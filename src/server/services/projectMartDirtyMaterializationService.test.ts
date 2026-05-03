@@ -140,6 +140,7 @@ test('project mart dirty materialization migration creates durable fenced state 
     'source_scope_high_water_article_created_at',
     'source_scope_high_water_article_id',
     'source_scope_fingerprint',
+    'source_scope_expected_row_count',
     'materialization_status',
     'materialization_owner',
     'lease_expires_at',
@@ -167,6 +168,7 @@ test('project mart dirty materialization migration creates durable fenced state 
     materializationStatus: 'pending',
     projectId: 'dirty-materialization-project',
     sourceKind: 'project_scope_article',
+    sourceScopeExpectedRowCount: null,
     sourceScopeFingerprint: 'scope-fingerprint-1',
     sourceScopeGeneration: 42,
     sourceScopeHighWaterArticleId: 'article-999',
@@ -386,4 +388,287 @@ test('project mart dirty materialization updates require owner lease token sourc
     materializationStatus: 'failed',
     targetDirtyToken: 8,
   })
+})
+
+test('project-wide dirty materialization inserts scoped article state in database batches before dirty claims', () => {
+  const result = runDirtyMaterializationScript<{
+    articleRows: Array<{articleId: string; firstDirtyToken: number; lastDirtyToken: number}>
+    dirtyClaimsAfterComplete: Array<{claimedToken: number; projectId: string}>
+    dirtyClaimsBeforeComplete: Array<{claimedToken: number; projectId: string}>
+    dirtyProjects: Array<{articleIds?: string[]; projectId: string}>
+    firstBatch: {insertedRowCountDelta: number; isComplete: boolean}
+    materializationState: ProjectMartDirtyMaterializationStateRecord | null
+    secondBatch: {insertedRowCountDelta: number; isComplete: boolean}
+    thirdBatch: {insertedRowCountDelta: number; isComplete: boolean}
+  }>(`
+    const {getProjectMartDirtyMaterializationService} = await import(
+      './src/server/services/projectMartDirtyMaterializationService.ts'
+    )
+    const {getProjectMartDirtyRefreshStateService} = await import(
+      './src/server/services/projectMartDirtyRefreshStateService.ts'
+    )
+    const materializationService = getProjectMartDirtyMaterializationService()
+    const refreshStateService = getProjectMartDirtyRefreshStateService()
+
+    await database.run(\`
+      INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+      VALUES
+        ('dirty-materialization-article-1', 'external-1', 'Article 1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z'),
+        ('dirty-materialization-article-2', 'external-2', 'Article 2', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T01:00:00.000Z'),
+        ('dirty-materialization-article-3', 'external-3', 'Article 3', TIMESTAMPTZ '2026-04-03T00:00:00.000Z', TIMESTAMPTZ '2026-04-03T01:00:00.000Z')
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_article (id, project_id, article_id)
+      VALUES
+        ('dirty-materialization-project-article-1', 'dirty-materialization-project', 'dirty-materialization-article-1'),
+        ('dirty-materialization-project-article-2', 'dirty-materialization-project', 'dirty-materialization-article-2')
+    \`)
+    await database.run(\`
+      INSERT INTO mart.project_scope_article (
+        project_id,
+        article_id,
+        in_curated_scope,
+        in_route_scope,
+        article_created_at,
+        article_updated_at
+      ) VALUES (
+        'dirty-materialization-project',
+        'dirty-materialization-article-3',
+        TRUE,
+        FALSE,
+        TIMESTAMPTZ '2026-04-03T00:00:00.000Z',
+        TIMESTAMPTZ '2026-04-03T01:00:00.000Z'
+      )
+    \`)
+
+    const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(database, [
+      'dirty-materialization-project',
+    ])
+    const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({
+      projects: dirtyProjects,
+      reason: 'project-wide-materialization-test',
+      runner: database,
+      now: new Date('2026-04-04T10:00:00.000Z'),
+    })
+    const [claim] = await materializationService.claimDirtyMaterializations({
+      sourceKind: 'project_scope_article',
+      workerId: 'dirty-materialization-worker',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-04T10:00:01.000Z'),
+    })
+    const firstBatch = await materializationService.materializeProjectScopeDirtyBatch({
+      ...claim,
+      batchSize: 2,
+      now: new Date('2026-04-04T10:00:02.000Z'),
+    })
+    const dirtyClaimsBeforeComplete = await refreshStateService.claimDirtyProjects({
+      workerId: 'refresh-worker-before-complete',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-04T10:00:02.500Z'),
+    })
+    const secondBatch = await materializationService.materializeProjectScopeDirtyBatch({
+      ...claim,
+      batchSize: 2,
+      now: new Date('2026-04-04T10:00:03.000Z'),
+    })
+    const thirdBatch = await materializationService.materializeProjectScopeDirtyBatch({
+      ...claim,
+      batchSize: 2,
+      now: new Date('2026-04-04T10:00:04.000Z'),
+    })
+    const dirtyClaimsAfterComplete = await refreshStateService.claimDirtyProjects({
+      workerId: 'refresh-worker-after-complete',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-04T10:00:04.500Z'),
+    })
+    const materializationState = await materializationService.getCompletedDirtyMaterializationToken({
+      projectId: 'dirty-materialization-project',
+      sourceKind: 'project_scope_article',
+      targetDirtyToken: dirtyState.dirtyToken,
+      sourceScopeGeneration: claim.sourceScopeGeneration,
+      sourceScopeHighWaterArticleCreatedAt: claim.sourceScopeHighWaterArticleCreatedAt,
+      sourceScopeHighWaterArticleId: claim.sourceScopeHighWaterArticleId,
+      sourceScopeFingerprint: claim.sourceScopeFingerprint,
+      sourceScopeExpectedRowCount: claim.sourceScopeExpectedRowCount,
+    }).then(async () => {
+      const [row] = await database.queryJson(\`
+        SELECT
+          project_id AS projectId,
+          source_kind AS sourceKind,
+          CAST(target_dirty_token AS INTEGER) AS targetDirtyToken,
+          cursor_article_created_at AS cursorArticleCreatedAt,
+          cursor_article_id AS cursorArticleId,
+          CAST(inserted_row_count AS INTEGER) AS insertedRowCount,
+          CAST(source_scope_generation AS INTEGER) AS sourceScopeGeneration,
+          source_scope_high_water_article_created_at AS sourceScopeHighWaterArticleCreatedAt,
+          source_scope_high_water_article_id AS sourceScopeHighWaterArticleId,
+          source_scope_fingerprint AS sourceScopeFingerprint,
+          CAST(source_scope_expected_row_count AS INTEGER) AS sourceScopeExpectedRowCount,
+          materialization_status AS materializationStatus,
+          materialization_owner AS materializationOwner,
+          lease_expires_at AS leaseExpiresAt,
+          last_started_at AS lastStartedAt,
+          last_completed_at AS lastCompletedAt,
+          last_failed_at AS lastFailedAt,
+          last_error AS lastError,
+          created_at AS createdAt,
+          updated_at AS updatedAt
+        FROM app.project_mart_dirty_materialization_state
+        WHERE project_id = 'dirty-materialization-project'
+          AND source_kind = 'project_scope_article'
+          AND target_dirty_token = \${dirtyState.dirtyToken}
+        LIMIT 1
+      \`)
+
+      return row ?? null
+    })
+    const articleRows = await database.queryJson(\`
+      SELECT
+        article_id AS articleId,
+        CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+        CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+      FROM app.project_mart_refresh_article_state
+      WHERE project_id = 'dirty-materialization-project'
+      ORDER BY article_id ASC
+    \`)
+
+    console.log(JSON.stringify({
+      articleRows,
+      dirtyClaimsAfterComplete,
+      dirtyClaimsBeforeComplete,
+      dirtyProjects,
+      firstBatch,
+      materializationState,
+      secondBatch,
+      thirdBatch,
+    }))
+    await database.close()
+  `)
+
+  expect(result.dirtyProjects).toEqual([{projectId: 'dirty-materialization-project'}])
+  expect(result.firstBatch).toMatchObject({insertedRowCountDelta: 2, isComplete: false})
+  expect(result.dirtyClaimsBeforeComplete).toEqual([])
+  expect(result.secondBatch).toMatchObject({insertedRowCountDelta: 1, isComplete: false})
+  expect(result.thirdBatch).toMatchObject({insertedRowCountDelta: 0, isComplete: true})
+  expect(result.materializationState).toMatchObject({
+    insertedRowCount: 3,
+    materializationStatus: 'completed',
+    sourceScopeExpectedRowCount: 3,
+    targetDirtyToken: 1,
+  })
+  expect(result.articleRows).toEqual([
+    {articleId: 'dirty-materialization-article-1', firstDirtyToken: 1, lastDirtyToken: 1},
+    {articleId: 'dirty-materialization-article-2', firstDirtyToken: 1, lastDirtyToken: 1},
+    {articleId: 'dirty-materialization-article-3', firstDirtyToken: 1, lastDirtyToken: 1},
+  ])
+  expect(result.dirtyClaimsAfterComplete).toHaveLength(1)
+  expect(result.dirtyClaimsAfterComplete[0]).toMatchObject({
+    claimedToken: 1,
+    projectId: 'dirty-materialization-project',
+  })
+})
+
+test('project-wide dirty materialization marks unreconciled when the source fingerprint changes', () => {
+  const result = runDirtyMaterializationScript<{
+    claimAfterMutation: Array<{claimedToken: number; projectId: string}>
+    materializationState: ProjectMartDirtyMaterializationStateRecord | null
+    finalBatch: {insertedRowCountDelta: number; isComplete: boolean}
+  }>(`
+    const {getProjectMartDirtyMaterializationService} = await import(
+      './src/server/services/projectMartDirtyMaterializationService.ts'
+    )
+    const {getProjectMartDirtyRefreshStateService} = await import(
+      './src/server/services/projectMartDirtyRefreshStateService.ts'
+    )
+    const materializationService = getProjectMartDirtyMaterializationService()
+    const refreshStateService = getProjectMartDirtyRefreshStateService()
+
+    await database.run(\`
+      INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+      VALUES
+        ('dirty-materialization-fingerprint-article-1', 'fingerprint-external-1', 'Fingerprint Article 1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z'),
+        ('dirty-materialization-fingerprint-article-2', 'fingerprint-external-2', 'Fingerprint Article 2', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T01:00:00.000Z')
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_article (id, project_id, article_id)
+      VALUES ('dirty-materialization-fingerprint-project-article-1', 'dirty-materialization-project', 'dirty-materialization-fingerprint-article-1')
+    \`)
+
+    const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({
+      projects: [{projectId: 'dirty-materialization-project'}],
+      reason: 'project-wide-materialization-fingerprint-test',
+      now: new Date('2026-04-04T11:00:00.000Z'),
+    })
+    const [claim] = await materializationService.claimDirtyMaterializations({
+      sourceKind: 'project_scope_article',
+      workerId: 'dirty-materialization-worker',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-04T11:00:01.000Z'),
+    })
+
+    await materializationService.materializeProjectScopeDirtyBatch({
+      ...claim,
+      batchSize: 1,
+      now: new Date('2026-04-04T11:00:02.000Z'),
+    })
+    await database.run(\`
+      INSERT INTO app.project_article (id, project_id, article_id)
+      VALUES ('dirty-materialization-fingerprint-project-article-2', 'dirty-materialization-project', 'dirty-materialization-fingerprint-article-2')
+    \`)
+    const finalBatch = await materializationService.materializeProjectScopeDirtyBatch({
+      ...claim,
+      batchSize: 1,
+      now: new Date('2026-04-04T11:00:03.000Z'),
+    })
+    const claimAfterMutation = await refreshStateService.claimDirtyProjects({
+      workerId: 'refresh-worker-after-mutation',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-04T11:00:04.000Z'),
+    })
+    const [materializationState] = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        source_kind AS sourceKind,
+        CAST(target_dirty_token AS INTEGER) AS targetDirtyToken,
+        cursor_article_created_at AS cursorArticleCreatedAt,
+        cursor_article_id AS cursorArticleId,
+        CAST(inserted_row_count AS INTEGER) AS insertedRowCount,
+        CAST(source_scope_generation AS INTEGER) AS sourceScopeGeneration,
+        source_scope_high_water_article_created_at AS sourceScopeHighWaterArticleCreatedAt,
+        source_scope_high_water_article_id AS sourceScopeHighWaterArticleId,
+        source_scope_fingerprint AS sourceScopeFingerprint,
+        CAST(source_scope_expected_row_count AS INTEGER) AS sourceScopeExpectedRowCount,
+        materialization_status AS materializationStatus,
+        materialization_owner AS materializationOwner,
+        lease_expires_at AS leaseExpiresAt,
+        last_started_at AS lastStartedAt,
+        last_completed_at AS lastCompletedAt,
+        last_failed_at AS lastFailedAt,
+        last_error AS lastError,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.project_mart_dirty_materialization_state
+      WHERE project_id = 'dirty-materialization-project'
+        AND source_kind = 'project_scope_article'
+        AND target_dirty_token = \${dirtyState.dirtyToken}
+      LIMIT 1
+    \`)
+
+    console.log(JSON.stringify({claimAfterMutation, finalBatch, materializationState}))
+    await database.close()
+  `)
+
+  expect(result.finalBatch).toMatchObject({insertedRowCountDelta: 0, isComplete: false})
+  expect(result.materializationState).toMatchObject({
+    lastError: 'project scope source changed before dirty materialization completed',
+    materializationStatus: 'unreconciled',
+    sourceScopeExpectedRowCount: 1,
+    targetDirtyToken: 1,
+  })
+  expect(result.claimAfterMutation).toEqual([])
 })

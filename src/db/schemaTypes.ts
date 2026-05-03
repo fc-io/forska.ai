@@ -408,6 +408,7 @@ export type ProjectMartDirtyMaterializationStateRecord = {
   sourceScopeHighWaterArticleCreatedAt: Date | null
   sourceScopeHighWaterArticleId: string | null
   sourceScopeFingerprint: string | null
+  sourceScopeExpectedRowCount: number | null
   materializationStatus: string
   materializationOwner: string | null
   leaseExpiresAt: Date | null

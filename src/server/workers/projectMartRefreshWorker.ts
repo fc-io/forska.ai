@@ -5,6 +5,11 @@ import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqli
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {
+  type DirtyMaterializationClaim,
+  getProjectMartDirtyMaterializationService,
+  projectScopeDirtyMaterializationSourceKind,
+} from '../services/projectMartDirtyMaterializationService.ts'
+import {
   getProjectMartDirtyRefreshStateService,
   type ProjectRefreshClaim,
 } from '../services/projectMartDirtyRefreshStateService.ts'
@@ -47,6 +52,21 @@ type ProjectMartRefreshStateWorkerService = {
   releaseProjectRefreshClaim: (params: {now?: Date; projectId: string; workerId: string}) => Promise<unknown>
 }
 
+type ProjectMartDirtyMaterializationWorkerService = {
+  claimDirtyMaterializations: (params: {
+    leaseMs: number
+    limit: number
+    now?: Date
+    sourceKind?: string
+    workerId: string
+  }) => Promise<DirtyMaterializationClaim[]>
+  failDirtyMaterialization: (params: DirtyMaterializationClaim & {error: string; now?: Date}) => Promise<unknown>
+  heartbeatDirtyMaterialization: (params: DirtyMaterializationClaim & {leaseMs: number; now?: Date}) => Promise<unknown>
+  materializeProjectScopeDirtyBatch: (
+    params: DirtyMaterializationClaim & {batchSize: number; now?: Date},
+  ) => Promise<{insertedRowCountDelta: number; isComplete: boolean; materializationState: unknown}>
+}
+
 type ProjectMartLargeRebuildStateWorkerService = {
   clearArchivedLargeRebuildStates: () => Promise<unknown>
   queueLargeRebuild: (params: {
@@ -77,6 +97,7 @@ type ProjectMartRefreshRunnerService = {
 
 type ProjectMartRefreshWorkerDependencies = {
   largeRebuildStateService: ProjectMartLargeRebuildStateWorkerService
+  materializationService?: ProjectMartDirtyMaterializationWorkerService
   projectInspector: {getProjectScopeArticleCount: (projectId: string) => Promise<number>}
   refreshService: ProjectMartRefreshRunnerService
   sleep: typeof sleep
@@ -130,6 +151,7 @@ const getProjectScopeArticleCount = async (projectId: string) => {
 
 const defaultProjectMartRefreshWorkerDependencies: ProjectMartRefreshWorkerDependencies = {
   largeRebuildStateService: getProjectMartLargeRebuildStateService(),
+  materializationService: getProjectMartDirtyMaterializationService(),
   projectInspector: {getProjectScopeArticleCount},
   refreshService: getDuckdbMartRefreshService(),
   sleep,
@@ -153,6 +175,27 @@ const getClaimedProject = async (
     leaseMs: options.leaseMs ?? defaultProjectMartRefreshWorkerLeaseMs,
     limit: 1,
     now: options.now,
+    workerId: options.workerId ?? getProjectMartRefreshWorkerId(),
+  })
+
+  return claim ?? null
+}
+
+const getClaimedDirtyMaterialization = async (
+  dependencies: ProjectMartRefreshWorkerDependencies,
+  options: ProjectMartRefreshWorkerCycleOptions,
+) => {
+  const materializationService = dependencies.materializationService
+
+  if (!materializationService) {
+    return null
+  }
+
+  const [claim] = await materializationService.claimDirtyMaterializations({
+    leaseMs: options.leaseMs ?? defaultProjectMartRefreshWorkerLeaseMs,
+    limit: 1,
+    now: options.now,
+    sourceKind: projectScopeDirtyMaterializationSourceKind,
     workerId: options.workerId ?? getProjectMartRefreshWorkerId(),
   })
 
@@ -188,6 +231,52 @@ const startClaimHeartbeat = (
   return () => {
     clearInterval(interval)
   }
+}
+
+const startDirtyMaterializationHeartbeat = (
+  claim: DirtyMaterializationClaim,
+  dependencies: ProjectMartRefreshWorkerDependencies,
+  options: ProjectMartRefreshWorkerCycleOptions,
+) => {
+  const interval = setInterval(() => {
+    return void dependencies.materializationService?.heartbeatDirtyMaterialization({
+      ...claim,
+      leaseMs: options.leaseMs ?? defaultProjectMartRefreshWorkerLeaseMs,
+      now: getWorkerNow(),
+    })
+  }, options.heartbeatMs ?? defaultProjectMartRefreshWorkerHeartbeatMs)
+
+  interval.unref()
+
+  return () => {
+    clearInterval(interval)
+  }
+}
+
+const processDirtyMaterializationBatchForClaim = async ({
+  claim,
+  dependencies,
+  options,
+}: {
+  claim: DirtyMaterializationClaim
+  dependencies: ProjectMartRefreshWorkerDependencies
+  options: ProjectMartRefreshWorkerCycleOptions
+}): Promise<void> => {
+  const materialization = await dependencies.materializationService?.materializeProjectScopeDirtyBatch({
+    ...claim,
+    batchSize: getDirtyArticleBatchSize(options),
+    now: getWorkerNow(options.now),
+  })
+
+  if (materialization?.isComplete) {
+    return
+  }
+
+  if (!materialization || materialization.insertedRowCountDelta === 0) {
+    throw new Error(`Project dirty materialization made no progress for ${claim.projectId}`)
+  }
+
+  return processDirtyMaterializationBatchForClaim({claim, dependencies, options})
 }
 
 const queueBoundedInitialProjectMartSetup = async ({
@@ -266,6 +355,38 @@ export const runProjectMartRefreshWorkerCycle = async (
   const workerId = options.workerId ?? getProjectMartRefreshWorkerId()
 
   await dependencies.sqliteService.reconcileProjectRefreshAcks()
+
+  const dirtyMaterializationClaim = await getClaimedDirtyMaterialization(dependencies, {...options, workerId})
+
+  if (dirtyMaterializationClaim !== null) {
+    const stopDirtyMaterializationHeartbeat = startDirtyMaterializationHeartbeat(
+      dirtyMaterializationClaim,
+      dependencies,
+      {...options, workerId},
+    )
+
+    try {
+      await processDirtyMaterializationBatchForClaim({claim: dirtyMaterializationClaim, dependencies, options})
+    } catch (error) {
+      const errorText = getErrorText(error)
+
+      await dependencies.materializationService?.failDirtyMaterialization({
+        ...dirtyMaterializationClaim,
+        error: errorText,
+        now: getWorkerNow(options.now),
+      })
+
+      return {
+        claimedToken: dirtyMaterializationClaim.targetDirtyToken,
+        error: errorText,
+        projectId: dirtyMaterializationClaim.projectId,
+        status: 'failed',
+        workerId,
+      }
+    } finally {
+      stopDirtyMaterializationHeartbeat()
+    }
+  }
 
   const claim = await getClaimedProject(dependencies, {...options, workerId})
 

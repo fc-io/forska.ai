@@ -501,13 +501,20 @@ test('markArticleProjectsDirtyAtomically resolves active affected projects befor
   ])
 })
 
-test('getDirtyProjectsForProjectIds includes current and previously materialized scope articles', () => {
+test('getDirtyProjectsForProjectIds queues project-wide materialization for current and previously materialized scope articles', () => {
   const result = runRefreshStateScript<{
-    dirtyProjects: Array<{articleIds: string[]; projectId: string}>
+    dirtyProjects: Array<{articleIds?: string[]; projectId: string}>
     dirtyRows: ProjectMartRefreshArticleStateRecord[]
+    materializationRows: Array<{
+      insertedRowCount: number
+      materializationStatus: string
+      sourceScopeExpectedRowCount: number
+    }>
   }>(`
+    const {getProjectMartDirtyMaterializationService} = await import('./src/server/services/projectMartDirtyMaterializationService.ts')
     const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
+    const materializationService = getProjectMartDirtyMaterializationService()
     const service = getProjectMartDirtyRefreshStateService()
 
     await database.run(\`
@@ -537,6 +544,23 @@ test('getDirtyProjectsForProjectIds includes current and previously materialized
       projects: dirtyProjects,
       reason: 'refresh-state-test.scope-delta',
     })
+    const [claim] = await materializationService.claimDirtyMaterializations({
+      sourceKind: 'project_scope_article',
+      workerId: 'refresh-state-materialization-worker',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-02T10:05:00.000Z'),
+    })
+    await materializationService.materializeProjectScopeDirtyBatch({
+      ...claim,
+      batchSize: 10,
+      now: new Date('2026-04-02T10:05:01.000Z'),
+    })
+    await materializationService.materializeProjectScopeDirtyBatch({
+      ...claim,
+      batchSize: 10,
+      now: new Date('2026-04-02T10:05:02.000Z'),
+    })
     const dirtyRows = await database.queryJson(\`
       SELECT
         project_id AS projectId,
@@ -549,13 +573,23 @@ test('getDirtyProjectsForProjectIds includes current and previously materialized
       WHERE project_id = 'refresh-project-1'
       ORDER BY article_id ASC
     \`)
+    const materializationRows = await database.queryJson(\`
+      SELECT
+        CAST(inserted_row_count AS INTEGER) AS insertedRowCount,
+        materialization_status AS materializationStatus,
+        CAST(source_scope_expected_row_count AS INTEGER) AS sourceScopeExpectedRowCount
+      FROM app.project_mart_dirty_materialization_state
+      WHERE project_id = 'refresh-project-1'
+      ORDER BY target_dirty_token ASC
+    \`)
 
-    console.log(JSON.stringify({dirtyProjects, dirtyRows}))
+    console.log(JSON.stringify({dirtyProjects, dirtyRows, materializationRows}))
     await database.close()
   `)
 
-  expect(result.dirtyProjects).toEqual([
-    {articleIds: ['refresh-article-1', 'refresh-article-2'], projectId: 'refresh-project-1'},
+  expect(result.dirtyProjects).toEqual([{projectId: 'refresh-project-1'}])
+  expect(result.materializationRows).toEqual([
+    {insertedRowCount: 2, materializationStatus: 'completed', sourceScopeExpectedRowCount: 2},
   ])
   expect(
     result.dirtyRows.map((row) => {
