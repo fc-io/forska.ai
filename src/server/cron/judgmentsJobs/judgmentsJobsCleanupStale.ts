@@ -1,5 +1,5 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getJsonValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {isJudgmentJobLeaseProcessAlive, isJudgmentJobLeaseStale} from './judgmentJobLease.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
@@ -7,9 +7,16 @@ import {runJudgmentJobRepairAction} from './judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 import {getTransientJudgmentJobSqliteLockReasonSql} from './judgmentJobSqliteTransientLock.ts'
+import {
+  getDurableTerminalRequestAttemptCloseoutProofs,
+  type JudgmentRequestAttemptJsonEntry,
+  parseRequestAttempts,
+} from './judgmentRequestAttemptManifest.ts'
+import {reconcileProviderAdmissionLeasesThroughOwner} from './providerAdmissionLease.ts'
 import {abandonedSentPromptGraceMs} from './requeueAbandonedSentPrompts.ts'
 
 type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
+type RequestAttemptsJsonRow = {requestAttemptsJson: unknown}
 
 const sqliteRetentionCleanupBatchSize = 1_000
 const sqliteCleanupTerminalStatuses = ['completed', 'paused', 'project_removed'] as const
@@ -24,6 +31,35 @@ const addRetentionPruneResults = (left: RetentionPruneResult, right: RetentionPr
     outboxRowsDeleted: left.outboxRowsDeleted + right.outboxRowsDeleted,
     queuePromptRowsDeleted: left.queuePromptRowsDeleted + right.queuePromptRowsDeleted,
   }
+}
+
+const getRequestAttemptsFromDuckdbJson = (value: unknown): JudgmentRequestAttemptJsonEntry[] => {
+  const parsed = getJsonValue(value)
+
+  return parseRequestAttempts(Array.isArray(parsed) ? (parsed as JudgmentRequestAttemptJsonEntry[]) : null)
+}
+
+const getDuckdbTokenUseTerminalRequestAttemptCloseouts = async () => {
+  const rows = await getAppDatabaseService().queryJson<RequestAttemptsJsonRow>(`
+    SELECT TO_JSON(request_attempts_json) AS requestAttemptsJson
+    FROM app.token_use
+    WHERE request_attempts_json IS NOT NULL
+  `)
+
+  return rows.flatMap((row) => {
+    return getDurableTerminalRequestAttemptCloseoutProofs(getRequestAttemptsFromDuckdbJson(row.requestAttemptsJson))
+  })
+}
+
+const reconcileProviderAdmissionLeasesForDurableCloseout = async (): Promise<void> => {
+  const [tokenUseCloseouts, sqliteCloseouts] = await Promise.all([
+    getDuckdbTokenUseTerminalRequestAttemptCloseouts(),
+    getJudgmentJobSqliteService().getDurableTerminalRequestAttemptCloseoutProofs(),
+  ])
+
+  await reconcileProviderAdmissionLeasesThroughOwner({
+    terminalRequestAttemptCloseouts: [...tokenUseCloseouts, ...sqliteCloseouts],
+  })
 }
 
 const getDrainingSqliteJobIds = async () => {
@@ -231,5 +267,6 @@ export const judgmentsJobsCleanupStale = async (): Promise<void> => {
   await repairOrphanedDrainingJobs(drainingJobIds)
   await finalizeMissingLocalSqliteDrainingJobs(missingLocalSqliteDrainingJobIds)
   await sqliteService.finalizeDrainingJobs()
+  await reconcileProviderAdmissionLeasesForDurableCloseout()
   await sqliteService.deleteDrainedJobs()
 }

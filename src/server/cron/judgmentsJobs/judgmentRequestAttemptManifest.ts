@@ -124,6 +124,8 @@ export type JudgmentRequestAttemptManifestMutation = {
   mergeEntries?: JudgmentRequestAttemptJsonEntry[]
 }
 
+export type JudgmentRequestAttemptCloseoutProof = {providerKey: string; requestAttemptId: string}
+
 export class JudgmentRequestAttemptManifestCasExhaustedError extends Error {
   ownerId: string
   ownerKind: JudgmentRequestAttemptManifestOwner['kind']
@@ -266,6 +268,24 @@ export const isTerminalRequestAttemptLifecycleState = (state: JudgmentRequestAtt
 
 export const isDurableRequestAttemptCloseoutKind = (closeoutKind: JudgmentRequestAttemptCloseoutKind): boolean => {
   return durableCloseoutKinds.has(closeoutKind)
+}
+
+export const getDurableTerminalRequestAttemptCloseoutProofs = (
+  requestAttempts: JudgmentRequestAttemptJsonEntry[],
+): JudgmentRequestAttemptCloseoutProof[] => {
+  return requestAttempts.flatMap((entry) => {
+    const lifecycleState = getRequestAttemptLifecycleState(entry)
+    const providerKey = typeof entry.providerKey === 'string' ? entry.providerKey.trim() : ''
+    const requestAttemptId = typeof entry.requestAttemptId === 'string' ? entry.requestAttemptId.trim() : ''
+    const hasExactCloseout =
+      isDurableRequestAttemptCloseoutKind(entry.closeoutKind)
+      && isTerminalRequestAttemptLifecycleState(lifecycleState)
+      && Boolean(entry.durableCloseoutRef)
+      && providerKey.length > 0
+      && requestAttemptId.length > 0
+
+    return hasExactCloseout ? [{providerKey, requestAttemptId}] : []
+  })
 }
 
 const getDateMs = (value: unknown): number | null => {

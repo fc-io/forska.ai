@@ -41,8 +41,10 @@ import {
 import {
   appendRequestAttemptManifestRepairMarker,
   createRequestAttemptManifestRepairMarker,
+  getDurableTerminalRequestAttemptCloseoutProofs,
   getRequestAttemptManifestMutationIds,
   getRequestAttemptManifestOwnerId,
+  type JudgmentRequestAttemptCloseoutProof,
   type JudgmentRequestAttemptJsonEntry,
   JudgmentRequestAttemptManifestCasExhaustedError,
   type JudgmentRequestAttemptManifestMutation,
@@ -1206,6 +1208,61 @@ const getExistingOutboxJobIds = (jobId?: string) => {
 
 const getTrackedJudgmentJobIds = async (jobId?: string) => {
   return [...getExistingOutboxJobIds(jobId)].sort()
+}
+
+const getUniqueRequestAttemptCloseoutProofs = (
+  proofs: JudgmentRequestAttemptCloseoutProof[],
+): JudgmentRequestAttemptCloseoutProof[] => {
+  return Array.from(
+    proofs
+      .reduce((map, proof) => {
+        map.set(`${proof.providerKey}\n${proof.requestAttemptId}`, proof)
+        return map
+      }, new Map<string, JudgmentRequestAttemptCloseoutProof>())
+      .values(),
+  )
+}
+
+const getDurableTerminalRequestAttemptCloseoutProofsFromDatabase = (
+  database: Database,
+): JudgmentRequestAttemptCloseoutProof[] => {
+  const rows = database
+    .query(
+      `
+        SELECT request_attempt_manifest_json AS requestAttemptsJson
+        FROM queue_prompt
+        UNION ALL
+        SELECT request_attempts_json AS requestAttemptsJson
+        FROM judgment_outbox
+        WHERE request_attempts_json IS NOT NULL
+        UNION ALL
+        SELECT request_attempts_json AS requestAttemptsJson
+        FROM completion_ack
+        WHERE request_attempts_json IS NOT NULL
+      `,
+    )
+    .all() as Array<{requestAttemptsJson: string | null}>
+
+  return getUniqueRequestAttemptCloseoutProofs(
+    rows.flatMap((row) => {
+      return getDurableTerminalRequestAttemptCloseoutProofs(parseRequestAttempts(row.requestAttemptsJson))
+    }),
+  )
+}
+
+const getDurableTerminalRequestAttemptCloseoutProofsForJobIds = async (
+  jobIds: string[],
+): Promise<JudgmentRequestAttemptCloseoutProof[]> => {
+  const [jobId = '', ...remainingJobIds] = jobIds
+
+  if (!jobId) {
+    return []
+  }
+
+  return getUniqueRequestAttemptCloseoutProofs([
+    ...(withJobDatabase(jobId, false, getDurableTerminalRequestAttemptCloseoutProofsFromDatabase) ?? []),
+    ...(await getDurableTerminalRequestAttemptCloseoutProofsForJobIds(remainingJobIds)),
+  ])
 }
 
 const getTrackedJudgmentJobIdsForProject = async (projectId: string) => {
@@ -4782,6 +4839,9 @@ const sqliteService = {
       maxRows: normalizedMaxRows,
       serverJobId,
     })
+  },
+  getDurableTerminalRequestAttemptCloseoutProofs: async (jobId?: string) => {
+    return getDurableTerminalRequestAttemptCloseoutProofsForJobIds(await getTrackedJudgmentJobIds(jobId))
   },
 }
 

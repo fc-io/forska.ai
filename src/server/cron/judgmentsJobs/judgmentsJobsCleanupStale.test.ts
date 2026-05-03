@@ -3,8 +3,13 @@ import {existsSync} from 'node:fs'
 import {Database} from 'bun:sqlite'
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 
+import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import {getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
+import {
+  getProviderAdmissionProbeLeaseIdentity,
+  getProviderAdmissionRequestLeaseIdentity,
+} from './providerAdmissionLease.ts'
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-judgments-jobs-cleanup-stale')
 const tempDbPath = tempRuntimeRoot.duckdbPath
@@ -558,6 +563,102 @@ test('cleanupStale clears stale running prompts before finalizing draining jobs'
     `),
   ).toEqual([{status: 'paused', storageState: 'drained'}])
   expect(existsSync(sqlitePath)).toBe(false)
+})
+
+test('cleanupStale releases token-use closed request leases without closing probe leases', async () => {
+  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const timestamp = Date.now()
+  const providerKey = `cleanup-stale-provider-lease-${timestamp}`
+  const requestAttemptId = `cleanup-stale-request-attempt-${timestamp}`
+  const requestLeaseIdentity = getProviderAdmissionRequestLeaseIdentity(requestAttemptId)
+  const endpointAvailabilityKey = `${providerKey}::http://localhost:30001`
+  const probeLeaseIdentity = getProviderAdmissionProbeLeaseIdentity({
+    endpointAvailabilityKey,
+    probeAttemptId: `cleanup-stale-probe-attempt-${timestamp}`,
+  })
+  const requestAttemptsJson = JSON.stringify([
+    {
+      closeoutKind: 'token_use',
+      durableCloseoutRef: {id: `cleanup-stale-token-use-${timestamp}`, kind: 'token_use', requestAttemptId},
+      outcome: 'success',
+      providerKey,
+      requestAttemptId,
+    },
+  ])
+
+  await runDatabase(`
+    INSERT INTO app.provider_admission_lease (
+      provider_key,
+      lease_kind,
+      lease_identity,
+      request_attempt_id,
+      endpoint_availability_key,
+      probe_attempt_id,
+      holder_token,
+      acquired_at,
+      heartbeat_at,
+      expires_at
+    ) VALUES
+      (
+        ${getSqlLiteral(providerKey)},
+        'request',
+        ${getSqlLiteral(requestLeaseIdentity)},
+        ${getSqlLiteral(requestAttemptId)},
+        NULL,
+        NULL,
+        'request-holder',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2036-05-04T10:00:00.000Z'
+      ),
+      (
+        ${getSqlLiteral(providerKey)},
+        'probe',
+        ${getSqlLiteral(probeLeaseIdentity)},
+        NULL,
+        ${getSqlLiteral(endpointAvailabilityKey)},
+        ${getSqlLiteral(`cleanup-stale-probe-attempt-${timestamp}`)},
+        'probe-holder',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2036-05-04T10:00:00.000Z'
+      )
+  `)
+  await runDatabase(`
+    INSERT INTO app.token_use (
+      id,
+      requests,
+      total_prompt_tokens,
+      total_completion_tokens,
+      total_tokens,
+      started_at,
+      finished_at,
+      request_attempts_json
+    ) VALUES (
+      ${getSqlLiteral(`cleanup-stale-token-use-${timestamp}`)},
+      1,
+      0,
+      0,
+      0,
+      TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+      TIMESTAMPTZ '2026-05-04T10:00:01.000Z',
+      CAST(${getSqlLiteral(requestAttemptsJson)} AS JSON)
+    )
+  `)
+
+  await judgmentsJobsCleanupStale()
+
+  const rows = await queryDatabase<{leaseIdentity: string; leaseKind: string}>(`
+    SELECT lease_identity AS leaseIdentity, lease_kind AS leaseKind
+    FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+    ORDER BY lease_kind ASC
+  `)
+
+  expect(rows).toEqual([{leaseIdentity: probeLeaseIdentity, leaseKind: 'probe'}])
 })
 
 test('cleanupStale clears transient locked quarantine after SQLite preflight succeeds', async () => {

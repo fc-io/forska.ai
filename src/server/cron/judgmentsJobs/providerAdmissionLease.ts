@@ -104,6 +104,8 @@ export type ProviderAdmissionLeaseAcquireInput = {
 
 export type ProviderAdmissionLeaseReleaseInput = {holderToken: string; leaseIdentity: string; providerKey: string}
 
+export type ProviderAdmissionLeaseReleaseResult = {released: true} | {released: false; reason: 'missing' | 'notHolder'}
+
 export type ProviderAdmissionLeaseHeartbeatInput = ProviderAdmissionLeaseReleaseInput & {nowMs?: number; ttlMs?: number}
 
 export type ProviderAdmissionLeaseHeartbeatResult =
@@ -113,6 +115,45 @@ export type ProviderAdmissionLeaseHeartbeatResult =
 export type ProviderAdmissionLeaseExpiryInput = {nowMs?: number; providerKey: string}
 
 export type ProviderAdmissionLeaseExpiryResult = {expiredLeaseCount: number}
+
+export type ProviderAdmissionLeaseHolderWorkerFreshness = 'demoted' | 'fresh' | 'missing' | 'stale'
+
+export type ProviderAdmissionLeaseHolderWorkerDemotion = {
+  demotedAtMs?: number | null
+  freshness?: ProviderAdmissionLeaseHolderWorkerFreshness
+  holderToken: string
+  missingSinceMs?: number | null
+  observedAtMs?: number | null
+  staleSinceMs?: number | null
+  state?: ProviderAdmissionLeaseHolderWorkerFreshness
+}
+
+export type ProviderAdmissionLeaseTerminalRequestCloseout = {providerKey?: string | null; requestAttemptId: string}
+
+export type ProviderAdmissionLeaseSuspectFreshProof = {
+  holderToken?: string | null
+  leaseIdentity: string
+  leaseKind?: ProviderAdmissionLeaseKind | null
+  providerKey: string
+}
+
+export type ProviderAdmissionLeaseReconciliationInput = {
+  holderGraceMs?: number
+  holderWorkerDemotions?: ProviderAdmissionLeaseHolderWorkerDemotion[]
+  nowMs?: number
+  suspectFreshHolderProofs?: ProviderAdmissionLeaseSuspectFreshProof[]
+  suspectFreshProofs?: ProviderAdmissionLeaseSuspectFreshProof[]
+  terminalRequestAttemptCloseouts?: ProviderAdmissionLeaseTerminalRequestCloseout[]
+}
+
+export type ProviderAdmissionLeaseReconciliationResult = {
+  durableRequestCloseoutLeaseCount: number
+  expiredLeaseCount: number
+  graceHeldLeaseCount: number
+  holderDemotionLeaseCount: number
+  suspectFreshHolderLeaseCount: number
+  suspectFreshProofLeaseCount: number
+}
 
 type ProviderAdmissionLeaseIdentityParts = {
   endpointAvailabilityKey: string | null
@@ -151,6 +192,10 @@ const defaultProviderAdmissionLeaseClock: ProviderAdmissionLeaseClock = {
 
 const getNormalizedLeaseDurationMs = (value: number): number => {
   return Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : providerAdmissionLeaseTtlMs
+}
+
+const getNormalizedGraceDurationMs = (value: number): number => {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : providerAdmissionLeaseTtlMs
 }
 
 const getNormalizedTimestampMs = (value: number): number => {
@@ -343,6 +388,132 @@ const getCountValue = (value: unknown): number => {
       : typeof value === 'string'
         ? Number(value)
         : 0
+}
+
+const getEmptyProviderAdmissionLeaseReconciliationResult = (): ProviderAdmissionLeaseReconciliationResult => {
+  return {
+    durableRequestCloseoutLeaseCount: 0,
+    expiredLeaseCount: 0,
+    graceHeldLeaseCount: 0,
+    holderDemotionLeaseCount: 0,
+    suspectFreshHolderLeaseCount: 0,
+    suspectFreshProofLeaseCount: 0,
+  }
+}
+
+const addProviderAdmissionLeaseReconciliationResults = (
+  left: ProviderAdmissionLeaseReconciliationResult,
+  right: ProviderAdmissionLeaseReconciliationResult,
+): ProviderAdmissionLeaseReconciliationResult => {
+  return {
+    durableRequestCloseoutLeaseCount: left.durableRequestCloseoutLeaseCount + right.durableRequestCloseoutLeaseCount,
+    expiredLeaseCount: left.expiredLeaseCount + right.expiredLeaseCount,
+    graceHeldLeaseCount: left.graceHeldLeaseCount + right.graceHeldLeaseCount,
+    holderDemotionLeaseCount: left.holderDemotionLeaseCount + right.holderDemotionLeaseCount,
+    suspectFreshHolderLeaseCount: left.suspectFreshHolderLeaseCount + right.suspectFreshHolderLeaseCount,
+    suspectFreshProofLeaseCount: left.suspectFreshProofLeaseCount + right.suspectFreshProofLeaseCount,
+  }
+}
+
+const getUniqueTrimmedValues = (values: Array<string | null | undefined>): string[] => {
+  return Array.from(
+    new Set(
+      values.flatMap((value) => {
+        const trimmed = String(value ?? '').trim()
+        return trimmed.length > 0 ? [trimmed] : []
+      }),
+    ),
+  )
+}
+
+const getSqlLiteralList = (values: string[]): string => {
+  return values
+    .map((value) => {
+      return getSqlLiteral(value)
+    })
+    .join(', ')
+}
+
+const getHolderWorkerFreshness = (
+  holder: ProviderAdmissionLeaseHolderWorkerDemotion,
+): ProviderAdmissionLeaseHolderWorkerFreshness => {
+  return holder.freshness ?? holder.state ?? 'demoted'
+}
+
+const getHolderWorkerFreshnessStartedAtMs = (holder: ProviderAdmissionLeaseHolderWorkerDemotion): number => {
+  return getNormalizedTimestampMs(
+    holder.demotedAtMs ?? holder.staleSinceMs ?? holder.missingSinceMs ?? holder.observedAtMs ?? 0,
+  )
+}
+
+const getHolderWorkerGraceElapsed = ({
+  graceMs,
+  holder,
+  nowMs,
+}: {
+  graceMs: number
+  holder: ProviderAdmissionLeaseHolderWorkerDemotion
+  nowMs: number
+}): boolean => {
+  return nowMs - getHolderWorkerFreshnessStartedAtMs(holder) >= getNormalizedGraceDurationMs(graceMs)
+}
+
+const getEligibleHolderDemotionTokens = ({
+  graceMs,
+  holders,
+  nowMs,
+}: {
+  graceMs: number
+  holders: ProviderAdmissionLeaseHolderWorkerDemotion[]
+  nowMs: number
+}): string[] => {
+  return getUniqueTrimmedValues(
+    holders.flatMap((holder) => {
+      const freshness = getHolderWorkerFreshness(holder)
+      const shouldDelete =
+        freshness !== 'fresh'
+        && getTrimmedValue(holder.holderToken) !== null
+        && getHolderWorkerGraceElapsed({graceMs, holder, nowMs})
+
+      return shouldDelete ? [holder.holderToken] : []
+    }),
+  )
+}
+
+const getGraceHeldHolderTokens = ({
+  graceMs,
+  holders,
+  nowMs,
+}: {
+  graceMs: number
+  holders: ProviderAdmissionLeaseHolderWorkerDemotion[]
+  nowMs: number
+}): string[] => {
+  return getUniqueTrimmedValues(
+    holders.flatMap((holder) => {
+      const freshness = getHolderWorkerFreshness(holder)
+      const isHeld =
+        freshness !== 'fresh'
+        && getTrimmedValue(holder.holderToken) !== null
+        && !getHolderWorkerGraceElapsed({graceMs, holder, nowMs})
+
+      return isHeld ? [holder.holderToken] : []
+    }),
+  )
+}
+
+const getFreshHolderTokens = (holders: ProviderAdmissionLeaseHolderWorkerDemotion[]): string[] => {
+  return getUniqueTrimmedValues(
+    holders.flatMap((holder) => {
+      return getHolderWorkerFreshness(holder) === 'fresh' ? [holder.holderToken] : []
+    }),
+  )
+}
+
+const getReconciliationProofs = (
+  input: ProviderAdmissionLeaseReconciliationInput,
+): ProviderAdmissionLeaseSuspectFreshProof[] => {
+  return [...(input.suspectFreshProofs ?? []), ...(input.suspectFreshHolderProofs ?? [])]
 }
 
 const getProviderAdmissionLeaseRecord = (row: ProviderAdmissionLeaseRow): ProviderAdmissionLeaseRecord => {
@@ -650,6 +821,232 @@ const deleteExpiredProviderAdmissionLeaseIdentity = async ({
   `)
 }
 
+const getProviderAdmissionLeaseProviderKeys = async (): Promise<string[]> => {
+  return (
+    await getAppDatabaseService().queryJson<{providerKey: string}>(`
+      SELECT DISTINCT provider_key AS providerKey
+      FROM app.provider_admission_lease
+      ORDER BY provider_key ASC
+    `)
+  ).map((row) => {
+    return row.providerKey
+  })
+}
+
+const getReconciliationProviderKeys = async (input: ProviderAdmissionLeaseReconciliationInput): Promise<string[]> => {
+  const existingProviderKeys = await getProviderAdmissionLeaseProviderKeys()
+  const inputProviderKeys = [
+    ...(input.terminalRequestAttemptCloseouts ?? []).map((closeout) => {
+      return closeout.providerKey
+    }),
+    ...getReconciliationProofs(input).map((proof) => {
+      return proof.providerKey
+    }),
+  ]
+
+  return getUniqueTrimmedValues([...existingProviderKeys, ...inputProviderKeys])
+}
+
+const deleteDurableRequestCloseoutLeases = async ({
+  closeouts,
+  providerKey,
+  tx,
+}: {
+  closeouts: ProviderAdmissionLeaseTerminalRequestCloseout[]
+  providerKey: string
+  tx: {queryJson: <T>(statement: string) => Promise<T[]>}
+}): Promise<number> => {
+  const requestAttemptIds = getUniqueTrimmedValues(
+    closeouts.flatMap((closeout) => {
+      const closeoutProviderKey = getTrimmedValue(closeout.providerKey)
+      return closeoutProviderKey !== null && closeoutProviderKey !== providerKey ? [] : [closeout.requestAttemptId]
+    }),
+  )
+
+  if (requestAttemptIds.length === 0) {
+    return 0
+  }
+
+  const rows = await tx.queryJson<{leaseIdentity: string}>(`
+    DELETE FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+      AND lease_kind = 'request'
+      AND request_attempt_id IN (${getSqlLiteralList(requestAttemptIds)})
+      AND lease_identity IN (${getSqlLiteralList(
+        requestAttemptIds.map((requestAttemptId) => {
+          return getProviderAdmissionRequestLeaseIdentity(requestAttemptId)
+        }),
+      )})
+    RETURNING lease_identity AS leaseIdentity
+  `)
+
+  return rows.length
+}
+
+const getSuspectFreshProofPredicate = (proof: ProviderAdmissionLeaseSuspectFreshProof): string => {
+  const holderPredicate = getTrimmedValue(proof.holderToken)
+    ? `AND holder_token = ${getSqlLiteral(getTrimmedValue(proof.holderToken))}`
+    : ''
+  const kindPredicate = proof.leaseKind ? `AND lease_kind = ${getSqlLiteral(proof.leaseKind)}` : ''
+
+  return `(lease_identity = ${getSqlLiteral(proof.leaseIdentity)} ${holderPredicate} ${kindPredicate})`
+}
+
+const deleteSuspectFreshProofLeases = async ({
+  proofs,
+  providerKey,
+  tx,
+}: {
+  proofs: ProviderAdmissionLeaseSuspectFreshProof[]
+  providerKey: string
+  tx: {queryJson: <T>(statement: string) => Promise<T[]>}
+}): Promise<number> => {
+  const predicates = proofs.flatMap((proof) => {
+    return getTrimmedValue(proof.providerKey) === providerKey && getTrimmedValue(proof.leaseIdentity)
+      ? [getSuspectFreshProofPredicate(proof)]
+      : []
+  })
+
+  if (predicates.length === 0) {
+    return 0
+  }
+
+  const rows = await tx.queryJson<{leaseIdentity: string}>(`
+    DELETE FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+      AND (${predicates.join(' OR ')})
+    RETURNING lease_identity AS leaseIdentity
+  `)
+
+  return rows.length
+}
+
+const deleteHolderDemotionLeases = async ({
+  holderTokens,
+  providerKey,
+  tx,
+}: {
+  holderTokens: string[]
+  providerKey: string
+  tx: {queryJson: <T>(statement: string) => Promise<T[]>}
+}): Promise<number> => {
+  if (holderTokens.length === 0) {
+    return 0
+  }
+
+  const rows = await tx.queryJson<{leaseIdentity: string}>(`
+    DELETE FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+      AND holder_token IN (${getSqlLiteralList(holderTokens)})
+    RETURNING lease_identity AS leaseIdentity
+  `)
+
+  return rows.length
+}
+
+const getActiveLeaseCountForHolderTokens = async ({
+  holderTokens,
+  now,
+  providerKey,
+  tx,
+}: {
+  holderTokens: string[]
+  now: Date
+  providerKey: string
+  tx: {queryJson: <T>(statement: string) => Promise<T[]>}
+}): Promise<number> => {
+  if (holderTokens.length === 0) {
+    return 0
+  }
+
+  const [row] = await tx.queryJson<{leaseCount: number | string | bigint}>(`
+    SELECT COUNT(*) AS leaseCount
+    FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+      AND holder_token IN (${getSqlLiteralList(holderTokens)})
+      AND expires_at > ${getSqlLiteral(now)}
+  `)
+
+  return getCountValue(row?.leaseCount)
+}
+
+const reconcileProviderAdmissionLeasesForProvider = async ({
+  input,
+  providerKey,
+}: {
+  input: ProviderAdmissionLeaseReconciliationInput
+  providerKey: string
+}): Promise<ProviderAdmissionLeaseReconciliationResult> => {
+  return withProviderAdmissionLeaseSerialization(providerKey, async () => {
+    return getAppDatabaseService().transaction(async (tx) => {
+      const nowMs = getNormalizedTimestampMs(input.nowMs ?? Date.now())
+      const now = getDateFromMs(nowMs)
+      const holderGraceMs = getNormalizedGraceDurationMs(input.holderGraceMs ?? providerAdmissionLeaseTtlMs)
+      const holderWorkerDemotions = input.holderWorkerDemotions ?? []
+      const durableRequestCloseoutLeaseCount = await deleteDurableRequestCloseoutLeases({
+        closeouts: input.terminalRequestAttemptCloseouts ?? [],
+        providerKey,
+        tx,
+      })
+      const suspectFreshProofLeaseCount = await deleteSuspectFreshProofLeases({
+        proofs: getReconciliationProofs(input),
+        providerKey,
+        tx,
+      })
+      const holderDemotionLeaseCount = await deleteHolderDemotionLeases({
+        holderTokens: getEligibleHolderDemotionTokens({graceMs: holderGraceMs, holders: holderWorkerDemotions, nowMs}),
+        providerKey,
+        tx,
+      })
+      const expiredLeaseCount = await deleteExpiredProviderAdmissionLeases({now, providerKey, tx})
+      const graceHeldLeaseCount = await getActiveLeaseCountForHolderTokens({
+        holderTokens: getGraceHeldHolderTokens({graceMs: holderGraceMs, holders: holderWorkerDemotions, nowMs}),
+        now,
+        providerKey,
+        tx,
+      })
+      const suspectFreshHolderLeaseCount = await getActiveLeaseCountForHolderTokens({
+        holderTokens: getFreshHolderTokens(holderWorkerDemotions),
+        now,
+        providerKey,
+        tx,
+      })
+
+      return {
+        durableRequestCloseoutLeaseCount,
+        expiredLeaseCount,
+        graceHeldLeaseCount,
+        holderDemotionLeaseCount,
+        suspectFreshHolderLeaseCount,
+        suspectFreshProofLeaseCount,
+      }
+    })
+  })
+}
+
+const reconcileProviderAdmissionLeasesForProviders = async ({
+  input,
+  providerKeys,
+  total = getEmptyProviderAdmissionLeaseReconciliationResult(),
+}: {
+  input: ProviderAdmissionLeaseReconciliationInput
+  providerKeys: string[]
+  total?: ProviderAdmissionLeaseReconciliationResult
+}): Promise<ProviderAdmissionLeaseReconciliationResult> => {
+  const [providerKey = '', ...remainingProviderKeys] = providerKeys
+
+  return providerKey
+    ? reconcileProviderAdmissionLeasesForProviders({
+        input,
+        providerKeys: remainingProviderKeys,
+        total: addProviderAdmissionLeaseReconciliationResults(
+          total,
+          await reconcileProviderAdmissionLeasesForProvider({input, providerKey}),
+        ),
+      })
+    : total
+}
+
 const getActiveProviderLeases = (providerKey: string, nowMs: number): ProviderAdmissionLease[] => {
   const entries = Array.from(providerAdmissionLeases.entries())
   const activeEntries = entries.filter(([, lease]) => {
@@ -884,16 +1281,6 @@ export const heartbeatProviderAdmissionLeaseOnCurrentOwner = async (
       const nowMs = getNormalizedTimestampMs(input.nowMs ?? Date.now())
       const now = getDateFromMs(nowMs)
       const expiresAt = getDateFromMs(nowMs + getNormalizedLeaseDurationMs(input.ttlMs ?? providerAdmissionLeaseTtlMs))
-      const existingLease = await getProviderAdmissionLeaseByIdentity({leaseIdentity: input.leaseIdentity, tx})
-
-      if (existingLease === null || existingLease.providerKey !== input.providerKey) {
-        return {heartbeat: false, reason: 'missing'}
-      }
-
-      if (existingLease.holderToken !== input.holderToken) {
-        return {heartbeat: false, reason: 'notHolder'}
-      }
-
       const [row] = await tx.queryJson<ProviderAdmissionLeaseRow>(`
         UPDATE app.provider_admission_lease
         SET heartbeat_at = ${getSqlLiteral(now)},
@@ -914,9 +1301,14 @@ export const heartbeatProviderAdmissionLeaseOnCurrentOwner = async (
           expires_at AS expiresAt
       `)
 
-      return row === undefined
-        ? {heartbeat: false, reason: 'missing'}
-        : {heartbeat: true, lease: getProviderAdmissionLeaseRecord(row)}
+      if (row !== undefined) {
+        return {heartbeat: true, lease: getProviderAdmissionLeaseRecord(row)}
+      }
+
+      const existingLease = await getProviderAdmissionLeaseByIdentity({leaseIdentity: input.leaseIdentity, tx})
+      const reason = existingLease !== null && existingLease.providerKey === input.providerKey ? 'notHolder' : 'missing'
+
+      return {heartbeat: false, reason}
     })
   })
 }
@@ -929,9 +1321,9 @@ export const heartbeatProviderAdmissionLeaseThroughOwner = async (
     : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseHeartbeatResult>({body: input, path: '/heartbeat'})
 }
 
-export const releaseProviderAdmissionLeaseOnCurrentOwner = async (
+export const releaseProviderAdmissionLeaseWithResultOnCurrentOwner = async (
   input: ProviderAdmissionLeaseReleaseInput,
-): Promise<boolean> => {
+): Promise<ProviderAdmissionLeaseReleaseResult> => {
   await ensureCurrentDuckdbOwnerLease()
 
   return withProviderAdmissionLeaseSerialization(input.providerKey, async () => {
@@ -944,9 +1336,30 @@ export const releaseProviderAdmissionLeaseOnCurrentOwner = async (
         RETURNING lease_identity AS leaseIdentity
       `)
 
-      return rows.length > 0
+      if (rows.length > 0) {
+        return {released: true}
+      }
+
+      const existingLease = await getProviderAdmissionLeaseByIdentity({leaseIdentity: input.leaseIdentity, tx})
+      const reason = existingLease !== null && existingLease.providerKey === input.providerKey ? 'notHolder' : 'missing'
+
+      return {released: false, reason}
     })
   })
+}
+
+export const releaseProviderAdmissionLeaseOnCurrentOwner = async (
+  input: ProviderAdmissionLeaseReleaseInput,
+): Promise<boolean> => {
+  return (await releaseProviderAdmissionLeaseWithResultOnCurrentOwner(input)).released
+}
+
+export const releaseProviderAdmissionLeaseWithResultThroughOwner = async (
+  input: ProviderAdmissionLeaseReleaseInput,
+): Promise<ProviderAdmissionLeaseReleaseResult> => {
+  return canCurrentServerOwnDuckdb()
+    ? releaseProviderAdmissionLeaseWithResultOnCurrentOwner(input)
+    : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseReleaseResult>({body: input, path: '/release-result'})
 }
 
 export const releaseProviderAdmissionLeaseThroughOwner = async (
@@ -981,6 +1394,22 @@ export const expireProviderAdmissionLeasesThroughOwner = async (
   return canCurrentServerOwnDuckdb()
     ? expireProviderAdmissionLeasesOnCurrentOwner(input)
     : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseExpiryResult>({body: input, path: '/expire'})
+}
+
+export const reconcileProviderAdmissionLeasesOnCurrentOwner = async (
+  input: ProviderAdmissionLeaseReconciliationInput = {},
+): Promise<ProviderAdmissionLeaseReconciliationResult> => {
+  await ensureCurrentDuckdbOwnerLease()
+
+  return reconcileProviderAdmissionLeasesForProviders({input, providerKeys: await getReconciliationProviderKeys(input)})
+}
+
+export const reconcileProviderAdmissionLeasesThroughOwner = async (
+  input: ProviderAdmissionLeaseReconciliationInput = {},
+): Promise<ProviderAdmissionLeaseReconciliationResult> => {
+  return canCurrentServerOwnDuckdb()
+    ? reconcileProviderAdmissionLeasesOnCurrentOwner(input)
+    : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseReconciliationResult>({body: input, path: '/reconcile'})
 }
 
 export const resetProviderAdmissionLeaseForTests = (): void => {

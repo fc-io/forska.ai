@@ -9,6 +9,7 @@ import {
   type LegacyEvidenceRepairResult,
   repairLegacyTokenUseEvidenceForJob,
 } from './judgmentLegacyEvidenceRepair.ts'
+import {reconcileProviderAdmissionLeasesThroughOwner} from './providerAdmissionLease.ts'
 
 type RolloutCleanupJobRow = {id: string; status: string; storageState: string}
 
@@ -167,5 +168,11 @@ export const runStartupJudgmentRolloutCleanup = async ({
 }: {
   claimedBy: string
 }): Promise<JudgmentStartupRolloutCleanupResult> => {
-  return cleanupStartupRolloutJobs({claimedBy, jobs: await getStartupRolloutJobRows()})
+  const result = await cleanupStartupRolloutJobs({claimedBy, jobs: await getStartupRolloutJobRows()})
+  const terminalRequestAttemptCloseouts =
+    await getJudgmentJobSqliteService().getDurableTerminalRequestAttemptCloseoutProofs()
+
+  await reconcileProviderAdmissionLeasesThroughOwner({terminalRequestAttemptCloseouts})
+
+  return result
 }

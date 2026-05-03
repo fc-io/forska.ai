@@ -8,7 +8,10 @@ import {
   getProviderAdmissionProbeLeaseIdentity,
   getProviderAdmissionRequestLeaseIdentity,
   getProviderBucketSnapshot,
+  heartbeatProviderAdmissionLeaseOnCurrentOwner,
+  reconcileProviderAdmissionLeasesOnCurrentOwner,
   releaseProviderAdmissionLeaseOnCurrentOwner,
+  releaseProviderAdmissionLeaseWithResultOnCurrentOwner,
   resetProviderAdmissionLeaseForTests,
 } from './providerAdmissionLease.ts'
 
@@ -603,4 +606,214 @@ test('current owner release and expiry serialize behind holder fencing', async (
   `)
 
   expect(Number(row?.leaseCount)).toBe(0)
+})
+
+test('current owner heartbeat extends only the exact held lease across provider version changes', async () => {
+  if (!queryDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const firstSnapshot = getProviderBucketSnapshot({
+    getNonCodexCapacity,
+    maxInflightRequests: 2,
+    modelId: 'model-heartbeat-fence',
+    modelProvider: 'openai',
+    providerConnectionId: 'connection-heartbeat-fence',
+    providerConnectionUpdatedAt: '2026-05-04T10:00:00.000Z',
+    providerName: 'OpenAI',
+  })
+  const leaseIdentity = getProviderAdmissionRequestLeaseIdentity('request-attempt-heartbeat-fence')
+
+  await acquireProviderAdmissionLeaseOnCurrentOwner({
+    holderToken: 'holder-a',
+    leaseIdentity,
+    nowMs: 1_000,
+    requestAttemptId: 'request-attempt-heartbeat-fence',
+    snapshot: firstSnapshot,
+    ttlMs: 2_000,
+  })
+
+  getProviderBucketSnapshot({
+    getNonCodexCapacity,
+    maxInflightRequests: 1,
+    modelId: 'model-heartbeat-fence',
+    modelProvider: 'openai',
+    providerConnectionId: 'connection-heartbeat-fence',
+    providerConnectionUpdatedAt: '2026-05-04T10:01:00.000Z',
+    providerName: 'OpenAI',
+  })
+
+  const blocked = await heartbeatProviderAdmissionLeaseOnCurrentOwner({
+    holderToken: 'holder-b',
+    leaseIdentity,
+    nowMs: 2_000,
+    providerKey: firstSnapshot.providerKey,
+    ttlMs: 10_000,
+  })
+  const extended = await heartbeatProviderAdmissionLeaseOnCurrentOwner({
+    holderToken: 'holder-a',
+    leaseIdentity,
+    nowMs: 3_000,
+    providerKey: firstSnapshot.providerKey,
+    ttlMs: 10_000,
+  })
+  const [row] = await queryDatabase<{
+    expiresAt: string
+    heartbeatAt: string
+    holderToken: string
+    providerKey: string
+  }>(`
+    SELECT
+      expires_at AS expiresAt,
+      heartbeat_at AS heartbeatAt,
+      holder_token AS holderToken,
+      provider_key AS providerKey
+    FROM app.provider_admission_lease
+    WHERE lease_identity = ${getSqlLiteral(leaseIdentity)}
+  `)
+
+  expect(blocked).toEqual({heartbeat: false, reason: 'notHolder'})
+  expect(extended).toMatchObject({
+    heartbeat: true,
+    lease: {holderToken: 'holder-a', providerKey: firstSnapshot.providerKey},
+  })
+  expect(new Date(row?.expiresAt ?? '').getTime()).toBe(13_000)
+  expect(new Date(row?.heartbeatAt ?? '').getTime()).toBe(3_000)
+  expect(row).toMatchObject({holderToken: 'holder-a', providerKey: firstSnapshot.providerKey})
+})
+
+test('current owner release result reports notHolder without deleting another holder lease', async () => {
+  if (!queryDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const snapshot = getProviderBucketSnapshot({
+    getNonCodexCapacity,
+    maxInflightRequests: 2,
+    modelId: 'model-release-result',
+    modelProvider: 'openai',
+    providerConnectionId: 'connection-release-result',
+    providerConnectionUpdatedAt: '2026-05-04T10:00:00.000Z',
+    providerName: 'OpenAI',
+  })
+  const leaseIdentity = getProviderAdmissionRequestLeaseIdentity('request-attempt-release-result')
+
+  await acquireProviderAdmissionLeaseOnCurrentOwner({
+    holderToken: 'holder-a',
+    leaseIdentity,
+    nowMs: 1_000,
+    requestAttemptId: 'request-attempt-release-result',
+    snapshot,
+  })
+
+  expect(
+    await releaseProviderAdmissionLeaseWithResultOnCurrentOwner({
+      holderToken: 'holder-b',
+      leaseIdentity,
+      providerKey: snapshot.providerKey,
+    }),
+  ).toEqual({released: false, reason: 'notHolder'})
+
+  const [row] = await queryDatabase<{holderToken: string; leaseCount: number}>(`
+    SELECT holder_token AS holderToken, COUNT(*) OVER () AS leaseCount
+    FROM app.provider_admission_lease
+    WHERE lease_identity = ${getSqlLiteral(leaseIdentity)}
+  `)
+
+  expect(row?.holderToken).toBe('holder-a')
+  expect(Number(row?.leaseCount)).toBe(1)
+  expect(
+    await releaseProviderAdmissionLeaseWithResultOnCurrentOwner({
+      holderToken: 'holder-a',
+      leaseIdentity,
+      providerKey: snapshot.providerKey,
+    }),
+  ).toEqual({released: true})
+})
+
+test('current owner reconciliation closes exact request leases without closing probes', async () => {
+  if (!queryDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const providerKey = 'provider-reconcile'
+  const requestLeaseIdentity = getProviderAdmissionRequestLeaseIdentity('request-attempt-reconcile-terminal')
+  const demotedLeaseIdentity = getProviderAdmissionRequestLeaseIdentity('request-attempt-reconcile-demoted')
+  const freshLeaseIdentity = getProviderAdmissionRequestLeaseIdentity('request-attempt-reconcile-fresh')
+  const endpointAvailabilityKey = 'provider-reconcile::http://localhost:30001'
+  const probeLeaseIdentity = getProviderAdmissionProbeLeaseIdentity({
+    endpointAvailabilityKey,
+    probeAttemptId: 'probe-attempt-reconcile-terminal',
+  })
+
+  await insertLease({
+    holderToken: 'terminal-holder',
+    leaseIdentity: requestLeaseIdentity,
+    leaseKind: 'request',
+    providerKey,
+    requestAttemptId: 'request-attempt-reconcile-terminal',
+  })
+  await insertLease({
+    endpointAvailabilityKey,
+    holderToken: 'probe-holder',
+    leaseIdentity: probeLeaseIdentity,
+    leaseKind: 'probe',
+    probeAttemptId: 'probe-attempt-reconcile-terminal',
+    providerKey,
+  })
+  await insertLease({
+    holderToken: 'demoted-holder',
+    leaseIdentity: demotedLeaseIdentity,
+    leaseKind: 'request',
+    providerKey,
+    requestAttemptId: 'request-attempt-reconcile-demoted',
+  })
+  await insertLease({
+    holderToken: 'fresh-holder',
+    leaseIdentity: freshLeaseIdentity,
+    leaseKind: 'request',
+    providerKey,
+    requestAttemptId: 'request-attempt-reconcile-fresh',
+  })
+
+  const result = await reconcileProviderAdmissionLeasesOnCurrentOwner({
+    holderGraceMs: 1_000,
+    holderWorkerDemotions: [
+      {demotedAtMs: 1_000, freshness: 'demoted', holderToken: 'demoted-holder'},
+      {freshness: 'fresh', holderToken: 'fresh-holder', observedAtMs: 2_000},
+    ],
+    nowMs: 3_000,
+    terminalRequestAttemptCloseouts: [{providerKey, requestAttemptId: 'request-attempt-reconcile-terminal'}],
+  })
+  const rows = await queryDatabase<{leaseIdentity: string; leaseKind: string}>(`
+    SELECT lease_identity AS leaseIdentity, lease_kind AS leaseKind
+    FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+    ORDER BY lease_kind ASC, lease_identity ASC
+  `)
+
+  expect(result).toMatchObject({
+    durableRequestCloseoutLeaseCount: 1,
+    holderDemotionLeaseCount: 1,
+    suspectFreshHolderLeaseCount: 1,
+  })
+  expect(rows).toEqual([
+    {leaseIdentity: probeLeaseIdentity, leaseKind: 'probe'},
+    {leaseIdentity: freshLeaseIdentity, leaseKind: 'request'},
+  ])
+
+  const proofResult = await reconcileProviderAdmissionLeasesOnCurrentOwner({
+    suspectFreshProofs: [
+      {holderToken: 'probe-holder', leaseIdentity: probeLeaseIdentity, leaseKind: 'probe', providerKey},
+    ],
+  })
+  const remainingRows = await queryDatabase<{leaseIdentity: string; leaseKind: string}>(`
+    SELECT lease_identity AS leaseIdentity, lease_kind AS leaseKind
+    FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+    ORDER BY lease_kind ASC, lease_identity ASC
+  `)
+
+  expect(proofResult).toMatchObject({suspectFreshProofLeaseCount: 1})
+  expect(remainingRows).toEqual([{leaseIdentity: freshLeaseIdentity, leaseKind: 'request'}])
 })
