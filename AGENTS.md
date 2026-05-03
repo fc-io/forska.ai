@@ -32,6 +32,7 @@ bun run db:duck:rebuild-marts
 - List commands you ran. If you skip an obvious command, say why.
 - Do not fix unrelated lint issues.
 - For shared app, frontend, runtime-path, or server changes, explicitly consider both the browser/web flow and the desktop app flow. Verify the relevant one(s) and call out what you checked.
+- For internal intermediate state, queues, caches, and marts, do not add backward-compatibility shims unless explicitly required. Prefer a clear cutover that deletes or rebuilds obsolete intermediate state over preserving legacy rows or parallel paths.
 
 ## Benchmark Integrity
 
