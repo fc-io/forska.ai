@@ -169,6 +169,38 @@ test('applies lower provider caps without restart', async () => {
   await runtime.shutdown('test-complete')
 })
 
+test('uses adaptive prompt backlog target when provided', async () => {
+  const release = createSignal()
+  const processPromptBatch = mock(async ({prompts}: {label: string; prompts: PromptToProcess[]}) => {
+    const [firstPrompt] = prompts
+
+    if (firstPrompt?.recordId === 'record-active') {
+      await release.promise
+    }
+  })
+  const runtime = createJudgmentDispatchRuntime({processPromptBatch})
+
+  await runtime.enqueueClaimedPrompts({
+    label: 'adaptive-target',
+    prompts: [
+      createPrompt({providerMaxInflightRequests: 2, providerPromptBacklogTarget: 6, recordId: 'record-active'}),
+    ],
+  })
+  await flush()
+
+  expect(
+    await runtime.getProviderQueueCapacity({
+      providerConnectionId: 'connection-a',
+      providerMaxInflightRequests: 2,
+      providerPromptBacklogTarget: 6,
+      providerUsesFamilyDefault: false,
+    }),
+  ).toBe(4)
+
+  release.resolve()
+  await runtime.shutdown('test-complete')
+})
+
 test('reports job-local and provider dispatch stats separately', async () => {
   const release = createSignal()
   const processPromptBatch = mock(async ({prompts}: {label: string; prompts: PromptToProcess[]}) => {

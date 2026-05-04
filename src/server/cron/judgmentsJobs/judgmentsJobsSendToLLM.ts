@@ -16,6 +16,7 @@ import {
 } from './judgmentDispatchRuntime.ts'
 import {getJudgmentEndpointAvailability} from './judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
+import {recordJudgmentReadyWorkClaimResult} from './judgmentReadyWorkSignal.ts'
 import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 import {
   getAndUpdateReadyPrompts,
@@ -456,7 +457,22 @@ const claimAndEnqueuePromptRequest = async ({
   limit: number
   serverJobId: string
 }): Promise<number> => {
-  return claimAndEnqueuePromptChunks({chunkLimits: getPromptClaimChunkLimits(limit), job, label, serverJobId})
+  const fetched = await claimAndEnqueuePromptChunks({
+    chunkLimits: getPromptClaimChunkLimits(limit),
+    job,
+    label,
+    serverJobId,
+  })
+
+  recordJudgmentReadyWorkClaimResult({
+    claimedCount: fetched,
+    jobId: job.id,
+    ownerBacked: shouldUseJudgeWorkerOwnerHandoff(),
+    providerKey: getJobProviderKey(job),
+    requestedCount: limit,
+  })
+
+  return fetched
 }
 
 const getDispatchEndpoints = (runtime: PromptRuntime): string[] => {

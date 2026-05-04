@@ -36,6 +36,7 @@ export type PromptToProcess = {
   providerLimitVersion?: string
   providerMaxInflightRequests: number | null
   providerName?: string
+  providerPromptBacklogTarget?: number | null
   providerUsesFamilyDefault: boolean
   resolvedDefaultCapacity?: number
   modelWorkerUrls: string[]

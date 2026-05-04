@@ -1,6 +1,10 @@
 import {expect, test} from 'bun:test'
 
-import {getProviderTargetAllocationSnapshot} from './providerTargetAllocationSnapshot.ts'
+import {
+  getJudgmentBacklogControllerState,
+  getProviderTargetAllocationSnapshot,
+  judgmentBacklogControllerConstants,
+} from './providerTargetAllocationSnapshot.ts'
 
 const completeSource = {
   aggregateCompleteness: 'complete' as const,
@@ -145,5 +149,78 @@ test('uses probe occupancy version in allocation identity and capacity input', (
     providerAvailableRequestLeases: 3,
     providerLeasedPhysicalCalls: 2,
     targetRequestLiveCalls: 4,
+  })
+})
+
+test('adaptive backlog controller preserves filled targets until hysteresis allows growth', () => {
+  const baseInput = {
+    allocationCompleteCurrent: true,
+    effectiveProviderLimit: 8,
+    expectedLocalLiveShare: 8,
+    hasHealthyEndpointOrEndpointlessPath: true,
+    localPromptBacklog: 16,
+    localPromptBacklogTarget: 16,
+    localProviderLiveRequests: 4,
+    localRequestWorkBacklog: 8,
+    localRequestWorkBacklogTarget: 8,
+    normalRequestCapacity: 8,
+    preconditionsStableSinceMs: judgmentBacklogControllerConstants.targetIncreaseHysteresisMs - 1,
+    providerAvailableRequestLeases: 4,
+    providerLeasedProbeCalls: 0,
+    providerLimit: 8,
+    readyCount: 20,
+  }
+
+  const held = getJudgmentBacklogControllerState(baseInput)
+  const increased = getJudgmentBacklogControllerState({
+    ...baseInput,
+    preconditionsStableSinceMs: judgmentBacklogControllerConstants.targetIncreaseHysteresisMs,
+  })
+
+  expect(held).toMatchObject({
+    backlogReplenishmentAllowed: true,
+    localAdditionalLeaseHeadroom: 0,
+    localAdditionalTargetHeadroom: 0,
+    localPromptBacklogTarget: 16,
+    localRequestWorkBacklogTarget: 8,
+    targetIncreaseAllowed: false,
+  })
+  expect(increased).toMatchObject({
+    backlogReplenishmentAllowed: true,
+    localAdditionalLeaseHeadroom: 1,
+    localAdditionalTargetHeadroom: 1,
+    localPromptBacklogTarget: 17,
+    localRequestWorkBacklogTarget: 9,
+    targetIncreaseAllowed: true,
+  })
+})
+
+test('adaptive backlog controller immediately clamps unsafe targets without new lease headroom', () => {
+  const state = getJudgmentBacklogControllerState({
+    allocationCompleteCurrent: false,
+    effectiveProviderLimit: 8,
+    expectedLocalLiveShare: 8,
+    hasHealthyEndpointOrEndpointlessPath: true,
+    localPromptBacklog: 3,
+    localPromptBacklogTarget: 16,
+    localProviderLiveRequests: 2,
+    localRequestWorkBacklog: 2,
+    localRequestWorkBacklogTarget: 8,
+    normalRequestCapacity: 8,
+    preconditionsStableSinceMs: judgmentBacklogControllerConstants.targetIncreaseHysteresisMs,
+    providerAvailableRequestLeases: 6,
+    providerLeasedProbeCalls: 0,
+    providerLimit: 8,
+    readyCount: 20,
+  })
+
+  expect(state).toMatchObject({
+    backlogReplenishmentAllowed: false,
+    localAdditionalLeaseHeadroom: 0,
+    localAdditionalTargetHeadroom: 0,
+    localPromptBacklogTarget: 3,
+    localRequestWorkBacklogTarget: 2,
+    preconditionChangedReason: 'allocationSnapshotIncomplete',
+    targetIncreaseAllowed: false,
   })
 })

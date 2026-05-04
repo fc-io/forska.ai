@@ -7,6 +7,7 @@ import {
   getAcceptedJudgeWorkerClaimLifecycleRows,
   shouldUseJudgeWorkerOwnerHandoff,
 } from './judgeWorkerCompletionJournal.ts'
+import {getJudgmentBacklogControllerState, type JudgmentBacklogLifecycleAgesMs} from './judgmentBacklogController.ts'
 import {
   getJudgmentDispatchPromptLifecycleRecords,
   getJudgmentDispatchProviderKey,
@@ -24,6 +25,7 @@ import {
   type JudgmentLifecycleTelemetryRecord,
   mergeJudgmentLifecycleTelemetry,
 } from './judgmentLifecycleTelemetry.ts'
+import {getJudgmentReadyWorkSignal} from './judgmentReadyWorkSignal.ts'
 import {
   type JudgmentRequestAttemptJsonEntry,
   parseRequestAttempts,
@@ -105,6 +107,7 @@ export type JudgmentConvergenceDiagnostics = {
   providerAcceptingRequests: boolean
   providerLimitPositive: boolean
   readyCount: number
+  targetIncreaseAllowed?: boolean
 }
 
 export type JudgmentProviderTelemetry = {
@@ -449,6 +452,9 @@ const getConvergenceDiagnosticsFromRecord = (value: unknown): JudgmentConvergenc
         providerAcceptingRequests,
         providerLimitPositive,
         readyCount,
+        ...(getBooleanValue(value.targetIncreaseAllowed) === null
+          ? {}
+          : {targetIncreaseAllowed: getBooleanValue(value.targetIncreaseAllowed) ?? false}),
       }
 }
 
@@ -936,19 +942,29 @@ const getProviderBucketSnapshotFromInput = (input: JudgmentDispatchTelemetryInpu
 }
 
 const getConvergenceDiagnostics = ({
+  activeHigherPriorityStopRules = [],
   allocationCompleteCurrent,
   allocationInputState,
+  backlogReplenishmentAllowed,
   normalRequestCapacity,
+  preconditionChangedReason = null,
+  preconditionsStableSinceMs = 0,
   providerAvailableRequestLeases,
   providerLimit,
   readyCount,
+  targetIncreaseAllowed,
 }: {
+  activeHigherPriorityStopRules?: string[]
   allocationCompleteCurrent: boolean
   allocationInputState: string
+  backlogReplenishmentAllowed?: boolean
   normalRequestCapacity: number
+  preconditionChangedReason?: string | null
+  preconditionsStableSinceMs?: number
   providerAvailableRequestLeases: number
   providerLimit: number
   readyCount: number
+  targetIncreaseAllowed?: boolean
 }): JudgmentConvergenceDiagnostics => {
   const providerLimitPositive = providerLimit > 0
   const normalRequestCapacityPositive = normalRequestCapacity > 0
@@ -956,17 +972,19 @@ const getConvergenceDiagnostics = ({
   const hasReadyWork = readyCount > 0
 
   return {
-    activeHigherPriorityStopRules: [],
+    activeHigherPriorityStopRules,
     allocationCompleteCurrent,
     allocationInputState,
-    backlogReplenishmentAllowed: hasReadyWork && providerAcceptingRequests && normalRequestCapacityPositive,
+    backlogReplenishmentAllowed:
+      backlogReplenishmentAllowed ?? (hasReadyWork && providerAcceptingRequests && normalRequestCapacityPositive),
     hasHealthyEndpointOrEndpointlessPath: true,
     normalRequestCapacityPositive,
-    preconditionChangedReason: null,
-    preconditionsStableSinceMs: 0,
+    preconditionChangedReason,
+    preconditionsStableSinceMs,
     providerAcceptingRequests,
     providerLimitPositive,
     readyCount,
+    ...(targetIncreaseAllowed === undefined ? {} : {targetIncreaseAllowed}),
   }
 }
 
@@ -994,13 +1012,53 @@ const getProviderTargetAllocationWorkerInput = (
   }
 }
 
+const getReadyWorkCountForController = ({
+  input,
+  providerKey,
+}: {
+  input: JudgmentDispatchTelemetryInput
+  providerKey: string
+}): number => {
+  return getJudgmentReadyWorkSignal({
+    jobId: input.jobId,
+    ownerBacked: shouldUseJudgeWorkerOwnerHandoff(),
+    providerKey,
+    readyCount: input.readyCount,
+  }).readyCount
+}
+
+const getLifecycleSummaryAgeMs = (
+  lifecycle: JudgmentLifecycleTelemetry | undefined,
+  lifecycleState: string,
+): number | null => {
+  const summary = lifecycle?.summaries.find((entry) => {
+    return entry.lifecycleState === lifecycleState
+  })
+
+  return summary?.ageMs.maxMs ?? null
+}
+
+const getBacklogControllerLifecycleAgesMs = (
+  lifecycle: JudgmentLifecycleTelemetry | undefined,
+): JudgmentBacklogLifecycleAgesMs => {
+  return {
+    dispatchQueued: getLifecycleSummaryAgeMs(lifecycle, 'dispatchQueued'),
+    hasLiveRequest: getLifecycleSummaryAgeMs(lifecycle, 'hasLiveRequest'),
+    persisting: getLifecycleSummaryAgeMs(lifecycle, 'persisting'),
+    preparing: getLifecycleSummaryAgeMs(lifecycle, 'preparing'),
+    waitingForRequestSlot: getLifecycleSummaryAgeMs(lifecycle, 'waitingForRequestSlot'),
+  }
+}
+
 const getLocalProviderTelemetry = async ({
   dispatch,
   input,
+  lifecycle,
   request,
 }: {
   dispatch: JudgmentDispatchPromptTelemetry
   input: JudgmentDispatchTelemetryInput
+  lifecycle?: JudgmentLifecycleTelemetry
   request: JudgmentDispatchTelemetrySnapshot['request']
 }): Promise<JudgmentProviderTelemetry> => {
   const snapshot = getProviderBucketSnapshotFromInput(input)
@@ -1057,22 +1115,40 @@ const getLocalProviderTelemetry = async ({
   const targetRequestLiveCalls = providerTargetAllocationSnapshot.targetRequestLiveCalls
   const effectiveProviderLimit = localWorkerAllocation?.effectiveProviderLimit ?? 0
   const expectedLocalLiveShare = localWorkerAllocation?.expectedLocalLiveShare ?? 0
-  const localAdditionalTargetHeadroom = Math.max(0, expectedLocalLiveShare - localProviderLiveRequests)
-  const localAdditionalLeaseHeadroom = Math.min(providerAvailableRequestLeases, localAdditionalTargetHeadroom)
   const localPromptBacklog = dispatch.providerDispatchActivePrompts + dispatch.providerDispatchQueuedPrompts
-  const localPromptBacklogTarget = dispatch.providerDispatchActivePromptLimit + dispatch.providerDispatchQueueLimit
   const localRequestWorkBacklog =
     Math.max(localProviderLiveRequests, request.inFlight) + request.pendingPersistedAttempts
-  const localRequestWorkBacklogTarget = expectedLocalLiveShare
   const allocationInputState = providerTargetAllocationSnapshot.allocationInputState
   const allocationCompleteCurrent = providerTargetAllocationSnapshot.allocationCompleteCurrent
+  const readyCount = getReadyWorkCountForController({input, providerKey: snapshot.providerKey})
+  const controller = getJudgmentBacklogControllerState({
+    allocationCompleteCurrent,
+    effectiveProviderLimit,
+    expectedLocalLiveShare,
+    hasHealthyEndpointOrEndpointlessPath: true,
+    lifecycleAgesMs: getBacklogControllerLifecycleAgesMs(lifecycle),
+    localPromptBacklog,
+    localPromptBacklogTarget: dispatch.providerDispatchActivePromptLimit + dispatch.providerDispatchQueueLimit,
+    localProviderLiveRequests,
+    localRequestWorkBacklog,
+    localRequestWorkBacklogTarget: expectedLocalLiveShare,
+    normalRequestCapacity,
+    providerAvailableRequestLeases,
+    providerLeasedProbeCalls: leaseTelemetry.providerLeasedProbeCalls,
+    providerLimit: snapshot.providerLimit,
+    readyCount,
+  })
   const convergenceDiagnostics = getConvergenceDiagnostics({
     allocationCompleteCurrent,
     allocationInputState,
+    backlogReplenishmentAllowed: controller.backlogReplenishmentAllowed,
     normalRequestCapacity,
+    preconditionChangedReason: controller.preconditionChangedReason,
+    preconditionsStableSinceMs: controller.preconditionsStableSinceMs,
     providerAvailableRequestLeases,
     providerLimit: snapshot.providerLimit,
-    readyCount: Math.max(0, Math.trunc(input.readyCount ?? 0)),
+    readyCount,
+    targetIncreaseAllowed: controller.targetIncreaseAllowed,
   })
 
   return {
@@ -1085,14 +1161,14 @@ const getLocalProviderTelemetry = async ({
     effectiveProviderLimit,
     endpointDiagnostics: [],
     expectedLocalLiveShare,
-    localAdditionalLeaseHeadroom,
-    localAdditionalTargetHeadroom,
+    localAdditionalLeaseHeadroom: controller.localAdditionalLeaseHeadroom,
+    localAdditionalTargetHeadroom: controller.localAdditionalTargetHeadroom,
     localPromptBacklog,
-    localPromptBacklogTarget,
+    localPromptBacklogTarget: controller.localPromptBacklogTarget,
     localProviderLiveRequests,
     localProviderRequestFillPct: getFillPct(localProviderLiveRequests, effectiveProviderLimit),
     localRequestWorkBacklog,
-    localRequestWorkBacklogTarget,
+    localRequestWorkBacklogTarget: controller.localRequestWorkBacklogTarget,
     normalRequestCapacity,
     observedAggregateLabel: 'bestEffort',
     observedGlobalEffectiveProviderLimit: effectiveProviderLimit,
@@ -1126,7 +1202,7 @@ export const getLocalJudgmentDispatchTelemetry = async (
   ])
   const dispatch = getDispatchTelemetryFromStats(dispatchStats)
   const request = getJudgmentRequestStats(input.jobId)
-  const provider = await getLocalProviderTelemetry({dispatch, input, request})
+  const provider = await getLocalProviderTelemetry({dispatch, input, lifecycle, request})
   const source = getTelemetrySourceMetadata({
     freshWorkerCount: 1,
     providerKey: provider.providerKey,
@@ -1179,27 +1255,40 @@ const withProviderTargetAllocationSnapshot = ({
   })
   const expectedLocalLiveShare = workerAllocation?.expectedLocalLiveShare ?? 0
   const effectiveProviderLimit = workerAllocation?.effectiveProviderLimit ?? 0
-  const localAdditionalTargetHeadroom = Math.max(
-    0,
-    expectedLocalLiveShare - snapshot.provider.localProviderLiveRequests,
-  )
-  const localAdditionalLeaseHeadroom = Math.min(
-    allocationSnapshot.providerAvailableRequestLeases,
-    localAdditionalTargetHeadroom,
-  )
+  const controller = getJudgmentBacklogControllerState({
+    activeHigherPriorityStopRules: snapshot.provider.convergenceDiagnostics.activeHigherPriorityStopRules,
+    allocationCompleteCurrent: allocationSnapshot.allocationCompleteCurrent,
+    effectiveProviderLimit,
+    expectedLocalLiveShare,
+    hasHealthyEndpointOrEndpointlessPath: snapshot.provider.convergenceDiagnostics.hasHealthyEndpointOrEndpointlessPath,
+    lifecycleAgesMs: getBacklogControllerLifecycleAgesMs(snapshot.lifecycle),
+    localPromptBacklog: snapshot.provider.localPromptBacklog,
+    localPromptBacklogTarget: snapshot.provider.localPromptBacklogTarget,
+    localProviderLiveRequests: snapshot.provider.localProviderLiveRequests,
+    localRequestWorkBacklog: snapshot.provider.localRequestWorkBacklog,
+    localRequestWorkBacklogTarget: snapshot.provider.localRequestWorkBacklogTarget,
+    normalRequestCapacity: allocationSnapshot.normalRequestCapacity,
+    preconditionsStableSinceMs: snapshot.provider.convergenceDiagnostics.preconditionsStableSinceMs,
+    providerAvailableRequestLeases: allocationSnapshot.providerAvailableRequestLeases,
+    providerLeasedProbeCalls: allocationSnapshot.providerLeasedProbeCalls,
+    providerLimit: allocationSnapshot.providerLimit,
+    readyCount: snapshot.provider.convergenceDiagnostics.readyCount,
+  })
   const convergenceDiagnostics = {
     ...getConvergenceDiagnostics({
       allocationCompleteCurrent: allocationSnapshot.allocationCompleteCurrent,
       allocationInputState: allocationSnapshot.allocationInputState,
+      backlogReplenishmentAllowed: controller.backlogReplenishmentAllowed,
       normalRequestCapacity: allocationSnapshot.normalRequestCapacity,
+      preconditionChangedReason: controller.preconditionChangedReason,
+      preconditionsStableSinceMs: controller.preconditionsStableSinceMs,
       providerAvailableRequestLeases: allocationSnapshot.providerAvailableRequestLeases,
       providerLimit: allocationSnapshot.providerLimit,
       readyCount: snapshot.provider.convergenceDiagnostics.readyCount,
+      targetIncreaseAllowed: controller.targetIncreaseAllowed,
     }),
     activeHigherPriorityStopRules: snapshot.provider.convergenceDiagnostics.activeHigherPriorityStopRules,
     hasHealthyEndpointOrEndpointlessPath: snapshot.provider.convergenceDiagnostics.hasHealthyEndpointOrEndpointlessPath,
-    preconditionChangedReason: snapshot.provider.convergenceDiagnostics.preconditionChangedReason,
-    preconditionsStableSinceMs: snapshot.provider.convergenceDiagnostics.preconditionsStableSinceMs,
   }
   const provider = {
     ...snapshot.provider,
@@ -1208,10 +1297,11 @@ const withProviderTargetAllocationSnapshot = ({
     convergenceDiagnostics,
     effectiveProviderLimit,
     expectedLocalLiveShare,
-    localAdditionalLeaseHeadroom,
-    localAdditionalTargetHeadroom,
+    localAdditionalLeaseHeadroom: controller.localAdditionalLeaseHeadroom,
+    localAdditionalTargetHeadroom: controller.localAdditionalTargetHeadroom,
+    localPromptBacklogTarget: controller.localPromptBacklogTarget,
     localProviderRequestFillPct: getFillPct(snapshot.provider.localProviderLiveRequests, effectiveProviderLimit),
-    localRequestWorkBacklogTarget: expectedLocalLiveShare,
+    localRequestWorkBacklogTarget: controller.localRequestWorkBacklogTarget,
     normalRequestCapacity: allocationSnapshot.normalRequestCapacity,
     probeOccupancySampledAtMs: allocationSnapshot.probeOccupancySampledAtMs,
     providerAllocationVersion: allocationSnapshot.providerAllocationVersion,
@@ -1467,8 +1557,50 @@ export const withJudgmentProviderEndpointDiagnostics = ({
     staleWorkerCount: snapshot.source.staleWorkerCount,
     unavailableWorkerCount: snapshot.source.unavailableWorkerCount,
   })
+  const hasHealthyEndpointOrEndpointlessPath = diagnostics.status === 'healthy'
+  const controller = getJudgmentBacklogControllerState({
+    activeHigherPriorityStopRules: snapshot.provider.convergenceDiagnostics.activeHigherPriorityStopRules,
+    allocationCompleteCurrent: snapshot.provider.allocationCompleteCurrent,
+    effectiveProviderLimit: snapshot.provider.effectiveProviderLimit,
+    expectedLocalLiveShare: snapshot.provider.expectedLocalLiveShare,
+    hasHealthyEndpointOrEndpointlessPath,
+    lifecycleAgesMs: getBacklogControllerLifecycleAgesMs(snapshot.lifecycle),
+    localPromptBacklog: snapshot.provider.localPromptBacklog,
+    localPromptBacklogTarget: snapshot.provider.localPromptBacklogTarget,
+    localProviderLiveRequests: snapshot.provider.localProviderLiveRequests,
+    localRequestWorkBacklog: snapshot.provider.localRequestWorkBacklog,
+    localRequestWorkBacklogTarget: snapshot.provider.localRequestWorkBacklogTarget,
+    normalRequestCapacity: snapshot.provider.normalRequestCapacity,
+    preconditionsStableSinceMs: snapshot.provider.convergenceDiagnostics.preconditionsStableSinceMs,
+    providerAvailableRequestLeases: snapshot.provider.providerAvailableRequestLeases,
+    providerLeasedProbeCalls: snapshot.provider.providerLeasedProbeCalls,
+    providerLimit: snapshot.provider.providerLimit,
+    readyCount: snapshot.provider.convergenceDiagnostics.readyCount,
+  })
+  const convergenceDiagnostics = {
+    ...snapshot.provider.convergenceDiagnostics,
+    backlogReplenishmentAllowed: controller.backlogReplenishmentAllowed,
+    hasHealthyEndpointOrEndpointlessPath,
+    preconditionChangedReason: controller.preconditionChangedReason,
+    preconditionsStableSinceMs: controller.preconditionsStableSinceMs,
+    ...(controller.targetIncreaseAllowed === undefined
+      ? {}
+      : {targetIncreaseAllowed: controller.targetIncreaseAllowed}),
+  }
 
-  return {...snapshot, provider: {...snapshot.provider, endpointDiagnostics}, source}
+  return {
+    ...snapshot,
+    provider: {
+      ...snapshot.provider,
+      convergenceDiagnostics,
+      endpointDiagnostics,
+      localAdditionalLeaseHeadroom: controller.localAdditionalLeaseHeadroom,
+      localAdditionalTargetHeadroom: controller.localAdditionalTargetHeadroom,
+      localPromptBacklogTarget: controller.localPromptBacklogTarget,
+      localRequestWorkBacklogTarget: controller.localRequestWorkBacklogTarget,
+    },
+    source,
+  }
 }
 
 export const getAggregatedJudgmentDispatchTelemetry = async (

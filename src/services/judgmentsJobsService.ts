@@ -22,6 +22,7 @@ export type JudgmentJobConvergenceDiagnostics = {
   providerAcceptingRequests: boolean
   providerLimitPositive: boolean
   readyCount: number
+  targetIncreaseAllowed?: boolean
 }
 export type JudgmentJobProviderTelemetry = {
   allocationCompleteCurrent: boolean

@@ -7,6 +7,7 @@ import {
   flushJudgeWorkerCompletionOutboxForClaim,
   shouldUseJudgeWorkerOwnerHandoff,
 } from './judgeWorkerCompletionJournal.ts'
+import {getJudgmentPromptQueueTargetFromProviderLimit} from './judgmentBacklogController.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import type {JudgmentLifecycleTelemetryRecord} from './judgmentLifecycleTelemetry.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
@@ -19,6 +20,7 @@ export type ProviderQueueInput = {
   providerKey?: string | null
   providerConnectionId: string | null
   providerMaxInflightRequests: number | null
+  providerPromptBacklogTarget?: number | null
   providerUsesFamilyDefault: boolean
 }
 
@@ -132,11 +134,15 @@ export const getJudgmentDispatchProviderKey = (input: ProviderQueueInput): strin
 }
 
 const getProviderActivePromptLimit = ({providerMaxInflightRequests}: ProviderQueueInput): number => {
-  return Math.max(1, providerMaxInflightRequests ?? 1)
+  return getJudgmentPromptQueueTargetFromProviderLimit({providerMaxInflightRequests}).activePromptLimit
 }
 
-const getProviderQueueCapacityLimit = ({providerMaxInflightRequests}: ProviderQueueInput): number => {
-  return Math.max(1, providerMaxInflightRequests ?? 1)
+const getProviderQueueCapacityLimit = ({
+  providerMaxInflightRequests,
+  providerPromptBacklogTarget,
+}: ProviderQueueInput): number => {
+  return getJudgmentPromptQueueTargetFromProviderLimit({providerMaxInflightRequests, providerPromptBacklogTarget})
+    .queuedPromptLimit
 }
 
 const getPromptProviderQueueInput = (prompt: PromptToProcess): ProviderQueueInput => {
@@ -146,6 +152,7 @@ const getPromptProviderQueueInput = (prompt: PromptToProcess): ProviderQueueInpu
     providerKey: prompt.providerKey,
     providerConnectionId: prompt.providerConnectionId,
     providerMaxInflightRequests: prompt.providerMaxInflightRequests,
+    providerPromptBacklogTarget: prompt.providerPromptBacklogTarget,
     providerUsesFamilyDefault: prompt.providerUsesFamilyDefault,
   }
 }

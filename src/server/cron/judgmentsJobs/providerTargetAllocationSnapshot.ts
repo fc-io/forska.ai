@@ -1,3 +1,10 @@
+export {
+  getJudgmentBacklogControllerState,
+  judgmentBacklogControllerConstants,
+  type JudgmentBacklogControllerInput,
+  type JudgmentBacklogControllerState,
+} from './judgmentBacklogController.ts'
+
 export type ProviderTargetAllocationInputState = 'completeCurrent' | 'partialTelemetry'
 
 export type ProviderTargetAllocationSourceMetadata = {
