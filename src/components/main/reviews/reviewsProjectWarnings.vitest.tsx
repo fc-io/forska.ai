@@ -190,6 +190,8 @@ test('renders staged large rebuild progress separately from dirty article ACKs',
         cursorArticleCreatedAt: null,
         cursorArticleId: 'article-148',
         lastError: null,
+        lastProgressedAt: '2026-04-02T12:12:00.000Z',
+        lastStartedAt: '2026-04-02T12:05:00.000Z',
         operatorNote: null,
         progress: {remainingCurrentPhaseArticleCount: 12, rowsPerMinute: 600, scopeArticleCount: 148},
         rebuildPhase: 'review_article_serving',
@@ -208,6 +210,197 @@ test('renders staged large rebuild progress separately from dirty article ACKs',
     expect(container.textContent).toContain('Large rebuild: current phase 7 of 7 (review_article_serving)')
     expect(container.textContent).toContain('Article counts are per phase and reset when the rebuild advances')
     expect(container.textContent).not.toContain('Article refreshes: processing 0, queued 148, 0/min')
+  } finally {
+    dispose()
+  }
+})
+
+test('renders user-facing counts and progress timestamps for review indexing work', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({
+      activeConsumerCount: 2,
+      activeWorkCount: 2,
+      cleanup: {inFlightGenerationCleanupCount: 1, lastProgressedAt: '2026-04-02T12:11:00.000Z'},
+      dirtyMaterialization: {
+        activeOwnerCount: 1,
+        failedCount: 0,
+        incompleteCount: 2,
+        isActive: true,
+        lastProgressedAt: '2026-04-02T12:10:00.000Z',
+        oldestQueuedAt: '2026-04-02T12:00:00.000Z',
+        pendingCount: 1,
+        runningCount: 1,
+        unreconciledCount: 0,
+      },
+      freshness: {
+        dirtyToken: 8,
+        hasIncompleteDirtyMaterialization: true,
+        hasUnresolvedQuarantineBarrier: true,
+        isFresh: false,
+        lastCompletedDirtyToken: 6,
+        refreshStatus: 'running',
+        status: 'pending',
+        unresolvedQuarantineBarrierCount: 1,
+      },
+      inFlightArticleRefreshCount: 2,
+      inFlightProjectRefreshCount: 1,
+      inFlightRefreshCount: 3,
+      largeRebuild: {
+        cursorArticleCreatedAt: null,
+        cursorArticleId: null,
+        lastError: null,
+        lastProgressedAt: '2026-04-02T12:12:00.000Z',
+        lastStartedAt: '2026-04-02T12:04:00.000Z',
+        operatorNote: null,
+        progress: {remainingCurrentPhaseArticleCount: 4, rowsPerMinute: null, scopeArticleCount: 9},
+        rebuildPhase: 'review_article_rollup',
+        refreshStatus: 'running',
+        refreshToken: 8,
+      },
+      lastProgressedAt: '2026-04-02T12:12:00.000Z',
+      lastStartedAt: '2026-04-02T12:04:00.000Z',
+      pendingArticleRefreshCount: 2,
+      pendingProjectRefreshCount: 1,
+      pendingRefreshCount: 3,
+      progressState: 'processing',
+      quarantinedArticleRefreshCount: 1,
+      quarantinedArticles: [
+        {
+          articleId: 'article-quarantined',
+          createdAt: '2026-04-02T12:03:00.000Z',
+          detectedBy: 'worker-1',
+          error: 'Article refresh failed validation',
+          updatedAt: '2026-04-02T12:09:00.000Z',
+        },
+      ],
+      queuedArticleRefreshCount: 0,
+      queuedProjectRefreshCount: 0,
+    }),
+  )
+
+  try {
+    expect(container.textContent).toContain('Project refreshes: processing 1, queued 0')
+    expect(container.textContent).toContain('last progress')
+    expect(container.textContent).toContain('Dirty materialization: 2 project-wide dirty snapshots pending')
+    expect(container.textContent).toContain('Quarantine: 1 quarantined article barrier blocking freshness')
+    expect(container.textContent).toContain('last updated')
+    expect(container.textContent).toContain('Cleanup: 1 old-generation cleanup job running')
+    expect(container.textContent).toContain('Large rebuild: current phase 6 of 7 (review_article_rollup)')
+  } finally {
+    dispose()
+  }
+})
+
+test('does not render admin-only diagnostics in the user indexing banner', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({
+      activeConsumerCount: 1,
+      activeWorkCount: 1,
+      diagnostics: {
+        duckdbQueues: {
+          background: {
+            lastDurationMs: 4,
+            lastWaitMs: 3,
+            maxQueueDepth: 7,
+            queueDepth: 2,
+            tasksCompleted: 11,
+            tasksStarted: 12,
+            totalDurationMs: 40,
+            totalWaitMs: 30,
+          },
+          main: {
+            lastDurationMs: 5,
+            lastWaitMs: 25,
+            maxQueueDepth: 9,
+            queueDepth: 4,
+            tasksCompleted: 21,
+            tasksStarted: 22,
+            totalDurationMs: 50,
+            totalWaitMs: 250,
+          },
+        },
+        largeRebuild: {
+          currentPhase: {
+            committedRowCount: 900,
+            cycleCount: 3,
+            durationMs: 60000,
+            lastEndedAt: '2026-04-02T12:12:00.000Z',
+            lastRssBytes: 123456789,
+            lastTempSpill: {
+              available: true,
+              error: null,
+              fileCount: 4,
+              tempDirectory: '/tmp/review-diagnostics',
+              totalBytes: 987654,
+            },
+            maxRssBytes: 123456789,
+            maxTempSpillBytes: 987654,
+            phase: 'review_article_serving',
+            queueWaitMs: 25,
+            rowsPerSecond: 15,
+          },
+          lastCycle: {
+            endedAt: '2026-04-02T12:12:00.000Z',
+            phase: 'review_article_serving',
+            queueWaitMs: 25,
+            rowsPerSecond: 15,
+            rssBytes: 123456789,
+            tempSpill: {
+              available: true,
+              error: null,
+              fileCount: 4,
+              tempDirectory: '/tmp/review-diagnostics',
+              totalBytes: 987654,
+            },
+          },
+        },
+        processMemory: {rssBytes: 123456789},
+        tempSpill: {
+          available: true,
+          error: null,
+          fileCount: 4,
+          tempDirectory: '/tmp/review-diagnostics',
+          totalBytes: 987654,
+        },
+      },
+      inFlightProjectRefreshCount: 1,
+      inFlightRefreshCount: 1,
+      progressState: 'processing',
+      queuedProjectRefreshCount: 0,
+    }),
+  )
+
+  try {
+    expect(container.textContent).not.toContain('rows/sec')
+    expect(container.textContent).not.toContain('RSS')
+    expect(container.textContent).not.toContain('temp spill')
+    expect(container.textContent).not.toContain('/tmp/review-diagnostics')
+    expect(container.textContent).not.toContain('queue wait')
+    expect(container.textContent).not.toContain('123456789')
+  } finally {
+    dispose()
+  }
+})
+
+test('renders bounded cleanup while review index reads stay ready', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({
+      cleanup: {inFlightGenerationCleanupCount: 1, lastProgressedAt: '2026-04-02T12:11:00.000Z'},
+      pendingProjectRefreshCount: 0,
+      pendingRefreshCount: 0,
+      progressState: 'completed',
+      queuedProjectRefreshCount: 0,
+      queuedRefreshCount: 0,
+      status: 'ready',
+    }),
+  )
+
+  try {
+    expect(container.textContent).toContain('Review cleanup in progress')
+    expect(container.textContent).toContain('Current review pages remain usable')
+    expect(container.textContent).toContain('Status: old index cleanup running')
+    expect(container.textContent).toContain('Cleanup: 1 old-generation cleanup job running')
+    expect(container.textContent).toContain('last progress')
   } finally {
     dispose()
   }

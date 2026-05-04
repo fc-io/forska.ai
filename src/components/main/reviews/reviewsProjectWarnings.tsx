@@ -105,7 +105,13 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
   const showIndexingBanner = createMemo(() => {
     const status = warningsData()?.indexing.status ?? 'ready'
 
-    return status === 'blocked' || status === 'failed' || status === 'refreshing' || status === 'stale'
+    return (
+      status === 'blocked'
+      || status === 'failed'
+      || status === 'refreshing'
+      || status === 'stale'
+      || (warningsData()?.indexing.cleanup?.inFlightGenerationCleanupCount ?? 0) > 0
+    )
   })
 
   const indexingBannerTone = createMemo(() => {

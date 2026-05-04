@@ -57,10 +57,14 @@ const hasDirtyMaterializationWork = (indexing: ReviewsWarningsData['indexing']) 
   return (indexing.dirtyMaterialization?.incompleteCount ?? 0) > 0
 }
 
+const hasCleanupWork = (indexing: ReviewsWarningsData['indexing']) => {
+  return (indexing.cleanup?.inFlightGenerationCleanupCount ?? 0) > 0
+}
+
 const getLargeRebuildPhasedDescription = (state: 'active' | 'queued') => {
   return state === 'queued'
-    ? 'This staged rebuild is queued for its current phase. Large rebuilds run several passes over the same article scope, so the article counter resets when the phase changes.'
-    : 'This project is being rebuilt in bounded phases. Each phase scans the same article scope, so current-phase article counts reset when the rebuild advances.'
+    ? 'Review pages remain usable while this staged rebuild waits for its current phase. Large rebuilds run several passes over the same article scope, so the article counter resets when the phase changes.'
+    : 'Review pages remain usable while this project is rebuilt in bounded phases. Each phase scans the same article scope, so current-phase article counts reset when the rebuild advances.'
 }
 
 const getDirtyMaterializationDescription = (state: 'active' | 'queued') => {
@@ -104,6 +108,14 @@ const getFailedReviewIndexingCopy = (indexing: ReviewsWarningsData['indexing']):
           'The latest review index refresh failed. Results may stay stale or incomplete until the maintenance worker retries the review index.',
         title: 'Review indexing failed',
       }
+}
+
+const getCleanupReviewIndexingCopy = (): ReviewIndexingCopy => {
+  return {
+    description:
+      'Old review index generations are being cleaned up in bounded batches. Current review pages remain usable while cleanup finishes.',
+    title: 'Review cleanup in progress',
+  }
 }
 
 const getQueuedReviewIndexingCopy = (params: ReviewIndexingCopyParams): ReviewIndexingCopy => {
@@ -151,5 +163,7 @@ export const getReviewIndexingStateCopy = (params: ReviewIndexingCopyParams): Re
         ? {description: getReviewIndexingStalledBody(), title: getReviewIndexingStalledTitle()}
         : params.indexing.progressState === 'processing'
           ? getProcessingReviewIndexingCopy(params)
-          : getQueuedReviewIndexingCopy(params)
+          : hasCleanupWork(params.indexing)
+            ? getCleanupReviewIndexingCopy()
+            : getQueuedReviewIndexingCopy(params)
 }

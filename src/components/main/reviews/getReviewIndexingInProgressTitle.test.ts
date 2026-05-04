@@ -124,6 +124,8 @@ test('large rebuild copy explains phase counters reset', () => {
         cursorArticleCreatedAt: null,
         cursorArticleId: null,
         lastError: null,
+        lastProgressedAt: null,
+        lastStartedAt: null,
         operatorNote: null,
         progress: {remainingCurrentPhaseArticleCount: 10, rowsPerMinute: 600, scopeArticleCount: 20},
         rebuildPhase: 'prompt_answer_fact',
@@ -138,4 +140,23 @@ test('large rebuild copy explains phase counters reset', () => {
 
   expect(copy.title).toBe('Large rebuild phase queued: prompt_answer_fact')
   expect(copy.description).toContain('article counter resets when the phase changes')
+})
+
+test('cleanup copy keeps ready review pages usable', () => {
+  const copy = getReviewIndexingStateCopy({
+    indexing: getIndexing({
+      cleanup: {inFlightGenerationCleanupCount: 1, lastProgressedAt: '2026-04-02T12:11:00.000Z'},
+      pendingProjectRefreshCount: 0,
+      pendingRefreshCount: 0,
+      progressState: 'completed',
+      queuedProjectRefreshCount: 0,
+      queuedRefreshCount: 0,
+      status: 'ready',
+    }),
+    projectId: 'project-1',
+    surface: 'banner',
+  })
+
+  expect(copy.title).toBe('Review cleanup in progress')
+  expect(copy.description).toContain('Current review pages remain usable')
 })

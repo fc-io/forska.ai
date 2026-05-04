@@ -51,7 +51,7 @@ type ProjectDirtyMaterializationSummary = {
   runningCount: number
   unreconciledCount: number
 }
-type ProjectReviewIndexCleanup = {inFlightGenerationCleanupCount: number}
+type ProjectReviewIndexCleanup = {inFlightGenerationCleanupCount: number; lastProgressedAt: string | null}
 type ProjectLargeRebuildRuntimeCycle = ReturnType<
   typeof getProjectMartLargeRebuildRuntimeMetrics
 >['recentCycles'][number]
@@ -118,6 +118,8 @@ const getLargeRebuildDetails = (state: ProjectLargeRebuildState, progress: Proje
         cursorArticleCreatedAt: state.cursorArticleCreatedAt,
         cursorArticleId: state.cursorArticleId,
         lastError: state.lastError,
+        lastProgressedAt: state.updatedAt ?? state.lastCompletedAt,
+        lastStartedAt: state.lastStartedAt,
         operatorNote: state.operatorNote,
         progress,
         rebuildPhase: state.rebuildPhase,
@@ -716,6 +718,15 @@ const getFreshMaintenanceLeaseCount = (
   }).length
 }
 
+const getFreshMaintenanceLeases = (
+  leases: FreshMaintenanceWorkLeaseRecord[],
+  workKind: FreshMaintenanceWorkLeaseRecord['workKind'],
+) => {
+  return leases.filter((lease) => {
+    return lease.workKind === workKind
+  })
+}
+
 const getFreshArticleRefreshLeaseCount = (leases: FreshMaintenanceWorkLeaseRecord[]) => {
   return getUniqueCount(
     leases
@@ -847,12 +858,18 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       freshMaintenanceLeases,
       'review_index_large_rebuild',
     )
-    const freshGenerationCleanupLeaseCount = getFreshMaintenanceLeaseCount(
+    const freshGenerationCleanupLeases = getFreshMaintenanceLeases(
       freshMaintenanceLeases,
       'review_index_serving_generation_cleanup',
     )
+    const freshGenerationCleanupLeaseCount = freshGenerationCleanupLeases.length
     const reviewIndexCleanup: ProjectReviewIndexCleanup = {
       inFlightGenerationCleanupCount: freshGenerationCleanupLeaseCount,
+      lastProgressedAt: getLatestTimestamp(
+        ...freshGenerationCleanupLeases.map((lease) => {
+          return lease.lastProgressedAt
+        }),
+      ),
     }
     const hasActiveProjectLease =
       getHasActiveLease(projectRefreshState.leaseExpiresAt, currentNow) || freshProjectRefreshLeaseCount > 0

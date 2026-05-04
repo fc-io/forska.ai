@@ -18,6 +18,7 @@ type ReviewsWarningsResponse = {
       activeConsumerCount: number
       activeWorkCount: number
       blockedReason: 'paused_by_policy' | 'quarantine_barrier' | 'waiting_for_maintenance_worker' | null
+      cleanup: {inFlightGenerationCleanupCount: number; lastProgressedAt: string | null}
       diagnostics: {
         duckdbQueues: {background: {queueDepth: number}; main: {queueDepth: number}}
         largeRebuild: {
@@ -297,6 +298,40 @@ const insertFreshArticleRefreshLease = async (projectId: string, articleId: stri
   `)
 }
 
+const insertFreshGenerationCleanupLease = async (projectId: string) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.maintenance_work_lease (
+      id,
+      work_kind,
+      scope_kind,
+      project_id,
+      article_id,
+      required_consumer_role,
+      consumer_id,
+      last_started_at,
+      last_progressed_at,
+      lease_expires_at,
+      fresh_until_at
+    ) VALUES (
+      'test-generation-cleanup-lease-${projectId}',
+      'review_index_serving_generation_cleanup',
+      'project',
+      '${projectId}',
+      NULL,
+      'maintenance-worker',
+      'test-maintenance-worker',
+      TIMESTAMPTZ '2026-04-02T12:05:00.000Z',
+      TIMESTAMPTZ '2026-04-02T12:05:20.000Z',
+      TIMESTAMPTZ '2035-04-02T12:05:30.000Z',
+      TIMESTAMPTZ '2035-04-02T12:05:30.000Z'
+    )
+  `)
+}
+
 const insertReviewServingRow = async (projectId: string, articleId: string) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -438,6 +473,26 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.enabledPromptCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.status).toBe('ready')
+})
+
+test('reviews warnings expose bounded cleanup lease progress without blocking ready reads', async () => {
+  const projectId = 'project-generation-cleanup-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertFreshGenerationCleanupLease(projectId)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.cleanup).toEqual({
+    inFlightGenerationCleanupCount: 1,
+    lastProgressedAt: '2026-04-02 12:05:20+00',
+  })
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.status).toBe('ready')
