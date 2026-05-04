@@ -5,7 +5,15 @@ import {expect, test} from 'bun:test'
 
 const projectRoot = process.cwd()
 
-const scanRoots = ['package.json', 'scripts', 'src/server', 'src/db/duckdbMigrations'] as const
+const scanRoots = [
+  'package.json',
+  'AGENTS.md',
+  'README.md',
+  'docs',
+  'scripts',
+  'src/server',
+  'src/db/duckdbMigrations',
+] as const
 
 const allowedReferenceFiles = new Set([
   'scripts/rebuild2Cutover.test.ts',
@@ -17,6 +25,8 @@ const allowedReferenceFiles = new Set([
   'src/db/duckdbMigrations/0054_clearProjectMartRefreshQueueProjectTasks.sql',
   'src/db/duckdbMigrations/0063_dropMartRefreshQueue.sql',
 ])
+
+const allowedStateClearingFiles = new Set(['scripts/rebuild2Cutover.ts'])
 
 const obsoletePatterns = [
   /db:duck:recover-archived-refresh-queue/,
@@ -53,6 +63,53 @@ const obsoletePatterns = [
   /app\.mart_refresh_queue/,
 ] as const
 
+const obsoleteStateClearingPatterns = [
+  {
+    label: 'dirty materialization state',
+    pattern:
+      /\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+app\.project_mart_dirty_materialization_state\b/i,
+  },
+  {
+    label: 'dirty refresh article quarantine',
+    pattern:
+      /\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+app\.project_mart_dirty_refresh_article_quarantine\b/i,
+  },
+  {
+    label: 'dirty refresh article state',
+    pattern:
+      /\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+app\.project_mart_refresh_article_state\b/i,
+  },
+  {
+    label: 'dirty refresh project state',
+    pattern:
+      /\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+app\.project_mart_refresh_state\b/i,
+  },
+  {
+    label: 'large rebuild state',
+    pattern:
+      /\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+app\.project_mart_large_rebuild_state\b/i,
+  },
+  {
+    label: 'legacy mart refresh queue',
+    pattern: /\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+app\.mart_refresh_queue\b/i,
+  },
+  {
+    label: 'obsolete quarantine state',
+    pattern:
+      /\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+app\.project_mart_refresh_article_quarantine\b/i,
+  },
+  {
+    label: 'outbox import state',
+    pattern:
+      /\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+app\.judgment_job_sqlite_outbox_import\b/i,
+  },
+  {
+    label: 'maintenance lease state',
+    pattern:
+      /\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+app\.maintenance_work_lease\b/i,
+  },
+] as const
+
 const getScanFiles = (rootPath: string): string[] => {
   const absolutePath = join(projectRoot, rootPath)
   const entries = readdirSync(absolutePath, {withFileTypes: true})
@@ -64,14 +121,17 @@ const getScanFiles = (rootPath: string): string[] => {
       return [...acc, ...getScanFiles(entryPath)]
     }
 
-    return entry.name.endsWith('.ts') || entry.name.endsWith('.sql') || entry.name === 'package.json'
+    return entry.name.endsWith('.md')
+      || entry.name.endsWith('.ts')
+      || entry.name.endsWith('.sql')
+      || entry.name === 'package.json'
       ? [...acc, entryPath]
       : acc
   }, [])
 }
 
 const getRootScanFiles = (rootPath: string) => {
-  return rootPath.endsWith('.json') ? [rootPath] : getScanFiles(rootPath)
+  return rootPath.endsWith('.json') || rootPath.endsWith('.md') ? [rootPath] : getScanFiles(rootPath)
 }
 
 const getObsoleteReferenceMatches = () => {
@@ -96,6 +156,28 @@ const getObsoleteReferenceMatches = () => {
     })
 }
 
-test('obsolete mart refresh queue command and runtime references are gone', () => {
+const getNonCutoverStateClearingMatches = () => {
+  return getScanFiles('scripts')
+    .filter((filePath) => {
+      return !allowedStateClearingFiles.has(filePath) && !filePath.endsWith('.test.ts')
+    })
+    .flatMap((filePath) => {
+      const content = readFileSync(join(projectRoot, filePath), 'utf8')
+
+      return obsoleteStateClearingPatterns
+        .filter(({pattern}) => {
+          return pattern.test(content)
+        })
+        .map(({label}) => {
+          return {label, path: relative(projectRoot, join(projectRoot, filePath))}
+        })
+    })
+}
+
+test('obsolete mart refresh queue command, docs, and runtime references are gone', () => {
   expect(getObsoleteReferenceMatches()).toEqual([])
+})
+
+test('rebuild2 cutover is the only operator script that clears obsolete rebuild2 state', () => {
+  expect(getNonCutoverStateClearingMatches()).toEqual([])
 })
