@@ -138,6 +138,15 @@ export type JudgmentExecutionSnapshotClaim = {
   useTitle: boolean
 }
 
+export type JudgmentExecutionSnapshotClaimInput = {
+  articleId: string
+  claimId: string
+  claimedBy: string
+  jobId: string
+  promptId: string
+  queueRecordId: string
+}
+
 const isObjectRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -169,27 +178,32 @@ const getDateIsoValue = (value: unknown): string | null => {
   return getDateValue(value)?.toISOString() ?? null
 }
 
-const getSnapshotRow = async ({
-  articleId,
-  claimId,
-  jobId,
-  promptId,
-  queueRecordId,
-}: {
-  articleId: string
-  claimId: string
-  jobId: string
-  promptId: string
-  queueRecordId: string
-}): Promise<JudgmentExecutionSnapshotRow> => {
-  const [row] = await getAppDatabaseService().queryJson<JudgmentExecutionSnapshotRow>(`
+const getSnapshotRequestValuesSql = (requests: JudgmentExecutionSnapshotClaimInput[]): string => {
+  return requests
+    .map((request, index) => {
+      return `(${index}, ${getSqlLiteral(request.articleId)}, ${getSqlLiteral(request.claimId)}, ${getSqlLiteral(request.jobId)}, ${getSqlLiteral(request.promptId)}, ${getSqlLiteral(request.queueRecordId)})`
+    })
+    .join(', ')
+}
+
+const getSnapshotRows = async (
+  requests: JudgmentExecutionSnapshotClaimInput[],
+): Promise<JudgmentExecutionSnapshotRow[]> => {
+  if (requests.length === 0) {
+    return []
+  }
+
+  return getAppDatabaseService().queryJson<JudgmentExecutionSnapshotRow>(`
+    WITH snapshot_request(request_order, article_id, claim_id, job_id, prompt_id, queue_record_id) AS (
+      VALUES ${getSnapshotRequestValuesSql(requests)}
+    )
     SELECT
       jj.id AS jobId,
       jj.project_id AS projectId,
-      ${getSqlLiteral(queueRecordId)} AS queueRecordId,
-      ${getSqlLiteral(claimId)} AS claimId,
-      ${getSqlLiteral(articleId)} AS requestedArticleId,
-      ${getSqlLiteral(promptId)} AS requestedPromptId,
+      snapshot_request.queue_record_id AS queueRecordId,
+      snapshot_request.claim_id AS claimId,
+      snapshot_request.article_id AS requestedArticleId,
+      snapshot_request.prompt_id AS requestedPromptId,
       p.name AS projectName,
       p.model_id AS modelId,
       p.use_title AS useTitle,
@@ -250,22 +264,16 @@ const getSnapshotRow = async ({
       TO_JSON(pc.config_json) AS providerConfigJson,
       pc.secret_ref AS providerSecretRef,
       pc.secret_ref AS modelSecretRef
-    FROM app.judgment_job jj
+    FROM snapshot_request
+    INNER JOIN app.judgment_job jj ON jj.id = snapshot_request.job_id
     INNER JOIN app.project p ON p.id = jj.project_id
     INNER JOIN app.model m ON m.id = p.model_id
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-    LEFT JOIN app.prompt pr ON pr.id = ${getSqlLiteral(promptId)}
+    LEFT JOIN app.prompt pr ON pr.id = snapshot_request.prompt_id
     LEFT JOIN app.project_prompt pp ON pp.project_id = p.id AND pp.prompt_id = pr.id
-    LEFT JOIN app.article a ON a.id = ${getSqlLiteral(articleId)}
-    WHERE jj.id = ${getSqlLiteral(jobId)}
-    LIMIT 1
+    LEFT JOIN app.article a ON a.id = snapshot_request.article_id
+    ORDER BY snapshot_request.request_order ASC
   `)
-
-  if (!row) {
-    throw new Error(`Cannot create judgment execution snapshot for missing job ${jobId}`)
-  }
-
-  return row
 }
 
 const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
@@ -422,29 +430,76 @@ const getSnapshotByClaim = async ({
   return row ? toSnapshotRecord(row) : null
 }
 
-export const createJudgmentExecutionSnapshotForClaim = async ({
-  articleId,
-  claimId,
+const getSnapshotInsertValueSql = ({
   claimedBy,
-  jobId,
-  promptId,
-  queueRecordId,
+  executionSnapshotHash,
+  executionSnapshotId,
+  payload,
+  row,
 }: {
-  articleId: string
-  claimId: string
   claimedBy: string
-  jobId: string
-  promptId: string
-  queueRecordId: string
-}): Promise<JudgmentExecutionSnapshotClaim> => {
-  const sourceRow = await getSnapshotRow({articleId, claimId, jobId, promptId, queueRecordId})
-  const payload = getSnapshotPayload(sourceRow)
-  const executionSnapshotHash = getJudgmentExecutionSnapshotHash(payload)
-  const executionSnapshotId = randomUUID()
-  const promptIdForRecord = sourceRow.promptId ?? sourceRow.requestedPromptId
-  const articleIdForRecord = sourceRow.articleId ?? sourceRow.requestedArticleId
+  executionSnapshotHash: string
+  executionSnapshotId: string
+  payload: unknown
+  row: JudgmentExecutionSnapshotRow
+}) => {
+  const promptIdForRecord = row.promptId ?? row.requestedPromptId
+  const articleIdForRecord = row.articleId ?? row.requestedArticleId
 
-  const [inserted] = await getAppDatabaseService().queryJson<StoredSnapshotRow>(`
+  return `(
+    ${getSqlLiteral(executionSnapshotId)},
+    ${getSqlLiteral(row.jobId)},
+    ${getSqlLiteral(row.projectId)},
+    ${getSqlLiteral(row.queueRecordId)},
+    ${getSqlLiteral(row.claimId)},
+    ${getSqlLiteral(articleIdForRecord)},
+    ${getSqlLiteral(promptIdForRecord)},
+    ${getSqlLiteral(row.modelId)},
+    ${getSqlLiteral(row.useTitle)},
+    ${getSqlLiteral(row.useAbstract)},
+    ${getSqlLiteral(row.useFulltext)},
+    ${getSqlLiteral(row.useFulltextNoImages)},
+    ${getSqlLiteral(executionSnapshotHash)},
+    ${getSqlLiteral(JSON.stringify(payload))}::JSON,
+    ${getSqlLiteral(claimedBy)}
+  )`
+}
+
+const getSnapshotByRequest = async ({claimId, jobId, queueRecordId}: JudgmentExecutionSnapshotClaimInput) => {
+  return getSnapshotByClaim({claimId, jobId, queueRecordId})
+}
+
+const getSnapshotIdentity = (snapshot: JudgmentExecutionSnapshotRecord): JudgmentExecutionSnapshotClaim => {
+  return {
+    executionSnapshotHash: snapshot.executionSnapshotHash,
+    executionSnapshotId: snapshot.executionSnapshotId,
+    modelId: snapshot.modelId,
+    projectId: snapshot.projectId,
+    useAbstract: snapshot.useAbstract,
+    useFulltext: snapshot.useFulltext,
+    useFulltextNoImages: snapshot.useFulltextNoImages,
+    useTitle: snapshot.useTitle,
+  }
+}
+
+export const createJudgmentExecutionSnapshotsForClaims = async (
+  requests: JudgmentExecutionSnapshotClaimInput[],
+): Promise<JudgmentExecutionSnapshotClaim[]> => {
+  if (requests.length === 0) {
+    return []
+  }
+
+  const sourceRows = await getSnapshotRows(requests)
+  const snapshotInputs = sourceRows.map((row) => {
+    const payload = getSnapshotPayload(row)
+    return {
+      executionSnapshotHash: getJudgmentExecutionSnapshotHash(payload),
+      executionSnapshotId: randomUUID(),
+      payload,
+      row,
+    }
+  })
+  const insertedRows = await getAppDatabaseService().queryJson<StoredSnapshotRow>(`
     INSERT INTO app.judgment_execution_snapshot (
       id,
       job_id,
@@ -461,23 +516,11 @@ export const createJudgmentExecutionSnapshotForClaim = async ({
       payload_hash,
       payload_json,
       created_by
-    ) VALUES (
-      ${getSqlLiteral(executionSnapshotId)},
-      ${getSqlLiteral(sourceRow.jobId)},
-      ${getSqlLiteral(sourceRow.projectId)},
-      ${getSqlLiteral(sourceRow.queueRecordId)},
-      ${getSqlLiteral(sourceRow.claimId)},
-      ${getSqlLiteral(articleIdForRecord)},
-      ${getSqlLiteral(promptIdForRecord)},
-      ${getSqlLiteral(sourceRow.modelId)},
-      ${getSqlLiteral(sourceRow.useTitle)},
-      ${getSqlLiteral(sourceRow.useAbstract)},
-      ${getSqlLiteral(sourceRow.useFulltext)},
-      ${getSqlLiteral(sourceRow.useFulltextNoImages)},
-      ${getSqlLiteral(executionSnapshotHash)},
-      ${getSqlLiteral(JSON.stringify(payload))}::JSON,
-      ${getSqlLiteral(claimedBy)}
-    )
+    ) VALUES ${snapshotInputs
+      .map((input) => {
+        return getSnapshotInsertValueSql(input)
+      })
+      .join(', ')}
     ON CONFLICT(job_id, queue_record_id, claim_id) DO NOTHING
     RETURNING
       id AS executionSnapshotId,
@@ -497,22 +540,55 @@ export const createJudgmentExecutionSnapshotForClaim = async ({
       created_by AS createdBy,
       created_at AS createdAt
   `)
-  const snapshot = inserted ? toSnapshotRecord(inserted) : await getSnapshotByClaim({claimId, jobId, queueRecordId})
+  const insertedByClaim = new Map(
+    insertedRows.map((row) => {
+      return [`${row.jobId}:${row.queueRecordId}:${row.claimId}`, toSnapshotRecord(row)] as const
+    }),
+  )
+  const snapshots = await Promise.all(
+    requests.map(async (request) => {
+      return (
+        insertedByClaim.get(`${request.jobId}:${request.queueRecordId}:${request.claimId}`)
+        ?? (await getSnapshotByRequest(request))
+      )
+    }),
+  )
+
+  return snapshots.map((snapshot, index) => {
+    if (!snapshot) {
+      throw new Error(
+        `Failed to persist judgment execution snapshot for claim ${requests[index]?.claimId ?? 'unknown'}`,
+      )
+    }
+
+    return getSnapshotIdentity(snapshot)
+  })
+}
+
+export const createJudgmentExecutionSnapshotForClaim = async ({
+  articleId,
+  claimId,
+  claimedBy,
+  jobId,
+  promptId,
+  queueRecordId,
+}: {
+  articleId: string
+  claimId: string
+  claimedBy: string
+  jobId: string
+  promptId: string
+  queueRecordId: string
+}): Promise<JudgmentExecutionSnapshotClaim> => {
+  const [snapshot] = await createJudgmentExecutionSnapshotsForClaims([
+    {articleId, claimId, claimedBy, jobId, promptId, queueRecordId},
+  ])
 
   if (!snapshot) {
     throw new Error(`Failed to persist judgment execution snapshot for claim ${claimId}`)
   }
 
-  return {
-    executionSnapshotHash: snapshot.executionSnapshotHash,
-    executionSnapshotId: snapshot.executionSnapshotId,
-    modelId: snapshot.modelId,
-    projectId: snapshot.projectId,
-    useAbstract: snapshot.useAbstract,
-    useFulltext: snapshot.useFulltext,
-    useFulltextNoImages: snapshot.useFulltextNoImages,
-    useTitle: snapshot.useTitle,
-  }
+  return snapshot
 }
 
 export const getJudgmentExecutionSnapshot = async ({

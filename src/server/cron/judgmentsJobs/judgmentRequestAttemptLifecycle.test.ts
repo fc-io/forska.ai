@@ -295,6 +295,47 @@ test('terminal request attempts are sinks except same-state metadata enrichment'
   expect(terminalEntry.error).toBe('late duplicate metadata')
 })
 
+test('compaction accepts token-use closeout after completion closeout for the same attempt', () => {
+  const completionAttempt = getFirstManifestEntry(
+    withDurableCloseoutRef({
+      closeoutKind: 'judgment_outbox',
+      ref: {id: 'judgment-a', jobId: 'job-a', queueRecordId: 'queue-a'},
+      requestAttempts: [
+        {
+          ...baseManifestAttempt,
+          closeoutKind: 'persistence',
+          finishedAt: '2026-05-03T12:00:02.000Z',
+          lifecycleState: 'persistingCompletion',
+          outcome: 'success',
+        },
+      ],
+    }),
+  )
+  const tokenUseAttempt = withDurableCloseoutRef({
+    closeoutKind: 'token_use',
+    ref: {id: 'token-use-a', jobId: 'job-a'},
+    requestAttempts: [
+      {
+        ...baseManifestAttempt,
+        closeoutKind: 'persistence',
+        completionTokens: 5,
+        finishedAt: '2026-05-03T12:00:02.000Z',
+        lifecycleState: 'persistingCompletion',
+        outcome: 'success',
+        promptTokens: 10,
+        totalTokens: 15,
+      },
+    ],
+  })
+
+  const compacted = mutateRequestAttemptManifestEntries({
+    currentEntries: [completionAttempt],
+    mutation: {compactRequestAttemptIds: [completionAttempt.requestAttemptId], mergeEntries: tokenUseAttempt},
+  })
+
+  expect(compacted).toEqual([])
+})
+
 test('durable evidence supersedes unavailable diagnostics and late evidence after worker-loss closeout is quarantined', () => {
   const unavailableAttempt = {
     ...baseManifestAttempt,

@@ -27,4 +27,8 @@ test('prompt pipeline width stays above provider request capacity', () => {
   expect(
     getJudgmentPromptQueueTargetFromProviderLimit({providerMaxInflightRequests: 2, providerPromptBacklogTarget: 6}),
   ).toEqual({activePromptLimit: 4, queuedPromptLimit: 2})
+  expect(getJudgmentPromptQueueTargetFromProviderLimit({providerMaxInflightRequests: 300})).toEqual({
+    activePromptLimit: 600,
+    queuedPromptLimit: 1,
+  })
 })

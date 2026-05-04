@@ -216,7 +216,7 @@ export const getProviderTargetAllocationSnapshot = ({
   const allocationInputState = allocationCompleteCurrent ? 'completeCurrent' : 'partialTelemetry'
   const routeableWorkers = orderedWorkers.flatMap((worker) => {
     const currentProvider = worker.providerKey === providerKey && worker.providerLimitVersion === providerLimitVersion
-    const routeable = allocationCompleteCurrent && worker.routeable && currentProvider
+    const routeable = worker.routeable && currentProvider
     const effectiveProviderLimit = routeable
       ? Math.min(normalRequestCapacity, getFiniteInteger(worker.effectiveProviderLimit ?? normalRequestCapacity))
       : 0

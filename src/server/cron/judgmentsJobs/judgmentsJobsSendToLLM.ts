@@ -6,6 +6,7 @@ import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {
   enqueueJudgeWorkerCompletion,
   flushJudgeWorkerCompletionOutboxForClaim,
+  recoverAbandonedJudgeWorkerAcceptedClaims,
   replayJudgeWorkerCompletionOutbox,
   shouldUseJudgeWorkerOwnerHandoff,
 } from './judgeWorkerCompletionJournal.ts'
@@ -62,6 +63,7 @@ const schedulerFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 
 const sendToLLMComponent = 'judgmentsJobsSendToLLM'
 const initialPromptClaimDispatchChunkSize = 16
 const promptClaimDispatchChunkSize = 64
+const probePromptClaimLimit = initialPromptClaimDispatchChunkSize
 
 const anthropicConnectionWarmupStartedAt = new Map<string, number>()
 
@@ -247,7 +249,7 @@ const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number
 const getRuntimeInFlightCountsByJob = (jobIds: string[]): Map<string, number> => {
   return new Map(
     jobIds.map((jobId) => {
-      return [jobId, getJudgmentRequestStats(jobId).requestWorkBacklog] as const
+      return [jobId, getJudgmentRequestStats(jobId).inFlight] as const
     }),
   )
 }
@@ -607,7 +609,7 @@ export const getClaimableRequests = async ({
       })
 
       if (probeJob) {
-        return [{...probeJob, dispatchMode: 'probe' as const, limit: 1}]
+        return [{...probeJob, dispatchMode: 'probe' as const, limit: Math.min(probeJob.limit, probePromptClaimLimit)}]
       }
 
       jobsWithRuntime.forEach((jobAllocation) => {
@@ -928,6 +930,43 @@ export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJ
 
 let isRunningJudgmentsJobsSendToLLM = false
 
+const getProtectedJudgeWorkerAcceptedClaimPrompts = async (
+  jobs: RunningJudgmentJob[],
+): Promise<Array<{jobId: string; queueRecordId: string}>> => {
+  const protectedPrompts = await Promise.all(
+    jobs.map(async (job) => {
+      const recordIds = await getJudgmentDispatchJobPromptIds(job.id)
+
+      return recordIds.map((recordId) => {
+        return {jobId: job.id, queueRecordId: recordId}
+      })
+    }),
+  )
+
+  return protectedPrompts.flat()
+}
+
+const recoverAbandonedAcceptedClaimsForJobs = async (jobs: RunningJudgmentJob[]): Promise<void> => {
+  if (!shouldUseJudgeWorkerOwnerHandoff()) {
+    return undefined
+  }
+
+  const recovery = await recoverAbandonedJudgeWorkerAcceptedClaims({
+    protectedPrompts: await getProtectedJudgeWorkerAcceptedClaimPrompts(jobs),
+  })
+  const recoveredCount = recovery.acceptedClaimsDeleted + recovery.closeoutIntentsInserted
+
+  if (recoveredCount > 0) {
+    schedulerLogger.warn('scheduler:accepted-claim-recovery', '[capacity] recovered abandoned accepted claims', {
+      acceptedClaimsDeleted: recovery.acceptedClaimsDeleted,
+      closeoutIntentsInserted: recovery.closeoutIntentsInserted,
+      component: sendToLLMComponent,
+      event: 'acceptedClaimRecovery',
+      replay: recovery.replay,
+    })
+  }
+}
+
 export const requeueAndFilterRunningJobs = async ({
   allJobs,
   filterJobs = filterRunningJobsByRuntimeMatch,
@@ -1053,6 +1092,7 @@ export const judgmentsJobsSendToLLM = async (
     }
 
     const sendableJobs = await requeueAndFilterRunningJobs({allJobs, filterJobs, serverJobId})
+    await recoverAbandonedAcceptedClaimsForJobs(sendableJobs)
     const capacityBuckets = getCapacityBuckets({jobs: sendableJobs})
 
     await Promise.all(

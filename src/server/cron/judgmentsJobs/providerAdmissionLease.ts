@@ -201,6 +201,7 @@ export const providerAdmissionLeaseTtlMs = 60_000
 export const providerAdmissionLeaseHeartbeatIntervalMs = 15_000
 export const providerAdmissionLeaseOwnerApiPath = '/api/provideradmissionleases'
 export const providerAdmissionLeaseOwnerApiAliasPath = '/api/provider-admission-leases'
+const providerAdmissionLeaseOwnerRequestTimeoutMs = 30_000
 
 const defaultProviderAdmissionLeaseClock: ProviderAdmissionLeaseClock = {
   now: () => {
@@ -721,7 +722,12 @@ const requestProviderAdmissionLeaseOwner = async <T>({body, path}: {body: unknow
   const ownerUrl = await getProviderAdmissionLeaseOwnerUrl()
   const response = await fetch(
     `${ownerUrl}${duckdbOwnerPrivateApiPrefix}${providerAdmissionLeaseOwnerApiPath}${path}`,
-    {body: JSON.stringify(body), headers: {'content-type': 'application/json'}, method: 'POST'},
+    {
+      body: JSON.stringify(body),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+      signal: AbortSignal.timeout(providerAdmissionLeaseOwnerRequestTimeoutMs),
+    },
   )
   const text = await response.text()
   const parsed = text.trim().length === 0 ? null : (JSON.parse(text) as {data?: T; error?: unknown})

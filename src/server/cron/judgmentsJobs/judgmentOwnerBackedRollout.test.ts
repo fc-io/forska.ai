@@ -8,6 +8,7 @@ import {afterEach, expect, test} from 'bun:test'
 import {
   mutateAcceptedClaimRequestAttemptManifest,
   recordAcceptedJudgeWorkerClaims,
+  recoverAbandonedJudgeWorkerAcceptedClaims,
   resetJudgeWorkerCompletionJournalForTests,
   runJudgeWorkerRolloutCleanup,
 } from './judgeWorkerCompletionJournal.ts'
@@ -228,6 +229,42 @@ test('owner-backed rollout cleanup keeps accepted claim until durable closeout i
     replay: {ackedCount: 1, discardedCount: 0, failedCount: 0},
   })
   expect(readJournalRolloutState(journalPath, prompt.claimId)).toMatchObject({
+    acceptedClaimCount: 0,
+    completionOutboxCount: 1,
+  })
+})
+
+test('accepted claim recovery skips prompts still active in dispatch runtime', async () => {
+  const ownerRequests: unknown[] = []
+  const activePrompt = createPrompt({claimId: 'claim-active', recordId: 'queue-active'})
+  const abandonedPrompt = createPrompt({claimId: 'claim-abandoned', recordId: 'queue-abandoned'})
+  const {journalPath} = setupRolloutTest(async (request) => {
+    const body = (await request.json()) as {claimId: string; queueRecordId: string}
+
+    ownerRequests.push(body)
+    return Response.json({data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'retry'}})
+  })
+
+  await addAcceptedClaimWithManifest(activePrompt)
+  await addAcceptedClaimWithManifest(abandonedPrompt)
+
+  expect(
+    await recoverAbandonedJudgeWorkerAcceptedClaims({
+      protectedPrompts: [{jobId: activePrompt.jobId, queueRecordId: activePrompt.recordId}],
+    }),
+  ).toEqual({
+    acceptedClaimsDeleted: 1,
+    closeoutIntentsInserted: 1,
+    replay: {ackedCount: 1, discardedCount: 0, failedCount: 0},
+  })
+
+  expect(ownerRequests).toHaveLength(1)
+  expect(ownerRequests[0]).toMatchObject({claimId: abandonedPrompt.claimId, queueRecordId: abandonedPrompt.recordId})
+  expect(readJournalRolloutState(journalPath, activePrompt.claimId)).toMatchObject({
+    acceptedClaimCount: 1,
+    completionOutboxCount: 0,
+  })
+  expect(readJournalRolloutState(journalPath, abandonedPrompt.claimId)).toMatchObject({
     acceptedClaimCount: 0,
     completionOutboxCount: 1,
   })

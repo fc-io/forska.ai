@@ -1286,6 +1286,32 @@ const getProviderTargetAllocationWorkerInput = (
   }
 }
 
+const shouldAllocateUnavailableWorkerTelemetry = (provider: JudgmentProviderTelemetry): boolean => {
+  return (
+    provider.convergenceDiagnostics.readyCount > 0
+    && provider.convergenceDiagnostics.hasHealthyEndpointOrEndpointlessPath
+    && provider.normalRequestCapacity > 0
+    && provider.providerAvailableRequestLeases > 0
+  )
+}
+
+const getUnavailableProviderTargetAllocationWorkerInput = ({
+  authorityProvider,
+  workerId,
+}: {
+  authorityProvider: JudgmentProviderTelemetry
+  workerId: string
+}): ProviderTargetAllocationWorkerInput => {
+  return {
+    effectiveProviderLimit: authorityProvider.normalRequestCapacity,
+    localProviderLiveRequests: 0,
+    providerKey: authorityProvider.providerKey,
+    providerLimitVersion: authorityProvider.providerLimitVersion,
+    routeable: shouldAllocateUnavailableWorkerTelemetry(authorityProvider),
+    workerId,
+  }
+}
+
 const getReadyWorkCountForController = ({
   input,
   providerKey,
@@ -1449,7 +1475,7 @@ const getEffectiveCapacityLimitedBottleneck = (
     && (targetPositive || hasReadyWork)
   const normalCapacityBlocked = !diagnostics.normalRequestCapacityPositive && (targetPositive || hasReadyWork)
   const routeableCapacityExhausted = provider.unallocatedTargetLiveCalls > 0 && hasReadyWork
-  const allocationIncomplete = !provider.allocationCompleteCurrent && targetPositive && hasReadyWork
+  const allocationIncomplete = !provider.allocationCompleteCurrent && routeableCapacityExhausted && targetPositive
   const warmupLimited = diagnostics.preconditionChangedReason === 'warmupLimited'
 
   return !diagnostics.providerLimitPositive || noEffectiveCapacity || normalCapacityBlocked
@@ -1846,15 +1872,63 @@ const withTelemetryWorkerId = (
   return {...snapshot, source: {...snapshot.source, localWorkerId: workerId}}
 }
 
+const getUnavailableWorkerTelemetrySnapshot = ({
+  authorityProvider,
+  source,
+  workerId,
+}: {
+  authorityProvider: JudgmentProviderTelemetry
+  source: JudgmentTelemetrySourceMetadata
+  workerId: string
+}): JudgmentDispatchTelemetrySnapshot => {
+  return {
+    dispatch: getZeroDispatchStats(),
+    provider: withProviderApiReadModels({
+      ...authorityProvider,
+      effectiveProviderLimit: 0,
+      expectedLocalLiveShare: 0,
+      localAdditionalLeaseHeadroom: 0,
+      localAdditionalTargetHeadroom: 0,
+      localPromptBacklog: 0,
+      localPromptBacklogTarget: 0,
+      localProviderLiveRequests: 0,
+      localProviderRequestFillPct: null,
+      localRequestWorkBacklog: 0,
+      localRequestWorkBacklogTarget: 0,
+      observedGlobalEffectiveProviderLimit: 0,
+      observedGlobalPromptBacklog: 0,
+      observedGlobalProviderLiveRequests: 0,
+      observedGlobalProviderRequestFillPct: null,
+      observedGlobalRequestWorkBacklog: 0,
+    }),
+    request: {
+      inFlight: 0,
+      pendingPersistedAttempts: 0,
+      requestSlotWaiters: {codex: 0, fallback: 0, providerAdmission: 0, worker: 0},
+      requestWorkBacklog: 0,
+      waitingForRequestSlot: 0,
+    },
+    source: {...source, localWorkerId: workerId},
+  }
+}
+
 const getProviderTargetAllocationSnapshotForTelemetry = ({
   authorityProvider,
   snapshots,
   source,
+  unavailableWorkerIds,
 }: {
   authorityProvider: JudgmentProviderTelemetry
   snapshots: JudgmentDispatchTelemetrySnapshot[]
   source: JudgmentTelemetrySourceMetadata
+  unavailableWorkerIds: string[]
 }): ProviderTargetAllocationSnapshot => {
+  const unavailableWorkers = shouldAllocateUnavailableWorkerTelemetry(authorityProvider)
+    ? unavailableWorkerIds.map((workerId) => {
+        return getUnavailableProviderTargetAllocationWorkerInput({authorityProvider, workerId})
+      })
+    : []
+
   return getProviderTargetAllocationSnapshot({
     probeOccupancySampledAtMs: authorityProvider.probeOccupancySampledAtMs,
     providerKey: authorityProvider.providerKey,
@@ -1864,7 +1938,7 @@ const getProviderTargetAllocationSnapshotForTelemetry = ({
     providerLimitVersion: authorityProvider.providerLimitVersion,
     providerProbeOccupancyVersion: authorityProvider.providerProbeOccupancyVersion,
     source: getAllocationSourceMetadata(source),
-    workers: snapshots.map(getProviderTargetAllocationWorkerInput),
+    workers: [...snapshots.map(getProviderTargetAllocationWorkerInput), ...unavailableWorkers],
   })
 }
 
@@ -2054,6 +2128,7 @@ const getRemoteJudgmentDispatchTelemetry = async (
   freshRemoteWorkerCount: number
   snapshots: JudgmentDispatchTelemetrySnapshot[]
   staleWorkerCount: number
+  unavailableWorkerIds: string[]
   unavailableWorkerCount: number
 }> => {
   const getRecords = options.getJudgingWorkerRecords ?? getJudgingWorkerRecords
@@ -2067,19 +2142,22 @@ const getRemoteJudgmentDispatchTelemetry = async (
     freshRecords.map(async (record) => {
       const snapshot = await fetchTelemetry(record, input)
 
-      return snapshot ? withTelemetryWorkerId(snapshot, record.instanceId) : null
+      return {record, snapshot: snapshot ? withTelemetryWorkerId(snapshot, record.instanceId) : null}
     }),
   )
 
   return {
-    freshRemoteWorkerCount: telemetry.filter((snapshot) => {
+    freshRemoteWorkerCount: telemetry.filter(({snapshot}) => {
       return snapshot !== null
     }).length,
-    snapshots: telemetry.filter((snapshot): snapshot is JudgmentDispatchTelemetrySnapshot => {
-      return snapshot !== null
+    snapshots: telemetry.flatMap(({snapshot}) => {
+      return snapshot ? [snapshot] : []
     }),
     staleWorkerCount,
-    unavailableWorkerCount: telemetry.filter((snapshot) => {
+    unavailableWorkerIds: telemetry.flatMap(({record, snapshot}) => {
+      return snapshot ? [] : [record.instanceId]
+    }),
+    unavailableWorkerCount: telemetry.filter(({snapshot}) => {
       return snapshot === null
     }).length,
   }
@@ -2272,12 +2350,18 @@ export const getAggregatedJudgmentDispatchTelemetry = async (
     authorityProvider: localTelemetry.provider,
     snapshots: remoteTelemetry.snapshots,
     source,
+    unavailableWorkerIds: remoteTelemetry.unavailableWorkerIds,
   })
   const allocationAuthorityTelemetry = withProviderTargetAllocationSnapshot({
     allocationSnapshot: providerTargetAllocationSnapshot,
     snapshot: localTelemetry,
   })
-  const allocationWorkerTelemetry = remoteTelemetry.snapshots.map((snapshot) => {
+  const unavailableWorkerTelemetry = shouldAllocateUnavailableWorkerTelemetry(localTelemetry.provider)
+    ? remoteTelemetry.unavailableWorkerIds.map((workerId) => {
+        return getUnavailableWorkerTelemetrySnapshot({authorityProvider: localTelemetry.provider, source, workerId})
+      })
+    : []
+  const allocationWorkerTelemetry = [...remoteTelemetry.snapshots, ...unavailableWorkerTelemetry].map((snapshot) => {
     return withProviderTargetAllocationSnapshot({allocationSnapshot: providerTargetAllocationSnapshot, snapshot})
   })
 

@@ -107,6 +107,48 @@ test('marks stale provider limit input incomplete and prevents new target headro
   ])
 })
 
+test('allocates fresh routeable workers when aggregate telemetry is partial', () => {
+  const snapshot = getProviderTargetAllocationSnapshot({
+    probeOccupancySampledAtMs: 1_000,
+    providerKey: 'provider-a',
+    providerLeasedLiveRequests: 2,
+    providerLeasedProbeCalls: 0,
+    providerLimit: 10,
+    providerLimitVersion: 'limit-current',
+    providerProbeOccupancyVersion: 'probe-a',
+    source: {...completeSource, aggregateCompleteness: 'partial', staleWorkerCount: 1},
+    workers: [
+      {
+        effectiveProviderLimit: 10,
+        providerKey: 'provider-a',
+        providerLimitVersion: 'limit-current',
+        routeable: true,
+        workerId: 'worker-a',
+      },
+    ],
+  })
+
+  expect(snapshot).toMatchObject({
+    allocationCompleteCurrent: false,
+    allocationInputState: 'partialTelemetry',
+    incompleteInputs: [{reason: 'partialTelemetry', workerId: null}],
+    providerAvailableRequestLeases: 8,
+    targetRequestLiveCalls: 10,
+    unallocatedTargetLiveCalls: 0,
+  })
+  expect(snapshot.workers).toEqual([
+    {
+      effectiveProviderLimit: 10,
+      expectedLocalLiveShare: 10,
+      localProviderLiveRequests: 0,
+      providerKey: 'provider-a',
+      providerLimitVersion: 'limit-current',
+      routeable: true,
+      workerId: 'worker-a',
+    },
+  ])
+})
+
 test('uses probe occupancy version in allocation identity and capacity input', () => {
   const firstSnapshot = getProviderTargetAllocationSnapshot({
     probeOccupancySampledAtMs: 1_000,
@@ -195,7 +237,7 @@ test('adaptive backlog controller preserves filled targets until hysteresis allo
   })
 })
 
-test('adaptive backlog controller immediately clamps unsafe targets without new lease headroom', () => {
+test('adaptive backlog controller allows lease-gated replenishment with partial telemetry', () => {
   const state = getJudgmentBacklogControllerState({
     allocationCompleteCurrent: false,
     effectiveProviderLimit: 8,
@@ -215,12 +257,12 @@ test('adaptive backlog controller immediately clamps unsafe targets without new 
   })
 
   expect(state).toMatchObject({
-    backlogReplenishmentAllowed: false,
-    localAdditionalLeaseHeadroom: 0,
-    localAdditionalTargetHeadroom: 0,
-    localPromptBacklogTarget: 3,
-    localRequestWorkBacklogTarget: 2,
-    preconditionChangedReason: 'allocationSnapshotIncomplete',
+    backlogReplenishmentAllowed: true,
+    localAdditionalLeaseHeadroom: 6,
+    localAdditionalTargetHeadroom: 6,
+    localPromptBacklogTarget: 16,
+    localRequestWorkBacklogTarget: 8,
+    preconditionChangedReason: null,
     targetIncreaseAllowed: false,
   })
 })

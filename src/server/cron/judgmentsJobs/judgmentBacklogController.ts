@@ -130,7 +130,6 @@ const getStageAgeExceededReason = (ages: JudgmentBacklogLifecycleAgesMs | undefi
 
 const getPreconditionChangedReason = ({
   activeHigherPriorityStopRules,
-  allocationCompleteCurrent,
   hasHealthyEndpointOrEndpointlessPath,
   lifecycleAgesMs,
   normalRequestCapacity,
@@ -138,7 +137,6 @@ const getPreconditionChangedReason = ({
   providerLimit,
 }: {
   activeHigherPriorityStopRules: string[]
-  allocationCompleteCurrent: boolean
   hasHealthyEndpointOrEndpointlessPath: boolean
   lifecycleAgesMs?: JudgmentBacklogLifecycleAgesMs
   normalRequestCapacity: number
@@ -153,10 +151,6 @@ const getPreconditionChangedReason = ({
 
   if (normalRequestCapacity <= 0) {
     return 'probeOccupancy'
-  }
-
-  if (!allocationCompleteCurrent) {
-    return 'allocationSnapshotIncomplete'
   }
 
   if (!hasHealthyEndpointOrEndpointlessPath) {
@@ -268,7 +262,6 @@ export const getJudgmentBacklogControllerState = (
   const preconditionsStableSinceMs = getNonNegativeInteger(input.preconditionsStableSinceMs)
   const preconditionChangedReason = getPreconditionChangedReason({
     activeHigherPriorityStopRules,
-    allocationCompleteCurrent: input.allocationCompleteCurrent,
     hasHealthyEndpointOrEndpointlessPath: input.hasHealthyEndpointOrEndpointlessPath,
     lifecycleAgesMs: input.lifecycleAgesMs,
     normalRequestCapacity,
@@ -276,8 +269,7 @@ export const getJudgmentBacklogControllerState = (
     providerLimit,
   })
   const hasHealthyCapacity =
-    input.allocationCompleteCurrent
-    && input.hasHealthyEndpointOrEndpointlessPath
+    input.hasHealthyEndpointOrEndpointlessPath
     && activeHigherPriorityStopRules.length === 0
     && providerLimit > 0
     && normalRequestCapacity > 0
@@ -393,10 +385,14 @@ export const getJudgmentPromptQueueTargetFromProviderLimit = ({
   const defaultPromptBacklogTarget =
     providerLimit * judgmentBacklogControllerConstants.promptBacklogRequestWorkMultiplier
   const promptBacklogTarget = getNonNegativeInteger(providerPromptBacklogTarget) || defaultPromptBacklogTarget
+  const maximumActivePromptLimit = Math.max(
+    judgmentBacklogControllerConstants.promptPipelineMaximumUnits,
+    providerLimit * judgmentBacklogControllerConstants.promptBacklogRequestWorkMultiplier,
+  )
   const activePromptLimit = getBoundedInteger(
     Math.max(providerLimit + 1, Math.min(promptBacklogTarget, providerLimit * 2)),
     judgmentBacklogControllerConstants.promptPipelineMinimumUnits,
-    judgmentBacklogControllerConstants.promptPipelineMaximumUnits,
+    maximumActivePromptLimit,
   )
   const queuedPromptLimit = Math.max(1, promptBacklogTarget - activePromptLimit)
 

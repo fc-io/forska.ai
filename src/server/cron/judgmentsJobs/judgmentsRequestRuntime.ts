@@ -39,6 +39,8 @@ import {
   getProviderAdmissionProbeLeaseIdentity,
   getProviderAdmissionRequestLeaseIdentity,
   getProviderBucketSnapshot,
+  heartbeatProviderAdmissionLeaseThroughOwner,
+  providerAdmissionLeaseHeartbeatIntervalMs,
   type ProviderBucketSnapshot,
   releaseProviderAdmissionLeaseWithResultThroughOwner,
   resetProviderAdmissionLeaseForTests,
@@ -119,6 +121,7 @@ const codexWaiters: RequestWaiter<() => void>[] = []
 const codexProviderWaiters: CodexProviderWaiter[] = []
 const workerWaiters: WorkerWaiter[] = []
 const fallbackWaiters: FallbackWaiter[] = []
+const providerAdmissionAcquireAttempts: RequestWaiterMetadata[] = []
 const providerAdmissionRetryWaiters: ProviderAdmissionRetryWaiter[] = []
 const probeAdmissionWaiters: ProbeAdmissionWaiter[] = []
 const jobRequestStates = new Map<string, JobRequestState>()
@@ -436,6 +439,29 @@ const removeProviderAdmissionRetryWaiter = (waiter: ProviderAdmissionRetryWaiter
   }
 }
 
+const removeProviderAdmissionAcquireAttempt = (metadata: RequestWaiterMetadata): void => {
+  const index = providerAdmissionAcquireAttempts.findIndex((attempt) => {
+    return attempt.requestAttemptId === metadata.requestAttemptId
+  })
+
+  if (index >= 0) {
+    providerAdmissionAcquireAttempts.splice(index, 1)
+  }
+}
+
+const withProviderAdmissionAcquireAttempt = async <T>(
+  metadata: RequestWaiterMetadata,
+  acquire: () => Promise<T>,
+): Promise<T> => {
+  providerAdmissionAcquireAttempts.push(metadata)
+
+  try {
+    return await acquire()
+  } finally {
+    removeProviderAdmissionAcquireAttempt(metadata)
+  }
+}
+
 const settleProviderAdmissionRetryWaiter = (waiter: ProviderAdmissionRetryWaiter): void => {
   if (waiter.timeout) {
     clearTimeout(waiter.timeout)
@@ -544,12 +570,14 @@ const acquireProviderRequestAdmissionLease = async ({
 }): Promise<ProviderRequestAdmissionLease> => {
   const holderToken = getProviderRequestLeaseHolderToken(requestAttempt.requestAttemptId)
   const leaseIdentity = getProviderAdmissionRequestLeaseIdentity(requestAttempt.requestAttemptId)
-  const result = await acquireProviderAdmissionLeasePersisted({
-    holderToken,
-    leaseIdentity,
-    leaseKind: 'request',
-    requestAttemptId: requestAttempt.requestAttemptId,
-    snapshot,
+  const result = await withProviderAdmissionAcquireAttempt(metadata, () => {
+    return acquireProviderAdmissionLeasePersisted({
+      holderToken,
+      leaseIdentity,
+      leaseKind: 'request',
+      requestAttemptId: requestAttempt.requestAttemptId,
+      snapshot,
+    })
   })
 
   if (result.acquired) {
@@ -571,6 +599,21 @@ const releaseProviderRequestAdmissionLease = async (lease: ProviderRequestAdmiss
   })
   notifyProviderAdmissionRetryWaiters()
   notifyProbeAdmissionWaiters()
+}
+
+const startProviderRequestAdmissionLeaseHeartbeat = (lease: ProviderRequestAdmissionLease): (() => void) => {
+  const heartbeat = (): void => {
+    void heartbeatProviderAdmissionLeaseThroughOwner(lease).catch(() => {
+      return undefined
+    })
+  }
+  const interval = setInterval(heartbeat, providerAdmissionLeaseHeartbeatIntervalMs)
+
+  interval.unref?.()
+
+  return () => {
+    clearInterval(interval)
+  }
 }
 
 const acquireProviderProbeAdmissionLease = async ({
@@ -1575,7 +1618,9 @@ export const getJudgmentRequestStats = (
     requestSlotWaiters: {
       codex: codexWaiters.filter(waiterMatchesJob).length + codexProviderWaiters.filter(waiterMatchesJob).length,
       fallback: fallbackWaiters.filter(waiterMatchesJob).length,
-      providerAdmission: providerAdmissionRetryWaiters.filter(waiterMatchesJob).length,
+      providerAdmission:
+        providerAdmissionAcquireAttempts.filter(waiterMatchesJob).length
+        + providerAdmissionRetryWaiters.filter(waiterMatchesJob).length,
       worker: workerWaiters.filter(waiterMatchesJob).length,
     },
     requestWorkBacklog: Math.max(requestAttemptBacklog, getReservedRequestWorkUnits(state)),
@@ -1590,9 +1635,16 @@ export const getJudgmentProviderRequestStats = (
   >,
 ): {localProviderLiveRequests: number} => {
   const providerKey = getProviderRequestKey({...input, providerUsesFamilyDefault: false})
-  const state = providerRequestStates.get(providerKey)
+  const localProviderLiveRequests = Array.from(jobRequestStates.values()).reduce((sum, state) => {
+    return (
+      sum
+      + Array.from(state.requestAttempts.values()).filter((attempt) => {
+        return attempt.providerKey === providerKey && attempt.lifecycleState === 'liveRequest'
+      }).length
+    )
+  }, 0)
 
-  return {localProviderLiveRequests: state?.inFlight ?? 0}
+  return {localProviderLiveRequests}
 }
 
 export const getJudgmentRequestLifecycleRecords = (judgmentsJobId: string): JudgmentLifecycleTelemetryRecord[] => {
@@ -1739,10 +1791,17 @@ export const withJudgmentRequest = async <T>(
     owner: requestAttemptManifestOwner,
     requestAttempt: requestAttemptContext,
   })
-  const providerAdmissionLease = await acquireProviderRequestAdmissionLease({
+  const slot = await acquireRequestSlot({
+    fallbackBaseURL,
     metadata: waiterMetadata,
-    requestAttempt: requestAttemptContext,
-    snapshot: providerAdmissionSnapshot,
+    modelId,
+    provider,
+    providerConnectionId,
+    providerKey,
+    providerLimitVersion,
+    providerMaxInflightRequests,
+    providerUsesFamilyDefault,
+    workerUrls,
   }).catch(async (error) => {
     const finishedAt = new Date().toISOString()
     await recordRequestAttemptManifestStage({
@@ -1759,19 +1818,12 @@ export const withJudgmentRequest = async <T>(
       getRuntimeRequestAttemptErrorFields({finishedAt, requestAttempt: requestAttemptContext}),
     )
   })
-  const slot = await acquireRequestSlot({
-    fallbackBaseURL,
+  const providerAdmissionLease = await acquireProviderRequestAdmissionLease({
     metadata: waiterMetadata,
-    modelId,
-    provider,
-    providerConnectionId,
-    providerKey,
-    providerLimitVersion,
-    providerMaxInflightRequests,
-    providerUsesFamilyDefault,
-    workerUrls,
+    requestAttempt: requestAttemptContext,
+    snapshot: providerAdmissionSnapshot,
   }).catch(async (error) => {
-    await releaseProviderRequestAdmissionLease(providerAdmissionLease)
+    slot.release()
     const finishedAt = new Date().toISOString()
     await recordRequestAttemptManifestStage({
       closeoutKind: 'slot_wait',
@@ -1789,6 +1841,7 @@ export const withJudgmentRequest = async <T>(
   })
   const requestAttempt = {...requestAttemptContext, baseURL: slot.baseURL, startedAt: new Date().toISOString()}
   markRequestStarted(judgmentsJobId, requestAttempt)
+  const stopProviderAdmissionHeartbeat = startProviderRequestAdmissionLeaseHeartbeat(providerAdmissionLease)
 
   try {
     await recordRequestAttemptManifestStage({
@@ -1801,6 +1854,7 @@ export const withJudgmentRequest = async <T>(
 
     return await run(slot.baseURL, requestAttempt)
   } finally {
+    stopProviderAdmissionHeartbeat()
     markRequestFinished(judgmentsJobId, requestAttempt)
     slot.release()
     await releaseProviderRequestAdmissionLease(providerAdmissionLease)
@@ -1817,6 +1871,7 @@ export const resetJudgmentRequestRuntimeForTests = (): void => {
   jobRequestStates.clear()
   providerRequestStates.clear()
   fallbackInFlightByProviderKey.clear()
+  providerAdmissionAcquireAttempts.splice(0, providerAdmissionAcquireAttempts.length)
   localEndpointProbePermits.clear()
   codexInFlight = 0
   resetJudgmentEndpointAvailabilityForTests()

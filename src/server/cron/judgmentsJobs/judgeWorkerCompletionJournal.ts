@@ -163,7 +163,8 @@ type AcceptedClaimRolloutRow = AcceptedClaimManifestRow & {
   payloadJson: string
   queueRecordId: string
 }
-type JudgeWorkerRolloutCleanupResult = {
+type AcceptedClaimProtectedPrompt = {jobId: string; queueRecordId: string}
+export type JudgeWorkerRolloutCleanupResult = {
   acceptedClaimsDeleted: number
   closeoutIntentsInserted: number
   replay: CompletionReplayResult
@@ -183,6 +184,7 @@ class OwnerBackedJudgmentRequestError extends Error {
 
 const completionJournalLogger = createRateLimitedLogger({windowMs: 30_000})
 const successCompletionTokenUseReplayGraceMs = 30_000
+const ownerBackedRequestTimeoutMs = 30_000
 
 let journalDatabase: Database | null = null
 
@@ -419,6 +421,7 @@ const requestOwnerJson = async <T>({
     body: hasBody ? JSON.stringify(body) : undefined,
     headers: hasBody ? {'content-type': 'application/json'} : undefined,
     method,
+    signal: AbortSignal.timeout(ownerBackedRequestTimeoutMs),
   })
   const text = await response.text()
   const parsed = tryParseOwnerResponse<T>(text)
@@ -1039,6 +1042,18 @@ const getAcceptedClaimRolloutRows = (database: Database): AcceptedClaimRolloutRo
     .all() as AcceptedClaimRolloutRow[]
 }
 
+const getAcceptedClaimPromptKey = ({jobId, queueRecordId}: AcceptedClaimProtectedPrompt): string => {
+  return `${jobId}\n${queueRecordId}`
+}
+
+const getProtectedAcceptedClaimPromptKeys = (prompts: AcceptedClaimProtectedPrompt[]): Set<string> => {
+  return new Set(
+    prompts.map((prompt) => {
+      return getAcceptedClaimPromptKey(prompt)
+    }),
+  )
+}
+
 const acceptedClaimHasCompletionOutboxIntent = (database: Database, claimId: string): boolean => {
   const row = database
     .query(
@@ -1169,10 +1184,11 @@ const insertRolloutCloseoutIntent = (database: Database, row: AcceptedClaimRollo
   return Number(result.changes ?? 0)
 }
 
-const recordRolloutCloseoutIntents = (database: Database): number => {
+const recordRolloutCloseoutIntents = (database: Database, protectedPromptKeys: Set<string> = new Set()): number => {
   return database.transaction((rows: AcceptedClaimRolloutRow[]) => {
     return rows.reduce((count, row) => {
-      return acceptedClaimHasCompletionOutboxIntent(database, row.claimId)
+      return protectedPromptKeys.has(getAcceptedClaimPromptKey(row))
+        || acceptedClaimHasCompletionOutboxIntent(database, row.claimId)
         ? count
         : count + insertRolloutCloseoutIntent(database, row)
     }, 0)
@@ -1469,7 +1485,9 @@ const isStaleCompletionReplayError = (error: unknown): boolean => {
   return (
     error instanceof OwnerBackedJudgmentRequestError
     && error.status === 409
-    && (normalized.includes('missing claimed prompt identity') || normalized.includes('missing sqlite job database'))
+    && (normalized.includes('missing claimed prompt identity')
+      || normalized.includes('missing sqlite job database')
+      || (normalized.includes('snapshot') && normalized.includes('identity mismatch')))
   )
 }
 
@@ -1520,20 +1538,53 @@ const replayCompletionRows = async (rows: CompletionOutboxRow[]): Promise<Comple
   )
 }
 
-export const replayJudgeWorkerCompletionOutbox = async (): Promise<CompletionReplayResult> => {
+const replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup = async (): Promise<CompletionReplayResult> => {
   const database = openJournalDatabase()
   reactivateAckedCompletionsWithPendingTokenUse(database)
 
   return replayCompletionRows(getUnackedCompletionRows(database))
 }
 
+export const replayJudgeWorkerCompletionOutbox = async (): Promise<CompletionReplayResult> => {
+  const replay = await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup()
+  deleteAcceptedClaimsWithOwnerAck(openJournalDatabase())
+
+  return replay
+}
+
 export const runJudgeWorkerRolloutCleanup = async (): Promise<JudgeWorkerRolloutCleanupResult> => {
-  const firstReplay = await replayJudgeWorkerCompletionOutbox()
+  const firstReplay = await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup()
   const database = openJournalDatabase()
   const closeoutIntentsInserted = recordRolloutCloseoutIntents(database)
   const secondReplay =
     closeoutIntentsInserted > 0
-      ? await replayJudgeWorkerCompletionOutbox()
+      ? await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup()
+      : {ackedCount: 0, discardedCount: 0, failedCount: 0}
+  const acceptedClaimsDeleted = deleteAcceptedClaimsWithOwnerAck(database)
+
+  return {
+    acceptedClaimsDeleted,
+    closeoutIntentsInserted,
+    replay: {
+      ackedCount: firstReplay.ackedCount + secondReplay.ackedCount,
+      discardedCount: firstReplay.discardedCount + secondReplay.discardedCount,
+      failedCount: firstReplay.failedCount + secondReplay.failedCount,
+    },
+  }
+}
+
+export const recoverAbandonedJudgeWorkerAcceptedClaims = async ({
+  protectedPrompts = [],
+}: {protectedPrompts?: AcceptedClaimProtectedPrompt[]} = {}): Promise<JudgeWorkerRolloutCleanupResult> => {
+  const firstReplay = await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup()
+  const database = openJournalDatabase()
+  const closeoutIntentsInserted = recordRolloutCloseoutIntents(
+    database,
+    getProtectedAcceptedClaimPromptKeys(protectedPrompts),
+  )
+  const secondReplay =
+    closeoutIntentsInserted > 0
+      ? await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup()
       : {ackedCount: 0, discardedCount: 0, failedCount: 0}
   const acceptedClaimsDeleted = deleteAcceptedClaimsWithOwnerAck(database)
 
@@ -1549,7 +1600,10 @@ export const runJudgeWorkerRolloutCleanup = async (): Promise<JudgeWorkerRollout
 }
 
 export const flushJudgeWorkerCompletionOutboxForClaim = async (claimId: string): Promise<CompletionReplayResult> => {
-  return replayCompletionRows(getUnackedCompletionRows(openJournalDatabase(), claimId))
+  const replay = await replayCompletionRows(getUnackedCompletionRows(openJournalDatabase(), claimId))
+  deleteAcceptedClaimsWithOwnerAck(openJournalDatabase())
+
+  return replay
 }
 
 export const hasUnackedJudgeWorkerCompletion = async (claimId: string): Promise<boolean> => {

@@ -88,7 +88,21 @@ const registerMocks = (): void => {
     }
   })
   void mock.module(requestAttemptManifestStoreModulePath, () => {
-    return {recordRequestAttemptManifestStage}
+    return {
+      compactClosedOutRequestAttemptManifestEntries: async () => {
+        return undefined
+      },
+      getRequestAttemptManifestOwner: (input: unknown) => {
+        return input
+      },
+      recordRequestAttemptManifestStage,
+      recordRequestAttemptsEnteringPersistence: async () => {
+        return undefined
+      },
+      recordRequestAttemptsPersistenceFailure: async () => {
+        return undefined
+      },
+    }
   })
 }
 
@@ -183,6 +197,52 @@ test('codex waiters are rejected when their request attempt is closed', async ()
 
   first.release.resolve()
   await first.request
+})
+
+test('in-flight provider admission acquisition is reported as provider admission wait', async () => {
+  const runtime = await loadRuntime()
+  const admissionRelease = createSignal()
+  let started = false
+
+  acquireProviderAdmissionLeasePersisted.mockImplementationOnce(async (input: ProviderAdmissionLeaseAcquireInput) => {
+    await admissionRelease.promise
+    return realProviderAdmissionLeaseModule.acquireProviderAdmissionLease(input)
+  })
+
+  const request = runtime.withJudgmentRequest(
+    {
+      ...createProviderSnapshotFields('openai'),
+      fallbackBaseURL: 'http://provider-admission-wait.test/v1',
+      judgmentsJobId: 'job-provider-admission-wait',
+      provider: 'openai',
+      providerConnectionId: null,
+      providerMaxInflightRequests: 10,
+      requestAttemptManifestOwner: {
+        jobId: 'job-provider-admission-wait',
+        kind: 'queue_prompt',
+        queueRecordId: 'record-provider-admission-wait',
+      },
+      workerUrls: [],
+    },
+    async () => {
+      started = true
+    },
+  )
+
+  await flush()
+
+  expect(started).toBe(false)
+  expect(runtime.getJudgmentRequestStats('job-provider-admission-wait')).toMatchObject({
+    inFlight: 0,
+    requestSlotWaiters: {codex: 0, fallback: 0, providerAdmission: 1, worker: 0},
+    waitingForRequestSlot: 1,
+  })
+
+  admissionRelease.resolve()
+  await request
+
+  expect(started).toBe(true)
+  expect(runtime.getJudgmentRequestStats('job-provider-admission-wait').requestSlotWaiters.providerAdmission).toBe(0)
 })
 
 test('fallback and worker waiters are rejected by prompt-scoped recovery', async () => {

@@ -293,6 +293,75 @@ test('falls back to local telemetry when judge-worker telemetry is unavailable',
   })
 })
 
+test('does not report partial allocation as a bottleneck when fresh workers cover target capacity', async () => {
+  const telemetry = await getAggregatedJudgmentDispatchTelemetry(input, {
+    fetchWorkerTelemetry: async () => {
+      return createSnapshot({provider: {localProviderLiveRequests: 2}, request: {inFlight: 2}})
+    },
+    getJudgingWorkerRecords: async () => {
+      return [createJudgingRecord(), createJudgingRecord({instanceId: 'stale-worker', isStale: true, listenPort: 3004})]
+    },
+    getLocalTelemetry: async () => {
+      return createSnapshot({provider: getProviderWithReadyWork({providerLeasedLiveRequests: 2})})
+    },
+    shouldUseLocalTelemetryOnly: () => {
+      return false
+    },
+  })
+
+  expect(telemetry.provider).toMatchObject({
+    allocationCompleteCurrent: false,
+    allocationInputState: 'partialTelemetry',
+    bottleneck: 'claiming',
+    bottleneckSubreason: 'promptClaimBacklog',
+    convergenceDiagnostics: {backlogReplenishmentAllowed: true},
+    observedGlobalEffectiveProviderLimit: 20,
+    unallocatedTargetLiveCalls: 0,
+  })
+})
+
+test('allocates target capacity to unavailable fresh worker telemetry when leases and ready work exist', async () => {
+  const telemetry = await getAggregatedJudgmentDispatchTelemetry(input, {
+    fetchWorkerTelemetry: async () => {
+      return null
+    },
+    getJudgingWorkerRecords: async () => {
+      return [createJudgingRecord()]
+    },
+    getLocalTelemetry: async () => {
+      return createSnapshot({provider: getProviderWithReadyWork()})
+    },
+    shouldUseLocalTelemetryOnly: () => {
+      return false
+    },
+  })
+
+  expect(telemetry.provider).toMatchObject({
+    allocationCompleteCurrent: false,
+    allocationInputState: 'partialTelemetry',
+    bottleneck: 'claiming',
+    bottleneckSubreason: 'promptClaimBacklog',
+    observedGlobalEffectiveProviderLimit: 20,
+    unallocatedTargetLiveCalls: 0,
+  })
+  expect(telemetry.provider.providerTargetAllocationSnapshot?.workers).toEqual([
+    {
+      effectiveProviderLimit: 20,
+      expectedLocalLiveShare: 19,
+      localProviderLiveRequests: 0,
+      providerKey: 'connection-a',
+      providerLimitVersion: 'version-a',
+      routeable: true,
+      workerId: 'judge-worker-a',
+    },
+  ])
+  expect(telemetry.source).toMatchObject({
+    aggregateCompleteness: 'partial',
+    telemetryUnavailable: true,
+    unavailableWorkerCount: 1,
+  })
+})
+
 test('merges prompt and request-attempt lifecycle telemetry from fresh workers', async () => {
   const records = [createJudgingRecord(), createJudgingRecord({instanceId: 'judge-worker-b', listenPort: 3004})]
   const telemetry = await getAggregatedJudgmentDispatchTelemetry(input, {

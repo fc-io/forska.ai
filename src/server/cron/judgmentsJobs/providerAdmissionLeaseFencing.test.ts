@@ -803,6 +803,7 @@ test('current owner reconciliation closes exact request leases without closing p
   ])
 
   const proofResult = await reconcileProviderAdmissionLeasesOnCurrentOwner({
+    nowMs: 3_000,
     suspectFreshProofs: [
       {holderToken: 'probe-holder', leaseIdentity: probeLeaseIdentity, leaseKind: 'probe', providerKey},
     ],

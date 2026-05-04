@@ -63,15 +63,17 @@ test('bounds accepted prompts by provider queue capacity', async () => {
     prompts: [
       createPrompt({articleId: 'article-1', promptId: 'prompt-1', recordId: 'record-1'}),
       createPrompt({articleId: 'article-2', promptId: 'prompt-2', recordId: 'record-2'}),
+      createPrompt({articleId: 'article-3', promptId: 'prompt-3', recordId: 'record-3'}),
+      createPrompt({articleId: 'article-4', promptId: 'prompt-4', recordId: 'record-4'}),
     ],
   })
 
-  expect(result.acceptedCount).toBe(1)
+  expect(result.acceptedCount).toBe(3)
   expect(
     result.rejectedPrompts.map((prompt) => {
       return prompt.recordId
     }),
-  ).toEqual(['record-2'])
+  ).toEqual(['record-4'])
   expect(
     await runtime.getProviderQueueCapacity({
       providerConnectionId: 'connection-a',
@@ -160,7 +162,7 @@ test('applies lower provider caps without restart', async () => {
       providerMaxInflightRequests: 2,
       providerUsesFamilyDefault: false,
     }),
-  ).toBe(1)
+  ).toBe(5)
 
   expect(
     await runtime.getProviderQueueCapacity({
@@ -168,7 +170,7 @@ test('applies lower provider caps without restart', async () => {
       providerMaxInflightRequests: 1,
       providerUsesFamilyDefault: false,
     }),
-  ).toBe(1)
+  ).toBe(3)
 
   await runtime.shutdown('test-complete')
 })
@@ -199,7 +201,7 @@ test('uses adaptive prompt backlog target when provided', async () => {
       providerPromptBacklogTarget: 6,
       providerUsesFamilyDefault: false,
     }),
-  ).toBe(2)
+  ).toBe(5)
 
   release.resolve()
   await runtime.shutdown('test-complete')

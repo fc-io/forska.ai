@@ -757,7 +757,11 @@ export const mutateRequestAttemptManifestEntries = ({
   currentEntries: JudgmentRequestAttemptJsonEntry[]
   mutation: JudgmentRequestAttemptManifestMutation
 }): JudgmentRequestAttemptJsonEntry[] => {
-  const mergedEntries = mergeManifestEntriesByRequestAttemptId(currentEntries, mutation.mergeEntries ?? [])
+  const currentEntriesAfterCompaction = compactDurableManifestEntries(currentEntries, mutation.compactRequestAttemptIds)
+  const mergedEntries = mergeManifestEntriesByRequestAttemptId(
+    currentEntriesAfterCompaction,
+    mutation.mergeEntries ?? [],
+  )
 
   return compactDurableManifestEntries(mergedEntries, mutation.compactRequestAttemptIds)
 }

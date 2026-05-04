@@ -10,9 +10,11 @@ import {
   enqueueJudgeWorkerCompletion,
   hasUnackedJudgeWorkerCompletion,
   type JudgeWorkerCompletionPayload,
+  recordAcceptedJudgeWorkerClaims,
   replayJudgeWorkerCompletionOutbox,
   resetJudgeWorkerCompletionJournalForTests,
 } from './judgeWorkerCompletionJournal.ts'
+import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 
 const originalEnv = {
   API_SERVER_PORT: process.env.API_SERVER_PORT,
@@ -73,6 +75,34 @@ const createTokenUse = () => {
   }
 }
 
+const createAcceptedClaimPrompt = (payload: JudgeWorkerCompletionPayload): PromptToProcess => {
+  return {
+    articleId: payload.articleId,
+    claimId: payload.claimId,
+    executionSnapshotHash: payload.executionSnapshotHash,
+    executionSnapshotId: payload.executionSnapshotId,
+    jobId: payload.jobId,
+    modelBaseUrl: 'http://runtime.test/v1',
+    modelId: payload.modelId,
+    modelMetadataJson: null,
+    modelName: 'Model A',
+    modelProvider: 'openai',
+    modelSecretRef: null,
+    modelVersion: null,
+    modelWorkerUrls: [],
+    projectId: payload.projectId,
+    promptId: payload.promptId,
+    providerConnectionId: 'connection-a',
+    providerMaxInflightRequests: 10,
+    providerUsesFamilyDefault: false,
+    recordId: payload.queueRecordId,
+    useAbstract: payload.useAbstract,
+    useFulltext: payload.useFulltext,
+    useFulltextNoImages: payload.useFulltextNoImages,
+    useTitle: payload.useTitle,
+  }
+}
+
 const setupJournalTest = (handler: OwnerFetchHandler) => {
   const testDirectory = mkdtempSync(join(tmpdir(), 'f1-judge-worker-journal-'))
   const journalPath = join(testDirectory, 'journal.sqlite')
@@ -104,6 +134,22 @@ const getCompletionOutboxRow = (journalPath: string, claimId: string) => {
 
   database.close(false)
   return row
+}
+
+const getAcceptedClaimCount = (journalPath: string, claimId: string): number => {
+  const database = new Database(journalPath, {readonly: true})
+  const row = database
+    .query(
+      `
+        SELECT COUNT(*) AS count
+        FROM accepted_claim
+        WHERE claim_id = ?
+      `,
+    )
+    .get(claimId) as {count: number} | null
+
+  database.close(false)
+  return row?.count ?? 0
 }
 
 afterEach(async () => {
@@ -170,6 +216,67 @@ test('completion replay discards stale missing SQLite job database responses', a
   expect(row?.ackedAt).not.toBeNull()
   expect(row?.status).toBe('discarded_stale')
   expect(row?.lastError).toContain('owner-backed judgment request failed (409): missing SQLite job database')
+})
+
+test('completion replay discards stale snapshot identity mismatch responses', async () => {
+  const {journalPath} = setupJournalTest(async () => {
+    return new Response('snapshot identity mismatch for judgment completion', {status: 409})
+  })
+  const payload = createCompletionPayload({claimId: 'claim-snapshot-mismatch', status: 'retry'})
+
+  await enqueueJudgeWorkerCompletion(payload)
+
+  const result = await replayJudgeWorkerCompletionOutbox()
+  const row = getCompletionOutboxRow(journalPath, payload.claimId)
+
+  expect(result).toEqual({ackedCount: 0, discardedCount: 1, failedCount: 0})
+  expect(await hasUnackedJudgeWorkerCompletion(payload.claimId)).toBe(false)
+  expect(row?.ackedAt).not.toBeNull()
+  expect(row?.status).toBe('discarded_stale')
+  expect(row?.lastError).toContain('owner-backed judgment request failed (409): snapshot identity mismatch')
+})
+
+test('completion replay discards stale snapshot claim identity mismatch responses', async () => {
+  const {journalPath} = setupJournalTest(async () => {
+    return new Response('snapshot claim identity mismatch for claimId', {status: 409})
+  })
+  const payload = createCompletionPayload({claimId: 'claim-snapshot-claim-mismatch', status: 'retry'})
+
+  await enqueueJudgeWorkerCompletion(payload)
+
+  const result = await replayJudgeWorkerCompletionOutbox()
+  const row = getCompletionOutboxRow(journalPath, payload.claimId)
+
+  expect(result).toEqual({ackedCount: 0, discardedCount: 1, failedCount: 0})
+  expect(await hasUnackedJudgeWorkerCompletion(payload.claimId)).toBe(false)
+  expect(row?.ackedAt).not.toBeNull()
+  expect(row?.status).toBe('discarded_stale')
+  expect(row?.lastError).toContain('owner-backed judgment request failed (409): snapshot claim identity mismatch')
+})
+
+test('completion replay deletes accepted claim rows after owner ack', async () => {
+  const {journalPath} = setupJournalTest(async (request) => {
+    const body = (await request.json()) as {claimId: string; queueRecordId: string}
+
+    return Response.json({data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}})
+  })
+  const payload = createCompletionPayload({claimId: 'claim-accepted-cleanup'})
+
+  await recordAcceptedJudgeWorkerClaims([createAcceptedClaimPrompt(payload)])
+  await enqueueJudgeWorkerCompletion(payload)
+
+  expect(getAcceptedClaimCount(journalPath, payload.claimId)).toBe(1)
+  expect(await replayJudgeWorkerCompletionOutbox()).toEqual({ackedCount: 0, discardedCount: 0, failedCount: 0})
+
+  await attachTokenUseToPendingJudgeWorkerCompletion({
+    articleId: payload.articleId,
+    jobId: payload.jobId,
+    promptIds: [payload.promptId],
+    tokenUse: createTokenUse(),
+  })
+
+  expect(await replayJudgeWorkerCompletionOutbox()).toEqual({ackedCount: 1, discardedCount: 0, failedCount: 0})
+  expect(getAcceptedClaimCount(journalPath, payload.claimId)).toBe(0)
 })
 
 test('judged completion replay waits for token use', async () => {

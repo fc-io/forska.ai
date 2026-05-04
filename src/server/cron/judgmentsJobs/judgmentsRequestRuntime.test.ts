@@ -16,6 +16,9 @@ type ProviderAdmissionLeaseAcquireInput = Parameters<
 type ProviderAdmissionLeaseReleaseInput = Parameters<
   typeof realProviderAdmissionLeaseModule.releaseProviderAdmissionLeaseWithResultThroughOwner
 >[0]
+type ProviderAdmissionLeaseHeartbeatInput = Parameters<
+  typeof realProviderAdmissionLeaseModule.heartbeatProviderAdmissionLeaseThroughOwner
+>[0]
 type ProviderHealthResult = {lastError: string | null; message: string; modelCount: number | null; ok: boolean}
 
 const providerConnectionRepositoryModulePath = new URL(
@@ -105,6 +108,9 @@ const acquireProviderAdmissionLeasePersisted = mock(async (input: ProviderAdmiss
 const releaseProviderAdmissionLeaseWithResultThroughOwner = mock(async (input: ProviderAdmissionLeaseReleaseInput) => {
   const released = realProviderAdmissionLeaseModule.releaseProviderAdmissionLease(input)
   return released ? ({released: true} as const) : ({reason: 'missing', released: false} as const)
+})
+const heartbeatProviderAdmissionLeaseThroughOwner = mock(async (_input: ProviderAdmissionLeaseHeartbeatInput) => {
+  return {heartbeat: false, reason: 'missing' as const}
 })
 class RecoverableJudgeError extends Error {
   failureCode: string
@@ -254,6 +260,8 @@ const registerModuleMocks = () => {
     return {
       ...realProviderAdmissionLeaseModule,
       acquireProviderAdmissionLeasePersisted,
+      heartbeatProviderAdmissionLeaseThroughOwner,
+      providerAdmissionLeaseHeartbeatIntervalMs: 5,
       releaseProviderAdmissionLeaseWithResultThroughOwner,
     }
   })
@@ -380,6 +388,7 @@ afterEach(async () => {
   testProviderConnectionHealth.mockClear()
   getJudgmentsCapacityMock.mockClear()
   acquireProviderAdmissionLeasePersisted.mockClear()
+  heartbeatProviderAdmissionLeaseThroughOwner.mockClear()
   releaseProviderAdmissionLeaseWithResultThroughOwner.mockClear()
   judgeSinglePrompt.mockClear()
   queryJson.mockClear()
@@ -413,6 +422,11 @@ afterEach(async () => {
     async (input: ProviderAdmissionLeaseReleaseInput) => {
       const released = realProviderAdmissionLeaseModule.releaseProviderAdmissionLease(input)
       return released ? ({released: true} as const) : ({reason: 'missing', released: false} as const)
+    },
+  )
+  heartbeatProviderAdmissionLeaseThroughOwner.mockImplementation(
+    async (_input: ProviderAdmissionLeaseHeartbeatInput) => {
+      return {heartbeat: false, reason: 'missing' as const}
     },
   )
   judgeSinglePrompt.mockImplementation(async (_input: unknown) => {
@@ -452,7 +466,7 @@ afterEach(async () => {
 const realDateNow = Date.now
 
 test('fallback requests enforce provider caps and release after failure', async () => {
-  const {withJudgmentRequest} = await loadRuntime()
+  const {getJudgmentProviderRequestStats, withJudgmentRequest} = await loadRuntime()
   const firstRelease = createSignal()
   let firstStarted = false
   let secondStarted = false
@@ -478,6 +492,13 @@ test('fallback requests enforce provider caps and release after failure', async 
 
   await flush()
   expect(firstStarted).toBe(true)
+  expect(
+    getJudgmentProviderRequestStats({
+      modelProvider: 'openai',
+      providerConnectionId: 'connection-shared',
+      providerMaxInflightRequests: 1,
+    }),
+  ).toEqual({localProviderLiveRequests: 1})
 
   const secondRequest = withJudgmentRequest(
     {
@@ -503,6 +524,13 @@ test('fallback requests enforce provider caps and release after failure', async 
   await secondRequest
 
   expect(secondStarted).toBe(true)
+  expect(
+    getJudgmentProviderRequestStats({
+      modelProvider: 'openai',
+      providerConnectionId: 'connection-shared',
+      providerMaxInflightRequests: 1,
+    }),
+  ).toEqual({localProviderLiveRequests: 0})
 })
 
 test('worker requests enforce provider caps and release after success', async () => {
@@ -1088,6 +1116,40 @@ test('provider admission request leases gate starts before local provider slots'
 
   expect(secondStarted).toBe(true)
   expect(acquireProviderAdmissionLeasePersisted.mock.calls.length).toBeGreaterThan(2)
+})
+
+test('heartbeats provider admission lease while remote request is running', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
+  const release = createSignal()
+
+  const request = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-provider-heartbeat',
+      provider: 'openai',
+      fallbackBaseURL: 'http://provider-heartbeat-runtime.test/v1',
+      providerConnectionId: 'connection-provider-heartbeat',
+      providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      await release.promise
+    },
+  )
+
+  await flush()
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20)
+  })
+
+  expect(heartbeatProviderAdmissionLeaseThroughOwner).toHaveBeenCalled()
+  const heartbeatInput = heartbeatProviderAdmissionLeaseThroughOwner.mock.calls[0]?.[0]
+  expect(heartbeatInput?.holderToken).toContain(':request:')
+  expect(heartbeatInput?.leaseIdentity.startsWith('request:')).toBe(true)
+  expect(typeof heartbeatInput?.providerKey).toBe('string')
+
+  release.resolve()
+  await request
 })
 
 test('provider admission release fencing failure still clears the local request slot', async () => {

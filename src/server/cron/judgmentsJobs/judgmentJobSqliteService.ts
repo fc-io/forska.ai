@@ -6,7 +6,7 @@ import {Database} from 'bun:sqlite'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-import {createJudgmentExecutionSnapshotForClaim} from '../../services/judgmentExecutionSnapshotService.ts'
+import {createJudgmentExecutionSnapshotsForClaims} from '../../services/judgmentExecutionSnapshotService.ts'
 import {getJudgmentJobSqliteHealthProjectionService} from '../../services/judgmentJobSqliteHealthProjectionService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../../utils/runtimeLogger.ts'
@@ -3162,32 +3162,6 @@ const markReadyQueuePromptClaimed = ({
   return Number(result.changes ?? 0) === 1
 }
 
-const claimReadyQueuePromptRow = async ({
-  jobId,
-  row,
-  serverJobId,
-}: {
-  jobId: string
-  row: QueuePromptRow
-  serverJobId: string
-}): Promise<QueuePromptClaim[]> => {
-  const claimId = randomUUID()
-  const snapshot = await createJudgmentExecutionSnapshotForClaim({
-    articleId: row.articleId,
-    claimId,
-    claimedBy: serverJobId,
-    jobId,
-    promptId: row.promptId,
-    queueRecordId: row.id,
-  })
-  const claim = {claimId, ...snapshot}
-  await ensureOwnedJobLease(jobId, serverJobId)
-  const database = getOpenDatabase(jobId, false)
-  const claimed = database ? markReadyQueuePromptClaimed({claim, database, row, serverJobId}) : false
-
-  return claimed ? [{articleId: row.articleId, jobId, promptId: row.promptId, recordId: row.id, ...claim}] : []
-}
-
 const claimReadyQueuePromptRows = async ({
   jobId,
   rows,
@@ -3197,12 +3171,47 @@ const claimReadyQueuePromptRows = async ({
   rows: QueuePromptRow[]
   serverJobId: string
 }): Promise<QueuePromptClaim[]> => {
-  return rows.reduce<Promise<QueuePromptClaim[]>>(async (claimedPromise, row) => {
-    const claimed = await claimedPromise
-    const nextClaim = await claimReadyQueuePromptRow({jobId, row, serverJobId})
+  if (rows.length === 0) {
+    return []
+  }
 
-    return [...claimed, ...nextClaim]
-  }, Promise.resolve([]))
+  const rowClaims = rows.map((row) => {
+    return {claimId: randomUUID(), row}
+  })
+  const snapshots = await createJudgmentExecutionSnapshotsForClaims(
+    rowClaims.map(({claimId, row}) => {
+      return {
+        articleId: row.articleId,
+        claimId,
+        claimedBy: serverJobId,
+        jobId,
+        promptId: row.promptId,
+        queueRecordId: row.id,
+      }
+    }),
+  )
+
+  await ensureOwnedJobLease(jobId, serverJobId)
+  const database = getOpenDatabase(jobId, false)
+
+  if (!database) {
+    return []
+  }
+
+  return database.transaction(() => {
+    return rowClaims.flatMap(({claimId, row}, index) => {
+      const snapshot = snapshots[index]
+
+      if (!snapshot) {
+        return []
+      }
+
+      const claim = {claimId, ...snapshot}
+      const claimed = markReadyQueuePromptClaimed({claim, database, row, serverJobId})
+
+      return claimed ? [{articleId: row.articleId, jobId, promptId: row.promptId, recordId: row.id, ...claim}] : []
+    })
+  })()
 }
 
 const getPromptClaimIdentityFromDatabase = (

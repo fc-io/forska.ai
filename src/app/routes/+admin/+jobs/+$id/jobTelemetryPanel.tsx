@@ -108,8 +108,9 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
               <div>
                 <h2 class="text-lg font-semibold text-gray-900">Provider Capacity Telemetry</h2>
                 <p class="mt-1 text-sm text-gray-500">
-                  Request leases are the shared admission authority. Observed aggregates are worker-reported best-effort
-                  telemetry, and local diagnostics describe this server&apos;s prompt and request-work backlog.
+                  Remote LLM request leases are the shared admission authority. Observed aggregates are worker-reported
+                  best-effort telemetry, and local diagnostics describe this server&apos;s prompt and request-work
+                  backlog.
                 </p>
               </div>
               <span class="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-800">
@@ -119,14 +120,14 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
 
             <div class="mt-6 grid gap-6 xl:grid-cols-3">
               <TelemetrySection
-                description="Lease-authoritative request-level provider capacity from shared admission leases."
+                description="Lease-authoritative provider capacity for live remote LLM HTTP requests."
                 title="Lease Authority"
               >
                 <div class="grid gap-3">
                   <TelemetryMetric
                     description={`Provider key: ${provider().leaseAuthority.providerKey}`}
                     tone="blue"
-                    label="Request Leases"
+                    label="Remote LLM Requests"
                   >
                     {formatTelemetryRatio(
                       provider().leaseAuthority.providerLeasedLiveRequests,
@@ -134,7 +135,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                     )}
                   </TelemetryMetric>
                   <TelemetryMetric
-                    description="Live request leases plus endpoint probe leases."
+                    description="Live remote LLM request leases plus endpoint probe leases."
                     tone="indigo"
                     label="Physical Calls"
                   >
@@ -144,7 +145,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                     )}
                   </TelemetryMetric>
                   <TelemetryMetric
-                    description="Lease slots still available for normal request attempts."
+                    description="Lease slots still available for live remote LLM requests."
                     label="Lease Headroom"
                   >
                     {formatTelemetryCount(provider().leaseAuthority.providerAvailableRequestLeases)}
@@ -176,7 +177,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
               >
                 <div class="grid gap-3">
                   <TelemetryMetric
-                    description="Physical request-level LLM calls running in this worker."
+                    description="Remote LLM HTTP calls running in this worker."
                     tone="sky"
                     label="Local Live Requests"
                   >
@@ -195,7 +196,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                     {formatTelemetryRatio(provider().localPromptBacklog, provider().localPromptBacklogTarget)}
                   </TelemetryMetric>
                   <TelemetryMetric
-                    description="Estimated request work compared with the adaptive request-work target."
+                    description="Estimated pre-request, live-request, and post-response work compared with the adaptive target."
                     label="Request-Work Backlog"
                   >
                     {formatTelemetryRatio(provider().localRequestWorkBacklog, provider().localRequestWorkBacklogTarget)}
