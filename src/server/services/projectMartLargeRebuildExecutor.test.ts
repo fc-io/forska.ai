@@ -502,7 +502,11 @@ test('project judgment fact batch rebuild replaces only affected scoped article 
         article_id AS articleId,
         answered_original AS answer
       FROM mart.judgment_fact
-      WHERE project_id = 'large-rebuild-executor-project'
+      WHERE judgment_id IN (
+        'judgment-fact-1',
+        'stale-unscoped-requested-judgment-fact',
+        'stale-unrelated-judgment-fact'
+      )
       ORDER BY article_id ASC, judgment_id ASC
     \`)
 
@@ -519,7 +523,7 @@ test('project judgment fact batch rebuild replaces only affected scoped article 
 
 test('project judgment fact batch rebuild repairs shared facts for scoped articles', () => {
   const result = runScript<{
-    factRows: Array<{judgmentId: string; projectId: string}>
+    factRows: Array<{judgmentId: string; projectId: string | null}>
     promptAnswerRows: Array<{answerValue: string; judgmentId: string; projectId: string}>
   }>(`
     await database.run(
@@ -559,9 +563,7 @@ test('project judgment fact batch rebuild repairs shared facts for scoped articl
     await database.close()
   `)
 
-  expect(result.factRows).toEqual([
-    {judgmentId: 'large-rebuild-shared-source-judgment', projectId: 'large-rebuild-shared-source'},
-  ])
+  expect(result.factRows).toEqual([{judgmentId: 'large-rebuild-shared-source-judgment', projectId: null}])
   expect(result.promptAnswerRows).toEqual([
     {answerValue: 'yes', judgmentId: 'large-rebuild-shared-source-judgment', projectId: 'large-rebuild-shared-target'},
   ])

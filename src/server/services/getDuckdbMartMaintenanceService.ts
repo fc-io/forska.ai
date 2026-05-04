@@ -763,7 +763,6 @@ const getProjectReviewAnswerDictionaryRebuildSql = (projectId: string) => {
 
   return `
     BEGIN TRANSACTION;
-    DELETE FROM app.review_answer_dictionary WHERE project_id = ${projectLiteral};
     INSERT INTO app.review_answer_dictionary (
       project_id,
       prompt_id,
@@ -772,18 +771,47 @@ const getProjectReviewAnswerDictionaryRebuildSql = (projectId: string) => {
       numeric_answer_value,
       dictionary_updated_at
     )
-    SELECT
-      project_id,
-      prompt_id,
-      DENSE_RANK() OVER (PARTITION BY project_id, prompt_id ORDER BY answer_value ASC) AS answer_id,
-      answer_value,
-      TRY_CAST(answer_value AS BIGINT),
-      current_timestamp
-    FROM (
-      SELECT DISTINCT project_id, prompt_id, answer_value
+    WITH answer_values AS (
+      SELECT DISTINCT
+        project_id,
+        prompt_id,
+        answer_value
       FROM mart.prompt_answer_fact
       WHERE project_id = ${projectLiteral}
-    ) answer_values;
+    ),
+    missing_answer_values AS (
+      SELECT answer_values.project_id, answer_values.prompt_id, answer_values.answer_value
+      FROM answer_values
+      LEFT JOIN app.review_answer_dictionary dictionary
+        ON dictionary.project_id = answer_values.project_id
+       AND dictionary.prompt_id = answer_values.prompt_id
+       AND dictionary.answer_value = answer_values.answer_value
+      WHERE dictionary.answer_id IS NULL
+    ),
+    current_answer_id AS (
+      SELECT
+        project_id,
+        prompt_id,
+        COALESCE(MAX(answer_id), 0) AS max_answer_id
+      FROM app.review_answer_dictionary
+      WHERE project_id = ${projectLiteral}
+      GROUP BY project_id, prompt_id
+    )
+    SELECT
+      missing_answer_values.project_id,
+      missing_answer_values.prompt_id,
+      COALESCE(current_answer_id.max_answer_id, 0)
+        + ROW_NUMBER() OVER (
+          PARTITION BY missing_answer_values.project_id, missing_answer_values.prompt_id
+          ORDER BY missing_answer_values.answer_value ASC
+        ) AS answer_id,
+      missing_answer_values.answer_value,
+      TRY_CAST(missing_answer_values.answer_value AS BIGINT),
+      current_timestamp
+    FROM missing_answer_values
+    LEFT JOIN current_answer_id
+      ON current_answer_id.project_id = missing_answer_values.project_id
+     AND current_answer_id.prompt_id = missing_answer_values.prompt_id;
     COMMIT;
   `
 }
@@ -1255,8 +1283,8 @@ const getProjectReviewServingBatchBodySql = (projectId: string) => {
       judgment_fact.article_created_at,
       judgment_fact.article_updated_at,
       judgment_fact.model_id,
-      judgment_fact.project_id,
-      judgment_fact.updated_at,
+      judgment.project_id,
+      judgment.updated_at,
       judgment_fact.use_title,
       judgment_fact.use_abstract,
       judgment_fact.use_fulltext,
@@ -1266,8 +1294,8 @@ const getProjectReviewServingBatchBodySql = (projectId: string) => {
       judgment_fact.confidence_original,
       judgment_fact.explanation,
       judgment_fact.quotes,
-      judgment_fact.snapshot_project_id,
-      judgment_fact.snapshot_project_model_name,
+      judgment.snapshot_project_id,
+      judgment.snapshot_project_model_name,
       judgment_fact.answered_original,
       judgment_fact.answered_original_as_array,
       current_timestamp
@@ -1283,6 +1311,7 @@ const getProjectReviewServingBatchBodySql = (projectId: string) => {
         projectPromptAlias: 'project_prompt',
         projectScopeAlias: 'scope_article',
       })}
+    LEFT JOIN app.judgment judgment ON judgment.id = judgment_fact.judgment_id
     WHERE scope_article.project_id = ${projectLiteral}
       AND ${getProjectRefreshArticleBatchExistsSql('scope_article.article_id')};
   `
@@ -1465,8 +1494,8 @@ const getProjectReviewActiveServingBatchRefreshBodySql = (projectId: string) => 
       judgment_fact.article_created_at,
       judgment_fact.article_updated_at,
       judgment_fact.model_id,
-      judgment_fact.project_id,
-      judgment_fact.updated_at,
+      judgment.project_id,
+      judgment.updated_at,
       judgment_fact.use_title,
       judgment_fact.use_abstract,
       judgment_fact.use_fulltext,
@@ -1476,8 +1505,8 @@ const getProjectReviewActiveServingBatchRefreshBodySql = (projectId: string) => 
       judgment_fact.confidence_original,
       judgment_fact.explanation,
       judgment_fact.quotes,
-      judgment_fact.snapshot_project_id,
-      judgment_fact.snapshot_project_model_name,
+      judgment.snapshot_project_id,
+      judgment.snapshot_project_model_name,
       judgment_fact.answered_original,
       judgment_fact.answered_original_as_array,
       current_timestamp
@@ -1493,6 +1522,7 @@ const getProjectReviewActiveServingBatchRefreshBodySql = (projectId: string) => 
         projectPromptAlias: 'project_prompt',
         projectScopeAlias: 'scope_article',
       })}
+    LEFT JOIN app.judgment judgment ON judgment.id = judgment_fact.judgment_id
     WHERE scope_article.project_id = ${projectLiteral}
       AND ${getProjectRefreshArticleBatchExistsSql('scope_article.article_id')};
   `
@@ -1586,9 +1616,6 @@ const getJudgmentFactRefreshSourceSql = (articleFilterSql: string) => {
       judgment.article_id,
       judgment.prompt_id,
       judgment.model_id,
-      judgment.project_id,
-      judgment.snapshot_project_id,
-      judgment.snapshot_project_model_name,
       judgment.use_title,
       judgment.use_abstract,
       judgment.use_fulltext,
@@ -1647,9 +1674,6 @@ const getJudgmentFactSafeRefreshBodySql = ({dirtyArticlesSql}: {dirtyArticlesSql
       article_id,
       prompt_id,
       model_id,
-      project_id,
-      snapshot_project_id,
-      snapshot_project_model_name,
       use_title,
       use_abstract,
       use_fulltext,
@@ -2159,11 +2183,7 @@ export const archivedProjectMartTableNames = [
   'mart.project_scope_article',
 ]
 
-const archivedProjectCleanupTableNames = [
-  ...archivedProjectMartTableNames,
-  'app.review_answer_dictionary',
-  'app.project_review_serving_generation',
-]
+const archivedProjectCleanupTableNames = [...archivedProjectMartTableNames, 'app.project_review_serving_generation']
 
 const getArchivedProjectMartCleanupCandidateSql = () => {
   return `
@@ -2769,8 +2789,8 @@ const _getProjectArticleServingRefreshSql = (projectId: string, articleId: strin
       judgment_fact.article_created_at,
       judgment_fact.article_updated_at,
       judgment_fact.model_id,
-      judgment_fact.project_id,
-      judgment_fact.updated_at,
+      judgment.project_id,
+      judgment.updated_at,
       judgment_fact.use_title,
       judgment_fact.use_abstract,
       judgment_fact.use_fulltext,
@@ -2780,8 +2800,8 @@ const _getProjectArticleServingRefreshSql = (projectId: string, articleId: strin
       judgment_fact.confidence_original,
       judgment_fact.explanation,
       judgment_fact.quotes,
-      judgment_fact.snapshot_project_id,
-      judgment_fact.snapshot_project_model_name,
+      judgment.snapshot_project_id,
+      judgment.snapshot_project_model_name,
       judgment_fact.answered_original,
       judgment_fact.answered_original_as_array,
       current_timestamp
@@ -2796,7 +2816,8 @@ const _getProjectArticleServingRefreshSql = (projectId: string, articleId: strin
        projectAlias: 'project',
        projectPromptAlias: 'project_prompt',
        projectScopeAlias: 'article_scope',
-     })};
+     })}
+    LEFT JOIN app.judgment judgment ON judgment.id = judgment_fact.judgment_id;
     COMMIT;
   `
 }
