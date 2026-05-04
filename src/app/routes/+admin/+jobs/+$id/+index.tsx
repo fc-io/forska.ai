@@ -23,6 +23,7 @@ import {
   fetchProviderConnections,
   formatProviderMaxInflightRequests,
 } from '../../../+admin/+models/providerConnectionsClient.ts'
+import {JobTelemetryPanel} from './jobTelemetryPanel.tsx'
 
 const getActionErrorMessage = (error: unknown, fallback: string) => {
   return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback
@@ -712,7 +713,7 @@ const AdminJudgmentJobDetail = () => {
                         </Show>
                       </div>
                       <div>
-                        <p class="text-sm text-gray-500">Current Active LLM Calls limit</p>
+                        <p class="text-sm text-gray-500">Current request-level LLM call limit</p>
                         <Show
                           when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
                           fallback={<p class="font-medium">Loading...</p>}
@@ -791,16 +792,17 @@ const AdminJudgmentJobDetail = () => {
                         <p class="text-sm text-sky-600 mb-1">Running Prompts</p>
                         <p class="text-2xl font-bold text-sky-900">{data()?.promptStats?.running ?? 0}</p>
                         <p class="text-xs text-sky-600 mt-1">
-                          Prompt executions started locally; one prompt can span multiple live LLM calls
+                          Prompt executions started locally; one prompt can span multiple live request LLM calls
                         </p>
                         <Show when={data()?.requestStats}>
                           <p class="text-xs font-medium text-sky-700 mt-1">
-                            Live LLM calls: {data()?.requestStats?.liveLlmCalls ?? data()?.requestStats?.inFlight ?? 0}
+                            Live request LLM calls:{' '}
+                            {data()?.requestStats?.liveLlmCalls ?? data()?.requestStats?.inFlight ?? 0}
                           </p>
                         </Show>
                         <Show when={data()?.requestStats?.dispatch}>
                           <p class="text-xs text-sky-700 mt-1">
-                            Worker active prompts: {data()?.requestStats?.dispatch?.jobActivePrompts ?? 0}
+                            Worker prompt slots: {data()?.requestStats?.dispatch?.jobActivePrompts ?? 0}
                           </p>
                           <p class="text-xs text-sky-700 mt-1">
                             Worker queued prompts: {data()?.requestStats?.dispatch?.jobQueuedPrompts ?? 0}
@@ -826,9 +828,9 @@ const AdminJudgmentJobDetail = () => {
                 <Show when={data()?.requestStats}>
                   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                     <h2 class="text-lg font-semibold mb-4">Request Activity</h2>
-                    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-7">
+                    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
                       <div class="bg-sky-50 rounded-lg p-4">
-                        <p class="text-sm text-sky-600 mb-1">Active LLM Calls</p>
+                        <p class="text-sm text-sky-600 mb-1">Live Request LLM Calls</p>
                         <p class="text-2xl font-bold text-sky-900">
                           {data()?.requestStats?.liveLlmCalls ?? data()?.requestStats?.inFlight ?? 0}
                         </p>
@@ -859,12 +861,12 @@ const AdminJudgmentJobDetail = () => {
                       </div>
                       <Show when={data()?.requestStats?.dispatch}>
                         <div class="bg-cyan-50 rounded-lg p-4">
-                          <p class="text-sm text-cyan-700 mb-1">Worker Active Prompts</p>
+                          <p class="text-sm text-cyan-700 mb-1">Worker Prompt Slots</p>
                           <p class="text-2xl font-bold text-cyan-900">
                             {data()?.requestStats?.dispatch?.jobActivePrompts ?? 0}
                           </p>
                           <p class="text-xs text-cyan-700 mt-1">
-                            This job&apos;s prompts currently occupying worker active slots
+                            This job&apos;s prompts currently occupying worker prompt slots
                           </p>
                         </div>
                         <div class="bg-teal-50 rounded-lg p-4">
@@ -873,31 +875,30 @@ const AdminJudgmentJobDetail = () => {
                             {data()?.requestStats?.dispatch?.jobQueuedPrompts ?? 0}
                           </p>
                           <p class="text-xs text-teal-700 mt-1">
-                            This job&apos;s prompts already claimed and waiting for a provider slot
+                            This job&apos;s prompts already claimed and waiting in the worker prompt queue
                           </p>
                         </div>
                         <div class="bg-violet-50 rounded-lg p-4">
-                          <p class="text-sm text-violet-700 mb-1">Provider Prefetch Fill</p>
+                          <p class="text-sm text-violet-700 mb-1">Prompt Prefetch Fill</p>
                           <p class="text-2xl font-bold text-violet-900">
-                            {formatPercent(data()?.requestStats?.providerTelemetry?.providerRequestFillPct)}
+                            {formatPercent(data()?.requestStats?.dispatch?.providerDispatchPrefetchFillPct)}
                           </p>
                           <p class="text-xs text-violet-700 mt-1">
-                            Dispatch queue: {data()?.requestStats?.dispatch?.providerDispatchQueuedPrompts ?? 0}/
+                            Prompt queue: {data()?.requestStats?.dispatch?.providerDispatchQueuedPrompts ?? 0}/
                             {data()?.requestStats?.dispatch?.providerDispatchQueueLimit ?? 0}
                           </p>
                           <p class="text-xs text-violet-700 mt-1">
-                            Request leases: {data()?.requestStats?.providerTelemetry?.providerLeasedLiveRequests ?? 0}/
-                            {data()?.requestStats?.providerTelemetry?.normalRequestCapacity ?? 0} (
-                            {formatPercent(data()?.requestStats?.providerTelemetry?.providerRequestFillPct)})
-                          </p>
-                          <p class="text-xs text-violet-700 mt-1">
-                            Probe leases: {data()?.requestStats?.providerTelemetry?.providerLeasedProbeCalls ?? 0}
+                            Prompt active slots: {data()?.requestStats?.dispatch?.providerDispatchActivePrompts ?? 0}/
+                            {data()?.requestStats?.dispatch?.providerDispatchActivePromptLimit ?? 0} (
+                            {formatPercent(data()?.requestStats?.dispatch?.providerDispatchActivePromptFillPct)})
                           </p>
                         </div>
                       </Show>
                     </div>
                   </div>
                 </Show>
+
+                <JobTelemetryPanel requestStats={data()?.requestStats} />
 
                 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                   <div class="flex items-start justify-between gap-4 mb-4">
