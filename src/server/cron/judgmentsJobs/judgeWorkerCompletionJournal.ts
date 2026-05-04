@@ -1469,7 +1469,7 @@ const isStaleCompletionReplayError = (error: unknown): boolean => {
   return (
     error instanceof OwnerBackedJudgmentRequestError
     && error.status === 409
-    && normalized.includes('missing claimed prompt identity')
+    && (normalized.includes('missing claimed prompt identity') || normalized.includes('missing sqlite job database'))
   )
 }
 

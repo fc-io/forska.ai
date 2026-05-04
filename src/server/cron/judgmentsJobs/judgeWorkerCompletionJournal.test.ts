@@ -154,6 +154,24 @@ test('completion replay discards stale missing-claim responses', async () => {
   expect(row?.lastError).toContain('owner-backed judgment request failed (409): missing claimed prompt identity')
 })
 
+test('completion replay discards stale missing SQLite job database responses', async () => {
+  const {journalPath} = setupJournalTest(async () => {
+    return new Response('missing SQLite job database', {status: 409})
+  })
+  const payload = createCompletionPayload({claimId: 'claim-missing-sqlite', status: 'retry'})
+
+  await enqueueJudgeWorkerCompletion(payload)
+
+  const result = await replayJudgeWorkerCompletionOutbox()
+  const row = getCompletionOutboxRow(journalPath, payload.claimId)
+
+  expect(result).toEqual({ackedCount: 0, discardedCount: 1, failedCount: 0})
+  expect(await hasUnackedJudgeWorkerCompletion(payload.claimId)).toBe(false)
+  expect(row?.ackedAt).not.toBeNull()
+  expect(row?.status).toBe('discarded_stale')
+  expect(row?.lastError).toContain('owner-backed judgment request failed (409): missing SQLite job database')
+})
+
 test('judged completion replay waits for token use', async () => {
   let requestCount = 0
   let receivedTokenUse: unknown = null
