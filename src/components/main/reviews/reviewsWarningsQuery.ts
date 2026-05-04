@@ -8,7 +8,7 @@ export type ReviewsWarningsData = {
     activeWorkCount: number
     articleRefreshesPerMinute: number | null
     blockedReason: 'paused_by_policy' | 'quarantine_barrier' | 'waiting_for_maintenance_worker' | null
-    cleanup?: {inFlightGenerationCleanupCount: number}
+    cleanup?: {inFlightGenerationCleanupCount: number; lastProgressedAt: string | null}
     diagnostics: {
       duckdbQueues: {
         background: {
@@ -87,7 +87,9 @@ export type ReviewsWarningsData = {
     largeRebuild: null | {
       cursorArticleCreatedAt: string | null
       cursorArticleId: string | null
+      lastProgressedAt: string | null
       lastError: string | null
+      lastStartedAt: string | null
       operatorNote: string | null
       progress: null | {
         remainingCurrentPhaseArticleCount: number | null
