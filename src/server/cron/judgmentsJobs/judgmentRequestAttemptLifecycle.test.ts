@@ -105,6 +105,7 @@ test('withJudgmentRequest exposes exact request attempt context', async () => {
       expect(getJudgmentRequestStats(jobId)).toEqual({
         inFlight: 1,
         pendingPersistedAttempts: 1,
+        requestSlotWaiters: {codex: 0, fallback: 0, providerAdmission: 0, worker: 0},
         requestWorkBacklog: 1,
         waitingForRequestSlot: 0,
       })
@@ -121,6 +122,7 @@ test('withJudgmentRequest exposes exact request attempt context', async () => {
   expect(getJudgmentRequestStats(jobId)).toEqual({
     inFlight: 0,
     pendingPersistedAttempts: 1,
+    requestSlotWaiters: {codex: 0, fallback: 0, providerAdmission: 0, worker: 0},
     requestWorkBacklog: 1,
     waitingForRequestSlot: 0,
   })
@@ -133,6 +135,7 @@ test('withJudgmentRequest exposes exact request attempt context', async () => {
   expect(getJudgmentRequestStats(jobId)).toEqual({
     inFlight: 0,
     pendingPersistedAttempts: 0,
+    requestSlotWaiters: {codex: 0, fallback: 0, providerAdmission: 0, worker: 0},
     requestWorkBacklog: 0,
     waitingForRequestSlot: 0,
   })

@@ -3,6 +3,8 @@ import {expect, mock, test} from 'bun:test'
 import type {DuckdbOwnerConnectionRecord} from '../../utils/duckdbOwnerConnections.ts'
 import {
   getAggregatedJudgmentDispatchTelemetry,
+  judgmentBottleneckSubreasonValues,
+  judgmentBottleneckValues,
   type JudgmentDispatchTelemetryInput,
   type JudgmentDispatchTelemetrySnapshot,
 } from './judgmentDispatchTelemetry.ts'
@@ -166,6 +168,24 @@ const createJudgingRecord = (overrides: Partial<DuckdbOwnerConnectionRecord> = {
       profile: 'non-maintenance',
     },
     ...overrides,
+  }
+}
+
+const getProviderWithReadyWork = (
+  overrides: Partial<JudgmentDispatchTelemetrySnapshot['provider']> = {},
+): JudgmentDispatchTelemetrySnapshot['provider'] => {
+  const provider = createSnapshot().provider
+
+  return {
+    ...provider,
+    ...overrides,
+    convergenceDiagnostics: {
+      ...provider.convergenceDiagnostics,
+      backlogReplenishmentAllowed: true,
+      preconditionsStableSinceMs: 15_000,
+      readyCount: 12,
+      ...(overrides.convergenceDiagnostics ?? {}),
+    },
   }
 }
 
@@ -397,6 +417,134 @@ test('uses local telemetry without polling workers when this process judges', as
     },
   })
 
-  expect(telemetry).toEqual(localTelemetry)
+  expect(telemetry).toEqual({
+    ...localTelemetry,
+    provider: {
+      ...localTelemetry.provider,
+      bottleneck: 'noReadyWork',
+      bottleneckSource: 'convergenceDiagnostics.readyCount',
+      bottleneckSubreason: 'readyWorkUnavailable',
+    },
+  })
   expect(fetchWorkerTelemetry).not.toHaveBeenCalled()
+})
+
+test('bottleneck subreasons do not overlap primary bottleneck values', () => {
+  const bottlenecks = new Set<string>(judgmentBottleneckValues)
+  const overlap = judgmentBottleneckSubreasonValues.filter((value) => {
+    return bottlenecks.has(value)
+  })
+
+  expect(overlap).toEqual([])
+})
+
+test('classifies completion persistence before endpoint and capacity bottlenecks', async () => {
+  const telemetry = await getAggregatedJudgmentDispatchTelemetry(input, {
+    getLocalTelemetry: async () => {
+      return createSnapshot({
+        lifecycleRecords: [
+          {
+            closeoutReason: 'completion_outbox',
+            jobId: input.jobId,
+            lifecycleKind: 'prompt',
+            lifecycleState: 'persisting',
+            providerKey: 'connection-a',
+            queueRecordId: 'queue-persisting',
+            stateStartedAt: now,
+          },
+        ],
+        provider: getProviderWithReadyWork({
+          convergenceDiagnostics: {
+            ...createSnapshot().provider.convergenceDiagnostics,
+            backlogReplenishmentAllowed: false,
+            hasHealthyEndpointOrEndpointlessPath: false,
+            preconditionChangedReason: 'endpointRouteability',
+            preconditionsStableSinceMs: 15_000,
+            readyCount: 12,
+          },
+          effectiveProviderLimit: 0,
+          endpointDiagnostics: [
+            {
+              cooldownRemainingMs: 30_000,
+              effectiveBaseURL: 'http://provider.test/v1',
+              endpointAvailabilityKey: 'connection-a::http://provider.test',
+              endpointIdentity: 'http://provider.test',
+              lastFailureKind: 'endpoint_unavailable',
+              lastFailureMessage: 'cooldown',
+              localEndpointProbeCooldownUntil: now,
+              localEndpointProbeLive: 0,
+              localEndpointProbeState: 'cooldown',
+              observedGlobalEndpointProbeLive: 0,
+              probeInProgress: false,
+            },
+          ],
+        }),
+      })
+    },
+    shouldUseLocalTelemetryOnly: () => {
+      return true
+    },
+  })
+
+  expect(telemetry.provider).toMatchObject({
+    bottleneck: 'completionPersistence',
+    bottleneckSource: 'lifecycle:prompt:persisting',
+    bottleneckSubreason: 'completionJournal',
+  })
+})
+
+test('distinguishes provider target from provider physical saturation', async () => {
+  const createProviderTelemetry = (providerLeasedPhysicalCalls: number) => {
+    return getProviderWithReadyWork({
+      providerLeasedLiveRequests: 19,
+      providerLeasedPhysicalCalls,
+      providerLimit: 20,
+      targetRequestLiveCalls: 19,
+    })
+  }
+  const atTarget = await getAggregatedJudgmentDispatchTelemetry(input, {
+    getLocalTelemetry: async () => {
+      return createSnapshot({provider: createProviderTelemetry(19), request: {waitingForRequestSlot: 1}})
+    },
+    shouldUseLocalTelemetryOnly: () => {
+      return true
+    },
+  })
+  const saturated = await getAggregatedJudgmentDispatchTelemetry(input, {
+    getLocalTelemetry: async () => {
+      return createSnapshot({provider: createProviderTelemetry(20), request: {waitingForRequestSlot: 1}})
+    },
+    shouldUseLocalTelemetryOnly: () => {
+      return true
+    },
+  })
+
+  expect(atTarget.provider).toMatchObject({
+    bottleneck: 'providerAtTarget',
+    bottleneckSubreason: 'providerTargetReached',
+  })
+  expect(saturated.provider).toMatchObject({
+    bottleneck: 'providerSaturated',
+    bottleneckSubreason: 'providerPhysicalCap',
+  })
+})
+
+test('classifies request slot waits with a concrete non-primary subreason', async () => {
+  const telemetry = await getAggregatedJudgmentDispatchTelemetry(input, {
+    getLocalTelemetry: async () => {
+      return createSnapshot({
+        provider: getProviderWithReadyWork({providerLeasedLiveRequests: 4}),
+        request: {waitingForRequestSlot: 1},
+      })
+    },
+    shouldUseLocalTelemetryOnly: () => {
+      return true
+    },
+  })
+
+  expect(telemetry.provider).toMatchObject({
+    bottleneck: 'requestSlotWait',
+    bottleneckSource: 'lifecycle:requestAttempt:waitingForRequestSlot',
+    bottleneckSubreason: 'noAcquireAttemptRecorded',
+  })
 })

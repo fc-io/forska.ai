@@ -1553,16 +1553,31 @@ const acquireRequestSlot = async ({
 
 export const getJudgmentRequestStats = (
   judgmentsJobId: string,
-): {inFlight: number; pendingPersistedAttempts: number; requestWorkBacklog: number; waitingForRequestSlot: number} => {
+): {
+  inFlight: number
+  pendingPersistedAttempts: number
+  requestSlotWaiters: {codex: number; fallback: number; providerAdmission: number; worker: number}
+  requestWorkBacklog: number
+  waitingForRequestSlot: number
+} => {
   const state = jobRequestStates.get(judgmentsJobId) ?? getEmptyJobRequestState()
   const waitingForRequestSlot = Array.from(state.requestAttempts.values()).filter((attempt) => {
     return attempt.lifecycleState === 'waitingForRequestSlot'
   }).length
   const requestAttemptBacklog = Math.max(state.inFlight, state.pendingRequestAttemptIds.size)
+  const waiterMatchesJob = (waiter: RequestWaiterMetadata): boolean => {
+    return waiter.judgmentsJobId === judgmentsJobId
+  }
 
   return {
     inFlight: state.inFlight,
     pendingPersistedAttempts: state.pendingRequestAttemptIds.size,
+    requestSlotWaiters: {
+      codex: codexWaiters.filter(waiterMatchesJob).length + codexProviderWaiters.filter(waiterMatchesJob).length,
+      fallback: fallbackWaiters.filter(waiterMatchesJob).length,
+      providerAdmission: providerAdmissionRetryWaiters.filter(waiterMatchesJob).length,
+      worker: workerWaiters.filter(waiterMatchesJob).length,
+    },
     requestWorkBacklog: Math.max(requestAttemptBacklog, getReservedRequestWorkUnits(state)),
     waitingForRequestSlot,
   }

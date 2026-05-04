@@ -138,6 +138,7 @@ export type JudgmentJobRequestStats = {
   failures?: {anthropicRefusalArticles: number; anthropicRefusals: number; persistedFailedRequests: number}
   inFlight: number
   providerTelemetry?: JudgmentJobProviderTelemetry
+  requestSlotWaiters?: {codex: number; fallback: number; providerAdmission: number; worker: number}
   requestWorkBacklog?: number
   telemetrySource?: JudgmentJobTelemetrySource
   waitingForRequestSlot?: number

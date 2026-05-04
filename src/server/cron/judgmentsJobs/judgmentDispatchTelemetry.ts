@@ -7,7 +7,11 @@ import {
   getAcceptedJudgeWorkerClaimLifecycleRows,
   shouldUseJudgeWorkerOwnerHandoff,
 } from './judgeWorkerCompletionJournal.ts'
-import {getJudgmentBacklogControllerState, type JudgmentBacklogLifecycleAgesMs} from './judgmentBacklogController.ts'
+import {
+  getJudgmentBacklogControllerState,
+  judgmentBacklogControllerConstants,
+  type JudgmentBacklogLifecycleAgesMs,
+} from './judgmentBacklogController.ts'
 import {
   getJudgmentDispatchPromptLifecycleRecords,
   getJudgmentDispatchProviderKey,
@@ -63,6 +67,61 @@ export type JudgmentDispatchTelemetryInput = ProviderQueueInput & {
 
 export type JudgmentTelemetryAggregateCompleteness = 'complete' | 'partial' | 'unavailable'
 
+export const judgmentBottleneckValues = [
+  'claiming',
+  'promptPreparation',
+  'requestSlotWait',
+  'providerAtTarget',
+  'providerSaturated',
+  'workerCapacitySaturated',
+  'fallbackCapacitySaturated',
+  'completionPersistence',
+  'endpointUnavailable',
+  'effectiveCapacityLimited',
+  'noReadyWork',
+] as const
+
+export type JudgmentBottleneck = (typeof judgmentBottleneckValues)[number]
+
+export const judgmentRequestSlotWaitSubreasonValues = [
+  'ownerAdmissionUnavailable',
+  'staleSnapshotRefreshPending',
+  'waiterNotWoken',
+  'leaseAcquireContention',
+  'noAcquireAttemptRecorded',
+  'waiterInterrupted',
+] as const
+
+export type JudgmentRequestSlotWaitSubreason = (typeof judgmentRequestSlotWaitSubreasonValues)[number]
+
+export const judgmentBottleneckSubreasonValues = [
+  'allocationSnapshotIncomplete',
+  'completionJournal',
+  'effectiveCapacityZero',
+  'endpointCooldown',
+  'endpointMisconfigured',
+  'endpointProbe',
+  'endpointUnhealthy',
+  'judgmentOutbox',
+  'localWorkerAtCapacity',
+  'manifestCasExhausted',
+  'persistencePending',
+  'promptClaimBacklog',
+  'promptPreparationBacklog',
+  'providerPhysicalCap',
+  'providerTargetReached',
+  'readyWorkUnavailable',
+  'routeableCapacityExhausted',
+  'sharedFallbackAtCapacity',
+  'terminalCleanup',
+  'tokenUsePersistence',
+  'warmupLimited',
+  'ownerAck',
+  ...judgmentRequestSlotWaitSubreasonValues,
+] as const
+
+export type JudgmentBottleneckSubreason = (typeof judgmentBottleneckSubreasonValues)[number]
+
 export type JudgmentDispatchPromptTelemetry = {
   jobActivePrompts: number
   jobQueuedPrompts: number
@@ -95,6 +154,13 @@ export type JudgmentEndpointTelemetryDiagnostics = {
   probeInProgress: boolean
 }
 
+export type JudgmentRequestSlotWaiterTelemetry = {
+  codex: number
+  fallback: number
+  providerAdmission: number
+  worker: number
+}
+
 export type JudgmentConvergenceDiagnostics = {
   activeHigherPriorityStopRules: string[]
   allocationCompleteCurrent: boolean
@@ -113,9 +179,9 @@ export type JudgmentConvergenceDiagnostics = {
 export type JudgmentProviderTelemetry = {
   allocationCompleteCurrent: boolean
   allocationInputState: string
-  bottleneck: string | null
+  bottleneck: JudgmentBottleneck | null
   bottleneckSource: string | null
-  bottleneckSubreason: string | null
+  bottleneckSubreason: JudgmentBottleneckSubreason | null
   convergenceDiagnostics: JudgmentConvergenceDiagnostics
   effectiveProviderLimit: number
   endpointDiagnostics: JudgmentEndpointTelemetryDiagnostics[]
@@ -170,6 +236,7 @@ export type JudgmentDispatchTelemetrySnapshot = {
   request: {
     inFlight: number
     pendingPersistedAttempts: number
+    requestSlotWaiters?: JudgmentRequestSlotWaiterTelemetry
     requestWorkBacklog: number
     waitingForRequestSlot: number
   }
@@ -188,6 +255,26 @@ type JudgmentDispatchTelemetryOptions = {
 
 const workerTelemetryTimeoutMs = 1_000
 const defaultProviderProbeOccupancyVersion = 'probe-occupancy-unavailable'
+const judgmentBottleneckValueSet = new Set<string>(judgmentBottleneckValues)
+const judgmentBottleneckSubreasonValueSet = new Set<string>(judgmentBottleneckSubreasonValues)
+const judgmentRequestSlotWaitSubreasonValueSet = new Set<string>(judgmentRequestSlotWaitSubreasonValues)
+
+const getCanonicalBottleneck = (value: unknown): JudgmentBottleneck | null => {
+  return typeof value === 'string' && judgmentBottleneckValueSet.has(value) ? (value as JudgmentBottleneck) : null
+}
+
+const getCanonicalBottleneckSubreason = (value: unknown): JudgmentBottleneckSubreason | null => {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  const isCanonical = judgmentBottleneckSubreasonValueSet.has(trimmed) && !judgmentBottleneckValueSet.has(trimmed)
+
+  return isCanonical ? (trimmed as JudgmentBottleneckSubreason) : null
+}
+
+const getCanonicalRequestSlotWaitSubreason = (value: unknown): JudgmentRequestSlotWaitSubreason | null => {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+
+  return judgmentRequestSlotWaitSubreasonValueSet.has(trimmed) ? (trimmed as JudgmentRequestSlotWaitSubreason) : null
+}
 
 const getFillPct = (used: number, capacity: number): number | null => {
   return capacity > 0 ? Math.round((used / capacity) * 100) : null
@@ -336,7 +423,13 @@ const getZeroTelemetrySnapshot = (): JudgmentDispatchTelemetrySnapshot => {
   return {
     dispatch: getZeroDispatchStats(),
     provider: getZeroProviderTelemetry({providerKey}),
-    request: {inFlight: 0, pendingPersistedAttempts: 0, requestWorkBacklog: 0, waitingForRequestSlot: 0},
+    request: {
+      inFlight: 0,
+      pendingPersistedAttempts: 0,
+      requestSlotWaiters: {codex: 0, fallback: 0, providerAdmission: 0, worker: 0},
+      requestWorkBacklog: 0,
+      waitingForRequestSlot: 0,
+    },
     source: getTelemetrySourceMetadata({
       freshWorkerCount: 0,
       providerKey,
@@ -406,7 +499,26 @@ const getRequestStatsFromRecord = (value: unknown): JudgmentDispatchTelemetrySna
 
   return inFlight === null || pendingPersistedAttempts === null
     ? null
-    : {inFlight, pendingPersistedAttempts, requestWorkBacklog, waitingForRequestSlot}
+    : {
+        inFlight,
+        pendingPersistedAttempts,
+        requestSlotWaiters: getRequestSlotWaitersFromRecord(value.requestSlotWaiters),
+        requestWorkBacklog,
+        waitingForRequestSlot,
+      }
+}
+
+const getRequestSlotWaitersFromRecord = (value: unknown): JudgmentRequestSlotWaiterTelemetry | undefined => {
+  if (!isRecord(value)) {
+    return undefined
+  }
+
+  return {
+    codex: getNumberValue(value.codex) ?? 0,
+    fallback: getNumberValue(value.fallback) ?? 0,
+    providerAdmission: getNumberValue(value.providerAdmission) ?? 0,
+    worker: getNumberValue(value.worker) ?? 0,
+  }
 }
 
 const getBooleanValue = (value: unknown): boolean | null => {
@@ -542,9 +654,9 @@ const getProviderTelemetryFromRecord = (value: unknown): JudgmentProviderTelemet
     : {
         allocationCompleteCurrent,
         allocationInputState,
-        bottleneck: getStringValue(value.bottleneck),
+        bottleneck: getCanonicalBottleneck(value.bottleneck),
         bottleneckSource: getStringValue(value.bottleneckSource),
-        bottleneckSubreason: getStringValue(value.bottleneckSubreason),
+        bottleneckSubreason: getCanonicalBottleneckSubreason(value.bottleneckSubreason),
         convergenceDiagnostics,
         effectiveProviderLimit,
         endpointDiagnostics: Array.isArray(value.endpointDiagnostics)
@@ -1060,6 +1172,359 @@ const getBacklogControllerLifecycleAgesMs = (
   }
 }
 
+type JudgmentBottleneckClassification = {
+  bottleneck: JudgmentBottleneck
+  bottleneckSource: string
+  bottleneckSubreason: JudgmentBottleneckSubreason | null
+}
+
+const getLifecycleStateCount = (
+  lifecycle: JudgmentLifecycleTelemetry | undefined,
+  lifecycleKind: 'prompt' | 'requestAttempt',
+  lifecycleState: string,
+): number => {
+  const summary = lifecycle?.summaries.find((entry) => {
+    return entry.lifecycleKind === lifecycleKind && entry.lifecycleState === lifecycleState
+  })
+
+  return summary?.count ?? 0
+}
+
+const hasLifecycleState = (
+  lifecycle: JudgmentLifecycleTelemetry | undefined,
+  lifecycleKind: 'prompt' | 'requestAttempt',
+  lifecycleState: string,
+): boolean => {
+  return getLifecycleStateCount(lifecycle, lifecycleKind, lifecycleState) > 0
+}
+
+const getLifecycleStateRecord = (
+  lifecycle: JudgmentLifecycleTelemetry | undefined,
+  lifecycleKind: 'prompt' | 'requestAttempt',
+  lifecycleState: string,
+): JudgmentLifecycleTelemetry['records'][number] | null => {
+  return (
+    lifecycle?.records.find((entry) => {
+      return entry.lifecycleKind === lifecycleKind && entry.lifecycleState === lifecycleState
+    }) ?? null
+  )
+}
+
+const getCompletionPersistenceSubreason = (value: string | null | undefined): JudgmentBottleneckSubreason => {
+  const normalized = value?.trim() ?? ''
+  const mapped = new Map<string, JudgmentBottleneckSubreason>([
+    ['completion_ack', 'ownerAck'],
+    ['completion_outbox', 'completionJournal'],
+    ['judgment_outbox', 'judgmentOutbox'],
+    ['manifestCasExhausted', 'manifestCasExhausted'],
+    ['owner_ack', 'ownerAck'],
+    ['owner_completion_body', 'ownerAck'],
+    ['owner_token_use_body', 'tokenUsePersistence'],
+    ['pending_token_use', 'tokenUsePersistence'],
+    ['terminalCleanup', 'terminalCleanup'],
+    ['token_use', 'tokenUsePersistence'],
+  ])
+
+  return mapped.get(normalized) ?? getCanonicalBottleneckSubreason(normalized) ?? 'persistencePending'
+}
+
+const getCompletionPersistenceBottleneck = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  const promptRecord = getLifecycleStateRecord(snapshot.lifecycle, 'prompt', 'persisting')
+  const requestRecord = getLifecycleStateRecord(snapshot.lifecycle, 'requestAttempt', 'persistingCompletion')
+  const promptPersisting = promptRecord !== null
+  const requestPersisting = requestRecord !== null
+  const knownActiveAttempts = snapshot.request.inFlight + snapshot.request.waitingForRequestSlot
+  const pendingPersistence = snapshot.request.pendingPersistedAttempts > knownActiveAttempts
+  const record = requestRecord ?? promptRecord
+
+  return promptPersisting || requestPersisting || pendingPersistence
+    ? {
+        bottleneck: 'completionPersistence',
+        bottleneckSource: record
+          ? `lifecycle:${record.lifecycleKind}:${record.lifecycleState}`
+          : 'request.pendingPersistedAttempts',
+        bottleneckSubreason: getCompletionPersistenceSubreason(record?.closeoutReason),
+      }
+    : null
+}
+
+const getEndpointUnavailableSubreason = (
+  diagnostics: JudgmentEndpointTelemetryDiagnostics | null,
+): JudgmentBottleneckSubreason => {
+  const failureKind = diagnostics?.lastFailureKind ?? ''
+
+  return diagnostics?.localEndpointProbeState === 'misconfigured' || failureKind === 'endpoint_misconfigured'
+    ? 'endpointMisconfigured'
+    : diagnostics?.probeInProgress || diagnostics?.localEndpointProbeState === 'probing'
+      ? 'endpointProbe'
+      : diagnostics?.cooldownRemainingMs !== null || diagnostics?.localEndpointProbeState === 'cooldown'
+        ? 'endpointCooldown'
+        : 'endpointUnhealthy'
+}
+
+const getEndpointUnavailableBottleneck = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  const diagnostics =
+    snapshot.provider.endpointDiagnostics.find((entry) => {
+      return entry.localEndpointProbeState !== 'healthy'
+    }) ?? null
+  const unavailable = !snapshot.provider.convergenceDiagnostics.hasHealthyEndpointOrEndpointlessPath || diagnostics
+
+  return unavailable
+    ? {
+        bottleneck: 'endpointUnavailable',
+        bottleneckSource: diagnostics
+          ? `endpoint:${diagnostics.endpointAvailabilityKey}`
+          : 'convergenceDiagnostics.hasHealthyEndpointOrEndpointlessPath',
+        bottleneckSubreason: getEndpointUnavailableSubreason(diagnostics),
+      }
+    : null
+}
+
+const getEffectiveCapacityLimitedBottleneck = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  const provider = snapshot.provider
+  const diagnostics = provider.convergenceDiagnostics
+  const hasReadyWork = diagnostics.readyCount > 0
+  const targetPositive = provider.targetRequestLiveCalls > 0
+  const noEffectiveCapacity =
+    provider.effectiveProviderLimit <= 0
+    && provider.observedGlobalEffectiveProviderLimit <= 0
+    && (targetPositive || hasReadyWork)
+  const normalCapacityBlocked = !diagnostics.normalRequestCapacityPositive && (targetPositive || hasReadyWork)
+  const routeableCapacityExhausted = provider.unallocatedTargetLiveCalls > 0 && hasReadyWork
+  const allocationIncomplete = !provider.allocationCompleteCurrent && targetPositive && hasReadyWork
+  const warmupLimited = diagnostics.preconditionChangedReason === 'warmupLimited'
+
+  return !diagnostics.providerLimitPositive || noEffectiveCapacity || normalCapacityBlocked
+    ? {
+        bottleneck: 'effectiveCapacityLimited',
+        bottleneckSource: !diagnostics.providerLimitPositive
+          ? 'convergenceDiagnostics.providerLimitPositive'
+          : 'provider.effectiveProviderLimit',
+        bottleneckSubreason: 'effectiveCapacityZero',
+      }
+    : warmupLimited
+      ? {
+          bottleneck: 'effectiveCapacityLimited',
+          bottleneckSource: 'convergenceDiagnostics.preconditionChangedReason',
+          bottleneckSubreason: 'warmupLimited',
+        }
+      : routeableCapacityExhausted || allocationIncomplete
+        ? {
+            bottleneck: 'effectiveCapacityLimited',
+            bottleneckSource: allocationIncomplete
+              ? `allocationInputState:${provider.allocationInputState}`
+              : 'provider.unallocatedTargetLiveCalls',
+            bottleneckSubreason: allocationIncomplete ? 'allocationSnapshotIncomplete' : 'routeableCapacityExhausted',
+          }
+        : null
+}
+
+const hasRequestPressure = (snapshot: JudgmentDispatchTelemetrySnapshot): boolean => {
+  return (
+    snapshot.provider.convergenceDiagnostics.readyCount > 0
+    || snapshot.provider.localPromptBacklog > 0
+    || snapshot.provider.localRequestWorkBacklog > 0
+    || snapshot.request.waitingForRequestSlot > 0
+  )
+}
+
+const providerLiveRequestsBelowTarget = (snapshot: JudgmentDispatchTelemetrySnapshot): boolean => {
+  return (
+    snapshot.provider.targetRequestLiveCalls > 0
+    && snapshot.provider.providerLeasedLiveRequests < snapshot.provider.targetRequestLiveCalls
+  )
+}
+
+const hasRequestSlotWait = (snapshot: JudgmentDispatchTelemetrySnapshot): boolean => {
+  return (
+    snapshot.request.waitingForRequestSlot > 0
+    || hasLifecycleState(snapshot.lifecycle, 'prompt', 'waitingForRequestSlot')
+    || hasLifecycleState(snapshot.lifecycle, 'requestAttempt', 'waitingForRequestSlot')
+  )
+}
+
+const getWorkerCapacitySaturatedBottleneck = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  const waiterCount = snapshot.request.requestSlotWaiters?.worker ?? 0
+  const fallbackWaiterCount = snapshot.request.requestSlotWaiters?.fallback ?? 0
+  const observedCapacityFilled =
+    snapshot.provider.observedGlobalEffectiveProviderLimit > 0
+    && snapshot.provider.observedGlobalProviderLiveRequests >= snapshot.provider.observedGlobalEffectiveProviderLimit
+  const localCapacityFilled =
+    snapshot.provider.effectiveProviderLimit > 0
+    && snapshot.provider.localProviderLiveRequests >= snapshot.provider.effectiveProviderLimit
+  const saturated = providerLiveRequestsBelowTarget(snapshot) && hasRequestSlotWait(snapshot)
+  const source = waiterCount > 0 ? 'request.requestSlotWaiters.worker' : 'observedGlobalEffectiveProviderLimit'
+
+  return saturated && fallbackWaiterCount === 0 && (waiterCount > 0 || observedCapacityFilled || localCapacityFilled)
+    ? {bottleneck: 'workerCapacitySaturated', bottleneckSource: source, bottleneckSubreason: 'localWorkerAtCapacity'}
+    : null
+}
+
+const getFallbackCapacitySaturatedBottleneck = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  const waiterCount = snapshot.request.requestSlotWaiters?.fallback ?? 0
+
+  return providerLiveRequestsBelowTarget(snapshot) && waiterCount > 0
+    ? {
+        bottleneck: 'fallbackCapacitySaturated',
+        bottleneckSource: 'request.requestSlotWaiters.fallback',
+        bottleneckSubreason: 'sharedFallbackAtCapacity',
+      }
+    : null
+}
+
+const getProviderSaturatedBottleneck = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  const provider = snapshot.provider
+  const saturated = provider.providerLimit > 0 && provider.providerLeasedPhysicalCalls >= provider.providerLimit
+
+  return saturated && hasRequestPressure(snapshot)
+    ? {
+        bottleneck: 'providerSaturated',
+        bottleneckSource: 'provider.providerLeasedPhysicalCalls',
+        bottleneckSubreason: 'providerPhysicalCap',
+      }
+    : null
+}
+
+const getProviderAtTargetBottleneck = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  const provider = snapshot.provider
+  const atTarget =
+    provider.targetRequestLiveCalls > 0
+    && provider.providerLeasedLiveRequests >= provider.targetRequestLiveCalls
+    && provider.providerLeasedPhysicalCalls < provider.providerLimit
+
+  return atTarget && hasRequestPressure(snapshot)
+    ? {
+        bottleneck: 'providerAtTarget',
+        bottleneckSource: 'provider.providerLeasedLiveRequests',
+        bottleneckSubreason: 'providerTargetReached',
+      }
+    : null
+}
+
+const getPromptPreparationBottleneck = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  const preparing = hasLifecycleState(snapshot.lifecycle, 'prompt', 'preparing')
+
+  return preparing && providerLiveRequestsBelowTarget(snapshot)
+    ? {
+        bottleneck: 'promptPreparation',
+        bottleneckSource: 'lifecycle:prompt:preparing',
+        bottleneckSubreason: 'promptPreparationBacklog',
+      }
+    : null
+}
+
+const getRequestSlotWaitSubreason = (snapshot: JudgmentDispatchTelemetrySnapshot): JudgmentRequestSlotWaitSubreason => {
+  const waitRecord =
+    getLifecycleStateRecord(snapshot.lifecycle, 'requestAttempt', 'waitingForRequestSlot')
+    ?? getLifecycleStateRecord(snapshot.lifecycle, 'prompt', 'waitingForRequestSlot')
+  const recordSubreason = getCanonicalRequestSlotWaitSubreason(waitRecord?.closeoutReason)
+  const waiters = snapshot.request.requestSlotWaiters
+
+  return (
+    recordSubreason
+    ?? (waiters?.providerAdmission ? 'leaseAcquireContention' : null)
+    ?? (waiters?.codex ? 'leaseAcquireContention' : null)
+    ?? (snapshot.source.telemetryUnavailable ? 'ownerAdmissionUnavailable' : null)
+    ?? 'noAcquireAttemptRecorded'
+  )
+}
+
+const getRequestSlotWaitBottleneck = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  return hasRequestSlotWait(snapshot) && providerLiveRequestsBelowTarget(snapshot)
+    ? {
+        bottleneck: 'requestSlotWait',
+        bottleneckSource: 'lifecycle:requestAttempt:waitingForRequestSlot',
+        bottleneckSubreason: getRequestSlotWaitSubreason(snapshot),
+      }
+    : null
+}
+
+const getClaimingBottleneck = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  const readyCount = snapshot.provider.convergenceDiagnostics.readyCount
+  const belowTarget = providerLiveRequestsBelowTarget(snapshot)
+  const stableEnough =
+    snapshot.provider.convergenceDiagnostics.preconditionsStableSinceMs
+    >= judgmentBacklogControllerConstants.successfulLeaseWindowMs
+  const underfed =
+    snapshot.provider.localPromptBacklog < snapshot.provider.localPromptBacklogTarget
+    || snapshot.provider.localRequestWorkBacklog < snapshot.provider.localRequestWorkBacklogTarget
+    || stableEnough
+
+  return readyCount > 0 && belowTarget && underfed
+    ? {
+        bottleneck: 'claiming',
+        bottleneckSource: 'convergenceDiagnostics.readyCount',
+        bottleneckSubreason: 'promptClaimBacklog',
+      }
+    : null
+}
+
+const getNoReadyWorkBottleneck = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  return snapshot.provider.convergenceDiagnostics.readyCount <= 0
+    ? {
+        bottleneck: 'noReadyWork',
+        bottleneckSource: 'convergenceDiagnostics.readyCount',
+        bottleneckSubreason: 'readyWorkUnavailable',
+      }
+    : null
+}
+
+const getBottleneckClassification = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentBottleneckClassification | null => {
+  return (
+    getCompletionPersistenceBottleneck(snapshot)
+    ?? getEndpointUnavailableBottleneck(snapshot)
+    ?? getEffectiveCapacityLimitedBottleneck(snapshot)
+    ?? getWorkerCapacitySaturatedBottleneck(snapshot)
+    ?? getFallbackCapacitySaturatedBottleneck(snapshot)
+    ?? getProviderSaturatedBottleneck(snapshot)
+    ?? getProviderAtTargetBottleneck(snapshot)
+    ?? getPromptPreparationBottleneck(snapshot)
+    ?? getRequestSlotWaitBottleneck(snapshot)
+    ?? getClaimingBottleneck(snapshot)
+    ?? getNoReadyWorkBottleneck(snapshot)
+  )
+}
+
+const withBottleneckClassification = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): JudgmentDispatchTelemetrySnapshot => {
+  const classification = getBottleneckClassification(snapshot)
+
+  return {
+    ...snapshot,
+    provider: {
+      ...snapshot.provider,
+      bottleneck: classification?.bottleneck ?? null,
+      bottleneckSource: classification?.bottleneckSource ?? null,
+      bottleneckSubreason: classification?.bottleneckSubreason ?? null,
+    },
+  }
+}
+
 const getLocalProviderTelemetry = async ({
   dispatch,
   input,
@@ -1219,7 +1684,7 @@ export const getLocalJudgmentDispatchTelemetry = async (
     unavailableWorkerCount: 0,
   })
 
-  return {dispatch, ...(lifecycle ? {lifecycle} : {}), provider, request, source}
+  return withBottleneckClassification({dispatch, ...(lifecycle ? {lifecycle} : {}), provider, request, source})
 }
 
 const withTelemetryWorkerId = (
@@ -1333,6 +1798,18 @@ const withProviderTargetAllocationSnapshot = ({
   return {...snapshot, provider}
 }
 
+const addRequestSlotWaiters = (
+  left: JudgmentRequestSlotWaiterTelemetry | undefined,
+  right: JudgmentRequestSlotWaiterTelemetry | undefined,
+): JudgmentRequestSlotWaiterTelemetry => {
+  return {
+    codex: (left?.codex ?? 0) + (right?.codex ?? 0),
+    fallback: (left?.fallback ?? 0) + (right?.fallback ?? 0),
+    providerAdmission: (left?.providerAdmission ?? 0) + (right?.providerAdmission ?? 0),
+    worker: (left?.worker ?? 0) + (right?.worker ?? 0),
+  }
+}
+
 const mergeJudgmentDispatchTelemetrySnapshots = (
   snapshots: JudgmentDispatchTelemetrySnapshot[],
   source: JudgmentTelemetrySourceMetadata,
@@ -1363,6 +1840,10 @@ const mergeJudgmentDispatchTelemetrySnapshots = (
       request: {
         inFlight: merged.request.inFlight + snapshot.request.inFlight,
         pendingPersistedAttempts: merged.request.pendingPersistedAttempts + snapshot.request.pendingPersistedAttempts,
+        requestSlotWaiters: addRequestSlotWaiters(
+          merged.request.requestSlotWaiters,
+          snapshot.request.requestSlotWaiters,
+        ),
         requestWorkBacklog: merged.request.requestWorkBacklog + snapshot.request.requestWorkBacklog,
         waitingForRequestSlot: merged.request.waitingForRequestSlot + snapshot.request.waitingForRequestSlot,
       },
@@ -1599,7 +2080,7 @@ export const withJudgmentProviderEndpointDiagnostics = ({
       : {targetIncreaseAllowed: controller.targetIncreaseAllowed}),
   }
 
-  return {
+  return withBottleneckClassification({
     ...snapshot,
     provider: {
       ...snapshot.provider,
@@ -1611,7 +2092,7 @@ export const withJudgmentProviderEndpointDiagnostics = ({
       localRequestWorkBacklogTarget: controller.localRequestWorkBacklogTarget,
     },
     source,
-  }
+  })
 }
 
 export const getAggregatedJudgmentDispatchTelemetry = async (
@@ -1623,7 +2104,7 @@ export const getAggregatedJudgmentDispatchTelemetry = async (
   const localTelemetry = await getLocalTelemetry(input)
 
   if (shouldUseLocalOnly()) {
-    return localTelemetry
+    return withBottleneckClassification(localTelemetry)
   }
 
   const remoteTelemetry = await getRemoteJudgmentDispatchTelemetry(input, options)
@@ -1648,21 +2129,25 @@ export const getAggregatedJudgmentDispatchTelemetry = async (
   })
 
   return allocationWorkerTelemetry.length === 0
-    ? withUnavailableWorkerLifecycleTelemetry({
-        input,
-        snapshot: withTelemetrySource(allocationAuthorityTelemetry, source),
-        unavailableWorkerCount: remoteTelemetry.unavailableWorkerCount,
-      })
-    : withUnavailableWorkerLifecycleTelemetry({
-        input,
-        snapshot: withLocalLifecycleTelemetry({
-          localTelemetry,
-          snapshot: mergeJudgmentDispatchTelemetrySnapshots(
-            allocationWorkerTelemetry,
-            source,
-            allocationAuthorityTelemetry.provider,
-          ),
+    ? withBottleneckClassification(
+        withUnavailableWorkerLifecycleTelemetry({
+          input,
+          snapshot: withTelemetrySource(allocationAuthorityTelemetry, source),
+          unavailableWorkerCount: remoteTelemetry.unavailableWorkerCount,
         }),
-        unavailableWorkerCount: remoteTelemetry.unavailableWorkerCount,
-      })
+      )
+    : withBottleneckClassification(
+        withUnavailableWorkerLifecycleTelemetry({
+          input,
+          snapshot: withLocalLifecycleTelemetry({
+            localTelemetry,
+            snapshot: mergeJudgmentDispatchTelemetrySnapshots(
+              allocationWorkerTelemetry,
+              source,
+              allocationAuthorityTelemetry.provider,
+            ),
+          }),
+          unavailableWorkerCount: remoteTelemetry.unavailableWorkerCount,
+        }),
+      )
 }

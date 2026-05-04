@@ -1220,6 +1220,7 @@ test('404 misroutes block dispatch during cooldown, allow one probe after expiry
   expect(getJudgmentRequestStats('job-gated-probe-1')).toEqual({
     inFlight: 0,
     pendingPersistedAttempts: 0,
+    requestSlotWaiters: {codex: 0, fallback: 0, providerAdmission: 0, worker: 0},
     requestWorkBacklog: 0,
     waitingForRequestSlot: 0,
   })
@@ -1265,6 +1266,7 @@ test('404 misroutes block dispatch during cooldown, allow one probe after expiry
   expect(getJudgmentRequestStats('job-gated-probe-2')).toEqual({
     inFlight: 0,
     pendingPersistedAttempts: 0,
+    requestSlotWaiters: {codex: 0, fallback: 0, providerAdmission: 0, worker: 0},
     requestWorkBacklog: 0,
     waitingForRequestSlot: 0,
   })

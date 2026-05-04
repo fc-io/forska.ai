@@ -2601,6 +2601,7 @@ export const judgmentsJobsRoutes = new Elysia()
               inFlight: requestRuntimeStats.inFlight,
               lifecycle: dispatchTelemetry.lifecycle,
               providerTelemetry: dispatchTelemetry.provider,
+              requestSlotWaiters: requestRuntimeStats.requestSlotWaiters,
               requestWorkBacklog: requestRuntimeStats.requestWorkBacklog,
               telemetrySource: dispatchTelemetry.source,
               waitingForRequestSlot: requestRuntimeStats.waitingForRequestSlot,
