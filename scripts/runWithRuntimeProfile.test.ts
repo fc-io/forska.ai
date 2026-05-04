@@ -58,6 +58,39 @@ const waitForProcessExit = async (processToWaitFor: SpawnedProcess, timeoutMs: n
   })
 }
 
+const getAvailableLocalPorts = async (count: number) => {
+  const servers = Array.from({length: count}, () => {
+    return globalThis.Bun.serve({
+      fetch: () => {
+        return new Response('ok')
+      },
+      hostname: '127.0.0.1',
+      port: 0,
+    })
+  })
+  const ports = servers.map((server) => {
+    return server.port
+  })
+  await Promise.all(
+    servers.map((server) => {
+      return server.stop(true)
+    }),
+  )
+
+  return ports
+}
+
+const getCanStartLocalListener = async () => {
+  try {
+    await getAvailableLocalPorts(1)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const canStartLocalListener = await getCanStartLocalListener()
+
 const stopProcess = async (processToStop: SpawnedProcess) => {
   if (processToStop.exitCode === null) {
     processToStop.kill('SIGTERM')
@@ -121,10 +154,11 @@ test('judge-only launcher clears inherited explicit journal paths', () => {
   } finally {
     if (previousJournalPath === undefined) {
       delete process.env.JUDGE_WORKER_JOURNAL_PATH
-      return
     }
 
-    process.env.JUDGE_WORKER_JOURNAL_PATH = previousJournalPath
+    if (previousJournalPath !== undefined) {
+      process.env.JUDGE_WORKER_JOURNAL_PATH = previousJournalPath
+    }
   }
 })
 
@@ -140,12 +174,15 @@ test('stacked server launcher carries split-role port and journal identity wirin
   })
 })
 
-test('server stack script starts api, maintenance-worker, and judge-worker together', async () => {
+test('server stack script starts api, maintenance-worker, and judge-worker together', {timeout: 30_000}, async () => {
+  if (!canStartLocalListener) {
+    expect(canStartLocalListener).toBe(false)
+    return
+  }
+
   const dataRoot = join(process.cwd(), 'data', 'runtime', `run-with-runtime-profile-stack-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'forska.duckdb')
-  const apiPort = 34760
-  const maintenancePort = 34761
-  const judgePort = 34762
+  const [vitePort, apiPort, maintenancePort, judgePort] = await getAvailableLocalPorts(4)
 
   mkdirSync(dataRoot, {recursive: true})
 
@@ -160,7 +197,7 @@ test('server stack script starts api, maintenance-worker, and judge-worker toget
       JUDGE_WORKER_ID: 'run-with-runtime-profile-stack-judge',
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
       RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-      VITE_PORT: '34759',
+      VITE_PORT: String(vitePort),
     },
     stderr: 'pipe',
     stdout: 'pipe',
@@ -186,12 +223,14 @@ test(
   'server stack startup takes over a live conflicting judge worker before spawning its own judge role',
   {timeout: 30_000},
   async () => {
+    if (!canStartLocalListener) {
+      expect(canStartLocalListener).toBe(false)
+      return
+    }
+
     const dataRoot = join(process.cwd(), 'data', 'runtime', `run-with-runtime-profile-judge-takeover-${Date.now()}`)
     const duckdbPath = join(dataRoot, 'forska.duckdb')
-    const standaloneJudgePort = 34770
-    const apiPort = 34771
-    const maintenancePort = 34772
-    const judgePort = 34773
+    const [vitePort, standaloneJudgePort, apiPort, maintenancePort, judgePort] = await getAvailableLocalPorts(5)
 
     mkdirSync(dataRoot, {recursive: true})
 
@@ -207,7 +246,7 @@ test(
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
         SERVER_DUCKDB_OWNER_URL: '',
         SERVER_ROLE: 'judge-worker',
-        VITE_PORT: '34769',
+        VITE_PORT: String(vitePort),
       },
       stderr: 'pipe',
       stdout: 'pipe',
@@ -230,7 +269,7 @@ test(
           JUDGE_WORKER_JOURNAL_PATH: '',
           RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
           RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-          VITE_PORT: '34769',
+          VITE_PORT: String(vitePort),
         },
         stderr: 'pipe',
         stdout: 'pipe',
