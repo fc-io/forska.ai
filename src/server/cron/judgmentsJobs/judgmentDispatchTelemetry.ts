@@ -39,6 +39,12 @@ import {
   getProviderBucketSnapshot,
   type ProviderBucketSnapshot,
 } from './providerAdmissionLease.ts'
+import {
+  getProviderTargetAllocationSnapshot,
+  getProviderTargetAllocationWorkerSnapshot,
+  type ProviderTargetAllocationSnapshot,
+  type ProviderTargetAllocationWorkerInput,
+} from './providerTargetAllocationSnapshot.ts'
 
 export const judgmentDispatchTelemetryPath = '/api/admin/judgment-dispatch-runtime'
 
@@ -137,6 +143,7 @@ export type JudgmentProviderTelemetry = {
   providerLimitVersion: string
   providerProbeOccupancyVersion: string
   providerRequestFillPct: number | null
+  providerTargetAllocationSnapshot?: ProviderTargetAllocationSnapshot
   targetRequestLiveCalls: number
   unallocatedTargetLiveCalls: number
 }
@@ -178,12 +185,6 @@ const getFillPct = (used: number, capacity: number): number | null => {
   return capacity > 0 ? Math.round((used / capacity) * 100) : null
 }
 
-const getTargetRequestLiveCalls = (normalRequestCapacity: number): number => {
-  return normalRequestCapacity <= 0
-    ? 0
-    : Math.max(1, Math.min(normalRequestCapacity, Math.ceil(normalRequestCapacity * 0.95)))
-}
-
 const getTelemetryAggregateCompleteness = ({
   staleWorkerCount,
   unavailableWorkerCount,
@@ -214,12 +215,14 @@ const getTelemetryCoverageMetadata = ({
 const getTelemetrySourceMetadata = ({
   endpointAvailabilityKeys = [],
   freshWorkerCount,
+  localWorkerId = getDefaultJudgmentServerJobId(),
   providerKey,
   staleWorkerCount,
   unavailableWorkerCount,
 }: {
   endpointAvailabilityKeys?: string[]
   freshWorkerCount: number
+  localWorkerId?: string
   providerKey: string
   staleWorkerCount: number
   unavailableWorkerCount: number
@@ -231,7 +234,7 @@ const getTelemetrySourceMetadata = ({
     endpointCoverage: endpointAvailabilityKeys.map((endpointAvailabilityKey) => {
       return {...coverage, endpointAvailabilityKey}
     }),
-    localWorkerId: getDefaultJudgmentServerJobId(),
+    localWorkerId,
     observedAggregatesAreBestEffort: true,
     providerCoverage: [{...coverage, providerKey}],
     telemetryUnavailable: unavailableWorkerCount > 0,
@@ -586,6 +589,7 @@ const getTelemetrySourceFromRecord = (
     : getTelemetrySourceMetadata({
         endpointAvailabilityKeys,
         freshWorkerCount,
+        localWorkerId: getStringValue(value.localWorkerId) ?? getDefaultJudgmentServerJobId(),
         providerKey,
         staleWorkerCount,
         unavailableWorkerCount,
@@ -931,16 +935,6 @@ const getProviderBucketSnapshotFromInput = (input: JudgmentDispatchTelemetryInpu
   }
 }
 
-const getAllocationVersion = ({
-  providerLimitVersion,
-  providerProbeOccupancyVersion,
-}: {
-  providerLimitVersion: string
-  providerProbeOccupancyVersion: string
-}): string => {
-  return `local:${providerLimitVersion}:${providerProbeOccupancyVersion}`
-}
-
 const getConvergenceDiagnostics = ({
   allocationCompleteCurrent,
   allocationInputState,
@@ -976,6 +970,30 @@ const getConvergenceDiagnostics = ({
   }
 }
 
+const getAllocationSourceMetadata = (
+  source: JudgmentTelemetrySourceMetadata,
+): ProviderTargetAllocationSnapshot['source'] => {
+  return {
+    aggregateCompleteness: source.aggregateCompleteness,
+    freshWorkerCount: source.freshWorkerCount,
+    staleWorkerCount: source.staleWorkerCount,
+    unavailableWorkerCount: source.unavailableWorkerCount,
+  }
+}
+
+const getProviderTargetAllocationWorkerInput = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+): ProviderTargetAllocationWorkerInput => {
+  return {
+    effectiveProviderLimit: snapshot.provider.effectiveProviderLimit,
+    localProviderLiveRequests: snapshot.provider.localProviderLiveRequests,
+    providerKey: snapshot.provider.providerKey,
+    providerLimitVersion: snapshot.provider.providerLimitVersion,
+    routeable: snapshot.provider.convergenceDiagnostics.hasHealthyEndpointOrEndpointlessPath,
+    workerId: snapshot.source.localWorkerId,
+  }
+}
+
 const getLocalProviderTelemetry = async ({
   dispatch,
   input,
@@ -997,9 +1015,6 @@ const getLocalProviderTelemetry = async ({
   })
   const providerLeasedPhysicalCalls =
     leaseTelemetry.providerLeasedLiveRequests + leaseTelemetry.providerLeasedProbeCalls
-  const providerAvailableRequestLeases = Math.max(0, snapshot.providerLimit - providerLeasedPhysicalCalls)
-  const normalRequestCapacity = Math.max(0, snapshot.providerLimit - leaseTelemetry.providerLeasedProbeCalls)
-  const targetRequestLiveCalls = getTargetRequestLiveCalls(normalRequestCapacity)
   const localProviderLiveRequests = getJudgmentProviderRequestStats({
     modelId: input.modelId,
     modelProvider: input.modelProvider,
@@ -1007,17 +1022,50 @@ const getLocalProviderTelemetry = async ({
     providerKey: snapshot.providerKey,
     providerMaxInflightRequests: input.providerMaxInflightRequests,
   }).localProviderLiveRequests
-  const effectiveProviderLimit = snapshot.providerLimit
-  const expectedLocalLiveShare = targetRequestLiveCalls
+  const allocationSource = {
+    aggregateCompleteness: 'complete' as const,
+    freshWorkerCount: 1,
+    staleWorkerCount: 0,
+    unavailableWorkerCount: 0,
+  }
+  const providerTargetAllocationSnapshot = getProviderTargetAllocationSnapshot({
+    probeOccupancySampledAtMs: leaseTelemetry.sampledAtMs,
+    providerKey: snapshot.providerKey,
+    providerLeasedLiveRequests: leaseTelemetry.providerLeasedLiveRequests,
+    providerLeasedProbeCalls: leaseTelemetry.providerLeasedProbeCalls,
+    providerLimit: snapshot.providerLimit,
+    providerLimitVersion: snapshot.providerLimitVersion,
+    providerProbeOccupancyVersion: leaseTelemetry.providerProbeOccupancyVersion,
+    source: allocationSource,
+    workers: [
+      {
+        effectiveProviderLimit: snapshot.providerLimit,
+        localProviderLiveRequests,
+        providerKey: snapshot.providerKey,
+        providerLimitVersion: snapshot.providerLimitVersion,
+        routeable: true,
+        workerId: getDefaultJudgmentServerJobId(),
+      },
+    ],
+  })
+  const localWorkerAllocation = getProviderTargetAllocationWorkerSnapshot({
+    snapshot: providerTargetAllocationSnapshot,
+    workerId: getDefaultJudgmentServerJobId(),
+  })
+  const providerAvailableRequestLeases = providerTargetAllocationSnapshot.providerAvailableRequestLeases
+  const normalRequestCapacity = providerTargetAllocationSnapshot.normalRequestCapacity
+  const targetRequestLiveCalls = providerTargetAllocationSnapshot.targetRequestLiveCalls
+  const effectiveProviderLimit = localWorkerAllocation?.effectiveProviderLimit ?? 0
+  const expectedLocalLiveShare = localWorkerAllocation?.expectedLocalLiveShare ?? 0
   const localAdditionalTargetHeadroom = Math.max(0, expectedLocalLiveShare - localProviderLiveRequests)
   const localAdditionalLeaseHeadroom = Math.min(providerAvailableRequestLeases, localAdditionalTargetHeadroom)
   const localPromptBacklog = dispatch.providerDispatchActivePrompts + dispatch.providerDispatchQueuedPrompts
   const localPromptBacklogTarget = dispatch.providerDispatchActivePromptLimit + dispatch.providerDispatchQueueLimit
   const localRequestWorkBacklog =
     Math.max(localProviderLiveRequests, request.inFlight) + request.pendingPersistedAttempts
-  const localRequestWorkBacklogTarget = targetRequestLiveCalls
-  const allocationInputState = 'localOnly'
-  const allocationCompleteCurrent = true
+  const localRequestWorkBacklogTarget = expectedLocalLiveShare
+  const allocationInputState = providerTargetAllocationSnapshot.allocationInputState
+  const allocationCompleteCurrent = providerTargetAllocationSnapshot.allocationCompleteCurrent
   const convergenceDiagnostics = getConvergenceDiagnostics({
     allocationCompleteCurrent,
     allocationInputState,
@@ -1052,11 +1100,8 @@ const getLocalProviderTelemetry = async ({
     observedGlobalProviderLiveRequests: localProviderLiveRequests,
     observedGlobalProviderRequestFillPct: getFillPct(localProviderLiveRequests, effectiveProviderLimit),
     observedGlobalRequestWorkBacklog: localRequestWorkBacklog,
-    probeOccupancySampledAtMs: leaseTelemetry.sampledAtMs,
-    providerAllocationVersion: getAllocationVersion({
-      providerLimitVersion: snapshot.providerLimitVersion,
-      providerProbeOccupancyVersion: leaseTelemetry.providerProbeOccupancyVersion,
-    }),
+    probeOccupancySampledAtMs: providerTargetAllocationSnapshot.probeOccupancySampledAtMs,
+    providerAllocationVersion: providerTargetAllocationSnapshot.providerAllocationVersion,
     providerAvailableRequestLeases,
     providerKey: snapshot.providerKey,
     providerLeasedLiveRequests: leaseTelemetry.providerLeasedLiveRequests,
@@ -1066,8 +1111,9 @@ const getLocalProviderTelemetry = async ({
     providerLimitVersion: snapshot.providerLimitVersion,
     providerProbeOccupancyVersion: leaseTelemetry.providerProbeOccupancyVersion,
     providerRequestFillPct: getFillPct(leaseTelemetry.providerLeasedLiveRequests, normalRequestCapacity),
+    providerTargetAllocationSnapshot,
     targetRequestLiveCalls,
-    unallocatedTargetLiveCalls: 0,
+    unallocatedTargetLiveCalls: providerTargetAllocationSnapshot.unallocatedTargetLiveCalls,
   }
 }
 
@@ -1089,6 +1135,103 @@ export const getLocalJudgmentDispatchTelemetry = async (
   })
 
   return {dispatch, ...(lifecycle ? {lifecycle} : {}), provider, request, source}
+}
+
+const withTelemetryWorkerId = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+  workerId: string,
+): JudgmentDispatchTelemetrySnapshot => {
+  return {...snapshot, source: {...snapshot.source, localWorkerId: workerId}}
+}
+
+const getProviderTargetAllocationSnapshotForTelemetry = ({
+  authorityProvider,
+  snapshots,
+  source,
+}: {
+  authorityProvider: JudgmentProviderTelemetry
+  snapshots: JudgmentDispatchTelemetrySnapshot[]
+  source: JudgmentTelemetrySourceMetadata
+}): ProviderTargetAllocationSnapshot => {
+  return getProviderTargetAllocationSnapshot({
+    probeOccupancySampledAtMs: authorityProvider.probeOccupancySampledAtMs,
+    providerKey: authorityProvider.providerKey,
+    providerLeasedLiveRequests: authorityProvider.providerLeasedLiveRequests,
+    providerLeasedProbeCalls: authorityProvider.providerLeasedProbeCalls,
+    providerLimit: authorityProvider.providerLimit,
+    providerLimitVersion: authorityProvider.providerLimitVersion,
+    providerProbeOccupancyVersion: authorityProvider.providerProbeOccupancyVersion,
+    source: getAllocationSourceMetadata(source),
+    workers: snapshots.map(getProviderTargetAllocationWorkerInput),
+  })
+}
+
+const withProviderTargetAllocationSnapshot = ({
+  allocationSnapshot,
+  snapshot,
+}: {
+  allocationSnapshot: ProviderTargetAllocationSnapshot
+  snapshot: JudgmentDispatchTelemetrySnapshot
+}): JudgmentDispatchTelemetrySnapshot => {
+  const workerAllocation = getProviderTargetAllocationWorkerSnapshot({
+    snapshot: allocationSnapshot,
+    workerId: snapshot.source.localWorkerId,
+  })
+  const expectedLocalLiveShare = workerAllocation?.expectedLocalLiveShare ?? 0
+  const effectiveProviderLimit = workerAllocation?.effectiveProviderLimit ?? 0
+  const localAdditionalTargetHeadroom = Math.max(
+    0,
+    expectedLocalLiveShare - snapshot.provider.localProviderLiveRequests,
+  )
+  const localAdditionalLeaseHeadroom = Math.min(
+    allocationSnapshot.providerAvailableRequestLeases,
+    localAdditionalTargetHeadroom,
+  )
+  const convergenceDiagnostics = {
+    ...getConvergenceDiagnostics({
+      allocationCompleteCurrent: allocationSnapshot.allocationCompleteCurrent,
+      allocationInputState: allocationSnapshot.allocationInputState,
+      normalRequestCapacity: allocationSnapshot.normalRequestCapacity,
+      providerAvailableRequestLeases: allocationSnapshot.providerAvailableRequestLeases,
+      providerLimit: allocationSnapshot.providerLimit,
+      readyCount: snapshot.provider.convergenceDiagnostics.readyCount,
+    }),
+    activeHigherPriorityStopRules: snapshot.provider.convergenceDiagnostics.activeHigherPriorityStopRules,
+    hasHealthyEndpointOrEndpointlessPath: snapshot.provider.convergenceDiagnostics.hasHealthyEndpointOrEndpointlessPath,
+    preconditionChangedReason: snapshot.provider.convergenceDiagnostics.preconditionChangedReason,
+    preconditionsStableSinceMs: snapshot.provider.convergenceDiagnostics.preconditionsStableSinceMs,
+  }
+  const provider = {
+    ...snapshot.provider,
+    allocationCompleteCurrent: allocationSnapshot.allocationCompleteCurrent,
+    allocationInputState: allocationSnapshot.allocationInputState,
+    convergenceDiagnostics,
+    effectiveProviderLimit,
+    expectedLocalLiveShare,
+    localAdditionalLeaseHeadroom,
+    localAdditionalTargetHeadroom,
+    localProviderRequestFillPct: getFillPct(snapshot.provider.localProviderLiveRequests, effectiveProviderLimit),
+    localRequestWorkBacklogTarget: expectedLocalLiveShare,
+    normalRequestCapacity: allocationSnapshot.normalRequestCapacity,
+    probeOccupancySampledAtMs: allocationSnapshot.probeOccupancySampledAtMs,
+    providerAllocationVersion: allocationSnapshot.providerAllocationVersion,
+    providerAvailableRequestLeases: allocationSnapshot.providerAvailableRequestLeases,
+    providerLeasedLiveRequests: allocationSnapshot.providerLeasedLiveRequests,
+    providerLeasedPhysicalCalls: allocationSnapshot.providerLeasedPhysicalCalls,
+    providerLeasedProbeCalls: allocationSnapshot.providerLeasedProbeCalls,
+    providerLimit: allocationSnapshot.providerLimit,
+    providerLimitVersion: allocationSnapshot.providerLimitVersion,
+    providerProbeOccupancyVersion: allocationSnapshot.providerProbeOccupancyVersion,
+    providerRequestFillPct: getFillPct(
+      allocationSnapshot.providerLeasedLiveRequests,
+      allocationSnapshot.normalRequestCapacity,
+    ),
+    providerTargetAllocationSnapshot: allocationSnapshot,
+    targetRequestLiveCalls: allocationSnapshot.targetRequestLiveCalls,
+    unallocatedTargetLiveCalls: allocationSnapshot.unallocatedTargetLiveCalls,
+  }
+
+  return {...snapshot, provider}
 }
 
 const mergeJudgmentDispatchTelemetrySnapshots = (
@@ -1145,14 +1288,16 @@ const mergeJudgmentDispatchTelemetrySnapshots = (
   const observedGlobalRequestWorkBacklog = snapshots.reduce((sum, snapshot) => {
     return sum + snapshot.provider.localRequestWorkBacklog
   }, 0)
+  const allocationCompleteCurrent = providerAuthority.allocationCompleteCurrent
+  const allocationInputState = providerAuthority.allocationInputState
   const provider = {
     ...providerAuthority,
-    allocationCompleteCurrent: source.aggregateCompleteness === 'complete',
-    allocationInputState: source.aggregateCompleteness === 'complete' ? 'completeCurrent' : 'partialTelemetry',
+    allocationCompleteCurrent,
+    allocationInputState,
     convergenceDiagnostics: {
       ...providerAuthority.convergenceDiagnostics,
-      allocationCompleteCurrent: source.aggregateCompleteness === 'complete',
-      allocationInputState: source.aggregateCompleteness === 'complete' ? 'completeCurrent' : 'partialTelemetry',
+      allocationCompleteCurrent,
+      allocationInputState,
     },
     observedGlobalEffectiveProviderLimit,
     observedGlobalPromptBacklog,
@@ -1185,8 +1330,10 @@ const getRemoteJudgmentDispatchTelemetry = async (
   })
   const staleWorkerCount = records.length - freshRecords.length
   const telemetry = await Promise.all(
-    freshRecords.map((record) => {
-      return fetchTelemetry(record, input)
+    freshRecords.map(async (record) => {
+      const snapshot = await fetchTelemetry(record, input)
+
+      return snapshot ? withTelemetryWorkerId(snapshot, record.instanceId) : null
     }),
   )
 
@@ -1344,18 +1491,34 @@ export const getAggregatedJudgmentDispatchTelemetry = async (
     staleWorkerCount: remoteTelemetry.staleWorkerCount,
     unavailableWorkerCount: remoteTelemetry.unavailableWorkerCount,
   })
+  const providerTargetAllocationSnapshot = getProviderTargetAllocationSnapshotForTelemetry({
+    authorityProvider: localTelemetry.provider,
+    snapshots: remoteTelemetry.snapshots,
+    source,
+  })
+  const allocationAuthorityTelemetry = withProviderTargetAllocationSnapshot({
+    allocationSnapshot: providerTargetAllocationSnapshot,
+    snapshot: localTelemetry,
+  })
+  const allocationWorkerTelemetry = remoteTelemetry.snapshots.map((snapshot) => {
+    return withProviderTargetAllocationSnapshot({allocationSnapshot: providerTargetAllocationSnapshot, snapshot})
+  })
 
-  return remoteTelemetry.snapshots.length === 0
+  return allocationWorkerTelemetry.length === 0
     ? withUnavailableWorkerLifecycleTelemetry({
         input,
-        snapshot: withTelemetrySource(localTelemetry, source),
+        snapshot: withTelemetrySource(allocationAuthorityTelemetry, source),
         unavailableWorkerCount: remoteTelemetry.unavailableWorkerCount,
       })
     : withUnavailableWorkerLifecycleTelemetry({
         input,
         snapshot: withLocalLifecycleTelemetry({
           localTelemetry,
-          snapshot: mergeJudgmentDispatchTelemetrySnapshots(remoteTelemetry.snapshots, source, localTelemetry.provider),
+          snapshot: mergeJudgmentDispatchTelemetrySnapshots(
+            allocationWorkerTelemetry,
+            source,
+            allocationAuthorityTelemetry.provider,
+          ),
         }),
         unavailableWorkerCount: remoteTelemetry.unavailableWorkerCount,
       })

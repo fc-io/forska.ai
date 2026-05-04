@@ -71,6 +71,24 @@ export type JudgmentJobProviderTelemetry = {
   providerLimitVersion: string
   providerProbeOccupancyVersion: string
   providerRequestFillPct: number | null
+  providerTargetAllocationSnapshot?: {
+    allocationCompleteCurrent: boolean
+    allocationInputState: string
+    normalRequestCapacity: number
+    probeOccupancySampledAtMs: number
+    providerAllocationVersion: string
+    providerKey: string
+    providerLimitVersion: string
+    providerProbeOccupancyVersion: string
+    targetRequestLiveCalls: number
+    unallocatedTargetLiveCalls: number
+    workers: Array<{
+      effectiveProviderLimit: number
+      expectedLocalLiveShare: number
+      routeable: boolean
+      workerId: string
+    }>
+  }
   targetRequestLiveCalls: number
   unallocatedTargetLiveCalls: number
 }

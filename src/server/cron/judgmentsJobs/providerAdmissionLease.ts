@@ -186,9 +186,16 @@ type ProviderAdmissionLeaseRow = {
   requestAttemptId: string | null
 }
 
+type DeletedProviderAdmissionLeaseRow = {
+  leaseIdentity: string
+  leaseKind: ProviderAdmissionLeaseKind
+  providerKey: string
+}
+
 const currentProviderSnapshots = new Map<string, ProviderBucketSnapshot>()
 const providerAdmissionLeases = new Map<string, ProviderAdmissionLease>()
 const providerAdmissionLeaseOperationQueues = new Map<string, Promise<void>>()
+const providerProbeOccupancyVersionCounters = new Map<string, number>()
 
 export const providerAdmissionLeaseTtlMs = 60_000
 export const providerAdmissionLeaseHeartbeatIntervalMs = 15_000
@@ -813,7 +820,27 @@ const getProviderProbeOccupancyVersion = ({
   providerKey: string
   providerLeasedProbeCalls: number
 }): string => {
-  return createHash('sha256').update(`${providerKey}:${providerLeasedProbeCalls}`).digest('hex')
+  const versionCounter = providerProbeOccupancyVersionCounters.get(providerKey) ?? 0
+
+  return createHash('sha256').update(`${providerKey}:${providerLeasedProbeCalls}:${versionCounter}`).digest('hex')
+}
+
+const incrementProviderProbeOccupancyVersion = (providerKey: string): number => {
+  const nextCounter = (providerProbeOccupancyVersionCounters.get(providerKey) ?? 0) + 1
+
+  providerProbeOccupancyVersionCounters.set(providerKey, nextCounter)
+  return nextCounter
+}
+
+const incrementProviderProbeOccupancyVersionForDeletedRows = (rows: DeletedProviderAdmissionLeaseRow[]): number => {
+  const providerKeys = rows.reduce<string[]>((keys, row) => {
+    return row.leaseKind === 'probe' && !keys.includes(row.providerKey) ? [...keys, row.providerKey] : keys
+  }, [])
+
+  return providerKeys.reduce((count, providerKey) => {
+    incrementProviderProbeOccupancyVersion(providerKey)
+    return count + 1
+  }, 0)
 }
 
 export const getProviderAdmissionLeaseTelemetry = async ({
@@ -877,13 +904,17 @@ const deleteExpiredProviderAdmissionLeases = async ({
   providerKey: string
   tx: {queryJson: <T>(statement: string) => Promise<T[]>}
 }): Promise<number> => {
-  const rows = await tx.queryJson<{leaseIdentity: string}>(`
+  const rows = await tx.queryJson<DeletedProviderAdmissionLeaseRow>(`
     DELETE FROM app.provider_admission_lease
     WHERE provider_key = ${getSqlLiteral(providerKey)}
       AND expires_at <= ${getSqlLiteral(now)}
-    RETURNING lease_identity AS leaseIdentity
+    RETURNING
+      provider_key AS providerKey,
+      lease_kind AS leaseKind,
+      lease_identity AS leaseIdentity
   `)
 
+  incrementProviderProbeOccupancyVersionForDeletedRows(rows)
   return rows.length
 }
 
@@ -896,12 +927,17 @@ const deleteExpiredProviderAdmissionLeaseIdentity = async ({
   now: Date
   tx: {queryJson: <T>(statement: string) => Promise<T[]>}
 }): Promise<void> => {
-  await tx.queryJson<{leaseIdentity: string}>(`
+  const rows = await tx.queryJson<DeletedProviderAdmissionLeaseRow>(`
     DELETE FROM app.provider_admission_lease
     WHERE lease_identity = ${getSqlLiteral(leaseIdentity)}
       AND expires_at <= ${getSqlLiteral(now)}
-    RETURNING lease_identity AS leaseIdentity
+    RETURNING
+      provider_key AS providerKey,
+      lease_kind AS leaseKind,
+      lease_identity AS leaseIdentity
   `)
+
+  incrementProviderProbeOccupancyVersionForDeletedRows(rows)
 }
 
 const getProviderAdmissionLeaseProviderKeys = async (): Promise<string[]> => {
@@ -994,13 +1030,17 @@ const deleteSuspectFreshProofLeases = async ({
     return 0
   }
 
-  const rows = await tx.queryJson<{leaseIdentity: string}>(`
+  const rows = await tx.queryJson<DeletedProviderAdmissionLeaseRow>(`
     DELETE FROM app.provider_admission_lease
     WHERE provider_key = ${getSqlLiteral(providerKey)}
       AND (${predicates.join(' OR ')})
-    RETURNING lease_identity AS leaseIdentity
+    RETURNING
+      provider_key AS providerKey,
+      lease_kind AS leaseKind,
+      lease_identity AS leaseIdentity
   `)
 
+  incrementProviderProbeOccupancyVersionForDeletedRows(rows)
   return rows.length
 }
 
@@ -1017,13 +1057,17 @@ const deleteHolderDemotionLeases = async ({
     return 0
   }
 
-  const rows = await tx.queryJson<{leaseIdentity: string}>(`
+  const rows = await tx.queryJson<DeletedProviderAdmissionLeaseRow>(`
     DELETE FROM app.provider_admission_lease
     WHERE provider_key = ${getSqlLiteral(providerKey)}
       AND holder_token IN (${getSqlLiteralList(holderTokens)})
-    RETURNING lease_identity AS leaseIdentity
+    RETURNING
+      provider_key AS providerKey,
+      lease_kind AS leaseKind,
+      lease_identity AS leaseIdentity
   `)
 
+  incrementProviderProbeOccupancyVersionForDeletedRows(rows)
   return rows.length
 }
 
@@ -1229,6 +1273,10 @@ export const acquireProviderAdmissionLease = ({
     providerLimitVersion: snapshot.providerLimitVersion,
   })
 
+  if (probeParts?.leaseKind === 'probe') {
+    incrementProviderProbeOccupancyVersion(snapshot.providerKey)
+  }
+
   return {
     acquired: true,
     activeLeaseCount: activeLeaseCount + 1,
@@ -1253,6 +1301,10 @@ export const releaseProviderAdmissionLease = ({
   const leaseKey = getLeaseKey({leaseIdentity, providerKey})
   const lease = providerAdmissionLeases.get(leaseKey) ?? null
   const shouldRelease = lease?.holderToken === holderToken
+
+  if (shouldRelease && lease.leaseKind === 'probe') {
+    incrementProviderProbeOccupancyVersion(providerKey)
+  }
 
   return shouldRelease ? providerAdmissionLeases.delete(leaseKey) : false
 }
@@ -1357,6 +1409,10 @@ export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
 
       await tx.run(getProviderAdmissionLeaseInsertSql({expiresAt, input, parts, startedAt: now}))
 
+      if (parts.leaseKind === 'probe') {
+        incrementProviderProbeOccupancyVersion(input.snapshot.providerKey)
+      }
+
       const lease = await getProviderAdmissionLeaseByIdentity({leaseIdentity: input.leaseIdentity, tx})
 
       return {
@@ -1442,15 +1498,19 @@ export const releaseProviderAdmissionLeaseWithResultOnCurrentOwner = async (
 
   return withProviderAdmissionLeaseSerialization(input.providerKey, async () => {
     return getAppDatabaseService().transaction(async (tx) => {
-      const rows = await tx.queryJson<{leaseIdentity: string}>(`
+      const rows = await tx.queryJson<DeletedProviderAdmissionLeaseRow>(`
         DELETE FROM app.provider_admission_lease
         WHERE provider_key = ${getSqlLiteral(input.providerKey)}
           AND lease_identity = ${getSqlLiteral(input.leaseIdentity)}
           AND holder_token = ${getSqlLiteral(input.holderToken)}
-        RETURNING lease_identity AS leaseIdentity
+        RETURNING
+          provider_key AS providerKey,
+          lease_kind AS leaseKind,
+          lease_identity AS leaseIdentity
       `)
 
       if (rows.length > 0) {
+        incrementProviderProbeOccupancyVersionForDeletedRows(rows)
         return {released: true}
       }
 
@@ -1530,4 +1590,5 @@ export const resetProviderAdmissionLeaseForTests = (): void => {
   currentProviderSnapshots.clear()
   providerAdmissionLeases.clear()
   providerAdmissionLeaseOperationQueues.clear()
+  providerProbeOccupancyVersionCounters.clear()
 }
