@@ -73,6 +73,12 @@ const state = {
   getJudgmentDispatchJobPromptIds: mock(async (_jobId: string) => {
     return []
   }),
+  getJudgmentDispatchPromptLifecycleRecords: mock(async (_input: unknown) => {
+    return []
+  }),
+  getJudgmentDispatchProviderKey: mock((input: {providerConnectionId: string | null}) => {
+    return input.providerConnectionId ?? 'provider:unknown:default'
+  }),
   enqueueClaimedJudgmentPrompts: mock(async (_input: {label: string; prompts: unknown[]}) => {
     return {acceptedCount: 0, rejectedPrompts: []}
   }),
@@ -95,6 +101,8 @@ const registerModuleMocks = () => {
     return {
       enqueueClaimedJudgmentPrompts: state.enqueueClaimedJudgmentPrompts,
       getJudgmentDispatchJobPromptIds: state.getJudgmentDispatchJobPromptIds,
+      getJudgmentDispatchPromptLifecycleRecords: state.getJudgmentDispatchPromptLifecycleRecords,
+      getJudgmentDispatchProviderKey: state.getJudgmentDispatchProviderKey,
       getJudgmentDispatchProviderStats: state.getJudgmentDispatchProviderStats,
       getJudgmentDispatchQueueCapacity: state.getJudgmentDispatchQueueCapacity,
     }
@@ -1484,15 +1492,25 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
       dispatch: {
         jobActivePrompts: number
         jobQueuedPrompts: number
-        providerActiveFillPct: number | null
-        providerActiveLimit: number
-        providerActivePrompts: number
-        providerPrefetchFillPct: number | null
-        providerQueueLimit: number
-        providerQueuedPrompts: number
+        providerDispatchActivePromptFillPct: number | null
+        providerDispatchActivePromptLimit: number
+        providerDispatchActivePrompts: number
+        providerDispatchPrefetchFillPct: number | null
+        providerDispatchQueueLimit: number
+        providerDispatchQueuedPrompts: number
       }
       failures: {anthropicRefusalArticles: number; anthropicRefusals: number; persistedFailedRequests: number}
       inFlight: number
+      providerTelemetry: {
+        normalRequestCapacity: number
+        providerAvailableRequestLeases: number
+        providerLeasedLiveRequests: number
+        providerLeasedPhysicalCalls: number
+        providerLeasedProbeCalls: number
+        providerLimit: number
+        providerRequestFillPct: number | null
+        targetRequestLiveCalls: number
+      }
     }
     storageHealth: {
       claimedOutboxCount: number
@@ -1520,12 +1538,22 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   expect(body.requestStats.dispatch).toEqual({
     jobActivePrompts: 0,
     jobQueuedPrompts: 0,
-    providerActiveFillPct: 0,
-    providerActiveLimit: 1,
-    providerActivePrompts: 0,
-    providerPrefetchFillPct: 0,
-    providerQueueLimit: 1,
-    providerQueuedPrompts: 0,
+    providerDispatchActivePromptFillPct: 0,
+    providerDispatchActivePromptLimit: 1,
+    providerDispatchActivePrompts: 0,
+    providerDispatchPrefetchFillPct: 0,
+    providerDispatchQueueLimit: 1,
+    providerDispatchQueuedPrompts: 0,
+  })
+  expect(body.requestStats.providerTelemetry).toMatchObject({
+    normalRequestCapacity: 1,
+    providerAvailableRequestLeases: 1,
+    providerLeasedLiveRequests: 0,
+    providerLeasedPhysicalCalls: 0,
+    providerLeasedProbeCalls: 0,
+    providerLimit: 1,
+    providerRequestFillPct: 0,
+    targetRequestLiveCalls: 1,
   })
   expect(body.storageHealth.outboxRowCount).toBe(1)
   expect(body.storageHealth.retainedRowCount).toBe(5)
@@ -1820,13 +1848,14 @@ test('job details expose provider dispatch saturation stats', async () => {
       dispatch: {
         jobActivePrompts: number
         jobQueuedPrompts: number
-        providerActiveFillPct: number | null
-        providerActiveLimit: number
-        providerActivePrompts: number
-        providerPrefetchFillPct: number | null
-        providerQueueLimit: number
-        providerQueuedPrompts: number
+        providerDispatchActivePromptFillPct: number | null
+        providerDispatchActivePromptLimit: number
+        providerDispatchActivePrompts: number
+        providerDispatchPrefetchFillPct: number | null
+        providerDispatchQueueLimit: number
+        providerDispatchQueuedPrompts: number
       }
+      providerTelemetry: {normalRequestCapacity: number; providerLimit: number; providerRequestFillPct: number | null}
     }
   }
 
@@ -1834,12 +1863,17 @@ test('job details expose provider dispatch saturation stats', async () => {
   expect(body.requestStats.dispatch).toEqual({
     jobActivePrompts: 12,
     jobQueuedPrompts: 18,
-    providerActiveFillPct: 80,
-    providerActiveLimit: 80,
-    providerActivePrompts: 64,
-    providerPrefetchFillPct: 50,
-    providerQueueLimit: 80,
-    providerQueuedPrompts: 40,
+    providerDispatchActivePromptFillPct: 80,
+    providerDispatchActivePromptLimit: 80,
+    providerDispatchActivePrompts: 64,
+    providerDispatchPrefetchFillPct: 50,
+    providerDispatchQueueLimit: 80,
+    providerDispatchQueuedPrompts: 40,
+  })
+  expect(body.requestStats.providerTelemetry).toMatchObject({
+    normalRequestCapacity: 80,
+    providerLimit: 80,
+    providerRequestFillPct: 0,
   })
 })
 

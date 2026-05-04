@@ -21,25 +21,100 @@ const createSnapshot = (
   overrides: {
     dispatch?: Partial<JudgmentDispatchTelemetrySnapshot['dispatch']>
     lifecycleRecords?: JudgmentLifecycleTelemetryRecord[]
+    provider?: Partial<JudgmentDispatchTelemetrySnapshot['provider']>
     request?: Partial<JudgmentDispatchTelemetrySnapshot['request']>
   } = {},
 ): JudgmentDispatchTelemetrySnapshot => {
   const lifecycle = overrides.lifecycleRecords
     ? getJudgmentLifecycleTelemetry({now: new Date(now), records: overrides.lifecycleRecords})
     : undefined
+  const provider = {
+    allocationCompleteCurrent: true,
+    allocationInputState: 'completeCurrent',
+    bottleneck: null,
+    bottleneckSource: null,
+    bottleneckSubreason: null,
+    convergenceDiagnostics: {
+      activeHigherPriorityStopRules: [],
+      allocationCompleteCurrent: true,
+      allocationInputState: 'completeCurrent',
+      backlogReplenishmentAllowed: false,
+      hasHealthyEndpointOrEndpointlessPath: true,
+      normalRequestCapacityPositive: true,
+      preconditionChangedReason: null,
+      preconditionsStableSinceMs: 0,
+      providerAcceptingRequests: true,
+      providerLimitPositive: true,
+      readyCount: 0,
+    },
+    effectiveProviderLimit: 20,
+    endpointDiagnostics: [],
+    expectedLocalLiveShare: 19,
+    localAdditionalLeaseHeadroom: 19,
+    localAdditionalTargetHeadroom: 19,
+    localPromptBacklog: 0,
+    localPromptBacklogTarget: 40,
+    localProviderLiveRequests: 0,
+    localProviderRequestFillPct: 0,
+    localRequestWorkBacklog: 0,
+    localRequestWorkBacklogTarget: 19,
+    normalRequestCapacity: 20,
+    observedAggregateLabel: 'bestEffort' as const,
+    observedGlobalEffectiveProviderLimit: 20,
+    observedGlobalPromptBacklog: 0,
+    observedGlobalProviderLiveRequests: 0,
+    observedGlobalProviderRequestFillPct: 0,
+    observedGlobalRequestWorkBacklog: 0,
+    probeOccupancySampledAtMs: 0,
+    providerAllocationVersion: 'allocation-a',
+    providerAvailableRequestLeases: 20,
+    providerKey: 'connection-a',
+    providerLeasedLiveRequests: 0,
+    providerLeasedPhysicalCalls: 0,
+    providerLeasedProbeCalls: 0,
+    providerLimit: 20,
+    providerLimitVersion: 'version-a',
+    providerProbeOccupancyVersion: 'probe-version-a',
+    providerRequestFillPct: 0,
+    targetRequestLiveCalls: 19,
+    unallocatedTargetLiveCalls: 0,
+    ...overrides.provider,
+  } satisfies JudgmentDispatchTelemetrySnapshot['provider']
 
   return {
     dispatch: {
-      jobActivePromptCount: 0,
-      jobQueuedPromptCount: 0,
-      providerActiveLimit: 20,
-      providerActivePromptCount: 0,
-      providerQueueLimit: 20,
-      providerQueuedPromptCount: 0,
+      jobActivePrompts: 0,
+      jobQueuedPrompts: 0,
+      providerDispatchActivePromptFillPct: 0,
+      providerDispatchActivePromptLimit: 20,
+      providerDispatchActivePrompts: 0,
+      providerDispatchPrefetchFillPct: 0,
+      providerDispatchQueueLimit: 20,
+      providerDispatchQueuedPrompts: 0,
       ...overrides.dispatch,
     },
     ...(lifecycle ? {lifecycle} : {}),
+    provider,
     request: {inFlight: 0, pendingPersistedAttempts: 0, ...overrides.request},
+    source: {
+      aggregateCompleteness: 'complete',
+      endpointCoverage: [],
+      freshWorkerCount: 1,
+      localWorkerId: 'test-worker',
+      observedAggregatesAreBestEffort: true,
+      providerCoverage: [
+        {
+          aggregateCompleteness: 'complete',
+          freshWorkerCount: 1,
+          providerKey: provider.providerKey,
+          staleWorkerCount: 0,
+          unavailableWorkerCount: 0,
+        },
+      ],
+      staleWorkerCount: 0,
+      telemetryUnavailable: false,
+      unavailableWorkerCount: 0,
+    },
   }
 }
 
@@ -94,20 +169,22 @@ test('aggregates fresh judge-worker telemetry when this process does not judge',
     return record.listenPort === 3003
       ? createSnapshot({
           dispatch: {
-            jobActivePromptCount: 12,
-            jobQueuedPromptCount: 4,
-            providerActivePromptCount: 12,
-            providerQueuedPromptCount: 4,
+            jobActivePrompts: 12,
+            jobQueuedPrompts: 4,
+            providerDispatchActivePrompts: 12,
+            providerDispatchQueuedPrompts: 4,
           },
+          provider: {localProviderLiveRequests: 15},
           request: {inFlight: 15, pendingPersistedAttempts: 2},
         })
       : createSnapshot({
           dispatch: {
-            jobActivePromptCount: 3,
-            jobQueuedPromptCount: 1,
-            providerActivePromptCount: 3,
-            providerQueuedPromptCount: 1,
+            jobActivePrompts: 3,
+            jobQueuedPrompts: 1,
+            providerDispatchActivePrompts: 3,
+            providerDispatchQueuedPrompts: 1,
           },
+          provider: {localProviderLiveRequests: 4},
           request: {inFlight: 4, pendingPersistedAttempts: 1},
         })
   })
@@ -125,23 +202,35 @@ test('aggregates fresh judge-worker telemetry when this process does not judge',
     },
   })
 
-  expect(telemetry).toEqual({
+  expect(telemetry).toMatchObject({
     dispatch: {
-      jobActivePromptCount: 15,
-      jobQueuedPromptCount: 5,
-      providerActiveLimit: 40,
-      providerActivePromptCount: 15,
-      providerQueueLimit: 40,
-      providerQueuedPromptCount: 5,
+      jobActivePrompts: 15,
+      jobQueuedPrompts: 5,
+      providerDispatchActivePromptLimit: 40,
+      providerDispatchActivePrompts: 15,
+      providerDispatchQueueLimit: 40,
+      providerDispatchQueuedPrompts: 5,
+    },
+    provider: {
+      observedAggregateLabel: 'bestEffort',
+      observedGlobalEffectiveProviderLimit: 40,
+      observedGlobalProviderLiveRequests: 19,
     },
     request: {inFlight: 19, pendingPersistedAttempts: 3},
+    source: {
+      aggregateCompleteness: 'complete',
+      freshWorkerCount: 3,
+      staleWorkerCount: 0,
+      telemetryUnavailable: false,
+      unavailableWorkerCount: 0,
+    },
   })
   expect(fetchWorkerTelemetry).toHaveBeenCalledTimes(2)
 })
 
 test('falls back to local telemetry when judge-worker telemetry is unavailable', async () => {
   const localTelemetry = createSnapshot({
-    dispatch: {jobActivePromptCount: 0, providerActiveLimit: 20, providerQueueLimit: 20},
+    dispatch: {jobActivePrompts: 0, providerDispatchActivePromptLimit: 20, providerDispatchQueueLimit: 20},
     request: {inFlight: 0, pendingPersistedAttempts: 0},
   })
 
@@ -160,7 +249,22 @@ test('falls back to local telemetry when judge-worker telemetry is unavailable',
     },
   })
 
-  expect(telemetry).toEqual(localTelemetry)
+  expect(telemetry).toMatchObject({
+    dispatch: localTelemetry.dispatch,
+    provider: {
+      allocationCompleteCurrent: false,
+      allocationInputState: 'partialTelemetry',
+      convergenceDiagnostics: {allocationCompleteCurrent: false, allocationInputState: 'partialTelemetry'},
+    },
+    request: localTelemetry.request,
+    source: {
+      aggregateCompleteness: 'partial',
+      freshWorkerCount: 1,
+      staleWorkerCount: 0,
+      telemetryUnavailable: true,
+      unavailableWorkerCount: 1,
+    },
+  })
 })
 
 test('merges prompt and request-attempt lifecycle telemetry from fresh workers', async () => {

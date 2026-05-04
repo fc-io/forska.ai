@@ -10,17 +10,104 @@ export type JudgmentJobRepairAction =
   | 'repair_orphaned_queue'
   | 'unquarantine'
 export type JudgmentJobPromptStats = {claimed: number; judged: number; ready: number; running: number; skipped: number}
+export type JudgmentJobConvergenceDiagnostics = {
+  activeHigherPriorityStopRules: string[]
+  allocationCompleteCurrent: boolean
+  allocationInputState: string
+  backlogReplenishmentAllowed: boolean
+  hasHealthyEndpointOrEndpointlessPath: boolean
+  normalRequestCapacityPositive: boolean
+  preconditionChangedReason: string | null
+  preconditionsStableSinceMs: number
+  providerAcceptingRequests: boolean
+  providerLimitPositive: boolean
+  readyCount: number
+}
+export type JudgmentJobProviderTelemetry = {
+  allocationCompleteCurrent: boolean
+  allocationInputState: string
+  bottleneck: string | null
+  bottleneckSource: string | null
+  bottleneckSubreason: string | null
+  convergenceDiagnostics: JudgmentJobConvergenceDiagnostics
+  effectiveProviderLimit: number
+  endpointDiagnostics: Array<{
+    cooldownRemainingMs: number | null
+    endpointAvailabilityKey: string
+    endpointIdentity: string | null
+    effectiveBaseURL: string | null
+    lastFailureKind: string | null
+    lastFailureMessage: string | null
+    localEndpointProbeCooldownUntil: string | null
+    localEndpointProbeLive: number
+    localEndpointProbeState: string
+    observedGlobalEndpointProbeLive: number | null
+    probeInProgress: boolean
+  }>
+  expectedLocalLiveShare: number
+  localAdditionalLeaseHeadroom: number
+  localAdditionalTargetHeadroom: number
+  localPromptBacklog: number
+  localPromptBacklogTarget: number
+  localProviderLiveRequests: number
+  localProviderRequestFillPct: number | null
+  localRequestWorkBacklog: number
+  localRequestWorkBacklogTarget: number
+  normalRequestCapacity: number
+  observedAggregateLabel: 'bestEffort'
+  observedGlobalEffectiveProviderLimit: number
+  observedGlobalPromptBacklog: number
+  observedGlobalProviderLiveRequests: number
+  observedGlobalProviderRequestFillPct: number | null
+  observedGlobalRequestWorkBacklog: number
+  probeOccupancySampledAtMs: number
+  providerAllocationVersion: string
+  providerAvailableRequestLeases: number
+  providerKey: string
+  providerLeasedLiveRequests: number
+  providerLeasedPhysicalCalls: number
+  providerLeasedProbeCalls: number
+  providerLimit: number
+  providerLimitVersion: string
+  providerProbeOccupancyVersion: string
+  providerRequestFillPct: number | null
+  targetRequestLiveCalls: number
+  unallocatedTargetLiveCalls: number
+}
+export type JudgmentJobTelemetrySource = {
+  aggregateCompleteness: 'complete' | 'partial' | 'unavailable'
+  endpointCoverage: Array<{
+    aggregateCompleteness: 'complete' | 'partial' | 'unavailable'
+    endpointAvailabilityKey: string
+    freshWorkerCount: number
+    staleWorkerCount: number
+    unavailableWorkerCount: number
+  }>
+  freshWorkerCount: number
+  localWorkerId: string
+  observedAggregatesAreBestEffort: true
+  providerCoverage: Array<{
+    aggregateCompleteness: 'complete' | 'partial' | 'unavailable'
+    freshWorkerCount: number
+    providerKey: string
+    staleWorkerCount: number
+    unavailableWorkerCount: number
+  }>
+  staleWorkerCount: number
+  telemetryUnavailable: boolean
+  unavailableWorkerCount: number
+}
 export type JudgmentJobRequestStats = {
   attempts: number
   dispatch?: {
     jobActivePrompts: number
     jobQueuedPrompts: number
-    providerActiveFillPct: number | null
-    providerActiveLimit: number
-    providerActivePrompts: number
-    providerPrefetchFillPct: number | null
-    providerQueueLimit: number
-    providerQueuedPrompts: number
+    providerDispatchActivePromptFillPct: number | null
+    providerDispatchActivePromptLimit: number
+    providerDispatchActivePrompts: number
+    providerDispatchPrefetchFillPct: number | null
+    providerDispatchQueueLimit: number
+    providerDispatchQueuedPrompts: number
   }
   endpointAvailability?: {
     cooldownRemainingMs: number | null
@@ -31,6 +118,8 @@ export type JudgmentJobRequestStats = {
   } | null
   failures?: {anthropicRefusalArticles: number; anthropicRefusals: number; persistedFailedRequests: number}
   inFlight: number
+  providerTelemetry?: JudgmentJobProviderTelemetry
+  telemetrySource?: JudgmentJobTelemetrySource
 }
 
 type JudgmentJobRepairResponse = {

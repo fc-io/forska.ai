@@ -14,6 +14,7 @@ import {
   type JudgmentDispatchProviderStats,
   type ProviderQueueInput,
 } from './judgmentDispatchRuntime.ts'
+import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {getJudgmentJobSqliteService, type JudgmentJobQueuePromptLifecycleRow} from './judgmentJobSqliteService.ts'
 import {
   getJudgmentLifecycleTelemetry,
@@ -28,16 +29,136 @@ import {
   parseRequestAttempts,
   stringifyRequestAttempts,
 } from './judgmentRequestAttemptManifest.ts'
-import {getJudgmentRequestLifecycleRecords, getJudgmentRequestStats} from './judgmentsRequestRuntime.ts'
+import {
+  getJudgmentProviderRequestStats,
+  getJudgmentRequestLifecycleRecords,
+  getJudgmentRequestStats,
+} from './judgmentsRequestRuntime.ts'
+import {
+  getProviderAdmissionLeaseTelemetry,
+  getProviderBucketSnapshot,
+  type ProviderBucketSnapshot,
+} from './providerAdmissionLease.ts'
 
 export const judgmentDispatchTelemetryPath = '/api/admin/judgment-dispatch-runtime'
 
-export type JudgmentDispatchTelemetryInput = ProviderQueueInput & {jobId: string}
+export type JudgmentDispatchTelemetryInput = ProviderQueueInput & {
+  jobId: string
+  providerFamily?: string | null
+  providerId?: string | null
+  providerLimit?: number | null
+  providerLimitVersion?: string | null
+  providerName?: string | null
+  readyCount?: number | null
+  resolvedDefaultCapacity?: number | null
+}
+
+export type JudgmentTelemetryAggregateCompleteness = 'complete' | 'partial' | 'unavailable'
+
+export type JudgmentDispatchPromptTelemetry = {
+  jobActivePrompts: number
+  jobQueuedPrompts: number
+  providerDispatchActivePromptFillPct: number | null
+  providerDispatchActivePromptLimit: number
+  providerDispatchActivePrompts: number
+  providerDispatchPrefetchFillPct: number | null
+  providerDispatchQueueLimit: number
+  providerDispatchQueuedPrompts: number
+}
+
+export type JudgmentTelemetryCoverageMetadata = {
+  aggregateCompleteness: JudgmentTelemetryAggregateCompleteness
+  freshWorkerCount: number
+  staleWorkerCount: number
+  unavailableWorkerCount: number
+}
+
+export type JudgmentEndpointTelemetryDiagnostics = {
+  cooldownRemainingMs: number | null
+  endpointAvailabilityKey: string
+  endpointIdentity: string | null
+  effectiveBaseURL: string | null
+  lastFailureKind: string | null
+  lastFailureMessage: string | null
+  localEndpointProbeCooldownUntil: string | null
+  localEndpointProbeLive: number
+  localEndpointProbeState: string
+  observedGlobalEndpointProbeLive: number | null
+  probeInProgress: boolean
+}
+
+export type JudgmentConvergenceDiagnostics = {
+  activeHigherPriorityStopRules: string[]
+  allocationCompleteCurrent: boolean
+  allocationInputState: string
+  backlogReplenishmentAllowed: boolean
+  hasHealthyEndpointOrEndpointlessPath: boolean
+  normalRequestCapacityPositive: boolean
+  preconditionChangedReason: string | null
+  preconditionsStableSinceMs: number
+  providerAcceptingRequests: boolean
+  providerLimitPositive: boolean
+  readyCount: number
+}
+
+export type JudgmentProviderTelemetry = {
+  allocationCompleteCurrent: boolean
+  allocationInputState: string
+  bottleneck: string | null
+  bottleneckSource: string | null
+  bottleneckSubreason: string | null
+  convergenceDiagnostics: JudgmentConvergenceDiagnostics
+  effectiveProviderLimit: number
+  endpointDiagnostics: JudgmentEndpointTelemetryDiagnostics[]
+  expectedLocalLiveShare: number
+  localAdditionalLeaseHeadroom: number
+  localAdditionalTargetHeadroom: number
+  localPromptBacklog: number
+  localPromptBacklogTarget: number
+  localProviderLiveRequests: number
+  localProviderRequestFillPct: number | null
+  localRequestWorkBacklog: number
+  localRequestWorkBacklogTarget: number
+  normalRequestCapacity: number
+  observedAggregateLabel: 'bestEffort'
+  observedGlobalEffectiveProviderLimit: number
+  observedGlobalPromptBacklog: number
+  observedGlobalProviderLiveRequests: number
+  observedGlobalProviderRequestFillPct: number | null
+  observedGlobalRequestWorkBacklog: number
+  probeOccupancySampledAtMs: number
+  providerAllocationVersion: string
+  providerAvailableRequestLeases: number
+  providerKey: string
+  providerLeasedLiveRequests: number
+  providerLeasedPhysicalCalls: number
+  providerLeasedProbeCalls: number
+  providerLimit: number
+  providerLimitVersion: string
+  providerProbeOccupancyVersion: string
+  providerRequestFillPct: number | null
+  targetRequestLiveCalls: number
+  unallocatedTargetLiveCalls: number
+}
+
+export type JudgmentTelemetrySourceMetadata = {
+  aggregateCompleteness: JudgmentTelemetryAggregateCompleteness
+  endpointCoverage: Array<JudgmentTelemetryCoverageMetadata & {endpointAvailabilityKey: string}>
+  freshWorkerCount: number
+  localWorkerId: string
+  observedAggregatesAreBestEffort: true
+  providerCoverage: Array<JudgmentTelemetryCoverageMetadata & {providerKey: string}>
+  staleWorkerCount: number
+  telemetryUnavailable: boolean
+  unavailableWorkerCount: number
+}
 
 export type JudgmentDispatchTelemetrySnapshot = {
-  dispatch: JudgmentDispatchProviderStats
+  dispatch: JudgmentDispatchPromptTelemetry
   lifecycle?: JudgmentLifecycleTelemetry
+  provider: JudgmentProviderTelemetry
   request: {inFlight: number; pendingPersistedAttempts: number}
+  source: JudgmentTelemetrySourceMetadata
 }
 
 type JudgmentDispatchTelemetryOptions = {
@@ -51,20 +172,167 @@ type JudgmentDispatchTelemetryOptions = {
 }
 
 const workerTelemetryTimeoutMs = 1_000
+const defaultProviderProbeOccupancyVersion = 'probe-occupancy-unavailable'
 
-const getZeroDispatchStats = (): JudgmentDispatchProviderStats => {
+const getFillPct = (used: number, capacity: number): number | null => {
+  return capacity > 0 ? Math.round((used / capacity) * 100) : null
+}
+
+const getTargetRequestLiveCalls = (normalRequestCapacity: number): number => {
+  return normalRequestCapacity <= 0
+    ? 0
+    : Math.max(1, Math.min(normalRequestCapacity, Math.ceil(normalRequestCapacity * 0.95)))
+}
+
+const getTelemetryAggregateCompleteness = ({
+  staleWorkerCount,
+  unavailableWorkerCount,
+}: {
+  staleWorkerCount: number
+  unavailableWorkerCount: number
+}): JudgmentTelemetryAggregateCompleteness => {
+  return staleWorkerCount > 0 || unavailableWorkerCount > 0 ? 'partial' : 'complete'
+}
+
+const getTelemetryCoverageMetadata = ({
+  freshWorkerCount,
+  staleWorkerCount,
+  unavailableWorkerCount,
+}: {
+  freshWorkerCount: number
+  staleWorkerCount: number
+  unavailableWorkerCount: number
+}): JudgmentTelemetryCoverageMetadata => {
   return {
-    jobActivePromptCount: 0,
-    jobQueuedPromptCount: 0,
-    providerActiveLimit: 0,
-    providerActivePromptCount: 0,
-    providerQueueLimit: 0,
-    providerQueuedPromptCount: 0,
+    aggregateCompleteness: getTelemetryAggregateCompleteness({staleWorkerCount, unavailableWorkerCount}),
+    freshWorkerCount,
+    staleWorkerCount,
+    unavailableWorkerCount,
+  }
+}
+
+const getTelemetrySourceMetadata = ({
+  endpointAvailabilityKeys = [],
+  freshWorkerCount,
+  providerKey,
+  staleWorkerCount,
+  unavailableWorkerCount,
+}: {
+  endpointAvailabilityKeys?: string[]
+  freshWorkerCount: number
+  providerKey: string
+  staleWorkerCount: number
+  unavailableWorkerCount: number
+}): JudgmentTelemetrySourceMetadata => {
+  const coverage = getTelemetryCoverageMetadata({freshWorkerCount, staleWorkerCount, unavailableWorkerCount})
+
+  return {
+    ...coverage,
+    endpointCoverage: endpointAvailabilityKeys.map((endpointAvailabilityKey) => {
+      return {...coverage, endpointAvailabilityKey}
+    }),
+    localWorkerId: getDefaultJudgmentServerJobId(),
+    observedAggregatesAreBestEffort: true,
+    providerCoverage: [{...coverage, providerKey}],
+    telemetryUnavailable: unavailableWorkerCount > 0,
+  }
+}
+
+const getZeroDispatchStats = (): JudgmentDispatchPromptTelemetry => {
+  return {
+    jobActivePrompts: 0,
+    jobQueuedPrompts: 0,
+    providerDispatchActivePromptFillPct: null,
+    providerDispatchActivePromptLimit: 0,
+    providerDispatchActivePrompts: 0,
+    providerDispatchPrefetchFillPct: null,
+    providerDispatchQueueLimit: 0,
+    providerDispatchQueuedPrompts: 0,
+  }
+}
+
+const getDispatchTelemetryFromStats = (stats: JudgmentDispatchProviderStats): JudgmentDispatchPromptTelemetry => {
+  return {
+    jobActivePrompts: stats.jobActivePromptCount,
+    jobQueuedPrompts: stats.jobQueuedPromptCount,
+    providerDispatchActivePromptFillPct: getFillPct(stats.providerActivePromptCount, stats.providerActiveLimit),
+    providerDispatchActivePromptLimit: stats.providerActiveLimit,
+    providerDispatchActivePrompts: stats.providerActivePromptCount,
+    providerDispatchPrefetchFillPct: getFillPct(stats.providerQueuedPromptCount, stats.providerQueueLimit),
+    providerDispatchQueueLimit: stats.providerQueueLimit,
+    providerDispatchQueuedPrompts: stats.providerQueuedPromptCount,
+  }
+}
+
+const getZeroProviderTelemetry = ({providerKey}: {providerKey: string}): JudgmentProviderTelemetry => {
+  const convergenceDiagnostics = {
+    activeHigherPriorityStopRules: [],
+    allocationCompleteCurrent: false,
+    allocationInputState: 'unavailable',
+    backlogReplenishmentAllowed: false,
+    hasHealthyEndpointOrEndpointlessPath: false,
+    normalRequestCapacityPositive: false,
+    preconditionChangedReason: null,
+    preconditionsStableSinceMs: 0,
+    providerAcceptingRequests: false,
+    providerLimitPositive: false,
+    readyCount: 0,
+  }
+
+  return {
+    allocationCompleteCurrent: false,
+    allocationInputState: 'unavailable',
+    bottleneck: null,
+    bottleneckSource: null,
+    bottleneckSubreason: null,
+    convergenceDiagnostics,
+    effectiveProviderLimit: 0,
+    endpointDiagnostics: [],
+    expectedLocalLiveShare: 0,
+    localAdditionalLeaseHeadroom: 0,
+    localAdditionalTargetHeadroom: 0,
+    localPromptBacklog: 0,
+    localPromptBacklogTarget: 0,
+    localProviderLiveRequests: 0,
+    localProviderRequestFillPct: null,
+    localRequestWorkBacklog: 0,
+    localRequestWorkBacklogTarget: 0,
+    normalRequestCapacity: 0,
+    observedAggregateLabel: 'bestEffort',
+    observedGlobalEffectiveProviderLimit: 0,
+    observedGlobalPromptBacklog: 0,
+    observedGlobalProviderLiveRequests: 0,
+    observedGlobalProviderRequestFillPct: null,
+    observedGlobalRequestWorkBacklog: 0,
+    probeOccupancySampledAtMs: 0,
+    providerAllocationVersion: 'allocation-unavailable',
+    providerAvailableRequestLeases: 0,
+    providerKey,
+    providerLeasedLiveRequests: 0,
+    providerLeasedPhysicalCalls: 0,
+    providerLeasedProbeCalls: 0,
+    providerLimit: 0,
+    providerLimitVersion: 'provider-limit-unavailable',
+    providerProbeOccupancyVersion: defaultProviderProbeOccupancyVersion,
+    providerRequestFillPct: null,
+    targetRequestLiveCalls: 0,
+    unallocatedTargetLiveCalls: 0,
   }
 }
 
 const getZeroTelemetrySnapshot = (): JudgmentDispatchTelemetrySnapshot => {
-  return {dispatch: getZeroDispatchStats(), request: {inFlight: 0, pendingPersistedAttempts: 0}}
+  const providerKey = 'unknown'
+  return {
+    dispatch: getZeroDispatchStats(),
+    provider: getZeroProviderTelemetry({providerKey}),
+    request: {inFlight: 0, pendingPersistedAttempts: 0},
+    source: getTelemetrySourceMetadata({
+      freshWorkerCount: 0,
+      providerKey,
+      staleWorkerCount: 0,
+      unavailableWorkerCount: 0,
+    }),
+  }
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -75,32 +343,42 @@ const getNumberValue = (value: unknown): number | null => {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-const getDispatchStatsFromRecord = (value: unknown): JudgmentDispatchProviderStats | null => {
+const getDispatchTelemetryFromRecord = (value: unknown): JudgmentDispatchPromptTelemetry | null => {
   if (!isRecord(value)) {
     return null
   }
 
-  const jobActivePromptCount = getNumberValue(value.jobActivePromptCount)
-  const jobQueuedPromptCount = getNumberValue(value.jobQueuedPromptCount)
-  const providerActiveLimit = getNumberValue(value.providerActiveLimit)
-  const providerActivePromptCount = getNumberValue(value.providerActivePromptCount)
-  const providerQueueLimit = getNumberValue(value.providerQueueLimit)
-  const providerQueuedPromptCount = getNumberValue(value.providerQueuedPromptCount)
+  const jobActivePrompts = getNumberValue(value.jobActivePrompts) ?? getNumberValue(value.jobActivePromptCount)
+  const jobQueuedPrompts = getNumberValue(value.jobQueuedPrompts) ?? getNumberValue(value.jobQueuedPromptCount)
+  const providerDispatchActivePromptLimit =
+    getNumberValue(value.providerDispatchActivePromptLimit) ?? getNumberValue(value.providerActiveLimit)
+  const providerDispatchActivePrompts =
+    getNumberValue(value.providerDispatchActivePrompts) ?? getNumberValue(value.providerActivePromptCount)
+  const providerDispatchQueueLimit =
+    getNumberValue(value.providerDispatchQueueLimit) ?? getNumberValue(value.providerQueueLimit)
+  const providerDispatchQueuedPrompts =
+    getNumberValue(value.providerDispatchQueuedPrompts) ?? getNumberValue(value.providerQueuedPromptCount)
 
-  return jobActivePromptCount === null
-    || jobQueuedPromptCount === null
-    || providerActiveLimit === null
-    || providerActivePromptCount === null
-    || providerQueueLimit === null
-    || providerQueuedPromptCount === null
+  return jobActivePrompts === null
+    || jobQueuedPrompts === null
+    || providerDispatchActivePromptLimit === null
+    || providerDispatchActivePrompts === null
+    || providerDispatchQueueLimit === null
+    || providerDispatchQueuedPrompts === null
     ? null
     : {
-        jobActivePromptCount,
-        jobQueuedPromptCount,
-        providerActiveLimit,
-        providerActivePromptCount,
-        providerQueueLimit,
-        providerQueuedPromptCount,
+        jobActivePrompts,
+        jobQueuedPrompts,
+        providerDispatchActivePromptFillPct:
+          getNumberValue(value.providerDispatchActivePromptFillPct)
+          ?? getFillPct(providerDispatchActivePrompts, providerDispatchActivePromptLimit),
+        providerDispatchActivePromptLimit,
+        providerDispatchActivePrompts,
+        providerDispatchPrefetchFillPct:
+          getNumberValue(value.providerDispatchPrefetchFillPct)
+          ?? getFillPct(providerDispatchQueuedPrompts, providerDispatchQueueLimit),
+        providerDispatchQueueLimit,
+        providerDispatchQueuedPrompts,
       }
 }
 
@@ -115,8 +393,203 @@ const getRequestStatsFromRecord = (value: unknown): JudgmentDispatchTelemetrySna
   return inFlight === null || pendingPersistedAttempts === null ? null : {inFlight, pendingPersistedAttempts}
 }
 
+const getBooleanValue = (value: unknown): boolean | null => {
+  return typeof value === 'boolean' ? value : null
+}
+
+const getStringArrayValue = (value: unknown): string[] => {
+  return Array.isArray(value)
+    ? value.flatMap((entry) => {
+        return typeof entry === 'string' ? [entry] : []
+      })
+    : []
+}
+
 const getStringValue = (value: unknown): string | null => {
   return typeof value === 'string' && value.trim().length > 0 ? value : null
+}
+
+const getConvergenceDiagnosticsFromRecord = (value: unknown): JudgmentConvergenceDiagnostics | null => {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const readyCount = getNumberValue(value.readyCount)
+  const providerLimitPositive = getBooleanValue(value.providerLimitPositive)
+  const normalRequestCapacityPositive = getBooleanValue(value.normalRequestCapacityPositive)
+  const hasHealthyEndpointOrEndpointlessPath = getBooleanValue(value.hasHealthyEndpointOrEndpointlessPath)
+  const providerAcceptingRequests = getBooleanValue(value.providerAcceptingRequests)
+  const backlogReplenishmentAllowed = getBooleanValue(value.backlogReplenishmentAllowed)
+  const allocationInputState = getStringValue(value.allocationInputState)
+  const allocationCompleteCurrent = getBooleanValue(value.allocationCompleteCurrent)
+  const preconditionsStableSinceMs = getNumberValue(value.preconditionsStableSinceMs)
+
+  return readyCount === null
+    || providerLimitPositive === null
+    || normalRequestCapacityPositive === null
+    || hasHealthyEndpointOrEndpointlessPath === null
+    || providerAcceptingRequests === null
+    || backlogReplenishmentAllowed === null
+    || allocationInputState === null
+    || allocationCompleteCurrent === null
+    || preconditionsStableSinceMs === null
+    ? null
+    : {
+        activeHigherPriorityStopRules: getStringArrayValue(value.activeHigherPriorityStopRules),
+        allocationCompleteCurrent,
+        allocationInputState,
+        backlogReplenishmentAllowed,
+        hasHealthyEndpointOrEndpointlessPath,
+        normalRequestCapacityPositive,
+        preconditionChangedReason: getStringValue(value.preconditionChangedReason),
+        preconditionsStableSinceMs,
+        providerAcceptingRequests,
+        providerLimitPositive,
+        readyCount,
+      }
+}
+
+const getEndpointDiagnosticsFromRecord = (value: unknown): JudgmentEndpointTelemetryDiagnostics | null => {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const endpointAvailabilityKey = getStringValue(value.endpointAvailabilityKey)
+  const localEndpointProbeLive = getNumberValue(value.localEndpointProbeLive)
+  const localEndpointProbeState = getStringValue(value.localEndpointProbeState)
+  const probeInProgress = getBooleanValue(value.probeInProgress)
+
+  return endpointAvailabilityKey === null
+    || localEndpointProbeLive === null
+    || localEndpointProbeState === null
+    || probeInProgress === null
+    ? null
+    : {
+        cooldownRemainingMs: getNumberValue(value.cooldownRemainingMs),
+        effectiveBaseURL: getStringValue(value.effectiveBaseURL),
+        endpointAvailabilityKey,
+        endpointIdentity: getStringValue(value.endpointIdentity),
+        lastFailureKind: getStringValue(value.lastFailureKind),
+        lastFailureMessage: getStringValue(value.lastFailureMessage),
+        localEndpointProbeCooldownUntil: getStringValue(value.localEndpointProbeCooldownUntil),
+        localEndpointProbeLive,
+        localEndpointProbeState,
+        observedGlobalEndpointProbeLive: getNumberValue(value.observedGlobalEndpointProbeLive),
+        probeInProgress,
+      }
+}
+
+const getProviderTelemetryFromRecord = (value: unknown): JudgmentProviderTelemetry | null => {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const providerKey = getStringValue(value.providerKey)
+  const providerLimit = getNumberValue(value.providerLimit)
+  const providerLimitVersion = getStringValue(value.providerLimitVersion)
+  const providerLeasedLiveRequests = getNumberValue(value.providerLeasedLiveRequests)
+  const providerLeasedProbeCalls = getNumberValue(value.providerLeasedProbeCalls)
+  const providerLeasedPhysicalCalls = getNumberValue(value.providerLeasedPhysicalCalls)
+  const providerAvailableRequestLeases = getNumberValue(value.providerAvailableRequestLeases)
+  const normalRequestCapacity = getNumberValue(value.normalRequestCapacity)
+  const targetRequestLiveCalls = getNumberValue(value.targetRequestLiveCalls)
+  const effectiveProviderLimit = getNumberValue(value.effectiveProviderLimit)
+  const localProviderLiveRequests = getNumberValue(value.localProviderLiveRequests)
+  const expectedLocalLiveShare = getNumberValue(value.expectedLocalLiveShare)
+  const localAdditionalTargetHeadroom = getNumberValue(value.localAdditionalTargetHeadroom)
+  const localAdditionalLeaseHeadroom = getNumberValue(value.localAdditionalLeaseHeadroom)
+  const allocationInputState = getStringValue(value.allocationInputState)
+  const allocationCompleteCurrent = getBooleanValue(value.allocationCompleteCurrent)
+  const convergenceDiagnostics = getConvergenceDiagnosticsFromRecord(value.convergenceDiagnostics)
+
+  return providerKey === null
+    || providerLimit === null
+    || providerLimitVersion === null
+    || providerLeasedLiveRequests === null
+    || providerLeasedProbeCalls === null
+    || providerLeasedPhysicalCalls === null
+    || providerAvailableRequestLeases === null
+    || normalRequestCapacity === null
+    || targetRequestLiveCalls === null
+    || effectiveProviderLimit === null
+    || localProviderLiveRequests === null
+    || expectedLocalLiveShare === null
+    || localAdditionalTargetHeadroom === null
+    || localAdditionalLeaseHeadroom === null
+    || allocationInputState === null
+    || allocationCompleteCurrent === null
+    || convergenceDiagnostics === null
+    ? null
+    : {
+        allocationCompleteCurrent,
+        allocationInputState,
+        bottleneck: getStringValue(value.bottleneck),
+        bottleneckSource: getStringValue(value.bottleneckSource),
+        bottleneckSubreason: getStringValue(value.bottleneckSubreason),
+        convergenceDiagnostics,
+        effectiveProviderLimit,
+        endpointDiagnostics: Array.isArray(value.endpointDiagnostics)
+          ? value.endpointDiagnostics.flatMap((entry) => {
+              const diagnostics = getEndpointDiagnosticsFromRecord(entry)
+
+              return diagnostics ? [diagnostics] : []
+            })
+          : [],
+        expectedLocalLiveShare,
+        localAdditionalLeaseHeadroom,
+        localAdditionalTargetHeadroom,
+        localPromptBacklog: getNumberValue(value.localPromptBacklog) ?? 0,
+        localPromptBacklogTarget: getNumberValue(value.localPromptBacklogTarget) ?? 0,
+        localProviderLiveRequests,
+        localProviderRequestFillPct: getNumberValue(value.localProviderRequestFillPct),
+        localRequestWorkBacklog: getNumberValue(value.localRequestWorkBacklog) ?? 0,
+        localRequestWorkBacklogTarget: getNumberValue(value.localRequestWorkBacklogTarget) ?? 0,
+        normalRequestCapacity,
+        observedAggregateLabel: 'bestEffort',
+        observedGlobalEffectiveProviderLimit: getNumberValue(value.observedGlobalEffectiveProviderLimit) ?? 0,
+        observedGlobalPromptBacklog: getNumberValue(value.observedGlobalPromptBacklog) ?? 0,
+        observedGlobalProviderLiveRequests: getNumberValue(value.observedGlobalProviderLiveRequests) ?? 0,
+        observedGlobalProviderRequestFillPct: getNumberValue(value.observedGlobalProviderRequestFillPct),
+        observedGlobalRequestWorkBacklog: getNumberValue(value.observedGlobalRequestWorkBacklog) ?? 0,
+        probeOccupancySampledAtMs: getNumberValue(value.probeOccupancySampledAtMs) ?? 0,
+        providerAllocationVersion: getStringValue(value.providerAllocationVersion) ?? 'allocation-unavailable',
+        providerAvailableRequestLeases,
+        providerKey,
+        providerLeasedLiveRequests,
+        providerLeasedPhysicalCalls,
+        providerLeasedProbeCalls,
+        providerLimit,
+        providerLimitVersion,
+        providerProbeOccupancyVersion:
+          getStringValue(value.providerProbeOccupancyVersion) ?? defaultProviderProbeOccupancyVersion,
+        providerRequestFillPct: getNumberValue(value.providerRequestFillPct),
+        targetRequestLiveCalls,
+        unallocatedTargetLiveCalls: getNumberValue(value.unallocatedTargetLiveCalls) ?? 0,
+      }
+}
+
+const getTelemetrySourceFromRecord = (
+  value: unknown,
+  providerKey: string,
+  endpointAvailabilityKeys: string[],
+): JudgmentTelemetrySourceMetadata | null => {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const freshWorkerCount = getNumberValue(value.freshWorkerCount)
+  const staleWorkerCount = getNumberValue(value.staleWorkerCount)
+  const unavailableWorkerCount = getNumberValue(value.unavailableWorkerCount)
+
+  return freshWorkerCount === null || staleWorkerCount === null || unavailableWorkerCount === null
+    ? null
+    : getTelemetrySourceMetadata({
+        endpointAvailabilityKeys,
+        freshWorkerCount,
+        providerKey,
+        staleWorkerCount,
+        unavailableWorkerCount,
+      })
 }
 
 const getLifecycleRecordFromRecord = (value: unknown): JudgmentLifecycleTelemetryRecord | null => {
@@ -168,11 +641,36 @@ const getTelemetrySnapshotFromRecord = (value: unknown): JudgmentDispatchTelemet
     return null
   }
 
-  const dispatch = getDispatchStatsFromRecord(value.dispatch)
+  const dispatch = getDispatchTelemetryFromRecord(value.dispatch)
   const request = getRequestStatsFromRecord(value.request)
   const lifecycle = getLifecycleTelemetryFromRecord(value.lifecycle)
+  const provider = getProviderTelemetryFromRecord(value.provider)
+  const source = provider
+    ? getTelemetrySourceFromRecord(
+        value.source,
+        provider.providerKey,
+        provider.endpointDiagnostics.map((diagnostics) => {
+          return diagnostics.endpointAvailabilityKey
+        }),
+      )
+    : null
 
-  return dispatch === null || request === null ? null : {dispatch, ...(lifecycle ? {lifecycle} : {}), request}
+  return dispatch === null || request === null || provider === null
+    ? null
+    : {
+        dispatch,
+        ...(lifecycle ? {lifecycle} : {}),
+        provider,
+        request,
+        source:
+          source
+          ?? getTelemetrySourceMetadata({
+            freshWorkerCount: 1,
+            providerKey: provider.providerKey,
+            staleWorkerCount: 0,
+            unavailableWorkerCount: 0,
+          }),
+      }
 }
 
 const getTelemetrySnapshotFromResponseBody = (value: unknown): JudgmentDispatchTelemetrySnapshot | null => {
@@ -193,6 +691,30 @@ const getWorkerTelemetryUrl = (record: DuckdbOwnerConnectionRecord, input: Judgm
     url.searchParams.set('providerConnectionId', input.providerConnectionId)
   }
 
+  if (input.providerFamily) {
+    url.searchParams.set('providerFamily', input.providerFamily)
+  }
+
+  if (input.providerId) {
+    url.searchParams.set('providerId', input.providerId)
+  }
+
+  if (input.providerKey) {
+    url.searchParams.set('providerKey', input.providerKey)
+  }
+
+  if (input.providerLimit !== null && input.providerLimit !== undefined) {
+    url.searchParams.set('providerLimit', String(input.providerLimit))
+  }
+
+  if (input.providerLimitVersion) {
+    url.searchParams.set('providerLimitVersion', input.providerLimitVersion)
+  }
+
+  if (input.providerName) {
+    url.searchParams.set('providerName', input.providerName)
+  }
+
   if (input.modelId) {
     url.searchParams.set('modelId', input.modelId)
   }
@@ -203,6 +725,14 @@ const getWorkerTelemetryUrl = (record: DuckdbOwnerConnectionRecord, input: Judgm
 
   if (input.providerMaxInflightRequests !== null) {
     url.searchParams.set('providerMaxInflightRequests', String(input.providerMaxInflightRequests))
+  }
+
+  if (input.readyCount !== null && input.readyCount !== undefined) {
+    url.searchParams.set('readyCount', String(input.readyCount))
+  }
+
+  if (input.resolvedDefaultCapacity !== null && input.resolvedDefaultCapacity !== undefined) {
+    url.searchParams.set('resolvedDefaultCapacity', String(input.resolvedDefaultCapacity))
   }
 
   url.searchParams.set('providerUsesFamilyDefault', String(input.providerUsesFamilyDefault))
@@ -244,7 +774,7 @@ const getJudgingWorkerRecords = async (): Promise<DuckdbOwnerConnectionRecord[]>
     return record !== null
   })
   const judgingRecords = records.filter((record) => {
-    return record.capabilities.includes('judging') && !record.isCurrentProcess && !record.isStale
+    return record.capabilities.includes('judging') && !record.isCurrentProcess
   })
 
   return getUniqueJudgingWorkerRecords(judgingRecords)
@@ -368,37 +898,232 @@ const getLocalLifecycleTelemetry = async (
   return records.length === 0 ? undefined : getJudgmentLifecycleTelemetry({records})
 }
 
+const getPositiveInteger = (value: number | null | undefined): number | null => {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : null
+}
+
+const getProviderBucketSnapshotFromInput = (input: JudgmentDispatchTelemetryInput): ProviderBucketSnapshot => {
+  const computedSnapshot = getProviderBucketSnapshot({
+    maxInflightRequests: input.providerUsesFamilyDefault ? null : input.providerMaxInflightRequests,
+    modelId: input.modelId,
+    modelProvider: input.modelProvider,
+    providerConnectionId: input.providerConnectionId,
+    providerName: input.providerName,
+    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+  })
+  const providerLimit = getPositiveInteger(input.providerLimit)
+  const resolvedDefaultCapacity = getPositiveInteger(input.resolvedDefaultCapacity)
+  const providerKey = getStringValue(input.providerKey) ?? computedSnapshot.providerKey
+  const providerFamily = getStringValue(input.providerFamily) ?? computedSnapshot.providerFamily
+  const providerId = getStringValue(input.providerId) ?? computedSnapshot.providerId
+  const providerLimitVersion = getStringValue(input.providerLimitVersion) ?? computedSnapshot.providerLimitVersion
+  const providerName = getStringValue(input.providerName) ?? computedSnapshot.providerName
+
+  return {
+    ...computedSnapshot,
+    providerFamily,
+    providerId,
+    providerKey,
+    providerLimit: providerLimit ?? computedSnapshot.providerLimit,
+    providerLimitVersion,
+    providerName,
+    resolvedDefaultCapacity: resolvedDefaultCapacity ?? computedSnapshot.resolvedDefaultCapacity,
+  }
+}
+
+const getAllocationVersion = ({
+  providerLimitVersion,
+  providerProbeOccupancyVersion,
+}: {
+  providerLimitVersion: string
+  providerProbeOccupancyVersion: string
+}): string => {
+  return `local:${providerLimitVersion}:${providerProbeOccupancyVersion}`
+}
+
+const getConvergenceDiagnostics = ({
+  allocationCompleteCurrent,
+  allocationInputState,
+  normalRequestCapacity,
+  providerAvailableRequestLeases,
+  providerLimit,
+  readyCount,
+}: {
+  allocationCompleteCurrent: boolean
+  allocationInputState: string
+  normalRequestCapacity: number
+  providerAvailableRequestLeases: number
+  providerLimit: number
+  readyCount: number
+}): JudgmentConvergenceDiagnostics => {
+  const providerLimitPositive = providerLimit > 0
+  const normalRequestCapacityPositive = normalRequestCapacity > 0
+  const providerAcceptingRequests = providerAvailableRequestLeases > 0
+  const hasReadyWork = readyCount > 0
+
+  return {
+    activeHigherPriorityStopRules: [],
+    allocationCompleteCurrent,
+    allocationInputState,
+    backlogReplenishmentAllowed: hasReadyWork && providerAcceptingRequests && normalRequestCapacityPositive,
+    hasHealthyEndpointOrEndpointlessPath: true,
+    normalRequestCapacityPositive,
+    preconditionChangedReason: null,
+    preconditionsStableSinceMs: 0,
+    providerAcceptingRequests,
+    providerLimitPositive,
+    readyCount,
+  }
+}
+
+const getLocalProviderTelemetry = async ({
+  dispatch,
+  input,
+  request,
+}: {
+  dispatch: JudgmentDispatchPromptTelemetry
+  input: JudgmentDispatchTelemetryInput
+  request: JudgmentDispatchTelemetrySnapshot['request']
+}): Promise<JudgmentProviderTelemetry> => {
+  const snapshot = getProviderBucketSnapshotFromInput(input)
+  const leaseTelemetry = await getProviderAdmissionLeaseTelemetry({providerKey: snapshot.providerKey}).catch(() => {
+    return {
+      providerKey: snapshot.providerKey,
+      providerLeasedLiveRequests: 0,
+      providerLeasedProbeCalls: 0,
+      providerProbeOccupancyVersion: defaultProviderProbeOccupancyVersion,
+      sampledAtMs: Date.now(),
+    }
+  })
+  const providerLeasedPhysicalCalls =
+    leaseTelemetry.providerLeasedLiveRequests + leaseTelemetry.providerLeasedProbeCalls
+  const providerAvailableRequestLeases = Math.max(0, snapshot.providerLimit - providerLeasedPhysicalCalls)
+  const normalRequestCapacity = Math.max(0, snapshot.providerLimit - leaseTelemetry.providerLeasedProbeCalls)
+  const targetRequestLiveCalls = getTargetRequestLiveCalls(normalRequestCapacity)
+  const localProviderLiveRequests = getJudgmentProviderRequestStats({
+    modelId: input.modelId,
+    modelProvider: input.modelProvider,
+    providerConnectionId: input.providerConnectionId,
+    providerKey: snapshot.providerKey,
+    providerMaxInflightRequests: input.providerMaxInflightRequests,
+  }).localProviderLiveRequests
+  const effectiveProviderLimit = snapshot.providerLimit
+  const expectedLocalLiveShare = targetRequestLiveCalls
+  const localAdditionalTargetHeadroom = Math.max(0, expectedLocalLiveShare - localProviderLiveRequests)
+  const localAdditionalLeaseHeadroom = Math.min(providerAvailableRequestLeases, localAdditionalTargetHeadroom)
+  const localPromptBacklog = dispatch.providerDispatchActivePrompts + dispatch.providerDispatchQueuedPrompts
+  const localPromptBacklogTarget = dispatch.providerDispatchActivePromptLimit + dispatch.providerDispatchQueueLimit
+  const localRequestWorkBacklog =
+    Math.max(localProviderLiveRequests, request.inFlight) + request.pendingPersistedAttempts
+  const localRequestWorkBacklogTarget = targetRequestLiveCalls
+  const allocationInputState = 'localOnly'
+  const allocationCompleteCurrent = true
+  const convergenceDiagnostics = getConvergenceDiagnostics({
+    allocationCompleteCurrent,
+    allocationInputState,
+    normalRequestCapacity,
+    providerAvailableRequestLeases,
+    providerLimit: snapshot.providerLimit,
+    readyCount: Math.max(0, Math.trunc(input.readyCount ?? 0)),
+  })
+
+  return {
+    allocationCompleteCurrent,
+    allocationInputState,
+    bottleneck: null,
+    bottleneckSource: null,
+    bottleneckSubreason: null,
+    convergenceDiagnostics,
+    effectiveProviderLimit,
+    endpointDiagnostics: [],
+    expectedLocalLiveShare,
+    localAdditionalLeaseHeadroom,
+    localAdditionalTargetHeadroom,
+    localPromptBacklog,
+    localPromptBacklogTarget,
+    localProviderLiveRequests,
+    localProviderRequestFillPct: getFillPct(localProviderLiveRequests, effectiveProviderLimit),
+    localRequestWorkBacklog,
+    localRequestWorkBacklogTarget,
+    normalRequestCapacity,
+    observedAggregateLabel: 'bestEffort',
+    observedGlobalEffectiveProviderLimit: effectiveProviderLimit,
+    observedGlobalPromptBacklog: localPromptBacklog,
+    observedGlobalProviderLiveRequests: localProviderLiveRequests,
+    observedGlobalProviderRequestFillPct: getFillPct(localProviderLiveRequests, effectiveProviderLimit),
+    observedGlobalRequestWorkBacklog: localRequestWorkBacklog,
+    probeOccupancySampledAtMs: leaseTelemetry.sampledAtMs,
+    providerAllocationVersion: getAllocationVersion({
+      providerLimitVersion: snapshot.providerLimitVersion,
+      providerProbeOccupancyVersion: leaseTelemetry.providerProbeOccupancyVersion,
+    }),
+    providerAvailableRequestLeases,
+    providerKey: snapshot.providerKey,
+    providerLeasedLiveRequests: leaseTelemetry.providerLeasedLiveRequests,
+    providerLeasedPhysicalCalls,
+    providerLeasedProbeCalls: leaseTelemetry.providerLeasedProbeCalls,
+    providerLimit: snapshot.providerLimit,
+    providerLimitVersion: snapshot.providerLimitVersion,
+    providerProbeOccupancyVersion: leaseTelemetry.providerProbeOccupancyVersion,
+    providerRequestFillPct: getFillPct(leaseTelemetry.providerLeasedLiveRequests, normalRequestCapacity),
+    targetRequestLiveCalls,
+    unallocatedTargetLiveCalls: 0,
+  }
+}
+
 export const getLocalJudgmentDispatchTelemetry = async (
   input: JudgmentDispatchTelemetryInput,
 ): Promise<JudgmentDispatchTelemetrySnapshot> => {
-  const [dispatch, lifecycle] = await Promise.all([
+  const [dispatchStats, lifecycle] = await Promise.all([
     getJudgmentDispatchProviderStats(input),
     getLocalLifecycleTelemetry(input),
   ])
+  const dispatch = getDispatchTelemetryFromStats(dispatchStats)
   const request = getJudgmentRequestStats(input.jobId)
+  const provider = await getLocalProviderTelemetry({dispatch, input, request})
+  const source = getTelemetrySourceMetadata({
+    freshWorkerCount: 1,
+    providerKey: provider.providerKey,
+    staleWorkerCount: 0,
+    unavailableWorkerCount: 0,
+  })
 
-  return {dispatch, ...(lifecycle ? {lifecycle} : {}), request}
+  return {dispatch, ...(lifecycle ? {lifecycle} : {}), provider, request, source}
 }
 
 const mergeJudgmentDispatchTelemetrySnapshots = (
   snapshots: JudgmentDispatchTelemetrySnapshot[],
+  source: JudgmentTelemetrySourceMetadata,
+  authorityProvider?: JudgmentProviderTelemetry,
 ): JudgmentDispatchTelemetrySnapshot => {
   const mergedSnapshot = snapshots.reduce<JudgmentDispatchTelemetrySnapshot>((merged, snapshot) => {
     return {
       dispatch: {
-        jobActivePromptCount: merged.dispatch.jobActivePromptCount + snapshot.dispatch.jobActivePromptCount,
-        jobQueuedPromptCount: merged.dispatch.jobQueuedPromptCount + snapshot.dispatch.jobQueuedPromptCount,
-        providerActiveLimit: merged.dispatch.providerActiveLimit + snapshot.dispatch.providerActiveLimit,
-        providerActivePromptCount:
-          merged.dispatch.providerActivePromptCount + snapshot.dispatch.providerActivePromptCount,
-        providerQueueLimit: merged.dispatch.providerQueueLimit + snapshot.dispatch.providerQueueLimit,
-        providerQueuedPromptCount:
-          merged.dispatch.providerQueuedPromptCount + snapshot.dispatch.providerQueuedPromptCount,
+        jobActivePrompts: merged.dispatch.jobActivePrompts + snapshot.dispatch.jobActivePrompts,
+        jobQueuedPrompts: merged.dispatch.jobQueuedPrompts + snapshot.dispatch.jobQueuedPrompts,
+        providerDispatchActivePromptFillPct: getFillPct(
+          merged.dispatch.providerDispatchActivePrompts + snapshot.dispatch.providerDispatchActivePrompts,
+          merged.dispatch.providerDispatchActivePromptLimit + snapshot.dispatch.providerDispatchActivePromptLimit,
+        ),
+        providerDispatchActivePromptLimit:
+          merged.dispatch.providerDispatchActivePromptLimit + snapshot.dispatch.providerDispatchActivePromptLimit,
+        providerDispatchActivePrompts:
+          merged.dispatch.providerDispatchActivePrompts + snapshot.dispatch.providerDispatchActivePrompts,
+        providerDispatchPrefetchFillPct: getFillPct(
+          merged.dispatch.providerDispatchQueuedPrompts + snapshot.dispatch.providerDispatchQueuedPrompts,
+          merged.dispatch.providerDispatchQueueLimit + snapshot.dispatch.providerDispatchQueueLimit,
+        ),
+        providerDispatchQueueLimit:
+          merged.dispatch.providerDispatchQueueLimit + snapshot.dispatch.providerDispatchQueueLimit,
+        providerDispatchQueuedPrompts:
+          merged.dispatch.providerDispatchQueuedPrompts + snapshot.dispatch.providerDispatchQueuedPrompts,
       },
       request: {
         inFlight: merged.request.inFlight + snapshot.request.inFlight,
         pendingPersistedAttempts: merged.request.pendingPersistedAttempts + snapshot.request.pendingPersistedAttempts,
       },
+      provider: merged.provider,
+      source: merged.source,
     }
   }, getZeroTelemetrySnapshot())
   const lifecycle = mergeJudgmentLifecycleTelemetry(
@@ -406,27 +1131,73 @@ const mergeJudgmentDispatchTelemetrySnapshots = (
       return snapshot.lifecycle
     }),
   )
+  const providerAuthority =
+    authorityProvider ?? snapshots[0]?.provider ?? getZeroProviderTelemetry({providerKey: 'unknown'})
+  const observedGlobalEffectiveProviderLimit = snapshots.reduce((sum, snapshot) => {
+    return sum + snapshot.provider.effectiveProviderLimit
+  }, 0)
+  const observedGlobalProviderLiveRequests = snapshots.reduce((sum, snapshot) => {
+    return sum + snapshot.provider.localProviderLiveRequests
+  }, 0)
+  const observedGlobalPromptBacklog = snapshots.reduce((sum, snapshot) => {
+    return sum + snapshot.provider.localPromptBacklog
+  }, 0)
+  const observedGlobalRequestWorkBacklog = snapshots.reduce((sum, snapshot) => {
+    return sum + snapshot.provider.localRequestWorkBacklog
+  }, 0)
+  const provider = {
+    ...providerAuthority,
+    allocationCompleteCurrent: source.aggregateCompleteness === 'complete',
+    allocationInputState: source.aggregateCompleteness === 'complete' ? 'completeCurrent' : 'partialTelemetry',
+    convergenceDiagnostics: {
+      ...providerAuthority.convergenceDiagnostics,
+      allocationCompleteCurrent: source.aggregateCompleteness === 'complete',
+      allocationInputState: source.aggregateCompleteness === 'complete' ? 'completeCurrent' : 'partialTelemetry',
+    },
+    observedGlobalEffectiveProviderLimit,
+    observedGlobalPromptBacklog,
+    observedGlobalProviderLiveRequests,
+    observedGlobalProviderRequestFillPct: getFillPct(
+      observedGlobalProviderLiveRequests,
+      observedGlobalEffectiveProviderLimit,
+    ),
+    observedGlobalRequestWorkBacklog,
+  }
+  const snapshot = {...mergedSnapshot, provider, source}
 
-  return lifecycle ? {...mergedSnapshot, lifecycle} : mergedSnapshot
+  return lifecycle ? {...snapshot, lifecycle} : snapshot
 }
 
 const getRemoteJudgmentDispatchTelemetry = async (
   input: JudgmentDispatchTelemetryInput,
   options: JudgmentDispatchTelemetryOptions,
-): Promise<{snapshots: JudgmentDispatchTelemetrySnapshot[]; unavailableWorkerCount: number}> => {
+): Promise<{
+  freshRemoteWorkerCount: number
+  snapshots: JudgmentDispatchTelemetrySnapshot[]
+  staleWorkerCount: number
+  unavailableWorkerCount: number
+}> => {
   const getRecords = options.getJudgingWorkerRecords ?? getJudgingWorkerRecords
   const fetchTelemetry = options.fetchWorkerTelemetry ?? fetchWorkerJudgmentDispatchTelemetry
   const records = await getRecords()
+  const freshRecords = records.filter((record) => {
+    return !record.isStale
+  })
+  const staleWorkerCount = records.length - freshRecords.length
   const telemetry = await Promise.all(
-    records.map((record) => {
+    freshRecords.map((record) => {
       return fetchTelemetry(record, input)
     }),
   )
 
   return {
+    freshRemoteWorkerCount: telemetry.filter((snapshot) => {
+      return snapshot !== null
+    }).length,
     snapshots: telemetry.filter((snapshot): snapshot is JudgmentDispatchTelemetrySnapshot => {
       return snapshot !== null
     }),
+    staleWorkerCount,
     unavailableWorkerCount: telemetry.filter((snapshot) => {
       return snapshot === null
     }).length,
@@ -475,6 +1246,84 @@ const withLocalLifecycleTelemetry = ({
   return lifecycle ? {...snapshot, lifecycle} : snapshot
 }
 
+const withTelemetrySource = (
+  snapshot: JudgmentDispatchTelemetrySnapshot,
+  source: JudgmentTelemetrySourceMetadata,
+): JudgmentDispatchTelemetrySnapshot => {
+  const allocationInputState = source.aggregateCompleteness === 'complete' ? 'completeCurrent' : 'partialTelemetry'
+  const allocationCompleteCurrent = source.aggregateCompleteness === 'complete'
+  const provider = {
+    ...snapshot.provider,
+    allocationCompleteCurrent,
+    allocationInputState,
+    convergenceDiagnostics: {
+      ...snapshot.provider.convergenceDiagnostics,
+      allocationCompleteCurrent,
+      allocationInputState,
+    },
+  }
+
+  return {...snapshot, provider, source}
+}
+
+export const withJudgmentProviderEndpointDiagnostics = ({
+  diagnostics,
+  effectiveBaseURL,
+  endpointAvailabilityKey,
+  snapshot,
+}: {
+  diagnostics: {
+    cooldownRemainingMs: number | null
+    lastFailureKind: string | null
+    lastFailureMessage: string | null
+    localProbeLiveCount: number
+    observedAggregateProbeLiveCount: number | null
+    probeInProgress: boolean
+    status: string
+  } | null
+  effectiveBaseURL: string | null
+  endpointAvailabilityKey: string | null
+  snapshot: JudgmentDispatchTelemetrySnapshot
+}): JudgmentDispatchTelemetrySnapshot => {
+  if (!diagnostics || !endpointAvailabilityKey) {
+    return snapshot
+  }
+
+  const localEndpointProbeCooldownUntil =
+    diagnostics.cooldownRemainingMs === null
+      ? null
+      : new Date(Date.now() + diagnostics.cooldownRemainingMs).toISOString()
+  const endpointDiagnostics = [
+    ...snapshot.provider.endpointDiagnostics.filter((entry) => {
+      return entry.endpointAvailabilityKey !== endpointAvailabilityKey
+    }),
+    {
+      cooldownRemainingMs: diagnostics.cooldownRemainingMs,
+      effectiveBaseURL,
+      endpointAvailabilityKey,
+      endpointIdentity: effectiveBaseURL,
+      lastFailureKind: diagnostics.lastFailureKind,
+      lastFailureMessage: diagnostics.lastFailureMessage,
+      localEndpointProbeCooldownUntil,
+      localEndpointProbeLive: diagnostics.localProbeLiveCount,
+      localEndpointProbeState: diagnostics.status,
+      observedGlobalEndpointProbeLive: diagnostics.observedAggregateProbeLiveCount,
+      probeInProgress: diagnostics.probeInProgress,
+    },
+  ]
+  const source = getTelemetrySourceMetadata({
+    endpointAvailabilityKeys: endpointDiagnostics.map((entry) => {
+      return entry.endpointAvailabilityKey
+    }),
+    freshWorkerCount: snapshot.source.freshWorkerCount,
+    providerKey: snapshot.provider.providerKey,
+    staleWorkerCount: snapshot.source.staleWorkerCount,
+    unavailableWorkerCount: snapshot.source.unavailableWorkerCount,
+  })
+
+  return {...snapshot, provider: {...snapshot.provider, endpointDiagnostics}, source}
+}
+
 export const getAggregatedJudgmentDispatchTelemetry = async (
   input: JudgmentDispatchTelemetryInput,
   options: JudgmentDispatchTelemetryOptions = {},
@@ -488,18 +1337,25 @@ export const getAggregatedJudgmentDispatchTelemetry = async (
   }
 
   const remoteTelemetry = await getRemoteJudgmentDispatchTelemetry(input, options)
+  const freshWorkerCount = 1 + remoteTelemetry.freshRemoteWorkerCount
+  const source = getTelemetrySourceMetadata({
+    freshWorkerCount,
+    providerKey: localTelemetry.provider.providerKey,
+    staleWorkerCount: remoteTelemetry.staleWorkerCount,
+    unavailableWorkerCount: remoteTelemetry.unavailableWorkerCount,
+  })
 
   return remoteTelemetry.snapshots.length === 0
     ? withUnavailableWorkerLifecycleTelemetry({
         input,
-        snapshot: localTelemetry,
+        snapshot: withTelemetrySource(localTelemetry, source),
         unavailableWorkerCount: remoteTelemetry.unavailableWorkerCount,
       })
     : withUnavailableWorkerLifecycleTelemetry({
         input,
         snapshot: withLocalLifecycleTelemetry({
           localTelemetry,
-          snapshot: mergeJudgmentDispatchTelemetrySnapshots(remoteTelemetry.snapshots),
+          snapshot: mergeJudgmentDispatchTelemetrySnapshots(remoteTelemetry.snapshots, source, localTelemetry.provider),
         }),
         unavailableWorkerCount: remoteTelemetry.unavailableWorkerCount,
       })

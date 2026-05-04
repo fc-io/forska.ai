@@ -41,6 +41,39 @@ const getTempTableName = (prefix: string) => {
   return `temp_${prefix}_${crypto.randomUUID().replaceAll('-', '_')}`
 }
 
+const tokenUseColumns = [
+  'id',
+  'judgment_job_id',
+  'requests',
+  'total_prompt_tokens',
+  'total_completion_tokens',
+  'total_tokens',
+  'started_at',
+  'finished_at',
+  'duration',
+  'gpu_nnodes',
+  'gpu_gpus_per_node',
+  'gpu_total_gpus',
+  'tp_size',
+  'dp_size',
+  'gpu_shape',
+  'sglang_max_running_requests',
+  'sglang_model',
+  'successful_requests',
+  'failed_requests',
+  'has_failed_requests',
+  'failed_requests_details',
+  'total_success_prompt_tokens',
+  'total_success_completion_tokens',
+  'total_success_tokens',
+  'total_failed_prompt_tokens',
+  'total_failed_completion_tokens',
+  'total_failed_tokens',
+  'request_attempts_json',
+  'created_at',
+  'updated_at',
+]
+
 export const rebuildTokenUseWithoutJobTx = async ({jobId, tx}: {jobId: string; tx: JudgmentJobDeleteTx}) => {
   const tempTableName = getTempTableName('judgment_job_delete_token_use')
 
@@ -53,7 +86,41 @@ export const rebuildTokenUseWithoutJobTx = async ({jobId, tx}: {jobId: string; t
   `)
   await tx.run(`DROP TABLE app.token_use`)
   await tx.run(tokenUseCreateSql)
-  await tx.run(`INSERT INTO app.token_use SELECT * FROM ${tempTableName}`)
+  await tx.run(`
+    INSERT INTO app.token_use (${tokenUseColumns.join(', ')})
+    SELECT
+      id,
+      judgment_job_id,
+      requests,
+      total_prompt_tokens,
+      total_completion_tokens,
+      total_tokens,
+      started_at,
+      finished_at,
+      duration,
+      gpu_nnodes,
+      gpu_gpus_per_node,
+      gpu_total_gpus,
+      tp_size,
+      dp_size,
+      gpu_shape,
+      sglang_max_running_requests,
+      sglang_model,
+      successful_requests,
+      failed_requests,
+      has_failed_requests,
+      failed_requests_details,
+      total_success_prompt_tokens,
+      total_success_completion_tokens,
+      total_success_tokens,
+      total_failed_prompt_tokens,
+      total_failed_completion_tokens,
+      total_failed_tokens,
+      request_attempts_json,
+      COALESCE(created_at, current_timestamp),
+      COALESCE(updated_at, current_timestamp)
+    FROM ${tempTableName}
+  `)
   await tx.run(`DROP TABLE ${tempTableName}`)
 }
 

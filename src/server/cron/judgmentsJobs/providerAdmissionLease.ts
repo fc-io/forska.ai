@@ -119,6 +119,13 @@ export type ProviderAdmissionLeaseHeartbeatResult =
 export type ProviderAdmissionLeaseExpiryInput = {nowMs?: number; providerKey: string}
 
 export type ProviderAdmissionLeaseExpiryResult = {expiredLeaseCount: number}
+export type ProviderAdmissionLeaseTelemetry = {
+  providerKey: string
+  providerLeasedLiveRequests: number
+  providerLeasedProbeCalls: number
+  providerProbeOccupancyVersion: string
+  sampledAtMs: number
+}
 
 export type ProviderAdmissionLeaseHolderWorkerFreshness = 'demoted' | 'fresh' | 'missing' | 'stale'
 
@@ -797,6 +804,52 @@ const getActiveProviderProbeLeaseCount = async ({
   `)
 
   return getCountValue(row?.leaseCount)
+}
+
+const getProviderProbeOccupancyVersion = ({
+  providerKey,
+  providerLeasedProbeCalls,
+}: {
+  providerKey: string
+  providerLeasedProbeCalls: number
+}): string => {
+  return createHash('sha256').update(`${providerKey}:${providerLeasedProbeCalls}`).digest('hex')
+}
+
+export const getProviderAdmissionLeaseTelemetry = async ({
+  nowMs = Date.now(),
+  providerKey,
+}: {
+  nowMs?: number
+  providerKey: string
+}): Promise<ProviderAdmissionLeaseTelemetry> => {
+  const now = getDateFromMs(getNormalizedTimestampMs(nowMs))
+  const [requestRow, probeRow] = await Promise.all([
+    getAppDatabaseService().queryJson<{leaseCount: number | string | bigint}>(`
+      SELECT COUNT(*) AS leaseCount
+      FROM app.provider_admission_lease
+      WHERE provider_key = ${getSqlLiteral(providerKey)}
+        AND lease_kind = 'request'
+        AND expires_at > ${getSqlLiteral(now)}
+    `),
+    getAppDatabaseService().queryJson<{leaseCount: number | string | bigint}>(`
+      SELECT COUNT(*) AS leaseCount
+      FROM app.provider_admission_lease
+      WHERE provider_key = ${getSqlLiteral(providerKey)}
+        AND lease_kind = 'probe'
+        AND expires_at > ${getSqlLiteral(now)}
+    `),
+  ])
+  const providerLeasedLiveRequests = getCountValue(requestRow[0]?.leaseCount)
+  const providerLeasedProbeCalls = getCountValue(probeRow[0]?.leaseCount)
+
+  return {
+    providerKey,
+    providerLeasedLiveRequests,
+    providerLeasedProbeCalls,
+    providerProbeOccupancyVersion: getProviderProbeOccupancyVersion({providerKey, providerLeasedProbeCalls}),
+    sampledAtMs: now.getTime(),
+  }
 }
 
 const getProviderAdmissionLeaseByIdentity = async ({

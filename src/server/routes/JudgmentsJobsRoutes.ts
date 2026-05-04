@@ -2,7 +2,10 @@ import {Elysia, t} from 'elysia'
 
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
 import type {OwnerBackedJudgmentJobInfo} from '../cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
-import {getAggregatedJudgmentDispatchTelemetry} from '../cron/judgmentsJobs/judgmentDispatchTelemetry.ts'
+import {
+  getAggregatedJudgmentDispatchTelemetry,
+  withJudgmentProviderEndpointDiagnostics,
+} from '../cron/judgmentsJobs/judgmentDispatchTelemetry.ts'
 import {
   getJudgmentEndpointAvailability,
   getJudgmentEndpointAvailabilityDiagnostics,
@@ -39,7 +42,6 @@ import {
   attachProviderBucketSnapshotToRunningJob,
   type RunningJudgmentJob,
 } from '../cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
-import {getEffectiveProviderCap} from '../cron/judgmentsJobs/judgmentsJobsSendToLLM.ts'
 import {getProviderBucketSnapshot, type ProviderBucketSnapshot} from '../cron/judgmentsJobs/providerAdmissionLease.ts'
 import {getProviderConnectionForStoredModel} from '../providers/providerConnectionRepository.ts'
 import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.ts'
@@ -2510,57 +2512,59 @@ export const judgmentsJobsRoutes = new Elysia()
                 savedModelIds: [projectModelId],
               })
             : null
-          const endpointAvailability = effectiveBaseURL
-            ? getJudgmentEndpointAvailabilityDiagnostics(
-                getJudgmentEndpointAvailability({
-                  effectiveBaseURL,
-                  modelId: projectModelId,
-                  modelProvider: providerConnection?.providerKind ?? null,
-                  providerConnectionId: providerConnection?.id ?? null,
-                }),
-              )
+          const endpointAvailabilitySnapshot = effectiveBaseURL
+            ? getJudgmentEndpointAvailability({
+                effectiveBaseURL,
+                modelId: projectModelId,
+                modelProvider: providerConnection?.providerKind ?? null,
+                providerConnectionId: providerConnection?.id ?? null,
+              })
             : null
-          const effectiveProviderCap = getEffectiveProviderCap({
-            job: {
-              id: job.id,
-              maxInflightRequests: providerConnection?.maxInflightRequests ?? null,
-              modelId: projectModelId,
-              modelName: providerConnection?.label ?? null,
-              modelProvider: providerConnection?.providerKind ?? null,
-              projectId: job.projectId,
-              providerConnectionId: providerConnection?.id ?? null,
-              quarantineReason: job.quarantineReason,
-              storageState: job.storageState,
-            },
-          })
-          const dispatchTelemetry = await getAggregatedJudgmentDispatchTelemetry({
-            jobId: job.id,
+          const endpointAvailability = endpointAvailabilitySnapshot
+            ? getJudgmentEndpointAvailabilityDiagnostics(endpointAvailabilitySnapshot)
+            : null
+          const providerSnapshot = getProviderBucketSnapshot({
+            maxInflightRequests: providerConnection?.maxInflightRequests ?? null,
             modelId: projectModelId,
             modelProvider: providerConnection?.providerKind ?? null,
             providerConnectionId: providerConnection?.id ?? null,
-            providerMaxInflightRequests: effectiveProviderCap.maxInflight,
-            providerUsesFamilyDefault: effectiveProviderCap.usesFamilyDefault,
+            providerConnectionUpdatedAt: providerConnection?.updatedAt ?? null,
+            providerName: providerConnection?.label ?? null,
+            useOwnerBackedSyntheticProviderId: false,
+          })
+          const dispatchTelemetry = withJudgmentProviderEndpointDiagnostics({
+            diagnostics: endpointAvailability,
+            effectiveBaseURL,
+            endpointAvailabilityKey: endpointAvailabilitySnapshot?.endpointAvailabilityKey ?? null,
+            snapshot: await getAggregatedJudgmentDispatchTelemetry({
+              jobId: job.id,
+              modelId: projectModelId,
+              modelProvider: providerConnection?.providerKind ?? null,
+              providerFamily: providerSnapshot.providerFamily,
+              providerConnectionId: providerConnection?.id ?? null,
+              providerId: providerSnapshot.providerId,
+              providerKey: providerSnapshot.providerKey,
+              providerLimit: providerSnapshot.providerLimit,
+              providerLimitVersion: providerSnapshot.providerLimitVersion,
+              providerMaxInflightRequests: providerConnection?.maxInflightRequests ?? null,
+              providerName: providerSnapshot.providerName,
+              providerUsesFamilyDefault: providerSnapshot.providerUsesFamilyDefault,
+              readyCount: sqliteHealth.promptCounts.ready,
+              resolvedDefaultCapacity: providerSnapshot.resolvedDefaultCapacity,
+            }),
           })
           const dispatchStats = dispatchTelemetry.dispatch
           const requestRuntimeStats = dispatchTelemetry.request
-          const providerActiveFillPct =
-            dispatchStats.providerActiveLimit > 0
-              ? Math.round((dispatchStats.providerActivePromptCount / dispatchStats.providerActiveLimit) * 100)
-              : null
-          const providerPrefetchFillPct =
-            dispatchStats.providerQueueLimit > 0
-              ? Math.round((dispatchStats.providerQueuedPromptCount / dispatchStats.providerQueueLimit) * 100)
-              : null
 
           const activePromptsNotMarkedRunning = Math.max(
             0,
-            dispatchStats.jobActivePromptCount - sqliteHealth.promptCounts.running,
+            dispatchStats.jobActivePrompts - sqliteHealth.promptCounts.running,
           )
           const promptStats = {
             claimed: Math.max(0, sqliteHealth.promptCounts.claimed - activePromptsNotMarkedRunning),
             judged: sqliteHealth.promptCounts.judged,
             ready: sqliteHealth.promptCounts.ready,
-            running: Math.max(sqliteHealth.promptCounts.running, dispatchStats.jobActivePromptCount),
+            running: Math.max(sqliteHealth.promptCounts.running, dispatchStats.jobActivePrompts),
             skipped: sqliteHealth.promptCounts.skipped,
           }
           const storageHealth = {
@@ -2583,19 +2587,21 @@ export const judgmentsJobsRoutes = new Elysia()
             },
             requestStats: {
               dispatch: {
-                jobActivePrompts: dispatchStats.jobActivePromptCount,
-                jobQueuedPrompts: dispatchStats.jobQueuedPromptCount,
-                providerActiveFillPct,
-                providerActiveLimit: dispatchStats.providerActiveLimit,
-                providerActivePrompts: dispatchStats.providerActivePromptCount,
-                providerPrefetchFillPct,
-                providerQueueLimit: dispatchStats.providerQueueLimit,
-                providerQueuedPrompts: dispatchStats.providerQueuedPromptCount,
+                jobActivePrompts: dispatchStats.jobActivePrompts,
+                jobQueuedPrompts: dispatchStats.jobQueuedPrompts,
+                providerDispatchActivePromptFillPct: dispatchStats.providerDispatchActivePromptFillPct,
+                providerDispatchActivePromptLimit: dispatchStats.providerDispatchActivePromptLimit,
+                providerDispatchActivePrompts: dispatchStats.providerDispatchActivePrompts,
+                providerDispatchPrefetchFillPct: dispatchStats.providerDispatchPrefetchFillPct,
+                providerDispatchQueueLimit: dispatchStats.providerDispatchQueueLimit,
+                providerDispatchQueuedPrompts: dispatchStats.providerDispatchQueuedPrompts,
               },
               endpointAvailability,
               failures: failedRequestSummary,
               inFlight: requestRuntimeStats.inFlight,
               lifecycle: dispatchTelemetry.lifecycle,
+              providerTelemetry: dispatchTelemetry.provider,
+              telemetrySource: dispatchTelemetry.source,
               attempts: Number(totalTokenUsage[0]?.totalRequests || 0) + requestRuntimeStats.pendingPersistedAttempts,
             },
           }

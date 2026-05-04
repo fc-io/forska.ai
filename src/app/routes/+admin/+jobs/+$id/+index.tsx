@@ -877,16 +877,19 @@ const AdminJudgmentJobDetail = () => {
                         <div class="bg-violet-50 rounded-lg p-4">
                           <p class="text-sm text-violet-700 mb-1">Provider Prefetch Fill</p>
                           <p class="text-2xl font-bold text-violet-900">
-                            {formatPercent(data()?.requestStats?.dispatch?.providerPrefetchFillPct)}
+                            {formatPercent(data()?.requestStats?.providerTelemetry?.providerRequestFillPct)}
                           </p>
                           <p class="text-xs text-violet-700 mt-1">
-                            Shared connection queue: {data()?.requestStats?.dispatch?.providerQueuedPrompts ?? 0}/
-                            {data()?.requestStats?.dispatch?.providerQueueLimit ?? 0}
+                            Dispatch queue: {data()?.requestStats?.dispatch?.providerDispatchQueuedPrompts ?? 0}/
+                            {data()?.requestStats?.dispatch?.providerDispatchQueueLimit ?? 0}
                           </p>
                           <p class="text-xs text-violet-700 mt-1">
-                            Shared active slots: {data()?.requestStats?.dispatch?.providerActivePrompts ?? 0}/
-                            {data()?.requestStats?.dispatch?.providerActiveLimit ?? 0} (
-                            {formatPercent(data()?.requestStats?.dispatch?.providerActiveFillPct)})
+                            Request leases: {data()?.requestStats?.providerTelemetry?.providerLeasedLiveRequests ?? 0}/
+                            {data()?.requestStats?.providerTelemetry?.normalRequestCapacity ?? 0} (
+                            {formatPercent(data()?.requestStats?.providerTelemetry?.providerRequestFillPct)})
+                          </p>
+                          <p class="text-xs text-violet-700 mt-1">
+                            Probe leases: {data()?.requestStats?.providerTelemetry?.providerLeasedProbeCalls ?? 0}
                           </p>
                         </div>
                       </Show>

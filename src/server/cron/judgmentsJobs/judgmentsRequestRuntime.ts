@@ -1389,6 +1389,18 @@ export const getJudgmentRequestStats = (
   return {inFlight: state.inFlight, pendingPersistedAttempts: state.pendingRequestAttemptIds.size}
 }
 
+export const getJudgmentProviderRequestStats = (
+  input: Pick<
+    ProviderRequestScope,
+    'modelId' | 'modelProvider' | 'providerConnectionId' | 'providerKey' | 'providerMaxInflightRequests'
+  >,
+): {localProviderLiveRequests: number} => {
+  const providerKey = getProviderRequestKey({...input, providerUsesFamilyDefault: false})
+  const state = providerRequestStates.get(providerKey)
+
+  return {localProviderLiveRequests: state?.inFlight ?? 0}
+}
+
 export const getJudgmentRequestLifecycleRecords = (judgmentsJobId: string): JudgmentLifecycleTelemetryRecord[] => {
   const state = jobRequestStates.get(judgmentsJobId)
 

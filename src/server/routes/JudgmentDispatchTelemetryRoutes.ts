@@ -8,9 +8,17 @@ import {
 const judgmentDispatchTelemetryQuerySchema = t.Object({
   modelId: t.Optional(t.String()),
   modelProvider: t.Optional(t.String()),
+  providerFamily: t.Optional(t.String()),
   providerConnectionId: t.Optional(t.String()),
+  providerId: t.Optional(t.String()),
+  providerKey: t.Optional(t.String()),
+  providerLimit: t.Optional(t.String()),
+  providerLimitVersion: t.Optional(t.String()),
   providerMaxInflightRequests: t.Optional(t.String()),
+  providerName: t.Optional(t.String()),
   providerUsesFamilyDefault: t.Optional(t.String()),
+  readyCount: t.Optional(t.String()),
+  resolvedDefaultCapacity: t.Optional(t.String()),
 })
 
 const getNullableNumberQueryValue = (value: string | undefined): number | null => {
@@ -31,9 +39,17 @@ export const judgmentDispatchTelemetryRoutes = new Elysia().get(
         jobId: params.jobId,
         modelId: query.modelId ?? null,
         modelProvider: query.modelProvider ?? null,
+        providerFamily: query.providerFamily ?? null,
         providerConnectionId: query.providerConnectionId ?? null,
+        providerId: query.providerId ?? null,
+        providerKey: query.providerKey ?? null,
+        providerLimit: getNullableNumberQueryValue(query.providerLimit),
+        providerLimitVersion: query.providerLimitVersion ?? null,
         providerMaxInflightRequests: getNullableNumberQueryValue(query.providerMaxInflightRequests),
+        providerName: query.providerName ?? null,
         providerUsesFamilyDefault: getBooleanQueryValue(query.providerUsesFamilyDefault),
+        readyCount: getNullableNumberQueryValue(query.readyCount),
+        resolvedDefaultCapacity: getNullableNumberQueryValue(query.resolvedDefaultCapacity),
       }),
       error: null,
     }
