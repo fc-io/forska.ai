@@ -245,10 +245,15 @@ export type JudgmentJobSqliteHealthSnapshot = {
 }
 
 export type JudgmentJobQueuePromptLifecycleRow = {
+  ackRequestAttemptsJson: string | null
   articleId: string
   createdAt: string
   jobId: string
   judgedAt: string | null
+  noRequestSuccessReason: string | null
+  outboxRequestAttemptsJson: string | null
+  promptCloseoutReason: string | null
+  promptTerminalState: 'closed' | 'completed' | null
   promptId: string
   queueRecordId: string
   requestAttemptManifestJson: string | null
@@ -365,6 +370,15 @@ type PromptCompletionAck = {
   requestAttemptsJson?: string | null
   tokenUseId?: string | null
 }
+
+export type PromptNoRequestSuccessReason = 'alreadyJudged'
+
+export type PromptCloseoutReason =
+  | 'articleMissing'
+  | 'ownerCompletionFailed'
+  | 'promptMissing'
+  | 'recoverableRequestFailureExhausted'
+  | 'requestFailure'
 
 type PromptCompletionAckRow = {
   claimId: string
@@ -3488,6 +3502,20 @@ const recoverableRequestAttemptStates = new Set<JudgmentRequestAttemptLifecycleS
   'workerUnavailable',
 ])
 
+const unavailableRequestAttemptRepairDeadlineMs = 16 * 60 * 1000
+
+const unavailableDiagnosticRequestAttemptStates = new Set<JudgmentRequestAttemptLifecycleState>([
+  'telemetryUnavailable',
+  'workerUnavailable',
+])
+
+type UnavailableDiagnosticQueuePromptRow = {
+  ackRequestAttemptsJson: string | null
+  outboxRequestAttemptsJson: string | null
+  queueRecordId: string
+  requestAttemptManifestJson: string | null
+}
+
 const getRecoverableRequestAttemptCloseoutEntries = ({
   now,
   requestAttemptsJson,
@@ -3516,6 +3544,151 @@ const getRecoverableRequestAttemptCloseoutEntries = ({
         ]
       : []
   })
+}
+
+const getRequestAttemptDate = (entry: JudgmentRequestAttemptJsonEntry): Date | null => {
+  return (
+    getDateValue(entry.stateStartedAt)
+    ?? getDateValue(entry.updatedAt)
+    ?? getDateValue(entry.startedAt)
+    ?? getDateValue(entry.createdAt)
+  )
+}
+
+const getUnavailableCloseoutReason = (state: JudgmentRequestAttemptLifecycleState): string => {
+  return state === 'telemetryUnavailable' ? 'telemetryUnavailableNoDurableResult' : 'workerLostNoDurableResult'
+}
+
+const getRequestAttemptIds = (requestAttempts: JudgmentRequestAttemptJsonEntry[]): Set<string> => {
+  return new Set(
+    requestAttempts.map((entry) => {
+      return entry.requestAttemptId
+    }),
+  )
+}
+
+const getUnavailableRequestAttemptCloseoutEntries = ({
+  durableRequestAttemptIds,
+  now,
+  requestAttemptsJson,
+  staleBefore,
+}: {
+  durableRequestAttemptIds: Set<string>
+  now: string
+  requestAttemptsJson: string | null
+  staleBefore: Date
+}): JudgmentRequestAttemptJsonEntry[] => {
+  return parseRequestAttempts(requestAttemptsJson).flatMap((entry) => {
+    const lifecycleState = getRequestAttemptLifecycleState(entry)
+    const stateStartedAt = getRequestAttemptDate(entry)
+    const shouldClose =
+      unavailableDiagnosticRequestAttemptStates.has(lifecycleState)
+      && stateStartedAt !== null
+      && stateStartedAt <= staleBefore
+      && !durableRequestAttemptIds.has(entry.requestAttemptId)
+
+    return shouldClose
+      ? [
+          {
+            ...entry,
+            closeoutKind: 'manifest_repair',
+            closeoutReason: getUnavailableCloseoutReason(lifecycleState),
+            durableCloseoutRef: null,
+            finishedAt: now,
+            lifecycleState: 'closedRequest',
+            outcome: 'failure',
+            stateStartedAt: now,
+            updatedAt: now,
+          },
+        ]
+      : []
+  })
+}
+
+const getUnavailableDiagnosticQueuePromptRows = (database: Database): UnavailableDiagnosticQueuePromptRow[] => {
+  return database
+    .query(
+      `
+        SELECT
+          qp.id AS queueRecordId,
+          qp.request_attempt_manifest_json AS requestAttemptManifestJson,
+          (
+            SELECT jo.request_attempts_json
+            FROM judgment_outbox jo
+            WHERE jo.queue_prompt_id = qp.id
+              AND jo.request_attempts_json IS NOT NULL
+            LIMIT 1
+          ) AS outboxRequestAttemptsJson,
+          (
+            SELECT ca.request_attempts_json
+            FROM completion_ack ca
+            WHERE ca.queue_prompt_id = qp.id
+              AND ca.request_attempts_json IS NOT NULL
+            LIMIT 1
+          ) AS ackRequestAttemptsJson
+        FROM queue_prompt qp
+        WHERE qp.request_attempt_manifest_json IS NOT NULL
+          AND qp.request_attempt_manifest_json <> '[]'
+      `,
+    )
+    .all() as UnavailableDiagnosticQueuePromptRow[]
+}
+
+const repairUnavailableDiagnosticQueuePromptRow = ({
+  database,
+  jobId,
+  now,
+  row,
+  staleBefore,
+}: {
+  database: Database
+  jobId: string
+  now: string
+  row: UnavailableDiagnosticQueuePromptRow
+  staleBefore: Date
+}): number => {
+  const durableRequestAttempts = [
+    ...parseRequestAttempts(row.outboxRequestAttemptsJson),
+    ...parseRequestAttempts(row.ackRequestAttemptsJson),
+  ]
+  const durableRequestAttemptIds = getRequestAttemptIds(durableRequestAttempts)
+
+  if (row.outboxRequestAttemptsJson) {
+    compactQueuePromptManifestCloseoutFromDatabase({
+      database,
+      jobId,
+      queueRecordId: row.queueRecordId,
+      requestAttemptsJson: row.outboxRequestAttemptsJson,
+    })
+  }
+
+  if (row.ackRequestAttemptsJson) {
+    compactQueuePromptManifestCloseoutFromDatabase({
+      database,
+      jobId,
+      queueRecordId: row.queueRecordId,
+      requestAttemptsJson: row.ackRequestAttemptsJson,
+    })
+  }
+
+  const closeoutEntries = getUnavailableRequestAttemptCloseoutEntries({
+    durableRequestAttemptIds,
+    now,
+    requestAttemptsJson: row.requestAttemptManifestJson,
+    staleBefore,
+  })
+
+  if (closeoutEntries.length === 0) {
+    return durableRequestAttemptIds.size
+  }
+
+  mutateQueuePromptManifestFromDatabase({
+    database,
+    mutation: {mergeEntries: closeoutEntries},
+    owner: {jobId, kind: 'queue_prompt', queueRecordId: row.queueRecordId},
+  })
+
+  return durableRequestAttemptIds.size + closeoutEntries.length
 }
 
 const closeRecoverableRequestAttemptsBeforeRequeue = ({
@@ -3763,10 +3936,34 @@ const sqliteService = {
           .query(
             `
               SELECT
+                (
+                  SELECT ca.request_attempts_json
+                  FROM completion_ack ca
+                  WHERE ca.queue_prompt_id = queue_prompt.id
+                    AND ca.request_attempts_json IS NOT NULL
+                  LIMIT 1
+                ) AS ackRequestAttemptsJson,
                 article_id AS articleId,
                 created_at AS createdAt,
                 job_id AS jobId,
                 judged_at AS judgedAt,
+                CASE WHEN terminal_kind = 'completed' THEN skip_reason ELSE NULL END AS noRequestSuccessReason,
+                (
+                  SELECT jo.request_attempts_json
+                  FROM judgment_outbox jo
+                  WHERE jo.queue_prompt_id = queue_prompt.id
+                    AND jo.request_attempts_json IS NOT NULL
+                  LIMIT 1
+                ) AS outboxRequestAttemptsJson,
+                CASE
+                  WHEN terminal_kind IN ('closed', 'failed', 'skipped') THEN COALESCE(skip_reason, terminal_kind)
+                  ELSE NULL
+                END AS promptCloseoutReason,
+                CASE
+                  WHEN terminal_kind = 'completed' THEN 'completed'
+                  WHEN terminal_kind IN ('closed', 'failed', 'skipped') THEN 'closed'
+                  ELSE NULL
+                END AS promptTerminalState,
                 prompt_id AS promptId,
                 id AS queueRecordId,
                 request_attempt_manifest_json AS requestAttemptManifestJson,
@@ -4489,20 +4686,83 @@ const sqliteService = {
   markPromptAsJudged: async (jobId: string, recordId: string, completionAck?: PromptCompletionAck) => {
     await withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
+      const terminalKind = completionAck?.status === 'failed' ? 'failed' : null
+      const skipReason = completionAck?.status === 'failed' ? 'ownerCompletionFailed' : null
       database.transaction(() => {
         database
           .query(
             `
           UPDATE queue_prompt
           SET status = 'judged',
-              terminal_kind = NULL,
-              skip_reason = NULL,
+              terminal_kind = ?,
+              skip_reason = ?,
               judged_at = ?,
               updated_at = ?
           WHERE id = ?
         `,
           )
-          .run(now, now, recordId)
+          .run(terminalKind, skipReason, now, now, recordId)
+
+        if (completionAck) {
+          recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
+        }
+      })()
+    })
+    await withOwnedJobDatabase(jobId, false, (database) => {
+      return completionAck
+        ? compactQueuePromptManifestCloseoutFromDatabase({
+            database,
+            jobId,
+            queueRecordId: completionAck.queuePromptId,
+            requestAttemptsJson: completionAck.requestAttemptsJson,
+          })
+        : undefined
+    })
+  },
+  markPromptAsNoRequestSuccess: async (
+    jobId: string,
+    recordId: string,
+    reason: PromptNoRequestSuccessReason,
+  ): Promise<void> => {
+    await withOwnedJobDatabase(jobId, false, (database) => {
+      const now = new Date().toISOString()
+      database
+        .query(
+          `
+          UPDATE queue_prompt
+          SET status = 'judged',
+              terminal_kind = 'completed',
+              skip_reason = ?,
+              judged_at = ?,
+              updated_at = ?
+          WHERE id = ?
+        `,
+        )
+        .run(reason, now, now, recordId)
+    })
+  },
+  markPromptAsClosed: async (
+    jobId: string,
+    recordId: string,
+    reason: PromptCloseoutReason,
+    completionAck?: PromptCompletionAck,
+  ): Promise<void> => {
+    await withOwnedJobDatabase(jobId, false, (database) => {
+      const now = new Date().toISOString()
+      database.transaction(() => {
+        database
+          .query(
+            `
+          UPDATE queue_prompt
+          SET status = 'judged',
+              terminal_kind = 'closed',
+              skip_reason = ?,
+              judged_at = ?,
+              updated_at = ?
+          WHERE id = ?
+        `,
+          )
+          .run(reason, now, now, recordId)
 
         if (completionAck) {
           recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
@@ -4855,6 +5115,29 @@ const sqliteService = {
             .run(new Date().toISOString(), serverJobId, ...targetArgs) as {changes?: number}
 
           return Number(result.changes ?? 0)
+        },
+        serverJobId,
+      )) ?? 0
+    )
+  },
+  repairUnavailableRequestAttemptDiagnostics: async ({
+    jobId,
+    serverJobId,
+    staleBefore = new Date(Date.now() - unavailableRequestAttemptRepairDeadlineMs),
+  }: {
+    jobId: string
+    serverJobId: string
+    staleBefore?: Date
+  }): Promise<number> => {
+    return (
+      (await withOwnedJobDatabase(
+        jobId,
+        false,
+        (database) => {
+          const now = new Date().toISOString()
+          return getUnavailableDiagnosticQueuePromptRows(database).reduce((count, row) => {
+            return count + repairUnavailableDiagnosticQueuePromptRow({database, jobId, now, row, staleBefore})
+          }, 0)
         },
         serverJobId,
       )) ?? 0

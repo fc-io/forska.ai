@@ -362,6 +362,34 @@ test('derived prompt lifecycle precedence separates attempt closeout from prompt
   ).toBe('hasLiveRequest')
 })
 
+test('zero-request prompt terminals require explicit no-request success or closeout reasons', () => {
+  const closedAttempt = {
+    ...baseManifestAttempt,
+    closeoutKind: 'manifest_repair',
+    closeoutReason: 'workerLostNoDurableResult',
+    finishedAt: '2026-05-03T12:00:03.000Z',
+    lifecycleState: 'closedRequest',
+    outcome: 'failure',
+  } satisfies JudgmentRequestAttemptJsonEntry
+
+  expect(getDerivedJudgmentPromptLifecycleState({requestAttempts: [], status: 'judged'})).toBeNull()
+  expect(
+    getDerivedJudgmentPromptLifecycleState({
+      noRequestSuccessReason: 'alreadyJudged',
+      requestAttempts: [],
+      status: 'judged',
+    }),
+  ).toBe('completed')
+  expect(
+    getDerivedJudgmentPromptLifecycleState({
+      promptCloseoutReason: 'articleMissing',
+      requestAttempts: [],
+      status: 'judged',
+    }),
+  ).toBe('closed')
+  expect(getDerivedJudgmentPromptLifecycleState({requestAttempts: [closedAttempt], status: 'judged'})).toBe('closed')
+})
+
 test('duplicate request attempt ids with conflicting durable fields fail invariants', () => {
   const completedAttempt = getFirstManifestEntry(
     withDurableCloseoutRef({

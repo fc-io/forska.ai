@@ -345,17 +345,22 @@ const getPromptTerminalState = (
   const hasCompletedAttempt = hasRequestAttemptState(requestAttempts, 'completedRequest')
   const allAttemptsTerminal = getAllRequestAttemptsTerminal(requestAttempts)
   const hasNoRequestSuccess = Boolean(input.noRequestSuccessReason)
-  const explicitCompleted = input.promptTerminalState === 'completed'
+  const canCompleteWithAttempts = hasCompletedAttempt && allAttemptsTerminal
+  const canCompleteWithoutRequests = requestAttempts.length === 0 && hasNoRequestSuccess
+  const canCompletePrompt = canCompleteWithAttempts || canCompleteWithoutRequests
+  const explicitCompleted = input.promptTerminalState === 'completed' && canCompletePrompt
   const explicitClosed = input.promptTerminalState === 'closed' || Boolean(input.promptCloseoutReason)
-  const statusCompleted =
-    status === 'judged'
-    && !terminalPromptKinds.has(terminalKind)
-    && (requestAttempts.length === 0 || (hasCompletedAttempt && allAttemptsTerminal) || hasNoRequestSuccess)
+  const statusCompleted = status === 'judged' && !terminalPromptKinds.has(terminalKind) && canCompletePrompt
   const statusClosed = status === 'skipped' || (status === 'judged' && terminalPromptKinds.has(terminalKind))
+  const allAttemptsClosed =
+    requestAttempts.length > 0
+    && allAttemptsTerminal
+    && !hasCompletedAttempt
+    && (status === 'judged' || status === 'skipped')
 
-  return explicitCompleted || statusCompleted || hasNoRequestSuccess
+  return explicitCompleted || statusCompleted
     ? 'completed'
-    : explicitClosed || statusClosed
+    : explicitClosed || statusClosed || allAttemptsClosed
       ? 'closed'
       : null
 }
@@ -443,7 +448,7 @@ export const getJudgmentPromptLifecycleTelemetryRecord = (
   return lifecycleState === null
     ? null
     : {
-        closeoutReason: input.promptCloseoutReason ?? input.terminalKind ?? input.noRequestSuccessReason ?? null,
+        closeoutReason: input.promptCloseoutReason ?? input.noRequestSuccessReason ?? input.terminalKind ?? null,
         finishedAt:
           lifecycleState === 'completed' || lifecycleState === 'closed' ? (input.judgedAt ?? input.updatedAt) : null,
         jobId: input.jobId,

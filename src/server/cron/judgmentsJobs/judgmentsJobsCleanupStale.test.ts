@@ -684,6 +684,123 @@ test('stale prompt requeue closes recoverable live request attempts before a fut
   }
 })
 
+test('unavailable request diagnostics close explicitly after repair deadline without durable evidence', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const timestamp = Date.now()
+  const connectionId = `cleanup-stale-unavailable-connection-${timestamp}`
+  const modelId = `cleanup-stale-unavailable-model-${timestamp}`
+  const projectId = `cleanup-stale-unavailable-project-${timestamp}`
+  const jobId = `cleanup-stale-unavailable-job-${timestamp}`
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Cleanup stale unavailable test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'article-unavailable-lifecycle', promptId: 'prompt-unavailable-lifecycle'}],
+    'server-a',
+  )
+
+  const sqliteDatabase = new Database(sqlitePath)
+  const queueRecordId = (() => {
+    try {
+      const row = sqliteDatabase.query(`SELECT id FROM queue_prompt LIMIT 1`).get() as {id: string} | null
+      const recordId = row?.id ?? ''
+
+      if (!recordId) {
+        throw new Error('Expected queue prompt row')
+      }
+      sqliteDatabase
+        .query(
+          `
+            UPDATE queue_prompt
+            SET status = 'judged',
+                terminal_kind = 'closed',
+                skip_reason = 'requestFailure',
+                judged_at = ?,
+                request_attempt_manifest_json = ?,
+                request_attempt_manifest_version = 1,
+                updated_at = ?
+            WHERE id = ?
+          `,
+        )
+        .run(
+          '2026-04-01T00:00:00.000Z',
+          JSON.stringify([
+            {
+              closeoutKind: 'live_request',
+              createdAt: '2026-04-01T00:00:00.000Z',
+              jobId,
+              lifecycleState: 'workerUnavailable',
+              outcome: 'unknown',
+              providerKey: 'provider:openai:default',
+              queueRecordId: recordId,
+              requestAttemptId: 'attempt-worker-unavailable',
+              stateStartedAt: '2026-04-01T00:00:01.000Z',
+              updatedAt: '2026-04-01T00:00:01.000Z',
+            },
+          ]),
+          '2026-04-01T00:00:01.000Z',
+          recordId,
+        )
+
+      return recordId
+    } finally {
+      sqliteDatabase.close()
+    }
+  })()
+
+  const repaired = await service.repairUnavailableRequestAttemptDiagnostics({
+    jobId,
+    serverJobId: 'server-b',
+    staleBefore: new Date('2026-04-02T00:00:00.000Z'),
+  })
+  const inspectionDatabase = new Database(sqlitePath)
+
+  try {
+    const row = inspectionDatabase
+      .query(
+        `
+          SELECT request_attempt_manifest_json AS requestAttemptManifestJson
+          FROM queue_prompt
+          WHERE id = ?
+        `,
+      )
+      .get(queueRecordId) as {requestAttemptManifestJson: string} | null
+    const [attempt] = parseRequestAttempts(row?.requestAttemptManifestJson)
+
+    expect(repaired).toBe(1)
+    expect(attempt).toBeDefined()
+    if (!attempt) {
+      throw new Error('Expected repaired request attempt')
+    }
+    expect(getRequestAttemptLifecycleState(attempt)).toBe('closedRequest')
+    expect(attempt.closeoutReason).toBe('workerLostNoDurableResult')
+  } finally {
+    inspectionDatabase.close()
+  }
+})
+
 test('cleanupStale releases token-use closed request leases without closing probe leases', async () => {
   if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase) {
     throw new Error('Test database not initialized')

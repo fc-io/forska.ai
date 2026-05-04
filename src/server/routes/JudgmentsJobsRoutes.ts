@@ -864,7 +864,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
   }
 
   if (body.status === 'failed') {
-    await getJudgmentJobSqliteService().markPromptAsJudged(jobId, body.queueRecordId, {
+    await getJudgmentJobSqliteService().markPromptAsClosed(jobId, body.queueRecordId, 'ownerCompletionFailed', {
       claimId: body.claimId,
       queuePromptId: body.queueRecordId,
       status: 'failed',

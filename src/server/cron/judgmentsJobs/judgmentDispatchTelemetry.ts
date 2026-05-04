@@ -23,6 +23,11 @@ import {
   type JudgmentLifecycleTelemetryRecord,
   mergeJudgmentLifecycleTelemetry,
 } from './judgmentLifecycleTelemetry.ts'
+import {
+  type JudgmentRequestAttemptJsonEntry,
+  parseRequestAttempts,
+  stringifyRequestAttempts,
+} from './judgmentRequestAttemptManifest.ts'
 import {getJudgmentRequestLifecycleRecords, getJudgmentRequestStats} from './judgmentsRequestRuntime.ts'
 
 export const judgmentDispatchTelemetryPath = '/api/admin/judgment-dispatch-runtime'
@@ -259,6 +264,21 @@ const getProviderKeyForTelemetryInput = (input: JudgmentDispatchTelemetryInput):
   return getJudgmentDispatchProviderKey(input)
 }
 
+const mergeQueueRequestAttempts = (
+  rows: Array<JudgmentRequestAttemptJsonEntry[] | string | null | undefined>,
+): string | null => {
+  const attemptsById = rows
+    .flatMap((row) => {
+      return parseRequestAttempts(row)
+    })
+    .reduce((map, entry) => {
+      return new Map(map).set(entry.requestAttemptId, entry)
+    }, new Map<string, JudgmentRequestAttemptJsonEntry>())
+  const requestAttempts = Array.from(attemptsById.values())
+
+  return stringifyRequestAttempts(requestAttempts)
+}
+
 const getQueuePromptLifecycleRecords = ({
   providerKey,
   rows,
@@ -267,14 +287,22 @@ const getQueuePromptLifecycleRecords = ({
   rows: JudgmentJobQueuePromptLifecycleRow[]
 }): JudgmentLifecycleTelemetryRecord[] => {
   return rows.flatMap((row) => {
+    const requestAttempts = mergeQueueRequestAttempts([
+      row.requestAttemptManifestJson,
+      row.outboxRequestAttemptsJson,
+      row.ackRequestAttemptsJson,
+    ])
     const promptRecord = getJudgmentPromptLifecycleTelemetryRecord({
       createdAt: row.createdAt,
       jobId: row.jobId,
       judgedAt: row.judgedAt,
+      noRequestSuccessReason: row.noRequestSuccessReason,
       promptId: row.promptId,
+      promptCloseoutReason: row.promptCloseoutReason,
+      promptTerminalState: row.promptTerminalState,
       providerKey,
       queueRecordId: row.queueRecordId,
-      requestAttempts: row.requestAttemptManifestJson,
+      requestAttempts,
       sentAt: row.sentAt,
       status: row.status,
       terminalKind: row.terminalKind ?? row.skipReason,
@@ -283,7 +311,7 @@ const getQueuePromptLifecycleRecords = ({
     const requestRecords = getRequestAttemptLifecycleTelemetryRecords({
       fallbackJobId: row.jobId,
       fallbackProviderKey: providerKey,
-      requestAttempts: row.requestAttemptManifestJson,
+      requestAttempts,
     })
 
     return promptRecord ? [promptRecord, ...requestRecords] : requestRecords

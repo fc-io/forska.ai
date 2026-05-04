@@ -21,7 +21,11 @@ import {
   shouldUseJudgeWorkerOwnerHandoff,
 } from '../judgeWorkerCompletionJournal.ts'
 import {getJudgmentEndpointAvailability} from '../judgmentEndpointAvailability.ts'
-import {getJudgmentJobSqliteService} from '../judgmentJobSqliteService.ts'
+import {
+  getJudgmentJobSqliteService,
+  type PromptCloseoutReason,
+  type PromptNoRequestSuccessReason,
+} from '../judgmentJobSqliteService.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 
 const checkJudgmentExistsInDatabase = async (promptToProcess: PromptToProcess): Promise<boolean> => {
@@ -64,7 +68,8 @@ type PromptDefinition = {
 }
 
 type PreparedPromptResult =
-  | {kind: 'judged'}
+  | {kind: 'closed'; closeoutReason: PromptCloseoutReason}
+  | {kind: 'completed'; noRequestSuccessReason: PromptNoRequestSuccessReason}
   | {kind: 'ready'}
   | {kind: 'run'; articleForJudging: ArticleRecord; prompt: PromptDefinition}
   | {kind: 'skipped'; skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'}
@@ -72,7 +77,8 @@ type PreparedPromptResult =
 type PromptPreparationWaiter = {resolve: (release: () => void) => void}
 
 type PromptTerminalState =
-  | {kind: 'judged'}
+  | {kind: 'closed'; closeoutReason: PromptCloseoutReason}
+  | {kind: 'completed'; noRequestSuccessReason?: PromptNoRequestSuccessReason}
   | {kind: 'ready'; retryAfterMs: number | null}
   | {kind: 'skipped'; skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'}
 
@@ -409,6 +415,26 @@ const markAsJudged = async (jobId: string, recordId: string): Promise<void> => {
   await getJudgmentJobSqliteService().markPromptAsJudged(jobId, recordId)
 }
 
+const markAsNoRequestSuccess = async (
+  jobId: string,
+  recordId: string,
+  reason: PromptNoRequestSuccessReason,
+): Promise<void> => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    return undefined
+  }
+
+  await getJudgmentJobSqliteService().markPromptAsNoRequestSuccess(jobId, recordId, reason)
+}
+
+const markAsClosed = async (jobId: string, recordId: string, reason: PromptCloseoutReason): Promise<void> => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    return undefined
+  }
+
+  await getJudgmentJobSqliteService().markPromptAsClosed(jobId, recordId, reason)
+}
+
 const markAsRetry = async (jobId: string, recordId: string, retryAfterMs: number | null): Promise<void> => {
   if (shouldUseJudgeWorkerOwnerHandoff()) {
     return undefined
@@ -444,7 +470,7 @@ const prepareLocalPrompt = async (
       promptId: promptToProcess.promptId,
       recordId: promptToProcess.recordId,
     })
-    return {kind: 'judged'}
+    return {kind: 'completed', noRequestSuccessReason: 'alreadyJudged'}
   }
 
   const needsFulltext = promptToProcess.useFulltext || promptToProcess.useFulltextNoImages
@@ -459,7 +485,7 @@ const prepareLocalPrompt = async (
       promptId: promptToProcess.promptId,
       recordId: promptToProcess.recordId,
     })
-    return {kind: 'judged'}
+    return {closeoutReason: 'articleMissing', kind: 'closed'}
   }
 
   let articleWithFulltext = article
@@ -535,7 +561,7 @@ const prepareLocalPrompt = async (
       projectId: promptToProcess.projectId,
       recordId: promptToProcess.recordId,
     })
-    return {kind: 'judged'}
+    return {closeoutReason: 'promptMissing', kind: 'closed'}
   }
 
   return {articleForJudging, kind: 'run', prompt}
@@ -627,18 +653,22 @@ const releasePromptTerminalState = async (
     return undefined
   }
 
-  return terminalState.kind === 'judged'
-    ? markAsJudged(jobId, recordId)
-    : terminalState.kind === 'ready'
-      ? markAsRetry(jobId, recordId, terminalState.retryAfterMs)
-      : markAsSkipped(jobId, recordId, terminalState.skipReason)
+  return terminalState.kind === 'completed' && terminalState.noRequestSuccessReason
+    ? markAsNoRequestSuccess(jobId, recordId, terminalState.noRequestSuccessReason)
+    : terminalState.kind === 'completed'
+      ? markAsJudged(jobId, recordId)
+      : terminalState.kind === 'closed'
+        ? markAsClosed(jobId, recordId, terminalState.closeoutReason)
+        : terminalState.kind === 'ready'
+          ? markAsRetry(jobId, recordId, terminalState.retryAfterMs)
+          : markAsSkipped(jobId, recordId, terminalState.skipReason)
 }
 
 const enqueueJudgeWorkerTerminalCompletion = async (
   promptToProcess: PromptToProcess,
   terminalState: PromptTerminalState,
 ): Promise<void> => {
-  if (terminalState.kind === 'judged' && (await hasUnackedJudgeWorkerCompletion(promptToProcess.claimId))) {
+  if (terminalState.kind === 'completed' && (await hasUnackedJudgeWorkerCompletion(promptToProcess.claimId))) {
     return undefined
   }
 
@@ -674,6 +704,12 @@ const getRecoverableRetryDelayMs = (_failureCode: string): number | null => {
   return null
 }
 
+const getPromptPreparationCloseoutReason = (error: unknown): PromptCloseoutReason => {
+  const message = error instanceof Error ? error.message : String(error)
+
+  return message.includes('missing required prompt data') ? 'promptMissing' : 'requestFailure'
+}
+
 export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Effect.Effect<void, unknown> => {
   const startTime = Date.now()
   const modelContext = getModelContext(promptToProcess.modelMetadataJson)
@@ -698,7 +734,25 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
         return Effect.promise(async () => {
           const prepared = await withPromptPreparationPermit(() => {
             return preparePrompt(promptToProcess, modelContext)
+          }).catch((error) => {
+            const errorMessage = error instanceof Error ? error.message : String(error)
+            const closeoutReason = getPromptPreparationCloseoutReason(error)
+            processPromptFailureLogger.error('llm.prompt.preparationFailed', '[llm] ERROR - Failed to prepare prompt', {
+              articleId: promptToProcess.articleId,
+              component: processPromptComponent,
+              error: errorMessage,
+              event: 'promptPreparationFailed',
+              jobId: promptToProcess.jobId,
+              promptId: promptToProcess.promptId,
+              recordId: promptToProcess.recordId,
+            })
+            terminalState = {closeoutReason, kind: 'closed'}
+            return null
           })
+
+          if (!prepared) {
+            return undefined
+          }
 
           if (prepared.kind !== 'run') {
             terminalState = prepared.kind === 'ready' ? {kind: 'ready', retryAfterMs: null} : prepared
@@ -718,7 +772,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
               recordId: promptToProcess.recordId,
             })
             await processSinglePrompt(promptToProcess, prepared.articleForJudging, prepared.prompt, modelContext)
-            terminalState = {kind: 'judged'}
+            terminalState = {kind: 'completed'}
             const duration = Date.now() - startTime
             processPromptLogger.log(`llm:success:${promptToProcess.modelBaseUrl}`, '[llm] Success - processed prompt', {
               articleId: promptToProcess.articleId,
@@ -813,7 +867,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
                   recordId: promptToProcess.recordId,
                 },
               )
-              terminalState = {kind: 'judged'}
+              terminalState = {closeoutReason: 'recoverableRequestFailureExhausted', kind: 'closed'}
               return undefined
             }
 
@@ -827,7 +881,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
               promptId: promptToProcess.promptId,
               recordId: promptToProcess.recordId,
             })
-            terminalState = {kind: 'judged'}
+            terminalState = {closeoutReason: 'requestFailure', kind: 'closed'}
             return undefined
           }
         })

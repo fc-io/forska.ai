@@ -190,6 +190,36 @@ const repairOrphanedDrainingJobs = async (jobIds: string[]): Promise<void> => {
   return repairOrphanedDrainingJobs(jobIds.slice(1))
 }
 
+const repairUnavailableRequestAttemptDiagnostics = async ({
+  jobIds,
+  serverJobId,
+  staleBefore,
+}: {
+  jobIds: string[]
+  serverJobId: string
+  staleBefore: Date
+}): Promise<void> => {
+  const [currentJobId = ''] = jobIds
+
+  if (!currentJobId) {
+    return
+  }
+
+  try {
+    await getJudgmentJobSqliteService().repairUnavailableRequestAttemptDiagnostics({
+      jobId: currentJobId,
+      serverJobId,
+      staleBefore,
+    })
+  } catch (error) {
+    if (!(error instanceof JudgmentJobLeaseError)) {
+      throw error
+    }
+  }
+
+  return repairUnavailableRequestAttemptDiagnostics({jobIds: jobIds.slice(1), serverJobId, staleBefore})
+}
+
 const pruneVisibilityAckedRetentionUntilStable = async ({
   jobId,
   serverJobId,
@@ -253,6 +283,7 @@ export const judgmentsJobsCleanupStale = async (): Promise<void> => {
   const sixteenMinutesAgo = new Date(Date.now() - 16 * 60 * 1000)
   const serverJobId = getDefaultJudgmentServerJobId()
   const sqliteService = getJudgmentJobSqliteService()
+  const sqliteJobIds = getJudgmentJobSqliteJobIds()
   const [drainingJobIds, missingLocalSqliteDrainingJobIds, transientLockedQuarantinedJobIds] = await Promise.all([
     getDrainingSqliteJobIds(),
     getMissingLocalSqliteDrainingJobIds(),
@@ -265,6 +296,7 @@ export const judgmentsJobsCleanupStale = async (): Promise<void> => {
   await sqliteService.pruneVisibilityAckedRetention({maxRows: sqliteRetentionCleanupBatchSize})
   await pruneDrainingVisibilityAckedRetention({jobIds: drainingJobIds, serverJobId})
   await repairOrphanedDrainingJobs(drainingJobIds)
+  await repairUnavailableRequestAttemptDiagnostics({jobIds: sqliteJobIds, serverJobId, staleBefore: sixteenMinutesAgo})
   await finalizeMissingLocalSqliteDrainingJobs(missingLocalSqliteDrainingJobIds)
   await sqliteService.finalizeDrainingJobs()
   await reconcileProviderAdmissionLeasesForDurableCloseout()
