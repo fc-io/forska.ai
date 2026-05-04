@@ -26,6 +26,7 @@ import {
   type PromptCloseoutReason,
   type PromptNoRequestSuccessReason,
 } from '../judgmentJobSqliteService.ts'
+import {reserveJudgmentPromptRequestWork} from '../judgmentsRequestRuntime.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 
 const checkJudgmentExistsInDatabase = async (promptToProcess: PromptToProcess): Promise<boolean> => {
@@ -74,7 +75,7 @@ type PreparedPromptResult =
   | {kind: 'run'; articleForJudging: ArticleRecord; prompt: PromptDefinition}
   | {kind: 'skipped'; skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'}
 
-type PromptPreparationWaiter = {resolve: (release: () => void) => void}
+type PromptPreparationWaiter = {limit: number; resolve: (release: () => void) => void}
 
 type PromptTerminalState =
   | {kind: 'closed'; closeoutReason: PromptCloseoutReason}
@@ -92,11 +93,25 @@ const cachedPromptLookups = new Map<string, Promise<PromptDefinition | null>>()
 const DEFAULT_MODEL_CONTEXT = 32768
 const DEFAULT_PROMPT_TOKEN_LIMIT = Math.max(0, DEFAULT_MODEL_CONTEXT - MAX_COMPLETION_TOKENS)
 const maxRecoverablePromptExtraRetries = 1
-const promptPreparationMaxInFlight = 16
+export const promptPreparationConcurrencyBounds = {maximum: 128, minimum: 2} as const
 
 const promptPreparationWaiters: PromptPreparationWaiter[] = []
 
 let promptPreparationInFlight = 0
+
+export const getPromptPreparationConcurrencyLimit = ({
+  providerMaxInflightRequests,
+}: {
+  providerMaxInflightRequests: number | null | undefined
+}): number => {
+  const providerLimit =
+    typeof providerMaxInflightRequests === 'number' && Number.isFinite(providerMaxInflightRequests)
+      ? Math.max(1, Math.trunc(providerMaxInflightRequests))
+      : 1
+  const dynamicLimit = Math.max(promptPreparationConcurrencyBounds.minimum, providerLimit * 2)
+
+  return Math.min(promptPreparationConcurrencyBounds.maximum, dynamicLimit)
+}
 
 const getModelContext = (metadataJson: unknown): number => {
   return getProviderModelMetadataPromptTokenLimit(metadataJson, MAX_COMPLETION_TOKENS) ?? DEFAULT_PROMPT_TOKEN_LIMIT
@@ -322,21 +337,28 @@ const getCachedPromptDefinition = async ({
   })
 }
 
-const releasePromptPreparationSlot = (): void => {
-  const nextWaiter = promptPreparationWaiters.shift()
+const drainPromptPreparationWaiters = (): void => {
+  const waiterIndex = promptPreparationWaiters.findIndex((waiter) => {
+    return promptPreparationInFlight < waiter.limit
+  })
+  const nextWaiter = waiterIndex >= 0 ? promptPreparationWaiters.splice(waiterIndex, 1)[0] : null
 
   if (nextWaiter) {
+    promptPreparationInFlight += 1
     nextWaiter.resolve(() => {
       releasePromptPreparationSlot()
     })
-    return
+    drainPromptPreparationWaiters()
   }
-
-  promptPreparationInFlight = Math.max(0, promptPreparationInFlight - 1)
 }
 
-const acquirePromptPreparationSlot = async (): Promise<() => void> => {
-  if (promptPreparationInFlight < promptPreparationMaxInFlight) {
+const releasePromptPreparationSlot = (): void => {
+  promptPreparationInFlight = Math.max(0, promptPreparationInFlight - 1)
+  drainPromptPreparationWaiters()
+}
+
+const acquirePromptPreparationSlot = async (limit: number): Promise<() => void> => {
+  if (promptPreparationInFlight < limit) {
     promptPreparationInFlight += 1
     return () => {
       releasePromptPreparationSlot()
@@ -344,18 +366,29 @@ const acquirePromptPreparationSlot = async (): Promise<() => void> => {
   }
 
   return new Promise((resolve) => {
-    promptPreparationWaiters.push({resolve})
+    promptPreparationWaiters.push({limit, resolve})
   })
 }
 
-const withPromptPreparationPermit = async <T>(work: () => Promise<T>): Promise<T> => {
-  const release = await acquirePromptPreparationSlot()
+const withPromptPreparationPermit = async <T>(promptToProcess: PromptToProcess, work: () => Promise<T>): Promise<T> => {
+  const release = await acquirePromptPreparationSlot(
+    getPromptPreparationConcurrencyLimit({providerMaxInflightRequests: promptToProcess.providerMaxInflightRequests}),
+  )
 
   try {
     return await work()
   } finally {
     release()
   }
+}
+
+export const getPromptPreparationConcurrencyStatsForTests = (): {inFlight: number; waiting: number} => {
+  return {inFlight: promptPreparationInFlight, waiting: promptPreparationWaiters.length}
+}
+
+export const resetPromptPreparationConcurrencyForTests = (): void => {
+  promptPreparationWaiters.splice(0, promptPreparationWaiters.length)
+  promptPreparationInFlight = 0
 }
 
 const processSinglePrompt = async (
@@ -365,46 +398,56 @@ const processSinglePrompt = async (
   modelContext: number,
 ): Promise<void> => {
   const sessionId = null
-  await judgeSinglePrompt({
-    article,
-    prompt,
-    queueRecordId: promptToProcess.recordId,
-    sessionId,
+  const releaseRequestWork = reserveJudgmentPromptRequestWork({
     judgmentsJobId: promptToProcess.jobId,
-    modelConfig: {
-      modelId: promptToProcess.modelId,
-      modelName: promptToProcess.modelName,
-      baseURL: promptToProcess.modelBaseUrl,
-      provider: promptToProcess.modelProvider,
-      providerConnectionId: promptToProcess.providerConnectionId,
-      providerInvocationContext: shouldUseJudgeWorkerOwnerHandoff()
-        ? getOwnerBackedProviderInvocationContext(promptToProcess)
-        : undefined,
-      providerFamily: promptToProcess.providerFamily,
-      providerId: promptToProcess.providerId,
-      providerKey: promptToProcess.providerKey,
-      providerLimit: promptToProcess.providerLimit,
-      providerLimitVersion: promptToProcess.providerLimitVersion,
-      providerMaxInflightRequests: promptToProcess.providerMaxInflightRequests,
-      providerName: promptToProcess.providerName,
-      providerUsesFamilyDefault: promptToProcess.providerUsesFamilyDefault,
-      resolvedDefaultCapacity: promptToProcess.resolvedDefaultCapacity,
-      workerUrls: promptToProcess.modelWorkerUrls,
-    },
-    modelContext,
-    projectId: promptToProcess.projectId,
-    claimIdentity: {
-      claimId: promptToProcess.claimId,
-      executionSnapshotHash: promptToProcess.executionSnapshotHash,
-      executionSnapshotId: promptToProcess.executionSnapshotId,
-    },
-    contentSettings: {
-      useTitle: promptToProcess.useTitle,
-      useAbstract: promptToProcess.useAbstract,
-      useFulltext: promptToProcess.useFulltext,
-      useFulltextNoImages: promptToProcess.useFulltextNoImages,
-    },
+    queueRecordId: promptToProcess.recordId,
+    requestWorkUnits: 1,
   })
+
+  try {
+    await judgeSinglePrompt({
+      article,
+      prompt,
+      queueRecordId: promptToProcess.recordId,
+      sessionId,
+      judgmentsJobId: promptToProcess.jobId,
+      modelConfig: {
+        modelId: promptToProcess.modelId,
+        modelName: promptToProcess.modelName,
+        baseURL: promptToProcess.modelBaseUrl,
+        provider: promptToProcess.modelProvider,
+        providerConnectionId: promptToProcess.providerConnectionId,
+        providerInvocationContext: shouldUseJudgeWorkerOwnerHandoff()
+          ? getOwnerBackedProviderInvocationContext(promptToProcess)
+          : undefined,
+        providerFamily: promptToProcess.providerFamily,
+        providerId: promptToProcess.providerId,
+        providerKey: promptToProcess.providerKey,
+        providerLimit: promptToProcess.providerLimit,
+        providerLimitVersion: promptToProcess.providerLimitVersion,
+        providerMaxInflightRequests: promptToProcess.providerMaxInflightRequests,
+        providerName: promptToProcess.providerName,
+        providerUsesFamilyDefault: promptToProcess.providerUsesFamilyDefault,
+        resolvedDefaultCapacity: promptToProcess.resolvedDefaultCapacity,
+        workerUrls: promptToProcess.modelWorkerUrls,
+      },
+      modelContext,
+      projectId: promptToProcess.projectId,
+      claimIdentity: {
+        claimId: promptToProcess.claimId,
+        executionSnapshotHash: promptToProcess.executionSnapshotHash,
+        executionSnapshotId: promptToProcess.executionSnapshotId,
+      },
+      contentSettings: {
+        useTitle: promptToProcess.useTitle,
+        useAbstract: promptToProcess.useAbstract,
+        useFulltext: promptToProcess.useFulltext,
+        useFulltextNoImages: promptToProcess.useFulltextNoImages,
+      },
+    })
+  } finally {
+    releaseRequestWork()
+  }
 }
 
 const markAsJudged = async (jobId: string, recordId: string): Promise<void> => {
@@ -732,7 +775,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
     ).pipe(
       Effect.flatMap(() => {
         return Effect.promise(async () => {
-          const prepared = await withPromptPreparationPermit(() => {
+          const prepared = await withPromptPreparationPermit(promptToProcess, () => {
             return preparePrompt(promptToProcess, modelContext)
           }).catch((error) => {
             const errorMessage = error instanceof Error ? error.message : String(error)

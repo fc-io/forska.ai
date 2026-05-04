@@ -167,7 +167,12 @@ export type JudgmentDispatchTelemetrySnapshot = {
   dispatch: JudgmentDispatchPromptTelemetry
   lifecycle?: JudgmentLifecycleTelemetry
   provider: JudgmentProviderTelemetry
-  request: {inFlight: number; pendingPersistedAttempts: number}
+  request: {
+    inFlight: number
+    pendingPersistedAttempts: number
+    requestWorkBacklog: number
+    waitingForRequestSlot: number
+  }
   source: JudgmentTelemetrySourceMetadata
 }
 
@@ -331,7 +336,7 @@ const getZeroTelemetrySnapshot = (): JudgmentDispatchTelemetrySnapshot => {
   return {
     dispatch: getZeroDispatchStats(),
     provider: getZeroProviderTelemetry({providerKey}),
-    request: {inFlight: 0, pendingPersistedAttempts: 0},
+    request: {inFlight: 0, pendingPersistedAttempts: 0, requestWorkBacklog: 0, waitingForRequestSlot: 0},
     source: getTelemetrySourceMetadata({
       freshWorkerCount: 0,
       providerKey,
@@ -395,8 +400,13 @@ const getRequestStatsFromRecord = (value: unknown): JudgmentDispatchTelemetrySna
 
   const inFlight = getNumberValue(value.inFlight)
   const pendingPersistedAttempts = getNumberValue(value.pendingPersistedAttempts)
+  const requestWorkBacklog =
+    getNumberValue(value.requestWorkBacklog) ?? Math.max(inFlight ?? 0, pendingPersistedAttempts ?? 0)
+  const waitingForRequestSlot = getNumberValue(value.waitingForRequestSlot) ?? 0
 
-  return inFlight === null || pendingPersistedAttempts === null ? null : {inFlight, pendingPersistedAttempts}
+  return inFlight === null || pendingPersistedAttempts === null
+    ? null
+    : {inFlight, pendingPersistedAttempts, requestWorkBacklog, waitingForRequestSlot}
 }
 
 const getBooleanValue = (value: unknown): boolean | null => {
@@ -1116,8 +1126,7 @@ const getLocalProviderTelemetry = async ({
   const effectiveProviderLimit = localWorkerAllocation?.effectiveProviderLimit ?? 0
   const expectedLocalLiveShare = localWorkerAllocation?.expectedLocalLiveShare ?? 0
   const localPromptBacklog = dispatch.providerDispatchActivePrompts + dispatch.providerDispatchQueuedPrompts
-  const localRequestWorkBacklog =
-    Math.max(localProviderLiveRequests, request.inFlight) + request.pendingPersistedAttempts
+  const localRequestWorkBacklog = Math.max(localProviderLiveRequests, request.requestWorkBacklog)
   const allocationInputState = providerTargetAllocationSnapshot.allocationInputState
   const allocationCompleteCurrent = providerTargetAllocationSnapshot.allocationCompleteCurrent
   const readyCount = getReadyWorkCountForController({input, providerKey: snapshot.providerKey})
@@ -1354,6 +1363,8 @@ const mergeJudgmentDispatchTelemetrySnapshots = (
       request: {
         inFlight: merged.request.inFlight + snapshot.request.inFlight,
         pendingPersistedAttempts: merged.request.pendingPersistedAttempts + snapshot.request.pendingPersistedAttempts,
+        requestWorkBacklog: merged.request.requestWorkBacklog + snapshot.request.requestWorkBacklog,
+        waitingForRequestSlot: merged.request.waitingForRequestSlot + snapshot.request.waitingForRequestSlot,
       },
       provider: merged.provider,
       source: merged.source,

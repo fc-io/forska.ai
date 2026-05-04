@@ -95,7 +95,13 @@ const createSnapshot = (
     },
     ...(lifecycle ? {lifecycle} : {}),
     provider,
-    request: {inFlight: 0, pendingPersistedAttempts: 0, ...overrides.request},
+    request: {
+      inFlight: 0,
+      pendingPersistedAttempts: 0,
+      requestWorkBacklog: 0,
+      waitingForRequestSlot: 0,
+      ...overrides.request,
+    },
     source: {
       aggregateCompleteness: 'complete',
       endpointCoverage: [],

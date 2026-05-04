@@ -16,7 +16,10 @@ import type {
   JudgmentRequestAttemptLiveContext,
 } from '../server/cron/judgmentsJobs/judgmentRequestAttemptManifest.ts'
 import {getRequestAttemptManifestOwner} from '../server/cron/judgmentsJobs/judgmentRequestAttemptManifestStore.ts'
-import {withJudgmentRequest} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
+import {
+  updateJudgmentPromptRequestWork,
+  withJudgmentRequest,
+} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {
   invokeStoredProviderModel,
   type StoredProviderInvocationContext,
@@ -1503,6 +1506,7 @@ export const judgeSinglePrompt = async ({
     const chunks = chunking.chunks
     const chunkingStrategy: JudgmentChunkingStrategy = chunking.strategy
     const extraRequests = chunks.length + 1
+    updateJudgmentPromptRequestWork({judgmentsJobId, queueRecordId, requestWorkUnits: extraRequests})
 
     rateLimitedLogger.log(
       `judge:chunked-mode:${baseURL}`,

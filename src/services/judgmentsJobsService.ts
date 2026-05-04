@@ -138,7 +138,9 @@ export type JudgmentJobRequestStats = {
   failures?: {anthropicRefusalArticles: number; anthropicRefusals: number; persistedFailedRequests: number}
   inFlight: number
   providerTelemetry?: JudgmentJobProviderTelemetry
+  requestWorkBacklog?: number
   telemetrySource?: JudgmentJobTelemetrySource
+  waitingForRequestSlot?: number
 }
 
 type JudgmentJobRepairResponse = {

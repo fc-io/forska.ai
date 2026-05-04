@@ -218,6 +218,9 @@ const sqliteServiceMock = {
   markPromptAsJudged: mock(async (_jobId: string, _recordId: string) => {
     sqliteStateTransitions.push('judged')
   }),
+  markPromptAsClosed: mock(async (_jobId: string, _recordId: string, _reason: string) => {
+    sqliteStateTransitions.push('closed')
+  }),
   markPromptAsRetry: mock(async (_jobId: string, _recordId: string) => {
     sqliteStateTransitions.push('ready')
   }),
@@ -388,6 +391,7 @@ afterEach(async () => {
   hasUnackedJudgeWorkerCompletion.mockClear()
   sqliteServiceMock.hasJob.mockClear()
   sqliteServiceMock.hasLocalJudgment.mockClear()
+  sqliteServiceMock.markPromptAsClosed.mockClear()
   sqliteServiceMock.markPromptAsJudged.mockClear()
   sqliteServiceMock.markPromptAsRetry.mockClear()
   sqliteServiceMock.consumePromptExtraRetry.mockClear()
@@ -1213,7 +1217,12 @@ test('404 misroutes block dispatch during cooldown, allow one probe after expiry
   await flush()
   expect(probeStarted).toBe(false)
   expect(testProviderConnectionHealth).toHaveBeenCalledTimes(1)
-  expect(getJudgmentRequestStats('job-gated-probe-1')).toEqual({inFlight: 0, pendingPersistedAttempts: 0})
+  expect(getJudgmentRequestStats('job-gated-probe-1')).toEqual({
+    inFlight: 0,
+    pendingPersistedAttempts: 0,
+    requestWorkBacklog: 0,
+    waitingForRequestSlot: 0,
+  })
   const firstProbeAcquireInput = acquireProviderAdmissionLeasePersisted.mock.calls[0]?.[0]
   expect(firstProbeAcquireInput).toMatchObject({
     endpointAvailabilityKey: 'connection-gated::http://fallback-runtime-gated.test',
@@ -1253,7 +1262,12 @@ test('404 misroutes block dispatch during cooldown, allow one probe after expiry
   await flush()
   expect(testProviderConnectionHealth).toHaveBeenCalledTimes(1)
   expect(secondStarted).toBe(false)
-  expect(getJudgmentRequestStats('job-gated-probe-2')).toEqual({inFlight: 0, pendingPersistedAttempts: 0})
+  expect(getJudgmentRequestStats('job-gated-probe-2')).toEqual({
+    inFlight: 0,
+    pendingPersistedAttempts: 0,
+    requestWorkBacklog: 0,
+    waitingForRequestSlot: 0,
+  })
   expect(testProviderConnectionHealth.mock.calls[0]?.[1]).toEqual({effectiveBaseURL: fallbackBaseURL})
 
   probeRelease.resolve()
@@ -1654,6 +1668,6 @@ test('prompt release stops requeueing after recoverable retry budget is exhauste
 
   await processPromptWithLLM(createPromptToProcess())
 
-  expect(sqliteStateTransitions).toEqual(['running', 'judged'])
+  expect(sqliteStateTransitions).toEqual(['running', 'closed'])
   expect(sqliteServiceMock.markPromptAsRetry).not.toHaveBeenCalled()
 })

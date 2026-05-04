@@ -102,7 +102,12 @@ test('withJudgmentRequest exposes exact request attempt context', async () => {
       expect(requestAttempt.providerKey).toBe('codex:default')
       expect(requestAttempt.baseURL).toBe('codex://app-server')
       expect(requestAttempt.startedAt).toContain('T')
-      expect(getJudgmentRequestStats(jobId)).toEqual({inFlight: 1, pendingPersistedAttempts: 1})
+      expect(getJudgmentRequestStats(jobId)).toEqual({
+        inFlight: 1,
+        pendingPersistedAttempts: 1,
+        requestWorkBacklog: 1,
+        waitingForRequestSlot: 0,
+      })
       expect(getJudgmentRequestLifecycleRecords(jobId)).toMatchObject([
         {lifecycleState: 'liveRequest', requestAttemptId: requestAttempt.requestAttemptId},
       ])
@@ -113,14 +118,24 @@ test('withJudgmentRequest exposes exact request attempt context', async () => {
   expect(baseURL).toBe('codex://app-server')
   expect(seenAttempts).toHaveLength(1)
   expect(seenAttempts[0]).toMatch(/[0-9a-f-]{36}/)
-  expect(getJudgmentRequestStats(jobId)).toEqual({inFlight: 0, pendingPersistedAttempts: 1})
+  expect(getJudgmentRequestStats(jobId)).toEqual({
+    inFlight: 0,
+    pendingPersistedAttempts: 1,
+    requestWorkBacklog: 1,
+    waitingForRequestSlot: 0,
+  })
   expect(getJudgmentRequestLifecycleRecords(jobId)).toMatchObject([
     {lifecycleState: 'persistingCompletion', requestAttemptId: seenAttempts[0]},
   ])
 
   markJudgmentRequestAttemptsPersisted(jobId, seenAttempts)
 
-  expect(getJudgmentRequestStats(jobId)).toEqual({inFlight: 0, pendingPersistedAttempts: 0})
+  expect(getJudgmentRequestStats(jobId)).toEqual({
+    inFlight: 0,
+    pendingPersistedAttempts: 0,
+    requestWorkBacklog: 0,
+    waitingForRequestSlot: 0,
+  })
   expect(getJudgmentRequestLifecycleRecords(jobId)).toEqual([])
 })
 

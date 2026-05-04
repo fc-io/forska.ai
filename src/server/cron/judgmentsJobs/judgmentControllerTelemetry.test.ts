@@ -135,7 +135,12 @@ const createSnapshot = ({
       targetRequestLiveCalls: 11,
       unallocatedTargetLiveCalls: 0,
     },
-    request: {inFlight: localProviderLiveRequests, pendingPersistedAttempts: 0},
+    request: {
+      inFlight: localProviderLiveRequests,
+      pendingPersistedAttempts: 0,
+      requestWorkBacklog: localProviderLiveRequests,
+      waitingForRequestSlot: 0,
+    },
     source: {
       aggregateCompleteness: 'complete',
       endpointCoverage: [],

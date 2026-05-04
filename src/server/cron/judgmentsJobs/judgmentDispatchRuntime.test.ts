@@ -100,6 +100,10 @@ test('queues one prompt ahead of the active slot and starts it when capacity fre
       started.push(firstPrompt.recordId)
       await secondRelease.promise
     }
+
+    if (firstPrompt?.recordId === 'record-rejected') {
+      started.push(firstPrompt.recordId)
+    }
   })
   const runtime = createJudgmentDispatchRuntime({processPromptBatch})
 
@@ -122,13 +126,13 @@ test('queues one prompt ahead of the active slot and starts it when capacity fre
 
   expect(firstResult.acceptedCount).toBe(1)
   expect(secondResult.acceptedCount).toBe(1)
-  expect(thirdResult.acceptedCount).toBe(0)
+  expect(thirdResult.acceptedCount).toBe(1)
   expect(
     thirdResult.rejectedPrompts.map((prompt) => {
       return prompt.recordId
     }),
-  ).toEqual(['record-rejected'])
-  expect(started).toEqual(['record-active'])
+  ).toEqual([])
+  expect(started).toEqual(['record-active', 'record-queued'])
   expect(
     await runtime.getProviderQueueCapacity({
       providerConnectionId: 'connection-a',
@@ -140,7 +144,7 @@ test('queues one prompt ahead of the active slot and starts it when capacity fre
   firstRelease.resolve()
   await flush()
 
-  expect(started).toEqual(['record-active', 'record-queued'])
+  expect(started).toEqual(['record-active', 'record-queued', 'record-rejected'])
 
   secondRelease.resolve()
   await runtime.shutdown('test-complete')
@@ -156,7 +160,7 @@ test('applies lower provider caps without restart', async () => {
       providerMaxInflightRequests: 2,
       providerUsesFamilyDefault: false,
     }),
-  ).toBe(2)
+  ).toBe(1)
 
   expect(
     await runtime.getProviderQueueCapacity({
@@ -174,7 +178,7 @@ test('uses adaptive prompt backlog target when provided', async () => {
   const processPromptBatch = mock(async ({prompts}: {label: string; prompts: PromptToProcess[]}) => {
     const [firstPrompt] = prompts
 
-    if (firstPrompt?.recordId === 'record-active') {
+    if (firstPrompt?.recordId === 'record-active' || firstPrompt?.recordId === 'record-queued') {
       await release.promise
     }
   })
@@ -195,7 +199,7 @@ test('uses adaptive prompt backlog target when provided', async () => {
       providerPromptBacklogTarget: 6,
       providerUsesFamilyDefault: false,
     }),
-  ).toBe(4)
+  ).toBe(2)
 
   release.resolve()
   await runtime.shutdown('test-complete')
@@ -206,7 +210,7 @@ test('reports job-local and provider dispatch stats separately', async () => {
   const processPromptBatch = mock(async ({prompts}: {label: string; prompts: PromptToProcess[]}) => {
     const [firstPrompt] = prompts
 
-    if (firstPrompt?.recordId === 'record-active') {
+    if (firstPrompt?.recordId === 'record-active' || firstPrompt?.recordId === 'record-queued') {
       await release.promise
     }
   })
@@ -231,12 +235,12 @@ test('reports job-local and provider dispatch stats separately', async () => {
       providerUsesFamilyDefault: false,
     }),
   ).toEqual({
-    jobActivePromptCount: 1,
-    jobQueuedPromptCount: 1,
-    providerActiveLimit: 1,
-    providerActivePromptCount: 1,
+    jobActivePromptCount: 2,
+    jobQueuedPromptCount: 0,
+    providerActiveLimit: 2,
+    providerActivePromptCount: 2,
     providerQueueLimit: 1,
-    providerQueuedPromptCount: 1,
+    providerQueuedPromptCount: 0,
   })
   expect(await runtime.getJobDispatchPromptIds('job-a')).toEqual(['record-active', 'record-queued'])
 
@@ -317,12 +321,12 @@ test('shutdown recovers active and queued prompts for a provider', async () => {
           return prompt.recordId
         })
         .sort(),
-    ).toEqual(['record-active', 'record-queued'])
+    ).toEqual(['record-active', 'record-queued', 'record-second-active'])
   })
   const processPromptBatch = mock(async ({prompts}: {label: string; prompts: PromptToProcess[]}) => {
     if (
       prompts.some((prompt) => {
-        return prompt.recordId === 'record-active'
+        return prompt.recordId === 'record-active' || prompt.recordId === 'record-second-active'
       })
     ) {
       await release.promise
@@ -331,6 +335,8 @@ test('shutdown recovers active and queued prompts for a provider', async () => {
   const runtime = createJudgmentDispatchRuntime({processPromptBatch, recoverPrompts: recovered})
 
   await runtime.enqueueClaimedPrompts({label: 'shutdown', prompts: [createPrompt({recordId: 'record-active'})]})
+  await flush()
+  await runtime.enqueueClaimedPrompts({label: 'shutdown', prompts: [createPrompt({recordId: 'record-second-active'})]})
   await flush()
   await runtime.enqueueClaimedPrompts({label: 'shutdown', prompts: [createPrompt({recordId: 'record-queued'})]})
   await flush()

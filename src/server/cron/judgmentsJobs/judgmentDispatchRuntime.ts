@@ -12,6 +12,7 @@ import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import type {JudgmentLifecycleTelemetryRecord} from './judgmentLifecycleTelemetry.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
+import {rejectJudgmentRequestWaitersForPrompts} from './judgmentsRequestRuntime.ts'
 import {getProviderKey} from './providerKey.ts'
 
 export type ProviderQueueInput = {
@@ -368,6 +369,7 @@ const createJudgmentDispatchRuntimeLayer = (
         const recoverablePrompts = [...state.activePrompts, ...state.queuedPrompts].map((entry) => {
           return entry.prompt
         })
+        rejectJudgmentRequestWaitersForPrompts({prompts: recoverablePrompts, reason: getShutdownReason()})
 
         state.activePrompts = []
         state.queuedPrompts = []
@@ -376,18 +378,18 @@ const createJudgmentDispatchRuntimeLayer = (
         state.batchFibers.clear()
 
         return Effect.gen(function* () {
+          if (recoverablePrompts.length > 0) {
+            yield* Effect.tryPromise(async () => {
+              await recoverPrompts(recoverablePrompts, getShutdownReason())
+            })
+          }
+
           yield* Effect.all(
             batchFibers.map((fiber) => {
               return Fiber.interrupt(fiber)
             }),
             {concurrency: 'unbounded', discard: true},
           )
-
-          if (recoverablePrompts.length > 0) {
-            yield* Effect.tryPromise(async () => {
-              await recoverPrompts(recoverablePrompts, getShutdownReason())
-            })
-          }
         }).pipe(
           Effect.catchAll((error) => {
             return Effect.sync(() => {

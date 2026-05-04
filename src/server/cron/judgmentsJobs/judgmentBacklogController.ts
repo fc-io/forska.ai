@@ -54,6 +54,8 @@ export const judgmentBacklogControllerConstants = {
   lowLimitRoundingThresholdUnits: 3,
   promptBacklogMaximumEffectiveCapacityMultiplier: 4,
   promptBacklogMinimumUnits: 1,
+  promptPipelineMaximumUnits: 128,
+  promptPipelineMinimumUnits: 2,
   promptBacklogRequestWorkMultiplier: 2,
   promptDrainWindowMs: 10_000,
   promptStageAgeThresholdMs: {dispatchQueued: 60_000, preparing: 120_000},
@@ -387,10 +389,15 @@ export const getJudgmentPromptQueueTargetFromProviderLimit = ({
   providerMaxInflightRequests: number | null | undefined
   providerPromptBacklogTarget?: number | null
 }): {activePromptLimit: number; queuedPromptLimit: number} => {
-  const activePromptLimit = getPositiveInteger(providerMaxInflightRequests)
+  const providerLimit = getPositiveInteger(providerMaxInflightRequests)
   const defaultPromptBacklogTarget =
-    activePromptLimit * judgmentBacklogControllerConstants.promptBacklogRequestWorkMultiplier
+    providerLimit * judgmentBacklogControllerConstants.promptBacklogRequestWorkMultiplier
   const promptBacklogTarget = getNonNegativeInteger(providerPromptBacklogTarget) || defaultPromptBacklogTarget
+  const activePromptLimit = getBoundedInteger(
+    Math.max(providerLimit + 1, Math.min(promptBacklogTarget, providerLimit * 2)),
+    judgmentBacklogControllerConstants.promptPipelineMinimumUnits,
+    judgmentBacklogControllerConstants.promptPipelineMaximumUnits,
+  )
   const queuedPromptLimit = Math.max(1, promptBacklogTarget - activePromptLimit)
 
   return {activePromptLimit, queuedPromptLimit}

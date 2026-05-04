@@ -247,7 +247,7 @@ const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number
 const getRuntimeInFlightCountsByJob = (jobIds: string[]): Map<string, number> => {
   return new Map(
     jobIds.map((jobId) => {
-      return [jobId, getJudgmentRequestStats(jobId).inFlight] as const
+      return [jobId, getJudgmentRequestStats(jobId).requestWorkBacklog] as const
     }),
   )
 }
