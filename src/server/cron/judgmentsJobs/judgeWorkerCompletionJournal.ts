@@ -487,6 +487,26 @@ export const getOwnerBackedRunningJudgmentJobs = async (): Promise<RunningJudgme
   return data.jobs
 }
 
+export const heartbeatOwnerBackedJudgmentWorker = async ({
+  claimedBy,
+  jobIds,
+}: {
+  claimedBy: string
+  jobIds: string[]
+}): Promise<void> => {
+  const uniqueJobIds = Array.from(new Set(jobIds))
+
+  if (uniqueJobIds.length === 0) {
+    return
+  }
+
+  await requestOwnerJson<{jobIds: string[]}>({
+    body: {claimedBy, jobIds: uniqueJobIds},
+    method: 'POST',
+    path: '/api/judgmentsjobs-worker-heartbeats',
+  })
+}
+
 export const getOwnerBackedJudgmentExecutionSnapshot = async ({
   executionSnapshotHash,
   executionSnapshotId,

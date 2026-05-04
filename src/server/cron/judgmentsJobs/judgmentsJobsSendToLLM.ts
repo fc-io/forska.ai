@@ -6,6 +6,7 @@ import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {
   enqueueJudgeWorkerCompletion,
   flushJudgeWorkerCompletionOutboxForClaim,
+  heartbeatOwnerBackedJudgmentWorker,
   recoverAbandonedJudgeWorkerAcceptedClaims,
   replayJudgeWorkerCompletionOutbox,
   shouldUseJudgeWorkerOwnerHandoff,
@@ -1088,6 +1089,12 @@ export const judgmentsJobsSendToLLM = async (
 
   try {
     if (shouldUseJudgeWorkerOwnerHandoff()) {
+      await heartbeatOwnerBackedJudgmentWorker({
+        claimedBy: serverJobId,
+        jobIds: allJobs.map((job) => {
+          return job.id
+        }),
+      })
       await replayJudgeWorkerCompletionOutbox()
     }
 

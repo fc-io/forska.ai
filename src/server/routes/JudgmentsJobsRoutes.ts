@@ -352,6 +352,7 @@ type JudgmentCompletionTokenUseSummary = {
   requestAttempts?: JudgmentRequestAttemptJsonEntry[] | null
 }
 type JudgmentClaimRequestBody = {claimedBy?: string; limit?: number; protectedRecordIds?: string[]}
+type JudgmentWorkerHeartbeatBody = {claimedBy?: string; jobIds?: string[]}
 type JudgmentSnapshotQuery = {executionSnapshotHash?: string; hash?: string}
 const unassessedCountTTLms = 10_000
 const abandonedClaimGraceMs = 30_000
@@ -367,6 +368,9 @@ const judgmentClaimRequestSchema = t.Optional(
     limit: t.Optional(t.Number()),
     protectedRecordIds: t.Optional(t.Array(t.String())),
   }),
+)
+const judgmentWorkerHeartbeatBodySchema = t.Optional(
+  t.Object({claimedBy: t.Optional(t.String()), jobIds: t.Optional(t.Array(t.String()))}),
 )
 const judgmentCompletionBodySchema = t.Object({
   articleId: t.String(),
@@ -709,6 +713,7 @@ const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequest
     ...(body?.protectedRecordIds !== undefined ? {protectedRecordIds: body.protectedRecordIds} : {}),
   }
 
+  await getJudgmentJobSqliteService().recordWorkerHeartbeat(jobId, claimedBy)
   await getJudgmentJobSqliteService().requeueAbandonedSentPrompts(requeueInput)
 
   const claims = await getJudgmentJobSqliteService().claimReadyPrompts(
@@ -718,6 +723,21 @@ const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequest
   )
 
   return {data: {claims}, error: null}
+}
+
+const recordJudgmentJobWorkerHeartbeat = async (body: JudgmentWorkerHeartbeatBody | undefined) => {
+  const claimedBy = body?.claimedBy ?? judgmentJobServerId
+  const jobIds = Array.from(new Set(body?.jobIds ?? []))
+  const recorded = await Promise.all(
+    jobIds.map((jobId) => {
+      return getJudgmentJobSqliteService().recordWorkerHeartbeat(jobId, claimedBy)
+    }),
+  )
+  const recordedJobIds = jobIds.filter((_jobId, index) => {
+    return recorded[index] === true
+  })
+
+  return {data: {jobIds: recordedJobIds}, error: null}
 }
 
 const getJudgmentValueRecord = (body: JudgmentCompletionBody): Record<string, unknown> => {
@@ -2709,6 +2729,13 @@ export const judgmentsJobsRoutes = new Elysia()
   .get('/api/judgmentsjobs-running', async () => {
     return {data: {jobs: await getOwnerBackedRunningJudgmentJobs()}, error: null}
   })
+  .post(
+    '/api/judgmentsjobs-worker-heartbeats',
+    async ({body}) => {
+      return recordJudgmentJobWorkerHeartbeat(body)
+    },
+    {body: judgmentWorkerHeartbeatBodySchema},
+  )
   .get(
     '/api/judgmentsjobs/:id/runtime',
     async ({params}) => {

@@ -227,6 +227,127 @@ test('requeues stale same-server prompts only when they are not protected by dis
   expect(await service.getInFlightCount(jobId)).toBe(1)
 })
 
+test('does not requeue stale foreign prompts for a live judge-worker heartbeat', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-live-worker-requeue-${Date.now()}`
+  const modelId = `model-live-worker-requeue-${Date.now()}`
+  const projectId = `project-live-worker-requeue-${Date.now()}`
+  const jobId = `job-live-worker-requeue-${Date.now()}`
+  const workerServerId = 'server-live-worker-requeue-owner'
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Live Worker Requeue Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'article-live-worker', promptId: 'prompt-live-worker'}],
+    workerServerId,
+  )
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, workerServerId, 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for live worker requeue test')
+  }
+
+  await service.recordWorkerHeartbeat(jobId, workerServerId)
+
+  const requeued = await service.requeueAbandonedSentPrompts({
+    jobId,
+    serverJobId: 'server-live-worker-requeue-reaper',
+    staleBefore: new Date(Date.now() + 1000),
+  })
+
+  expect(requeued).toBe(0)
+  expect(await service.getReadyCount(jobId)).toBe(0)
+  expect(await service.getClaimedCount(jobId)).toBe(1)
+})
+
+test('requeues stale foreign prompts after judge-worker heartbeat expires', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-dead-worker-requeue-${Date.now()}`
+  const modelId = `model-dead-worker-requeue-${Date.now()}`
+  const projectId = `project-dead-worker-requeue-${Date.now()}`
+  const jobId = `job-dead-worker-requeue-${Date.now()}`
+  const workerServerId = 'server-dead-worker-requeue-owner'
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Dead Worker Requeue Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'article-dead-worker', promptId: 'prompt-dead-worker'}],
+    workerServerId,
+  )
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, workerServerId, 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for dead worker requeue test')
+  }
+
+  await service.recordWorkerHeartbeat(jobId, workerServerId)
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+  const staleHeartbeatAt = new Date(Date.now() - 60_000).toISOString()
+
+  try {
+    sqliteDatabase
+      .query(`UPDATE judge_worker_heartbeat SET heartbeat_at = ?, updated_at = ? WHERE server_id = ?`)
+      .run(staleHeartbeatAt, staleHeartbeatAt, workerServerId)
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  const requeued = await service.requeueAbandonedSentPrompts({
+    jobId,
+    serverJobId: 'server-dead-worker-requeue-reaper',
+    staleBefore: new Date(Date.now() + 1000),
+  })
+
+  expect(requeued).toBe(1)
+  expect(await service.getReadyCount(jobId)).toBe(1)
+  expect(await service.getClaimedCount(jobId)).toBe(0)
+})
+
 test('claims ready prompts in insertion order for a fresh SQLite queue', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

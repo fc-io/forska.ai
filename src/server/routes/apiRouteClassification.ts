@@ -42,12 +42,14 @@ const isOwnerBackedJudgmentJobPath = (pathname: string, method: string) => {
   const controlMatch = pathname.match(
     /^\/api\/judgmentsjobs\/[^/]+(?:\/(?:checkpoint|drain|preflight|quarantine|repair|start-clean|unquarantine))?$/,
   )
+  const heartbeatMatch = pathname === '/api/judgmentsjobs-worker-heartbeats'
   const snapshotMatch =
     pathname.match(/^\/api\/judgmentsjobs\/execution-snapshots\/[^/]+$/)
     || pathname.match(/^\/api\/judgmentsjobs-execution-snapshots\/[^/]+$/)
 
   return (
-    snapshotMatch !== null
+    heartbeatMatch
+    || snapshotMatch !== null
     || claimOrCompletionMatch !== null
     || (controlMatch !== null && ['DELETE', 'PATCH', 'POST'].includes(normalizedMethod))
   )

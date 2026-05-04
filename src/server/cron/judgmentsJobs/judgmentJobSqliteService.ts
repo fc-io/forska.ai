@@ -435,6 +435,7 @@ const ownedJobLeaseOperationCounts = new Map<string, number>()
 const judgmentJobLeaseHeartbeatIntervalMs = 5_000
 const judgmentJobLeaseOperationDrainPollMs = 25
 const judgmentJobLeaseOperationDrainTimeoutMs = 10_000
+const judgeWorkerHeartbeatStaleMs = 30_000
 const judgmentJobLeaseLogger = createRateLimitedLogger({windowMs: 30_000})
 const judgmentJobHealthProjectionLogger = createRateLimitedLogger({windowMs: 30_000})
 let judgmentJobLeaseHeartbeatStarted = false
@@ -756,6 +757,11 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(job_id, article_id, prompt_id)
+    );
+    CREATE TABLE IF NOT EXISTS judge_worker_heartbeat (
+      server_id TEXT PRIMARY KEY,
+      heartbeat_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS judgment_outbox (
       outbox_seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3214,6 +3220,26 @@ const claimReadyQueuePromptRows = async ({
   })()
 }
 
+const recordJudgeWorkerHeartbeatFromDatabase = (database: Database, serverJobId: string): void => {
+  const now = new Date().toISOString()
+
+  database
+    .query(
+      `
+        INSERT INTO judge_worker_heartbeat (server_id, heartbeat_at, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(server_id) DO UPDATE SET
+          heartbeat_at = EXCLUDED.heartbeat_at,
+          updated_at = EXCLUDED.updated_at
+      `,
+    )
+    .run(serverJobId, now, now)
+}
+
+const pruneStaleJudgeWorkerHeartbeatsFromDatabase = (database: Database, liveHeartbeatCutoff: string): void => {
+  database.query(`DELETE FROM judge_worker_heartbeat WHERE heartbeat_at <= ?`).run(liveHeartbeatCutoff)
+}
+
 const getPromptClaimIdentityFromDatabase = (
   database: Database,
   jobId: string,
@@ -5116,6 +5142,7 @@ const sqliteService = {
         (database) => {
           const shouldRecoverCurrentServer = protectedRecordIds !== undefined
           const protectedIds = Array.from(new Set(protectedRecordIds ?? []))
+          const liveHeartbeatCutoff = new Date(Date.now() - judgeWorkerHeartbeatStaleMs).toISOString()
           const currentServerRecoveryPredicate =
             shouldRecoverCurrentServer && protectedIds.length > 0
               ? `id NOT IN (${getSqlPlaceholders(protectedIds.length).join(', ')})`
@@ -5125,9 +5152,20 @@ const sqliteService = {
           const targetPredicate = `
             status IN ('claimed', 'running', 'sent')
               AND sent_at <= ?
-              AND (COALESCE(server_id, '') <> ? OR ${currentServerRecoveryPredicate})
+              AND (
+                (COALESCE(server_id, '') = ? AND ${currentServerRecoveryPredicate})
+                OR (
+                  COALESCE(server_id, '') <> ?
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM judge_worker_heartbeat jwh
+                    WHERE jwh.server_id = queue_prompt.server_id
+                      AND jwh.heartbeat_at > ?
+                  )
+                )
+              )
           `
-          const targetArgs = [staleBefore.toISOString(), serverJobId, ...protectedIds]
+          const targetArgs = [staleBefore.toISOString(), serverJobId, ...protectedIds, serverJobId, liveHeartbeatCutoff]
           const targetRows = database
             .query(
               `
@@ -5140,6 +5178,7 @@ const sqliteService = {
             )
             .all(...targetArgs) as Array<{queueRecordId: string; requestAttemptManifestJson: string | null}>
 
+          pruneStaleJudgeWorkerHeartbeatsFromDatabase(database, liveHeartbeatCutoff)
           closeRecoverableRequestAttemptsBeforeRequeue({database, jobId, rows: targetRows})
 
           const result = database
@@ -5163,6 +5202,19 @@ const sqliteService = {
         },
         serverJobId,
       )) ?? 0
+    )
+  },
+  recordWorkerHeartbeat: async (jobId: string, serverJobId: string): Promise<boolean> => {
+    return (
+      (await withOwnedJobDatabase(
+        jobId,
+        false,
+        (database) => {
+          recordJudgeWorkerHeartbeatFromDatabase(database, serverJobId)
+          return true
+        },
+        serverJobId,
+      )) ?? false
     )
   },
   repairUnavailableRequestAttemptDiagnostics: async ({

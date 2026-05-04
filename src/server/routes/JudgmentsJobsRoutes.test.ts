@@ -544,7 +544,7 @@ test('owner-backed claim route honors claim limits above 100', async () => {
   await sqliteService.closeAll()
 })
 
-test('owner-backed claim requeues stale unprotected worker claims before claiming', async () => {
+test('owner-backed claim requeues stale unprotected dead-worker claims before claiming', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
   }
@@ -591,6 +591,7 @@ test('owner-backed claim requeues stale unprotected worker claims before claimin
   }
 
   const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+  const staleHeartbeatAt = '2026-04-01T00:00:00.000Z'
 
   try {
     sqliteDatabase
@@ -601,7 +602,12 @@ test('owner-backed claim requeues stale unprotected worker claims before claimin
           WHERE id = ?
         `,
       )
-      .run('2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', staleClaim.recordId)
+      .run(staleHeartbeatAt, staleHeartbeatAt, staleClaim.recordId)
+    const heartbeatUpdate = sqliteDatabase
+      .query(`UPDATE judge_worker_heartbeat SET heartbeat_at = ?, updated_at = ? WHERE server_id = ?`)
+      .run(staleHeartbeatAt, staleHeartbeatAt, 'judge-worker-old') as {changes?: number}
+
+    expect(Number(heartbeatUpdate.changes ?? 0)).toBe(1)
   } finally {
     sqliteDatabase.close()
   }
