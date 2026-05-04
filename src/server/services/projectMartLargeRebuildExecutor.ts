@@ -299,9 +299,6 @@ const getProjectJudgmentFactBatchInsertSql = (projectId: string, articleIds: str
       article_id,
       prompt_id,
       model_id,
-      project_id,
-      snapshot_project_id,
-      snapshot_project_model_name,
       use_title,
       use_abstract,
       use_fulltext,
@@ -327,9 +324,6 @@ const getProjectJudgmentFactBatchInsertSql = (projectId: string, articleIds: str
       judgment.article_id,
       judgment.prompt_id,
       judgment.model_id,
-      judgment.project_id,
-      judgment.snapshot_project_id,
-      judgment.snapshot_project_model_name,
       judgment.use_title,
       judgment.use_abstract,
       judgment.use_fulltext,
@@ -848,8 +842,8 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
       judgment_fact.article_created_at,
       judgment_fact.article_updated_at,
       judgment_fact.model_id,
-      judgment_fact.project_id,
-      judgment_fact.updated_at,
+      judgment.project_id,
+      judgment.updated_at,
       judgment_fact.use_title,
       judgment_fact.use_abstract,
       judgment_fact.use_fulltext,
@@ -859,8 +853,8 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
       judgment_fact.confidence_original,
       judgment_fact.explanation,
       judgment_fact.quotes,
-      judgment_fact.snapshot_project_id,
-      judgment_fact.snapshot_project_model_name,
+      judgment.snapshot_project_id,
+      judgment.snapshot_project_model_name,
       judgment_fact.answered_original,
       judgment_fact.answered_original_as_array,
       current_timestamp
@@ -874,6 +868,7 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
         projectPromptAlias: 'project_prompt',
         projectScopeAlias: 'scope_article',
       })}
+    LEFT JOIN app.judgment judgment ON judgment.id = judgment_fact.judgment_id
     WHERE scope_article.project_id = ${projectLiteral}
       AND scope_article.article_id IN (${articleIdsSql});
     COMMIT;

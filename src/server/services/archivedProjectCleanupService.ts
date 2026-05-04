@@ -46,7 +46,6 @@ const archivedProjectMartCleanupMutations: CleanupMutation[] = [
   'mart.review_article_rollup',
   'mart.prompt_answer_fact',
   'mart.project_scope_article',
-  'app.review_answer_dictionary',
   'app.project_review_serving_generation',
 ].map((tableName) => {
   return {
