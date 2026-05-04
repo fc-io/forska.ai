@@ -89,10 +89,18 @@ type ProjectReviewConfig = {
 
 type ProjectReviewDetailMartFreshness = {
   dirtyToken: number | null
+  failedMaterializationCount: number
+  hasIncompleteDirtyMaterialization: boolean
+  hasUnresolvedQuarantineBarrier: boolean
   isFresh: boolean
   lastCompletedDirtyToken: number | null
+  pendingMaterializationCount: number
   refreshStatus: ProjectMartRefreshStatus | null
+  runningMaterializationCount: number
   state: 'fresh' | 'running' | 'stale'
+  status: 'fresh' | 'pending' | 'stale'
+  unresolvedQuarantineBarrierCount: number
+  unreconciledMaterializationCount: number
 }
 
 type ProjectReviewDetailJudgmentRow = {
@@ -226,25 +234,102 @@ const getProjectReviewDetailJudgmentRows = async (params: {
 const getProjectReviewDetailMartFreshness = async (projectId: string): Promise<ProjectReviewDetailMartFreshness> => {
   const [row] = await getAppDatabaseService().queryJson<{
     dirtyToken: number | null
+    failedMaterializationCount: number | null
+    incompleteMaterializationCount: number | null
     lastCompletedDirtyToken: number | null
+    pendingMaterializationCount: number | null
     refreshStatus: ProjectMartRefreshStatus | null
+    runningMaterializationCount: number | null
+    unresolvedQuarantineBarrierCount: number | null
+    unreconciledMaterializationCount: number | null
   }>(`
+    WITH refresh_state AS (
+      SELECT
+        project_id,
+        dirty_token,
+        last_completed_dirty_token,
+        refresh_status
+      FROM app.project_mart_refresh_state
+      WHERE project_id = '${escapeSqlString(projectId)}'
+      LIMIT 1
+    ),
+    materialization_summary AS (
+      SELECT
+        CAST(COUNT(*) FILTER (WHERE materialization.materialization_status <> 'completed') AS INTEGER) AS incompleteMaterializationCount,
+        CAST(COUNT(*) FILTER (WHERE materialization.materialization_status = 'pending') AS INTEGER) AS pendingMaterializationCount,
+        CAST(COUNT(*) FILTER (WHERE materialization.materialization_status = 'running') AS INTEGER) AS runningMaterializationCount,
+        CAST(COUNT(*) FILTER (WHERE materialization.materialization_status = 'failed') AS INTEGER) AS failedMaterializationCount,
+        CAST(COUNT(*) FILTER (WHERE materialization.materialization_status = 'unreconciled') AS INTEGER) AS unreconciledMaterializationCount
+      FROM app.project_mart_dirty_materialization_state materialization
+      INNER JOIN refresh_state state ON state.project_id = materialization.project_id
+      WHERE state.dirty_token IS NOT NULL
+        AND materialization.target_dirty_token <= state.dirty_token
+    ),
+    quarantine_summary AS (
+      SELECT CAST(COUNT(*) AS INTEGER) AS unresolvedQuarantineBarrierCount
+      FROM app.project_mart_dirty_refresh_article_quarantine quarantine
+      INNER JOIN refresh_state state ON state.project_id = quarantine.project_id
+      WHERE state.dirty_token IS NOT NULL
+        AND quarantine.dirty_token <= state.dirty_token
+        AND quarantine.resolved_at IS NULL
+    )
     SELECT
       CAST(dirty_token AS INTEGER) AS dirtyToken,
       CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
-      refresh_status AS refreshStatus
-    FROM app.project_mart_refresh_state
-    WHERE project_id = '${escapeSqlString(projectId)}'
-    LIMIT 1
+      refresh_status AS refreshStatus,
+      COALESCE(materialization_summary.incompleteMaterializationCount, 0) AS incompleteMaterializationCount,
+      COALESCE(materialization_summary.pendingMaterializationCount, 0) AS pendingMaterializationCount,
+      COALESCE(materialization_summary.runningMaterializationCount, 0) AS runningMaterializationCount,
+      COALESCE(materialization_summary.failedMaterializationCount, 0) AS failedMaterializationCount,
+      COALESCE(materialization_summary.unreconciledMaterializationCount, 0) AS unreconciledMaterializationCount,
+      COALESCE(quarantine_summary.unresolvedQuarantineBarrierCount, 0) AS unresolvedQuarantineBarrierCount
+    FROM refresh_state
+    CROSS JOIN materialization_summary
+    CROSS JOIN quarantine_summary
   `)
 
   const dirtyToken = row?.dirtyToken ?? null
+  const failedMaterializationCount = Number(row?.failedMaterializationCount ?? 0)
+  const incompleteMaterializationCount = Number(row?.incompleteMaterializationCount ?? 0)
   const lastCompletedDirtyToken = row?.lastCompletedDirtyToken ?? null
+  const pendingMaterializationCount = Number(row?.pendingMaterializationCount ?? 0)
   const refreshStatus = row?.refreshStatus ?? null
-  const isFresh = dirtyToken === null || (lastCompletedDirtyToken !== null && lastCompletedDirtyToken >= dirtyToken)
-  const state = isFresh ? 'fresh' : refreshStatus === 'running' ? 'running' : 'stale'
+  const runningMaterializationCount = Number(row?.runningMaterializationCount ?? 0)
+  const unresolvedQuarantineBarrierCount = Number(row?.unresolvedQuarantineBarrierCount ?? 0)
+  const unreconciledMaterializationCount = Number(row?.unreconciledMaterializationCount ?? 0)
+  const hasIncompleteDirtyMaterialization = incompleteMaterializationCount > 0
+  const hasUnresolvedQuarantineBarrier = unresolvedQuarantineBarrierCount > 0
+  const isFresh =
+    dirtyToken === null
+    || (!hasIncompleteDirtyMaterialization
+      && !hasUnresolvedQuarantineBarrier
+      && lastCompletedDirtyToken !== null
+      && lastCompletedDirtyToken >= dirtyToken)
+  const status = isFresh
+    ? 'fresh'
+    : hasUnresolvedQuarantineBarrier
+        || failedMaterializationCount > 0
+        || unreconciledMaterializationCount > 0
+        || refreshStatus === 'failed'
+      ? 'stale'
+      : 'pending'
+  const state = isFresh ? 'fresh' : refreshStatus === 'running' || runningMaterializationCount > 0 ? 'running' : 'stale'
 
-  return {dirtyToken, isFresh, lastCompletedDirtyToken, refreshStatus, state}
+  return {
+    dirtyToken,
+    failedMaterializationCount,
+    hasIncompleteDirtyMaterialization,
+    hasUnresolvedQuarantineBarrier,
+    isFresh,
+    lastCompletedDirtyToken,
+    pendingMaterializationCount,
+    refreshStatus,
+    runningMaterializationCount,
+    state,
+    status,
+    unresolvedQuarantineBarrierCount,
+    unreconciledMaterializationCount,
+  }
 }
 
 const getArticleJudgmentRows = async (params: {

@@ -17,7 +17,7 @@ type ReviewsWarningsResponse = {
     indexing: {
       activeConsumerCount: number
       activeWorkCount: number
-      blockedReason: 'paused_by_policy' | 'waiting_for_maintenance_worker' | null
+      blockedReason: 'paused_by_policy' | 'quarantine_barrier' | 'waiting_for_maintenance_worker' | null
       diagnostics: {
         duckdbQueues: {background: {queueDepth: number}; main: {queueDepth: number}}
         largeRebuild: {
@@ -40,6 +40,20 @@ type ReviewsWarningsResponse = {
       }
       eligibleConsumerCount: number
       eligibleConsumerPresent: boolean
+      dirtyMaterialization: {
+        failedCount: number
+        incompleteCount: number
+        pendingCount: number
+        runningCount: number
+        unreconciledCount: number
+      }
+      freshness: {
+        hasIncompleteDirtyMaterialization: boolean
+        hasUnresolvedQuarantineBarrier: boolean
+        isFresh: boolean
+        status: 'fresh' | 'pending' | 'stale'
+        unresolvedQuarantineBarrierCount: number
+      }
       inFlightArticleRefreshCount: number
       inFlightProjectRefreshCount: number
       inFlightRefreshCount: number
@@ -465,15 +479,23 @@ test('reviews warnings expose quarantined article refreshes without pending heal
 
   expect(response.status).toBe(200)
   expect(body.data.indexing.pendingArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.blockedReason).toBe('quarantine_barrier')
+  expect(body.data.indexing.freshness).toMatchObject({
+    hasUnresolvedQuarantineBarrier: true,
+    isFresh: false,
+    status: 'stale',
+    unresolvedQuarantineBarrierCount: 1,
+  })
   expect(body.data.indexing.quarantinedArticleRefreshCount).toBe(1)
   expect(
     body.data.indexing.quarantinedArticles.map((article) => {
       return {articleId: article.articleId, detectedBy: article.detectedBy, error: article.error}
     }),
   ).toEqual([{articleId, detectedBy: 'test-suite', error: 'native crash repro'}])
-  expect(body.data.indexing.progressState).toBe('completed')
-  expect(body.data.indexing.status).toBe('ready')
+  expect(body.data.indexing.progressState).toBe('blocked')
+  expect(body.data.indexing.status).toBe('blocked')
 })
 
 test('reviews warnings queues repair when visible judgments are missing from judgment facts', async () => {

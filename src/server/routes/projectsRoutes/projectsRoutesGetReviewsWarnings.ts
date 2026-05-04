@@ -26,10 +26,11 @@ import {getProjectMartLargeRebuildRuntimeMetrics} from '../../utils/projectMartL
 import {shouldCurrentServerRunMaintenanceLoops} from '../../utils/serverRuntimeRole.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
-type ReviewsIndexingBlockedReason = 'paused_by_policy' | 'waiting_for_maintenance_worker' | null
+type ReviewsIndexingBlockedReason = 'paused_by_policy' | 'quarantine_barrier' | 'waiting_for_maintenance_worker' | null
 type ReviewsIndexingProgressState = 'blocked' | 'completed' | 'failed' | 'processing' | 'queued' | 'stalled'
 type ReviewsIndexingStatus = 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
 type ReviewsIndexingRecoveryMode = 'archived_project_mart_recovery' | 'none' | 'retry_backoff'
+type ReviewsIndexingFreshnessStatus = 'fresh' | 'pending' | 'stale'
 
 type ProjectMartRefreshStatus = 'blocked_by_quarantine' | 'failed' | 'idle' | 'paused' | 'running'
 
@@ -39,6 +40,18 @@ type ProjectLargeRebuildProgress = {
   rowsPerMinute: number | null
   scopeArticleCount: number
 }
+type ProjectDirtyMaterializationSummary = {
+  activeOwnerCount: number
+  failedCount: number
+  incompleteCount: number
+  isActive: boolean
+  lastProgressedAt: string | null
+  oldestQueuedAt: string | null
+  pendingCount: number
+  runningCount: number
+  unreconciledCount: number
+}
+type ProjectReviewIndexCleanup = {inFlightGenerationCleanupCount: number}
 type ProjectLargeRebuildRuntimeCycle = ReturnType<
   typeof getProjectMartLargeRebuildRuntimeMetrics
 >['recentCycles'][number]
@@ -212,7 +225,11 @@ const getReviewsRuntimeDiagnostics = (
 }
 
 type ProjectRefreshState = {
+  dirtyMaterialization: ProjectDirtyMaterializationSummary
   dirtyToken: number | null
+  freshnessStatus: ReviewsIndexingFreshnessStatus
+  hasIncompleteDirtyMaterialization: boolean
+  hasUnresolvedQuarantineBarrier: boolean
   isFresh: boolean
   lastCompletedAt: string | null
   lastCompletedDirtyToken: number | null
@@ -220,6 +237,7 @@ type ProjectRefreshState = {
   lastStartedAt: string | null
   leaseExpiresAt: string | null
   refreshStatus: ProjectMartRefreshStatus | null
+  unresolvedQuarantineBarrierCount: number
   updatedAt: string | null
   workerId: string | null
 }
@@ -258,18 +276,102 @@ const getHasRouteArticles = async (projectId: string): Promise<boolean> => {
   return rows.length > 0
 }
 
+const getEmptyDirtyMaterializationSummary = (): ProjectDirtyMaterializationSummary => {
+  return {
+    activeOwnerCount: 0,
+    failedCount: 0,
+    incompleteCount: 0,
+    isActive: false,
+    lastProgressedAt: null,
+    oldestQueuedAt: null,
+    pendingCount: 0,
+    runningCount: 0,
+    unreconciledCount: 0,
+  }
+}
+
+const getRefreshFreshnessStatus = (params: {
+  hasFailedMaterialization: boolean
+  hasUnresolvedQuarantineBarrier: boolean
+  isFresh: boolean
+  refreshStatus: ProjectMartRefreshStatus | null
+}): ReviewsIndexingFreshnessStatus => {
+  return params.isFresh
+    ? 'fresh'
+    : params.hasUnresolvedQuarantineBarrier || params.hasFailedMaterialization || params.refreshStatus === 'failed'
+      ? 'stale'
+      : 'pending'
+}
+
 const getProjectRefreshState = async (projectId: string): Promise<ProjectRefreshState> => {
   const [row] = await getAppDatabaseService().queryJson<{
+    activeMaterializationOwnerCount: number | null
     dirtyToken: number | null
+    failedMaterializationCount: number | null
+    incompleteMaterializationCount: number | null
+    lastDirtyMaterializationProgressedAt: string | null
     lastCompletedAt: string | null
     lastCompletedDirtyToken: number | null
     lastRequestedAt: string | null
     lastStartedAt: string | null
     leaseExpiresAt: string | null
+    oldestDirtyMaterializationQueuedAt: string | null
+    pendingMaterializationCount: number | null
     refreshStatus: ProjectMartRefreshStatus | null
+    runningMaterializationCount: number | null
+    unresolvedQuarantineBarrierCount: number | null
+    unreconciledMaterializationCount: number | null
     updatedAt: string | null
     workerId: string | null
   }>(`
+    WITH refresh_state AS (
+      SELECT
+        project_id,
+        dirty_token,
+        last_completed_at,
+        last_completed_dirty_token,
+        last_requested_at,
+        last_started_at,
+        lease_expires_at,
+        refresh_status,
+        updated_at,
+        worker_id
+      FROM app.project_mart_refresh_state
+      WHERE project_id = '${escapeSqlString(projectId)}'
+      LIMIT 1
+    ),
+    materialization_summary AS (
+      SELECT
+        CAST(COUNT(*) FILTER (WHERE materialization.materialization_status <> 'completed') AS INTEGER) AS incompleteMaterializationCount,
+        CAST(COUNT(*) FILTER (WHERE materialization.materialization_status = 'pending') AS INTEGER) AS pendingMaterializationCount,
+        CAST(COUNT(*) FILTER (WHERE materialization.materialization_status = 'running') AS INTEGER) AS runningMaterializationCount,
+        CAST(COUNT(*) FILTER (WHERE materialization.materialization_status = 'failed') AS INTEGER) AS failedMaterializationCount,
+        CAST(COUNT(*) FILTER (WHERE materialization.materialization_status = 'unreconciled') AS INTEGER) AS unreconciledMaterializationCount,
+        CAST(COUNT(DISTINCT materialization.materialization_owner) FILTER (
+          WHERE materialization.materialization_status = 'running'
+            AND materialization.materialization_owner IS NOT NULL
+            AND materialization.lease_expires_at > current_timestamp
+        ) AS INTEGER) AS activeMaterializationOwnerCount,
+        MIN(COALESCE(materialization.last_started_at, materialization.created_at)) FILTER (
+          WHERE materialization.materialization_status <> 'completed'
+        ) AS oldestDirtyMaterializationQueuedAt,
+        MAX(COALESCE(materialization.last_completed_at, materialization.updated_at)) FILTER (
+          WHERE materialization.materialization_status = 'running'
+             OR materialization.materialization_status = 'completed'
+        ) AS lastDirtyMaterializationProgressedAt
+      FROM app.project_mart_dirty_materialization_state materialization
+      INNER JOIN refresh_state state ON state.project_id = materialization.project_id
+      WHERE state.dirty_token IS NOT NULL
+        AND materialization.target_dirty_token <= state.dirty_token
+    ),
+    quarantine_summary AS (
+      SELECT CAST(COUNT(*) AS INTEGER) AS unresolvedQuarantineBarrierCount
+      FROM app.project_mart_dirty_refresh_article_quarantine quarantine
+      INNER JOIN refresh_state state ON state.project_id = quarantine.project_id
+      WHERE state.dirty_token IS NOT NULL
+        AND quarantine.dirty_token <= state.dirty_token
+        AND quarantine.resolved_at IS NULL
+    )
     SELECT
       CAST(dirty_token AS INTEGER) AS dirtyToken,
       last_completed_at AS lastCompletedAt,
@@ -279,19 +381,63 @@ const getProjectRefreshState = async (projectId: string): Promise<ProjectRefresh
       lease_expires_at AS leaseExpiresAt,
       refresh_status AS refreshStatus,
       updated_at AS updatedAt,
-      worker_id AS workerId
-    FROM app.project_mart_refresh_state
-    WHERE project_id = '${escapeSqlString(projectId)}'
-    LIMIT 1
+      worker_id AS workerId,
+      COALESCE(materialization_summary.incompleteMaterializationCount, 0) AS incompleteMaterializationCount,
+      COALESCE(materialization_summary.pendingMaterializationCount, 0) AS pendingMaterializationCount,
+      COALESCE(materialization_summary.runningMaterializationCount, 0) AS runningMaterializationCount,
+      COALESCE(materialization_summary.failedMaterializationCount, 0) AS failedMaterializationCount,
+      COALESCE(materialization_summary.unreconciledMaterializationCount, 0) AS unreconciledMaterializationCount,
+      COALESCE(materialization_summary.activeMaterializationOwnerCount, 0) AS activeMaterializationOwnerCount,
+      materialization_summary.oldestDirtyMaterializationQueuedAt AS oldestDirtyMaterializationQueuedAt,
+      materialization_summary.lastDirtyMaterializationProgressedAt AS lastDirtyMaterializationProgressedAt,
+      COALESCE(quarantine_summary.unresolvedQuarantineBarrierCount, 0) AS unresolvedQuarantineBarrierCount
+    FROM refresh_state
+    CROSS JOIN materialization_summary
+    CROSS JOIN quarantine_summary
   `)
 
   const dirtyToken = row?.dirtyToken ?? null
+  const failedMaterializationCount = Number(row?.failedMaterializationCount ?? 0)
+  const incompleteMaterializationCount = Number(row?.incompleteMaterializationCount ?? 0)
   const lastCompletedDirtyToken = row?.lastCompletedDirtyToken ?? null
+  const pendingMaterializationCount = Number(row?.pendingMaterializationCount ?? 0)
   const refreshStatus = row?.refreshStatus ?? null
-  const isFresh = dirtyToken === null || (lastCompletedDirtyToken !== null && lastCompletedDirtyToken >= dirtyToken)
+  const runningMaterializationCount = Number(row?.runningMaterializationCount ?? 0)
+  const unresolvedQuarantineBarrierCount = Number(row?.unresolvedQuarantineBarrierCount ?? 0)
+  const unreconciledMaterializationCount = Number(row?.unreconciledMaterializationCount ?? 0)
+  const hasIncompleteDirtyMaterialization = incompleteMaterializationCount > 0
+  const hasUnresolvedQuarantineBarrier = unresolvedQuarantineBarrierCount > 0
+  const isFresh =
+    dirtyToken === null
+    || (!hasIncompleteDirtyMaterialization
+      && !hasUnresolvedQuarantineBarrier
+      && lastCompletedDirtyToken !== null
+      && lastCompletedDirtyToken >= dirtyToken)
+  const dirtyMaterialization = row
+    ? {
+        activeOwnerCount: Number(row.activeMaterializationOwnerCount ?? 0),
+        failedCount: failedMaterializationCount,
+        incompleteCount: incompleteMaterializationCount,
+        isActive: Number(row.activeMaterializationOwnerCount ?? 0) > 0,
+        lastProgressedAt: row.lastDirtyMaterializationProgressedAt ?? null,
+        oldestQueuedAt: row.oldestDirtyMaterializationQueuedAt ?? null,
+        pendingCount: pendingMaterializationCount,
+        runningCount: runningMaterializationCount,
+        unreconciledCount: unreconciledMaterializationCount,
+      }
+    : getEmptyDirtyMaterializationSummary()
 
   return {
+    dirtyMaterialization,
     dirtyToken,
+    freshnessStatus: getRefreshFreshnessStatus({
+      hasFailedMaterialization: failedMaterializationCount > 0 || unreconciledMaterializationCount > 0,
+      hasUnresolvedQuarantineBarrier,
+      isFresh,
+      refreshStatus,
+    }),
+    hasIncompleteDirtyMaterialization,
+    hasUnresolvedQuarantineBarrier,
     isFresh,
     lastCompletedAt: row?.lastCompletedAt ?? null,
     lastCompletedDirtyToken,
@@ -299,6 +445,7 @@ const getProjectRefreshState = async (projectId: string): Promise<ProjectRefresh
     lastStartedAt: row?.lastStartedAt ?? null,
     leaseExpiresAt: row?.leaseExpiresAt ?? null,
     refreshStatus,
+    unresolvedQuarantineBarrierCount,
     updatedAt: row?.updatedAt ?? null,
     workerId: row?.workerId ?? null,
   }
@@ -530,13 +677,16 @@ const queueMissingVisibleJudgmentFactRepair = async (projectId: string): Promise
 const getReviewIndexingBlockedReason = (params: {
   canRunMartRefreshDrain: boolean
   canRunMaintenanceWork: boolean
+  hasUnresolvedQuarantineBarrier: boolean
   pendingRefreshCount: number
 }): ReviewsIndexingBlockedReason => {
-  return params.pendingRefreshCount === 0 || (params.canRunMaintenanceWork && params.canRunMartRefreshDrain)
-    ? null
-    : params.canRunMaintenanceWork
-      ? 'paused_by_policy'
-      : 'waiting_for_maintenance_worker'
+  return params.hasUnresolvedQuarantineBarrier
+    ? 'quarantine_barrier'
+    : params.pendingRefreshCount === 0 || (params.canRunMaintenanceWork && params.canRunMartRefreshDrain)
+      ? null
+      : params.canRunMaintenanceWork
+        ? 'paused_by_policy'
+        : 'waiting_for_maintenance_worker'
 }
 
 const getMaintenanceConsumerAvailability = async () => {
@@ -587,6 +737,7 @@ const getUniqueCount = (values: Array<string | null>) => {
 }
 
 const getActiveConsumerCount = (params: {
+  activeDirtyMaterializationOwnerCount: number
   freshMaintenanceLeases: FreshMaintenanceWorkLeaseRecord[]
   isLargeRebuildRunning: boolean
   isProjectRunning: boolean
@@ -596,6 +747,9 @@ const getActiveConsumerCount = (params: {
   return getUniqueCount([
     ...params.freshMaintenanceLeases.map((lease) => {
       return lease.consumerId
+    }),
+    ...Array.from({length: params.activeDirtyMaterializationOwnerCount}, (_, index) => {
+      return `dirty-materialization-owner-${index}`
     }),
     params.isProjectRunning ? params.projectRefreshState.workerId : null,
     params.isLargeRebuildRunning ? params.projectLargeRebuildState.workerId : null,
@@ -612,6 +766,7 @@ const getReviewsIndexingStatus = (params: {
   hasFailedRefresh: boolean
   hasAnyArticlesInScope: boolean
   hasReviewRollupRows: boolean
+  hasUnresolvedQuarantineBarrier: boolean
   eligibleConsumerPresent: boolean
   pendingRefreshCount: number
 }): ReviewsIndexingStatus => {
@@ -621,13 +776,15 @@ const getReviewsIndexingStatus = (params: {
     ? 'not-needed'
     : params.hasFailedRefresh
       ? 'failed'
-      : params.pendingRefreshCount > 0 && params.activeWorkCount === 0 && !params.eligibleConsumerPresent
+      : params.hasUnresolvedQuarantineBarrier
         ? 'blocked'
-        : params.pendingRefreshCount > 0
-          ? 'refreshing'
-          : params.hasReviewRollupRows
-            ? 'ready'
-            : 'stale'
+        : params.pendingRefreshCount > 0 && params.activeWorkCount === 0 && !params.eligibleConsumerPresent
+          ? 'blocked'
+          : params.pendingRefreshCount > 0
+            ? 'refreshing'
+            : params.hasReviewRollupRows
+              ? 'ready'
+              : 'stale'
 }
 
 const getReviewsIndexingProgressState = (params: {
@@ -690,6 +847,13 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       freshMaintenanceLeases,
       'review_index_large_rebuild',
     )
+    const freshGenerationCleanupLeaseCount = getFreshMaintenanceLeaseCount(
+      freshMaintenanceLeases,
+      'review_index_serving_generation_cleanup',
+    )
+    const reviewIndexCleanup: ProjectReviewIndexCleanup = {
+      inFlightGenerationCleanupCount: freshGenerationCleanupLeaseCount,
+    }
     const hasActiveProjectLease =
       getHasActiveLease(projectRefreshState.leaseExpiresAt, currentNow) || freshProjectRefreshLeaseCount > 0
     const hasActiveLargeRebuildLease =
@@ -709,6 +873,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const eligibleConsumerPresent = maintenanceConsumerAvailability.eligibleConsumerPresent || canRunMartRefreshDrain
     const isProjectRunning =
       freshProjectRefreshLeaseCount > 0
+      || projectRefreshState.dirtyMaterialization.isActive
       || (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'running' && hasActiveProjectLease)
     const rawInFlightProjectRefreshCount = isProjectRunning ? 1 : isLargeRebuildRunning ? 1 : 0
     const inFlightProjectRefreshCount = rawInFlightProjectRefreshCount
@@ -741,10 +906,14 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const rawBlockedReason = getReviewIndexingBlockedReason({
       canRunMaintenanceWork,
       canRunMartRefreshDrain,
+      hasUnresolvedQuarantineBarrier: projectRefreshState.hasUnresolvedQuarantineBarrier,
       pendingRefreshCount,
     })
     const hasFailedRefresh =
-      (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'failed') || isLargeRebuildFailed
+      (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'failed')
+      || projectRefreshState.dirtyMaterialization.failedCount > 0
+      || projectRefreshState.dirtyMaterialization.unreconciledCount > 0
+      || isLargeRebuildFailed
     const indexingStatus = getReviewsIndexingStatus({
       activeWorkCount,
       enabledPromptCount,
@@ -752,10 +921,12 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       hasFailedRefresh,
       hasAnyArticlesInScope,
       hasReviewRollupRows: hasReviewServingRows,
+      hasUnresolvedQuarantineBarrier: projectRefreshState.hasUnresolvedQuarantineBarrier,
       pendingRefreshCount,
     })
     const blockedReason = indexingStatus === 'blocked' ? rawBlockedReason : null
     const activeConsumerCount = getActiveConsumerCount({
+      activeDirtyMaterializationOwnerCount: projectRefreshState.dirtyMaterialization.activeOwnerCount,
       freshMaintenanceLeases,
       isLargeRebuildRunning,
       isProjectRunning,
@@ -773,12 +944,24 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           activeWorkCount,
           articleRefreshesPerMinute: throughputSnapshot.articleRefreshesPerMinute,
           blockedReason,
+          cleanup: reviewIndexCleanup,
           diagnostics: getReviewsRuntimeDiagnostics(projectId, projectLargeRebuildState),
+          dirtyMaterialization: projectRefreshState.dirtyMaterialization,
           eligibleConsumerCount: Math.max(
             maintenanceConsumerAvailability.eligibleConsumerCount,
             eligibleConsumerPresent ? 1 : 0,
           ),
           eligibleConsumerPresent,
+          freshness: {
+            dirtyToken: projectRefreshState.dirtyToken,
+            hasIncompleteDirtyMaterialization: projectRefreshState.hasIncompleteDirtyMaterialization,
+            hasUnresolvedQuarantineBarrier: projectRefreshState.hasUnresolvedQuarantineBarrier,
+            isFresh: projectRefreshState.isFresh,
+            lastCompletedDirtyToken: projectRefreshState.lastCompletedDirtyToken,
+            refreshStatus: projectRefreshState.refreshStatus,
+            status: projectRefreshState.freshnessStatus,
+            unresolvedQuarantineBarrierCount: projectRefreshState.unresolvedQuarantineBarrierCount,
+          },
           inFlightArticleRefreshCount,
           inFlightProjectRefreshCount,
           inFlightRefreshCount,
@@ -786,6 +969,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           lastProgressedAt: getLatestTimestamp(
             projectRefreshState.lastCompletedAt,
             isProjectRunning ? projectRefreshState.updatedAt : null,
+            projectRefreshState.dirtyMaterialization.lastProgressedAt,
             projectLargeRebuildState.lastCompletedAt,
             isLargeRebuildRunning ? projectLargeRebuildState.updatedAt : null,
             ...freshMaintenanceLeases.map((lease) => {
@@ -805,6 +989,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           ),
           oldestQueuedAt: getOldestQueuedAt(
             projectRefreshState.isFresh ? null : projectRefreshState.lastRequestedAt,
+            projectRefreshState.dirtyMaterialization.oldestQueuedAt,
             pendingArticleRefreshInfo.oldestQueuedAt,
           ),
           pendingArticleRefreshCount,

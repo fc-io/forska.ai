@@ -30,15 +30,19 @@ export const getReviewIndexingStalledBody = () => {
 }
 
 export const getReviewIndexingBlockedTitle = (blockedReason: ReviewIndexingBlockedReason) => {
-  return blockedReason === 'paused_by_policy'
-    ? 'Review indexing cooling down after memory pressure'
-    : 'Review indexing blocked: waiting for maintenance worker'
+  return blockedReason === 'quarantine_barrier'
+    ? 'Review indexing blocked by quarantined article'
+    : blockedReason === 'paused_by_policy'
+      ? 'Review indexing cooling down after memory pressure'
+      : 'Review indexing blocked: waiting for maintenance worker'
 }
 
 export const getReviewIndexingBlockedBody = (blockedReason: ReviewIndexingBlockedReason) => {
-  return blockedReason === 'paused_by_policy'
-    ? 'Review index work is queued, but the maintenance worker is cooling down after memory pressure before starting more review refresh work.'
-    : 'Review index work is queued and waiting for a maintenance worker to become available.'
+  return blockedReason === 'quarantine_barrier'
+    ? 'One or more article refreshes are quarantined. Review lists keep using the current index until the quarantined work is resolved.'
+    : blockedReason === 'paused_by_policy'
+      ? 'Review index work is queued, but the maintenance worker is cooling down after memory pressure before starting more review refresh work.'
+      : 'Review index work is queued and waiting for a maintenance worker to become available.'
 }
 
 const hasOnlyArticleRefreshWork = (indexing: ReviewsWarningsData['indexing']) => {
@@ -49,10 +53,20 @@ const getLargeRebuildPhase = (indexing: ReviewsWarningsData['indexing']) => {
   return indexing.largeRebuild?.rebuildPhase ?? null
 }
 
+const hasDirtyMaterializationWork = (indexing: ReviewsWarningsData['indexing']) => {
+  return (indexing.dirtyMaterialization?.incompleteCount ?? 0) > 0
+}
+
 const getLargeRebuildPhasedDescription = (state: 'active' | 'queued') => {
   return state === 'queued'
     ? 'This staged rebuild is queued for its current phase. Large rebuilds run several passes over the same article scope, so the article counter resets when the phase changes.'
     : 'This project is being rebuilt in bounded phases. Each phase scans the same article scope, so current-phase article counts reset when the rebuild advances.'
+}
+
+const getDirtyMaterializationDescription = (state: 'active' | 'queued') => {
+  return state === 'queued'
+    ? 'Project-wide dirty state is queued for materialization before review refresh can continue. Current review lists remain readable but may be stale.'
+    : 'Project-wide dirty state is being materialized before review refresh continues. Current review lists remain readable but may be stale.'
 }
 
 const getArticleRefreshQueuedDescription = (surface: ReviewIndexingCopySurface) => {
@@ -97,12 +111,14 @@ const getQueuedReviewIndexingCopy = (params: ReviewIndexingCopyParams): ReviewIn
 
   return phase
     ? {description: getLargeRebuildPhasedDescription('queued'), title: `Large rebuild phase queued: ${phase}`}
-    : hasOnlyArticleRefreshWork(params.indexing)
-      ? {
-          description: getArticleRefreshQueuedDescription(params.surface),
-          title: 'New judgments are queued for incorporation',
-        }
-      : {description: getReviewIndexingQueuedBody(), title: getReviewIndexingQueuedTitle(params.projectId)}
+    : hasDirtyMaterializationWork(params.indexing)
+      ? {description: getDirtyMaterializationDescription('queued'), title: 'Review index materialization queued'}
+      : hasOnlyArticleRefreshWork(params.indexing)
+        ? {
+            description: getArticleRefreshQueuedDescription(params.surface),
+            title: 'New judgments are queued for incorporation',
+          }
+        : {description: getReviewIndexingQueuedBody(), title: getReviewIndexingQueuedTitle(params.projectId)}
 }
 
 const getProcessingReviewIndexingCopy = (params: ReviewIndexingCopyParams): ReviewIndexingCopy => {
@@ -110,15 +126,17 @@ const getProcessingReviewIndexingCopy = (params: ReviewIndexingCopyParams): Revi
 
   return phase
     ? {description: getLargeRebuildPhasedDescription('active'), title: `Large rebuild phase in progress: ${phase}`}
-    : hasOnlyArticleRefreshWork(params.indexing)
-      ? {
-          description: getArticleRefreshProcessingDescription(params.surface),
-          title: 'New judgments are still being incorporated',
-        }
-      : {
-          description: getProjectRefreshProcessingDescription(params.surface),
-          title: getReviewIndexingInProgressTitle(params.projectId),
-        }
+    : hasDirtyMaterializationWork(params.indexing)
+      ? {description: getDirtyMaterializationDescription('active'), title: 'Review index materialization in progress'}
+      : hasOnlyArticleRefreshWork(params.indexing)
+        ? {
+            description: getArticleRefreshProcessingDescription(params.surface),
+            title: 'New judgments are still being incorporated',
+          }
+        : {
+            description: getProjectRefreshProcessingDescription(params.surface),
+            title: getReviewIndexingInProgressTitle(params.projectId),
+          }
 }
 
 export const getReviewIndexingStateCopy = (params: ReviewIndexingCopyParams): ReviewIndexingCopy => {
