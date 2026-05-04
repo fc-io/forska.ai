@@ -52,8 +52,8 @@ const runFreshnessScript = <T>(body: string) => {
 
 test('judgment job freshness treats earlier incomplete dirty materialization as stale', () => {
   const result = runFreshnessScript<{
-    completed: {dirtyToken: number | null; hasIncompleteDirtyMaterialization: boolean; isFresh: boolean}
-    pending: {dirtyToken: number | null; hasIncompleteDirtyMaterialization: boolean; isFresh: boolean}
+    completed: {dirtyToken: number | null; hasIncompleteDirtyMaterialization: boolean; isFresh: boolean; status: string}
+    pending: {dirtyToken: number | null; hasIncompleteDirtyMaterialization: boolean; isFresh: boolean; status: string}
   }>(`
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
     const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
@@ -118,6 +118,110 @@ test('judgment job freshness treats earlier incomplete dirty materialization as 
     await database.close()
   `)
 
-  expect(result.pending).toMatchObject({dirtyToken: 3, hasIncompleteDirtyMaterialization: true, isFresh: false})
-  expect(result.completed).toMatchObject({dirtyToken: 3, hasIncompleteDirtyMaterialization: false, isFresh: true})
+  expect(result.pending).toMatchObject({
+    dirtyToken: 3,
+    hasIncompleteDirtyMaterialization: true,
+    isFresh: false,
+    status: 'pending',
+  })
+  expect(result.completed).toMatchObject({
+    dirtyToken: 3,
+    hasIncompleteDirtyMaterialization: false,
+    isFresh: true,
+    status: 'fresh',
+  })
+})
+
+test('judgment job freshness treats unresolved quarantine barriers as stale', () => {
+  const result = runFreshnessScript<{
+    fresh: {
+      hasUnresolvedQuarantineBarrier: boolean
+      isFresh: boolean
+      status: string
+      unresolvedQuarantineBarrierCount: number
+    }
+    quarantined: {
+      hasUnresolvedQuarantineBarrier: boolean
+      isFresh: boolean
+      status: string
+      unresolvedQuarantineBarrierCount: number
+    }
+  }>(`
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {getProjectMartFreshnessState} = await import('./src/server/routes/JudgmentsJobsRoutes.ts')
+
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('quarantine-freshness-connection', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+    await database.run(\`
+      INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+      VALUES ('quarantine-freshness-model', 'quarantine-freshness-connection', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+    \`)
+    await database.run(\`
+      INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+      VALUES ('quarantine-freshness-project', 'Quarantine Freshness Project', 'quarantine-freshness-model', TRUE, TRUE, FALSE, FALSE)
+    \`)
+    await database.run(\`
+      INSERT INTO app.article (id, article_title)
+      VALUES ('quarantine-freshness-article', 'Quarantine freshness article')
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_mart_refresh_state (
+        project_id,
+        dirty_token,
+        last_completed_dirty_token
+      ) VALUES (
+        'quarantine-freshness-project',
+        3,
+        3
+      )
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_mart_dirty_refresh_article_quarantine (
+        project_id,
+        article_id,
+        dirty_token,
+        error,
+        detected_by
+      ) VALUES (
+        'quarantine-freshness-project',
+        'quarantine-freshness-article',
+        2,
+        'native crash',
+        'test'
+      )
+    \`)
+
+    const quarantined = await getProjectMartFreshnessState('quarantine-freshness-project')
+
+    await database.run(\`
+      UPDATE app.project_mart_dirty_refresh_article_quarantine
+      SET resolved_at = current_timestamp
+      WHERE project_id = 'quarantine-freshness-project'
+    \`)
+
+    const fresh = await getProjectMartFreshnessState('quarantine-freshness-project')
+
+    console.log(JSON.stringify({fresh, quarantined}))
+    await database.close()
+  `)
+
+  expect(result.quarantined).toMatchObject({
+    hasUnresolvedQuarantineBarrier: true,
+    isFresh: false,
+    status: 'stale',
+    unresolvedQuarantineBarrierCount: 1,
+  })
+  expect(result.fresh).toMatchObject({
+    hasUnresolvedQuarantineBarrier: false,
+    isFresh: true,
+    status: 'fresh',
+    unresolvedQuarantineBarrierCount: 0,
+  })
 })

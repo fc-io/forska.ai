@@ -77,6 +77,28 @@ const getLargeRebuildFailureLabel = (indexing: ReviewsWarningsData['indexing']) 
   return lastError === null || lastError === undefined ? null : `last error: ${lastError}`
 }
 
+const getDirtyMaterializationLabel = (indexing: ReviewsWarningsData['indexing']) => {
+  const materialization = indexing.dirtyMaterialization
+
+  return materialization === undefined || materialization.incompleteCount === 0
+    ? null
+    : `${getCountLabel(materialization.incompleteCount)} project-wide dirty ${materialization.incompleteCount === 1 ? 'snapshot' : 'snapshots'} pending`
+}
+
+const getQuarantineBarrierLabel = (indexing: ReviewsWarningsData['indexing']) => {
+  return (indexing.freshness?.unresolvedQuarantineBarrierCount ?? 0) === 0
+    ? null
+    : `${getCountLabel(indexing.freshness?.unresolvedQuarantineBarrierCount ?? 0)} quarantined article ${indexing.freshness?.unresolvedQuarantineBarrierCount === 1 ? 'barrier' : 'barriers'} blocking freshness`
+}
+
+const getCleanupLabel = (indexing: ReviewsWarningsData['indexing']) => {
+  const cleanupCount = indexing.cleanup?.inFlightGenerationCleanupCount ?? 0
+
+  return cleanupCount === 0
+    ? null
+    : `${getCountLabel(cleanupCount)} old-generation cleanup ${cleanupCount === 1 ? 'job' : 'jobs'} running`
+}
+
 const getIndexingStatusLabel = (indexing: ReviewsWarningsData['indexing']) => {
   return indexing.progressState === 'processing'
     ? `${indexing.activeWorkCount} ${indexing.activeWorkCount === 1 ? 'refresh job' : 'refresh jobs'} actively processing`
@@ -155,6 +177,33 @@ export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => 
             return (
               <p>
                 <span class="font-medium text-slate-700">Large rebuild:</span> {phaseLabel()}
+              </p>
+            )
+          }}
+        </Show>
+        <Show when={getDirtyMaterializationLabel(props.indexing)}>
+          {(materializationLabel) => {
+            return (
+              <p>
+                <span class="font-medium text-slate-700">Dirty materialization:</span> {materializationLabel()}
+              </p>
+            )
+          }}
+        </Show>
+        <Show when={getQuarantineBarrierLabel(props.indexing)}>
+          {(quarantineLabel) => {
+            return (
+              <p>
+                <span class="font-medium text-slate-700">Quarantine:</span> {quarantineLabel()}
+              </p>
+            )
+          }}
+        </Show>
+        <Show when={getCleanupLabel(props.indexing)}>
+          {(cleanupLabel) => {
+            return (
+              <p>
+                <span class="font-medium text-slate-700">Cleanup:</span> {cleanupLabel()}
               </p>
             )
           }}

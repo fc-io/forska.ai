@@ -63,6 +63,23 @@ const getLargeRebuildDetailLabel = (data: ReviewsWarningsData) => {
                 : `Current rebuild phase in progress: ${phaseLabel}`
 }
 
+const getFreshnessBarrierMetaLabel = (data: ReviewsWarningsData) => {
+  const materializationCount = data.indexing.dirtyMaterialization?.incompleteCount ?? 0
+  const quarantineCount = data.indexing.freshness?.unresolvedQuarantineBarrierCount ?? 0
+  const parts = [
+    materializationCount > 0
+      ? `${materializationCount.toLocaleString()} dirty materialization ${materializationCount === 1 ? 'snapshot' : 'snapshots'} pending`
+      : null,
+    quarantineCount > 0
+      ? `${quarantineCount.toLocaleString()} quarantined article ${quarantineCount === 1 ? 'barrier' : 'barriers'}`
+      : null,
+  ].filter((value): value is string => {
+    return value !== null
+  })
+
+  return parts.length === 0 ? null : parts.join(' and ')
+}
+
 export const ReviewsProjectWarnings = (props: {projectId: string}) => {
   const query = useQuery(() => {
     return createReviewsWarningsQueryOptions(props.projectId)
@@ -118,10 +135,12 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
     if (!data) return null
 
     const largeRebuildLabel = getLargeRebuildDetailLabel(data)
+    const freshnessBarrierLabel = getFreshnessBarrierMetaLabel(data)
     const queuedAtLabel = formatQueuedAt(data.indexing.oldestQueuedAt)
     const pendingLabel = data.indexing.pendingRefreshCount === 0 ? null : getPendingRefreshMetaLabel(data.indexing)
     const parts = [
       largeRebuildLabel,
+      freshnessBarrierLabel,
       pendingLabel ? (queuedAtLabel ? `${pendingLabel} since ${queuedAtLabel}` : pendingLabel) : null,
     ].filter((value): value is string => {
       return value !== null

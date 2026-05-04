@@ -7,7 +7,8 @@ export type ReviewsWarningsData = {
     activeConsumerCount: number
     activeWorkCount: number
     articleRefreshesPerMinute: number | null
-    blockedReason: 'paused_by_policy' | 'waiting_for_maintenance_worker' | null
+    blockedReason: 'paused_by_policy' | 'quarantine_barrier' | 'waiting_for_maintenance_worker' | null
+    cleanup?: {inFlightGenerationCleanupCount: number}
     diagnostics: {
       duckdbQueues: {
         background: {
@@ -59,6 +60,27 @@ export type ReviewsWarningsData = {
     }
     eligibleConsumerCount: number
     eligibleConsumerPresent: boolean
+    dirtyMaterialization?: {
+      activeOwnerCount: number
+      failedCount: number
+      incompleteCount: number
+      isActive: boolean
+      lastProgressedAt: string | null
+      oldestQueuedAt: string | null
+      pendingCount: number
+      runningCount: number
+      unreconciledCount: number
+    }
+    freshness?: {
+      dirtyToken: number | null
+      hasIncompleteDirtyMaterialization: boolean
+      hasUnresolvedQuarantineBarrier: boolean
+      isFresh: boolean
+      lastCompletedDirtyToken: number | null
+      refreshStatus: 'blocked_by_quarantine' | 'failed' | 'idle' | 'paused' | 'running' | null
+      status: 'fresh' | 'pending' | 'stale'
+      unresolvedQuarantineBarrierCount: number
+    }
     inFlightArticleRefreshCount: number
     inFlightProjectRefreshCount: number
     inFlightRefreshCount: number
