@@ -39,13 +39,58 @@ export type JudgmentJobProviderTelemetry = {
     effectiveBaseURL: string | null
     lastFailureKind: string | null
     lastFailureMessage: string | null
-    localEndpointProbeCooldownUntil: string | null
-    localEndpointProbeLive: number
-    localEndpointProbeState: string
-    observedGlobalEndpointProbeLive: number | null
+    localProbeCooldownUntil: string | null
+    localProbeLiveCount: number
+    localProbeState: string
+    observedAggregateProbeLiveCount: number | null
     probeInProgress: boolean
   }>
+  endpointDiagnosticsByKey: Record<
+    string,
+    {
+      cooldownRemainingMs: number | null
+      endpointAvailabilityKey: string
+      endpointIdentity: string | null
+      effectiveBaseURL: string | null
+      lastFailureKind: string | null
+      lastFailureMessage: string | null
+      localProbeCooldownUntil: string | null
+      localProbeLiveCount: number
+      localProbeState: string
+      observedAggregateProbeLiveCount: number | null
+      probeInProgress: boolean
+    }
+  >
+  endpointDiagnosticsSummary: {
+    blockedEndpointCount: number
+    cooldownEndpointCount: number
+    endpointCount: number
+    hasHealthyEndpointOrEndpointlessPath: boolean
+    healthyEndpointCount: number
+    localProbeLiveCount: number
+    misconfiguredEndpointCount: number
+    observedAggregateProbeLiveCount: number | null
+    probeInProgress: boolean
+    providerKey: string
+    probingEndpointCount: number
+    unhealthyEndpointCount: number
+  }
   expectedLocalLiveShare: number
+  leaseAuthority: {
+    normalRequestCapacity: number
+    probeOccupancySampledAtMs: number
+    providerAllocationVersion: string
+    providerAvailableRequestLeases: number
+    providerKey: string
+    providerLeasedLiveRequests: number
+    providerLeasedPhysicalCalls: number
+    providerLeasedProbeCalls: number
+    providerLimit: number
+    providerLimitVersion: string
+    providerProbeOccupancyVersion: string
+    providerRequestFillPct: number | null
+    targetRequestLiveCalls: number
+  }
   localAdditionalLeaseHeadroom: number
   localAdditionalTargetHeadroom: number
   localPromptBacklog: number
@@ -55,6 +100,14 @@ export type JudgmentJobProviderTelemetry = {
   localRequestWorkBacklog: number
   localRequestWorkBacklogTarget: number
   normalRequestCapacity: number
+  observedBestEffort: {
+    effectiveProviderLimit: number
+    label: 'bestEffort'
+    promptBacklog: number
+    providerLiveRequests: number
+    providerRequestFillPct: number | null
+    requestWorkBacklog: number
+  }
   observedAggregateLabel: 'bestEffort'
   observedGlobalEffectiveProviderLimit: number
   observedGlobalPromptBacklog: number
@@ -130,13 +183,28 @@ export type JudgmentJobRequestStats = {
   }
   endpointAvailability?: {
     cooldownRemainingMs: number | null
+    effectiveBaseURL?: string | null
+    endpointAvailabilityKey?: string
+    endpointIdentity?: string | null
     lastFailureKind: string | null
     lastFailureMessage: string | null
+    localProbeLiveCount?: number
+    localProbeState?: string
+    observedAggregateProbeLiveCount?: number | null
     probeInProgress: boolean
     status: string
   } | null
   failures?: {anthropicRefusalArticles: number; anthropicRefusals: number; persistedFailedRequests: number}
   inFlight: number
+  lifecycleCounters?: {
+    claimedPrompts: number
+    liveLlmCalls: number
+    providerKey: string
+    runningPrompts: number
+    workerActivePrompts: number
+    workerQueuedPrompts: number
+  }
+  liveLlmCalls?: number
   providerTelemetry?: JudgmentJobProviderTelemetry
   requestSlotWaiters?: {codex: number; fallback: number; providerAdmission: number; worker: number}
   requestWorkBacklog?: number

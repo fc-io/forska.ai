@@ -1772,30 +1772,143 @@ test('job details expose shared endpoint availability diagnostics', async () => 
       attempts: number
       endpointAvailability: {
         cooldownRemainingMs: number | null
+        endpointAvailabilityKey: string
+        endpointIdentity: string | null
         lastFailureKind: string | null
         lastFailureMessage: string | null
+        localProbeLiveCount: number
+        localProbeState: string
+        observedAggregateProbeLiveCount: number | null
         probeInProgress: boolean
         status: string
       } | null
       inFlight: number
+      lifecycleCounters: {
+        claimedPrompts: number
+        liveLlmCalls: number
+        providerKey: string
+        runningPrompts: number
+        workerActivePrompts: number
+        workerQueuedPrompts: number
+      }
+      liveLlmCalls: number
+      providerTelemetry: {
+        bottleneck: string | null
+        bottleneckSource: string | null
+        bottleneckSubreason: string | null
+        endpointDiagnosticsByKey: Record<
+          string,
+          {
+            cooldownRemainingMs: number | null
+            localProbeLiveCount: number
+            localProbeState: string
+            observedAggregateProbeLiveCount: number | null
+          }
+        >
+        endpointDiagnosticsSummary: {
+          blockedEndpointCount: number
+          cooldownEndpointCount: number
+          endpointCount: number
+          hasHealthyEndpointOrEndpointlessPath: boolean
+          localProbeLiveCount: number
+          observedAggregateProbeLiveCount: number | null
+          providerKey: string
+        }
+        leaseAuthority: {
+          normalRequestCapacity: number
+          providerAvailableRequestLeases: number
+          providerKey: string
+          providerLeasedLiveRequests: number
+          providerLeasedPhysicalCalls: number
+          providerLeasedProbeCalls: number
+        }
+        observedBestEffort: {label: 'bestEffort'; providerLiveRequests: number; requestWorkBacklog: number}
+      }
+      telemetrySource: {
+        aggregateCompleteness: string
+        observedAggregatesAreBestEffort: true
+        providerCoverage: unknown[]
+      }
     }
   }
+  const endpointAvailabilityKey = `${connectionId}::https://runtime-paused.example.com`
 
   expect(response.status).toBe(200)
   expect(body.requestStats.inFlight).toBe(0)
+  expect(body.requestStats.liveLlmCalls).toBe(0)
   expect(body.requestStats.attempts).toBe(0)
   expect(body.requestStats.endpointAvailability).toMatchObject({
+    endpointAvailabilityKey,
+    endpointIdentity: 'https://runtime-paused.example.com',
     lastFailureKind: 'endpoint_unavailable',
+    localProbeLiveCount: 0,
+    localProbeState: 'cooldown',
+    observedAggregateProbeLiveCount: null,
     probeInProgress: false,
     status: 'cooldown',
   })
   expect(body.requestStats.endpointAvailability?.lastFailureMessage).toContain('Provider endpoint outage:')
   expect(body.requestStats.endpointAvailability?.cooldownRemainingMs).toBeGreaterThan(0)
+  expect(body.requestStats.lifecycleCounters).toEqual({
+    claimedPrompts: 0,
+    liveLlmCalls: 0,
+    providerKey: connectionId,
+    runningPrompts: 0,
+    workerActivePrompts: 0,
+    workerQueuedPrompts: 0,
+  })
+  expect(body.requestStats.providerTelemetry.leaseAuthority).toMatchObject({
+    normalRequestCapacity: 1,
+    providerAvailableRequestLeases: 1,
+    providerKey: connectionId,
+    providerLeasedLiveRequests: 0,
+    providerLeasedPhysicalCalls: 0,
+    providerLeasedProbeCalls: 0,
+  })
+  expect(body.requestStats.providerTelemetry.observedBestEffort).toMatchObject({
+    label: 'bestEffort',
+    providerLiveRequests: 0,
+    requestWorkBacklog: 0,
+  })
+  const providerEndpointDiagnostics =
+    body.requestStats.providerTelemetry.endpointDiagnosticsByKey[endpointAvailabilityKey]
+
+  expect(providerEndpointDiagnostics?.cooldownRemainingMs).toBeGreaterThan(0)
+  expect(providerEndpointDiagnostics).toMatchObject({
+    localProbeLiveCount: 0,
+    localProbeState: 'cooldown',
+    observedAggregateProbeLiveCount: null,
+  })
+  expect(body.requestStats.providerTelemetry.endpointDiagnosticsSummary).toMatchObject({
+    blockedEndpointCount: 1,
+    cooldownEndpointCount: 1,
+    endpointCount: 1,
+    hasHealthyEndpointOrEndpointlessPath: false,
+    localProbeLiveCount: 0,
+    observedAggregateProbeLiveCount: null,
+    providerKey: connectionId,
+  })
+  expect(body.requestStats.providerTelemetry.bottleneck).toBe('endpointUnavailable')
+  expect(body.requestStats.providerTelemetry.bottleneckSource).toBe(`endpoint:${endpointAvailabilityKey}`)
+  expect(body.requestStats.providerTelemetry.bottleneckSubreason).toBe('endpointCooldown')
+  expect(body.requestStats.telemetrySource).toMatchObject({
+    aggregateCompleteness: 'complete',
+    observedAggregatesAreBestEffort: true,
+  })
 
   const healthResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
   const healthBody = (await healthResponse.json()) as {
     blockedReason: string | null
-    endpointAvailability: {cooldownRemainingMs: number | null; status: string} | null
+    endpointAvailability: {
+      cooldownRemainingMs: number | null
+      endpointAvailabilityKey: string
+      localProbeState: string
+      status: string
+    } | null
+    providerDiagnostics: {
+      endpointDiagnosticsByKey: Record<string, {localProbeState: string}>
+      endpointDiagnosticsSummary: {blockedEndpointCount: number; providerKey: string}
+    }
     progressState: string
     recoveryMode: string
     retryAfterAt: string | null
@@ -1805,7 +1918,16 @@ test('job details expose shared endpoint availability diagnostics', async () => 
   expect(healthBody.progressState).toBe('cooldown')
   expect(healthBody.blockedReason).toBe('endpoint_cooldown')
   expect(healthBody.endpointAvailability?.status).toBe('cooldown')
+  expect(healthBody.endpointAvailability?.endpointAvailabilityKey).toBe(endpointAvailabilityKey)
+  expect(healthBody.endpointAvailability?.localProbeState).toBe('cooldown')
   expect(healthBody.endpointAvailability?.cooldownRemainingMs).toBeGreaterThan(0)
+  expect(healthBody.providerDiagnostics.endpointDiagnosticsByKey[endpointAvailabilityKey]).toMatchObject({
+    localProbeState: 'cooldown',
+  })
+  expect(healthBody.providerDiagnostics.endpointDiagnosticsSummary).toMatchObject({
+    blockedEndpointCount: 1,
+    providerKey: connectionId,
+  })
   expect(healthBody.recoveryMode).toBe('retry_backoff')
   expect(healthBody.retryAfterAt).not.toBeNull()
 })

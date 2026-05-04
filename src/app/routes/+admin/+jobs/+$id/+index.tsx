@@ -795,7 +795,7 @@ const AdminJudgmentJobDetail = () => {
                         </p>
                         <Show when={data()?.requestStats}>
                           <p class="text-xs font-medium text-sky-700 mt-1">
-                            Live LLM calls: {data()?.requestStats?.inFlight ?? 0}
+                            Live LLM calls: {data()?.requestStats?.liveLlmCalls ?? data()?.requestStats?.inFlight ?? 0}
                           </p>
                         </Show>
                         <Show when={data()?.requestStats?.dispatch}>
@@ -829,7 +829,9 @@ const AdminJudgmentJobDetail = () => {
                     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-7">
                       <div class="bg-sky-50 rounded-lg p-4">
                         <p class="text-sm text-sky-600 mb-1">Active LLM Calls</p>
-                        <p class="text-2xl font-bold text-sky-900">{data()?.requestStats?.inFlight ?? 0}</p>
+                        <p class="text-2xl font-bold text-sky-900">
+                          {data()?.requestStats?.liveLlmCalls ?? data()?.requestStats?.inFlight ?? 0}
+                        </p>
                         <p class="text-xs text-sky-600 mt-1">
                           Primary live throughput metric: request-level LLM calls running right now
                         </p>

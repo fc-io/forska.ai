@@ -147,11 +147,26 @@ export type JudgmentEndpointTelemetryDiagnostics = {
   effectiveBaseURL: string | null
   lastFailureKind: string | null
   lastFailureMessage: string | null
-  localEndpointProbeCooldownUntil: string | null
-  localEndpointProbeLive: number
-  localEndpointProbeState: string
-  observedGlobalEndpointProbeLive: number | null
+  localProbeCooldownUntil: string | null
+  localProbeLiveCount: number
+  localProbeState: string
+  observedAggregateProbeLiveCount: number | null
   probeInProgress: boolean
+}
+
+export type JudgmentEndpointTelemetrySummary = {
+  blockedEndpointCount: number
+  cooldownEndpointCount: number
+  endpointCount: number
+  hasHealthyEndpointOrEndpointlessPath: boolean
+  healthyEndpointCount: number
+  localProbeLiveCount: number
+  misconfiguredEndpointCount: number
+  observedAggregateProbeLiveCount: number | null
+  probeInProgress: boolean
+  providerKey: string
+  probingEndpointCount: number
+  unhealthyEndpointCount: number
 }
 
 export type JudgmentRequestSlotWaiterTelemetry = {
@@ -185,7 +200,24 @@ export type JudgmentProviderTelemetry = {
   convergenceDiagnostics: JudgmentConvergenceDiagnostics
   effectiveProviderLimit: number
   endpointDiagnostics: JudgmentEndpointTelemetryDiagnostics[]
+  endpointDiagnosticsByKey: Record<string, JudgmentEndpointTelemetryDiagnostics>
+  endpointDiagnosticsSummary: JudgmentEndpointTelemetrySummary
   expectedLocalLiveShare: number
+  leaseAuthority: {
+    normalRequestCapacity: number
+    probeOccupancySampledAtMs: number
+    providerAllocationVersion: string
+    providerAvailableRequestLeases: number
+    providerKey: string
+    providerLeasedLiveRequests: number
+    providerLeasedPhysicalCalls: number
+    providerLeasedProbeCalls: number
+    providerLimit: number
+    providerLimitVersion: string
+    providerProbeOccupancyVersion: string
+    providerRequestFillPct: number | null
+    targetRequestLiveCalls: number
+  }
   localAdditionalLeaseHeadroom: number
   localAdditionalTargetHeadroom: number
   localPromptBacklog: number
@@ -195,6 +227,14 @@ export type JudgmentProviderTelemetry = {
   localRequestWorkBacklog: number
   localRequestWorkBacklogTarget: number
   normalRequestCapacity: number
+  observedBestEffort: {
+    effectiveProviderLimit: number
+    label: 'bestEffort'
+    promptBacklog: number
+    providerLiveRequests: number
+    providerRequestFillPct: number | null
+    requestWorkBacklog: number
+  }
   observedAggregateLabel: 'bestEffort'
   observedGlobalEffectiveProviderLimit: number
   observedGlobalPromptBacklog: number
@@ -362,6 +402,115 @@ const getDispatchTelemetryFromStats = (stats: JudgmentDispatchProviderStats): Ju
   }
 }
 
+const getEndpointDiagnosticsByKey = (
+  endpointDiagnostics: JudgmentEndpointTelemetryDiagnostics[],
+): Record<string, JudgmentEndpointTelemetryDiagnostics> => {
+  return endpointDiagnostics.reduce<Record<string, JudgmentEndpointTelemetryDiagnostics>>((byKey, diagnostics) => {
+    return {...byKey, [diagnostics.endpointAvailabilityKey]: diagnostics}
+  }, {})
+}
+
+const getObservedAggregateProbeLiveCount = (
+  endpointDiagnostics: JudgmentEndpointTelemetryDiagnostics[],
+): number | null => {
+  const observedCounts = endpointDiagnostics.flatMap((diagnostics) => {
+    return diagnostics.observedAggregateProbeLiveCount === null ? [] : [diagnostics.observedAggregateProbeLiveCount]
+  })
+
+  return observedCounts.length === 0
+    ? null
+    : observedCounts.reduce((sum, count) => {
+        return sum + count
+      }, 0)
+}
+
+const getEndpointDiagnosticsSummary = ({
+  endpointDiagnostics,
+  hasHealthyEndpointOrEndpointlessPath,
+  providerKey,
+}: {
+  endpointDiagnostics: JudgmentEndpointTelemetryDiagnostics[]
+  hasHealthyEndpointOrEndpointlessPath: boolean
+  providerKey: string
+}): JudgmentEndpointTelemetrySummary => {
+  const countByState = (state: string): number => {
+    return endpointDiagnostics.filter((diagnostics) => {
+      return diagnostics.localProbeState === state
+    }).length
+  }
+  const localProbeLiveCount = endpointDiagnostics.reduce((sum, diagnostics) => {
+    return sum + diagnostics.localProbeLiveCount
+  }, 0)
+  const cooldownEndpointCount = countByState('cooldown')
+  const misconfiguredEndpointCount = countByState('misconfigured')
+  const probingEndpointCount = countByState('probing')
+  const healthyEndpointCount = countByState('healthy')
+  const unhealthyEndpointCount =
+    endpointDiagnostics.length
+    - healthyEndpointCount
+    - cooldownEndpointCount
+    - misconfiguredEndpointCount
+    - probingEndpointCount
+
+  return {
+    blockedEndpointCount:
+      endpointDiagnostics.length === 0 ? 0 : endpointDiagnostics.length - healthyEndpointCount - probingEndpointCount,
+    cooldownEndpointCount,
+    endpointCount: endpointDiagnostics.length,
+    hasHealthyEndpointOrEndpointlessPath,
+    healthyEndpointCount,
+    localProbeLiveCount,
+    misconfiguredEndpointCount,
+    observedAggregateProbeLiveCount: getObservedAggregateProbeLiveCount(endpointDiagnostics),
+    probeInProgress: endpointDiagnostics.some((diagnostics) => {
+      return diagnostics.probeInProgress
+    }),
+    providerKey,
+    probingEndpointCount,
+    unhealthyEndpointCount,
+  }
+}
+
+const withProviderApiReadModels = (
+  provider: Omit<
+    JudgmentProviderTelemetry,
+    'endpointDiagnosticsByKey' | 'endpointDiagnosticsSummary' | 'leaseAuthority' | 'observedBestEffort'
+  >,
+): JudgmentProviderTelemetry => {
+  return {
+    ...provider,
+    endpointDiagnosticsByKey: getEndpointDiagnosticsByKey(provider.endpointDiagnostics),
+    endpointDiagnosticsSummary: getEndpointDiagnosticsSummary({
+      endpointDiagnostics: provider.endpointDiagnostics,
+      hasHealthyEndpointOrEndpointlessPath: provider.convergenceDiagnostics.hasHealthyEndpointOrEndpointlessPath,
+      providerKey: provider.providerKey,
+    }),
+    leaseAuthority: {
+      normalRequestCapacity: provider.normalRequestCapacity,
+      probeOccupancySampledAtMs: provider.probeOccupancySampledAtMs,
+      providerAllocationVersion: provider.providerAllocationVersion,
+      providerAvailableRequestLeases: provider.providerAvailableRequestLeases,
+      providerKey: provider.providerKey,
+      providerLeasedLiveRequests: provider.providerLeasedLiveRequests,
+      providerLeasedPhysicalCalls: provider.providerLeasedPhysicalCalls,
+      providerLeasedProbeCalls: provider.providerLeasedProbeCalls,
+      providerLimit: provider.providerLimit,
+      providerLimitVersion: provider.providerLimitVersion,
+      providerProbeOccupancyVersion: provider.providerProbeOccupancyVersion,
+      providerRequestFillPct: provider.providerRequestFillPct,
+      targetRequestLiveCalls: provider.targetRequestLiveCalls,
+    },
+    observedBestEffort: {
+      effectiveProviderLimit: provider.observedGlobalEffectiveProviderLimit,
+      label: 'bestEffort',
+      promptBacklog: provider.observedGlobalPromptBacklog,
+      providerLiveRequests: provider.observedGlobalProviderLiveRequests,
+      providerRequestFillPct: provider.observedGlobalProviderRequestFillPct,
+      requestWorkBacklog: provider.observedGlobalRequestWorkBacklog,
+    },
+  }
+}
+
 const getZeroProviderTelemetry = ({providerKey}: {providerKey: string}): JudgmentProviderTelemetry => {
   const convergenceDiagnostics = {
     activeHigherPriorityStopRules: [],
@@ -377,7 +526,7 @@ const getZeroProviderTelemetry = ({providerKey}: {providerKey: string}): Judgmen
     readyCount: 0,
   }
 
-  return {
+  return withProviderApiReadModels({
     allocationCompleteCurrent: false,
     allocationInputState: 'unavailable',
     bottleneck: null,
@@ -415,7 +564,7 @@ const getZeroProviderTelemetry = ({providerKey}: {providerKey: string}): Judgmen
     providerRequestFillPct: null,
     targetRequestLiveCalls: 0,
     unallocatedTargetLiveCalls: 0,
-  }
+  })
 }
 
 const getZeroTelemetrySnapshot = (): JudgmentDispatchTelemetrySnapshot => {
@@ -586,13 +735,13 @@ const getEndpointDiagnosticsFromRecord = (value: unknown): JudgmentEndpointTelem
   }
 
   const endpointAvailabilityKey = getStringValue(value.endpointAvailabilityKey)
-  const localEndpointProbeLive = getNumberValue(value.localEndpointProbeLive)
-  const localEndpointProbeState = getStringValue(value.localEndpointProbeState)
+  const localProbeLiveCount = getNumberValue(value.localProbeLiveCount) ?? getNumberValue(value.localEndpointProbeLive)
+  const localProbeState = getStringValue(value.localProbeState) ?? getStringValue(value.localEndpointProbeState)
   const probeInProgress = getBooleanValue(value.probeInProgress)
 
   return endpointAvailabilityKey === null
-    || localEndpointProbeLive === null
-    || localEndpointProbeState === null
+    || localProbeLiveCount === null
+    || localProbeState === null
     || probeInProgress === null
     ? null
     : {
@@ -602,10 +751,13 @@ const getEndpointDiagnosticsFromRecord = (value: unknown): JudgmentEndpointTelem
         endpointIdentity: getStringValue(value.endpointIdentity),
         lastFailureKind: getStringValue(value.lastFailureKind),
         lastFailureMessage: getStringValue(value.lastFailureMessage),
-        localEndpointProbeCooldownUntil: getStringValue(value.localEndpointProbeCooldownUntil),
-        localEndpointProbeLive,
-        localEndpointProbeState,
-        observedGlobalEndpointProbeLive: getNumberValue(value.observedGlobalEndpointProbeLive),
+        localProbeCooldownUntil:
+          getStringValue(value.localProbeCooldownUntil) ?? getStringValue(value.localEndpointProbeCooldownUntil),
+        localProbeLiveCount,
+        localProbeState,
+        observedAggregateProbeLiveCount:
+          getNumberValue(value.observedAggregateProbeLiveCount)
+          ?? getNumberValue(value.observedGlobalEndpointProbeLive),
         probeInProgress,
       }
 }
@@ -651,7 +803,7 @@ const getProviderTelemetryFromRecord = (value: unknown): JudgmentProviderTelemet
     || allocationCompleteCurrent === null
     || convergenceDiagnostics === null
     ? null
-    : {
+    : withProviderApiReadModels({
         allocationCompleteCurrent,
         allocationInputState,
         bottleneck: getCanonicalBottleneck(value.bottleneck),
@@ -696,7 +848,7 @@ const getProviderTelemetryFromRecord = (value: unknown): JudgmentProviderTelemet
         providerRequestFillPct: getNumberValue(value.providerRequestFillPct),
         targetRequestLiveCalls,
         unallocatedTargetLiveCalls: getNumberValue(value.unallocatedTargetLiveCalls) ?? 0,
-      }
+      })
 }
 
 const getTelemetrySourceFromRecord = (
@@ -1255,11 +1407,11 @@ const getEndpointUnavailableSubreason = (
 ): JudgmentBottleneckSubreason => {
   const failureKind = diagnostics?.lastFailureKind ?? ''
 
-  return diagnostics?.localEndpointProbeState === 'misconfigured' || failureKind === 'endpoint_misconfigured'
+  return diagnostics?.localProbeState === 'misconfigured' || failureKind === 'endpoint_misconfigured'
     ? 'endpointMisconfigured'
-    : diagnostics?.probeInProgress || diagnostics?.localEndpointProbeState === 'probing'
+    : diagnostics?.probeInProgress || diagnostics?.localProbeState === 'probing'
       ? 'endpointProbe'
-      : diagnostics?.cooldownRemainingMs !== null || diagnostics?.localEndpointProbeState === 'cooldown'
+      : diagnostics?.cooldownRemainingMs !== null || diagnostics?.localProbeState === 'cooldown'
         ? 'endpointCooldown'
         : 'endpointUnhealthy'
 }
@@ -1269,7 +1421,7 @@ const getEndpointUnavailableBottleneck = (
 ): JudgmentBottleneckClassification | null => {
   const diagnostics =
     snapshot.provider.endpointDiagnostics.find((entry) => {
-      return entry.localEndpointProbeState !== 'healthy'
+      return entry.localProbeState !== 'healthy'
     }) ?? null
   const unavailable = !snapshot.provider.convergenceDiagnostics.hasHealthyEndpointOrEndpointlessPath || diagnostics
 
@@ -1625,7 +1777,7 @@ const getLocalProviderTelemetry = async ({
     targetIncreaseAllowed: controller.targetIncreaseAllowed,
   })
 
-  return {
+  return withProviderApiReadModels({
     allocationCompleteCurrent,
     allocationInputState,
     bottleneck: null,
@@ -1664,7 +1816,7 @@ const getLocalProviderTelemetry = async ({
     providerTargetAllocationSnapshot,
     targetRequestLiveCalls,
     unallocatedTargetLiveCalls: providerTargetAllocationSnapshot.unallocatedTargetLiveCalls,
-  }
+  })
 }
 
 export const getLocalJudgmentDispatchTelemetry = async (
@@ -1764,7 +1916,7 @@ const withProviderTargetAllocationSnapshot = ({
     activeHigherPriorityStopRules: snapshot.provider.convergenceDiagnostics.activeHigherPriorityStopRules,
     hasHealthyEndpointOrEndpointlessPath: snapshot.provider.convergenceDiagnostics.hasHealthyEndpointOrEndpointlessPath,
   }
-  const provider = {
+  const provider = withProviderApiReadModels({
     ...snapshot.provider,
     allocationCompleteCurrent: allocationSnapshot.allocationCompleteCurrent,
     allocationInputState: allocationSnapshot.allocationInputState,
@@ -1793,7 +1945,7 @@ const withProviderTargetAllocationSnapshot = ({
     providerTargetAllocationSnapshot: allocationSnapshot,
     targetRequestLiveCalls: allocationSnapshot.targetRequestLiveCalls,
     unallocatedTargetLiveCalls: allocationSnapshot.unallocatedTargetLiveCalls,
-  }
+  })
 
   return {...snapshot, provider}
 }
@@ -1872,7 +2024,7 @@ const mergeJudgmentDispatchTelemetrySnapshots = (
   }, 0)
   const allocationCompleteCurrent = providerAuthority.allocationCompleteCurrent
   const allocationInputState = providerAuthority.allocationInputState
-  const provider = {
+  const provider = withProviderApiReadModels({
     ...providerAuthority,
     allocationCompleteCurrent,
     allocationInputState,
@@ -1889,7 +2041,7 @@ const mergeJudgmentDispatchTelemetrySnapshots = (
       observedGlobalEffectiveProviderLimit,
     ),
     observedGlobalRequestWorkBacklog,
-  }
+  })
   const snapshot = {...mergedSnapshot, provider, source}
 
   return lifecycle ? {...snapshot, lifecycle} : snapshot
@@ -1981,7 +2133,7 @@ const withTelemetrySource = (
 ): JudgmentDispatchTelemetrySnapshot => {
   const allocationInputState = source.aggregateCompleteness === 'complete' ? 'completeCurrent' : 'partialTelemetry'
   const allocationCompleteCurrent = source.aggregateCompleteness === 'complete'
-  const provider = {
+  const provider = withProviderApiReadModels({
     ...snapshot.provider,
     allocationCompleteCurrent,
     allocationInputState,
@@ -1990,7 +2142,7 @@ const withTelemetrySource = (
       allocationCompleteCurrent,
       allocationInputState,
     },
-  }
+  })
 
   return {...snapshot, provider, source}
 }
@@ -2018,7 +2170,7 @@ export const withJudgmentProviderEndpointDiagnostics = ({
     return snapshot
   }
 
-  const localEndpointProbeCooldownUntil =
+  const localProbeCooldownUntil =
     diagnostics.cooldownRemainingMs === null
       ? null
       : new Date(Date.now() + diagnostics.cooldownRemainingMs).toISOString()
@@ -2033,10 +2185,10 @@ export const withJudgmentProviderEndpointDiagnostics = ({
       endpointIdentity: effectiveBaseURL,
       lastFailureKind: diagnostics.lastFailureKind,
       lastFailureMessage: diagnostics.lastFailureMessage,
-      localEndpointProbeCooldownUntil,
-      localEndpointProbeLive: diagnostics.localProbeLiveCount,
-      localEndpointProbeState: diagnostics.status,
-      observedGlobalEndpointProbeLive: diagnostics.observedAggregateProbeLiveCount,
+      localProbeCooldownUntil,
+      localProbeLiveCount: diagnostics.localProbeLiveCount,
+      localProbeState: diagnostics.status,
+      observedAggregateProbeLiveCount: diagnostics.observedAggregateProbeLiveCount,
       probeInProgress: diagnostics.probeInProgress,
     },
   ]
@@ -2045,6 +2197,7 @@ export const withJudgmentProviderEndpointDiagnostics = ({
       return entry.endpointAvailabilityKey
     }),
     freshWorkerCount: snapshot.source.freshWorkerCount,
+    localWorkerId: snapshot.source.localWorkerId,
     providerKey: snapshot.provider.providerKey,
     staleWorkerCount: snapshot.source.staleWorkerCount,
     unavailableWorkerCount: snapshot.source.unavailableWorkerCount,
@@ -2082,7 +2235,7 @@ export const withJudgmentProviderEndpointDiagnostics = ({
 
   return withBottleneckClassification({
     ...snapshot,
-    provider: {
+    provider: withProviderApiReadModels({
       ...snapshot.provider,
       convergenceDiagnostics,
       endpointDiagnostics,
@@ -2090,7 +2243,7 @@ export const withJudgmentProviderEndpointDiagnostics = ({
       localAdditionalTargetHeadroom: controller.localAdditionalTargetHeadroom,
       localPromptBacklogTarget: controller.localPromptBacklogTarget,
       localRequestWorkBacklogTarget: controller.localRequestWorkBacklogTarget,
-    },
+    }),
     source,
   })
 }

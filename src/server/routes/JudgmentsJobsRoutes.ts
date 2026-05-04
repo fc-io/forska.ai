@@ -207,7 +207,42 @@ type JudgmentJobImportWorkLease = {
   retryAfterAt: string | null
 }
 type JudgmentJobEndpointHealth = {
-  diagnostics: ReturnType<typeof getJudgmentEndpointAvailabilityDiagnostics> | null
+  diagnostics:
+    | (ReturnType<typeof getJudgmentEndpointAvailabilityDiagnostics> & {
+        effectiveBaseURL: string | null
+        endpointAvailabilityKey: string
+        endpointIdentity: string | null
+        localProbeState: string
+        providerKey: string
+      })
+    | null
+  providerDiagnostics: {
+    endpointDiagnosticsByKey: Record<
+      string,
+      ReturnType<typeof getJudgmentEndpointAvailabilityDiagnostics> & {
+        effectiveBaseURL: string | null
+        endpointAvailabilityKey: string
+        endpointIdentity: string | null
+        localProbeState: string
+        providerKey: string
+      }
+    >
+    endpointDiagnosticsSummary: {
+      blockedEndpointCount: number
+      cooldownEndpointCount: number
+      endpointCount: number
+      hasHealthyEndpointOrEndpointlessPath: boolean
+      healthyEndpointCount: number
+      localProbeLiveCount: number
+      misconfiguredEndpointCount: number
+      observedAggregateProbeLiveCount: number | null
+      probeInProgress: boolean
+      providerKey: string
+      probingEndpointCount: number
+      unhealthyEndpointCount: number
+    }
+    providerKey: string
+  }
   retryAfterAt: string | null
 }
 type JudgmentJobHealthProgress = {
@@ -1747,6 +1782,97 @@ const getUniqueStringCount = (values: Array<string | null>) => {
   ).size
 }
 
+const getEndpointIdentityFromAvailabilityKey = (endpointAvailabilityKey: string): string | null => {
+  const separatorIndex = endpointAvailabilityKey.indexOf('::')
+
+  return separatorIndex >= 0 ? endpointAvailabilityKey.slice(separatorIndex + 2) : null
+}
+
+const getObservedAggregateProbeLiveCountForHealth = (
+  diagnostics: NonNullable<JudgmentJobEndpointHealth['diagnostics']>[],
+): number | null => {
+  const observedCounts = diagnostics.flatMap((entry) => {
+    return entry.observedAggregateProbeLiveCount === null ? [] : [entry.observedAggregateProbeLiveCount]
+  })
+
+  return observedCounts.length === 0
+    ? null
+    : observedCounts.reduce((sum, count) => {
+        return sum + count
+      }, 0)
+}
+
+const getEndpointDiagnosticsSummaryForHealth = ({
+  diagnostics,
+  hasHealthyEndpointOrEndpointlessPath,
+  providerKey,
+}: {
+  diagnostics: NonNullable<JudgmentJobEndpointHealth['diagnostics']>[]
+  hasHealthyEndpointOrEndpointlessPath: boolean
+  providerKey: string
+}): JudgmentJobEndpointHealth['providerDiagnostics']['endpointDiagnosticsSummary'] => {
+  const getCountByState = (state: string) => {
+    return diagnostics.filter((entry) => {
+      return entry.status === state
+    }).length
+  }
+  const localProbeLiveCount = diagnostics.reduce((sum, entry) => {
+    return sum + entry.localProbeLiveCount
+  }, 0)
+  const cooldownEndpointCount = getCountByState('cooldown')
+  const healthyEndpointCount = getCountByState('healthy')
+  const misconfiguredEndpointCount = getCountByState('misconfigured')
+  const probingEndpointCount = getCountByState('probing')
+  const unhealthyEndpointCount =
+    diagnostics.length
+    - healthyEndpointCount
+    - cooldownEndpointCount
+    - misconfiguredEndpointCount
+    - probingEndpointCount
+
+  return {
+    blockedEndpointCount:
+      diagnostics.length === 0 ? 0 : diagnostics.length - healthyEndpointCount - probingEndpointCount,
+    cooldownEndpointCount,
+    endpointCount: diagnostics.length,
+    hasHealthyEndpointOrEndpointlessPath,
+    healthyEndpointCount,
+    localProbeLiveCount,
+    misconfiguredEndpointCount,
+    observedAggregateProbeLiveCount: getObservedAggregateProbeLiveCountForHealth(diagnostics),
+    probeInProgress: diagnostics.some((entry) => {
+      return entry.probeInProgress
+    }),
+    providerKey,
+    probingEndpointCount,
+    unhealthyEndpointCount,
+  }
+}
+
+const getEndpointProviderDiagnosticsForHealth = ({
+  diagnostics,
+  hasHealthyEndpointOrEndpointlessPath,
+  providerKey,
+}: {
+  diagnostics: NonNullable<JudgmentJobEndpointHealth['diagnostics']>[]
+  hasHealthyEndpointOrEndpointlessPath: boolean
+  providerKey: string
+}): JudgmentJobEndpointHealth['providerDiagnostics'] => {
+  return {
+    endpointDiagnosticsByKey: diagnostics.reduce<
+      JudgmentJobEndpointHealth['providerDiagnostics']['endpointDiagnosticsByKey']
+    >((byKey, entry) => {
+      return {...byKey, [entry.endpointAvailabilityKey]: entry}
+    }, {}),
+    endpointDiagnosticsSummary: getEndpointDiagnosticsSummaryForHealth({
+      diagnostics,
+      hasHealthyEndpointOrEndpointlessPath,
+      providerKey,
+    }),
+    providerKey,
+  }
+}
+
 const getJudgmentJobEndpointHealth = async ({
   db,
   modelId,
@@ -1763,6 +1889,15 @@ const getJudgmentJobEndpointHealth = async ({
         savedModelIds: [modelId],
       })
     : null
+  const providerSnapshot = getProviderBucketSnapshot({
+    maxInflightRequests: providerConnection?.maxInflightRequests ?? null,
+    modelId,
+    modelProvider: providerConnection?.providerKind ?? null,
+    providerConnectionId: providerConnection?.id ?? null,
+    providerConnectionUpdatedAt: providerConnection?.updatedAt ?? null,
+    providerName: providerConnection?.label ?? null,
+    useOwnerBackedSyntheticProviderId: false,
+  })
   const availability = effectiveBaseURL
     ? getJudgmentEndpointAvailability({
         effectiveBaseURL,
@@ -1771,9 +1906,28 @@ const getJudgmentJobEndpointHealth = async ({
         providerConnectionId: providerConnection?.id ?? null,
       })
     : null
+  const diagnostics = availability ? getJudgmentEndpointAvailabilityDiagnostics(availability) : null
+  const endpointDiagnostics =
+    diagnostics && availability
+      ? {
+          ...diagnostics,
+          effectiveBaseURL,
+          endpointAvailabilityKey: availability.endpointAvailabilityKey,
+          endpointIdentity: getEndpointIdentityFromAvailabilityKey(availability.endpointAvailabilityKey),
+          localProbeState: diagnostics.status,
+          providerKey: providerSnapshot.providerKey,
+        }
+      : null
+  const endpointDiagnosticsList = endpointDiagnostics ? [endpointDiagnostics] : []
+  const hasHealthyEndpointOrEndpointlessPath = !endpointDiagnostics || endpointDiagnostics.status === 'healthy'
 
   return {
-    diagnostics: availability ? getJudgmentEndpointAvailabilityDiagnostics(availability) : null,
+    diagnostics: endpointDiagnostics,
+    providerDiagnostics: getEndpointProviderDiagnosticsForHealth({
+      diagnostics: endpointDiagnosticsList,
+      hasHealthyEndpointOrEndpointlessPath,
+      providerKey: providerSnapshot.providerKey,
+    }),
     retryAfterAt: availability?.cooldownExpiresAt?.toISOString() ?? null,
   }
 }
@@ -2379,6 +2533,7 @@ export const judgmentsJobsRoutes = new Elysia()
             storagePolicy,
             recommendedNextAction,
             endpointAvailability: endpointHealth.diagnostics,
+            providerDiagnostics: endpointHealth.providerDiagnostics,
             importMetadata: {
               importFailureCount: job.importFailureCount,
               lastImportCompletedAt: job.lastImportCompletedAt,
@@ -2520,9 +2675,6 @@ export const judgmentsJobsRoutes = new Elysia()
                 providerConnectionId: providerConnection?.id ?? null,
               })
             : null
-          const endpointAvailability = endpointAvailabilitySnapshot
-            ? getJudgmentEndpointAvailabilityDiagnostics(endpointAvailabilitySnapshot)
-            : null
           const providerSnapshot = getProviderBucketSnapshot({
             maxInflightRequests: providerConnection?.maxInflightRequests ?? null,
             modelId: projectModelId,
@@ -2532,6 +2684,22 @@ export const judgmentsJobsRoutes = new Elysia()
             providerName: providerConnection?.label ?? null,
             useOwnerBackedSyntheticProviderId: false,
           })
+          const endpointAvailabilityDiagnostics = endpointAvailabilitySnapshot
+            ? getJudgmentEndpointAvailabilityDiagnostics(endpointAvailabilitySnapshot)
+            : null
+          const endpointAvailability =
+            endpointAvailabilityDiagnostics && endpointAvailabilitySnapshot
+              ? {
+                  ...endpointAvailabilityDiagnostics,
+                  effectiveBaseURL,
+                  endpointAvailabilityKey: endpointAvailabilitySnapshot.endpointAvailabilityKey,
+                  endpointIdentity: getEndpointIdentityFromAvailabilityKey(
+                    endpointAvailabilitySnapshot.endpointAvailabilityKey,
+                  ),
+                  localProbeState: endpointAvailabilityDiagnostics.status,
+                  providerKey: providerSnapshot.providerKey,
+                }
+              : null
           const dispatchTelemetry = withJudgmentProviderEndpointDiagnostics({
             diagnostics: endpointAvailability,
             effectiveBaseURL,
@@ -2567,6 +2735,14 @@ export const judgmentsJobsRoutes = new Elysia()
             running: Math.max(sqliteHealth.promptCounts.running, dispatchStats.jobActivePrompts),
             skipped: sqliteHealth.promptCounts.skipped,
           }
+          const lifecycleCounters = {
+            claimedPrompts: promptStats.claimed,
+            liveLlmCalls: requestRuntimeStats.inFlight,
+            providerKey: dispatchTelemetry.provider.providerKey,
+            runningPrompts: promptStats.running,
+            workerActivePrompts: dispatchStats.jobActivePrompts,
+            workerQueuedPrompts: dispatchStats.jobQueuedPrompts,
+          }
           const storageHealth = {
             ...sqliteHealth,
             ...(storageProjection ? {projection: storageProjection} : {}),
@@ -2600,6 +2776,8 @@ export const judgmentsJobsRoutes = new Elysia()
               failures: failedRequestSummary,
               inFlight: requestRuntimeStats.inFlight,
               lifecycle: dispatchTelemetry.lifecycle,
+              lifecycleCounters,
+              liveLlmCalls: requestRuntimeStats.inFlight,
               providerTelemetry: dispatchTelemetry.provider,
               requestSlotWaiters: requestRuntimeStats.requestSlotWaiters,
               requestWorkBacklog: requestRuntimeStats.requestWorkBacklog,
@@ -2876,21 +3054,32 @@ export const judgmentsJobsRoutes = new Elysia()
               action,
               endpointAvailability: endpointHealth.diagnostics,
               job: normalizedJob,
+              providerDiagnostics: endpointHealth.providerDiagnostics,
               sqliteHealth,
             }
           }),
         )
         const progressStates = getProgressStateCounts(jobsWithHealth)
-        const jobsSummary = jobsWithHealth.map(({action, endpointAvailability, job, sqliteHealth, ...progress}) => {
-          const normalizedJob = {
-            id: job.id,
-            projectId: job.projectId,
-            status: job.status,
-            storageState: job.storageState,
-          }
+        const jobsSummary = jobsWithHealth.map(
+          ({action, endpointAvailability, job, providerDiagnostics, sqliteHealth, ...progress}) => {
+            const normalizedJob = {
+              id: job.id,
+              projectId: job.projectId,
+              status: job.status,
+              storageState: job.storageState,
+            }
 
-          return {...progress, action, endpointAvailability, job: normalizedJob, jobId: job.id, sqliteHealth}
-        })
+            return {
+              ...progress,
+              action,
+              endpointAvailability,
+              job: normalizedJob,
+              jobId: job.id,
+              providerDiagnostics,
+              sqliteHealth,
+            }
+          },
+        )
 
         return {
           data: {
