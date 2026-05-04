@@ -130,7 +130,13 @@ test('runtime worker mode matches launcher remote urls and still uses local work
       activeModelNames: ['Qwen/Qwen3.5-27B'],
       providerKind: 'sglang',
       remoteWorkerUrls: ['http://remote-worker.example:30000'],
-      sourceMetadata: {cluster: 'remote', jobId: 'job-1', kind: 'launcher', label: 'Remote', sshJumpHost: 'remote-jump'},
+      sourceMetadata: {
+        cluster: 'remote',
+        jobId: 'job-1',
+        kind: 'launcher',
+        label: 'Remote',
+        sshJumpHost: 'remote-jump',
+      },
       workerUrls: ['http://localhost:30001'],
     },
     savedModelIds: ['Qwen/Qwen3.5-27B'],
@@ -169,7 +175,13 @@ test('runtime worker mode is ambiguous when saved base and worker urls conflict'
     runtimeSummary: {
       activeModelNames: ['Qwen/Qwen3'],
       providerKind: 'sglang',
-      sourceMetadata: {cluster: 'remote', jobId: 'job-1', kind: 'launcher', label: 'Remote', sshJumpHost: 'remote-jump'},
+      sourceMetadata: {
+        cluster: 'remote',
+        jobId: 'job-1',
+        kind: 'launcher',
+        label: 'Remote',
+        sshJumpHost: 'remote-jump',
+      },
       workerUrls: ['http://localhost:30001'],
     },
   })
@@ -213,7 +225,13 @@ test('runtime match keeps the saved base url as fallback source of truth', () =>
     runtimeSummary: {
       activeModelNames: ['Qwen/Qwen3'],
       providerKind: 'vllm',
-      sourceMetadata: {cluster: 'remote', jobId: 'job-2', kind: 'launcher', label: 'Remote', sshJumpHost: 'remote-jump'},
+      sourceMetadata: {
+        cluster: 'remote',
+        jobId: 'job-2',
+        kind: 'launcher',
+        label: 'Remote',
+        sshJumpHost: 'remote-jump',
+      },
       workerUrls: ['http://localhost:30001'],
     },
   })

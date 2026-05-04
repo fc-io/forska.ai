@@ -12,7 +12,13 @@ test('equivalent local and launcher runtime matches do not become ambiguous', ()
         activeModelNames: ['Qwen/Qwen3.5-27B'],
         providerKind: 'sglang',
         remoteWorkerUrls: ['http://remote-worker.example:30000'],
-        sourceMetadata: {cluster: 'remote', jobId: '6267253', kind: 'launcher', label: 'Remote', sshJumpHost: 'remote-jump'},
+        sourceMetadata: {
+          cluster: 'remote',
+          jobId: '6267253',
+          kind: 'launcher',
+          label: 'Remote',
+          sshJumpHost: 'remote-jump',
+        },
         workerUrls: ['http://localhost:30001'],
       },
       {
@@ -48,7 +54,13 @@ test('distinct runtime targets remain ambiguous', () => {
         activeModelNames: ['Qwen/Qwen3.5-27B'],
         providerKind: 'sglang',
         remoteWorkerUrls: ['http://remote-worker.example:30000'],
-        sourceMetadata: {cluster: 'remote', jobId: '6267253', kind: 'launcher', label: 'Remote', sshJumpHost: 'remote-jump'},
+        sourceMetadata: {
+          cluster: 'remote',
+          jobId: '6267253',
+          kind: 'launcher',
+          label: 'Remote',
+          sshJumpHost: 'remote-jump',
+        },
         workerUrls: ['http://localhost:30001'],
       },
       {

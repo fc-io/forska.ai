@@ -164,19 +164,19 @@ test('background server stack builds judge-worker env without DuckDB ownership',
 })
 
 test('background server stack async judge-worker env clears inherited explicit journal paths', async () => {
-  await expect(
-    getBackgroundServerEnvAsync({
-      baseEnv: {
-        API_SERVER_PORT: '3301',
-        BACKGROUND_JUDGE_PORT: '3303',
-        BACKGROUND_MAINTENANCE_PORT: '3302',
-        JUDGE_WORKER_ID: 'test-judge-worker',
-        JUDGE_WORKER_JOURNAL_PATH: 'data/custom/judge.sqlite',
-      },
-      localAppSettings: defaultLocalAppSettings,
-      role: 'judge-worker',
-    }),
-  ).resolves.toMatchObject({
+  const env = await getBackgroundServerEnvAsync({
+    baseEnv: {
+      API_SERVER_PORT: '3301',
+      BACKGROUND_JUDGE_PORT: '3303',
+      BACKGROUND_MAINTENANCE_PORT: '3302',
+      JUDGE_WORKER_ID: 'test-judge-worker',
+      JUDGE_WORKER_JOURNAL_PATH: 'data/custom/judge.sqlite',
+    },
+    localAppSettings: defaultLocalAppSettings,
+    role: 'judge-worker',
+  })
+
+  expect(env).toMatchObject({
     API_SERVER_PORT: '3303',
     JUDGE_WORKER_ID: 'test-judge-worker',
     JUDGE_WORKER_JOURNAL_PATH: '',
