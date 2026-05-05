@@ -503,35 +503,50 @@ const getProjectLargeRebuildState = async (projectId: string): Promise<ProjectLa
 }
 
 const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshCountInfo> => {
+  const projectLiteral = getSqlLiteral(projectId)
   const rows = await getAppDatabaseService().queryJson<{oldestQueuedAt: string | null; queuedRefreshCount: number}>(`
-    WITH scoped_article AS (
-      SELECT article_id AS articleId
-      FROM app.project_article
-      WHERE project_id = '${escapeSqlString(projectId)}'
+    WITH pending_article_state AS (
+      SELECT
+        article_state.article_id AS articleId,
+        article_state.updated_at AS updatedAt
+      FROM app.project_mart_refresh_article_state article_state
+      LEFT JOIN app.project_mart_refresh_state refresh_state
+        ON refresh_state.project_id = article_state.project_id
+      LEFT JOIN app.project_mart_dirty_refresh_article_quarantine quarantine
+        ON quarantine.project_id = article_state.project_id
+        AND quarantine.article_id = article_state.article_id
+        AND quarantine.resolved_at IS NULL
+      WHERE article_state.project_id = ${projectLiteral}
+        AND quarantine.project_id IS NULL
+        AND (
+          refresh_state.project_id IS NULL
+          OR refresh_state.last_completed_dirty_token IS NULL
+          OR CAST(article_state.last_dirty_token AS BIGINT) > CAST(refresh_state.last_completed_dirty_token AS BIGINT)
+        )
+    ),
+    scoped_pending_article AS (
+      SELECT
+        pending.articleId,
+        pending.updatedAt
+      FROM pending_article_state pending
+      INNER JOIN app.project_article project_article
+        ON project_article.project_id = ${projectLiteral}
+       AND project_article.article_id = pending.articleId
       UNION
-      SELECT air.article_id AS articleId
-      FROM app.project_import_route pir
-      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
-      WHERE pir.project_id = '${escapeSqlString(projectId)}'
+      SELECT
+        pending.articleId,
+        pending.updatedAt
+      FROM pending_article_state pending
+      INNER JOIN app.article_import_route article_import_route
+        ON article_import_route.article_id = pending.articleId
+      INNER JOIN app.project_import_route project_import_route
+        ON project_import_route.import_route_id = article_import_route.import_route_id
+       AND project_import_route.project_id = ${projectLiteral}
     )
     SELECT
-      MIN(article_state.updated_at) AS oldestQueuedAt,
+      MIN(scoped_pending_article.updatedAt) AS oldestQueuedAt,
       COUNT(*) AS queuedRefreshCount
-    FROM app.project_mart_refresh_article_state article_state
-    INNER JOIN scoped_article ON scoped_article.articleId = article_state.article_id
-    LEFT JOIN app.project_mart_refresh_state refresh_state
-      ON refresh_state.project_id = article_state.project_id
-    LEFT JOIN app.project_mart_dirty_refresh_article_quarantine quarantine
-      ON quarantine.project_id = article_state.project_id
-      AND quarantine.article_id = article_state.article_id
-      AND quarantine.resolved_at IS NULL
-    WHERE article_state.project_id = '${escapeSqlString(projectId)}'
-      AND quarantine.project_id IS NULL
-      AND (
-        refresh_state.project_id IS NULL
-        OR refresh_state.last_completed_dirty_token IS NULL
-        OR CAST(article_state.last_dirty_token AS BIGINT) > CAST(refresh_state.last_completed_dirty_token AS BIGINT)
-      )
+    FROM scoped_pending_article
   `)
   const [row] = rows
 
