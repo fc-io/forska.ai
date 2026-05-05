@@ -38,6 +38,9 @@ Quotes rules:
 - Do not shorten quotes with ellipses.
 - Do not include wrapper markers in quotes.
 - If the reasoning depends on the question or criteria text but the article text has no supporting quote, return an empty quotes array.
+- If your answer is "no" because the article does not mention the requested topic, return "quotes": [].
+- Do not quote unrelated article text merely to support absence.
+- Only include quotes for a "no" answer when the article explicitly says the topic is absent, ruled out, or not studied.
 
 IMPORTANT: Properly escape all special characters in your JSON string values to ensure valid JSON output:
 - Use \\" for double quotes within strings
@@ -50,15 +53,15 @@ Example user message:
 
 ## article_title
 
-Agents: Evolution, Architecture, and Real-World Applications
+Topic Alpha study.
 
 ## article_summary
 
-This paper examines the evolution, architecture, and practical applications of AI agents from their early, rule-based incarnations to modern sophisticated systems that integrate large language models with dedicated modules for perception, planning, and tool use. Emphasizing both theoretical foundations and real-world deployments, the paper reviews key agent paradigms, discusses limitations of current evaluation benchmarks, and proposes a holistic evaluation framework that balances task effectiveness, efficiency, robustness, and safety. Applications across enterprise, personal assistance, and specialized domains are analyzed, with insights into future research directions for more resilient and adaptive AI agent systems.
+This article studies topic alpha.
 
 ## Question
 
-Is this article about AI?
+Is this article about topic alpha?
 
 output_type: 'yes' | 'no' | 'unsure'
 
@@ -66,8 +69,32 @@ Example response:
 
 {
   "answer": "yes",
-  "explanation": "The title mentions Agents, a concept that could refer to AI agents. And AI Agents (not only agents) is also mentioned in the summary.",
-  "quotes": ["This paper examines the evolution, architecture, and practical applications of AI agents from their early, rule-based incarnations to modern sophisticated systems that integrate large language models with dedicated modules for perception, planning, and tool use.", "AI agents", "future research directions for more resilient and adaptive AI agent systems."]
+  "explanation": "The article directly studies topic alpha.",
+  "quotes": ["topic alpha"]
+}
+
+Example user message:
+
+## article_title
+
+Topic Beta study.
+
+## article_summary
+
+This article studies topic beta.
+
+## Question
+
+Is this article about topic alpha?
+
+output_type: 'yes' | 'no' | 'unsure'
+
+Example response:
+
+{
+  "answer": "no",
+  "explanation": "The article discusses topic beta, not topic alpha.",
+  "quotes": []
 }`)
   })
 
@@ -101,6 +128,9 @@ Quotes rules:
 - Do not shorten quotes with ellipses.
 - Do not include wrapper markers in quotes.
 - If the reasoning depends on the question or criteria text but the article text has no supporting quote, return an empty quotes array.
+- If your answer is "no" because the article does not mention the requested topic, return "quotes": [].
+- Do not quote unrelated article text merely to support absence.
+- Only include quotes for a "no" answer when the article explicitly says the topic is absent, ruled out, or not studied.
 
 IMPORTANT: Properly escape all special characters in your JSON string values to ensure valid JSON output:
 - Use \\" for double quotes within strings
@@ -113,15 +143,15 @@ Example user message:
 
 ## article_title
 
-Agents: Evolution, Architecture, and Real-World Applications
+Topic Alpha study.
 
 ## article_summary
 
-This paper examines the evolution, architecture, and practical applications of AI agents from their early, rule-based incarnations to modern sophisticated systems that integrate large language models with dedicated modules for perception, planning, and tool use. Emphasizing both theoretical foundations and real-world deployments, the paper reviews key agent paradigms, discusses limitations of current evaluation benchmarks, and proposes a holistic evaluation framework that balances task effectiveness, efficiency, robustness, and safety. Applications across enterprise, personal assistance, and specialized domains are analyzed, with insights into future research directions for more resilient and adaptive AI agent systems.
+This article studies topic alpha.
 
 ## Question
 
-Is this article about AI?
+Is this article about topic alpha?
 
 output_type: 'yes' | 'no' | 'unsure'
 
@@ -129,8 +159,32 @@ Example response:
 
 {
   "answer": "yes",
-  "explanation": "The title mentions Agents, a concept that could refer to AI agents. And AI Agents (not only agents) is also mentioned in the summary.",
-  "quotes": ["This paper examines the evolution, architecture, and practical applications of AI agents from their early, rule-based incarnations to modern sophisticated systems that integrate large language models with dedicated modules for perception, planning, and tool use.", "AI agents", "future research directions for more resilient and adaptive AI agent systems."]
+  "explanation": "The article directly studies topic alpha.",
+  "quotes": ["topic alpha"]
+}
+
+Example user message:
+
+## article_title
+
+Topic Beta study.
+
+## article_summary
+
+This article studies topic beta.
+
+## Question
+
+Is this article about topic alpha?
+
+output_type: 'yes' | 'no' | 'unsure'
+
+Example response:
+
+{
+  "answer": "no",
+  "explanation": "The article discusses topic beta, not topic alpha.",
+  "quotes": []
 }`)
   })
 

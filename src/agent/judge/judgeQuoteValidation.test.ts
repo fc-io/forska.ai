@@ -224,8 +224,8 @@ test('single prompt quote validation keeps exact quotes that already include sou
 test('single prompt quote validation still rejects ellipsized quotes', () => {
   const result = validateSinglePromptJudgmentQuotes({
     attempt: 1,
-    judgment: {answer: 'no', explanation: 'because', quotes: ['Local article...text only.']},
-    lastResponse: '{"answer":"no","quotes":["Local article...text only."]}',
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['Local article...text only.']},
+    lastResponse: '{"answer":"yes","quotes":["Local article...text only."]}',
     maxRetries: 2,
     recordText: 'Local article text only.',
     retryBasePrompt: 'base prompt',
@@ -306,11 +306,40 @@ Interventions aimed at improving antibiotic prescribing/use`
   expect(result).toEqual({judgment: {answer: 'no', explanation: 'because', quotes: []}, kind: 'valid'})
 })
 
-test('single prompt quote validation requests a retry before the final attempt', () => {
+test('single prompt quote validation repairs invalid quotes to empty quotes for no answers', () => {
   const result = validateSinglePromptJudgmentQuotes({
     attempt: 1,
     judgment: {answer: 'no', explanation: 'because', quotes: ['foreign quote']},
     lastResponse: '{"answer":"no","quotes":["foreign quote"]}',
+    maxRetries: 2,
+    recordText: 'Local article text only.',
+    retryBasePrompt: 'base prompt',
+  })
+
+  expect(result).toEqual({judgment: {answer: 'no', explanation: 'because', quotes: []}, kind: 'valid'})
+})
+
+test('single prompt quote validation keeps valid quotes when repairing no answers', () => {
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {answer: 'no', explanation: 'because', quotes: ['PM2.5 concentrations', 'invented quote']},
+    lastResponse: '{"answer":"no","quotes":["PM2.5 concentrations","invented quote"]}',
+    maxRetries: 2,
+    recordText: 'Portable air cleaners reduce PM<sub>2.5</sub> concentrations in homes.',
+    retryBasePrompt: 'base prompt',
+  })
+
+  expect(result).toEqual({
+    judgment: {answer: 'no', explanation: 'because', quotes: ['PM<sub>2.5</sub> concentrations']},
+    kind: 'valid',
+  })
+})
+
+test('single prompt quote validation requests a retry before the final attempt for yes answers', () => {
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['foreign quote']},
+    lastResponse: '{"answer":"yes","quotes":["foreign quote"]}',
     maxRetries: 2,
     recordText: 'Local article text only.',
     retryBasePrompt: 'base prompt',
@@ -333,8 +362,8 @@ test('single prompt quote validation requests a retry before the final attempt',
 test('single prompt quote validation retries when only some quotes can be repaired', () => {
   const result = validateSinglePromptJudgmentQuotes({
     attempt: 1,
-    judgment: {answer: 'no', explanation: 'because', quotes: ['PM2.5 concentrations', 'invented quote']},
-    lastResponse: '{"answer":"no","quotes":["PM2.5 concentrations","invented quote"]}',
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['PM2.5 concentrations', 'invented quote']},
+    lastResponse: '{"answer":"yes","quotes":["PM2.5 concentrations","invented quote"]}',
     maxRetries: 2,
     recordText: 'Portable air cleaners reduce PM<sub>2.5</sub> concentrations in homes.',
     retryBasePrompt: 'base prompt',
@@ -351,8 +380,8 @@ test('single prompt quote validation retries when only some quotes can be repair
 test('single prompt quote validation requeues after the final invalid attempt', () => {
   const result = validateSinglePromptJudgmentQuotes({
     attempt: 2,
-    judgment: {answer: 'no', explanation: 'because', quotes: ['foreign quote']},
-    lastResponse: '{"answer":"no","quotes":["foreign quote"]}',
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['foreign quote']},
+    lastResponse: '{"answer":"yes","quotes":["foreign quote"]}',
     maxRetries: 2,
     recordText: 'Local article text only.',
     retryBasePrompt: 'base prompt',

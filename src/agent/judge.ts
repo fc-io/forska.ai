@@ -355,6 +355,10 @@ type SinglePromptJudgmentQuoteValidationResult =
 
 const invalidSinglePromptQuoteError = 'Invalid quotes: not substrings of record text'
 
+const shouldAutoRepairNoAnswerQuotes = (answer: SinglePromptJudgmentResult['answer']): boolean => {
+  return answer === 'no'
+}
+
 const isPromptSourcedInvalidQuote = ({quote, retryBasePrompt}: {quote: string; retryBasePrompt: string}): boolean => {
   const normalizedPromptText = normalizeQuoteTextForMatch(retryBasePrompt)
 
@@ -382,8 +386,9 @@ export const validateSinglePromptJudgmentQuotes = ({
   const retryableInvalidQuotes = quoteValidation.invalid.filter((quote) => {
     return !isPromptSourcedInvalidQuote({quote, retryBasePrompt})
   })
+  const shouldAutoRepairQuotes = shouldAutoRepairNoAnswerQuotes(judgment.answer) && retryableInvalidQuotes.length > 0
 
-  return retryableInvalidQuotes.length === 0
+  return retryableInvalidQuotes.length === 0 || shouldAutoRepairQuotes
     ? {judgment: {...judgment, quotes: normalizedQuotes}, kind: 'valid'}
     : attempt < maxRetries
       ? {
