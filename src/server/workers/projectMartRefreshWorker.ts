@@ -133,7 +133,7 @@ type ProjectMartRefreshWorkerCycleResult =
 
 const defaultProjectMartRefreshWorkerLeaseMs = 30_000
 const defaultProjectMartRefreshWorkerHeartbeatMs = 10_000
-const defaultProjectMartRefreshWorkerDirtyArticleBatchSize = 3
+const defaultProjectMartRefreshWorkerDirtyArticleBatchSize = 128
 const defaultProjectMartRefreshWorkerPollIntervalMs = 2_000
 
 const getProjectScopeArticleCount = async (projectId: string) => {

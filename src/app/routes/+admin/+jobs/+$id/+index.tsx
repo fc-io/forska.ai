@@ -898,6 +898,18 @@ const AdminJudgmentJobDetail = () => {
                   </div>
                 </Show>
 
+                <Show when={data()?.projectId}>
+                  {(projectId) => {
+                    return (
+                      <div class="mb-6">
+                        <Suspense fallback={<TokenUsageTimelinePanelFallback />}>
+                          <TokenUsageTimeline projectId={projectId()} />
+                        </Suspense>
+                      </div>
+                    )
+                  }}
+                </Show>
+
                 <JobTelemetryPanel requestStats={data()?.requestStats} />
 
                 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
@@ -1126,18 +1138,6 @@ const AdminJudgmentJobDetail = () => {
                       </For>
                     </ul>
                   </div>
-                </Show>
-
-                <Show when={data()?.projectId}>
-                  {(projectId) => {
-                    return (
-                      <div class="mb-6">
-                        <Suspense fallback={<TokenUsageTimelinePanelFallback />}>
-                          <TokenUsageTimeline projectId={projectId()} />
-                        </Suspense>
-                      </div>
-                    )
-                  }}
                 </Show>
 
                 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
