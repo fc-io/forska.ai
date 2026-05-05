@@ -337,6 +337,23 @@ test('completion replay logs plain owner errors without JSON parse masking', asy
   expect(row?.lastError).not.toContain('JSON Parse error')
 })
 
+test('completion replay logs owner request path for empty successful responses', async () => {
+  const {journalPath} = setupJournalTest(async () => {
+    return new Response('', {status: 200})
+  })
+  const payload = createCompletionPayload({status: 'retry'})
+
+  await enqueueJudgeWorkerCompletion(payload)
+
+  const result = await replayJudgeWorkerCompletionOutbox()
+  const row = getCompletionOutboxRow(journalPath, payload.claimId)
+
+  expect(result).toEqual({ackedCount: 0, discardedCount: 0, failedCount: 1})
+  expect(row?.lastError).toContain(
+    'owner-backed judgment request returned no data (200): [POST /api/judgmentsjobs/job-a/completions]',
+  )
+})
+
 test('completion flushes are globally bounded so owner ack cannot stampede', async () => {
   let activeRequests = 0
   let maxActiveRequests = 0

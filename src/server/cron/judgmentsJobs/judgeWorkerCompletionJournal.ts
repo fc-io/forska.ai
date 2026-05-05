@@ -247,6 +247,26 @@ const getErrorMessageValue = (value: unknown): string => {
   return typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value)
 }
 
+const getOwnerResponseMessage = ({
+  detail,
+  method,
+  path,
+  status,
+  type,
+}: {
+  detail: string
+  method: 'GET' | 'POST'
+  path: string
+  status: number
+  type: 'failed' | 'invalid JSON' | 'no data'
+}) => {
+  const context = `[${method} ${path}]`
+  const messageDetail = detail.trim().length > 0 ? `${detail} ${context}` : context
+  const messagePrefix = type === 'failed' ? 'failed' : `returned ${type}`
+
+  return `owner-backed judgment request ${messagePrefix} (${status}): ${messageDetail}`
+}
+
 const tryParseOwnerResponse = <T>(text: string): {data?: T; error?: unknown} | null => {
   try {
     return text.length > 0 ? (JSON.parse(text) as {data?: T; error?: unknown}) : {}
@@ -570,7 +590,7 @@ const requestOwnerJsonOnce = async <T>({
     const responseError = getErrorMessageValue(parsedError) || text || response.statusText
 
     throw new OwnerBackedJudgmentRequestError({
-      message: `owner-backed judgment request failed (${response.status}): ${responseError}`,
+      message: getOwnerResponseMessage({detail: responseError, method, path, status: response.status, type: 'failed'}),
       responseText: text,
       status: response.status,
     })
@@ -578,7 +598,7 @@ const requestOwnerJsonOnce = async <T>({
 
   if (!parsed) {
     throw new OwnerBackedJudgmentRequestError({
-      message: `owner-backed judgment request returned invalid JSON (${response.status}): ${text}`,
+      message: getOwnerResponseMessage({detail: text, method, path, status: response.status, type: 'invalid JSON'}),
       responseText: text,
       status: response.status,
     })
@@ -586,7 +606,7 @@ const requestOwnerJsonOnce = async <T>({
 
   if (!('data' in parsed)) {
     throw new OwnerBackedJudgmentRequestError({
-      message: `owner-backed judgment request returned no data (${response.status}): ${text}`,
+      message: getOwnerResponseMessage({detail: text, method, path, status: response.status, type: 'no data'}),
       responseText: text,
       status: response.status,
     })

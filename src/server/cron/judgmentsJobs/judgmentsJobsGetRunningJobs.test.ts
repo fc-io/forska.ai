@@ -196,6 +196,56 @@ test('judge-worker running jobs fall back to local accepted claims when the owne
   expect(result.jobs).toEqual([getJob('job-owner-backed')])
 })
 
+test('judge-worker running jobs skip a dispatch tick when the owner is unavailable without fallback jobs', async () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const judgmentsJobsGetRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
+        const judgeWorkerCompletionJournalModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts')
+        const sqlitePreflightModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqlitePreflight.ts')
+
+        void mock.module(judgeWorkerCompletionJournalModulePath, () => {
+          return {
+            getAcceptedJudgeWorkerClaimRunningJobs: () => [],
+            getOwnerBackedRunningJudgmentJobs: async () => {
+              throw new Error('owner returned empty data')
+            },
+            shouldUseJudgeWorkerOwnerHandoff: () => true,
+          }
+        })
+        void mock.module(sqlitePreflightModulePath, () => {
+          return {
+            filterRunningJobsBySqlitePreflight: async (jobs) => jobs,
+          }
+        })
+
+        const {judgmentsJobsGetRunningJobs} = await import(judgmentsJobsGetRunningJobsModulePath + '?owner-backed-no-fallback=' + Date.now())
+        const jobs = await judgmentsJobsGetRunningJobs()
+        console.log(JSON.stringify({jobs}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'owner-backed no fallback test failed',
+    )
+  }
+
+  const result = JSON.parse(runScript.stdout.toString()) as {jobs: RunningJudgmentJob[]}
+
+  expect(result.jobs).toEqual([])
+})
+
 test('filterRunningJobsByRuntimeMatch filters out jobs with runtime mismatch', async () => {
   const getRuntimeMatch = mock(async ({modelId}: {modelId: string}) => {
     return {

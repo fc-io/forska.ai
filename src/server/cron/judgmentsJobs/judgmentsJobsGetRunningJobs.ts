@@ -147,7 +147,12 @@ const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
         return fallbackJobs
       }
 
-      throw error
+      runningJobsLogger.warn(
+        'judgments-owner-backed-running-jobs-unavailable',
+        '[judgments] owner-backed running jobs unavailable; skipping this dispatch tick',
+        {error: error instanceof Error ? error.message : String(error)},
+      )
+      return []
     }
   }
 
