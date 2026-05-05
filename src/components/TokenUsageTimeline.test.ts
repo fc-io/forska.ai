@@ -41,17 +41,14 @@ test('one minute timeline drops a trailing empty current-minute bucket', () => {
   ])
 })
 
-test('one minute timeline keeps a non-empty current-minute bucket', () => {
+test('one minute timeline drops a non-empty current-minute bucket', () => {
   const now = new Date('2026-04-28T12:44:30.000Z')
   const data = [
     getBucket({timestamp: '2026-04-28T12:43:00.000Z'}),
     getBucket({timestamp: '2026-04-28T12:44:00.000Z', totalPromptTokens: 100, totalRequests: 1, totalTokens: 100}),
   ]
 
-  expect(getDisplayedTimestamps({data, interval: '1min', now})).toEqual([
-    '2026-04-28T12:43:00.000Z',
-    '2026-04-28T12:44:00.000Z',
-  ])
+  expect(getDisplayedTimestamps({data, interval: '1min', now})).toEqual(['2026-04-28T12:43:00.000Z'])
 })
 
 test('one minute timeline keeps a trailing empty completed-minute bucket', () => {

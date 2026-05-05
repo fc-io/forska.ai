@@ -160,20 +160,6 @@ const getMinuteBucketStart = (date: Date) => {
   return bucketStart
 }
 
-const isEmptyTokenTimelineBucket = (bucket: TokenTimelineData) => {
-  return (
-    Number(bucket.totalPromptTokens ?? 0) === 0
-    && Number(bucket.totalCompletionTokens ?? 0) === 0
-    && Number(bucket.totalTokens ?? 0) === 0
-    && Number(bucket.totalRequests ?? 0) === 0
-    && Number(bucket.totalSuccessPromptTokens ?? 0) === 0
-    && Number(bucket.totalSuccessCompletionTokens ?? 0) === 0
-    && Number(bucket.totalSuccessTokens ?? 0) === 0
-    && Number(bucket.totalFailedTokens ?? 0) === 0
-    && Number(bucket.count ?? 0) === 0
-  )
-}
-
 export const getTokenTimelineDisplayData = ({
   data,
   interval,
@@ -188,9 +174,7 @@ export const getTokenTimelineDisplayData = ({
   const trailingBucketTime = trailingBucket ? new Date(trailingBucket.timestamp).getTime() : null
   const shouldDropTrailingBucket =
     interval === '1min' && trailingBucket
-      ? trailingBucketTime !== null
-        && trailingBucketTime >= currentMinuteStart
-        && isEmptyTokenTimelineBucket(trailingBucket)
+      ? trailingBucketTime !== null && trailingBucketTime >= currentMinuteStart
       : false
 
   return shouldDropTrailingBucket ? data.slice(0, -1) : data
