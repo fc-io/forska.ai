@@ -670,6 +670,45 @@ test('reviews warnings report refreshing from ledger and worker progress state',
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
+test('reviews warnings count only dirty articles still in live project scope', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-live-scope-dirty-warning'
+  const articleId = `article-${projectId}`
+  const staleArticleId = `article-${projectId}-stale`
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 2, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name, active)
+    VALUES ('route-${projectId}', 'route-${projectId}', 'Live Scope Route', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES ('project-route-${projectId}', '${projectId}', 'route-${projectId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article_import_route (id, article_id, import_route_id)
+    VALUES ('article-route-${projectId}', '${articleId}', 'route-${projectId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${staleArticleId}', 'Stale dirty article')
+  `)
+  await insertDirtyArticleRefreshState(projectId, articleId, 2)
+  await insertDirtyArticleRefreshState(projectId, staleArticleId, 2)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.queuedArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(2)
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 test('reviews warnings report stale when scope exists but review rollups are missing', async () => {
   const projectId = 'project-stale-warning'
 
