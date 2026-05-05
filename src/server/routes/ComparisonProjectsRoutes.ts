@@ -234,7 +234,7 @@ const appDatabaseService = getAppDatabaseService()
 const {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} = appQueryHelpers
 const summaryPromptId = 'summary'
 const summaryPromptLabel = 'Overall decision'
-const comparisonProjectJudgmentArticleBatchSize = 500
+const comparisonProjectJudgmentArticleBatchSize = 20000
 
 const getRequiredDateValue = (value: unknown) => {
   const parsedDate = getDateValue(value)
