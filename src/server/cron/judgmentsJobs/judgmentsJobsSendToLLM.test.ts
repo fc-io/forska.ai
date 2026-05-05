@@ -8,6 +8,8 @@ import {
   getEffectiveDispatchProviderCap,
   getEffectiveProviderCap,
   getPromptClaimChunkLimits,
+  getPromptClaimDispatchChunkLimits,
+  getPromptClaimDispatchRequestedCount,
   getRequestsToSendByProviderConnection,
   processClaimedPromptsByConnection,
   requeueAndFilterRunningJobs,
@@ -350,12 +352,6 @@ test('getEffectiveDispatchProviderCap leaves non-Anthropic overrides unchanged',
 
 test('caps shared provider connections before splitting claims across jobs', () => {
   const allocations = getRequestsToSendByProviderConnection({
-    getCodexDefaultMaxInflight: () => {
-      return 4
-    },
-    getNonCodexCapacity: () => {
-      return {maxBurst: 10, maxInflight: 10, workerCount: 1}
-    },
     providerQueueCapacities: new Map([
       ['connection-shared', 2],
       ['connection-independent', 5],
@@ -364,11 +360,6 @@ test('caps shared provider connections before splitting claims across jobs', () 
       ['job-shared-a', 4],
       ['job-shared-b', 4],
       ['job-independent', 5],
-    ]),
-    runtimeInFlightCounts: new Map([
-      ['job-shared-a', 5],
-      ['job-shared-b', 3],
-      ['job-independent', 0],
     ]),
     jobs: [
       {
@@ -419,12 +410,6 @@ test('caps shared provider connections before splitting claims across jobs', () 
 
 test('caps shared codex provider connections by the saved override before splitting claims across jobs', () => {
   const allocations = getRequestsToSendByProviderConnection({
-    getCodexDefaultMaxInflight: () => {
-      return 4
-    },
-    getNonCodexCapacity: () => {
-      return {maxBurst: 10, maxInflight: 10, workerCount: 1}
-    },
     providerQueueCapacities: new Map([
       ['connection-codex-shared', 1],
       ['connection-codex-other', 4],
@@ -433,11 +418,6 @@ test('caps shared codex provider connections by the saved override before splitt
       ['job-codex-shared-a', 4],
       ['job-codex-shared-b', 4],
       ['job-codex-other', 4],
-    ]),
-    runtimeInFlightCounts: new Map([
-      ['job-codex-shared-a', 1],
-      ['job-codex-shared-b', 0],
-      ['job-codex-other', 0],
     ]),
     jobs: [
       {
@@ -488,12 +468,6 @@ test('caps shared codex provider connections by the saved override before splitt
 
 test('lets different provider connections progress under a stricter shared bucket limit', () => {
   const allocations = getRequestsToSendByProviderConnection({
-    getCodexDefaultMaxInflight: () => {
-      return 4
-    },
-    getNonCodexCapacity: () => {
-      return {maxBurst: 10, maxInflight: 10, workerCount: 1}
-    },
     providerQueueCapacities: new Map([
       ['connection-a', 5],
       ['connection-b', 5],
@@ -501,10 +475,6 @@ test('lets different provider connections progress under a stricter shared bucke
     readyCounts: new Map([
       ['job-a', 5],
       ['job-b', 5],
-    ]),
-    runtimeInFlightCounts: new Map([
-      ['job-a', 0],
-      ['job-b', 0],
     ]),
     jobs: [
       {
@@ -551,12 +521,6 @@ test('lets different provider connections progress under a stricter shared bucke
 
 test('tops up from free dispatcher capacity instead of treating claimed backlog as running', () => {
   const allocations = getRequestsToSendByProviderConnection({
-    getCodexDefaultMaxInflight: () => {
-      return 4
-    },
-    getNonCodexCapacity: () => {
-      return {maxBurst: 10, maxInflight: 10, workerCount: 1}
-    },
     jobs: [
       {
         id: 'job-a',
@@ -571,7 +535,6 @@ test('tops up from free dispatcher capacity instead of treating claimed backlog 
     maxRequestsToSend: 10,
     providerQueueCapacities: new Map([['connection-a', 1]]),
     readyCounts: new Map([['job-a', 5]]),
-    runtimeInFlightCounts: new Map([['job-a', 0]]),
   })
 
   expect(allocations).toEqual([
@@ -598,12 +561,6 @@ test('tops up from free dispatcher capacity instead of treating claimed backlog 
 
 test('claims against dispatcher queue headroom even when a live request is already running', () => {
   const allocations = getRequestsToSendByProviderConnection({
-    getCodexDefaultMaxInflight: () => {
-      return 4
-    },
-    getNonCodexCapacity: () => {
-      return {maxBurst: 10, maxInflight: 10, workerCount: 1}
-    },
     jobs: [
       {
         id: 'job-a',
@@ -618,17 +575,45 @@ test('claims against dispatcher queue headroom even when a live request is alrea
     maxRequestsToSend: 10,
     providerQueueCapacities: new Map([['connection-a', 2]]),
     readyCounts: new Map([['job-a', 5]]),
-    runtimeInFlightCounts: new Map([['job-a', 1]]),
   })
 
   expect(allocations[0]?.limit).toBe(2)
   expect(allocations[0]?.jobs[0]?.limit).toBe(2)
 })
 
+test('fills dispatcher reserve above the live provider cap', () => {
+  const allocations = getRequestsToSendByProviderConnection({
+    jobs: [
+      {
+        id: 'job-a',
+        maxInflightRequests: 3,
+        modelId: 'model-a',
+        modelName: 'Model A',
+        modelProvider: 'sglang',
+        projectId: 'project-a',
+        providerConnectionId: 'connection-a',
+      },
+    ],
+    maxRequestsToSend: 10,
+    providerQueueCapacities: new Map([['connection-a', 6]]),
+    readyCounts: new Map([['job-a', 10]]),
+  })
+
+  expect(allocations[0]?.limit).toBe(6)
+  expect(allocations[0]?.jobs[0]?.limit).toBe(6)
+})
+
 test('splits large prompt claims into dispatch chunks', () => {
   expect(getPromptClaimChunkLimits(0)).toEqual([])
   expect(getPromptClaimChunkLimits(33)).toEqual([16, 17])
   expect(getPromptClaimChunkLimits(145)).toEqual([16, 64, 64, 1])
+})
+
+test('caps owner-backed prompt claim chunks per dispatch pass', () => {
+  expect(getPromptClaimDispatchChunkLimits({limit: 600, ownerBacked: true})).toEqual([32, 64, 64, 64, 64])
+  expect(getPromptClaimDispatchChunkLimits({limit: 145, ownerBacked: false})).toEqual([16, 64, 64, 1])
+  expect(getPromptClaimDispatchRequestedCount({limit: 600, ownerBacked: true})).toBe(288)
+  expect(getPromptClaimDispatchRequestedCount({limit: 145, ownerBacked: false})).toBe(145)
 })
 
 test('dispatch availability skips 404 misroutes during cooldown, probes once after expiry, and skips misconfigured endpoints', () => {

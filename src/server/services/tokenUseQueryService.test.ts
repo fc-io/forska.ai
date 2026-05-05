@@ -13,6 +13,9 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 let closeDatabase: (() => Promise<void>) | null = null
 let tokenUseQueryService: Awaited<typeof import('./tokenUseQueryService.ts')>['tokenUseQueryService'] | null = null
+let TokenUseIdempotencyConflictErrorClass:
+  | typeof import('./tokenUseQueryService.ts').TokenUseIdempotencyConflictError
+  | null = null
 
 const buildFailedRequestDetail = (promptIds: string[]) => {
   return {
@@ -86,6 +89,7 @@ beforeAll(async () => {
     return database.close()
   }
   tokenUseQueryService = tokenUseQueryServiceModule.tokenUseQueryService
+  TokenUseIdempotencyConflictErrorClass = tokenUseQueryServiceModule.TokenUseIdempotencyConflictError
 })
 
 afterAll(async () => {
@@ -113,7 +117,7 @@ test('insertTokenUse generates an id when one is not provided', async () => {
 })
 
 test('insertTokenUseOnce reloads matching conflicts and rejects durable mismatches', async () => {
-  if (!tokenUseQueryService) {
+  if (!tokenUseQueryService || !TokenUseIdempotencyConflictErrorClass) {
     throw new Error('Token use query service not initialized')
   }
 
@@ -145,6 +149,7 @@ test('insertTokenUseOnce reloads matching conflicts and rejects durable mismatch
   )
 
   expect(mismatchError).toBeInstanceOf(Error)
+  expect(mismatchError).toBeInstanceOf(TokenUseIdempotencyConflictErrorClass)
   expect(mismatchError instanceof Error ? mismatchError.message : '').toBe(
     'token use idempotency conflict for idempotent-token-use-1: total_tokens mismatch',
   )

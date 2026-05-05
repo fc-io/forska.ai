@@ -472,6 +472,8 @@ test('dirty project article batch refresh uses a temp article table without proj
   expect(statement).not.toMatch(
     /DELETE FROM mart\\.prompt_answer_fact\\s+WHERE project_id = 'project-dirty-batch-shape'\\s*;/,
   )
+  expect(statement).not.toContain('DROP INDEX IF EXISTS mart.idx_mart_prompt_answer_fact_lookup')
+  expect(statement).not.toContain('CREATE INDEX IF NOT EXISTS idx_mart_prompt_answer_fact_lookup')
 })
 
 test('project prompt and import-route dirty requests mark projects dirty without project queue rows', () => {

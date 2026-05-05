@@ -295,6 +295,110 @@ test('terminal request attempts are sinks except same-state metadata enrichment'
   expect(terminalEntry.error).toBe('late duplicate metadata')
 })
 
+test('compatible terminal closeout surfaces merge without treating token use as conflicting', () => {
+  const legacyCompletionAttempt = {
+    ...baseManifestAttempt,
+    closeoutKind: 'completion_outbox',
+    completionTokens: 5,
+    finishedAt: '2026-05-03T12:00:02.000Z',
+    lifecycleState: 'completedRequest',
+    outcome: 'success',
+    promptTokens: 10,
+    totalTokens: 15,
+  } satisfies JudgmentRequestAttemptJsonEntry
+  const pendingTokenUseAttempt = getFirstManifestEntry(
+    withDurableCloseoutRef({
+      closeoutKind: 'pending_token_use',
+      ref: {claimId: 'claim-a', id: 'attempt-a', jobId: 'job-a', queueRecordId: 'queue-a'},
+      requestAttempts: [legacyCompletionAttempt],
+    }),
+  )
+  const mergedManifest = mutateRequestAttemptManifestEntries({
+    currentEntries: [legacyCompletionAttempt],
+    mutation: {mergeEntries: [pendingTokenUseAttempt]},
+  })
+  const mergedEntry = getFirstManifestEntry(mergedManifest)
+
+  expect(getRequestAttemptLifecycleState(mergedEntry)).toBe('completedRequest')
+  expect(mergedEntry.closeoutKind).toBe('pending_token_use')
+  expect(mergedEntry.durableCloseoutRef?.kind).toBe('pending_token_use')
+})
+
+test('durable timeout token use closes a non-durable live request failure', () => {
+  const liveTimeoutAttempt = {
+    ...baseManifestAttempt,
+    baseURL: 'http://provider.test/v1',
+    closeoutKind: 'live_request',
+    error: 'The operation timed out.',
+    finishedAt: '2026-05-03T12:00:35.000Z',
+    lifecycleState: 'liveRequest',
+    outcome: 'failure',
+    startedAt: '2026-05-03T12:00:05.000Z',
+    stateStartedAt: '2026-05-03T12:00:05.000Z',
+    updatedAt: '2026-05-03T12:00:35.000Z',
+  } satisfies JudgmentRequestAttemptJsonEntry
+  const pendingTokenUseAttempt = getFirstManifestEntry(
+    withDurableCloseoutRef({
+      closeoutKind: 'pending_token_use',
+      ref: {claimId: 'claim-a', jobId: 'job-a', queueRecordId: 'queue-a'},
+      requestAttempts: [
+        {
+          ...liveTimeoutAttempt,
+          closeoutKind: 'persistence',
+          finishedAt: '2026-05-03T12:00:36.000Z',
+          lifecycleState: 'persistingCompletion',
+        },
+      ],
+    }),
+  )
+  const mergedManifest = mutateRequestAttemptManifestEntries({
+    currentEntries: [liveTimeoutAttempt],
+    mutation: {mergeEntries: [pendingTokenUseAttempt]},
+  })
+  const mergedEntry = getFirstManifestEntry(mergedManifest)
+
+  expect(getRequestAttemptLifecycleState(mergedEntry)).toBe('closedRequest')
+  expect(mergedEntry.closeoutKind).toBe('pending_token_use')
+  expect(mergedEntry.durableCloseoutRef?.kind).toBe('pending_token_use')
+  expect(mergedEntry.error).toBe('The operation timed out.')
+})
+
+test('late durable failure evidence after no-durable worker closeout is quarantined', () => {
+  const workerLostClosedAttempt = {
+    ...baseManifestAttempt,
+    closeoutKind: 'manifest_repair',
+    closeoutReason: 'workerLostNoDurableResult',
+    finishedAt: '2026-05-03T12:00:35.000Z',
+    lifecycleState: 'closedRequest',
+    outcome: 'failure',
+    stateStartedAt: '2026-05-03T12:00:35.000Z',
+    updatedAt: '2026-05-03T12:00:35.000Z',
+  } satisfies JudgmentRequestAttemptJsonEntry
+  const tokenUseAttempt = getFirstManifestEntry(
+    withDurableCloseoutRef({
+      closeoutKind: 'token_use',
+      ref: {id: 'token-use-a', jobId: 'job-a', queueRecordId: 'queue-a'},
+      requestAttempts: [
+        {
+          ...workerLostClosedAttempt,
+          closeoutKind: 'persistence',
+          finishedAt: '2026-05-03T12:00:36.000Z',
+          lifecycleState: 'persistingCompletion',
+        },
+      ],
+    }),
+  )
+  const mergedManifest = mutateRequestAttemptManifestEntries({
+    currentEntries: [workerLostClosedAttempt],
+    mutation: {mergeEntries: [tokenUseAttempt]},
+  })
+  const mergedEntry = getFirstManifestEntry(mergedManifest)
+
+  expect(getRequestAttemptLifecycleState(mergedEntry)).toBe('closedRequest')
+  expect(mergedEntry.closeoutKind).toBe('manifest_repair')
+  expect(mergedEntry.lateEvidenceConflict?.closeoutKind).toBe('token_use')
+})
+
 test('compaction accepts token-use closeout after completion closeout for the same attempt', () => {
   const completionAttempt = getFirstManifestEntry(
     withDurableCloseoutRef({
@@ -482,6 +586,19 @@ test('duplicate request attempt ids with conflicting durable fields fail invaria
     mutateRequestAttemptManifestEntries({
       currentEntries: [completedAttempt],
       mutation: {mergeEntries: [conflictingAttempt]},
+    })
+  }).toThrow(JudgmentRequestAttemptInvariantError)
+  expect(() => {
+    mutateRequestAttemptManifestEntries({
+      currentEntries: [completedAttempt],
+      mutation: {
+        mergeEntries: [
+          {
+            ...completedAttempt,
+            durableCloseoutRef: {...completedAttempt.durableCloseoutRef, id: 'token-use-b', kind: 'token_use'},
+          },
+        ],
+      },
     })
   }).toThrow(JudgmentRequestAttemptInvariantError)
 })

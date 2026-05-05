@@ -4,8 +4,10 @@ import {getEndpointAvailabilityKey} from './endpointAvailabilityKey.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {
+  applyJudgeWorkerCompletionOutboxLocally,
   enqueueJudgeWorkerCompletion,
   flushJudgeWorkerCompletionOutboxForClaim,
+  getAcceptedJudgeWorkerClaimPrompts,
   heartbeatOwnerBackedJudgmentWorker,
   recoverAbandonedJudgeWorkerAcceptedClaims,
   replayJudgeWorkerCompletionOutbox,
@@ -64,9 +66,23 @@ const schedulerFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 
 const sendToLLMComponent = 'judgmentsJobsSendToLLM'
 const initialPromptClaimDispatchChunkSize = 16
 const promptClaimDispatchChunkSize = 64
+const ownerBackedInitialPromptClaimDispatchChunkSize = 32
+const ownerBackedPromptClaimDispatchChunkSize = 64
+const ownerBackedPromptClaimChunksPerDispatch = 5
+const ownerBackedPromptClaimInterChunkYieldMs = 500
+const ownerBackedPreDispatchCompletionReplayLimit = 64
+const ownerBackedPreDispatchLocalCompletionApplyLimit = 64
+const ownerBackedCompletionReplayIntervalMs = 5_000
+const ownerBackedAcceptedClaimRecoveryReplayLimit = 64
+const ownerBackedAcceptedClaimRecoveryIntervalMs = 10_000
 const probePromptClaimLimit = initialPromptClaimDispatchChunkSize
 
 const anthropicConnectionWarmupStartedAt = new Map<string, number>()
+let ownerBackedAcceptedClaimRecoveryPromise: Promise<void> | null = null
+let ownerBackedAcceptedClaimRecoveryStartedAt = 0
+let ownerBackedCompletionReplayPromise: Promise<void> | null = null
+let ownerBackedCompletionReplayStartedAt = 0
+let ownerBackedHeartbeatPromise: Promise<void> | null = null
 
 const isAnthropicJob = (job: {modelProvider: string | null}) => {
   return normalizeProvider(job.modelProvider) === 'anthropic'
@@ -325,16 +341,51 @@ const getPromptClaimChunkLimit = (limit: number, chunkSize: number): number => {
   return Math.min(normalizedLimit, chunkSize)
 }
 
-const getSteadyPromptClaimChunkLimits = (limit: number): number[] => {
-  const chunkLimit = getPromptClaimChunkLimit(limit, promptClaimDispatchChunkSize)
+const getSteadyPromptClaimChunkLimits = (limit: number, chunkSize = promptClaimDispatchChunkSize): number[] => {
+  const chunkLimit = getPromptClaimChunkLimit(limit, chunkSize)
 
-  return chunkLimit <= 0 ? [] : [chunkLimit, ...getSteadyPromptClaimChunkLimits(limit - chunkLimit)]
+  return chunkLimit <= 0 ? [] : [chunkLimit, ...getSteadyPromptClaimChunkLimits(limit - chunkLimit, chunkSize)]
 }
 
 export const getPromptClaimChunkLimits = (limit: number): number[] => {
   const chunkLimit = getPromptClaimChunkLimit(limit, initialPromptClaimDispatchChunkSize)
 
   return chunkLimit <= 0 ? [] : [chunkLimit, ...getSteadyPromptClaimChunkLimits(limit - chunkLimit)]
+}
+
+const getOwnerBackedPromptClaimChunkLimits = (limit: number): number[] => {
+  const chunkLimit = getPromptClaimChunkLimit(limit, ownerBackedInitialPromptClaimDispatchChunkSize)
+
+  return chunkLimit <= 0
+    ? []
+    : [
+        chunkLimit,
+        ...getSteadyPromptClaimChunkLimits(limit - chunkLimit, ownerBackedPromptClaimDispatchChunkSize),
+      ]
+}
+
+export const getPromptClaimDispatchChunkLimits = ({
+  limit,
+  ownerBacked,
+}: {
+  limit: number
+  ownerBacked: boolean
+}): number[] => {
+  return ownerBacked
+    ? getOwnerBackedPromptClaimChunkLimits(limit).slice(0, ownerBackedPromptClaimChunksPerDispatch)
+    : getPromptClaimChunkLimits(limit)
+}
+
+export const getPromptClaimDispatchRequestedCount = ({
+  limit,
+  ownerBacked,
+}: {
+  limit: number
+  ownerBacked: boolean
+}): number => {
+  return getPromptClaimDispatchChunkLimits({limit, ownerBacked}).reduce((sum, chunkLimit) => {
+    return sum + chunkLimit
+  }, 0)
 }
 
 const enqueueClaimedPromptBatch = async ({
@@ -385,19 +436,35 @@ const claimAndEnqueuePromptChunk = async ({
   job,
   label,
   limit,
+  ownerBackedJobInfo,
   serverJobId,
 }: {
   job: RunningJudgmentJob
   label: string
   limit: number
+  ownerBackedJobInfo?: PromptRuntime['ownerBackedJobInfo']
   serverJobId: string
 }): Promise<{fetched: number; rejected: number}> => {
   const providerCap = getEffectiveDispatchProviderCap({job})
   const protectedRecordIds = shouldUseJudgeWorkerOwnerHandoff() ? await getJudgmentDispatchJobPromptIds(job.id) : []
+  const acceptedPrompts = shouldUseJudgeWorkerOwnerHandoff()
+    ? await getAcceptedJudgeWorkerClaimPrompts({
+        excludedQueueRecordIds: new Set(protectedRecordIds),
+        jobId: job.id,
+        limit,
+      })
+    : []
+  const acceptedEnqueueResult = await enqueueClaimedPromptBatch({label, prompts: acceptedPrompts})
+  const remainingLimit = Math.max(0, limit - acceptedPrompts.length)
+
+  if (remainingLimit <= 0 || acceptedEnqueueResult.rejectedPrompts.length > 0) {
+    return {fetched: acceptedPrompts.length, rejected: acceptedEnqueueResult.rejectedPrompts.length}
+  }
+
   const prompts = await getAndUpdateReadyPrompts(
     serverJobId,
     job.id,
-    limit,
+    remainingLimit,
     {
       providerFamily: job.providerFamily,
       providerId: job.providerId,
@@ -410,22 +477,29 @@ const claimAndEnqueuePromptChunk = async ({
       providerUsesFamilyDefault: providerCap.usesFamilyDefault,
       resolvedDefaultCapacity: job.resolvedDefaultCapacity,
     },
-    {protectedRecordIds},
+    {ownerBackedJobInfo, protectedRecordIds},
   )
   const enqueueResult = await enqueueClaimedPromptBatch({label, prompts})
 
-  return {fetched: prompts.length, rejected: enqueueResult.rejectedPrompts.length}
+  return {
+    fetched: acceptedPrompts.length + prompts.length,
+    rejected: acceptedEnqueueResult.rejectedPrompts.length + enqueueResult.rejectedPrompts.length,
+  }
 }
 
 const claimAndEnqueuePromptChunks = async ({
   chunkLimits,
   job,
   label,
+  ownerBacked,
+  ownerBackedJobInfo,
   serverJobId,
 }: {
   chunkLimits: number[]
   job: RunningJudgmentJob
   label: string
+  ownerBacked: boolean
+  ownerBackedJobInfo?: PromptRuntime['ownerBackedJobInfo']
   serverJobId: string
 }): Promise<number> => {
   const [chunkLimit, ...remainingChunkLimits] = chunkLimits
@@ -435,13 +509,32 @@ const claimAndEnqueuePromptChunks = async ({
   }
 
   try {
-    const chunkResult = await claimAndEnqueuePromptChunk({job, label, limit: chunkLimit, serverJobId})
+    const chunkResult = await claimAndEnqueuePromptChunk({
+      job,
+      label,
+      limit: chunkLimit,
+      ownerBackedJobInfo,
+      serverJobId,
+    })
     const shouldContinue =
       chunkResult.fetched === chunkLimit && chunkResult.rejected === 0 && remainingChunkLimits.length > 0
 
+    if (shouldContinue && ownerBacked) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, ownerBackedPromptClaimInterChunkYieldMs)
+      })
+    }
+
     return shouldContinue
       ? chunkResult.fetched
-          + (await claimAndEnqueuePromptChunks({chunkLimits: remainingChunkLimits, job, label, serverJobId}))
+          + (await claimAndEnqueuePromptChunks({
+            chunkLimits: remainingChunkLimits,
+            job,
+            label,
+            ownerBacked,
+            ownerBackedJobInfo,
+            serverJobId,
+          }))
       : chunkResult.fetched
   } catch (error) {
     logPromptClaimFailure({error, jobId: job.id, label, requested: chunkLimit})
@@ -453,17 +546,23 @@ const claimAndEnqueuePromptRequest = async ({
   job,
   label,
   limit,
+  runtime,
   serverJobId,
 }: {
   job: RunningJudgmentJob
   label: string
   limit: number
+  runtime: PromptRuntime
   serverJobId: string
-}): Promise<number> => {
+}): Promise<{fetched: number; requested: number}> => {
+  const ownerBacked = shouldUseJudgeWorkerOwnerHandoff()
+  const requested = getPromptClaimDispatchRequestedCount({limit, ownerBacked})
   const fetched = await claimAndEnqueuePromptChunks({
-    chunkLimits: getPromptClaimChunkLimits(limit),
+    chunkLimits: getPromptClaimDispatchChunkLimits({limit, ownerBacked}),
     job,
     label,
+    ownerBacked,
+    ownerBackedJobInfo: runtime.ownerBackedJobInfo,
     serverJobId,
   })
 
@@ -472,10 +571,10 @@ const claimAndEnqueuePromptRequest = async ({
     jobId: job.id,
     ownerBacked: shouldUseJudgeWorkerOwnerHandoff(),
     providerKey: getJobProviderKey(job),
-    requestedCount: limit,
+    requestedCount: requested,
   })
 
-  return fetched
+  return {fetched, requested}
 }
 
 const getDispatchEndpoints = (runtime: PromptRuntime): string[] => {
@@ -861,21 +960,15 @@ export const getRequestsToSendByJob = <T extends {id: string}>(
 }
 
 export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJob>({
-  getCodexDefaultMaxInflight = getCodexMaxInflight,
-  getNonCodexCapacity = getJudgmentsCapacity,
   jobs,
   maxRequestsToSend,
   providerQueueCapacities,
   readyCounts,
-  runtimeInFlightCounts: _runtimeInFlightCounts,
 }: {
-  getCodexDefaultMaxInflight?: () => number
-  getNonCodexCapacity?: (runningJobCount: number) => Capacity
   jobs: T[]
   maxRequestsToSend: number
   providerQueueCapacities: Map<string, number>
   readyCounts: Map<string, number>
-  runtimeInFlightCounts: Map<string, number>
 }): ProviderConnectionRequestAllocation<T>[] => {
   const connectionGroups = Array.from(
     jobs.reduce((state, job) => {
@@ -886,17 +979,12 @@ export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJ
     const firstJob = connectionJobs[0]
     if (!firstJob) return null
 
-    const providerCap = getProviderKeyBucketCapacity({
-      getCodexDefaultMaxInflight,
-      getNonCodexCapacity,
-      jobs: connectionJobs,
-    }).maxInflight
     const ready = connectionJobs.reduce((sum, job) => {
       return sum + (readyCounts.get(job.id) ?? 0)
     }, 0)
     const providerQueueCapacity = providerQueueCapacities.get(connectionId) ?? 0
 
-    return {connectionId, jobs: connectionJobs, limit: Math.max(0, Math.min(ready, providerCap, providerQueueCapacity))}
+    return {connectionId, jobs: connectionJobs, limit: Math.max(0, Math.min(ready, providerQueueCapacity))}
   })
   const sendableConnectionGroups = connectionGroups.filter(
     (group): group is {connectionId: string; jobs: T[]; limit: number} => {
@@ -953,6 +1041,7 @@ const recoverAbandonedAcceptedClaimsForJobs = async (jobs: RunningJudgmentJob[])
   }
 
   const recovery = await recoverAbandonedJudgeWorkerAcceptedClaims({
+    limit: ownerBackedAcceptedClaimRecoveryReplayLimit,
     protectedPrompts: await getProtectedJudgeWorkerAcceptedClaimPrompts(jobs),
   })
   const recoveredCount = recovery.acceptedClaimsDeleted + recovery.closeoutIntentsInserted
@@ -966,6 +1055,105 @@ const recoverAbandonedAcceptedClaimsForJobs = async (jobs: RunningJudgmentJob[])
       replay: recovery.replay,
     })
   }
+}
+
+const getBackgroundError = (error: unknown): {message: string; name?: string; stack?: string} => {
+  return error instanceof Error
+    ? {message: error.message, name: error.name, stack: error.stack}
+    : {message: String(error)}
+}
+
+const logOwnerBackedBackgroundFailure = (event: string, message: string, error: unknown): void => {
+  schedulerFailureLogger.warn(`scheduler:${event}`, message, {
+    component: sendToLLMComponent,
+    error: getBackgroundError(error),
+    event,
+  })
+}
+
+const startOwnerBackedCompletionReplay = (): void => {
+  const now = Date.now()
+
+  if (
+    ownerBackedCompletionReplayPromise
+    || now - ownerBackedCompletionReplayStartedAt < ownerBackedCompletionReplayIntervalMs
+  ) {
+    return
+  }
+
+  ownerBackedCompletionReplayStartedAt = now
+  ownerBackedCompletionReplayPromise = replayJudgeWorkerCompletionOutbox({
+    limit: ownerBackedPreDispatchCompletionReplayLimit,
+  })
+    .then((replay) => {
+      const changed = replay.ackedCount + replay.discardedCount + replay.failedCount
+
+      if (changed > 0) {
+        schedulerLogger.log('scheduler:owner-backed-completion-replay', '[capacity] replayed owner completions', {
+          ...replay,
+          component: sendToLLMComponent,
+          event: 'ownerBackedCompletionReplay',
+        })
+      }
+    })
+    .catch((error) => {
+      logOwnerBackedBackgroundFailure(
+        'ownerBackedCompletionReplayFailed',
+        '[capacity] owner completion replay failed',
+        error,
+      )
+    })
+    .finally(() => {
+      ownerBackedCompletionReplayPromise = null
+    })
+}
+
+const startOwnerBackedWorkerHeartbeat = (serverJobId: string, jobs: RunningJudgmentJob[]): void => {
+  if (ownerBackedHeartbeatPromise || jobs.length === 0) {
+    return
+  }
+
+  ownerBackedHeartbeatPromise = heartbeatOwnerBackedJudgmentWorker({
+    claimedBy: serverJobId,
+    jobIds: jobs.map((job) => {
+      return job.id
+    }),
+  })
+    .catch((error) => {
+      logOwnerBackedBackgroundFailure(
+        'ownerBackedWorkerHeartbeatFailed',
+        '[capacity] owner worker heartbeat failed',
+        error,
+      )
+    })
+    .finally(() => {
+      ownerBackedHeartbeatPromise = null
+    })
+}
+
+const startOwnerBackedAcceptedClaimRecovery = (jobs: RunningJudgmentJob[]): void => {
+  const now = Date.now()
+
+  if (
+    ownerBackedAcceptedClaimRecoveryPromise
+    || !shouldUseJudgeWorkerOwnerHandoff()
+    || now - ownerBackedAcceptedClaimRecoveryStartedAt < ownerBackedAcceptedClaimRecoveryIntervalMs
+  ) {
+    return
+  }
+
+  ownerBackedAcceptedClaimRecoveryStartedAt = now
+  ownerBackedAcceptedClaimRecoveryPromise = recoverAbandonedAcceptedClaimsForJobs(jobs)
+    .catch((error) => {
+      logOwnerBackedBackgroundFailure(
+        'ownerBackedAcceptedClaimRecoveryFailed',
+        '[capacity] owner accepted-claim recovery failed',
+        error,
+      )
+    })
+    .finally(() => {
+      ownerBackedAcceptedClaimRecoveryPromise = null
+    })
 }
 
 export const requeueAndFilterRunningJobs = async ({
@@ -1043,7 +1231,6 @@ const sendToLLMForJobs = async (
     maxRequestsToSend: requestsToSend,
     providerQueueCapacities,
     readyCounts,
-    runtimeInFlightCounts,
   })
   const requestsToSendByJob = await getClaimableRequests({allocations: requestsToSendByConnection, label})
   schedulerLogger.log(`llm.requestsToSendByJob.${label}`, `[capacity:${label}] requests to send by job`, {
@@ -1055,17 +1242,17 @@ const sendToLLMForJobs = async (
     }),
   })
 
-  const promptFetchedCounts = await Promise.all(
-    requestsToSendByJob.map(({job, limit}) => {
-      return claimAndEnqueuePromptRequest({job, label, limit, serverJobId})
+  const promptClaimResults = await Promise.all(
+    requestsToSendByJob.map(({job, limit, runtime}) => {
+      return claimAndEnqueuePromptRequest({job, label, limit, runtime, serverJobId})
     }),
   )
-  const expectedPromptsToFetch = requestsToSendByJob.reduce((sum, request) => {
-    return sum + request.limit
+  const expectedPromptsToFetch = promptClaimResults.reduce((sum, result) => {
+    return sum + result.requested
   }, 0)
 
-  const totalPromptsFetched = promptFetchedCounts.reduce((sum, count) => {
-    return sum + count
+  const totalPromptsFetched = promptClaimResults.reduce((sum, result) => {
+    return sum + result.fetched
   }, 0)
 
   if (totalPromptsFetched !== expectedPromptsToFetch) {
@@ -1089,17 +1276,23 @@ export const judgmentsJobsSendToLLM = async (
 
   try {
     if (shouldUseJudgeWorkerOwnerHandoff()) {
-      await heartbeatOwnerBackedJudgmentWorker({
-        claimedBy: serverJobId,
-        jobIds: allJobs.map((job) => {
-          return job.id
-        }),
+      startOwnerBackedWorkerHeartbeat(serverJobId, allJobs)
+      startOwnerBackedCompletionReplay()
+      const localApply = await applyJudgeWorkerCompletionOutboxLocally({
+        limit: ownerBackedPreDispatchLocalCompletionApplyLimit,
       })
-      await replayJudgeWorkerCompletionOutbox()
+
+      if (localApply.appliedCount > 0) {
+        schedulerLogger.log('scheduler:owner-backed-local-completion-apply', '[capacity] applied local completions', {
+          ...localApply,
+          component: sendToLLMComponent,
+          event: 'ownerBackedLocalCompletionApply',
+        })
+      }
     }
 
     const sendableJobs = await requeueAndFilterRunningJobs({allJobs, filterJobs, serverJobId})
-    await recoverAbandonedAcceptedClaimsForJobs(sendableJobs)
+    startOwnerBackedAcceptedClaimRecovery(sendableJobs)
     const capacityBuckets = getCapacityBuckets({jobs: sendableJobs})
 
     await Promise.all(

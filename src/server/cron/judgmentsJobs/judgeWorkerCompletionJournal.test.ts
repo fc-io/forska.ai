@@ -1,4 +1,4 @@
-import {mkdtempSync, rmSync} from 'node:fs'
+import {mkdirSync, mkdtempSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -6,8 +6,10 @@ import {Database} from 'bun:sqlite'
 import {afterEach, expect, test} from 'bun:test'
 
 import {
+  applyJudgeWorkerCompletionOutboxLocally,
   attachTokenUseToPendingJudgeWorkerCompletion,
   enqueueJudgeWorkerCompletion,
+  flushJudgeWorkerCompletionOutboxForClaim,
   hasUnackedJudgeWorkerCompletion,
   type JudgeWorkerCompletionPayload,
   recordAcceptedJudgeWorkerClaims,
@@ -18,6 +20,7 @@ import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPr
 
 const originalEnv = {
   API_SERVER_PORT: process.env.API_SERVER_PORT,
+  DUCKDB_PATH: process.env.DUCKDB_PATH,
   JUDGE_WORKER_JOURNAL_PATH: process.env.JUDGE_WORKER_JOURNAL_PATH,
   SERVER_DUCKDB_OWNER_URL: process.env.SERVER_DUCKDB_OWNER_URL,
   SERVER_ROLE: process.env.SERVER_ROLE,
@@ -112,11 +115,145 @@ const setupJournalTest = (handler: OwnerFetchHandler) => {
     return handler(new Request(input, init))
   }
   process.env.API_SERVER_PORT = '3001'
+  process.env.DUCKDB_PATH = join(testDirectory, 'forska.duckdb')
   process.env.JUDGE_WORKER_JOURNAL_PATH = journalPath
   process.env.SERVER_DUCKDB_OWNER_URL = 'http://owner.test'
   process.env.SERVER_ROLE = 'judge-worker'
 
-  return {journalPath}
+  return {journalPath, testDirectory}
+}
+
+const createLocalJobPrompt = ({
+  claimId,
+  payload,
+  testDirectory,
+}: {
+  claimId: string | null
+  payload: JudgeWorkerCompletionPayload
+  testDirectory: string
+}): void => {
+  const jobsRoot = join(testDirectory, 'judgment-jobs')
+  mkdirSync(jobsRoot, {recursive: true})
+  const database = new Database(join(jobsRoot, `${payload.jobId}.sqlite`), {create: true})
+
+  database.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA busy_timeout = 5000;
+
+    CREATE TABLE job_info (
+      job_id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      model_provider TEXT NOT NULL,
+      model_version TEXT,
+      model_base_url TEXT,
+      model_secret_ref TEXT,
+      model_metadata_json TEXT,
+      provider_config_json TEXT,
+      use_title INTEGER NOT NULL,
+      use_abstract INTEGER NOT NULL,
+      use_fulltext INTEGER NOT NULL,
+      use_fulltext_no_images INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE queue_prompt (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      article_id TEXT NOT NULL,
+      prompt_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      terminal_kind TEXT,
+      skip_reason TEXT,
+      server_id TEXT,
+      claim_id TEXT,
+      execution_snapshot_id TEXT,
+      execution_snapshot_hash TEXT,
+      sent_at TEXT,
+      judged_at TEXT,
+      extra_retry_count INTEGER NOT NULL DEFAULT 0,
+      last_recoverable_error_code TEXT,
+      retry_after_at TEXT,
+      request_attempt_manifest_json TEXT NOT NULL DEFAULT '[]',
+      request_attempt_manifest_version INTEGER NOT NULL DEFAULT 0,
+      request_attempt_manifest_repair_json TEXT,
+      ready_insert_seq INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(job_id, article_id, prompt_id)
+    );
+    CREATE TABLE completion_ack (
+      claim_id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      queue_prompt_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      token_use_id TEXT,
+      request_attempts_json TEXT,
+      completed_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `)
+  database
+    .query(
+      `
+        INSERT INTO job_info (
+          job_id,
+          project_id,
+          model_id,
+          model_name,
+          model_provider,
+          use_title,
+          use_abstract,
+          use_fulltext,
+          use_fulltext_no_images,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      payload.jobId,
+      payload.projectId,
+      payload.modelId,
+      'Model A',
+      'openai',
+      Number(payload.useTitle),
+      Number(payload.useAbstract),
+      Number(payload.useFulltext),
+      Number(payload.useFulltextNoImages),
+      new Date().toISOString(),
+    )
+  database
+    .query(
+      `
+        INSERT INTO queue_prompt (
+          id,
+          job_id,
+          article_id,
+          prompt_id,
+          status,
+          claim_id,
+          execution_snapshot_id,
+          execution_snapshot_hash,
+          ready_insert_seq,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      payload.queueRecordId,
+      payload.jobId,
+      payload.articleId,
+      payload.promptId,
+      'claimed',
+      claimId,
+      payload.executionSnapshotId,
+      payload.executionSnapshotHash,
+      1,
+      new Date().toISOString(),
+      new Date().toISOString(),
+    )
+  database.close(false)
 }
 
 const getCompletionOutboxRow = (journalPath: string, claimId: string) => {
@@ -152,6 +289,23 @@ const getAcceptedClaimCount = (journalPath: string, claimId: string): number => 
   return row?.count ?? 0
 }
 
+const getQueuePromptState = (testDirectory: string, payload: JudgeWorkerCompletionPayload) => {
+  const database = new Database(join(testDirectory, 'judgment-jobs', `${payload.jobId}.sqlite`), {readonly: true})
+  const row = database
+    .query(
+      `
+        SELECT claim_id AS claimId, status
+        FROM queue_prompt
+        WHERE id = ?
+        LIMIT 1
+      `,
+    )
+    .get(payload.queueRecordId) as {claimId: string | null; status: string} | null
+
+  database.close(false)
+  return row
+}
+
 afterEach(async () => {
   resetJudgeWorkerCompletionJournalForTests()
   globalThis.fetch = originalFetch
@@ -159,6 +313,7 @@ afterEach(async () => {
     rmSync(directory, {force: true, recursive: true})
   })
   process.env.API_SERVER_PORT = originalEnv.API_SERVER_PORT
+  process.env.DUCKDB_PATH = originalEnv.DUCKDB_PATH
   process.env.JUDGE_WORKER_JOURNAL_PATH = originalEnv.JUDGE_WORKER_JOURNAL_PATH
   process.env.SERVER_DUCKDB_OWNER_URL = originalEnv.SERVER_DUCKDB_OWNER_URL
   process.env.SERVER_ROLE = originalEnv.SERVER_ROLE
@@ -182,6 +337,52 @@ test('completion replay logs plain owner errors without JSON parse masking', asy
   expect(row?.lastError).not.toContain('JSON Parse error')
 })
 
+test('completion flushes are globally bounded so owner ack cannot stampede', async () => {
+  let activeRequests = 0
+  let maxActiveRequests = 0
+  const {journalPath} = setupJournalTest(async (request) => {
+    activeRequests += 1
+    maxActiveRequests = Math.max(maxActiveRequests, activeRequests)
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10)
+    })
+    activeRequests -= 1
+    const body = (await request.json()) as JudgeWorkerCompletionPayload
+
+    return Response.json({
+      data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: body.status ?? 'judged'},
+      error: null,
+    })
+  })
+  const payloads = Array.from({length: 16}, (_value, index) => {
+    return createCompletionPayload({
+      articleId: `article-${index}`,
+      claimId: `claim-${index}`,
+      queueRecordId: `queue-${index}`,
+      status: 'retry',
+    })
+  })
+
+  await Promise.all(
+    payloads.map((payload) => {
+      return enqueueJudgeWorkerCompletion(payload)
+    }),
+  )
+  const replays = await Promise.all(
+    payloads.map((payload) => {
+      return flushJudgeWorkerCompletionOutboxForClaim(payload.claimId)
+    }),
+  )
+
+  expect(maxActiveRequests).toBeLessThanOrEqual(8)
+  expect(
+    replays.reduce((total, replay) => {
+      return total + replay.ackedCount
+    }, 0),
+  ).toBe(16)
+  expect(getCompletionOutboxRow(journalPath, 'claim-0')?.ackedAt).not.toBeNull()
+})
+
 test('completion replay discards stale missing-claim responses', async () => {
   const {journalPath} = setupJournalTest(async () => {
     return new Response('missing claimed prompt identity', {status: 409})
@@ -198,6 +399,67 @@ test('completion replay discards stale missing-claim responses', async () => {
   expect(row?.ackedAt).not.toBeNull()
   expect(row?.status).toBe('discarded_stale')
   expect(row?.lastError).toContain('owner-backed judgment request failed (409): missing claimed prompt identity')
+})
+
+test('completion replay discards locally stale claims without calling the owner', async () => {
+  let ownerCalls = 0
+  const {journalPath, testDirectory} = setupJournalTest(async () => {
+    ownerCalls += 1
+    return Response.json({data: {claimId: 'unexpected', queueRecordId: 'unexpected', status: 'retry'}})
+  })
+  const payload = createCompletionPayload({claimId: 'claim-local-stale', status: 'retry'})
+
+  createLocalJobPrompt({claimId: 'claim-current', payload, testDirectory})
+  await enqueueJudgeWorkerCompletion(payload)
+
+  const result = await replayJudgeWorkerCompletionOutbox()
+  const row = getCompletionOutboxRow(journalPath, payload.claimId)
+
+  expect(result).toEqual({ackedCount: 0, discardedCount: 1, failedCount: 0})
+  expect(ownerCalls).toBe(0)
+  expect(await hasUnackedJudgeWorkerCompletion(payload.claimId)).toBe(false)
+  expect(row?.ackedAt).not.toBeNull()
+  expect(row?.status).toBe('discarded_stale')
+  expect(row?.lastError).toContain('snapshot claim identity mismatch for claimId')
+})
+
+test('local completion apply releases retry rows without owner calls', async () => {
+  let ownerCalls = 0
+  const {journalPath, testDirectory} = setupJournalTest(() => {
+    ownerCalls += 1
+    return new Response('owner should not be called', {status: 500})
+  })
+  const payload = createCompletionPayload({
+    claimId: 'claim-local-retry',
+    jobId: 'job-local-retry',
+    queueRecordId: 'queue-local-retry',
+    status: 'retry',
+  })
+
+  createLocalJobPrompt({claimId: payload.claimId, payload, testDirectory})
+  await recordAcceptedJudgeWorkerClaims([createAcceptedClaimPrompt(payload)])
+  await enqueueJudgeWorkerCompletion(payload)
+
+  const result = await applyJudgeWorkerCompletionOutboxLocally({limit: 1})
+  const queuePrompt = getQueuePromptState(testDirectory, payload)
+  const database = new Database(journalPath, {readonly: true})
+  const outbox = database
+    .query(
+      `
+        SELECT acked_at AS ackedAt, local_applied_at AS localAppliedAt
+        FROM completion_outbox
+        WHERE claim_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(payload.claimId) as {ackedAt: string | null; localAppliedAt: string | null} | null
+  database.close(false)
+
+  expect(ownerCalls).toBe(0)
+  expect(result.appliedCount).toBe(1)
+  expect(queuePrompt).toEqual({claimId: null, status: 'ready'})
+  expect(outbox?.ackedAt).toBeNull()
+  expect(outbox?.localAppliedAt).toBeTruthy()
 })
 
 test('completion replay discards stale missing SQLite job database responses', async () => {
@@ -252,6 +514,32 @@ test('completion replay discards stale snapshot claim identity mismatch response
   expect(row?.ackedAt).not.toBeNull()
   expect(row?.status).toBe('discarded_stale')
   expect(row?.lastError).toContain('owner-backed judgment request failed (409): snapshot claim identity mismatch')
+})
+
+test('completion replay limit skips rows still waiting for token use', async () => {
+  const receivedClaimIds: string[] = []
+  setupJournalTest(async (request) => {
+    const body = (await request.json()) as {claimId: string; queueRecordId: string}
+    receivedClaimIds.push(body.claimId)
+
+    return Response.json({data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'retry'}})
+  })
+  const waitingPayload = createCompletionPayload({claimId: 'claim-limit-waiting', queueRecordId: 'queue-limit-waiting'})
+  const retryPayload = createCompletionPayload({
+    claimId: 'claim-limit-retry',
+    queueRecordId: 'queue-limit-retry',
+    status: 'retry',
+  })
+
+  await enqueueJudgeWorkerCompletion(waitingPayload)
+  await enqueueJudgeWorkerCompletion(retryPayload)
+
+  const result = await replayJudgeWorkerCompletionOutbox({limit: 1})
+
+  expect(result).toEqual({ackedCount: 1, discardedCount: 0, failedCount: 0})
+  expect(receivedClaimIds).toEqual(['claim-limit-retry'])
+  expect(await hasUnackedJudgeWorkerCompletion(waitingPayload.claimId)).toBe(true)
+  expect(await hasUnackedJudgeWorkerCompletion(retryPayload.claimId)).toBe(false)
 })
 
 test('completion replay deletes accepted claim rows after owner ack', async () => {

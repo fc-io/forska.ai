@@ -139,7 +139,7 @@ const getJudgeWorkerStartupEnv = ({
 
 const writeUnackedJudgeWorkerCompletion = (journalPath: string) => {
   const database = new Database(journalPath, {create: true})
-  const now = new Date().toISOString()
+  const now = new Date(Date.now() - 31_000).toISOString()
   const payload = {
     articleId: 'article-replay-startup',
     claimId: 'claim-replay-startup',
@@ -156,6 +156,24 @@ const writeUnackedJudgeWorkerCompletion = (journalPath: string) => {
     useFulltextNoImages: false,
     useTitle: true,
   }
+  const requestAttemptsJson = JSON.stringify([
+    {
+      articleId: payload.articleId,
+      claimId: payload.claimId,
+      closeoutKind: 'completion_outbox',
+      createdAt: now,
+      finishedAt: now,
+      jobId: payload.jobId,
+      outcome: 'success',
+      promptId: payload.promptId,
+      promptIds: [payload.promptId],
+      providerKey: `legacy:${payload.modelId}`,
+      queueRecordId: payload.queueRecordId,
+      requestAttemptId: 'request-attempt-replay-startup',
+      startedAt: now,
+      updatedAt: now,
+    },
+  ])
 
   database.exec(`
     PRAGMA journal_mode = WAL;
@@ -165,6 +183,7 @@ const writeUnackedJudgeWorkerCompletion = (journalPath: string) => {
       queue_record_id TEXT NOT NULL,
       payload_json TEXT NOT NULL,
       token_use_json TEXT,
+      request_attempts_json TEXT,
       status TEXT NOT NULL,
       acked_at TEXT,
       attempts INTEGER NOT NULL DEFAULT 0,
@@ -183,6 +202,7 @@ const writeUnackedJudgeWorkerCompletion = (journalPath: string) => {
           queue_record_id,
           payload_json,
           token_use_json,
+          request_attempts_json,
           status,
           acked_at,
           attempts,
@@ -190,10 +210,19 @@ const writeUnackedJudgeWorkerCompletion = (journalPath: string) => {
           last_error,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, NULL, NULL, ?, ?)
+        ) VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, 0, NULL, NULL, ?, ?)
       `,
     )
-    .run(payload.claimId, payload.jobId, payload.queueRecordId, JSON.stringify(payload), payload.status, now, now)
+    .run(
+      payload.claimId,
+      payload.jobId,
+      payload.queueRecordId,
+      JSON.stringify(payload),
+      requestAttemptsJson,
+      payload.status,
+      now,
+      now,
+    )
   database.close(false)
 }
 

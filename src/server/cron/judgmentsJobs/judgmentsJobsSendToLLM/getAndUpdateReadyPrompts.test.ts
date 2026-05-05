@@ -310,7 +310,11 @@ test('owner-backed codex prompts bypass runtime autodetect', async () => {
     runtimeMatchCalls: number
   }
 
-  expect(result.runtime).toEqual({modelBaseUrl: 'codex://app-server', modelProvider: 'codex', modelWorkerUrls: []})
+  expect(result.runtime).toMatchObject({
+    modelBaseUrl: 'codex://app-server',
+    modelProvider: 'codex',
+    modelWorkerUrls: [],
+  })
   expect(result.prompts).toHaveLength(1)
   expect(result.prompts[0]).toMatchObject({
     modelBaseUrl: 'codex://app-server',
@@ -471,7 +475,7 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
     runtimeSummaryCalls: number
   }
 
-  expect(result.runtime).toEqual({
+  expect(result.runtime).toMatchObject({
     modelBaseUrl: 'http://owner-sglang:30000/v1',
     modelProvider: 'sglang',
     modelWorkerUrls: ['http://owner-sglang-worker:30001'],

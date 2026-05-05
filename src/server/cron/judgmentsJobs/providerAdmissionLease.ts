@@ -221,6 +221,10 @@ const getNormalizedTimestampMs = (value: number): number => {
   return Number.isFinite(value) ? Math.trunc(value) : Date.now()
 }
 
+const shouldUseLocalProviderAdmissionLeaseStore = (): boolean => {
+  return String(process.env.SERVER_ROLE ?? '').trim() === 'judge-worker'
+}
+
 const getRequiredLeaseIdentityPart = ({label, value}: {label: string; value: string}): string => {
   const trimmed = value.trim()
 
@@ -1199,6 +1203,26 @@ const getActiveProviderLeases = (providerKey: string, nowMs: number): ProviderAd
   })
 }
 
+const getProviderAdmissionLeaseRecordFromMemory = (lease: ProviderAdmissionLease): ProviderAdmissionLeaseRecord => {
+  const parts = parseRequestLeaseIdentity(lease.leaseIdentity) ?? parseProbeLeaseIdentity(lease.leaseIdentity)
+
+  return {
+    acquiredAt: getIsoTimestamp(getDateFromMs(lease.acquiredAtMs)),
+    acquiredAtMs: lease.acquiredAtMs,
+    endpointAvailabilityKey: lease.endpointAvailabilityKey,
+    expiresAt: getIsoTimestamp(getDateFromMs(lease.expiresAtMs)),
+    expiresAtMs: lease.expiresAtMs,
+    heartbeatAt: getIsoTimestamp(getDateFromMs(lease.heartbeatAtMs)),
+    heartbeatAtMs: lease.heartbeatAtMs,
+    holderToken: lease.holderToken,
+    leaseIdentity: lease.leaseIdentity,
+    leaseKind: lease.leaseKind,
+    probeAttemptId: parts?.probeAttemptId ?? null,
+    providerKey: lease.providerKey,
+    requestAttemptId: parts?.requestAttemptId ?? null,
+  }
+}
+
 export const acquireProviderAdmissionLease = ({
   holderToken,
   leaseIdentity,
@@ -1299,11 +1323,7 @@ export const releaseProviderAdmissionLease = ({
   holderToken,
   leaseIdentity,
   providerKey,
-}: {
-  holderToken: string
-  leaseIdentity: string
-  providerKey: string
-}): boolean => {
+}: ProviderAdmissionLeaseReleaseInput): boolean => {
   const leaseKey = getLeaseKey({leaseIdentity, providerKey})
   const lease = providerAdmissionLeases.get(leaseKey) ?? null
   const shouldRelease = lease?.holderToken === holderToken
@@ -1313,6 +1333,58 @@ export const releaseProviderAdmissionLease = ({
   }
 
   return shouldRelease ? providerAdmissionLeases.delete(leaseKey) : false
+}
+
+export const heartbeatProviderAdmissionLease = ({
+  holderToken,
+  leaseIdentity,
+  nowMs = Date.now(),
+  providerKey,
+  ttlMs = providerAdmissionLeaseTtlMs,
+}: ProviderAdmissionLeaseHeartbeatInput): ProviderAdmissionLeaseHeartbeatResult => {
+  const normalizedNowMs = getNormalizedTimestampMs(nowMs)
+  const leaseKey = getLeaseKey({leaseIdentity, providerKey})
+  const lease = providerAdmissionLeases.get(leaseKey) ?? null
+  const expired = lease !== null && lease.expiresAtMs <= normalizedNowMs
+
+  if (expired) {
+    releaseProviderAdmissionLease({holderToken: lease.holderToken, leaseIdentity, providerKey})
+    return {heartbeat: false, reason: 'missing'}
+  }
+
+  if (lease === null) {
+    return {heartbeat: false, reason: 'missing'}
+  }
+
+  if (lease.holderToken !== holderToken) {
+    return {heartbeat: false, reason: 'notHolder'}
+  }
+
+  const nextLease = {
+    ...lease,
+    expiresAtMs: normalizedNowMs + getNormalizedLeaseDurationMs(ttlMs),
+    heartbeatAtMs: normalizedNowMs,
+  }
+
+  providerAdmissionLeases.set(leaseKey, nextLease)
+
+  return {heartbeat: true, lease: getProviderAdmissionLeaseRecordFromMemory(nextLease)}
+}
+
+export const releaseProviderAdmissionLeaseWithResult = (
+  input: ProviderAdmissionLeaseReleaseInput,
+): ProviderAdmissionLeaseReleaseResult => {
+  const lease = providerAdmissionLeases.get(getLeaseKey(input)) ?? null
+
+  if (lease === null) {
+    return {released: false, reason: 'missing'}
+  }
+
+  if (lease.holderToken !== input.holderToken) {
+    return {released: false, reason: 'notHolder'}
+  }
+
+  return releaseProviderAdmissionLease(input) ? {released: true} : {released: false, reason: 'missing'}
 }
 
 export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
@@ -1440,9 +1512,11 @@ export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
 export const acquireProviderAdmissionLeaseThroughOwner = async (
   input: ProviderAdmissionLeaseAcquireInput,
 ): Promise<ProviderAdmissionLeaseAcquireResult> => {
-  return canCurrentServerOwnDuckdb()
-    ? acquireProviderAdmissionLeaseOnCurrentOwner(input)
-    : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseAcquireResult>({body: input, path: '/acquire'})
+  return shouldUseLocalProviderAdmissionLeaseStore()
+      ? acquireProviderAdmissionLease(input)
+    : canCurrentServerOwnDuckdb()
+      ? acquireProviderAdmissionLeaseOnCurrentOwner(input)
+      : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseAcquireResult>({body: input, path: '/acquire'})
 }
 
 export const acquireProviderAdmissionLeasePersisted = acquireProviderAdmissionLeaseThroughOwner
@@ -1492,9 +1566,11 @@ export const heartbeatProviderAdmissionLeaseOnCurrentOwner = async (
 export const heartbeatProviderAdmissionLeaseThroughOwner = async (
   input: ProviderAdmissionLeaseHeartbeatInput,
 ): Promise<ProviderAdmissionLeaseHeartbeatResult> => {
-  return canCurrentServerOwnDuckdb()
-    ? heartbeatProviderAdmissionLeaseOnCurrentOwner(input)
-    : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseHeartbeatResult>({body: input, path: '/heartbeat'})
+  return shouldUseLocalProviderAdmissionLeaseStore()
+      ? heartbeatProviderAdmissionLease(input)
+    : canCurrentServerOwnDuckdb()
+      ? heartbeatProviderAdmissionLeaseOnCurrentOwner(input)
+      : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseHeartbeatResult>({body: input, path: '/heartbeat'})
 }
 
 export const releaseProviderAdmissionLeaseWithResultOnCurrentOwner = async (
@@ -1537,17 +1613,21 @@ export const releaseProviderAdmissionLeaseOnCurrentOwner = async (
 export const releaseProviderAdmissionLeaseWithResultThroughOwner = async (
   input: ProviderAdmissionLeaseReleaseInput,
 ): Promise<ProviderAdmissionLeaseReleaseResult> => {
-  return canCurrentServerOwnDuckdb()
-    ? releaseProviderAdmissionLeaseWithResultOnCurrentOwner(input)
-    : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseReleaseResult>({body: input, path: '/release-result'})
+  return shouldUseLocalProviderAdmissionLeaseStore()
+      ? releaseProviderAdmissionLeaseWithResult(input)
+    : canCurrentServerOwnDuckdb()
+      ? releaseProviderAdmissionLeaseWithResultOnCurrentOwner(input)
+      : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseReleaseResult>({body: input, path: '/release-result'})
 }
 
 export const releaseProviderAdmissionLeaseThroughOwner = async (
   input: ProviderAdmissionLeaseReleaseInput,
 ): Promise<boolean> => {
-  return canCurrentServerOwnDuckdb()
-    ? releaseProviderAdmissionLeaseOnCurrentOwner(input)
-    : requestProviderAdmissionLeaseOwner<boolean>({body: input, path: '/release'})
+  return shouldUseLocalProviderAdmissionLeaseStore()
+      ? releaseProviderAdmissionLease(input)
+    : canCurrentServerOwnDuckdb()
+      ? releaseProviderAdmissionLeaseOnCurrentOwner(input)
+      : requestProviderAdmissionLeaseOwner<boolean>({body: input, path: '/release'})
 }
 
 export const expireProviderAdmissionLeasesOnCurrentOwner = async (

@@ -1050,49 +1050,24 @@ const getHumanReviewedArticleIdsFromServing = async (params: {
 }
 
 const getHasReviewArticleServingRows = async (scope: ProjectOlapScope) => {
-  const scopeRouteQuery =
-    scope.routeIds.length > 0
-      ? `SELECT article_id AS articleId
-         FROM app.article_import_route
-         WHERE import_route_id IN (${getDuckdbSqlStringList(scope.routeIds).join(', ')})`
-      : null
   const filteredScopeWhereParts = [
-    scope.dateFrom ? `a.article_created_at >= ${getDuckdbTimestampLiteral(scope.dateFrom)}` : null,
-    scope.dateTo ? `a.article_created_at <= ${getDuckdbTimestampLiteral(scope.dateTo)}` : null,
+    `scope_article.project_id = ${getDuckdbSqlString(scope.projectId)}`,
+    scope.dateFrom ? `scope_article.article_created_at >= ${getDuckdbTimestampLiteral(scope.dateFrom)}` : null,
+    scope.dateTo ? `scope_article.article_created_at <= ${getDuckdbTimestampLiteral(scope.dateTo)}` : null,
   ].filter((part): part is string => {
     return part !== null
   })
-  const filteredScopeWhereClause =
-    filteredScopeWhereParts.length > 0 ? `WHERE ${filteredScopeWhereParts.join(' AND ')}` : ''
-  const scopeArticleIdsQuery = [
-    scopeRouteQuery,
-    `SELECT article_id AS articleId
-     FROM app.project_article
-     WHERE project_id = ${getDuckdbSqlString(scope.projectId)}`,
-  ]
-    .filter((query): query is string => {
-      return query !== null
-    })
-    .join('\nUNION\n')
   const rows = await runDuckdbJsonQuery<{projectId: string}>(`
-    WITH scope_article_ids AS (
-      ${scopeArticleIdsQuery}
-    ),
-    filtered_scope_article_ids AS (
-      SELECT a.id AS articleId
-      FROM app.article a
-      INNER JOIN scope_article_ids s ON s.articleId = a.id
-      ${filteredScopeWhereClause}
-      GROUP BY a.id
-    ),
-    active_generation AS (
+    WITH active_generation AS (
       SELECT generation.project_id AS projectId, generation.active_generation AS generation
       FROM app.project_review_serving_generation generation
       WHERE generation.project_id = ${getDuckdbSqlString(scope.projectId)}
+        AND generation.active_generation > 0
     ),
     scope_counts AS (
       SELECT COUNT(*) AS scopeRowCount
-      FROM filtered_scope_article_ids
+      FROM mart.project_scope_article scope_article
+      WHERE ${filteredScopeWhereParts.join(' AND ')}
     ),
     serving_counts AS (
       SELECT COUNT(*) AS servingRowCount
@@ -1100,6 +1075,7 @@ const getHasReviewArticleServingRows = async (scope: ProjectOlapScope) => {
       INNER JOIN active_generation active
         ON active.projectId = s.project_id
        AND active.generation = s.generation
+      WHERE ${getDuckdbServingBaseWhereParts({scope}).join(' AND ')}
     )
     SELECT active.projectId
     FROM active_generation active
@@ -1461,6 +1437,41 @@ const countDuckdbReviewedArticles = async (params: {
     )
     SELECT COUNT(*) AS totalCount
     FROM reviewed_article_ids
+  `)
+
+  return Number(rows[0]?.totalCount ?? 0)
+}
+
+const countDuckdbUnassessedArticles = async (params: {
+  scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
+  from?: string | null
+  to?: string | null
+  search?: string | null
+}) => {
+  const sections = getDuckdbReviewedArticlesQuerySections(params)
+  const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
+    WITH scope_article_ids AS (
+      ${sections.scopeArticleIdsQuery}
+    ),
+    filtered_scope_article_ids AS (
+      SELECT a.id AS articleId
+      FROM app.article a
+      INNER JOIN scope_article_ids s ON s.articleId = a.id
+      ${sections.filteredScopeWhereClause}
+    ),
+    judged_prompt_counts AS (
+      SELECT s.articleId, COUNT(DISTINCT j.prompt_id) AS judgedPromptCount
+      FROM filtered_scope_article_ids s
+      LEFT JOIN app.judgment j
+        ON j.article_id = s.articleId
+       AND ${sections.judgmentsWhereClause}
+      GROUP BY s.articleId
+    )
+    SELECT COUNT(*) AS totalCount
+    FROM judged_prompt_counts
+    WHERE judgedPromptCount < ${params.scope.promptIds.length}
   `)
 
   return Number(rows[0]?.totalCount ?? 0)
@@ -2969,15 +2980,13 @@ export const getUnassessedCountFromDuckdb = async (params: UnassessedCountParams
     })
   }
 
-  const {scopedArticles} = await getUnassessedArticleRows({
+  return countDuckdbUnassessedArticles({
     scope,
     hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
     hasStudyDecisionConflict: params.hasStudyDecisionConflict,
     from: params.projectDateFrom ? params.projectDateFrom.toISOString().slice(0, 10) : null,
     to: params.projectDateTo ? params.projectDateTo.toISOString().slice(0, 10) : null,
   })
-
-  return scopedArticles.length
 }
 
 export const getUnassessedArticlesFromDuckdb = async (

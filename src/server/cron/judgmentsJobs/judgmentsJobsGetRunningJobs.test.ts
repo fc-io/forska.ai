@@ -54,6 +54,7 @@ test('judge-worker running jobs come from the owner-backed API without local run
 
         void mock.module(judgeWorkerCompletionJournalModulePath, () => {
           return {
+            getAcceptedJudgeWorkerClaimRunningJobs: () => [],
             getOwnerBackedRunningJudgmentJobs: async () => [{
               id: 'job-owner-backed',
               maxInflightRequests: null,
@@ -125,6 +126,74 @@ test('judge-worker running jobs come from the owner-backed API without local run
   expect(result.jobs).toEqual([getJob('job-owner-backed')])
   expect(result.readOnlyQueries).toBe(0)
   expect(result.runtimeChecks).toBe(0)
+})
+
+test('judge-worker running jobs fall back to local accepted claims when the owner is busy', async () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const judgmentsJobsGetRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
+        const judgeWorkerCompletionJournalModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts')
+        const sqlitePreflightModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqlitePreflight.ts')
+
+        void mock.module(judgeWorkerCompletionJournalModulePath, () => {
+          return {
+            getAcceptedJudgeWorkerClaimRunningJobs: () => [{
+              id: 'job-owner-backed',
+              maxInflightRequests: null,
+              modelId: 'job-owner-backed-model',
+              modelName: 'Qwen/Qwen3.5-35B-A3B',
+              modelProvider: 'sglang',
+              providerFamily: 'sglang',
+              providerId: 'job-owner-backed-connection',
+              providerKey: 'job-owner-backed-connection',
+              providerLimit: 6,
+              providerLimitVersion: 'job-owner-backed-provider-limit-version',
+              providerName: 'SGLang',
+              providerUsesFamilyDefault: true,
+              quarantineReason: null,
+              providerConnectionId: 'job-owner-backed-connection',
+              projectId: 'job-owner-backed-project',
+              resolvedDefaultCapacity: 6,
+              storageState: 'active',
+            }],
+            getOwnerBackedRunningJudgmentJobs: async () => {
+              throw new Error('owner timed out')
+            },
+            shouldUseJudgeWorkerOwnerHandoff: () => true,
+          }
+        })
+        void mock.module(sqlitePreflightModulePath, () => {
+          return {
+            filterRunningJobsBySqlitePreflight: async (jobs) => jobs,
+          }
+        })
+
+        const {judgmentsJobsGetRunningJobs} = await import(judgmentsJobsGetRunningJobsModulePath + '?owner-backed-fallback=' + Date.now())
+        const jobs = await judgmentsJobsGetRunningJobs()
+        console.log(JSON.stringify({jobs}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'owner-backed running jobs fallback test failed',
+    )
+  }
+
+  const result = JSON.parse(runScript.stdout.toString()) as {jobs: RunningJudgmentJob[]}
+
+  expect(result.jobs).toEqual([getJob('job-owner-backed')])
 })
 
 test('filterRunningJobsByRuntimeMatch filters out jobs with runtime mismatch', async () => {

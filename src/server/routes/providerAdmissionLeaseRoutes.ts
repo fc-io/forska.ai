@@ -1,14 +1,14 @@
 import {Elysia, t} from 'elysia'
 
 import {
-  acquireProviderAdmissionLeaseOnCurrentOwner,
+  acquireProviderAdmissionLease,
   expireProviderAdmissionLeasesOnCurrentOwner,
-  heartbeatProviderAdmissionLeaseOnCurrentOwner,
+  heartbeatProviderAdmissionLease,
   providerAdmissionLeaseOwnerApiAliasPath,
   providerAdmissionLeaseOwnerApiPath,
   reconcileProviderAdmissionLeasesOnCurrentOwner,
-  releaseProviderAdmissionLeaseOnCurrentOwner,
-  releaseProviderAdmissionLeaseWithResultOnCurrentOwner,
+  releaseProviderAdmissionLease,
+  releaseProviderAdmissionLeaseWithResult,
 } from '../cron/judgmentsJobs/providerAdmissionLease.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -85,28 +85,28 @@ const addProviderAdmissionLeaseRoutes = (app: Elysia, prefix: string) => {
     .post(
       `${prefix}/acquire`,
       async ({body}) => {
-        return {data: await acquireProviderAdmissionLeaseOnCurrentOwner(body)}
+        return {data: acquireProviderAdmissionLease(body)}
       },
       {body: providerAdmissionLeaseAcquireBody},
     )
     .post(
       `${prefix}/heartbeat`,
       async ({body}) => {
-        return {data: await heartbeatProviderAdmissionLeaseOnCurrentOwner(body)}
+        return {data: heartbeatProviderAdmissionLease(body)}
       },
       {body: providerAdmissionLeaseHeartbeatBody},
     )
     .post(
       `${prefix}/release`,
       async ({body}) => {
-        return {data: await releaseProviderAdmissionLeaseOnCurrentOwner(body)}
+        return {data: releaseProviderAdmissionLease(body)}
       },
       {body: providerAdmissionLeaseReleaseBody},
     )
     .post(
       `${prefix}/release-result`,
       async ({body}) => {
-        return {data: await releaseProviderAdmissionLeaseWithResultOnCurrentOwner(body)}
+        return {data: releaseProviderAdmissionLeaseWithResult(body)}
       },
       {body: providerAdmissionLeaseReleaseBody},
     )

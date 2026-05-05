@@ -1,4 +1,4 @@
-import {runtimeReadyPath} from '../utils/runtimeReadyContract.ts'
+import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.ts'
 import {duckdbStudioSnapshotPath} from './DuckdbStudioRoutes.ts'
 
 export const duckdbOwnerPrivateApiPrefix = '/__duckdb-owner-rpc'
@@ -14,6 +14,7 @@ export type ApiRouteClassification =
 const duckdbOwnerDiagnosticsPaths = ['/api/duckdb_owner_connections', '/api/duckdb_owner_connections/heartbeat']
 const ownerDependentPaths = [duckdbStudioSnapshotPath]
 const ownerlessReadableDiagnosticsPaths = [
+  runtimeStatePath,
   '/api/admin/worker-runtime-diagnostics',
   '/api/judgmentsjobs',
   '/api/judgmentsjobs-health',

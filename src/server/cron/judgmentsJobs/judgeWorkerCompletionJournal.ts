@@ -1,4 +1,4 @@
-import {mkdirSync} from 'node:fs'
+import {existsSync, mkdirSync} from 'node:fs'
 import {dirname} from 'node:path'
 
 import {Database} from 'bun:sqlite'
@@ -14,6 +14,8 @@ import {
   getRequestAttemptRepairState,
   legacyCompletionEvidencePendingRepairReason,
 } from './judgmentLegacyEvidenceRepair.ts'
+import {getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
+import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import {
   appendRequestAttemptManifestRepairMarker,
   createRequestAttemptManifestRepairMarker,
@@ -126,9 +128,12 @@ export type OwnerBackedJudgmentJobInfo = ProviderBucketSnapshot & {
 
 type CompletionOutboxRow = {
   ackedAt: string | null
+  articleId: string | null
   claimId: string
   jobId: string
+  localAppliedAt: string | null
   payloadJson: string
+  promptId: string | null
   queueRecordId: string
   status: string
   requestAttemptsJson: string | null
@@ -137,6 +142,8 @@ type CompletionOutboxRow = {
 }
 
 type CompletionReplayResult = {ackedCount: number; discardedCount: number; failedCount: number}
+type CompletionReplayOptions = {limit?: number}
+type JudgeWorkerRolloutCleanupOptions = CompletionReplayOptions
 type CompletionSendResult = {claimId: string; queueRecordId: string; status: string}
 type PendingTokenUseJsonRow = {requestAttemptsJson: string | null; tokenUseJson: string}
 type AcceptedClaimManifestOwner = Extract<JudgmentRequestAttemptManifestOwner, {kind: 'accepted_claim'}>
@@ -157,6 +164,13 @@ type PendingTokenUseRow = {
   tokenUseJson: string
   updatedAt: string
 }
+type TokenUseCompletionLookupInput = {
+  articleId: string
+  jobId: string
+  promptIds: string[]
+  queueRecordIds?: string[]
+  requestAttempts?: JudgmentRequestAttemptJsonEntry[]
+}
 type AcceptedClaimRolloutRow = AcceptedClaimManifestRow & {
   claimId: string
   jobId: string
@@ -164,6 +178,20 @@ type AcceptedClaimRolloutRow = AcceptedClaimManifestRow & {
   queueRecordId: string
 }
 type AcceptedClaimProtectedPrompt = {jobId: string; queueRecordId: string}
+type CompletionClaimIdentityKey =
+  | 'articleId'
+  | 'claimId'
+  | 'executionSnapshotHash'
+  | 'executionSnapshotId'
+  | 'jobId'
+  | 'modelId'
+  | 'projectId'
+  | 'promptId'
+  | 'queueRecordId'
+  | 'useAbstract'
+  | 'useFulltext'
+  | 'useFulltextNoImages'
+  | 'useTitle'
 export type JudgeWorkerRolloutCleanupResult = {
   acceptedClaimsDeleted: number
   closeoutIntentsInserted: number
@@ -184,9 +212,24 @@ class OwnerBackedJudgmentRequestError extends Error {
 
 const completionJournalLogger = createRateLimitedLogger({windowMs: 30_000})
 const successCompletionTokenUseReplayGraceMs = 30_000
+const completionReplayFailureBackoffMs = 60_000
 const ownerBackedRequestTimeoutMs = 30_000
+const ownerBackedClaimRequestTimeoutMs = 120_000
+const ownerBackedCompletionRequestTimeoutMs = 120_000
+const ownerBackedRequestRetryDelayMs = 100
+const ownerBackedRequestMaxAttempts = 3
+const ownerBackedCompletionReplayConcurrency = 8
+const tokenUseCompletionLookupLimit = 128
+const legacyRequestAttemptRepairCandidateSql = `
+  request_attempts_json IS NULL
+  OR TRIM(request_attempts_json) IN ('', '[]', 'null')
+  OR TRIM(request_attempts_json) NOT LIKE '[%'
+  OR request_attempts_json NOT LIKE '%"requestAttemptId"%'
+`
 
 let journalDatabase: Database | null = null
+let ownerBackedCompletionReplayInFlight = 0
+const ownerBackedCompletionReplayWaiters: Array<(release: () => void) => void> = []
 
 export const shouldUseJudgeWorkerOwnerHandoff = (): boolean => {
   const configuredRole = String(process.env.SERVER_ROLE ?? '').trim()
@@ -259,6 +302,8 @@ const openJournalDatabase = (): Database => {
       claim_id TEXT PRIMARY KEY,
       job_id TEXT NOT NULL,
       queue_record_id TEXT NOT NULL,
+      article_id TEXT,
+      prompt_id TEXT,
       payload_json TEXT NOT NULL,
       token_use_json TEXT,
       request_attempts_json TEXT,
@@ -287,9 +332,28 @@ const openJournalDatabase = (): Database => {
 
     CREATE INDEX IF NOT EXISTS idx_completion_outbox_unacked
       ON completion_outbox(acked_at, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_completion_outbox_unacked_created_claim
+      ON completion_outbox(acked_at, created_at, claim_id);
+
+    CREATE INDEX IF NOT EXISTS idx_completion_outbox_job_queue_acked_created
+      ON completion_outbox(job_id, queue_record_id, acked_at, created_at, claim_id);
+
+    CREATE INDEX IF NOT EXISTS idx_completion_outbox_legacy_repair
+      ON completion_outbox(created_at, claim_id)
+      WHERE ${legacyRequestAttemptRepairCandidateSql};
+
+    CREATE INDEX IF NOT EXISTS idx_pending_token_use_created
+      ON pending_token_use(created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_accepted_claim_accepted
+      ON accepted_claim(accepted_at, claim_id);
+    CREATE INDEX IF NOT EXISTS idx_accepted_claim_job_accepted
+      ON accepted_claim(job_id, accepted_at, claim_id);
   `)
 
   ensureJournalSchema(database)
+  ensureJournalIndexes(database)
   repairLegacyJournalEvidence(database)
   journalDatabase = database
   return database
@@ -335,7 +399,12 @@ const ensureAcceptedClaimSchema = (database: Database): void => {
 
 const ensureCompletionOutboxSchema = (database: Database): void => {
   const existingColumns = getJournalColumnNames(database, 'completion_outbox')
-  const missingColumns = [{name: 'request_attempts_json', sql: 'TEXT'}].filter((column) => {
+  const missingColumns = [
+    {name: 'article_id', sql: 'TEXT'},
+    {name: 'prompt_id', sql: 'TEXT'},
+    {name: 'request_attempts_json', sql: 'TEXT'},
+    {name: 'local_applied_at', sql: 'TEXT'},
+  ].filter((column) => {
     return !existingColumns.has(column.name)
   })
 
@@ -407,7 +476,77 @@ const ensureJournalSchema = (database: Database): void => {
   ensurePendingTokenUseSchema(database)
 }
 
-const requestOwnerJson = async <T>({
+const ensureJournalIndexes = (database: Database): void => {
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_completion_outbox_job_article_prompt_acked_created
+      ON completion_outbox(job_id, article_id, prompt_id, acked_at, created_at, claim_id);
+    CREATE INDEX IF NOT EXISTS idx_completion_outbox_local_retry
+      ON completion_outbox(status, created_at, claim_id)
+      WHERE acked_at IS NULL
+        AND local_applied_at IS NULL
+        AND status = 'retry';
+  `)
+}
+
+const waitForOwnerBackedRetry = async (): Promise<void> => {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ownerBackedRequestRetryDelayMs)
+  })
+}
+
+const getOwnerBackedRequestTimeoutMs = (path: string): number => {
+  return path.includes('/claims')
+    ? ownerBackedClaimRequestTimeoutMs
+    : path.includes('/completions')
+      ? ownerBackedCompletionRequestTimeoutMs
+      : ownerBackedRequestTimeoutMs
+}
+
+const drainOwnerBackedCompletionReplayWaiters = (): void => {
+  const waiterIndex = ownerBackedCompletionReplayWaiters.findIndex(() => {
+    return ownerBackedCompletionReplayInFlight < ownerBackedCompletionReplayConcurrency
+  })
+  const nextWaiter =
+    waiterIndex >= 0 ? ownerBackedCompletionReplayWaiters.splice(waiterIndex, 1)[0] : null
+
+  if (nextWaiter) {
+    ownerBackedCompletionReplayInFlight += 1
+    nextWaiter(() => {
+      releaseOwnerBackedCompletionReplaySlot()
+    })
+    drainOwnerBackedCompletionReplayWaiters()
+  }
+}
+
+const releaseOwnerBackedCompletionReplaySlot = (): void => {
+  ownerBackedCompletionReplayInFlight = Math.max(0, ownerBackedCompletionReplayInFlight - 1)
+  drainOwnerBackedCompletionReplayWaiters()
+}
+
+const acquireOwnerBackedCompletionReplaySlot = async (): Promise<() => void> => {
+  if (ownerBackedCompletionReplayInFlight < ownerBackedCompletionReplayConcurrency) {
+    ownerBackedCompletionReplayInFlight += 1
+    return () => {
+      releaseOwnerBackedCompletionReplaySlot()
+    }
+  }
+
+  return new Promise((resolve) => {
+    ownerBackedCompletionReplayWaiters.push(resolve)
+  })
+}
+
+const withOwnerBackedCompletionReplaySlot = async <T>(work: () => Promise<T>): Promise<T> => {
+  const release = await acquireOwnerBackedCompletionReplaySlot()
+
+  try {
+    return await work()
+  } finally {
+    release()
+  }
+}
+
+const requestOwnerJsonOnce = async <T>({
   body,
   method,
   path,
@@ -421,7 +560,7 @@ const requestOwnerJson = async <T>({
     body: hasBody ? JSON.stringify(body) : undefined,
     headers: hasBody ? {'content-type': 'application/json'} : undefined,
     method,
-    signal: AbortSignal.timeout(ownerBackedRequestTimeoutMs),
+    signal: AbortSignal.timeout(getOwnerBackedRequestTimeoutMs(path)),
   })
   const text = await response.text()
   const parsed = tryParseOwnerResponse<T>(text)
@@ -446,10 +585,40 @@ const requestOwnerJson = async <T>({
   }
 
   if (!('data' in parsed)) {
-    throw new Error('owner-backed judgment request returned no data')
+    throw new OwnerBackedJudgmentRequestError({
+      message: `owner-backed judgment request returned no data (${response.status}): ${text}`,
+      responseText: text,
+      status: response.status,
+    })
   }
 
   return parsed.data as T
+}
+
+const requestOwnerJson = async <T>(
+  input: {
+    body?: unknown
+    method: 'GET' | 'POST'
+    path: string
+  },
+  attempt = 1,
+): Promise<T> => {
+  try {
+    return await requestOwnerJsonOnce<T>(input)
+  } catch (error) {
+    const shouldRetry =
+      error instanceof OwnerBackedJudgmentRequestError
+      && error.status === 200
+      && error.responseText.trim() === ''
+      && attempt < ownerBackedRequestMaxAttempts
+
+    if (!shouldRetry) {
+      throw error
+    }
+
+    await waitForOwnerBackedRetry()
+    return requestOwnerJson<T>(input, attempt + 1)
+  }
 }
 
 export const claimOwnerJudgmentJobPrompts = async ({
@@ -592,6 +761,32 @@ export const getAcceptedJudgeWorkerClaimLifecycleRows = (jobId: string): JudgeWo
       `,
     )
     .all(jobId) as JudgeWorkerAcceptedClaimLifecycleRow[]
+}
+
+const getAcceptedClaimPromptRows = (database: Database, jobId: string, limit: number): AcceptedClaimRolloutRow[] => {
+  return database
+    .query(
+      `
+        SELECT
+          ac.claim_id AS claimId,
+          ac.job_id AS jobId,
+          ac.queue_record_id AS queueRecordId,
+          ac.payload_json AS payloadJson,
+          ac.request_attempt_manifest_json AS requestAttemptManifestJson,
+          ac.request_attempt_manifest_version AS requestAttemptManifestVersion,
+          ac.request_attempt_manifest_repair_json AS requestAttemptManifestRepairJson
+        FROM accepted_claim ac
+        WHERE ac.job_id = ?
+          AND NOT EXISTS (
+            SELECT 1
+            FROM completion_outbox co
+            WHERE co.claim_id = ac.claim_id
+          )
+        ORDER BY ac.accepted_at ASC, ac.claim_id ASC
+        LIMIT ?
+      `,
+    )
+    .all(jobId, limit) as AcceptedClaimRolloutRow[]
 }
 
 const getAcceptedClaimManifestRow = (
@@ -892,8 +1087,33 @@ const getLegacyCompletionOutboxRequestAttemptsJson = (row: CompletionOutboxRow):
   })
 }
 
+const getLegacyCompletionRows = (database: Database): CompletionOutboxRow[] => {
+  return database
+    .query(
+      `
+        SELECT
+          acked_at AS ackedAt,
+          article_id AS articleId,
+          claim_id AS claimId,
+          job_id AS jobId,
+          local_applied_at AS localAppliedAt,
+          queue_record_id AS queueRecordId,
+          payload_json AS payloadJson,
+          prompt_id AS promptId,
+          status,
+          request_attempts_json AS requestAttemptsJson,
+          token_use_json AS tokenUseJson,
+          updated_at AS updatedAt
+        FROM completion_outbox
+        WHERE ${legacyRequestAttemptRepairCandidateSql}
+        ORDER BY created_at DESC, claim_id DESC
+      `,
+    )
+    .all() as CompletionOutboxRow[]
+}
+
 const repairLegacyCompletionOutboxRows = (database: Database): void => {
-  getCompletionRows(database).forEach((row) => {
+  getLegacyCompletionRows(database).forEach((row) => {
     const state = getRequestAttemptRepairState(row.requestAttemptsJson)
     const requestAttemptsJson = getLegacyCompletionOutboxRequestAttemptsJson(row)
 
@@ -1178,13 +1398,17 @@ const insertRolloutCloseoutIntent = (database: Database, row: AcceptedClaimRollo
           claim_id,
           job_id,
           queue_record_id,
+          article_id,
+          prompt_id,
           payload_json,
           request_attempts_json,
           status,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(claim_id) DO UPDATE SET
+          article_id = COALESCE(completion_outbox.article_id, EXCLUDED.article_id),
+          prompt_id = COALESCE(completion_outbox.prompt_id, EXCLUDED.prompt_id),
           request_attempts_json = COALESCE(completion_outbox.request_attempts_json, EXCLUDED.request_attempts_json),
           updated_at = EXCLUDED.updated_at
         WHERE completion_outbox.acked_at IS NULL
@@ -1194,6 +1418,8 @@ const insertRolloutCloseoutIntent = (database: Database, row: AcceptedClaimRollo
       payload.claimId,
       payload.jobId,
       payload.queueRecordId,
+      payload.articleId,
+      payload.promptId,
       JSON.stringify(payload),
       requestAttemptsJson,
       payload.status ?? 'retry',
@@ -1220,11 +1446,11 @@ const deleteAcceptedClaimsWithOwnerAck = (database: Database): number => {
     .query(
       `
         DELETE FROM accepted_claim
-        WHERE claim_id IN (
-          SELECT ac.claim_id
-          FROM accepted_claim ac
-          INNER JOIN completion_outbox co ON co.claim_id = ac.claim_id
-          WHERE co.acked_at IS NOT NULL
+        WHERE EXISTS (
+          SELECT 1
+          FROM completion_outbox co
+          WHERE co.claim_id = accepted_claim.claim_id
+            AND co.acked_at IS NOT NULL
         )
       `,
     )
@@ -1249,16 +1475,20 @@ export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletio
             claim_id,
             job_id,
             queue_record_id,
+            article_id,
+            prompt_id,
             payload_json,
             token_use_json,
             request_attempts_json,
             status,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(claim_id) DO UPDATE SET
             job_id = EXCLUDED.job_id,
             queue_record_id = EXCLUDED.queue_record_id,
+            article_id = EXCLUDED.article_id,
+            prompt_id = EXCLUDED.prompt_id,
             payload_json = EXCLUDED.payload_json,
             token_use_json = COALESCE(completion_outbox.token_use_json, EXCLUDED.token_use_json),
             request_attempts_json = COALESCE(EXCLUDED.request_attempts_json, completion_outbox.request_attempts_json),
@@ -1271,6 +1501,8 @@ export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletio
         payload.claimId,
         payload.jobId,
         payload.queueRecordId,
+        payload.articleId,
+        payload.promptId,
         JSON.stringify(payload),
         pendingTokenUse?.tokenUseJson ?? null,
         requestAttemptsJson ?? null,
@@ -1337,16 +1569,27 @@ const reactivateAckedCompletionWithTokenUse = (
   return Number(result.changes ?? 0)
 }
 
+const getNormalizedCompletionReplayLimit = (limit: number | null | undefined): number | null => {
+  return typeof limit === 'number' && Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : null
+}
+
+const getCompletionReplayLimitSql = (limit: number | null): string => {
+  return limit === null ? '' : `LIMIT ${limit}`
+}
+
 const getUnackedCompletionRows = (database: Database, claimId?: string): CompletionOutboxRow[] => {
   return database
     .query(
       `
         SELECT
           acked_at AS ackedAt,
+          article_id AS articleId,
           claim_id AS claimId,
           job_id AS jobId,
+          local_applied_at AS localAppliedAt,
           queue_record_id AS queueRecordId,
           payload_json AS payloadJson,
+          prompt_id AS promptId,
           status,
           request_attempts_json AS requestAttemptsJson,
           token_use_json AS tokenUseJson,
@@ -1360,22 +1603,72 @@ const getUnackedCompletionRows = (database: Database, claimId?: string): Complet
     .all(...(claimId ? [claimId] : [])) as CompletionOutboxRow[]
 }
 
-const getCompletionRows = (database: Database): CompletionOutboxRow[] => {
+const getCompletionReplayCandidateRows = (
+  database: Database,
+  claimId: string | undefined,
+  limit: number | undefined,
+): CompletionOutboxRow[] => {
+  const normalizedLimit = getNormalizedCompletionReplayLimit(limit)
+  const replayGraceCutoff = new Date(Date.now() - successCompletionTokenUseReplayGraceMs).toISOString()
+  const failureBackoffCutoff = new Date(Date.now() - completionReplayFailureBackoffMs).toISOString()
+
   return database
     .query(
       `
         SELECT
           acked_at AS ackedAt,
+          article_id AS articleId,
           claim_id AS claimId,
           job_id AS jobId,
           queue_record_id AS queueRecordId,
           payload_json AS payloadJson,
+          prompt_id AS promptId,
           status,
           request_attempts_json AS requestAttemptsJson,
           token_use_json AS tokenUseJson,
           updated_at AS updatedAt
         FROM completion_outbox
-        ORDER BY created_at DESC, claim_id DESC
+        WHERE acked_at IS NULL
+          ${claimId ? 'AND claim_id = ?' : ''}
+          AND (last_attempt_at IS NULL OR last_attempt_at <= ?)
+          AND (
+            status NOT IN ('completed', 'judged', 'succeeded')
+            OR token_use_json IS NOT NULL
+            OR updated_at <= ?
+          )
+        ORDER BY created_at ASC, claim_id ASC
+        ${getCompletionReplayLimitSql(normalizedLimit)}
+      `,
+    )
+    .all(...(claimId ? [claimId, failureBackoffCutoff, replayGraceCutoff] : [failureBackoffCutoff, replayGraceCutoff])) as CompletionOutboxRow[]
+}
+
+const getCompletionLocalApplyRows = (database: Database, limit: number | undefined): CompletionOutboxRow[] => {
+  const normalizedLimit = getNormalizedCompletionReplayLimit(limit)
+
+  return database
+    .query(
+      `
+        SELECT
+          acked_at AS ackedAt,
+          article_id AS articleId,
+          claim_id AS claimId,
+          job_id AS jobId,
+          local_applied_at AS localAppliedAt,
+          queue_record_id AS queueRecordId,
+          payload_json AS payloadJson,
+          prompt_id AS promptId,
+          status,
+          request_attempts_json AS requestAttemptsJson,
+          token_use_json AS tokenUseJson,
+          updated_at AS updatedAt
+        FROM completion_outbox
+        WHERE acked_at IS NULL
+          AND local_applied_at IS NULL
+          AND status = 'retry'
+          AND status != 'discarded_stale'
+        ORDER BY created_at ASC, claim_id ASC
+        ${getCompletionReplayLimitSql(normalizedLimit)}
       `,
     )
     .all() as CompletionOutboxRow[]
@@ -1406,13 +1699,127 @@ const completionRowMatchesPendingTokenUse = (row: CompletionOutboxRow, pending: 
   )
 }
 
+const getRequestAttemptQueueRecordIds = (requestAttempts: JudgmentRequestAttemptJsonEntry[]): string[] => {
+  return requestAttempts.flatMap((attempt) => {
+    return typeof attempt.queueRecordId === 'string' && attempt.queueRecordId.trim().length > 0
+      ? [attempt.queueRecordId]
+      : []
+  })
+}
+
+const getTokenUseCompletionLookupQueueRecordIds = ({
+  promptIds,
+  queueRecordIds = [],
+  requestAttempts = [],
+}: Pick<TokenUseCompletionLookupInput, 'promptIds' | 'queueRecordIds' | 'requestAttempts'>): string[] => {
+  return Array.from(new Set([...queueRecordIds, ...getRequestAttemptQueueRecordIds(requestAttempts), ...promptIds]))
+    .map((id) => {
+      return id.trim()
+    })
+    .filter((id) => {
+      return id.length > 0
+    })
+    .slice(0, tokenUseCompletionLookupLimit)
+}
+
+const completionRowMatchesTokenUseInput = (row: CompletionOutboxRow, input: TokenUseCompletionLookupInput): boolean => {
+  if (row.articleId !== null && row.promptId !== null) {
+    return row.jobId === input.jobId && row.articleId === input.articleId && input.promptIds.includes(row.promptId)
+  }
+
+  const payload = parseJson<JudgeWorkerCompletionPayload>(row.payloadJson)
+
+  return (
+    payload.jobId === input.jobId && payload.articleId === input.articleId && input.promptIds.includes(payload.promptId)
+  )
+}
+
+const getCompletionRowsByTokenUseIdentity = (
+  database: Database,
+  input: TokenUseCompletionLookupInput,
+  ackedState: 'acked' | 'unacked',
+): CompletionOutboxRow[] => {
+  const queueRecordIds = getTokenUseCompletionLookupQueueRecordIds(input)
+  const promptIds = input.promptIds
+    .map((id) => {
+      return id.trim()
+    })
+    .filter((id) => {
+      return id.length > 0
+    })
+    .slice(0, tokenUseCompletionLookupLimit)
+  const queueRecordPlaceholders = queueRecordIds
+    .map(() => {
+      return '?'
+    })
+    .join(', ')
+  const promptIdPlaceholders = promptIds
+    .map(() => {
+      return '?'
+    })
+    .join(', ')
+  const queueRecordCondition = queueRecordIds.length > 0 ? `queue_record_id IN (${queueRecordPlaceholders})` : 'FALSE'
+  const promptIdCondition =
+    promptIds.length > 0 ? `(article_id = ? AND prompt_id IN (${promptIdPlaceholders}))` : 'FALSE'
+
+  if (queueRecordIds.length === 0 && promptIds.length === 0) {
+    return []
+  }
+
+  const rows = database
+    .query(
+      `
+        SELECT
+          acked_at AS ackedAt,
+          article_id AS articleId,
+          claim_id AS claimId,
+          job_id AS jobId,
+          queue_record_id AS queueRecordId,
+          payload_json AS payloadJson,
+          prompt_id AS promptId,
+          status,
+          request_attempts_json AS requestAttemptsJson,
+          token_use_json AS tokenUseJson,
+          updated_at AS updatedAt
+        FROM completion_outbox
+        WHERE job_id = ?
+          AND (${queueRecordCondition} OR ${promptIdCondition})
+          AND acked_at IS ${ackedState === 'acked' ? 'NOT NULL' : 'NULL'}
+        ORDER BY created_at DESC, claim_id DESC
+        LIMIT ${tokenUseCompletionLookupLimit}
+      `,
+    )
+    .all(
+      input.jobId,
+      ...queueRecordIds,
+      ...(promptIds.length > 0 ? [input.articleId, ...promptIds] : []),
+    ) as CompletionOutboxRow[]
+
+  return rows.filter((row) => {
+    return completionRowMatchesTokenUseInput(row, input)
+  })
+}
+
 const reactivateAckedCompletionsWithPendingTokenUse = (database: Database): number => {
   const pendingRows = getPendingTokenUseRows(database)
-  const completionRows = getCompletionRows(database)
+
+  if (pendingRows.length === 0) {
+    return 0
+  }
 
   return database.transaction((rows: PendingTokenUseRow[]) => {
     return rows.reduce((count, pending) => {
-      const completionRow = completionRows.find((row) => {
+      const completionRow = getCompletionRowsByTokenUseIdentity(
+        database,
+        {
+          articleId: pending.articleId,
+          jobId: pending.jobId,
+          promptIds: [pending.promptId],
+          queueRecordIds: [pending.queueRecordId],
+          requestAttempts: parseRequestAttempts(pending.requestAttemptsJson),
+        },
+        'acked',
+      ).find((row) => {
         return (
           row.ackedAt !== null
           && completionStatusNeedsTokenUseBeforeReplay(row.status)
@@ -1498,6 +1905,218 @@ const markCompletionDiscarded = (database: Database, claimId: string, error: unk
     .run(now, error instanceof Error ? error.message : String(error), now, now, claimId)
 }
 
+const markCompletionLocallyApplied = (database: Database, claimId: string): void => {
+  const now = new Date().toISOString()
+
+  database
+    .query(
+      `
+        UPDATE completion_outbox
+        SET local_applied_at = ?,
+            updated_at = ?
+        WHERE claim_id = ?
+          AND local_applied_at IS NULL
+      `,
+    )
+    .run(now, now, claimId)
+}
+
+const getCompletionAckStatus = (
+  payload: JudgeWorkerCompletionPayload,
+): 'failed' | 'judged' | 'retry' | 'skipped' => {
+  return payload.status === 'retry'
+    ? 'retry'
+    : payload.status === 'skipped'
+      ? 'skipped'
+      : payload.status === 'failed'
+        ? 'failed'
+        : 'judged'
+}
+
+const getCompletionTokenUseId = (row: CompletionOutboxRow): string | null => {
+  return row.tokenUseJson ? `judgment-completion-token-use:${row.claimId}` : null
+}
+
+const getCompletionAck = (row: CompletionOutboxRow, payload: JudgeWorkerCompletionPayload) => {
+  return {
+    claimId: payload.claimId,
+    queuePromptId: payload.queueRecordId,
+    status: getCompletionAckStatus(payload),
+    requestAttemptsJson: row.requestAttemptsJson,
+    tokenUseId: getCompletionTokenUseId(row),
+  }
+}
+
+const getStringArray = (value: unknown): string[] => {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => {
+        return typeof entry === 'string'
+      })
+    : []
+}
+
+const getCompletionJudgmentRecord = (payload: JudgeWorkerCompletionPayload): Record<string, unknown> => {
+  return payload.judgment && typeof payload.judgment === 'object' && !Array.isArray(payload.judgment)
+    ? (payload.judgment as Record<string, unknown>)
+    : {}
+}
+
+const getCompletionAnsweredOriginal = (payload: JudgeWorkerCompletionPayload): string | null => {
+  const judgment = getCompletionJudgmentRecord(payload)
+  const value = payload.answeredOriginal ?? judgment.answer
+
+  return Array.isArray(value)
+    ? JSON.stringify(getStringArray(value))
+    : typeof value === 'string'
+      ? value
+      : value == null
+        ? null
+        : JSON.stringify(value)
+}
+
+const getCompletionAnsweredOriginalAsArray = (payload: JudgeWorkerCompletionPayload): string[] => {
+  const judgment = getCompletionJudgmentRecord(payload)
+  const explicit = getStringArray(payload.answeredOriginalAsArray)
+  const fallback = payload.answeredOriginal ?? judgment.answer
+
+  return explicit.length > 0
+    ? explicit
+    : Array.isArray(fallback)
+      ? getStringArray(fallback)
+      : typeof fallback === 'string'
+        ? [fallback]
+        : []
+}
+
+const applyJudgedCompletionLocally = async (
+  row: CompletionOutboxRow,
+  payload: JudgeWorkerCompletionPayload,
+): Promise<void> => {
+  const judgment = getCompletionJudgmentRecord(payload)
+  const now = new Date()
+
+  await getJudgmentJobSqliteService().recordJudgmentSuccess(payload.jobId, {
+    answeredOriginal: getCompletionAnsweredOriginal(payload),
+    answeredOriginalAsArray: getCompletionAnsweredOriginalAsArray(payload),
+    articleId: payload.articleId,
+    claimId: payload.claimId,
+    chunkingStrategy: payload.chunkingStrategy ?? null,
+    confidenceOriginal: payload.confidenceOriginal ?? 50,
+    createdAt: now,
+    explanation: payload.explanation ?? (typeof judgment.explanation === 'string' ? judgment.explanation : null),
+    executionSnapshotHash: payload.executionSnapshotHash,
+    executionSnapshotId: payload.executionSnapshotId,
+    isAnswered: payload.isAnswered ?? true,
+    judgmentId: payload.judgmentId ?? crypto.randomUUID(),
+    modelId: payload.modelId,
+    projectId: payload.projectId,
+    promptId: payload.promptId,
+    queuePromptId: payload.queueRecordId,
+    completionTokenUseId: getCompletionTokenUseId(row),
+    quotes: payload.quotes ?? judgment.quotes ?? null,
+    rawResponseJson: payload.rawResponseJson ?? payload.judgment ?? null,
+    requestAttemptsJson: row.requestAttemptsJson,
+    snapshotProjectId: payload.projectId,
+    snapshotProjectModelName: null,
+    updatedAt: now,
+    useAbstract: payload.useAbstract,
+    useFulltext: payload.useFulltext,
+    useFulltextNoImages: payload.useFulltextNoImages,
+    useTitle: payload.useTitle,
+  })
+}
+
+const applyTerminalCompletionLocally = async (
+  row: CompletionOutboxRow,
+  payload: JudgeWorkerCompletionPayload,
+): Promise<void> => {
+  const completionAck = getCompletionAck(row, payload)
+
+  return payload.status === 'retry'
+    ? getJudgmentJobSqliteService().markPromptAsRetryWithoutLease(
+        payload.jobId,
+        payload.queueRecordId,
+        payload.retryAfterMs ?? null,
+        completionAck,
+      )
+    : payload.status === 'skipped'
+      ? getJudgmentJobSqliteService().markPromptAsSkipped(
+          payload.jobId,
+          payload.queueRecordId,
+          payload.skipReason ?? 'no_fulltext',
+          completionAck,
+        )
+      : getJudgmentJobSqliteService().markPromptAsClosed(
+          payload.jobId,
+          payload.queueRecordId,
+          'ownerCompletionFailed',
+          completionAck,
+        )
+}
+
+const applyCompletionRowLocally = async (database: Database, row: CompletionOutboxRow): Promise<boolean> => {
+  if (!existsSync(getJudgmentJobSqlitePath(row.jobId))) {
+    return false
+  }
+
+  try {
+    const payload = getCompletionPayloadFromRow(row)
+    const mismatch = await getLocalClaimIdentityMismatch(getCompletionClaimIdentity(payload))
+
+    if (mismatch) {
+      markCompletionLocallyApplied(database, row.claimId)
+      return false
+    }
+
+    await (getCompletionAckStatus(payload) === 'judged'
+      ? applyJudgedCompletionLocally(row, payload)
+      : applyTerminalCompletionLocally(row, payload))
+    markCompletionLocallyApplied(database, row.claimId)
+    return true
+  } catch (error) {
+    completionJournalLogger.warn(
+      `judge-worker:completion-local-apply-failed:${row.claimId}`,
+      '[judge-worker] local completion apply failed',
+      {
+        claimId: row.claimId,
+        error: error instanceof Error ? error.message : String(error),
+        jobId: row.jobId,
+        queueRecordId: row.queueRecordId,
+      },
+    )
+    return false
+  }
+}
+
+const applyCompletionRowsLocally = async (
+  database: Database,
+  rows: CompletionOutboxRow[],
+): Promise<{appliedCount: number; skippedCount: number}> => {
+  const [row, ...remainingRows] = rows
+
+  if (!row) {
+    return {appliedCount: 0, skippedCount: 0}
+  }
+
+  const applied = await applyCompletionRowLocally(database, row)
+  const rest = await applyCompletionRowsLocally(database, remainingRows)
+
+  return {
+    appliedCount: rest.appliedCount + (applied ? 1 : 0),
+    skippedCount: rest.skippedCount + (applied ? 0 : 1),
+  }
+}
+
+export const applyJudgeWorkerCompletionOutboxLocally = async ({
+  limit,
+}: {
+  limit?: number
+} = {}): Promise<{appliedCount: number; skippedCount: number}> => {
+  const database = openJournalDatabase()
+
+  return applyCompletionRowsLocally(database, getCompletionLocalApplyRows(database, limit))
+}
+
 const isStaleCompletionReplayError = (error: unknown): boolean => {
   const text = error instanceof OwnerBackedJudgmentRequestError ? error.responseText || error.message : ''
   const normalized = text.toLowerCase()
@@ -1511,6 +2130,89 @@ const isStaleCompletionReplayError = (error: unknown): boolean => {
   )
 }
 
+const completionClaimIdentityKeys: CompletionClaimIdentityKey[] = [
+  'articleId',
+  'claimId',
+  'executionSnapshotHash',
+  'executionSnapshotId',
+  'jobId',
+  'modelId',
+  'projectId',
+  'promptId',
+  'queueRecordId',
+  'useAbstract',
+  'useFulltext',
+  'useFulltextNoImages',
+  'useTitle',
+]
+
+type CompletionClaimIdentity = Record<CompletionClaimIdentityKey, string | boolean>
+
+const getClaimIdentityMismatch = (
+  expected: CompletionClaimIdentity,
+  actual: CompletionClaimIdentity | null,
+): string | null => {
+  if (!actual) {
+    return 'missing claimed prompt identity'
+  }
+
+  const mismatchedKey = completionClaimIdentityKeys.find((key) => {
+    return actual[key] !== expected[key]
+  })
+
+  return mismatchedKey ? `snapshot claim identity mismatch for ${mismatchedKey}` : null
+}
+
+const getCompletionClaimIdentity = (payload: JudgeWorkerCompletionPayload): CompletionClaimIdentity => {
+  return {
+    articleId: payload.articleId,
+    claimId: payload.claimId,
+    executionSnapshotHash: payload.executionSnapshotHash,
+    executionSnapshotId: payload.executionSnapshotId,
+    jobId: payload.jobId,
+    modelId: payload.modelId,
+    projectId: payload.projectId,
+    promptId: payload.promptId,
+    queueRecordId: payload.queueRecordId,
+    useAbstract: payload.useAbstract,
+    useFulltext: payload.useFulltext,
+    useFulltextNoImages: payload.useFulltextNoImages,
+    useTitle: payload.useTitle,
+  }
+}
+
+const getPromptClaimIdentity = (prompt: PromptToProcess): CompletionClaimIdentity => {
+  return {
+    articleId: prompt.articleId,
+    claimId: prompt.claimId,
+    executionSnapshotHash: prompt.executionSnapshotHash,
+    executionSnapshotId: prompt.executionSnapshotId,
+    jobId: prompt.jobId,
+    modelId: prompt.modelId,
+    projectId: prompt.projectId,
+    promptId: prompt.promptId,
+    queueRecordId: prompt.recordId,
+    useAbstract: prompt.useAbstract,
+    useFulltext: prompt.useFulltext,
+    useFulltextNoImages: prompt.useFulltextNoImages,
+    useTitle: prompt.useTitle,
+  }
+}
+
+const getLocalClaimIdentityMismatch = async (identity: CompletionClaimIdentity): Promise<string | null> => {
+  const actual = await getJudgmentJobSqliteService().getPromptClaimIdentity(identity.jobId, identity.queueRecordId)
+
+  return getClaimIdentityMismatch(identity, actual)
+}
+
+const getLocalStaleCompletionReplayReason = async (row: CompletionOutboxRow): Promise<string | null> => {
+  if (!existsSync(getJudgmentJobSqlitePath(row.jobId))) {
+    return null
+  }
+
+  return getLocalClaimIdentityMismatch(getCompletionClaimIdentity(getCompletionPayloadFromRow(row)))
+}
+
 const getCompletionPayloadFromRow = (row: CompletionOutboxRow) => {
   const payload = parseJson<JudgeWorkerCompletionPayload>(row.payloadJson)
   const tokenUse = row.tokenUseJson ? parseJson<JudgeWorkerTokenUseSummary>(row.tokenUseJson) : undefined
@@ -1522,6 +2224,100 @@ const getCompletionPayloadFromRow = (row: CompletionOutboxRow) => {
   return tokenUseWithAttempts ? {...payloadWithAttempts, tokenUse: tokenUseWithAttempts} : payloadWithAttempts
 }
 
+export const getAcceptedJudgeWorkerClaimPrompts = async ({
+  excludedQueueRecordIds = new Set(),
+  jobId,
+  limit,
+}: {
+  excludedQueueRecordIds?: Set<string>
+  jobId: string
+  limit: number
+}): Promise<PromptToProcess[]> => {
+  const normalizedLimit = getNormalizedCompletionReplayLimit(limit) ?? 0
+
+  if (normalizedLimit <= 0 || !existsSync(getJudgmentJobSqlitePath(jobId))) {
+    return []
+  }
+
+  const database = openJournalDatabase()
+  const rows = getAcceptedClaimPromptRows(database, jobId, normalizedLimit + excludedQueueRecordIds.size)
+  const prompts = await Promise.all(
+    rows.map(async (row) => {
+      if (excludedQueueRecordIds.has(row.queueRecordId)) {
+        return null
+      }
+
+      const prompt = parseJson<PromptToProcess>(row.payloadJson)
+      const rowMismatch =
+        prompt.claimId !== row.claimId
+          ? 'accepted claim payload claimId mismatch'
+          : prompt.jobId !== row.jobId
+            ? 'accepted claim payload jobId mismatch'
+            : prompt.recordId !== row.queueRecordId
+              ? 'accepted claim payload queueRecordId mismatch'
+              : null
+      const localMismatch = rowMismatch ?? (await getLocalClaimIdentityMismatch(getPromptClaimIdentity(prompt)))
+
+      if (localMismatch) {
+        completionJournalLogger.warn(
+          `judge-worker:accepted-claim-resume-stale:${row.jobId}`,
+          '[judge-worker] accepted claim resume skipped stale local prompt',
+          {claimId: row.claimId, jobId: row.jobId, reason: localMismatch, queueRecordId: row.queueRecordId},
+        )
+        return null
+      }
+
+      return prompt
+    }),
+  )
+
+  return prompts.flatMap((prompt) => {
+    return prompt ? [prompt] : []
+  }).slice(0, normalizedLimit)
+}
+
+const getRunningJobFromAcceptedPrompt = (prompt: PromptToProcess): RunningJudgmentJob => {
+  return {
+    id: prompt.jobId,
+    maxInflightRequests: prompt.maxInflightRequests ?? prompt.providerMaxInflightRequests ?? null,
+    modelId: prompt.modelId,
+    modelName: prompt.modelName,
+    modelProvider: prompt.modelProvider,
+    projectId: prompt.projectId,
+    providerConnectionId: prompt.providerConnectionId,
+    providerFamily: prompt.providerFamily,
+    providerId: prompt.providerId,
+    providerKey: prompt.providerKey,
+    providerLimit: prompt.providerLimit,
+    providerLimitVersion: prompt.providerLimitVersion,
+    providerName: prompt.providerName,
+    providerUsesFamilyDefault: prompt.providerUsesFamilyDefault,
+    quarantineReason: null,
+    resolvedDefaultCapacity: prompt.resolvedDefaultCapacity,
+    storageState: 'active',
+  }
+}
+
+export const getAcceptedJudgeWorkerClaimRunningJobs = (): RunningJudgmentJob[] => {
+  const database = openJournalDatabase()
+  const rows = database
+    .query(
+      `
+        SELECT payload_json AS payloadJson
+        FROM accepted_claim
+        ORDER BY accepted_at DESC, claim_id DESC
+      `,
+    )
+    .all() as Array<{payloadJson: string}>
+  const jobById = rows.reduce((state, row) => {
+    const prompt = parseJson<PromptToProcess>(row.payloadJson)
+
+    return state.has(prompt.jobId) ? state : new Map(state).set(prompt.jobId, getRunningJobFromAcceptedPrompt(prompt))
+  }, new Map<string, RunningJudgmentJob>())
+
+  return Array.from(jobById.values())
+}
+
 const replayCompletionRows = async (rows: CompletionOutboxRow[]): Promise<CompletionReplayResult> => {
   const database = openJournalDatabase()
   const replayableRows = rows.filter(completionRowIsReplayable)
@@ -1531,14 +2327,28 @@ const replayCompletionRows = async (rows: CompletionOutboxRow[]): Promise<Comple
       const summary = await summaryPromise
 
       try {
-        await sendCompletionToOwner(getCompletionPayloadFromRow(row))
+        const localStaleReason = await getLocalStaleCompletionReplayReason(row)
+
+        if (localStaleReason) {
+          markCompletionDiscarded(database, row.claimId, new Error(localStaleReason))
+          completionJournalLogger.warn(
+            `judge-worker:completion-replay-discarded-local:${row.jobId}`,
+            '[judge-worker] owner completion replay discarded locally as stale',
+            {claimId: row.claimId, error: localStaleReason, jobId: row.jobId},
+          )
+          return {...summary, discardedCount: summary.discardedCount + 1}
+        }
+
+        await withOwnerBackedCompletionReplaySlot(() => {
+          return sendCompletionToOwner(getCompletionPayloadFromRow(row))
+        })
         markCompletionAcked(database, row.claimId)
         return {...summary, ackedCount: summary.ackedCount + 1}
       } catch (error) {
         if (isStaleCompletionReplayError(error)) {
           markCompletionDiscarded(database, row.claimId, error)
           completionJournalLogger.warn(
-            `judge-worker:completion-replay-discarded:${row.claimId}`,
+            `judge-worker:completion-replay-discarded:${row.jobId}`,
             '[judge-worker] owner completion replay discarded as stale',
             {claimId: row.claimId, error: error instanceof Error ? error.message : String(error), jobId: row.jobId},
           )
@@ -1558,27 +2368,33 @@ const replayCompletionRows = async (rows: CompletionOutboxRow[]): Promise<Comple
   )
 }
 
-const replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup = async (): Promise<CompletionReplayResult> => {
+const replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup = async ({
+  limit,
+}: CompletionReplayOptions = {}): Promise<CompletionReplayResult> => {
   const database = openJournalDatabase()
   reactivateAckedCompletionsWithPendingTokenUse(database)
 
-  return replayCompletionRows(getUnackedCompletionRows(database))
+  return replayCompletionRows(getCompletionReplayCandidateRows(database, undefined, limit))
 }
 
-export const replayJudgeWorkerCompletionOutbox = async (): Promise<CompletionReplayResult> => {
-  const replay = await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup()
+export const replayJudgeWorkerCompletionOutbox = async (
+  options: CompletionReplayOptions = {},
+): Promise<CompletionReplayResult> => {
+  const replay = await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup(options)
   deleteAcceptedClaimsWithOwnerAck(openJournalDatabase())
 
   return replay
 }
 
-export const runJudgeWorkerRolloutCleanup = async (): Promise<JudgeWorkerRolloutCleanupResult> => {
-  const firstReplay = await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup()
+export const runJudgeWorkerRolloutCleanup = async ({
+  limit,
+}: JudgeWorkerRolloutCleanupOptions = {}): Promise<JudgeWorkerRolloutCleanupResult> => {
+  const firstReplay = await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup({limit})
   const database = openJournalDatabase()
   const closeoutIntentsInserted = recordRolloutCloseoutIntents(database)
   const secondReplay =
     closeoutIntentsInserted > 0
-      ? await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup()
+      ? await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup({limit})
       : {ackedCount: 0, discardedCount: 0, failedCount: 0}
   const acceptedClaimsDeleted = deleteAcceptedClaimsWithOwnerAck(database)
 
@@ -1593,10 +2409,33 @@ export const runJudgeWorkerRolloutCleanup = async (): Promise<JudgeWorkerRollout
   }
 }
 
+let judgeWorkerStartupRolloutCleanupPromise: Promise<JudgeWorkerRolloutCleanupResult> | null = null
+const judgeWorkerStartupRolloutReplayLimit = 1
+
+export const startJudgeWorkerStartupRolloutCleanup = (): Promise<JudgeWorkerRolloutCleanupResult> => {
+  if (!judgeWorkerStartupRolloutCleanupPromise) {
+    judgeWorkerStartupRolloutCleanupPromise = runJudgeWorkerRolloutCleanup({
+      limit: judgeWorkerStartupRolloutReplayLimit,
+    })
+  }
+
+  return judgeWorkerStartupRolloutCleanupPromise
+}
+
+export const waitForJudgeWorkerStartupRolloutCleanup = async (): Promise<void> => {
+  if (judgeWorkerStartupRolloutCleanupPromise) {
+    await judgeWorkerStartupRolloutCleanupPromise
+  }
+}
+
 export const recoverAbandonedJudgeWorkerAcceptedClaims = async ({
+  limit,
   protectedPrompts = [],
-}: {protectedPrompts?: AcceptedClaimProtectedPrompt[]} = {}): Promise<JudgeWorkerRolloutCleanupResult> => {
-  const firstReplay = await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup()
+}: {
+  limit?: number
+  protectedPrompts?: AcceptedClaimProtectedPrompt[]
+} = {}): Promise<JudgeWorkerRolloutCleanupResult> => {
+  const firstReplay = await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup({limit})
   const database = openJournalDatabase()
   const closeoutIntentsInserted = recordRolloutCloseoutIntents(
     database,
@@ -1604,7 +2443,7 @@ export const recoverAbandonedJudgeWorkerAcceptedClaims = async ({
   )
   const secondReplay =
     closeoutIntentsInserted > 0
-      ? await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup()
+      ? await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup({limit})
       : {ackedCount: 0, discardedCount: 0, failedCount: 0}
   const acceptedClaimsDeleted = deleteAcceptedClaimsWithOwnerAck(database)
 
@@ -1687,23 +2526,12 @@ export const attachTokenUseToPendingJudgeWorkerCompletion = async ({
 }): Promise<boolean> => {
   const database = openJournalDatabase()
   const requestAttemptsJson = stringifyRequestAttempts(requestAttempts)
-  const row = getUnackedCompletionRows(database).find((completionRow) => {
-    const payload = parseJson<JudgeWorkerCompletionPayload>(completionRow.payloadJson)
-
-    return payload.jobId === jobId && payload.articleId === articleId && promptIds.includes(payload.promptId)
-  })
+  const lookupInput = {articleId, jobId, promptIds, requestAttempts}
+  const row = getCompletionRowsByTokenUseIdentity(database, lookupInput, 'unacked')[0] ?? null
   const ackedSuccessRow = row
     ? null
-    : getCompletionRows(database).find((completionRow) => {
-        const payload = parseJson<JudgeWorkerCompletionPayload>(completionRow.payloadJson)
-
-        return (
-          completionRow.ackedAt !== null
-          && completionStatusNeedsTokenUseBeforeReplay(completionRow.status)
-          && payload.jobId === jobId
-          && payload.articleId === articleId
-          && promptIds.includes(payload.promptId)
-        )
+    : getCompletionRowsByTokenUseIdentity(database, lookupInput, 'acked').find((completionRow) => {
+        return completionRow.ackedAt !== null && completionStatusNeedsTokenUseBeforeReplay(completionRow.status)
       })
   const completionRow = row ?? ackedSuccessRow
 
@@ -1812,4 +2640,6 @@ export const resetJudgeWorkerCompletionJournalForTests = (): void => {
     journalDatabase.close(false)
     journalDatabase = null
   }
+  ownerBackedCompletionReplayInFlight = 0
+  ownerBackedCompletionReplayWaiters.splice(0, ownerBackedCompletionReplayWaiters.length)
 }

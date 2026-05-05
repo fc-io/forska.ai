@@ -170,6 +170,22 @@ test('getStoredProviderModelRuntimeMatch returns an unreachable-runtime message 
   })
 })
 
+test('getStoredProviderModelRuntimeMatch treats operation timed out as unreachable runtime', async () => {
+  state.listModels.mockImplementationOnce(async (_input: unknown) => {
+    throw new Error('The operation timed out.')
+  })
+  const {getStoredProviderModelRuntimeMatch} = await loadGuard()
+
+  const result = await getStoredProviderModelRuntimeMatch({modelId: 'model-timeout'})
+
+  expect(result).toEqual({
+    message:
+      'Could not reach the configured SGLang runtime at http://127.0.0.1:30000/v1, so Forska could not confirm it serves Qwen/Qwen3.5-35B-A3B. The operation timed out.',
+    ok: false,
+    reason: 'runtime-unreachable',
+  })
+})
+
 test('getStoredProviderModelRuntimeMatch returns a mismatch message when SGLang serves another model', async () => {
   state.listModels.mockImplementationOnce(async (_input: unknown) => {
     return [

@@ -2,12 +2,18 @@ import {getStoredProviderModelRuntimeMatch} from '../../providers/providerRuntim
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
-import {getOwnerBackedRunningJudgmentJobs, shouldUseJudgeWorkerOwnerHandoff} from './judgeWorkerCompletionJournal.ts'
+import {
+  getAcceptedJudgeWorkerClaimRunningJobs,
+  getOwnerBackedRunningJudgmentJobs,
+  shouldUseJudgeWorkerOwnerHandoff,
+} from './judgeWorkerCompletionJournal.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {filterRunningJobsBySqlitePreflight} from './judgmentJobSqlitePreflight.ts'
 import {getProviderBucketSnapshot, type ProviderBucketSnapshot} from './providerAdmissionLease.ts'
 
 const runningJobsLogger = createRateLimitedLogger({windowMs: 30_000})
+const ownerBackedRunningJobsCacheTtlMs = 300_000
+let ownerBackedRunningJobsCache: {jobs: RunningJudgmentJob[]; updatedAt: number} | null = null
 
 const getRuntimeCheckFailureLogMessage = ({
   provider,
@@ -111,7 +117,38 @@ const getRunningJobFromDatabase = async (jobId: string): Promise<RunningJudgment
 
 const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
   if (shouldUseJudgeWorkerOwnerHandoff()) {
-    return getOwnerBackedRunningJudgmentJobs()
+    try {
+      const jobs = await getOwnerBackedRunningJudgmentJobs()
+      ownerBackedRunningJobsCache = {jobs, updatedAt: Date.now()}
+      return jobs
+    } catch (error) {
+      const acceptedClaimJobs = getAcceptedJudgeWorkerClaimRunningJobs()
+      const cachedJobs =
+        ownerBackedRunningJobsCache && Date.now() - ownerBackedRunningJobsCache.updatedAt <= ownerBackedRunningJobsCacheTtlMs
+          ? ownerBackedRunningJobsCache.jobs
+          : []
+      const fallbackJobs = Array.from(
+        [...cachedJobs, ...acceptedClaimJobs]
+          .reduce((state, job) => {
+            return state.has(job.id) ? state : new Map(state).set(job.id, job)
+          }, new Map<string, RunningJudgmentJob>())
+          .values(),
+      )
+
+      if (fallbackJobs.length > 0) {
+        runningJobsLogger.warn(
+          'judgments-owner-backed-running-jobs-fallback',
+          '[judgments] using local owner-backed running job fallback',
+          {
+            error: error instanceof Error ? error.message : String(error),
+            fallbackJobCount: fallbackJobs.length,
+          },
+        )
+        return fallbackJobs
+      }
+
+      throw error
+    }
   }
 
   const trackedJobIds = getJudgmentJobSqliteJobIds().sort()

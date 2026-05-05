@@ -194,6 +194,31 @@ const requestAttemptEvidenceTimestampFields = ['createdAt', 'finishedAt', 'start
 const requestAttemptOwnerFields = ['articleId', 'claimId', 'jobId', 'promptId', 'queueRecordId'] as const
 const requestAttemptTokenFields = ['completionTokens', 'promptTokens', 'totalTokens'] as const
 
+const closeoutKindsAreCompatibleTerminalEvidence = ({
+  current,
+  currentState,
+  incoming,
+  incomingState,
+}: {
+  current: JudgmentRequestAttemptJsonEntry
+  currentState: JudgmentRequestAttemptLifecycleState
+  incoming: JudgmentRequestAttemptJsonEntry
+  incomingState: JudgmentRequestAttemptLifecycleState
+}): boolean => {
+  const currentHasDurableCloseoutKind = durableCloseoutKinds.has(current.closeoutKind)
+  const incomingIsDurableTerminal = isDurableTerminalRequestAttempt(incoming)
+  const currentCanReceiveDurableTerminalEvidence =
+    !currentHasDurableCloseoutKind && current.closeoutReason !== 'workerLostNoDurableResult'
+
+  return (
+    currentState === incomingState
+    && current.closeoutKind !== incoming.closeoutKind
+    && isTerminalRequestAttemptLifecycleState(currentState)
+    && incomingIsDurableTerminal
+    && (currentHasDurableCloseoutKind || currentCanReceiveDurableTerminalEvidence)
+  )
+}
+
 export const stringifyRequestAttempts = (
   requestAttempts: JudgmentRequestAttemptJsonEntry[] | null | undefined,
 ): string | null => {
@@ -466,16 +491,18 @@ const assertTimestampFieldMatches = ({
 }
 
 const assertDurableCloseoutRefMatches = ({
+  allowCompatibleTerminalEvidence,
   current,
   incoming,
 }: {
+  allowCompatibleTerminalEvidence?: boolean
   current: JudgmentRequestAttemptJsonEntry
   incoming: JudgmentRequestAttemptJsonEntry
 }): void => {
   const currentRef = current.durableCloseoutRef ? JSON.stringify(current.durableCloseoutRef) : null
   const incomingRef = incoming.durableCloseoutRef ? JSON.stringify(incoming.durableCloseoutRef) : null
 
-  if (currentRef !== null && incomingRef !== null && currentRef !== incomingRef) {
+  if (!allowCompatibleTerminalEvidence && currentRef !== null && incomingRef !== null && currentRef !== incomingRef) {
     throw createInvariantError({reason: 'durableCloseoutRef conflict', requestAttemptId: current.requestAttemptId})
   }
 }
@@ -509,9 +536,11 @@ const assertPromptIdsMatch = ({
 }
 
 const assertRequestAttemptIdentityMatches = ({
+  allowCompatibleTerminalEvidence,
   current,
   incoming,
 }: {
+  allowCompatibleTerminalEvidence?: boolean
   current: JudgmentRequestAttemptJsonEntry
   incoming: JudgmentRequestAttemptJsonEntry
 }): void => {
@@ -524,7 +553,7 @@ const assertRequestAttemptIdentityMatches = ({
   requestAttemptTokenFields.forEach((field) => {
     assertTokenFieldMatches({current, field, incoming})
   })
-  assertDurableCloseoutRefMatches({current, incoming})
+  assertDurableCloseoutRefMatches({allowCompatibleTerminalEvidence, current, incoming})
 }
 
 const assertTerminalTimestampMatches = ({
@@ -555,6 +584,7 @@ const closeoutKindCanChange = ({
 
   return (
     current.closeoutKind === incoming.closeoutKind
+    || closeoutKindsAreCompatibleTerminalEvidence({current, currentState, incoming, incomingState})
     || incomingOrder > currentOrder
     || unavailableRequestAttemptStates.has(currentState)
   )
@@ -614,11 +644,12 @@ const getMergedMetadataEntry = ({
   incoming: JudgmentRequestAttemptJsonEntry
   lifecycleState: JudgmentRequestAttemptLifecycleState
 }): JudgmentRequestAttemptJsonEntry => {
+  const durableCloseoutRef = incoming.durableCloseoutRef ?? current.durableCloseoutRef ?? null
   const merged = {
     ...current,
     ...incoming,
-    closeoutKind: incoming.closeoutKind,
-    durableCloseoutRef: incoming.durableCloseoutRef ?? current.durableCloseoutRef ?? null,
+    closeoutKind: durableCloseoutRef?.kind ?? incoming.closeoutKind,
+    durableCloseoutRef,
     lifecycleState,
     outcome: current.outcome === 'unknown' ? incoming.outcome : current.outcome,
     updatedAt: getLatestCanonicalTimestamp(current.updatedAt, incoming.updatedAt),
@@ -636,15 +667,19 @@ const getTerminalSinkEntry = ({
 }): JudgmentRequestAttemptJsonEntry => {
   const currentState = getRequestAttemptLifecycleState(current)
   const incomingState = getRequestAttemptLifecycleState(incoming)
-
-  if (currentState === incomingState) {
-    assertCloseoutKindCanMerge({current, currentState, incoming, incomingState})
-    assertTerminalTimestampMatches({current, incoming})
-    return getMergedMetadataEntry({current, incoming, lifecycleState: currentState})
-  }
+  const durableTerminalUpgrade =
+    !durableCloseoutKinds.has(current.closeoutKind) && isDurableTerminalRequestAttempt(incoming)
 
   if (entryHasLateWorkerLostDurableEvidenceConflict({current, currentState, incoming})) {
     return normalizeRequestAttemptEntry({...current, lateEvidenceConflict: getLateEvidenceConflict(incoming)})
+  }
+
+  if (currentState === incomingState) {
+    assertCloseoutKindCanMerge({current, currentState, incoming, incomingState})
+    if (!durableTerminalUpgrade) {
+      assertTerminalTimestampMatches({current, incoming})
+    }
+    return getMergedMetadataEntry({current, incoming, lifecycleState: currentState})
   }
 
   return current
@@ -700,8 +735,23 @@ const mergeManifestEntry = ({
 }): JudgmentRequestAttemptJsonEntry => {
   const currentState = getRequestAttemptLifecycleState(current)
   const incomingState = getRequestAttemptLifecycleState(incoming)
+  const allowCompatibleTerminalEvidence = closeoutKindsAreCompatibleTerminalEvidence({
+    current,
+    currentState,
+    incoming,
+    incomingState,
+  })
+  const hasLateWorkerLostDurableEvidenceConflict = entryHasLateWorkerLostDurableEvidenceConflict({
+    current,
+    currentState,
+    incoming,
+  })
 
-  assertRequestAttemptIdentityMatches({current, incoming})
+  if (hasLateWorkerLostDurableEvidenceConflict) {
+    return getTerminalSinkEntry({current, incoming})
+  }
+
+  assertRequestAttemptIdentityMatches({allowCompatibleTerminalEvidence, current, incoming})
 
   if (isTerminalRequestAttemptLifecycleState(currentState)) {
     return getTerminalSinkEntry({current, incoming})

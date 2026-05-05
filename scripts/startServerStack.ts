@@ -30,6 +30,7 @@ type ManagedServerState = {
 
 const restartDelayMs = 1_000
 const startupTimeoutMs = 20_000
+const judgeStartupTimeoutMs = 90_000
 const shutdownTimeoutMs = 20_000
 const forcedKillTimeoutMs = 5_000
 const duckdbOwnerPollIntervalMs = 250
@@ -389,7 +390,7 @@ const isJudgeReady = async () => {
   }
 }
 
-const waitForJudgeReady = async (deadlineMs = Date.now() + startupTimeoutMs): Promise<void> => {
+const waitForJudgeReady = async (deadlineMs = Date.now() + judgeStartupTimeoutMs): Promise<void> => {
   return Date.now() >= deadlineMs
     ? Promise.reject(new Error(`Timed out waiting for judge-worker readiness at ${getJudgeRuntimeReadyUrl()}`))
     : (await isJudgeReady())

@@ -746,11 +746,15 @@ const getProjectPromptAnswerFactBatchRefreshSql = (projectId: string, articleIds
   `
 }
 
-const getProjectPromptAnswerFactBatchRefreshBodySql = (projectId: string) => {
+const getProjectPromptAnswerFactBatchRefreshBodySql = (
+  projectId: string,
+  options: {rebuildLookupIndex?: boolean} = {},
+) => {
   const projectLiteral = getSqlLiteral(projectId)
+  const rebuildLookupIndex = options.rebuildLookupIndex ?? true
 
   return `
-    DROP INDEX IF EXISTS ${martPromptAnswerFactLookupIndexQualifiedName};
+    ${rebuildLookupIndex ? `DROP INDEX IF EXISTS ${martPromptAnswerFactLookupIndexQualifiedName};` : ''}
     DELETE FROM mart.prompt_answer_fact
     WHERE project_id = ${projectLiteral}
       AND ${getProjectRefreshArticleBatchExistsSql('mart.prompt_answer_fact.article_id')};
@@ -1534,8 +1538,7 @@ const getDirtyProjectArticleBatchRefreshSql = (projectId: string, articleIds: st
     ${getProjectRefreshArticleBatchSetupSql(articleIds)}
     ${getProjectScopeArticleBatchRefreshBodySql(projectId)}
     ${getJudgmentProjectScopeBatchRefreshBodySql(projectId)}
-    ${getProjectPromptAnswerFactBatchRefreshBodySql(projectId)}
-    ${getProjectPromptAnswerFactLookupIndexCreateSql()}
+    ${getProjectPromptAnswerFactBatchRefreshBodySql(projectId, {rebuildLookupIndex: false})}
     ${getProjectReviewAnswerDictionaryMissingBatchInsertBodySql(projectId)}
     ${getProjectReviewArticleRollupBatchInsertBodySql(projectId)}
     ${getProjectReviewActiveServingBatchRefreshBodySql(projectId)}

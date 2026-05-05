@@ -93,7 +93,7 @@ const cachedPromptLookups = new Map<string, Promise<PromptDefinition | null>>()
 const DEFAULT_MODEL_CONTEXT = 32768
 const DEFAULT_PROMPT_TOKEN_LIMIT = Math.max(0, DEFAULT_MODEL_CONTEXT - MAX_COMPLETION_TOKENS)
 const maxRecoverablePromptExtraRetries = 1
-export const promptPreparationConcurrencyBounds = {maximum: 128, minimum: 2} as const
+export const promptPreparationConcurrencyBounds = {maximum: 512, minimum: 2} as const
 
 const promptPreparationWaiters: PromptPreparationWaiter[] = []
 
@@ -218,13 +218,8 @@ const getOwnerBackedPromptInput = async (
   promptToProcess: PromptToProcess,
 ): Promise<{article: ArticleRecord; prompt: PromptDefinition}> => {
   const cacheKey = `${promptToProcess.executionSnapshotId}:${promptToProcess.executionSnapshotHash}`
-
-  return withCachedLookup(cachedOwnerBackedPromptLookups, cacheKey, async () => {
-    const snapshot = await getOwnerBackedJudgmentExecutionSnapshot({
-      executionSnapshotHash: promptToProcess.executionSnapshotHash,
-      executionSnapshotId: promptToProcess.executionSnapshotId,
-    })
-    const payload = isObjectRecord(snapshot.payload) ? snapshot.payload : null
+  const buildPromptInput = (payloadValue: unknown): {article: ArticleRecord; prompt: PromptDefinition} => {
+    const payload = isObjectRecord(payloadValue) ? payloadValue : null
     const articlePayload = payload && isObjectRecord(payload.article) ? payload.article : null
     const promptPayload = payload && isObjectRecord(payload.prompt) ? payload.prompt : null
     const articleId = getStringValue(articlePayload?.id) ?? promptToProcess.articleId
@@ -282,6 +277,19 @@ const getOwnerBackedPromptInput = async (
         type: getStringValue(promptPayload.type),
       },
     }
+  }
+
+  if (promptToProcess.executionSnapshotPayload !== undefined) {
+    return buildPromptInput(promptToProcess.executionSnapshotPayload)
+  }
+
+  return withCachedLookup(cachedOwnerBackedPromptLookups, cacheKey, async () => {
+    const snapshot = await getOwnerBackedJudgmentExecutionSnapshot({
+      executionSnapshotHash: promptToProcess.executionSnapshotHash,
+      executionSnapshotId: promptToProcess.executionSnapshotId,
+    })
+
+    return buildPromptInput(snapshot.payload)
   })
 }
 
@@ -740,7 +748,22 @@ const releaseJudgeWorkerTerminalState = async (
   terminalState: PromptTerminalState,
 ): Promise<void> => {
   await enqueueJudgeWorkerTerminalCompletion(promptToProcess, terminalState)
-  await flushJudgeWorkerCompletionOutboxForClaim(promptToProcess.claimId)
+  void flushJudgeWorkerCompletionOutboxForClaim(promptToProcess.claimId).catch((error) => {
+    processPromptFailureLogger.warn(
+      `llm.ownerCompletionFlush.failed.${promptToProcess.claimId}`,
+      '[llm] owner completion flush failed after durable enqueue',
+      {
+        articleId: promptToProcess.articleId,
+        claimId: promptToProcess.claimId,
+        component: processPromptComponent,
+        error: error instanceof Error ? error.message : String(error),
+        event: 'ownerCompletionFlushFailed',
+        jobId: promptToProcess.jobId,
+        promptId: promptToProcess.promptId,
+        recordId: promptToProcess.recordId,
+      },
+    )
+  })
 }
 
 const getRecoverableRetryDelayMs = (_failureCode: string): number | null => {

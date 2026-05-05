@@ -98,6 +98,7 @@ const isNetworkError = (error: unknown): boolean => {
       || msg.includes('enotfound')
       || msg.includes('etimedout')
       || msg.includes('timeout')
+      || msg.includes('timed out')
       || msg.includes('socket')
       || msg.includes('network')
       || msg.includes('fetch failed')

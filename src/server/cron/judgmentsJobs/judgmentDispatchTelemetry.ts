@@ -293,7 +293,7 @@ type JudgmentDispatchTelemetryOptions = {
   shouldUseLocalTelemetryOnly?: () => boolean
 }
 
-const workerTelemetryTimeoutMs = 1_000
+const workerTelemetryTimeoutMs = 5_000
 const defaultProviderProbeOccupancyVersion = 'probe-occupancy-unavailable'
 const judgmentBottleneckValueSet = new Set<string>(judgmentBottleneckValues)
 const judgmentBottleneckSubreasonValueSet = new Set<string>(judgmentBottleneckSubreasonValues)

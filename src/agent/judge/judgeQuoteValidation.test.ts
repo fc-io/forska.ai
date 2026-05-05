@@ -19,6 +19,43 @@ test('single prompt quote validation accepts matching quotes', () => {
   expect(result.kind).toBe('valid')
 })
 
+test('single prompt quote validation repairs case-only quote differences to source text', () => {
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {
+      answer: 'no',
+      explanation: 'because',
+      quotes: ['association between oral health and frailty among older cancer patients: a cross-sectional study.'],
+    },
+    lastResponse: '{"answer":"no"}',
+    maxRetries: 2,
+    recordText: 'Association between oral health and frailty among older cancer patients: a cross-sectional study.',
+    retryBasePrompt: 'base prompt',
+  })
+
+  expect(result).toEqual({
+    judgment: {
+      answer: 'no',
+      explanation: 'because',
+      quotes: ['Association between oral health and frailty among older cancer patients: a cross-sectional study.'],
+    },
+    kind: 'valid',
+  })
+})
+
+test('single prompt quote validation drops blank quotes', () => {
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {answer: 'no', explanation: 'because', quotes: ['', '   ']},
+    lastResponse: '{"answer":"no","quotes":[""]}',
+    maxRetries: 2,
+    recordText: 'Local article text only.',
+    retryBasePrompt: 'base prompt',
+  })
+
+  expect(result).toEqual({judgment: {answer: 'no', explanation: 'because', quotes: []}, kind: 'valid'})
+})
+
 test('single prompt quote validation accepts quotes wrapped in harmless outer quotes', () => {
   const result = validateSinglePromptJudgmentQuotes({
     attempt: 1,
@@ -118,6 +155,54 @@ test('single prompt quote validation normalizes internal double quotes back to t
     },
     kind: 'valid',
   })
+})
+
+test('single prompt quote validation repairs visible text across HTML tags to source text', () => {
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {answer: 'no', explanation: 'because', quotes: ['PM2.5 concentrations']},
+    lastResponse: '{"answer":"no"}',
+    maxRetries: 2,
+    recordText: 'Portable air cleaners reduce PM<sub>2.5</sub> concentrations in homes.',
+    retryBasePrompt: 'base prompt',
+  })
+
+  expect(result).toEqual({
+    judgment: {answer: 'no', explanation: 'because', quotes: ['PM<sub>2.5</sub> concentrations']},
+    kind: 'valid',
+  })
+})
+
+test('single prompt quote validation repairs visible text across escaped HTML tags to source text', () => {
+  const sourceQuote = 'Metabolic changes using &lt;sup&gt;18&lt;/sup&gt;F-FDG PET/CT'
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {answer: 'no', explanation: 'because', quotes: ['Metabolic changes using <sup>18</sup>F-FDG PET/CT']},
+    lastResponse: '{"answer":"no"}',
+    maxRetries: 2,
+    recordText: sourceQuote,
+    retryBasePrompt: 'base prompt',
+  })
+
+  expect(result).toEqual({judgment: {answer: 'no', explanation: 'because', quotes: [sourceQuote]}, kind: 'valid'})
+})
+
+test('single prompt quote validation repairs malformed HTML quote tags to source text', () => {
+  const sourceQuote = 'Pt<sub><i>x</i></sub>Sn<sub><i>y</i></sub> intermetallic compounds are widely used as catalysts'
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {
+      answer: 'no',
+      explanation: 'because',
+      quotes: ['Pt<sub>x</i></sub>Sn<sub><i>y</i></sub> intermetallic compounds are widely used as catalysts'],
+    },
+    lastResponse: '{"answer":"no"}',
+    maxRetries: 2,
+    recordText: sourceQuote,
+    retryBasePrompt: 'base prompt',
+  })
+
+  expect(result).toEqual({judgment: {answer: 'no', explanation: 'because', quotes: [sourceQuote]}, kind: 'valid'})
 })
 
 test('single prompt quote validation keeps exact quotes that already include source quotation marks', () => {
@@ -242,6 +327,24 @@ test('single prompt quote validation requests a retry before the final attempt',
     expect(result.nextPrompt).toContain('Do not shorten quotes with ellipses.')
     expect(result.nextPrompt).toContain('Do not include wrapper markers in quotes.')
     expect(result.error).toBe('Invalid quotes: not substrings of record text')
+  }
+})
+
+test('single prompt quote validation retries when only some quotes can be repaired', () => {
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {answer: 'no', explanation: 'because', quotes: ['PM2.5 concentrations', 'invented quote']},
+    lastResponse: '{"answer":"no","quotes":["PM2.5 concentrations","invented quote"]}',
+    maxRetries: 2,
+    recordText: 'Portable air cleaners reduce PM<sub>2.5</sub> concentrations in homes.',
+    retryBasePrompt: 'base prompt',
+  })
+
+  expect(result.kind).toBe('retry')
+
+  if (result.kind === 'retry') {
+    expect(result.nextPrompt).toContain('invented quote')
+    expect(result.nextPrompt).not.toContain('- "PM2.5 concentrations"')
   }
 })
 

@@ -19,7 +19,7 @@ test('prompt preparation concurrency is dynamic and bounded', () => {
   )
 })
 
-test('prompt pipeline width stays above provider request capacity', () => {
+test('prompt pipeline width preserves small-provider headroom and scales to large provider limits', () => {
   expect(getJudgmentPromptQueueTargetFromProviderLimit({providerMaxInflightRequests: 1})).toEqual({
     activePromptLimit: 2,
     queuedPromptLimit: 1,
@@ -28,7 +28,7 @@ test('prompt pipeline width stays above provider request capacity', () => {
     getJudgmentPromptQueueTargetFromProviderLimit({providerMaxInflightRequests: 2, providerPromptBacklogTarget: 6}),
   ).toEqual({activePromptLimit: 4, queuedPromptLimit: 2})
   expect(getJudgmentPromptQueueTargetFromProviderLimit({providerMaxInflightRequests: 300})).toEqual({
-    activePromptLimit: 600,
-    queuedPromptLimit: 1,
+    activePromptLimit: 512,
+    queuedPromptLimit: 88,
   })
 })

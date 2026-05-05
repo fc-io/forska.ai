@@ -90,6 +90,15 @@ test('keeps prompt validation failures out of the outage path', () => {
   expect(isConnectionError({status: 422})).toBe(false)
 })
 
+test('classifies operation timed out errors as network unavailable', () => {
+  const error = new Error('The operation timed out.')
+  const failure = classifyConnectionFailure({context, error})
+
+  expect(failure.kind).toBe('network_unavailable')
+  expect(failure.shouldPauseConnection).toBe(true)
+  expect(isConnectionError(error)).toBe(true)
+})
+
 test('classifies Codex websocket 403 as transient throttling', () => {
   const failure = classifyConnectionFailure({
     context: {effectiveBaseURL: 'codex://app-server', endpointPath: null, providerKind: 'codex'},

@@ -114,6 +114,7 @@ const hasConnectionErrorMarker = ({
     || normalizedMessage.includes('enotfound')
     || normalizedMessage.includes('etimedout')
     || normalizedMessage.includes('timeout')
+    || normalizedMessage.includes('timed out')
     || normalizedMessage.includes('socket')
     || normalizedMessage.includes('network')
     || normalizedMessage.includes('fetch failed')

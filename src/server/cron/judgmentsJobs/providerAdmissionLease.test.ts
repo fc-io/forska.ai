@@ -2,14 +2,19 @@ import {afterEach, expect, test} from 'bun:test'
 
 import {
   acquireProviderAdmissionLease,
+  acquireProviderAdmissionLeaseThroughOwner,
   getProviderAdmissionLeaseTiming,
   getProviderAdmissionProbeLeaseIdentity,
   getProviderAdmissionRequestLeaseIdentity,
   getProviderBucketSnapshot,
+  heartbeatProviderAdmissionLease,
+  heartbeatProviderAdmissionLeaseThroughOwner,
   providerAdmissionLeaseHeartbeatIntervalMs,
   providerAdmissionLeaseTtlMs,
   publishProviderBucketSnapshot,
   releaseProviderAdmissionLease,
+  releaseProviderAdmissionLeaseWithResult,
+  releaseProviderAdmissionLeaseWithResultThroughOwner,
   resetProviderAdmissionLeaseForTests,
 } from './providerAdmissionLease.ts'
 
@@ -42,6 +47,51 @@ test('provider bucket snapshot resolves null maxInflightRequests to the family d
     resolvedDefaultCapacity: 6,
   })
   expect(snapshot.providerLimitVersion).toHaveLength(64)
+})
+
+test('judge workers use local provider admission leases instead of owner RPCs', async () => {
+  const originalServerRole = process.env.SERVER_ROLE
+  process.env.SERVER_ROLE = 'judge-worker'
+
+  try {
+    const snapshot = getProviderBucketSnapshot({
+      getNonCodexCapacity,
+      maxInflightRequests: 1,
+      modelId: 'model-local-owner-backed',
+      modelProvider: 'sglang',
+      providerConnectionId: 'connection-local-owner-backed',
+      providerName: 'SGLang',
+    })
+    const leaseIdentity = getProviderAdmissionRequestLeaseIdentity('request-local-owner-backed')
+    const acquire = await acquireProviderAdmissionLeaseThroughOwner({
+      holderToken: 'holder-local-owner-backed',
+      leaseIdentity,
+      requestAttemptId: 'request-local-owner-backed',
+      snapshot,
+    })
+
+    expect(acquire.acquired).toBe(true)
+    expect(
+      await heartbeatProviderAdmissionLeaseThroughOwner({
+        holderToken: 'holder-local-owner-backed',
+        leaseIdentity,
+        providerKey: snapshot.providerKey,
+      }),
+    ).toMatchObject({heartbeat: true})
+    expect(
+      await releaseProviderAdmissionLeaseWithResultThroughOwner({
+        holderToken: 'holder-local-owner-backed',
+        leaseIdentity,
+        providerKey: snapshot.providerKey,
+      }),
+    ).toEqual({released: true})
+  } finally {
+    if (originalServerRole === undefined) {
+      delete process.env.SERVER_ROLE
+    } else {
+      process.env.SERVER_ROLE = originalServerRole
+    }
+  }
 })
 
 test('request and probe lease identities are non-null canonical values', () => {
@@ -328,4 +378,84 @@ test('publishing a same-limit provider setting change still rotates providerLimi
     reason: 'staleProviderLimitSnapshot',
     staleProviderLimitSnapshot: true,
   })
+})
+
+test('in-memory provider admission heartbeat extends request leases without touching DuckDB', () => {
+  const snapshot = getProviderBucketSnapshot({
+    getNonCodexCapacity,
+    maxInflightRequests: 2,
+    modelId: 'model-memory-heartbeat',
+    modelProvider: 'sglang',
+    providerConnectionId: 'connection-memory-heartbeat',
+    providerName: 'SGLang',
+  })
+  const leaseIdentity = getProviderAdmissionRequestLeaseIdentity('request-attempt-memory')
+
+  expect(
+    acquireProviderAdmissionLease({holderToken: 'holder-memory', leaseIdentity, nowMs: 1_000, snapshot, ttlMs: 10_000}),
+  ).toMatchObject({acquired: true})
+
+  const heartbeat = heartbeatProviderAdmissionLease({
+    holderToken: 'holder-memory',
+    leaseIdentity,
+    nowMs: 5_000,
+    providerKey: snapshot.providerKey,
+    ttlMs: 20_000,
+  })
+
+  if (!heartbeat.heartbeat) {
+    throw new Error('Expected in-memory heartbeat to succeed')
+  }
+
+  expect(heartbeat.lease).toMatchObject({
+    expiresAtMs: 25_000,
+    heartbeatAtMs: 5_000,
+    holderToken: 'holder-memory',
+    leaseIdentity,
+    leaseKind: 'request',
+    providerKey: snapshot.providerKey,
+    requestAttemptId: 'request-attempt-memory',
+  })
+})
+
+test('in-memory provider admission release result distinguishes missing and wrong holders', () => {
+  const snapshot = getProviderBucketSnapshot({
+    getNonCodexCapacity,
+    maxInflightRequests: 2,
+    modelId: 'model-memory-release',
+    modelProvider: 'sglang',
+    providerConnectionId: 'connection-memory-release',
+    providerName: 'SGLang',
+  })
+  const endpointAvailabilityKey = 'connection-memory-release::http://localhost:30001'
+  const leaseIdentity = getProviderAdmissionProbeLeaseIdentity({
+    endpointAvailabilityKey,
+    probeAttemptId: 'probe-attempt-memory',
+  })
+
+  expect(
+    acquireProviderAdmissionLease({holderToken: 'probe-holder-memory', leaseIdentity, nowMs: 1_000, snapshot}),
+  ).toMatchObject({acquired: true})
+
+  expect(
+    releaseProviderAdmissionLeaseWithResult({
+      holderToken: 'different-holder',
+      leaseIdentity,
+      providerKey: snapshot.providerKey,
+    }),
+  ).toEqual({released: false, reason: 'notHolder'})
+  expect(
+    releaseProviderAdmissionLeaseWithResult({
+      holderToken: 'probe-holder-memory',
+      leaseIdentity,
+      providerKey: snapshot.providerKey,
+    }),
+  ).toEqual({released: true})
+  expect(
+    releaseProviderAdmissionLeaseWithResult({
+      holderToken: 'probe-holder-memory',
+      leaseIdentity,
+      providerKey: snapshot.providerKey,
+    }),
+  ).toEqual({released: false, reason: 'missing'})
 })

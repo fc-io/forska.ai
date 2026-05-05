@@ -1,3 +1,5 @@
+import {existsSync} from 'node:fs'
+
 import {getProviderConnectionConfigFromJson} from '../../../providers/providerDbUtils.ts'
 import {resolveProviderConnectionRuntimeMatch} from '../../../providers/providerRuntimeMatchResolver.ts'
 import {getSqlLiteral} from '../../../services/appQueryHelpers.ts'
@@ -9,6 +11,7 @@ import {
   recordAcceptedJudgeWorkerClaims,
   shouldUseJudgeWorkerOwnerHandoff,
 } from '../judgeWorkerCompletionJournal.ts'
+import {getJudgmentJobSqlitePath} from '../judgmentJobPaths.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from '../judgmentJobSqliteService.ts'
 
 export type PromptToProcess = {
@@ -17,6 +20,7 @@ export type PromptToProcess = {
   claimId: string
   executionSnapshotHash: string
   executionSnapshotId: string
+  executionSnapshotPayload?: unknown
   promptId: string
   recordId: string
   projectId: string
@@ -46,7 +50,12 @@ export type PromptToProcess = {
   useFulltextNoImages: boolean
 }
 
-export type PromptRuntime = {modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]}
+export type PromptRuntime = {
+  modelBaseUrl: string
+  modelProvider: string
+  modelWorkerUrls: string[]
+  ownerBackedJobInfo?: OwnerBackedJudgmentJobInfo
+}
 
 const normalizeProvider = (value: string | null | undefined): string => {
   const v = String(value ?? '')
@@ -57,6 +66,14 @@ const normalizeProvider = (value: string | null | undefined): string => {
 
 const isCodexProvider = (provider: string): boolean => {
   return provider === 'codex'
+}
+
+const getErrorMessage = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error)
+}
+
+const shouldTryLocalOwnerBackedClaim = (): boolean => {
+  return process.env.FORSKA_JUDGE_WORKER_LOCAL_SNAPSHOT_CLAIMS === 'true'
 }
 
 const getCodexPlaceholderBaseUrl = (): string => {
@@ -86,6 +103,37 @@ const getOwnerBackedPromptRuntime = (jobId: string, jobInfo: OwnerBackedJudgment
   })
 
   return null
+}
+
+const getLocalPromptRuntime = async ({
+  jobId,
+  jobInfo,
+}: {
+  jobId: string
+  jobInfo: NonNullable<Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getJobInfo']>>>
+}): Promise<PromptRuntime | null> => {
+  const provider = normalizeProvider(jobInfo.modelProvider)
+
+  if (isCodexProvider(provider)) {
+    return getCodexPromptRuntime()
+  }
+
+  if (!jobInfo.modelBaseUrl) {
+    console.error('Prompt missing required matched model baseURL:', {
+      jobId,
+      modelName: jobInfo.modelName,
+      modelProvider: jobInfo.modelProvider,
+    })
+    return null
+  }
+
+  const config = getProviderConnectionConfigFromJson({providerKind: provider, value: jobInfo.providerConfigJson})
+
+  return {
+    modelBaseUrl: String(jobInfo.modelBaseUrl),
+    modelProvider: provider,
+    modelWorkerUrls: config.workerUrlMode === 'manual' ? config.manualWorkerUrls : [],
+  }
 }
 
 const isJobReadyToClaimPrompts = async (jobId: string): Promise<boolean> => {
@@ -164,7 +212,7 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
   const provider = normalizeProvider(jobInfo.modelProvider)
 
   if (isCodexProvider(provider)) {
-    const claimedRows = await sqliteService.claimReadyPrompts(jobId, serverJobId, limit)
+    const claimedRows = await sqliteService.claimReadyPromptsWithoutLease(jobId, serverJobId, limit)
     const runtime = getCodexPromptRuntime()
 
     return claimedRows.map((prompt) => {
@@ -227,67 +275,137 @@ const getOwnerBackedReadyRows = async (
   serverJobId: string,
   jobId: string,
   limit: number,
+  requestRuntime: {
+    providerFamily?: string | null
+    providerId?: string | null
+    providerKey?: string | null
+    providerConnectionId: string | null
+    providerLimit?: number | null
+    providerLimitVersion?: string | null
+    providerMaxInflightRequests: number | null
+    providerName?: string | null
+    providerUsesFamilyDefault: boolean
+    resolvedDefaultCapacity?: number | null
+  },
   protectedRecordIds: string[],
+  providedJobInfo?: OwnerBackedJudgmentJobInfo | null,
 ): Promise<PromptToProcess[]> => {
-  const jobInfo = await getOwnerBackedJudgmentJobInfo(jobId)
+  const getRemoteOwnerBackedReadyRows = async (): Promise<PromptToProcess[]> => {
+    const jobInfo = providedJobInfo ?? (await getOwnerBackedJudgmentJobInfo(jobId))
 
-  if (!jobInfo) {
-    console.error('[getAndUpdateReadyPrompts] owner-backed job info not found for jobId:', jobId)
-    return []
-  }
-
-  const runtime = getOwnerBackedPromptRuntime(jobId, jobInfo)
-
-  if (!runtime) {
-    return []
-  }
-
-  const claims = await claimOwnerJudgmentJobPrompts({claimedBy: serverJobId, jobId, limit, protectedRecordIds})
-  const prompts = claims.map((prompt) => {
-    return {
-      ...prompt,
-      maxInflightRequests: jobInfo.maxInflightRequests,
-      modelBaseUrl: runtime.modelBaseUrl,
-      modelId: jobInfo.modelId,
-      modelMetadataJson: jobInfo.modelMetadataJson,
-      modelName: jobInfo.modelName,
-      modelProvider: runtime.modelProvider,
-      modelSecretRef: jobInfo.modelSecretRef,
-      modelVersion: jobInfo.modelVersion,
-      providerConnectionId: jobInfo.providerId,
-      providerFamily: jobInfo.providerFamily,
-      providerId: jobInfo.providerId,
-      providerKey: jobInfo.providerKey,
-      providerLimit: jobInfo.providerLimit,
-      providerLimitVersion: jobInfo.providerLimitVersion,
-      providerMaxInflightRequests: jobInfo.providerLimit,
-      providerName: jobInfo.providerName,
-      providerUsesFamilyDefault: jobInfo.providerUsesFamilyDefault,
-      resolvedDefaultCapacity: jobInfo.resolvedDefaultCapacity,
-      modelWorkerUrls: runtime.modelWorkerUrls,
-      projectId: jobInfo.projectId,
-      useAbstract: jobInfo.useAbstract,
-      useFulltext: jobInfo.useFulltext,
-      useFulltextNoImages: jobInfo.useFulltextNoImages,
-      useTitle: jobInfo.useTitle,
+    if (!jobInfo) {
+      console.error('[getAndUpdateReadyPrompts] owner-backed job info not found for jobId:', jobId)
+      return []
     }
-  })
 
-  await recordAcceptedJudgeWorkerClaims(prompts)
+    const runtime = getOwnerBackedPromptRuntime(jobId, jobInfo)
 
-  return prompts
+    if (!runtime) {
+      return []
+    }
+
+    const claims = await claimOwnerJudgmentJobPrompts({claimedBy: serverJobId, jobId, limit, protectedRecordIds})
+    const prompts = claims.map((prompt) => {
+      return {
+        ...prompt,
+        maxInflightRequests: jobInfo.maxInflightRequests,
+        modelBaseUrl: runtime.modelBaseUrl,
+        modelId: jobInfo.modelId,
+        modelMetadataJson: jobInfo.modelMetadataJson,
+        modelName: jobInfo.modelName,
+        modelProvider: runtime.modelProvider,
+        modelSecretRef: jobInfo.modelSecretRef,
+        modelVersion: jobInfo.modelVersion,
+        providerConnectionId: jobInfo.providerId,
+        providerFamily: jobInfo.providerFamily,
+        providerId: jobInfo.providerId,
+        providerKey: jobInfo.providerKey,
+        providerLimit: jobInfo.providerLimit,
+        providerLimitVersion: jobInfo.providerLimitVersion,
+        providerMaxInflightRequests: jobInfo.providerLimit,
+        providerName: jobInfo.providerName,
+        providerUsesFamilyDefault: jobInfo.providerUsesFamilyDefault,
+        resolvedDefaultCapacity: jobInfo.resolvedDefaultCapacity,
+        modelWorkerUrls: runtime.modelWorkerUrls,
+        projectId: jobInfo.projectId,
+        useAbstract: jobInfo.useAbstract,
+        useFulltext: jobInfo.useFulltext,
+        useFulltextNoImages: jobInfo.useFulltextNoImages,
+        useTitle: jobInfo.useTitle,
+      }
+    })
+
+    await recordAcceptedJudgeWorkerClaims(prompts)
+
+    return prompts
+  }
+
+  if (shouldTryLocalOwnerBackedClaim() && existsSync(getJudgmentJobSqlitePath(jobId))) {
+    try {
+      const sqliteService = getJudgmentJobSqliteService()
+      const localJobInfo = await sqliteService.getJobInfo(jobId)
+
+      if (!localJobInfo) {
+        return []
+      }
+
+      const runtime = await getLocalPromptRuntime({jobId, jobInfo: localJobInfo})
+
+      if (!runtime) {
+        return []
+      }
+
+      const claimedRows = await sqliteService.claimReadyPromptsWithoutLease(jobId, serverJobId, limit)
+      const prompts = claimedRows.map((prompt) => {
+        return {
+          ...prompt,
+          ...requestRuntime,
+          modelBaseUrl: runtime.modelBaseUrl,
+          modelMetadataJson: localJobInfo.modelMetadataJson,
+          modelName: localJobInfo.modelName,
+          modelProvider: runtime.modelProvider,
+          modelSecretRef: localJobInfo.modelSecretRef,
+          modelVersion: localJobInfo.modelVersion,
+          providerConnectionId: requestRuntime.providerId ?? requestRuntime.providerConnectionId,
+          providerMaxInflightRequests: requestRuntime.providerLimit ?? requestRuntime.providerMaxInflightRequests,
+          modelWorkerUrls: runtime.modelWorkerUrls,
+        }
+      })
+
+      await recordAcceptedJudgeWorkerClaims(prompts)
+
+      return prompts
+    } catch (error) {
+      console.warn('[getAndUpdateReadyPrompts] local owner-backed claim fell back to DuckDB owner RPC:', {
+        error: getErrorMessage(error),
+        jobId,
+      })
+    }
+  }
+
+  return getRemoteOwnerBackedReadyRows()
 }
 
 export const getReadyPromptRuntime = async (jobId: string): Promise<PromptRuntime | null> => {
   if (shouldUseJudgeWorkerOwnerHandoff()) {
-    const jobInfo = await getOwnerBackedJudgmentJobInfo(jobId)
+    try {
+      const jobInfo = await getOwnerBackedJudgmentJobInfo(jobId)
 
-    if (!jobInfo) {
-      console.error('[getReadyPromptRuntime] owner-backed job info not found for jobId:', jobId)
-      return null
+      if (!jobInfo) {
+        console.error('[getReadyPromptRuntime] owner-backed job info not found for jobId:', jobId)
+        return null
+      }
+
+      const runtime = getOwnerBackedPromptRuntime(jobId, jobInfo)
+
+      return runtime ? {...runtime, ownerBackedJobInfo: jobInfo} : null
+    } catch (_error) {
+      const localJobInfo = existsSync(getJudgmentJobSqlitePath(jobId))
+        ? await getJudgmentJobSqliteService().getJobInfo(jobId)
+        : null
+
+      return localJobInfo ? getLocalPromptRuntime({jobId, jobInfo: localJobInfo}) : null
     }
-
-    return getOwnerBackedPromptRuntime(jobId, jobInfo)
   }
 
   if (!(await isJobReadyToClaimPrompts(jobId))) {
@@ -345,10 +463,17 @@ export const getAndUpdateReadyPrompts = async (
     providerUsesFamilyDefault: boolean
     resolvedDefaultCapacity?: number | null
   },
-  options: {protectedRecordIds?: string[]} = {},
+  options: {ownerBackedJobInfo?: OwnerBackedJudgmentJobInfo | null; protectedRecordIds?: string[]} = {},
 ): Promise<PromptToProcess[]> => {
   if (shouldUseJudgeWorkerOwnerHandoff()) {
-    return getOwnerBackedReadyRows(serverJobId, jobId, limit, options.protectedRecordIds ?? [])
+    return getOwnerBackedReadyRows(
+      serverJobId,
+      jobId,
+      limit,
+      requestRuntime,
+      options.protectedRecordIds ?? [],
+      options.ownerBackedJobInfo,
+    )
   }
 
   const prompts = await getSqliteReadyRows(serverJobId, jobId, limit)

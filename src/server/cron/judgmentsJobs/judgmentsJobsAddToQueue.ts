@@ -32,9 +32,12 @@ type JobConfig = {
 const addToQueueLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const addToQueueWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const addToQueueComponent = 'judgmentsJobsAddToQueue'
-const sqliteScanOverscanMultiplier = 5
-const sqliteScanMaxWindowsPerTick = 5
+const sqliteScanOverscanMultiplier = 1
+const sqliteScanMaxWindowsPerTick = 1
+const sqliteScanMaxWindowSize = 128
 const sqliteScanExhaustedCooldownMs = 60_000
+const sqliteActiveBacklogRefillLowWatermarkRatio = 1
+const sqliteActiveBacklogRefillLowWatermarkMinimumTarget = 32
 
 type AddToQueueBucket = {addToQueueMaxBatchSize: number; jobs: Job[]; label: string; readyTargetPerJob: number}
 
@@ -121,6 +124,47 @@ const getPromptsToFetchCount = (
 ): number => {
   const deficit = Math.max(0, readyTargetPerJob - readyCount)
   return Math.min(deficit, addToQueueMaxBatchSize)
+}
+
+const getActiveQueueBacklogCount = async ({
+  jobId,
+  readyCount,
+  sqliteService,
+}: {
+  jobId: string
+  readyCount: number
+  sqliteService: ReturnType<typeof getJudgmentJobSqliteService>
+}): Promise<number> => {
+  const health = await (
+    sqliteService as {
+      getHealthSnapshot?: (
+        jobId: string,
+      ) => Promise<{promptCounts?: {claimed?: number; ready?: number; running?: number}}>
+    }
+  ).getHealthSnapshot?.(jobId)
+  const counts = health?.promptCounts
+
+  return counts
+    ? Math.max(0, Number(counts.ready ?? 0) + Number(counts.claimed ?? 0) + Number(counts.running ?? 0))
+    : readyCount
+}
+
+const getActiveBacklogRefillLowWatermark = (readyTargetPerJob: number): number => {
+  const target = Math.max(1, readyTargetPerJob)
+
+  return target < sqliteActiveBacklogRefillLowWatermarkMinimumTarget
+    ? target
+    : Math.max(1, Math.floor(target * sqliteActiveBacklogRefillLowWatermarkRatio))
+}
+
+const shouldRefillActiveQueueBacklog = ({
+  activeQueueBacklogCount,
+  readyTargetPerJob,
+}: {
+  activeQueueBacklogCount: number
+  readyTargetPerJob: number
+}): boolean => {
+  return activeQueueBacklogCount < getActiveBacklogRefillLowWatermark(readyTargetPerJob)
 }
 
 type PromptQueueEntry = {articleId: string; promptId: string}
@@ -426,6 +470,7 @@ const filterAlreadyJudged = async (
 
 const getSqliteWindowSize = (readyDeficit: number, addToQueueMaxBatchSize: number) => {
   return Math.min(
+    sqliteScanMaxWindowSize,
     addToQueueMaxBatchSize * sqliteScanOverscanMultiplier,
     Math.max(readyDeficit, readyDeficit * sqliteScanOverscanMultiplier),
   )
@@ -538,7 +583,17 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   }
 
   const countOfReadyPrompts = await sqliteService.getReadyCount(job.id)
-  const promptsToFetchCount = getPromptsToFetchCount(countOfReadyPrompts, readyTargetPerJob, addToQueueMaxBatchSize)
+  const activeQueueBacklogCount = await getActiveQueueBacklogCount({
+    jobId: job.id,
+    readyCount: countOfReadyPrompts,
+    sqliteService,
+  })
+
+  if (!shouldRefillActiveQueueBacklog({activeQueueBacklogCount, readyTargetPerJob})) {
+    return
+  }
+
+  const promptsToFetchCount = getPromptsToFetchCount(activeQueueBacklogCount, readyTargetPerJob, addToQueueMaxBatchSize)
 
   if (promptsToFetchCount === 0) {
     return
@@ -631,7 +686,11 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       sqliteService,
     })
 
-    const nextReadyCount = await sqliteService.getReadyCount(job.id)
+    const nextReadyCount = await getActiveQueueBacklogCount({
+      jobId: job.id,
+      readyCount: await sqliteService.getReadyCount(job.id),
+      sqliteService,
+    })
     const nextScanState = promptData.nextCursor
       ? {
           cursor: promptData.nextCursor,
@@ -656,7 +715,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
 
   const getNewStartMs = Date.now()
 
-  await scanWindow({cursor: baseCursor, readyCount: countOfReadyPrompts, windowsLeft: sqliteScanMaxWindowsPerTick})
+  await scanWindow({cursor: baseCursor, readyCount: activeQueueBacklogCount, windowsLeft: sqliteScanMaxWindowsPerTick})
 
   const getNewMs = Date.now() - getNewStartMs
   const finalReadyCount = await sqliteService.getReadyCount(job.id)
@@ -664,6 +723,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   addToQueueLogger.log(`judgmentQueue.addToQueue.topUp.${job.id}`, '[addToQueue] sqlite top-up check', {
     component: addToQueueComponent,
     event: 'topUp',
+    activeBacklog: activeQueueBacklogCount,
     fetchedNeeded: promptsToFetchCount,
     jobId: job.id,
     ms: getNewMs,

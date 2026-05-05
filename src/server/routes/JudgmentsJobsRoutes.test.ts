@@ -452,6 +452,39 @@ test('owner-backed claim route returns immutable execution snapshot identity and
 
   await insertProjectFixture({connectionId, modelId, projectId})
   await runDatabase(`
+    INSERT INTO app.article (
+      id,
+      article_id,
+      article_title,
+      article_summary,
+      full_text,
+      full_text_html,
+      full_text_pdf,
+      original_data
+    ) VALUES (
+      '${articleId}',
+      'external-${articleId}',
+      'Snapshot claim article',
+      'Snapshot claim summary',
+      'Snapshot claim full text should not be loaded',
+      '<p>Snapshot claim full text should not be loaded</p>',
+      '/tmp/snapshot-claim.pdf',
+      '{"heavy":"snapshot claim original data"}'::JSON
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Snapshot claim prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order)
+    VALUES ('project-prompt-${promptId}', '${projectId}', '${promptId}', 0)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('project-article-${articleId}', '${projectId}', '${articleId}')
+  `)
+  await runDatabase(`
     INSERT INTO app.judgment_job (id, project_id, status)
     VALUES ('${jobId}', '${projectId}', 'running')
   `)
@@ -493,13 +526,24 @@ test('owner-backed claim route returns immutable execution snapshot identity and
     ),
   )
   const snapshotBody = (await snapshotResponse.json()) as {
-    data: {articleId: string; claimId: string; payload: {identity: {queueRecordId: string}}}
+    data: {
+      articleId: string
+      claimId: string
+      payload: {
+        article: {articleSummary: string | null; fullText: string | null; fullTextHtml: string | null; originalData: unknown}
+        identity: {queueRecordId: string}
+      }
+    }
   }
 
   expect(snapshotResponse.status).toBe(200)
   expect(snapshotBody.data.articleId).toBe(articleId)
   expect(snapshotBody.data.claimId).toBe(claim?.claimId)
   expect(snapshotBody.data.payload.identity.queueRecordId).toBe(claim?.recordId)
+  expect(snapshotBody.data.payload.article.articleSummary).toBe('Snapshot claim summary')
+  expect(snapshotBody.data.payload.article.fullText).toBeNull()
+  expect(snapshotBody.data.payload.article.fullTextHtml).toBeNull()
+  expect(snapshotBody.data.payload.article.originalData).toBeNull()
 
   await sqliteService.closeAll()
 })
@@ -727,6 +771,138 @@ test('owner-backed completion rejects snapshot mismatch before accepting the cla
   expect(completionResponse.status).toBe(200)
   expect(completionResponseBody.data.status).toBe('judged')
   expect(await sqliteService.getOutboxCount(jobId)).toBe(1)
+
+  await sqliteService.closeAll()
+})
+
+test('owner-backed completion replay accepts existing ack when token use conflicts', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const [{getJudgmentJobSqliteService}, {getAppDatabaseService}] = await Promise.all([
+    import('../cron/judgmentsJobs/judgmentJobSqliteService.ts'),
+    import('../services/appDatabaseService.ts'),
+  ])
+  const sqliteService = getJudgmentJobSqliteService()
+  const projectId = `token-conflict-project-${Date.now()}`
+  const modelId = `token-conflict-model-${Date.now()}`
+  const connectionId = `token-conflict-connection-${Date.now()}`
+  const jobId = `token-conflict-job-${Date.now()}`
+  const articleId = `token-conflict-article-${Date.now()}`
+  const promptId = `token-conflict-prompt-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const claimResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-a', limit: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const claimBody = (await claimResponse.json()) as {
+    data: {
+      claims: Array<{
+        articleId: string
+        claimId: string
+        executionSnapshotHash: string
+        executionSnapshotId: string
+        modelId: string
+        projectId: string
+        promptId: string
+        recordId: string
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        useTitle: boolean
+      }>
+    }
+  }
+  const [claim] = claimBody.data.claims
+
+  if (!claim) {
+    throw new Error('Expected owner-backed claim')
+  }
+
+  const tokenUse = {
+    failedRequests: 0,
+    failedRequestsDetails: [],
+    hasFailedRequests: false,
+    modelName: 'Qwen/Qwen3.5-122B-A10B',
+    successfulRequests: 1,
+    totalCompletionTokens: 3,
+    totalFailedCompletionTokens: 0,
+    totalFailedPromptTokens: 0,
+    totalFailedTokens: 0,
+    totalPromptTokens: 7,
+    totalRequests: 1,
+    totalSuccessCompletionTokens: 3,
+    totalSuccessPromptTokens: 7,
+    totalSuccessTokens: 10,
+    totalTokens: 10,
+  }
+  const completionBody = {
+    articleId: claim.articleId,
+    claimId: claim.claimId,
+    executionSnapshotHash: claim.executionSnapshotHash,
+    executionSnapshotId: claim.executionSnapshotId,
+    jobId,
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
+    modelId: claim.modelId,
+    projectId: claim.projectId,
+    promptId: claim.promptId,
+    queueRecordId: claim.recordId,
+    tokenUse,
+    useAbstract: claim.useAbstract,
+    useFulltext: claim.useFulltext,
+    useFulltextNoImages: claim.useFulltextNoImages,
+    useTitle: claim.useTitle,
+  }
+
+  const completionResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
+      body: JSON.stringify(completionBody),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const replayResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
+      body: JSON.stringify({
+        ...completionBody,
+        tokenUse: {
+          ...tokenUse,
+          totalCompletionTokens: 4,
+          totalSuccessCompletionTokens: 4,
+          totalSuccessTokens: 11,
+          totalTokens: 11,
+        },
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const replayBody = (await replayResponse.json()) as {data: {status: string}}
+  const [tokenUseRow] = await getAppDatabaseService().queryJson<{totalCompletionTokens: number; totalTokens: number}>(`
+    SELECT total_completion_tokens AS totalCompletionTokens,
+           total_tokens AS totalTokens
+    FROM app.token_use
+    WHERE id = 'judgment-completion-token-use:${claim.claimId}'
+    LIMIT 1
+  `)
+
+  expect(completionResponse.status).toBe(200)
+  expect(replayResponse.status).toBe(200)
+  expect(replayBody.data.status).toBe('judged')
+  expect(Number(tokenUseRow?.totalCompletionTokens ?? 0)).toBe(3)
+  expect(Number(tokenUseRow?.totalTokens ?? 0)).toBe(10)
 
   await sqliteService.closeAll()
 })

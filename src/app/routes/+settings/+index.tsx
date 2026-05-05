@@ -96,6 +96,20 @@ type WorkerRuntimeDiagnostics = {
   serverRole: string
   takeoverState?: {status: string}
 }
+type RuntimeState = {
+  bun: {
+    maxHttpRequests: {
+      configuredMaxHttpRequests: number | null
+      defaultMaxHttpRequests: number
+      effectiveMaxHttpRequests: number
+      source: 'default' | 'env'
+    }
+  }
+  pid: number
+  role: string
+  runtimeVersion: string
+  serverRole: string | null
+}
 type UpdateLocalUserInput = {
   maintenanceWorkerDuckdbMemoryLimit: string
   codexBin: string
@@ -112,6 +126,7 @@ type UpdateLocalUserInput = {
 }
 type UpdateUserResponse = {data: LocalUser}
 type StoredModelsResponse = {data: StoredModel[]}
+type RuntimeStateResponse = {data: RuntimeState}
 
 const fetchLocalUser = async (): Promise<LocalUser | null> => {
   const response = await apiClient.api.users.get()
@@ -134,6 +149,12 @@ const fetchMaintenanceRuntimeDiagnostics = async (): Promise<MaintenanceRuntimeD
 const fetchWorkerRuntimeDiagnostics = async (): Promise<WorkerRuntimeDiagnostics | null> => {
   const response = await apiClient.api.admin['worker-runtime-diagnostics'].get()
   return handleApiResponse<WorkerRuntimeDiagnostics>(response, 'Failed to load worker runtime diagnostics')
+}
+
+const fetchRuntimeState = async (): Promise<RuntimeState | null> => {
+  const response = await apiClient.api.runtime.state.get()
+  const result = handleApiResponse<RuntimeStateResponse>(response, 'Failed to load runtime state')
+  return result.data
 }
 
 const getNullableString = (value: string): string | null => {
@@ -172,6 +193,10 @@ const formatWorkerRuntimeBoolean = (value: boolean | null | undefined) => {
 
 const formatWorkerRuntimeList = (values: string[] | null | undefined) => {
   return values && values.length > 0 ? values.join(', ') : 'None'
+}
+
+const formatRuntimeStateSource = (source: RuntimeState['bun']['maxHttpRequests']['source'] | null | undefined) => {
+  return source === 'env' ? 'Env override' : 'Bun default'
 }
 
 const formatOwnerlessBackend = (diagnostics: WorkerRuntimeDiagnostics | null | undefined) => {
@@ -242,6 +267,9 @@ const Settings = () => {
       refetchInterval: 5_000,
       refetchOnWindowFocus: false,
     }
+  })
+  const runtimeStateQuery = useQuery(() => {
+    return {queryKey: ['runtime-state'], queryFn: fetchRuntimeState, staleTime: 60_000, refetchOnWindowFocus: false}
   })
   const updateLocalUserMutation = createMutation(() => {
     return {
@@ -547,6 +575,35 @@ const Settings = () => {
                       Heartbeat tuning changes apply to the running maintenance runtime within a few seconds. DuckDB
                       memory-limit changes are saved immediately but only apply after the next server restart.
                     </p>
+                  </div>
+                  <div class="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-2">
+                    <p class="text-sm font-medium text-gray-900">Runtime state</p>
+                    <Show when={runtimeStateQuery.isLoading}>
+                      <p class="text-xs text-gray-500">Loading runtime state...</p>
+                    </Show>
+                    <Show when={runtimeStateQuery.isError}>
+                      <p class="text-xs text-red-600">
+                        {runtimeStateQuery.error instanceof Error
+                          ? runtimeStateQuery.error.message
+                          : 'Failed to load runtime state'}
+                      </p>
+                    </Show>
+                    <Show when={!runtimeStateQuery.isLoading && !runtimeStateQuery.isError}>
+                      <p class="text-xs text-gray-600">
+                        Bun max HTTP requests:{' '}
+                        {runtimeStateQuery.data?.bun.maxHttpRequests.effectiveMaxHttpRequests ?? 'N/A'} (
+                        {formatRuntimeStateSource(runtimeStateQuery.data?.bun.maxHttpRequests.source)})
+                      </p>
+                      <p class="text-xs text-gray-600">
+                        Configured env:{' '}
+                        {runtimeStateQuery.data?.bun.maxHttpRequests.configuredMaxHttpRequests ?? 'not set'} | Bun
+                        default: {runtimeStateQuery.data?.bun.maxHttpRequests.defaultMaxHttpRequests ?? 'N/A'}
+                      </p>
+                      <p class="text-xs text-gray-600">
+                        Process: role {runtimeStateQuery.data?.role ?? 'N/A'} | configured role{' '}
+                        {runtimeStateQuery.data?.serverRole ?? 'N/A'} | pid {runtimeStateQuery.data?.pid ?? 'N/A'}
+                      </p>
+                    </Show>
                   </div>
                   <div class="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-3">
                     <p class="text-sm font-medium text-gray-900">Worker runtime diagnostics</p>

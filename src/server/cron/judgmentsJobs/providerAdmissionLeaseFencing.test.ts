@@ -186,7 +186,7 @@ test('provider admission lease migration creates only the live lease shape', asy
     indexes.some((index) => {
       return index.indexName === 'idx_app_provider_admission_lease_expiry'
     }),
-  ).toBe(true)
+  ).toBe(false)
 })
 
 test('request and probe leases persist through the canonical non-null identity', async () => {

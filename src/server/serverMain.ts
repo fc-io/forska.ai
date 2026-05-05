@@ -5,7 +5,7 @@ import {migrateDuckdb} from '../db/migrateDuckdb.ts'
 import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsJudgingCron, judgmentsJobsMaintenanceCron} from './cron/judgmentsJobs.ts'
-import {runJudgeWorkerRolloutCleanup} from './cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
+import {startJudgeWorkerStartupRolloutCleanup} from './cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {runStartupAutomaticOrphanedQueueRepair} from './cron/judgmentsJobs/judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from './cron/judgmentsJobs/judgmentJobServerIdentity.ts'
 import {getJudgmentJobSqliteService} from './cron/judgmentsJobs/judgmentJobSqliteService.ts'
@@ -128,10 +128,6 @@ if (getCurrentServerRole() === 'judge-worker') {
 
 if (canCurrentServerOwnDuckdb()) {
   await migrateDuckdb()
-}
-
-if (getCurrentServerRole() === 'judge-worker') {
-  await runJudgeWorkerRolloutCleanup()
 }
 
 if (getCurrentServerRole() !== 'judge-worker' && shouldCurrentServerRunJudgingLoops()) {
@@ -266,6 +262,17 @@ writeRuntimeOperatorLogEvent({
   message: `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_owner=${canCurrentServerOwnDuckdb()}`,
   severity: 'INFO',
 })
+if (getCurrentServerRole() === 'judge-worker') {
+  void startJudgeWorkerStartupRolloutCleanup().catch((error) => {
+    writeRuntimeOperatorLogEvent({
+      attrs: {error},
+      event: 'judge-worker.startup-rollout-cleanup-failed',
+      message: '[judge-worker] startup rollout cleanup failed',
+      severity: 'ERROR',
+      terminalLevel: 'error',
+    })
+  })
+}
 startBackgroundWork()
 
 if (shouldWarmCodex) {

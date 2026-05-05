@@ -832,8 +832,182 @@ const OUTER_QUOTE_WRAPPER_PAIRS: Array<[string, string]> = [
   ['\u2039', '\u203a'],
 ]
 
+const htmlBoundaryTags = new Set([
+  'address',
+  'article',
+  'aside',
+  'blockquote',
+  'br',
+  'dd',
+  'div',
+  'dl',
+  'dt',
+  'figcaption',
+  'figure',
+  'footer',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'header',
+  'hr',
+  'li',
+  'main',
+  'nav',
+  'ol',
+  'p',
+  'pre',
+  'section',
+  'table',
+  'tbody',
+  'td',
+  'tfoot',
+  'th',
+  'thead',
+  'tr',
+  'ul',
+])
+
+type NormalizedQuoteText = {spans: Array<{end: number; start: number}>; text: string}
+type NormalizedQuoteTextBuilder = {spans: Array<{end: number; start: number}>; text: string[]}
+
+const htmlEntityMap: Record<string, string> = {amp: '&', apos: "'", gt: '>', lt: '<', nbsp: ' ', quot: '"'}
+
+const quoteNormalizationTokenPattern =
+  /&lt;\/?\s*[a-zA-Z][a-zA-Z0-9:-]*\b(?:(?!&gt;)[\s\S])*&gt;|<\/?\s*[a-zA-Z][a-zA-Z0-9:-]*\b[^>]*>|&(?:#\d+|#x[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]+);|[\s\S]/g
+
+const getDecodedHtmlEntity = (entity: string): string | null => {
+  const normalizedEntity = entity.trim().toLowerCase()
+  const decimalValue = normalizedEntity.match(/^#(\d+)$/)
+  const hexValue = normalizedEntity.match(/^#x([0-9a-f]+)$/)
+  const entityValue = htmlEntityMap[normalizedEntity]
+
+  return entityValue !== undefined
+    ? entityValue
+    : decimalValue
+      ? String.fromCodePoint(Number(decimalValue[1]))
+      : hexValue
+        ? String.fromCodePoint(Number.parseInt(hexValue[1] ?? '', 16))
+        : null
+}
+
+const getHtmlEntityMatch = (value: string, start: number): {end: number; text: string} | null => {
+  const match = value.slice(start).match(/^&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]+);/)
+  const decoded = match ? getDecodedHtmlEntity(match[1] ?? '') : null
+
+  return match && decoded !== null ? {end: start + match[0].length, text: decoded} : null
+}
+
+const getHtmlTagMatch = (value: string, start: number): {end: number; tagName: string} | null => {
+  const match = value.slice(start).match(/^<\/?\s*([a-zA-Z][a-zA-Z0-9:-]*)\b[^>]*>/)
+
+  return match ? {end: start + match[0].length, tagName: (match[1] ?? '').toLowerCase()} : null
+}
+
+const getEscapedHtmlTagMatch = (value: string, start: number): {end: number; tagName: string} | null => {
+  const match = value.slice(start).match(/^&lt;\/?\s*([a-zA-Z][a-zA-Z0-9:-]*)\b(?:(?!&gt;)[\s\S])*&gt;/)
+
+  return match ? {end: start + match[0].length, tagName: (match[1] ?? '').toLowerCase()} : null
+}
+
+const getClosingHtmlTagMatch = (value: string, start: number): {end: number} | null => {
+  const match = value.slice(start).match(/^<\/\s*[a-zA-Z][a-zA-Z0-9:-]*\s*>/)
+
+  return match ? {end: start + match[0].length} : null
+}
+
+const normalizeQuoteMatchChar = (value: string): string => {
+  return value
+    .replace(/[\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/g, ' ')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, '-')
+    .toLowerCase()
+}
+
+const appendNormalizedQuoteChar = (
+  normalized: NormalizedQuoteTextBuilder,
+  char: string,
+  start: number,
+  end: number,
+): NormalizedQuoteTextBuilder => {
+  normalized.spans.push({end, start})
+  normalized.text.push(char)
+
+  return normalized
+}
+
+const appendNormalizedQuoteText = (
+  normalized: NormalizedQuoteTextBuilder,
+  text: string,
+  start: number,
+  end: number,
+): NormalizedQuoteTextBuilder => {
+  const chars = Array.from(text).map((char) => {
+    return normalizeQuoteMatchChar(char)
+  })
+
+  return chars.reduce<NormalizedQuoteTextBuilder>((acc, char) => {
+    const isWhitespace = /\s/.test(char)
+    const normalizedChar = isWhitespace ? ' ' : char
+    const shouldSkip = isWhitespace && acc.text.at(-1) === ' '
+
+    return shouldSkip ? acc : appendNormalizedQuoteChar(acc, normalizedChar, start, end)
+  }, normalized)
+}
+
+const getNormalizedQuoteText = (value: string): NormalizedQuoteText => {
+  const normalized = Array.from(value.matchAll(quoteNormalizationTokenPattern)).reduce<NormalizedQuoteTextBuilder>(
+    (acc, match) => {
+      const token = match[0]
+      const start = match.index ?? 0
+      const end = start + token.length
+      const tagMatch = token.startsWith('<')
+        ? getHtmlTagMatch(token, 0)
+        : token.startsWith('&lt;')
+          ? getEscapedHtmlTagMatch(token, 0)
+          : null
+      const entityMatch = token.startsWith('&') ? getHtmlEntityMatch(token, 0) : null
+
+      return tagMatch && tagMatch.end === token.length
+        ? htmlBoundaryTags.has(tagMatch.tagName)
+          ? appendNormalizedQuoteText(acc, ' ', start, end)
+          : acc
+        : entityMatch && entityMatch.end === token.length
+          ? appendNormalizedQuoteText(acc, entityMatch.text, start, end)
+          : appendNormalizedQuoteText(acc, token, start, end)
+    },
+    {spans: [], text: []},
+  )
+  const text = normalized.text.join('')
+
+  return text.endsWith(' ') ? {spans: normalized.spans.slice(0, -1), text: text.trimEnd()} : {...normalized, text}
+}
+
+const extendQuoteSpanPastClosingTags = (recordText: string, end: number): number => {
+  const match = getClosingHtmlTagMatch(recordText, end)
+
+  return match ? extendQuoteSpanPastClosingTags(recordText, match.end) : end
+}
+
 const normalizeQuoteTextForMatch = (value: string): string => {
   return value.replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"')
+}
+
+const getNormalizedSourceQuoteMatch = (quote: string, recordText: string): string | null => {
+  const normalizedQuote = getNormalizedQuoteText(quote)
+  const normalizedRecordText = getNormalizedQuoteText(recordText)
+  const matchIndex = normalizedRecordText.text.indexOf(normalizedQuote.text)
+  const matchEndIndex = matchIndex + normalizedQuote.text.length - 1
+  const startSpan = matchIndex >= 0 ? normalizedRecordText.spans[matchIndex] : null
+  const endSpan = matchIndex >= 0 ? normalizedRecordText.spans[matchEndIndex] : null
+  const rawSourceMatch = startSpan && endSpan ? recordText.slice(startSpan.start, endSpan.end) : null
+  const sourceEnd =
+    endSpan && rawSourceMatch?.includes('<') ? extendQuoteSpanPastClosingTags(recordText, endSpan.end) : endSpan?.end
+
+  return startSpan && endSpan && sourceEnd !== undefined ? recordText.slice(startSpan.start, sourceEnd) : null
 }
 
 const getExactQuoteMatch = (quote: string, recordText: string, normalizedRecordText: string): string | null => {
@@ -907,7 +1081,10 @@ const getNormalizedQuoteSubstring = (
     return nextCandidate === value ? null : tryCandidate(nextCandidate)
   }
 
-  return tryCandidate(trimmedQuote)
+  return (
+    tryCandidate(trimmedQuote)
+    ?? (trimmedQuote.length > 0 ? getNormalizedSourceQuoteMatch(trimmedQuote, recordText) : null)
+  )
 }
 
 const getQuoteValidation = (quotes: string[], recordText: string): {valid: string[]; invalid: string[]} => {
@@ -916,6 +1093,12 @@ const getQuoteValidation = (quotes: string[], recordText: string): {valid: strin
   return quotes.reduce(
     (acc, quote) => {
       const rawQuote = String(quote ?? '')
+      const trimmedQuote = rawQuote.trim()
+
+      if (trimmedQuote.length === 0) {
+        return acc
+      }
+
       const normalizedQuote = getNormalizedQuoteSubstring(rawQuote, recordText, normalizedRecordText)
 
       return normalizedQuote === null
@@ -1875,7 +2058,7 @@ export const judgeSinglePrompt = async ({
           const rawQuotes = Array.isArray(judgment.quotes) ? judgment.quotes : []
           const quoteValidation = getQuoteValidation(rawQuotes, recordTextForQuoteValidation)
 
-          if (quoteValidation.invalid.length > 0 && attempts < MAX_RETRIES) {
+          if (quoteValidation.invalid.length > 0) {
             recordConnectionSuccess({
               effectiveBaseURL: currentResponse.baseURL,
               modelId,
@@ -1895,7 +2078,7 @@ export const judgeSinglePrompt = async ({
               completionTokens: currentResponse.usage.completionTokens,
               totalTokens: currentResponse.usage.totalTokens,
               outcome: 'failure',
-              error: 'Invalid quotes: not substrings of record text',
+              error: invalidSinglePromptQuoteError,
               sanitizationAttempted: false,
               sanitizedError: null,
               sanitizedResponse: null,
@@ -1906,13 +2089,23 @@ export const judgeSinglePrompt = async ({
             })
             errorCount += 1
 
-            finalUserPrompt = buildQuoteValidationRetryPrompt(
-              fittedFinal.userPrompt,
-              quoteValidation.invalid,
-              currentResponse.text,
-            )
             lastResponse = currentResponse.text
-            continue
+
+            if (attempts < MAX_RETRIES) {
+              finalUserPrompt = buildQuoteValidationRetryPrompt(
+                fittedFinal.userPrompt,
+                quoteValidation.invalid,
+                currentResponse.text,
+              )
+              continue
+            }
+
+            abortCount += 1
+            shouldRequeueError = shouldRequeueError ?? new JudgmentPersistenceError(invalidSinglePromptQuoteError)
+            console.error(
+              `${article.id} | Prompt ${prompt.id} | Aborting chunked final. ${invalidSinglePromptQuoteError}`,
+            )
+            break
           }
 
           const finalQuotes = dedupeStrings(quoteValidation.valid)

@@ -61,6 +61,18 @@ type TokenTimelineInterval = '1min' | '5min' | '15min' | '1h' | '24h' | '1w' | '
 type ModelInfo = {provider: string | null; modelName: string | null; version: string | null}
 type FailedRequestDetailRecord = Record<string, unknown>
 
+export class TokenUseIdempotencyConflictError extends Error {
+  id: string
+  mismatch: string
+
+  constructor({id, mismatch}: {id: string; mismatch: string}) {
+    super(`token use idempotency conflict for ${id}: ${mismatch} mismatch`)
+    this.name = 'TokenUseIdempotencyConflictError'
+    this.id = id
+    this.mismatch = mismatch
+  }
+}
+
 const getFailedRequestDetailRecord = (value: unknown): FailedRequestDetailRecord | null => {
   const parsedValue = typeof value === 'string' ? getJsonValue(value) : value
 
@@ -349,7 +361,7 @@ const assertTokenUseIdempotentConflictMatches = (
   const mismatch = getTokenUseConflictMismatch(existingRow, insertValues)
 
   if (mismatch) {
-    throw new Error(`token use idempotency conflict for ${existingRow.id}: ${mismatch} mismatch`)
+    throw new TokenUseIdempotencyConflictError({id: existingRow.id, mismatch})
   }
 }
 

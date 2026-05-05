@@ -5,12 +5,16 @@ import {dirname} from 'node:path'
 import {Database} from 'bun:sqlite'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-import {createJudgmentExecutionSnapshotsForClaims} from '../../services/judgmentExecutionSnapshotService.ts'
+import {
+  createJudgmentExecutionSnapshotsForClaims,
+  createTransientJudgmentExecutionSnapshotsForClaims,
+} from '../../services/judgmentExecutionSnapshotService.ts'
 import {getJudgmentJobSqliteHealthProjectionService} from '../../services/judgmentJobSqliteHealthProjectionService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../../utils/runtimeLogger.ts'
-import {registerDuckdbOwnerDemotionHandler} from '../../utils/serverRuntimeRole.ts'
+import {canCurrentServerOwnDuckdb, registerDuckdbOwnerDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import {
   acquireJudgmentJobLease,
   isJudgmentJobLeaseHeldError,
@@ -113,6 +117,7 @@ export type JobCursor = {lastDate: Date; lastArticleId: string; priorityBucket: 
 type QueueCountRow = {count: number; status: string}
 
 type QueuePromptRow = {articleId: string; id: string; promptId: string}
+type QueuePromptSnapshotSettings = {useFulltext: boolean; useFulltextNoImages: boolean}
 
 type QueuePromptInsert = {articleId: string; promptId: string}
 
@@ -121,6 +126,7 @@ type QueuePromptClaim = {
   claimId: string
   executionSnapshotHash: string
   executionSnapshotId: string
+  executionSnapshotPayload?: unknown
   jobId: string
   modelId: string
   projectId: string
@@ -1108,7 +1114,12 @@ const ensureOutboxClaimSchema = (database: Database) => {
   addMissingJudgmentOutboxColumns(database, missingIdentityColumns)
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_judgment_outbox_claim
-      ON judgment_outbox(exported_at, export_claimed_at, outbox_seq)
+      ON judgment_outbox(exported_at, export_claimed_at, outbox_seq);
+    CREATE INDEX IF NOT EXISTS idx_judgment_outbox_legacy_repair
+      ON judgment_outbox(outbox_seq)
+      WHERE request_attempts_json IS NULL
+         OR TRIM(request_attempts_json) IN ('', '[]', 'null')
+         OR TRIM(request_attempts_json) NOT LIKE '[%';
   `)
 }
 
@@ -1208,6 +1219,13 @@ const ensureCompletionAckSchema = (database: Database) => {
   })
 
   addMissingCompletionAckColumns(database, missingColumns)
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_completion_ack_legacy_repair
+      ON completion_ack(completed_at, claim_id)
+      WHERE request_attempts_json IS NULL
+         OR TRIM(request_attempts_json) IN ('', '[]', 'null')
+         OR TRIM(request_attempts_json) NOT LIKE '[%';
+  `)
 }
 
 const getStoredScanState = (database: Database, jobId: string) => {
@@ -2241,6 +2259,12 @@ const getLegacyProviderKey = (modelProvider: string | null): string => {
   return modelProvider && modelProvider.trim().length > 0 ? `legacy:${modelProvider}` : 'legacy:unknown'
 }
 
+const getLegacyRepairCandidateWhereSql = (alias: string): string => {
+  const column = `${alias}.request_attempts_json`
+
+  return `(${column} IS NULL OR TRIM(${column}) IN ('', '[]', 'null') OR TRIM(${column}) NOT LIKE '[%')`
+}
+
 const getLegacyOutboxRepairRows = (database: Database): LegacyOutboxRepairRow[] => {
   return database
     .query(
@@ -2259,6 +2283,7 @@ const getLegacyOutboxRepairRows = (database: Database): LegacyOutboxRepairRow[] 
           ji.model_provider AS modelProvider
         FROM judgment_outbox jo
         LEFT JOIN job_info ji ON ji.job_id = jo.job_id
+        WHERE ${getLegacyRepairCandidateWhereSql('jo')}
         ORDER BY jo.outbox_seq ASC
       `,
     )
@@ -2283,6 +2308,7 @@ const getLegacyCompletionAckRepairRows = (database: Database): LegacyCompletionA
         FROM completion_ack ca
         LEFT JOIN queue_prompt qp ON qp.id = ca.queue_prompt_id AND qp.job_id = ca.job_id
         LEFT JOIN job_info ji ON ji.job_id = ca.job_id
+        WHERE ${getLegacyRepairCandidateWhereSql('ca')}
         ORDER BY ca.completed_at ASC, ca.claim_id ASC
       `,
     )
@@ -3134,6 +3160,28 @@ const getReadyQueuePromptRows = (database: Database, limit: number): QueuePrompt
     .all(new Date().toISOString(), limit) as QueuePromptRow[]
 }
 
+const getQueuePromptSnapshotSettings = (database: Database, jobId: string): QueuePromptSnapshotSettings | null => {
+  const row = database
+    .query(
+      `
+        SELECT
+          use_fulltext AS useFulltext,
+          use_fulltext_no_images AS useFulltextNoImages
+        FROM job_info
+        WHERE job_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(jobId) as {useFulltext: number; useFulltextNoImages: number} | null
+
+  return row
+    ? {
+        useFulltext: toBoolean(row.useFulltext),
+        useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+      }
+    : null
+}
+
 const markReadyQueuePromptClaimed = ({
   claim,
   database,
@@ -3169,10 +3217,14 @@ const markReadyQueuePromptClaimed = ({
 }
 
 const claimReadyQueuePromptRows = async ({
+  database,
+  ensureLease = true,
   jobId,
   rows,
   serverJobId,
 }: {
+  database: Database
+  ensureLease?: boolean
   jobId: string
   rows: QueuePromptRow[]
   serverJobId: string
@@ -3184,27 +3236,32 @@ const claimReadyQueuePromptRows = async ({
   const rowClaims = rows.map((row) => {
     return {claimId: randomUUID(), row}
   })
-  const snapshots = await createJudgmentExecutionSnapshotsForClaims(
-    rowClaims.map(({claimId, row}) => {
-      return {
-        articleId: row.articleId,
-        claimId,
-        claimedBy: serverJobId,
-        jobId,
-        promptId: row.promptId,
-        queueRecordId: row.id,
-      }
-    }),
-  )
+  const snapshotSettings = getQueuePromptSnapshotSettings(database, jobId)
+  const snapshotRequests = rowClaims.map(({claimId, row}) => {
+    return {
+      articleId: row.articleId,
+      claimId,
+      claimedBy: serverJobId,
+      jobId,
+      promptId: row.promptId,
+      queueRecordId: row.id,
+      ...(snapshotSettings ?? {}),
+    }
+  })
+  const snapshots = ensureLease
+    ? await createJudgmentExecutionSnapshotsForClaims(snapshotRequests)
+    : await createTransientJudgmentExecutionSnapshotsForClaims(
+        snapshotRequests,
+        getJudgeWorkerReadOnlyAppDatabaseService(),
+      )
 
-  await ensureOwnedJobLease(jobId, serverJobId)
-  const database = getOpenDatabase(jobId, false)
-
-  if (!database) {
-    return []
+  if (ensureLease) {
+    await ensureOwnedJobLease(jobId, serverJobId)
   }
 
   return database.transaction(() => {
+    recordJudgeWorkerHeartbeatFromDatabase(database, serverJobId)
+
     return rowClaims.flatMap(({claimId, row}, index) => {
       const snapshot = snapshots[index]
 
@@ -3874,10 +3931,32 @@ const sqliteService = {
         return []
       }
 
-      return await claimReadyQueuePromptRows({jobId, rows: getReadyQueuePromptRows(database, limit), serverJobId})
+      return await claimReadyQueuePromptRows({
+        database,
+        jobId,
+        rows: getReadyQueuePromptRows(database, limit),
+        serverJobId,
+      })
     } finally {
       finishOwnedJobLeaseOperation(jobId)
     }
+  },
+  claimReadyPromptsWithoutLease: async (
+    jobId: string,
+    serverJobId: string,
+    limit: number,
+  ): Promise<QueuePromptClaim[]> => {
+    const database = getOpenDatabase(jobId, false)
+
+    return database
+      ? claimReadyQueuePromptRows({
+          database,
+          ensureLease: false,
+          jobId,
+          rows: getReadyQueuePromptRows(database, limit),
+          serverJobId,
+        })
+      : []
   },
   clearActiveQueue: async (jobId: string) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
@@ -4122,6 +4201,10 @@ const sqliteService = {
 
     if (!storedJobInfo) {
       return null
+    }
+
+    if (!canCurrentServerOwnDuckdb()) {
+      return storedJobInfo
     }
 
     const latestRuntimeInfo = await getLatestRuntimeInfoForModel(storedJobInfo.modelId)
@@ -4924,6 +5007,66 @@ const sqliteService = {
           })
         : undefined
     })
+  },
+  markPromptAsRetryWithoutLease: async (
+    jobId: string,
+    recordId: string,
+    retryAfterMs: number | null = null,
+    completionAck?: PromptCompletionAck,
+  ) => {
+    const database = getOpenDatabase(jobId, false)
+
+    if (!database) {
+      return undefined
+    }
+
+    const now = new Date().toISOString()
+    const retryAfterAt = retryAfterMs && retryAfterMs > 0 ? new Date(Date.now() + retryAfterMs).toISOString() : null
+
+    database.transaction(() => {
+      const nextReadyInsertSeq = Number(
+        (
+          database
+            .query(
+              `
+                SELECT COALESCE(MAX(ready_insert_seq), 0) + 1 AS nextReadyInsertSeq
+                FROM queue_prompt
+              `,
+            )
+            .get() as {nextReadyInsertSeq: number | null} | null
+        )?.nextReadyInsertSeq ?? 1,
+      )
+
+      database
+        .query(
+          `
+          UPDATE queue_prompt
+          SET status = 'ready',
+              sent_at = NULL,
+              retry_after_at = ?,
+              updated_at = ?,
+              claim_id = NULL,
+              execution_snapshot_id = NULL,
+              execution_snapshot_hash = NULL,
+              ready_insert_seq = ?
+          WHERE id = ?
+        `,
+        )
+        .run(retryAfterAt, now, nextReadyInsertSeq, recordId)
+
+      if (completionAck) {
+        recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
+      }
+    })()
+
+    return completionAck
+      ? compactQueuePromptManifestCloseoutFromDatabase({
+          database,
+          jobId,
+          queueRecordId: completionAck.queuePromptId,
+          requestAttemptsJson: completionAck.requestAttemptsJson,
+        })
+      : undefined
   },
   consumePromptExtraRetry: async ({
     errorCode,

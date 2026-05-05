@@ -73,12 +73,13 @@ import {
   getProjectMartLargeRebuildScopeProgress,
   isArticleScopedLargeRebuildPhase,
 } from '../services/projectMartLargeRebuildProgressService.ts'
-import {getTokenUseQueryService} from '../services/tokenUseQueryService.ts'
+import {getTokenUseQueryService, TokenUseIdempotencyConflictError} from '../services/tokenUseQueryService.ts'
 import {
   getDuckdbOwnerConnectionProxyHeaders,
   getDuckdbOwnerConnectionsOverview,
 } from '../utils/duckdbOwnerConnections.ts'
 import {HttpError} from '../utils/httpError.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {probeDuckdbOwnerCutoverCompatibility} from '../utils/runtimeCutover.ts'
 import {
@@ -91,6 +92,7 @@ import {
 import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 
 const judgmentJobServerId = getDefaultJudgmentServerJobId()
+const judgmentsJobsLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 
 type JudgmentJobMutationState = {
   error: unknown
@@ -356,9 +358,11 @@ type JudgmentWorkerHeartbeatBody = {claimedBy?: string; jobIds?: string[]}
 type JudgmentSnapshotQuery = {executionSnapshotHash?: string; hash?: string}
 const unassessedCountTTLms = 10_000
 const abandonedClaimGraceMs = 30_000
+const ownerBackedClaimRecoveryIntervalMs = 15_000
 const staleImportThresholdMs = 15 * 60 * 1_000
 const largeWalThresholdBytes = 64 * 1_024 * 1_024
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
+const ownerBackedClaimRecoveryCheckedAt = new Map<string, number>()
 const systemSqliteFallbackStepsSchema = t.Array(
   t.Union([t.Literal('checkpoint'), t.Literal('diagnostic'), t.Literal('export')]),
 )
@@ -520,6 +524,56 @@ const getJudgmentJobsOwnerProxyData = async <T>(request: Request): Promise<T | n
 
 const getNormalizedClaimLimit = (limit: number | null | undefined) => {
   return Number.isFinite(limit) ? Math.max(0, Math.floor(limit ?? 0)) : 1
+}
+
+const getOwnerBackedClaimRecoveryKey = (jobId: string, claimedBy: string) => {
+  return `${jobId}:${claimedBy}`
+}
+
+const shouldRunOwnerBackedClaimRecovery = (jobId: string, claimedBy: string) => {
+  const key = getOwnerBackedClaimRecoveryKey(jobId, claimedBy)
+  const now = Date.now()
+  const checkedAt = ownerBackedClaimRecoveryCheckedAt.get(key) ?? 0
+  const shouldRun = now - checkedAt >= ownerBackedClaimRecoveryIntervalMs
+
+  if (shouldRun) {
+    ownerBackedClaimRecoveryCheckedAt.set(key, now)
+  }
+
+  return shouldRun
+}
+
+const getRouteErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
+}
+
+const startOwnerBackedClaimRecovery = ({
+  claimedBy,
+  jobId,
+  protectedRecordIds,
+}: {
+  claimedBy: string
+  jobId: string
+  protectedRecordIds?: string[]
+}) => {
+  if (!shouldRunOwnerBackedClaimRecovery(jobId, claimedBy)) {
+    return
+  }
+
+  void getJudgmentJobSqliteService()
+    .requeueAbandonedSentPrompts({
+      jobId,
+      serverJobId: claimedBy,
+      staleBefore: new Date(Date.now() - abandonedClaimGraceMs),
+      ...(protectedRecordIds !== undefined ? {protectedRecordIds} : {}),
+    })
+    .catch((error) => {
+      console.warn('[judgmentsJobs] owner-backed claim recovery failed', {
+        claimedBy,
+        error: getRouteErrorMessage(error),
+        jobId,
+      })
+    })
 }
 
 const getOwnerBackedRunningJudgmentJobs = async (): Promise<RunningJudgmentJob[]> => {
@@ -706,15 +760,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
 
 const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequestBody | undefined) => {
   const claimedBy = body?.claimedBy ?? judgmentJobServerId
-  const requeueInput = {
-    jobId,
-    serverJobId: claimedBy,
-    staleBefore: new Date(Date.now() - abandonedClaimGraceMs),
-    ...(body?.protectedRecordIds !== undefined ? {protectedRecordIds: body.protectedRecordIds} : {}),
-  }
-
-  await getJudgmentJobSqliteService().recordWorkerHeartbeat(jobId, claimedBy)
-  await getJudgmentJobSqliteService().requeueAbandonedSentPrompts(requeueInput)
+  startOwnerBackedClaimRecovery({claimedBy, jobId, protectedRecordIds: body?.protectedRecordIds})
 
   const claims = await getJudgmentJobSqliteService().claimReadyPrompts(
     jobId,
@@ -867,6 +913,36 @@ const applyCompletionTokenUseOnce = async (body: JudgmentCompletionBody): Promis
   return tokenUseId
 }
 
+const logAcceptedCompletionTokenUseConflict = (
+  body: JudgmentCompletionBody,
+  error: TokenUseIdempotencyConflictError,
+): void => {
+  judgmentsJobsLogger.warn(
+    `judgmentsJobs:completion-token-use-conflict:${body.claimId}`,
+    '[judgmentsJobs] completion token use replay conflict ignored after accepted completion',
+    {
+      claimId: body.claimId,
+      jobId: body.jobId,
+      mismatch: error.mismatch,
+      queueRecordId: body.queueRecordId,
+      tokenUseId: error.id,
+    },
+  )
+}
+
+const applyAcceptedCompletionTokenUseOnce = async (body: JudgmentCompletionBody): Promise<string | null> => {
+  try {
+    return await applyCompletionTokenUseOnce(body)
+  } catch (error) {
+    if (error instanceof TokenUseIdempotencyConflictError) {
+      logAcceptedCompletionTokenUseConflict(body, error)
+      return getCompletionTokenUseIdOrNull(body)
+    }
+
+    throw error
+  }
+}
+
 const getExistingCompletionAckResponse = async (jobId: string, body: JudgmentCompletionBody) => {
   const existingAck = await getJudgmentJobSqliteService().getPromptCompletionAck(jobId, body.claimId)
 
@@ -880,7 +956,7 @@ const getExistingCompletionAckResponse = async (jobId: string, body: JudgmentCom
     throw new HttpError(409, 'snapshot identity mismatch for replayed judgment completion')
   }
 
-  await applyCompletionTokenUseOnce(body)
+  await applyAcceptedCompletionTokenUseOnce(body)
 
   return {
     data: {claimId: body.claimId, queueRecordId: existingAck.queuePromptId, status: existingAck.status},
@@ -913,7 +989,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
       requestAttemptsJson: completionAckRequestAttemptsJson,
       tokenUseId,
     })
-    await applyCompletionTokenUseOnce(body)
+    await applyAcceptedCompletionTokenUseOnce(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'retry'}, error: null}
   }
 
@@ -930,7 +1006,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
         tokenUseId,
       },
     )
-    await applyCompletionTokenUseOnce(body)
+    await applyAcceptedCompletionTokenUseOnce(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'skipped'}, error: null}
   }
 
@@ -942,7 +1018,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
       requestAttemptsJson: completionAckRequestAttemptsJson,
       tokenUseId,
     })
-    await applyCompletionTokenUseOnce(body)
+    await applyAcceptedCompletionTokenUseOnce(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'failed'}, error: null}
   }
 
@@ -980,7 +1056,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
     useFulltextNoImages: body.useFulltextNoImages,
     useTitle: body.useTitle,
   })
-  await applyCompletionTokenUseOnce(body)
+  await applyAcceptedCompletionTokenUseOnce(body)
 
   return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}, error: null}
 }
