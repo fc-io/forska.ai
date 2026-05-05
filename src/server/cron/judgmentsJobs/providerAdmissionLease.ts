@@ -860,6 +860,24 @@ export const getProviderAdmissionLeaseTelemetry = async ({
   nowMs?: number
   providerKey: string
 }): Promise<ProviderAdmissionLeaseTelemetry> => {
+  if (shouldUseLocalProviderAdmissionLeaseStore()) {
+    const activeLeases = getActiveProviderLeases(providerKey, getNormalizedTimestampMs(nowMs))
+    const providerLeasedLiveRequests = activeLeases.filter((lease) => {
+      return lease.leaseKind === 'request'
+    }).length
+    const providerLeasedProbeCalls = activeLeases.filter((lease) => {
+      return lease.leaseKind === 'probe'
+    }).length
+
+    return {
+      providerKey,
+      providerLeasedLiveRequests,
+      providerLeasedProbeCalls,
+      providerProbeOccupancyVersion: getProviderProbeOccupancyVersion({providerKey, providerLeasedProbeCalls}),
+      sampledAtMs: getNormalizedTimestampMs(nowMs),
+    }
+  }
+
   const now = getDateFromMs(getNormalizedTimestampMs(nowMs))
   const [requestRow, probeRow] = await Promise.all([
     getAppDatabaseService().queryJson<{leaseCount: number | string | bigint}>(`
@@ -1513,7 +1531,7 @@ export const acquireProviderAdmissionLeaseThroughOwner = async (
   input: ProviderAdmissionLeaseAcquireInput,
 ): Promise<ProviderAdmissionLeaseAcquireResult> => {
   return shouldUseLocalProviderAdmissionLeaseStore()
-      ? acquireProviderAdmissionLease(input)
+    ? acquireProviderAdmissionLease(input)
     : canCurrentServerOwnDuckdb()
       ? acquireProviderAdmissionLeaseOnCurrentOwner(input)
       : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseAcquireResult>({body: input, path: '/acquire'})
@@ -1567,7 +1585,7 @@ export const heartbeatProviderAdmissionLeaseThroughOwner = async (
   input: ProviderAdmissionLeaseHeartbeatInput,
 ): Promise<ProviderAdmissionLeaseHeartbeatResult> => {
   return shouldUseLocalProviderAdmissionLeaseStore()
-      ? heartbeatProviderAdmissionLease(input)
+    ? heartbeatProviderAdmissionLease(input)
     : canCurrentServerOwnDuckdb()
       ? heartbeatProviderAdmissionLeaseOnCurrentOwner(input)
       : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseHeartbeatResult>({body: input, path: '/heartbeat'})
@@ -1614,7 +1632,7 @@ export const releaseProviderAdmissionLeaseWithResultThroughOwner = async (
   input: ProviderAdmissionLeaseReleaseInput,
 ): Promise<ProviderAdmissionLeaseReleaseResult> => {
   return shouldUseLocalProviderAdmissionLeaseStore()
-      ? releaseProviderAdmissionLeaseWithResult(input)
+    ? releaseProviderAdmissionLeaseWithResult(input)
     : canCurrentServerOwnDuckdb()
       ? releaseProviderAdmissionLeaseWithResultOnCurrentOwner(input)
       : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseReleaseResult>({body: input, path: '/release-result'})
@@ -1624,7 +1642,7 @@ export const releaseProviderAdmissionLeaseThroughOwner = async (
   input: ProviderAdmissionLeaseReleaseInput,
 ): Promise<boolean> => {
   return shouldUseLocalProviderAdmissionLeaseStore()
-      ? releaseProviderAdmissionLease(input)
+    ? releaseProviderAdmissionLease(input)
     : canCurrentServerOwnDuckdb()
       ? releaseProviderAdmissionLeaseOnCurrentOwner(input)
       : requestProviderAdmissionLeaseOwner<boolean>({body: input, path: '/release'})

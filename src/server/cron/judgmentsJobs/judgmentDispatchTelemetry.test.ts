@@ -254,6 +254,46 @@ test('aggregates fresh judge-worker telemetry when this process does not judge',
   expect(fetchWorkerTelemetry).toHaveBeenCalledTimes(2)
 })
 
+test('uses fresh worker local lease telemetry when owner authority reports no live leases', async () => {
+  const records = [createJudgingRecord(), createJudgingRecord({instanceId: 'judge-worker-b', listenPort: 3004})]
+  const fetchWorkerTelemetry = mock(async (record: DuckdbOwnerConnectionRecord) => {
+    return record.listenPort === 3003
+      ? createSnapshot({
+          provider: {localProviderLiveRequests: 15, providerLeasedLiveRequests: 15, providerLeasedPhysicalCalls: 15},
+          request: {inFlight: 15},
+        })
+      : createSnapshot({
+          provider: {localProviderLiveRequests: 4, providerLeasedLiveRequests: 4, providerLeasedPhysicalCalls: 4},
+          request: {inFlight: 4},
+        })
+  })
+
+  const telemetry = await getAggregatedJudgmentDispatchTelemetry(input, {
+    fetchWorkerTelemetry,
+    getJudgingWorkerRecords: async () => {
+      return records
+    },
+    getLocalTelemetry: async () => {
+      return createSnapshot({request: {inFlight: 0, pendingPersistedAttempts: 0}})
+    },
+    shouldUseLocalTelemetryOnly: () => {
+      return false
+    },
+  })
+
+  expect(telemetry.provider).toMatchObject({
+    leaseAuthority: {
+      providerAvailableRequestLeases: 1,
+      providerLeasedLiveRequests: 19,
+      providerLeasedPhysicalCalls: 19,
+      providerRequestFillPct: 95,
+    },
+    providerAvailableRequestLeases: 1,
+    providerLeasedLiveRequests: 19,
+    providerLeasedPhysicalCalls: 19,
+  })
+})
+
 test('falls back to local telemetry when judge-worker telemetry is unavailable', async () => {
   const localTelemetry = createSnapshot({
     dispatch: {jobActivePrompts: 0, providerDispatchActivePromptLimit: 20, providerDispatchQueueLimit: 20},

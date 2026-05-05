@@ -3,6 +3,7 @@ import {afterEach, expect, test} from 'bun:test'
 import {
   acquireProviderAdmissionLease,
   acquireProviderAdmissionLeaseThroughOwner,
+  getProviderAdmissionLeaseTelemetry,
   getProviderAdmissionLeaseTiming,
   getProviderAdmissionProbeLeaseIdentity,
   getProviderAdmissionRequestLeaseIdentity,
@@ -71,6 +72,11 @@ test('judge workers use local provider admission leases instead of owner RPCs', 
     })
 
     expect(acquire.acquired).toBe(true)
+    expect(await getProviderAdmissionLeaseTelemetry({providerKey: snapshot.providerKey})).toMatchObject({
+      providerKey: snapshot.providerKey,
+      providerLeasedLiveRequests: 1,
+      providerLeasedProbeCalls: 0,
+    })
     expect(
       await heartbeatProviderAdmissionLeaseThroughOwner({
         holderToken: 'holder-local-owner-backed',

@@ -277,6 +277,9 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     return customRange() !== null
   })
   const maxSelectableDate = fromDate(getTokenUsageTimelineEndOfDay(new Date()), timeZone)
+  const timelineTitle = createMemo(() => {
+    return props.allJobs ? 'Token Usage Timeline' : 'Project Token Usage Timeline'
+  })
 
   const lowerIntervalMap: Record<Exclude<TimeInterval, '1min'>, TimeInterval> = {
     '5min': '1min',
@@ -647,7 +650,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
         <div class="flex justify-between items-center mb-4">
           <div>
             <div class="flex items-center gap-2">
-              <h2 class="text-lg font-semibold text-gray-900">Token Usage Timeline</h2>
+              <h2 class="text-lg font-semibold text-gray-900">{timelineTitle()}</h2>
             </div>
             <div>
               <TokenUsageTimelineStats

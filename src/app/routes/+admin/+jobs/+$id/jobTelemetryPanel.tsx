@@ -88,6 +88,17 @@ const getEndpointIdentityText = (endpoint: EndpointDiagnostics): string => {
   return endpoint.endpointIdentity ?? endpoint.effectiveBaseURL ?? endpoint.endpointAvailabilityKey
 }
 
+const getLeaseObservedMismatchMessage = (provider: JudgmentJobProviderTelemetry): string | null => {
+  const leasedLiveRequests = provider.leaseAuthority.providerLeasedLiveRequests
+  const observedLiveRequests = provider.observedBestEffort.providerLiveRequests
+
+  return leasedLiveRequests === 0 && observedLiveRequests > 0
+    ? `Observed worker telemetry reports ${formatTelemetryCount(
+        observedLiveRequests,
+      )} live requests, but the admission lease snapshot reports 0. Treat the lease snapshot as stale or incomplete until the next refresh catches up.`
+    : null
+}
+
 export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element => {
   const providerTelemetry = () => {
     return props.requestStats?.providerTelemetry
@@ -120,14 +131,14 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
 
             <div class="mt-6 grid gap-6 xl:grid-cols-3">
               <TelemetrySection
-                description="Lease-authoritative provider capacity for live remote LLM HTTP requests."
-                title="Lease Authority"
+                description="Admission lease snapshot for live remote LLM HTTP requests."
+                title="Admission Lease Snapshot"
               >
                 <div class="grid gap-3">
                   <TelemetryMetric
                     description={`Provider key: ${provider().leaseAuthority.providerKey}`}
                     tone="blue"
-                    label="Remote LLM Requests"
+                    label="Leased Remote Requests"
                   >
                     {formatTelemetryRatio(
                       provider().leaseAuthority.providerLeasedLiveRequests,
@@ -169,6 +180,15 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                     {formatTelemetryPercent(provider().leaseAuthority.providerRequestFillPct)}
                   </TelemetryMetric>
                 </div>
+                <Show when={getLeaseObservedMismatchMessage(provider())}>
+                  {(message) => {
+                    return (
+                      <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                        {message()}
+                      </div>
+                    )
+                  }}
+                </Show>
               </TelemetrySection>
 
               <TelemetrySection

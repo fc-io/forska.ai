@@ -1923,6 +1923,23 @@ const getProviderTargetAllocationSnapshotForTelemetry = ({
   source: JudgmentTelemetrySourceMetadata
   unavailableWorkerIds: string[]
 }): ProviderTargetAllocationSnapshot => {
+  const workerLeaseCounts = snapshots.reduce(
+    (counts, snapshot) => {
+      return {
+        providerLeasedLiveRequests: counts.providerLeasedLiveRequests + snapshot.provider.providerLeasedLiveRequests,
+        providerLeasedProbeCalls: counts.providerLeasedProbeCalls + snapshot.provider.providerLeasedProbeCalls,
+      }
+    },
+    {providerLeasedLiveRequests: 0, providerLeasedProbeCalls: 0},
+  )
+  const providerLeasedLiveRequests =
+    authorityProvider.providerLeasedLiveRequests === 0 && workerLeaseCounts.providerLeasedLiveRequests > 0
+      ? workerLeaseCounts.providerLeasedLiveRequests
+      : authorityProvider.providerLeasedLiveRequests
+  const providerLeasedProbeCalls =
+    authorityProvider.providerLeasedProbeCalls === 0 && workerLeaseCounts.providerLeasedProbeCalls > 0
+      ? workerLeaseCounts.providerLeasedProbeCalls
+      : authorityProvider.providerLeasedProbeCalls
   const unavailableWorkers = shouldAllocateUnavailableWorkerTelemetry(authorityProvider)
     ? unavailableWorkerIds.map((workerId) => {
         return getUnavailableProviderTargetAllocationWorkerInput({authorityProvider, workerId})
@@ -1932,8 +1949,8 @@ const getProviderTargetAllocationSnapshotForTelemetry = ({
   return getProviderTargetAllocationSnapshot({
     probeOccupancySampledAtMs: authorityProvider.probeOccupancySampledAtMs,
     providerKey: authorityProvider.providerKey,
-    providerLeasedLiveRequests: authorityProvider.providerLeasedLiveRequests,
-    providerLeasedProbeCalls: authorityProvider.providerLeasedProbeCalls,
+    providerLeasedLiveRequests,
+    providerLeasedProbeCalls,
     providerLimit: authorityProvider.providerLimit,
     providerLimitVersion: authorityProvider.providerLimitVersion,
     providerProbeOccupancyVersion: authorityProvider.providerProbeOccupancyVersion,
