@@ -8,10 +8,10 @@ Make the job detail page more compact and easier to debug by ordering visible in
 
 1. Job Header
    - Show project link, full job ID, job status, storage state, created/updated timestamps, project ID, and primary lifecycle actions in one compact header.
-   - Keep runtime warnings near the header so start blockers are immediately visible.
+   - Keep `RuntimeModelNotice`, judging-runtime warnings, action errors/notices, and resume-blocked guidance near the header so start blockers are immediately visible.
 
 2. Work Definition
-   - Show provider connection, current request-level LLM call limit, model/runtime notice, unassessed article count, and token totals.
+   - Show provider connection, current request-level LLM call limit, unassessed article count, and token totals.
    - Purpose: clarify what this job is trying to process before showing execution state.
 
 3. Pipeline Summary
@@ -19,15 +19,16 @@ Make the job detail page more compact and easier to debug by ordering visible in
    - Show request indicators nearby: Live request calls, Attempts, Failed attempts, Anthropic refusals.
 
 4. Request And Capacity Debug
-   - Group worker slots, queued prompts, provider prefetch fill, request-slot waiters, lifecycle counters, and request-work backlog.
+   - Group worker prompt slots, worker queued prompts, prompt prefetch fill, request-slot waiters, lifecycle counters, local prompt backlog, and request-work backlog.
    - Purpose: explain whether the job is executing, waiting locally, or blocked by capacity.
 
 5. Provider Capacity Telemetry
    - Keep all telemetry visible, but make cards denser.
-   - Order sections as: Lease Authority, Local Worker Diagnostics, Observed Aggregate Telemetry, Bottleneck Metadata, Allocation/Convergence, Endpoint Diagnostics.
+   - Order sections as: Admission Lease Snapshot, Local Worker Diagnostics, Observed Aggregate Telemetry, Allocation State And Convergence, Bottleneck Source Metadata, Endpoint Diagnostics.
+   - Preserve endpoint diagnostics, provider coverage, lease/observed mismatch warning, allocation versions, convergence preconditions, bottleneck/subreason/source metadata, and lifecycle counters.
 
 6. Storage And Import Flow
-   - Order storage fields by recovery path: storage policy, SQLite/WAL size, outbox/claimed/retained/pending ACK, recent transfer flow, oldest unexported/ACK age, projected drain, import success/failure details.
+   - Order storage fields by recovery path: storage policy, SQLite/WAL size, outbox/claimed/retained/pending ACK, orphaned local queue, recent transfer flow, oldest unexported/ACK age, projected drain, import success/failure details, and quarantine reason.
    - Move lease host, PID, lease ID, server job, port, and heartbeat under a compact Runtime Lease subsection.
 
 7. Recovery And Danger Actions
@@ -35,8 +36,8 @@ Make the job detail page more compact and easier to debug by ordering visible in
    - Keep delete separated as a danger action.
 
 8. Errors And Timeline
-   - Show errors near the top when present.
-   - Keep token timeline visible lower on the page, after live/debug state.
+   - Move job errors near the top when present, below immediate start/runtime blockers and above detailed debug sections.
+   - Move token timeline lower on the page, after live/debug state and before danger actions.
 
 ## Compactness Changes
 
@@ -54,14 +55,21 @@ No underlying stats or indicators will be removed from the page. Only duplicate 
 - Remove Live request LLM calls from Job Queue because it remains in Request Activity and Provider Capacity Telemetry.
 - Remove Worker prompt slots from Job Queue because it remains in Request Activity and lifecycle counters.
 - Remove Worker queued prompts from Job Queue because it remains in Request Activity and lifecycle counters.
-- Remove duplicate standalone Project ID display if it is already shown in the compact header metadata.
-- Remove duplicate standalone Created and Last Updated cards if they are already shown in the compact header metadata.
+- Consolidate Project ID, Created, and Last Updated into compact header metadata instead of repeating them in separate large metadata blocks.
 - Keep token totals in one place only, under Work Definition.
+
+## Test Updates
+
+- Update telemetry e2e assertions to match the final section headings, especially `Admission Lease Snapshot` versus the older `Lease Authority` label.
+- Keep list-page behavior unchanged except for any compactness checks needed by this plan.
+- For shared app UI changes, verify the browser/web path and ensure the desktop build still compiles.
 
 ## Quality Gates
 
 - `bun run lint`
 - `bun run build`
+- `bun run desktop:build`
 - `bun test src/app/routes/+admin/+jobs/jobsPageShared.test.ts`
+- `bunx playwright test tests/e2e/adminJudgmentJobTelemetry.spec.ts tests/e2e/adminJudgmentJobTelemetryWebFlow.spec.ts`
 - Browser check `/admin/jobs/:id` on desktop and mobile widths.
 - Browser check `/admin/jobs` to ensure the list remains compact and usable.
