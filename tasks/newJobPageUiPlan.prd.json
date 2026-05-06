@@ -83,11 +83,12 @@
         "Browser check `/admin/jobs` verifies the list remains compact and usable"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-002"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-004",
@@ -182,6 +183,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-05-06T19:01:46.308Z"
+    "updatedAt": "2026-05-06T19:09:06.355Z"
   }
 }

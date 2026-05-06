@@ -74,16 +74,6 @@ const TelemetrySection = (props: TelemetrySectionProps): JSX.Element => {
   )
 }
 
-const getRequestSlotWaiterText = (requestStats: Partial<JudgmentJobRequestStats> | undefined): string => {
-  const waiters = requestStats?.requestSlotWaiters
-
-  return waiters
-    ? `provider ${formatTelemetryCount(waiters.providerAdmission)}, worker ${formatTelemetryCount(
-        waiters.worker,
-      )}, Codex ${formatTelemetryCount(waiters.codex)}, fallback ${formatTelemetryCount(waiters.fallback)}`
-    : 'N/A'
-}
-
 const getEndpointIdentityText = (endpoint: EndpointDiagnostics): string => {
   return endpoint.endpointIdentity ?? endpoint.effectiveBaseURL ?? endpoint.endpointAvailabilityKey
 }
@@ -228,12 +218,6 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                     <span>{formatTelemetryCount(provider().localAdditionalTargetHeadroom)} target</span>
                     <span class="mx-1 text-gray-400">/</span>
                     <span>{formatTelemetryCount(provider().localAdditionalLeaseHeadroom)} lease</span>
-                  </TelemetryMetric>
-                  <TelemetryMetric
-                    description="Waiters are grouped by the capacity surface they are blocked on."
-                    label="Request Slot Waiters"
-                  >
-                    {getRequestSlotWaiterText(requestStats())}
                   </TelemetryMetric>
                 </div>
               </TelemetrySection>

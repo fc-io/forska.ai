@@ -45,6 +45,7 @@ test('admin job detail web flow explains provider telemetry bottleneck states', 
 
       await expect(page.getByRole('heading', {name: 'Job'})).toBeVisible()
       await expect(page.getByRole('heading', {name: 'Provider Capacity Telemetry'})).toBeVisible()
+      await expect(page.getByRole('heading', {name: 'Request And Capacity Debug'})).toBeVisible()
       await expect(page.getByText(telemetryScenario.label)).toBeVisible()
       await expect(page.getByText(telemetryScenario.description)).toBeVisible()
       await expect(page.getByText('Bottleneck Source Metadata')).toBeVisible()
