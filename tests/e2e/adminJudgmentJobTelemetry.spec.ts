@@ -14,7 +14,7 @@ test('admin job telemetry separates lease authority, observed aggregates, and lo
     await page.goto(`/admin/jobs/${job.id}`)
 
     await expect(page.getByRole('heading', {name: 'Provider Capacity Telemetry'})).toBeVisible()
-    await expect(page.getByRole('heading', {name: 'Lease Authority'})).toBeVisible()
+    await expect(page.getByRole('heading', {name: 'Admission Lease Snapshot'})).toBeVisible()
     await expect(page.getByRole('heading', {name: 'Local Worker Diagnostics'})).toBeVisible()
     await expect(page.getByRole('heading', {name: 'Observed Aggregate Telemetry'})).toBeVisible()
     await expect(page.getByText('Observed aggregates: best-effort partial')).toBeVisible()

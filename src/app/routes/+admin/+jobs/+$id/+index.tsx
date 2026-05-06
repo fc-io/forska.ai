@@ -441,8 +441,8 @@ const AdminJudgmentJobDetail = () => {
   // console.log('job.data type:', typeof job, Array.isArray(job))
 
   return (
-    <div class="min-h-screen bg-gray-50 p-6">
-      <div class="max-w-4xl mx-auto">
+    <div class="min-h-screen overflow-x-hidden bg-gray-50 px-4 py-6 sm:px-6">
+      <div class="mx-auto max-w-7xl min-w-0">
         <div class="mb-6">
           <Link to="/admin/jobs" class="text-blue-600 hover:text-blue-800 text-sm flex items-center gap-1">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -617,159 +617,308 @@ const AdminJudgmentJobDetail = () => {
               return runtime?.enabled === false ? (runtime.reason ?? 'Judging is disabled for this server.') : null
             }
             const jobQueueGridClass = () => {
-              return `grid gap-4 ${shouldShowFulltextSkipped() ? 'grid-cols-5' : 'grid-cols-4'}`
+              return `grid gap-4 sm:grid-cols-2 ${shouldShowFulltextSkipped() ? 'xl:grid-cols-5' : 'xl:grid-cols-4'}`
             }
             return (
               <>
-                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-                  <div class="flex justify-between items-start mb-4">
-                    <div>
-                      <h1 class="text-2xl font-bold text-gray-900">Job</h1>
-                      <p class="text-sm text-gray-500 mt-1 font-mono">{data()?.id}</p>
+                <div class="mb-6 overflow-hidden rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-6">
+                  <div class="flex min-w-0 flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                    <div class="min-w-0 flex-1 space-y-4">
+                      <div class="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div class="min-w-0">
+                          <p class="text-sm text-gray-500">Project</p>
+                          <Show
+                            when={data()?.projectId}
+                            fallback={<p class="font-medium break-words">{data()?.projectName || 'Unknown Project'}</p>}
+                          >
+                            {(projectId) => {
+                              return (
+                                <Link
+                                  to="/projects/$id"
+                                  params={{id: projectId()}}
+                                  class="font-medium text-blue-600 break-words hover:text-blue-800 hover:underline"
+                                >
+                                  {data()?.projectName || 'Unknown Project'}
+                                </Link>
+                              )
+                            }}
+                          </Show>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                          <span
+                            class={`inline-flex rounded-full border px-3 py-1 text-sm font-medium ${getStatusColor(data()?.status ?? null)}`}
+                          >
+                            {formatStatus(data()?.status ?? null)}
+                          </span>
+                          <span class="inline-flex rounded-full border border-gray-200 bg-gray-100 px-3 py-1 text-sm font-medium text-gray-800">
+                            Storage: {formatStatus(data()?.storageState ?? null)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div class="min-w-0">
+                        <h1 class="text-2xl font-bold text-gray-900">Job</h1>
+                        <p class="mt-1 break-all font-mono text-sm text-gray-500">{data()?.id}</p>
+                      </div>
+
+                      <div class="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                        <div class="min-w-0">
+                          <p class="text-sm text-gray-500">Project ID</p>
+                          <p class="break-all font-mono text-sm text-gray-900">{data()?.projectId ?? 'N/A'}</p>
+                        </div>
+                        <div class="min-w-0">
+                          <p class="text-sm text-gray-500">Created</p>
+                          <p class="font-medium text-gray-900">{formatDateTime(data()?.createdAt)}</p>
+                        </div>
+                        <div class="min-w-0">
+                          <p class="text-sm text-gray-500">Last Updated</p>
+                          <p class="font-medium text-gray-900">{formatDateTime(data()?.updatedAt)}</p>
+                        </div>
+                      </div>
                     </div>
-                    <span
-                      class={`px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(data()?.status ?? null)}`}
-                    >
-                      {formatStatus(data()?.status ?? null)}
-                    </span>
+
+                    <div class="min-w-0 xl:w-96 xl:flex-none">
+                      <div class="flex flex-wrap gap-3 xl:justify-end">
+                        <Show when={data()?.status === 'running'}>
+                          <button
+                            class="rounded-md bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={isPausing()}
+                            onClick={() => {
+                              const jobId = data()?.id
+                              if (jobId) {
+                                return void handlePauseJob(jobId)
+                              }
+                            }}
+                          >
+                            {isPausing() ? 'Pausing...' : 'Pause Job'}
+                          </button>
+                        </Show>
+                        <Show when={data()?.status === 'paused'}>
+                          <button
+                            class="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={isStarting() || isStartingClean() || isPausing() || isResumeBlocked()}
+                            onClick={() => {
+                              const jobId = data()?.id
+                              if (jobId) {
+                                return void handleStartJob(jobId)
+                              }
+                            }}
+                          >
+                            {isStarting() ? 'Starting...' : 'Start Job'}
+                          </button>
+                        </Show>
+                        <Show when={data()?.status === 'failed'}>
+                          <button
+                            class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={isStarting() || isStartingClean() || isPausing() || isResumeBlocked()}
+                            onClick={() => {
+                              const jobId = data()?.id
+                              if (jobId) {
+                                return void handleStartJob(jobId)
+                              }
+                            }}
+                          >
+                            {isStarting() ? 'Retrying...' : 'Retry Job'}
+                          </button>
+                        </Show>
+                        <Show when={data()?.status === 'paused' || data()?.status === 'failed'}>
+                          <button
+                            class="rounded-md bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={isStarting() || isStartingClean() || isPausing()}
+                            onClick={() => {
+                              const jobId = data()?.id
+
+                              if (!jobId) return
+                              if (
+                                !confirm(
+                                  'Start this job clean? This will reset local SQLite queue state for this job but keep the job and token usage history.',
+                                )
+                              ) {
+                                return
+                              }
+
+                              return void handleStartJobClean(jobId)
+                            }}
+                          >
+                            {isStartingClean() ? 'Starting Clean...' : 'Start Job Clean'}
+                          </button>
+                        </Show>
+                        <button
+                          class="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={isDeleting() || isStarting() || isStartingClean() || isPausing()}
+                          onClick={() => {
+                            const jobId = data()?.id
+                            if (!jobId) return
+                            if (!confirm('Are you sure you want to delete this job? This action cannot be undone.'))
+                              return
+                            setIsDeleting(true)
+                            deleteJudgmentsJob(jobId)
+                              .then(() => {
+                                void navigate({to: '/admin/jobs'})
+                              })
+                              .catch((error) => {
+                                console.error('Failed to delete job:', error)
+                                setIsDeleting(false)
+                              })
+                          }}
+                        >
+                          {isDeleting() ? 'Deleting...' : 'Delete Job'}
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
-                  <div class="grid grid-cols-2 gap-4 mt-6">
-                    <div>
-                      <p class="text-sm text-gray-500">Project</p>
-                      <Show
-                        when={data()?.projectId}
-                        fallback={<p class="font-medium">{data()?.projectName || 'Unknown Project'}</p>}
-                      >
-                        {(projectId) => {
+                  <Show
+                    when={
+                      runtimeModelNotice()
+                      || judgingRuntimeWarning()
+                      || actionError()
+                      || actionNotice()
+                      || resumeBlockedReason()
+                    }
+                  >
+                    <div class="mt-4 min-w-0 space-y-3 border-t border-gray-200 pt-4">
+                      <RuntimeModelNotice class="break-words" notice={runtimeModelNotice()} />
+                      <Show when={judgingRuntimeWarning()}>
+                        {(warning) => {
                           return (
-                            <Link
-                              to="/projects/$id"
-                              params={{id: projectId()}}
-                              class="font-medium text-blue-600 hover:text-blue-800 hover:underline"
-                            >
-                              {data()?.projectName || 'Unknown Project'}
-                            </Link>
+                            <div class="break-words rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                              {warning()}
+                            </div>
+                          )
+                        }}
+                      </Show>
+                      <Show when={actionError()}>
+                        {(message) => {
+                          return (
+                            <div class="break-words rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                              {message()}
+                            </div>
+                          )
+                        }}
+                      </Show>
+                      <Show when={actionNotice()}>
+                        {(message) => {
+                          return (
+                            <div class="break-words rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+                              {message()}
+                            </div>
+                          )
+                        }}
+                      </Show>
+                      <Show when={resumeBlockedReason()}>
+                        {(message) => {
+                          return (
+                            <div class="break-words rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                              {message()}
+                            </div>
                           )
                         }}
                       </Show>
                     </div>
-                    <div>
-                      <p class="text-sm text-gray-500">Project ID</p>
-                      <p class="font-mono text-sm">{data()?.projectId}</p>
-                    </div>
-                    <div>
-                      <p class="text-sm text-gray-500">Created</p>
-                      <p class="font-medium">
-                        {data()?.createdAt
-                          ? formatDate(new Date(data()?.createdAt ?? ''), 'yyyy-MM-dd HH:mm:ss')
-                          : 'N/A'}
-                      </p>
-                    </div>
-                    <div>
-                      <p class="text-sm text-gray-500">Last Updated</p>
-                      <p class="font-medium">
-                        {data()?.updatedAt
-                          ? formatDate(new Date(data()?.updatedAt ?? ''), 'yyyy-MM-dd HH:mm:ss')
-                          : 'N/A'}
-                      </p>
-                    </div>
-                  </div>
-                  <RuntimeModelNotice class="mt-4" notice={runtimeModelNotice()} />
-                  <Show when={judgingRuntimeWarning()}>
-                    {(warning) => {
-                      return (
-                        <div class="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                          {warning()}
-                        </div>
-                      )
-                    }}
                   </Show>
+                </div>
 
-                  <div class="mt-6 pt-6 border-t border-gray-200">
-                    <h3 class="text-sm font-medium text-gray-900 mb-3">Provider</h3>
-                    <div class="grid grid-cols-2 gap-4">
-                      <div>
-                        <p class="text-sm text-gray-500">Connection</p>
-                        <Show
-                          when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
-                          fallback={<p class="font-medium">Loading...</p>}
-                        >
+                <Show when={data()?.error && Array.isArray(data()?.error) && (data()?.error?.length ?? 0) > 0}>
+                  <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4">
+                    <h2 class="mb-2 text-lg font-semibold text-red-900">Errors</h2>
+                    <ul class="list-disc space-y-1 pl-5">
+                      <For each={data()?.error ?? []}>
+                        {(err) => {
+                          return <li class="break-words text-red-700">{err}</li>
+                        }}
+                      </For>
+                    </ul>
+                  </div>
+                </Show>
+
+                <div class="mb-6 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+                  <div class="grid gap-6 lg:grid-cols-2">
+                    <div class="min-w-0">
+                      <h3 class="mb-3 text-sm font-medium text-gray-900">Provider</h3>
+                      <div class="grid gap-4 sm:grid-cols-2">
+                        <div class="min-w-0">
+                          <p class="text-sm text-gray-500">Connection</p>
                           <Show
-                            when={projectProviderConnection()}
-                            fallback={<p class="font-medium">Unknown provider</p>}
+                            when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
+                            fallback={<p class="font-medium">Loading...</p>}
                           >
-                            {(connection) => {
-                              return (
-                                <a
-                                  class="font-medium text-blue-600 hover:text-blue-800 hover:underline"
-                                  href={`/providers/${connection().id}`}
-                                >
-                                  {connection().label}
-                                </a>
-                              )
-                            }}
+                            <Show
+                              when={projectProviderConnection()}
+                              fallback={<p class="font-medium">Unknown provider</p>}
+                            >
+                              {(connection) => {
+                                return (
+                                  <a
+                                    class="break-words font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                                    href={`/providers/${connection().id}`}
+                                  >
+                                    {connection().label}
+                                  </a>
+                                )
+                              }}
+                            </Show>
                           </Show>
-                        </Show>
-                      </div>
-                      <div>
-                        <p class="text-sm text-gray-500">Current request-level LLM call limit</p>
-                        <Show
-                          when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
-                          fallback={<p class="font-medium">Loading...</p>}
-                        >
-                          <Show when={projectProviderConnection()} fallback={<p class="font-medium">Unknown</p>}>
-                            {(connection) => {
-                              return (
-                                <>
-                                  <p class="font-medium">{formatProviderMaxInflightRequests(connection())}</p>
-                                  <p class="text-xs text-gray-500 mt-1">
-                                    Shared throughput ceiling for all jobs using this provider connection.
-                                  </p>
-                                </>
-                              )
-                            }}
+                        </div>
+                        <div class="min-w-0">
+                          <p class="text-sm text-gray-500">Current request-level LLM call limit</p>
+                          <Show
+                            when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
+                            fallback={<p class="font-medium">Loading...</p>}
+                          >
+                            <Show when={projectProviderConnection()} fallback={<p class="font-medium">Unknown</p>}>
+                              {(connection) => {
+                                return (
+                                  <>
+                                    <p class="font-medium">{formatProviderMaxInflightRequests(connection())}</p>
+                                    <p class="mt-1 break-words text-xs text-gray-500">
+                                      Shared throughput ceiling for all jobs using this provider connection.
+                                    </p>
+                                  </>
+                                )
+                              }}
+                            </Show>
                           </Show>
-                        </Show>
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div class="mt-6 pt-6 border-t border-gray-200">
-                    <h3 class="text-sm font-medium text-gray-900 mb-3">Project</h3>
-                    <div class="mb-4 space-y-1">
-                      <p class="text-sm text-gray-500">Unassessed Articles</p>
-                      <Show when={!unassessedCountQuery.isLoading} fallback={<p class="font-medium">Loading…</p>}>
-                        <Show
-                          when={shouldLinkToUnassessedArticles()}
-                          fallback={<p class="font-medium">{formattedUnassessedArticlesCount()}</p>}
-                        >
-                          <a href={unassessedArticlesLink()} class="font-medium text-blue-600 hover:text-blue-800">
-                            {formattedUnassessedArticlesCount()}
-                          </a>
+                    <div class="min-w-0">
+                      <h3 class="mb-3 text-sm font-medium text-gray-900">Project</h3>
+                      <div class="mb-4 space-y-1">
+                        <p class="text-sm text-gray-500">Unassessed Articles</p>
+                        <Show when={!unassessedCountQuery.isLoading} fallback={<p class="font-medium">Loading…</p>}>
+                          <Show
+                            when={shouldLinkToUnassessedArticles()}
+                            fallback={<p class="font-medium">{formattedUnassessedArticlesCount()}</p>}
+                          >
+                            <a href={unassessedArticlesLink()} class="font-medium text-blue-600 hover:text-blue-800">
+                              {formattedUnassessedArticlesCount()}
+                            </a>
+                          </Show>
                         </Show>
+                      </div>
+                      <Show when={data()?.totalTokenUsage}>
+                        <div class="grid gap-4 sm:grid-cols-3">
+                          <div class="min-w-0">
+                            <p class="text-sm text-gray-500">Total Tokens</p>
+                            <p class="font-medium">{data()?.totalTokenUsage?.totalTokens?.toLocaleString() ?? '0'}</p>
+                          </div>
+                          <div class="min-w-0">
+                            <p class="text-sm text-gray-500">Prompt Tokens</p>
+                            <p class="font-medium">
+                              {data()?.totalTokenUsage?.totalPromptTokens?.toLocaleString() ?? '0'}
+                            </p>
+                          </div>
+                          <div class="min-w-0">
+                            <p class="text-sm text-gray-500">Completion Tokens</p>
+                            <p class="font-medium">
+                              {data()?.totalTokenUsage?.totalCompletionTokens?.toLocaleString() ?? '0'}
+                            </p>
+                          </div>
+                        </div>
                       </Show>
                     </div>
-                    <Show when={data()?.totalTokenUsage}>
-                      <div class="grid grid-cols-3 gap-4">
-                        <div>
-                          <p class="text-sm text-gray-500">Total Tokens</p>
-                          <p class="font-medium">{data()?.totalTokenUsage?.totalTokens?.toLocaleString() ?? '0'}</p>
-                        </div>
-                        <div>
-                          <p class="text-sm text-gray-500">Prompt Tokens</p>
-                          <p class="font-medium">
-                            {data()?.totalTokenUsage?.totalPromptTokens?.toLocaleString() ?? '0'}
-                          </p>
-                        </div>
-                        <div>
-                          <p class="text-sm text-gray-500">Completion Tokens</p>
-                          <p class="font-medium">
-                            {data()?.totalTokenUsage?.totalCompletionTokens?.toLocaleString() ?? '0'}
-                          </p>
-                        </div>
-                      </div>
-                    </Show>
                   </div>
                 </div>
                 <Show when={data()?.promptStats}>
@@ -1124,139 +1273,6 @@ const AdminJudgmentJobDetail = () => {
                         </button>
                       </Show>
                     </div>
-                  </div>
-                </div>
-
-                <Show when={data()?.error && Array.isArray(data()?.error) && (data()?.error?.length ?? 0) > 0}>
-                  <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-                    <h2 class="text-lg font-semibold text-red-900 mb-2">Errors</h2>
-                    <ul class="list-disc list-inside space-y-1">
-                      <For each={data()?.error ?? []}>
-                        {(err) => {
-                          return <li class="text-red-700">{err}</li>
-                        }}
-                      </For>
-                    </ul>
-                  </div>
-                </Show>
-
-                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-                  <h2 class="text-lg font-semibold mb-4">Actions</h2>
-                  <div class="flex flex-col gap-3">
-                    <div class="flex gap-3">
-                      <Show when={data()?.status === 'running'}>
-                        <button
-                          class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={isPausing()}
-                          onClick={() => {
-                            const jobId = data()?.id
-                            if (jobId) {
-                              return void handlePauseJob(jobId)
-                            }
-                          }}
-                        >
-                          {isPausing() ? 'Pausing...' : 'Pause Job'}
-                        </button>
-                      </Show>
-                      <Show when={data()?.status === 'paused'}>
-                        <button
-                          class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={isStarting() || isStartingClean() || isPausing() || isResumeBlocked()}
-                          onClick={() => {
-                            const jobId = data()?.id
-                            if (jobId) {
-                              return void handleStartJob(jobId)
-                            }
-                          }}
-                        >
-                          {isStarting() ? 'Starting...' : 'Start Job'}
-                        </button>
-                      </Show>
-                      <Show when={data()?.status === 'failed'}>
-                        <button
-                          class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={isStarting() || isStartingClean() || isPausing() || isResumeBlocked()}
-                          onClick={() => {
-                            const jobId = data()?.id
-                            if (jobId) {
-                              return void handleStartJob(jobId)
-                            }
-                          }}
-                        >
-                          {isStarting() ? 'Retrying...' : 'Retry Job'}
-                        </button>
-                      </Show>
-                      <Show when={data()?.status === 'paused' || data()?.status === 'failed'}>
-                        <button
-                          class="px-4 py-2 bg-slate-700 text-white rounded-md hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={isStarting() || isStartingClean() || isPausing()}
-                          onClick={() => {
-                            const jobId = data()?.id
-
-                            if (!jobId) return
-                            if (
-                              !confirm(
-                                'Start this job clean? This will reset local SQLite queue state for this job but keep the job and token usage history.',
-                              )
-                            ) {
-                              return
-                            }
-
-                            return void handleStartJobClean(jobId)
-                          }}
-                        >
-                          {isStartingClean() ? 'Starting Clean...' : 'Start Job Clean'}
-                        </button>
-                      </Show>
-                      <button
-                        class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled={isDeleting() || isStarting() || isStartingClean() || isPausing()}
-                        onClick={() => {
-                          const jobId = data()?.id
-                          if (!jobId) return
-                          if (!confirm('Are you sure you want to delete this job? This action cannot be undone.'))
-                            return
-                          setIsDeleting(true)
-                          deleteJudgmentsJob(jobId)
-                            .then(() => {
-                              void navigate({to: '/admin/jobs'})
-                            })
-                            .catch((error) => {
-                              console.error('Failed to delete job:', error)
-                              setIsDeleting(false)
-                            })
-                        }}
-                      >
-                        {isDeleting() ? 'Deleting...' : 'Delete Job'}
-                      </button>
-                    </div>
-                    <Show when={actionError()}>
-                      {(message) => {
-                        return (
-                          <div class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                            {message()}
-                          </div>
-                        )
-                      }}
-                    </Show>
-                    <Show when={actionNotice()}>
-                      {(message) => {
-                        return (
-                          <div class="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
-                            {message()}
-                          </div>
-                        )
-                      }}
-                    </Show>
-                    <Show when={resumeBlockedReason()}>
-                      {(message) => {
-                        return (
-                          <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                            {message()}
-                          </div>
-                        )
-                      }}
-                    </Show>
                   </div>
                 </div>
               </>

@@ -8,7 +8,7 @@ export const RuntimeModelNotice = (props: {class?: string; notice: RuntimeModelN
       {(notice) => {
         return (
           <div
-            class={`${notice().tone === 'warning' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-sky-200 bg-sky-50 text-sky-900'} rounded-md border px-3 py-2 text-sm ${props.class ?? ''}`}
+            class={`${notice().tone === 'warning' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-sky-200 bg-sky-50 text-sky-900'} min-w-0 break-words rounded-md border px-3 py-2 text-sm ${props.class ?? ''}`}
           >
             {notice().message}
           </div>
