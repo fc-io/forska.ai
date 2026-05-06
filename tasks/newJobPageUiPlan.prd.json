@@ -1,0 +1,186 @@
+{
+  "name": "New Job Page UI Plan",
+  "description": "Make the admin job detail page more compact and easier to debug by ordering visible information as a pipeline, while preserving all existing debug data, leaving the token timeline unchanged, and avoiding API server changes.",
+  "branchName": "ralph/new-job-page-ui",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Build the compact job header and error placement",
+      "description": "As an operator, I want the job header to show identity, status, blockers, and primary lifecycle controls in one compact area so I can see start/runtime blockers before reading detailed diagnostics.",
+      "acceptanceCriteria": [
+        "Widen the job detail page container from `max-w-4xl` to `max-w-7xl` while preserving mobile-safe wrapping and avoiding page-level horizontal overflow.",
+        "Rebuild the header to include the project link, full job ID, job status, storage state, project ID, created and updated timestamps, and primary lifecycle actions.",
+        "Render action errors, action notices, resume-blocked guidance, `RuntimeModelNotice`, and judging-runtime warnings near the header before detailed debug sections.",
+        "Move job errors directly below the header/blocker area and above Work Definition when errors are present.",
+        "Add wrapping or break classes for long job IDs, project IDs, action messages, runtime notices, judging-runtime warnings, and job errors.",
+        "Do not change API routes, server job/runtime behavior, database schema, or API response contracts.",
+        "Do not change the token timeline component, data, content, props, or current page placement.",
+        "bun run lint passes",
+        "bun run build passes",
+        "bun run desktop:build passes",
+        "bun test src/app/routes/+admin/+jobs/jobsPageShared.test.ts passes",
+        "bunx playwright test tests/e2e/adminJudgmentJobTelemetry.spec.ts tests/e2e/adminJudgmentJobTelemetryWebFlow.spec.ts passes",
+        "Browser check `/admin/jobs/:id` on desktop and mobile widths passes",
+        "Browser check `/admin/jobs/:id` with long IDs, endpoint URLs, provider keys, and error text verifies no text or page-level horizontal overflow",
+        "Browser check `/admin/jobs` verifies the list remains compact and usable"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Create Work Definition and Pipeline Summary sections",
+      "description": "As an operator, I want the job's intended work and prompt/request progress summarized before capacity diagnostics so I can understand what the job is processing and where it is in the pipeline.",
+      "acceptanceCriteria": [
+        "Create a Work Definition section with provider connection, current request-level LLM call limit, unassessed article count, and token totals.",
+        "Keep token totals in Work Definition as their only large metric placement.",
+        "Create a Pipeline Summary section with Ready, Claimed, Running, Judged, Skipped, Live Request LLM Calls, Attempts, Failed Attempts, and Anthropic Refusals.",
+        "Split the current Job Queue and Request Activity presentations without removing the underlying API data.",
+        "Remove duplicate Live Request LLM Calls from the old Job Queue placement because it remains in Pipeline Summary and Provider Capacity Telemetry lifecycle counters.",
+        "Use dense metric grids or label/value rows instead of large standalone cards where practical.",
+        "Do not change API routes, server job/runtime behavior, database schema, or API response contracts.",
+        "Do not change the token timeline component, data, content, props, or current page placement.",
+        "bun run lint passes",
+        "bun run build passes",
+        "bun run desktop:build passes",
+        "bun test src/app/routes/+admin/+jobs/jobsPageShared.test.ts passes",
+        "bunx playwright test tests/e2e/adminJudgmentJobTelemetry.spec.ts tests/e2e/adminJudgmentJobTelemetryWebFlow.spec.ts passes",
+        "Browser check `/admin/jobs/:id` on desktop and mobile widths passes",
+        "Browser check `/admin/jobs/:id` with long IDs, endpoint URLs, provider keys, and error text verifies no text or page-level horizontal overflow",
+        "Browser check `/admin/jobs` verifies the list remains compact and usable"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Create Request And Capacity Debug section",
+      "description": "As an operator, I want request and local capacity indicators grouped together so I can tell whether a job is executing, waiting locally, or blocked by capacity.",
+      "acceptanceCriteria": [
+        "Create a Request And Capacity Debug section with Worker Prompt Slots, Worker Queued Prompts, Prompt Prefetch Fill, and Request Slot Waiters.",
+        "Make Request Slot Waiters canonical in Request And Capacity Debug and remove the Provider Capacity Telemetry placement if it would otherwise duplicate.",
+        "Remove duplicate Worker Prompt Slots and Worker Queued Prompts from the old Job Queue placement because they remain in Request And Capacity Debug and Provider Capacity Telemetry lifecycle counters.",
+        "Do not repeat local prompt backlog, request-work backlog, or lifecycle counters in Request And Capacity Debug.",
+        "Keep local prompt backlog, request-work backlog, and lifecycle counters canonical in Provider Capacity Telemetry.",
+        "Use compact card spacing and wrapping so long metric text does not overflow at mobile widths.",
+        "Do not change API routes, server job/runtime behavior, database schema, or API response contracts.",
+        "Do not change the token timeline component, data, content, props, or current page placement.",
+        "bun run lint passes",
+        "bun run build passes",
+        "bun run desktop:build passes",
+        "bun test src/app/routes/+admin/+jobs/jobsPageShared.test.ts passes",
+        "bunx playwright test tests/e2e/adminJudgmentJobTelemetry.spec.ts tests/e2e/adminJudgmentJobTelemetryWebFlow.spec.ts passes",
+        "Browser check `/admin/jobs/:id` on desktop and mobile widths passes",
+        "Browser check `/admin/jobs/:id` with long IDs, endpoint URLs, provider keys, and error text verifies no text or page-level horizontal overflow",
+        "Browser check `/admin/jobs` verifies the list remains compact and usable"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Densify Provider Capacity Telemetry",
+      "description": "As an operator, I want provider capacity telemetry to stay complete but denser so I can inspect admission, local worker, aggregate, allocation, bottleneck, and endpoint diagnostics without excessive scrolling.",
+      "acceptanceCriteria": [
+        "Keep Provider Capacity Telemetry visible and preserve endpoint diagnostics, provider coverage, lease/observed mismatch warning, allocation versions, convergence preconditions, bottleneck/subreason/source metadata, and lifecycle counters.",
+        "Order Provider Capacity Telemetry sections as Admission Lease Snapshot, Local Worker Diagnostics, Observed Aggregate Telemetry, Allocation State And Convergence, Bottleneck Source Metadata, and Endpoint Diagnostics.",
+        "Keep Local Worker Diagnostics as the canonical location for local prompt backlog and request-work backlog.",
+        "Keep lifecycle counters only in Provider Capacity Telemetry.",
+        "Use denser card padding, grids, and label/value rows without removing fields.",
+        "Update telemetry e2e assertions to match final section headings, especially `Admission Lease Snapshot` instead of the older `Lease Authority` label.",
+        "Do not change API routes, server job/runtime behavior, database schema, or API response contracts.",
+        "Do not change the token timeline component, data, content, props, or current page placement.",
+        "bun run lint passes",
+        "bun run build passes",
+        "bun run desktop:build passes",
+        "bun test src/app/routes/+admin/+jobs/jobsPageShared.test.ts passes",
+        "bunx playwright test tests/e2e/adminJudgmentJobTelemetry.spec.ts tests/e2e/adminJudgmentJobTelemetryWebFlow.spec.ts passes",
+        "Browser check `/admin/jobs/:id` on desktop and mobile widths passes",
+        "Browser check `/admin/jobs/:id` with long IDs, endpoint URLs, provider keys, and error text verifies no text or page-level horizontal overflow",
+        "Browser check `/admin/jobs` verifies the list remains compact and usable"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Reorder storage diagnostics and actions",
+      "description": "As an operator, I want storage, import, lease, repair, and danger controls organized by recovery path so I can diagnose local state before choosing a repair or delete action.",
+      "acceptanceCriteria": [
+        "Reorder Storage And Import Flow by recovery path: storage policy, SQLite/WAL size, outbox/claimed/retained/pending ACK, orphaned local queue, recent transfer flow, oldest unexported/ACK age, projected drain, import success/failure details, and quarantine reason.",
+        "Group lease host, PID, lease ID, server job, port, and heartbeat under a compact Runtime Lease subsection.",
+        "Remove the duplicate Storage State metric card because storage state remains in the header and storage section badge.",
+        "Keep recovery repair actions adjacent to storage diagnostics and do not insert unrelated sections between storage diagnostics and repair controls.",
+        "Move delete into a final separated Danger Actions section below recovery actions.",
+        "Add wrapping or break classes for lease IDs, endpoint URLs, provider keys, import failure details, quarantine reasons, and storage/recovery messages.",
+        "Do not change API routes, server job/runtime behavior, database schema, or API response contracts.",
+        "Do not change the token timeline component, data, content, props, or current page placement.",
+        "bun run lint passes",
+        "bun run build passes",
+        "bun run desktop:build passes",
+        "bun test src/app/routes/+admin/+jobs/jobsPageShared.test.ts passes",
+        "bunx playwright test tests/e2e/adminJudgmentJobTelemetry.spec.ts tests/e2e/adminJudgmentJobTelemetryWebFlow.spec.ts passes",
+        "Browser check `/admin/jobs/:id` on desktop and mobile widths passes",
+        "Browser check `/admin/jobs/:id` with long IDs, endpoint URLs, provider keys, and error text verifies no text or page-level horizontal overflow",
+        "Browser check `/admin/jobs` verifies the list remains compact and usable"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Finalize job detail tests and verification",
+      "description": "As a maintainer, I want tests and manual checks updated for the final UI structure so the compact job detail page remains stable in browser and desktop flows.",
+      "acceptanceCriteria": [
+        "Update unit and e2e tests for the new headings, header-adjacent blockers/actions, compactness expectations, and no-overflow behavior.",
+        "Add an e2e assertion that lifecycle actions, action errors/notices, resume-blocked guidance, `RuntimeModelNotice`, and judging-runtime warnings render near the header before detailed debug sections.",
+        "Keep list-page behavior unchanged except for compactness checks required by this plan.",
+        "Verify the browser/web path for `/admin/jobs/:id` and `/admin/jobs`.",
+        "Verify the desktop build still compiles for shared app UI changes.",
+        "Record any skipped quality gate with the reason.",
+        "Do not change API routes, server job/runtime behavior, database schema, or API response contracts.",
+        "Do not change the token timeline component, data, content, props, or current page placement.",
+        "bun run lint passes",
+        "bun run build passes",
+        "bun run desktop:build passes",
+        "bun test src/app/routes/+admin/+jobs/jobsPageShared.test.ts passes",
+        "bunx playwright test tests/e2e/adminJudgmentJobTelemetry.spec.ts tests/e2e/adminJudgmentJobTelemetryWebFlow.spec.ts passes",
+        "Browser check `/admin/jobs/:id` on desktop and mobile widths passes",
+        "Browser check `/admin/jobs/:id` with long IDs, endpoint URLs, provider keys, and error text verifies no text or page-level horizontal overflow",
+        "Browser check `/admin/jobs` verifies the list remains compact and usable"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-05-06T18:50:59.701Z"
+  }
+}

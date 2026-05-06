@@ -46,12 +46,12 @@ const getMetricToneClass = (tone: TelemetryTone | undefined): string => {
 
 const TelemetryMetric = (props: TelemetryMetricProps): JSX.Element => {
   return (
-    <div class={`rounded-lg border p-4 ${getMetricToneClass(props.tone)}`}>
-      <p class="text-xs font-medium uppercase tracking-wide opacity-70">{props.label}</p>
-      <div class="mt-1 text-xl font-semibold">{props.children}</div>
+    <div class={`min-w-0 rounded-lg border p-4 ${getMetricToneClass(props.tone)}`}>
+      <p class="break-words text-xs font-medium uppercase tracking-wide opacity-70">{props.label}</p>
+      <div class="mt-1 break-words text-xl font-semibold">{props.children}</div>
       <Show when={props.description}>
         {(description) => {
-          return <p class="mt-1 text-xs leading-5 opacity-75">{description()}</p>
+          return <p class="mt-1 break-words text-xs leading-5 opacity-75">{description()}</p>
         }}
       </Show>
     </div>
@@ -65,7 +65,7 @@ const TelemetrySection = (props: TelemetrySectionProps): JSX.Element => {
         <h3 class="text-sm font-semibold text-gray-900">{props.title}</h3>
         <Show when={props.description}>
           {(description) => {
-            return <p class="mt-1 text-sm text-gray-500">{description()}</p>
+            return <p class="mt-1 break-words text-sm text-gray-500">{description()}</p>
           }}
         </Show>
       </div>
@@ -275,12 +275,12 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                     {formatTelemetryPercent(provider().observedBestEffort.providerRequestFillPct)}
                   </TelemetryMetric>
                   <Show when={(telemetrySource()?.providerCoverage ?? []).length > 0}>
-                    <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 text-xs text-gray-600">
+                    <div class="min-w-0 rounded-lg border border-gray-200 bg-gray-50 p-4 text-xs text-gray-600">
                       <p class="font-medium text-gray-800">Provider coverage</p>
                       <For each={telemetrySource()?.providerCoverage ?? []}>
                         {(coverage) => {
                           return (
-                            <p class="mt-1">
+                            <p class="mt-1 break-words">
                               {coverage.providerKey}: {coverage.aggregateCompleteness}, fresh{' '}
                               {formatTelemetryCount(coverage.freshWorkerCount)}, stale{' '}
                               {formatTelemetryCount(coverage.staleWorkerCount)}, unavailable{' '}
@@ -385,13 +385,13 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                   <TelemetryMetric tone="amber" label="Current Bottleneck">
                     {getProviderBottleneckLabel(provider().bottleneck)}
                   </TelemetryMetric>
-                  <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
-                    <p>{getProviderBottleneckDescription(provider().bottleneck)}</p>
+                  <div class="min-w-0 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                    <p class="break-words">{getProviderBottleneckDescription(provider().bottleneck)}</p>
                     <div class="mt-3 grid gap-2 md:grid-cols-2">
-                      <p>
+                      <p class="break-words">
                         <span class="font-medium">Source:</span> {provider().bottleneckSource ?? 'N/A'}
                       </p>
-                      <p>
+                      <p class="break-words">
                         <span class="font-medium">Subreason:</span>{' '}
                         {formatTelemetryEnumValue(provider().bottleneckSubreason)}
                       </p>
@@ -470,10 +470,10 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                     <For each={provider().endpointDiagnostics}>
                       {(endpoint) => {
                         return (
-                          <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                          <div class="min-w-0 rounded-lg border border-gray-200 bg-gray-50 p-4">
                             <div class="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                              <div>
-                                <p class="font-medium text-gray-900">{getEndpointIdentityText(endpoint)}</p>
+                              <div class="min-w-0">
+                                <p class="break-all font-medium text-gray-900">{getEndpointIdentityText(endpoint)}</p>
                                 <p class="mt-1 break-all font-mono text-xs text-gray-500">
                                   {endpoint.endpointAvailabilityKey}
                                 </p>
