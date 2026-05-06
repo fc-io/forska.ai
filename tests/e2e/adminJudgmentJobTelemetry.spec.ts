@@ -5,7 +5,17 @@ import {createBrowserFailureAssertions} from '../../src/app/utils/browserFailure
 
 import {buildTelemetryJob, installAdminTelemetryMocks} from './adminJudgmentJobTelemetryFixtures'
 
-test('admin job telemetry separates lease authority, observed aggregates, and local diagnostics', async ({page}) => {
+const providerCapacityTelemetryHeadings = [
+  'Provider Capacity Telemetry',
+  'Admission Lease Snapshot',
+  'Local Worker Diagnostics',
+  'Observed Aggregate Telemetry',
+  'Allocation State And Convergence',
+  'Bottleneck Source Metadata',
+  'Endpoint Diagnostics',
+]
+
+test('admin job telemetry separates admission leases, observed aggregates, and local diagnostics', async ({page}) => {
   const browserFailures = createBrowserFailureAssertions(page)
   const job = buildTelemetryJob('claiming')
 
@@ -13,10 +23,10 @@ test('admin job telemetry separates lease authority, observed aggregates, and lo
     await installAdminTelemetryMocks(page, job)
     await page.goto(`/admin/jobs/${job.id}`)
 
-    await expect(page.getByRole('heading', {name: 'Provider Capacity Telemetry'})).toBeVisible()
-    await expect(page.getByRole('heading', {name: 'Admission Lease Snapshot'})).toBeVisible()
-    await expect(page.getByRole('heading', {name: 'Local Worker Diagnostics'})).toBeVisible()
-    await expect(page.getByRole('heading', {name: 'Observed Aggregate Telemetry'})).toBeVisible()
+    const providerCapacityTelemetry = page.getByTestId('provider-capacity-telemetry')
+
+    await expect(providerCapacityTelemetry).toBeVisible()
+    await expect(providerCapacityTelemetry.getByRole('heading')).toHaveText(providerCapacityTelemetryHeadings)
     await expect(page.getByRole('heading', {name: 'Request And Capacity Debug'})).toBeVisible()
     await expect(page.getByText('Observed aggregates: best-effort partial')).toBeVisible()
     await expect(page.getByText('Some remote worker telemetry is stale or missing')).toBeVisible()

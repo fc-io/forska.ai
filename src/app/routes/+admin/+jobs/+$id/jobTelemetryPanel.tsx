@@ -19,6 +19,7 @@ import {
 
 type TelemetryTone = 'amber' | 'blue' | 'gray' | 'green' | 'indigo' | 'rose' | 'sky' | 'violet'
 type TelemetryMetricProps = ParentProps<{description?: string; label: string; tone?: TelemetryTone}>
+type TelemetryDetailRowProps = ParentProps<{class?: string; label: string; machine?: boolean}>
 type TelemetrySectionProps = ParentProps<{description?: string; title: string}>
 type JobTelemetryPanelProps = {requestStats?: Partial<JudgmentJobRequestStats>}
 type EndpointDiagnostics = JudgmentJobProviderTelemetry['endpointDiagnostics'][number]
@@ -44,28 +45,45 @@ const getMetricToneClass = (tone: TelemetryTone | undefined): string => {
   }
 }
 
+const getDetailValueWrapClass = (machine: boolean | undefined): string => {
+  return machine ? 'break-all' : 'break-words'
+}
+
 const TelemetryMetric = (props: TelemetryMetricProps): JSX.Element => {
   return (
-    <div class={`min-w-0 rounded-lg border p-4 ${getMetricToneClass(props.tone)}`}>
-      <p class="break-words text-xs font-medium uppercase tracking-wide opacity-70">{props.label}</p>
-      <div class="mt-1 break-words text-xl font-semibold">{props.children}</div>
+    <div class={`min-w-0 rounded-md border px-3 py-2 ${getMetricToneClass(props.tone)}`}>
+      <div class="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+        <p class="min-w-0 break-words text-xs font-medium uppercase opacity-70 sm:w-5/12">{props.label}</p>
+        <div class="min-w-0 break-words text-base font-semibold sm:w-7/12 sm:text-right">{props.children}</div>
+      </div>
       <Show when={props.description}>
         {(description) => {
-          return <p class="mt-1 break-words text-xs leading-5 opacity-75">{description()}</p>
+          return <p class="mt-1 break-words text-xs leading-4 opacity-75">{description()}</p>
         }}
       </Show>
     </div>
   )
 }
 
+const TelemetryDetailRow = (props: TelemetryDetailRowProps): JSX.Element => {
+  return (
+    <div class={`min-w-0 ${props.class ?? ''}`}>
+      <div class="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-start sm:justify-between sm:gap-2">
+        <span class="font-medium text-gray-800">{props.label}</span>
+        <span class={`min-w-0 ${getDetailValueWrapClass(props.machine)} sm:text-right`}>{props.children}</span>
+      </div>
+    </div>
+  )
+}
+
 const TelemetrySection = (props: TelemetrySectionProps): JSX.Element => {
   return (
-    <section class="space-y-3">
+    <section class="min-w-0 space-y-2">
       <div>
         <h3 class="text-sm font-semibold text-gray-900">{props.title}</h3>
         <Show when={props.description}>
           {(description) => {
-            return <p class="mt-1 break-words text-sm text-gray-500">{description()}</p>
+            return <p class="mt-1 break-words text-xs leading-5 text-gray-500">{description()}</p>
           }}
         </Show>
       </div>
@@ -104,27 +122,30 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
     <Show when={providerTelemetry()}>
       {(provider) => {
         return (
-          <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-              <div>
+          <div
+            class="mb-6 rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5"
+            data-testid="provider-capacity-telemetry"
+          >
+            <div class="flex min-w-0 flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div class="min-w-0">
                 <h2 class="text-lg font-semibold text-gray-900">Provider Capacity Telemetry</h2>
-                <p class="mt-1 text-sm text-gray-500">
+                <p class="mt-1 break-words text-sm text-gray-500">
                   Remote LLM request leases are the shared admission authority. Observed aggregates are worker-reported
                   best-effort telemetry, and local diagnostics describe this server&apos;s prompt and request-work
                   backlog.
                 </p>
               </div>
-              <span class="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-800">
+              <span class="max-w-full self-start rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-800">
                 {getObservedAggregateTelemetryLabel(telemetrySource())}
               </span>
             </div>
 
-            <div class="mt-6 grid gap-6 xl:grid-cols-3">
+            <div class="mt-4 grid gap-4 xl:grid-cols-3">
               <TelemetrySection
                 description="Admission lease snapshot for live remote LLM HTTP requests."
                 title="Admission Lease Snapshot"
               >
-                <div class="grid gap-3">
+                <div class="grid gap-2">
                   <TelemetryMetric
                     description={`Provider key: ${provider().leaseAuthority.providerKey}`}
                     tone="blue"
@@ -173,7 +194,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                 <Show when={getLeaseObservedMismatchMessage(provider())}>
                   {(message) => {
                     return (
-                      <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                      <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
                         {message()}
                       </div>
                     )
@@ -185,7 +206,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                 description="This worker's prompt backlog, request-work backlog, target share, and local request counters."
                 title="Local Worker Diagnostics"
               >
-                <div class="grid gap-3">
+                <div class="grid gap-2">
                   <TelemetryMetric
                     description="Remote LLM HTTP calls running in this worker."
                     tone="sky"
@@ -226,7 +247,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                 description={getObservedAggregateTelemetryDescription(telemetrySource())}
                 title="Observed Aggregate Telemetry"
               >
-                <div class="grid gap-3">
+                <div class="grid gap-2">
                   <TelemetryMetric
                     description={getTelemetryCoverageSummary(telemetrySource())}
                     tone="violet"
@@ -259,17 +280,20 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                     {formatTelemetryPercent(provider().observedBestEffort.providerRequestFillPct)}
                   </TelemetryMetric>
                   <Show when={(telemetrySource()?.providerCoverage ?? []).length > 0}>
-                    <div class="min-w-0 rounded-lg border border-gray-200 bg-gray-50 p-4 text-xs text-gray-600">
+                    <div class="min-w-0 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
                       <p class="font-medium text-gray-800">Provider coverage</p>
                       <For each={telemetrySource()?.providerCoverage ?? []}>
                         {(coverage) => {
                           return (
-                            <p class="mt-1 break-words">
-                              {coverage.providerKey}: {coverage.aggregateCompleteness}, fresh{' '}
-                              {formatTelemetryCount(coverage.freshWorkerCount)}, stale{' '}
-                              {formatTelemetryCount(coverage.staleWorkerCount)}, unavailable{' '}
-                              {formatTelemetryCount(coverage.unavailableWorkerCount)}
-                            </p>
+                            <div class="mt-1 grid min-w-0 gap-1 sm:grid-cols-2">
+                              <p class="min-w-0 break-all font-medium text-gray-800">{coverage.providerKey}</p>
+                              <p class="min-w-0 break-words sm:text-right">
+                                {coverage.aggregateCompleteness}, fresh{' '}
+                                {formatTelemetryCount(coverage.freshWorkerCount)}, stale{' '}
+                                {formatTelemetryCount(coverage.staleWorkerCount)}, unavailable{' '}
+                                {formatTelemetryCount(coverage.unavailableWorkerCount)}
+                              </p>
+                            </div>
                           )
                         }}
                       </For>
@@ -279,12 +303,12 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
               </TelemetrySection>
             </div>
 
-            <div class="mt-8 grid gap-6 xl:grid-cols-2">
+            <div class="mt-5 grid gap-4 xl:grid-cols-2">
               <TelemetrySection
                 description="Allocation state and convergence diagnostics explain whether backlog targets can increase."
                 title="Allocation State And Convergence"
               >
-                <div class="grid gap-3 md:grid-cols-2">
+                <div class="grid gap-2 md:grid-cols-2">
                   <TelemetryMetric
                     description={`Input state: ${formatTelemetryEnumValue(provider().allocationInputState)}`}
                     tone="green"
@@ -350,9 +374,9 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                   </TelemetryMetric>
                 </div>
                 <Show when={provider().convergenceDiagnostics.activeHigherPriorityStopRules.length > 0}>
-                  <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
                     <p class="font-medium">Higher priority stop rules</p>
-                    <p class="mt-1">
+                    <p class="mt-1 break-words">
                       {provider()
                         .convergenceDiagnostics.activeHigherPriorityStopRules.map(formatTelemetryEnumValue)
                         .join(', ')}
@@ -365,24 +389,23 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                 description="Bottleneck, subreason, and source metadata after endpoint diagnostics are attached."
                 title="Bottleneck Source Metadata"
               >
-                <div class="grid gap-3">
+                <div class="grid gap-2">
                   <TelemetryMetric tone="amber" label="Current Bottleneck">
                     {getProviderBottleneckLabel(provider().bottleneck)}
                   </TelemetryMetric>
-                  <div class="min-w-0 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                  <div class="min-w-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">
                     <p class="break-words">{getProviderBottleneckDescription(provider().bottleneck)}</p>
-                    <div class="mt-3 grid gap-2 md:grid-cols-2">
-                      <p class="break-words">
-                        <span class="font-medium">Source:</span> {provider().bottleneckSource ?? 'N/A'}
-                      </p>
-                      <p class="break-words">
-                        <span class="font-medium">Subreason:</span>{' '}
+                    <div class="mt-2 grid gap-2 md:grid-cols-2">
+                      <TelemetryDetailRow machine label="Source">
+                        {provider().bottleneckSource ?? 'N/A'}
+                      </TelemetryDetailRow>
+                      <TelemetryDetailRow label="Subreason">
                         {formatTelemetryEnumValue(provider().bottleneckSubreason)}
-                      </p>
+                      </TelemetryDetailRow>
                     </div>
                   </div>
                   <Show when={provider().bottleneck === 'endpointUnavailable'}>
-                    <div class="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-950">
+                    <div class="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-950">
                       <p class="font-medium">Claiming held by endpoint probe state</p>
                       <p class="mt-1">
                         Endpoint diagnostics are blocking new claims until a healthy endpoint or endpointless route is
@@ -393,17 +416,25 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                   <Show when={requestStats()?.lifecycleCounters}>
                     {(counters) => {
                       return (
-                        <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 text-xs text-gray-600">
+                        <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
                           <p class="font-medium text-gray-800">Lifecycle counters</p>
-                          <p class="mt-1">
-                            running prompts {formatTelemetryCount(counters().runningPrompts)}, claimed prompts{' '}
-                            {formatTelemetryCount(counters().claimedPrompts)}, live request LLM calls{' '}
-                            {formatTelemetryCount(counters().liveLlmCalls)}
-                          </p>
-                          <p class="mt-1">
-                            worker prompt slots {formatTelemetryCount(counters().workerActivePrompts)}, worker prompt
-                            queue {formatTelemetryCount(counters().workerQueuedPrompts)}
-                          </p>
+                          <div class="mt-2 grid gap-x-3 gap-y-1 sm:grid-cols-2">
+                            <TelemetryDetailRow label="Running prompts">
+                              {formatTelemetryCount(counters().runningPrompts)}
+                            </TelemetryDetailRow>
+                            <TelemetryDetailRow label="Claimed prompts">
+                              {formatTelemetryCount(counters().claimedPrompts)}
+                            </TelemetryDetailRow>
+                            <TelemetryDetailRow label="Live request LLM calls">
+                              {formatTelemetryCount(counters().liveLlmCalls)}
+                            </TelemetryDetailRow>
+                            <TelemetryDetailRow label="Worker prompt slots">
+                              {formatTelemetryCount(counters().workerActivePrompts)}
+                            </TelemetryDetailRow>
+                            <TelemetryDetailRow label="Worker prompt queue">
+                              {formatTelemetryCount(counters().workerQueuedPrompts)}
+                            </TelemetryDetailRow>
+                          </div>
                         </div>
                       )
                     }}
@@ -413,12 +444,12 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
             </div>
 
             <Show when={provider().endpointDiagnostics.length > 0}>
-              <div class="mt-8">
+              <div class="mt-5">
                 <TelemetrySection
                   description="Endpoint diagnostics show probe state, cooldown, failure metadata, and observed probe occupancy."
                   title="Endpoint Diagnostics"
                 >
-                  <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                     <TelemetryMetric
                       description={`Provider key: ${provider().endpointDiagnosticsSummary.providerKey}`}
                       tone="rose"
@@ -450,11 +481,11 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                       </span>
                     </TelemetryMetric>
                   </div>
-                  <div class="mt-3 grid gap-3">
+                  <div class="mt-2 grid gap-2">
                     <For each={provider().endpointDiagnostics}>
                       {(endpoint) => {
                         return (
-                          <div class="min-w-0 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                          <div class="min-w-0 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
                             <div class="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                               <div class="min-w-0">
                                 <p class="break-all font-medium text-gray-900">{getEndpointIdentityText(endpoint)}</p>
@@ -462,37 +493,31 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                                   {endpoint.endpointAvailabilityKey}
                                 </p>
                               </div>
-                              <span class="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700">
+                              <span class="max-w-full self-start rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700">
                                 {getEndpointProbeStateLabel(endpoint.localProbeState)}
                               </span>
                             </div>
-                            <div class="mt-3 grid gap-2 text-sm text-gray-600 md:grid-cols-2 xl:grid-cols-4">
-                              <p>
-                                <span class="font-medium text-gray-800">Cooldown:</span>{' '}
+                            <div class="mt-2 grid gap-x-3 gap-y-1 text-xs text-gray-600 md:grid-cols-2 xl:grid-cols-4">
+                              <TelemetryDetailRow label="Cooldown">
                                 {formatTelemetryDuration(endpoint.cooldownRemainingMs)}
-                              </p>
-                              <p>
-                                <span class="font-medium text-gray-800">Probe running:</span>{' '}
+                              </TelemetryDetailRow>
+                              <TelemetryDetailRow label="Probe running">
                                 {formatTelemetryBoolean(endpoint.probeInProgress)}
-                              </p>
-                              <p>
-                                <span class="font-medium text-gray-800">Local probe live:</span>{' '}
+                              </TelemetryDetailRow>
+                              <TelemetryDetailRow label="Local probe live">
                                 {formatTelemetryCount(endpoint.localProbeLiveCount)}
-                              </p>
-                              <p>
-                                <span class="font-medium text-gray-800">Observed probe live:</span>{' '}
+                              </TelemetryDetailRow>
+                              <TelemetryDetailRow label="Observed probe live">
                                 {endpoint.observedAggregateProbeLiveCount === null
                                   ? 'N/A'
                                   : formatTelemetryCount(endpoint.observedAggregateProbeLiveCount)}
-                              </p>
-                              <p>
-                                <span class="font-medium text-gray-800">Failure kind:</span>{' '}
+                              </TelemetryDetailRow>
+                              <TelemetryDetailRow label="Failure kind">
                                 {formatTelemetryEnumValue(endpoint.lastFailureKind)}
-                              </p>
-                              <p class="break-words md:col-span-2 xl:col-span-3">
-                                <span class="font-medium text-gray-800">Failure message:</span>{' '}
+                              </TelemetryDetailRow>
+                              <TelemetryDetailRow class="md:col-span-2 xl:col-span-3" label="Failure message">
                                 {endpoint.lastFailureMessage ?? 'N/A'}
-                              </p>
+                              </TelemetryDetailRow>
                             </div>
                           </div>
                         )
