@@ -33,6 +33,16 @@ const telemetryScenarios = [
   },
 ]
 
+const providerCapacityTelemetryHeadings = [
+  'Provider Capacity Telemetry',
+  'Admission Lease Snapshot',
+  'Local Worker Diagnostics',
+  'Observed Aggregate Telemetry',
+  'Allocation State And Convergence',
+  'Bottleneck Source Metadata',
+  'Endpoint Diagnostics',
+]
+
 test('admin job detail web flow explains provider telemetry bottleneck states', async ({page}) => {
   const browserFailures = createBrowserFailureAssertions(page)
 
@@ -44,7 +54,10 @@ test('admin job detail web flow explains provider telemetry bottleneck states', 
       await page.goto(`/admin/jobs/${job.id}`)
 
       await expect(page.getByRole('heading', {name: 'Job'})).toBeVisible()
-      await expect(page.getByRole('heading', {name: 'Provider Capacity Telemetry'})).toBeVisible()
+      const providerCapacityTelemetry = page.getByTestId('provider-capacity-telemetry')
+
+      await expect(providerCapacityTelemetry).toBeVisible()
+      await expect(providerCapacityTelemetry.getByRole('heading')).toHaveText(providerCapacityTelemetryHeadings)
       await expect(page.getByRole('heading', {name: 'Request And Capacity Debug'})).toBeVisible()
       await expect(page.getByText(telemetryScenario.label)).toBeVisible()
       await expect(page.getByText(telemetryScenario.description)).toBeVisible()
