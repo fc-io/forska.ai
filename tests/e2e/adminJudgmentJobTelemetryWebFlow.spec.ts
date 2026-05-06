@@ -1,4 +1,4 @@
-import {expect, test} from '@playwright/test'
+import {expect, type Page, test} from '@playwright/test'
 
 import {routeErrorSurfaceTestId} from '../../src/app/routerErrorSurface'
 import {createBrowserFailureAssertions} from '../../src/app/utils/browserFailureAssertions'
@@ -43,6 +43,14 @@ const providerCapacityTelemetryHeadings = [
   'Endpoint Diagnostics',
 ]
 
+const assertPageHasNoHorizontalOverflow = async (page: Page) => {
+  const hasNoHorizontalOverflow = await page.evaluate(() => {
+    return document.documentElement.scrollWidth <= document.documentElement.clientWidth
+  })
+
+  expect(hasNoHorizontalOverflow).toBe(true)
+}
+
 test('admin job detail web flow explains provider telemetry bottleneck states', async ({page}) => {
   const browserFailures = createBrowserFailureAssertions(page)
 
@@ -67,6 +75,42 @@ test('admin job detail web flow explains provider telemetry bottleneck states', 
 
       await page.unroute('**/api/**')
     }
+
+    browserFailures.assertNoFailures()
+  } finally {
+    browserFailures.dispose()
+  }
+})
+
+test('admin jobs list stays compact while preserving job row behavior', async ({page}) => {
+  const browserFailures = createBrowserFailureAssertions(page)
+  const job = buildTelemetryJob('claiming')
+
+  try {
+    await installAdminTelemetryMocks(page, job)
+    await page.setViewportSize({height: 900, width: 1280})
+    await page.goto('/admin/jobs')
+
+    await expect(page.getByRole('heading', {name: 'Judgment Jobs'})).toBeVisible()
+    await expect(page.getByRole('link', {name: 'Health Triage'})).toBeVisible()
+    await expect(page.getByRole('link', {name: 'DuckDB Append Metrics'})).toBeVisible()
+    await expect(page.getByRole('link', {name: 'Large Rebuild Status'})).toBeVisible()
+    await expect(page.getByRole('columnheader', {name: 'Job ID'})).toBeVisible()
+    await expect(page.getByRole('columnheader', {name: 'Project'})).toBeVisible()
+    await expect(page.getByRole('columnheader', {name: 'Health'})).toBeVisible()
+    await expect(page.getByRole('link', {name: 'Telemetry Project'})).toBeVisible()
+    await expect(page.getByText('Healthy')).toBeVisible()
+    await expect(page.getByText('1 total jobs')).toBeVisible()
+    await expect(page.getByText('1 running')).toBeVisible()
+
+    const jobRow = page.getByRole('row').filter({hasText: 'Telemetry Project'})
+    const jobRowHeight = await jobRow.evaluate((element) => {
+      return element.getBoundingClientRect().height
+    })
+
+    expect(jobRowHeight).toBeLessThanOrEqual(150)
+    await assertPageHasNoHorizontalOverflow(page)
+    await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
 
     browserFailures.assertNoFailures()
   } finally {

@@ -1,15 +1,30 @@
 import {expect, test} from 'bun:test'
 
 import {
+  formatNumber,
+  formatStatus,
   formatTelemetryRatio,
   getAllocationStateLabel,
   getEndpointProbeStateLabel,
+  getJobRiskScore,
+  getJudgmentsJobsRefetchInterval,
   getObservedAggregateTelemetryDescription,
   getObservedAggregateTelemetryLabel,
   getProviderBottleneckDescription,
   getProviderBottleneckLabel,
   getTelemetryCoverageSummary,
+  jobMatchesHealthFilter,
+  type JudgmentsJobListItem,
 } from './jobsPageShared'
+
+const buildListJob = (overrides: Partial<JudgmentsJobListItem>): JudgmentsJobListItem => {
+  return {
+    health: {badges: ['Healthy']},
+    status: 'completed',
+    storageState: 'active',
+    ...overrides,
+  } as JudgmentsJobListItem
+}
 
 test('provider telemetry labels explain the required admin bottleneck states', () => {
   expect(getProviderBottleneckLabel('claiming')).toBe('Underfed provider: claiming backlog')
@@ -54,4 +69,22 @@ test('capacity helper labels keep request leases separate from endpoint probes a
   expect(
     getAllocationStateLabel({allocationCompleteCurrent: false, allocationInputState: 'partialRemoteTelemetry'}),
   ).toBe('Allocation incomplete (Partial Remote Telemetry)')
+})
+
+test('list page helpers preserve status labels and active job polling behavior', () => {
+  expect(formatStatus('waiting_on_llm_connection')).toBe('Waiting On Llm Connection')
+  expect(formatStatus('paused')).toBe('Paused')
+  expect(formatNumber(1234567)).toBe('1,234,567')
+  expect(getJudgmentsJobsRefetchInterval([buildListJob({status: 'running'})])).toBe(30 * 1000)
+  expect(getJudgmentsJobsRefetchInterval([buildListJob({status: 'completed'})])).toBe(60 * 1000)
+})
+
+test('list page health helpers keep risky filters and scores stable', () => {
+  const job = buildListJob({health: {badges: ['Draining', 'Large WAL', 'Retained Outbox']}, storageState: 'draining'})
+
+  expect(jobMatchesHealthFilter(job, 'draining')).toBe(true)
+  expect(jobMatchesHealthFilter(job, 'largeWal')).toBe(true)
+  expect(jobMatchesHealthFilter(job, 'retainedOutbox')).toBe(true)
+  expect(jobMatchesHealthFilter(job, 'quarantined')).toBe(false)
+  expect(getJobRiskScore(job)).toBe(11)
 })
