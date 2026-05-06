@@ -96,6 +96,20 @@ const formatMetricCount = (value: number | null | undefined) => {
   return Number(value ?? 0).toLocaleString()
 }
 
+const formatOptionalMetricCount = (value: number | null | undefined) => {
+  return value === null || value === undefined ? 'N/A' : formatMetricCount(value)
+}
+
+const getRequestSlotWaiterText = (requestStats: Partial<JudgmentJobRequestStats> | undefined) => {
+  const waiters = requestStats?.requestSlotWaiters
+
+  return waiters
+    ? `provider ${formatMetricCount(waiters.providerAdmission)}, worker ${formatMetricCount(
+        waiters.worker,
+      )}, Codex ${formatMetricCount(waiters.codex)}, fallback ${formatMetricCount(waiters.fallback)}`
+    : 'N/A'
+}
+
 const formatSignedRowCount = (value: number | null | undefined) => {
   const normalizedValue = Number(value ?? 0)
   return `${normalizedValue > 0 ? '+' : ''}${normalizedValue.toLocaleString()} rows`
@@ -667,6 +681,9 @@ const AdminJudgmentJobDetail = () => {
             const liveRequestLlmCalls = () => {
               return data()?.requestStats?.liveLlmCalls ?? data()?.requestStats?.inFlight ?? 0
             }
+            const dispatchStats = () => {
+              return data()?.requestStats?.dispatch
+            }
             return (
               <>
                 <div class="mb-6 overflow-hidden rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-6">
@@ -1020,47 +1037,6 @@ const AdminJudgmentJobDetail = () => {
                         </DenseMetric>
                       </div>
                     </MetricGroup>
-
-                    <Show when={data()?.requestStats?.dispatch}>
-                      {(dispatch) => {
-                        return (
-                          <MetricGroup
-                            description="Worker prompt-slot and prefetch details from the request activity feed."
-                            title="Worker Dispatch Details"
-                          >
-                            <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                              <DenseMetric
-                                description="This job's prompts currently occupying worker prompt slots."
-                                label="Worker Prompt Slots"
-                                tone="cyan"
-                              >
-                                {formatMetricCount(dispatch().jobActivePrompts)}
-                              </DenseMetric>
-                              <DenseMetric
-                                description="This job's prompts already claimed and waiting in the worker prompt queue."
-                                label="Worker Queued Prompts"
-                                tone="blue"
-                              >
-                                {formatMetricCount(dispatch().jobQueuedPrompts)}
-                              </DenseMetric>
-                              <DenseMetric
-                                description={`Prompt queue: ${formatMetricCount(
-                                  dispatch().providerDispatchQueuedPrompts,
-                                )}/${formatMetricCount(dispatch().providerDispatchQueueLimit)}; prompt active slots: ${formatMetricCount(
-                                  dispatch().providerDispatchActivePrompts,
-                                )}/${formatMetricCount(dispatch().providerDispatchActivePromptLimit)} (${formatPercent(
-                                  dispatch().providerDispatchActivePromptFillPct,
-                                )})`}
-                                label="Prompt Prefetch Fill"
-                                tone="indigo"
-                              >
-                                {formatPercent(dispatch().providerDispatchPrefetchFillPct)}
-                              </DenseMetric>
-                            </div>
-                          </MetricGroup>
-                        )
-                      }}
-                    </Show>
                   </div>
                 </section>
 
@@ -1075,6 +1051,54 @@ const AdminJudgmentJobDetail = () => {
                     )
                   }}
                 </Show>
+
+                <section class="mb-6 rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+                  <div class="mb-3">
+                    <h2 class="text-lg font-semibold text-gray-900">Request And Capacity Debug</h2>
+                    <p class="mt-1 break-words text-sm text-gray-500">
+                      Local prompt-slot state and request-slot waits for this job&apos;s current execution path.
+                    </p>
+                  </div>
+
+                  <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                    <DenseMetric
+                      description="This job's prompts currently occupying worker prompt slots."
+                      label="Worker Prompt Slots"
+                      tone="cyan"
+                    >
+                      {formatOptionalMetricCount(dispatchStats()?.jobActivePrompts)}
+                    </DenseMetric>
+                    <DenseMetric
+                      description="This job's prompts already claimed and waiting in the worker prompt queue."
+                      label="Worker Queued Prompts"
+                      tone="blue"
+                    >
+                      {formatOptionalMetricCount(dispatchStats()?.jobQueuedPrompts)}
+                    </DenseMetric>
+                    <DenseMetric
+                      description={`Prompt queue: ${formatOptionalMetricCount(
+                        dispatchStats()?.providerDispatchQueuedPrompts,
+                      )}/${formatOptionalMetricCount(
+                        dispatchStats()?.providerDispatchQueueLimit,
+                      )}; prompt active slots: ${formatOptionalMetricCount(
+                        dispatchStats()?.providerDispatchActivePrompts,
+                      )}/${formatOptionalMetricCount(dispatchStats()?.providerDispatchActivePromptLimit)} (${formatPercent(
+                        dispatchStats()?.providerDispatchActivePromptFillPct,
+                      )})`}
+                      label="Prompt Prefetch Fill"
+                      tone="indigo"
+                    >
+                      {formatPercent(dispatchStats()?.providerDispatchPrefetchFillPct)}
+                    </DenseMetric>
+                    <DenseMetric
+                      description="Waiters are grouped by the capacity surface they are blocked on."
+                      label="Request Slot Waiters"
+                      tone="amber"
+                    >
+                      {getRequestSlotWaiterText(data()?.requestStats)}
+                    </DenseMetric>
+                  </div>
+                </section>
 
                 <JobTelemetryPanel requestStats={data()?.requestStats} />
 
