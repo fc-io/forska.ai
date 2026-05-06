@@ -13,6 +13,12 @@ const telemetryProjectId = 'project-telemetry'
 const telemetryModelId = 'model-telemetry'
 const telemetryProviderId = 'provider-telemetry'
 const endpointAvailabilityKey = `${telemetryProviderId}::https://runtime-paused.example.com`
+const mockRuntime = {
+  activeModelNames: ['telemetry-model'],
+  providerKind: 'sglang',
+  sourceMetadata: null,
+  workerUrls: [],
+}
 
 const baseEndpointDiagnostics = {
   cooldownRemainingMs: null,
@@ -220,6 +226,7 @@ export const buildTelemetryJob = (scenario: TelemetryScenario) => {
     id: `telemetry-${scenario}`,
     createdAt: '2026-05-04T12:00:00.000Z',
     error: [],
+    health: {badges: ['Healthy']},
     importFailureCount: 0,
     judgingRuntime: {enabled: true, reason: null},
     lastImportCompletedAt: null,
@@ -280,11 +287,7 @@ export const buildTelemetryJob = (scenario: TelemetryScenario) => {
       sqliteFileBytes: null,
       walBytes: 0,
     },
-    storagePolicy: {
-      hasLocalSqliteState: true,
-      repairMode: 'none',
-      startupHandling: 'idle',
-    },
+    storagePolicy: {hasLocalSqliteState: true, repairMode: 'none', startupHandling: 'idle'},
     storageState: 'active',
     totalTokenUsage: {totalCompletionTokens: 20, totalPromptTokens: 40, totalTokens: 60},
     updatedAt: '2026-05-04T12:00:30.000Z',
@@ -352,19 +355,104 @@ const mockProviderConnection = {
   },
 }
 
-const mockProject = {
+const mockProject = {id: telemetryProjectId, model: {id: telemetryModelId}, name: 'Telemetry Project', prompts: []}
+
+const mockProjectListItem = {
+  archived: false,
+  createdAt: '2026-05-04T12:00:00.000Z',
+  dateFrom: null,
+  dateTo: null,
+  description: null,
+  humanJudgmentMode: null,
   id: telemetryProjectId,
-  model: {id: telemetryModelId},
+  modelId: telemetryModelId,
+  modelName: 'telemetry-model',
+  modelProvider: 'sglang',
+  modelVersion: null,
   name: 'Telemetry Project',
-  prompts: [],
+  updatedAt: '2026-05-04T12:00:00.000Z',
+  useAbstract: true,
+  useFulltext: false,
+  useFulltextNoImages: false,
+  useTitle: true,
 }
 
-export const installAdminTelemetryMocks = async (page: Page, job: MockJob): Promise<void> => {
+type AdminTelemetryMocksOptions = {
+  jobs?: MockJob[]
+  preflightNotice?: string
+  providerRuntime?: typeof mockRuntime
+  startCleanError?: string
+}
+
+const repairResponse = (job: MockJob, message: string) => {
+  return {
+    action: 'preflight',
+    changes: {
+      checkpointed: false,
+      deletedOrphanedJudgedRows: 0,
+      finalizedDrain: false,
+      importedOutboxRows: 0,
+      initializedSqlite: false,
+      prunedOutboxRows: 0,
+      prunedQueueRows: 0,
+      quarantined: false,
+      reapedOutboxClaims: 0,
+      requeuedOrphanedJudgedRows: 0,
+      requeuedSentPrompts: 0,
+      unquarantined: false,
+    },
+    job,
+    jobId: job.id,
+    liveSqlite: {
+      claimedOutboxCount: 0,
+      lastAckSeq: null,
+      oldestUnexportedAgeMs: null,
+      orphanedJudgedRowCount: 0,
+      outboxRowCount: 0,
+      promptCounts: job.promptStats,
+      retainedRowCount: 0,
+      sqliteFileBytes: null,
+      walBytes: 0,
+    },
+    message,
+    ok: true,
+    preflight: {ok: true},
+    requestedBy: 'playwright',
+    systemSqliteFallback: {requestedSteps: [], results: []},
+  }
+}
+
+export const installAdminTelemetryMocks = async (
+  page: Page,
+  job: MockJob,
+  options: AdminTelemetryMocksOptions = {},
+): Promise<void> => {
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url())
 
+    if (url.pathname === '/api/judgmentsjobs') {
+      await route.fulfill({json: {data: options.jobs ?? [job], error: null}})
+      return
+    }
+
     if (url.pathname === `/api/judgmentsjobs/${job.id}`) {
       await route.fulfill({json: job})
+      return
+    }
+
+    if (url.pathname === `/api/judgmentsjobs/${job.id}/start-clean`) {
+      await route.fulfill({
+        json: options.startCleanError
+          ? {data: null, error: options.startCleanError}
+          : {data: {started: true}, error: null},
+      })
+      return
+    }
+
+    if (url.pathname === `/api/judgmentsjobs/${job.id}/preflight`) {
+      await route.fulfill({
+        json: {data: repairResponse(job, options.preflightNotice ?? 'Preflight completed.'), error: null},
+      })
       return
     }
 
@@ -373,15 +461,40 @@ export const installAdminTelemetryMocks = async (page: Page, job: MockJob): Prom
       return
     }
 
+    if (url.pathname === '/api/judgmentsjobs-total-token-usage') {
+      await route.fulfill({
+        json: {data: {totalCompletionTokens: 20, totalPromptTokens: 40, totalTokens: 60}, error: null},
+      })
+      return
+    }
+
     if (url.pathname === `/api/projects/${telemetryProjectId}`) {
       await route.fulfill({json: {data: mockProject, error: null}})
       return
     }
 
+    if (url.pathname === '/api/projects') {
+      await route.fulfill({json: {data: [mockProjectListItem], error: null}})
+      return
+    }
+
     if (url.pathname === '/api/provider-connections') {
       await route.fulfill({
-        json: {data: {catalog: [], connections: [mockProviderConnection], runtime: null}, error: null},
+        json: {
+          data: {catalog: [], connections: [mockProviderConnection], runtime: options.providerRuntime ?? mockRuntime},
+          error: null,
+        },
       })
+      return
+    }
+
+    if (url.pathname === '/api/tokens/timelineAllJobsStats') {
+      await route.fulfill({json: {highestUsage: null, p90Usage: null, success: true}})
+      return
+    }
+
+    if (url.pathname === '/api/tokens/timelineAllJobs') {
+      await route.fulfill({json: {data: [], success: true}})
       return
     }
 
