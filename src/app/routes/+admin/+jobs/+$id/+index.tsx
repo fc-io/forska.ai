@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
-import {createEffect, createSignal, For, onCleanup, Show, Suspense} from 'solid-js'
+import {createEffect, createSignal, For, onCleanup, type ParentProps, Show, Suspense} from 'solid-js'
 
 import {RuntimeModelNotice} from '../../../../../components/main/runtimeModelNotice.tsx'
 import {TokenUsageTimeline} from '../../../../../components/TokenUsageTimeline'
@@ -92,6 +92,10 @@ const formatPercent = (value: number | null | undefined) => {
   return value === null || value === undefined ? 'N/A' : `${value}%`
 }
 
+const formatMetricCount = (value: number | null | undefined) => {
+  return Number(value ?? 0).toLocaleString()
+}
+
 const formatSignedRowCount = (value: number | null | undefined) => {
   const normalizedValue = Number(value ?? 0)
   return `${normalizedValue > 0 ? '+' : ''}${normalizedValue.toLocaleString()} rows`
@@ -173,10 +177,6 @@ const getResumeBlockedReason = ({
   return storageState === 'quarantined'
     ? 'Resume is blocked while local storage is quarantined. Repair or unquarantine the local storage first.'
     : null
-}
-
-const isRecord = (value: unknown): value is Record<string, unknown> => {
-  return Boolean(value && typeof value === 'object')
 }
 
 type JobData = {
@@ -263,10 +263,6 @@ type JobRepairAction =
   | 'repair_orphaned_queue'
   | 'unquarantine'
 
-const shouldShowFulltextSkippedFromJob = (job: unknown) => {
-  return isRecord(job) ? Boolean(job.useFulltext || job.useFulltextNoImages) : false
-}
-
 const activeJudgmentsJobStatuses = new Set([
   'not_started',
   'running',
@@ -288,6 +284,61 @@ const TokenUsageTimelinePanelFallback = () => {
       <div class="h-64 flex items-center justify-center">
         <p class="text-gray-500">Loading token usage timeline...</p>
       </div>
+    </div>
+  )
+}
+
+type DenseMetricTone = 'amber' | 'blue' | 'cyan' | 'emerald' | 'gray' | 'indigo' | 'rose' | 'sky'
+type DenseMetricProps = ParentProps<{description?: string; label: string; tone?: DenseMetricTone}>
+type MetricGroupProps = ParentProps<{description?: string; title: string}>
+
+const getDenseMetricToneClass = (tone: DenseMetricTone | undefined) => {
+  switch (tone) {
+    case 'amber':
+      return 'border-amber-200 bg-amber-50 text-amber-950'
+    case 'blue':
+      return 'border-blue-200 bg-blue-50 text-blue-950'
+    case 'cyan':
+      return 'border-cyan-200 bg-cyan-50 text-cyan-950'
+    case 'emerald':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-950'
+    case 'indigo':
+      return 'border-indigo-200 bg-indigo-50 text-indigo-950'
+    case 'rose':
+      return 'border-rose-200 bg-rose-50 text-rose-950'
+    case 'sky':
+      return 'border-sky-200 bg-sky-50 text-sky-950'
+    default:
+      return 'border-gray-200 bg-gray-50 text-gray-950'
+  }
+}
+
+const DenseMetric = (props: DenseMetricProps) => {
+  return (
+    <div class={`min-w-0 rounded-md border px-3 py-2 ${getDenseMetricToneClass(props.tone)}`}>
+      <p class="break-words text-xs font-medium text-gray-500">{props.label}</p>
+      <div class="mt-1 break-words text-base font-semibold">{props.children}</div>
+      <Show when={props.description}>
+        {(description) => {
+          return <p class="mt-1 break-words text-xs leading-5 opacity-75">{description()}</p>
+        }}
+      </Show>
+    </div>
+  )
+}
+
+const MetricGroup = (props: MetricGroupProps) => {
+  return (
+    <div class="min-w-0 space-y-3">
+      <div>
+        <h3 class="text-sm font-medium text-gray-900">{props.title}</h3>
+        <Show when={props.description}>
+          {(description) => {
+            return <p class="mt-1 break-words text-sm text-gray-500">{description()}</p>
+          }}
+        </Show>
+      </div>
+      {props.children}
     </div>
   )
 }
@@ -500,9 +551,6 @@ const AdminJudgmentJobDetail = () => {
             const unassessedArticlesLink = () => {
               return shouldLinkToUnassessedArticles() ? `/admin/jobs/${jobId()}/unassessed_articles` : ''
             }
-            const shouldShowFulltextSkipped = () => {
-              return shouldShowFulltextSkippedFromJob(data())
-            }
             const storageHealth = () => {
               return data()?.storageHealth
             }
@@ -616,8 +664,8 @@ const AdminJudgmentJobDetail = () => {
               const runtime = data()?.judgingRuntime
               return runtime?.enabled === false ? (runtime.reason ?? 'Judging is disabled for this server.') : null
             }
-            const jobQueueGridClass = () => {
-              return `grid gap-4 sm:grid-cols-2 ${shouldShowFulltextSkipped() ? 'xl:grid-cols-5' : 'xl:grid-cols-4'}`
+            const liveRequestLlmCalls = () => {
+              return data()?.requestStats?.liveLlmCalls ?? data()?.requestStats?.inFlight ?? 0
             }
             return (
               <>
@@ -832,220 +880,189 @@ const AdminJudgmentJobDetail = () => {
                   </div>
                 </Show>
 
-                <div class="mb-6 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-                  <div class="grid gap-6 lg:grid-cols-2">
-                    <div class="min-w-0">
-                      <h3 class="mb-3 text-sm font-medium text-gray-900">Provider</h3>
-                      <div class="grid gap-4 sm:grid-cols-2">
-                        <div class="min-w-0">
-                          <p class="text-sm text-gray-500">Connection</p>
-                          <Show
-                            when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
-                            fallback={<p class="font-medium">Loading...</p>}
-                          >
-                            <Show
-                              when={projectProviderConnection()}
-                              fallback={<p class="font-medium">Unknown provider</p>}
-                            >
-                              {(connection) => {
-                                return (
-                                  <a
-                                    class="break-words font-medium text-blue-600 hover:text-blue-800 hover:underline"
-                                    href={`/providers/${connection().id}`}
-                                  >
-                                    {connection().label}
-                                  </a>
-                                )
-                              }}
-                            </Show>
-                          </Show>
-                        </div>
-                        <div class="min-w-0">
-                          <p class="text-sm text-gray-500">Current request-level LLM call limit</p>
-                          <Show
-                            when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
-                            fallback={<p class="font-medium">Loading...</p>}
-                          >
-                            <Show when={projectProviderConnection()} fallback={<p class="font-medium">Unknown</p>}>
-                              {(connection) => {
-                                return (
-                                  <>
-                                    <p class="font-medium">{formatProviderMaxInflightRequests(connection())}</p>
-                                    <p class="mt-1 break-words text-xs text-gray-500">
-                                      Shared throughput ceiling for all jobs using this provider connection.
-                                    </p>
-                                  </>
-                                )
-                              }}
-                            </Show>
-                          </Show>
-                        </div>
-                      </div>
-                    </div>
+                <section class="mb-6 rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-6">
+                  <div class="mb-4">
+                    <h2 class="text-lg font-semibold text-gray-900">Work Definition</h2>
+                    <p class="mt-1 break-words text-sm text-gray-500">
+                      Provider connection, request limit, remaining article scope, and token totals for this job.
+                    </p>
+                  </div>
 
-                    <div class="min-w-0">
-                      <h3 class="mb-3 text-sm font-medium text-gray-900">Project</h3>
-                      <div class="mb-4 space-y-1">
-                        <p class="text-sm text-gray-500">Unassessed Articles</p>
-                        <Show when={!unassessedCountQuery.isLoading} fallback={<p class="font-medium">Loading…</p>}>
-                          <Show
-                            when={shouldLinkToUnassessedArticles()}
-                            fallback={<p class="font-medium">{formattedUnassessedArticlesCount()}</p>}
-                          >
-                            <a href={unassessedArticlesLink()} class="font-medium text-blue-600 hover:text-blue-800">
-                              {formattedUnassessedArticlesCount()}
-                            </a>
-                          </Show>
+                  <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <DenseMetric label="Provider Connection">
+                      <Show
+                        when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
+                        fallback={<span>Loading...</span>}
+                      >
+                        <Show when={projectProviderConnection()} fallback={<span>Unknown provider</span>}>
+                          {(connection) => {
+                            return (
+                              <a
+                                class="break-words text-blue-600 hover:text-blue-800 hover:underline"
+                                href={`/providers/${connection().id}`}
+                              >
+                                {connection().label}
+                              </a>
+                            )
+                          }}
                         </Show>
-                      </div>
-                      <Show when={data()?.totalTokenUsage}>
-                        <div class="grid gap-4 sm:grid-cols-3">
-                          <div class="min-w-0">
-                            <p class="text-sm text-gray-500">Total Tokens</p>
-                            <p class="font-medium">{data()?.totalTokenUsage?.totalTokens?.toLocaleString() ?? '0'}</p>
-                          </div>
-                          <div class="min-w-0">
-                            <p class="text-sm text-gray-500">Prompt Tokens</p>
-                            <p class="font-medium">
-                              {data()?.totalTokenUsage?.totalPromptTokens?.toLocaleString() ?? '0'}
-                            </p>
-                          </div>
-                          <div class="min-w-0">
-                            <p class="text-sm text-gray-500">Completion Tokens</p>
-                            <p class="font-medium">
-                              {data()?.totalTokenUsage?.totalCompletionTokens?.toLocaleString() ?? '0'}
-                            </p>
-                          </div>
-                        </div>
                       </Show>
-                    </div>
-                  </div>
-                </div>
-                <Show when={data()?.promptStats}>
-                  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-                    <h2 class="text-lg font-semibold mb-4">Job Queue</h2>
-                    <div class={jobQueueGridClass()}>
-                      <div class="bg-gray-50 rounded-lg p-4">
-                        <p class="text-sm text-gray-500 mb-1">Ready</p>
-                        <p class="text-2xl font-bold text-gray-900">{data()?.promptStats?.ready ?? 0}</p>
-                        <p class="text-xs text-gray-500 mt-1">Prompts queued for judgment</p>
-                      </div>
-                      <div class="bg-blue-50 rounded-lg p-4">
-                        <p class="text-sm text-blue-600 mb-1">Claimed</p>
-                        <p class="text-2xl font-bold text-blue-900">{data()?.promptStats?.claimed ?? 0}</p>
-                        <p class="text-xs text-blue-600 mt-1">
-                          Reserved local backlog on this server that has not started running yet
-                        </p>
-                      </div>
-                      <div class="bg-sky-50 rounded-lg p-4">
-                        <p class="text-sm text-sky-600 mb-1">Running Prompts</p>
-                        <p class="text-2xl font-bold text-sky-900">{data()?.promptStats?.running ?? 0}</p>
-                        <p class="text-xs text-sky-600 mt-1">
-                          Prompt executions started locally; one prompt can span multiple live request LLM calls
-                        </p>
-                        <Show when={data()?.requestStats}>
-                          <p class="text-xs font-medium text-sky-700 mt-1">
-                            Live request LLM calls:{' '}
-                            {data()?.requestStats?.liveLlmCalls ?? data()?.requestStats?.inFlight ?? 0}
-                          </p>
+                    </DenseMetric>
+                    <DenseMetric
+                      description="Shared throughput ceiling for all jobs using this provider connection."
+                      label="Current request-level LLM call limit"
+                    >
+                      <Show
+                        when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
+                        fallback={<span>Loading...</span>}
+                      >
+                        <Show when={projectProviderConnection()} fallback={<span>Unknown</span>}>
+                          {(connection) => {
+                            return <span>{formatProviderMaxInflightRequests(connection())}</span>
+                          }}
                         </Show>
-                        <Show when={data()?.requestStats?.dispatch}>
-                          <p class="text-xs text-sky-700 mt-1">
-                            Worker prompt slots: {data()?.requestStats?.dispatch?.jobActivePrompts ?? 0}
-                          </p>
-                          <p class="text-xs text-sky-700 mt-1">
-                            Worker queued prompts: {data()?.requestStats?.dispatch?.jobQueuedPrompts ?? 0}
-                          </p>
-                        </Show>
-                      </div>
-                      <div class="bg-green-50 rounded-lg p-4">
-                        <p class="text-sm text-green-600 mb-1">Judged</p>
-                        <p class="text-2xl font-bold text-green-900">{data()?.promptStats?.judged ?? 0}</p>
-                        <p class="text-xs text-green-600 mt-1">Prompts with judgments completed</p>
-                      </div>
-                      <Show when={shouldShowFulltextSkipped()}>
-                        <div class="bg-amber-50 rounded-lg p-4">
-                          <p class="text-sm text-amber-600 mb-1">Skipped</p>
-                          <p class="text-2xl font-bold text-amber-900">{data()?.promptStats?.skipped ?? 0}</p>
-                          <p class="text-xs text-amber-600 mt-1">No fulltext available</p>
-                        </div>
                       </Show>
-                    </div>
+                    </DenseMetric>
+                    <DenseMetric label="Unassessed Articles">
+                      <Show when={!unassessedCountQuery.isLoading} fallback={<span>Loading...</span>}>
+                        <Show
+                          when={shouldLinkToUnassessedArticles()}
+                          fallback={<span>{formattedUnassessedArticlesCount()}</span>}
+                        >
+                          <a href={unassessedArticlesLink()} class="text-blue-600 hover:text-blue-800 hover:underline">
+                            {formattedUnassessedArticlesCount()}
+                          </a>
+                        </Show>
+                      </Show>
+                    </DenseMetric>
+                    <DenseMetric label="Total Tokens" tone="indigo">
+                      {formatMetricCount(data()?.totalTokenUsage?.totalTokens)}
+                    </DenseMetric>
+                    <DenseMetric label="Prompt Tokens" tone="blue">
+                      {formatMetricCount(data()?.totalTokenUsage?.totalPromptTokens)}
+                    </DenseMetric>
+                    <DenseMetric label="Completion Tokens" tone="cyan">
+                      {formatMetricCount(data()?.totalTokenUsage?.totalCompletionTokens)}
+                    </DenseMetric>
                   </div>
-                </Show>
+                </section>
 
-                <Show when={data()?.requestStats}>
-                  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-                    <h2 class="text-lg font-semibold mb-4">Request Activity</h2>
-                    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-                      <div class="bg-sky-50 rounded-lg p-4">
-                        <p class="text-sm text-sky-600 mb-1">Live Request LLM Calls</p>
-                        <p class="text-2xl font-bold text-sky-900">
-                          {data()?.requestStats?.liveLlmCalls ?? data()?.requestStats?.inFlight ?? 0}
-                        </p>
-                        <p class="text-xs text-sky-600 mt-1">
-                          Primary live throughput metric: request-level LLM calls running right now
-                        </p>
-                      </div>
-                      <div class="bg-indigo-50 rounded-lg p-4">
-                        <p class="text-sm text-indigo-600 mb-1">Attempts</p>
-                        <p class="text-2xl font-bold text-indigo-900">{data()?.requestStats?.attempts ?? 0}</p>
-                        <p class="text-xs text-indigo-600 mt-1">Total runtime request attempts, not distinct prompts</p>
-                      </div>
-                      <div class="bg-rose-50 rounded-lg p-4">
-                        <p class="text-sm text-rose-700 mb-1">Failed Attempts</p>
-                        <p class="text-2xl font-bold text-rose-900">
-                          {data()?.requestStats?.failures?.persistedFailedRequests ?? 0}
-                        </p>
-                        <p class="text-xs text-rose-700 mt-1">Failed request attempts captured in token usage rows</p>
-                      </div>
-                      <div class="bg-fuchsia-50 rounded-lg p-4">
-                        <p class="text-sm text-fuchsia-700 mb-1">Anthropic Refusals</p>
-                        <p class="text-2xl font-bold text-fuchsia-900">
-                          {data()?.requestStats?.failures?.anthropicRefusals ?? 0}
-                        </p>
-                        <p class="text-xs text-fuchsia-700 mt-1">
-                          Articles affected: {data()?.requestStats?.failures?.anthropicRefusalArticles ?? 0}
-                        </p>
-                      </div>
-                      <Show when={data()?.requestStats?.dispatch}>
-                        <div class="bg-cyan-50 rounded-lg p-4">
-                          <p class="text-sm text-cyan-700 mb-1">Worker Prompt Slots</p>
-                          <p class="text-2xl font-bold text-cyan-900">
-                            {data()?.requestStats?.dispatch?.jobActivePrompts ?? 0}
-                          </p>
-                          <p class="text-xs text-cyan-700 mt-1">
-                            This job&apos;s prompts currently occupying worker prompt slots
-                          </p>
-                        </div>
-                        <div class="bg-teal-50 rounded-lg p-4">
-                          <p class="text-sm text-teal-700 mb-1">Worker Queued Prompts</p>
-                          <p class="text-2xl font-bold text-teal-900">
-                            {data()?.requestStats?.dispatch?.jobQueuedPrompts ?? 0}
-                          </p>
-                          <p class="text-xs text-teal-700 mt-1">
-                            This job&apos;s prompts already claimed and waiting in the worker prompt queue
-                          </p>
-                        </div>
-                        <div class="bg-violet-50 rounded-lg p-4">
-                          <p class="text-sm text-violet-700 mb-1">Prompt Prefetch Fill</p>
-                          <p class="text-2xl font-bold text-violet-900">
-                            {formatPercent(data()?.requestStats?.dispatch?.providerDispatchPrefetchFillPct)}
-                          </p>
-                          <p class="text-xs text-violet-700 mt-1">
-                            Prompt queue: {data()?.requestStats?.dispatch?.providerDispatchQueuedPrompts ?? 0}/
-                            {data()?.requestStats?.dispatch?.providerDispatchQueueLimit ?? 0}
-                          </p>
-                          <p class="text-xs text-violet-700 mt-1">
-                            Prompt active slots: {data()?.requestStats?.dispatch?.providerDispatchActivePrompts ?? 0}/
-                            {data()?.requestStats?.dispatch?.providerDispatchActivePromptLimit ?? 0} (
-                            {formatPercent(data()?.requestStats?.dispatch?.providerDispatchActivePromptFillPct)})
-                          </p>
-                        </div>
-                      </Show>
-                    </div>
+                <section class="mb-6 rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-6">
+                  <div class="mb-4">
+                    <h2 class="text-lg font-semibold text-gray-900">Pipeline Summary</h2>
+                    <p class="mt-1 break-words text-sm text-gray-500">
+                      Prompt lifecycle and request-level progress before provider capacity diagnostics.
+                    </p>
                   </div>
-                </Show>
+
+                  <div class="space-y-6">
+                    <MetricGroup
+                      description="Prompt queue state for this job's project, model, and content settings."
+                      title="Prompt Queue"
+                    >
+                      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                        <DenseMetric description="Prompts queued for judgment." label="Ready">
+                          {formatMetricCount(data()?.promptStats?.ready)}
+                        </DenseMetric>
+                        <DenseMetric
+                          description="Reserved local backlog that has not started running yet."
+                          label="Claimed"
+                          tone="blue"
+                        >
+                          {formatMetricCount(data()?.promptStats?.claimed)}
+                        </DenseMetric>
+                        <DenseMetric description="Prompt executions started locally." label="Running" tone="sky">
+                          {formatMetricCount(data()?.promptStats?.running)}
+                        </DenseMetric>
+                        <DenseMetric description="Prompts with judgments completed." label="Judged" tone="emerald">
+                          {formatMetricCount(data()?.promptStats?.judged)}
+                        </DenseMetric>
+                        <DenseMetric description="Skipped prompt rows." label="Skipped" tone="amber">
+                          {formatMetricCount(data()?.promptStats?.skipped)}
+                        </DenseMetric>
+                      </div>
+                    </MetricGroup>
+
+                    <MetricGroup
+                      description="Request attempts are counted separately from prompt lifecycle rows."
+                      title="Request Activity"
+                    >
+                      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        <DenseMetric
+                          description="Request-level LLM calls running right now."
+                          label="Live Request LLM Calls"
+                          tone="sky"
+                        >
+                          {formatMetricCount(liveRequestLlmCalls())}
+                        </DenseMetric>
+                        <DenseMetric
+                          description="Total runtime request attempts, not distinct prompts."
+                          label="Attempts"
+                          tone="indigo"
+                        >
+                          {formatMetricCount(data()?.requestStats?.attempts)}
+                        </DenseMetric>
+                        <DenseMetric
+                          description="Failed request attempts captured in token usage rows."
+                          label="Failed Attempts"
+                          tone="rose"
+                        >
+                          {formatMetricCount(data()?.requestStats?.failures?.persistedFailedRequests)}
+                        </DenseMetric>
+                        <DenseMetric
+                          description={`Articles affected: ${formatMetricCount(
+                            data()?.requestStats?.failures?.anthropicRefusalArticles,
+                          )}`}
+                          label="Anthropic Refusals"
+                          tone="rose"
+                        >
+                          {formatMetricCount(data()?.requestStats?.failures?.anthropicRefusals)}
+                        </DenseMetric>
+                      </div>
+                    </MetricGroup>
+
+                    <Show when={data()?.requestStats?.dispatch}>
+                      {(dispatch) => {
+                        return (
+                          <MetricGroup
+                            description="Worker prompt-slot and prefetch details from the request activity feed."
+                            title="Worker Dispatch Details"
+                          >
+                            <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                              <DenseMetric
+                                description="This job's prompts currently occupying worker prompt slots."
+                                label="Worker Prompt Slots"
+                                tone="cyan"
+                              >
+                                {formatMetricCount(dispatch().jobActivePrompts)}
+                              </DenseMetric>
+                              <DenseMetric
+                                description="This job's prompts already claimed and waiting in the worker prompt queue."
+                                label="Worker Queued Prompts"
+                                tone="blue"
+                              >
+                                {formatMetricCount(dispatch().jobQueuedPrompts)}
+                              </DenseMetric>
+                              <DenseMetric
+                                description={`Prompt queue: ${formatMetricCount(
+                                  dispatch().providerDispatchQueuedPrompts,
+                                )}/${formatMetricCount(dispatch().providerDispatchQueueLimit)}; prompt active slots: ${formatMetricCount(
+                                  dispatch().providerDispatchActivePrompts,
+                                )}/${formatMetricCount(dispatch().providerDispatchActivePromptLimit)} (${formatPercent(
+                                  dispatch().providerDispatchActivePromptFillPct,
+                                )})`}
+                                label="Prompt Prefetch Fill"
+                                tone="indigo"
+                              >
+                                {formatPercent(dispatch().providerDispatchPrefetchFillPct)}
+                              </DenseMetric>
+                            </div>
+                          </MetricGroup>
+                        )
+                      }}
+                    </Show>
+                  </div>
+                </section>
 
                 <Show when={data()?.projectId}>
                   {(projectId) => {
