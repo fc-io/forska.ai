@@ -92,6 +92,10 @@ const formatPercent = (value: number | null | undefined) => {
   return value === null || value === undefined ? 'N/A' : `${value}%`
 }
 
+const formatBoolean = (value: boolean | null | undefined) => {
+  return value === true ? 'Yes' : value === false ? 'No' : 'N/A'
+}
+
 const formatMetricCount = (value: number | null | undefined) => {
   return Number(value ?? 0).toLocaleString()
 }
@@ -502,6 +506,19 @@ const AdminJudgmentJobDetail = () => {
       setIsRepairing(null)
     }
   }
+  const handleDeleteJob = (jobId: string) => {
+    if (!confirm('Are you sure you want to delete this job? This action cannot be undone.')) return
+
+    setIsDeleting(true)
+    deleteJudgmentsJob(jobId)
+      .then(() => {
+        void navigate({to: '/admin/jobs'})
+      })
+      .catch((error) => {
+        console.error('Failed to delete job:', error)
+        setIsDeleting(false)
+      })
+  }
   // console.log('job.data:', job.data?.unassessedArticlesCount)
   // console.log('job.data type:', typeof job, Array.isArray(job))
 
@@ -808,27 +825,6 @@ const AdminJudgmentJobDetail = () => {
                             {isStartingClean() ? 'Starting Clean...' : 'Start Job Clean'}
                           </button>
                         </Show>
-                        <button
-                          class="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={isDeleting() || isStarting() || isStartingClean() || isPausing()}
-                          onClick={() => {
-                            const jobId = data()?.id
-                            if (!jobId) return
-                            if (!confirm('Are you sure you want to delete this job? This action cannot be undone.'))
-                              return
-                            setIsDeleting(true)
-                            deleteJudgmentsJob(jobId)
-                              .then(() => {
-                                void navigate({to: '/admin/jobs'})
-                              })
-                              .catch((error) => {
-                                console.error('Failed to delete job:', error)
-                                setIsDeleting(false)
-                              })
-                          }}
-                        >
-                          {isDeleting() ? 'Deleting...' : 'Delete Job'}
-                        </button>
                       </div>
                     </div>
                   </div>
@@ -1102,162 +1098,171 @@ const AdminJudgmentJobDetail = () => {
 
                 <JobTelemetryPanel requestStats={data()?.requestStats} />
 
-                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-                  <div class="flex items-start justify-between gap-4 mb-4">
-                    <div>
-                      <h2 class="text-lg font-semibold">Local Storage Health</h2>
-                      <p class="text-sm text-gray-500 mt-1">
-                        Live per-job SQLite state and targeted recovery controls.
+                <div class="mb-6 min-w-0 rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-6">
+                  <div class="mb-4 flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div class="min-w-0">
+                      <h2 class="text-lg font-semibold text-gray-900">Storage And Import Flow</h2>
+                      <p class="mt-1 break-words text-sm text-gray-500">
+                        Local SQLite state, import closeout, runtime lease metadata, and targeted recovery controls.
                       </p>
                     </div>
-                    <span class="px-3 py-1 rounded-full text-sm font-medium border bg-gray-100 text-gray-800 border-gray-200">
+                    <span class="max-w-full self-start rounded-full border border-gray-200 bg-gray-100 px-3 py-1 text-sm font-medium text-gray-800">
                       {formatStatus(data()?.storageState ?? null)}
                     </span>
                   </div>
 
-                  <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Storage State</p>
-                      <p class="font-medium mt-1">{formatStatus(data()?.storageState ?? null)}</p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Repair Mode</p>
-                      <p class="font-medium mt-1">{formatRepairMode(storagePolicy()?.repairMode)}</p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Startup Handling</p>
-                      <p class="font-medium mt-1">{formatStartupHandling(storagePolicy()?.startupHandling)}</p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">SQLite Size</p>
-                      <p class="font-medium mt-1">{formatByteSize(storageHealth()?.sqliteFileBytes)}</p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">WAL Size</p>
-                      <p class="font-medium mt-1">{formatByteSize(storageHealth()?.walBytes)}</p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Outbox Rows</p>
-                      <p class="font-medium mt-1">{storageHealth()?.outboxRowCount ?? 0}</p>
-                      <p class="text-xs text-gray-500 mt-1">
-                        Claimed: {storageHealth()?.claimedOutboxCount ?? 0} | Retained:{' '}
-                        {storageHealth()?.retainedRowCount ?? 0}
-                      </p>
-                      <p class="text-xs text-gray-500 mt-1">
-                        Pending refresh ACK: {storageHealth()?.pendingCompletionAckCount ?? 0}
-                      </p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Orphaned Local Queue</p>
-                      <p class="font-medium mt-1">{storageHealth()?.orphanedJudgedRowCount ?? 0}</p>
-                      <p class="text-xs text-gray-500 mt-1">Repair processes up to 1,000 rows per action.</p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4 md:col-span-2 xl:col-span-1">
-                      <p class="text-sm text-gray-500">Recent Outbox Flow</p>
-                      <p class="font-medium mt-1">
+                  <div class="space-y-6">
+                    <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <DenseMetric
+                        description={`Local SQLite state: ${formatBoolean(storagePolicy()?.hasLocalSqliteState)}`}
+                        label="Storage Policy"
+                      >
+                        <span>{formatRepairMode(storagePolicy()?.repairMode)}</span>
+                        <span class="mx-1 text-gray-400">/</span>
+                        <span>{formatStartupHandling(storagePolicy()?.startupHandling)}</span>
+                      </DenseMetric>
+                      <DenseMetric
+                        description={`WAL: ${formatByteSize(storageHealth()?.walBytes)}`}
+                        label="SQLite / WAL Size"
+                      >
+                        {formatByteSize(storageHealth()?.sqliteFileBytes)}
+                      </DenseMetric>
+                      <DenseMetric
+                        description={`Claimed ${formatMetricCount(
+                          storageHealth()?.claimedOutboxCount,
+                        )}, retained ${formatMetricCount(
+                          storageHealth()?.retainedRowCount,
+                        )}, pending ACK ${formatMetricCount(storageHealth()?.pendingCompletionAckCount)}`}
+                        label="Outbox / ACK"
+                        tone="blue"
+                      >
+                        {formatMetricCount(storageHealth()?.outboxRowCount)}
+                      </DenseMetric>
+                      <DenseMetric
+                        description="Repair processes up to 1,000 rows per action."
+                        label="Orphaned Local Queue"
+                        tone="rose"
+                      >
+                        {formatMetricCount(storageHealth()?.orphanedJudgedRowCount)}
+                      </DenseMetric>
+                      <DenseMetric
+                        description={`Last ${recentTransfer()?.windowMinutes ?? 5}m; added ${formatMetricCount(
+                          recentTransfer()?.addedRows,
+                        )} (${formatRowsPerMinute(
+                          recentTransfer()?.addedRowsPerMinute ?? 0,
+                        )}), cleared ${formatMetricCount(recentTransfer()?.clearedRows)} (${formatRowsPerMinute(
+                          recentTransfer()?.clearedRowsPerMinute ?? 0,
+                        )}), DuckDB inserts ${formatMetricCount(
+                          recentTransfer()?.insertedRows,
+                        )} (${formatRowsPerMinute(recentTransfer()?.insertedRowsPerMinute ?? 0)})`}
+                        label="Recent Transfer Flow"
+                        tone="cyan"
+                      >
                         Net {formatSignedRowCount(recentTransfer()?.netRows)} (
                         {formatRowsPerMinute(recentTransfer()?.netRowsPerMinute ?? 0)})
-                      </p>
-                      <p class="text-xs text-gray-500 mt-1">
-                        Last {recentTransfer()?.windowMinutes ?? 5}m of actual runtime activity
-                      </p>
-                      <p class="text-xs text-gray-500 mt-1">
-                        Added: {(recentTransfer()?.addedRows ?? 0).toLocaleString()} (
-                        {formatRowsPerMinute(recentTransfer()?.addedRowsPerMinute ?? 0)})
-                      </p>
-                      <p class="text-xs text-gray-500 mt-1">
-                        Cleared: {(recentTransfer()?.clearedRows ?? 0).toLocaleString()} (
-                        {formatRowsPerMinute(recentTransfer()?.clearedRowsPerMinute ?? 0)})
-                      </p>
-                      <p class="text-xs text-gray-500 mt-1">
-                        DuckDB inserts: {(recentTransfer()?.insertedRows ?? 0).toLocaleString()} (
-                        {formatRowsPerMinute(recentTransfer()?.insertedRowsPerMinute ?? 0)})
-                      </p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Oldest Unexported</p>
-                      <p class="font-medium mt-1">{formatDuration(storageHealth()?.oldestUnexportedAgeMs)}</p>
-                      <p class="text-xs text-gray-500 mt-1">Last ACK seq: {storageHealth()?.lastAckSeq ?? 'N/A'}</p>
-                      <p class="text-xs text-gray-500 mt-1">
-                        Oldest pending refresh ACK: {formatDuration(storageHealth()?.oldestUnackedCompletionAgeMs)}
-                      </p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4 md:col-span-2 xl:col-span-1">
-                      <p class="text-sm text-gray-500">Projected Storage Drain</p>
-                      <p class="font-medium mt-1">
+                      </DenseMetric>
+                      <DenseMetric
+                        description={`Last ACK seq: ${storageHealth()?.lastAckSeq ?? 'N/A'}; oldest pending refresh ACK: ${formatDuration(
+                          storageHealth()?.oldestUnackedCompletionAgeMs,
+                        )}`}
+                        label="Oldest Unexported / ACK Age"
+                        tone="amber"
+                      >
+                        {formatDuration(storageHealth()?.oldestUnexportedAgeMs)}
+                      </DenseMetric>
+                      <DenseMetric
+                        description={`ETA ${formatDateTime(
+                          storageHealth()?.projection?.projectedStorageDrainAt,
+                        )}; phase ${
+                          storageHealth()?.projection?.currentPhase
+                            ? formatStatus(storageHealth()?.projection?.currentPhase ?? null)
+                            : 'N/A'
+                        }; current phase ETA ${formatDuration(
+                          storageHealth()?.projection?.estimatedCurrentPhaseRemainingMs,
+                        )}; throughput ${formatRowsPerMinute(
+                          storageHealth()?.projection?.rowsPerMinute,
+                        )}; active rebuilds ${storageHealth()?.projection?.activeLargeRebuildProjectCount ?? 'N/A'}`}
+                        label="Projected Drain"
+                        tone="indigo"
+                      >
                         {formatDuration(storageHealth()?.projection?.estimatedStorageDrainRemainingMs)}
-                      </p>
-                      <p class="text-xs text-gray-500 mt-1">
-                        ETA: {formatDateTime(storageHealth()?.projection?.projectedStorageDrainAt)}
-                      </p>
-                      <p class="text-xs text-gray-500 mt-1">
-                        Phase:{' '}
-                        {storageHealth()?.projection?.currentPhase
-                          ? formatStatus(storageHealth()?.projection?.currentPhase ?? null)
-                          : 'N/A'}{' '}
-                        | Current phase ETA:{' '}
-                        {formatDuration(storageHealth()?.projection?.estimatedCurrentPhaseRemainingMs)}
-                      </p>
-                      <p class="text-xs text-gray-500 mt-1">
-                        Throughput: {formatRowsPerMinute(storageHealth()?.projection?.rowsPerMinute)} | Active rebuilds:{' '}
-                        {storageHealth()?.projection?.activeLargeRebuildProjectCount ?? 'N/A'}
-                      </p>
+                      </DenseMetric>
                     </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Import Failures</p>
-                      <p class="font-medium mt-1">{data()?.importFailureCount ?? 0}</p>
-                      <p class="text-xs text-gray-500 mt-1">Last exit code: {data()?.lastImportExitCode ?? 'N/A'}</p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Last Import Success</p>
-                      <p class="font-medium mt-1">{formatDateTime(data()?.lastImportCompletedAt)}</p>
-                      <p class="text-xs text-gray-500 mt-1">Started: {formatDateTime(data()?.lastImportStartedAt)}</p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4 md:col-span-2 xl:col-span-1">
-                      <p class="text-sm text-gray-500">Last Import Failure</p>
-                      <p class="font-medium mt-1">{formatDateTime(data()?.lastImportErrorAt)}</p>
-                      <p class="text-xs text-gray-500 mt-1 break-words">
-                        {data()?.lastImportError ?? 'No recent import failure'}
-                      </p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Lease Acquired</p>
-                      <p class="font-medium mt-1">{formatDateTime(leaseMetadata()?.acquiredAt)}</p>
-                      <p class="text-xs text-gray-500 mt-1">
-                        API server port: {leaseMetadata()?.apiServerPort ?? 'N/A'}
-                      </p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Lease Host</p>
-                      <p class="font-medium mt-1">{leaseMetadata()?.hostname ?? 'N/A'}</p>
-                      <p class="text-xs text-gray-500 mt-1">PID: {leaseMetadata()?.pid ?? 'N/A'}</p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Lease ID</p>
-                      <p class="font-medium mt-1 break-all">{leaseMetadata()?.leaseId ?? 'N/A'}</p>
-                      <p class="text-xs text-gray-500 mt-1">Server Job: {leaseMetadata()?.serverJobId ?? 'N/A'}</p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4">
-                      <p class="text-sm text-gray-500">Lease Heartbeat</p>
-                      <p class="font-medium mt-1">{formatDateTime(leaseMetadata()?.heartbeatAt)}</p>
-                      <p class="text-xs text-gray-500 mt-1">Age: {formatDuration(leaseHeartbeatAgeMs())}</p>
-                    </div>
-                    <div class="bg-gray-50 rounded-lg p-4 md:col-span-2 xl:col-span-1">
-                      <p class="text-sm text-gray-500">Quarantine Reason</p>
-                      <p class="font-medium mt-1 break-words">{data()?.quarantineReason ?? 'Not quarantined'}</p>
-                    </div>
+
+                    <MetricGroup
+                      description="Last successful and failed import closeout details."
+                      title="Import Success / Failure"
+                    >
+                      <div class="grid gap-3 md:grid-cols-3">
+                        <DenseMetric
+                          description={`Started: ${formatDateTime(data()?.lastImportStartedAt)}`}
+                          label="Last Import Success"
+                          tone="emerald"
+                        >
+                          {formatDateTime(data()?.lastImportCompletedAt)}
+                        </DenseMetric>
+                        <DenseMetric
+                          description={`Last exit code: ${data()?.lastImportExitCode ?? 'N/A'}`}
+                          label="Import Failures"
+                          tone="rose"
+                        >
+                          {formatMetricCount(data()?.importFailureCount)}
+                        </DenseMetric>
+                        <DenseMetric label="Last Import Failure" tone="amber">
+                          <span>{formatDateTime(data()?.lastImportErrorAt)}</span>
+                          <span class="mt-1 block break-words text-xs font-medium text-gray-600">
+                            {data()?.lastImportError ?? 'No recent import failure'}
+                          </span>
+                        </DenseMetric>
+                      </div>
+                    </MetricGroup>
+
+                    <DenseMetric label="Quarantine Reason" tone="amber">
+                      <span class="break-words">{data()?.quarantineReason ?? 'Not quarantined'}</span>
+                    </DenseMetric>
+
+                    <MetricGroup
+                      description="Compact owner lease metadata for the local runtime that last acquired this job."
+                      title="Runtime Lease"
+                    >
+                      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        <DenseMetric label="Lease Host" tone="gray">
+                          <span class="break-all">{leaseMetadata()?.hostname ?? 'N/A'}</span>
+                          <span class="mt-1 block break-words text-xs font-medium text-gray-600">
+                            PID: {leaseMetadata()?.pid ?? 'N/A'}
+                          </span>
+                        </DenseMetric>
+                        <DenseMetric label="Lease ID" tone="gray">
+                          <span class="break-all">{leaseMetadata()?.leaseId ?? 'N/A'}</span>
+                          <span class="mt-1 block break-all text-xs font-medium text-gray-600">
+                            Server job: {leaseMetadata()?.serverJobId ?? 'N/A'}
+                          </span>
+                        </DenseMetric>
+                        <DenseMetric
+                          description={`Acquired: ${formatDateTime(leaseMetadata()?.acquiredAt)}; age ${formatDuration(
+                            leaseHeartbeatAgeMs(),
+                          )}`}
+                          label="Port / Heartbeat"
+                          tone="gray"
+                        >
+                          <span>{leaseMetadata()?.apiServerPort ?? 'N/A'}</span>
+                          <span class="mx-1 text-gray-400">/</span>
+                          <span>{formatDateTime(leaseMetadata()?.heartbeatAt)}</span>
+                        </DenseMetric>
+                      </div>
+                    </MetricGroup>
                   </div>
 
-                  <div class="mt-6 pt-6 border-t border-gray-200">
+                  <div class="mt-6 border-t border-gray-200 pt-6">
                     <Show when={recoveryGuidance()}>
                       {(guidance) => {
                         return (
-                          <div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                          <div class="mb-4 break-words rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                             <p class="font-medium">{guidance().title}</p>
                             <ul class="mt-2 list-disc space-y-1 pl-5">
                               <For each={guidance().lines}>
                                 {(line) => {
-                                  return <li>{line}</li>
+                                  return <li class="break-words">{line}</li>
                                 }}
                               </For>
                             </ul>
@@ -1314,6 +1319,26 @@ const AdminJudgmentJobDetail = () => {
                         </button>
                       </Show>
                     </div>
+                  </div>
+
+                  <div class="mt-6 border-t border-red-200 pt-6">
+                    <h3 class="mb-2 text-sm font-medium text-red-900">Danger Actions</h3>
+                    <p class="mb-3 break-words text-sm text-red-700">
+                      Delete removes this job permanently. Use recovery actions first when local state may still be
+                      repairable.
+                    </p>
+                    <button
+                      class="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={isDeleting() || isStarting() || isStartingClean() || isPausing()}
+                      onClick={() => {
+                        const jobId = data()?.id
+                        if (jobId) {
+                          return handleDeleteJob(jobId)
+                        }
+                      }}
+                    >
+                      {isDeleting() ? 'Deleting...' : 'Delete Job'}
+                    </button>
                   </div>
                 </div>
               </>
