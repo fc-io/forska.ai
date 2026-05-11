@@ -43,7 +43,7 @@ export const app = new Elysia()
     return file(path.join(distDir, 'index.html'))
   })
 
-const listener = app.listen(appServerRuntimeConfig.port)
+const listener = app.listen({hostname: '127.0.0.1', port: appServerRuntimeConfig.port})
 let shutdownStarted = false
 
 if (listener.server && typeof listener.server === 'object') {
