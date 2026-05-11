@@ -1,6 +1,6 @@
 {
   "name": "forska.ai",
-  "version": "0.1.51",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "start": "bun run start:build && bun run start:server & bun run start:app-server",
