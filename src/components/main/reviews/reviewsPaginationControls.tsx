@@ -234,7 +234,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                                                     return k
                                                   })
                                                 if (ids.length > 0) {
-                                                  await apiClient.api.projects['add_artilces_by_ids'].post({
+                                                  await apiClient.api.projects['add_articles_by_ids'].post({
                                                     targetProjectId: p.id,
                                                     sourceProjectId: props.sourceProjectId || '',
                                                     articleIds: ids,

@@ -390,7 +390,7 @@ const EditProject = (): JSX.Element => {
   const importRoutesQuery = useQuery(
     () => {
       return {
-        queryKey: ['importroutes'],
+        queryKey: ['import-routes'],
         queryFn: async () => {
           const response = await apiClient.api['import-routes'].get()
           const result = handleApiResponse<ImportRoutesResponse>(response, 'Failed to load import routes')
@@ -403,11 +403,6 @@ const EditProject = (): JSX.Element => {
       return appQueryClient
     },
   )
-
-  const createDefaultModel = async () => {
-    await apiClient.api.judgments.model.get()
-    await modelsQuery.refetch()
-  }
 
   const availableModels = () => {
     const models = modelsQuery.data ?? []
@@ -842,17 +837,9 @@ const EditProject = (): JSX.Element => {
                   <RuntimeModelNotice class="mt-3" notice={selectedModelRuntimeWarning()} />
                   <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
                     <div class="flex items-center justify-between gap-3">
-                      <p class="text-sm text-muted-foreground">No models available.</p>
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => {
-                          return void createDefaultModel()
-                        }}
-                        disabled={isLocked()}
-                        class={actionStateClass()}
-                      >
-                        Create default model
+                      <p class="text-sm text-muted-foreground">No models available. Set up a provider to add one.</p>
+                      <Button as={Link} to="/providers" size="sm">
+                        Manage providers
                       </Button>
                     </div>
                   </Show>

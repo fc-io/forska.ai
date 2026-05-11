@@ -71,7 +71,7 @@ export const projectsAddArticlesRoutes = new Elysia()
     },
   )
   .post(
-    '/api/projects/add_artilces_by_ids',
+    '/api/projects/add_articles_by_ids',
     async ({body}) => {
       const ids = Array.isArray(body.articleIds) ? body.articleIds : [body.articleIds]
       const result = await insertArticlesIntoProject(body.targetProjectId, ids, body.sourceProjectId)

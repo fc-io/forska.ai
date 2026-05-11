@@ -25,7 +25,6 @@ import {humanAssessmentRoutes} from './routes/HumanAssessmentRoutes.ts'
 import {importRoutes} from './routes/ImportRoutes.ts'
 import {judgmentDispatchTelemetryRoutes} from './routes/JudgmentDispatchTelemetryRoutes.ts'
 import {judgmentsJobsRoutes} from './routes/JudgmentsJobsRoutes.ts'
-import {judgmentsRoutes} from './routes/JudgmentsRoutes.ts'
 import {llmStatusRoutes} from './routes/LlmStatusRoutes.ts'
 import {modelsRoutes} from './routes/ModelsRoutes.ts'
 import {nvidiaSmiRoutes} from './routes/NvidiaSmiRoutes.ts'
@@ -189,7 +188,6 @@ const getProductApiRoutes = () => {
     .use(judgmentsJobsRoutes)
     .use(articlesRoutes)
     .use(articleAdminRoutes)
-    .use(judgmentsRoutes)
     .use(humanAssessmentRoutes)
     .use(modelsRoutes)
     .use(providerAdmissionLeaseRoutes)

@@ -827,17 +827,9 @@ const AdminCovidenceImport = () => {
                   </Show>
                   <Show when={!modelsQuery.isLoading && !modelsQuery.isError && (modelsQuery.data?.length ?? 0) === 0}>
                     <div class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-stone-50 p-4">
-                      <p class="text-sm text-stone-600">No models are available yet.</p>
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => {
-                          return void apiClient.api.judgments.model.get().then(() => {
-                            return modelsQuery.refetch()
-                          })
-                        }}
-                      >
-                        Create default model
+                      <p class="text-sm text-stone-600">No models are available yet. Set up a provider to add one.</p>
+                      <Button as={Link} to="/providers" size="sm">
+                        Manage providers
                       </Button>
                     </div>
                   </Show>

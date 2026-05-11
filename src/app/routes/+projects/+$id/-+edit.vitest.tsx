@@ -134,7 +134,7 @@ const seedEditRouteQueries = (queryClient: QueryClient, projectId: string) => {
   queryClient.setQueryData(['project', projectId, 'with-prompts'], getProjectDetails(projectId))
   queryClient.setQueryData(['models'], mockState.models)
   queryClient.setQueryData(['provider-connections', 'project-edit', projectId], mockState.providerConnectionsPayload)
-  queryClient.setQueryData(['importroutes'], mockState.importRoutes)
+  queryClient.setQueryData(['import-routes'], mockState.importRoutes)
 }
 
 const seedCovidenceImportQueries = (queryClient: QueryClient) => {
@@ -254,13 +254,6 @@ vi.mock('../../../../services/apiClient.ts', () => {
           get: async () => {
             mockState.apiCallCounts.providerConnections += 1
             return {data: {data: mockState.providerConnectionsPayload}}
-          },
-        },
-        judgments: {
-          model: {
-            get: async () => {
-              return {data: {data: {}}}
-            },
           },
         },
         models: {
