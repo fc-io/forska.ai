@@ -1,31 +1,5 @@
 # Open Source Investigation Plan
 
-## Goal
-
-- Decide whether Forska can be published safely as open source, and if not, produce a concrete blocker list with remediation order.
-- Treat security as the primary release gate, especially current API exposure, old internal APIs in git history, leaked secrets, and internal infra details.
-- Do not publish until both the current tree and reachable history have been reviewed.
-
-## Current Repo Signals
-
-- `README.md` says the product goal is a local-first single-user app with no admin role, but `src/server/serverMain.ts` still mounts routes such as `AdminInvestigateRoutes`, `ArticleAdminRoutes`, `DuckdbStudioRoutes`, `NvidiaSmiRoutes`, `LlmStatusRoutes`, `ApiProxyRoutes`, `TokensRoutes`, and `UsersRoutes`.
-- `src/appServerMain.ts` is a second HTTP listener and proxies `/api/*` to the API server, while `src/appServer.ts` is its runtime bootstrap wrapper, so the public network surface is broader than `src/server/routes/` alone.
-- `package.json` still includes operational scripts for backups, remote DB merge flows, and SSH-based workflows that may not belong in a public repo.
-- `.gitignore` already excludes `.env`, `data/`, `.secrets/`, logs, and imported assets, which is a good start, but that does not say anything about older commits.
-- The repo has a root `LICENSE`, but does not currently have `SECURITY.md` or `CONTRIBUTING.md`.
-- There is no current `.github/` workflow scaffold, so public-repo guardrails such as secret scans and denylisted-path checks will need to be added explicitly rather than assumed.
-
-## Main Questions To Answer
-
-- Which code, docs, scripts, and assets are safe to publish as-is?
-- What are all current network entrypoints, transitively mounted routes, proxy paths, and default bind interfaces?
-- Which current API routes are real product surface versus internal-only/debug/operator surface?
-- Which local API routes should be stable and documented for local LLM apps, agents, scripts, the browser UI, and the desktop app?
-- Which publication artifacts are safe to publish: Dockerfiles, compose files, CI config, remote-run docs, and release helpers?
-- Which old routes still appear in git history, tags, or release artifacts?
-- Have any secrets, internal URLs, SSH aliases, hostnames, tokens, or private datasets ever been committed?
-- Is it safer to rewrite history or to publish a new clean public repo from an audited snapshot?
-
 ## Core Release Principle
 
 - Default to a fail-closed release: if a route, script, doc, asset, or historical secret is not clearly safe for public distribution, treat it as blocked until reviewed.
