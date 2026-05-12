@@ -1,6 +1,18 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
+import {
+  type ComparisonProjectDifferenceColumn,
+  type ComparisonProjectDifferenceFilter,
+  getComparisonProjectHasAnyConflict,
+  getComparisonProjectHasDifferenceFilterMatch,
+} from '../../utils/comparisonProjectDifferenceFilter.ts'
+import {
+  type ComparisonProjectRowFilter,
+  comparisonProjectRowFilters,
+  getComparisonProjectPassesRowFilter,
+} from '../../utils/comparisonProjectRowFilter.ts'
+
 const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
 const comparisonProjectServingRebuildServiceModulePath = new URL(
   '../services/comparisonProjectServingRebuildService.ts',
@@ -328,6 +340,204 @@ const getMockLlmJudgmentRow = (params: {answer: string; articleId: string; model
   }
 }
 
+type MockServingRow = {
+  articleCreatedAt: Date
+  articleId: string
+  articleSummary: string | null
+  articleTitle: string
+  cells: Record<string, string | null>
+  hasConflict: boolean
+}
+
+const differenceFilters = ['all', 'human-vs-llm', 'llm-vs-llm', 'any-disagreement'] as const
+
+const hasServingCellValue = (value: string | null | undefined) => {
+  return (value?.trim() ?? '') !== ''
+}
+
+const getMockSourceProjectModelId = (sourceProjectId: string) => {
+  return sourceProjects[sourceProjectId as keyof typeof sourceProjects]?.modelId ?? 'model-1'
+}
+
+const getMockComparisonProjectColumns = (state: MockDatabaseState): ComparisonProjectDifferenceColumn[] => {
+  const promptIds = [...state.promptLinks]
+    .sort((left, right) => {
+      return left.order - right.order
+    })
+    .map((promptLink) => {
+      return promptLink.promptId
+    })
+
+  if (state.comparisonProject.compareWithHumans && state.comparisonProject.humanJudgmentMode === 'summary') {
+    const llmColumns =
+      state.sourceProjectLinks.length > 0
+        ? state.sourceProjectLinks.map((sourceProjectLink) => {
+            const modelId = getMockSourceProjectModelId(sourceProjectLink.sourceProjectId)
+            return {
+              id: `llm:${sourceProjectLink.sourceProjectId}:${modelId}:1100:summary`,
+              kind: 'llm',
+              promptId: 'summary',
+            } satisfies ComparisonProjectDifferenceColumn
+          })
+        : state.comparisonProject.modelIds.map((modelId) => {
+            return {
+              id: `llm:${modelId}:1100:summary`,
+              kind: 'llm',
+              promptId: 'summary',
+            } satisfies ComparisonProjectDifferenceColumn
+          })
+    const humanColumns = [
+      {id: 'human:summary', kind: 'human', promptId: 'summary'},
+    ] satisfies ComparisonProjectDifferenceColumn[]
+
+    return [...llmColumns, ...humanColumns]
+  }
+
+  const llmColumns = state.comparisonProject.modelIds.flatMap((modelId) => {
+    return promptIds.map((promptId) => {
+      return {id: `llm:${modelId}:1100:${promptId}`, kind: 'llm', promptId} satisfies ComparisonProjectDifferenceColumn
+    })
+  })
+  const humanColumns = state.comparisonProject.compareWithHumans
+    ? promptIds.map((promptId) => {
+        return {id: `human:${promptId}`, kind: 'human', promptId} satisfies ComparisonProjectDifferenceColumn
+      })
+    : []
+
+  return [...llmColumns, ...humanColumns]
+}
+
+const getMockPromptServingCells = (state: MockDatabaseState): Record<string, Record<string, string | null>> => {
+  const promptIds = state.promptLinks.map((promptLink) => {
+    return promptLink.promptId
+  })
+  const article1LlmCells = state.comparisonProject.modelIds.reduce<Record<string, string | null>>((cells, modelId) => {
+    const modelCells = promptIds.reduce<Record<string, string | null>>((promptCells, promptId) => {
+      const answer = modelId === 'model-2' && promptId === 'prompt-2' ? 'no' : 'yes'
+      return {...promptCells, [`llm:${modelId}:1100:${promptId}`]: answer}
+    }, {})
+
+    return {...cells, ...modelCells}
+  }, {})
+  const article1HumanCells =
+    state.comparisonProject.compareWithHumans && state.comparisonProject.humanJudgmentMode !== 'summary'
+      ? {'human:prompt-1': 'yes', 'human:prompt-2': 'no'}
+      : {}
+  const extraLlmCells = state.extraLlmRows.reduce<Record<string, Record<string, string | null>>>((articleMap, row) => {
+    const cells = articleMap[row.articleId] ?? {}
+
+    return {
+      ...articleMap,
+      [row.articleId]: {...cells, [`llm:${row.modelId}:1100:${row.promptId}`]: row.answeredOriginal},
+    }
+  }, {})
+  const article2SingleCells = state.includeSingleAnswerArticle
+    ? {'llm:model-1:1100:prompt-1': 'yes'}
+    : (extraLlmCells['article-2'] ?? {})
+
+  return {
+    'article-1': {...article1LlmCells, ...article1HumanCells, ...(extraLlmCells['article-1'] ?? {})},
+    ...(Object.keys(article2SingleCells).length > 0 ? {'article-2': article2SingleCells} : {}),
+  }
+}
+
+const getMockSummaryServingCells = (state: MockDatabaseState): Record<string, Record<string, string | null>> => {
+  const llmColumns = getMockComparisonProjectColumns(state).filter((column) => {
+    return column.kind === 'llm'
+  })
+  const getLlmSummaryCells = () => {
+    return llmColumns.reduce<Record<string, string | null>>((cells, column) => {
+      return {...cells, [column.id]: column.id.includes('model-2') ? 'yes' : 'no'}
+    }, {})
+  }
+  const article2Cells = state.extraLlmRows.length > 0 ? getLlmSummaryCells() : {}
+
+  return {
+    'article-1': {...getLlmSummaryCells(), 'human:summary': 'maybe'},
+    ...(Object.keys(article2Cells).length > 0 ? {'article-2': article2Cells} : {}),
+  }
+}
+
+const getMockServingCellsByArticle = (state: MockDatabaseState): Record<string, Record<string, string | null>> => {
+  return state.comparisonProject.compareWithHumans && state.comparisonProject.humanJudgmentMode === 'summary'
+    ? getMockSummaryServingCells(state)
+    : getMockPromptServingCells(state)
+}
+
+const getMockServingRowFilterMatch = (
+  rowFilter: ComparisonProjectRowFilter,
+  cells: Record<string, string | null>,
+  columns: ComparisonProjectDifferenceColumn[],
+  isSummaryMode: boolean,
+) => {
+  const answeredColumns = columns.filter((column) => {
+    return hasServingCellValue(cells[column.id])
+  })
+  const hasAllColumns = (kind: ComparisonProjectDifferenceColumn['kind']) => {
+    return columns
+      .filter((column) => {
+        return column.kind === kind
+      })
+      .every((column) => {
+        return hasServingCellValue(cells[column.id])
+      })
+  }
+
+  return getComparisonProjectPassesRowFilter({
+    answeredColumnCount: answeredColumns.length,
+    answeredPromptCount: new Set(
+      answeredColumns.map((column) => {
+        return column.promptId
+      }),
+    ).size,
+    hasAllHumanColumns: hasAllColumns('human'),
+    hasAllLlmColumns: hasAllColumns('llm'),
+    isSummaryMode,
+    rowFilter,
+  })
+}
+
+const getMockServingRows = (
+  state: MockDatabaseState,
+  rowFilter: ComparisonProjectRowFilter = 'all',
+  differenceFilter: ComparisonProjectDifferenceFilter = 'all',
+) => {
+  const columns = getMockComparisonProjectColumns(state)
+  const isSummaryMode =
+    state.comparisonProject.compareWithHumans && state.comparisonProject.humanJudgmentMode === 'summary'
+  const cellsByArticle = getMockServingCellsByArticle(state)
+  const rows = [
+    {
+      articleCreatedAt: new Date('2026-03-30T00:00:00.000Z'),
+      articleId: 'article-1',
+      articleSummary: 'Article 1 summary',
+      articleTitle: 'Article 1',
+    },
+    {
+      articleCreatedAt: new Date('2026-03-29T00:00:00.000Z'),
+      articleId: 'article-2',
+      articleSummary: 'Article 2 summary',
+      articleTitle: 'Article 2',
+    },
+  ]
+    .map<MockServingRow | null>((article) => {
+      const cells = cellsByArticle[article.articleId] ?? {}
+      const hasCells = Object.values(cells).some(hasServingCellValue)
+
+      return hasCells ? {...article, cells, hasConflict: getComparisonProjectHasAnyConflict(cells, columns)} : null
+    })
+    .filter((row): row is MockServingRow => {
+      return row !== null
+    })
+
+  return rows.filter((row) => {
+    return (
+      getMockServingRowFilterMatch(rowFilter, row.cells, columns, isSummaryMode)
+      && getComparisonProjectHasDifferenceFilterMatch(row.cells, columns, differenceFilter)
+    )
+  })
+}
+
 const postComparisonProjectJudgments = (
   app: {handle: (request: Request) => Promise<Response>},
   body: Record<string, unknown>,
@@ -355,9 +565,11 @@ const postComparisonProjectExport = (
 }
 
 const getComparisonProjectJudgmentsTotalCount = async (response: Response) => {
-  const body = (await response.json()) as {data: {totalCount: number}}
+  const body = (await response.json()) as {data: {data: Array<{id: string}>; totalCount: number | null}}
 
-  return body.data.totalCount
+  expect(body.data.totalCount).toBeNull()
+
+  return body.data.data.length
 }
 
 const getComparisonProjectJudgmentRowTitles = async (response: Response) => {
@@ -397,6 +609,33 @@ const getComparisonProjectExportAndJudgmentTitles = async (
   return exportTitles
 }
 
+const getSqlFilterValue = <T extends string>(params: {
+  column: 'difference_filter' | 'row_filter'
+  fallback: T
+  statement: string
+  values: readonly T[]
+}) => {
+  return (
+    params.values.find((value) => {
+      return params.statement.includes(`member.${params.column} = '${value}'`)
+    }) ?? params.fallback
+  )
+}
+
+const getSqlLimitValue = (statement: string) => {
+  const limitMatch = statement.match(/LIMIT\s+(\d+)/)
+  const limit = Number.parseInt(limitMatch?.[1] ?? '', 10)
+
+  return Number.isSafeInteger(limit) && limit > 0 ? limit : 50
+}
+
+const getSqlCursorOrdinal = (statement: string) => {
+  const cursorMatch = statement.match(/member\.ordinal > (\d+)/)
+  const cursor = Number.parseInt(cursorMatch?.[1] ?? '', 10)
+
+  return Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : null
+}
+
 const queryJson = async (
   statement: string,
   state: {
@@ -431,6 +670,66 @@ const queryJson = async (
     return state.conflictResolutionRows.filter((row) => {
       return statement.includes(`'${row.articleId}'`)
     })
+  }
+
+  if (statement.includes('FROM mart.comparison_filter_member')) {
+    const generation = getMockDatabaseState().servingStatus.activeGeneration
+
+    if (generation === null) {
+      return []
+    }
+
+    const rowFilter = getSqlFilterValue({
+      column: 'row_filter',
+      fallback: 'multiple-answers',
+      statement,
+      values: comparisonProjectRowFilters,
+    })
+    const differenceFilter = getSqlFilterValue({
+      column: 'difference_filter',
+      fallback: 'all',
+      statement,
+      values: differenceFilters,
+    })
+    const cursor = getSqlCursorOrdinal(statement)
+    const limit = getSqlLimitValue(statement)
+
+    return getMockServingRows(getMockDatabaseState(), rowFilter, differenceFilter)
+      .map((row, ordinal) => {
+        return {articleId: row.articleId, generation, ordinal}
+      })
+      .filter((row) => {
+        return cursor === null || row.ordinal > cursor
+      })
+      .slice(0, limit)
+  }
+
+  if (statement.includes('FROM mart.comparison_article_serving')) {
+    return getMockServingRows(getMockDatabaseState())
+      .filter((row) => {
+        return statement.includes(`'${row.articleId}'`)
+      })
+      .map((row) => {
+        return {
+          articleCreatedAt: row.articleCreatedAt,
+          articleId: row.articleId,
+          articleSummary: row.articleSummary,
+          articleTitle: row.articleTitle,
+          hasConflict: row.hasConflict,
+        }
+      })
+  }
+
+  if (statement.includes('FROM mart.comparison_cell_serving')) {
+    return getMockServingRows(getMockDatabaseState())
+      .filter((row) => {
+        return statement.includes(`'${row.articleId}'`)
+      })
+      .flatMap((row) => {
+        return Object.entries(row.cells).map(([columnId, displayAnswer]) => {
+          return {articleId: row.articleId, columnId, displayAnswer}
+        })
+      })
   }
 
   if (statement.includes('INSERT INTO app.comparison_project') && statement.includes('RETURNING')) {
@@ -1007,6 +1306,18 @@ const createMockDatabaseState = (): MockDatabaseState => {
     sourceProjectLinks: [],
     staleServingIds: [],
     transactionCalls: 0,
+  }
+}
+
+const createMockDatabaseStateWithReadyServing = (): MockDatabaseState => {
+  return {
+    ...createMockDatabaseState(),
+    servingStatus: getMockServingStatus({
+      activeGeneration: 1,
+      generationUpdatedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingCompletedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingStatus: 'ready',
+    }),
   }
 }
 
@@ -1690,7 +2001,7 @@ test('comparison project create and update mark serving stale and queue rebuilds
 
 test('comparison judgments normalize missing and invalid rowFilter to multiple answers', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       compareWithHumans: false,
       humanJudgmentMode: 'prompt',
@@ -1729,21 +2040,24 @@ test('comparison judgments normalize missing and invalid rowFilter to multiple a
       method: 'POST',
     }),
   )
-  const missingBody = (await missingResponse.json()) as {data: {totalCount: number}}
-  const invalidBody = (await invalidResponse.json()) as {data: {totalCount: number}}
-  const allBody = (await allResponse.json()) as {data: {totalCount: number}}
+  const missingBody = (await missingResponse.json()) as {data: {data: unknown[]; totalCount: number | null}}
+  const invalidBody = (await invalidResponse.json()) as {data: {data: unknown[]; totalCount: number | null}}
+  const allBody = (await allResponse.json()) as {data: {data: unknown[]; totalCount: number | null}}
 
   expect(missingResponse.status).toBe(200)
   expect(invalidResponse.status).toBe(200)
   expect(allResponse.status).toBe(200)
-  expect(missingBody.data.totalCount).toBe(1)
-  expect(invalidBody.data.totalCount).toBe(1)
-  expect(allBody.data.totalCount).toBe(2)
+  expect(missingBody.data.totalCount).toBeNull()
+  expect(invalidBody.data.totalCount).toBeNull()
+  expect(allBody.data.totalCount).toBeNull()
+  expect(missingBody.data.data).toHaveLength(1)
+  expect(invalidBody.data.data).toHaveLength(1)
+  expect(allBody.data.data).toHaveLength(2)
 })
 
 test('prompt comparison judgments apply rowFilter modes and keep difference filtering', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       compareWithHumans: false,
       humanJudgmentMode: 'prompt',
@@ -1794,9 +2108,225 @@ test('prompt comparison judgments apply rowFilter modes and keep difference filt
   expect(allRowsWithDifferenceTotalCount).toBe(1)
 })
 
-test('summary comparison judgments apply rowFilter modes to shown summary columns', async () => {
+test('comparison judgments page serving rows by cursor and return serving status without counts', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    includeSingleAnswerArticle: true,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const firstResponse = await postComparisonProjectJudgments(app, {
+    differenceFilter: 'all',
+    limit: '1',
+    rowFilter: 'all',
+  })
+  const firstBody = (await firstResponse.json()) as {
+    data: {
+      activeGeneration: number | null
+      data: Array<{articleTitle: string | null}>
+      nextCursor: string | null
+      servingStatus: string
+      totalCount: number | null
+      totalPages: number | null
+    }
+  }
+  const secondResponse = await postComparisonProjectJudgments(app, {
+    cursor: firstBody.data.nextCursor,
+    differenceFilter: 'all',
+    limit: '1',
+    rowFilter: 'all',
+  })
+  const secondBody = (await secondResponse.json()) as {
+    data: {data: Array<{articleTitle: string | null}>; nextCursor: string | null}
+  }
+  const state = getMockDatabaseState()
+
+  expect(firstResponse.status).toBe(200)
+  expect(secondResponse.status).toBe(200)
+  expect(
+    firstBody.data.data.map((row) => {
+      return row.articleTitle
+    }),
+  ).toEqual(['Article 1'])
+  expect(firstBody.data.nextCursor).toBe('0')
+  expect(firstBody.data.totalCount).toBeNull()
+  expect(firstBody.data.totalPages).toBeNull()
+  expect(firstBody.data.activeGeneration).toBe(1)
+  expect(firstBody.data.servingStatus).toBe('ready')
+  expect(
+    secondBody.data.data.map((row) => {
+      return row.articleTitle
+    }),
+  ).toEqual(['Article 2'])
+  expect(secondBody.data.nextCursor).toBeNull()
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_filter_member') && statement.includes('member.ordinal > 0')
+    }),
+  ).toBe(true)
+})
+
+test('comparison judgments serving path supports every difference filter', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const responseBodies = await differenceFilters.reduce<Promise<Array<{filter: string; titles: string[]}>>>(
+    async (promise, differenceFilter) => {
+      const results = await promise
+      const response = await postComparisonProjectJudgments(app, {
+        differenceFilter,
+        limit: '50',
+        rowFilter: 'fully-answered',
+      })
+      const body = (await response.json()) as {data: {data: Array<{articleTitle: string | null}>}}
+
+      expect(response.status).toBe(200)
+
+      return [
+        ...results,
+        {
+          filter: differenceFilter,
+          titles: body.data.data.map((row) => {
+            return row.articleTitle ?? 'Untitled'
+          }),
+        },
+      ]
+    },
+    Promise.resolve([]),
+  )
+
+  expect(responseBodies).toEqual([
+    {filter: 'all', titles: ['Article 1']},
+    {filter: 'human-vs-llm', titles: ['Article 1']},
+    {filter: 'llm-vs-llm', titles: ['Article 1']},
+    {filter: 'any-disagreement', titles: ['Article 1']},
+  ])
+})
+
+test('comparison judgments return an empty serving page when active generation is missing', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseState(),
+    comparisonProject: {
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectJudgments(app, {differenceFilter: 'all', limit: '50', rowFilter: 'all'})
+  const body = (await response.json()) as {
+    data: {
+      activeGeneration: number | null
+      data: unknown[]
+      nextCursor: string | null
+      servingStatus: string
+      totalCount: number | null
+      totalPages: number | null
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data).toEqual({
+    activeGeneration: null,
+    data: [],
+    isServingReady: false,
+    limit: 50,
+    nextCursor: null,
+    page: 1,
+    servingStatus: 'missing',
+    servingUpdatedAt: null,
+    totalCount: null,
+    totalPages: null,
+  })
+})
+
+test('comparison judgments hydrate conflict resolutions only for returned serving rows', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    conflictResolutionRows: [{answerValue: null, articleId: 'article-1', promptId: 'prompt-2'}],
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectJudgments(app, {
+    differenceFilter: 'llm-vs-llm',
+    limit: '50',
+    rowFilter: 'fully-answered',
+  })
+  const body = (await response.json()) as {
+    data: {data: Array<{conflictResolution: {articleId: string; label: string; value: string} | null; id: string}>}
+  }
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(
+    body.data.data.map((row) => {
+      return {conflictResolution: row.conflictResolution, id: row.id}
+    }),
+  ).toEqual([{conflictResolution: {articleId: 'article-1', label: 'Prompt 2', value: 'prompt-2'}, id: 'article-1'}])
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM app.comparison_project_conflict_resolution')
+        && statement.includes("article_id IN ('article-1')")
+      )
+    }),
+  ).toBe(true)
+})
+
+test('summary comparison judgments apply rowFilter modes to shown summary columns', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       compareWithHumans: true,
       humanJudgmentMode: 'summary',
@@ -1904,7 +2434,7 @@ test('comparison conflict resolution upsert uses DuckDB-safe timestamp function'
 
 test('comparison export filters match judgments endpoint row and difference filters', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       compareWithHumans: false,
       humanJudgmentMode: 'prompt',
@@ -1945,7 +2475,7 @@ test('comparison export filters match judgments endpoint row and difference filt
 
 test('prompt comparison judgments keep legacy prompt columns and human prompt answers', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       compareWithHumans: true,
       humanJudgmentMode: null,
@@ -1982,7 +2512,7 @@ test('prompt comparison judgments keep legacy prompt columns and human prompt an
   const judgmentsBody = (await judgmentsResponse.json()) as {
     data: {
       data: Array<{articleSummary: string | null; cells: Record<string, string | null>; id: string}>
-      totalCount: number
+      totalCount: number | null
     }
   }
   const [row] = judgmentsBody.data.data
@@ -1997,7 +2527,8 @@ test('prompt comparison judgments keep legacy prompt columns and human prompt an
     }),
   ).toEqual(['prompt-1', 'prompt-1', 'prompt-2', 'prompt-2', 'prompt-1', 'prompt-2'])
   expect(judgmentsResponse.status).toBe(200)
-  expect(judgmentsBody.data.totalCount).toBe(1)
+  expect(judgmentsBody.data.totalCount).toBeNull()
+  expect(judgmentsBody.data.data).toHaveLength(1)
   expect(row?.cells['llm:model-1:1100:prompt-1']).toBe('yes')
   expect(row?.cells['llm:model-2:1100:prompt-2']).toBe('no')
   expect(row?.cells['human:prompt-1']).toBe('yes')
@@ -2171,7 +2702,7 @@ test('comparison project export allows archived projects without writes', async 
 
 test('summary comparison judgments use synthetic summary columns and derived cells', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       compareWithHumans: true,
       humanJudgmentMode: 'summary',
@@ -2218,7 +2749,7 @@ test('summary comparison judgments use synthetic summary columns and derived cel
   const judgmentsBody = (await judgmentsResponse.json()) as {
     data: {
       data: Array<{articleSummary: string | null; cells: Record<string, string | null>; id: string}>
-      totalCount: number
+      totalCount: number | null
     }
   }
   const [row] = judgmentsBody.data.data
@@ -2232,7 +2763,8 @@ test('summary comparison judgments use synthetic summary columns and derived cel
   ).toEqual(['summary', 'summary', 'summary'])
   expect(metadataBody.data.columns[0]?.promptLabel).toBe('Overall decision')
   expect(judgmentsResponse.status).toBe(200)
-  expect(judgmentsBody.data.totalCount).toBe(1)
+  expect(judgmentsBody.data.totalCount).toBeNull()
+  expect(judgmentsBody.data.data).toHaveLength(1)
   expect(row?.cells['llm:model-1:1100:summary']).toBe('no')
   expect(row?.cells['llm:model-2:1100:summary']).toBe('yes')
   expect(row?.cells['human:summary']).toBe('maybe')
@@ -2240,29 +2772,25 @@ test('summary comparison judgments use synthetic summary columns and derived cel
   expect(
     state.queryStatements.some((statement) => {
       return (
-        statement.includes('FROM app.article a')
-        && statement.includes('article_title AS articleTitle')
-        && statement.includes('article_summary AS articleSummary')
-        && statement.includes('article_created_at AS articleCreatedAt')
-        && statement.includes('ORDER BY a.article_created_at DESC, a.article_title ASC, a.id ASC')
-        && statement.includes('LIMIT 20000')
-        && statement.includes('OFFSET 0')
+        statement.includes('FROM mart.comparison_filter_member')
+        && statement.includes("member.row_filter = 'fully-answered'")
+        && statement.includes("member.difference_filter = 'llm-vs-llm'")
       )
     }),
   ).toBe(true)
   expect(
     state.queryStatements.some((statement) => {
       return (
-        statement.includes('FROM app.article a')
-        && statement.includes("pa.project_id IN ('source-project-1')")
-        && statement.includes("air.import_route_id IN ('import-route-1')")
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes("article.article_id IN ('article-1')")
       )
     }),
   ).toBe(true)
   expect(
     state.queryStatements.some((statement) => {
       return (
-        statement.includes('FROM app.judgment_human_summary') && statement.includes("project_id = 'source-project-1'")
+        statement.includes('FROM mart.comparison_cell_serving cell')
+        && statement.includes("cell.article_id IN ('article-1')")
       )
     }),
   ).toBe(true)
@@ -2270,7 +2798,7 @@ test('summary comparison judgments use synthetic summary columns and derived cel
 
 test('summary comparison judgments scope to explicit source project links when available', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       compareWithHumans: true,
       humanJudgmentMode: 'summary',
@@ -2317,23 +2845,20 @@ test('summary comparison judgments scope to explicit source project links when a
     }),
   )
   const judgmentsBody = (await judgmentsResponse.json()) as {
-    data: {data: Array<{cells: Record<string, string | null>}>; totalCount: number}
+    data: {data: Array<{cells: Record<string, string | null>}>; totalCount: number | null}
   }
   const [row] = judgmentsBody.data.data
   const state = getMockDatabaseState()
 
   expect(judgmentsResponse.status).toBe(200)
-  expect(judgmentsBody.data.totalCount).toBe(1)
+  expect(judgmentsBody.data.totalCount).toBeNull()
+  expect(judgmentsBody.data.data).toHaveLength(1)
   expect(row?.cells['llm:source-project-1:model-1:1100:summary']).toBe('no')
   expect(row?.cells['llm:source-project-2:model-2:1100:summary']).toBe('yes')
   expect(row?.cells['human:summary']).toBe('maybe')
   expect(
     state.queryStatements.some((statement) => {
-      return (
-        statement.includes('FROM app.article a')
-        && statement.includes("pa.project_id IN ('source-project-1', 'source-project-2')")
-        && !statement.includes('air.import_route_id IN')
-      )
+      return statement.includes('FROM mart.comparison_filter_member')
     }),
   ).toBe(true)
 })

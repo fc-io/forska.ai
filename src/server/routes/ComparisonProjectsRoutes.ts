@@ -46,6 +46,7 @@ import {
   getComparisonProjectContentKey,
   getComparisonProjectRequiredColumnIds,
   getComparisonProjectScopedArticleBatch,
+  getComparisonProjectServingJudgmentRowsPage,
 } from './comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
 
 type PromptSelection = {
@@ -245,6 +246,16 @@ const {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} = appQuer
 const summaryPromptId = 'summary'
 const summaryPromptLabel = 'Overall decision'
 const comparisonProjectJudgmentArticleBatchSize = 20000
+
+const getRequestedPositiveInteger = (value: string | number | null | undefined, fallback: number) => {
+  const parsedValue = Number.parseInt(String(value ?? ''), 10)
+
+  return Number.isNaN(parsedValue) ? fallback : parsedValue
+}
+
+const getComparisonProjectJudgmentsCursor = (params: {cursor?: string | null; limit: number; page: number}) => {
+  return params.cursor ?? (params.page > 1 ? String((params.page - 1) * params.limit - 1) : null)
+}
 
 const getRequiredDateValue = (value: unknown) => {
   const parsedDate = getDateValue(value)
@@ -2369,79 +2380,48 @@ const getComparisonProjectJudgmentsPage = async (
   scope: ComparisonProjectScope,
   page: number,
   limit: number,
+  cursor: string | null,
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
 ) => {
   if (scope.prompts.length === 0 || scope.columns.length === 0) {
-    return {data: [], totalCount: 0, page: 1, limit, totalPages: 0}
+    return {
+      activeGeneration: scope.activeGeneration,
+      data: [],
+      isServingReady: scope.isServingReady,
+      limit,
+      nextCursor: null,
+      page: 1,
+      servingStatus: scope.servingStatus,
+      servingUpdatedAt: scope.servingUpdatedAt,
+      totalCount: null,
+      totalPages: null,
+    }
   }
 
-  const articleScopeConditions = getArticleScopeConditions(
-    scope.importRouteIds,
-    scope.sourceProjectIds,
-    scope.useImportRoutesForScope,
-  )
-  const articleScopeWhereClause = getWhereClause(articleScopeConditions)
   const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, scope.columns)
-  const requestedPage = Math.max(page, 1)
-  const requestedOffset = (requestedPage - 1) * limit
-  const pageState = {
-    lastPageRows: [] as ComparisonProjectJudgmentRow[],
-    pageRows: [] as ComparisonProjectJudgmentRow[],
-    totalCount: 0,
-  }
-
-  await forEachComparisonProjectJudgmentRowBatch({
-    articleBatchSize: comparisonProjectJudgmentArticleBatchSize,
-    columns: scope.columns,
+  const pageResult = await getComparisonProjectServingJudgmentRowsPage({
+    comparisonProjectId: scope.id,
+    cursor,
     differenceFilter: normalizedDifferenceFilter,
-    isSummaryMode: getIsSummaryMode(scope),
-    loadHumanRows: (articleIds) => {
-      return getComparisonProjectHumanRows(scope, articleIds)
-    },
-    loadLlmRows: async (articleIds) => {
-      const rawLlmRows = await getComparisonProjectLlmRows(scope, articleIds)
-      return getComparisonProjectLlmSummaryRows(scope, rawLlmRows)
-    },
-    loadScopedArticles: (request) => {
-      return getComparisonProjectScopedArticleBatch({
-        articleTable,
-        limit: request.limit,
-        offset: request.offset,
-        queryRunner: appDatabaseService,
-        whereClause: articleScopeWhereClause,
-      })
-    },
-    onRows: (rows) => {
-      const nextPageState = rows.reduce(
-        (state, row) => {
-          const rowIndex = state.totalCount
-          const isRequestedPageRow = rowIndex >= requestedOffset && rowIndex < requestedOffset + limit
-          const isFirstRowInLastPage = rowIndex % limit === 0
-
-          return {
-            lastPageRows: isFirstRowInLastPage ? [row] : [...state.lastPageRows, row],
-            pageRows: isRequestedPageRow ? [...state.pageRows, row] : state.pageRows,
-            totalCount: state.totalCount + 1,
-          }
-        },
-        {lastPageRows: pageState.lastPageRows, pageRows: pageState.pageRows, totalCount: pageState.totalCount},
-      )
-
-      pageState.lastPageRows = nextPageState.lastPageRows
-      pageState.pageRows = nextPageState.pageRows
-      pageState.totalCount = nextPageState.totalCount
-    },
+    limit,
+    queryRunner: appDatabaseService,
     rowFilter,
   })
+  const rowsWithConflictResolutions = await getComparisonProjectRowsWithConflictResolutions(scope, pageResult.rows)
 
-  const totalCount = pageState.totalCount
-  const totalPages = totalCount > 0 ? Math.ceil(totalCount / limit) : 0
-  const safePage = totalPages > 0 ? Math.min(Math.max(page, 1), totalPages) : 1
-  const data = safePage === requestedPage ? pageState.pageRows : pageState.lastPageRows
-  const rowsWithConflictResolutions = await getComparisonProjectRowsWithConflictResolutions(scope, data)
-
-  return {data: rowsWithConflictResolutions, totalCount, page: safePage, limit, totalPages}
+  return {
+    activeGeneration: scope.activeGeneration,
+    data: rowsWithConflictResolutions,
+    isServingReady: scope.isServingReady,
+    limit,
+    nextCursor: pageResult.nextCursor,
+    page,
+    servingStatus: scope.servingStatus,
+    servingUpdatedAt: scope.servingUpdatedAt,
+    totalCount: null,
+    totalPages: null,
+  }
 }
 
 const insertComparisonProjectPromptLinks = async (
@@ -3110,23 +3090,32 @@ export const comparisonProjectsRoutes = new Elysia()
         return {data: null, error: 'Comparison project not found'}
       }
 
-      const parsedPage = Number.parseInt(body.page, 10)
-      const parsedLimit = Number.parseInt(body.limit, 10)
-      const page = Number.isNaN(parsedPage) ? 1 : parsedPage
-      const limit = Number.isNaN(parsedLimit) ? 50 : Math.min(Math.max(parsedLimit, 1), 100)
+      const parsedPage = getRequestedPositiveInteger(body.page, 1)
+      const parsedLimit = getRequestedPositiveInteger(body.limit, 50)
+      const page = Math.max(parsedPage, 1)
+      const limit = Math.min(Math.max(parsedLimit, 1), 100)
+      const cursor = getComparisonProjectJudgmentsCursor({cursor: body.cursor, limit, page})
       const differenceFilter = getRequestedComparisonProjectDifferenceFilter({
         differenceFilter: body.differenceFilter,
         showOnlyModelDifferences: body.showOnlyModelDifferences,
       })
       const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
-      const judgmentsPage = await getComparisonProjectJudgmentsPage(data, page, limit, rowFilter, differenceFilter)
+      const judgmentsPage = await getComparisonProjectJudgmentsPage(
+        data,
+        page,
+        limit,
+        cursor,
+        rowFilter,
+        differenceFilter,
+      )
 
       return {data: judgmentsPage}
     },
     {
       body: t.Object({
-        page: t.String(),
-        limit: t.String(),
+        page: t.Optional(t.Union([t.String(), t.Number()])),
+        limit: t.Union([t.String(), t.Number()]),
+        cursor: t.Optional(t.Nullable(t.String())),
         rowFilter: t.Optional(t.String()),
         differenceFilter: t.Optional(
           t.Union([

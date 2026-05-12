@@ -187,17 +187,26 @@ export type ComparisonProjectJudgmentsRow = {
 }
 
 export type ComparisonProjectJudgmentsPage = {
+  activeGeneration: number | null
   data: ComparisonProjectJudgmentsRow[]
-  totalCount: number
+  isServingReady: boolean
   page: number
   limit: number
-  totalPages: number
+  nextCursor: string | null
+  servingStatus: ComparisonProjectServingStatus
+  servingUpdatedAt: Date | string | null
+  totalCount: number | null
+  totalPages: number | null
 }
 export type ComparisonProjectRowsRequestFilters = {
   rowFilter?: ComparisonProjectRowFilter
   differenceFilter?: ComparisonProjectDifferenceFilter
 }
-export type ComparisonProjectJudgmentsPageRequest = ComparisonProjectRowsRequestFilters & {page: string; limit: string}
+export type ComparisonProjectJudgmentsPageRequest = ComparisonProjectRowsRequestFilters & {
+  cursor?: string | null
+  limit: string
+  page: string
+}
 export type ComparisonProjectExportRequest = ComparisonProjectRowsRequestFilters
 
 const getResponseData = <T>(response: {data?: {data?: T | null} | null; error?: unknown}, errorMessage: string) => {
@@ -267,8 +276,10 @@ export const fetchComparisonProjectJudgmentsPage = async (
   limit: number,
   rowFilter?: ComparisonProjectRowFilter,
   differenceFilter?: ComparisonProjectDifferenceFilter,
+  cursor?: string | null,
 ) => {
   const body: ComparisonProjectJudgmentsPageRequest = {
+    cursor,
     page: String(page),
     limit: String(limit),
     rowFilter,

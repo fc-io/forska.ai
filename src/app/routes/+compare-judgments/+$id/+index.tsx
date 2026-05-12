@@ -45,7 +45,14 @@ const getContentSettingsLabel = (contentVariants: Array<{label: string}>) => {
     : 'none'
 }
 
-const getRangeLabel = (page: number, limit: number, totalCount: number) => {
+const getRangeLabel = (page: number, limit: number, rowCount: number, totalCount: number | null) => {
+  if (totalCount === null) {
+    const start = (page - 1) * limit + 1
+    const end = start + rowCount - 1
+
+    return rowCount === 0 ? 'Showing 0 results' : `Showing ${start}-${end}`
+  }
+
   if (totalCount === 0) {
     return 'Showing 0 results'
   }
@@ -242,7 +249,7 @@ const CompareProjectJudgmentsPage = () => {
     return currentPage() > 1
   })
   const canGoToNextPage = createMemo(() => {
-    return currentPage() < (judgmentsPageQuery.data?.totalPages ?? 0)
+    return Boolean(judgmentsPageQuery.data?.nextCursor)
   })
   const conflictResolutionOptions = createMemo(() => {
     const comparisonProject = comparisonProjectQuery.data
@@ -459,6 +466,7 @@ const CompareProjectJudgmentsPage = () => {
                         ? getRangeLabel(
                             judgmentsPageQuery.data.page,
                             judgmentsPageQuery.data.limit,
+                            judgmentsPageQuery.data.data.length,
                             judgmentsPageQuery.data.totalCount,
                           )
                         : 'Loading results...'}
@@ -536,8 +544,11 @@ const CompareProjectJudgmentsPage = () => {
                         Previous
                       </Button>
                       <span class="text-sm text-gray-600">
-                        Page {judgmentsPageQuery.data?.page ?? currentPage()} of{' '}
-                        {judgmentsPageQuery.data?.totalPages ?? 0}
+                        {judgmentsPageQuery.data?.totalPages === null
+                          ? `Page ${judgmentsPageQuery.data?.page ?? currentPage()}`
+                          : `Page ${judgmentsPageQuery.data?.page ?? currentPage()} of ${
+                              judgmentsPageQuery.data?.totalPages ?? 0
+                            }`}
                       </span>
                       <Button
                         variant="outline"

@@ -8,6 +8,10 @@ import {
   getComparisonProjectBatchCellsByArticle,
   getComparisonProjectBatchRows,
   getComparisonProjectScopedArticleBatchSql,
+  getComparisonProjectServingArticlesSql,
+  getComparisonProjectServingCellsSql,
+  getComparisonProjectServingJudgmentRowsPage,
+  getComparisonProjectServingMemberSql,
 } from './comparisonProjectJudgmentRows.ts'
 
 const columns = [
@@ -166,4 +170,124 @@ test('row batch iterator yields filtered rows by scoped article batch', async ()
 
   expect(offsets).toEqual([0, 2])
   expect(yieldedRowIds).toEqual([['article-1'], ['article-3']])
+})
+
+test('serving member sql resolves active generation and pages by filter cursor', () => {
+  const sql = getComparisonProjectServingMemberSql({
+    comparisonProjectId: 'comparison-project-1',
+    cursor: '4',
+    differenceFilter: 'llm-vs-llm',
+    limit: 25,
+    rowFilter: 'fully-answered',
+  })
+
+  expect(sql).toContain('FROM app.comparison_project_serving_generation')
+  expect(sql).toContain('FROM mart.comparison_filter_member member')
+  expect(sql).toContain("comparison_project_id = 'comparison-project-1'")
+  expect(sql).toContain("member.row_filter = 'fully-answered'")
+  expect(sql).toContain("member.difference_filter = 'llm-vs-llm'")
+  expect(sql).toContain('member.ordinal > 4')
+  expect(sql).toContain('ORDER BY member.ordinal ASC')
+  expect(sql).toContain('LIMIT 26')
+})
+
+test('serving hydration sql scopes articles and cells to returned article ids', () => {
+  const articleSql = getComparisonProjectServingArticlesSql({
+    articleIds: ['article-1', 'article-2'],
+    comparisonProjectId: 'comparison-project-1',
+    generation: 3,
+  })
+  const cellSql = getComparisonProjectServingCellsSql({
+    articleIds: ['article-1', 'article-2'],
+    comparisonProjectId: 'comparison-project-1',
+    generation: 3,
+  })
+
+  expect(articleSql).toContain('FROM mart.comparison_article_serving article')
+  expect(articleSql).toContain("article.article_id IN ('article-1', 'article-2')")
+  expect(cellSql).toContain('FROM mart.comparison_cell_serving cell')
+  expect(cellSql).toContain("cell.article_id IN ('article-1', 'article-2')")
+})
+
+test('serving judgment rows return next cursor and hydrate page rows only', async () => {
+  const statements: string[] = []
+  const page = await getComparisonProjectServingJudgmentRowsPage({
+    comparisonProjectId: 'comparison-project-1',
+    cursor: null,
+    differenceFilter: 'all',
+    limit: 2,
+    queryRunner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+
+        return statement.includes('FROM mart.comparison_filter_member')
+          ? ([
+              {articleId: 'article-1', generation: 1, ordinal: 0},
+              {articleId: 'article-2', generation: 1, ordinal: 1},
+              {articleId: 'article-3', generation: 1, ordinal: 2},
+            ] as T[])
+          : statement.includes('FROM mart.comparison_article_serving')
+            ? ([
+                {
+                  articleCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+                  articleId: 'article-1',
+                  articleSummary: 'Article 1 summary',
+                  articleTitle: 'Article 1',
+                  hasConflict: true,
+                },
+                {
+                  articleCreatedAt: new Date('2026-04-02T00:00:00.000Z'),
+                  articleId: 'article-2',
+                  articleSummary: 'Article 2 summary',
+                  articleTitle: 'Article 2',
+                  hasConflict: false,
+                },
+              ] as T[])
+            : ([
+                {articleId: 'article-1', columnId: 'llm:model-1:1100:prompt-1', displayAnswer: 'yes'},
+                {articleId: 'article-2', columnId: 'llm:model-1:1100:prompt-1', displayAnswer: 'no'},
+              ] as T[])
+      },
+    },
+    rowFilter: 'all',
+  })
+
+  expect(page.nextCursor).toBe('1')
+  expect(page.rows).toEqual([
+    {
+      articleCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+      articleSummary: 'Article 1 summary',
+      articleTitle: 'Article 1',
+      cells: {'llm:model-1:1100:prompt-1': 'yes'},
+      hasConflict: true,
+      id: 'article-1',
+    },
+    {
+      articleCreatedAt: new Date('2026-04-02T00:00:00.000Z'),
+      articleSummary: 'Article 2 summary',
+      articleTitle: 'Article 2',
+      cells: {'llm:model-1:1100:prompt-1': 'no'},
+      hasConflict: false,
+      id: 'article-2',
+    },
+  ])
+  expect(statements[1]).toContain("article.article_id IN ('article-1', 'article-2')")
+  expect(statements[2]).toContain("cell.article_id IN ('article-1', 'article-2')")
+})
+
+test('serving judgment rows return empty page when active generation is missing', async () => {
+  const page = await getComparisonProjectServingJudgmentRowsPage({
+    comparisonProjectId: 'comparison-project-1',
+    cursor: null,
+    differenceFilter: 'all',
+    limit: 50,
+    queryRunner: {
+      queryJson: async <T>(): Promise<T[]> => {
+        return []
+      },
+    },
+    rowFilter: 'all',
+  })
+
+  expect(page).toEqual({nextCursor: null, rows: []})
 })

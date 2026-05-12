@@ -8,7 +8,7 @@ import {
   type ComparisonProjectRowFilter,
   getComparisonProjectPassesRowFilter,
 } from '../../../utils/comparisonProjectRowFilter.ts'
-import {getDateValue} from '../../services/appQueryHelpers.ts'
+import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgmentDisplayAnswer, hasAnyJudgmentAnswer} from '../../utils/judgmentAnswers.ts'
 
 export type ComparisonProjectScopedArticle = {
@@ -56,6 +56,18 @@ type ComparisonProjectScopedArticleRow = Omit<ComparisonProjectScopedArticle, 'a
 
 type ComparisonProjectScopedArticleQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 
+type ComparisonProjectServingMemberRow = {articleId: string; generation: unknown; ordinal: unknown}
+
+type ComparisonProjectServingArticleRow = {
+  articleCreatedAt: unknown
+  articleId: string
+  articleSummary: string | null
+  articleTitle: string | null
+  hasConflict: boolean
+}
+
+type ComparisonProjectServingCellRow = {articleId: string; columnId: string; displayAnswer: string | null}
+
 type ComparisonProjectBatchCellsByArticle = {
   humanCellsByArticle: Record<string, Record<string, string | null>>
   llmCellsByArticle: Record<string, Record<string, string | null>>
@@ -86,6 +98,17 @@ type ForEachComparisonProjectJudgmentRowBatchParams = {
   onRows: (rows: ComparisonProjectJudgmentRow[]) => Promise<void> | void
   rowFilter: ComparisonProjectRowFilter
 }
+
+type ComparisonProjectServingJudgmentRowsParams = {
+  comparisonProjectId: string
+  cursor?: string | null
+  differenceFilter: ComparisonProjectDifferenceFilter
+  limit: number
+  queryRunner: ComparisonProjectScopedArticleQueryRunner
+  rowFilter: ComparisonProjectRowFilter
+}
+
+export type ComparisonProjectServingJudgmentRowsPage = {nextCursor: string | null; rows: ComparisonProjectJudgmentRow[]}
 
 export const getComparisonProjectContentKey = (settings: {
   useTitle: boolean
@@ -130,6 +153,28 @@ const getPositiveInteger = (value: number) => {
 const getNonNegativeInteger = (value: number) => {
   const integerValue = Number.isFinite(value) ? Math.floor(value) : 0
   return Math.max(integerValue, 0)
+}
+
+const getComparisonProjectServingCursorOrdinal = (cursor: string | null | undefined) => {
+  const parsedCursor = Number.parseInt(cursor ?? '', 10)
+
+  return Number.isSafeInteger(parsedCursor) && parsedCursor >= 0 ? parsedCursor : null
+}
+
+const getComparisonProjectServingOrdinal = (value: unknown) => {
+  const parsedOrdinal = typeof value === 'bigint' ? Number(value) : Number(value)
+
+  return Number.isSafeInteger(parsedOrdinal) && parsedOrdinal >= 0 ? parsedOrdinal : null
+}
+
+const getComparisonProjectServingGeneration = (value: unknown) => {
+  const parsedGeneration = typeof value === 'bigint' ? Number(value) : Number(value)
+
+  return Number.isSafeInteger(parsedGeneration) && parsedGeneration > 0 ? parsedGeneration : null
+}
+
+const getInClause = (values: string[]) => {
+  return getQuotedStringList(values).join(', ')
 }
 
 const getRowsByArticleId = <T extends {articleId: string}>(rows: readonly T[]) => {
@@ -234,6 +279,151 @@ export const getComparisonProjectScopedArticleBatch = async (params: {
   return rows.map((row) => {
     return {...row, articleCreatedAt: getDateValue(row.articleCreatedAt)}
   })
+}
+
+export const getComparisonProjectServingMemberSql = (params: {
+  comparisonProjectId: string
+  cursor?: string | null
+  differenceFilter: ComparisonProjectDifferenceFilter
+  limit: number
+  rowFilter: ComparisonProjectRowFilter
+}) => {
+  const cursorOrdinal = getComparisonProjectServingCursorOrdinal(params.cursor)
+  const limit = getPositiveInteger(params.limit)
+
+  return `
+    WITH active_generation AS (
+      SELECT active_generation AS generation
+      FROM app.comparison_project_serving_generation
+      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+        AND active_generation > 0
+    )
+    SELECT
+      member.article_id AS articleId,
+      member.generation AS generation,
+      member.ordinal AS ordinal
+    FROM mart.comparison_filter_member member
+    INNER JOIN active_generation active ON active.generation = member.generation
+    WHERE member.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+      AND member.row_filter = ${getSqlLiteral(params.rowFilter)}
+      AND member.difference_filter = ${getSqlLiteral(params.differenceFilter)}
+      ${cursorOrdinal === null ? '' : `AND member.ordinal > ${getSqlLiteral(cursorOrdinal)}`}
+    ORDER BY member.ordinal ASC
+    LIMIT ${limit + 1}
+  `
+}
+
+export const getComparisonProjectServingArticlesSql = (params: {
+  articleIds: string[]
+  comparisonProjectId: string
+  generation: number
+}) => {
+  return `
+    SELECT
+      article.article_id AS articleId,
+      article.article_title AS articleTitle,
+      article.article_summary AS articleSummary,
+      article.article_created_at AS articleCreatedAt,
+      article.has_conflict AS hasConflict
+    FROM mart.comparison_article_serving article
+    WHERE article.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+      AND article.generation = ${getSqlLiteral(params.generation)}
+      AND article.article_id IN (${getInClause(params.articleIds)})
+  `
+}
+
+export const getComparisonProjectServingCellsSql = (params: {
+  articleIds: string[]
+  comparisonProjectId: string
+  generation: number
+}) => {
+  return `
+    SELECT
+      cell.article_id AS articleId,
+      cell.column_id AS columnId,
+      cell.display_answer AS displayAnswer
+    FROM mart.comparison_cell_serving cell
+    WHERE cell.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+      AND cell.generation = ${getSqlLiteral(params.generation)}
+      AND cell.article_id IN (${getInClause(params.articleIds)})
+    ORDER BY cell.article_id ASC, cell.column_order ASC, cell.column_id ASC
+  `
+}
+
+const getComparisonProjectServingCellsByArticle = (cellRows: readonly ComparisonProjectServingCellRow[]) => {
+  return cellRows.reduce<Record<string, Record<string, string | null>>>((articleMap, cellRow) => {
+    const articleCells = articleMap[cellRow.articleId] ?? {}
+
+    return {...articleMap, [cellRow.articleId]: {...articleCells, [cellRow.columnId]: cellRow.displayAnswer}}
+  }, {})
+}
+
+const getComparisonProjectServingArticleRowsById = (articleRows: readonly ComparisonProjectServingArticleRow[]) => {
+  return articleRows.reduce<Map<string, ComparisonProjectServingArticleRow>>((articleMap, articleRow) => {
+    articleMap.set(articleRow.articleId, articleRow)
+    return articleMap
+  }, new Map<string, ComparisonProjectServingArticleRow>())
+}
+
+const getComparisonProjectServingJudgmentRows = (params: {
+  articleRows: readonly ComparisonProjectServingArticleRow[]
+  cellRows: readonly ComparisonProjectServingCellRow[]
+  memberRows: readonly ComparisonProjectServingMemberRow[]
+}) => {
+  const articlesById = getComparisonProjectServingArticleRowsById(params.articleRows)
+  const cellsByArticle = getComparisonProjectServingCellsByArticle(params.cellRows)
+
+  return params.memberRows
+    .map<ComparisonProjectJudgmentRow | null>((memberRow) => {
+      const articleRow = articlesById.get(memberRow.articleId)
+
+      return articleRow
+        ? {
+            articleCreatedAt: getDateValue(articleRow.articleCreatedAt),
+            articleSummary: articleRow.articleSummary,
+            articleTitle: articleRow.articleTitle,
+            cells: cellsByArticle[memberRow.articleId] ?? {},
+            hasConflict: articleRow.hasConflict,
+            id: memberRow.articleId,
+          }
+        : null
+    })
+    .filter(isDefined)
+}
+
+export const getComparisonProjectServingJudgmentRowsPage = async (
+  params: ComparisonProjectServingJudgmentRowsParams,
+): Promise<ComparisonProjectServingJudgmentRowsPage> => {
+  const limit = getPositiveInteger(params.limit)
+  const memberRows = await params.queryRunner.queryJson<ComparisonProjectServingMemberRow>(
+    getComparisonProjectServingMemberSql({...params, limit}),
+  )
+  const hasMore = memberRows.length > limit
+  const pageMemberRows = memberRows.slice(0, limit)
+  const generation = getComparisonProjectServingGeneration(pageMemberRows[0]?.generation)
+  const lastPageMemberRow = pageMemberRows[pageMemberRows.length - 1]
+  const nextOrdinal = getComparisonProjectServingOrdinal(lastPageMemberRow?.ordinal)
+  const articleIds = pageMemberRows.map((row) => {
+    return row.articleId
+  })
+
+  if (articleIds.length === 0 || generation === null) {
+    return {nextCursor: null, rows: []}
+  }
+
+  const [articleRows, cellRows] = await Promise.all([
+    params.queryRunner.queryJson<ComparisonProjectServingArticleRow>(
+      getComparisonProjectServingArticlesSql({articleIds, comparisonProjectId: params.comparisonProjectId, generation}),
+    ),
+    params.queryRunner.queryJson<ComparisonProjectServingCellRow>(
+      getComparisonProjectServingCellsSql({articleIds, comparisonProjectId: params.comparisonProjectId, generation}),
+    ),
+  ])
+
+  return {
+    nextCursor: hasMore && nextOrdinal !== null ? String(nextOrdinal) : null,
+    rows: getComparisonProjectServingJudgmentRows({articleRows, cellRows, memberRows: pageMemberRows}),
+  }
 }
 
 export const getComparisonProjectLlmCells = (rows: readonly ComparisonProjectJudgmentLlmRow[]) => {
