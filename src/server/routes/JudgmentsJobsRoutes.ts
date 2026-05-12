@@ -31,6 +31,7 @@ import {
 import {getJudgmentJobStorageTransferRuntime} from '../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts'
 import {
   getEndpointIdentityFromAvailabilityKey,
+  getJudgmentProviderTelemetryProviderSnapshot,
   getJudgmentProviderTelemetrySnapshot,
 } from '../cron/judgmentsJobs/judgmentProviderTelemetrySnapshot.ts'
 import {
@@ -68,6 +69,10 @@ import {
   type JudgmentJobSqliteHealthProjectionRecord,
   type JudgmentJobSqliteHealthSnapshotForProjection,
 } from '../services/judgmentJobSqliteHealthProjectionService.ts'
+import {
+  type JudgmentProviderTelemetryBucketedHistory,
+  queryJudgmentProviderTelemetryBucketedHistory,
+} from '../services/judgmentProviderTelemetryHistoryService.ts'
 import {
   getProjectMartLargeRebuildRowsPerMs,
   getProjectMartLargeRebuildScopeProgress,
@@ -452,6 +457,11 @@ const judgmentCompletionBodySchema = t.Object({
 const judgmentSnapshotQuerySchema = t.Object({
   executionSnapshotHash: t.Optional(t.String()),
   hash: t.Optional(t.String()),
+})
+const judgmentProviderTelemetryHistoryQuerySchema = t.Object({
+  jobId: t.String(),
+  providerKey: t.Optional(t.String()),
+  range: t.Union([t.Literal('5m'), t.Literal('15m'), t.Literal('1h'), t.Literal('24h'), t.Literal('3d')]),
 })
 
 const getJudgmentJobsReadDatabase = (): JudgmentJobSqliteHealthProjectionReader => {
@@ -1530,6 +1540,24 @@ const getJobContext = async ({
       return r.importRouteId
     }),
   }
+}
+
+const getTelemetryHistoryRoutePayload = (history: JudgmentProviderTelemetryBucketedHistory) => {
+  return {
+    bucketSizeSeconds: history.bucketSizeSeconds,
+    buckets: history.buckets.map((bucket) => {
+      return {...bucket, bucketEnd: bucket.bucketEnd.toISOString(), bucketStart: bucket.bucketStart.toISOString()}
+    }),
+    providerKey: history.providerKey,
+    rangeEnd: history.rangeEnd.toISOString(),
+    rangeStart: history.rangeStart.toISOString(),
+  }
+}
+
+const getTrimmedProviderKey = (value: string | undefined) => {
+  const trimmed = value?.trim() ?? ''
+
+  return trimmed.length > 0 ? trimmed : null
 }
 
 const getProjectModelId = async (
@@ -2817,6 +2845,34 @@ export const judgmentsJobsRoutes = new Elysia()
   .get('/api/judgmentsjobs-running', async () => {
     return {data: {jobs: await getOwnerBackedRunningJudgmentJobs()}, error: null}
   })
+  .get(
+    '/api/judgmentsjobs-provider-telemetry-history',
+    async ({query, request}) => {
+      return runJudgmentJobsRead({
+        operation: async () => {
+          const db = getJudgmentJobsReadDatabase()
+          const {job, projectModelId} = await getJobContext({db, jobId: query.jobId})
+          const requestedProviderKey = getTrimmedProviderKey(query.providerKey)
+          const providerKey = requestedProviderKey
+            ? requestedProviderKey
+            : getJudgmentProviderTelemetryProviderSnapshot({
+                job: {id: job.id, modelId: projectModelId},
+                providerConnection: await getProviderConnectionForStoredModel(projectModelId, db),
+              }).providerKey
+          const history = await queryJudgmentProviderTelemetryBucketedHistory({
+            jobId: job.id,
+            providerKey,
+            range: query.range,
+            runner: db,
+          })
+
+          return getTelemetryHistoryRoutePayload(history)
+        },
+        request,
+      })
+    },
+    {query: judgmentProviderTelemetryHistoryQuerySchema},
+  )
   .post(
     '/api/judgmentsjobs-worker-heartbeats',
     async ({body}) => {

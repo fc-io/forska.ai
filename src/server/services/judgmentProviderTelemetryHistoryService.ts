@@ -84,10 +84,7 @@ export type JudgmentProviderTelemetryBucketedHistory = {
   rangeEnd: Date
   rangeStart: Date
 }
-export type JudgmentProviderTelemetryHistoryRunner = {
-  queryJson: <T>(statement: string) => Promise<T[]>
-  run: (statement: string) => Promise<void>
-}
+export type JudgmentProviderTelemetryHistoryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 
 type BottleneckCandidate = JudgmentProviderTelemetryBottleneckSummary & {latestSampledAtMs: number}
 type JudgmentProviderTelemetryHistoryRow = {

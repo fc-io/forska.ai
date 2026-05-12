@@ -18,6 +18,7 @@ const ownerlessReadableDiagnosticsPaths = [
   '/api/admin/worker-runtime-diagnostics',
   '/api/judgmentsjobs',
   '/api/judgmentsjobs-health',
+  '/api/judgmentsjobs-provider-telemetry-history',
 ]
 
 const normalizePathname = (pathname: string) => {

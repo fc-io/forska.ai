@@ -8,11 +8,11 @@
 
 ## Current Repo Signals
 
-- `README.md` says the product goal is a local-first single-user app with no admin role, but `src/server/index.ts` still mounts routes such as `AdminInvestigateRoutes`, `ArticleAdminRoutes`, `DuckdbStudioRoutes`, `NvidiaSmiRoutes`, `LlmStatusRoutes`, `ApiProxyRoutes`, `TokensRoutes`, and `UsersRoutes`.
-- `src/appServer.ts` is a second HTTP entrypoint and proxies `/api/*` to the API server, so the public network surface is broader than `src/server/routes/` alone.
+- `README.md` says the product goal is a local-first single-user app with no admin role, but `src/server/serverMain.ts` still mounts routes such as `AdminInvestigateRoutes`, `ArticleAdminRoutes`, `DuckdbStudioRoutes`, `NvidiaSmiRoutes`, `LlmStatusRoutes`, `ApiProxyRoutes`, `TokensRoutes`, and `UsersRoutes`.
+- `src/appServerMain.ts` is a second HTTP listener and proxies `/api/*` to the API server, while `src/appServer.ts` is its runtime bootstrap wrapper, so the public network surface is broader than `src/server/routes/` alone.
 - `package.json` still includes operational scripts for backups, remote DB merge flows, and SSH-based workflows that may not belong in a public repo.
 - `.gitignore` already excludes `.env`, `data/`, `.secrets/`, logs, and imported assets, which is a good start, but that does not say anything about older commits.
-- The repo does not currently have a root `LICENSE`, `SECURITY.md`, or `CONTRIBUTING` file.
+- The repo has a root `LICENSE`, but does not currently have `SECURITY.md` or `CONTRIBUTING.md`.
 - There is no current `.github/` workflow scaffold, so public-repo guardrails such as secret scans and denylisted-path checks will need to be added explicitly rather than assumed.
 
 ## Main Questions To Answer
@@ -20,6 +20,7 @@
 - Which code, docs, scripts, and assets are safe to publish as-is?
 - What are all current network entrypoints, transitively mounted routes, proxy paths, and default bind interfaces?
 - Which current API routes are real product surface versus internal-only/debug/operator surface?
+- Which local API routes should be stable and documented for local LLM apps, agents, scripts, the browser UI, and the desktop app?
 - Which publication artifacts are safe to publish: Dockerfiles, compose files, CI config, remote-run docs, and release helpers?
 - Which old routes still appear in git history, tags, or release artifacts?
 - Have any secrets, internal URLs, SSH aliases, hostnames, tokens, or private datasets ever been committed?
@@ -28,6 +29,7 @@
 ## Core Release Principle
 
 - Default to a fail-closed release: if a route, script, doc, asset, or historical secret is not clearly safe for public distribution, treat it as blocked until reviewed.
+- Do not confuse local integration with public internet exposure. The intended open-source shape includes a documented API for local apps on the same machine, while unsupported internal/debug/operator routes stay clearly separated.
 - Assume exhaustive discovery of every old API use in git history is not realistic. The default public-release path should therefore avoid publishing the existing private history.
 
 ## Preferred Public Release Path
@@ -47,6 +49,7 @@
 
 - Include only what is needed for the public OSS flow: `bun install`, `bun run db:mig`, `bun run dev:server`, `bun run dev:app`, `bun run build`, and relevant `bun test` commands.
 - Include reviewed product code under `src/`, but only after the route and surface audit removes or gates internal-only endpoints.
+- Include a supported local API contract based on `plans/supportedLocalApi.md`, so local LLM apps, agents, scripts, browser UI, and desktop app know which routes are stable.
 - Include DuckDB migration files under `src/db/duckdbMigrations/` and any other schema/runtime files required for first boot.
 - Include tests that validate the public product surface, as long as fixtures and snapshots are sanitized.
 - Include root build and tooling files needed for public development, such as `package.json`, `bun.lock`, `tsconfig.json`, `vite.config.ts`, `eslint.config.ts`, `playwright.config.ts`, `.gitignore`, `.prettierrc.js`, `.prettierignore`, and `index.html`.
@@ -76,18 +79,20 @@
 
 ### 2. Inventory the current server and API surface
 
-- Build a network surface inventory from `src/server/index.ts`, `src/appServer.ts`, every file under `src/server/routes/`, and any nested or transitively mounted routes.
-- For each listener, proxy entrypoint, or route, record: bind host, path, methods, mounted role, proxy behavior, client caller, data touched, whether it is required for the product, and whether it is safe to keep public.
-- Classify each route into one of: public product route, local-only route, admin/debug route, operator/infra route, or dead route.
+- Use `plans/supportedLocalApi.md` as the companion plan for deciding which localhost routes are stable local integration APIs versus internal/debug implementation details.
+- Build a network surface inventory from `src/server/index.ts`, `src/server/serverMain.ts`, `src/appServer.ts`, `src/appServerMain.ts`, every file under `src/server/routes/`, and any nested or transitively mounted routes.
+- For each listener, proxy entrypoint, or route, record: bind host, path, methods, mounted role, proxy behavior, client caller, local integration caller, data touched, whether it is required for the product, and whether it is safe to keep in the public seed.
+- Classify each route into one of: supported local API, local diagnostics API, sensitive local API, internal runtime API, maintenance/debug API, or remove from public seed.
 - Pay special attention to current hotspots: `AdminInvestigateRoutes`, `ArticleAdminRoutes`, `DuckdbStudioRoutes`, `NvidiaSmiRoutes`, `LlmStatusRoutes`, `ApiProxyRoutes`, `TokensRoutes`, `UsersRoutes`, `RuntimeAssetsRoutes`, the provider routes mounted under `ModelsRoutes`, and the `/api/*` proxy path in `src/appServer.ts`.
-- Compare the route inventory against the README claim that the app is single-user with no admin role. Any mismatch becomes a release blocker or an explicit product decision.
+- Compare the route inventory against the README claim that the app is single-user with no admin role, while preserving the intended local integration API for same-machine tools. Any mismatch becomes a release blocker or an explicit product decision.
 
 ### 3. Prove that old APIs are gone from the current tree
 
 - Search current code, tests, docs, and scripts for old route names, old `/api/` paths, and stale client calls.
-- Create one explicit list of supported routes and other network entrypoints and use it as the release baseline.
+- Create one explicit list of supported local API routes and other network entrypoints and use it as the release baseline.
 - Verify that nested route mounts, proxy paths, and app-server forwarding do not expose endpoints missing from the release baseline.
 - Remove dead routes, or gate local-only routes so they are not exposed by default in normal open-source usage.
+- Keep documented supported local API routes available on loopback for local LLM apps, agents, scripts, the browser UI, and the desktop app.
 - Update docs so only supported public or local-only routes remain documented.
 - Add focused tests where useful so removed routes do not silently come back later.
 
@@ -123,8 +128,8 @@
 
 - Review all admin, debug, status, proxy, database snapshot, and machine-observability routes.
 - Decide which of these should be removed entirely, which should remain local-only, and which need stronger gating.
-- Review every listener and proxy entrypoint, including `src/server/index.ts` and `src/appServer.ts`, and record the default bind interfaces.
-- Review bootstrap entrypoints that install runtime logging and process identity, including `src/server/index.ts`, `src/appServer.ts`, and any dedicated bootstrap modules, so the release inventory covers startup-time logging behavior as well as HTTP routes.
+- Review every listener and proxy entrypoint, including `src/server/serverMain.ts` and `src/appServerMain.ts`, and record the default bind interfaces.
+- Review bootstrap entrypoints that install runtime logging and process identity, including `src/server/index.ts`, `src/server/serverMain.ts`, `src/appServer.ts`, `src/appServerMain.ts`, and any dedicated bootstrap modules, so the release inventory covers startup-time logging behavior as well as HTTP routes.
 - Confirm the supported OSS flow binds only to loopback by default, or document and explicitly justify any broader bind. Any wider default exposure is a release blocker.
 - Review CORS, desktop-mode exceptions, and writer-proxy behavior to ensure the default network posture stays narrow.
 - Remove or quarantine operational scripts that are useful only inside private environments.
@@ -134,7 +139,7 @@
 - Pick an explicit project license and verify that dependencies, bundled assets, model integrations, and docs are compatible with that choice.
 - Confirm that no private data, licensed PDFs, restricted datasets, or unpublished prompts are included in tracked files.
 - Decide whether any medical, research, or model-use disclaimers should be part of the public release.
-- Add `LICENSE`, `SECURITY.md`, and contributor guidance before opening the repo broadly.
+- Confirm the existing `LICENSE`, then add `SECURITY.md` and contributor guidance before opening the repo broadly.
 
 ### 9. Produce the release packet and go/no-go review
 
@@ -153,18 +158,19 @@
 
 ## Suggested Audit Commands
 
-- Current tree network surface inventory: `rg "/api/|Routes|listen\\(" src/server src/appServer.ts docs scripts`
+- Current tree network surface inventory: `rg "/api/|Routes|listen\\(" src/server src/appServer.ts src/appServerMain.ts docs scripts`
 - Current tree transitive mount search: `rg "\\.use\\([A-Za-z].*Routes" src/server`
 - Current tree hotspot search: `rg "AdminInvestigate|ArticleAdmin|DuckdbStudio|NvidiaSmi|LlmStatus|ApiProxy|Tokens|Users" src docs scripts`
 - Publication artifact search: `rg "ssh|STACK_ROOT|SSH_ALIAS|docker" README.md docs scripts package.json Dockerfile*`
 - Runtime logging surface search: `rg "LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|FORSKA_RUNTIME_PROFILE|runtimeLogger|logs/runtime" src docs scripts`
-- History search by path or string: `git log --all -- src/server src/appServer.ts docs scripts Dockerfile*` and `git log --all -S"/api/" -- src/server src/appServer.ts docs scripts`
+- History search by path or string: `git log --all -- src/server src/appServer.ts src/appServerMain.ts docs scripts Dockerfile*` and `git log --all -S"/api/" -- src/server src/appServer.ts src/appServerMain.ts docs scripts`
 - Full-history secret scan: run a dedicated tool such as `gitleaks` or `trufflehog` against all refs, then manually review hits
 - Rewrite option if needed: `git filter-repo` or BFG, followed by a fresh scan of all remaining refs
 
 ## Deliverables
 
-- A current API and network-surface matrix with keep/remove/local-only decisions, bind notes, and transitive mount coverage
+- A current API and network-surface matrix with supported-local/diagnostic/sensitive/internal/debug/remove decisions, bind notes, and transitive mount coverage
+- A supported local API manifest and documentation, based on `plans/supportedLocalApi.md`, covering local LLM apps, agents, scripts, browser UI, and desktop app callers
 - A git-history findings report covering secrets, old endpoints, and sensitive infra details, with owner, severity, disposition, and closure evidence
 - A release-scope allowlist and private-material denylist
 - A decision memo that defaults to publishing from a fresh clean mirror and explains any exception
@@ -172,11 +178,12 @@
 - A kept-versus-removed publication artifact list covering scripts, Dockerfiles, remote docs, CI, and release helpers
 - A public-repo guardrail plan for secret scanning, denylisted-path checks, and unexpected route or listener changes
 - A logging-surface note covering runtime JSONL env vars, ignored paths, payload shape, bootstrap entrypoints, and retention behavior in the public seed
-- Public-release docs: `LICENSE`, `SECURITY.md`, contributor guidance, and sanitized README updates
+- Public-release docs: existing `LICENSE`, new `SECURITY.md`, contributor guidance, and sanitized README updates
 
 ## Exit Criteria
 
 - Every currently mounted route, proxy entrypoint, and listener has an owner and a classification.
+- Every documented local integration route is listed in the supported local API manifest, and every unlisted mounted route is explicitly internal, debug, sensitive, or removed from the public seed.
 - No current default route or listener exposure contradicts the intended single-user local-first product stance.
 - Supported OSS listeners bind only to loopback by default, or every broader bind has an explicit documented exception.
 - No unrevoked secret remains reachable in the history that will be public.
@@ -197,7 +204,7 @@
 - `bun run lint`
 - Targeted `bun test` for any touched route files under `src/server/routes`
 - `bun run build` if client or route-consumer UI changes land during the cleanup
-- Manual verify: the network surface inventory covers `src/server/index.ts`, `src/appServer.ts`, nested mounts, and proxy entrypoints
+- Manual verify: the network surface inventory covers `src/server/index.ts`, `src/server/serverMain.ts`, `src/appServer.ts`, `src/appServerMain.ts`, nested mounts, and proxy entrypoints
 - Manual verify: supported OSS listeners bind only to loopback by default, or every broader bind is documented and approved
 - Manual verify: full-history secret and sensitive-artifact scans rerun clean for all refs that could become public, or every hit is rotated/revoked and excluded from the public seed
 - Manual verify: public seed allowlist and denylist diff is reviewed, including scripts, Dockerfiles, and remote docs

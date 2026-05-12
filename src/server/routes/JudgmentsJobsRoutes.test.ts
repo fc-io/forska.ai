@@ -3,6 +3,11 @@ import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 import {existsSync, rmSync, writeFileSync} from 'fs'
 
+import {
+  getJudgmentProviderTelemetryAlignedRange,
+  insertJudgmentProviderTelemetryHistorySamples,
+  type JudgmentProviderTelemetryHistorySampleInsert,
+} from '../services/judgmentProviderTelemetryHistoryService.ts'
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {HttpError} from '../utils/httpError.ts'
 
@@ -85,6 +90,26 @@ const state = {
   resolveProviderConnectionRuntimeMatch: mock(async (_input: unknown) => {
     return getDefaultRuntimeMatch()
   }),
+}
+
+type TelemetryHistoryRouteBody = {
+  bucketSizeSeconds: number
+  buckets: Array<{
+    adherenceState: string
+    avgUtilization: number | null
+    bottleneck: string | null
+    bottleneckSampleCount: number
+    bottleneckSource: string | null
+    bottleneckSubreason: string | null
+    bucketEnd: string
+    bucketStart: string
+    maxUtilization: number | null
+    minUtilization: number | null
+    sampleCount: number
+  }>
+  providerKey: string
+  rangeEnd: string
+  rangeStart: string
 }
 
 const registerModuleMocks = () => {
@@ -244,6 +269,39 @@ const insertProjectFixture = async ({
     INSERT INTO app.project (id, name, model_id)
     VALUES ('${projectId}', 'Runtime Match Project', '${modelId}')
   `)
+}
+
+const getProviderTelemetryHistorySample = (
+  values: Omit<Partial<JudgmentProviderTelemetryHistorySampleInsert>, 'sampledAt'> & {
+    jobId: string
+    providerKey: string
+    sampledAt: Date
+  },
+): JudgmentProviderTelemetryHistorySampleInsert => {
+  return {
+    aggregateCompleteness: 'complete',
+    bottleneck: null,
+    bottleneckSource: null,
+    bottleneckSubreason: null,
+    effectiveProviderLimit: 12,
+    freshWorkerCount: 1,
+    normalRequestCapacity: 10,
+    projectId: `${values.jobId}-project`,
+    providerAllocationVersion: 'allocation-v1',
+    providerAvailableRequestLeases: 5,
+    providerLeasedLiveRequests: 5,
+    providerLeasedPhysicalCalls: 5,
+    providerLeasedProbeCalls: 0,
+    providerLimit: 12,
+    providerLimitVersion: 'limit-v1',
+    providerProbeOccupancyVersion: 'probe-v1',
+    providerRequestFillPct: null,
+    staleWorkerCount: 0,
+    targetRequestLiveCalls: 10,
+    unavailableWorkerCount: 0,
+    unallocatedTargetLiveCalls: 0,
+    ...values,
+  }
 }
 
 const insertQueuedPromptFixture = async ({
@@ -1050,6 +1108,199 @@ test('owner-backed running jobs route returns provider bucket snapshots', async 
   })
   expect(job?.resolvedDefaultCapacity).toBeGreaterThan(0)
   expect(job?.providerLimitVersion).toHaveLength(64)
+})
+
+test('provider telemetry history route returns empty aligned buckets for valid ranges', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const routeApp = app
+  const projectId = `telemetry-history-empty-project-${Date.now()}`
+  const modelId = `telemetry-history-empty-model-${Date.now()}`
+  const connectionId = `telemetry-history-empty-connection-${Date.now()}`
+  const jobId = `telemetry-history-empty-job-${Date.now()}`
+  const cases = [
+    {bucketCount: 10, bucketSizeSeconds: 30, range: '5m'},
+    {bucketCount: 30, bucketSizeSeconds: 30, range: '15m'},
+    {bucketCount: 60, bucketSizeSeconds: 60, range: '1h'},
+    {bucketCount: 96, bucketSizeSeconds: 900, range: '24h'},
+    {bucketCount: 72, bucketSizeSeconds: 3600, range: '3d'},
+  ] as const
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await Promise.all(
+    cases.map(async (entry) => {
+      const response = await routeApp.handle(
+        new Request(
+          `http://localhost/api/judgmentsjobs-provider-telemetry-history?jobId=${jobId}&range=${entry.range}`,
+        ),
+      )
+      const body = (await response.json()) as TelemetryHistoryRouteBody
+      const ordered = body.buckets.every((bucket, index) => {
+        const previous = body.buckets[index - 1]
+
+        return previous === undefined || previous.bucketEnd === bucket.bucketStart
+      })
+
+      expect(response.status).toBe(200)
+      expect(body.providerKey).toBe(connectionId)
+      expect(body.bucketSizeSeconds).toBe(entry.bucketSizeSeconds)
+      expect(body.buckets).toHaveLength(entry.bucketCount)
+      expect(body.buckets[0]?.bucketStart).toBe(body.rangeStart)
+      expect(body.buckets.at(-1)?.bucketEnd).toBe(body.rangeEnd)
+      expect(ordered).toBe(true)
+      expect(
+        body.buckets.every((bucket) => {
+          return bucket.sampleCount === 0 && bucket.avgUtilization === null && bucket.adherenceState === 'unknown'
+        }),
+      ).toBe(true)
+    }),
+  )
+  await runDatabase(`
+    DELETE FROM app.judgment_job
+    WHERE id = '${jobId}'
+  `)
+})
+
+test('provider telemetry history route rejects invalid ranges', async () => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const response = await app.handle(
+    new Request('http://localhost/api/judgmentsjobs-provider-telemetry-history?jobId=job-invalid-range&range=2h'),
+  )
+
+  expect(response.status).toBe(422)
+})
+
+test('provider telemetry history route defaults to current provider and summarizes buckets', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `telemetry-history-project-${Date.now()}`
+  const modelId = `telemetry-history-model-${Date.now()}`
+  const connectionId = `telemetry-history-connection-${Date.now()}`
+  const jobId = `telemetry-history-job-${Date.now()}`
+  const otherProviderKey = `telemetry-history-other-provider-${Date.now()}`
+  const alignedRange = getJudgmentProviderTelemetryAlignedRange({range: '3d'})
+  const populatedBucketStart = new Date(alignedRange.rangeEnd.getTime() - 3 * 60 * 60 * 1000)
+  const nullBucketStart = new Date(alignedRange.rangeEnd.getTime() - 2 * 60 * 60 * 1000)
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await insertJudgmentProviderTelemetryHistorySamples({
+    samples: [
+      getProviderTelemetryHistorySample({
+        bottleneck: 'providerAtTarget',
+        bottleneckSource: 'provider.old',
+        bottleneckSubreason: 'providerTargetReached',
+        jobId,
+        projectId,
+        providerKey: connectionId,
+        providerLeasedLiveRequests: 8,
+        providerRequestFillPct: 80,
+        sampledAt: new Date(populatedBucketStart.getTime() + 5 * 60 * 1000),
+      }),
+      getProviderTelemetryHistorySample({
+        bottleneck: 'providerAtTarget',
+        bottleneckSource: 'provider.latest',
+        bottleneckSubreason: 'providerTargetReached',
+        jobId,
+        projectId,
+        providerKey: connectionId,
+        providerLeasedLiveRequests: 10,
+        providerRequestFillPct: 100,
+        sampledAt: new Date(populatedBucketStart.getTime() + 10 * 60 * 1000),
+      }),
+      getProviderTelemetryHistorySample({
+        bottleneck: 'requestSlotWait',
+        bottleneckSource: 'request.waiter',
+        bottleneckSubreason: 'waiterNotWoken',
+        jobId,
+        projectId,
+        providerKey: connectionId,
+        providerLeasedLiveRequests: 4,
+        providerRequestFillPct: 40,
+        sampledAt: new Date(populatedBucketStart.getTime() + 15 * 60 * 1000),
+      }),
+      getProviderTelemetryHistorySample({
+        jobId,
+        normalRequestCapacity: 0,
+        projectId,
+        providerKey: connectionId,
+        providerLeasedLiveRequests: 0,
+        providerLeasedPhysicalCalls: 0,
+        sampledAt: new Date(nullBucketStart.getTime() + 5 * 60 * 1000),
+      }),
+      getProviderTelemetryHistorySample({
+        jobId,
+        projectId,
+        providerKey: otherProviderKey,
+        providerLeasedLiveRequests: 9,
+        providerRequestFillPct: 90,
+        sampledAt: new Date(populatedBucketStart.getTime() + 20 * 60 * 1000),
+      }),
+    ],
+  })
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs-provider-telemetry-history?jobId=${jobId}&range=3d`),
+  )
+  const explicitResponse = await app.handle(
+    new Request(
+      `http://localhost/api/judgmentsjobs-provider-telemetry-history?jobId=${jobId}&range=3d&providerKey=${otherProviderKey}`,
+    ),
+  )
+  const body = (await response.json()) as TelemetryHistoryRouteBody
+  const explicitBody = (await explicitResponse.json()) as TelemetryHistoryRouteBody
+  const populatedBucket = body.buckets.find((bucket) => {
+    return bucket.sampleCount === 3
+  })
+  const nullUtilizationBucket = body.buckets.find((bucket) => {
+    return bucket.sampleCount === 1 && bucket.avgUtilization === null
+  })
+  const explicitBucket = explicitBody.buckets.find((bucket) => {
+    return bucket.sampleCount > 0
+  })
+
+  expect(response.status).toBe(200)
+  expect(explicitResponse.status).toBe(200)
+  expect(body.providerKey).toBe(connectionId)
+  expect(explicitBody.providerKey).toBe(otherProviderKey)
+  expect(populatedBucket).toMatchObject({
+    adherenceState: 'atLimit',
+    bottleneck: 'providerAtTarget',
+    bottleneckSampleCount: 2,
+    bottleneckSource: 'provider.latest',
+    bottleneckSubreason: 'providerTargetReached',
+    maxUtilization: 100,
+    minUtilization: 40,
+    sampleCount: 3,
+  })
+  expect(populatedBucket?.avgUtilization).toBeCloseTo(73.333, 3)
+  expect(nullUtilizationBucket).toMatchObject({
+    adherenceState: 'atLimit',
+    avgUtilization: null,
+    maxUtilization: null,
+    minUtilization: null,
+    sampleCount: 1,
+  })
+  expect(explicitBucket).toMatchObject({avgUtilization: 90, sampleCount: 1})
+  await runDatabase(`
+    DELETE FROM app.judgment_job
+    WHERE id = '${jobId}'
+  `)
 })
 
 test('creating a judgments job fails when the runtime model check fails', async () => {
