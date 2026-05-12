@@ -63,6 +63,26 @@ const getStoredFailedRequestDetails = async (failedRequestsDetails: unknown[]) =
   return await tokenUseQueryService.getFailedRequestById(row.id)
 }
 
+const getRequestAttemptCloseoutRows = async (requestAttemptId: string) => {
+  const {getAppDatabaseService} = await import('./appDatabaseService.ts')
+
+  return getAppDatabaseService().queryJson<{
+    durableCloseoutId: string | null
+    providerKey: string
+    requestAttemptId: string
+    tokenUseId: string
+  }>(`
+    SELECT
+      durable_closeout_id AS durableCloseoutId,
+      provider_key AS providerKey,
+      request_attempt_id AS requestAttemptId,
+      token_use_id AS tokenUseId
+    FROM app.request_attempt_closeout
+    WHERE request_attempt_id = '${requestAttemptId}'
+    ORDER BY provider_key
+  `)
+}
+
 beforeAll(async () => {
   const [
     {migrateDuckdb},
@@ -155,6 +175,60 @@ test('insertTokenUseOnce reloads matching conflicts and rejects durable mismatch
   )
 })
 
+test('insertTokenUseOnce repairs missing closeout projections from canonical stored request attempts on replay', async () => {
+  if (!tokenUseQueryService) {
+    throw new Error('Token use query service not initialized')
+  }
+
+  const {getAppDatabaseService} = await import('./appDatabaseService.ts')
+  const database = getAppDatabaseService()
+  const requestAttemptId = 'attempt-replay-repair'
+  const providerKey = 'provider-replay-repair'
+  const replayValues = {
+    id: 'idempotent-token-use-replay-repair',
+    judgment_job_id: null,
+    requests: 1,
+    total_prompt_tokens: 11,
+    total_completion_tokens: 7,
+    total_tokens: 18,
+    started_at: new Date('2026-05-03T13:00:00.000Z'),
+    finished_at: new Date('2026-05-03T13:00:02.000Z'),
+    duration: 2000,
+  }
+  const canonicalRequestAttempts = [
+    {
+      closeoutKind: 'token_use',
+      durableCloseoutRef: {id: 'closeout-replay-repair', kind: 'token_use', jobId: 'job-replay-repair'},
+      finishedAt: '2026-05-03T13:00:02.000Z',
+      lifecycleState: 'completedRequest',
+      outcome: 'success',
+      providerKey,
+      requestAttemptId,
+    },
+  ]
+
+  await tokenUseQueryService.insertTokenUseOnce({
+    ...replayValues,
+    request_attempts_json: JSON.stringify(canonicalRequestAttempts),
+  })
+  expect(await getRequestAttemptCloseoutRows(requestAttemptId)).toHaveLength(1)
+
+  await database.run(`DELETE FROM app.request_attempt_closeout WHERE request_attempt_id = '${requestAttemptId}'`)
+  expect(await getRequestAttemptCloseoutRows(requestAttemptId)).toHaveLength(0)
+
+  await tokenUseQueryService.insertTokenUseOnce(replayValues)
+  const repairedRows = await getRequestAttemptCloseoutRows(requestAttemptId)
+
+  expect(repairedRows).toEqual([
+    {
+      durableCloseoutId: 'closeout-replay-repair',
+      providerKey,
+      requestAttemptId,
+      tokenUseId: 'idempotent-token-use-replay-repair',
+    },
+  ])
+})
+
 test('getFailedRequestById keeps failed request detail objects readable', async () => {
   const failedRequest = await getStoredFailedRequestDetails([buildFailedRequestDetail(['prompt-1'])])
   const firstDetail = Array.isArray(failedRequest?.failedRequestsDetails)
@@ -182,6 +256,7 @@ test('getTimelineBucketRowsAllJobs aggregates token rows before returning them',
     throw new Error('Token use query service not initialized')
   }
 
+  const service = tokenUseQueryService
   const startDate = new Date('2030-01-01T00:00:00.000Z')
   const endDate = new Date('2030-01-01T00:10:00.000Z')
   const rows = [
@@ -193,7 +268,7 @@ test('getTimelineBucketRowsAllJobs aggregates token rows before returning them',
 
   await Promise.all(
     rows.map((row) => {
-      return tokenUseQueryService.insertTokenUse({
+      return service.insertTokenUse({
         id: row.id,
         judgment_job_id: row.jobId,
         requests: row.requests,
@@ -206,7 +281,7 @@ test('getTimelineBucketRowsAllJobs aggregates token rows before returning them',
     }),
   )
 
-  const buckets = await tokenUseQueryService.getTimelineBucketRowsAllJobs({interval: '5min', startDate, endDate})
+  const buckets = await service.getTimelineBucketRowsAllJobs({interval: '5min', startDate, endDate})
 
   expect(
     buckets.map((row) => {
