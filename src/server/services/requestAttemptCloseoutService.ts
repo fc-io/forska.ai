@@ -1,3 +1,5 @@
+import {randomUUID} from 'node:crypto'
+
 import {
   getDurableTerminalRequestAttemptCloseoutProjectionRows,
   type JudgmentRequestAttemptCloseoutProjectionInput,
@@ -5,9 +7,16 @@ import {
   type JudgmentRequestAttemptJsonEntry,
   parseRequestAttempts,
 } from '../cron/judgmentsJobs/judgmentRequestAttemptManifest.ts'
-import {getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
+import {getAppDatabaseService} from './appDatabaseService.ts'
+import {getDateValue, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 
 export type RequestAttemptCloseoutRunner = {run: (statement: string) => Promise<void>}
+export type RequestAttemptCloseoutQueryRunner = RequestAttemptCloseoutRunner & {
+  queryJson: <T>(statement: string) => Promise<T[]>
+}
+export type RequestAttemptCloseoutDatabaseRunner = RequestAttemptCloseoutQueryRunner & {
+  transaction?: <T>(operation: (runner: RequestAttemptCloseoutQueryRunner) => Promise<T>) => Promise<T>
+}
 
 export type RequestAttemptCloseoutTokenUseInput = {
   requestAttemptsJson?: unknown
@@ -21,6 +30,46 @@ export type RequestAttemptCloseoutProjectionResult = {attempted: number; project
 
 export type RequestAttemptCloseoutWriteRow = Omit<JudgmentRequestAttemptCloseoutProjectionRow, 'durableCloseoutRef'> & {
   durableCloseoutRefJson: unknown
+}
+
+export type RequestAttemptCloseoutRebuildCursor = {createdAt: string; id: string}
+export type RequestAttemptCloseoutRebuildResult = {
+  attempted: number
+  batches: number
+  highWaterMark: RequestAttemptCloseoutRebuildCursor | null
+  mode: 'maintenance' | 'online'
+  projected: number
+  scanned: number
+}
+export type RequestAttemptCloseoutMaintenanceRebuildInput = {
+  batchSize?: number
+  cleanupDisabled: true
+  mode: 'maintenance'
+  runner?: RequestAttemptCloseoutDatabaseRunner
+  tokenUseWritersStopped: true
+}
+export type RequestAttemptCloseoutOnlineRebuildInput = {
+  batchSize?: number
+  mode: 'online'
+  runner?: RequestAttemptCloseoutDatabaseRunner
+}
+export type RequestAttemptCloseoutRebuildInput =
+  | RequestAttemptCloseoutMaintenanceRebuildInput
+  | RequestAttemptCloseoutOnlineRebuildInput
+
+type RequestAttemptCloseoutTokenUseRebuildRow = {
+  createdAt: JudgmentRequestAttemptCloseoutProjectionInput['tokenUseCreatedAt']
+  finishedAt: JudgmentRequestAttemptCloseoutProjectionInput['tokenUseFinishedAt']
+  id: string
+  requestAttemptsJson: unknown
+  startedAt: JudgmentRequestAttemptCloseoutProjectionInput['tokenUseStartedAt']
+}
+
+type RequestAttemptCloseoutRebuildAccumulator = {
+  attempted: number
+  batches: number
+  cursor: RequestAttemptCloseoutRebuildCursor | null
+  scanned: number
 }
 
 const getJsonLiteral = (value: unknown): string => {
@@ -130,30 +179,346 @@ const getRequestAttemptCloseoutCaseSql = (column: string): string => {
   return `CASE WHEN ${requestAttemptCloseoutIncomingIsEarlierSql} THEN EXCLUDED.${column} ELSE ${column} END`
 }
 
-const getUpsertRequestAttemptCloseoutRowsSql = (rows: RequestAttemptCloseoutWriteRow[]): string => {
+const requestAttemptCloseoutInsertColumnsSql = `
+  token_use_id,
+  token_use_created_at,
+  request_attempt_id,
+  provider_key,
+  closeout_kind,
+  durable_closeout_kind,
+  durable_closeout_id,
+  durable_closeout_ref_json,
+  closed_at
+`
+
+const requestAttemptCloseoutUpdateAssignmentsSql = `
+  token_use_id = ${getRequestAttemptCloseoutCaseSql('token_use_id')},
+  token_use_created_at = ${getRequestAttemptCloseoutCaseSql('token_use_created_at')},
+  closeout_kind = ${getRequestAttemptCloseoutCaseSql('closeout_kind')},
+  durable_closeout_kind = ${getRequestAttemptCloseoutCaseSql('durable_closeout_kind')},
+  durable_closeout_id = ${getRequestAttemptCloseoutCaseSql('durable_closeout_id')},
+  durable_closeout_ref_json = ${getRequestAttemptCloseoutCaseSql('durable_closeout_ref_json')},
+  closed_at = ${getRequestAttemptCloseoutCaseSql('closed_at')},
+  updated_at = now()
+`
+
+const getUpsertRequestAttemptCloseoutRowsSql = ({
+  rows,
+  targetTableName,
+}: {
+  rows: RequestAttemptCloseoutWriteRow[]
+  targetTableName: string
+}): string => {
   return `
-    INSERT INTO app.request_attempt_closeout (
-      token_use_id,
-      token_use_created_at,
-      request_attempt_id,
-      provider_key,
-      closeout_kind,
-      durable_closeout_kind,
-      durable_closeout_id,
-      durable_closeout_ref_json,
-      closed_at
-    )
+    INSERT INTO ${targetTableName} (${requestAttemptCloseoutInsertColumnsSql})
     VALUES ${rows.map(getRequestAttemptCloseoutValuesSql).join(', ')}
     ON CONFLICT(request_attempt_id, provider_key) DO UPDATE SET
-      token_use_id = ${getRequestAttemptCloseoutCaseSql('token_use_id')},
-      token_use_created_at = ${getRequestAttemptCloseoutCaseSql('token_use_created_at')},
-      closeout_kind = ${getRequestAttemptCloseoutCaseSql('closeout_kind')},
-      durable_closeout_kind = ${getRequestAttemptCloseoutCaseSql('durable_closeout_kind')},
-      durable_closeout_id = ${getRequestAttemptCloseoutCaseSql('durable_closeout_id')},
-      durable_closeout_ref_json = ${getRequestAttemptCloseoutCaseSql('durable_closeout_ref_json')},
-      closed_at = ${getRequestAttemptCloseoutCaseSql('closed_at')},
-      updated_at = now()
+      ${requestAttemptCloseoutUpdateAssignmentsSql}
   `
+}
+
+const getUpsertRequestAttemptCloseoutStagingSql = (stagingTableName: string): string => {
+  return `
+    INSERT INTO app.request_attempt_closeout (${requestAttemptCloseoutInsertColumnsSql})
+    SELECT ${requestAttemptCloseoutInsertColumnsSql}
+    FROM ${stagingTableName}
+    ORDER BY closed_at, token_use_created_at, token_use_id
+    ON CONFLICT(request_attempt_id, provider_key) DO UPDATE SET
+      ${requestAttemptCloseoutUpdateAssignmentsSql}
+  `
+}
+
+const getCreateRequestAttemptCloseoutStagingTableSql = (stagingTableName: string): string => {
+  return `
+    CREATE TEMP TABLE ${stagingTableName} (
+      token_use_id VARCHAR NOT NULL,
+      token_use_created_at TIMESTAMPTZ NOT NULL,
+      request_attempt_id VARCHAR NOT NULL,
+      provider_key VARCHAR NOT NULL,
+      closeout_kind VARCHAR NOT NULL,
+      durable_closeout_kind VARCHAR NOT NULL,
+      durable_closeout_id VARCHAR,
+      durable_closeout_ref_json JSON NOT NULL,
+      closed_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      PRIMARY KEY (request_attempt_id, provider_key)
+    )
+  `
+}
+
+const getRequestAttemptCloseoutStagingTableName = (): string => {
+  return `temp_request_attempt_closeout_rebuild_${randomUUID().replaceAll('-', '_')}`
+}
+
+const getPositiveBatchSize = (batchSize: number | undefined): number => {
+  return Math.max(1, Math.floor(batchSize ?? 1000))
+}
+
+const getRequestAttemptCloseoutRebuildCursor = (
+  row: {createdAt: unknown; id: string} | undefined,
+): RequestAttemptCloseoutRebuildCursor | null => {
+  const createdAt = getDateValue(row?.createdAt)
+  const id = typeof row?.id === 'string' ? row.id : ''
+
+  return createdAt && id.trim().length > 0 ? {createdAt: createdAt.toISOString(), id} : null
+}
+
+const getRequestAttemptCloseoutRebuildCursorClause = (cursor: RequestAttemptCloseoutRebuildCursor | null): string => {
+  return cursor
+    ? `(
+        created_at > ${getTimestampLiteral(new Date(cursor.createdAt))}
+        OR (created_at = ${getTimestampLiteral(new Date(cursor.createdAt))} AND id > ${getSqlLiteral(cursor.id)})
+      )`
+    : 'TRUE'
+}
+
+const getRequestAttemptCloseoutRebuildHighWaterClause = (
+  highWaterMark: RequestAttemptCloseoutRebuildCursor | null,
+): string => {
+  return highWaterMark
+    ? `(
+        created_at < ${getTimestampLiteral(new Date(highWaterMark.createdAt))}
+        OR (created_at = ${getTimestampLiteral(new Date(highWaterMark.createdAt))} AND id <= ${getSqlLiteral(highWaterMark.id)})
+      )`
+    : 'TRUE'
+}
+
+const getRequestAttemptCloseoutTokenUseBatchSql = ({
+  batchSize,
+  cursor,
+  highWaterMark,
+}: {
+  batchSize: number
+  cursor: RequestAttemptCloseoutRebuildCursor | null
+  highWaterMark: RequestAttemptCloseoutRebuildCursor | null
+}): string => {
+  return `
+    SELECT
+      id,
+      TO_JSON(request_attempts_json) AS requestAttemptsJson,
+      created_at AS createdAt,
+      started_at AS startedAt,
+      finished_at AS finishedAt
+    FROM app.token_use
+    WHERE ${getRequestAttemptCloseoutRebuildCursorClause(cursor)}
+      AND ${getRequestAttemptCloseoutRebuildHighWaterClause(highWaterMark)}
+    ORDER BY created_at, id
+    LIMIT ${batchSize}
+  `
+}
+
+const getRequestAttemptCloseoutHighWaterMark = async (
+  runner: RequestAttemptCloseoutQueryRunner,
+): Promise<RequestAttemptCloseoutRebuildCursor | null> => {
+  const [row] = await runner.queryJson<{createdAt: unknown; id: string}>(`
+    SELECT
+      created_at AS createdAt,
+      id
+    FROM app.token_use
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `)
+
+  return getRequestAttemptCloseoutRebuildCursor(row)
+}
+
+const getRequestAttemptCloseoutTokenUseRows = async ({
+  batchSize,
+  cursor,
+  highWaterMark,
+  runner,
+}: {
+  batchSize: number
+  cursor: RequestAttemptCloseoutRebuildCursor | null
+  highWaterMark: RequestAttemptCloseoutRebuildCursor | null
+  runner: RequestAttemptCloseoutQueryRunner
+}): Promise<RequestAttemptCloseoutTokenUseRebuildRow[]> => {
+  return runner.queryJson<RequestAttemptCloseoutTokenUseRebuildRow>(
+    getRequestAttemptCloseoutTokenUseBatchSql({batchSize, cursor, highWaterMark}),
+  )
+}
+
+const getRequestAttemptCloseoutRowsForTokenUseRows = (
+  rows: RequestAttemptCloseoutTokenUseRebuildRow[],
+): RequestAttemptCloseoutWriteRow[] => {
+  return rows.flatMap((row) => {
+    return getRequestAttemptCloseoutWriteRows({
+      requestAttemptsJson: row.requestAttemptsJson,
+      tokenUseCreatedAt: row.createdAt,
+      tokenUseFinishedAt: row.finishedAt,
+      tokenUseId: row.id,
+      tokenUseStartedAt: row.startedAt,
+    })
+  })
+}
+
+const rebuildRequestAttemptCloseoutBatches = async ({
+  accumulator,
+  batchSize,
+  highWaterMark,
+  runner,
+  targetTableName,
+}: {
+  accumulator: RequestAttemptCloseoutRebuildAccumulator
+  batchSize: number
+  highWaterMark: RequestAttemptCloseoutRebuildCursor | null
+  runner: RequestAttemptCloseoutQueryRunner
+  targetTableName: string
+}): Promise<RequestAttemptCloseoutRebuildAccumulator> => {
+  const tokenUseRows = await getRequestAttemptCloseoutTokenUseRows({
+    batchSize,
+    cursor: accumulator.cursor,
+    highWaterMark,
+    runner,
+  })
+  const rows = getRequestAttemptCloseoutRowsForTokenUseRows(tokenUseRows)
+  const result = await upsertRequestAttemptCloseoutRowsIntoTable({rows, runner, targetTableName})
+  const cursor = getRequestAttemptCloseoutRebuildCursor(tokenUseRows.at(-1))
+  const nextAccumulator = {
+    attempted: accumulator.attempted + result.attempted,
+    batches: accumulator.batches + (tokenUseRows.length > 0 ? 1 : 0),
+    cursor,
+    scanned: accumulator.scanned + tokenUseRows.length,
+  }
+
+  return tokenUseRows.length === batchSize && cursor
+    ? rebuildRequestAttemptCloseoutBatches({
+        accumulator: nextAccumulator,
+        batchSize,
+        highWaterMark,
+        runner,
+        targetTableName,
+      })
+    : nextAccumulator
+}
+
+const getRequestAttemptCloseoutRowCount = async (
+  runner: RequestAttemptCloseoutQueryRunner,
+  tableName: string,
+): Promise<number> => {
+  const [row] = await runner.queryJson<{count: number | string | bigint}>(`
+    SELECT COUNT(*) AS count
+    FROM ${tableName}
+  `)
+
+  return Number(row?.count ?? 0)
+}
+
+const getInitialRequestAttemptCloseoutRebuildAccumulator = (): RequestAttemptCloseoutRebuildAccumulator => {
+  return {attempted: 0, batches: 0, cursor: null, scanned: 0}
+}
+
+const getRequestAttemptCloseoutRebuildStats = (accumulator: RequestAttemptCloseoutRebuildAccumulator) => {
+  return {attempted: accumulator.attempted, batches: accumulator.batches, scanned: accumulator.scanned}
+}
+
+const rebuildRequestAttemptCloseoutsIntoTable = async ({
+  batchSize,
+  highWaterMark,
+  runner,
+  targetTableName,
+}: {
+  batchSize: number
+  highWaterMark: RequestAttemptCloseoutRebuildCursor | null
+  runner: RequestAttemptCloseoutQueryRunner
+  targetTableName: string
+}): Promise<RequestAttemptCloseoutRebuildAccumulator> => {
+  return rebuildRequestAttemptCloseoutBatches({
+    accumulator: getInitialRequestAttemptCloseoutRebuildAccumulator(),
+    batchSize,
+    highWaterMark,
+    runner,
+    targetTableName,
+  })
+}
+
+const rebuildRequestAttemptCloseoutsForMaintenanceTx = async ({
+  batchSize,
+  runner,
+}: {
+  batchSize: number
+  runner: RequestAttemptCloseoutQueryRunner
+}): Promise<RequestAttemptCloseoutRebuildResult> => {
+  await runner.run('TRUNCATE app.request_attempt_closeout')
+  const accumulator = await rebuildRequestAttemptCloseoutsIntoTable({
+    batchSize,
+    highWaterMark: null,
+    runner,
+    targetTableName: 'app.request_attempt_closeout',
+  })
+  const projected = await getRequestAttemptCloseoutRowCount(runner, 'app.request_attempt_closeout')
+  const stats = getRequestAttemptCloseoutRebuildStats(accumulator)
+
+  return {...stats, highWaterMark: null, mode: 'maintenance', projected}
+}
+
+const rebuildRequestAttemptCloseoutsForMaintenance = async (
+  input: RequestAttemptCloseoutMaintenanceRebuildInput,
+): Promise<RequestAttemptCloseoutRebuildResult> => {
+  const runner = (input.runner ?? getAppDatabaseService()) as RequestAttemptCloseoutDatabaseRunner
+  const batchSize = getPositiveBatchSize(input.batchSize)
+
+  if (input.tokenUseWritersStopped !== true || input.cleanupDisabled !== true) {
+    throw new Error(
+      'request_attempt_closeout maintenance rebuild requires stopped token-use writers and disabled cleanup',
+    )
+  }
+
+  return runner.transaction
+    ? runner.transaction((tx) => {
+        return rebuildRequestAttemptCloseoutsForMaintenanceTx({batchSize, runner: tx})
+      })
+    : rebuildRequestAttemptCloseoutsForMaintenanceTx({batchSize, runner})
+}
+
+const rebuildRequestAttemptCloseoutsOnline = async (
+  input: RequestAttemptCloseoutOnlineRebuildInput,
+): Promise<RequestAttemptCloseoutRebuildResult> => {
+  const runner = (input.runner ?? getAppDatabaseService()) as RequestAttemptCloseoutDatabaseRunner
+  const batchSize = getPositiveBatchSize(input.batchSize)
+  const highWaterMark = await getRequestAttemptCloseoutHighWaterMark(runner)
+  const stagingTableName = getRequestAttemptCloseoutStagingTableName()
+
+  if (!highWaterMark) {
+    return {attempted: 0, batches: 0, highWaterMark: null, mode: 'online', projected: 0, scanned: 0}
+  }
+
+  await runner.run(getCreateRequestAttemptCloseoutStagingTableSql(stagingTableName))
+
+  try {
+    const accumulator = await rebuildRequestAttemptCloseoutsIntoTable({
+      batchSize,
+      highWaterMark,
+      runner,
+      targetTableName: stagingTableName,
+    })
+    const projected = await getRequestAttemptCloseoutRowCount(runner, stagingTableName)
+    const stats = getRequestAttemptCloseoutRebuildStats(accumulator)
+    await runner.run(getUpsertRequestAttemptCloseoutStagingSql(stagingTableName))
+
+    return {...stats, highWaterMark, mode: 'online', projected}
+  } finally {
+    await runner.run(`DROP TABLE IF EXISTS ${stagingTableName}`)
+  }
+}
+
+const upsertRequestAttemptCloseoutRowsIntoTable = async ({
+  rows,
+  runner,
+  targetTableName,
+}: {
+  rows: RequestAttemptCloseoutWriteRow[]
+  runner: RequestAttemptCloseoutRunner
+  targetTableName: string
+}): Promise<RequestAttemptCloseoutProjectionResult> => {
+  const earliestRows = getEarliestRequestAttemptCloseoutRows(rows)
+
+  if (earliestRows.length > 0) {
+    await runner.run(getUpsertRequestAttemptCloseoutRowsSql({rows: earliestRows, targetTableName}))
+  }
+
+  return {attempted: rows.length, projected: earliestRows.length}
 }
 
 export const upsertRequestAttemptCloseoutRows = async ({
@@ -163,13 +528,7 @@ export const upsertRequestAttemptCloseoutRows = async ({
   rows: RequestAttemptCloseoutWriteRow[]
   runner: RequestAttemptCloseoutRunner
 }): Promise<RequestAttemptCloseoutProjectionResult> => {
-  const earliestRows = getEarliestRequestAttemptCloseoutRows(rows)
-
-  if (earliestRows.length > 0) {
-    await runner.run(getUpsertRequestAttemptCloseoutRowsSql(earliestRows))
-  }
-
-  return {attempted: rows.length, projected: earliestRows.length}
+  return upsertRequestAttemptCloseoutRowsIntoTable({rows, runner, targetTableName: 'app.request_attempt_closeout'})
 }
 
 export const projectRequestAttemptCloseoutsForTokenUse = async ({
@@ -180,4 +539,12 @@ export const projectRequestAttemptCloseoutsForTokenUse = async ({
   tokenUse: RequestAttemptCloseoutTokenUseInput
 }): Promise<RequestAttemptCloseoutProjectionResult> => {
   return upsertRequestAttemptCloseoutRows({rows: getRequestAttemptCloseoutWriteRows(tokenUse), runner})
+}
+
+export const rebuildRequestAttemptCloseouts = async (
+  input: RequestAttemptCloseoutRebuildInput,
+): Promise<RequestAttemptCloseoutRebuildResult> => {
+  return input.mode === 'maintenance'
+    ? rebuildRequestAttemptCloseoutsForMaintenance(input)
+    : rebuildRequestAttemptCloseoutsOnline(input)
 }

@@ -224,3 +224,435 @@ test('request attempt closeout projection is idempotent and preserves earliest s
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
+
+test('maintenance rebuild truncates and rebuilds request attempt closeouts in bounded token-use batches', () => {
+  const duckdbPath = `/tmp/f1-request-attempt-closeout-maintenance-rebuild-${Date.now()}.duckdb`
+  const runResult = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {rebuildRequestAttemptCloseouts} = await import('./src/server/services/requestAttemptCloseoutService.ts')
+
+        const quote = (value) => {
+          return "'" + String(value).replaceAll("'", "''") + "'"
+        }
+        const timestampLiteral = (value) => {
+          return 'TIMESTAMPTZ ' + quote(value)
+        }
+        const jsonLiteral = (value) => {
+          return 'CAST(' + quote(JSON.stringify(value)) + ' AS JSON)'
+        }
+        const nullableJsonLiteral = (value) => {
+          return value === null ? 'NULL' : jsonLiteral(value)
+        }
+        const getAttempt = ({durableId, finishedAt, requestAttemptId}) => {
+          return {
+            closeoutKind: 'token_use',
+            durableCloseoutRef: {id: durableId, kind: 'token_use', jobId: 'job-maintenance-rebuild'},
+            finishedAt,
+            lifecycleState: 'completedRequest',
+            outcome: 'success',
+            providerKey: 'provider:maintenance-rebuild',
+            requestAttemptId,
+          }
+        }
+        const getInsertTokenUseSql = ({createdAt, finishedAt, id, requestAttempts, startedAt}) => {
+          return [
+            'INSERT INTO app.token_use (',
+            'id, requests, total_prompt_tokens, total_completion_tokens, total_tokens, ',
+            'started_at, finished_at, created_at, request_attempts_json',
+            ') VALUES (',
+            quote(id),
+            ', 1, 1, 1, 1, ',
+            timestampLiteral(startedAt),
+            ', ',
+            timestampLiteral(finishedAt),
+            ', ',
+            timestampLiteral(createdAt),
+            ', ',
+            nullableJsonLiteral(requestAttempts),
+            ')',
+          ].join('')
+        }
+        const insertTokenUse = async (input) => {
+          await db.run(getInsertTokenUseSql(input))
+        }
+
+        await migrateDuckdb()
+        const db = getAppDatabaseService()
+        await insertTokenUse({
+          createdAt: '2026-05-01T00:00:00.000Z',
+          finishedAt: '2026-05-01T00:00:03.000Z',
+          id: 'token-use-maintenance-a',
+          requestAttempts: [getAttempt({
+            durableId: 'durable-maintenance-a',
+            finishedAt: '2026-05-01T00:00:05.000Z',
+            requestAttemptId: 'attempt-maintenance-shared',
+          })],
+          startedAt: '2026-05-01T00:00:01.000Z',
+        })
+        await insertTokenUse({
+          createdAt: '2026-05-01T00:00:00.000Z',
+          finishedAt: '2026-05-01T00:00:04.000Z',
+          id: 'token-use-maintenance-b',
+          requestAttempts: [getAttempt({
+            durableId: 'durable-maintenance-b',
+            finishedAt: '2026-05-01T00:00:04.000Z',
+            requestAttemptId: 'attempt-maintenance-b',
+          })],
+          startedAt: '2026-05-01T00:00:02.000Z',
+        })
+        await insertTokenUse({
+          createdAt: '2026-05-01T00:00:01.000Z',
+          finishedAt: '2026-05-01T00:00:07.000Z',
+          id: 'token-use-maintenance-c',
+          requestAttempts: [getAttempt({
+            durableId: 'durable-maintenance-c',
+            finishedAt: '2026-05-01T00:00:06.000Z',
+            requestAttemptId: 'attempt-maintenance-shared',
+          })],
+          startedAt: '2026-05-01T00:00:03.000Z',
+        })
+        await insertTokenUse({
+          createdAt: '2026-05-01T00:00:02.000Z',
+          finishedAt: '2026-05-01T00:00:08.000Z',
+          id: 'token-use-maintenance-empty',
+          requestAttempts: null,
+          startedAt: '2026-05-01T00:00:04.000Z',
+        })
+        await db.run(
+          [
+            'INSERT INTO app.request_attempt_closeout (',
+            'token_use_id, token_use_created_at, request_attempt_id, provider_key, closeout_kind, ',
+            'durable_closeout_kind, durable_closeout_id, durable_closeout_ref_json, closed_at',
+            ') VALUES (',
+            quote('stale-token-use'),
+            ', ',
+            timestampLiteral('2026-04-30T00:00:00.000Z'),
+            ', ',
+            quote('attempt-stale'),
+            ', ',
+            quote('provider:maintenance-rebuild'),
+            ', ',
+            quote('token_use'),
+            ', ',
+            quote('token_use'),
+            ', ',
+            quote('durable-stale'),
+            ', ',
+            jsonLiteral({id: 'durable-stale', kind: 'token_use'}),
+            ', ',
+            timestampLiteral('2026-04-30T00:00:01.000Z'),
+            ')',
+          ].join(''),
+        )
+
+        const result = await rebuildRequestAttemptCloseouts({
+          batchSize: 2,
+          cleanupDisabled: true,
+          mode: 'maintenance',
+          tokenUseWritersStopped: true,
+        })
+        const rows = await db.queryJson(\`
+          SELECT
+            request_attempt_id AS requestAttemptId,
+            token_use_id AS tokenUseId,
+            durable_closeout_id AS durableCloseoutId,
+            epoch_ms(closed_at) AS closedAtMs
+          FROM app.request_attempt_closeout
+          ORDER BY request_attempt_id
+        \`)
+
+        console.log(JSON.stringify({result, rows}))
+        await db.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runResult.exitCode !== 0) {
+      throw new Error(
+        runResult.stderr.toString() || runResult.stdout.toString() || 'maintenance closeout rebuild test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {
+      result: {
+        attempted: number
+        batches: number
+        highWaterMark: unknown
+        mode: string
+        projected: number
+        scanned: number
+      }
+      rows: Array<{
+        closedAtMs: number | string
+        durableCloseoutId: string
+        requestAttemptId: string
+        tokenUseId: string
+      }>
+    }
+
+    expect(result.result).toEqual({
+      attempted: 3,
+      batches: 2,
+      highWaterMark: null,
+      mode: 'maintenance',
+      projected: 2,
+      scanned: 4,
+    })
+    expect(result.rows).toHaveLength(2)
+    expect(
+      result.rows.map((row) => {
+        return row.requestAttemptId
+      }),
+    ).toEqual(['attempt-maintenance-b', 'attempt-maintenance-shared'])
+    expect(
+      result.rows.find((row) => {
+        return row.requestAttemptId === 'attempt-maintenance-shared'
+      })?.tokenUseId,
+    ).toBe('token-use-maintenance-a')
+    expect(
+      result.rows.find((row) => {
+        return row.requestAttemptId === 'attempt-maintenance-b'
+      })?.durableCloseoutId,
+    ).toBe('durable-maintenance-b')
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('online rebuild stages to a high-water mark and preserves live writer closeout rows during merge', () => {
+  const duckdbPath = `/tmp/f1-request-attempt-closeout-online-rebuild-${Date.now()}.duckdb`
+  const runResult = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {
+          projectRequestAttemptCloseoutsForTokenUse,
+          rebuildRequestAttemptCloseouts,
+        } = await import('./src/server/services/requestAttemptCloseoutService.ts')
+
+        const quote = (value) => {
+          return "'" + String(value).replaceAll("'", "''") + "'"
+        }
+        const timestampLiteral = (value) => {
+          return 'TIMESTAMPTZ ' + quote(value)
+        }
+        const jsonLiteral = (value) => {
+          return 'CAST(' + quote(JSON.stringify(value)) + ' AS JSON)'
+        }
+        const getAttempt = ({durableId, finishedAt, providerKey, requestAttemptId}) => {
+          return {
+            closeoutKind: 'token_use',
+            durableCloseoutRef: {id: durableId, kind: 'token_use', jobId: 'job-online-rebuild'},
+            finishedAt,
+            lifecycleState: 'completedRequest',
+            outcome: 'success',
+            providerKey,
+            requestAttemptId,
+          }
+        }
+        const getInsertTokenUseSql = ({createdAt, finishedAt, id, requestAttempts, startedAt}) => {
+          return [
+            'INSERT INTO app.token_use (',
+            'id, requests, total_prompt_tokens, total_completion_tokens, total_tokens, ',
+            'started_at, finished_at, created_at, request_attempts_json',
+            ') VALUES (',
+            quote(id),
+            ', 1, 1, 1, 1, ',
+            timestampLiteral(startedAt),
+            ', ',
+            timestampLiteral(finishedAt),
+            ', ',
+            timestampLiteral(createdAt),
+            ', ',
+            jsonLiteral(requestAttempts),
+            ')',
+          ].join('')
+        }
+        const insertTokenUse = async (input) => {
+          await db.run(getInsertTokenUseSql(input))
+        }
+        const providerKey = 'provider:online-rebuild'
+        const stagedConflictAttempt = getAttempt({
+          durableId: 'durable-online-staged-conflict',
+          finishedAt: '2026-05-02T12:00:20.000Z',
+          providerKey,
+          requestAttemptId: 'attempt-online-conflict',
+        })
+        const stagedOnlyAttempt = getAttempt({
+          durableId: 'durable-online-staged-only',
+          finishedAt: '2026-05-02T12:00:30.000Z',
+          providerKey,
+          requestAttemptId: 'attempt-online-staged-only',
+        })
+        const liveConflictAttempt = getAttempt({
+          durableId: 'durable-online-live-conflict',
+          finishedAt: '2026-05-02T12:00:10.000Z',
+          providerKey,
+          requestAttemptId: 'attempt-online-conflict',
+        })
+        const liveOnlyAttempt = getAttempt({
+          durableId: 'durable-online-live-only',
+          finishedAt: '2026-05-02T12:05:10.000Z',
+          providerKey,
+          requestAttemptId: 'attempt-online-live-only',
+        })
+
+        await migrateDuckdb()
+        const db = getAppDatabaseService()
+        await insertTokenUse({
+          createdAt: '2026-05-02T12:00:00.000Z',
+          finishedAt: '2026-05-02T12:00:21.000Z',
+          id: 'token-use-online-old',
+          requestAttempts: [stagedConflictAttempt],
+          startedAt: '2026-05-02T12:00:01.000Z',
+        })
+        await insertTokenUse({
+          createdAt: '2026-05-02T12:00:01.000Z',
+          finishedAt: '2026-05-02T12:00:31.000Z',
+          id: 'token-use-online-stage',
+          requestAttempts: [stagedOnlyAttempt],
+          startedAt: '2026-05-02T12:00:02.000Z',
+        })
+
+        let highWaterCaptured = false
+        let writerInserted = false
+        const writerAttempts = [liveConflictAttempt, liveOnlyAttempt]
+        const runner = {
+          queryJson: async (statement) => {
+            const rows = await db.queryJson(statement)
+
+            if (statement.includes('ORDER BY created_at DESC, id DESC')) {
+              highWaterCaptured = true
+            }
+
+            return rows
+          },
+          run: async (statement) => {
+            if (highWaterCaptured && !writerInserted && statement.includes('INSERT INTO app.request_attempt_closeout')) {
+              writerInserted = true
+              await insertTokenUse({
+                createdAt: '2026-05-02T12:05:00.000Z',
+                finishedAt: '2026-05-02T12:05:11.000Z',
+                id: 'token-use-online-live',
+                requestAttempts: writerAttempts,
+                startedAt: '2026-05-02T12:05:01.000Z',
+              })
+              await projectRequestAttemptCloseoutsForTokenUse({
+                runner: db,
+                tokenUse: {
+                  requestAttemptsJson: JSON.stringify(writerAttempts),
+                  tokenUseCreatedAt: '2026-05-02T12:05:00.000Z',
+                  tokenUseFinishedAt: '2026-05-02T12:05:11.000Z',
+                  tokenUseId: 'token-use-online-live',
+                  tokenUseStartedAt: '2026-05-02T12:05:01.000Z',
+                },
+              })
+            }
+
+            await db.run(statement)
+          },
+        }
+
+        const result = await rebuildRequestAttemptCloseouts({batchSize: 1, mode: 'online', runner})
+        const rows = await db.queryJson(\`
+          SELECT
+            request_attempt_id AS requestAttemptId,
+            token_use_id AS tokenUseId,
+            durable_closeout_id AS durableCloseoutId,
+            epoch_ms(closed_at) AS closedAtMs
+          FROM app.request_attempt_closeout
+          ORDER BY request_attempt_id
+        \`)
+
+        console.log(JSON.stringify({result, rows, writerInserted}))
+        await db.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runResult.exitCode !== 0) {
+      throw new Error(
+        runResult.stderr.toString() || runResult.stdout.toString() || 'online closeout rebuild test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {
+      result: {
+        attempted: number
+        batches: number
+        highWaterMark: {createdAt: string; id: string} | null
+        mode: string
+        projected: number
+        scanned: number
+      }
+      rows: Array<{
+        closedAtMs: number | string
+        durableCloseoutId: string
+        requestAttemptId: string
+        tokenUseId: string
+      }>
+      writerInserted: boolean
+    }
+    const conflictRow = result.rows.find((row) => {
+      return row.requestAttemptId === 'attempt-online-conflict'
+    })
+    const liveOnlyRow = result.rows.find((row) => {
+      return row.requestAttemptId === 'attempt-online-live-only'
+    })
+    const stagedOnlyRow = result.rows.find((row) => {
+      return row.requestAttemptId === 'attempt-online-staged-only'
+    })
+
+    expect(result.writerInserted).toBe(true)
+    expect(result.result).toEqual({
+      attempted: 2,
+      batches: 2,
+      highWaterMark: {createdAt: '2026-05-02T12:00:01.000Z', id: 'token-use-online-stage'},
+      mode: 'online',
+      projected: 2,
+      scanned: 2,
+    })
+    expect(result.rows).toHaveLength(3)
+    expect(conflictRow?.tokenUseId).toBe('token-use-online-live')
+    expect(conflictRow?.durableCloseoutId).toBe('durable-online-live-conflict')
+    expect(Number(conflictRow?.closedAtMs)).toBe(new Date('2026-05-02T12:00:10.000Z').getTime())
+    expect(liveOnlyRow?.tokenUseId).toBe('token-use-online-live')
+    expect(stagedOnlyRow?.tokenUseId).toBe('token-use-online-stage')
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
