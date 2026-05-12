@@ -3,7 +3,12 @@ import {expect, type Locator, type Page, test} from '@playwright/test'
 import {routeErrorSurfaceTestId} from '../../src/app/routerErrorSurface'
 import {createBrowserFailureAssertions} from '../../src/app/utils/browserFailureAssertions'
 
-import {buildTelemetryJob, installAdminTelemetryMocks} from './adminJudgmentJobTelemetryFixtures'
+import {
+  buildEmptyTelemetryHistory,
+  buildTelemetryHistory,
+  buildTelemetryJob,
+  installAdminTelemetryMocks,
+} from './adminJudgmentJobTelemetryFixtures'
 
 const providerCapacityTelemetryHeadings = [
   'Provider Capacity Telemetry',
@@ -24,6 +29,7 @@ const detailSectionHeadings = [
   'Token Usage Timeline',
   'Request And Capacity Debug',
   ...providerCapacityTelemetryHeadings,
+  'Provider Utilization History',
   'Storage And Import Flow',
   'Import Success / Failure',
   'Runtime Lease',
@@ -79,6 +85,59 @@ test('admin job telemetry separates admission leases, observed aggregates, and l
     await expect(page.getByText('Request Slot Waiters', {exact: true})).toHaveCount(1)
     await expect(page.getByText('Underfed provider: claiming backlog')).toBeVisible()
     await expect(page.getByText('local prompt or request-work backlog needs replenishment')).toBeVisible()
+    await expect(page.getByTestId('provider-telemetry-history-chart')).toBeVisible()
+    await expect(page.getByText('Provider Utilization History')).toBeVisible()
+    await expect(page.getByText('Last 15 minutes')).toBeVisible()
+    await expect(page.getByText('Latest Sampled Bucket')).toBeVisible()
+    await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
+
+    browserFailures.assertNoFailures()
+  } finally {
+    browserFailures.dispose()
+  }
+})
+
+test('admin job telemetry history chart switches ranges and shows empty history locally', async ({page}) => {
+  const browserFailures = createBrowserFailureAssertions(page)
+  const job = buildTelemetryJob('providerAtTarget')
+  const chart = page.getByTestId('provider-telemetry-history-chart')
+
+  try {
+    await installAdminTelemetryMocks(page, job, {
+      historyByRange: {
+        '1h': buildTelemetryHistory({
+          range: '1h',
+          sampledBuckets: [
+            {
+              adherenceState: 'atLimit',
+              avgUtilization: 92.5,
+              bottleneck: 'providerAtTarget',
+              bottleneckSource: 'provider.providerLeasedLiveRequests',
+              bottleneckSubreason: 'providerTargetReached',
+              indexFromEnd: 1,
+              maxUtilization: 100,
+              minUtilization: 75,
+              sampleCount: 3,
+            },
+          ],
+        }),
+        '5m': buildEmptyTelemetryHistory('5m'),
+      },
+    })
+    await page.goto(`/admin/jobs/${job.id}`)
+
+    await expect(chart).toBeVisible()
+    await expect(chart.getByText('Last 15 minutes')).toBeVisible()
+    await expect(chart.getByText('112.5%')).toBeVisible()
+
+    await chart.getByRole('button', {name: '1h'}).click()
+    await expect(chart.getByText('Last 1 hour')).toBeVisible()
+    await expect(chart.getByText('92.5%')).toBeVisible()
+    await expect(chart.getByText('Provider at target (3 samples)')).toBeVisible()
+
+    await chart.getByRole('button', {name: '5m'}).click()
+    await expect(chart.getByText('No telemetry history samples for Last 5 minutes')).toBeVisible()
+    await assertPageHasNoHorizontalOverflow(page)
     await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
 
     browserFailures.assertNoFailures()
@@ -210,7 +269,7 @@ test('admin job detail avoids page-level overflow at mobile width with long diag
     await expect(page.getByRole('heading', {name: 'Job'})).toBeVisible()
     await expect(page.getByText(longEndpointIdentity)).toBeVisible()
     await expect(page.getByText(longEndpointKey)).toBeVisible()
-    await expect(page.getByText(`Provider key: ${longProviderKey}`)).toHaveCount(2)
+    await expect(page.getByText(`Provider key: ${longProviderKey}`)).toHaveCount(3)
     await expect(page.getByText(`Provider error ${longOpaqueValue('provider-error')}`)).toBeVisible()
     await assertPageHasNoHorizontalOverflow(page)
     await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)

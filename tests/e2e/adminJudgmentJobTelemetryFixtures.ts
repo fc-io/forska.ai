@@ -6,6 +6,20 @@ type TelemetryScenario =
   | 'endpointUnavailable'
   | 'providerAtTarget'
   | 'providerSaturated'
+type TelemetryHistoryRange = '5m' | '15m' | '1h' | '24h' | '3d'
+type TelemetryHistoryBucketData = {
+  adherenceState: 'atLimit' | 'overLimit' | 'unknown' | 'withinLimit'
+  avgUtilization: number | null
+  bottleneck: string | null
+  bottleneckSampleCount?: number
+  bottleneckSource: string | null
+  bottleneckSubreason: string | null
+  indexFromEnd: number
+  maxUtilization: number | null
+  minUtilization: number | null
+  sampleCount: number
+}
+type TelemetryHistory = ReturnType<typeof buildTelemetryHistory>
 
 type MockJob = ReturnType<typeof buildTelemetryJob>
 
@@ -19,6 +33,60 @@ const mockRuntime = {
   sourceMetadata: null,
   workerUrls: [],
 }
+const telemetryHistoryRangePresets: Record<TelemetryHistoryRange, {bucketSizeSeconds: number; bucketCount: number}> = {
+  '5m': {bucketCount: 10, bucketSizeSeconds: 30},
+  '15m': {bucketCount: 30, bucketSizeSeconds: 30},
+  '1h': {bucketCount: 60, bucketSizeSeconds: 60},
+  '24h': {bucketCount: 96, bucketSizeSeconds: 15 * 60},
+  '3d': {bucketCount: 72, bucketSizeSeconds: 60 * 60},
+}
+const telemetryHistoryRangeEnd = new Date('2026-05-04T12:00:00.000Z')
+const defaultTelemetryHistoryBuckets: TelemetryHistoryBucketData[] = [
+  {
+    adherenceState: 'withinLimit',
+    avgUtilization: 25,
+    bottleneck: 'claiming',
+    bottleneckSource: 'convergenceDiagnostics.readyCount',
+    bottleneckSubreason: 'promptClaimBacklog',
+    indexFromEnd: 4,
+    maxUtilization: 31,
+    minUtilization: 12,
+    sampleCount: 2,
+  },
+  {
+    adherenceState: 'withinLimit',
+    avgUtilization: 37.5,
+    bottleneck: 'claiming',
+    bottleneckSource: 'convergenceDiagnostics.readyCount',
+    bottleneckSubreason: 'promptClaimBacklog',
+    indexFromEnd: 3,
+    maxUtilization: 50,
+    minUtilization: 25,
+    sampleCount: 2,
+  },
+  {
+    adherenceState: 'atLimit',
+    avgUtilization: 100,
+    bottleneck: 'providerAtTarget',
+    bottleneckSource: 'provider.providerLeasedLiveRequests',
+    bottleneckSubreason: 'providerTargetReached',
+    indexFromEnd: 2,
+    maxUtilization: 100,
+    minUtilization: 87.5,
+    sampleCount: 2,
+  },
+  {
+    adherenceState: 'overLimit',
+    avgUtilization: 112.5,
+    bottleneck: 'providerSaturated',
+    bottleneckSource: 'provider.providerLeasedPhysicalCalls',
+    bottleneckSubreason: 'providerPhysicalCap',
+    indexFromEnd: 1,
+    maxUtilization: 125,
+    minUtilization: 100,
+    sampleCount: 2,
+  },
+]
 
 const baseEndpointDiagnostics = {
   cooldownRemainingMs: null,
@@ -61,6 +129,79 @@ const baseTelemetrySource = {
   telemetryUnavailable: false,
   unavailableWorkerCount: 1,
 } as const
+
+const isTelemetryHistoryRange = (value: string | null): value is TelemetryHistoryRange => {
+  return value === '5m' || value === '15m' || value === '1h' || value === '24h' || value === '3d'
+}
+
+const getTelemetryHistoryBucketData = (
+  bucketCount: number,
+  index: number,
+  sampledBuckets: TelemetryHistoryBucketData[],
+): TelemetryHistoryBucketData | null => {
+  return (
+    sampledBuckets.find((bucket) => {
+      return bucketCount - bucket.indexFromEnd === index
+    }) ?? null
+  )
+}
+
+const getTelemetryHistoryBucket = (params: {
+  bucketSizeSeconds: number
+  bucketStart: Date
+  data: TelemetryHistoryBucketData | null
+}) => {
+  const bucketEnd = new Date(params.bucketStart.getTime() + params.bucketSizeSeconds * 1000)
+  const bottleneckSampleCount =
+    params.data?.bottleneckSampleCount ?? (params.data?.bottleneck ? params.data.sampleCount : 0)
+
+  return {
+    adherenceState: params.data?.adherenceState ?? 'unknown',
+    avgUtilization: params.data?.avgUtilization ?? null,
+    bottleneck: params.data?.bottleneck ?? null,
+    bottleneckSampleCount,
+    bottleneckSource: params.data?.bottleneckSource ?? null,
+    bottleneckSubreason: params.data?.bottleneckSubreason ?? null,
+    bucketEnd: bucketEnd.toISOString(),
+    bucketStart: params.bucketStart.toISOString(),
+    maxUtilization: params.data?.maxUtilization ?? null,
+    minUtilization: params.data?.minUtilization ?? null,
+    sampleCount: params.data?.sampleCount ?? 0,
+  }
+}
+
+export const buildTelemetryHistory = ({
+  providerKey = telemetryProviderId,
+  range,
+  sampledBuckets = defaultTelemetryHistoryBuckets,
+}: {
+  providerKey?: string
+  range: TelemetryHistoryRange
+  sampledBuckets?: TelemetryHistoryBucketData[]
+}) => {
+  const preset = telemetryHistoryRangePresets[range]
+  const bucketSizeMs = preset.bucketSizeSeconds * 1000
+  const rangeStart = new Date(telemetryHistoryRangeEnd.getTime() - preset.bucketCount * bucketSizeMs)
+  const buckets = Array.from({length: preset.bucketCount}, (_, index) => {
+    return getTelemetryHistoryBucket({
+      bucketSizeSeconds: preset.bucketSizeSeconds,
+      bucketStart: new Date(rangeStart.getTime() + index * bucketSizeMs),
+      data: getTelemetryHistoryBucketData(preset.bucketCount, index, sampledBuckets),
+    })
+  })
+
+  return {
+    bucketSizeSeconds: preset.bucketSizeSeconds,
+    buckets,
+    providerKey,
+    rangeEnd: telemetryHistoryRangeEnd.toISOString(),
+    rangeStart: rangeStart.toISOString(),
+  }
+}
+
+export const buildEmptyTelemetryHistory = (range: TelemetryHistoryRange, providerKey = telemetryProviderId) => {
+  return buildTelemetryHistory({providerKey, range, sampledBuckets: []})
+}
 
 const getEndpointDiagnostics = (scenario: TelemetryScenario) => {
   return scenario === 'endpointUnavailable'
@@ -378,6 +519,7 @@ const mockProjectListItem = {
 }
 
 type AdminTelemetryMocksOptions = {
+  historyByRange?: Partial<Record<TelemetryHistoryRange, TelemetryHistory>>
   jobs?: MockJob[]
   preflightNotice?: string
   providerRuntime?: typeof mockRuntime
@@ -458,6 +600,18 @@ export const installAdminTelemetryMocks = async (
 
     if (url.pathname === '/api/judgmentsjobs-unassessed-count') {
       await route.fulfill({json: {count: 0}})
+      return
+    }
+
+    if (url.pathname === '/api/judgmentsjobs-provider-telemetry-history') {
+      const requestedRange = url.searchParams.get('range')
+      const range = isTelemetryHistoryRange(requestedRange) ? requestedRange : '15m'
+      const providerKey =
+        url.searchParams.get('providerKey')?.trim() || job.requestStats.providerTelemetry.providerKey || telemetryProviderId
+
+      await route.fulfill({
+        json: options.historyByRange?.[range] ?? buildTelemetryHistory({providerKey, range}),
+      })
       return
     }
 

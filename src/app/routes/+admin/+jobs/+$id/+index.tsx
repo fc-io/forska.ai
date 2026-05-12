@@ -24,6 +24,7 @@ import {
   formatProviderMaxInflightRequests,
 } from '../../../+admin/+models/providerConnectionsClient.ts'
 import {JobTelemetryPanel} from './jobTelemetryPanel.tsx'
+import {JobTelemetryHistoryChart} from './jobTelemetryPanel/jobTelemetryHistoryChart.tsx'
 
 const getActionErrorMessage = (error: unknown, fallback: string) => {
   return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback
@@ -1097,6 +1098,10 @@ const AdminJudgmentJobDetail = () => {
                 </section>
 
                 <JobTelemetryPanel requestStats={data()?.requestStats} />
+                <JobTelemetryHistoryChart
+                  jobId={id()}
+                  providerKey={data()?.requestStats?.providerTelemetry?.providerKey}
+                />
 
                 <div class="mb-6 min-w-0 rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:p-6">
                   <div class="mb-4 flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

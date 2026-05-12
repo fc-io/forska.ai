@@ -323,6 +323,32 @@ export const getProviderTelemetryBottleneckSummaryLabel = (
     : 'No bottleneck'
 }
 
+export const getProviderTelemetryHistoryHasSamples = (
+  buckets: readonly Pick<JudgmentJobProviderTelemetryHistoryBucket, 'sampleCount'>[],
+): boolean => {
+  return buckets.some((bucket) => {
+    return bucket.sampleCount > 0
+  })
+}
+
+export const getProviderTelemetryHistoryUtilizationScaleMax = (
+  buckets: readonly Pick<
+    JudgmentJobProviderTelemetryHistoryBucket,
+    'avgUtilization' | 'maxUtilization' | 'minUtilization'
+  >[],
+): number => {
+  const values = buckets
+    .flatMap((bucket) => {
+      return [bucket.avgUtilization, bucket.maxUtilization, bucket.minUtilization]
+    })
+    .filter((value): value is number => {
+      return typeof value === 'number' && Number.isFinite(value)
+    })
+  const rawMax = Math.max(100, ...values)
+
+  return Math.ceil(rawMax / 25) * 25
+}
+
 export const getEndpointProbeStateLabel = (value: string | null | undefined): string => {
   return endpointProbeStateLabels[value ?? ''] ?? formatTelemetryEnumValue(value)
 }

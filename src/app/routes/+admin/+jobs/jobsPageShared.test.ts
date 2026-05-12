@@ -15,7 +15,9 @@ import {
   getProviderBottleneckLabel,
   getProviderTelemetryAdherenceStateLabel,
   getProviderTelemetryBottleneckSummaryLabel,
+  getProviderTelemetryHistoryHasSamples,
   getProviderTelemetryHistoryRangeLabel,
+  getProviderTelemetryHistoryUtilizationScaleMax,
   getTelemetryCoverageSummary,
   jobMatchesHealthFilter,
   judgmentProviderTelemetryHistoryRanges,
@@ -91,6 +93,14 @@ test('provider telemetry history labels cover chart range adherence utilization 
     'Provider at target (2 samples)',
   )
   expect(getProviderTelemetryBottleneckSummaryLabel({bottleneck: null, bottleneckSampleCount: 0})).toBe('No bottleneck')
+  expect(getProviderTelemetryHistoryHasSamples([{sampleCount: 0}, {sampleCount: 1}])).toBe(true)
+  expect(getProviderTelemetryHistoryHasSamples([{sampleCount: 0}, {sampleCount: 0}])).toBe(false)
+  expect(
+    getProviderTelemetryHistoryUtilizationScaleMax([
+      {avgUtilization: 73.3, maxUtilization: 117.2, minUtilization: 60},
+      {avgUtilization: null, maxUtilization: null, minUtilization: null},
+    ]),
+  ).toBe(125)
 })
 
 test('list page helpers preserve status labels and active job polling behavior', () => {
