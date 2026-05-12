@@ -1891,12 +1891,15 @@ test('comparison conflict resolution upsert uses DuckDB-safe timestamp function'
     }),
   )
   const body = (await response.json()) as {data: {label: string; value: string}}
-  const insertStatement = getMockDatabaseState().lastConflictResolutionInsertStatement ?? ''
+  const state = getMockDatabaseState()
+  const insertStatement = state.lastConflictResolutionInsertStatement ?? ''
 
   expect(response.status).toBe(200)
   expect(body.data).toEqual({articleId: 'article-1', label: 'Prompt 2', value: 'prompt-2'})
   expect(insertStatement).toContain('updated_at = now()')
   expect(insertStatement).not.toContain('updated_at = current_timestamp')
+  expect(state.staleServingIds).toEqual([])
+  expect(state.queuedServingRebuildIds).toEqual([])
 })
 
 test('comparison export filters match judgments endpoint row and difference filters', async () => {

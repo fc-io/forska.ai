@@ -1,6 +1,7 @@
 import type {JudgmentChunkingStrategy} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
+import {getComparisonProjectServingInvalidationService} from '../../server/services/comparisonProjectServingInvalidationService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../../server/services/projectMartDirtyRefreshStateService.ts'
 import {getShortIdForPrompt, type ShortIdMapping} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
@@ -138,8 +139,14 @@ export const judgeStoreJudgment = async (
             useTitle: boolean
             useAbstract: boolean
             useFulltext: boolean
+            useFulltextNoImages: boolean
           }>(`
-            SELECT id, use_title AS useTitle, use_abstract AS useAbstract, use_fulltext AS useFulltext
+            SELECT
+              id,
+              use_title AS useTitle,
+              use_abstract AS useAbstract,
+              use_fulltext AS useFulltext,
+              use_fulltext_no_images AS useFulltextNoImages
             FROM app.project
             WHERE id = '${escapeSqlString(projectId)}'
             LIMIT 1
@@ -185,6 +192,20 @@ export const judgeStoreJudgment = async (
           reason: 'judgeStoreJudgment',
           runner,
         })
+        await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForLlmJudgments(
+          promptIds.map((promptId) => {
+            return {
+              articleId,
+              modelId,
+              promptId,
+              useAbstract: projectRow?.useAbstract ?? true,
+              useFulltext: projectRow?.useFulltext ?? false,
+              useFulltextNoImages: projectRow?.useFulltextNoImages ?? false,
+              useTitle: projectRow?.useTitle ?? true,
+            }
+          }),
+          {runner},
+        )
       }
     })
   } catch (error) {

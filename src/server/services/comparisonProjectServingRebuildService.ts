@@ -1,6 +1,6 @@
 import type {ComparisonProjectServingStatus} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {getDateValue, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
+import {getDateValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 import {getComparisonProjectServingCellBuilder} from './comparisonProjectServingCellBuilder.ts'
 import {getComparisonProjectServingGenerationService} from './comparisonProjectServingGenerationService.ts'
 import {
@@ -145,6 +145,36 @@ const ensureComparisonProjectServingStatusRow = async (
   `)
 }
 
+const ensureComparisonProjectServingStatusRows = async (
+  runner: ComparisonProjectServingRebuildRunner,
+  comparisonProjectIds: string[],
+  now: Date,
+) => {
+  const uniqueComparisonProjectIds = Array.from(new Set(comparisonProjectIds))
+
+  if (uniqueComparisonProjectIds.length === 0) {
+    return
+  }
+
+  await runner.run(`
+    INSERT INTO ${comparisonProjectServingGenerationTable} (
+      comparison_project_id,
+      active_generation,
+      generation_updated_at
+    )
+    SELECT
+      row_value.comparison_project_id,
+      0,
+      ${getTimestampLiteral(now)}
+    FROM (VALUES ${uniqueComparisonProjectIds
+      .map((comparisonProjectId) => {
+        return `(${getSqlLiteral(comparisonProjectId)})`
+      })
+      .join(', ')}) AS row_value(comparison_project_id)
+    ON CONFLICT(comparison_project_id) DO NOTHING
+  `)
+}
+
 const recordComparisonProjectServingRebuildStarted = async ({
   comparisonProjectId,
   generation,
@@ -242,6 +272,36 @@ const recordComparisonProjectServingStale = async ({
       serving_error = NULL,
       generation_updated_at = ${getTimestampLiteral(now)}
     WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+  `)
+}
+
+const recordComparisonProjectsServingStale = async ({
+  comparisonProjectIds,
+  now,
+  runner,
+}: {
+  comparisonProjectIds: string[]
+  now: Date
+  runner: ComparisonProjectServingRebuildRunner
+}) => {
+  const uniqueComparisonProjectIds = Array.from(new Set(comparisonProjectIds))
+
+  if (uniqueComparisonProjectIds.length === 0) {
+    return
+  }
+
+  await ensureComparisonProjectServingStatusRows(runner, uniqueComparisonProjectIds, now)
+  await runner.run(`
+    UPDATE ${comparisonProjectServingGenerationTable}
+    SET
+      serving_status = 'stale',
+      serving_generation = NULL,
+      serving_started_at = NULL,
+      serving_completed_at = NULL,
+      serving_failed_at = NULL,
+      serving_error = NULL,
+      generation_updated_at = ${getTimestampLiteral(now)}
+    WHERE comparison_project_id IN (${getQuotedStringList(uniqueComparisonProjectIds).join(', ')})
   `)
 }
 
@@ -381,9 +441,32 @@ const markComparisonProjectServingStale = async (
   return getComparisonProjectServingStatus(comparisonProjectId, {database: dependencies.database})
 }
 
+const markComparisonProjectsServingStale = async (
+  comparisonProjectIds: string[],
+  overrides: Pick<ComparisonProjectServingRebuildDependencyOverrides, 'database'> = {},
+) => {
+  const uniqueComparisonProjectIds = Array.from(new Set(comparisonProjectIds))
+  const dependencies = getComparisonProjectServingRebuildDependencies(overrides)
+
+  if (uniqueComparisonProjectIds.length === 0) {
+    return []
+  }
+
+  await dependencies.database.transaction((runner) => {
+    return recordComparisonProjectsServingStale({
+      comparisonProjectIds: uniqueComparisonProjectIds,
+      now: new Date(),
+      runner,
+    })
+  })
+
+  return uniqueComparisonProjectIds
+}
+
 const comparisonProjectServingRebuildService = {
   getComparisonProjectServingStatus,
   markComparisonProjectServingStale,
+  markComparisonProjectsServingStale,
   rebuildComparisonProjectServing,
 }
 

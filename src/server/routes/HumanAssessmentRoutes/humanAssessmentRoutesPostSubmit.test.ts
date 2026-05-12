@@ -1,6 +1,10 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
+const comparisonProjectServingInvalidationServiceModulePath = new URL(
+  '../../services/comparisonProjectServingInvalidationService.ts',
+  import.meta.url,
+).pathname
 const projectMartDirtyRefreshStateServiceModulePath = new URL(
   '../../services/projectMartDirtyRefreshStateService.ts',
   import.meta.url,
@@ -28,6 +32,10 @@ const dirtyMarksRef = {
     projects: Array<{articleIds?: string[]; projectId: string}>
     reason: string | null | undefined
   }>,
+}
+
+const comparisonServingInvalidationMarksRef = {
+  current: [] as Array<{changes: Array<{articleId: string; promptId: string}>; hasRunner: boolean}>,
 }
 
 const registerModuleMocks = () => {
@@ -68,6 +76,21 @@ const registerModuleMocks = () => {
       },
     }
   })
+
+  void mock.module(comparisonProjectServingInvalidationServiceModulePath, () => {
+    return {
+      getComparisonProjectServingInvalidationService: () => {
+        return {
+          markComparisonProjectsServingStaleForHumanPromptJudgments: async (
+            changes: Array<{articleId: string; promptId: string}>,
+            options?: {runner?: unknown},
+          ) => {
+            comparisonServingInvalidationMarksRef.current.push({changes, hasRunner: options?.runner != null})
+          },
+        }
+      },
+    }
+  })
 }
 
 const loadHandler = async (): Promise<typeof import('./humanAssessmentRoutesPostSubmit.ts')> => {
@@ -85,6 +108,7 @@ afterEach(() => {
 test('human assessment submit marks the project dirty in the same transaction for the pending article', async () => {
   const statements: string[] = []
   dirtyMarksRef.current = []
+  comparisonServingInvalidationMarksRef.current = []
   queryJsonRef.current = async (statement) => {
     statements.push(statement)
 
@@ -119,6 +143,9 @@ test('human assessment submit marks the project dirty in the same transaction fo
       reason: 'humanAssessmentRoutesPostSubmit',
     },
   ])
+  expect(comparisonServingInvalidationMarksRef.current).toEqual([
+    {changes: [{articleId: 'article-1', promptId: 'prompt-1'}], hasRunner: true},
+  ])
   expect(
     statements.some((statement) => {
       return statement.includes('UPDATE app.judgment_human') && statement.includes('is_answered = TRUE')
@@ -129,6 +156,7 @@ test('human assessment submit marks the project dirty in the same transaction fo
 test('human assessment submit rejects summary-mode projects before prompt validation', async () => {
   const statements: string[] = []
   dirtyMarksRef.current = []
+  comparisonServingInvalidationMarksRef.current = []
   queryJsonRef.current = async (statement) => {
     statements.push(statement)
 
@@ -151,6 +179,7 @@ test('human assessment submit rejects summary-mode projects before prompt valida
   expect(set.status).toBe(409)
   expect(response).toEqual({data: null, error: 'Summary-mode projects do not support prompt-based human assessment'})
   expect(dirtyMarksRef.current).toEqual([])
+  expect(comparisonServingInvalidationMarksRef.current).toEqual([])
   expect(
     statements.some((statement) => {
       return (

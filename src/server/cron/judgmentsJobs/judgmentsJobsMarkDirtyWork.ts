@@ -1,6 +1,7 @@
 import type {JudgmentInsertRow} from '../../services/appDatabaseService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
+import {getComparisonProjectServingInvalidationService} from '../../services/comparisonProjectServingInvalidationService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../../services/projectMartDirtyRefreshStateService.ts'
 import type {JudgmentJobSqliteOutboxEntry} from './judgmentJobSqliteService.ts'
 
@@ -191,6 +192,35 @@ const markRefreshStateDirtyForEntries = async (
   }
 }
 
+const getInsertedEntries = (entries: JudgmentJobSqliteOutboxEntry[], insertedJudgmentIds: Set<string>) => {
+  return entries.filter((entry) => {
+    return insertedJudgmentIds.has(entry.judgmentId)
+  })
+}
+
+const markComparisonServingStaleForInsertedEntries = async (
+  runner: DirtyWorkRunner,
+  entries: JudgmentJobSqliteOutboxEntry[],
+  insertedJudgmentIds: Set<string>,
+) => {
+  const insertedEntries = getInsertedEntries(entries, insertedJudgmentIds)
+
+  await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForLlmJudgments(
+    insertedEntries.map((entry) => {
+      return {
+        articleId: entry.articleId,
+        modelId: entry.modelId,
+        promptId: entry.promptId,
+        useAbstract: entry.useAbstract,
+        useFulltext: entry.useFulltext,
+        useFulltextNoImages: entry.useFulltextNoImages,
+        useTitle: entry.useTitle,
+      }
+    }),
+    {runner},
+  )
+}
+
 const getOutboxImportMarkerValueSql = (
   {entry, errorMessage, importStatus}: JudgmentOutboxImportMarkerInput,
   now: Date,
@@ -323,6 +353,7 @@ export const commitJudgmentSqliteOutboxImportDirtyWork = async ({
     const insertedJudgmentIds = await insertJudgments(runner, unmarkedImportableEntries)
 
     await markRefreshStateDirtyForEntries(runner, unmarkedImportableEntries, requestedBy)
+    await markComparisonServingStaleForInsertedEntries(runner, unmarkedImportableEntries, insertedJudgmentIds)
     await insertOutboxImportMarkers(
       runner,
       getOutboxImportMarkerInputs({

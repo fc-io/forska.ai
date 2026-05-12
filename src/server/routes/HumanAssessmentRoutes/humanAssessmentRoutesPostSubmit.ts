@@ -3,6 +3,7 @@ import type {Context} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getComparisonProjectServingInvalidationService} from '../../services/comparisonProjectServingInvalidationService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../../services/projectMartDirtyRefreshStateService.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({
@@ -179,6 +180,16 @@ export const humanAssessmentRoutesPostSubmit = async ({
       reason: 'humanAssessmentRoutesPostSubmit',
       runner: tx,
     })
+    await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForHumanPromptJudgments(
+      pending
+        .filter((row) => {
+          return submittedIds.has(row.id)
+        })
+        .map((row) => {
+          return {articleId: row.articleId, promptId: row.promptId}
+        }),
+      {runner: tx},
+    )
   })
 
   return {data: {updated: idsToUpdate.length}}

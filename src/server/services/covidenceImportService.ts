@@ -14,6 +14,7 @@ import {
   storeImportedArticles,
   syncImportedArticlesWithTx,
 } from './articleImportStoreService.ts'
+import {getComparisonProjectServingInvalidationService} from './comparisonProjectServingInvalidationService.ts'
 import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
@@ -2085,6 +2086,42 @@ const markCovidenceSeededHumanJudgmentsDirty = async (params: {
   })
 }
 
+const markCovidenceComparisonServingStaleForSummaryHumanJudgments = async (params: {
+  articleIds: string[]
+  projectId: string
+  runner: CovidenceProjectTx
+}) => {
+  return getCovidenceValueChunks(params.articleIds, 500).reduce<Promise<void>>((previousRun, articleIdChunk) => {
+    return previousRun.then(() => {
+      return getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForHumanSummaryJudgments(
+        articleIdChunk.map((articleId) => {
+          return {articleId, projectId: params.projectId}
+        }),
+        {runner: params.runner},
+      )
+    })
+  }, Promise.resolve())
+}
+
+const markCovidenceComparisonServingStaleForPromptHumanJudgments = async (params: {
+  articleIds: string[]
+  promptIds: string[]
+  runner: CovidenceProjectTx
+}) => {
+  return getCovidenceValueChunks(params.articleIds, 500).reduce<Promise<void>>((previousRun, articleIdChunk) => {
+    return previousRun.then(() => {
+      return getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForHumanPromptJudgments(
+        articleIdChunk.flatMap((articleId) => {
+          return params.promptIds.map((promptId) => {
+            return {articleId, promptId}
+          })
+        }),
+        {runner: params.runner},
+      )
+    })
+  }, Promise.resolve())
+}
+
 export const buildCovidencePackageConfig = (params: {
   mode: CovidenceImportMode
   files: CovidencePackageFile[]
@@ -2465,6 +2502,11 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
     )
 
     await markCovidenceSeededHumanJudgmentsDirty({articleIds, projectId: project.id, tx: params.tx})
+    await markCovidenceComparisonServingStaleForSummaryHumanJudgments({
+      articleIds,
+      projectId: project.id,
+      runner: queryRunner,
+    })
 
     return
   }
@@ -2513,6 +2555,7 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
   )
 
   await markCovidenceSeededHumanJudgmentsDirty({articleIds, projectId: project.id, tx: params.tx})
+  await markCovidenceComparisonServingStaleForPromptHumanJudgments({articleIds, promptIds, runner: queryRunner})
 }
 
 export const clearCovidenceSeededHumanJudgments = async (params: {importRoute: string; tx?: CovidenceProjectTx}) => {
