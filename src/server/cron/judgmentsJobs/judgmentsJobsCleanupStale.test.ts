@@ -921,7 +921,7 @@ test('unavailable request diagnostics close explicitly after repair deadline wit
   }
 })
 
-test('cleanupStale releases token-use closed request leases without closing probe leases', async () => {
+test('cleanupStale releases projected closeout request leases without closing probe leases', async () => {
   if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase) {
     throw new Error('Test database not initialized')
   }
@@ -935,15 +935,11 @@ test('cleanupStale releases token-use closed request leases without closing prob
     endpointAvailabilityKey,
     probeAttemptId: `cleanup-stale-probe-attempt-${timestamp}`,
   })
-  const requestAttemptsJson = JSON.stringify([
-    {
-      closeoutKind: 'token_use',
-      durableCloseoutRef: {id: `cleanup-stale-token-use-${timestamp}`, kind: 'token_use', requestAttemptId},
-      outcome: 'success',
-      providerKey,
-      requestAttemptId,
-    },
-  ])
+  const durableCloseoutRefJson = JSON.stringify({
+    id: `cleanup-stale-token-use-${timestamp}`,
+    kind: 'token_use',
+    requestAttemptId,
+  })
 
   await runDatabase(`
     INSERT INTO app.provider_admission_lease (
@@ -984,24 +980,26 @@ test('cleanupStale releases token-use closed request leases without closing prob
       )
   `)
   await runDatabase(`
-    INSERT INTO app.token_use (
-      id,
-      requests,
-      total_prompt_tokens,
-      total_completion_tokens,
-      total_tokens,
-      started_at,
-      finished_at,
-      request_attempts_json
+    INSERT INTO app.request_attempt_closeout (
+      token_use_id,
+      token_use_created_at,
+      request_attempt_id,
+      provider_key,
+      closeout_kind,
+      durable_closeout_kind,
+      durable_closeout_id,
+      durable_closeout_ref_json,
+      closed_at
     ) VALUES (
       ${getSqlLiteral(`cleanup-stale-token-use-${timestamp}`)},
-      1,
-      0,
-      0,
-      0,
       TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
-      TIMESTAMPTZ '2026-05-04T10:00:01.000Z',
-      CAST(${getSqlLiteral(requestAttemptsJson)} AS JSON)
+      ${getSqlLiteral(requestAttemptId)},
+      ${getSqlLiteral(providerKey)},
+      'token_use',
+      'token_use',
+      ${getSqlLiteral(`cleanup-stale-token-use-${timestamp}`)},
+      CAST(${getSqlLiteral(durableCloseoutRefJson)} AS JSON),
+      TIMESTAMPTZ '2026-05-04T10:00:01.000Z'
     )
   `)
 

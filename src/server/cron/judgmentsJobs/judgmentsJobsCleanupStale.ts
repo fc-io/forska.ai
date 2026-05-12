@@ -1,5 +1,5 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {getJsonValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {pruneJudgmentProviderTelemetryHistorySamples} from '../../services/judgmentProviderTelemetryHistoryService.ts'
 import {isJudgmentJobLeaseProcessAlive, isJudgmentJobLeaseStale} from './judgmentJobLease.ts'
@@ -8,22 +8,14 @@ import {runJudgmentJobRepairAction} from './judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 import {getTransientJudgmentJobSqliteLockReasonSql} from './judgmentJobSqliteTransientLock.ts'
-import {
-  getDurableTerminalRequestAttemptCloseoutProofs,
-  type JudgmentRequestAttemptCloseoutProof,
-  type JudgmentRequestAttemptJsonEntry,
-  parseRequestAttempts,
-} from './judgmentRequestAttemptManifest.ts'
+import {type JudgmentRequestAttemptCloseoutProof} from './judgmentRequestAttemptManifest.ts'
 import {reconcileProviderAdmissionLeasesThroughOwner} from './providerAdmissionLease.ts'
 import {abandonedSentPromptGraceMs} from './requeueAbandonedSentPrompts.ts'
 
 type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
-type RequestAttemptsJsonRow = {requestAttemptsJson: unknown}
-type ProviderRequestLeaseRow = {requestAttemptId: string}
 
 const sqliteRetentionCleanupBatchSize = 1_000
 const sqliteCleanupTerminalStatuses = ['completed', 'paused', 'project_removed'] as const
-const tokenUseCloseoutLookupBatchSize = 128
 const transientLockedQuarantineRecoveryBatchSize = 5
 
 const getEmptyRetentionPruneResult = (): RetentionPruneResult => {
@@ -35,80 +27,6 @@ const addRetentionPruneResults = (left: RetentionPruneResult, right: RetentionPr
     outboxRowsDeleted: left.outboxRowsDeleted + right.outboxRowsDeleted,
     queuePromptRowsDeleted: left.queuePromptRowsDeleted + right.queuePromptRowsDeleted,
   }
-}
-
-const getRequestAttemptsFromDuckdbJson = (value: unknown): JudgmentRequestAttemptJsonEntry[] => {
-  const parsed = getJsonValue(value)
-
-  return parseRequestAttempts(Array.isArray(parsed) ? (parsed as JudgmentRequestAttemptJsonEntry[]) : null)
-}
-
-const getUniqueTrimmedValues = (values: string[]) => {
-  return Array.from(
-    values.reduce<Set<string>>((acc, value) => {
-      const trimmedValue = value.trim()
-
-      if (trimmedValue.length > 0) {
-        acc.add(trimmedValue)
-      }
-
-      return acc
-    }, new Set()),
-  )
-}
-
-const getStringChunks = (values: string[], chunkSize: number): string[][] => {
-  return values.length === 0
-    ? []
-    : values.length <= chunkSize
-      ? [values]
-      : [values.slice(0, chunkSize), ...getStringChunks(values.slice(chunkSize), chunkSize)]
-}
-
-const getActiveProviderRequestLeaseRows = async () => {
-  return await getAppDatabaseService().queryJson<ProviderRequestLeaseRow>(`
-    SELECT request_attempt_id AS requestAttemptId
-    FROM app.provider_admission_lease
-    WHERE lease_kind = 'request'
-      AND request_attempt_id IS NOT NULL
-      AND length(trim(request_attempt_id)) > 0
-      AND expires_at > current_timestamp
-    ORDER BY requestAttemptId ASC
-  `)
-}
-
-const getTokenUseRequestAttemptContainsPredicate = (requestAttemptIds: string[]) => {
-  return requestAttemptIds
-    .map((requestAttemptId) => {
-      return `contains(CAST(request_attempts_json AS VARCHAR), ${getSqlLiteral(requestAttemptId)})`
-    })
-    .join(' OR ')
-}
-
-const getDuckdbTokenUseRequestAttemptRows = async (requestAttemptIds: string[]): Promise<RequestAttemptsJsonRow[]> => {
-  const rows = await getAppDatabaseService().queryJson<RequestAttemptsJsonRow>(`
-    SELECT CAST(request_attempts_json AS VARCHAR) AS requestAttemptsJson
-    FROM app.token_use
-    WHERE request_attempts_json IS NOT NULL
-      AND (${getTokenUseRequestAttemptContainsPredicate(requestAttemptIds)})
-  `)
-
-  return rows
-}
-
-const getDuckdbTokenUseRequestAttemptRowsForChunks = async (
-  requestAttemptIdChunks: string[][],
-): Promise<RequestAttemptsJsonRow[]> => {
-  const [currentChunk = [], ...remainingChunks] = requestAttemptIdChunks
-
-  if (currentChunk.length === 0) {
-    return []
-  }
-
-  const rows = await getDuckdbTokenUseRequestAttemptRows(currentChunk)
-  const remainingRows = await getDuckdbTokenUseRequestAttemptRowsForChunks(remainingChunks)
-
-  return [...rows, ...remainingRows]
 }
 
 const getUniqueRequestAttemptCloseoutKey = (closeout: {providerKey: string; requestAttemptId: string}) => {
@@ -133,41 +51,33 @@ const getUniqueRequestAttemptCloseouts = <TCloseout extends {providerKey: string
   )
 }
 
-const getDuckdbTokenUseTerminalRequestAttemptCloseouts = async (): Promise<JudgmentRequestAttemptCloseoutProof[]> => {
-  const activeLeaseRows = await getActiveProviderRequestLeaseRows()
-  const activeRequestAttemptIds = getUniqueTrimmedValues(
-    activeLeaseRows.map((row) => {
-      return row.requestAttemptId
-    }),
-  )
+const getDuckdbProjectedTerminalRequestAttemptCloseouts = async (): Promise<JudgmentRequestAttemptCloseoutProof[]> => {
+  const rows = await getAppDatabaseService().queryJson<JudgmentRequestAttemptCloseoutProof>(`
+    SELECT DISTINCT
+      closeout.provider_key AS providerKey,
+      closeout.request_attempt_id AS requestAttemptId
+    FROM app.provider_admission_lease lease
+    INNER JOIN app.request_attempt_closeout closeout
+      ON closeout.provider_key = lease.provider_key
+     AND closeout.request_attempt_id = lease.request_attempt_id
+    WHERE lease.lease_kind = 'request'
+      AND lease.request_attempt_id IS NOT NULL
+      AND length(trim(lease.request_attempt_id)) > 0
+      AND lease.expires_at > current_timestamp
+    ORDER BY providerKey ASC, requestAttemptId ASC
+  `)
 
-  if (activeRequestAttemptIds.length === 0) {
-    return []
-  }
-
-  const activeRequestAttemptIdSet = new Set(activeRequestAttemptIds)
-  const rows = await getDuckdbTokenUseRequestAttemptRowsForChunks(
-    getStringChunks(activeRequestAttemptIds, tokenUseCloseoutLookupBatchSize),
-  )
-  const closeouts = rows.flatMap((row) => {
-    return getDurableTerminalRequestAttemptCloseoutProofs(getRequestAttemptsFromDuckdbJson(row.requestAttemptsJson))
-  })
-
-  return getUniqueRequestAttemptCloseouts(
-    closeouts.filter((closeout) => {
-      return activeRequestAttemptIdSet.has(closeout.requestAttemptId)
-    }),
-  )
+  return getUniqueRequestAttemptCloseouts(rows)
 }
 
 const reconcileProviderAdmissionLeasesForDurableCloseout = async (): Promise<void> => {
-  const [tokenUseCloseouts, sqliteCloseouts] = await Promise.all([
-    getDuckdbTokenUseTerminalRequestAttemptCloseouts(),
+  const [projectionCloseouts, sqliteCloseouts] = await Promise.all([
+    getDuckdbProjectedTerminalRequestAttemptCloseouts(),
     getJudgmentJobSqliteService().getDurableTerminalRequestAttemptCloseoutProofs(),
   ])
 
   await reconcileProviderAdmissionLeasesThroughOwner({
-    terminalRequestAttemptCloseouts: [...tokenUseCloseouts, ...sqliteCloseouts],
+    terminalRequestAttemptCloseouts: [...projectionCloseouts, ...sqliteCloseouts],
   })
 }
 
