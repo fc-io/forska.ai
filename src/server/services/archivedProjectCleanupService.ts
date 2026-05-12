@@ -102,6 +102,18 @@ const archivedProjectJobCleanupMutations: CleanupMutation[] = [
   },
   {
     phase: 'runtime_state_cleanup',
+    tableName: 'app.request_attempt_closeout',
+    whereSql: (projectId: string) => {
+      return `token_use_id IN (
+        SELECT token_use.id
+        FROM app.token_use token_use
+        INNER JOIN app.judgment_job job ON job.id = token_use.judgment_job_id
+        WHERE job.project_id = ${getSqlLiteral(projectId)}
+      )`
+    },
+  },
+  {
+    phase: 'runtime_state_cleanup',
     tableName: 'app.token_use',
     whereSql: (projectId: string) => {
       return `EXISTS (
@@ -397,10 +409,10 @@ const mutateRowsBatchTx = async (tx: AppRunner, mutation: CleanupMutation, proje
   return rowIds.length
 }
 
-const mutateRowsBatch = async (mutation: CleanupMutation, projectId: string, batchSize: number) => {
+const mutateRowsBatch = async (mutation: CleanupMutation, projectId: string, batchSize: number): Promise<number> => {
   return getAppDatabaseService().transaction(async (tx) => {
     return mutateRowsBatchTx(tx, mutation, projectId, batchSize)
-  })
+  }) as Promise<number>
 }
 
 const runFirstMutationBatch = async (
@@ -524,7 +536,7 @@ const finalDeleteProject = async (projectId: string): Promise<ArchivedProjectCle
     `)
 
     return {deletedRowCount: 1, phase: 'final_delete', projectId, tableName: 'app.project'}
-  })
+  }) as Promise<ArchivedProjectCleanupBatchResult | null>
 }
 
 const recordTombstoneCleanupResult = async (result: ArchivedProjectCleanupBatchResult) => {

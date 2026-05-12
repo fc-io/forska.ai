@@ -94,6 +94,29 @@ const getScript = (body: string) => {
       )
       VALUES ('archived-cleanup-token-use', 'archived-cleanup-job', 1, 2, 3, 5);
 
+      INSERT INTO app.request_attempt_closeout (
+        token_use_id,
+        token_use_created_at,
+        request_attempt_id,
+        provider_key,
+        closeout_kind,
+        durable_closeout_kind,
+        durable_closeout_id,
+        durable_closeout_ref_json,
+        closed_at
+      )
+      VALUES (
+        'archived-cleanup-token-use',
+        TIMESTAMPTZ '2026-01-01T00:00:00Z',
+        'archived-cleanup-request-attempt',
+        'archived-cleanup-provider',
+        'token_use',
+        'token_use',
+        'archived-cleanup-token-use',
+        '{"id":"archived-cleanup-token-use","kind":"token_use"}'::JSON,
+        TIMESTAMPTZ '2026-01-01T00:00:01Z'
+      );
+
       INSERT INTO app.judgment (
         id,
         article_id,
@@ -361,4 +384,59 @@ test('bounded cleanup keeps tombstoned project identity until blockers are clear
     projectRows: 0,
     runtimeRows: 0,
   })
+})
+
+test('cleanup deletes request attempt closeouts before their source token use rows', () => {
+  const result = runScript<{
+    afterProjection: {closeoutRows: number; tokenUseRows: number}
+    afterTokenUse: {closeoutRows: number; tokenUseRows: number}
+    batchesThroughProjection: {
+      deletedRowCount: number
+      phase: string
+      projectId: string | null
+      tableName: string | null
+    }[]
+    nextBatch: {deletedRowCount: number; phase: string; projectId: string | null; tableName: string | null}
+  }>(`
+    const cleanupUntilTable = async (tableName, batches = []) => {
+      const batch = await cleanupNextArchivedProjectBatch({batchSize: 1})
+      const nextBatches = [...batches, batch]
+
+      return batch.tableName === tableName || batch.phase === 'idle'
+        ? nextBatches
+        : cleanupUntilTable(tableName, nextBatches)
+    }
+
+    const batchesThroughProjection = await cleanupUntilTable('app.request_attempt_closeout')
+    const [afterProjection] = await database.queryJson(\`
+      SELECT
+        (SELECT COUNT(*) FROM app.request_attempt_closeout)::INTEGER AS closeoutRows,
+        (SELECT COUNT(*) FROM app.token_use WHERE id = 'archived-cleanup-token-use')::INTEGER AS tokenUseRows
+    \`)
+    const nextBatch = await cleanupNextArchivedProjectBatch({batchSize: 1})
+    const [afterTokenUse] = await database.queryJson(\`
+      SELECT
+        (SELECT COUNT(*) FROM app.request_attempt_closeout)::INTEGER AS closeoutRows,
+        (SELECT COUNT(*) FROM app.token_use WHERE id = 'archived-cleanup-token-use')::INTEGER AS tokenUseRows
+    \`)
+
+    console.log(JSON.stringify({afterProjection, afterTokenUse, batchesThroughProjection, nextBatch}))
+    await database.close()
+  `)
+  const projectionBatch = result.batchesThroughProjection.at(-1)
+
+  expect(projectionBatch).toEqual({
+    deletedRowCount: 1,
+    phase: 'runtime_state_cleanup',
+    projectId: 'archived-cleanup-project',
+    tableName: 'app.request_attempt_closeout',
+  })
+  expect(result.afterProjection).toEqual({closeoutRows: 0, tokenUseRows: 1})
+  expect(result.nextBatch).toEqual({
+    deletedRowCount: 1,
+    phase: 'runtime_state_cleanup',
+    projectId: 'archived-cleanup-project',
+    tableName: 'app.token_use',
+  })
+  expect(result.afterTokenUse).toEqual({closeoutRows: 0, tokenUseRows: 0})
 })

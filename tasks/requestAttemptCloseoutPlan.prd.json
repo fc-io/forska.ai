@@ -150,11 +150,12 @@
         "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-001"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-008",
@@ -254,6 +255,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-05-12T18:49:09.602Z"
+    "updatedAt": "2026-05-12T18:57:00.209Z"
   }
 }
