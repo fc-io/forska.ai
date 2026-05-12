@@ -43,6 +43,10 @@ const originalEnv = {
 }
 const journalDirectories: string[] = []
 
+const parseJsonValue = (value: unknown): unknown => {
+  return typeof value === 'string' ? parseJsonValue(JSON.parse(value) as unknown) : value
+}
+
 const restoreEnvValue = (key: keyof typeof originalEnv) => {
   const value = originalEnv[key]
 
@@ -304,7 +308,10 @@ test('legacy token-use and pending-token-use rows are converted with durable row
       total_completion_tokens,
       total_tokens,
       successful_requests,
-      failed_requests
+      failed_requests,
+      created_at,
+      started_at,
+      finished_at
     ) VALUES (
       'legacy-token-use-${suffix}',
       '${jobId}',
@@ -313,7 +320,10 @@ test('legacy token-use and pending-token-use rows are converted with durable row
       5,
       15,
       1,
-      0
+      0,
+      TIMESTAMPTZ '2026-05-03T12:00:00.000Z',
+      TIMESTAMPTZ '2026-05-03T12:00:01.000Z',
+      TIMESTAMPTZ '2026-05-03T12:00:02.000Z'
     )
   `)
 
@@ -325,17 +335,53 @@ test('legacy token-use and pending-token-use rows are converted with durable row
     WHERE id = 'legacy-token-use-${suffix}'
     LIMIT 1
   `)
-  const tokenUseAttempts =
-    typeof tokenUseRow?.requestAttemptsJson === 'string'
-      ? (JSON.parse(tokenUseRow.requestAttemptsJson) as Array<Record<string, unknown>>)
-      : (tokenUseRow?.requestAttemptsJson as Array<Record<string, unknown>>)
+  const parsedTokenUseAttempts = parseJsonValue(tokenUseRow?.requestAttemptsJson)
+  const tokenUseAttempts = Array.isArray(parsedTokenUseAttempts)
+    ? (parsedTokenUseAttempts as Array<Record<string, unknown>>)
+    : []
+  const tokenUseAttempt = tokenUseAttempts[0]
+  const tokenUseAttemptRequestAttemptId =
+    typeof tokenUseAttempt?.requestAttemptId === 'string' ? tokenUseAttempt.requestAttemptId : ''
+  const tokenUseAttemptProviderKey = typeof tokenUseAttempt?.providerKey === 'string' ? tokenUseAttempt.providerKey : ''
+  const tokenUseAttemptCloseoutKind =
+    typeof tokenUseAttempt?.closeoutKind === 'string' ? tokenUseAttempt.closeoutKind : ''
 
-  expect(tokenUseAttempts[0]?.requestAttemptId).toStartWith('legacyRequestAttemptId:token_use:')
-  expect(tokenUseAttempts[0]?.closeoutReason).toBe(legacyRolloutImportedCloseoutReason)
-  expect(tokenUseAttempts[0]?.legacyDurableRowRef).toMatchObject({
-    id: `legacy-token-use-${suffix}`,
-    surface: 'token_use',
-  })
+  expect(tokenUseAttemptRequestAttemptId).toStartWith('legacyRequestAttemptId:token_use:')
+  expect(tokenUseAttempt?.closeoutReason).toBe(legacyRolloutImportedCloseoutReason)
+  expect(tokenUseAttempt?.legacyDurableRowRef).toMatchObject({id: `legacy-token-use-${suffix}`, surface: 'token_use'})
+
+  const [projectionRow] = await queryDatabase<{
+    closedAtMs: number | string
+    closeoutKind: string
+    durableCloseoutId: string | null
+    durableCloseoutRefJson: unknown
+    providerKey: string
+    requestAttemptId: string
+    tokenUseCreatedAtMs: number | string
+    tokenUseId: string
+  }>(`
+    SELECT
+      token_use_id AS tokenUseId,
+      epoch_ms(token_use_created_at) AS tokenUseCreatedAtMs,
+      request_attempt_id AS requestAttemptId,
+      provider_key AS providerKey,
+      closeout_kind AS closeoutKind,
+      durable_closeout_id AS durableCloseoutId,
+      TO_JSON(durable_closeout_ref_json) AS durableCloseoutRefJson,
+      epoch_ms(closed_at) AS closedAtMs
+    FROM app.request_attempt_closeout
+    WHERE token_use_id = 'legacy-token-use-${suffix}'
+    LIMIT 1
+  `)
+
+  expect(projectionRow?.tokenUseId).toBe(`legacy-token-use-${suffix}`)
+  expect(Number(projectionRow?.tokenUseCreatedAtMs)).toBe(new Date('2026-05-03T12:00:00.000Z').getTime())
+  expect(projectionRow?.requestAttemptId).toBe(tokenUseAttemptRequestAttemptId)
+  expect(projectionRow?.providerKey).toBe(tokenUseAttemptProviderKey)
+  expect(projectionRow?.closeoutKind).toBe(tokenUseAttemptCloseoutKind)
+  expect(projectionRow?.durableCloseoutId).toBe(`legacy-token-use-${suffix}`)
+  expect(parseJsonValue(projectionRow?.durableCloseoutRefJson)).toEqual(tokenUseAttempt?.durableCloseoutRef)
+  expect(Number(projectionRow?.closedAtMs)).toBe(new Date('2026-05-03T12:00:02.000Z').getTime())
 
   const journalDirectory = mkdtempSync(join(tmpdir(), 'f1-legacy-pending-token-use-'))
   const journalPath = join(journalDirectory, 'journal.sqlite')

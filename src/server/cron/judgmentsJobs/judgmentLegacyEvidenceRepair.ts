@@ -2,8 +2,10 @@ import {createHash} from 'node:crypto'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {projectRequestAttemptCloseoutsForTokenUse} from '../../services/requestAttemptCloseoutService.ts'
 import {
   type JudgmentRequestAttemptCloseoutKind,
+  type JudgmentRequestAttemptCloseoutTimestampValue,
   type JudgmentRequestAttemptDurableCloseoutRef,
   type JudgmentRequestAttemptJsonEntry,
   stringifyRequestAttempts,
@@ -80,6 +82,19 @@ type LegacyTokenUseRow = {
   totalCompletionTokens: number
   totalPromptTokens: number
   totalTokens: number
+}
+
+type LegacyTokenUseRepairRunner = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
+
+type LegacyTokenUseCloseoutProjectionRow = {
+  createdAt: JudgmentRequestAttemptCloseoutTimestampValue
+  finishedAt: JudgmentRequestAttemptCloseoutTimestampValue
+  id: string
+  requestAttemptsJson: unknown
+  startedAt: JudgmentRequestAttemptCloseoutTimestampValue
 }
 
 const emptyLegacyEvidenceRepairResult = (): LegacyEvidenceRepairResult => {
@@ -344,6 +359,53 @@ const getLegacyTokenUseRequestAttemptsJson = (row: LegacyTokenUseRow): string | 
       : null
 }
 
+const legacyTokenUseCloseoutProjectionReturningSql = `
+  id,
+  TO_JSON(request_attempts_json) AS requestAttemptsJson,
+  started_at AS startedAt,
+  finished_at AS finishedAt,
+  created_at AS createdAt
+`
+
+const updateLegacyTokenUseRequestAttemptsJson = async ({
+  requestAttemptsJson,
+  row,
+  runner,
+}: {
+  requestAttemptsJson: string
+  row: LegacyTokenUseRow
+  runner: LegacyTokenUseRepairRunner
+}): Promise<LegacyTokenUseCloseoutProjectionRow | null> => {
+  const [updatedRow] = await runner.queryJson<LegacyTokenUseCloseoutProjectionRow>(`
+    UPDATE app.token_use
+    SET request_attempts_json = CAST(${getSqlLiteral(requestAttemptsJson)} AS JSON),
+        updated_at = current_timestamp
+    WHERE id = ${getSqlLiteral(row.id)}
+    RETURNING ${legacyTokenUseCloseoutProjectionReturningSql}
+  `)
+
+  return updatedRow ?? null
+}
+
+const projectLegacyTokenUseCloseoutProjection = async ({
+  runner,
+  tokenUse,
+}: {
+  runner: LegacyTokenUseRepairRunner
+  tokenUse: LegacyTokenUseCloseoutProjectionRow
+}): Promise<void> => {
+  await projectRequestAttemptCloseoutsForTokenUse({
+    runner,
+    tokenUse: {
+      requestAttemptsJson: tokenUse.requestAttemptsJson,
+      tokenUseCreatedAt: tokenUse.createdAt,
+      tokenUseFinishedAt: tokenUse.finishedAt,
+      tokenUseId: tokenUse.id,
+      tokenUseStartedAt: tokenUse.startedAt,
+    },
+  })
+}
+
 const repairLegacyTokenUseRow = async (row: LegacyTokenUseRow): Promise<LegacyEvidenceRepairResult> => {
   const state = getRequestAttemptRepairState(row.requestAttemptsJson)
   const requestAttemptsJson = getLegacyTokenUseRequestAttemptsJson(row)
@@ -356,14 +418,17 @@ const repairLegacyTokenUseRow = async (row: LegacyTokenUseRow): Promise<LegacyEv
     return {convertedCount: 0, pendingRepairCount: 0, quarantinedCount: 1}
   }
 
-  await getAppDatabaseService().run(`
-    UPDATE app.token_use
-    SET request_attempts_json = CAST(${getSqlLiteral(requestAttemptsJson)} AS JSON),
-        updated_at = current_timestamp
-    WHERE id = ${getSqlLiteral(row.id)}
-  `)
+  return getAppDatabaseService().transaction(async (tx) => {
+    const updatedRow = await updateLegacyTokenUseRequestAttemptsJson({requestAttemptsJson, row, runner: tx})
 
-  return {convertedCount: 1, pendingRepairCount: 0, quarantinedCount: 0}
+    if (!updatedRow) {
+      return emptyLegacyEvidenceRepairResult()
+    }
+
+    await projectLegacyTokenUseCloseoutProjection({runner: tx, tokenUse: updatedRow})
+
+    return {convertedCount: 1, pendingRepairCount: 0, quarantinedCount: 0}
+  }) as Promise<LegacyEvidenceRepairResult>
 }
 
 export const repairLegacyTokenUseEvidenceForJob = async (jobId: string): Promise<LegacyEvidenceRepairResult> => {
