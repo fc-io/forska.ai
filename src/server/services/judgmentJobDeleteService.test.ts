@@ -20,7 +20,7 @@ const getLastJsonLine = (stdout: string) => {
   )
 }
 
-test('deleteJudgmentJobSafelyTx removes token_use dependents before deleting the job row', () => {
+test('deleteJudgmentJobSafelyTx removes request attempt closeouts before rebuilding token_use rows', () => {
   const duckdbPath = `/tmp/f1-judgment-job-delete-service-${Date.now()}.duckdb`
   const runResult = globalThis.Bun.spawnSync(
     [
@@ -82,18 +82,80 @@ test('deleteJudgmentJobSafelyTx removes token_use dependents before deleting the
             unallocatedTargetLiveCalls: 0,
           },
         })
+        await db.run(\`
+          INSERT INTO app.request_attempt_closeout (
+            token_use_id,
+            token_use_created_at,
+            request_attempt_id,
+            provider_key,
+            closeout_kind,
+            durable_closeout_kind,
+            durable_closeout_id,
+            durable_closeout_ref_json,
+            closed_at
+          )
+          VALUES (
+            'delete-service-token',
+            TIMESTAMPTZ '2026-01-01T00:00:00Z',
+            'delete-service-request-attempt',
+            'delete-service-provider',
+            'token_use',
+            'token_use',
+            'delete-service-token',
+            '{"id":"delete-service-token","kind":"token_use"}'::JSON,
+            TIMESTAMPTZ '2026-01-01T00:00:01Z'
+          )
+        \`)
 
+        const orderSnapshots = []
+        const projectionDeleteStatements = []
         await db.transaction(async (tx) => {
-          await deleteJudgmentJobSafelyTx({jobId: 'delete-service-job', tx})
+          const tracingTx = {
+            queryJson: async (statement) => {
+              return tx.queryJson(statement)
+            },
+            run: async (statement) => {
+              if (statement.includes('DELETE FROM app.request_attempt_closeout')) {
+                projectionDeleteStatements.push(statement)
+                await tx.run(statement)
+                const [snapshot] = await tx.queryJson(\`
+                  SELECT
+                    'afterProjectionDelete' AS point,
+                    (SELECT COUNT(*) FROM app.request_attempt_closeout)::INTEGER AS closeoutRows,
+                    (SELECT COUNT(*) FROM app.token_use WHERE id = 'delete-service-token')::INTEGER AS tokenUseRows
+                \`)
+                orderSnapshots.push(snapshot)
+                return
+              }
+
+              if (statement.trim() === 'DROP TABLE app.token_use') {
+                const [snapshot] = await tx.queryJson(\`
+                  SELECT
+                    'beforeTokenUseDrop' AS point,
+                    (SELECT COUNT(*) FROM app.request_attempt_closeout)::INTEGER AS closeoutRows,
+                    (SELECT COUNT(*) FROM app.token_use WHERE id = 'delete-service-token')::INTEGER AS tokenUseRows
+                \`)
+                orderSnapshots.push(snapshot)
+              }
+
+              await tx.run(statement)
+            },
+          }
+
+          await deleteJudgmentJobSafelyTx({jobId: 'delete-service-job', tx: tracingTx})
         })
 
-        const jobs = await db.queryJson(\`SELECT COUNT(*) AS count FROM app.judgment_job WHERE id = 'delete-service-job'\`)
-        const tokens = await db.queryJson(\`SELECT COUNT(*) AS count FROM app.token_use WHERE judgment_job_id = 'delete-service-job'\`)
-        const telemetrySamples = await db.queryJson(\`SELECT COUNT(*) AS count FROM app.judgment_job_provider_telemetry_sample WHERE job_id = 'delete-service-job'\`)
+        const [finalSnapshot] = await db.queryJson(\`
+          SELECT
+            (SELECT COUNT(*) FROM app.judgment_job WHERE id = 'delete-service-job')::INTEGER AS jobs,
+            (SELECT COUNT(*) FROM app.request_attempt_closeout WHERE token_use_id = 'delete-service-token')::INTEGER AS closeouts,
+            (SELECT COUNT(*) FROM app.judgment_job_provider_telemetry_sample WHERE job_id = 'delete-service-job')::INTEGER AS telemetrySamples,
+            (SELECT COUNT(*) FROM app.token_use WHERE judgment_job_id = 'delete-service-job')::INTEGER AS tokens
+        \`)
         console.log(JSON.stringify({
-          jobs: jobs[0]?.count ?? 0,
-          telemetrySamples: telemetrySamples[0]?.count ?? 0,
-          tokens: tokens[0]?.count ?? 0,
+          finalSnapshot,
+          orderSnapshots,
+          projectionDeleteSql: projectionDeleteStatements[0] ?? ''
         }))
         await db.close()
       `,
@@ -118,13 +180,20 @@ test('deleteJudgmentJobSafelyTx removes token_use dependents before deleting the
     }
 
     const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {
-      jobs: number | string
-      telemetrySamples: number | string
-      tokens: number | string
+      finalSnapshot: {closeouts: number | string; jobs: number | string; telemetrySamples: number | string; tokens: number | string}
+      orderSnapshots: Array<{closeoutRows: number | string; point: string; tokenUseRows: number | string}>
+      projectionDeleteSql: string
     }
-    expect(Number(result.jobs)).toBe(0)
-    expect(Number(result.telemetrySamples)).toBe(0)
-    expect(Number(result.tokens)).toBe(0)
+    expect(result.projectionDeleteSql).toContain('DELETE FROM app.request_attempt_closeout')
+    expect(result.projectionDeleteSql).toContain('token_use_id IN')
+    expect(result.projectionDeleteSql).toContain('SELECT id')
+    expect(result.projectionDeleteSql).toContain('FROM app.token_use')
+    expect(result.projectionDeleteSql).toContain("WHERE judgment_job_id = 'delete-service-job'")
+    expect(result.orderSnapshots).toEqual([
+      {closeoutRows: 0, point: 'afterProjectionDelete', tokenUseRows: 1},
+      {closeoutRows: 0, point: 'beforeTokenUseDrop', tokenUseRows: 1},
+    ])
+    expect(result.finalSnapshot).toEqual({closeouts: 0, jobs: 0, telemetrySamples: 0, tokens: 0})
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
