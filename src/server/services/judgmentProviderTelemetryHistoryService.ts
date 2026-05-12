@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto'
 import type {
   JudgmentBottleneck,
   JudgmentBottleneckSubreason,
+  JudgmentDispatchTelemetrySnapshot,
   JudgmentTelemetryAggregateCompleteness,
 } from '../cron/judgmentsJobs/judgmentDispatchTelemetry.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
@@ -500,6 +501,44 @@ export const insertJudgmentProviderTelemetryHistorySamples = async (params: {
   const inserted = rows.length
 
   return {attempted: params.samples.length, inserted, skipped: params.samples.length - inserted}
+}
+
+export const getJudgmentProviderTelemetryHistorySampleInsertFromSnapshot = (params: {
+  jobId: string
+  projectId: string
+  sampledAt: Date
+  snapshot: JudgmentDispatchTelemetrySnapshot
+}): JudgmentProviderTelemetryHistorySampleInsert => {
+  const provider = params.snapshot.provider
+  const source = params.snapshot.source
+
+  return {
+    aggregateCompleteness: source.aggregateCompleteness,
+    bottleneck: provider.bottleneck,
+    bottleneckSource: provider.bottleneckSource,
+    bottleneckSubreason: provider.bottleneckSubreason,
+    effectiveProviderLimit: provider.effectiveProviderLimit,
+    freshWorkerCount: source.freshWorkerCount,
+    jobId: params.jobId,
+    normalRequestCapacity: provider.normalRequestCapacity,
+    projectId: params.projectId,
+    providerAllocationVersion: provider.providerAllocationVersion,
+    providerAvailableRequestLeases: provider.providerAvailableRequestLeases,
+    providerKey: provider.providerKey,
+    providerLeasedLiveRequests: provider.providerLeasedLiveRequests,
+    providerLeasedPhysicalCalls: provider.providerLeasedPhysicalCalls,
+    providerLeasedProbeCalls: provider.providerLeasedProbeCalls,
+    providerLimit: provider.providerLimit,
+    providerLimitVersion: provider.providerLimitVersion,
+    providerProbeOccupancyVersion: provider.providerProbeOccupancyVersion,
+    providerRequestFillPct: provider.providerRequestFillPct,
+    sampledAt: params.sampledAt,
+    snapshotJson: {dispatch: params.snapshot.dispatch, provider, request: params.snapshot.request, source},
+    staleWorkerCount: source.staleWorkerCount,
+    targetRequestLiveCalls: provider.targetRequestLiveCalls,
+    unavailableWorkerCount: source.unavailableWorkerCount,
+    unallocatedTargetLiveCalls: provider.unallocatedTargetLiveCalls,
+  }
 }
 
 export const insertJudgmentProviderTelemetryHistorySample = async (params: {

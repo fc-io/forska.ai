@@ -16,6 +16,7 @@ import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.t
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
+import {judgmentsJobsSampleProviderTelemetry} from './judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts'
 import {judgmentsJobsSendToLLM} from './judgmentsJobs/judgmentsJobsSendToLLM.ts'
 
 const serverJobId = getDefaultJudgmentServerJobId()
@@ -44,6 +45,7 @@ const shouldRunJudgmentMaintenanceCron = (): boolean => {
 const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'
 const LLM_PROCESSING_INTERVAL = '*/1 * * * * *'
 const IMPORT_JUDGMENTS_INTERVAL = '*/1 * * * * *'
+const SAMPLE_PROVIDER_TELEMETRY = '*/30 * * * * *'
 const CHECK_LLM_STATUS = '*/30 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */1 * * * *'
 const START_DELAY_MS = 1000
@@ -52,6 +54,8 @@ const lowMemoryJudgmentsWorkerDuckdbLimitMiB = 6400
 let isAddingToQueue = false
 let addToQueueStartedAtMs: number | null = null
 let isImportingJudgments = false
+let isSamplingProviderTelemetry = false
+let providerTelemetrySamplerStartedAtMs: number | null = null
 
 const shouldUseLowMemoryJudgmentsCronMode = () => {
   const workerDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
@@ -138,6 +142,32 @@ const checkLLMStatusCron = async (): Promise<void> => {
   }
 }
 
+const sampleProviderTelemetryCron = async (): Promise<void> => {
+  if (!shouldRunJudgmentMaintenanceCron()) return
+
+  if (isSamplingProviderTelemetry) {
+    const runningForMs = providerTelemetrySamplerStartedAtMs ? Date.now() - providerTelemetrySamplerStartedAtMs : null
+    cronLogger.warn(
+      'cron:sample-provider-telemetry:already-running',
+      '[cron] provider telemetry sampler still running',
+      {runningForMs, serverJobId},
+    )
+    return
+  }
+
+  isSamplingProviderTelemetry = true
+  providerTelemetrySamplerStartedAtMs = Date.now()
+
+  try {
+    await judgmentsJobsSampleProviderTelemetry()
+  } catch (err) {
+    logJudgingCronError('[cron] sampleProviderTelemetryCron error:', err)
+  } finally {
+    isSamplingProviderTelemetry = false
+    providerTelemetrySamplerStartedAtMs = null
+  }
+}
+
 const cleanupStaleQueueCron = async (): Promise<void> => {
   if (!shouldRunJudgmentMaintenanceCron()) return
   try {
@@ -170,6 +200,14 @@ export const judgmentsJobsMaintenanceCron = new Elysia()
       pattern: CLEANUP_STALE_REQUESTS,
       startAt: new Date(Date.now() + START_DELAY_MS),
       run: cleanupStaleQueueCron,
+    }),
+  )
+  .use(
+    cron({
+      name: 'judgments-jobs-sample-provider-telemetry',
+      pattern: SAMPLE_PROVIDER_TELEMETRY,
+      startAt: new Date(Date.now() + START_DELAY_MS),
+      run: sampleProviderTelemetryCron,
     }),
   )
   .use(

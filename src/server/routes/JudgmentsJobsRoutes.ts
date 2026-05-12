@@ -3,10 +3,6 @@ import {Elysia, t} from 'elysia'
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
 import type {OwnerBackedJudgmentJobInfo} from '../cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {
-  getAggregatedJudgmentDispatchTelemetry,
-  withJudgmentProviderEndpointDiagnostics,
-} from '../cron/judgmentsJobs/judgmentDispatchTelemetry.ts'
-import {
   getJudgmentEndpointAvailability,
   getJudgmentEndpointAvailabilityDiagnostics,
 } from '../cron/judgmentsJobs/judgmentEndpointAvailability.ts'
@@ -33,6 +29,10 @@ import {
   hasJudgmentJobLocalSqliteState,
 } from '../cron/judgmentsJobs/judgmentJobStoragePolicy.ts'
 import {getJudgmentJobStorageTransferRuntime} from '../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts'
+import {
+  getEndpointIdentityFromAvailabilityKey,
+  getJudgmentProviderTelemetrySnapshot,
+} from '../cron/judgmentsJobs/judgmentProviderTelemetrySnapshot.ts'
 import {
   type JudgmentRequestAttemptJsonEntry,
   stringifyRequestAttempts,
@@ -2022,12 +2022,6 @@ const getUniqueStringCount = (values: Array<string | null>) => {
   ).size
 }
 
-const getEndpointIdentityFromAvailabilityKey = (endpointAvailabilityKey: string): string | null => {
-  const separatorIndex = endpointAvailabilityKey.indexOf('::')
-
-  return separatorIndex >= 0 ? endpointAvailabilityKey.slice(separatorIndex + 2) : null
-}
-
 const getObservedAggregateProbeLiveCountForHealth = (
   diagnostics: NonNullable<JudgmentJobEndpointHealth['diagnostics']>[],
 ): number | null => {
@@ -2906,68 +2900,20 @@ export const judgmentsJobsRoutes = new Elysia()
           ])
           const storagePolicy = getStoragePolicy({job, sqliteHealth})
           const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
-          const effectiveBaseURL = providerConnection
-            ? getProviderConnectionEffectiveBaseURL({
-                baseURL: providerConnection.baseURL,
-                config: providerConnection.config,
-                providerKind: providerConnection.providerKind,
-                savedModelIds: [projectModelId],
-              })
-            : null
-          const endpointAvailabilitySnapshot = effectiveBaseURL
-            ? getJudgmentEndpointAvailability({
-                effectiveBaseURL,
-                modelId: projectModelId,
-                modelProvider: providerConnection?.providerKind ?? null,
-                providerConnectionId: providerConnection?.id ?? null,
-              })
-            : null
-          const providerSnapshot = getProviderBucketSnapshot({
-            maxInflightRequests: providerConnection?.maxInflightRequests ?? null,
-            modelId: projectModelId,
-            modelProvider: providerConnection?.providerKind ?? null,
-            providerConnectionId: providerConnection?.id ?? null,
-            providerConnectionUpdatedAt: providerConnection?.updatedAt ?? null,
-            providerName: providerConnection?.label ?? null,
-            useOwnerBackedSyntheticProviderId: false,
-          })
-          const endpointAvailabilityDiagnostics = endpointAvailabilitySnapshot
-            ? getJudgmentEndpointAvailabilityDiagnostics(endpointAvailabilitySnapshot)
-            : null
-          const endpointAvailability =
-            endpointAvailabilityDiagnostics && endpointAvailabilitySnapshot
-              ? {
-                  ...endpointAvailabilityDiagnostics,
-                  effectiveBaseURL,
-                  endpointAvailabilityKey: endpointAvailabilitySnapshot.endpointAvailabilityKey,
-                  endpointIdentity: getEndpointIdentityFromAvailabilityKey(
-                    endpointAvailabilitySnapshot.endpointAvailabilityKey,
-                  ),
-                  localProbeState: endpointAvailabilityDiagnostics.status,
-                  providerKey: providerSnapshot.providerKey,
-                }
-              : null
-          const dispatchTelemetry = withJudgmentProviderEndpointDiagnostics({
-            diagnostics: endpointAvailability,
-            effectiveBaseURL,
-            endpointAvailabilityKey: endpointAvailabilitySnapshot?.endpointAvailabilityKey ?? null,
-            snapshot: await getAggregatedJudgmentDispatchTelemetry({
-              jobId: job.id,
+          const providerTelemetry = await getJudgmentProviderTelemetrySnapshot({
+            job: {
+              id: job.id,
+              maxInflightRequests: providerConnection?.maxInflightRequests ?? null,
               modelId: projectModelId,
               modelProvider: providerConnection?.providerKind ?? null,
-              providerFamily: providerSnapshot.providerFamily,
               providerConnectionId: providerConnection?.id ?? null,
-              providerId: providerSnapshot.providerId,
-              providerKey: providerSnapshot.providerKey,
-              providerLimit: providerSnapshot.providerLimit,
-              providerLimitVersion: providerSnapshot.providerLimitVersion,
-              providerMaxInflightRequests: providerConnection?.maxInflightRequests ?? null,
-              providerName: providerSnapshot.providerName,
-              providerUsesFamilyDefault: providerSnapshot.providerUsesFamilyDefault,
-              readyCount: sqliteHealth.promptCounts.ready,
-              resolvedDefaultCapacity: providerSnapshot.resolvedDefaultCapacity,
-            }),
+              providerName: providerConnection?.label ?? null,
+            },
+            providerConnection,
+            readyCount: sqliteHealth.promptCounts.ready,
           })
+          const dispatchTelemetry = providerTelemetry.dispatchTelemetry
+          const endpointAvailability = providerTelemetry.endpointAvailability
           const dispatchStats = dispatchTelemetry.dispatch
           const requestRuntimeStats = dispatchTelemetry.request
 
