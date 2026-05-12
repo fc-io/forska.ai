@@ -1,7 +1,7 @@
 {
   "name": "Limit Telemetry Plan",
-  "branchName": "ralph/limit-telemetry",
   "description": "Persist provider-limit adherence telemetry for judgment jobs and show the last 3 days on the job detail page.",
+  "branchName": "ralph/limit-telemetry",
   "userStories": [
     {
       "id": "US-001",
@@ -18,9 +18,10 @@
         "`bun run desktop:build` passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -43,7 +44,9 @@
       "priority": 2,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-003",
@@ -65,7 +68,10 @@
       "priority": 3,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-002"]
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ]
     },
     {
       "id": "US-004",
@@ -87,7 +93,9 @@
       "priority": 4,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003"]
+      "dependsOn": [
+        "US-003"
+      ]
     },
     {
       "id": "US-005",
@@ -110,7 +118,9 @@
       "priority": 5,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003"]
+      "dependsOn": [
+        "US-003"
+      ]
     },
     {
       "id": "US-006",
@@ -132,7 +142,10 @@
       "priority": 6,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003", "US-005"]
+      "dependsOn": [
+        "US-003",
+        "US-005"
+      ]
     },
     {
       "id": "US-007",
@@ -153,7 +166,9 @@
       "priority": 7,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-006"]
+      "dependsOn": [
+        "US-006"
+      ]
     },
     {
       "id": "US-008",
@@ -177,7 +192,9 @@
       "priority": 8,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-007"]
+      "dependsOn": [
+        "US-007"
+      ]
     },
     {
       "id": "US-009",
@@ -204,7 +221,12 @@
       "priority": 9,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-008"]
+      "dependsOn": [
+        "US-008"
+      ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-05-12T15:27:50.496Z"
+  }
 }

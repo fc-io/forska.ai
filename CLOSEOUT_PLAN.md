@@ -104,6 +104,9 @@ Conflict behavior:
 - On conflict, keep the existing source tuple and diagnostic fields unless the
   incoming row has an earlier `(closed_at, token_use_created_at, token_use_id)`
   tuple. Preserve the original `created_at` and always refresh `updated_at`.
+- Implement the conflict update with `CASE` assignments, not an `ON CONFLICT ...
+  WHERE` clause that skips the update for later incoming rows. Later rows must
+  still refresh `updated_at` while leaving the earlier source tuple untouched.
 - The bounded rebuild must apply the same ordering and conflict rule so rebuilds
   are deterministic.
 
@@ -128,15 +131,18 @@ Conflict behavior:
     `requestAttemptsJson`.
 4. Wire projection writes into legacy token-use evidence repair when it updates
    `app.token_use.request_attempts_json`. Keep the repair update and projection
-   upsert in one DuckDB transaction where practical; otherwise rely on the
-   bounded rebuild before projection-only cleanup is enabled.
+   upsert in one DuckDB transaction. Build projection rows from the canonical
+   updated token-use row, using `UPDATE ... RETURNING` when available or a
+   reload inside the same transaction, so the projection matches the committed
+   JSON and timestamps. If that cannot be done immediately, run the bounded
+   rebuild before projection-only cleanup is enabled.
 5. Add a bounded rebuild maintenance script or service method that rebuilds
     `app.request_attempt_closeout` from `app.token_use` in small ordered batches of
     `created_at` and `id`, reading `id`, `request_attempts_json`, `created_at`,
     `started_at`, and `finished_at`. Parse request attempts in TypeScript rather
     than DuckDB JSON/text predicates. This is the cutover path for existing rows.
     - In maintenance mode, truncate and rebuild in batches while token-use writers
-      are stopped.
+      are stopped and cleanup is disabled.
     - Outside maintenance mode, capture a stable `(created_at, id)` high-water
       mark before scanning, rebuild rows up to that mark into a staging table,
       then transactionally upsert staging rows into the live projection with the
@@ -144,20 +150,28 @@ Conflict behavior:
       token-use writers are running, because concurrent writer rows newer than
       the high-water mark must remain intact.
 6. Update `archivedProjectCleanupService.ts` so projection rows for a project are
-    deleted before the source `app.token_use` rows they came from.
+   deleted before the source `app.token_use` rows they came from. Add the
+   projection cleanup mutation immediately before the existing `app.token_use`
+   mutation and key it by `token_use_id` with an `IN` subquery from
+   `app.token_use` joined to `app.judgment_job` so cleanup can use the
+   `token_use_id` index.
 7. Update `judgmentJobDeleteService.ts` so deleting or rebuilding token-use rows
-    for a judgment job deletes matching projection rows in the same transaction
-    before the source `app.token_use` rows are removed.
+   for a judgment job deletes matching projection rows in the same transaction
+   before the source `app.token_use` rows are removed. Delete by
+   `token_use_id IN (SELECT id FROM app.token_use WHERE judgment_job_id = ...)`
+   before `rebuildTokenUseWithoutJobTx(...)` drops or recreates `app.token_use`.
 8. Update `judgmentsJobsCleanupStale.ts` so DuckDB closeout lookup joins active
     `app.provider_admission_lease` request leases to
     `app.request_attempt_closeout` on `(provider_key, request_attempt_id)`.
 9. Delete the cleanup-time token-use JSON fallback and related helpers from
     `judgmentsJobsCleanupStale.ts`.
 10. Add tests for projection insert idempotency, token-use replay repair,
-    bounded rebuild, online rebuild merge preservation of live writer rows,
-    archived-project projection cleanup, judgment-job deletion projection cleanup,
-    cleanup release from closeout rows, and absence of token-use JSON lookup in
-    cleanup.
+    later-conflict `updated_at` refresh without source tuple replacement,
+    legacy repair projection from the canonical updated token-use row, bounded
+    rebuild, online rebuild merge preservation of live writer rows,
+    archived-project projection cleanup, judgment-job deletion projection
+    cleanup, cleanup release from closeout rows, and absence of token-use JSON
+    lookup in cleanup.
 11. Add the shared DuckDB runtime safety note to `AGENTS.md` so future background
     work avoids unbounded JSON or historical-table scans.
 
@@ -173,6 +187,8 @@ Recommended cutover:
 2. Run the bounded rebuild once in maintenance mode, or run an online
    staging-table rebuild and merge the staged rows into the live projection
    without replacing concurrent writer output.
+   If the maintenance-mode path truncates or clears the live projection, keep
+   cleanup disabled until rebuild and verification finish.
 3. Verify existing durable token-use rows and new token-use writes create
    projection rows after the rebuild.
 4. Deploy the cleanup change that reads only the projection table and SQLite

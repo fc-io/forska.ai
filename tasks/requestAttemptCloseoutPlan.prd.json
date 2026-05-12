@@ -1,0 +1,228 @@
+{
+  "name": "Request Attempt Closeout Plan",
+  "branchName": "ralph/request-attempt-closeout",
+  "description": "Make request-attempt closeout lookup keyed and bounded so background judgment cleanup cannot OOM DuckDB or block unrelated foreground API routes.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add request-attempt closeout projection schema",
+      "description": "As a maintainer, I want a compact DuckDB projection table for durable request-attempt closeout evidence so cleanup can look up closeouts by key instead of scanning token-use JSON.",
+      "acceptanceCriteria": [
+        "Add `src/db/duckdbMigrations/0071_requestAttemptCloseout.sql` for `app.request_attempt_closeout`.",
+        "The table has `token_use_id`, `token_use_created_at`, `request_attempt_id`, `provider_key`, `closeout_kind`, `durable_closeout_kind`, `durable_closeout_id`, `durable_closeout_ref_json`, `closed_at`, `created_at`, and `updated_at` columns.",
+        "The primary key is `(request_attempt_id, provider_key)` and there is an index on `token_use_id`.",
+        "The schema stores `token_use_id` without a foreign key to `app.token_use`.",
+        "The schema includes non-empty checks for token-use id, request attempt id, provider key, closeout kind, and durable closeout kind.",
+        "`bun run db:mig` passes",
+        "`bun test src/db/migrateDuckdb.test.ts` passes",
+        "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Extract durable closeout projection rows",
+      "description": "As a maintainer, I want manifest helpers to expose durable terminal request-attempt closeout metadata so the projection service can reuse the canonical closeout predicate.",
+      "acceptanceCriteria": [
+        "Extend `getDurableTerminalRequestAttemptCloseoutProofs(...)` or add a sibling helper that uses the same durable-terminal predicate.",
+        "The helper returns normalized `providerKey`, `requestAttemptId`, `closeoutKind`, `durableCloseoutRef`, `tokenUseId`, `tokenUseCreatedAt`, and non-null `closedAt` data for projection writes.",
+        "`closedAt` is chosen from request-attempt `finishedAt`, request-attempt `updatedAt`, token-use `finished_at`, token-use `started_at`, then token-use `created_at`.",
+        "Entries missing a trimmed `providerKey` or `requestAttemptId` are skipped.",
+        "`durable_closeout_kind` falls back to `entry.closeoutKind` when `durableCloseoutRef.kind` is missing or blank.",
+        "`durable_closeout_id` is null when `durableCloseoutRef.id` is missing or blank.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentRequestAttemptLifecycle.test.ts` passes if manifest helper types or extraction behavior changes",
+        "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-003",
+      "title": "Add request-attempt closeout projection service",
+      "description": "As a maintainer, I want a small projection service that writes closeout rows transactionally and deterministically so writers and rebuilds share one conflict rule.",
+      "acceptanceCriteria": [
+        "Add `src/server/services/requestAttemptCloseoutService.ts` with functions that accept a DuckDB runner or transaction.",
+        "The service parses request attempts with existing manifest helpers and no-ops for missing or non-terminal request attempts.",
+        "The service stores `durable_closeout_ref_json` as the source durable ref JSON, not as a replacement for raw `app.token_use.request_attempts_json`.",
+        "The service keeps one row per `(request_attempt_id, provider_key)` and prefers the earliest durable terminal evidence by `(closed_at, token_use_created_at, token_use_id)`.",
+        "Conflict updates use `CASE` assignments instead of `ON CONFLICT ... WHERE` so later incoming rows refresh `updated_at` while leaving the earlier source tuple untouched.",
+        "Service tests cover projection insert idempotency and later-conflict `updated_at` refresh without source tuple replacement.",
+        "`bun test src/server/services/requestAttemptCloseoutService.test.ts` passes",
+        "`bun run db:mig` passes",
+        "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Wire token-use inserts to closeout projection",
+      "description": "As a maintainer, I want token-use persistence to write closeout projection rows atomically so new durable evidence is queryable without a rebuild.",
+      "acceptanceCriteria": [
+        "Wire projection writes into `tokenUseQueryService.insertTokenUse(...)` using `getAppDatabaseService().transaction(...)`.",
+        "Wire projection writes into `insertTokenUseOnce(...)` for newly inserted rows using the inserted `RETURNING` row.",
+        "On idempotent replay, validate the conflict first and then ensure projection rows exist from the canonical stored `requestAttemptsJson`.",
+        "Token-use row writes and projection row writes commit together or roll back together for new inserts.",
+        "Token-use tests cover replay repair for canonical stored rows with durable request-attempt evidence.",
+        "`bun test src/server/services/tokenUseQueryService.test.ts` passes",
+        "`bun test src/server/services/requestAttemptCloseoutService.test.ts` passes",
+        "`bun run db:mig` passes",
+        "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Wire legacy evidence repair to closeout projection",
+      "description": "As a maintainer, I want legacy token-use evidence repair to update projection rows in the same transaction so repaired durable evidence is available to cleanup.",
+      "acceptanceCriteria": [
+        "When legacy repair updates `app.token_use.request_attempts_json`, it also upserts closeout projection rows in one DuckDB transaction.",
+        "Projection rows are built from the canonical updated token-use row using `UPDATE ... RETURNING` when available or a reload inside the same transaction.",
+        "The projection matches the committed JSON and token-use timestamps after repair.",
+        "Tests cover legacy repair projection from the canonical updated token-use row.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentLegacyEvidenceRepair.test.ts` passes",
+        "`bun test src/server/services/requestAttemptCloseoutService.test.ts` passes",
+        "`bun run db:mig` passes",
+        "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-006",
+      "title": "Add bounded closeout projection rebuild",
+      "description": "As an operator, I want a bounded rebuild for existing durable token-use evidence so cleanup can cut over without a permanent token-use JSON fallback.",
+      "acceptanceCriteria": [
+        "Add a bounded rebuild maintenance script or service method for `app.request_attempt_closeout`.",
+        "The rebuild scans `app.token_use` in ordered batches by `created_at` and `id`, reading only `id`, `request_attempts_json`, `created_at`, `started_at`, and `finished_at`.",
+        "The rebuild parses request attempts in TypeScript and does not use DuckDB JSON or text predicates over `request_attempts_json`.",
+        "Maintenance mode truncates and rebuilds in batches only while token-use writers are stopped and cleanup is disabled.",
+        "Online mode captures a stable `(created_at, id)` high-water mark, writes rows up to that mark into staging, and merges staging rows into the live projection without replacing newer writer output.",
+        "The rebuild applies the same deterministic ordering and conflict rule as the projection service.",
+        "Tests cover bounded rebuild and online rebuild merge preservation of live writer rows.",
+        "`bun test src/server/services/requestAttemptCloseoutService.test.ts` passes",
+        "`bun run db:mig` passes",
+        "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-007",
+      "title": "Delete closeout projections during archived-project cleanup",
+      "description": "As a maintainer, I want archived-project cleanup to remove projection rows before token-use rows so projection state does not outlive its source evidence.",
+      "acceptanceCriteria": [
+        "Update `archivedProjectCleanupService.ts` to delete `app.request_attempt_closeout` rows before deleting matching `app.token_use` rows.",
+        "The projection cleanup mutation is immediately before the existing `app.token_use` mutation.",
+        "The cleanup is keyed by `token_use_id` with an `IN` subquery from `app.token_use` joined to `app.judgment_job` for the archived project.",
+        "Tests prove archived-project cleanup removes projection rows before removing source `app.token_use` rows.",
+        "`bun test src/server/services/archivedProjectCleanupService.test.ts` passes",
+        "`bun run db:mig` passes",
+        "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-008",
+      "title": "Delete closeout projections during judgment-job deletion",
+      "description": "As a maintainer, I want judgment-job deletion to remove projection rows before rebuilding token-use rows so delete paths cannot leave stale closeout keys.",
+      "acceptanceCriteria": [
+        "Update `judgmentJobDeleteService.ts` to delete `app.request_attempt_closeout` rows in the same transaction before source token-use rows are removed.",
+        "The delete uses `token_use_id IN (SELECT id FROM app.token_use WHERE judgment_job_id = ...)`.",
+        "Projection rows are deleted before `rebuildTokenUseWithoutJobTx(...)` drops or recreates `app.token_use`.",
+        "Tests prove judgment-job deletion removes projection rows before removing source `app.token_use` rows.",
+        "`bun test src/server/services/judgmentJobDeleteService.test.ts` passes",
+        "`bun run db:mig` passes",
+        "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-009",
+      "title": "Switch stale cleanup to projection closeout lookup",
+      "description": "As an operator, I want stale judgment cleanup to release request leases from keyed closeout rows and SQLite proofs so cleanup no longer scans historical token-use JSON.",
+      "acceptanceCriteria": [
+        "Update `judgmentsJobsCleanupStale.ts` so DuckDB closeout lookup joins active `app.provider_admission_lease` request leases to `app.request_attempt_closeout` on `(provider_key, request_attempt_id)`.",
+        "Cleanup still combines DuckDB projection closeouts with SQLite durable closeout proofs before reconciling provider admission leases.",
+        "Delete the cleanup-time token-use JSON fallback and related token-use JSON helper functions from `judgmentsJobsCleanupStale.ts`.",
+        "Tests prove cleanup releases request leases from closeout rows and does not release unrelated probe leases.",
+        "Source inspection shows `judgmentsJobsCleanupStale.ts` no longer queries `app.token_use` or `request_attempts_json`.",
+        "No provider, model, thinking, or runtime settings are retried, downgraded, or mutated to make cleanup succeed.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts` passes",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts` passes",
+        "`bun run db:mig` passes",
+        "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004", "US-005", "US-006", "US-007", "US-008"]
+    },
+    {
+      "id": "US-010",
+      "title": "Document shared DuckDB runtime safety",
+      "description": "As a maintainer, I want the agent handbook to document shared DuckDB runtime constraints so future background work avoids unbounded JSON or historical-table scans.",
+      "acceptanceCriteria": [
+        "Add a `### Shared DuckDB Runtime Safety` subsection under `## Database` in `AGENTS.md`.",
+        "The subsection states that foreground routes, cron jobs, queues, marts, and maintenance tasks share one constrained DuckDB runtime.",
+        "The subsection discourages unbounded scans over JSON, text, or historical tables in background jobs.",
+        "The subsection requires background work to be scoped by active rows, project, dirty token, cursor, batch limit, or explicit time window.",
+        "The subsection tells future work to persist relational keys and prefer compact lookup/projection tables for maintenance state.",
+        "The subsection treats raising `DUCKDB_MEMORY_LIMIT` as an emergency mitigation, not the root fix.",
+        "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-011",
+      "title": "Verify projection-only closeout cutover",
+      "description": "As an operator, I want final verification of the projection-only cleanup path so request-attempt closeout lookup is bounded across web and desktop server flows.",
+      "acceptanceCriteria": [
+        "Source inspection shows archived-project cleanup and judgment-job deletion remove projection rows before removing source `app.token_use` rows.",
+        "Source inspection shows `judgmentsJobsCleanupStale.ts` reads only projection rows and SQLite closeout proofs for request-attempt closeout release.",
+        "With cleanup enabled and a seeded durable closeout, the Covidence create/import flow succeeds and server output shows no DuckDB OOM.",
+        "Desktop verification runs `bun run desktop:build` if the implementation is being prepared for a desktop-shipped branch; otherwise the reason for skipping is recorded and notes that desktop uses the same migration and server cleanup path.",
+        "`bun run db:mig` passes",
+        "`bun test src/db/migrateDuckdb.test.ts` passes",
+        "`bun test src/server/services/requestAttemptCloseoutService.test.ts` passes",
+        "`bun test src/server/services/tokenUseQueryService.test.ts` passes",
+        "`bun test src/server/services/archivedProjectCleanupService.test.ts` passes",
+        "`bun test src/server/services/judgmentJobDeleteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentLegacyEvidenceRepair.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentRequestAttemptLifecycle.test.ts` passes if manifest helper types or extraction behavior changes",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts` passes",
+        "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-009", "US-010"]
+    }
+  ]
+}
