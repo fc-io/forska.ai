@@ -1,6 +1,7 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
+import {pruneJudgmentProviderTelemetryHistorySamples} from '../../services/judgmentProviderTelemetryHistoryService.ts'
 import {isJudgmentJobLeaseProcessAlive, isJudgmentJobLeaseStale} from './judgmentJobLease.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {runJudgmentJobRepairAction} from './judgmentJobRepair.ts'
@@ -406,6 +407,7 @@ export const judgmentsJobsCleanupStale = async (): Promise<void> => {
   await repairOrphanedDrainingJobs(drainingJobIds)
   await repairUnavailableRequestAttemptDiagnostics({jobIds: sqliteJobIds, serverJobId, staleBefore: sixteenMinutesAgo})
   await finalizeMissingLocalSqliteDrainingJobs(missingLocalSqliteDrainingJobIds)
+  await pruneJudgmentProviderTelemetryHistorySamples()
   await sqliteService.finalizeDrainingJobs()
   await reconcileProviderAdmissionLeasesForDurableCloseout()
   await sqliteService.deleteDrainedJobs()

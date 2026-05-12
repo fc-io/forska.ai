@@ -30,6 +30,7 @@ test('deleteJudgmentJobSafelyTx removes token_use dependents before deleting the
         const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
         const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
         const {deleteJudgmentJobSafelyTx} = await import('./src/server/services/judgmentJobDeleteService.ts')
+        const {insertJudgmentProviderTelemetryHistorySample} = await import('./src/server/services/judgmentProviderTelemetryHistoryService.ts')
 
         await migrateDuckdb()
         const db = getAppDatabaseService()
@@ -53,6 +54,34 @@ test('deleteJudgmentJobSafelyTx removes token_use dependents before deleting the
           INSERT INTO app.token_use (id, judgment_job_id, requests, total_prompt_tokens, total_completion_tokens, total_tokens)
           VALUES ('delete-service-token', 'delete-service-job', 1, 10, 5, 15)
         \`)
+        await insertJudgmentProviderTelemetryHistorySample({
+          sample: {
+            aggregateCompleteness: 'complete',
+            bottleneck: null,
+            bottleneckSource: null,
+            bottleneckSubreason: null,
+            effectiveProviderLimit: 12,
+            freshWorkerCount: 1,
+            jobId: 'delete-service-job',
+            normalRequestCapacity: 10,
+            projectId: 'delete-service-project',
+            providerAllocationVersion: 'allocation-v1',
+            providerAvailableRequestLeases: 5,
+            providerKey: 'provider-delete-service',
+            providerLeasedLiveRequests: 5,
+            providerLeasedPhysicalCalls: 5,
+            providerLeasedProbeCalls: 0,
+            providerLimit: 12,
+            providerLimitVersion: 'limit-v1',
+            providerProbeOccupancyVersion: 'probe-v1',
+            providerRequestFillPct: null,
+            sampledAt: new Date('2026-05-12T12:00:05.000Z'),
+            staleWorkerCount: 0,
+            targetRequestLiveCalls: 10,
+            unavailableWorkerCount: 0,
+            unallocatedTargetLiveCalls: 0,
+          },
+        })
 
         await db.transaction(async (tx) => {
           await deleteJudgmentJobSafelyTx({jobId: 'delete-service-job', tx})
@@ -60,7 +89,12 @@ test('deleteJudgmentJobSafelyTx removes token_use dependents before deleting the
 
         const jobs = await db.queryJson(\`SELECT COUNT(*) AS count FROM app.judgment_job WHERE id = 'delete-service-job'\`)
         const tokens = await db.queryJson(\`SELECT COUNT(*) AS count FROM app.token_use WHERE judgment_job_id = 'delete-service-job'\`)
-        console.log(JSON.stringify({jobs: jobs[0]?.count ?? 0, tokens: tokens[0]?.count ?? 0}))
+        const telemetrySamples = await db.queryJson(\`SELECT COUNT(*) AS count FROM app.judgment_job_provider_telemetry_sample WHERE job_id = 'delete-service-job'\`)
+        console.log(JSON.stringify({
+          jobs: jobs[0]?.count ?? 0,
+          telemetrySamples: telemetrySamples[0]?.count ?? 0,
+          tokens: tokens[0]?.count ?? 0,
+        }))
         await db.close()
       `,
     ],
@@ -85,9 +119,11 @@ test('deleteJudgmentJobSafelyTx removes token_use dependents before deleting the
 
     const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {
       jobs: number | string
+      telemetrySamples: number | string
       tokens: number | string
     }
     expect(Number(result.jobs)).toBe(0)
+    expect(Number(result.telemetrySamples)).toBe(0)
     expect(Number(result.tokens)).toBe(0)
   } finally {
     removeFileIfExists(duckdbPath)

@@ -1,6 +1,10 @@
 import {getSqlLiteral} from './appQueryHelpers.ts'
+import {deleteJudgmentProviderTelemetryHistoryForJob} from './judgmentProviderTelemetryHistoryService.ts'
 
-type JudgmentJobDeleteTx = {run: (statement: string) => Promise<void>}
+type JudgmentJobDeleteTx = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
 
 const tokenUseCreateSql = `
   CREATE TABLE app.token_use (
@@ -126,6 +130,7 @@ export const rebuildTokenUseWithoutJobTx = async ({jobId, tx}: {jobId: string; t
 
 export const deleteJudgmentJobSafelyTx = async ({jobId, tx}: {jobId: string; tx: JudgmentJobDeleteTx}) => {
   await rebuildTokenUseWithoutJobTx({jobId, tx})
+  await deleteJudgmentProviderTelemetryHistoryForJob({jobId, runner: tx})
   await tx.run(`
     DELETE FROM app.judgment_job
     WHERE id = ${getSqlLiteral(jobId)}

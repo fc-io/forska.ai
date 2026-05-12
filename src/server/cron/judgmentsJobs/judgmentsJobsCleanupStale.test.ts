@@ -3,7 +3,7 @@ import {existsSync} from 'node:fs'
 import {Database} from 'bun:sqlite'
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 
-import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import {getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
 import {getRequestAttemptLifecycleState, parseRequestAttempts} from './judgmentRequestAttemptManifest.ts'
@@ -262,6 +262,116 @@ afterAll(async () => {
   await sqliteService?.().closeAll()
   await closeDatabase?.()
   tempRuntimeRoot.cleanup()
+})
+
+test('cleanupStale prunes old provider telemetry samples and keeps samples inside retention', async () => {
+  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const timestamp = Date.now()
+  const jobId = `cleanup-stale-telemetry-job-${timestamp}`
+  const projectId = `cleanup-stale-telemetry-project-${timestamp}`
+  const providerKey = `cleanup-stale-telemetry-provider-${timestamp}`
+  const prunedSampleId = `cleanup-stale-telemetry-pruned-${timestamp}`
+  const retainedSampleId = `cleanup-stale-telemetry-retained-${timestamp}`
+  const prunedSampledAt = new Date(timestamp - 4 * 24 * 60 * 60 * 1000)
+  const retainedSampledAt = new Date(timestamp - 2 * 24 * 60 * 60 * 1000)
+
+  await runDatabase(`
+    INSERT INTO app.judgment_job_provider_telemetry_sample (
+      id,
+      job_id,
+      project_id,
+      provider_key,
+      sampled_at,
+      provider_limit,
+      effective_provider_limit,
+      normal_request_capacity,
+      target_request_live_calls,
+      unallocated_target_live_calls,
+      provider_available_request_leases,
+      provider_leased_live_requests,
+      provider_leased_physical_calls,
+      provider_leased_probe_calls,
+      provider_request_fill_pct,
+      provider_limit_version,
+      provider_probe_occupancy_version,
+      provider_allocation_version,
+      bottleneck,
+      bottleneck_source,
+      bottleneck_subreason,
+      fresh_worker_count,
+      stale_worker_count,
+      unavailable_worker_count,
+      aggregate_completeness
+    ) VALUES
+      (
+        ${getSqlLiteral(prunedSampleId)},
+        ${getSqlLiteral(jobId)},
+        ${getSqlLiteral(projectId)},
+        ${getSqlLiteral(providerKey)},
+        ${getTimestampLiteral(prunedSampledAt)},
+        12,
+        12,
+        10,
+        10,
+        0,
+        5,
+        5,
+        5,
+        0,
+        50,
+        'limit-v1',
+        'probe-v1',
+        'allocation-v1',
+        NULL,
+        NULL,
+        NULL,
+        1,
+        0,
+        0,
+        'complete'
+      ),
+      (
+        ${getSqlLiteral(retainedSampleId)},
+        ${getSqlLiteral(jobId)},
+        ${getSqlLiteral(projectId)},
+        ${getSqlLiteral(providerKey)},
+        ${getTimestampLiteral(retainedSampledAt)},
+        12,
+        12,
+        10,
+        10,
+        0,
+        5,
+        5,
+        5,
+        0,
+        50,
+        'limit-v1',
+        'probe-v1',
+        'allocation-v1',
+        NULL,
+        NULL,
+        NULL,
+        1,
+        0,
+        0,
+        'complete'
+      )
+  `)
+
+  await judgmentsJobsCleanupStale()
+
+  expect(
+    await queryDatabase<{id: string}>(`
+      SELECT id
+      FROM app.judgment_job_provider_telemetry_sample
+      WHERE job_id = ${getSqlLiteral(jobId)}
+      ORDER BY id ASC
+    `),
+  ).toEqual([{id: retainedSampleId}])
 })
 
 test('cleanupStale automatically repairs recoverable orphaned judged queue rows for draining jobs', async () => {
@@ -541,6 +651,16 @@ test('cleanupStale clears stale running prompts before finalizing draining jobs'
         `,
       )
       .run('2026-04-01T00:00:00.000Z', claimedPrompt.recordId)
+    sqliteDatabase
+      .query(
+        `
+          UPDATE judge_worker_heartbeat
+          SET heartbeat_at = ?,
+              updated_at = ?
+          WHERE server_id = ?
+        `,
+      )
+      .run('2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', 'server-a')
   } finally {
     sqliteDatabase.close()
   }
