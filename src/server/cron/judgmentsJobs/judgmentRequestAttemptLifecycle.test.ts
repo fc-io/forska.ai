@@ -2,6 +2,7 @@ import {afterEach, expect, mock, test} from 'bun:test'
 
 import {getDerivedJudgmentPromptLifecycleState} from './judgmentLifecycleTelemetry.ts'
 import {
+  getDurableTerminalRequestAttemptCloseoutProjectionRows,
   getRequestAttemptLifecycleState,
   JudgmentRequestAttemptInvariantError,
   type JudgmentRequestAttemptJsonEntry,
@@ -484,6 +485,91 @@ test('durable evidence supersedes unavailable diagnostics and late evidence afte
   expect(getRequestAttemptLifecycleState(supersededEntry)).toBe('completedRequest')
   expect(getRequestAttemptLifecycleState(conflictEntry)).toBe('closedRequest')
   expect(conflictEntry.lateEvidenceConflict?.reason).toBe('lateEvidenceAfterWorkerLostNoDurableResult')
+})
+
+test('durable terminal closeout projection rows normalize write metadata', () => {
+  const durableAttempt = {
+    ...baseManifestAttempt,
+    closeoutKind: 'token_use',
+    durableCloseoutRef: {id: '   ', jobId: 'job-a'} as unknown as JudgmentRequestAttemptJsonEntry['durableCloseoutRef'],
+    finishedAt: null,
+    lifecycleState: 'completedRequest',
+    outcome: 'success',
+    providerKey: ' provider:openai:default ',
+    requestAttemptId: ' attempt-a ',
+    updatedAt: '2026-05-03T12:00:04.000Z',
+  } satisfies JudgmentRequestAttemptJsonEntry
+  const rows = getDurableTerminalRequestAttemptCloseoutProjectionRows({
+    requestAttempts: [
+      durableAttempt,
+      {...durableAttempt, providerKey: '   ', requestAttemptId: 'attempt-missing-provider'},
+      {...durableAttempt, providerKey: 'provider:openai:default', requestAttemptId: '   '},
+      {...durableAttempt, closeoutKind: 'persistence', requestAttemptId: 'attempt-persistence'},
+    ],
+    tokenUseCreatedAt: '2026-05-03T12:00:01.000Z',
+    tokenUseFinishedAt: '2026-05-03T12:00:03.000Z',
+    tokenUseId: ' token-use-a ',
+    tokenUseStartedAt: '2026-05-03T12:00:02.000Z',
+  })
+
+  expect(rows).toEqual([
+    {
+      closedAt: '2026-05-03T12:00:04.000Z',
+      closeoutKind: 'token_use',
+      durableCloseoutId: null,
+      durableCloseoutKind: 'token_use',
+      durableCloseoutRef: {id: null, jobId: 'job-a', kind: 'token_use'},
+      providerKey: 'provider:openai:default',
+      requestAttemptId: 'attempt-a',
+      tokenUseCreatedAt: '2026-05-03T12:00:01.000Z',
+      tokenUseId: 'token-use-a',
+    },
+  ])
+})
+
+test('durable terminal closeout projection rows choose closedAt by request then token use precedence', () => {
+  const durableAttempt = {
+    ...baseManifestAttempt,
+    closeoutKind: 'token_use',
+    durableCloseoutRef: {id: 'token-use-a', kind: 'token_use', jobId: 'job-a'},
+    lifecycleState: 'completedRequest',
+    outcome: 'success',
+  } satisfies JudgmentRequestAttemptJsonEntry
+  const getClosedAt = (entry: JudgmentRequestAttemptJsonEntry) => {
+    return getDurableTerminalRequestAttemptCloseoutProjectionRows({
+      requestAttempts: [entry],
+      tokenUseCreatedAt: '2026-05-03T12:00:01.000Z',
+      tokenUseFinishedAt: '2026-05-03T12:00:03.000Z',
+      tokenUseId: 'token-use-a',
+      tokenUseStartedAt: '2026-05-03T12:00:02.000Z',
+    })[0]?.closedAt
+  }
+
+  expect(
+    getClosedAt({...durableAttempt, finishedAt: '2026-05-03T12:00:05.000Z', updatedAt: '2026-05-03T12:00:04.000Z'}),
+  ).toBe('2026-05-03T12:00:05.000Z')
+  expect(getClosedAt({...durableAttempt, finishedAt: null, updatedAt: '2026-05-03T12:00:04.000Z'})).toBe(
+    '2026-05-03T12:00:04.000Z',
+  )
+  expect(getClosedAt({...durableAttempt, finishedAt: null, updatedAt: null})).toBe('2026-05-03T12:00:03.000Z')
+  expect(
+    getDurableTerminalRequestAttemptCloseoutProjectionRows({
+      requestAttempts: [{...durableAttempt, finishedAt: null, updatedAt: null}],
+      tokenUseCreatedAt: '2026-05-03T12:00:01.000Z',
+      tokenUseFinishedAt: null,
+      tokenUseId: 'token-use-a',
+      tokenUseStartedAt: '2026-05-03T12:00:02.000Z',
+    })[0]?.closedAt,
+  ).toBe('2026-05-03T12:00:02.000Z')
+  expect(
+    getDurableTerminalRequestAttemptCloseoutProjectionRows({
+      requestAttempts: [{...durableAttempt, finishedAt: null, updatedAt: null}],
+      tokenUseCreatedAt: '2026-05-03T12:00:01.000Z',
+      tokenUseFinishedAt: null,
+      tokenUseId: 'token-use-a',
+      tokenUseStartedAt: null,
+    })[0]?.closedAt,
+  ).toBe('2026-05-03T12:00:01.000Z')
 })
 
 test('derived prompt lifecycle precedence separates attempt closeout from prompt terminal state', () => {
