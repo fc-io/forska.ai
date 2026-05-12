@@ -2,7 +2,9 @@
 
 Date: 2026-05-12
 
-Status: draft. This plan defines the API surface that local apps, LLM tools, agents, and scripts should be able to call when Forska is running on the same machine.
+Status: draft decision framework. This plan defines the API surface that local apps, LLM tools, agents, and scripts should be able to call when Forska is running on the same machine.
+
+Implementation timing: implement this plan last in the open-source cleanup sequence. Use it now to guide route decisions, but do not add the manifest, public local API docs, CORS expansion, or regression guardrails until after route cleanup, sensitive-route decisions, public-seed allowlist/denylist work, and private-material removal are settled.
 
 ## Goal
 
@@ -26,6 +28,7 @@ For browser-based local clients, loopback availability is not enough. The curren
 - Do not add admin accounts or user auth for the open-source local app unless separately decided.
 - Do not expose the API to the LAN or internet by default.
 - Do not broaden CORS or listener binding as a side effect of documenting the local API.
+- Do not support third-party browser origins by default. Native apps, CLIs, agents, and scripts can use loopback directly; browser tools need a separate explicit allowed-origin decision later.
 - Do not promise stability for internal worker, repair, database snapshot, or debug routes.
 
 ## API Categories
@@ -90,6 +93,97 @@ These are initial decisions, not final documentation. Each row still needs a rou
 | `apiRouteClassification.ts` | Internal runtime classifier | Keep as proxy/owner-routing input. Do not reuse these categories as the public API support taxonomy. |
 | `/__duckdb-owner-rpc/**` | Internal runtime API | Never document as a local integration API. |
 
+## Implementation Readiness
+
+This plan is ready to guide route review, but not ready to drive broad route cleanup directly.
+
+Implement it last because the manifest and public docs should describe the final cleaned API surface, not the current mixed route surface.
+
+Ready now:
+
+- Use the categories above while reviewing route groups.
+- Use the high-risk route list to decide what must be removed, gated, redacted, or excluded from the public seed.
+- Keep loopback access as the intended integration model for native local apps, CLIs, agents, and scripts.
+
+Not ready until later:
+
+- Do not publish the supported local API docs yet.
+- Do not treat the starting route decisions as final stable API promises.
+- Do not broaden CORS for third-party browser tools yet.
+- Do not add route-regression checks until the route surface has been cleaned enough that the manifest represents the intended public shape.
+
+When this plan is implemented, the first implementation step within this plan should be the manifest. That does not make this plan early work; it means the manifest is the first task after this plan becomes the final cleanup workstream.
+
+## Manifest Shape
+
+Suggested location: `src/server/routes/supportedLocalApiManifest.ts`.
+
+Suggested test location: `src/server/routes/supportedLocalApiManifest.test.ts`.
+
+Each manifest row should classify one method/path pattern, not only a route file.
+
+| Field | Meaning |
+| --- | --- |
+| `method` | HTTP method, or a narrow method list if the same path has identical support semantics. |
+| `path` | Elysia route pattern, including dynamic params such as `:id`. |
+| `category` | One of the API categories in this plan. |
+| `routeModule` | Owning route module or nested route module. |
+| `nativeLoopback` | Whether native apps, CLIs, agents, and scripts on the same machine may call it. |
+| `browserApp` | Whether the Forska browser UI may call it. |
+| `desktop` | Whether the desktop app or desktop bridge may call it. |
+| `thirdPartyBrowser` | Whether third-party browser origins are intentionally supported. Default should be `false`. |
+| `ownerProxy` | Whether the route is proxied to the DuckDB owner or mirrored under owner-private RPC. |
+| `sensitivity` | Short note for secrets, files, exports, failed requests, PDFs, patient data, provider metadata, or local machine telemetry. |
+| `notes` | Short release/support note. |
+
+Initial category type:
+
+```ts
+export type SupportedLocalApiCategory =
+  | 'supported-local-api'
+  | 'local-diagnostics-api'
+  | 'sensitive-local-api'
+  | 'internal-runtime-api'
+  | 'maintenance-debug-api'
+  | 'remove-from-public-seed'
+```
+
+Initial row shape:
+
+```ts
+export type SupportedLocalApiManifestRow = {
+  browserApp: boolean
+  category: SupportedLocalApiCategory
+  desktop: boolean
+  method: string
+  nativeLoopback: boolean
+  notes: string
+  ownerProxy: 'never' | 'maybe' | 'yes'
+  path: string
+  routeModule: string
+  sensitivity: string | null
+  thirdPartyBrowser: boolean
+}
+```
+
+## Regression Tests
+
+Add tests only after the route cleanup reaches its final intended public shape.
+
+First tests:
+
+- Every manifest row has a valid category.
+- Every manifest row has explicit caller flags for native loopback, Forska browser app, desktop, and third-party browser use.
+- `thirdPartyBrowser` defaults to `false` unless the route has a documented CORS decision.
+- Sensitive categories require a non-empty `sensitivity` note.
+- Internal runtime and maintenance/debug categories are not marked as third-party browser supported.
+
+Later tests:
+
+- Every mounted method/path pattern is present in the manifest.
+- Every route mounted under `/__duckdb-owner-rpc/**` is classified as internal runtime API.
+- CORS-related tests match `allowedOrigins` in `src/server/serverMain.ts`.
+
 ## What Needs To Change
 
 | # | Change | Target State |
@@ -105,11 +199,13 @@ These are initial decisions, not final documentation. Each row still needs a rou
 
 ## Suggested Implementation Order
 
-1. Build the first manifest from `src/server/serverMain.ts`, `src/appServerMain.ts`, `src/desktop/index.ts`, `src/server/routes/*`, nested route modules, `ApiProxyRoutes.ts`, `apiRouteClassification.ts`, and cron-mounted Elysia plugins.
-2. Mark every method/path pattern as `supported local API`, `local diagnostics API`, `sensitive local API`, `internal runtime API`, `maintenance/debug API`, or `remove from public seed`.
-3. Record whether each documented route is callable from native/CLI loopback clients, the Forska browser app, the desktop bridge, and any intentionally supported third-party browser origins.
-4. Close the high-risk decisions first: FHIR/EHR import, failed request details, runtime assets, provider secrets, DuckDB studio, `/api/admin/*`, and judgment repair/control routes.
-5. Add a route-manifest regression test or route-classification test that fails when a mounted method/path pattern is missing from the manifest.
+This is the implementation order inside this plan, but this whole plan should be implemented last in the broader open-source cleanup sequence.
+
+1. Confirm route cleanup and sensitive-route decisions are complete.
+2. Build the first manifest from `src/server/serverMain.ts`, `src/appServerMain.ts`, `src/desktop/index.ts`, `src/server/routes/*`, nested route modules, `ApiProxyRoutes.ts`, `apiRouteClassification.ts`, and cron-mounted Elysia plugins.
+3. Mark every method/path pattern as `supported local API`, `local diagnostics API`, `sensitive local API`, `internal runtime API`, `maintenance/debug API`, or `remove from public seed`.
+4. Record whether each documented route is callable from native/CLI loopback clients, the Forska browser app, the desktop bridge, and any intentionally supported third-party browser origins.
+5. Add route-manifest regression tests that fail when a mounted method/path pattern is missing from the manifest.
 6. Update public docs with the supported local API rules and examples for local LLM tools/scripts, including the browser CORS limitation.
 7. Update the open-source release seed allowlist so internal planning files and unsupported debug/operator docs do not enter the public seed.
 

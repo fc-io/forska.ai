@@ -49,7 +49,7 @@
 
 - Include only what is needed for the public OSS flow: `bun install`, `bun run db:mig`, `bun run dev:server`, `bun run dev:app`, `bun run build`, and relevant `bun test` commands.
 - Include reviewed product code under `src/`, but only after the route and surface audit removes or gates internal-only endpoints.
-- Include a supported local API contract based on `plans/supportedLocalApi.md`, so local LLM apps, agents, scripts, browser UI, and desktop app know which routes are stable.
+- Include a supported local API contract based on `plans/supportedLocalApi.md`, so local LLM apps, agents, scripts, browser UI, and desktop app know which routes are stable. Implement that contract last, after route cleanup and sensitive-route decisions are complete.
 - Include DuckDB migration files under `src/db/duckdbMigrations/` and any other schema/runtime files required for first boot.
 - Include tests that validate the public product surface, as long as fixtures and snapshots are sanitized.
 - Include root build and tooling files needed for public development, such as `package.json`, `bun.lock`, `tsconfig.json`, `vite.config.ts`, `eslint.config.ts`, `playwright.config.ts`, `.gitignore`, `.prettierrc.js`, `.prettierignore`, and `index.html`.
@@ -79,7 +79,7 @@
 
 ### 2. Inventory the current server and API surface
 
-- Use `plans/supportedLocalApi.md` as the companion plan for deciding which localhost routes are stable local integration APIs versus internal/debug implementation details.
+- Use `plans/supportedLocalApi.md` as the companion decision framework for deciding which localhost routes are stable local integration APIs versus internal/debug implementation details. Do not implement the manifest/docs/regression checks from that plan until late-stage cleanup.
 - Build a network surface inventory from `src/server/index.ts`, `src/server/serverMain.ts`, `src/appServer.ts`, `src/appServerMain.ts`, every file under `src/server/routes/`, and any nested or transitively mounted routes.
 - For each listener, proxy entrypoint, or route, record: bind host, path, methods, mounted role, proxy behavior, client caller, local integration caller, data touched, whether it is required for the product, and whether it is safe to keep in the public seed.
 - Classify each route into one of: supported local API, local diagnostics API, sensitive local API, internal runtime API, maintenance/debug API, or remove from public seed.
@@ -95,6 +95,7 @@
 - Keep documented supported local API routes available on loopback for local LLM apps, agents, scripts, the browser UI, and the desktop app.
 - Update docs so only supported public or local-only routes remain documented.
 - Add focused tests where useful so removed routes do not silently come back later.
+- Defer the final supported-local-API manifest, public local API docs, and manifest regression tests until after the current route surface has been cleaned and reviewed.
 
 ### 4. Audit git history for old APIs and sensitive material
 
@@ -152,7 +153,7 @@
 
 - Add a fresh public CI/workflow set rather than copying private automation blindly.
 - Run secret scanning on pull requests and on the default branch, and add denylisted-path checks for private docs, remote helpers, and restricted sample data.
-- Keep a supported-route or network-surface manifest and treat unexpected endpoint or listener changes as review failures.
+- As one of the last cleanup steps, implement the supported local API manifest from `plans/supportedLocalApi.md` and treat unexpected endpoint, listener, owner/proxy, or CORS changes as review failures.
 - Add a fresh-clone smoke test based only on public docs so new contributors can validate the supported OSS flow without private infra access.
 - Require explicit review before adding new Dockerfiles, remote-run docs, infra scripts, or release helpers to the public repo.
 
@@ -170,7 +171,7 @@
 ## Deliverables
 
 - A current API and network-surface matrix with supported-local/diagnostic/sensitive/internal/debug/remove decisions, bind notes, and transitive mount coverage
-- A supported local API manifest and documentation, based on `plans/supportedLocalApi.md`, covering local LLM apps, agents, scripts, browser UI, and desktop app callers
+- A late-stage supported local API manifest and documentation, based on `plans/supportedLocalApi.md`, covering local LLM apps, agents, scripts, browser UI, and desktop app callers
 - A git-history findings report covering secrets, old endpoints, and sensitive infra details, with owner, severity, disposition, and closure evidence
 - A release-scope allowlist and private-material denylist
 - A decision memo that defaults to publishing from a fresh clean mirror and explains any exception
