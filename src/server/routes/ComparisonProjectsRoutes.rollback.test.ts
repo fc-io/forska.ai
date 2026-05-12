@@ -2,7 +2,22 @@ import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
+const comparisonProjectServingRebuildServiceModulePath = new URL(
+  '../services/comparisonProjectServingRebuildService.ts',
+  import.meta.url,
+).pathname
 const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).pathname
+
+type MockServingStatus = {
+  activeGeneration: number | null
+  generationUpdatedAt: Date | null
+  servingCompletedAt: Date | null
+  servingError: string | null
+  servingFailedAt: Date | null
+  servingGeneration: number | null
+  servingStartedAt: Date | null
+  servingStatus: 'failed' | 'missing' | 'ready' | 'refreshing' | 'stale'
+}
 
 type MockDatabaseState = {
   comparisonProject: {
@@ -30,8 +45,11 @@ type MockDatabaseState = {
     order: number
   }>
   queryStatements: string[]
+  queuedServingRebuildIds: string[]
   routeLinks: Array<{id: string; importRouteId: string}>
+  servingStatus: MockServingStatus
   sourceProjectLinks: Array<{id: string; sourceProjectId: string}>
+  staleServingIds: string[]
   rootRunStatements: string[]
   transactionCalls: number
 }
@@ -202,6 +220,20 @@ const getMockDatabaseState = () => {
   }
 
   return state
+}
+
+const getMockServingStatus = (overrides: Partial<MockServingStatus> = {}): MockServingStatus => {
+  return {
+    activeGeneration: null,
+    generationUpdatedAt: null,
+    servingCompletedAt: null,
+    servingError: null,
+    servingFailedAt: null,
+    servingGeneration: null,
+    servingStartedAt: null,
+    servingStatus: 'missing',
+    ...overrides,
+  }
 }
 
 const getComparisonProjectRow = (comparisonProject: MockDatabaseState['comparisonProject']) => {
@@ -686,6 +718,42 @@ const registerModuleMocks = () => {
     }
   })
 
+  void mock.module(comparisonProjectServingRebuildServiceModulePath, () => {
+    return {
+      getComparisonProjectServingRebuildService: () => {
+        return {
+          getComparisonProjectServingStatus: async () => {
+            return getMockDatabaseState().servingStatus
+          },
+          markComparisonProjectServingStale: async (comparisonProjectId: string) => {
+            const state = getMockDatabaseState()
+            state.staleServingIds.push(comparisonProjectId)
+            state.servingStatus = {
+              ...state.servingStatus,
+              generationUpdatedAt: new Date('2026-04-03T00:00:00.000Z'),
+              servingCompletedAt: null,
+              servingError: null,
+              servingFailedAt: null,
+              servingGeneration: null,
+              servingStartedAt: null,
+              servingStatus: 'stale',
+            }
+
+            return state.servingStatus
+          },
+          rebuildComparisonProjectServing: async (comparisonProjectId: string) => {
+            getMockDatabaseState().queuedServingRebuildIds.push(comparisonProjectId)
+            return {
+              cleanupResult: {deletedRowCount: 0, tables: []},
+              generation: 1,
+              status: getMockDatabaseState().servingStatus,
+            }
+          },
+        }
+      },
+    }
+  })
+
   void mock.module(appDatabaseServiceModulePath, () => {
     return {
       getAppDatabaseService: () => {
@@ -932,9 +1000,12 @@ const createMockDatabaseState = (): MockDatabaseState => {
     lastUpdateStatement: null,
     promptLinks: [{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}],
     queryStatements: [],
+    queuedServingRebuildIds: [],
     rootRunStatements: [],
     routeLinks: [{id: 'comparison-project-route-1', importRouteId: 'import-route-1'}],
+    servingStatus: getMockServingStatus(),
     sourceProjectLinks: [],
+    staleServingIds: [],
     transactionCalls: 0,
   }
 }
@@ -1441,6 +1512,180 @@ test('comparison project sources expose summary capability metadata', async () =
   expect(sourceProject?.summarySourceProjectId).toBe('source-project-1')
   expect(sourceProject?.prompts[0]?.criteriaDisposition).toBe('include')
   expect(sourceProject?.prompts[0]?.criteriaSectionKey).toBe('population')
+})
+
+test('comparison project metadata exposes serving readiness states', async () => {
+  const statusCases: Array<{
+    expected: {
+      activeGeneration: number | null
+      isServingReady: boolean
+      servingStatus: string
+      servingUpdatedAt: string | null
+    }
+    status: MockServingStatus
+  }> = [
+    {
+      expected: {
+        activeGeneration: 2,
+        isServingReady: true,
+        servingStatus: 'ready',
+        servingUpdatedAt: '2026-04-03T00:00:00.000Z',
+      },
+      status: getMockServingStatus({
+        activeGeneration: 2,
+        generationUpdatedAt: new Date('2026-04-03T00:00:00.000Z'),
+        servingCompletedAt: new Date('2026-04-03T00:00:00.000Z'),
+        servingGeneration: 2,
+        servingStatus: 'ready',
+      }),
+    },
+    {
+      expected: {activeGeneration: null, isServingReady: false, servingStatus: 'missing', servingUpdatedAt: null},
+      status: getMockServingStatus(),
+    },
+    {
+      expected: {
+        activeGeneration: null,
+        isServingReady: false,
+        servingStatus: 'stale',
+        servingUpdatedAt: '2026-04-04T00:00:00.000Z',
+      },
+      status: getMockServingStatus({generationUpdatedAt: new Date('2026-04-04T00:00:00.000Z'), servingStatus: 'stale'}),
+    },
+    {
+      expected: {
+        activeGeneration: null,
+        isServingReady: false,
+        servingStatus: 'refreshing',
+        servingUpdatedAt: '2026-04-05T00:00:00.000Z',
+      },
+      status: getMockServingStatus({
+        servingGeneration: 1,
+        servingStartedAt: new Date('2026-04-05T00:00:00.000Z'),
+        servingStatus: 'refreshing',
+      }),
+    },
+    {
+      expected: {
+        activeGeneration: null,
+        isServingReady: false,
+        servingStatus: 'failed',
+        servingUpdatedAt: '2026-04-06T00:00:00.000Z',
+      },
+      status: getMockServingStatus({
+        servingError: 'serving rebuild failed',
+        servingFailedAt: new Date('2026-04-06T00:00:00.000Z'),
+        servingGeneration: 1,
+        servingStatus: 'failed',
+      }),
+    },
+    {
+      expected: {
+        activeGeneration: null,
+        isServingReady: false,
+        servingStatus: 'stale',
+        servingUpdatedAt: '2026-04-07T00:00:00.000Z',
+      },
+      status: getMockServingStatus({generationUpdatedAt: new Date('2026-04-07T00:00:00.000Z'), servingStatus: 'ready'}),
+    },
+  ]
+  mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+
+  await statusCases.reduce<Promise<void>>(async (promise, statusCase) => {
+    await promise
+
+    getMockDatabaseState().servingStatus = statusCase.status
+
+    const response = await app.handle(new Request('http://localhost/api/comparison-projects/comparison-project-1'))
+    const body = (await response.json()) as {
+      data: {
+        activeGeneration: number | null
+        isServingReady: boolean
+        servingStatus: string
+        servingUpdatedAt: string | null
+      }
+    }
+
+    expect(response.status).toBe(200)
+    expect({
+      activeGeneration: body.data.activeGeneration,
+      isServingReady: body.data.isServingReady,
+      servingStatus: body.data.servingStatus,
+      servingUpdatedAt: body.data.servingUpdatedAt,
+    }).toEqual(statusCase.expected)
+  }, Promise.resolve())
+})
+
+test('comparison project create and update mark serving stale and queue rebuilds', async () => {
+  mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false, promptLinks: []}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const createResponse = await app.handle(
+    new Request('http://localhost/api/comparison-projects', {
+      body: JSON.stringify({
+        compareWithHumans: false,
+        description: 'Manual comparison',
+        modelIds: ['model-1'],
+        name: 'Manual comparison',
+        promptSelections: [{promptId: 'prompt-1', order: 0}],
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const createFromProjectResponse = await app.handle(
+    new Request('http://localhost/api/comparison-projects/from-project', {
+      body: JSON.stringify({
+        compareWithHumans: false,
+        description: 'From project comparison',
+        name: 'From project comparison',
+        sourceProjectId: 'prompt-project-1',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const updateResponse = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1', {
+      body: JSON.stringify({
+        allowConflictResolution: false,
+        compareWithHumans: false,
+        description: 'Rollback test project',
+        modelIds: ['model-1'],
+        name: 'Rollback test project',
+        promptSelections: [{promptId: 'prompt-1', order: 0}],
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const state = getMockDatabaseState()
+
+  expect(createResponse.status).toBe(200)
+  expect(createFromProjectResponse.status).toBe(200)
+  expect(updateResponse.status).toBe(200)
+  expect(state.staleServingIds).toEqual([
+    'comparison-project-created',
+    'comparison-project-created',
+    'comparison-project-1',
+  ])
+  expect(state.queuedServingRebuildIds).toEqual([
+    'comparison-project-created',
+    'comparison-project-created',
+    'comparison-project-1',
+  ])
 })
 
 test('comparison judgments normalize missing and invalid rowFilter to multiple answers', async () => {

@@ -348,6 +348,24 @@ test('comparison serving rebuild failure records error and preserves the active 
   ).toBe(true)
 })
 
+test('comparison serving stale marker preserves active generation and clears target rebuild fields', () => {
+  const result = runScript<{status: {activeGeneration: number | null; servingStatus: string}; statusRow: StatusRow}>(`
+    await service.rebuildComparisonProjectServing(comparisonProjectId)
+    const status = await service.markComparisonProjectServingStale(comparisonProjectId)
+    const statusRow = await getStatusRow()
+
+    console.log(JSON.stringify({status, statusRow}))
+    await database.close()
+  `)
+
+  expect(result.status.activeGeneration).toBe(1)
+  expect(result.status.servingStatus).toBe('stale')
+  expect(result.statusRow.activeGeneration).toBe('1')
+  expect(result.statusRow.servingError).toBeNull()
+  expect(result.statusRow.servingGeneration).toBeNull()
+  expect(result.statusRow.servingStatus).toBe('stale')
+})
+
 test('comparison serving rebuild treats stale promotion as failed', () => {
   const result = runScript<{failureText: string; rows: GenerationRow[]; statusRow: StatusRow}>(`
     await service.rebuildComparisonProjectServing(comparisonProjectId)

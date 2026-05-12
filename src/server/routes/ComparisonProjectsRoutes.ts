@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import type {
   ComparisonProjectRecord,
+  ComparisonProjectServingStatus,
   HumanJudgmentMode,
   ProjectPromptCriteriaDisposition,
 } from '../../db/schemaTypes.ts'
@@ -23,6 +24,10 @@ import {getProviderModelMetadataOptions} from '../providers/providerModelMetadat
 import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
+import {
+  type ComparisonProjectServingStatusRow,
+  getComparisonProjectServingRebuildService,
+} from '../services/comparisonProjectServingRebuildService.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {
   deriveStrictSummaryAnswer,
@@ -98,9 +103,13 @@ type ComparisonProjectScope = {
   id: string
   name: string
   description: string | null
+  activeGeneration: number | null
   compareWithHumans: boolean
   allowConflictResolution: boolean
   humanJudgmentMode: HumanJudgmentMode
+  isServingReady: boolean
+  servingStatus: ComparisonProjectServingStatus
+  servingUpdatedAt: Date | null
   summarySourceProjectId: string | null
   useTitle: boolean
   useAbstract: boolean
@@ -231,6 +240,7 @@ const judgmentTable = 'app.judgment'
 const judgmentHumanTable = 'app.judgment_human'
 const judgmentHumanSummaryTable = 'app.judgment_human_summary'
 const appDatabaseService = getAppDatabaseService()
+const comparisonProjectServingRebuildService = getComparisonProjectServingRebuildService()
 const {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} = appQueryHelpers
 const summaryPromptId = 'summary'
 const summaryPromptLabel = 'Overall decision'
@@ -239,6 +249,49 @@ const comparisonProjectJudgmentArticleBatchSize = 20000
 const getRequiredDateValue = (value: unknown) => {
   const parsedDate = getDateValue(value)
   return parsedDate ?? new Date(0)
+}
+
+const getComparisonProjectServingUpdatedAt = (status: ComparisonProjectServingStatusRow) => {
+  return (
+    status.generationUpdatedAt ?? status.servingCompletedAt ?? status.servingFailedAt ?? status.servingStartedAt ?? null
+  )
+}
+
+const getComparisonProjectServingMetadataStatus = (
+  status: ComparisonProjectServingStatusRow,
+): ComparisonProjectServingStatus => {
+  return status.servingStatus === 'ready' && status.activeGeneration === null ? 'stale' : status.servingStatus
+}
+
+const getComparisonProjectServingMetadata = (status: ComparisonProjectServingStatusRow) => {
+  const servingStatus = getComparisonProjectServingMetadataStatus(status)
+
+  return {
+    activeGeneration: status.activeGeneration,
+    isServingReady: servingStatus === 'ready' && status.activeGeneration !== null,
+    servingStatus,
+    servingUpdatedAt: getComparisonProjectServingUpdatedAt(status),
+  }
+}
+
+const getComparisonProjectServingQueueErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
+}
+
+const queueComparisonProjectServingRebuild = (comparisonProjectId: string) => {
+  void comparisonProjectServingRebuildService
+    .rebuildComparisonProjectServing(comparisonProjectId)
+    .catch((error: unknown) => {
+      console.error('[comparison-project-serving] rebuild failed', {
+        comparisonProjectId,
+        error: getComparisonProjectServingQueueErrorMessage(error),
+      })
+    })
+}
+
+const markComparisonProjectServingStaleAndQueueRebuild = async (comparisonProjectId: string) => {
+  await comparisonProjectServingRebuildService.markComparisonProjectServingStale(comparisonProjectId)
+  queueComparisonProjectServingRebuild(comparisonProjectId)
 }
 
 const getStringArrayRowValue = <TRow extends Record<string, unknown>>(row: TRow, key: keyof TRow) => {
@@ -1355,7 +1408,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     modelIds: getStringArrayRowValue(comparisonProjectRow, 'modelIds'),
     humanJudgmentMode: comparisonProjectRow.humanJudgmentMode ?? 'prompt',
   }
-  const [promptRows, routeRows, sourceProjectLinkRows] = await Promise.all([
+  const [promptRows, routeRows, sourceProjectLinkRows, servingStatus] = await Promise.all([
     appDatabaseService.queryJson<{
       id: string
       promptHeading: string | null
@@ -1388,6 +1441,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
       FROM ${comparisonProjectSourceProjectTable}
       WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
     `),
+    comparisonProjectServingRebuildService.getComparisonProjectServingStatus(comparisonProjectId),
   ])
 
   const promptConfigs = promptRows.map<ComparisonProjectPromptConfig>((promptRow, index) => {
@@ -1452,6 +1506,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
 
   return {
     ...normalizedComparisonProjectRow,
+    ...getComparisonProjectServingMetadata(servingStatus),
     sourceProjectIds,
     useImportRoutesForScope,
     summarySourceProject,
@@ -3005,6 +3060,7 @@ export const comparisonProjectsRoutes = new Elysia()
           promptSelections: sourcePromptSelections,
         })
       })) as Awaited<ReturnType<typeof createComparisonProjectRecord>>
+      await markComparisonProjectServingStaleAndQueueRebuild(createdComparisonProject.id)
 
       return {data: createdComparisonProject}
     },
@@ -3155,6 +3211,7 @@ export const comparisonProjectsRoutes = new Elysia()
       const createdComparisonProject = (await appDatabaseService.transaction(async (tx) => {
         return createComparisonProjectRecord(tx, body)
       })) as Awaited<ReturnType<typeof createComparisonProjectRecord>>
+      await markComparisonProjectServingStaleAndQueueRebuild(createdComparisonProject.id)
 
       return {data: createdComparisonProject}
     },
@@ -3254,6 +3311,8 @@ export const comparisonProjectsRoutes = new Elysia()
       if (!updatedComparisonProjectRow) {
         throw new Error('Comparison project not found')
       }
+
+      await markComparisonProjectServingStaleAndQueueRebuild(params.id)
 
       return {data: getComparisonProjectRecordValue(updatedComparisonProjectRow)}
     },

@@ -1,4 +1,8 @@
-import type {HumanJudgmentMode, ProjectPromptCriteriaDisposition} from '../db/schemaTypes.ts'
+import type {
+  ComparisonProjectServingStatus,
+  HumanJudgmentMode,
+  ProjectPromptCriteriaDisposition,
+} from '../db/schemaTypes.ts'
 import type {
   ComparisonProjectDifferenceColumn,
   ComparisonProjectDifferenceFilter,
@@ -140,9 +144,13 @@ export type ComparisonProjectJudgmentsMetadata = {
   id: string
   name: string
   description: string | null
+  activeGeneration: number | null
   compareWithHumans: boolean
   allowConflictResolution: boolean
   humanJudgmentMode: HumanJudgmentMode
+  isServingReady: boolean
+  servingStatus: ComparisonProjectServingStatus
+  servingUpdatedAt: Date | string | null
   summarySourceProjectId: string | null
   summarySourceProject: ComparisonProjectSummarySourceProject | null
   sourceProjects: ComparisonProjectLinkedSourceProject[]

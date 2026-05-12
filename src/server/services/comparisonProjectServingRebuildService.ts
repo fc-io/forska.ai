@@ -221,6 +221,30 @@ const recordComparisonProjectServingRebuildFailed = async ({
   `)
 }
 
+const recordComparisonProjectServingStale = async ({
+  comparisonProjectId,
+  now,
+  runner,
+}: {
+  comparisonProjectId: string
+  now: Date
+  runner: ComparisonProjectServingRebuildRunner
+}) => {
+  await ensureComparisonProjectServingStatusRow(runner, comparisonProjectId)
+  await runner.run(`
+    UPDATE ${comparisonProjectServingGenerationTable}
+    SET
+      serving_status = 'stale',
+      serving_generation = NULL,
+      serving_started_at = NULL,
+      serving_completed_at = NULL,
+      serving_failed_at = NULL,
+      serving_error = NULL,
+      generation_updated_at = ${getTimestampLiteral(now)}
+    WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+  `)
+}
+
 const getComparisonProjectServingRebuildErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
 }
@@ -344,7 +368,24 @@ const getComparisonProjectServingStatus = async (
   return getComparisonProjectServingStatusRowValue(row)
 }
 
-const comparisonProjectServingRebuildService = {getComparisonProjectServingStatus, rebuildComparisonProjectServing}
+const markComparisonProjectServingStale = async (
+  comparisonProjectId: string,
+  overrides: Pick<ComparisonProjectServingRebuildDependencyOverrides, 'database'> = {},
+) => {
+  const dependencies = getComparisonProjectServingRebuildDependencies(overrides)
+
+  await dependencies.database.transaction((runner) => {
+    return recordComparisonProjectServingStale({comparisonProjectId, now: new Date(), runner})
+  })
+
+  return getComparisonProjectServingStatus(comparisonProjectId, {database: dependencies.database})
+}
+
+const comparisonProjectServingRebuildService = {
+  getComparisonProjectServingStatus,
+  markComparisonProjectServingStale,
+  rebuildComparisonProjectServing,
+}
 
 export const getComparisonProjectServingRebuildService = () => {
   return comparisonProjectServingRebuildService
