@@ -8,6 +8,7 @@ type ComparisonProjectServingCellBuilderParams = {comparisonProjectId: string; g
 type ComparisonProjectServingCellBuilderDependencies = {run: (statement: string) => Promise<void>}
 
 const comparisonCellServingTable = 'mart.comparison_cell_serving'
+const summaryPromptId = 'summary'
 
 const getDefaultComparisonProjectServingCellBuilderDependencies =
   (): ComparisonProjectServingCellBuilderDependencies => {
@@ -37,6 +38,13 @@ const getHumanPromptModeComparisonProjectPredicateSql = () => {
   return `
       AND cp.compare_with_humans = TRUE
       AND COALESCE(cp.human_judgment_mode, 'prompt') = 'prompt'
+    `
+}
+
+const getSummaryModeComparisonProjectPredicateSql = () => {
+  return `
+      AND cp.compare_with_humans = TRUE
+      AND COALESCE(cp.human_judgment_mode, 'prompt') = 'summary'
     `
 }
 
@@ -157,7 +165,7 @@ const getComparisonProjectPromptConfigCteSql = () => {
   `
 }
 
-const getComparisonProjectModelConfigCtesSql = () => {
+const getComparisonProjectModelConfigCtesSql = (promptConfigCteName = 'prompt_config') => {
   return `
     selected_model_source AS (
       SELECT selected_model.model_id, MIN(CAST(selected_model.ordinal - 1 AS INTEGER)) AS model_order
@@ -180,7 +188,7 @@ const getComparisonProjectModelConfigCtesSql = () => {
         MIN(m.name) AS model_name
       FROM app.judgment j
       INNER JOIN scoped_article scoped_article ON scoped_article.article_id = j.article_id
-      INNER JOIN prompt_config prompt_config ON prompt_config.prompt_id = j.prompt_id
+      INNER JOIN ${promptConfigCteName} prompt_config ON prompt_config.prompt_id = j.prompt_id
       INNER JOIN content_variant content_variant
         ON content_variant.use_title = j.use_title
        AND content_variant.use_abstract = j.use_abstract
@@ -208,8 +216,120 @@ const getComparisonProjectModelConfigCtesSql = () => {
     ),
     cell_column_counts AS (
       SELECT
-        (SELECT COUNT(*) FROM prompt_config) AS prompt_count,
+        (SELECT COUNT(*) FROM ${promptConfigCteName}) AS prompt_count,
         (SELECT COUNT(*) FROM model_config) AS model_count,
+        (SELECT COUNT(*) FROM content_variant) AS content_variant_count
+    )
+  `
+}
+
+const getSummaryModeComparisonProjectConfigCtesSql = () => {
+  return `
+    source_project_config AS (
+      SELECT
+        p.id AS source_project_id,
+        p.model_id,
+        CAST(
+          ROW_NUMBER() OVER (
+            ORDER BY cpsp.created_at ASC NULLS LAST, cpsp.id ASC
+          ) - 1 AS INTEGER
+        ) AS source_project_order
+      FROM app.comparison_project_source_project cpsp
+      INNER JOIN comparison_project cp ON cp.id = cpsp.comparison_project_id
+      INNER JOIN app.project p ON p.id = cpsp.source_project_id
+    ),
+    source_project_summary_prompt AS (
+      SELECT
+        source_project_config.source_project_id,
+        source_project_config.model_id,
+        source_project_config.source_project_order,
+        pp.prompt_id,
+        CAST(
+          ROW_NUMBER() OVER (
+            PARTITION BY source_project_config.source_project_id
+            ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC, p.id ASC
+          ) - 1 AS INTEGER
+        ) AS prompt_order,
+        CAST(pp.criteria_disposition AS VARCHAR) AS criteria_disposition
+      FROM source_project_config
+      INNER JOIN app.project_prompt pp ON pp.project_id = source_project_config.source_project_id
+      INNER JOIN app.prompt p ON p.id = pp.prompt_id
+      WHERE pp.enabled = TRUE
+        AND pp.criteria_disposition IS NOT NULL
+        AND pp.criteria_section_key IS NOT NULL
+    ),
+    source_project_summary_prompt_count AS (
+      SELECT COUNT(*) AS prompt_count
+      FROM source_project_summary_prompt
+    ),
+    fallback_summary_prompt AS (
+      SELECT
+        NULL AS source_project_id,
+        NULL AS model_id,
+        0 AS source_project_order,
+        cpp.prompt_id,
+        CAST(
+          ROW_NUMBER() OVER (
+            ORDER BY cpp.prompt_order ASC NULLS LAST, p.created_at ASC, p.id ASC
+          ) - 1 AS INTEGER
+        ) AS prompt_order,
+        CAST(cpp.criteria_disposition AS VARCHAR) AS criteria_disposition
+      FROM app.comparison_project_prompt cpp
+      INNER JOIN comparison_project cp ON cp.id = cpp.comparison_project_id
+      INNER JOIN app.prompt p ON p.id = cpp.prompt_id
+      CROSS JOIN source_project_summary_prompt_count
+      WHERE source_project_summary_prompt_count.prompt_count = 0
+    ),
+    summary_prompt_group AS (
+      SELECT
+        COALESCE(source_project_id, '__fallback__') AS summary_group_key,
+        source_project_id,
+        model_id,
+        source_project_order,
+        prompt_id,
+        prompt_order,
+        criteria_disposition
+      FROM source_project_summary_prompt
+
+      UNION ALL
+
+      SELECT
+        COALESCE(source_project_id, '__fallback__') AS summary_group_key,
+        source_project_id,
+        model_id,
+        source_project_order,
+        prompt_id,
+        prompt_order,
+        criteria_disposition
+      FROM fallback_summary_prompt
+    ),
+    summary_prompt_id_config AS (
+      SELECT prompt_id
+      FROM summary_prompt_group
+      GROUP BY prompt_id
+    ),
+    ${getComparisonProjectContentVariantCteSql()},
+    ${getComparisonProjectScopeCtesSql()},
+    ${getComparisonProjectModelConfigCtesSql('summary_prompt_id_config')},
+    source_project_column_config AS (
+      SELECT
+        source_project_config.source_project_id,
+        source_project_config.model_id,
+        source_project_config.source_project_order
+      FROM source_project_config
+      INNER JOIN model_config ON model_config.model_id = source_project_config.model_id
+      CROSS JOIN source_project_summary_prompt_count
+      WHERE source_project_summary_prompt_count.prompt_count > 0
+    ),
+    summary_column_counts AS (
+      SELECT
+        CAST(
+          CASE
+            WHEN (SELECT COUNT(*) FROM source_project_column_config) > 0
+              THEN (SELECT COUNT(*) FROM source_project_column_config)
+            ELSE (SELECT COUNT(*) FROM model_config)
+          END * (SELECT COUNT(*) FROM content_variant) AS INTEGER
+        ) AS llm_column_count,
         (SELECT COUNT(*) FROM content_variant) AS content_variant_count
     )
   `
@@ -272,6 +392,16 @@ const getDisplayAnswerCtesSql = (sourceCteName: string) => {
       FROM answer_value
       WHERE ARRAY_LENGTH(answer_value.answer_values) > 0
     )
+  `
+}
+
+const getNormalizedSummaryAnswerSql = (expression: string) => {
+  return `
+    CASE
+      WHEN LOWER(TRIM(${expression})) IN ('yes', 'no', 'maybe') THEN LOWER(TRIM(${expression}))
+      WHEN NULLIF(TRIM(${expression}), '') IS NOT NULL THEN 'maybe'
+      ELSE NULL
+    END
   `
 }
 
@@ -471,6 +601,284 @@ const getPromptModeComparisonProjectHumanCellServingInsertSql = ({
   `
 }
 
+const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
+  comparisonProjectId,
+  generation,
+}: ComparisonProjectServingCellBuilderParams) => {
+  const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
+  const generationLiteral = getComparisonProjectServingGenerationSql(generation)
+
+  return `
+    INSERT INTO ${comparisonCellServingTable} (
+      comparison_project_id,
+      generation,
+      article_id,
+      column_id,
+      column_order,
+      kind,
+      prompt_id,
+      model_id,
+      source_project_id,
+      content_key,
+      display_answer,
+      normalized_answers,
+      source_created_at,
+      source_updated_at
+    )
+    WITH comparison_project AS (
+      SELECT *
+      FROM app.comparison_project cp
+      WHERE cp.id = ${comparisonProjectLiteral}
+        ${getSummaryModeComparisonProjectPredicateSql()}
+    ),
+    ${getSummaryModeComparisonProjectConfigCtesSql()},
+    llm_source AS (
+      SELECT
+        j.article_id,
+        j.prompt_id,
+        j.model_id,
+        j.answered_original,
+        j.answered_original_as_array,
+        j.created_at AS source_created_at,
+        j.updated_at AS source_updated_at,
+        content_variant.content_order,
+        content_variant.content_key
+      FROM app.judgment j
+      INNER JOIN scoped_article scoped_article ON scoped_article.article_id = j.article_id
+      INNER JOIN summary_prompt_id_config prompt_config ON prompt_config.prompt_id = j.prompt_id
+      INNER JOIN model_config model_config ON model_config.model_id = j.model_id
+      INNER JOIN content_variant content_variant
+        ON content_variant.use_title = j.use_title
+       AND content_variant.use_abstract = j.use_abstract
+       AND content_variant.use_fulltext = j.use_fulltext
+       AND content_variant.use_fulltext_no_images = j.use_fulltext_no_images
+      WHERE j.deleted_at IS NULL
+    ),
+    ${getDisplayAnswerCtesSql('llm_source')},
+    ${getNormalizedCellCteSql()},
+    summary_prompt_answer AS (
+      SELECT
+        normalized_cell.article_id,
+        normalized_cell.model_id,
+        normalized_cell.content_key,
+        normalized_cell.content_order,
+        normalized_cell.prompt_id,
+        normalized_cell.source_created_at,
+        normalized_cell.source_updated_at,
+        summary_prompt_group.summary_group_key,
+        summary_prompt_group.source_project_id,
+        summary_prompt_group.source_project_order,
+        summary_prompt_group.criteria_disposition,
+        ${getNormalizedSummaryAnswerSql('normalized_cell.display_answer')} AS normalized_summary_answer,
+        ROW_NUMBER() OVER (
+          PARTITION BY
+            normalized_cell.article_id,
+            normalized_cell.model_id,
+            normalized_cell.content_key,
+            summary_prompt_group.summary_group_key,
+            normalized_cell.prompt_id
+          ORDER BY
+            normalized_cell.source_created_at DESC NULLS LAST,
+            normalized_cell.source_updated_at DESC NULLS LAST
+        ) AS answer_rank
+      FROM normalized_cell
+      INNER JOIN summary_prompt_group
+        ON summary_prompt_group.prompt_id = normalized_cell.prompt_id
+       AND (
+         summary_prompt_group.model_id IS NULL
+         OR summary_prompt_group.model_id = normalized_cell.model_id
+       )
+    ),
+    latest_summary_prompt_answer AS (
+      SELECT *
+      FROM summary_prompt_answer
+      WHERE answer_rank = 1
+        AND normalized_summary_answer IS NOT NULL
+    ),
+    summary_candidate AS (
+      SELECT
+        article_id,
+        model_id,
+        content_key,
+        content_order,
+        summary_group_key,
+        source_project_id,
+        source_project_order
+      FROM latest_summary_prompt_answer
+      GROUP BY
+        article_id,
+        model_id,
+        content_key,
+        content_order,
+        summary_group_key,
+        source_project_id,
+        source_project_order
+    ),
+    summary_rollup AS (
+      SELECT
+        summary_candidate.article_id,
+        summary_candidate.model_id,
+        summary_candidate.content_key,
+        summary_candidate.content_order,
+        summary_candidate.summary_group_key,
+        summary_candidate.source_project_id,
+        summary_candidate.source_project_order,
+        MAX(latest_summary_prompt_answer.source_created_at) AS source_created_at,
+        MAX(latest_summary_prompt_answer.source_updated_at) AS source_updated_at,
+        SUM(CASE WHEN summary_prompt_group.criteria_disposition IS NULL THEN 1 ELSE 0 END) AS missing_disposition_count,
+        SUM(CASE WHEN latest_summary_prompt_answer.prompt_id IS NULL THEN 1 ELSE 0 END) AS missing_answer_count,
+        SUM(
+          CASE
+            WHEN summary_prompt_group.criteria_disposition = 'exclude'
+              AND latest_summary_prompt_answer.normalized_summary_answer = 'yes'
+              THEN 1
+            WHEN summary_prompt_group.criteria_disposition = 'include'
+              AND latest_summary_prompt_answer.normalized_summary_answer = 'no'
+              THEN 1
+            WHEN summary_prompt_group.criteria_disposition = 'combined'
+              AND latest_summary_prompt_answer.normalized_summary_answer = 'no'
+              THEN 1
+            ELSE 0
+          END
+        ) AS hard_no_count,
+        SUM(
+          CASE
+            WHEN latest_summary_prompt_answer.normalized_summary_answer = 'maybe' THEN 1
+            ELSE 0
+          END
+        ) AS maybe_count
+      FROM summary_candidate
+      INNER JOIN summary_prompt_group
+        ON summary_prompt_group.summary_group_key = summary_candidate.summary_group_key
+      LEFT JOIN latest_summary_prompt_answer
+        ON latest_summary_prompt_answer.article_id = summary_candidate.article_id
+       AND latest_summary_prompt_answer.model_id = summary_candidate.model_id
+       AND latest_summary_prompt_answer.content_key = summary_candidate.content_key
+       AND latest_summary_prompt_answer.summary_group_key = summary_candidate.summary_group_key
+       AND latest_summary_prompt_answer.prompt_id = summary_prompt_group.prompt_id
+      GROUP BY
+        summary_candidate.article_id,
+        summary_candidate.model_id,
+        summary_candidate.content_key,
+        summary_candidate.content_order,
+        summary_candidate.summary_group_key,
+        summary_candidate.source_project_id,
+        summary_candidate.source_project_order
+    ),
+    summary_cell AS (
+      SELECT
+        summary_rollup.*,
+        CASE
+          WHEN summary_rollup.hard_no_count > 0 THEN 'no'
+          WHEN summary_rollup.maybe_count > 0 THEN 'maybe'
+          ELSE 'yes'
+        END AS display_answer
+      FROM summary_rollup
+      WHERE summary_rollup.missing_disposition_count = 0
+        AND summary_rollup.missing_answer_count = 0
+    )
+    SELECT
+      ${comparisonProjectLiteral} AS comparison_project_id,
+      ${generationLiteral} AS generation,
+      summary_cell.article_id,
+      CASE
+        WHEN summary_cell.source_project_id IS NOT NULL
+          THEN 'llm:' || summary_cell.source_project_id || ':' || summary_cell.model_id || ':' || summary_cell.content_key || ':${summaryPromptId}'
+        ELSE 'llm:' || summary_cell.model_id || ':' || summary_cell.content_key || ':${summaryPromptId}'
+      END AS column_id,
+      CAST(
+        CASE
+          WHEN summary_cell.source_project_id IS NOT NULL
+            THEN summary_cell.source_project_order * summary_column_counts.content_variant_count
+              + summary_cell.content_order
+          ELSE model_config.model_order * summary_column_counts.content_variant_count
+            + summary_cell.content_order
+        END AS INTEGER
+      ) AS column_order,
+      'llm' AS kind,
+      '${summaryPromptId}' AS prompt_id,
+      summary_cell.model_id,
+      summary_cell.source_project_id,
+      summary_cell.content_key,
+      summary_cell.display_answer,
+      [summary_cell.display_answer] AS normalized_answers,
+      summary_cell.source_created_at,
+      summary_cell.source_updated_at
+    FROM summary_cell
+    INNER JOIN model_config ON model_config.model_id = summary_cell.model_id
+    CROSS JOIN summary_column_counts
+  `
+}
+
+const getSummaryModeComparisonProjectHumanCellServingInsertSql = ({
+  comparisonProjectId,
+  generation,
+}: ComparisonProjectServingCellBuilderParams) => {
+  const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
+  const generationLiteral = getComparisonProjectServingGenerationSql(generation)
+
+  return `
+    INSERT INTO ${comparisonCellServingTable} (
+      comparison_project_id,
+      generation,
+      article_id,
+      column_id,
+      column_order,
+      kind,
+      prompt_id,
+      model_id,
+      source_project_id,
+      content_key,
+      display_answer,
+      normalized_answers,
+      source_created_at,
+      source_updated_at
+    )
+    WITH comparison_project AS (
+      SELECT *
+      FROM app.comparison_project cp
+      WHERE cp.id = ${comparisonProjectLiteral}
+        ${getSummaryModeComparisonProjectPredicateSql()}
+        AND cp.summary_source_project_id IS NOT NULL
+    ),
+    ${getSummaryModeComparisonProjectConfigCtesSql()},
+    human_source AS (
+      SELECT
+        h.article_id,
+        ${getNormalizedSummaryAnswerSql('h.answer')} AS display_answer,
+        h.created_at AS source_created_at,
+        h.updated_at AS source_updated_at
+      FROM app.judgment_human_summary h
+      INNER JOIN comparison_project cp ON cp.summary_source_project_id = h.project_id
+      INNER JOIN scoped_article scoped_article ON scoped_article.article_id = h.article_id
+      WHERE NULLIF(TRIM(COALESCE(h.answer, '')), '') IS NOT NULL
+    ),
+    display_cell AS (
+      SELECT *
+      FROM human_source
+      WHERE display_answer IS NOT NULL
+    ),
+    ${getNormalizedCellCteSql()}
+    SELECT
+      ${comparisonProjectLiteral} AS comparison_project_id,
+      ${generationLiteral} AS generation,
+      normalized_cell.article_id,
+      'human:${summaryPromptId}' AS column_id,
+      summary_column_counts.llm_column_count AS column_order,
+      'human' AS kind,
+      '${summaryPromptId}' AS prompt_id,
+      NULL AS model_id,
+      NULL AS source_project_id,
+      NULL AS content_key,
+      normalized_cell.display_answer,
+      normalized_cell.normalized_answers,
+      normalized_cell.source_created_at,
+      normalized_cell.source_updated_at
+    FROM normalized_cell
+    CROSS JOIN summary_column_counts
+  `
+}
+
 const insertPromptModeComparisonProjectLlmCells = (
   params: ComparisonProjectServingCellBuilderParams,
   dependencies: ComparisonProjectServingCellBuilderDependencies = getDefaultComparisonProjectServingCellBuilderDependencies(),
@@ -493,18 +901,50 @@ const insertPromptModeComparisonProjectCells = async (
   await insertPromptModeComparisonProjectHumanCells(params, runner)
 }
 
+const insertSummaryModeComparisonProjectLlmCells = (
+  params: ComparisonProjectServingCellBuilderParams,
+  dependencies: ComparisonProjectServingCellBuilderDependencies = getDefaultComparisonProjectServingCellBuilderDependencies(),
+) => {
+  return dependencies.run(getSummaryModeComparisonProjectLlmCellServingInsertSql(params))
+}
+
+const insertSummaryModeComparisonProjectHumanCells = (
+  params: ComparisonProjectServingCellBuilderParams,
+  dependencies: ComparisonProjectServingCellBuilderDependencies = getDefaultComparisonProjectServingCellBuilderDependencies(),
+) => {
+  return dependencies.run(getSummaryModeComparisonProjectHumanCellServingInsertSql(params))
+}
+
+const insertSummaryModeComparisonProjectCells = async (
+  params: ComparisonProjectServingCellBuilderParams,
+  runner: ComparisonProjectServingCellBuilderRunner = getDefaultComparisonProjectServingCellBuilderDependencies(),
+) => {
+  await insertSummaryModeComparisonProjectLlmCells(params, runner)
+  await insertSummaryModeComparisonProjectHumanCells(params, runner)
+}
+
 const comparisonProjectServingCellBuilder = {
   getPromptModeComparisonProjectHumanCellServingInsertSql,
   getPromptModeComparisonProjectLlmCellServingInsertSql,
+  getSummaryModeComparisonProjectHumanCellServingInsertSql,
+  getSummaryModeComparisonProjectLlmCellServingInsertSql,
   insertPromptModeComparisonProjectCells,
   insertPromptModeComparisonProjectHumanCells,
   insertPromptModeComparisonProjectLlmCells,
+  insertSummaryModeComparisonProjectCells,
+  insertSummaryModeComparisonProjectHumanCells,
+  insertSummaryModeComparisonProjectLlmCells,
 }
 
 export const getComparisonProjectServingCellBuilder = () => {
   return comparisonProjectServingCellBuilder
 }
 
-export {getPromptModeComparisonProjectHumanCellServingInsertSql, getPromptModeComparisonProjectLlmCellServingInsertSql}
+export {
+  getPromptModeComparisonProjectHumanCellServingInsertSql,
+  getPromptModeComparisonProjectLlmCellServingInsertSql,
+  getSummaryModeComparisonProjectHumanCellServingInsertSql,
+  getSummaryModeComparisonProjectLlmCellServingInsertSql,
+}
 
 export type {ComparisonProjectServingCellBuilderParams}

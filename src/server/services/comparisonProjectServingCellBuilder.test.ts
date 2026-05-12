@@ -24,10 +24,14 @@ type ActualServingCellRow = {
 }
 
 type PromptModeServingCellsResult = {actualRows: ActualServingCellRow[]}
+type SummaryModeServingCellsResult = {actualRows: Array<ActualServingCellRow & {comparisonProjectId: string}>}
 
 const comparisonProjectId = 'comparison-project-prompt-cells'
+const summaryModeComparisonProjectId = 'comparison-project-summary-cells'
+const missingMetadataComparisonProjectId = 'comparison-project-summary-missing-metadata'
 const contentSettings = {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
 const contentKey = getComparisonProjectContentKey(contentSettings)
+const summaryPromptId = 'summary'
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
@@ -382,4 +386,322 @@ test('prompt-mode serving cells match current TypeScript row assembly', () => {
   expect(rowsByArticleAndColumn.get(`article-with-cells:${llmYesColumnId}`)?.columnOrder).toBe(0)
   expect(rowsByArticleAndColumn.get(`article-with-cells:${llmArrayColumnId}`)?.columnOrder).toBe(2)
   expect(rowsByArticleAndColumn.get(`article-with-cells:${humanPromptAColumnId}`)?.columnOrder).toBe(4)
+})
+
+const getSummaryModeServingCellsScript = () => {
+  return `
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {getComparisonProjectServingCellBuilder} = await import('./src/server/services/comparisonProjectServingCellBuilder.ts')
+
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+    const builder = getComparisonProjectServingCellBuilder()
+
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('provider-summary-cells', 'sglang', 'Provider Summary Cells', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.model (
+        id,
+        provider_connection_id,
+        name,
+        remote_model_id,
+        display_name,
+        variant,
+        source,
+        enabled,
+        metadata_json
+      ) VALUES
+        ('model-a', 'provider-summary-cells', 'Model A', 'model-a', 'Model A', 'manual', 'manual', TRUE, '{}'::JSON),
+        ('model-b', 'provider-summary-cells', 'Model B', 'model-b', 'Model B', 'manual', 'manual', TRUE, '{}'::JSON)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.project (
+        id,
+        name,
+        description,
+        model_id,
+        human_judgment_mode,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      ) VALUES
+        ('source-project-a', 'Source Project A', NULL, 'model-a', 'summary', TRUE, TRUE, FALSE, FALSE),
+        ('source-project-b', 'Source Project B', NULL, 'model-b', 'summary', TRUE, TRUE, FALSE, FALSE)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash, created_at)
+      VALUES
+        ('prompt-a-include', 'Prompt A Include', 'Prompt A Include', NULL, 'prompt-a-include-hash', TIMESTAMPTZ '2026-04-01T00:00:00.000Z'),
+        ('prompt-a-exclude', 'Prompt A Exclude', 'Prompt A Exclude', NULL, 'prompt-a-exclude-hash', TIMESTAMPTZ '2026-04-02T00:00:00.000Z'),
+        ('prompt-b-include', 'Prompt B Include', 'Prompt B Include', NULL, 'prompt-b-include-hash', TIMESTAMPTZ '2026-04-03T00:00:00.000Z'),
+        ('prompt-b-exclude', 'Prompt B Exclude', 'Prompt B Exclude', NULL, 'prompt-b-exclude-hash', TIMESTAMPTZ '2026-04-04T00:00:00.000Z'),
+        ('prompt-missing-metadata', 'Prompt Missing Metadata', 'Prompt Missing Metadata', NULL, 'prompt-missing-metadata-hash', TIMESTAMPTZ '2026-04-05T00:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.project_prompt (
+        id,
+        project_id,
+        prompt_id,
+        prompt_order,
+        enabled,
+        criteria_disposition,
+        criteria_section_key,
+        criteria_section_label
+      ) VALUES
+        ('source-a-include', 'source-project-a', 'prompt-a-include', 0, TRUE, 'include', 'population', 'Population'),
+        ('source-a-exclude', 'source-project-a', 'prompt-a-exclude', 1, TRUE, 'exclude', 'exclusion', 'Exclusion'),
+        ('source-b-include', 'source-project-b', 'prompt-b-include', 0, TRUE, 'include', 'population', 'Population'),
+        ('source-b-exclude', 'source-project-b', 'prompt-b-exclude', 1, TRUE, 'exclude', 'exclusion', 'Exclusion')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.article (
+        id,
+        article_id,
+        article_title,
+        article_summary,
+        article_created_at,
+        article_updated_at
+      ) VALUES
+        ('article-summary-yes', 'external-summary-yes', 'Article Summary Yes', 'Summary Yes', TIMESTAMPTZ '2026-04-10T00:00:00.000Z', TIMESTAMPTZ '2026-04-10T01:00:00.000Z'),
+        ('article-summary-no-include', 'external-summary-no-include', 'Article Summary No Include', 'Summary No Include', TIMESTAMPTZ '2026-04-11T00:00:00.000Z', TIMESTAMPTZ '2026-04-11T01:00:00.000Z'),
+        ('article-summary-no-exclude', 'external-summary-no-exclude', 'Article Summary No Exclude', 'Summary No Exclude', TIMESTAMPTZ '2026-04-12T00:00:00.000Z', TIMESTAMPTZ '2026-04-12T01:00:00.000Z'),
+        ('article-summary-maybe', 'external-summary-maybe', 'Article Summary Maybe', 'Summary Maybe', TIMESTAMPTZ '2026-04-13T00:00:00.000Z', TIMESTAMPTZ '2026-04-13T01:00:00.000Z'),
+        ('article-summary-missing', 'external-summary-missing', 'Article Summary Missing', 'Summary Missing', TIMESTAMPTZ '2026-04-14T00:00:00.000Z', TIMESTAMPTZ '2026-04-14T01:00:00.000Z'),
+        ('article-summary-metadata', 'external-summary-metadata', 'Article Summary Metadata', 'Summary Metadata', TIMESTAMPTZ '2026-04-15T00:00:00.000Z', TIMESTAMPTZ '2026-04-15T01:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.project_article (id, project_id, article_id)
+      VALUES
+        ('source-a-article-yes', 'source-project-a', 'article-summary-yes'),
+        ('source-a-article-no-include', 'source-project-a', 'article-summary-no-include'),
+        ('source-a-article-no-exclude', 'source-project-a', 'article-summary-no-exclude'),
+        ('source-a-article-maybe', 'source-project-a', 'article-summary-maybe'),
+        ('source-a-article-missing', 'source-project-a', 'article-summary-missing'),
+        ('source-b-article-yes', 'source-project-b', 'article-summary-yes')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project (
+        id,
+        name,
+        description,
+        model_ids,
+        compare_with_humans,
+        human_judgment_mode,
+        summary_source_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      ) VALUES
+        (
+          '${summaryModeComparisonProjectId}',
+          'Comparison Summary Cells',
+          NULL,
+          ['model-a', 'model-b'],
+          TRUE,
+          'summary',
+          'source-project-a',
+          TRUE,
+          TRUE,
+          FALSE,
+          FALSE
+        ),
+        (
+          '${missingMetadataComparisonProjectId}',
+          'Comparison Summary Missing Metadata',
+          NULL,
+          ['model-a'],
+          TRUE,
+          'summary',
+          'source-project-a',
+          TRUE,
+          TRUE,
+          FALSE,
+          FALSE
+        )
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project_prompt (
+        id,
+        comparison_project_id,
+        prompt_id,
+        prompt_order,
+        criteria_disposition,
+        criteria_section_key,
+        criteria_section_label
+      ) VALUES
+        ('comparison-summary-a-include', '${summaryModeComparisonProjectId}', 'prompt-a-include', 0, 'include', 'population', 'Population'),
+        ('comparison-summary-a-exclude', '${summaryModeComparisonProjectId}', 'prompt-a-exclude', 1, 'exclude', 'exclusion', 'Exclusion'),
+        ('comparison-missing-metadata', '${missingMetadataComparisonProjectId}', 'prompt-missing-metadata', 0, NULL, 'population', 'Population')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project_source_project (
+        id,
+        comparison_project_id,
+        source_project_id,
+        created_at
+      ) VALUES
+        ('comparison-source-a', '${summaryModeComparisonProjectId}', 'source-project-a', TIMESTAMPTZ '2026-04-01T00:00:00.000Z'),
+        ('comparison-source-b', '${summaryModeComparisonProjectId}', 'source-project-b', TIMESTAMPTZ '2026-04-02T00:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        created_at,
+        updated_at
+      ) VALUES
+        ('judgment-summary-a-yes-include', 'article-summary-yes', 'prompt-a-include', 'model-a', 'source-project-a', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-20T00:00:00.000Z', TIMESTAMPTZ '2026-04-20T01:00:00.000Z'),
+        ('judgment-summary-a-yes-exclude', 'article-summary-yes', 'prompt-a-exclude', 'model-a', 'source-project-a', TRUE, 'no', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-20T00:00:00.000Z', TIMESTAMPTZ '2026-04-20T01:00:00.000Z'),
+        ('judgment-summary-b-yes-include', 'article-summary-yes', 'prompt-b-include', 'model-b', 'source-project-b', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-20T00:00:00.000Z', TIMESTAMPTZ '2026-04-20T01:00:00.000Z'),
+        ('judgment-summary-b-yes-exclude', 'article-summary-yes', 'prompt-b-exclude', 'model-b', 'source-project-b', TRUE, 'no', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-20T00:00:00.000Z', TIMESTAMPTZ '2026-04-20T01:00:00.000Z'),
+        ('judgment-summary-no-include-include', 'article-summary-no-include', 'prompt-a-include', 'model-a', 'source-project-a', TRUE, 'no', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-21T00:00:00.000Z', TIMESTAMPTZ '2026-04-21T01:00:00.000Z'),
+        ('judgment-summary-no-include-exclude', 'article-summary-no-include', 'prompt-a-exclude', 'model-a', 'source-project-a', TRUE, 'no', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-21T00:00:00.000Z', TIMESTAMPTZ '2026-04-21T01:00:00.000Z'),
+        ('judgment-summary-no-exclude-include', 'article-summary-no-exclude', 'prompt-a-include', 'model-a', 'source-project-a', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-22T00:00:00.000Z', TIMESTAMPTZ '2026-04-22T01:00:00.000Z'),
+        ('judgment-summary-no-exclude-exclude', 'article-summary-no-exclude', 'prompt-a-exclude', 'model-a', 'source-project-a', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-22T00:00:00.000Z', TIMESTAMPTZ '2026-04-22T01:00:00.000Z'),
+        ('judgment-summary-maybe-include', 'article-summary-maybe', 'prompt-a-include', 'model-a', 'source-project-a', TRUE, 'unclear', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-23T00:00:00.000Z', TIMESTAMPTZ '2026-04-23T01:00:00.000Z'),
+        ('judgment-summary-maybe-exclude', 'article-summary-maybe', 'prompt-a-exclude', 'model-a', 'source-project-a', TRUE, 'no', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-23T00:00:00.000Z', TIMESTAMPTZ '2026-04-23T01:00:00.000Z'),
+        ('judgment-summary-missing-include', 'article-summary-missing', 'prompt-a-include', 'model-a', 'source-project-a', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-24T00:00:00.000Z', TIMESTAMPTZ '2026-04-24T01:00:00.000Z'),
+        ('judgment-summary-metadata', 'article-summary-metadata', 'prompt-missing-metadata', 'model-a', 'source-project-a', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.judgment_human_summary (id, project_id, article_id, answer, origin, created_at, updated_at)
+      VALUES
+        ('human-summary-yes-source-a', 'source-project-a', 'article-summary-yes', 'maybe', 'manual_override', TIMESTAMPTZ '2026-04-26T00:00:00.000Z', TIMESTAMPTZ '2026-04-26T01:00:00.000Z'),
+        ('human-summary-no-source-a', 'source-project-a', 'article-summary-no-include', 'no', 'manual_override', TIMESTAMPTZ '2026-04-27T00:00:00.000Z', TIMESTAMPTZ '2026-04-27T01:00:00.000Z'),
+        ('human-summary-ignored-source-b', 'source-project-b', 'article-summary-yes', 'no', 'manual_override', TIMESTAMPTZ '2026-04-28T00:00:00.000Z', TIMESTAMPTZ '2026-04-28T01:00:00.000Z')
+    \`)
+
+    await builder.insertSummaryModeComparisonProjectCells(
+      {comparisonProjectId: '${summaryModeComparisonProjectId}', generation: 1},
+      {run: database.run},
+    )
+    await builder.insertSummaryModeComparisonProjectLlmCells(
+      {comparisonProjectId: '${missingMetadataComparisonProjectId}', generation: 1},
+      {run: database.run},
+    )
+
+    const actualRows = await database.queryJson(\`
+      SELECT
+        comparison_project_id AS comparisonProjectId,
+        article_id AS articleId,
+        column_id AS columnId,
+        CAST(column_order AS INTEGER) AS columnOrder,
+        kind,
+        prompt_id AS promptId,
+        model_id AS modelId,
+        source_project_id AS sourceProjectId,
+        content_key AS contentKey,
+        display_answer AS displayAnswer,
+        TO_JSON(normalized_answers) AS normalizedAnswersJson
+      FROM mart.comparison_cell_serving
+      WHERE generation = 1
+      ORDER BY comparison_project_id ASC, article_id ASC, column_order ASC, column_id ASC
+    \`)
+
+    const getJsonValue = (value) => {
+      return typeof value === 'string' ? JSON.parse(value) : value
+    }
+    const normalizedRows = actualRows.map((row) => {
+      return {...row, normalizedAnswers: getJsonValue(row.normalizedAnswersJson)}
+    })
+
+    console.log(JSON.stringify({actualRows: normalizedRows}))
+  `
+}
+
+test('summary-mode serving cells derive LLM summaries and normalized human summaries', () => {
+  const result = runScript<SummaryModeServingCellsResult>(getSummaryModeServingCellsScript())
+  const sourceAColumnId = getComparisonProjectColumnId(
+    'llm',
+    summaryPromptId,
+    'model-a',
+    contentKey,
+    'source-project-a',
+  )
+  const sourceBColumnId = getComparisonProjectColumnId(
+    'llm',
+    summaryPromptId,
+    'model-b',
+    contentKey,
+    'source-project-b',
+  )
+  const fallbackColumnId = getComparisonProjectColumnId('llm', summaryPromptId, 'model-a', contentKey)
+  const humanSummaryColumnId = getComparisonProjectColumnId('human', summaryPromptId)
+  const rowsByProjectArticleAndColumn = result.actualRows.reduce<Map<string, ActualServingCellRow>>((rowMap, row) => {
+    rowMap.set(`${row.comparisonProjectId}:${row.articleId}:${row.columnId}`, row)
+    return rowMap
+  }, new Map<string, ActualServingCellRow>())
+  const summaryRows = result.actualRows.filter((row) => {
+    return row.comparisonProjectId === summaryModeComparisonProjectId
+  })
+  const summaryCells = getActualCellsByArticle(summaryRows)
+
+  expect(summaryCells['article-summary-yes']?.[sourceAColumnId]).toBe('yes')
+  expect(summaryCells['article-summary-yes']?.[sourceBColumnId]).toBe('yes')
+  expect(summaryCells['article-summary-no-include']?.[sourceAColumnId]).toBe('no')
+  expect(summaryCells['article-summary-no-exclude']?.[sourceAColumnId]).toBe('no')
+  expect(summaryCells['article-summary-maybe']?.[sourceAColumnId]).toBe('maybe')
+  expect(summaryCells['article-summary-missing']?.[sourceAColumnId]).toBeUndefined()
+  expect(summaryCells['article-summary-yes']?.[humanSummaryColumnId]).toBe('maybe')
+  expect(summaryCells['article-summary-no-include']?.[humanSummaryColumnId]).toBe('no')
+  expect(
+    rowsByProjectArticleAndColumn.get(
+      `${missingMetadataComparisonProjectId}:article-summary-metadata:${fallbackColumnId}`,
+    ),
+  ).toBeUndefined()
+  expect(
+    rowsByProjectArticleAndColumn.get(`${summaryModeComparisonProjectId}:article-summary-yes:${sourceAColumnId}`)
+      ?.normalizedAnswers,
+  ).toEqual(['yes'])
+  expect(
+    rowsByProjectArticleAndColumn.get(`${summaryModeComparisonProjectId}:article-summary-maybe:${sourceAColumnId}`)
+      ?.normalizedAnswers,
+  ).toEqual(['maybe'])
+  expect(
+    rowsByProjectArticleAndColumn.get(`${summaryModeComparisonProjectId}:article-summary-yes:${humanSummaryColumnId}`)
+      ?.normalizedAnswers,
+  ).toEqual(['maybe'])
+  expect(
+    rowsByProjectArticleAndColumn.get(`${summaryModeComparisonProjectId}:article-summary-yes:${sourceAColumnId}`)
+      ?.sourceProjectId,
+  ).toBe('source-project-a')
+  expect(
+    rowsByProjectArticleAndColumn.get(`${summaryModeComparisonProjectId}:article-summary-yes:${sourceAColumnId}`)
+      ?.columnOrder,
+  ).toBe(0)
+  expect(
+    rowsByProjectArticleAndColumn.get(`${summaryModeComparisonProjectId}:article-summary-yes:${sourceBColumnId}`)
+      ?.columnOrder,
+  ).toBe(1)
+  expect(
+    rowsByProjectArticleAndColumn.get(`${summaryModeComparisonProjectId}:article-summary-yes:${humanSummaryColumnId}`)
+      ?.columnOrder,
+  ).toBe(2)
 })
