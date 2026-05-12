@@ -1,240 +1,339 @@
 {
-  "name": "Limit Telemetry Plan",
-  "description": "Persist provider-limit adherence telemetry for judgment jobs and show the last 3 days on the job detail page.",
-  "branchName": "ralph/limit-telemetry",
+  "name": "Better Performance For Compare Judgments",
+  "branchName": "ralph/better-performance-compare",
+  "description": "Make compare judgments filters and pagination scale by introducing generation-based comparison serving marts, cursor reads, async counts, and serving-backed export.",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Add provider telemetry sample schema",
-      "description": "As a maintainer, I want a DuckDB telemetry sample table so provider-limit history can be stored independently of admin page views.",
+      "title": "Fix compare filter initialization",
+      "description": "As a compare judgments user, I want URL filters to be preserved on first load so the page does not accidentally fetch a slower or incorrect filter.",
       "acceptanceCriteria": [
-        "Add `src/db/duckdbMigrations/0071_judgmentJobProviderTelemetrySample.sql` for `app.judgment_job_provider_telemetry_sample`.",
-        "The table stores `id`, `created_at`, `job_id`, `project_id`, `provider_key`, `sampled_at`, provider capacity and lease counts, provider versions, bottleneck fields, worker coverage fields, `aggregate_completeness`, and optional compact `snapshot_json`.",
-        "The schema has primary key `id`, unique key `(job_id, provider_key, sampled_at)`, retention index `(sampled_at)`, and checks for non-empty IDs/provider keys, non-negative counts, and valid `aggregate_completeness` values.",
-        "The schema does not add a duplicate `(job_id, provider_key, sampled_at)` query index beyond the unique key.",
-        "`bun run db:mig` passes",
-        "`bun run lint` passes",
-        "`bun run build` passes",
-        "`bun run desktop:build` passes"
+        "The compare judgments page does not reset `differenceFilter` until metadata columns are loaded.",
+        "The judgments query does not run until metadata confirms the selected difference filter is valid.",
+        "A route or helper test covers initial load with `differenceFilter=human-vs-llm` and preserves that filter.",
+        "`bun test src/app/routes/+compare-judgments/+$id/+index/compareProjectJudgmentsUrlState.test.ts` passes",
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
       ],
       "priority": 1,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [],
-      "completionNotes": "Completed by agent"
+      "dependsOn": []
     },
     {
       "id": "US-002",
-      "title": "Add telemetry bucket and adherence helpers",
-      "description": "As a maintainer, I want shared pure helpers for telemetry ranges, utilization, adherence, and bottleneck summaries so service, route, and UI behavior stay deterministic.",
+      "title": "Add comparison serving schema",
+      "description": "As a maintainer, I want DuckDB serving tables for comparison projects so filtered comparison rows can be materialized and read efficiently.",
       "acceptanceCriteria": [
-        "Add helpers for range presets `5m`, `15m`, `1h`, `24h`, and `3d` with the bucket sizes and complete-window semantics from the PRD.",
-        "Range helpers return inclusive `rangeStart`, exclusive `rangeEnd`, and `rangeEnd` floored to the preset bucket size.",
-        "Utilization helpers use `provider_request_fill_pct` when available and recompute from live leases and normal request capacity when needed.",
-        "Utilization is `null` when normal request capacity is zero, `100` means full normal request capacity, and over-limit samples may exceed `100`.",
-        "Adherence helpers derive `overLimit`, `atLimit`, `withinLimit`, and `unknown` with worst-state bucket precedence.",
-        "Bottleneck helpers choose the dominant bottleneck by highest sample count, break ties by latest sample, and take source/subreason from the selected latest sample.",
-        "Empty buckets are generated for the full aligned range.",
-        "`bun test src/server/services/judgmentProviderTelemetryHistoryService.test.ts` passes",
+        "Add DuckDB migrations for `app.comparison_project_serving_generation`, `mart.comparison_article_serving`, `mart.comparison_cell_serving`, `mart.comparison_filter_member`, and `mart.comparison_filter_stats`.",
+        "The article serving table stores article metadata, row sort fields, answered counts, row-filter flags, difference-filter flags, and conflict flags.",
+        "The cell serving table stores comparison project id, generation, article id, column id, column order, kind, prompt id, model id, source project id, content key, display answer, normalized answers, and source timestamps.",
+        "The filter member table stores comparison project id, generation, row filter, difference filter, article id, ordinal, article created at, and article title.",
+        "The stats table stores comparison project id, generation, row filter, difference filter, total count, and stats updated timestamp.",
+        "Indexes support active generation reads, filter membership reads, cell lookups, and stats lookups.",
         "`bun run db:mig` passes",
-        "`bun run lint` passes",
-        "`bun run build` passes",
-        "`bun run desktop:build` passes"
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
       ],
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-001"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": []
     },
     {
       "id": "US-003",
-      "title": "Implement telemetry history service",
-      "description": "As a maintainer, I want a server service for inserting, pruning, and querying telemetry samples so persistence and chart aggregation are centralized.",
+      "title": "Add serving generation helpers",
+      "description": "As a maintainer, I want reusable helpers for comparison serving generations so rebuilds can stage data and atomically promote a complete generation.",
       "acceptanceCriteria": [
-        "Add `src/server/services/judgmentProviderTelemetryHistoryService.ts` with functions for inserting samples, pruning samples older than 3 days, deleting samples for a job, and querying bucketed history.",
-        "Sample insertion normalizes `sampled_at` to the 30 second cadence-slot start and uses `created_at` only for insertion time.",
-        "Sample insertion uses `ON CONFLICT(job_id, provider_key, sampled_at) DO NOTHING` for cadence-slot deduplication.",
-        "Bucketed queries return `rangeStart`, `rangeEnd`, `bucketSizeSeconds`, `providerKey`, and ordered bucket rows with utilization, adherence, sample count, and bottleneck summary fields.",
-        "Bucket aggregation ignores null utilization values and returns null average/min/max when a bucket has no usable utilization samples.",
-        "Service tests cover insert dedupe, pruning, deletion by job, aligned buckets, null utilization, over-limit utilization, adherence precedence, and bottleneck tie-breaking.",
-        "`bun test src/server/services/judgmentProviderTelemetryHistoryService.test.ts` passes",
+        "Add server helpers to read the active comparison serving generation for a comparison project.",
+        "Add server helpers to create a new inactive generation for a comparison project.",
+        "Add server helpers to promote a staged generation atomically after a successful rebuild.",
+        "Add cleanup helpers that remove old generations without deleting the active generation.",
+        "Failed rebuild helper paths preserve the last active generation.",
+        "Unit tests cover missing generation, staged generation, promotion, cleanup, and failed rebuild preservation.",
         "`bun run db:mig` passes",
-        "`bun run lint` passes",
-        "`bun run build` passes",
-        "`bun run desktop:build` passes"
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
       ],
       "priority": 3,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
-        "US-001",
         "US-002"
-      ],
-      "completionNotes": "Completed by agent"
+      ]
     },
     {
       "id": "US-004",
-      "title": "Wire deletion and retention cleanup",
-      "description": "As an operator, I want provider telemetry samples deleted with their owning job and pruned after retention so telemetry does not accumulate stale data.",
+      "title": "Materialize prompt-mode comparison cells",
+      "description": "As a maintainer, I want prompt-mode comparison cells built in SQL so LLM and human prompt answers are stored once per serving generation.",
       "acceptanceCriteria": [
-        "`deleteJudgmentJobSafelyTx` deletes telemetry samples for the job before deleting the `app.judgment_job` row in the same transaction path.",
-        "`judgmentsJobsCleanupStale` prunes telemetry samples older than the 3 day retention window during maintenance cleanup.",
-        "Deletion tests prove telemetry samples are removed when a judgment job is deleted.",
-        "Cleanup tests prove samples newer than 3 days remain and samples older than 3 days are pruned.",
-        "`bun test src/server/services/judgmentJobDeleteService.test.ts` passes",
-        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts` passes",
-        "`bun test src/server/services/judgmentProviderTelemetryHistoryService.test.ts` passes",
+        "Add a set-based SQL builder for prompt-mode LLM comparison cells using configured prompts, models, content variants, and source project scope.",
+        "Add a set-based SQL builder for prompt-mode human comparison cells using the latest answered human prompt judgments.",
+        "Cell `column_id` values match the existing `getComparisonProjectColumnId` conventions.",
+        "Cell `display_answer` and `normalized_answers` preserve current answer normalization semantics.",
+        "Tests compare prompt-mode serving cells against current TypeScript row assembly for representative LLM, human, array-answer, and missing-answer cases.",
         "`bun run db:mig` passes",
-        "`bun run lint` passes",
-        "`bun run build` passes",
-        "`bun run desktop:build` passes"
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
       ],
       "priority": 4,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
+        "US-002",
         "US-003"
-      ],
-      "completionNotes": "Completed by agent"
+      ]
     },
     {
       "id": "US-005",
-      "title": "Add server-side telemetry sampler",
-      "description": "As an operator, I want the server to sample running active jobs every 30 seconds so telemetry history is not biased by admin page polling.",
+      "title": "Materialize summary-mode comparison cells",
+      "description": "As a maintainer, I want summary-mode comparison cells built in SQL so derived LLM summary answers and human summary answers are materialized consistently.",
       "acceptanceCriteria": [
-        "Extract shared live-route and sampler input building from `/api/judgmentsjobs/:id`, including endpoint diagnostics enrichment, so live snapshots and persisted samples use the same provider telemetry assembly.",
-        "Add a dedicated maintenance cron sampler with pattern `*/30 * * * * *` and an in-process overlap guard.",
-        "The sampler no-ops when the current server role should not run maintenance loops or cannot access the judgment read model.",
-        "The sampler uses `judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})` so endpoint/runtime-unavailable states are still sampled.",
-        "The sampler stores one sample per active `(job_id, provider_key, sampled_at)` cadence slot and relies on service-level conflict handling for cross-process overlap.",
-        "Cron tests cover role gating, overlap guard behavior, running-job discovery, and sampler invocation.",
-        "`bun test src/server/cron/judgmentsJobs.test.ts` passes",
-        "`bun test src/server/services/judgmentProviderTelemetryHistoryService.test.ts` passes",
+        "Add a set-based SQL builder for summary-mode LLM cells using source project summary prompt groups.",
+        "Summary-mode LLM derivation matches current `deriveStrictSummaryAnswer` behavior for include and exclude criteria.",
+        "Add a set-based SQL builder for summary-mode human cells using normalized human summary answers.",
+        "Summary-mode cell `column_id` values match the existing summary column conventions.",
+        "Tests cover yes, no, maybe, missing criteria metadata, missing prompt answers, source project grouping, and human summary normalization.",
         "`bun run db:mig` passes",
-        "`bun run lint` passes",
-        "`bun run build` passes",
-        "`bun run desktop:build` passes"
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
       ],
       "priority": 5,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
-        "US-003"
-      ],
-      "completionNotes": "Completed by agent"
+        "US-004"
+      ]
     },
     {
       "id": "US-006",
-      "title": "Add telemetry history API endpoint",
-      "description": "As a client developer, I want a flat Eden API endpoint for provider telemetry history so the job detail page can request stable chart buckets.",
+      "title": "Build comparison rollups and filters",
+      "description": "As a maintainer, I want article rollups, filter memberships, and filter stats generated from materialized cells so every compare filter is fast.",
       "acceptanceCriteria": [
-        "Add `GET /api/judgmentsjobs-provider-telemetry-history` with query input `jobId`, optional `providerKey`, and `range` in `5m | 15m | 1h | 24h | 3d`.",
-        "When `providerKey` is omitted, the route defaults to the current job provider key instead of aggregating unrelated provider keys.",
-        "The route returns `rangeStart`, `rangeEnd`, `bucketSizeSeconds`, `providerKey`, and ordered bucket rows with `bucketStart`, `bucketEnd`, `sampleCount`, `avgUtilization`, `minUtilization`, `maxUtilization`, `adherenceState`, and bottleneck summary fields.",
-        "The route returns empty buckets for the requested aligned range when no samples exist.",
-        "Route tests cover valid ranges, invalid ranges, provider-key defaulting, empty history, utilization null handling, and bottleneck summary behavior.",
-        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts` passes",
-        "`bun test src/server/services/judgmentProviderTelemetryHistoryService.test.ts` passes",
+        "Build `mart.comparison_article_serving` rows from materialized cells and scoped article metadata.",
+        "Compute `answered_column_count`, `answered_prompt_count`, `has_all_llm_columns`, `has_all_human_columns`, and `has_multiple_answers` in SQL.",
+        "Compute `has_human_vs_llm_difference`, `has_llm_vs_llm_difference`, `has_any_disagreement`, and `has_conflict` in SQL with existing filter semantics.",
+        "Build `mart.comparison_filter_member` rows for all supported row-filter and difference-filter combinations.",
+        "Build `mart.comparison_filter_stats` from filter membership counts.",
+        "Filter member ordinals are stable for `article_created_at DESC`, `article_title ASC`, and `article_id ASC` ordering.",
+        "Serving builder tests cover prompt mode, summary mode, all row filters, all difference filters, and page/export parity fixtures.",
         "`bun run db:mig` passes",
-        "`bun run lint` passes",
-        "`bun run build` passes",
-        "`bun run desktop:build` passes"
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
       ],
       "priority": 6,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
-        "US-003",
+        "US-004",
         "US-005"
-      ],
-      "completionNotes": "Completed by agent"
+      ]
     },
     {
       "id": "US-007",
-      "title": "Add client telemetry history service and labels",
-      "description": "As a UI developer, I want typed client fetch helpers and shared labels so the chart can consume the telemetry history API through existing app patterns.",
+      "title": "Execute comparison serving rebuilds",
+      "description": "As a maintainer, I want a rebuild service that stages, builds, promotes, and cleans comparison serving generations so reads remain stable during rebuilds.",
       "acceptanceCriteria": [
-        "Add `fetchJudgmentJobProviderTelemetryHistory` and response types in `src/services/judgmentsJobsService.ts` using Eden, not `fetch`.",
-        "Add or update shared helpers for range labels, adherence-state labels, utilization formatting, and bottleneck summary display used by the job detail UI.",
-        "Client query inputs include `jobId`, `range`, and optional `providerKey` without inventing parallel route contracts.",
-        "`jobsPageShared.test.ts` covers adherence labels, range labels, utilization formatting, and bottleneck summary labels.",
-        "`bun test src/app/routes/+admin/+jobs/jobsPageShared.test.ts` passes",
-        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts` passes",
+        "Add a comparison serving rebuild service that creates a staged generation, builds cells, builds rollups, builds filter members, builds stats, promotes the generation, and cleans old generations.",
+        "The rebuild service runs all multi-table changes in safe transactions where practical.",
+        "Failed rebuilds record an error state and do not replace the active generation.",
+        "A successful rebuild updates serving status fields for metadata reads.",
+        "Tests cover successful rebuild, failed rebuild, stale active generation preservation, and old generation cleanup.",
         "`bun run db:mig` passes",
-        "`bun run lint` passes",
-        "`bun run build` passes",
-        "`bun run desktop:build` passes"
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
       ],
       "priority": 7,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
         "US-006"
-      ],
-      "completionNotes": "Completed by agent"
+      ]
     },
     {
       "id": "US-008",
-      "title": "Render job detail telemetry history chart",
-      "description": "As an admin user, I want a utilization history chart on the job detail page so I can inspect provider-limit adherence over recent time ranges.",
+      "title": "Expose serving status and create-edit rebuilds",
+      "description": "As a compare judgments user, I want comparison metadata to show whether fast serving data is ready so the page can avoid silent slow scans.",
       "acceptanceCriteria": [
-        "Render the telemetry history chart near `JobTelemetryPanel` while preserving the existing live Provider Capacity Telemetry snapshot.",
-        "Use `useQuery` from `@tanstack/solid-query` with local loading, error, and empty-history UI inside the chart panel.",
-        "Do not suspend the route, do not add a full-page spinner, and do not add a new chart dependency.",
-        "Add range preset controls for `5m`, `15m`, `1h`, `24h`, and `3d`.",
-        "The chart displays average, minimum, and maximum utilization per bucket and exposes the bucket adherence state and bottleneck summary in readable text or tooltips.",
-        "The panel is mobile-safe and does not introduce horizontal page overflow.",
-        "`bun test src/app/routes/+admin/+jobs/jobsPageShared.test.ts` passes",
-        "`bun run test:playwright -- tests/e2e/adminJudgmentJobTelemetry.spec.ts` passes",
-        "Browser verification for chart range switching, empty history, and mobile overflow on the admin job detail page passes",
+        "Comparison project metadata includes `servingStatus`, `activeGeneration`, `isServingReady`, and `servingUpdatedAt`.",
+        "Comparison project create requests queue or run an initial comparison serving rebuild.",
+        "Comparison project edit requests mark serving stale and queue or run a rebuild.",
+        "The metadata endpoint returns a clear materializing or stale state when no active serving generation exists.",
+        "Route tests cover metadata status fields for ready, missing, stale, refreshing, and failed serving states.",
         "`bun run db:mig` passes",
-        "`bun run lint` passes",
-        "`bun run build` passes",
-        "`bun run desktop:build` passes"
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
       ],
       "priority": 8,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
         "US-007"
-      ],
-      "completionNotes": "Completed by agent"
+      ]
     },
     {
       "id": "US-009",
-      "title": "Add end-to-end telemetry chart coverage",
-      "description": "As a maintainer, I want browser coverage for the telemetry history chart so chart rendering, range switching, empty history, and responsive layout remain protected.",
+      "title": "Invalidate serving on source changes",
+      "description": "As a maintainer, I want comparison serving data marked stale when dependent LLM or human judgments change so fast reads do not show obsolete comparisons indefinitely.",
       "acceptanceCriteria": [
-        "Update Playwright telemetry fixtures to mock `GET /api/judgmentsjobs-provider-telemetry-history` responses.",
-        "Add Playwright coverage for rendering populated telemetry history buckets on the admin job detail page.",
-        "Add Playwright coverage for range switching and the empty-history state.",
-        "Add Playwright coverage or assertions that the telemetry history chart does not create horizontal overflow at mobile width.",
-        "Browser verification confirms chart range switching, empty history, and mobile overflow behavior in the admin job detail page.",
+        "LLM judgment changes mark affected comparison projects stale when model, prompt, content settings, and source project scope overlap.",
+        "Human prompt judgment changes mark affected prompt-mode comparison projects stale.",
+        "Human summary judgment changes mark affected summary-mode comparison projects stale.",
+        "Conflict resolution changes do not trigger a serving rebuild because conflict resolution is joined at read time.",
+        "Tests cover LLM dependency matching, prompt human dependency matching, summary human dependency matching, and conflict resolution exclusion.",
         "`bun run db:mig` passes",
-        "`bun test src/server/services/judgmentProviderTelemetryHistoryService.test.ts` passes",
-        "`bun test src/server/services/judgmentJobDeleteService.test.ts` passes",
-        "`bun test src/server/cron/judgmentsJobs.test.ts` passes",
-        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts` passes",
-        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts` passes",
-        "`bun test src/app/routes/+admin/+jobs/jobsPageShared.test.ts` passes",
-        "`bun run test:playwright -- tests/e2e/adminJudgmentJobTelemetry.spec.ts` passes",
-        "`bun run lint` passes",
-        "`bun run build` passes",
-        "`bun run desktop:build` passes"
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
       ],
       "priority": 9,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
         "US-008"
+      ]
+    },
+    {
+      "id": "US-010",
+      "title": "Read judgments with cursor serving path",
+      "description": "As a compare judgments user, I want the judgments endpoint to return a page of rows from serving data so any filter loads quickly regardless of total matching rows.",
+      "acceptanceCriteria": [
+        "`/api/comparison-projects/:id/judgments` supports `limit`, `cursor`, `rowFilter`, and `differenceFilter` request fields.",
+        "The endpoint resolves the active serving generation and reads matching article ids from `mart.comparison_filter_member` by cursor and limit.",
+        "The endpoint joins article metadata from `mart.comparison_article_serving` only for returned article ids.",
+        "The endpoint joins cells from `mart.comparison_cell_serving` only for returned article ids.",
+        "The endpoint joins conflict resolutions only for returned article ids.",
+        "The endpoint returns `nextCursor`, `totalCount: null`, `totalPages: null`, and serving status without blocking on exact counts.",
+        "Route tests cover cursor pagination, every row filter, every difference filter, missing active generation, and conflict resolution hydration.",
+        "`bun run db:mig` passes",
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
       ],
-      "completionNotes": "Completed by agent"
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-008"
+      ]
+    },
+    {
+      "id": "US-011",
+      "title": "Add comparison judgments count endpoint",
+      "description": "As a compare judgments user, I want exact counts to load separately so the table can render before totals are available.",
+      "acceptanceCriteria": [
+        "Add `/api/comparison-projects/:id/judgments/count` with `rowFilter`, `differenceFilter`, and `limit` request fields.",
+        "The count endpoint reads `total_count` from `mart.comparison_filter_stats` for the active generation.",
+        "The count endpoint returns `totalCount`, `totalPages`, and serving status.",
+        "The count endpoint does not scan comparison cells or rebuild row filters on request.",
+        "Route tests cover every row filter, every difference filter, missing stats, and missing active generation.",
+        "`bun run db:mig` passes",
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-010"
+      ]
+    },
+    {
+      "id": "US-012",
+      "title": "Convert compare UI to load-more pagination",
+      "description": "As a compare judgments user, I want rows to load with cursor pagination and counts to appear asynchronously so large filters stay responsive.",
+      "acceptanceCriteria": [
+        "The compare judgments page uses cursor/load-more pagination instead of exact page navigation for row data.",
+        "The page fetches rows first and fetches exact counts separately from the count endpoint.",
+        "The page shows a count skeleton or pending state while exact counts load.",
+        "The page preserves row filter, difference filter, and limit state in the URL.",
+        "The page shows materializing, stale, or failed serving status when metadata reports it.",
+        "Browser verification confirms `differenceFilter=human-vs-llm` is preserved, rows load before count, and load-more works.",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes",
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-010",
+        "US-011"
+      ]
+    },
+    {
+      "id": "US-013",
+      "title": "Stream compare export from serving marts",
+      "description": "As a compare judgments user, I want exports to use the same fast filter membership as the page so exporting large filtered comparisons does not recompute all rows.",
+      "acceptanceCriteria": [
+        "The compare export endpoint iterates `mart.comparison_filter_member` in ordinal batches for the selected row and difference filters.",
+        "The export joins article rows and cells per batch from comparison serving tables.",
+        "The export preserves page filter semantics for all row filters and difference filters.",
+        "The export does not call the old TypeScript full-scan row builder during normal serving-ready operation.",
+        "Export/page parity tests cover every row filter and difference filter.",
+        "`bun run db:mig` passes",
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-008"
+      ]
+    },
+    {
+      "id": "US-014",
+      "title": "Remove normal slow fallback",
+      "description": "As a maintainer, I want normal compare reads to avoid unbounded request-time scans so missing serving data is surfaced as a materializing state instead of hidden latency.",
+      "acceptanceCriteria": [
+        "Normal judgments page reads do not use the TypeScript full-scan row builder when no active generation exists.",
+        "The API returns a clear materializing or stale status when serving data is not ready.",
+        "The UI handles the not-ready status without showing an empty successful table.",
+        "Any remaining fallback is explicitly bounded to small local development cases or tests.",
+        "Regression tests verify missing serving data does not trigger unbounded article scanning.",
+        "Browser verification confirms the compare page shows a clear materializing or stale state when serving data is unavailable.",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes",
+        "`bun run db:mig` passes",
+        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-012",
+        "US-013"
+      ]
     }
-  ],
-  "metadata": {
-    "updatedAt": "2026-05-12T19:25:16.480Z"
-  }
+  ]
 }
