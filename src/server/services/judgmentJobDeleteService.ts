@@ -128,7 +128,19 @@ export const rebuildTokenUseWithoutJobTx = async ({jobId, tx}: {jobId: string; t
   await tx.run(`DROP TABLE ${tempTableName}`)
 }
 
+const deleteRequestAttemptCloseoutsForJobTx = async ({jobId, tx}: {jobId: string; tx: JudgmentJobDeleteTx}) => {
+  await tx.run(`
+    DELETE FROM app.request_attempt_closeout
+    WHERE token_use_id IN (
+      SELECT id
+      FROM app.token_use
+      WHERE judgment_job_id = ${getSqlLiteral(jobId)}
+    )
+  `)
+}
+
 export const deleteJudgmentJobSafelyTx = async ({jobId, tx}: {jobId: string; tx: JudgmentJobDeleteTx}) => {
+  await deleteRequestAttemptCloseoutsForJobTx({jobId, tx})
   await rebuildTokenUseWithoutJobTx({jobId, tx})
   await deleteJudgmentProviderTelemetryHistoryForJob({jobId, runner: tx})
   await tx.run(`
