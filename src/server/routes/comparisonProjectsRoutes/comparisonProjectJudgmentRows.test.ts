@@ -414,13 +414,16 @@ test('serving row batch iterator walks filter members by ordinal cursor', async 
 })
 
 test('serving judgment rows return empty page when active generation is missing', async () => {
+  const statements: string[] = []
   const page = await getComparisonProjectServingJudgmentRowsPage({
     comparisonProjectId: 'comparison-project-1',
     cursor: null,
     differenceFilter: 'all',
     limit: 50,
     queryRunner: {
-      queryJson: async <T>(): Promise<T[]> => {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+
         return []
       },
     },
@@ -428,4 +431,8 @@ test('serving judgment rows return empty page when active generation is missing'
   })
 
   expect(page).toEqual({nextCursor: null, rows: []})
+  expect(statements).toHaveLength(1)
+  expect(statements[0]).toContain('FROM mart.comparison_filter_member')
+  expect(statements[0]).not.toContain('FROM app.article')
+  expect(statements[0]).not.toContain('FROM app.judgment')
 })

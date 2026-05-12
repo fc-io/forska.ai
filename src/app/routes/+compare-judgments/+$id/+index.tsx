@@ -107,6 +107,11 @@ const comparisonProjectServingStatusBanners: Partial<
     className: 'border-red-200 bg-red-50 text-red-800',
     title: 'Comparison serving failed',
   },
+  missing: {
+    body: 'Rows will appear after comparison serving data has been materialized.',
+    className: 'border-blue-200 bg-blue-50 text-blue-800',
+    title: 'Comparison data is materializing',
+  },
   refreshing: {
     body: 'Rows remain readable while the comparison serving data is materializing.',
     className: 'border-blue-200 bg-blue-50 text-blue-800',
@@ -121,6 +126,37 @@ const comparisonProjectServingStatusBanners: Partial<
 
 const getComparisonProjectServingStatusBanner = (status: ComparisonProjectJudgmentsPage['servingStatus']) => {
   return comparisonProjectServingStatusBanners[status] ?? null
+}
+
+const comparisonProjectServingUnavailableStates: Partial<
+  Record<ComparisonProjectJudgmentsPage['servingStatus'], {body: string; title: string}>
+> = {
+  failed: {
+    body: 'The serving rebuild failed before a readable generation was promoted. Rows will appear after the rebuild succeeds.',
+    title: 'Comparison serving is not available',
+  },
+  missing: {
+    body: 'The comparison serving rows are being materialized. This page will show rows after the first generation is ready.',
+    title: 'Comparison data is materializing',
+  },
+  refreshing: {
+    body: 'The comparison serving rows are being materialized. This page will show rows after the first generation is ready.',
+    title: 'Comparison data is materializing',
+  },
+  stale: {
+    body: 'The current comparison configuration has no promoted serving generation. Rows will appear after serving data is rebuilt.',
+    title: 'Comparison data is stale',
+  },
+}
+
+const getComparisonProjectServingUnavailableState = (params: {
+  activeGeneration: number | null
+  isServingReady: boolean
+  status: ComparisonProjectJudgmentsPage['servingStatus']
+}) => {
+  return !params.isServingReady && params.activeGeneration === null
+    ? (comparisonProjectServingUnavailableStates[params.status] ?? comparisonProjectServingUnavailableStates.refreshing)
+    : null
 }
 
 const getHumanColumnSourceProjectId = (comparisonProject?: {
@@ -288,6 +324,17 @@ const CompareProjectJudgmentsPage = () => {
   })
   const exactTotalCount = createMemo(() => {
     return judgmentsCountQuery.isSuccess ? (judgmentsCountQuery.data?.totalCount ?? 0) : null
+  })
+  const servingUnavailableState = createMemo(() => {
+    const comparisonProject = comparisonProjectQuery.data
+
+    return comparisonProject
+      ? getComparisonProjectServingUnavailableState({
+          activeGeneration: comparisonProject.activeGeneration,
+          isServingReady: comparisonProject.isServingReady,
+          status: comparisonProject.servingStatus,
+        })
+      : null
   })
 
   const conflictResolutionOptions = createMemo(() => {
@@ -523,18 +570,27 @@ const CompareProjectJudgmentsPage = () => {
                   <div>
                     <h2 class="text-lg font-semibold">Article Judgments</h2>
                     <p class="text-sm text-gray-600">
-                      <Show when={judgmentsPageQuery.data} fallback="Loading results...">
-                        <Show
-                          when={exactTotalCount() !== null}
-                          fallback={
-                            <span class="inline-flex items-center gap-2">
-                              <span>{getPendingCountRangeLabel(serverFilteredRows().length)}</span>
-                              <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
-                            </span>
-                          }
-                        >
-                          {getLoadedRangeLabel(serverFilteredRows().length, exactTotalCount() ?? 0)}
-                        </Show>
+                      <Show
+                        when={servingUnavailableState()}
+                        fallback={
+                          <Show when={judgmentsPageQuery.data} fallback="Loading results...">
+                            <Show
+                              when={exactTotalCount() !== null}
+                              fallback={
+                                <span class="inline-flex items-center gap-2">
+                                  <span>{getPendingCountRangeLabel(serverFilteredRows().length)}</span>
+                                  <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
+                                </span>
+                              }
+                            >
+                              {getLoadedRangeLabel(serverFilteredRows().length, exactTotalCount() ?? 0)}
+                            </Show>
+                          </Show>
+                        }
+                      >
+                        {(state) => {
+                          return state().title
+                        }}
                       </Show>
                     </p>
                   </div>
@@ -629,6 +685,25 @@ const CompareProjectJudgmentsPage = () => {
                     !judgmentsPageQuery.isPending
                     && !judgmentsPageQuery.isError
                     && orderedColumns().length > 0
+                    && serverFilteredRows().length === 0
+                    && servingUnavailableState()
+                  }
+                >
+                  {(state) => {
+                    return (
+                      <div class="rounded-lg border border-blue-200 bg-blue-50 p-8 text-center text-blue-800 shadow">
+                        <p class="font-medium">{state().title}</p>
+                        <p class="mt-2 text-sm">{state().body}</p>
+                      </div>
+                    )
+                  }}
+                </Show>
+
+                <Show
+                  when={
+                    !judgmentsPageQuery.isPending
+                    && !judgmentsPageQuery.isError
+                    && orderedColumns().length > 0
                     && serverFilteredRows().length > 0
                   }
                 >
@@ -672,6 +747,7 @@ const CompareProjectJudgmentsPage = () => {
                     && !judgmentsPageQuery.isError
                     && orderedColumns().length > 0
                     && serverFilteredRows().length === 0
+                    && !servingUnavailableState()
                   }
                 >
                   <div class="rounded-lg bg-white p-8 text-center text-gray-500 shadow">

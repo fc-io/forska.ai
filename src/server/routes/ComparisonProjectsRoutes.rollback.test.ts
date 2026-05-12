@@ -1893,7 +1893,7 @@ test('comparison project metadata exposes serving readiness states', async () =>
       }),
     },
     {
-      expected: {activeGeneration: null, isServingReady: false, servingStatus: 'missing', servingUpdatedAt: null},
+      expected: {activeGeneration: null, isServingReady: false, servingStatus: 'refreshing', servingUpdatedAt: null},
       status: getMockServingStatus(),
     },
     {
@@ -2456,7 +2456,7 @@ test('comparison judgments count endpoint returns zero when active generation is
   expect(body.data).toMatchObject({
     activeGeneration: null,
     isServingReady: false,
-    servingStatus: 'missing',
+    servingStatus: 'refreshing',
     totalCount: 0,
     totalPages: 0,
   })
@@ -2506,6 +2506,7 @@ test('comparison judgments return an empty serving page when active generation i
       totalPages: number | null
     }
   }
+  const state = getMockDatabaseState()
 
   expect(response.status).toBe(200)
   expect(body.data).toEqual({
@@ -2515,11 +2516,23 @@ test('comparison judgments return an empty serving page when active generation i
     limit: 50,
     nextCursor: null,
     page: 1,
-    servingStatus: 'missing',
+    servingStatus: 'refreshing',
     servingUpdatedAt: null,
     totalCount: null,
     totalPages: null,
   })
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_filter_member')
+        || statement.includes('FROM mart.comparison_article_serving')
+        || statement.includes('FROM mart.comparison_cell_serving')
+        || statement.includes('FROM app.article a')
+        || statement.includes('FROM app.judgment j')
+        || statement.includes('FROM app.judgment_human\n')
+      )
+    }),
+  ).toBe(false)
 })
 
 test('comparison judgments hydrate conflict resolutions only for returned serving rows', async () => {

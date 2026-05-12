@@ -272,7 +272,11 @@ const getComparisonProjectServingUpdatedAt = (status: ComparisonProjectServingSt
 const getComparisonProjectServingMetadataStatus = (
   status: ComparisonProjectServingStatusRow,
 ): ComparisonProjectServingStatus => {
-  return status.servingStatus === 'ready' && status.activeGeneration === null ? 'stale' : status.servingStatus
+  return status.servingStatus === 'ready' && status.activeGeneration === null
+    ? 'stale'
+    : status.servingStatus === 'missing'
+      ? 'refreshing'
+      : status.servingStatus
 }
 
 const getComparisonProjectServingMetadata = (status: ComparisonProjectServingStatusRow) => {
@@ -2363,6 +2367,21 @@ const getComparisonProjectJudgmentsPage = async (
   differenceFilter: ComparisonProjectDifferenceFilter,
 ) => {
   if (scope.prompts.length === 0 || scope.columns.length === 0) {
+    return {
+      activeGeneration: scope.activeGeneration,
+      data: [],
+      isServingReady: scope.isServingReady,
+      limit,
+      nextCursor: null,
+      page: 1,
+      servingStatus: scope.servingStatus,
+      servingUpdatedAt: scope.servingUpdatedAt,
+      totalCount: null,
+      totalPages: null,
+    }
+  }
+
+  if (scope.activeGeneration === null) {
     return {
       activeGeneration: scope.activeGeneration,
       data: [],
