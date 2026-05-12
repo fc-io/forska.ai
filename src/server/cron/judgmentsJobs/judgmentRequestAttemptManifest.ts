@@ -125,6 +125,32 @@ export type JudgmentRequestAttemptManifestMutation = {
 }
 
 export type JudgmentRequestAttemptCloseoutProof = {providerKey: string; requestAttemptId: string}
+export type JudgmentRequestAttemptCloseoutTimestampValue = Date | number | string | null | undefined
+type JudgmentRequestAttemptDurableTerminalCloseout = {
+  closeoutKind: JudgmentRequestAttemptCloseoutKind
+  durableCloseoutRef: JudgmentRequestAttemptDurableCloseoutRef
+  providerKey: string
+  requestAttemptId: string
+}
+export type JudgmentRequestAttemptCloseoutProjectionRef = Record<string, unknown> & {id: string | null; kind: string}
+export type JudgmentRequestAttemptCloseoutProjectionInput = {
+  requestAttempts: JudgmentRequestAttemptJsonEntry[]
+  tokenUseCreatedAt: JudgmentRequestAttemptCloseoutTimestampValue
+  tokenUseFinishedAt?: JudgmentRequestAttemptCloseoutTimestampValue
+  tokenUseId: string
+  tokenUseStartedAt?: JudgmentRequestAttemptCloseoutTimestampValue
+}
+export type JudgmentRequestAttemptCloseoutProjectionRow = {
+  closedAt: string
+  closeoutKind: JudgmentRequestAttemptCloseoutKind
+  durableCloseoutId: string | null
+  durableCloseoutKind: string
+  durableCloseoutRef: JudgmentRequestAttemptCloseoutProjectionRef
+  providerKey: string
+  requestAttemptId: string
+  tokenUseCreatedAt: string
+  tokenUseId: string
+}
 
 export class JudgmentRequestAttemptManifestCasExhaustedError extends Error {
   ownerId: string
@@ -295,21 +321,38 @@ export const isDurableRequestAttemptCloseoutKind = (closeoutKind: JudgmentReques
   return durableCloseoutKinds.has(closeoutKind)
 }
 
+const getTrimmedText = (value: unknown): string | null => {
+  const trimmedValue = typeof value === 'string' ? value.trim() : null
+
+  return trimmedValue && trimmedValue.length > 0 ? trimmedValue : null
+}
+
+const getDurableTerminalRequestAttemptCloseout = (
+  entry: JudgmentRequestAttemptJsonEntry,
+): JudgmentRequestAttemptDurableTerminalCloseout | null => {
+  const lifecycleState = getRequestAttemptLifecycleState(entry)
+  const providerKey = getTrimmedText(entry.providerKey)
+  const requestAttemptId = getTrimmedText(entry.requestAttemptId)
+  const durableCloseoutRef = entry.durableCloseoutRef ?? null
+  const hasExactCloseout =
+    isDurableRequestAttemptCloseoutKind(entry.closeoutKind)
+    && isTerminalRequestAttemptLifecycleState(lifecycleState)
+    && Boolean(durableCloseoutRef)
+    && Boolean(providerKey)
+    && Boolean(requestAttemptId)
+
+  return hasExactCloseout && providerKey && requestAttemptId && durableCloseoutRef
+    ? {closeoutKind: entry.closeoutKind, durableCloseoutRef, providerKey, requestAttemptId}
+    : null
+}
+
 export const getDurableTerminalRequestAttemptCloseoutProofs = (
   requestAttempts: JudgmentRequestAttemptJsonEntry[],
 ): JudgmentRequestAttemptCloseoutProof[] => {
   return requestAttempts.flatMap((entry) => {
-    const lifecycleState = getRequestAttemptLifecycleState(entry)
-    const providerKey = typeof entry.providerKey === 'string' ? entry.providerKey.trim() : ''
-    const requestAttemptId = typeof entry.requestAttemptId === 'string' ? entry.requestAttemptId.trim() : ''
-    const hasExactCloseout =
-      isDurableRequestAttemptCloseoutKind(entry.closeoutKind)
-      && isTerminalRequestAttemptLifecycleState(lifecycleState)
-      && Boolean(entry.durableCloseoutRef)
-      && providerKey.length > 0
-      && requestAttemptId.length > 0
+    const closeout = getDurableTerminalRequestAttemptCloseout(entry)
 
-    return hasExactCloseout ? [{providerKey, requestAttemptId}] : []
+    return closeout ? [{providerKey: closeout.providerKey, requestAttemptId: closeout.requestAttemptId}] : []
   })
 }
 
@@ -369,6 +412,106 @@ const getCanonicalTimestamp = (value: unknown): string | null => {
   const scalar = getComparableScalar(value)
 
   return ms === null ? scalar : new Date(ms).toISOString()
+}
+
+const getRequestAttemptCloseoutProjectionClosedAt = ({
+  entry,
+  tokenUseCreatedAt,
+  tokenUseFinishedAt,
+  tokenUseStartedAt,
+}: {
+  entry: JudgmentRequestAttemptJsonEntry
+  tokenUseCreatedAt: JudgmentRequestAttemptCloseoutTimestampValue
+  tokenUseFinishedAt?: JudgmentRequestAttemptCloseoutTimestampValue
+  tokenUseStartedAt?: JudgmentRequestAttemptCloseoutTimestampValue
+}): string | null => {
+  return (
+    getCanonicalTimestamp(entry.finishedAt)
+    ?? getCanonicalTimestamp(entry.updatedAt)
+    ?? getCanonicalTimestamp(tokenUseFinishedAt)
+    ?? getCanonicalTimestamp(tokenUseStartedAt)
+    ?? getCanonicalTimestamp(tokenUseCreatedAt)
+  )
+}
+
+const getDurableCloseoutRefText = (
+  durableCloseoutRef: JudgmentRequestAttemptDurableCloseoutRef,
+  field: 'id' | 'kind',
+): string | null => {
+  return typeof durableCloseoutRef === 'object' && durableCloseoutRef
+    ? getTrimmedText((durableCloseoutRef as Record<string, unknown>)[field])
+    : null
+}
+
+const getNormalizedDurableCloseoutRef = ({
+  durableCloseoutId,
+  durableCloseoutKind,
+  durableCloseoutRef,
+}: {
+  durableCloseoutId: string | null
+  durableCloseoutKind: string
+  durableCloseoutRef: JudgmentRequestAttemptDurableCloseoutRef
+}): JudgmentRequestAttemptCloseoutProjectionRef => {
+  const ref =
+    typeof durableCloseoutRef === 'object' && durableCloseoutRef && !Array.isArray(durableCloseoutRef)
+      ? (durableCloseoutRef as Record<string, unknown>)
+      : {}
+
+  return {...ref, id: durableCloseoutId, kind: durableCloseoutKind}
+}
+
+export const getDurableTerminalRequestAttemptCloseoutProjectionRows = ({
+  requestAttempts,
+  tokenUseCreatedAt,
+  tokenUseFinishedAt,
+  tokenUseId,
+  tokenUseStartedAt,
+}: JudgmentRequestAttemptCloseoutProjectionInput): JudgmentRequestAttemptCloseoutProjectionRow[] => {
+  const normalizedTokenUseCreatedAt = getCanonicalTimestamp(tokenUseCreatedAt)
+  const normalizedTokenUseId = getTrimmedText(tokenUseId)
+
+  return requestAttempts.flatMap((entry) => {
+    const closeout = getDurableTerminalRequestAttemptCloseout(entry)
+    const closedAt = getRequestAttemptCloseoutProjectionClosedAt({
+      entry,
+      tokenUseCreatedAt,
+      tokenUseFinishedAt,
+      tokenUseStartedAt,
+    })
+    const durableCloseoutKind = closeout
+      ? (getDurableCloseoutRefText(closeout.durableCloseoutRef, 'kind') ?? closeout.closeoutKind)
+      : null
+    const durableCloseoutId = closeout ? getDurableCloseoutRefText(closeout.durableCloseoutRef, 'id') : null
+    const durableCloseoutRef =
+      closeout && durableCloseoutKind
+        ? getNormalizedDurableCloseoutRef({
+            durableCloseoutId,
+            durableCloseoutKind,
+            durableCloseoutRef: closeout.durableCloseoutRef,
+          })
+        : null
+
+    return closeout
+      && closedAt
+      && durableCloseoutKind
+      && durableCloseoutRef
+      && normalizedTokenUseCreatedAt
+      && normalizedTokenUseId
+      ? [
+          {
+            closedAt,
+            closeoutKind: closeout.closeoutKind,
+            durableCloseoutId,
+            durableCloseoutKind,
+            durableCloseoutRef,
+            providerKey: closeout.providerKey,
+            requestAttemptId: closeout.requestAttemptId,
+            tokenUseCreatedAt: normalizedTokenUseCreatedAt,
+            tokenUseId: normalizedTokenUseId,
+          },
+        ]
+      : []
+  })
 }
 
 const getLatestCanonicalTimestamp = (left: unknown, right: unknown): string | null => {
