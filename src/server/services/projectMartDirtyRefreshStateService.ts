@@ -121,6 +121,7 @@ type DirtyTokenCompletionBarrier = {barrierKind: DirtyTokenBarrierKind; barrierT
 type CompletedThroughDirtyTokenParams = {completedToken: number; projectId: string; tx: RefreshStateRunner}
 
 const dirtyRefreshArticleInputTableName = 'temp_project_mart_dirty_refresh_article_input'
+const dirtyRefreshArticleInputBatchSize = 1_000
 
 const getNow = (value?: Date) => {
   return value ?? new Date()
@@ -134,14 +135,30 @@ const getUniqueValues = (values: string[]) => {
   return Array.from(new Set(values))
 }
 
+const getValueChunks = <TValue>(values: TValue[], chunkSize = dirtyRefreshArticleInputBatchSize): TValue[][] => {
+  return values.length === 0
+    ? []
+    : values.length <= chunkSize
+      ? [values]
+      : [values.slice(0, chunkSize), ...getValueChunks(values.slice(chunkSize), chunkSize)]
+}
+
 const createDirtyRefreshArticleInputTable = async (runner: RefreshStateRunner, articleIds: string[]) => {
   await runner.run(`
     DROP TABLE IF EXISTS ${dirtyRefreshArticleInputTableName};
-    CREATE TEMP TABLE ${dirtyRefreshArticleInputTableName} AS
-    SELECT DISTINCT article_id
-    FROM UNNEST(${getSqlLiteral(articleIds)}) AS article_input(article_id)
-    WHERE article_id IS NOT NULL;
+    CREATE TEMP TABLE ${dirtyRefreshArticleInputTableName} (article_id VARCHAR);
   `)
+
+  await getValueChunks(articleIds).reduce<Promise<void>>((previousRun, articleIdChunk) => {
+    return previousRun.then(() => {
+      return runner.run(`
+        INSERT INTO ${dirtyRefreshArticleInputTableName} (article_id)
+        SELECT DISTINCT article_id
+        FROM UNNEST(${getSqlLiteral(articleIdChunk)}) AS article_input(article_id)
+        WHERE article_id IS NOT NULL;
+      `)
+    })
+  }, Promise.resolve())
 }
 
 const dropDirtyRefreshArticleInputTable = async (runner: RefreshStateRunner) => {

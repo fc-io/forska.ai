@@ -179,10 +179,24 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
         tx,
       })
 
-      await syncCovidenceProjectScopeFromConfig({config, importRoute, projectId: covidenceProject.id, tx})
-      await seedCovidenceHumanJudgmentsFromConfig({config, importRoute, projectId: covidenceProject?.id ?? null, tx})
+      await syncCovidenceProjectScopeFromConfig({
+        config,
+        importRoute,
+        packageRows: importResult.packageRows,
+        projectId: covidenceProject.id,
+        tx,
+      })
+      await seedCovidenceHumanJudgmentsFromConfig({
+        config,
+        importRoute,
+        packageRows: importResult.packageRows,
+        projectId: covidenceProject?.id ?? null,
+        tx,
+      })
 
-      return {...importResult, covidenceProject, covidencePrompts}
+      const {packageRows: _packageRows, ...responseImportResult} = importResult
+
+      return {...responseImportResult, covidenceProject, covidencePrompts}
     })
     .catch(async (error) => {
       deleteCovidencePackageFiles(dataSourceId)

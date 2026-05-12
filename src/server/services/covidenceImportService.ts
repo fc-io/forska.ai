@@ -181,6 +181,7 @@ type CovidenceAnalyzeResponse = {data: CovidenceAnalyzeResult; ok: true} | {erro
 type CovidenceImportResult = {
   config: CovidencePackageConfig
   importRouteIds?: string[]
+  packageRows?: CovidenceReferenceMergeResult
   stats: {importedCount: number; itemCount: number}
 }
 type CovidencePromptDefinition = {
@@ -222,6 +223,8 @@ type CovidenceProjectPromptLink = {
 
 const covidenceImportPathPrefix = 'assets/covidence_imports'
 const covidenceImportFolder = resolveRuntimeWritablePath({pathValue: covidenceImportPathPrefix})
+const covidenceProjectArticleInputTableName = 'temp_covidence_project_article_input'
+const covidenceSqlBatchSize = 500
 const covidencePromptHeadingByMode = {
   full_text: 'Covidence full-text screening',
   title_abstract: 'Covidence title/abstract screening',
@@ -1768,8 +1771,9 @@ const getCovidenceImportSourceMetadata = (params: {
 const getCovidenceImportRows = (params: {
   config: CovidencePackageConfig
   importRoute: string
+  packageRows?: CovidenceReferenceMergeResult
 }): ArticleImportStoreRow[] => {
-  const mergedResult = getCovidencePackageRowsFromConfig(params.config)
+  const mergedResult = params.packageRows ?? getCovidencePackageRowsFromConfig(params.config)
 
   return mergedResult.candidates.map((candidate) => {
     const articleId = `${params.importRoute}:${getSafeIdentityPart(candidate.articleKey)}`
@@ -1802,9 +1806,11 @@ const getCovidenceImportRows = (params: {
 const getCovidenceImportResultFromConfig = async (params: {
   config: CovidencePackageConfig
   importRoute: string
+  packageRows?: CovidenceReferenceMergeResult
   tx?: ArticleImportStoreTx
 }): Promise<CovidenceImportResult> => {
-  const rows = getCovidenceImportRows(params)
+  const packageRows = params.packageRows ?? getCovidencePackageRowsFromConfig(params.config)
+  const rows = getCovidenceImportRows({...params, packageRows})
 
   if (params.tx) {
     const importRefreshState = await syncImportedArticlesWithTx({importRoute: params.importRoute, rows, tx: params.tx})
@@ -1812,13 +1818,14 @@ const getCovidenceImportResultFromConfig = async (params: {
     return {
       config: params.config,
       importRouteIds: importRefreshState.importRouteIds,
+      packageRows,
       stats: {importedCount: rows.length, itemCount: rows.length},
     }
   }
 
   await storeImportedArticles(rows)
 
-  return {config: params.config, stats: {importedCount: rows.length, itemCount: rows.length}}
+  return {config: params.config, packageRows, stats: {importedCount: rows.length, itemCount: rows.length}}
 }
 
 const getCovidenceHumanJudgmentAnswer = (params: {
@@ -1838,34 +1845,44 @@ const getCovidenceHumanJudgmentAnswer = (params: {
         : null
 }
 
-const getCovidenceHumanJudgmentSeeds = (params: {config: CovidencePackageConfig; importRoute: string}) => {
-  return getCovidencePackageRowsFromConfig(params.config).candidates.flatMap<CovidenceHumanJudgmentSeed>(
-    (candidate) => {
-      const includeCandidate =
-        params.config.mode === 'title_abstract'
-        || candidate.stageMembership.full_text
-        || candidate.stageMembership.excluded
-        || candidate.stageMembership.included
-      const answer = getCovidenceHumanJudgmentAnswer({
-        mode: params.config.mode,
-        stageMembership: candidate.stageMembership,
-      })
+const getCovidenceHumanJudgmentSeeds = (params: {
+  config: CovidencePackageConfig
+  importRoute: string
+  packageRows?: CovidenceReferenceMergeResult
+}) => {
+  const packageRows = params.packageRows ?? getCovidencePackageRowsFromConfig(params.config)
 
-      return includeCandidate
-        ? [
-            {
-              answer,
-              articleExternalId: `${params.importRoute}:${getSafeIdentityPart(candidate.articleKey)}`,
-              isAnswered: answer !== null,
-            },
-          ]
-        : []
-    },
-  )
+  return packageRows.candidates.flatMap<CovidenceHumanJudgmentSeed>((candidate) => {
+    const includeCandidate =
+      params.config.mode === 'title_abstract'
+      || candidate.stageMembership.full_text
+      || candidate.stageMembership.excluded
+      || candidate.stageMembership.included
+    const answer = getCovidenceHumanJudgmentAnswer({
+      mode: params.config.mode,
+      stageMembership: candidate.stageMembership,
+    })
+
+    return includeCandidate
+      ? [
+          {
+            answer,
+            articleExternalId: `${params.importRoute}:${getSafeIdentityPart(candidate.articleKey)}`,
+            isAnswered: answer !== null,
+          },
+        ]
+      : []
+  })
 }
 
-const getCovidenceFullTextProjectScopeSeeds = (params: {config: CovidencePackageConfig; importRoute: string}) => {
-  return getCovidencePackageRowsFromConfig(params.config).candidates.flatMap<CovidenceProjectScopeSeed>((candidate) => {
+const getCovidenceFullTextProjectScopeSeeds = (params: {
+  config: CovidencePackageConfig
+  importRoute: string
+  packageRows?: CovidenceReferenceMergeResult
+}) => {
+  const packageRows = params.packageRows ?? getCovidencePackageRowsFromConfig(params.config)
+
+  return packageRows.candidates.flatMap<CovidenceProjectScopeSeed>((candidate) => {
     return candidate.stageMembership.full_text
       || candidate.stageMembership.excluded
       || candidate.stageMembership.included
@@ -1884,6 +1901,14 @@ const getCovidenceEnabledProjectPromptIds = async (params: {projectId: string; t
   `)
 }
 
+const getCovidenceValueChunks = <TValue>(values: TValue[], chunkSize = covidenceSqlBatchSize): TValue[][] => {
+  return values.length === 0
+    ? []
+    : values.length <= chunkSize
+      ? [values]
+      : [values.slice(0, chunkSize), ...getCovidenceValueChunks(values.slice(chunkSize), chunkSize)]
+}
+
 const getChunkedCovidenceHumanJudgmentSeeds = (
   seeds: CovidenceHumanJudgmentSeed[],
   chunkSize: number,
@@ -1894,13 +1919,101 @@ const getChunkedCovidenceHumanJudgmentSeeds = (
 }
 
 const getCovidenceInternalArticleIds = async (params: {articleExternalIds: string[]; tx?: CovidenceProjectTx}) => {
-  return params.articleExternalIds.length === 0
+  const articleExternalIds = Array.from(new Set(params.articleExternalIds))
+
+  return articleExternalIds.length === 0
     ? []
-    : await getCovidenceProjectQueryRunner(params.tx).queryJson<{articleExternalId: string; articleId: string}>(`
-        SELECT article_id AS articleExternalId, id AS articleId
-        FROM app.article
-        WHERE article_id IN (${getQuotedStringList(params.articleExternalIds).join(', ')})
+    : await getCovidenceValueChunks(articleExternalIds).reduce<
+        Promise<Array<{articleExternalId: string; articleId: string}>>
+      >(async (rowsPromise, articleExternalIdChunk) => {
+        const rows = await rowsPromise
+        const chunkRows = await getCovidenceProjectQueryRunner(params.tx).queryJson<{
+          articleExternalId: string
+          articleId: string
+        }>(`
+          SELECT article_id AS articleExternalId, id AS articleId
+          FROM app.article
+          WHERE article_id IN (${getQuotedStringList(articleExternalIdChunk).join(', ')})
+        `)
+
+        return [...rows, ...chunkRows]
+      }, Promise.resolve([]))
+}
+
+const createCovidenceProjectArticleInputTable = async (params: {
+  articleIds: string[]
+  queryRunner: CovidenceProjectTx
+}) => {
+  await params.queryRunner.run(`
+    DROP TABLE IF EXISTS ${covidenceProjectArticleInputTableName};
+    CREATE TEMP TABLE ${covidenceProjectArticleInputTableName} (article_id VARCHAR);
+  `)
+
+  await getCovidenceValueChunks(params.articleIds).reduce<Promise<void>>((previousRun, articleIdChunk) => {
+    return previousRun.then(() => {
+      return params.queryRunner.run(`
+        INSERT INTO ${covidenceProjectArticleInputTableName} (article_id)
+        VALUES ${articleIdChunk
+          .map((articleId) => {
+            return `(${getSqlLiteral(articleId)})`
+          })
+          .join(', ')}
       `)
+    })
+  }, Promise.resolve())
+}
+
+const dropCovidenceProjectArticleInputTable = async (queryRunner: CovidenceProjectTx) => {
+  await queryRunner.run(`
+    DROP TABLE IF EXISTS ${covidenceProjectArticleInputTableName}
+  `)
+}
+
+const deleteRemovedCovidenceSeededProjectArticles = async (params: {
+  articleIds: string[]
+  projectId: string
+  queryRunner: CovidenceProjectTx
+}) => {
+  if (params.articleIds.length === 0) {
+    await params.queryRunner.run(`
+      DELETE FROM app.project_article
+      WHERE project_id = ${getSqlLiteral(params.projectId)}
+        AND imported_from_project_id = ${getSqlLiteral(params.projectId)}
+    `)
+    return
+  }
+
+  await createCovidenceProjectArticleInputTable({articleIds: params.articleIds, queryRunner: params.queryRunner})
+  await params.queryRunner.run(`
+    DELETE FROM app.project_article
+    WHERE project_id = ${getSqlLiteral(params.projectId)}
+      AND imported_from_project_id = ${getSqlLiteral(params.projectId)}
+      AND article_id NOT IN (
+        SELECT article_id
+        FROM ${covidenceProjectArticleInputTableName} article_input
+      )
+  `)
+  await dropCovidenceProjectArticleInputTable(params.queryRunner)
+}
+
+const insertCovidenceSeededProjectArticles = async (params: {
+  articleIds: string[]
+  projectId: string
+  queryRunner: CovidenceProjectTx
+}) => {
+  await getCovidenceValueChunks(params.articleIds).reduce<Promise<void>>((previousRun, articleIdChunk) => {
+    return previousRun.then(() => {
+      return params.queryRunner.run(`
+        INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
+        VALUES ${articleIdChunk
+          .map((articleId) => {
+            return `(${getQuotedStringList([globalThis.crypto.randomUUID(), params.projectId, articleId, params.projectId]).join(', ')})`
+          })
+          .join(', ')}
+        ON CONFLICT(project_id, article_id) DO NOTHING
+      `)
+    })
+  }, Promise.resolve())
 }
 
 const syncCovidenceSeededProjectArticles = async (params: {
@@ -1919,24 +2032,20 @@ const syncCovidenceSeededProjectArticles = async (params: {
     return articleRow.articleId
   })
   const nextArticleIds = Array.from(new Set(params.articleIds))
+  const nextArticleIdSet = new Set(nextArticleIds)
   const scopeChanged =
     currentArticleIds.length !== nextArticleIds.length
     || currentArticleIds.some((articleId) => {
-      return !nextArticleIds.includes(articleId)
+      return !nextArticleIdSet.has(articleId)
     })
 
-  await queryRunner.run(`
-    DELETE FROM app.project_article
-    WHERE project_id = ${getSqlLiteral(params.projectId)}
-      AND imported_from_project_id = ${getSqlLiteral(params.projectId)}
-      ${
-        params.articleIds.length > 0
-          ? `AND article_id NOT IN (${getQuotedStringList(params.articleIds).join(', ')})`
-          : ''
-      }
-  `)
+  await deleteRemovedCovidenceSeededProjectArticles({
+    articleIds: nextArticleIds,
+    projectId: params.projectId,
+    queryRunner,
+  })
 
-  return params.articleIds.length === 0
+  return nextArticleIds.length === 0
     ? scopeChanged
       ? getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
           projects: [{articleIds: currentArticleIds, projectId: params.projectId}],
@@ -1944,32 +2053,24 @@ const syncCovidenceSeededProjectArticles = async (params: {
           runner: queryRunner,
         })
       : undefined
-    : await queryRunner
-        .run(
-          `
-          INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
-          VALUES ${params.articleIds
-            .map((articleId) => {
-              return `(${getQuotedStringList([globalThis.crypto.randomUUID(), params.projectId, articleId, params.projectId]).join(', ')})`
+    : await insertCovidenceSeededProjectArticles({
+        articleIds: nextArticleIds,
+        projectId: params.projectId,
+        queryRunner,
+      }).then(() => {
+        return scopeChanged
+          ? getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
+              projects: [
+                {
+                  articleIds: Array.from(new Set([...currentArticleIds, ...nextArticleIds])),
+                  projectId: params.projectId,
+                },
+              ],
+              reason: 'syncCovidenceProjectScopeFromConfig',
+              runner: queryRunner,
             })
-            .join(', ')}
-          ON CONFLICT(project_id, article_id) DO NOTHING
-        `,
-        )
-        .then(() => {
-          return scopeChanged
-            ? getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-                projects: [
-                  {
-                    articleIds: Array.from(new Set([...currentArticleIds, ...nextArticleIds])),
-                    projectId: params.projectId,
-                  },
-                ],
-                reason: 'syncCovidenceProjectScopeFromConfig',
-                runner: queryRunner,
-              })
-            : undefined
-        })
+          : undefined
+      })
 }
 
 const markCovidenceSeededHumanJudgmentsDirty = async (params: {
@@ -2237,6 +2338,7 @@ export const getOrCreateCovidenceProject = async (params: {
 export const syncCovidenceProjectScopeFromConfig = async (params: {
   config: CovidencePackageConfig
   importRoute: string
+  packageRows?: CovidenceReferenceMergeResult
   projectId?: string | null
   tx?: CovidenceProjectTx
 }) => {
@@ -2252,7 +2354,11 @@ export const syncCovidenceProjectScopeFromConfig = async (params: {
     return
   }
 
-  const scopeSeeds = getCovidenceFullTextProjectScopeSeeds({config: params.config, importRoute: params.importRoute})
+  const scopeSeeds = getCovidenceFullTextProjectScopeSeeds({
+    config: params.config,
+    importRoute: params.importRoute,
+    packageRows: params.packageRows,
+  })
   const articleRows = await getCovidenceInternalArticleIds({
     articleExternalIds: scopeSeeds.map((scopeSeed) => {
       return scopeSeed.articleExternalId
@@ -2269,6 +2375,7 @@ export const syncCovidenceProjectScopeFromConfig = async (params: {
 export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
   config: CovidencePackageConfig
   importRoute: string
+  packageRows?: CovidenceReferenceMergeResult
   projectId?: string | null
   tx?: CovidenceProjectTx
 }) => {
@@ -2291,7 +2398,11 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
     return
   }
 
-  const judgmentSeeds = getCovidenceHumanJudgmentSeeds({config: params.config, importRoute: params.importRoute})
+  const judgmentSeeds = getCovidenceHumanJudgmentSeeds({
+    config: params.config,
+    importRoute: params.importRoute,
+    packageRows: params.packageRows,
+  })
 
   if (judgmentSeeds.length === 0) {
     return
@@ -2825,11 +2936,13 @@ export const importCovidencePackageFromConfig = async (params: {
   config: CovidencePackageConfig
   datasourceId: string
   importRoute: string
+  packageRows?: CovidenceReferenceMergeResult
   tx?: ArticleImportStoreTx
 }) => {
   return await getCovidenceImportResultFromConfig({
     config: params.config,
     importRoute: params.importRoute,
+    packageRows: params.packageRows,
     tx: params.tx,
   })
 }

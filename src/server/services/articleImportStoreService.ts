@@ -36,6 +36,7 @@ type ArticleImportStoreRow = {
   fullTextConversionAttempts?: number | null
   fullTextCharCount?: number | null
 }
+type UpsertedArticleRow = {articleId: string; id: string}
 
 const articleColumnMap = {
   articleId: 'article_id',
@@ -99,6 +100,19 @@ const optionalArticleKeys = [
   'fullTextConversionAttempts',
   'fullTextCharCount',
 ] as const satisfies readonly PersistedArticleKey[]
+const articleImportBatchSize = 500
+
+const getValueChunks = <TValue>(values: TValue[], chunkSize = articleImportBatchSize): TValue[][] => {
+  return values.length === 0
+    ? []
+    : values.length <= chunkSize
+      ? [values]
+      : [values.slice(0, chunkSize), ...getValueChunks(values.slice(chunkSize), chunkSize)]
+}
+
+const getUniqueValues = (values: string[]) => {
+  return Array.from(new Set(values))
+}
 
 const getIncludedArticleKeys = (rows: ArticleImportStoreRow[]) => {
   const includedOptionalKeys = optionalArticleKeys.filter((key) => {
@@ -199,15 +213,25 @@ const ensureImportRoutes = async (tx: ArticleImportStoreTx, routes: string[]) =>
 }
 
 const getExistingArticleIds = async (tx: ArticleImportStoreTx, articleIds: string[]) => {
-  if (articleIds.length === 0) {
+  const uniqueArticleIds = getUniqueValues(articleIds)
+
+  if (uniqueArticleIds.length === 0) {
     return new Set<string>()
   }
 
-  const rows = await tx.queryJson<{articleId: string}>(`
-    SELECT article_id AS articleId
-    FROM app.article
-    WHERE article_id IN (${getQuotedStringList(articleIds).join(', ')})
-  `)
+  const rows = await getValueChunks(uniqueArticleIds).reduce<Promise<Array<{articleId: string}>>>(
+    async (rowsPromise, articleIdChunk) => {
+      const existingRows = await rowsPromise
+      const chunkRows = await tx.queryJson<{articleId: string}>(`
+        SELECT article_id AS articleId
+        FROM app.article
+        WHERE article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})
+      `)
+
+      return [...existingRows, ...chunkRows]
+    },
+    Promise.resolve([]),
+  )
 
   return new Set(
     rows.map((row) => {
@@ -227,11 +251,43 @@ const insertImportedArticlesInTx = async (params: {
 
   const columnNames = getArticleSourceColumnNames({includedKeys: params.includedKeys, includeInternalId: true})
 
-  await params.tx.run(`
-    INSERT INTO app.article (${columnNames.join(', ')})
-    VALUES ${getArticleValues({includedKeys: params.includedKeys, includeInternalId: true, rows: params.rows})}
-    ON CONFLICT(article_id) DO NOTHING
-  `)
+  await getValueChunks(params.rows).reduce<Promise<void>>((previousRun, rowChunk) => {
+    return previousRun.then(() => {
+      return params.tx.run(`
+        INSERT INTO app.article (${columnNames.join(', ')})
+        VALUES ${getArticleValues({includedKeys: params.includedKeys, includeInternalId: true, rows: rowChunk})}
+        ON CONFLICT(article_id) DO NOTHING
+      `)
+    })
+  }, Promise.resolve())
+}
+
+const getUpsertedArticles = async (tx: ArticleImportStoreTx, articleIds: string[]) => {
+  return await getValueChunks(getUniqueValues(articleIds)).reduce<Promise<UpsertedArticleRow[]>>(
+    async (rowsPromise, articleIdChunk) => {
+      const rows = await rowsPromise
+      const chunkRows = await tx.queryJson<UpsertedArticleRow>(`
+        SELECT id, article_id AS articleId
+        FROM app.article
+        WHERE article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})
+      `)
+
+      return [...rows, ...chunkRows]
+    },
+    Promise.resolve([]),
+  )
+}
+
+const insertArticleImportRouteLinks = async (tx: ArticleImportStoreTx, linkValues: string[]) => {
+  await getValueChunks(linkValues).reduce<Promise<void>>((previousRun, linkValueChunk) => {
+    return previousRun.then(() => {
+      return tx.run(`
+        INSERT INTO app.article_import_route (id, article_id, import_route_id)
+        VALUES ${linkValueChunk.join(', ')}
+        ON CONFLICT(article_id, import_route_id) DO NOTHING
+      `)
+    })
+  }, Promise.resolve())
 }
 
 const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
@@ -272,15 +328,12 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
 
   await insertImportedArticlesInTx({includedKeys, rows: rowsToInsert, tx})
 
-  const upsertedArticles = await tx.queryJson<{id: string; articleId: string}>(`
-    SELECT id, article_id AS articleId
-    FROM app.article
-    WHERE article_id IN (${getQuotedStringList(
-      normalizedRows.map((row) => {
-        return row.articleId
-      }),
-    ).join(', ')})
-  `)
+  const upsertedArticles = await getUpsertedArticles(
+    tx,
+    normalizedRows.map((row) => {
+      return row.articleId
+    }),
+  )
 
   const routeIdMap = await ensureImportRoutes(tx, routes)
   const articleIdToRoute = new Map(
@@ -301,11 +354,7 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
     })
 
   if (linkValues.length > 0) {
-    await tx.run(`
-      INSERT INTO app.article_import_route (id, article_id, import_route_id)
-      VALUES ${linkValues.join(', ')}
-      ON CONFLICT(article_id, import_route_id) DO NOTHING
-    `)
+    await insertArticleImportRouteLinks(tx, linkValues)
   }
 
   return {importRouteIds: Array.from(routeIdMap.values())}

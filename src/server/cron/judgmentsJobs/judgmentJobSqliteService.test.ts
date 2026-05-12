@@ -146,11 +146,23 @@ test('claims and requeues prompts from the per-job SQLite queue', async () => {
   const claimed = await service.claimReadyPrompts(jobId, 'server-a', 1)
 
   expect(claimed).toHaveLength(1)
+  expect(claimed[0]).not.toHaveProperty('executionSnapshotPayload')
   expect(await service.getReadyCount(jobId)).toBe(1)
   expect(await service.getClaimedCount(jobId)).toBe(1)
   expect(await service.getRunningCount(jobId)).toBe(0)
   expect(await service.getDispatchCounts(jobId)).toEqual({claimed: 1, running: 0})
   expect(await service.getInFlightCount(jobId)).toBe(1)
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+  const staleHeartbeatAt = new Date(Date.now() - 60_000).toISOString()
+
+  try {
+    sqliteDatabase
+      .query(`UPDATE judge_worker_heartbeat SET heartbeat_at = ?, updated_at = ? WHERE server_id = ?`)
+      .run(staleHeartbeatAt, staleHeartbeatAt, 'server-a')
+  } finally {
+    sqliteDatabase.close(false)
+  }
 
   const requeued = await service.requeueAbandonedSentPrompts({
     jobId,

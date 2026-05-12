@@ -1,23 +1,25 @@
-# App Packaging Spike TODO
+# App Packaging Electron Switch TODO
 
-- This file tracks the active ElectroBun feasibility spike and the next phase-1 execution plan.
+- This file tracks the switch from ElectroBun to Electron and the next phase-1 execution plan.
 - Full packaging and release work live in `APP_PLAN_TODO_FULL.md`.
 - Completed work lives in `plans/old/APP_PLAN_IMPLEMENTED.md`.
 
 ## Goal
 
-- Prove ElectroBun can run Forska as a desktop app without breaking `bun run dev:server`, `bun run dev:app`, or the non-desktop web flow.
-- Lock a source-first packaged runtime shape and validate clean-machine desktop startup for core user flows.
+- Replace the ElectroBun shell with Electron without breaking `bun run dev:server`, `bun run dev:app`, or the non-desktop web flow.
+- Lock a source-first Electron-packaged runtime shape and validate clean-machine desktop startup for core user flows.
 - Use macOS as the first artifact gate, then repeat the same runtime shape on native Windows.
 
 ## Locked Decisions
 
-- Use ElectroBun first and keep Electron as the fallback shell.
+- Switch active desktop shell work from ElectroBun to Electron.
+- Treat ElectroBun-specific runner proof, copy rules, and updater work as superseded unless explicitly called out as migration cleanup.
+- Use Electron for shell/window lifecycle and a bundled platform-specific Bun binary for backend children; Electron's `process.execPath` is not the backend runner.
 - Target packaged desktop startup on a multi-worker Bun backend stack: `SERVER_ROLE=api`, `SERVER_ROLE=maintenance-worker`, and `SERVER_ROLE=judge-worker`.
 - Keep the current `SERVER_ROLE=dev-single` desktop sidecar only as a transitional local-dev path until packaged launcher work switches over.
 - Use a source-first backend artifact for this spike.
 - Bundle Bun in the packaged app.
-- Load the built frontend directly in the desktop shell.
+- Load the built frontend directly in the Electron shell.
 - Do not bundle `sqlite3`.
 - Keep DuckDB CLI out of packaged startup and core flows; any non-default DB, diagnostic, or developer-only CLI path must be optional and failure-tolerant.
 - Keep Codex CLI as optional bring-your-own tooling.
@@ -25,14 +27,14 @@
 
 ## Current Starting Point
 
-- `package.json` already has `desktop:dev` and `desktop:build`.
-- `src/desktop/index.ts` already launches one `SERVER_ROLE=dev-single` backend sidecar, bridges `/api` requests, and waits for `/api/runtime/ready`; it does not yet launch or own the packaged multi-worker stack.
+- `package.json` already has `desktop:dev` and `desktop:build`, but those scripts currently target the ElectroBun path and need to be repointed to Electron.
+- `src/desktop/index.ts` already launches one `SERVER_ROLE=dev-single` backend sidecar, bridges `/api` requests, and waits for `/api/runtime/ready`; it does not yet launch or own the packaged multi-worker stack, and its shell integration needs to move behind Electron main/preload entrypoints.
 - `scripts/startServerStack.ts` already manages API, maintenance-worker, and judge-worker subprocesses for the `server-stack` runtime-profile path and the `stacked-server` dev path through `scripts/devServerWatch.ts`, but desktop packaging has not adopted that lifecycle yet.
 - `scripts/runWithRuntimeProfile.ts`, `scripts/devServerWatch.ts`, and `scripts/startServerStack.ts` still use bare `bun`/`bunx` commands and repo-relative entrypoints for current dev and server-stack launch paths.
 - `src/desktop/getDesktopRuntimeConfig.ts` still resolves Bun from `FORSKA_DESKTOP_BUN_BIN`, host lookup, or bare `bun` instead of an artifact-relative bundled Bun, still defaults desktop API to `32101`, and still treats `FORSKA_DESKTOP_API_SERVER_PORT` as a host env override without a packaged/dev-mode boundary.
 - `src/desktop/getDesktopRuntimeConfig.ts` currently spreads the parent process environment into `backendEnv`, so packaged launch can inherit development/runtime overrides such as `DUCKDB_PATH`, `LOG_DIR`, `SERVER_ROLE`, background ports, or `JUDGE_WORKER_JOURNAL_PATH` unless the packaged child env is built from an explicit sanitized base.
-- `src/desktop/getDesktopRuntimeConfig.ts` also computes the desktop `viewsRoot` from the desktop source module location, so phase 1 must verify and lock dev and packaged frontend asset resolution against the `electrobun.config.ts` copy target instead of accidentally depending on an un-copied `src/views` path, repo `dist`, or `process.cwd()`.
-- `electrobun.config.ts` still copies `src` and `node_modules` directly, so the packaged runtime shape is not locked yet; it does not copy `scripts`, which matters if packaged startup launches `scripts/startServerStack.ts`, and its `watchIgnore` entries also miss the dot-prefixed `.desktopArtifacts` and `.desktopBuild` folders configured for generated output.
+- `src/desktop/getDesktopRuntimeConfig.ts` also computes the desktop `viewsRoot` from the desktop source module location, so phase 1 must verify and lock dev and packaged frontend asset resolution against the Electron packaging copy target instead of accidentally depending on an un-copied `src/views` path, repo `dist`, or `process.cwd()`.
+- `electrobun.config.ts` still copies `src` and `node_modules` directly, so it is now migration debt: port any needed copy/exclude intent into the Electron packaging config, then remove or quarantine the ElectroBun config so generated output does not re-enter watch or test runs.
 - `src/db/migrateDuckdb.ts` resolves SQL files from `import.meta.dir/duckdbMigrations`, so a source-first artifact must preserve the migration SQL folder at the same relative path as the migration module.
 - `bun run lint` currently runs `bunx eslint src`, so work in `scripts/` or root config files needs explicit targeted ESLint coverage until the repo lint script is broadened.
 - `scripts/runBunTests.ts` ignores `desktopArtifacts/` and `desktopBuild/` but not the actual dot-prefixed `.desktopArtifacts/` and `.desktopBuild/` output folders, so full Bun test discovery can pick up copied tests from generated desktop artifacts after packaging.
@@ -62,14 +64,14 @@
 - API-key provider secret storage has an explicit packaged behavior on macOS and Windows, or unsupported API-key provider setup is recorded as a blocker and is not silently counted as passing provider setup.
 - Browser workflows still work with `bun run dev:server` and `bun run dev:app`.
 - At least one native Windows artifact smoke run is executed on the same source-first runtime shape and its results are captured.
-- The spike ends with an explicit continue-or-fallback decision versus Electron.
+- The spike ends with Electron accepted as the active shell path, or with a new blocker that explicitly names the next fallback.
 
 ## Implementation Readiness
 
-- Status: ready to implement the first slice with the contract and handoff checklist below; not ready to release until the macOS and Windows smoke runs pass and the continue-or-fallback decision is recorded.
+- Status: ready to implement the Electron switch slice with the contract and handoff checklist below; not ready to release until the macOS and Windows Electron smoke runs pass.
 - The first implementation slice is the only slice ready for immediate coding. Later workstreams stay blocked by the dependency rules and by the runner/artifact outputs from slice 1.
-- No product decision blocks slice 1. The expected implementation decisions are the packaged backend runner choice and whether manifest logic stays in `getDesktopRuntimeConfig.ts` or moves to `src/desktop/desktopArtifactManifest.ts`.
-- The runner proof must produce exactly one recorded outcome before backend stack orchestration starts: ElectroBun `process.execPath` is accepted as the packaged backend runner, or a separate copied platform-specific Bun binary is required.
+- No product decision blocks slice 1. The expected implementation decisions are the Electron packaging config shape and whether manifest logic stays in `getDesktopRuntimeConfig.ts` or moves to `src/desktop/desktopArtifactManifest.ts`.
+- The backend runner decision is locked for Electron: copy a platform-specific Bun binary into the artifact and resolve it artifact-relatively; do not use Electron's `process.execPath`, host `bun`, `bunx`, `node`, or `npm` as packaged backend runners.
 - The implementation unit is a small slice, not a whole workstream. Each slice must leave `bun run dev:server`, `bun run dev:app`, and the desktop build path either passing or with an explicitly recorded blocker.
 - The implementation-ready gap was the missing slice-1 contract, not missing product scope. The sections below now define packaged/dev mode boundaries, manifest fields, env sanitization expectations, runner-proof output, staging-script fallback, and the recording template needed to start coding.
 - Do not start signed installers, updater wiring, release channels, Linux packaging, or compiled-backend artifact work during this spike.
@@ -78,7 +80,7 @@
 
 ## Phase 1 Implementation Order
 
-1. Packaged runner proof and artifact manifest: prove whether ElectroBun's packaged `process.execPath` can launch backend TypeScript children or copy a separate platform-specific Bun binary, then lock the artifact-relative runner path, backend entrypoints, frontend views root, migration SQL location, native module roots, and copy/exclude manifest.
+1. Electron shell scaffold, bundled Bun runner, and artifact manifest: replace the ElectroBun shell/config path with Electron main/preload packaging, copy a platform-specific Bun binary, then lock the artifact-relative runner path, backend entrypoints, frontend views root, migration SQL location, native module roots, and copy/exclude manifest.
 2. Runtime config and env sanitization: split dev and packaged desktop config, build packaged child envs from an explicit safe base, assign data/temp/log/lock paths, clear host runtime/provider/telemetry/topology/project-mart/full-text/DuckDB/log/test env leakage, and keep desktop launcher imports free of server/native-DB top-level side effects.
 3. Backend stack orchestration: add the packaged API, maintenance-worker, and judge-worker lifecycle helper with deterministic ports, readiness, logs, shutdown, restart limits, stale-stack handling, per-role diagnostics, and `dev-single` retained only for the transitional dev path.
 4. API proxy and desktop bridge: implement owner-route proxying plus desktop request forwarding for JSON, multipart, binary bodies, aborts, timeouts, filtered headers, large upload/download behavior, and `Content-Disposition` preservation without changing browser client call sites.
@@ -87,7 +89,7 @@
 7. Optional CLI, provider, and secret-store behavior: make missing `codex`, DuckDB CLI, `sqlite3`, `ssh`, `nvidia-smi`, and OS credential helpers degraded or explicitly unsupported in packaged mode, and prevent default-model/provider flows from silently seeding unreachable local runtimes.
 8. macOS smoke run: build and run the unsigned artifact outside the repo checkout, including a path-with-spaces run and host-tool isolation, then record the result.
 9. Native Windows smoke run: repeat the same source-first runtime shape on native Windows, including path-with-spaces and host-tool isolation, then record the result.
-10. Continue-or-fallback decision: continue with ElectroBun only if both smoke runs pass the exit criteria, otherwise record the fallback reason and switch the next plan to Electron.
+10. Electron continue decision: continue with Electron only if both smoke runs pass the exit criteria, otherwise record the blocker and choose the next fallback explicitly.
 
 ## Dependency Rules
 
@@ -102,40 +104,43 @@
 
 Files:
 
-- `electrobun.config.ts`
+- Electron packaging config, such as `electron-builder.yml`, `electron-builder.json`, or a package-scoped builder config once chosen
+- `electrobun.config.ts` only for removal/quarantine or migration cleanup
+- `src/desktop/electronMain.ts` (new, if Electron main code is not kept in `src/desktop/index.ts`)
+- `src/desktop/electronPreload.ts` (new)
 - `src/desktop/getDesktopRuntimeConfig.ts`
 - `src/desktop/getDesktopRuntimeConfig.test.ts`
-- `src/desktop/index.ts` if packaged-runner diagnostics, startup error fields, or spawn behavior need to change
+- `src/desktop/index.ts` if shared packaged-runner diagnostics, startup error fields, or spawn behavior stay there during the transition
 - `src/desktop/desktopArtifactManifest.ts` (new, if manifest logic is not kept in `getDesktopRuntimeConfig.ts`)
 - `src/desktop/desktopArtifactManifest.test.ts` (new, if manifest logic is not kept in `getDesktopRuntimeConfig.test.ts`)
 - `src/desktop/desktopRunnerProbe.ts` (new, only if a minimal copied TypeScript child entrypoint is needed to prove the packaged runner before launching the full backend)
 - `scripts/runBunTests.ts`
 - `scripts/runBunTests.test.ts` (new)
-- `scripts/prepareDesktopArtifactSource.ts` (new, only if ElectroBun copy rules cannot express the needed include/exclude manifest directly)
+- `scripts/prepareDesktopArtifactSource.ts` (new, only if Electron packaging rules cannot express the needed include/exclude manifest directly)
 - `scripts/prepareDesktopArtifactSource.test.ts` (new, if a staging script is added)
-- `package.json` only if a helper script is required
+- `package.json` for Electron dependencies/scripts and any helper script required
 - `plans/old/APP_PLAN_IMPLEMENTED.md`
 - `APP_PLAN_TODO_SPIKE.md`
 
 Implementation Contract:
 
-- Add an explicit desktop runtime mode boundary, either as a `desktopRuntimeMode: 'dev' | 'packaged'` input or as an equivalent testable helper output. `desktop:dev` may keep host Bun lookup and `FORSKA_DESKTOP_BUN_BIN`; packaged mode must not use `FORSKA_DESKTOP_BUN_BIN`, bare `bun`, `bunx`, `node`, `npm`, `process.cwd()`, or inherited API-port overrides as fallback runtime inputs.
+- Add an explicit desktop runtime mode boundary, either as a `desktopRuntimeMode: 'dev' | 'packaged'` input or as an equivalent testable helper output. `desktop:dev` may keep host Bun lookup and `FORSKA_DESKTOP_BUN_BIN`; Electron packaged mode must not use `FORSKA_DESKTOP_BUN_BIN`, bare `bun`, `bunx`, `node`, `npm`, `process.cwd()`, Electron's `process.execPath`, or inherited API-port overrides as fallback runtime inputs.
 - The packaged artifact root must be resolved once and passed into path helpers. Do not infer artifact safety from the launcher cwd, from source `import.meta.dir` pointing at repo `src/desktop`, or from the presence of host Bun on `PATH`.
-- Lock one manifest/helper contract with these fields or direct equivalents: runtime mode, artifact root, runner source, runner path, backend stack entrypoint, server entrypoint, frontend `views/mainview/index.html`, frontend assets root, `src/db/duckdbMigrations`, required copied source roots, required runtime metadata, native dependency closure roots, and excluded generated/test/dev-only paths.
+- Lock one manifest/helper contract with these fields or direct equivalents: runtime mode, Electron app root/resources root, artifact root, runner source, runner path, backend stack entrypoint, server entrypoint, frontend `views/mainview/index.html` or equivalent packaged renderer entry, frontend assets root, `src/db/duckdbMigrations`, required copied source roots, required runtime metadata, native dependency closure roots, and excluded generated/test/dev-only paths.
 - Treat the native dependency requirement as the full `@duckdb/node-api` runtime dependency closure, not only the top-level `node_modules/@duckdb/node-api/` folder. If the exact native package paths differ by platform, record them in the manifest result rather than hard-coding a macOS-only expectation.
-- If ElectroBun `copy` rules cannot include required runtime files while excluding `.desktopArtifacts/`, `.desktopBuild/`, tests, fixtures, and dev-only files, add a small staging script and point the ElectroBun copy step at the staged source-first artifact. Do not keep copying broad `src` or `node_modules` trees blindly without a manifest/test explaining every retained test, fixture, or dev-only file.
-- Keep `viewsRoot` and `windowUrl` as an explicit pair: `viewsRoot` resolves to the copied artifact `views` root, and `windowUrl` stays `views://mainview/index.html`. The helper/test must prove that this maps to `views/mainview/index.html` without using repo `dist`, `src/views`, or cwd.
+- If Electron packaging rules cannot include required runtime files while excluding `.desktopArtifacts/`, `.desktopBuild/`, tests, fixtures, and dev-only files, add a small staging script and point the Electron package step at the staged source-first artifact. Do not keep copying broad `src` or `node_modules` trees blindly without a manifest/test explaining every retained test, fixture, or dev-only file.
+- Keep `viewsRoot` and `windowUrl` as an explicit pair: `viewsRoot` resolves to the copied artifact renderer root, and `windowUrl` uses the chosen Electron-safe renderer URL such as `file://.../views/mainview/index.html` or an app-owned custom protocol. The helper/test must prove that this maps to the packaged renderer entry without using repo `dist`, `src/views`, or cwd.
 - Build packaged child envs from a minimal documented OS base plus forced desktop-owned values. The test must set dangerous sentinel host values for runtime/profile/provider/telemetry/topology/project-mart/full-text/DuckDB/log/test/judgment/Codex env keys and prove they are absent or overwritten in packaged child envs.
 - The minimal OS env allowlist should be platform-aware. Keep only process essentials such as user/home/profile and Windows system loader variables when required, then force `TMPDIR`/`TMP`/`TEMP` to desktop runtime temp paths. If any `PATH` value remains in packaged children, it must point only at app-owned or OS system directories needed to run the child, not at host developer tool directories.
 - Runner diagnostics must include resolved runtime mode, runner source, runner path, backend entrypoint, artifact root, views root, data root, runtime temp path, log path, and the reason packaged mode refused any host fallback.
 - If startup error rendering is touched while adding runner diagnostics, render dynamic messages/logs as escaped text or through a testable startup-page helper. Do not add new raw HTML interpolation of command output or paths.
 
-Runner Proof Procedure:
+Electron Runner Proof Procedure:
 
-- Build with `bun run desktop:build`, then run the built app or runner probe from the built artifact outside normal repo cwd assumptions.
+- Build with `bun run desktop:build`, then run the built Electron app or runner probe from the built artifact outside normal repo cwd assumptions.
 - Run at least one proof with host `bun`, `bunx`, `node`, and `npm` absent from `PATH`, or record exactly why a tool cannot be hidden. Do not set `FORSKA_DESKTOP_BUN_BIN` for packaged proof.
 - The proof target may be a minimal copied TypeScript child entrypoint before the full backend stack is launched, but it must exercise the same chosen packaged runner and artifact-relative TypeScript/module resolution path that the backend will use.
-- Accept `process.execPath` only if the child can start from the built artifact, import TypeScript successfully, print the expected proof payload, and exit 0 under host-tool isolation. If not, switch the slice to a copied platform-specific Bun binary and keep packaged host fallback disabled.
+- Accept only the copied platform-specific Bun binary if the child can start from the built artifact, import TypeScript successfully, print the expected proof payload, and exit 0 under host-tool isolation. Keep packaged host fallback disabled.
 - Record the exact proof command or manual launch path, artifact path, runner path, backend/probe entrypoint path, stdout/stderr summary, exit code, host-tool isolation result, and chosen runner outcome in `plans/old/APP_PLAN_IMPLEMENTED.md` before marking slice 1 complete.
 
 Decision Record Template:
@@ -143,7 +148,7 @@ Decision Record Template:
 ```markdown
 ### Packaged Runner Proof - YYYY-MM-DD
 
-- Result: `process.execPath` accepted | copied Bun required | blocked
+- Result: Electron + copied Bun accepted | blocked
 - Artifact path:
 - Runtime mode:
 - Runner source:
@@ -161,12 +166,12 @@ Decision Record Template:
 
 Deliverables:
 
-- Decide and document the packaged backend runner path: verified ElectroBun `process.execPath` child launch or a copied platform-specific Bun binary.
+- Decide and document the Electron packaged backend runner path: a copied platform-specific Bun binary resolved from the artifact.
 - Record the runner proof result in `plans/old/APP_PLAN_IMPLEMENTED.md`, including the exact command or smoke check used, resolved runner path, backend entrypoint path, exit code, and whether the test ran inside the built artifact with host `bun`, `bunx`, `node`, and `npm` removed from `PATH`.
 - Produce actionable startup diagnostics for a missing/unusable packaged runner with no host-Bun fallback in packaged mode.
 - Lock artifact-relative `views/mainview`, backend entrypoint, migration SQL, source roots, native module roots, and required metadata expectations in an artifact manifest or equivalent testable helper.
-- Verify `viewsRoot` resolves to the artifact root's `views` directory, with `views://mainview/index.html` loading `views/mainview/index.html`; it must not depend on `src/views`, repo `dist`, or `process.cwd()`.
-- Fix ElectroBun watch ignores and Bun test discovery ignores for `.desktopArtifacts/` and `.desktopBuild/`.
+- Verify `viewsRoot` resolves to the artifact root's renderer directory, with the chosen Electron `windowUrl` loading the packaged `views/mainview/index.html`; it must not depend on `src/views`, repo `dist`, or `process.cwd()`.
+- Fix Electron build/artifact ignores and Bun test discovery ignores for `.desktopArtifacts/`, `.desktopBuild/`, and any new Electron output folders.
 - Refactor `scripts/runBunTests.ts` only as needed to export pure ignore/discovery helpers without running `main()` during import, so `.desktopArtifacts/` and `.desktopBuild/` ignore behavior is unit-testable.
 - Keep `desktop:dev` visibly separate from packaged runner resolution and allow it to keep explicit host-Bun lookup only in dev mode.
 
@@ -175,16 +180,17 @@ Handoff Checklist:
 - Start with failing tests for artifact-manifest/runtime-config behavior and `scripts/runBunTests.ts` ignore behavior before changing packaging rules.
 - Make desktop runtime mode explicit in the config helper, with separate dev and packaged runner resolution; packaged mode must not infer safety from `FORSKA_DESKTOP_BUN_BIN`, `process.cwd()`, or inherited shell env.
 - Run the packaged runner proof from inside an actual built artifact with host `bun`, `bunx`, `node`, and `npm` removed from `PATH`; capture resolved runner path, backend entrypoint path, stdout/stderr summary, and exit code.
-- Accept ElectroBun `process.execPath` only if it can launch the backend TypeScript entrypoint from the built artifact under the host-tool-isolated proof. If it cannot, switch this slice to a copied platform-specific Bun binary and keep host-Bun fallback disabled in packaged mode.
+- Use only a copied platform-specific Bun binary for Electron packaged backend children; keep Electron `process.execPath` and host-Bun fallback disabled in packaged mode.
 - Lock one artifact-root helper that resolves the packaged runner, backend entrypoints, `views/mainview`, `src/db/duckdbMigrations`, required source roots, native module roots, and required metadata; prefer one helper over scattered path joins.
 - Decide whether packaged startup will launch `scripts/startServerStack.ts` or a copied `src` entrypoint. If it launches the script, include `scripts` in the source-first artifact manifest; otherwise keep the packaged stack entrypoint under copied `src` paths.
-- Update `electrobun.config.ts` copy/watch-ignore rules and Bun test discovery ignores together so generated `.desktopArtifacts/` and `.desktopBuild/` files cannot re-enter watch or test runs.
+- Port needed `electrobun.config.ts` copy/watch-ignore intent into Electron packaging rules, then update Bun test discovery ignores so generated `.desktopArtifacts/`, `.desktopBuild/`, and Electron output files cannot re-enter watch or test runs.
 - Record the runner proof and artifact manifest result in `plans/old/APP_PLAN_IMPLEMENTED.md` before marking the slice complete, including any files intentionally copied despite being tests, fixtures, or dev-only assets.
 
 Quality Gates:
 
 - `bun run lint`
-- `bunx eslint electrobun.config.ts scripts/runBunTests.ts scripts/runBunTests.test.ts src/desktop/getDesktopRuntimeConfig.ts src/desktop/getDesktopRuntimeConfig.test.ts`
+- `bunx eslint scripts/runBunTests.ts scripts/runBunTests.test.ts src/desktop/getDesktopRuntimeConfig.ts src/desktop/getDesktopRuntimeConfig.test.ts`
+- `bunx eslint src/desktop/electronMain.ts src/desktop/electronPreload.ts` if Electron entrypoints are added
 - `bunx eslint src/desktop/desktopArtifactManifest.ts src/desktop/desktopArtifactManifest.test.ts` if a separate artifact-manifest helper is added
 - `bunx eslint src/desktop/desktopRunnerProbe.ts` if a runner probe is added
 - `bunx eslint scripts/prepareDesktopArtifactSource.ts scripts/prepareDesktopArtifactSource.test.ts` if a staging script is added
@@ -194,12 +200,12 @@ Quality Gates:
 - `bun test scripts/prepareDesktopArtifactSource.test.ts` if a staging script is added
 - `bun run build`
 - `bun run desktop:build`
-- Inspect the built artifact, or run the artifact-manifest test, and fail unless it includes the chosen backend runner, backend entrypoint, `src/server/index.ts`, `src/db/migrateDuckdb.ts`, `src/db/duckdbMigrations/*.sql`, `views/mainview/index.html`, `views/mainview/assets/`, the `@duckdb/node-api` native runtime dependency closure, and required runtime metadata such as `package.json` or `tsconfig.json` if the chosen runner needs them; fail if `.desktopArtifacts/`, `.desktopBuild/`, copied `*.test.ts`, fixtures, or dev-only files are present unless explicitly documented.
+- Inspect the built Electron artifact, or run the artifact-manifest test, and fail unless it includes the chosen backend runner, backend entrypoint, `src/server/index.ts`, `src/db/migrateDuckdb.ts`, `src/db/duckdbMigrations/*.sql`, `views/mainview/index.html`, `views/mainview/assets/`, the `@duckdb/node-api` native runtime dependency closure, and required runtime metadata such as `package.json` or `tsconfig.json` if the chosen runner needs them; fail if `.desktopArtifacts/`, `.desktopBuild/`, copied `*.test.ts`, fixtures, or dev-only files are present unless explicitly documented.
 - Browser verify: `bun run dev:server` and `bun run dev:app` still boot after the runner/artifact changes.
 
 ## Phase 1 Recommendation
 
-- Start with the smallest artifact that can pass real smoke tests: packaged Bun plus backend source, the multi-worker backend stack, and packaged frontend assets.
+- Start with the smallest Electron artifact that can pass real smoke tests: packaged Bun plus backend source, the multi-worker backend stack, and packaged frontend assets.
 - Do not spend time on compiled backend artifacts, signed installers, updater wiring, or release channels before the source-first shape passes macOS smoke tests and completes one native Windows smoke run.
 
 ## Phase 1 Workstreams
@@ -210,7 +216,8 @@ Goal: remove host-Bun and repo-root assumptions from the packaged desktop boot p
 
 Files:
 
-- `electrobun.config.ts`
+- Electron packaging config, such as `electron-builder.yml`, `electron-builder.json`, or a package-scoped builder config once chosen
+- `electrobun.config.ts` only for removal/quarantine or migration cleanup
 - `scripts/runWithRuntimeProfile.ts`
 - `scripts/devServerWatch.ts`
 - `scripts/startServerStack.ts`
@@ -238,11 +245,11 @@ Files:
 
 Deliverables:
 
-- Packaged mode resolves only the bundled Bun from the artifact; `desktop:dev` may keep explicit or host Bun lookup, but that path must stay visibly separate from packaged startup.
-- The chosen packaged backend runner is explicit and verified: either use ElectroBun's packaged Bun runtime only after proving `process.execPath` can launch backend TypeScript child entrypoints, or copy a separate platform-specific Bun binary into the artifact and resolve that path; macOS executable bits and Windows `.exe` naming are preserved.
+- Packaged mode resolves only the bundled Bun from the Electron artifact; `desktop:dev` may keep explicit or host Bun lookup, but that path must stay visibly separate from packaged startup.
+- The chosen packaged backend runner is explicit and verified: copy a separate platform-specific Bun binary into the Electron artifact and resolve that path; macOS executable bits and Windows `.exe` naming are preserved.
 - A missing or unusable packaged backend runner fails with actionable diagnostics instead of silently falling back to host Bun.
 - Backend entrypoint resolution is artifact-relative and deterministic.
-- Frontend `viewsRoot`, `windowUrl`, preload scripts, and renderer asset paths are artifact-relative and point at the copied `views/mainview` frontend assets in both dev and packaged modes; they do not assume `src/views`, repo `dist`, or the launcher `process.cwd()`.
+- Frontend `viewsRoot`, `windowUrl`, preload scripts, and renderer asset paths are artifact-relative and point at the copied `views/mainview` frontend assets in both dev and packaged Electron modes; they do not assume `src/views`, repo `dist`, or the launcher `process.cwd()`.
 - Packaged stack orchestration is an importable helper with no top-level side effects; dev scripts remain thin wrappers around shared process/env logic, and packaged startup does not depend on package scripts or repo-root `process.cwd()`.
 - Backend server module imports remain role-scoped or side-effect-free: importing the API, maintenance, or judge role must not spawn optional CLIs, run local-machine helper subprocesses, open DuckDB, or read/write role-irrelevant runtime state before that role's explicit startup gate needs it.
 - Packaged stack configuration resolution does not import `@duckdb/node-api`, open the DuckDB file, or read mutable app settings merely to choose ports or child commands before the maintenance role starts; stored maintenance tuning is read lazily with bounded failures and env/default fallbacks.
@@ -265,23 +272,24 @@ Deliverables:
 - The desktop fetch bridge preserves method, query string, headers, binary bodies, JSON, and multipart/form-data uploads when forwarding renderer `/api` requests to the API role, cleans up pending requests on renderer aborts, backend errors, timeouts, body-read failures, and window shutdown, and keeps desktop imports on the same client call sites as browser flows.
 - Large desktop uploads have a deliberate tested path: either streamed/chunked forwarding without base64 IPC memory blowups, or a documented pre-send limit with actionable UI/API failure before the renderer or shell allocates unbounded buffers.
 - Large desktop downloads and export responses, including CSV exports and runtime-asset/PDF responses, have a deliberate tested path: either streamed/chunked delivery without base64 IPC memory blowups, or a documented response-size limit that preserves `Content-Disposition`/content type and fails with actionable UI/API guidance before unbounded renderer or shell allocation.
-- If any desktop request path bypasses IPC and uses direct loopback `fetch`, packaged CORS/preflight handling explicitly allows the actual ElectroBun renderer origin (`views://mainview` or `null`, whichever the runtime sends) without broadening browser/dev origins unintentionally.
+- If any desktop request path bypasses IPC and uses direct loopback `fetch`, packaged CORS/preflight handling explicitly allows the actual Electron renderer origin (`file://`, `null`, or the chosen app-owned custom protocol origin, whichever the runtime sends) without broadening browser/dev origins unintentionally.
 - The desktop launcher assigns deterministic loopback ports, `SERVER_DUCKDB_OWNER_URL`, role env, a stable `JUDGE_WORKER_ID`, cleared inherited `JUDGE_WORKER_JOURNAL_PATH`, data paths, runtime temp paths, lock/metadata paths, log paths, and child `TMPDIR`/`TMP`/`TEMP` fallbacks for the stack.
 - Before falling back to alternate ports, the desktop launcher distinguishes foreign port occupancy from an existing same-data-root Forska backend stack, attaches to or shuts down orphaned same-data-root stacks when safe, reclaims stale same-data-root metadata, and refuses to start a second stack against the same desktop data root only when another live shell/backend owner remains.
 - Startup readiness, role logs, child-process shutdown, relaunch, and crash recovery are surfaced per role.
 - Initial packaged startup has bounded role restart/readiness attempts; repeated role crashes or readiness timeouts fail with actionable diagnostics instead of looping until the shell-level timeout.
 - Startup errors include resolved Bun path, backend entrypoint, frontend views root, API/maintenance/judge origins, data root, runtime temp path, and log path, and render dynamic error/log content as escaped text rather than raw HTML.
-- ElectroBun watch ignores and Bun test discovery ignores match the actual dot-prefixed build and artifact folders.
+- Electron build/artifact ignores and Bun test discovery ignores match the actual dot-prefixed build and artifact folders.
 
 Quality Gates:
 
 - `bun run lint`
-- `bunx eslint electrobun.config.ts scripts/runWithRuntimeProfile.ts scripts/devServerWatch.ts scripts/startServerStack.ts scripts/runBunTests.ts scripts/runBunTests.test.ts`
+- `bunx eslint scripts/runWithRuntimeProfile.ts scripts/devServerWatch.ts scripts/startServerStack.ts scripts/runBunTests.ts scripts/runBunTests.test.ts`
+- `bunx eslint src/desktop/electronMain.ts src/desktop/electronPreload.ts` if Electron entrypoints are added
 - Extend `scripts/runWithRuntimeProfile.test.ts` coverage for mode-scoped command/env construction that does not import `@duckdb/node-api` or read local app settings for app/app-server launch modes, then run `bun test scripts/runWithRuntimeProfile.test.ts`.
 - Add `scripts/runBunTests.test.ts` coverage for dot-prefixed desktop artifact/build-folder ignores, then run `bun test scripts/runBunTests.test.ts`.
 - Add `src/desktop/desktopBackendStack.test.ts` coverage for packaged stack process orchestration, sanitized child env construction, packaged Bun runner selection, no host-runner fallback in packaged mode, cleared host runtime/provider/telemetry/topology/project-mart/full-text/DuckDB-append/log-test-mode/HTTP-request-limit env, and packaged defaults for full-text cron toggles, then run `bun test src/desktop/desktopBackendStack.test.ts`.
 - Add `src/desktop/desktopApiBridge.test.ts` coverage for renderer-to-API request serialization of query strings, JSON, binary bodies, multipart/form-data, same-origin API versus same-origin non-API versus external URL filtering, hop-by-hop header filtering, abort handling, body-read failures, timeout cleanup, backend-error cleanup, large-upload limit/streaming behavior, and large download/export response streaming or bounded-size behavior with `Content-Disposition` preservation, then run `bun test src/desktop/desktopApiBridge.test.ts`.
-- If a direct loopback desktop fetch path is used for any request class, extend server startup/CORS coverage for the actual ElectroBun renderer origin and preflight headers without changing browser/dev defaults.
+- If a direct loopback desktop fetch path is used for any request class, extend server startup/CORS coverage for the actual Electron renderer origin and preflight headers without changing browser/dev defaults.
 - Add `src/desktop/desktopStartupPage.test.ts` coverage for escaped startup error rendering and diagnostic fields, then run `bun test src/desktop/desktopStartupPage.test.ts`.
 - Extend `src/desktop/getDesktopRuntimeConfig.test.ts` coverage for artifact-relative bundled Bun or verified packaged `process.execPath` runner selection, backend entrypoint, sanitized packaged env overrides including cleared host provider-runtime/telemetry/topology/project-mart/full-text/DuckDB-append/log-test-mode/HTTP-request-limit env, runtime temp root, and frontend views-root resolution, then run `bun test src/desktop/getDesktopRuntimeConfig.test.ts`.
 - `bun test src/desktop/desktopSingleInstance.test.ts`
@@ -622,7 +630,7 @@ Goal: validate the chosen source-first shape under clean-machine assumptions.
 Build Commands:
 
 - Run from the repo on a build machine with Bun available.
-- `bun run desktop:build` (currently invokes `bun run build` before `electrobun build`)
+- `bun run desktop:build` after it has been repointed from `electrobun build` to the Electron packaging command
 
 Artifact Run Preconditions:
 
@@ -644,7 +652,7 @@ Manual Checks:
 - If an API-key provider is tested, record the packaged secret-store backend used and any macOS `/usr/bin/security` helper exposure.
 - Quit and relaunch.
 - Confirm writes, runtime temp files, and any diagnostic snapshot files generated during the run land under the per-user desktop data root, not the repo root or install directory.
-- If the packaged backend runner is a separate copied Bun binary, confirm deleting or misplacing it in a throwaway artifact copy produces an actionable startup error rather than falling back to host Bun; if the runner is ElectroBun's `process.execPath`, record that this destructive check is not applicable and verify no packaged setting can redirect to host Bun.
+- Confirm deleting or misplacing the copied Bun binary in a throwaway Electron artifact copy produces an actionable startup error rather than falling back to host Bun.
 
 Quality Gates:
 
@@ -659,7 +667,7 @@ Goal: run the same source-first artifact assumptions on native Windows before ma
 Build Commands:
 
 - Run on native Windows or a native Windows CI runner with Bun available.
-- `bun run desktop:build` (currently invokes `bun run build` before `electrobun build`)
+- `bun run desktop:build` after it has been repointed from `electrobun build` to the Electron packaging command
 
 Artifact Run Preconditions:
 
@@ -687,8 +695,8 @@ Quality Gates:
 - All manual checks pass outside the repo checkout with no host `bun`, `node`, `npm`, `bunx`, DuckDB CLI, `codex`, `sqlite3`, `ssh`, or `nvidia-smi` exposure unless the exposure is explicitly recorded; any provider secret-store helper exposure is recorded separately.
 - Smoke result, command output summary, artifact path, artifact parent path space-check result, data root, runtime temp path, log path, export/download result, provider secret-store backend if tested, judging invocation result, Windows version, and any host-tool exposure are recorded in `plans/old/APP_PLAN_IMPLEMENTED.md` if it passes, or in this file under the relevant blocker if it fails.
 
-## Continue Or Fallback Decision
+## Electron Continue Decision
 
-- Continue on ElectroBun only if the source-first artifact works on macOS, passes at least one native Windows core smoke run, and does not depend on host Bun/Node/npm/bunx or other unbundled CLIs for startup, API, import, CSV export/download, judging, or secretless/manual provider setup.
+- Continue on Electron only if the source-first artifact works on macOS, passes at least one native Windows core smoke run, and does not depend on host Bun/Node/npm/bunx or other unbundled CLIs for startup, API, import, CSV export/download, judging, or secretless/manual provider setup.
 - Treat any unresolved API-key provider secret-storage gap as an explicit continue/fallback decision input rather than a hidden pass.
-- Escalate to Electron if either platform still exposes shell-blocking issues in artifact reliability, packaged Bun resolution, native dependency loading, or core smoke validation after this phase.
+- If Electron exposes shell-blocking issues in artifact reliability, packaged Bun resolution, native dependency loading, or core smoke validation after this phase, record the blocker and choose the next fallback explicitly.

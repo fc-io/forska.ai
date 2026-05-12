@@ -2,7 +2,7 @@
 
 - This file tracks the full remaining desktop packaging and release work beyond landed items.
 - Completed work lives in `plans/old/APP_PLAN_IMPLEMENTED.md`.
-- The active ElectroBun feasibility spike and phase-1 execution plan live in `APP_PLAN_TODO_SPIKE.md`.
+- The active Electron switch and phase-1 execution plan live in `APP_PLAN_TODO_SPIKE.md`.
 
 ## Goals
 
@@ -18,20 +18,20 @@
 - This repo is already close to a desktop product shape: Bun/Elysia backend, Solid/Vite frontend, DuckDB local data, SQLite local job state, and single-user local-first defaults.
 - `src/server/utils/getDuckdbPath.ts` already has platform-aware default DB locations for macOS, Windows, and Linux.
 - The main packaging risk is the runtime surface, not the UI: Bun APIs, native DB dependencies, local subprocesses, CLI fallbacks, and repo-root file assumptions.
-- `src/appServer.ts` exists mainly to serve the built web app in a browser. The current ElectroBun spike already loads packaged renderer assets directly in the desktop shell, so `src/appServer.ts` is optional at desktop startup.
+- `src/appServer.ts` exists mainly to serve the built web app in a browser. The Electron desktop path should load packaged renderer assets directly in the shell, so `src/appServer.ts` remains optional at desktop startup.
 
 ## Working Strategy
 
 ### Packaging Options
 
-- ElectroBun: best first implementation track if the goal is to stay Bun-native end to end. Use a packaged Bun backend stack for API serving, maintenance-worker DuckDB ownership, and judge-worker work. Pros: best runtime alignment with the existing backend, least conceptual overhead for a Bun-first team, and the best chance of preserving the current backend boot model. Cons: highest uncertainty around production packaging, signing, updates, and native dependency edge cases.
-- Electron + Bun backend stack: best fallback if ElectroBun blocks release work. Pros: lowest rewrite risk, mature macOS and Windows installer/signing ecosystem, and strong native module plus auto-update tooling. Cons: the largest bundle size and higher RAM use.
+- Electron + Bun backend stack: active implementation track after switching away from ElectroBun. Pros: lowest rewrite risk, mature macOS and Windows installer/signing ecosystem, strong native module plus auto-update tooling, and a clear shell boundary while preserving the Bun backend stack. Cons: the largest bundle size and higher RAM use.
+- ElectroBun: shelved first track. It kept the stack Bun-native end to end, but release risk around production packaging, signing, updates, and native dependency edge cases is no longer worth carrying as the active path.
 - Tauri + Bun backend stack: likely later optimization path if installer size becomes the main priority. Pros: smaller installers and a strong native shell story. Cons: more moving parts and higher first-release integration risk than Electron.
 - Local service + browser wrapper: fastest internal alpha path. Pros: minimal desktop-shell work. Cons: it does not feel like a normal desktop app and gives worse lifecycle, startup, update, and UX control.
 
 ### Active Recommendation
 
-- Use ElectroBun first.
+- Use Electron first.
 - Run the packaged Bun backend as a multi-worker stack with API, maintenance-worker, and judge-worker roles; keep `SERVER_ROLE=dev-single` only as a transitional local-dev path.
 - Load the built frontend directly inside the desktop shell and inject the API origin from the shell, so `src/appServer.ts` becomes optional instead of required.
 - Use a source-first backend artifact for the active spike and first clean-machine smoke tests; only revisit a compiled backend artifact later if the spike or release work exposes a concrete need.
@@ -39,19 +39,19 @@
 - Treat Codex CLI as optional user-installed tooling in packaged builds; desktop startup and normal app flows must not depend on it.
 - Do not bundle `sqlite3`; keep any `sqlite3` fallback or repair flows out of packaged startup, API serving, and normal user flows.
 - Add remote upgrades only after unsigned macOS and Windows artifacts are repeatable and native dependencies are verified in packaged mode.
-- Treat Electron as the fallback shell if ElectroBun blocks signed installers, native module packaging, or stable macOS/Windows distribution.
+- Treat ElectroBun as historical context only unless a future decision explicitly reopens it.
 - Keep Tauri as the likely later optimization path if installer size becomes a priority.
 
 ### Success And Fallback Criteria
 
-- Stay on ElectroBun if we can boot the app reliably on macOS and Windows, bundle the Bun backend, package `@duckdb/node-api`, and produce installable signed artifacts.
-- Stay on ElectroBun if its update mechanism can check, download, apply, and relaunch signed macOS and Windows builds without damaging local user data, once remote upgrades are intentionally in scope.
-- Fall back to Electron if ElectroBun blocks any of these for too long: app startup reliability, native module packaging, code signing, notarization, Windows installer generation, or update strategy.
+- Stay on Electron if we can boot the app reliably on macOS and Windows, bundle the Bun backend, package `@duckdb/node-api`, and produce installable signed artifacts.
+- Stay on Electron if `electron-builder`/`electron-updater` or the chosen Electron release tooling can check, download, apply, and relaunch signed macOS and Windows builds without damaging local user data, once remote upgrades are intentionally in scope.
+- Pick a new fallback only if Electron blocks app startup reliability, native module packaging, code signing, notarization, Windows installer generation, or update strategy for too long.
 - Preserve the current backend/frontend split so a shell swap stays low-risk if fallback is needed.
 
 ## Current Status Summary
 
-- Status as of 2026-04-26: the overall packaging effort is still downstream of an active desktop feasibility spike tracked in `APP_PLAN_TODO_SPIKE.md`.
+- Status as of 2026-05-11: the overall packaging effort is switching from the earlier ElectroBun feasibility spike to an Electron desktop shell tracked in `APP_PLAN_TODO_SPIKE.md`.
 - The release path is still unproven: unsigned artifacts, Windows launch, native dependency packaging, signed installers, and remote upgrades are not complete.
 - Current plan progress is still early and foundational, with the remaining work concentrated in packaging, cross-platform hardening, native dependency verification, signing, release operations, and upgrades.
 
@@ -59,7 +59,7 @@
 
 - There is no confirmed unsigned macOS artifact smoke test.
 - There is no confirmed unsigned Windows artifact smoke test.
-- The current ElectroBun desktop launcher still starts one `SERVER_ROLE=dev-single` backend sidecar; packaged multi-worker lifecycle, ports, readiness, logs, shutdown, and restart behavior are not implemented or verified yet.
+- The current desktop launcher still starts one `SERVER_ROLE=dev-single` backend sidecar through the old ElectroBun path; Electron main/preload entrypoints and packaged multi-worker lifecycle, ports, readiness, logs, shutdown, and restart behavior are not implemented or verified yet.
 - Packaged Bun bundling is not implemented yet, and the active source-first backend artifact shape is not yet validated by clean-machine smoke tests.
 - Packaged `@duckdb/node-api`, Bun SQLite, DuckDB migrations, SQLite job state, and restart/crash recovery are not verified.
 - Core packaged validation that normal startup and API flows do not require `sqlite3` or other unbundled CLIs is still pending.
@@ -71,7 +71,7 @@
 ### Recommended Next Steps
 
 - Finish the remaining desktop runtime-write audit so all writable files land under app-owned user directories in packaged mode.
-- Lock the packaged runtime shape around the active source-first multi-worker spike artifact: bundle Bun, validate backend source packaging on clean-machine smoke tests, and revisit a compiled backend artifact only if later release work needs it.
+- Lock the packaged runtime shape around the active Electron source-first multi-worker artifact: bundle Bun, validate backend source packaging on clean-machine smoke tests, and revisit a compiled backend artifact only if later release work needs it.
 - Verify native dependencies and migrations inside packaged artifacts before investing in signing and auto-update UX.
 - Prove the packaged app boots and serves normal user flows on clean machines without `codex`, `sqlite3`, or DuckDB CLI installed.
 - Run a local macOS artifact smoke test on the chosen packaged shape, without relying on repo checkout or Bun already being on `PATH`.
@@ -86,7 +86,7 @@
 
 ## Target Architecture
 
-- ElectroBun shell owns window lifecycle, single-instance lock, menus, logs, crash reporting, and app updates.
+- Electron shell owns window lifecycle, single-instance lock, menus, logs, crash reporting, and app updates.
 - Bun backend stack owns API routes, background work, migrations, DuckDB, SQLite, imports, and provider orchestration.
 - API role owns routes and frontend-facing readiness.
 - Maintenance-worker role owns DuckDB ownership, migrations, and maintenance work.
@@ -124,10 +124,10 @@
 - `bun test src/app/utils/getDesktopApiOrigin.test.ts`
 - `bun test src/app/utils/getApiRequestUrl.test.ts`
 - `bun test src/app/utils/getRuntimeAssetUrl.test.ts`
-- Run targeted ElectroBun packaging smoke tests on the chosen packaged Bun/backend shape.
-- ElectroBun verify: unsigned macOS artifact opens a desktop window, starts the backend stack, and reaches a healthy app state.
-- ElectroBun verify: unsigned Windows artifact opens a desktop window, starts the backend stack, and reaches a healthy app state.
-- ElectroBun verify: packaged backend diagnostics show API, maintenance-worker, and judge-worker roles with per-role readiness and logs.
+- Run targeted Electron packaging smoke tests on the chosen packaged Bun/backend shape.
+- Electron verify: unsigned macOS artifact opens a desktop window, starts the backend stack, and reaches a healthy app state.
+- Electron verify: unsigned Windows artifact opens a desktop window, starts the backend stack, and reaches a healthy app state.
+- Electron verify: packaged backend diagnostics show API, maintenance-worker, and judge-worker roles with per-role readiness and logs.
 - Browser verify: `bun run dev:server` and `bun run dev:app` still boot successfully and the app works in a normal browser.
 - Browser verify: existing built web flow still serves and loads correctly outside the desktop shell.
 - macOS verify: clean install, first launch, restart, import one dataset, configure one provider, then quit and relaunch successfully.
@@ -145,17 +145,17 @@
 - [ ] `src/server/utils/getCodexAppServerClient.ts` still needs a platform-aware packaged-build audit plus packaged-app guidance surfaces so optional user-installed Codex lookup works consistently and fails gracefully when `codex` is absent.
 - [ ] `src/desktop/index.ts` still launches one `SERVER_ROLE=dev-single` backend sidecar; packaged desktop needs to launch and supervise the multi-worker stack instead.
 - [ ] Packaged builds still need the remaining audit of runtime writes that can touch `cache/`, `assets/`, temp files, lock files, exports, DuckDB, SQLite, or generated diagnostics.
-- [ ] `electrobun.config.ts` currently has no `release.baseUrl`, and `src/desktop/index.ts` does not use ElectroBun's `Updater`, so remote upgrades are not wired yet.
+- [ ] Replace or remove `electrobun.config.ts`, add Electron packaging/release config, and defer `electron-updater` wiring until remote upgrades are intentionally in scope.
 
 ## Active Spike
 
-- See `APP_PLAN_TODO_SPIKE.md` for the active ElectroBun feasibility spike, the source-first runtime-shape decision, and the current phase-1 execution plan.
+- See `APP_PLAN_TODO_SPIKE.md` for the active Electron switch, the source-first runtime-shape decision, and the current phase-1 execution plan.
 
 ## Detailed Checklist
 
 ### 1. Architecture Decision
 
-- [ ] Close the active ElectroBun feasibility spike in `APP_PLAN_TODO_SPIKE.md` with a continue-or-fallback decision.
+- [ ] Record the switch from the active ElectroBun feasibility spike to Electron in `APP_PLAN_TODO_SPIKE.md`.
 - [ ] Confirm the packaged backend runtime shape: API role, maintenance-worker role, and judge-worker role launched by the desktop shell.
 - [ ] Define supported targets for v1: macOS Intel/Apple Silicon, Windows x64, and Linux later.
 - [ ] Define what "works offline" means versus what still needs network access for providers and remote runtimes.
@@ -206,13 +206,13 @@
 
 ### 8. Build And Packaging Pipeline
 
-- [ ] Package backend entrypoints, runtime assets, migrations, native modules, and ElectroBun shell assets.
+- [ ] Package backend entrypoints, runtime assets, migrations, native modules, and Electron shell assets.
 - [ ] Package the backend stack entrypoint or equivalent role entrypoints for API, maintenance-worker, and judge-worker startup.
 - [ ] Use backend source files for the first clean-machine artifact smoke tests, then decide after the spike whether release artifacts stay source-first or move to a compiled backend artifact.
-- [ ] Create local macOS ElectroBun artifacts for smoke testing on the chosen packaged Bun/backend shape.
-- [ ] Create local Windows ElectroBun artifacts for smoke testing on the chosen packaged Bun/backend shape.
+- [ ] Create local macOS Electron artifacts for smoke testing on the chosen packaged Bun/backend shape.
+- [ ] Create local Windows Electron artifacts for smoke testing on the chosen packaged Bun/backend shape.
 - [ ] Make artifact naming consistent by version, platform, and architecture.
-- [ ] Document the Electron fallback handoff so shell replacement stays isolated if needed.
+- [ ] Document the ElectroBun-to-Electron handoff so shell replacement stays isolated from backend/runtime-shape work.
 
 ### 9. UX And Product Polish
 
@@ -271,7 +271,7 @@
 
 - [ ] Decide whether remote upgrades ship in v1 or wait until after stable signed installer releases.
 - [ ] Add a release host decision: S3, Cloudflare R2, GitHub Releases, or another static host.
-- [ ] Add `release.baseUrl` to `electrobun.config.ts` once the release host is chosen.
+- [ ] Configure the chosen Electron updater/release metadata once the release host is chosen.
 - [ ] Add release channels, at minimum `stable`; optionally add `canary` for internal smoke builds.
 - [ ] Add build scripts for channel builds, for example `desktop:build:stable` and `desktop:build:canary`.
 - [ ] Add native CI jobs that build macOS and Windows artifacts on their own OS runners.
@@ -285,7 +285,7 @@
 - [ ] Add an upgrade compatibility policy for database migrations: never downgrade schemas silently, record app version at migration time, and surface failed migrations with a recovery path.
 - [ ] Add a rollback policy: publish a higher version to recover from a bad release rather than replacing an existing version in place.
 - [ ] Add signed-update verification gates before enabling updates for normal users.
-- [ ] Document the Electron fallback equivalent: `electron-builder` plus `electron-updater`, should ElectroBun updates fail the smoke gates.
+- [ ] Use `electron-builder` plus `electron-updater`, or document the chosen Electron equivalent, once remote upgrades enter scope.
 
 ### 16. Release Operations
 

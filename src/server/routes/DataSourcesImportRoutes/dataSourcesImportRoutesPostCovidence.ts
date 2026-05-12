@@ -35,8 +35,8 @@ export const dataSourcesImportRoutesPostCovidence = async ({body, set}: {body: {
     const importResult = await importCovidencePackageFromConfig({config, datasourceId: dataSource.id, importRoute, tx})
     const updatedAt = new Date()
 
-    await syncCovidenceProjectScopeFromConfig({config, importRoute, tx})
-    await seedCovidenceHumanJudgmentsFromConfig({config, importRoute, tx})
+    await syncCovidenceProjectScopeFromConfig({config, importRoute, packageRows: importResult.packageRows, tx})
+    await seedCovidenceHumanJudgmentsFromConfig({config, importRoute, packageRows: importResult.packageRows, tx})
 
     await tx.run(`
       UPDATE app.import_route
@@ -54,7 +54,9 @@ export const dataSourcesImportRoutesPostCovidence = async ({body, set}: {body: {
       WHERE id = '${escapeSqlString(dataSource.id)}'
     `)
 
-    return importResult
+    const {packageRows: _packageRows, ...responseImportResult} = importResult
+
+    return responseImportResult
   })) as Awaited<ReturnType<typeof importCovidencePackageFromConfig>>
 
   return {success: true, data: await getDataSourceQueryService().getDataSourceById(dataSource.id), stats: result.stats}

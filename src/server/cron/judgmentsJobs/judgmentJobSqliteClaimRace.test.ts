@@ -28,26 +28,32 @@ let sqliteService: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJ
 let snapshotGate: SnapshotGate | null = null
 
 void mock.module(judgmentExecutionSnapshotServiceModulePath, () => {
+  const getSnapshot = (input: {claimId: string}) => {
+    return {
+      executionSnapshotHash: `hash-${input.claimId}`,
+      executionSnapshotId: `snapshot-${input.claimId}`,
+      modelId: 'model-race',
+      projectId: 'project-race',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
+  }
+  const createJudgmentExecutionSnapshotsForClaims = async (inputs: Array<{claimId: string}>) => {
+    const gate = snapshotGate
+
+    if (gate) {
+      gate.started()
+      await gate.continuePromise
+    }
+
+    return inputs.map(getSnapshot)
+  }
+
   return {
-    createJudgmentExecutionSnapshotForClaim: async (input: {claimId: string}) => {
-      const gate = snapshotGate
-
-      if (gate) {
-        gate.started()
-        await gate.continuePromise
-      }
-
-      return {
-        executionSnapshotHash: `hash-${input.claimId}`,
-        executionSnapshotId: `snapshot-${input.claimId}`,
-        modelId: 'model-race',
-        projectId: 'project-race',
-        useAbstract: true,
-        useFulltext: false,
-        useFulltextNoImages: false,
-        useTitle: true,
-      }
-    },
+    createJudgmentExecutionSnapshotsForClaims,
+    createTransientJudgmentExecutionSnapshotsForClaims: createJudgmentExecutionSnapshotsForClaims,
   }
 })
 
