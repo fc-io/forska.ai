@@ -14,6 +14,16 @@ export type CompareProjectJudgmentsUrlState = {
   differenceFilter: ComparisonProjectDifferenceFilter
 }
 
+type CompareProjectJudgmentsDifferenceFilterMetadataState = {
+  availableDifferenceFilters: readonly ComparisonProjectDifferenceFilter[]
+  differenceFilter: ComparisonProjectDifferenceFilter
+  hasLoadedMetadata: boolean
+}
+
+type CompareProjectJudgmentsPageQueryState = CompareProjectJudgmentsDifferenceFilterMetadataState & {
+  searchInitialized: boolean
+}
+
 export const getDefaultCompareProjectJudgmentsUrlState = (): CompareProjectJudgmentsUrlState => {
   return {currentPage: 1, pageLimit: 50, rowFilter: defaultComparisonProjectRowFilter, differenceFilter: 'all'}
 }
@@ -105,4 +115,20 @@ export const getCompareProjectJudgmentsSearchParams = (
   }
 
   return searchParams
+}
+
+export const getCompareProjectJudgmentsConfirmedDifferenceFilter = (
+  state: CompareProjectJudgmentsDifferenceFilterMetadataState,
+): ComparisonProjectDifferenceFilter => {
+  return state.hasLoadedMetadata && !state.availableDifferenceFilters.includes(state.differenceFilter)
+    ? 'all'
+    : state.differenceFilter
+}
+
+export const getCanFetchCompareProjectJudgmentsPage = (state: CompareProjectJudgmentsPageQueryState) => {
+  return (
+    state.searchInitialized
+    && state.hasLoadedMetadata
+    && state.availableDifferenceFilters.includes(state.differenceFilter)
+  )
 }

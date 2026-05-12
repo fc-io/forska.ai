@@ -99,6 +99,7 @@ test('batch cell assembly preserves shared row shape and row-filter semantics', 
       articleSummary: 'Article 1 summary',
       articleTitle: 'Article 1',
       cells: {'human:prompt-1': 'yes', 'llm:model-1:1100:prompt-1': 'yes', 'llm:model-1:1100:prompt-2': 'no'},
+      hasConflict: false,
       id: 'article-1',
     },
   ])

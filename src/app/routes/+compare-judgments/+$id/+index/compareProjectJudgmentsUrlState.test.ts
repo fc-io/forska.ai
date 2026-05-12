@@ -1,6 +1,8 @@
 import {expect, test} from 'bun:test'
 
 import {
+  getCanFetchCompareProjectJudgmentsPage,
+  getCompareProjectJudgmentsConfirmedDifferenceFilter,
   getCompareProjectJudgmentsSearchParams,
   getInitialCompareProjectJudgmentsUrlState,
 } from './compareProjectJudgmentsUrlState.ts'
@@ -68,4 +70,34 @@ test('compare judgments URL state lets canonical params override legacy params',
   expect(state.rowFilter).toBe('multiple-answers')
   expect(state.differenceFilter).toBe('all')
   expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({})
+})
+
+test('compare judgments URL state preserves selected difference filter until metadata confirms it', () => {
+  const initialState = getInitialCompareProjectJudgmentsUrlState({differenceFilter: 'human-vs-llm'})
+  const loadingMetadataState = {
+    availableDifferenceFilters: ['all'] as const,
+    differenceFilter: initialState.differenceFilter,
+    hasLoadedMetadata: false,
+  }
+  const loadedMetadataState = {
+    ...loadingMetadataState,
+    availableDifferenceFilters: ['all', 'human-vs-llm'] as const,
+    hasLoadedMetadata: true,
+  }
+
+  expect(getCompareProjectJudgmentsConfirmedDifferenceFilter(loadingMetadataState)).toBe('human-vs-llm')
+  expect(getCanFetchCompareProjectJudgmentsPage({...loadingMetadataState, searchInitialized: true})).toBe(false)
+  expect(getCompareProjectJudgmentsConfirmedDifferenceFilter(loadedMetadataState)).toBe('human-vs-llm')
+  expect(getCanFetchCompareProjectJudgmentsPage({...loadedMetadataState, searchInitialized: true})).toBe(true)
+})
+
+test('compare judgments URL state resets selected difference filter after metadata rejects it', () => {
+  const metadataState = {
+    availableDifferenceFilters: ['all', 'llm-vs-llm'] as const,
+    differenceFilter: 'human-vs-llm' as const,
+    hasLoadedMetadata: true,
+  }
+
+  expect(getCompareProjectJudgmentsConfirmedDifferenceFilter(metadataState)).toBe('all')
+  expect(getCanFetchCompareProjectJudgmentsPage({...metadataState, searchInitialized: true})).toBe(false)
 })

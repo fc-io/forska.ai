@@ -29,6 +29,8 @@ import {
 } from '../../../../utils/comparisonProjectRowFilter.ts'
 import {
   compareProjectJudgmentsPageLimitOptions,
+  getCanFetchCompareProjectJudgmentsPage,
+  getCompareProjectJudgmentsConfirmedDifferenceFilter,
   getCompareProjectJudgmentsSearchParams,
   getInitialCompareProjectJudgmentsUrlState,
 } from './+index/compareProjectJudgmentsUrlState.ts'
@@ -185,39 +187,6 @@ const CompareProjectJudgmentsPage = () => {
       staleTime: 5 * 60 * 1000,
     }
   })
-  const getCurrentJudgmentsPageQueryKey = () => {
-    return [
-      'comparison-project-judgments-page',
-      comparisonProjectId(),
-      currentPage(),
-      pageLimit(),
-      rowFilter(),
-      differenceFilter(),
-    ] as const
-  }
-  const judgmentsPageQuery = useQuery(() => {
-    return {
-      queryKey: getCurrentJudgmentsPageQueryKey(),
-      queryFn: () => {
-        return fetchComparisonProjectJudgmentsPage(
-          comparisonProjectId(),
-          currentPage(),
-          pageLimit(),
-          rowFilter(),
-          differenceFilter(),
-        )
-      },
-      enabled: searchInitialized(),
-      refetchOnWindowFocus: false,
-    }
-  })
-
-  const canGoToPreviousPage = createMemo(() => {
-    return currentPage() > 1
-  })
-  const canGoToNextPage = createMemo(() => {
-    return currentPage() < (judgmentsPageQuery.data?.totalPages ?? 0)
-  })
   const orderedColumns = createMemo<ComparisonProjectJudgmentsTableColumn[]>(() => {
     const comparisonProject = comparisonProjectQuery.data
 
@@ -230,6 +199,50 @@ const CompareProjectJudgmentsPage = () => {
         }
       },
     )
+  })
+  const availableDifferenceFilters = createMemo(() => {
+    return getAvailableComparisonProjectDifferenceFilters(orderedColumns())
+  })
+  const getCurrentJudgmentsPageQueryKey = () => {
+    return [
+      'comparison-project-judgments-page',
+      comparisonProjectId(),
+      currentPage(),
+      pageLimit(),
+      rowFilter(),
+      differenceFilter(),
+    ] as const
+  }
+  const canFetchJudgmentsPage = createMemo(() => {
+    return getCanFetchCompareProjectJudgmentsPage({
+      availableDifferenceFilters: availableDifferenceFilters(),
+      differenceFilter: differenceFilter(),
+      hasLoadedMetadata: comparisonProjectQuery.isSuccess,
+      searchInitialized: searchInitialized(),
+    })
+  })
+  const judgmentsPageQuery = useQuery(() => {
+    return {
+      queryKey: getCurrentJudgmentsPageQueryKey(),
+      queryFn: () => {
+        return fetchComparisonProjectJudgmentsPage(
+          comparisonProjectId(),
+          currentPage(),
+          pageLimit(),
+          rowFilter(),
+          differenceFilter(),
+        )
+      },
+      enabled: canFetchJudgmentsPage(),
+      refetchOnWindowFocus: false,
+    }
+  })
+
+  const canGoToPreviousPage = createMemo(() => {
+    return currentPage() > 1
+  })
+  const canGoToNextPage = createMemo(() => {
+    return currentPage() < (judgmentsPageQuery.data?.totalPages ?? 0)
   })
   const conflictResolutionOptions = createMemo(() => {
     const comparisonProject = comparisonProjectQuery.data
@@ -252,7 +265,7 @@ const CompareProjectJudgmentsPage = () => {
     return Boolean(comparisonProject?.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary')
   })
   const differenceFilterOptions = createMemo(() => {
-    return getAvailableComparisonProjectDifferenceFilters(orderedColumns()).map((value) => {
+    return availableDifferenceFilters().map((value) => {
       return {label: getComparisonProjectDifferenceFilterLabel(value), value}
     })
   })
@@ -266,12 +279,14 @@ const CompareProjectJudgmentsPage = () => {
   })
 
   createEffect(() => {
-    const availableFilters = differenceFilterOptions().map((option) => {
-      return option.value
+    const confirmedDifferenceFilter = getCompareProjectJudgmentsConfirmedDifferenceFilter({
+      availableDifferenceFilters: availableDifferenceFilters(),
+      differenceFilter: differenceFilter(),
+      hasLoadedMetadata: comparisonProjectQuery.isSuccess,
     })
 
-    if (!availableFilters.includes(differenceFilter())) {
-      setDifferenceFilter('all')
+    if (confirmedDifferenceFilter !== differenceFilter()) {
+      setDifferenceFilter(confirmedDifferenceFilter)
     }
   })
 

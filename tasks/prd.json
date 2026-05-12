@@ -1,7 +1,7 @@
 {
   "name": "Better Performance For Compare Judgments",
-  "branchName": "ralph/better-performance-compare",
   "description": "Make compare judgments filters and pagination scale by introducing generation-based comparison serving marts, cursor reads, async counts, and serving-backed export.",
+  "branchName": "ralph/better-performance-compare",
   "userStories": [
     {
       "id": "US-001",
@@ -18,9 +18,10 @@
         "`bun run lint` passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -335,5 +336,8 @@
         "US-013"
       ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-05-12T20:16:29.516Z"
+  }
 }
