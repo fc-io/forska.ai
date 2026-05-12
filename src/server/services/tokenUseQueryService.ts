@@ -8,6 +8,12 @@ import {
   getSqlLiteral,
   getTimestampLiteral,
 } from './appQueryHelpers.ts'
+import {projectRequestAttemptCloseoutsForTokenUse} from './requestAttemptCloseoutService.ts'
+
+type TokenUseMutationRunner = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
 
 type TokenUseRow = {
   id: string
@@ -365,10 +371,10 @@ const assertTokenUseIdempotentConflictMatches = (
   }
 }
 
-const insertTokenUse = async (values: Record<string, unknown>) => {
-  const insertValues = getInsertTokenUseValues(values)
+const getInsertTokenUseSql = (insertValues: Record<string, unknown>): string => {
   const columns = Object.keys(insertValues)
-  const [row] = await getAppDatabaseService().queryJson<TokenUseRow>(`
+
+  return `
     INSERT INTO app.token_use (${columns.join(', ')})
     VALUES (${columns
       .map((column) => {
@@ -376,15 +382,13 @@ const insertTokenUse = async (values: Record<string, unknown>) => {
       })
       .join(', ')})
     RETURNING ${tokenUseSelectClause}
-  `)
-
-  return row ? getTokenUseValue(row) : null
+  `
 }
 
-const insertTokenUseOnce = async (values: Record<string, unknown>) => {
-  const insertValues = getInsertTokenUseValues(values)
+const getInsertTokenUseOnceSql = (insertValues: Record<string, unknown>): string => {
   const columns = Object.keys(insertValues)
-  const [insertedRow] = await getAppDatabaseService().queryJson<TokenUseRow>(`
+
+  return `
     INSERT INTO app.token_use (${columns.join(', ')})
     VALUES (${columns
       .map((column) => {
@@ -393,28 +397,75 @@ const insertTokenUseOnce = async (values: Record<string, unknown>) => {
       .join(', ')})
     ON CONFLICT(id) DO NOTHING
     RETURNING ${tokenUseSelectClause}
-  `)
+  `
+}
 
-  if (insertedRow) {
-    return getTokenUseValue(insertedRow)
-  }
-
-  const id = typeof insertValues.id === 'string' ? insertValues.id : ''
-  const [existingRow] = await getAppDatabaseService().queryJson<TokenUseRow>(`
+const getTokenUseById = async (runner: TokenUseMutationRunner, id: string): Promise<TokenUseRecord | null> => {
+  const [existingRow] = await runner.queryJson<TokenUseRow>(`
     SELECT ${tokenUseSelectClause}
     FROM app.token_use
     WHERE id = ${getSqlLiteral(id)}
     LIMIT 1
   `)
 
-  if (!existingRow) {
-    return null
-  }
+  return existingRow ? getTokenUseValue(existingRow) : null
+}
 
-  const existingValue = getTokenUseValue(existingRow)
-  assertTokenUseIdempotentConflictMatches(existingValue, insertValues)
+const projectRequestAttemptCloseoutsForTokenUseValue = async (
+  runner: TokenUseMutationRunner,
+  tokenUse: TokenUseRecord,
+): Promise<void> => {
+  await projectRequestAttemptCloseoutsForTokenUse({
+    runner,
+    tokenUse: {
+      requestAttemptsJson: tokenUse.requestAttemptsJson,
+      tokenUseCreatedAt: tokenUse.createdAt,
+      tokenUseFinishedAt: tokenUse.finishedAt,
+      tokenUseId: tokenUse.id,
+      tokenUseStartedAt: tokenUse.startedAt,
+    },
+  })
+}
 
-  return existingValue
+const insertTokenUse = async (values: Record<string, unknown>) => {
+  const insertValues = getInsertTokenUseValues(values)
+
+  return getAppDatabaseService().transaction(async (tx) => {
+    const [row] = await tx.queryJson<TokenUseRow>(getInsertTokenUseSql(insertValues))
+    const tokenUse = row ? getTokenUseValue(row) : null
+
+    if (tokenUse) {
+      await projectRequestAttemptCloseoutsForTokenUseValue(tx, tokenUse)
+    }
+
+    return tokenUse
+  }) as Promise<TokenUseRecord | null>
+}
+
+const insertTokenUseOnce = async (values: Record<string, unknown>) => {
+  const insertValues = getInsertTokenUseValues(values)
+
+  return getAppDatabaseService().transaction(async (tx) => {
+    const [insertedRow] = await tx.queryJson<TokenUseRow>(getInsertTokenUseOnceSql(insertValues))
+
+    if (insertedRow) {
+      const insertedValue = getTokenUseValue(insertedRow)
+      await projectRequestAttemptCloseoutsForTokenUseValue(tx, insertedValue)
+      return insertedValue
+    }
+
+    const id = typeof insertValues.id === 'string' ? insertValues.id : ''
+    const existingValue = await getTokenUseById(tx, id)
+
+    if (!existingValue) {
+      return null
+    }
+
+    assertTokenUseIdempotentConflictMatches(existingValue, insertValues)
+    await projectRequestAttemptCloseoutsForTokenUseValue(tx, existingValue)
+
+    return existingValue
+  }) as Promise<TokenUseRecord | null>
 }
 
 const getLargestSingleRequestRows = async (orderColumn: 'total_prompt_tokens' | 'total_completion_tokens') => {
