@@ -1,4 +1,4 @@
-import {useQuery, useQueryClient} from '@tanstack/solid-query'
+import {type InfiniteData, useInfiniteQuery, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, on, onMount, Show} from 'solid-js'
 
@@ -46,22 +46,18 @@ const getContentSettingsLabel = (contentVariants: Array<{label: string}>) => {
     : 'none'
 }
 
-const getRangeLabel = (page: number, limit: number, rowCount: number, totalCount: number | null) => {
-  if (totalCount === null) {
-    const start = (page - 1) * limit + 1
-    const end = start + rowCount - 1
-
-    return rowCount === 0 ? 'Showing 0 results' : `Showing ${start}-${end}`
-  }
-
+const getLoadedRangeLabel = (rowCount: number, totalCount: number) => {
   if (totalCount === 0) {
     return 'Showing 0 results'
   }
 
-  const start = (page - 1) * limit + 1
-  const end = Math.min(page * limit, totalCount)
+  const end = Math.min(rowCount, totalCount)
 
-  return `Showing ${start}-${end} of ${totalCount}`
+  return rowCount === 0 ? 'Showing 0 results' : `Showing 1-${end} of ${totalCount.toLocaleString()}`
+}
+
+const getPendingCountRangeLabel = (rowCount: number) => {
+  return rowCount === 0 ? 'Counting results' : `Showing 1-${rowCount.toLocaleString()} of`
 }
 
 const getHumanJudgmentModeLabel = (humanJudgmentMode: 'prompt' | 'summary') => {
@@ -101,6 +97,30 @@ const getUniqueConflictResolutionOptions = (options: Array<{label: string; value
       }, new Map<string, {label: string; value: string}>())
       .values(),
   )
+}
+
+const comparisonProjectServingStatusBanners: Partial<
+  Record<ComparisonProjectJudgmentsPage['servingStatus'], {body: string; className: string; title: string}>
+> = {
+  failed: {
+    body: 'Rows may be stale or incomplete until the serving rebuild succeeds.',
+    className: 'border-red-200 bg-red-50 text-red-800',
+    title: 'Comparison serving failed',
+  },
+  refreshing: {
+    body: 'Rows remain readable while the comparison serving data is materializing.',
+    className: 'border-blue-200 bg-blue-50 text-blue-800',
+    title: 'Comparison data is materializing',
+  },
+  stale: {
+    body: 'Rows may not include the latest project or judgment changes yet.',
+    className: 'border-amber-200 bg-amber-50 text-amber-800',
+    title: 'Comparison data is stale',
+  },
+}
+
+const getComparisonProjectServingStatusBanner = (status: ComparisonProjectJudgmentsPage['servingStatus']) => {
+  return comparisonProjectServingStatusBanners[status] ?? null
 }
 
 const getHumanColumnSourceProjectId = (comparisonProject?: {
@@ -171,7 +191,6 @@ const CompareProjectJudgmentsPage = () => {
 
     return 'id' in routeParams ? routeParams.id : ''
   }
-  const [currentPage, setCurrentPage] = createSignal(initialUrlState.currentPage)
   const [pageLimit, setPageLimit] = createSignal(initialUrlState.pageLimit)
   const [rowFilter, setRowFilter] = createSignal<ComparisonProjectRowFilter>(initialUrlState.rowFilter)
   const [differenceFilter, setDifferenceFilter] = createSignal<ComparisonProjectDifferenceFilter>(
@@ -215,7 +234,6 @@ const CompareProjectJudgmentsPage = () => {
     return [
       'comparison-project-judgments-page',
       comparisonProjectId(),
-      currentPage(),
       pageLimit(),
       rowFilter(),
       differenceFilter(),
@@ -238,19 +256,23 @@ const CompareProjectJudgmentsPage = () => {
       searchInitialized: searchInitialized(),
     })
   })
-  const judgmentsPageQuery = useQuery(() => {
+  const judgmentsPageQuery = useInfiniteQuery(() => {
     return {
       queryKey: getCurrentJudgmentsPageQueryKey(),
-      queryFn: () => {
+      queryFn: ({pageParam}) => {
         return fetchComparisonProjectJudgmentsPage(
           comparisonProjectId(),
-          currentPage(),
           pageLimit(),
           rowFilter(),
           differenceFilter(),
+          typeof pageParam === 'string' ? pageParam : null,
         )
       },
       enabled: canFetchJudgmentsPage(),
+      getNextPageParam: (lastPage) => {
+        return lastPage.nextCursor
+      },
+      initialPageParam: null as string | null,
       refetchOnWindowFocus: false,
     }
   })
@@ -260,23 +282,14 @@ const CompareProjectJudgmentsPage = () => {
       queryFn: () => {
         return fetchComparisonProjectJudgmentsCount(comparisonProjectId(), pageLimit(), rowFilter(), differenceFilter())
       },
-      enabled: canFetchJudgmentsPage(),
+      enabled: canFetchJudgmentsPage() && judgmentsPageQuery.isSuccess,
       refetchOnWindowFocus: false,
     }
   })
   const exactTotalCount = createMemo(() => {
-    return judgmentsCountQuery.data?.totalCount ?? null
-  })
-  const exactTotalPages = createMemo(() => {
-    return judgmentsCountQuery.data?.totalPages ?? null
+    return judgmentsCountQuery.isSuccess ? (judgmentsCountQuery.data?.totalCount ?? 0) : null
   })
 
-  const canGoToPreviousPage = createMemo(() => {
-    return currentPage() > 1
-  })
-  const canGoToNextPage = createMemo(() => {
-    return Boolean(judgmentsPageQuery.data?.nextCursor)
-  })
   const conflictResolutionOptions = createMemo(() => {
     const comparisonProject = comparisonProjectQuery.data
 
@@ -304,7 +317,6 @@ const CompareProjectJudgmentsPage = () => {
   })
   const compareSearchParams = createMemo(() => {
     return getCompareProjectJudgmentsSearchParams({
-      currentPage: currentPage(),
       pageLimit: pageLimit(),
       rowFilter: rowFilter(),
       differenceFilter: differenceFilter(),
@@ -324,7 +336,7 @@ const CompareProjectJudgmentsPage = () => {
   })
 
   createEffect(
-    on([currentPage, pageLimit, rowFilter, differenceFilter, searchInitialized], () => {
+    on([pageLimit, rowFilter, differenceFilter, searchInitialized], () => {
       if (!searchInitialized()) {
         return
       }
@@ -339,7 +351,11 @@ const CompareProjectJudgmentsPage = () => {
   )
 
   const serverFilteredRows = createMemo(() => {
-    return judgmentsPageQuery.data?.data ?? []
+    return (
+      judgmentsPageQuery.data?.pages.flatMap((page) => {
+        return page.data
+      }) ?? []
+    )
   })
   const hasRowFilters = createMemo(() => {
     return rowFilter() !== 'all' || differenceFilter() !== 'all'
@@ -348,16 +364,24 @@ const CompareProjectJudgmentsPage = () => {
     articleId: string,
     conflictResolution: {articleId: string; label: string; value: string} | null,
   ) => {
-    queryClient.setQueryData<ComparisonProjectJudgmentsPage>(getCurrentJudgmentsPageQueryKey(), (currentPageData) => {
-      return currentPageData
-        ? {
-            ...currentPageData,
-            data: currentPageData.data.map((row) => {
-              return row.id === articleId ? {...row, conflictResolution} : row
-            }),
-          }
-        : currentPageData
-    })
+    queryClient.setQueryData<InfiniteData<ComparisonProjectJudgmentsPage, string | null>>(
+      getCurrentJudgmentsPageQueryKey(),
+      (currentPageData) => {
+        return currentPageData
+          ? {
+              ...currentPageData,
+              pages: currentPageData.pages.map((page) => {
+                return {
+                  ...page,
+                  data: page.data.map((row) => {
+                    return row.id === articleId ? {...row, conflictResolution} : row
+                  }),
+                }
+              }),
+            }
+          : currentPageData
+      },
+    )
   }
   const refetchCurrentJudgmentsPage = async () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-page', comparisonProjectId()]})
@@ -483,19 +507,35 @@ const CompareProjectJudgmentsPage = () => {
                 </div>
               </div>
 
+              <Show when={getComparisonProjectServingStatusBanner(comparisonProject().servingStatus)}>
+                {(statusBanner) => {
+                  return (
+                    <div class={`rounded-lg border p-4 ${statusBanner().className}`}>
+                      <p class="font-medium">{statusBanner().title}</p>
+                      <p class="mt-1 text-sm opacity-90">{statusBanner().body}</p>
+                    </div>
+                  )
+                }}
+              </Show>
+
               <div class="space-y-4">
                 <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white p-4 shadow">
                   <div>
                     <h2 class="text-lg font-semibold">Article Judgments</h2>
                     <p class="text-sm text-gray-600">
-                      {judgmentsPageQuery.data
-                        ? getRangeLabel(
-                            judgmentsPageQuery.data.page,
-                            judgmentsPageQuery.data.limit,
-                            judgmentsPageQuery.data.data.length,
-                            exactTotalCount(),
-                          )
-                        : 'Loading results...'}
+                      <Show when={judgmentsPageQuery.data} fallback="Loading results...">
+                        <Show
+                          when={exactTotalCount() !== null}
+                          fallback={
+                            <span class="inline-flex items-center gap-2">
+                              <span>{getPendingCountRangeLabel(serverFilteredRows().length)}</span>
+                              <span class="h-4 w-16 animate-pulse rounded bg-gray-200" />
+                            </span>
+                          }
+                        >
+                          {getLoadedRangeLabel(serverFilteredRows().length, exactTotalCount() ?? 0)}
+                        </Show>
+                      </Show>
                     </p>
                   </div>
                   <div class="flex items-center gap-3">
@@ -506,7 +546,6 @@ const CompareProjectJudgmentsPage = () => {
                         class="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
                         onChange={(event) => {
                           setRowFilter(getNormalizedComparisonProjectRowFilter(event.currentTarget.value))
-                          setCurrentPage(1)
                         }}
                       >
                         <For each={comparisonProjectRowFilters}>
@@ -528,7 +567,6 @@ const CompareProjectJudgmentsPage = () => {
                           class="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
                           onChange={(event) => {
                             setDifferenceFilter(event.currentTarget.value as ComparisonProjectDifferenceFilter)
-                            setCurrentPage(1)
                           }}
                         >
                           <For each={differenceFilterOptions()}>
@@ -546,7 +584,6 @@ const CompareProjectJudgmentsPage = () => {
                         class="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
                         onChange={(event) => {
                           setPageLimit(Number(event.currentTarget.value))
-                          setCurrentPage(1)
                         }}
                       >
                         <For each={compareProjectJudgmentsPageLimitOptions}>
@@ -556,37 +593,6 @@ const CompareProjectJudgmentsPage = () => {
                         </For>
                       </select>
                     </label>
-                    <div class="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={!canGoToPreviousPage()}
-                        onClick={() => {
-                          setCurrentPage((page) => {
-                            return page - 1
-                          })
-                        }}
-                      >
-                        Previous
-                      </Button>
-                      <span class="text-sm text-gray-600">
-                        {exactTotalPages() === null
-                          ? `Page ${judgmentsPageQuery.data?.page ?? currentPage()}`
-                          : `Page ${judgmentsPageQuery.data?.page ?? currentPage()} of ${exactTotalPages() ?? 0}`}
-                      </span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={!canGoToNextPage()}
-                        onClick={() => {
-                          setCurrentPage((page) => {
-                            return page + 1
-                          })
-                        }}
-                      >
-                        Next
-                      </Button>
-                    </div>
                   </div>
                 </div>
 
@@ -626,15 +632,38 @@ const CompareProjectJudgmentsPage = () => {
                     && serverFilteredRows().length > 0
                   }
                 >
-                  <ComparisonProjectJudgmentsTable
-                    columns={orderedColumns()}
-                    conflictResolutionEnabled={comparisonProject().allowConflictResolution}
-                    conflictResolutionPendingArticleId={conflictResolutionPendingArticleId()}
-                    conflictResolutionOptions={conflictResolutionOptions()}
-                    onConflictResolutionReset={handleConflictResolutionReset}
-                    onConflictResolutionSelect={handleConflictResolutionSelect}
-                    rows={serverFilteredRows()}
-                  />
+                  <>
+                    <ComparisonProjectJudgmentsTable
+                      columns={orderedColumns()}
+                      conflictResolutionEnabled={comparisonProject().allowConflictResolution}
+                      conflictResolutionPendingArticleId={conflictResolutionPendingArticleId()}
+                      conflictResolutionOptions={conflictResolutionOptions()}
+                      onConflictResolutionReset={handleConflictResolutionReset}
+                      onConflictResolutionSelect={handleConflictResolutionSelect}
+                      rows={serverFilteredRows()}
+                    />
+                    <div class="flex justify-center">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!judgmentsPageQuery.hasNextPage || judgmentsPageQuery.isFetchingNextPage}
+                        onClick={() => {
+                          void judgmentsPageQuery.fetchNextPage()
+                        }}
+                      >
+                        <Show
+                          when={judgmentsPageQuery.isFetchingNextPage}
+                          fallback={
+                            <Show when={judgmentsPageQuery.hasNextPage} fallback="All rows loaded">
+                              Load more
+                            </Show>
+                          }
+                        >
+                          Loading...
+                        </Show>
+                      </Button>
+                    </div>
+                  </>
                 </Show>
 
                 <Show

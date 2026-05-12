@@ -214,7 +214,7 @@ export type ComparisonProjectRowsRequestFilters = {
 export type ComparisonProjectJudgmentsPageRequest = ComparisonProjectRowsRequestFilters & {
   cursor?: string | null
   limit: string
-  page: string
+  page?: string
 }
 export type ComparisonProjectJudgmentsCountRequest = ComparisonProjectRowsRequestFilters & {limit: string}
 export type ComparisonProjectExportRequest = ComparisonProjectRowsRequestFilters
@@ -282,19 +282,12 @@ export const fetchComparisonProjectEditFormData = async (comparisonProjectId: st
 
 export const fetchComparisonProjectJudgmentsPage = async (
   comparisonProjectId: string,
-  page: number,
   limit: number,
   rowFilter?: ComparisonProjectRowFilter,
   differenceFilter?: ComparisonProjectDifferenceFilter,
   cursor?: string | null,
 ) => {
-  const body: ComparisonProjectJudgmentsPageRequest = {
-    cursor,
-    page: String(page),
-    limit: String(limit),
-    rowFilter,
-    differenceFilter,
-  }
+  const body: ComparisonProjectJudgmentsPageRequest = {cursor, limit: String(limit), rowFilter, differenceFilter}
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.post(body)
 
   return getResponseData<ComparisonProjectJudgmentsPage>(response, 'Failed to fetch comparison project judgments')

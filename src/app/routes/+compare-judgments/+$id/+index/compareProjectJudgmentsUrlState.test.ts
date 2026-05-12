@@ -15,11 +15,10 @@ test('compare judgments URL state preserves canonical filter params', () => {
     rowFilter: 'fully-answered',
   })
 
-  expect(state).toEqual({currentPage: 3, differenceFilter: 'human-vs-llm', pageLimit: 100, rowFilter: 'fully-answered'})
+  expect(state).toEqual({differenceFilter: 'human-vs-llm', pageLimit: 100, rowFilter: 'fully-answered'})
   expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({
     differenceFilter: 'human-vs-llm',
     limit: '100',
-    page: '3',
     rowFilter: 'fully-answered',
   })
 })

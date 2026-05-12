@@ -44,7 +44,6 @@ const CompareProjectExportPage = () => {
   const comparisonProjectId = () => {
     return getComparisonProjectId(params() as Record<string, string>)
   }
-  const [currentPage, setCurrentPage] = createSignal(initialUrlState.currentPage)
   const [pageLimit] = createSignal(initialUrlState.pageLimit)
   const [rowFilter, setRowFilter] = createSignal<ComparisonProjectRowFilter>(initialUrlState.rowFilter)
   const [differenceFilter, setDifferenceFilter] = createSignal<ComparisonProjectDifferenceFilter>(
@@ -83,12 +82,7 @@ const CompareProjectExportPage = () => {
     })
   })
   const urlState = createMemo(() => {
-    return {
-      currentPage: currentPage(),
-      differenceFilter: differenceFilter(),
-      pageLimit: pageLimit(),
-      rowFilter: rowFilter(),
-    }
+    return {differenceFilter: differenceFilter(), pageLimit: pageLimit(), rowFilter: rowFilter()}
   })
 
   createEffect(() => {
@@ -103,7 +97,7 @@ const CompareProjectExportPage = () => {
   })
 
   createEffect(
-    on([currentPage, pageLimit, rowFilter, differenceFilter, searchInitialized], () => {
+    on([pageLimit, rowFilter, differenceFilter, searchInitialized], () => {
       if (!searchInitialized()) {
         return
       }
@@ -136,11 +130,9 @@ const CompareProjectExportPage = () => {
     }
   })
   const updateRowFilter = (value: ComparisonProjectRowFilter) => {
-    setCurrentPage(1)
     setRowFilter(value)
   }
   const updateDifferenceFilter = (value: ComparisonProjectDifferenceFilter) => {
-    setCurrentPage(1)
     setDifferenceFilter(value)
   }
   const handleExport = () => {
