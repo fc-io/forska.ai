@@ -252,6 +252,14 @@ const [local] = splitProps(props, ['user'])
 - Use singular table names.
 - Keep using the existing SQL migration files under `src/db/duckdbMigrations/`.
 
+### Shared DuckDB Runtime Safety
+
+- Foreground routes, cron jobs, queues, marts, and maintenance tasks share one constrained DuckDB runtime.
+- Background jobs should not run unbounded scans over JSON, text, or historical tables.
+- Scope background work by active rows, project, dirty token, cursor, batch limit, or an explicit time window.
+- Persist relational keys and prefer compact lookup or projection tables for maintenance state.
+- Raising `DUCKDB_MEMORY_LIMIT` is an emergency mitigation, not the root fix.
+
 ### Judgment Queries
 
 - When querying judgments in a project context, always filter by model and content settings.
