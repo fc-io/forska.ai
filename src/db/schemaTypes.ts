@@ -23,6 +23,7 @@ export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_gr
 export type Engine = 'sglang' | 'vllm'
 export type ModelSource = 'discovered' | 'manual'
 export type ProjectMartRefreshStatus = 'blocked_by_quarantine' | 'idle' | 'running' | 'failed' | 'paused'
+export type ComparisonProjectServingStatus = 'missing' | 'refreshing' | 'ready' | 'failed' | 'stale'
 export type HumanJudgmentMode = 'prompt' | 'summary'
 export type ProjectPromptCriteriaDisposition = 'include' | 'exclude' | 'combined'
 export type JudgmentHumanSummaryAnswer = 'yes' | 'no' | 'maybe'
