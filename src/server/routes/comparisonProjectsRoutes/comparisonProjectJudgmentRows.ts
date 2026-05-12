@@ -108,7 +108,16 @@ type ComparisonProjectServingJudgmentRowsParams = {
   rowFilter: ComparisonProjectRowFilter
 }
 
+type ComparisonProjectServingJudgmentCountParams = {
+  comparisonProjectId: string
+  differenceFilter: ComparisonProjectDifferenceFilter
+  limit: number
+  queryRunner: ComparisonProjectScopedArticleQueryRunner
+  rowFilter: ComparisonProjectRowFilter
+}
+
 export type ComparisonProjectServingJudgmentRowsPage = {nextCursor: string | null; rows: ComparisonProjectJudgmentRow[]}
+export type ComparisonProjectServingJudgmentCount = {totalCount: number; totalPages: number}
 
 export const getComparisonProjectContentKey = (settings: {
   useTitle: boolean
@@ -171,6 +180,12 @@ const getComparisonProjectServingGeneration = (value: unknown) => {
   const parsedGeneration = typeof value === 'bigint' ? Number(value) : Number(value)
 
   return Number.isSafeInteger(parsedGeneration) && parsedGeneration > 0 ? parsedGeneration : null
+}
+
+const getComparisonProjectServingCount = (value: unknown) => {
+  const parsedCount = typeof value === 'bigint' ? Number(value) : Number(value)
+
+  return Number.isSafeInteger(parsedCount) && parsedCount >= 0 ? parsedCount : 0
 }
 
 const getInClause = (values: string[]) => {
@@ -350,6 +365,28 @@ export const getComparisonProjectServingCellsSql = (params: {
   `
 }
 
+export const getComparisonProjectServingJudgmentCountSql = (params: {
+  comparisonProjectId: string
+  differenceFilter: ComparisonProjectDifferenceFilter
+  rowFilter: ComparisonProjectRowFilter
+}) => {
+  return `
+    WITH active_generation AS (
+      SELECT active_generation AS generation
+      FROM app.comparison_project_serving_generation
+      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+        AND active_generation > 0
+    )
+    SELECT stats.total_count AS totalCount
+    FROM mart.comparison_filter_stats stats
+    INNER JOIN active_generation active ON active.generation = stats.generation
+    WHERE stats.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+      AND stats.row_filter = ${getSqlLiteral(params.rowFilter)}
+      AND stats.difference_filter = ${getSqlLiteral(params.differenceFilter)}
+    LIMIT 1
+  `
+}
+
 const getComparisonProjectServingCellsByArticle = (cellRows: readonly ComparisonProjectServingCellRow[]) => {
   return cellRows.reduce<Record<string, Record<string, string | null>>>((articleMap, cellRow) => {
     const articleCells = articleMap[cellRow.articleId] ?? {}
@@ -389,6 +426,18 @@ const getComparisonProjectServingJudgmentRows = (params: {
         : null
     })
     .filter(isDefined)
+}
+
+export const getComparisonProjectServingJudgmentCount = async (
+  params: ComparisonProjectServingJudgmentCountParams,
+): Promise<ComparisonProjectServingJudgmentCount> => {
+  const limit = getPositiveInteger(params.limit)
+  const [row] = await params.queryRunner.queryJson<{totalCount: unknown}>(
+    getComparisonProjectServingJudgmentCountSql(params),
+  )
+  const totalCount = getComparisonProjectServingCount(row?.totalCount)
+
+  return {totalCount, totalPages: totalCount > 0 ? Math.ceil(totalCount / limit) : 0}
 }
 
 export const getComparisonProjectServingJudgmentRowsPage = async (

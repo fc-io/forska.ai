@@ -48,6 +48,7 @@ type MockDatabaseState = {
   lastConflictResolutionInsertStatement: string | null
   lastPromptInsertStatement: string | null
   lastUpdateStatement: string | null
+  missingServingStats: boolean
   promptLinks: Array<{
     criteriaDisposition?: string | null
     criteriaSectionKey?: string | null
@@ -551,6 +552,19 @@ const postComparisonProjectJudgments = (
   )
 }
 
+const postComparisonProjectJudgmentsCount = (
+  app: {handle: (request: Request) => Promise<Response>},
+  body: Record<string, unknown>,
+) => {
+  return app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments/count', {
+      body: JSON.stringify(body),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+}
+
 const postComparisonProjectExport = (
   app: {handle: (request: Request) => Promise<Response>},
   body: Record<string, unknown>,
@@ -617,7 +631,10 @@ const getSqlFilterValue = <T extends string>(params: {
 }) => {
   return (
     params.values.find((value) => {
-      return params.statement.includes(`member.${params.column} = '${value}'`)
+      return (
+        params.statement.includes(`member.${params.column} = '${value}'`)
+        || params.statement.includes(`stats.${params.column} = '${value}'`)
+      )
     }) ?? params.fallback
   )
 }
@@ -670,6 +687,30 @@ const queryJson = async (
     return state.conflictResolutionRows.filter((row) => {
       return statement.includes(`'${row.articleId}'`)
     })
+  }
+
+  if (statement.includes('FROM mart.comparison_filter_stats')) {
+    const mockState = getMockDatabaseState()
+    const generation = mockState.servingStatus.activeGeneration
+
+    if (generation === null || mockState.missingServingStats) {
+      return []
+    }
+
+    const rowFilter = getSqlFilterValue({
+      column: 'row_filter',
+      fallback: 'multiple-answers',
+      statement,
+      values: comparisonProjectRowFilters,
+    })
+    const differenceFilter = getSqlFilterValue({
+      column: 'difference_filter',
+      fallback: 'all',
+      statement,
+      values: differenceFilters,
+    })
+
+    return [{totalCount: getMockServingRows(mockState, rowFilter, differenceFilter).length}]
   }
 
   if (statement.includes('FROM mart.comparison_filter_member')) {
@@ -1297,6 +1338,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     lastConflictResolutionInsertStatement: null,
     lastPromptInsertStatement: null,
     lastUpdateStatement: null,
+    missingServingStats: false,
     promptLinks: [{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}],
     queryStatements: [],
     queuedServingRebuildIds: [],
@@ -2229,6 +2271,209 @@ test('comparison judgments serving path supports every difference filter', async
     {filter: 'llm-vs-llm', titles: ['Article 1']},
     {filter: 'any-disagreement', titles: ['Article 1']},
   ])
+})
+
+test('comparison judgments count endpoint supports every row and difference filter from serving stats', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    includeSingleAnswerArticle: true,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const filterCases = comparisonProjectRowFilters.flatMap((rowFilter) => {
+    return differenceFilters.map((differenceFilter) => {
+      return {differenceFilter, rowFilter}
+    })
+  })
+  const countBodies = await filterCases.reduce<
+    Promise<
+      Array<{
+        activeGeneration: number | null
+        differenceFilter: ComparisonProjectDifferenceFilter
+        isServingReady: boolean
+        limit: number
+        rowFilter: ComparisonProjectRowFilter
+        servingStatus: string
+        servingUpdatedAt: string | null
+        totalCount: number
+        totalPages: number
+      }>
+    >
+  >(async (promise, filterCase) => {
+    const results = await promise
+    const response = await postComparisonProjectJudgmentsCount(app, {...filterCase, limit: '1'})
+    const body = (await response.json()) as {
+      data: {
+        activeGeneration: number | null
+        isServingReady: boolean
+        limit: number
+        servingStatus: string
+        servingUpdatedAt: string | null
+        totalCount: number
+        totalPages: number
+      }
+    }
+
+    expect(response.status).toBe(200)
+
+    return [...results, {...body.data, ...filterCase}]
+  }, Promise.resolve([]))
+  const expectedBodies = filterCases.map((filterCase) => {
+    const totalCount = getMockServingRows(
+      getMockDatabaseState(),
+      filterCase.rowFilter,
+      filterCase.differenceFilter,
+    ).length
+
+    return {
+      activeGeneration: 1,
+      differenceFilter: filterCase.differenceFilter,
+      isServingReady: true,
+      limit: 1,
+      rowFilter: filterCase.rowFilter,
+      servingStatus: 'ready',
+      servingUpdatedAt: '2026-04-03T00:00:00.000Z',
+      totalCount,
+      totalPages: totalCount,
+    }
+  })
+  const state = getMockDatabaseState()
+
+  expect(countBodies).toEqual(expectedBodies)
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_filter_stats stats')
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_filter_member')
+        || statement.includes('FROM mart.comparison_cell_serving')
+        || statement.includes('FROM mart.comparison_article_serving')
+      )
+    }),
+  ).toBe(false)
+})
+
+test('comparison judgments count endpoint returns zero for missing stats without scanning rows', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    missingServingStats: true,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectJudgmentsCount(app, {
+    differenceFilter: 'llm-vs-llm',
+    limit: '50',
+    rowFilter: 'fully-answered',
+  })
+  const body = (await response.json()) as {
+    data: {activeGeneration: number | null; servingStatus: string; totalCount: number; totalPages: number}
+  }
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.data).toMatchObject({activeGeneration: 1, servingStatus: 'ready', totalCount: 0, totalPages: 0})
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_filter_stats stats')
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_filter_member')
+        || statement.includes('FROM mart.comparison_cell_serving')
+        || statement.includes('FROM mart.comparison_article_serving')
+      )
+    }),
+  ).toBe(false)
+})
+
+test('comparison judgments count endpoint returns zero when active generation is missing', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectJudgmentsCount(app, {
+    differenceFilter: 'all',
+    limit: '50',
+    rowFilter: 'all',
+  })
+  const body = (await response.json()) as {
+    data: {
+      activeGeneration: number | null
+      isServingReady: boolean
+      servingStatus: string
+      totalCount: number
+      totalPages: number
+    }
+  }
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.data).toMatchObject({
+    activeGeneration: null,
+    isServingReady: false,
+    servingStatus: 'missing',
+    totalCount: 0,
+    totalPages: 0,
+  })
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_filter_stats stats')
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_filter_member')
+        || statement.includes('FROM mart.comparison_cell_serving')
+        || statement.includes('FROM mart.comparison_article_serving')
+      )
+    }),
+  ).toBe(false)
 })
 
 test('comparison judgments return an empty serving page when active generation is missing', async () => {

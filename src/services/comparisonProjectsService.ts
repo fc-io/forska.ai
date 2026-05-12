@@ -198,6 +198,15 @@ export type ComparisonProjectJudgmentsPage = {
   totalCount: number | null
   totalPages: number | null
 }
+export type ComparisonProjectJudgmentsCount = {
+  activeGeneration: number | null
+  isServingReady: boolean
+  limit: number
+  servingStatus: ComparisonProjectServingStatus
+  servingUpdatedAt: Date | string | null
+  totalCount: number
+  totalPages: number
+}
 export type ComparisonProjectRowsRequestFilters = {
   rowFilter?: ComparisonProjectRowFilter
   differenceFilter?: ComparisonProjectDifferenceFilter
@@ -207,6 +216,7 @@ export type ComparisonProjectJudgmentsPageRequest = ComparisonProjectRowsRequest
   limit: string
   page: string
 }
+export type ComparisonProjectJudgmentsCountRequest = ComparisonProjectRowsRequestFilters & {limit: string}
 export type ComparisonProjectExportRequest = ComparisonProjectRowsRequestFilters
 
 const getResponseData = <T>(response: {data?: {data?: T | null} | null; error?: unknown}, errorMessage: string) => {
@@ -288,6 +298,18 @@ export const fetchComparisonProjectJudgmentsPage = async (
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.post(body)
 
   return getResponseData<ComparisonProjectJudgmentsPage>(response, 'Failed to fetch comparison project judgments')
+}
+
+export const fetchComparisonProjectJudgmentsCount = async (
+  comparisonProjectId: string,
+  limit: number,
+  rowFilter?: ComparisonProjectRowFilter,
+  differenceFilter?: ComparisonProjectDifferenceFilter,
+) => {
+  const body: ComparisonProjectJudgmentsCountRequest = {limit: String(limit), rowFilter, differenceFilter}
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.count.post(body)
+
+  return getResponseData<ComparisonProjectJudgmentsCount>(response, 'Failed to fetch comparison project judgment count')
 }
 
 export const setComparisonProjectConflictResolution = async (

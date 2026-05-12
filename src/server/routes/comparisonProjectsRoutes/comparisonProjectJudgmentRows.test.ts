@@ -10,6 +10,8 @@ import {
   getComparisonProjectScopedArticleBatchSql,
   getComparisonProjectServingArticlesSql,
   getComparisonProjectServingCellsSql,
+  getComparisonProjectServingJudgmentCount,
+  getComparisonProjectServingJudgmentCountSql,
   getComparisonProjectServingJudgmentRowsPage,
   getComparisonProjectServingMemberSql,
 } from './comparisonProjectJudgmentRows.ts'
@@ -207,6 +209,55 @@ test('serving hydration sql scopes articles and cells to returned article ids', 
   expect(articleSql).toContain("article.article_id IN ('article-1', 'article-2')")
   expect(cellSql).toContain('FROM mart.comparison_cell_serving cell')
   expect(cellSql).toContain("cell.article_id IN ('article-1', 'article-2')")
+})
+
+test('serving judgment count sql reads active generation filter stats only', () => {
+  const sql = getComparisonProjectServingJudgmentCountSql({
+    comparisonProjectId: 'comparison-project-1',
+    differenceFilter: 'human-vs-llm',
+    rowFilter: 'multiple-answers',
+  })
+
+  expect(sql).toContain('FROM app.comparison_project_serving_generation')
+  expect(sql).toContain('FROM mart.comparison_filter_stats stats')
+  expect(sql).toContain('stats.total_count')
+  expect(sql).toContain("stats.row_filter = 'multiple-answers'")
+  expect(sql).toContain("stats.difference_filter = 'human-vs-llm'")
+  expect(sql).not.toContain('comparison_filter_member')
+  expect(sql).not.toContain('comparison_cell_serving')
+  expect(sql).not.toContain('comparison_article_serving')
+})
+
+test('serving judgment count returns pages from stats and zero for missing stats', async () => {
+  const statements: string[] = []
+  const count = await getComparisonProjectServingJudgmentCount({
+    comparisonProjectId: 'comparison-project-1',
+    differenceFilter: 'all',
+    limit: 25,
+    queryRunner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+
+        return [{totalCount: 51}] as T[]
+      },
+    },
+    rowFilter: 'all',
+  })
+  const missingCount = await getComparisonProjectServingJudgmentCount({
+    comparisonProjectId: 'comparison-project-1',
+    differenceFilter: 'all',
+    limit: 25,
+    queryRunner: {
+      queryJson: async <T>(): Promise<T[]> => {
+        return []
+      },
+    },
+    rowFilter: 'all',
+  })
+
+  expect(count).toEqual({totalCount: 51, totalPages: 3})
+  expect(missingCount).toEqual({totalCount: 0, totalPages: 0})
+  expect(statements[0]).toContain('FROM mart.comparison_filter_stats stats')
 })
 
 test('serving judgment rows return next cursor and hydrate page rows only', async () => {

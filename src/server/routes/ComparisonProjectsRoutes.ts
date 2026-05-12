@@ -46,6 +46,7 @@ import {
   getComparisonProjectContentKey,
   getComparisonProjectRequiredColumnIds,
   getComparisonProjectScopedArticleBatch,
+  getComparisonProjectServingJudgmentCount,
   getComparisonProjectServingJudgmentRowsPage,
 } from './comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
 
@@ -2424,6 +2425,44 @@ const getComparisonProjectJudgmentsPage = async (
   }
 }
 
+const getComparisonProjectJudgmentsCount = async (
+  scope: ComparisonProjectScope,
+  limit: number,
+  rowFilter: ComparisonProjectRowFilter,
+  differenceFilter: ComparisonProjectDifferenceFilter,
+) => {
+  if (scope.prompts.length === 0 || scope.columns.length === 0) {
+    return {
+      activeGeneration: scope.activeGeneration,
+      isServingReady: scope.isServingReady,
+      limit,
+      servingStatus: scope.servingStatus,
+      servingUpdatedAt: scope.servingUpdatedAt,
+      totalCount: 0,
+      totalPages: 0,
+    }
+  }
+
+  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, scope.columns)
+  const countResult = await getComparisonProjectServingJudgmentCount({
+    comparisonProjectId: scope.id,
+    differenceFilter: normalizedDifferenceFilter,
+    limit,
+    queryRunner: appDatabaseService,
+    rowFilter,
+  })
+
+  return {
+    activeGeneration: scope.activeGeneration,
+    isServingReady: scope.isServingReady,
+    limit,
+    servingStatus: scope.servingStatus,
+    servingUpdatedAt: scope.servingUpdatedAt,
+    totalCount: countResult.totalCount,
+    totalPages: countResult.totalPages,
+  }
+}
+
 const insertComparisonProjectPromptLinks = async (
   tx: AppTx,
   comparisonProjectId: string,
@@ -3126,6 +3165,40 @@ export const comparisonProjectsRoutes = new Elysia()
           ]),
         ),
         showOnlyModelDifferences: t.Optional(t.Boolean()),
+      }),
+    },
+  )
+  .post(
+    '/api/comparison-projects/:id/judgments/count',
+    async (context) => {
+      const {params, body, set} = context
+      const data = await getComparisonProjectScope(params.id)
+
+      if (!data) {
+        set.status = 404
+        return {data: null, error: 'Comparison project not found'}
+      }
+
+      const parsedLimit = getRequestedPositiveInteger(body.limit, 50)
+      const limit = Math.min(Math.max(parsedLimit, 1), 100)
+      const differenceFilter = getRequestedComparisonProjectDifferenceFilter({differenceFilter: body.differenceFilter})
+      const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
+      const countResult = await getComparisonProjectJudgmentsCount(data, limit, rowFilter, differenceFilter)
+
+      return {data: countResult}
+    },
+    {
+      body: t.Object({
+        limit: t.Union([t.String(), t.Number()]),
+        rowFilter: t.Optional(t.String()),
+        differenceFilter: t.Optional(
+          t.Union([
+            t.Literal('all'),
+            t.Literal('human-vs-llm'),
+            t.Literal('llm-vs-llm'),
+            t.Literal('any-disagreement'),
+          ]),
+        ),
       }),
     },
   )

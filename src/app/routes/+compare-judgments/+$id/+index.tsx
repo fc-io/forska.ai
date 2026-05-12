@@ -10,6 +10,7 @@ import {Button} from '../../../../components/ui/button'
 import {
   type ComparisonProjectJudgmentsColumn,
   type ComparisonProjectJudgmentsPage,
+  fetchComparisonProjectJudgmentsCount,
   fetchComparisonProjectJudgmentsMetadata,
   fetchComparisonProjectJudgmentsPage,
   resetComparisonProjectConflictResolution,
@@ -220,6 +221,15 @@ const CompareProjectJudgmentsPage = () => {
       differenceFilter(),
     ] as const
   }
+  const getCurrentJudgmentsCountQueryKey = () => {
+    return [
+      'comparison-project-judgments-count',
+      comparisonProjectId(),
+      pageLimit(),
+      rowFilter(),
+      differenceFilter(),
+    ] as const
+  }
   const canFetchJudgmentsPage = createMemo(() => {
     return getCanFetchCompareProjectJudgmentsPage({
       availableDifferenceFilters: availableDifferenceFilters(),
@@ -243,6 +253,22 @@ const CompareProjectJudgmentsPage = () => {
       enabled: canFetchJudgmentsPage(),
       refetchOnWindowFocus: false,
     }
+  })
+  const judgmentsCountQuery = useQuery(() => {
+    return {
+      queryKey: getCurrentJudgmentsCountQueryKey(),
+      queryFn: () => {
+        return fetchComparisonProjectJudgmentsCount(comparisonProjectId(), pageLimit(), rowFilter(), differenceFilter())
+      },
+      enabled: canFetchJudgmentsPage(),
+      refetchOnWindowFocus: false,
+    }
+  })
+  const exactTotalCount = createMemo(() => {
+    return judgmentsCountQuery.data?.totalCount ?? null
+  })
+  const exactTotalPages = createMemo(() => {
+    return judgmentsCountQuery.data?.totalPages ?? null
   })
 
   const canGoToPreviousPage = createMemo(() => {
@@ -467,7 +493,7 @@ const CompareProjectJudgmentsPage = () => {
                             judgmentsPageQuery.data.page,
                             judgmentsPageQuery.data.limit,
                             judgmentsPageQuery.data.data.length,
-                            judgmentsPageQuery.data.totalCount,
+                            exactTotalCount(),
                           )
                         : 'Loading results...'}
                     </p>
@@ -544,11 +570,9 @@ const CompareProjectJudgmentsPage = () => {
                         Previous
                       </Button>
                       <span class="text-sm text-gray-600">
-                        {judgmentsPageQuery.data?.totalPages === null
+                        {exactTotalPages() === null
                           ? `Page ${judgmentsPageQuery.data?.page ?? currentPage()}`
-                          : `Page ${judgmentsPageQuery.data?.page ?? currentPage()} of ${
-                              judgmentsPageQuery.data?.totalPages ?? 0
-                            }`}
+                          : `Page ${judgmentsPageQuery.data?.page ?? currentPage()} of ${exactTotalPages() ?? 0}`}
                       </span>
                       <Button
                         variant="outline"
