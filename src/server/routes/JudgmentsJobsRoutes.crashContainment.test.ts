@@ -225,3 +225,54 @@ test('delete route fails safely for quarantined crash-path jobs when isolated fl
   expect(result.body).toContain('Delete Job stopped safely')
   expect(result.job?.storageState).toBe('quarantined')
 })
+
+test('claim route returns maintenance unavailable for transient SQLite lease failures', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        process.env.SERVER_ROLE = 'dev-single'
+        process.env.API_SERVER_PORT = '3997'
+        process.env.VITE_PORT = '3000'
+
+        const {getJudgmentJobSqliteService} = await import('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const sqliteService = getJudgmentJobSqliteService()
+
+        sqliteService.claimReadyPrompts = async () => {
+          throw new Error('Failed to acquire SQLite job lease for claim-route-regression')
+        }
+        sqliteService.requeueAbandonedSentPrompts = async () => {
+          return 0
+        }
+
+        const [{judgmentsJobsRoutes}, {Elysia}] = await Promise.all([
+          import('./src/server/routes/JudgmentsJobsRoutes.ts'),
+          import('elysia'),
+        ])
+        const app = new Elysia().use(judgmentsJobsRoutes)
+        const response = await app.handle(new Request('http://localhost/api/judgmentsjobs/claim-route-regression/claims', {
+          body: JSON.stringify({claimedBy: 'judge-worker-a', limit: 1}),
+          headers: {'content-type': 'application/json'},
+          method: 'POST',
+        }))
+        const body = await response.text()
+
+        console.log(JSON.stringify({body, status: response.status}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Claim route lease regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {body: string; status: number}
+
+  expect(result.status).toBe(503)
+  expect(result.body).toContain('maintenance-unavailable')
+  expect(result.body).toContain('Failed to acquire SQLite job lease')
+})

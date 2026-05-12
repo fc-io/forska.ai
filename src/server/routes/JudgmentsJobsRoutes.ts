@@ -547,6 +547,14 @@ const getRouteErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
 }
 
+const getOwnerBackedClaimResponse = (
+  claims: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['claimReadyPrompts']>>,
+) => {
+  return claims.map(({executionSnapshotPayload: _executionSnapshotPayload, ...claim}) => {
+    return claim
+  })
+}
+
 const startOwnerBackedClaimRecovery = ({
   claimedBy,
   jobId,
@@ -762,13 +770,23 @@ const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequest
   const claimedBy = body?.claimedBy ?? judgmentJobServerId
   startOwnerBackedClaimRecovery({claimedBy, jobId, protectedRecordIds: body?.protectedRecordIds})
 
-  const claims = await getJudgmentJobSqliteService().claimReadyPrompts(
-    jobId,
-    claimedBy,
-    getNormalizedClaimLimit(body?.limit ?? 1),
-  )
+  try {
+    const claims = await getJudgmentJobSqliteService().claimReadyPrompts(
+      jobId,
+      claimedBy,
+      getNormalizedClaimLimit(body?.limit ?? 1),
+    )
 
-  return {data: {claims}, error: null}
+    return {data: {claims: getOwnerBackedClaimResponse(claims)}, error: null}
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+
+    if (isTransientJudgmentJobSqliteLockMessage(errorMessage)) {
+      throw getMaintenanceUnavailableError(errorMessage, error)
+    }
+
+    throw error
+  }
 }
 
 const recordJudgmentJobWorkerHeartbeat = async (body: JudgmentWorkerHeartbeatBody | undefined) => {

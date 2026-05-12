@@ -505,6 +505,7 @@ test('owner-backed claim route returns immutable execution snapshot identity and
         claimId: string
         executionSnapshotHash: string
         executionSnapshotId: string
+        executionSnapshotPayload?: unknown
         modelId: string
         projectId: string
         promptId: string
@@ -519,6 +520,7 @@ test('owner-backed claim route returns immutable execution snapshot identity and
   expect(typeof claim?.claimId).toBe('string')
   expect(typeof claim?.executionSnapshotId).toBe('string')
   expect(claim?.executionSnapshotHash).toHaveLength(64)
+  expect(claim).not.toHaveProperty('executionSnapshotPayload')
 
   const snapshotResponse = await app.handle(
     new Request(
@@ -530,7 +532,12 @@ test('owner-backed claim route returns immutable execution snapshot identity and
       articleId: string
       claimId: string
       payload: {
-        article: {articleSummary: string | null; fullText: string | null; fullTextHtml: string | null; originalData: unknown}
+        article: {
+          articleSummary: string | null
+          fullText: string | null
+          fullTextHtml: string | null
+          originalData: unknown
+        }
         identity: {queueRecordId: string}
       }
     }

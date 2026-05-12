@@ -8,6 +8,7 @@ import {afterEach, expect, test} from 'bun:test'
 import {
   applyJudgeWorkerCompletionOutboxLocally,
   attachTokenUseToPendingJudgeWorkerCompletion,
+  claimOwnerJudgmentJobPrompts,
   enqueueJudgeWorkerCompletion,
   flushJudgeWorkerCompletionOutboxForClaim,
   hasUnackedJudgeWorkerCompletion,
@@ -352,6 +353,22 @@ test('completion replay logs owner request path for empty successful responses',
   expect(row?.lastError).toContain(
     'owner-backed judgment request returned no data (200): [POST /api/judgmentsjobs/job-a/completions]',
   )
+})
+
+test('claim owner prompts retries transient SQLite lease failures', async () => {
+  let ownerCalls = 0
+  setupJournalTest(async () => {
+    ownerCalls += 1
+
+    return ownerCalls === 1
+      ? Response.json({data: null, error: 'Failed to acquire SQLite job lease for job-a'}, {status: 503})
+      : Response.json({data: {claims: []}, error: null})
+  })
+
+  const claims = await claimOwnerJudgmentJobPrompts({claimedBy: 'worker-a', jobId: 'job-a', limit: 1})
+
+  expect(claims).toEqual([])
+  expect(ownerCalls).toBe(2)
 })
 
 test('completion flushes are globally bounded so owner ack cannot stampede', async () => {

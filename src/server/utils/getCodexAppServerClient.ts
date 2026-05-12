@@ -35,6 +35,9 @@ export type SpawnCodexAppServer = (
 ) => CodexAppServerProcess
 
 const CODEx_DEFAULT_TIMEOUT_MS = 30_000
+const CODEX_THREAD_READ_TIMEOUT_MS = 60_000
+const CODEX_THREAD_READ_MAX_ATTEMPTS = 3
+const CODEX_THREAD_READ_RETRY_DELAY_MS = 250
 
 const MAX_DEBUG_OUTPUT_CHARS = 8_000
 
@@ -127,6 +130,20 @@ export const getCodexTurnAgentMessageText = (threadReadResult: unknown, turnId: 
   }) as Array<{text?: unknown}>
   const last = agentItems[agentItems.length - 1]
   return typeof last?.text === 'string' ? last.text : ''
+}
+
+const getPositiveInteger = (value: number | null | undefined, fallback: number): number => {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : fallback
+}
+
+const waitForCodexThreadReadRetry = async (delayMs: number): Promise<void> => {
+  await new Promise((resolve) => {
+    setTimeout(resolve, delayMs)
+  })
+}
+
+const isCodexThreadReadTimeoutError = (error: unknown): boolean => {
+  return error instanceof Error && error.message === 'codex app-server timeout: thread/read'
 }
 
 export type CodexAppServerClient = {
@@ -279,12 +296,23 @@ export const createCodexAppServerClient = ({
   spawnProcess = (command, args, options) => {
     return spawn(command, args, options)
   },
-}: {spawnProcess?: SpawnCodexAppServer} = {}): CodexAppServerClient => {
+  threadReadMaxAttempts,
+  threadReadRetryDelayMs,
+  threadReadTimeoutMs,
+}: {
+  spawnProcess?: SpawnCodexAppServer
+  threadReadMaxAttempts?: number
+  threadReadRetryDelayMs?: number
+  threadReadTimeoutMs?: number
+} = {}): CodexAppServerClient => {
   let nextId = 1
   const pending = new Map<JsonRpcId, Pending>()
   const listeners = new Set<Listener>()
   const lifecycleListeners = new Set<LifecycleListener>()
   const codexBin = getCodexBinPath()
+  const resolvedThreadReadMaxAttempts = getPositiveInteger(threadReadMaxAttempts, CODEX_THREAD_READ_MAX_ATTEMPTS)
+  const resolvedThreadReadRetryDelayMs = getPositiveInteger(threadReadRetryDelayMs, CODEX_THREAD_READ_RETRY_DELAY_MS)
+  const resolvedThreadReadTimeoutMs = getPositiveInteger(threadReadTimeoutMs, CODEX_THREAD_READ_TIMEOUT_MS)
 
   const proc = spawnProcess(codexBin, ['app-server'], {stdio: ['pipe', 'pipe', 'pipe']})
 
@@ -405,6 +433,19 @@ export const createCodexAppServerClient = ({
         failAppServer(error instanceof Error ? error : new Error(String(error)))
       }
     })
+  }
+
+  const readThreadWithRetry = async (threadId: string, attempt = 1): Promise<unknown> => {
+    try {
+      return await request('thread/read', {threadId, includeTurns: true}, resolvedThreadReadTimeoutMs)
+    } catch (error) {
+      if (!isCodexThreadReadTimeoutError(error) || attempt >= resolvedThreadReadMaxAttempts) {
+        throw error
+      }
+
+      await waitForCodexThreadReadRetry(resolvedThreadReadRetryDelayMs)
+      return readThreadWithRetry(threadId, attempt + 1)
+    }
   }
 
   const onMessage = (msg: JsonRpcMessage) => {
@@ -545,7 +586,7 @@ export const createCodexAppServerClient = ({
             return undefined
           }
 
-          void request('thread/read', {threadId, includeTurns: true}, 5_000)
+          void readThreadWithRetry(threadId)
             .then((threadRead) => {
               resolve({text: getCodexTurnAgentMessageText(threadRead, turnId), usage: turnUsage})
             })

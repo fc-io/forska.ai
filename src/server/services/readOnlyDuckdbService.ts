@@ -52,13 +52,21 @@ const getNormalizedDisableValue = (value: string | undefined) => {
     .toLowerCase()
 }
 
-export const isLiveReadOnlyDuckdbTrusted = () => {
+const getTrimmedValue = (value: string | undefined) => {
+  return String(value ?? '').trim()
+}
+
+const isApiOwnerProxyConfigured = (context: ReadOnlyDuckdbContext | undefined) => {
+  return context === 'api-read-only' && getTrimmedValue(getEnv().SERVER_DUCKDB_OWNER_URL) !== ''
+}
+
+export const isLiveReadOnlyDuckdbTrusted = (context?: ReadOnlyDuckdbContext) => {
   const disabledByPrimaryFlag = disabledReadOnlyDuckdbValues.has(
     getNormalizedDisableValue(process.env.FORSKA_DISABLE_LIVE_READ_ONLY_DUCKDB),
   )
   const disabledByBackendFlag = getNormalizedDisableValue(process.env.FORSKA_OWNERLESS_READ_ONLY_DUCKDB) === 'disabled'
 
-  return !disabledByPrimaryFlag && !disabledByBackendFlag
+  return !disabledByPrimaryFlag && !disabledByBackendFlag && !isApiOwnerProxyConfigured(context)
 }
 
 const getReadOnlyDuckdbUnavailableError = (context: ReadOnlyDuckdbContext, message: string) => {
@@ -69,7 +77,7 @@ const assertReadOnlyDuckdbIsConfigured = (
   context: ReadOnlyDuckdbContext,
   runtimeConfig: ReadOnlyDuckdbRuntimeConfig,
 ) => {
-  if (!isLiveReadOnlyDuckdbTrusted()) {
+  if (!isLiveReadOnlyDuckdbTrusted(context)) {
     throw getReadOnlyDuckdbUnavailableError(context, 'live read-only DuckDB is disabled or untrusted')
   }
 

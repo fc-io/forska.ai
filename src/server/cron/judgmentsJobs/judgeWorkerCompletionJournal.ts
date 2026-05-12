@@ -8,14 +8,15 @@ import type {JudgmentExecutionSnapshotRecord} from '../../services/judgmentExecu
 import {getEnv} from '../../utils/env.ts'
 import {getCurrentJudgeWorkerJournalIdentity} from '../../utils/judgeWorkerJournalIdentity.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
+import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
+import {isTransientJudgmentJobSqliteLockMessage} from './judgmentJobSqliteTransientLock.ts'
 import {
   getLegacyRequestAttempts,
   getLegacyRequestAttemptsJson,
   getRequestAttemptRepairState,
   legacyCompletionEvidencePendingRepairReason,
 } from './judgmentLegacyEvidenceRepair.ts'
-import {getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
-import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import {
   appendRequestAttemptManifestRepairMarker,
   createRequestAttemptManifestRepairMarker,
@@ -526,8 +527,7 @@ const drainOwnerBackedCompletionReplayWaiters = (): void => {
   const waiterIndex = ownerBackedCompletionReplayWaiters.findIndex(() => {
     return ownerBackedCompletionReplayInFlight < ownerBackedCompletionReplayConcurrency
   })
-  const nextWaiter =
-    waiterIndex >= 0 ? ownerBackedCompletionReplayWaiters.splice(waiterIndex, 1)[0] : null
+  const nextWaiter = waiterIndex >= 0 ? ownerBackedCompletionReplayWaiters.splice(waiterIndex, 1)[0] : null
 
   if (nextWaiter) {
     ownerBackedCompletionReplayInFlight += 1
@@ -616,11 +616,7 @@ const requestOwnerJsonOnce = async <T>({
 }
 
 const requestOwnerJson = async <T>(
-  input: {
-    body?: unknown
-    method: 'GET' | 'POST'
-    path: string
-  },
+  input: {body?: unknown; method: 'GET' | 'POST'; path: string},
   attempt = 1,
 ): Promise<T> => {
   try {
@@ -628,9 +624,9 @@ const requestOwnerJson = async <T>(
   } catch (error) {
     const shouldRetry =
       error instanceof OwnerBackedJudgmentRequestError
-      && error.status === 200
-      && error.responseText.trim() === ''
       && attempt < ownerBackedRequestMaxAttempts
+      && ((error.status === 200 && error.responseText.trim() === '')
+        || isTransientJudgmentJobSqliteLockMessage(error.message))
 
     if (!shouldRetry) {
       throw error
@@ -1660,7 +1656,9 @@ const getCompletionReplayCandidateRows = (
         ${getCompletionReplayLimitSql(normalizedLimit)}
       `,
     )
-    .all(...(claimId ? [claimId, failureBackoffCutoff, replayGraceCutoff] : [failureBackoffCutoff, replayGraceCutoff])) as CompletionOutboxRow[]
+    .all(
+      ...(claimId ? [claimId, failureBackoffCutoff, replayGraceCutoff] : [failureBackoffCutoff, replayGraceCutoff]),
+    ) as CompletionOutboxRow[]
 }
 
 const getCompletionLocalApplyRows = (database: Database, limit: number | undefined): CompletionOutboxRow[] => {
@@ -1941,9 +1939,7 @@ const markCompletionLocallyApplied = (database: Database, claimId: string): void
     .run(now, now, claimId)
 }
 
-const getCompletionAckStatus = (
-  payload: JudgeWorkerCompletionPayload,
-): 'failed' | 'judged' | 'retry' | 'skipped' => {
+const getCompletionAckStatus = (payload: JudgeWorkerCompletionPayload): 'failed' | 'judged' | 'retry' | 'skipped' => {
   return payload.status === 'retry'
     ? 'retry'
     : payload.status === 'skipped'
@@ -2121,17 +2117,13 @@ const applyCompletionRowsLocally = async (
   const applied = await applyCompletionRowLocally(database, row)
   const rest = await applyCompletionRowsLocally(database, remainingRows)
 
-  return {
-    appliedCount: rest.appliedCount + (applied ? 1 : 0),
-    skippedCount: rest.skippedCount + (applied ? 0 : 1),
-  }
+  return {appliedCount: rest.appliedCount + (applied ? 1 : 0), skippedCount: rest.skippedCount + (applied ? 0 : 1)}
 }
 
-export const applyJudgeWorkerCompletionOutboxLocally = async ({
-  limit,
-}: {
-  limit?: number
-} = {}): Promise<{appliedCount: number; skippedCount: number}> => {
+export const applyJudgeWorkerCompletionOutboxLocally = async ({limit}: {limit?: number} = {}): Promise<{
+  appliedCount: number
+  skippedCount: number
+}> => {
   const database = openJournalDatabase()
 
   return applyCompletionRowsLocally(database, getCompletionLocalApplyRows(database, limit))
@@ -2291,9 +2283,11 @@ export const getAcceptedJudgeWorkerClaimPrompts = async ({
     }),
   )
 
-  return prompts.flatMap((prompt) => {
-    return prompt ? [prompt] : []
-  }).slice(0, normalizedLimit)
+  return prompts
+    .flatMap((prompt) => {
+      return prompt ? [prompt] : []
+    })
+    .slice(0, normalizedLimit)
 }
 
 const getRunningJobFromAcceptedPrompt = (prompt: PromptToProcess): RunningJudgmentJob => {

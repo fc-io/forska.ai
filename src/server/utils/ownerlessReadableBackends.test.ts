@@ -149,3 +149,61 @@ test('API ownerless validation releases live read-only DuckDB lock', () => {
     removePathIfExists(dataRoot)
   }
 })
+
+test('API owner proxy skips live read-only DuckDB validation', () => {
+  const dataRoot = join(tmpdir(), `forska-ownerless-readable-api-owner-proxy-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'forska.duckdb')
+  mkdirSync(dataRoot, {recursive: true})
+  const runValidation = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {DuckDBInstance} = await import('@duckdb/node-api')
+        const {validateOwnerlessRouteBackends} = await import('./src/server/utils/ownerlessReadableBackends.ts')
+
+        const duckdbInstance = await DuckDBInstance.create(process.env.DUCKDB_PATH)
+        const connection = await duckdbInstance.connect()
+        await connection.runAndReadAll('CREATE TABLE IF NOT EXISTS owner_proxy_probe (id INTEGER)')
+        connection.closeSync()
+        duckdbInstance.closeSync()
+
+        const selections = await validateOwnerlessRouteBackends()
+
+        console.log(JSON.stringify(selections))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39221',
+        DUCKDB_MEMORY_LIMIT: '1GB',
+        DUCKDB_PATH: duckdbPath,
+        FORSKA_DISABLE_LIVE_READ_ONLY_DUCKDB: '',
+        FORSKA_OWNERLESS_READ_ONLY_DUCKDB: '',
+        SERVER_DUCKDB_OWNER_URL: 'http://127.0.0.1:39222',
+        SERVER_ROLE: 'api',
+        VITE_PORT: '39220',
+      },
+      stderr: 'pipe',
+      stdout: 'pipe',
+    },
+  )
+
+  try {
+    if (runValidation.exitCode !== 0) {
+      throw new Error(runValidation.stderr.toString() || runValidation.stdout.toString() || 'validation failed')
+    }
+
+    const jsonLine = getLastJsonLine(runValidation.stdout.toString())
+    const selections = JSON.parse(jsonLine ?? '[]') as Array<{backend: string; method: string; pathname: string}>
+    const connectionsBackend = selections.find((selection) => {
+      return selection.method === 'GET' && selection.pathname === '/api/duckdb_owner_connections'
+    })
+
+    expect(connectionsBackend).toMatchObject({backend: 'ownerless-control-state'})
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})

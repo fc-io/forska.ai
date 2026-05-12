@@ -288,6 +288,95 @@ test('runJsonTurn ignores failed partial agent text when only the successful tur
   expect(threadReadInputs).toEqual(['success request'])
 })
 
+test('runJsonTurn retries delayed thread reads after a completed turn', async () => {
+  const stdout = new EventEmitter()
+  const stderr = new EventEmitter()
+  const proc = new EventEmitter() as EventEmitter & {
+    stderr: EventEmitter
+    stdin: {write: (data: string) => boolean}
+    stdout: EventEmitter
+  }
+  let threadReadCount = 0
+
+  const send = (message: unknown) => {
+    stdout.emit('data', Buffer.from(`${JSON.stringify(message)}\n`))
+  }
+
+  proc.stdout = stdout
+  proc.stderr = stderr
+  proc.stdin = {
+    write(payload) {
+      String(payload)
+        .split('\n')
+        .map((line) => {
+          return line.trim()
+        })
+        .filter((line) => {
+          return line.length > 0
+        })
+        .forEach((line) => {
+          const message = JSON.parse(line) as MockJsonRpcRequest
+
+          if (message.method === 'initialize') {
+            send({id: message.id, result: {}})
+            return
+          }
+
+          if (message.method === 'thread/start') {
+            send({id: message.id, result: {thread: {id: 'thread-delayed-read'}}})
+            return
+          }
+
+          if (message.method === 'turn/start') {
+            send({id: message.id, result: {turn: {id: 'turn-delayed-read'}}})
+            setTimeout(() => {
+              send({method: 'turn/completed', params: {turn: {id: 'turn-delayed-read', status: 'completed'}}})
+            }, 0)
+            return
+          }
+
+          if (message.method === 'thread/read') {
+            threadReadCount += 1
+
+            if (threadReadCount === 1) {
+              return
+            }
+
+            send({
+              id: message.id,
+              result: {
+                thread: {
+                  turns: [{id: 'turn-delayed-read', items: [{type: 'agentMessage', text: 'delayed thread read text'}]}],
+                },
+              },
+            })
+          }
+        })
+
+      return true
+    },
+  }
+
+  const spawnProcess: SpawnCodexAppServer = () => {
+    return proc
+  }
+  const client = createCodexAppServerClient({
+    spawnProcess,
+    threadReadMaxAttempts: 2,
+    threadReadRetryDelayMs: 1,
+    threadReadTimeoutMs: 1,
+  })
+  const result = await client.runJsonTurn({
+    model: 'gpt-5.4',
+    inputText: 'delayed read request',
+    outputSchema: {type: 'object'},
+    timeoutMs: 10_000,
+  })
+
+  expect(result.text).toBe('delayed thread read text')
+  expect(threadReadCount).toBe(2)
+})
+
 test('runJsonTurn preserves failed turn error detail', async () => {
   const {client} = createMockConcurrentCodexClient({
     notifications: [
