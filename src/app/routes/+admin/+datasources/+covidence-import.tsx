@@ -494,7 +494,7 @@ const AdminCovidenceImport = () => {
   const [description, setDescription] = createSignal('')
   const [selectedModelId, setSelectedModelId] = createSignal('')
   const [answerSet, setAnswerSet] = createSignal<CovidencePromptAnswerSet>('yes|no|maybe')
-  const [promptGrouping, setPromptGrouping] = createSignal<CovidencePromptGrouping>('per_field')
+  const [promptGrouping, setPromptGrouping] = createSignal<CovidencePromptGrouping>('per_section')
   const [isLoadingClipboard, setIsLoadingClipboard] = createSignal(false)
   const [pageError, setPageError] = createSignal('')
   const [eligibilitySectionValues, setEligibilitySectionValues] = createStore(createEmptyEligibilitySectionValues())
