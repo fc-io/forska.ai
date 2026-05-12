@@ -40,7 +40,7 @@ import {
   type ComparisonProjectJudgmentHumanRow,
   type ComparisonProjectJudgmentLlmRow,
   type ComparisonProjectJudgmentRow,
-  forEachComparisonProjectJudgmentRowBatch,
+  forEachComparisonProjectServingJudgmentRowBatch,
   getComparisonProjectBatchRows,
   getComparisonProjectColumnId,
   getComparisonProjectContentKey,
@@ -2329,40 +2329,17 @@ const getComparisonProjectExportResponse = (
         controller.enqueue(getComparisonProjectCsvLine(headers))
 
         if (scope.prompts.length > 0 && orderedColumns.length > 0) {
-          const articleScopeConditions = getArticleScopeConditions(
-            scope.importRouteIds,
-            scope.sourceProjectIds,
-            scope.useImportRoutesForScope,
-          )
-          const articleScopeWhereClause = getWhereClause(articleScopeConditions)
-
-          await forEachComparisonProjectJudgmentRowBatch({
-            articleBatchSize: comparisonProjectJudgmentArticleBatchSize,
-            columns: orderedColumns,
+          await forEachComparisonProjectServingJudgmentRowBatch({
+            comparisonProjectId: scope.id,
             differenceFilter: normalizedDifferenceFilter,
-            isSummaryMode: getIsSummaryMode(scope),
-            loadHumanRows: (articleIds) => {
-              return getComparisonProjectHumanRows(scope, articleIds)
-            },
-            loadLlmRows: async (articleIds) => {
-              const rawLlmRows = await getComparisonProjectLlmRows(scope, articleIds)
-              return getComparisonProjectLlmSummaryRows(scope, rawLlmRows)
-            },
-            loadScopedArticles: (request) => {
-              return getComparisonProjectScopedArticleBatch({
-                articleTable,
-                limit: request.limit,
-                offset: request.offset,
-                queryRunner: appDatabaseService,
-                whereClause: articleScopeWhereClause,
-              })
-            },
+            limit: comparisonProjectJudgmentArticleBatchSize,
             onRows: async (rows) => {
               const exportRows = includeConflictResolution
                 ? await getComparisonProjectRowsWithConflictResolutions(scope, rows)
                 : rows
               enqueueComparisonProjectExportRows(controller, exportRows, orderedColumns, includeConflictResolution)
             },
+            queryRunner: appDatabaseService,
             rowFilter,
           })
         }

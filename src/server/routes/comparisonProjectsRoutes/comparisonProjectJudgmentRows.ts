@@ -108,6 +108,10 @@ type ComparisonProjectServingJudgmentRowsParams = {
   rowFilter: ComparisonProjectRowFilter
 }
 
+type ForEachComparisonProjectServingJudgmentRowBatchParams = ComparisonProjectServingJudgmentRowsParams & {
+  onRows: (rows: ComparisonProjectJudgmentRow[]) => Promise<void> | void
+}
+
 type ComparisonProjectServingJudgmentCountParams = {
   comparisonProjectId: string
   differenceFilter: ComparisonProjectDifferenceFilter
@@ -473,6 +477,20 @@ export const getComparisonProjectServingJudgmentRowsPage = async (
     nextCursor: hasMore && nextOrdinal !== null ? String(nextOrdinal) : null,
     rows: getComparisonProjectServingJudgmentRows({articleRows, cellRows, memberRows: pageMemberRows}),
   }
+}
+
+export const forEachComparisonProjectServingJudgmentRowBatch = async (
+  params: ForEachComparisonProjectServingJudgmentRowBatchParams,
+  cursor: string | null = null,
+): Promise<void> => {
+  const pageResult = await getComparisonProjectServingJudgmentRowsPage({...params, cursor})
+  const rowsResult = pageResult.rows.length > 0 ? params.onRows(pageResult.rows) : undefined
+
+  await rowsResult
+
+  return pageResult.nextCursor
+    ? forEachComparisonProjectServingJudgmentRowBatch(params, pageResult.nextCursor)
+    : undefined
 }
 
 export const getComparisonProjectLlmCells = (rows: readonly ComparisonProjectJudgmentLlmRow[]) => {

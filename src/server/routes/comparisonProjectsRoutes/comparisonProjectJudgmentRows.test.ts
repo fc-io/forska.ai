@@ -5,6 +5,7 @@ import {
   type ComparisonProjectJudgmentLlmRow,
   type ComparisonProjectScopedArticle,
   forEachComparisonProjectJudgmentRowBatch,
+  forEachComparisonProjectServingJudgmentRowBatch,
   getComparisonProjectBatchCellsByArticle,
   getComparisonProjectBatchRows,
   getComparisonProjectScopedArticleBatchSql,
@@ -324,6 +325,92 @@ test('serving judgment rows return next cursor and hydrate page rows only', asyn
   ])
   expect(statements[1]).toContain("article.article_id IN ('article-1', 'article-2')")
   expect(statements[2]).toContain("cell.article_id IN ('article-1', 'article-2')")
+})
+
+test('serving row batch iterator walks filter members by ordinal cursor', async () => {
+  const statements: string[] = []
+  const yieldedRowIds: string[][] = []
+
+  await forEachComparisonProjectServingJudgmentRowBatch({
+    comparisonProjectId: 'comparison-project-1',
+    differenceFilter: 'llm-vs-llm',
+    limit: 2,
+    onRows: (rows) => {
+      yieldedRowIds.push(
+        rows.map((row) => {
+          return row.id
+        }),
+      )
+    },
+    queryRunner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+
+        return statement.includes('FROM mart.comparison_filter_member') && !statement.includes('member.ordinal > 1')
+          ? ([
+              {articleId: 'article-1', generation: 1, ordinal: 0},
+              {articleId: 'article-2', generation: 1, ordinal: 1},
+              {articleId: 'article-3', generation: 1, ordinal: 2},
+            ] as T[])
+          : statement.includes('FROM mart.comparison_filter_member')
+            ? ([{articleId: 'article-3', generation: 1, ordinal: 2}] as T[])
+            : statement.includes('FROM mart.comparison_article_serving')
+              ? (['article-1', 'article-2', 'article-3']
+                  .filter((articleId) => {
+                    return statement.includes(`'${articleId}'`)
+                  })
+                  .map((articleId) => {
+                    return {
+                      articleCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+                      articleId,
+                      articleSummary: `${articleId} summary`,
+                      articleTitle: articleId,
+                      hasConflict: false,
+                    }
+                  }) as T[])
+              : (['article-1', 'article-2', 'article-3']
+                  .filter((articleId) => {
+                    return statement.includes(`'${articleId}'`)
+                  })
+                  .map((articleId) => {
+                    return {articleId, columnId: 'llm:model-1:1100:prompt-1', displayAnswer: 'yes'}
+                  }) as T[])
+      },
+    },
+    rowFilter: 'fully-answered',
+  })
+
+  expect(yieldedRowIds).toEqual([['article-1', 'article-2'], ['article-3']])
+  expect(
+    statements.some((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_filter_member member')
+        && statement.includes("member.row_filter = 'fully-answered'")
+        && statement.includes("member.difference_filter = 'llm-vs-llm'")
+      )
+    }),
+  ).toBe(true)
+  expect(
+    statements.some((statement) => {
+      return statement.includes('FROM mart.comparison_filter_member member') && statement.includes('member.ordinal > 1')
+    }),
+  ).toBe(true)
+  expect(
+    statements.some((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes("article.article_id IN ('article-1', 'article-2')")
+      )
+    }),
+  ).toBe(true)
+  expect(
+    statements.some((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_cell_serving cell')
+        && statement.includes("cell.article_id IN ('article-3')")
+      )
+    }),
+  ).toBe(true)
 })
 
 test('serving judgment rows return empty page when active generation is missing', async () => {

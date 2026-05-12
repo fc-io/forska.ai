@@ -620,7 +620,7 @@ const getComparisonProjectExportAndJudgmentTitles = async (
   expect(exportResponse.status).toBe(200)
   expect(exportTitles).toEqual(judgmentTitles)
 
-  return exportTitles
+  return {exportTitles, judgmentTitles}
 }
 
 const getSqlFilterValue = <T extends string>(params: {
@@ -2677,11 +2677,11 @@ test('comparison conflict resolution upsert uses DuckDB-safe timestamp function'
   expect(state.queuedServingRebuildIds).toEqual([])
 })
 
-test('comparison export filters match judgments endpoint row and difference filters', async () => {
+test('comparison export filters match judgments endpoint for every row and difference filter', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
-      compareWithHumans: false,
+      compareWithHumans: true,
       humanJudgmentMode: 'prompt',
       id: 'comparison-project-1',
       modelIds: ['model-1', 'model-2'],
@@ -2700,22 +2700,78 @@ test('comparison export filters match judgments endpoint row and difference filt
 
   const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
   const app = new Elysia().use(comparisonProjectsRoutes)
-  const multipleAnswerTitles = await getComparisonProjectExportAndJudgmentTitles(app, {
-    differenceFilter: 'all',
-    rowFilter: 'multiple-answers',
+  const filterCases = comparisonProjectRowFilters.flatMap((rowFilter) => {
+    return differenceFilters.map((differenceFilter) => {
+      return {differenceFilter, rowFilter}
+    })
   })
-  const fullyAnsweredTitles = await getComparisonProjectExportAndJudgmentTitles(app, {
-    differenceFilter: 'all',
-    rowFilter: 'fully-answered',
-  })
-  const llmDifferenceTitles = await getComparisonProjectExportAndJudgmentTitles(app, {
-    differenceFilter: 'llm-vs-llm',
-    rowFilter: 'all',
-  })
+  const parityResults = await filterCases.reduce<
+    Promise<
+      Array<{
+        differenceFilter: ComparisonProjectDifferenceFilter
+        exportTitles: string[]
+        judgmentTitles: string[]
+        rowFilter: ComparisonProjectRowFilter
+      }>
+    >
+  >(async (promise, filterCase) => {
+    const results = await promise
+    const titles = await getComparisonProjectExportAndJudgmentTitles(app, filterCase)
 
-  expect(multipleAnswerTitles).toEqual(['Article 1', 'Article 2'])
-  expect(fullyAnsweredTitles).toEqual(['Article 1'])
-  expect(llmDifferenceTitles).toEqual(['Article 1'])
+    return [...results, {...filterCase, ...titles}]
+  }, Promise.resolve([]))
+  const state = getMockDatabaseState()
+
+  expect(parityResults).toEqual(
+    filterCases.map((filterCase) => {
+      const expectedTitles = getMockServingRows(
+        getMockDatabaseState(),
+        filterCase.rowFilter,
+        filterCase.differenceFilter,
+      ).map((row) => {
+        return row.articleTitle
+      })
+
+      return {
+        differenceFilter: filterCase.differenceFilter,
+        exportTitles: expectedTitles,
+        judgmentTitles: expectedTitles,
+        rowFilter: filterCase.rowFilter,
+      }
+    }),
+  )
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_filter_member')
+        && statement.includes("member.row_filter = 'fully-answered'")
+        && statement.includes("member.difference_filter = 'llm-vs-llm'")
+      )
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_article_serving article')
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_cell_serving cell')
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM app.article a')
+        && statement.includes('ORDER BY a.article_created_at DESC, a.article_title ASC, a.id ASC')
+      )
+    }),
+  ).toBe(false)
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM app.judgment\n') || statement.includes('FROM app.judgment_human\n')
+    }),
+  ).toBe(false)
 })
 
 test('prompt comparison judgments keep legacy prompt columns and human prompt answers', async () => {
@@ -2787,7 +2843,7 @@ test('prompt comparison judgments keep legacy prompt columns and human prompt an
 
 test('comparison project export streams ordered csv rows with article context and flattened answers', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       allowConflictResolution: true,
       compareWithHumans: true,
@@ -2800,8 +2856,8 @@ test('comparison project export streams ordered csv rows with article context an
     extraLlmRows: [
       {
         ...getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-1', modelId: 'model-1', promptId: 'prompt-1'}),
-        answeredOriginal: null,
-        answeredOriginalAsArray: ['yes', 'maybe'],
+        answeredOriginal: 'yes\nmaybe',
+        answeredOriginalAsArray: null,
         createdAt: new Date('2026-04-02T00:00:00.000Z'),
       },
     ],
@@ -2850,18 +2906,25 @@ test('comparison project export streams ordered csv rows with article context an
   expect(
     state.queryStatements.some((statement) => {
       return (
-        statement.includes('FROM app.article a')
-        && statement.includes('ORDER BY a.article_created_at DESC, a.article_title ASC, a.id ASC')
-        && statement.includes('LIMIT 20000')
-        && statement.includes('OFFSET 0')
+        statement.includes('FROM mart.comparison_filter_member member')
+        && statement.includes("member.row_filter = 'fully-answered'")
+        && statement.includes("member.difference_filter = 'all'")
       )
     }),
   ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM app.article a')
+        && statement.includes('ORDER BY a.article_created_at DESC, a.article_title ASC, a.id ASC')
+      )
+    }),
+  ).toBe(false)
 })
 
 test('summary comparison project export streams synthetic summary csv columns', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       compareWithHumans: true,
       humanJudgmentMode: 'summary',
@@ -2911,7 +2974,7 @@ test('summary comparison project export streams synthetic summary csv columns', 
 
 test('comparison project export allows archived projects without writes', async () => {
   mockDatabaseStateRef.current = {
-    ...createMockDatabaseState(),
+    ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
       archived: true,
       compareWithHumans: false,
