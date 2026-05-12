@@ -1,15 +1,64 @@
-import {expect, test} from 'bun:test'
+import {afterAll, beforeAll, expect, test} from 'bun:test'
 
+import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {
+  deleteJudgmentProviderTelemetryHistoryForJob,
   getJudgmentProviderTelemetryAlignedRange,
   getJudgmentProviderTelemetryBottleneckSummary,
   getJudgmentProviderTelemetryBucketAdherenceState,
   getJudgmentProviderTelemetryHistoryBuckets,
   getJudgmentProviderTelemetrySampleAdherenceState,
   getJudgmentProviderTelemetryUtilization,
+  insertJudgmentProviderTelemetryHistorySample,
+  insertJudgmentProviderTelemetryHistorySamples,
+  type JudgmentProviderTelemetryBucketedHistory,
   type JudgmentProviderTelemetryHistoryRange,
   type JudgmentProviderTelemetryHistorySample,
+  type JudgmentProviderTelemetryHistorySampleInsert,
+  pruneJudgmentProviderTelemetryHistorySamples,
+  queryJudgmentProviderTelemetryBucketedHistory,
 } from './judgmentProviderTelemetryHistoryService.ts'
+
+const tempRuntimeRoot = createTempRuntimeRoot('f1-provider-telemetry-history-service')
+const tempDbPath = tempRuntimeRoot.duckdbPath
+
+process.env.SERVER_ROLE = 'dev-single'
+process.env.DUCKDB_PATH = tempDbPath
+process.env.API_SERVER_PORT = process.env.API_SERVER_PORT ?? '3001'
+process.env.RUN_SERVER_JUDGING = 'false'
+process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
+
+let closeDatabase: (() => Promise<void>) | null = null
+let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
+
+beforeAll(async () => {
+  const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] =
+    await Promise.all([
+      import('../../db/migrateDuckdb.ts'),
+      import('./appDatabaseService.ts'),
+      import('../utils/duckdbService.ts'),
+      import('../utils/serverRuntimeRole.ts'),
+    ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
+
+  await migrateDuckdb()
+
+  const database = getAppDatabaseService()
+
+  closeDatabase = () => {
+    return database.close()
+  }
+  queryDatabase = (statement) => {
+    return database.queryJson(statement)
+  }
+})
+
+afterAll(async () => {
+  await closeDatabase?.()
+  tempRuntimeRoot.cleanup()
+})
 
 const getSample = (
   values: Partial<JudgmentProviderTelemetryHistorySample> & {sampledAt: string},
@@ -26,6 +75,61 @@ const getSample = (
     ...values,
     sampledAt: new Date(values.sampledAt),
   }
+}
+
+const getInsertSample = (
+  values: Omit<Partial<JudgmentProviderTelemetryHistorySampleInsert>, 'sampledAt'> & {jobId: string; sampledAt: string},
+): JudgmentProviderTelemetryHistorySampleInsert => {
+  return {
+    aggregateCompleteness: 'complete',
+    bottleneck: null,
+    bottleneckSource: null,
+    bottleneckSubreason: null,
+    effectiveProviderLimit: 12,
+    freshWorkerCount: 1,
+    normalRequestCapacity: 10,
+    projectId: `${values.jobId}-project`,
+    providerAllocationVersion: 'allocation-v1',
+    providerAvailableRequestLeases: 5,
+    providerKey: 'provider-a',
+    providerLeasedLiveRequests: 5,
+    providerLeasedPhysicalCalls: 5,
+    providerLeasedProbeCalls: 0,
+    providerLimit: 12,
+    providerLimitVersion: 'limit-v1',
+    providerProbeOccupancyVersion: 'probe-v1',
+    providerRequestFillPct: null,
+    staleWorkerCount: 0,
+    targetRequestLiveCalls: 10,
+    unavailableWorkerCount: 0,
+    unallocatedTargetLiveCalls: 0,
+    ...values,
+    sampledAt: new Date(values.sampledAt),
+  }
+}
+
+const getTestQueryDatabase = () => {
+  if (!queryDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  return queryDatabase
+}
+
+const getIsoString = (value: unknown) => {
+  const date = value instanceof Date ? value : new Date(String(value))
+
+  return date.toISOString()
+}
+
+const getBucket = (history: JudgmentProviderTelemetryBucketedHistory, index: number) => {
+  const bucket = history.buckets[index]
+
+  if (!bucket) {
+    throw new Error(`Missing telemetry history bucket ${index}`)
+  }
+
+  return bucket
 }
 
 test('range presets floor range end to bucket size and return complete windows', () => {
@@ -297,4 +401,177 @@ test('bottleneck summary uses highest count, latest tie-break, and latest select
     bottleneckSource: 'latest-request-source',
     bottleneckSubreason: 'leaseAcquireContention',
   })
+})
+
+test('inserting samples normalizes cadence slot and dedupes by job provider and sampled_at', async () => {
+  const query = getTestQueryDatabase()
+  const createdAt = new Date('2026-05-12T16:00:00.000Z')
+  const jobId = `history-insert-${Date.now()}`
+  const sample = getInsertSample({jobId, providerKey: 'provider-insert', sampledAt: '2026-05-12T15:12:44.999Z'})
+  const duplicate = getInsertSample({
+    jobId,
+    providerKey: 'provider-insert',
+    providerLeasedLiveRequests: 9,
+    sampledAt: '2026-05-12T15:12:35.000Z',
+  })
+  const firstResult = await insertJudgmentProviderTelemetryHistorySample({createdAt, sample})
+  const duplicateResult = await insertJudgmentProviderTelemetryHistorySample({
+    createdAt: new Date('2026-05-12T16:05:00.000Z'),
+    sample: duplicate,
+  })
+  const rows = await query<{createdAt: unknown; liveRequests: unknown; sampledAt: unknown}>(`
+    SELECT
+      created_at AS createdAt,
+      provider_leased_live_requests AS liveRequests,
+      sampled_at AS sampledAt
+    FROM app.judgment_job_provider_telemetry_sample
+    WHERE job_id = '${jobId}'
+    ORDER BY sampled_at ASC
+  `)
+
+  expect(firstResult).toEqual({attempted: 1, inserted: 1, skipped: 0})
+  expect(duplicateResult).toEqual({attempted: 1, inserted: 0, skipped: 1})
+  expect(rows).toHaveLength(1)
+  expect(getIsoString(rows[0]?.sampledAt)).toBe('2026-05-12T15:12:30.000Z')
+  expect(getIsoString(rows[0]?.createdAt)).toBe('2026-05-12T16:00:00.000Z')
+  expect(Number(rows[0]?.liveRequests ?? 0)).toBe(5)
+})
+
+test('pruning deletes samples older than the three day sampled_at retention cutoff', async () => {
+  const query = getTestQueryDatabase()
+  const jobId = `history-prune-${Date.now()}`
+
+  await insertJudgmentProviderTelemetryHistorySamples({
+    samples: [
+      getInsertSample({jobId, providerKey: 'provider-prune', sampledAt: '2026-05-09T11:59:45.000Z'}),
+      getInsertSample({jobId, providerKey: 'provider-prune', sampledAt: '2026-05-09T12:00:05.000Z'}),
+    ],
+  })
+
+  const deletedCount = await pruneJudgmentProviderTelemetryHistorySamples({now: new Date('2026-05-12T12:00:00.000Z')})
+  const rows = await query<{sampledAt: unknown}>(`
+    SELECT sampled_at AS sampledAt
+    FROM app.judgment_job_provider_telemetry_sample
+    WHERE job_id = '${jobId}'
+    ORDER BY sampled_at ASC
+  `)
+
+  expect(deletedCount).toBeGreaterThanOrEqual(1)
+  expect(rows).toHaveLength(1)
+  expect(getIsoString(rows[0]?.sampledAt)).toBe('2026-05-09T12:00:00.000Z')
+})
+
+test('deleting telemetry history for a job preserves other jobs', async () => {
+  const query = getTestQueryDatabase()
+  const jobId = `history-delete-${Date.now()}`
+  const otherJobId = `history-delete-other-${Date.now()}`
+
+  await insertJudgmentProviderTelemetryHistorySamples({
+    samples: [
+      getInsertSample({jobId, providerKey: 'provider-delete', sampledAt: '2026-05-12T15:00:05.000Z'}),
+      getInsertSample({jobId, providerKey: 'provider-delete', sampledAt: '2026-05-12T15:00:35.000Z'}),
+      getInsertSample({jobId: otherJobId, providerKey: 'provider-delete', sampledAt: '2026-05-12T15:00:05.000Z'}),
+    ],
+  })
+
+  const deletedCount = await deleteJudgmentProviderTelemetryHistoryForJob({jobId})
+  const rows = await query<{jobId: string; total: unknown}>(`
+    SELECT job_id AS jobId, COUNT(*) AS total
+    FROM app.judgment_job_provider_telemetry_sample
+    WHERE job_id IN ('${jobId}', '${otherJobId}')
+    GROUP BY job_id
+    ORDER BY job_id ASC
+  `)
+
+  expect(deletedCount).toBe(2)
+  expect(rows).toEqual([{jobId: otherJobId, total: '1'}])
+})
+
+test('bucketed history query returns aligned ordered buckets with utilization adherence and bottleneck summaries', async () => {
+  const jobId = `history-query-${Date.now()}`
+  const providerKey = `provider-query-${Date.now()}`
+
+  await insertJudgmentProviderTelemetryHistorySamples({
+    samples: [
+      getInsertSample({
+        bottleneck: 'providerAtTarget',
+        bottleneckSource: 'provider.providerLeasedLiveRequests',
+        bottleneckSubreason: 'providerTargetReached',
+        jobId,
+        providerKey,
+        providerLeasedLiveRequests: 5,
+        sampledAt: '2026-05-12T14:17:01.000Z',
+      }),
+      getInsertSample({
+        bottleneck: 'requestSlotWait',
+        bottleneckSource: 'request.requestSlotWaiters.worker',
+        bottleneckSubreason: 'waiterNotWoken',
+        jobId,
+        providerKey,
+        providerLeasedLiveRequests: 10,
+        providerRequestFillPct: 100,
+        sampledAt: '2026-05-12T14:17:31.000Z',
+      }),
+      getInsertSample({
+        jobId,
+        normalRequestCapacity: 0,
+        providerKey,
+        providerLeasedLiveRequests: 0,
+        providerLeasedPhysicalCalls: 0,
+        sampledAt: '2026-05-12T14:18:01.000Z',
+      }),
+      getInsertSample({
+        jobId,
+        normalRequestCapacity: 4,
+        providerKey,
+        providerLeasedLiveRequests: 5,
+        sampledAt: '2026-05-12T14:18:31.000Z',
+      }),
+      getInsertSample({
+        jobId,
+        normalRequestCapacity: 0,
+        providerKey,
+        providerLeasedLiveRequests: 0,
+        providerLeasedPhysicalCalls: 0,
+        sampledAt: '2026-05-12T14:19:01.000Z',
+      }),
+      getInsertSample({jobId, providerKey, sampledAt: '2026-05-12T15:17:05.000Z'}),
+    ],
+  })
+
+  const history = await queryJudgmentProviderTelemetryBucketedHistory({
+    jobId,
+    now: new Date('2026-05-12T15:17:44.123Z'),
+    providerKey,
+    range: '1h',
+  })
+  const firstBucket = getBucket(history, 0)
+  const secondBucket = getBucket(history, 1)
+  const thirdBucket = getBucket(history, 2)
+
+  expect(history.providerKey).toBe(providerKey)
+  expect(history.bucketSizeSeconds).toBe(60)
+  expect(history.rangeStart.toISOString()).toBe('2026-05-12T14:17:00.000Z')
+  expect(history.rangeEnd.toISOString()).toBe('2026-05-12T15:17:00.000Z')
+  expect(history.buckets).toHaveLength(60)
+  expect(firstBucket).toMatchObject({
+    adherenceState: 'atLimit',
+    avgUtilization: 75,
+    bottleneck: 'requestSlotWait',
+    bottleneckSampleCount: 1,
+    bottleneckSource: 'request.requestSlotWaiters.worker',
+    bottleneckSubreason: 'waiterNotWoken',
+    maxUtilization: 100,
+    minUtilization: 50,
+    sampleCount: 2,
+  })
+  expect(secondBucket).toMatchObject({
+    adherenceState: 'overLimit',
+    avgUtilization: 125,
+    maxUtilization: 125,
+    minUtilization: 125,
+    sampleCount: 2,
+  })
+  expect(thirdBucket).toMatchObject({avgUtilization: null, maxUtilization: null, minUtilization: null, sampleCount: 1})
+  expect(history.buckets.at(-1)?.sampleCount).toBe(0)
 })
