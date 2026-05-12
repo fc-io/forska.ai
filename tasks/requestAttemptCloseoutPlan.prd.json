@@ -1,7 +1,7 @@
 {
   "name": "Request Attempt Closeout Plan",
-  "branchName": "ralph/request-attempt-closeout",
   "description": "Make request-attempt closeout lookup keyed and bounded so background judgment cleanup cannot OOM DuckDB or block unrelated foreground API routes.",
+  "branchName": "ralph/request-attempt-closeout",
   "userStories": [
     {
       "id": "US-001",
@@ -18,9 +18,10 @@
         "`bun run lint` passes, or unrelated pre-existing lint failures are explicitly listed"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -59,7 +60,10 @@
       "priority": 3,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-002"]
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ]
     },
     {
       "id": "US-004",
@@ -79,7 +83,9 @@
       "priority": 4,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003"]
+      "dependsOn": [
+        "US-003"
+      ]
     },
     {
       "id": "US-005",
@@ -98,7 +104,9 @@
       "priority": 5,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003"]
+      "dependsOn": [
+        "US-003"
+      ]
     },
     {
       "id": "US-006",
@@ -119,7 +127,9 @@
       "priority": 6,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003"]
+      "dependsOn": [
+        "US-003"
+      ]
     },
     {
       "id": "US-007",
@@ -137,7 +147,9 @@
       "priority": 7,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-008",
@@ -155,7 +167,9 @@
       "priority": 8,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-009",
@@ -177,7 +191,13 @@
       "priority": 9,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-004", "US-005", "US-006", "US-007", "US-008"]
+      "dependsOn": [
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007",
+        "US-008"
+      ]
     },
     {
       "id": "US-010",
@@ -222,7 +242,13 @@
       "priority": 11,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-009", "US-010"]
+      "dependsOn": [
+        "US-009",
+        "US-010"
+      ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-05-12T17:35:30.298Z"
+  }
 }
