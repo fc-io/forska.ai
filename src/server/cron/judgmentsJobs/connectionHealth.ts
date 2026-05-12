@@ -152,6 +152,44 @@ const isCodexTransientUpstreamError = ({
   return isCodexContext && isTransientUpstreamReset
 }
 
+const getErrorCode = (error: unknown): string | null => {
+  if (!error || typeof error !== 'object' || !('code' in error)) {
+    return null
+  }
+
+  const code = (error as {code?: unknown}).code
+
+  return typeof code === 'string' ? code : null
+}
+
+const isCodexTransientPromptError = ({
+  endpointPath,
+  error,
+  providerKind,
+  statusCode,
+}: {
+  endpointPath: string | null
+  error: unknown
+  providerKind: string | null
+  statusCode: number | null
+}): boolean => {
+  const message = getErrorMessage(error).toLowerCase()
+  const code = getErrorCode(error)
+  const isCodexContext =
+    providerKind === 'codex'
+    || code === 'codex_transient_turn_failure'
+    || message.includes('codex app-server')
+    || message.includes('rmcp::transport::worker')
+  const isPromptScopedTurnFailure =
+    code === 'codex_transient_turn_failure'
+    || message.includes('codex app-server: turn failed')
+    || message.includes('codex app-server: turn timeout')
+    || message.includes('codex app-server timeout:')
+    || message.includes('operation timed out')
+
+  return isCodexContext && endpointPath === null && statusCode === null && isPromptScopedTurnFailure
+}
+
 const getLikelyCause = ({
   endpointPath,
   kind,
@@ -241,13 +279,19 @@ export const classifyConnectionFailure = ({
     statusCode,
   })
   const isCodexTransientUpstream = isCodexTransientUpstreamError({error, providerKind: normalizedContext.providerKind})
+  const isCodexTransientPrompt = isCodexTransientPromptError({
+    endpointPath,
+    error,
+    providerKind: normalizedContext.providerKind,
+    statusCode,
+  })
   const kind: ConnectionFailureKind = isCircuitOpenError(error)
     ? 'circuit_open'
     : statusCode === 429
       ? 'rate_limited'
       : isCodexWebsocketForbidden
         ? 'rate_limited'
-        : isCodexTransientUpstream
+        : isCodexTransientUpstream || isCodexTransientPrompt
           ? 'other'
           : isRequiredOpenAICompatibleEndpoint && statusCode === 404
             ? 'endpoint_unavailable'

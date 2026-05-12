@@ -505,6 +505,7 @@ type RequestAttemptTokenFields = {
 }
 
 const requestAttemptFieldsByError = new WeakMap<object, RequestAttemptTokenFields>()
+const promptScopedProviderErrors = new WeakSet<object>()
 
 const getRequestAttemptTokenFields = ({
   finishedAt,
@@ -527,6 +528,20 @@ const attachRequestAttemptFieldsToError = <T>(error: T, fields: RequestAttemptTo
   }
 
   return error
+}
+
+const attachPromptScopedProviderError = <T>(error: T): T => {
+  if (typeof error === 'object' && error !== null) {
+    promptScopedProviderErrors.add(error)
+  }
+
+  return error
+}
+
+const isJudgeConnectionError = (error: unknown): boolean => {
+  return typeof error === 'object' && error !== null && promptScopedProviderErrors.has(error)
+    ? false
+    : isConnectionError(error)
 }
 
 const getResponseRequestAttemptFields = (response: GeneratedPromptResponse): RequestAttemptTokenFields => {
@@ -623,6 +638,10 @@ const isAnthropicEmptyResponseFailureCode = (failureCode: string | null): boolea
   )
 }
 
+const isRecoverableProviderFailureCode = (failureCode: string | null): boolean => {
+  return isAnthropicEmptyResponseFailureCode(failureCode) || failureCode === 'codex_transient_turn_failure'
+}
+
 const getProviderInvocationFailureCode = (error: unknown): string | null => {
   return error instanceof ProviderInvocationError ? error.code : null
 }
@@ -638,7 +657,7 @@ const getProviderInvocationUsage = (
 }
 
 const getRecoverableJudgeError = ({adjustedErrorMessage, error}: {adjustedErrorMessage: string; error: unknown}) => {
-  return error instanceof ProviderInvocationError && isAnthropicEmptyResponseFailureCode(error.code)
+  return error instanceof ProviderInvocationError && isRecoverableProviderFailureCode(error.code)
     ? new RecoverableJudgeError(adjustedErrorMessage, {
         cause: error,
         failureCode: error.code,
@@ -782,7 +801,7 @@ const generateSinglePromptResponse = async ({
         })
 
         if (!failure.shouldPauseConnection) {
-          throw attachRequestAttemptFieldsToError(error, requestAttemptFields)
+          throw attachPromptScopedProviderError(attachRequestAttemptFieldsToError(error, requestAttemptFields))
         }
 
         throw attachRequestAttemptFieldsToError(
@@ -1527,7 +1546,7 @@ export const judgeSinglePrompt = async ({
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
         const requestBaseURL = getRequestBaseURL({baseURL, currentResponse, error})
 
-        if (isConnectionError(error)) {
+        if (isJudgeConnectionError(error)) {
           const failure = classifyJudgeFailure({
             baseURL: requestBaseURL,
             endpointPath: getProviderEndpointPath(provider),
@@ -1820,7 +1839,7 @@ export const judgeSinglePrompt = async ({
             } catch (error) {
               const errorMessage = error instanceof Error ? error.message : 'Unknown error'
               const requestBaseURL = getRequestBaseURL({baseURL, currentResponse, error})
-              const connectionFailure = isConnectionError(error)
+              const connectionFailure = isJudgeConnectionError(error)
               const classifiedFailure = connectionFailure
                 ? classifyJudgeFailure({
                     baseURL: requestBaseURL,
@@ -2176,7 +2195,7 @@ export const judgeSinglePrompt = async ({
           const errorMessage = error instanceof Error ? error.message : 'Unknown error'
           const requestBaseURL = getRequestBaseURL({baseURL, currentResponse, error})
 
-          if (isConnectionError(error)) {
+          if (isJudgeConnectionError(error)) {
             const failure = classifyJudgeFailure({
               baseURL: requestBaseURL,
               endpointPath: getProviderEndpointPath(provider),

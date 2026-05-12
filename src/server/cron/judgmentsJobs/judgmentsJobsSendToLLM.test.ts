@@ -712,6 +712,41 @@ test('prompt/content errors do not pause the whole provider connection', async (
   expect(requeuePrompts).not.toHaveBeenCalled()
 })
 
+test('Codex transient prompt errors do not pause the whole provider connection', async () => {
+  const firstPrompt = createPrompt({
+    modelBaseUrl: 'codex://app-server',
+    modelProvider: 'codex',
+    providerConnectionId: null,
+  })
+  const secondPrompt = createPrompt({
+    articleId: 'article-b',
+    modelBaseUrl: 'codex://app-server',
+    modelProvider: 'codex',
+    providerConnectionId: null,
+    recordId: 'record-b',
+  })
+  const processed: string[] = []
+  const requeuePrompts = mock(async (_prompts: PromptToProcess[]) => {
+    return undefined
+  })
+
+  await processClaimedPromptsByConnection({
+    label: 'test',
+    processPrompt: async (prompt) => {
+      processed.push(prompt.recordId)
+
+      if (prompt.recordId === firstPrompt.recordId) {
+        throw Object.assign(new Error('The operation timed out.'), {code: 'codex_transient_turn_failure'})
+      }
+    },
+    prompts: [firstPrompt, secondPrompt],
+    requeuePrompts,
+  })
+
+  expect(processed).toEqual(['record-a', 'record-b'])
+  expect(requeuePrompts).not.toHaveBeenCalled()
+})
+
 test('launches claimed prompts in bounded parallel per connection', async () => {
   const firstRelease = (() => {
     let resolve: () => void = () => {

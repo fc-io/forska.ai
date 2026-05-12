@@ -266,13 +266,36 @@ const loadJudgeModule = ({
   judgeStoreTokenUse: ReturnType<typeof mock>
   storeSinglePromptJudgment: ReturnType<typeof mock>
 }): Promise<JudgeModule> => {
+  let requestAttemptCount = 0
+
   void mock.module(judgmentsRequestRuntimeModulePath, () => {
     return {
+      updateJudgmentPromptRequestWork: () => {
+        return undefined
+      },
       withJudgmentRequest: async (
         {fallbackBaseURL}: {fallbackBaseURL: string},
-        run: (baseURL: string) => Promise<unknown>,
+        run: (
+          baseURL: string,
+          requestAttempt: {
+            baseURL: string
+            createdAt: string
+            providerKey: string
+            requestAttemptId: string
+            startedAt: string
+          },
+        ) => Promise<unknown>,
       ) => {
-        return run(fallbackBaseURL)
+        requestAttemptCount += 1
+        const now = new Date(0).toISOString()
+
+        return run(fallbackBaseURL, {
+          baseURL: fallbackBaseURL,
+          createdAt: now,
+          providerKey: 'codex:default',
+          requestAttemptId: `request-attempt-${requestAttemptCount}`,
+          startedAt: now,
+        })
       },
     }
   })

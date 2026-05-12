@@ -1,5 +1,7 @@
 import {beforeEach, expect, mock, test} from 'bun:test'
 
+import {ProviderInvocationError} from '../providerTypes.ts'
+
 const getCodexAppServerClientModulePath = new URL('../../utils/getCodexAppServerClient.ts', import.meta.url).pathname
 
 const runJsonTurn = mock(async (): Promise<{text: string; usage: unknown}> => {
@@ -50,6 +52,29 @@ test('invokeCodexAppModel maps Codex token usage into provider usage', async () 
   })
 
   expect(result).toEqual({text: 'codex-response', usage: {completionTokens: 35, promptTokens: 120, totalTokens: 155}})
+})
+
+test('invokeCodexAppModel wraps transient turn timeouts as provider invocation failures', async () => {
+  runJsonTurn.mockRejectedValue(new Error('The operation timed out.'))
+
+  const {invokeCodexAppModel} = await loadTransport()
+  const error = await (async (): Promise<unknown> => {
+    try {
+      await invokeCodexAppModel({
+        modelName: 'codex-mini',
+        outputSchema: {type: 'object'},
+        prompt: 'hello',
+        systemPrompt: 'system',
+        version: 'medium',
+      })
+      return null
+    } catch (caught) {
+      return caught
+    }
+  })()
+
+  expect(error).toBeInstanceOf(ProviderInvocationError)
+  expect(error).toMatchObject({code: 'codex_transient_turn_failure', providerKind: 'codex'})
 })
 
 test('getProviderUsageFromCodexThreadTokenUsage falls back to output totals when needed', async () => {

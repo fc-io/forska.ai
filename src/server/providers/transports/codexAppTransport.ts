@@ -12,6 +12,7 @@ import {
 } from '../../utils/getCodexAppServerClient.ts'
 import {
   type ProviderHealthResult,
+  ProviderInvocationError,
   type ProviderInvocationResult,
   type ProviderListedModel,
   type ProviderUsageSnapshot,
@@ -102,6 +103,32 @@ export const getProviderUsageFromCodexThreadTokenUsage = (
   return {completionTokens, promptTokens, totalTokens: Math.max(0, last.totalTokens)}
 }
 
+const getCodexInvocationErrorMessage = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error)
+}
+
+const isTransientCodexTurnError = (error: unknown): boolean => {
+  const message = getCodexInvocationErrorMessage(error).toLowerCase()
+
+  return (
+    message.includes('codex app-server: turn failed')
+    || message.includes('codex app-server: turn timeout')
+    || message.includes('codex app-server timeout:')
+    || message.includes('operation timed out')
+  )
+}
+
+const getCodexTransientTurnError = (error: unknown): ProviderInvocationError => {
+  const message = getCodexInvocationErrorMessage(error)
+
+  return new ProviderInvocationError(message, {
+    cause: error,
+    code: 'codex_transient_turn_failure',
+    diagnostics: {message},
+    providerKind: 'codex',
+  })
+}
+
 export const invokeCodexAppModel = async ({
   modelName,
   outputSchema,
@@ -116,13 +143,21 @@ export const invokeCodexAppModel = async ({
   version: string | null
 }): Promise<ProviderInvocationResult> => {
   const client = getCodexAppServerClient()
-  const result = await client.runJsonTurn({
-    effort: version,
-    inputText: `${systemPrompt}\n\n${prompt}`,
-    model: modelName,
-    outputSchema,
-    timeoutMs: 900_000,
-  })
+  const result = await client
+    .runJsonTurn({
+      effort: version,
+      inputText: `${systemPrompt}\n\n${prompt}`,
+      model: modelName,
+      outputSchema,
+      timeoutMs: 900_000,
+    })
+    .catch((error) => {
+      if (isTransientCodexTurnError(error)) {
+        throw getCodexTransientTurnError(error)
+      }
+
+      throw error
+    })
 
   return {text: result.text, usage: getProviderUsageFromCodexThreadTokenUsage(result.usage)}
 }
