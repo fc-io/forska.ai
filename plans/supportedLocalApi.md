@@ -9,6 +9,7 @@ Status: draft. This plan defines the API surface that local apps, LLM tools, age
 - Keep Forska usable as a local API server for the Forska UI, the desktop app, locally installed LLM apps, local agents, and user scripts.
 - Keep the default network posture local: bind API and app listeners to loopback by default.
 - Make the supported local API explicit so internal worker, repair, database, and debug routes do not accidentally become stable integration APIs.
+- Separate same-machine loopback access from browser-origin access. Native apps, CLIs, agents, and scripts can call loopback directly; browser-based local tools also need an explicit CORS decision.
 - Publish a clear local API contract before opening the repo.
 
 ## Plain Language Rule
@@ -17,11 +18,14 @@ Local apps should be able to call Forska through `http://127.0.0.1:<api-port>`.
 
 That does not mean every mounted route is a supported API. It means the documented local API is available to local clients, while internal runtime routes stay clearly marked as internal, debug, or unsupported.
 
+For browser-based local clients, loopback availability is not enough. The current server uses an explicit CORS allowlist for Forska app origins and desktop origins, so third-party browser tools are supported only if their origin policy is deliberately added and documented.
+
 ## Non-Goals
 
 - Do not add hosted multi-tenant behavior.
 - Do not add admin accounts or user auth for the open-source local app unless separately decided.
 - Do not expose the API to the LAN or internet by default.
+- Do not broaden CORS or listener binding as a side effect of documenting the local API.
 - Do not promise stability for internal worker, repair, database snapshot, or debug routes.
 
 ## API Categories
@@ -35,14 +39,19 @@ That does not mean every mounted route is a supported API. It means the document
 | `maintenance/debug API` | Repair, rebuild, database snapshot, admin investigation, cleanup, and dangerous one-off tools. | No by default | No, or developer/debug docs only |
 | `remove from public seed` | High-risk, legacy, dead, private, or unclear surface. | No | No |
 
+The manifest should classify method and path patterns, not only route files. Several route files mix supported product behavior, diagnostics, sensitive data access, internal worker operations, and maintenance controls.
+
+`apiRouteClassification.ts` is the current owner/proxy routing classifier. It is useful input, but its categories are not the public support categories and should not become the supported local API manifest by renaming alone.
+
 ## Starting Route Decisions
 
 These are initial decisions, not final documentation. Each row still needs a route-level review before release.
 
 | Route Group | Starting Decision | Notes |
 | --- | --- | --- |
-| `src/appServerMain.ts` `/api/*` proxy | Keep | Local apps can call the API server directly; the app server proxy remains useful for the browser app. The API server route manifest must define what is supported. |
-| `runtimeReadyRoutes.ts` | Local diagnostics API | Keep `GET /api/runtime/ready` and `GET /api/runtime/state`; document as local runtime status. |
+| `src/appServerMain.ts` `/api/*` proxy | Keep | Local apps can call the API server directly; the app server proxy remains useful for the browser app. The proxy is transport, not a separate support contract. |
+| `src/desktop/index.ts` API bridge | Keep | Desktop forwards only `/api/` paths to the configured API origin. The bridge must not expand the supported surface beyond the API manifest. |
+| `runtimeReadyRoutes.ts` | Local bootstrap plus diagnostics API | Keep `GET /api/runtime/ready` as the small readiness/bootstrap route used by desktop and split runtime; keep `GET /api/runtime/state` as diagnostic status. |
 | `ProjectsRoutes.ts` | Supported local API | Project CRUD, review views, filtering, and settings are core local app behavior. Split out maintenance-like cleanup routes. |
 | `ComparisonProjectsRoutes.ts` | Supported local API | Keep comparison project flows and exports as local product API. |
 | `ProjectArticlesRoutes.ts` | Supported local API | Keep project article add/remove/list behavior. |
@@ -65,7 +74,8 @@ These are initial decisions, not final documentation. Each row still needs a rou
 | `JudgmentsJobsRoutes.ts` worker claim/complete/heartbeat/runtime/snapshot routes | Internal runtime API | Keep only for Forska internals; not part of stable local integration API. |
 | `JudgmentsJobsRoutes.ts` repair/drain/checkpoint/quarantine routes | Maintenance/debug API | Gate or keep developer-only. Do not document as stable local API. |
 | `providerAdmissionLeaseRoutes.ts` | Internal runtime API | Keep for worker/provider capacity coordination only. Review aliases before public release. |
-| `DuckdbOwnerConnectionsRoutes.ts` | Internal runtime API or local diagnostics API | Required for split runtime. Document only diagnostics, not as stable integration surface. |
+| `DuckdbOwnerConnectionsRoutes.ts` `GET /api/duckdb_owner_connections` | Local diagnostics API | Useful split-runtime status. Document as diagnostic only, not as a stable product integration dependency. |
+| `DuckdbOwnerConnectionsRoutes.ts` `POST /api/duckdb_owner_connections/heartbeat` | Internal runtime API | Runtime heartbeat/write path for server coordination. Do not document as a stable local integration API. |
 | `DuckdbStudioRoutes.ts` | Maintenance/debug API | Gate or exclude from public seed. |
 | `AdminInvestigateRoutes.ts` | Maintenance/debug API | Gate, hide, or exclude from public seed. Current `/api/admin/*` naming conflicts with single-user/no-admin product docs. |
 | `JudgmentDispatchTelemetryRoutes.ts` | Local diagnostics API or internal runtime API | Keep only if still needed; mark diagnostic/internal. |
@@ -76,40 +86,44 @@ These are initial decisions, not final documentation. Each row still needs a rou
 | `NvidiaSmiRoutes.ts` | Local diagnostics API | Keep if useful; make clear it is machine-local GPU telemetry. |
 | `UsersRoutes.ts` | Supported local API | Single-user settings are product behavior. Consider future rename only if docs are confusing. |
 | `SubprojectsRoutes.ts` | Supported local API | Keep local product behavior. |
-| `ApiProxyRoutes.ts` | Internal runtime API | Keep as implementation detail. The supported local API should not depend on callers knowing proxy internals. |
+| `ApiProxyRoutes.ts` | Internal runtime API | Keep as implementation detail. The supported local API should not depend on callers knowing proxy internals or DuckDB-owner routing rules. |
+| `apiRouteClassification.ts` | Internal runtime classifier | Keep as proxy/owner-routing input. Do not reuse these categories as the public API support taxonomy. |
 | `/__duckdb-owner-rpc/**` | Internal runtime API | Never document as a local integration API. |
 
 ## What Needs To Change
 
 | # | Change | Target State |
 | --- | --- | --- |
-| 1 | Create a supported local API manifest | One reviewed source of truth lists supported local routes, diagnostic routes, internal routes, debug routes, and removed routes. |
+| 1 | Create a supported local API manifest | One reviewed source of truth lists each method/path pattern, route module, support category, sensitivity note, and owner/proxy behavior. |
 | 2 | Split route groups conceptually before release | Product routes, diagnostics, internal runtime routes, and debug routes are not all treated as the same API class. |
 | 3 | Document local integration behavior | Local apps can call `127.0.0.1:<api-port>`; the API is not network-exposed by default. |
-| 4 | Mark internal routes as unsupported | Worker claims, owner RPC, proxy internals, repair flows, and database snapshot routes are not stable integration APIs. |
-| 5 | Review sensitive routes | Provider secrets, failed request details, runtime assets, exports, PDFs, uploads, and FHIR/EHR import receive explicit keep/gate/remove decisions. |
-| 6 | Add regression checks | Unexpected new listeners or routes fail review until classified. |
-| 7 | Update README and public docs | Docs describe the supported local API and stop implying that all mounted routes are public product API. |
+| 4 | Decide browser-client CORS support | Native same-machine clients are supported through loopback; browser-based local tools have an explicit allowed-origin policy or are documented as unsupported. |
+| 5 | Mark internal routes as unsupported | Worker claims, owner RPC, proxy internals, repair flows, and database snapshot routes are not stable integration APIs. |
+| 6 | Review sensitive routes | Provider secrets, failed request details, runtime assets, exports, PDFs, uploads, and FHIR/EHR import receive explicit keep/gate/remove decisions. |
+| 7 | Add regression checks | Unexpected new listeners, routes, owner/proxy classifications, or CORS exposure changes fail review until classified. |
+| 8 | Update README and public docs | Docs describe the supported local API and stop implying that all mounted routes are public product API. |
 
 ## Suggested Implementation Order
 
-1. Build the first manifest from `src/server/serverMain.ts`, `src/appServerMain.ts`, `src/server/routes/*`, nested route modules, `ApiProxyRoutes.ts`, and `apiRouteClassification.ts`.
-2. Mark every route as `supported local API`, `local diagnostics API`, `sensitive local API`, `internal runtime API`, `maintenance/debug API`, or `remove from public seed`.
-3. Close the high-risk decisions first: FHIR/EHR import, failed request details, runtime assets, provider secrets, DuckDB studio, `/api/admin/*`, and judgment repair/control routes.
-4. Add a route-manifest regression test or route-classification test that fails when a mounted route is missing from the manifest.
-5. Update public docs with the supported local API rules and examples for local LLM tools/scripts.
-6. Update the open-source release seed allowlist so internal planning files and unsupported debug/operator docs do not enter the public seed.
+1. Build the first manifest from `src/server/serverMain.ts`, `src/appServerMain.ts`, `src/desktop/index.ts`, `src/server/routes/*`, nested route modules, `ApiProxyRoutes.ts`, `apiRouteClassification.ts`, and cron-mounted Elysia plugins.
+2. Mark every method/path pattern as `supported local API`, `local diagnostics API`, `sensitive local API`, `internal runtime API`, `maintenance/debug API`, or `remove from public seed`.
+3. Record whether each documented route is callable from native/CLI loopback clients, the Forska browser app, the desktop bridge, and any intentionally supported third-party browser origins.
+4. Close the high-risk decisions first: FHIR/EHR import, failed request details, runtime assets, provider secrets, DuckDB studio, `/api/admin/*`, and judgment repair/control routes.
+5. Add a route-manifest regression test or route-classification test that fails when a mounted method/path pattern is missing from the manifest.
+6. Update public docs with the supported local API rules and examples for local LLM tools/scripts, including the browser CORS limitation.
+7. Update the open-source release seed allowlist so internal planning files and unsupported debug/operator docs do not enter the public seed.
 
 ## Example Public Wording
 
-Forska runs a local API server on loopback by default. Local tools on the same machine can call the documented API at `http://127.0.0.1:<api-port>`. Forska does not expose the API to other machines by default. Routes not listed in the supported local API documentation are internal implementation details and may change without notice.
+Forska runs a local API server on loopback by default. Native apps, agents, CLIs, and scripts on the same machine can call the documented API at `http://127.0.0.1:<api-port>`. Browser-based tools are also subject to the documented CORS policy. Forska does not expose the API to other machines by default. Routes not listed in the supported local API documentation are internal implementation details and may change without notice.
 
 ## Deliverables
 
-- Supported local API manifest with every mounted route classified.
+- Supported local API manifest with every mounted method/path pattern classified.
+- Local browser-client/CORS decision that matches the server allowlist and public docs.
 - Public local API documentation for local LLM apps, agents, scripts, browser app, and desktop app.
 - Sensitive route decision log covering secrets, failed requests, runtime assets, exports, PDFs/uploads, and FHIR/EHR import.
-- Regression check that catches unclassified route or listener additions.
+- Regression check that catches unclassified route, listener, owner/proxy, or CORS exposure additions.
 - Updated README language that distinguishes local integration API from internal/debug routes.
 
 ## Touched Layers
@@ -121,8 +135,9 @@ Forska runs a local API server on loopback by default. Local tools on the same m
 
 ## Quality Gates
 
-- Manual verify: manifest covers `src/server/serverMain.ts`, `src/appServerMain.ts`, `src/desktop/index.ts`, `src/server/routes/*`, nested route modules, `ApiProxyRoutes.ts`, `apiRouteClassification.ts`, and cron-mounted Elysia plugins.
-- Manual verify: browser, desktop, local LLM tools, agents, and scripts can use documented supported local API routes through loopback.
+- Manual verify: manifest covers method/path patterns from `src/server/serverMain.ts`, `src/appServerMain.ts`, `src/desktop/index.ts`, `src/server/routes/*`, nested route modules, `ApiProxyRoutes.ts`, `apiRouteClassification.ts`, and cron-mounted Elysia plugins.
+- Manual verify: the Forska browser app, desktop app, local LLM tools, agents, and scripts can use documented supported local API routes through loopback.
+- Manual verify: browser-origin CORS claims match `allowedOrigins` in `src/server/serverMain.ts`; if third-party browser tools are supported, verify the expected preflight/response headers.
 - Manual verify: unsupported internal routes are marked internal, gated, moved, or excluded from public docs.
 - Manual verify: supported OSS listeners bind only to loopback by default, or every broader bind is explicitly documented and approved.
 - `bun run lint` after route or docs cleanup that changes source files.

@@ -1,6 +1,8 @@
 import {
   fetchJudgmentsJobs,
   type JudgmentJobProviderTelemetry,
+  type JudgmentJobProviderTelemetryHistoryBucket,
+  type JudgmentJobProviderTelemetryHistoryRange,
   type JudgmentJobTelemetrySource,
 } from '../../../../services/judgmentsJobsService'
 
@@ -30,6 +32,13 @@ const activeJudgmentsJobStatuses = new Set([
 ])
 
 export const judgmentsJobsQueryKey = ['judgments-jobs'] as const
+export const judgmentProviderTelemetryHistoryRanges = [
+  '5m',
+  '15m',
+  '1h',
+  '24h',
+  '3d',
+] as const satisfies readonly JudgmentJobProviderTelemetryHistoryRange[]
 
 export const judgmentJobsHealthFilterLabels: Record<JobHealthFilter, string> = {
   draining: 'Draining',
@@ -39,6 +48,17 @@ export const judgmentJobsHealthFilterLabels: Record<JobHealthFilter, string> = {
   largeWal: 'Large WAL',
   staleImport: 'Stale Import',
 }
+export const judgmentProviderTelemetryHistoryRangeLabels: Record<JudgmentJobProviderTelemetryHistoryRange, string> = {
+  '5m': 'Last 5 minutes',
+  '15m': 'Last 15 minutes',
+  '1h': 'Last 1 hour',
+  '24h': 'Last 24 hours',
+  '3d': 'Last 3 days',
+}
+export const judgmentProviderTelemetryAdherenceStateLabels: Record<
+  JudgmentJobProviderTelemetryHistoryBucket['adherenceState'],
+  string
+> = {atLimit: 'At limit', overLimit: 'Over limit', unknown: 'No samples', withinLimit: 'Within limit'}
 
 export const getActionErrorMessage = (error: unknown, fallback: string) => {
   return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback
@@ -233,6 +253,14 @@ export const formatTelemetryPercent = (value: number | null | undefined): string
   return value === null || value === undefined ? 'N/A' : `${value}%`
 }
 
+export const formatTelemetryUtilization = (value: number | null | undefined): string => {
+  const normalizedValue = Number(value)
+
+  return value === null || value === undefined || !Number.isFinite(normalizedValue)
+    ? 'N/A'
+    : `${Number.isInteger(normalizedValue) ? normalizedValue.toString() : normalizedValue.toFixed(1)}%`
+}
+
 export const formatTelemetryDuration = (value: number | null | undefined): string => {
   const totalSeconds = Math.max(Math.floor((value ?? 0) / 1000), 0)
   const minutes = Math.floor(totalSeconds / 60)
@@ -269,6 +297,30 @@ export const getProviderBottleneckDescription = (value: string | null | undefine
     providerBottleneckDetails[value ?? '']?.description
     ?? 'No specific bottleneck is currently classified for this provider.'
   )
+}
+
+export const getProviderTelemetryHistoryRangeLabel = (value: JudgmentJobProviderTelemetryHistoryRange): string => {
+  return judgmentProviderTelemetryHistoryRangeLabels[value]
+}
+
+export const getProviderTelemetryAdherenceStateLabel = (
+  value: JudgmentJobProviderTelemetryHistoryBucket['adherenceState'] | null | undefined,
+): string => {
+  return value === null || value === undefined
+    ? judgmentProviderTelemetryAdherenceStateLabels.unknown
+    : (judgmentProviderTelemetryAdherenceStateLabels[value] ?? formatTelemetryEnumValue(value))
+}
+
+export const getProviderTelemetryBottleneckSummaryLabel = (
+  summary: Pick<JudgmentJobProviderTelemetryHistoryBucket, 'bottleneck' | 'bottleneckSampleCount'> | null | undefined,
+): string => {
+  const sampleCount = Number(summary?.bottleneckSampleCount ?? 0)
+
+  return summary?.bottleneck && sampleCount > 0
+    ? `${getProviderBottleneckLabel(summary.bottleneck)} (${formatTelemetryCount(sampleCount)} ${
+        sampleCount === 1 ? 'sample' : 'samples'
+      })`
+    : 'No bottleneck'
 }
 
 export const getEndpointProbeStateLabel = (value: string | null | undefined): string => {

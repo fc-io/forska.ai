@@ -276,6 +276,18 @@ type JudgmentJobRepairResponse = {
   }
 }
 
+type JudgmentJobProviderTelemetryHistoryResponse = Awaited<
+  ReturnType<(typeof apiClient.api)['judgmentsjobs-provider-telemetry-history']['get']>
+>
+type JudgmentJobProviderTelemetryHistoryRequest = NonNullable<
+  Parameters<(typeof apiClient.api)['judgmentsjobs-provider-telemetry-history']['get']>[0]
+>
+
+export type JudgmentJobProviderTelemetryHistoryQuery = JudgmentJobProviderTelemetryHistoryRequest['query']
+export type JudgmentJobProviderTelemetryHistoryRange = JudgmentJobProviderTelemetryHistoryQuery['range']
+export type JudgmentJobProviderTelemetryHistory = NonNullable<JudgmentJobProviderTelemetryHistoryResponse['data']>
+export type JudgmentJobProviderTelemetryHistoryBucket = JudgmentJobProviderTelemetryHistory['buckets'][number]
+
 const buildMissingJob = () => {
   return {
     id: 'not found',
@@ -371,6 +383,13 @@ export const getTotalTokenUsage = async () => {
   const response = await apiClient.api['judgmentsjobs-total-token-usage'].get()
   const result = handleApiResponse(response, 'Failed to fetch total token usage')
   return result?.data ?? {totalTokens: 0, totalPromptTokens: 0, totalCompletionTokens: 0}
+}
+
+export const fetchJudgmentJobProviderTelemetryHistory = async (
+  query: JudgmentJobProviderTelemetryHistoryQuery,
+): Promise<JudgmentJobProviderTelemetryHistory> => {
+  const response = await apiClient.api['judgmentsjobs-provider-telemetry-history'].get({query})
+  return handleApiResponse(response, 'Failed to fetch provider telemetry history')
 }
 
 export const runJudgmentsJobRepairAction = async ({

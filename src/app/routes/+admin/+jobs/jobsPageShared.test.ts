@@ -4,6 +4,7 @@ import {
   formatNumber,
   formatStatus,
   formatTelemetryRatio,
+  formatTelemetryUtilization,
   getAllocationStateLabel,
   getEndpointProbeStateLabel,
   getJobRiskScore,
@@ -12,8 +13,12 @@ import {
   getObservedAggregateTelemetryLabel,
   getProviderBottleneckDescription,
   getProviderBottleneckLabel,
+  getProviderTelemetryAdherenceStateLabel,
+  getProviderTelemetryBottleneckSummaryLabel,
+  getProviderTelemetryHistoryRangeLabel,
   getTelemetryCoverageSummary,
   jobMatchesHealthFilter,
+  judgmentProviderTelemetryHistoryRanges,
   type JudgmentsJobListItem,
 } from './jobsPageShared'
 
@@ -69,6 +74,23 @@ test('capacity helper labels keep request leases separate from endpoint probes a
   expect(
     getAllocationStateLabel({allocationCompleteCurrent: false, allocationInputState: 'partialRemoteTelemetry'}),
   ).toBe('Allocation incomplete (Partial Remote Telemetry)')
+})
+
+test('provider telemetry history labels cover chart range adherence utilization and bottleneck summaries', () => {
+  expect(judgmentProviderTelemetryHistoryRanges).toEqual(['5m', '15m', '1h', '24h', '3d'])
+  expect(getProviderTelemetryHistoryRangeLabel('5m')).toBe('Last 5 minutes')
+  expect(getProviderTelemetryHistoryRangeLabel('24h')).toBe('Last 24 hours')
+  expect(getProviderTelemetryAdherenceStateLabel('withinLimit')).toBe('Within limit')
+  expect(getProviderTelemetryAdherenceStateLabel('atLimit')).toBe('At limit')
+  expect(getProviderTelemetryAdherenceStateLabel('overLimit')).toBe('Over limit')
+  expect(getProviderTelemetryAdherenceStateLabel('unknown')).toBe('No samples')
+  expect(formatTelemetryUtilization(73.3333)).toBe('73.3%')
+  expect(formatTelemetryUtilization(100)).toBe('100%')
+  expect(formatTelemetryUtilization(null)).toBe('N/A')
+  expect(getProviderTelemetryBottleneckSummaryLabel({bottleneck: 'providerAtTarget', bottleneckSampleCount: 2})).toBe(
+    'Provider at target (2 samples)',
+  )
+  expect(getProviderTelemetryBottleneckSummaryLabel({bottleneck: null, bottleneckSampleCount: 0})).toBe('No bottleneck')
 })
 
 test('list page helpers preserve status labels and active job polling behavior', () => {

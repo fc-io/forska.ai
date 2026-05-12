@@ -6,8 +6,8 @@ import {
   formatTelemetryCount,
   formatTelemetryDuration,
   formatTelemetryEnumValue,
-  formatTelemetryPercent,
   formatTelemetryRatio,
+  formatTelemetryUtilization,
   getAllocationStateLabel,
   getEndpointProbeStateLabel,
   getObservedAggregateTelemetryDescription,
@@ -188,7 +188,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                     description="Request lease fill uses normal request capacity, not prompt slots."
                     label="Request Fill"
                   >
-                    {formatTelemetryPercent(provider().leaseAuthority.providerRequestFillPct)}
+                    {formatTelemetryUtilization(provider().leaseAuthority.providerRequestFillPct)}
                   </TelemetryMetric>
                 </div>
                 <Show when={getLeaseObservedMismatchMessage(provider())}>
@@ -277,7 +277,7 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
                     {formatTelemetryCount(provider().observedBestEffort.requestWorkBacklog)}
                   </TelemetryMetric>
                   <TelemetryMetric description="Best-effort observed live request fill." label="Observed Fill">
-                    {formatTelemetryPercent(provider().observedBestEffort.providerRequestFillPct)}
+                    {formatTelemetryUtilization(provider().observedBestEffort.providerRequestFillPct)}
                   </TelemetryMetric>
                   <Show when={(telemetrySource()?.providerCoverage ?? []).length > 0}>
                     <div class="min-w-0 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
