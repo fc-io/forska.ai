@@ -49,6 +49,14 @@ const assertPageHasNoHorizontalOverflow = async (page: Page) => {
   expect(hasNoHorizontalOverflow).toBe(true)
 }
 
+const assertElementHasNoHorizontalOverflow = async (locator: Locator) => {
+  const hasNoHorizontalOverflow = await locator.evaluate((element) => {
+    return element.scrollWidth <= element.clientWidth
+  })
+
+  expect(hasNoHorizontalOverflow).toBe(true)
+}
+
 const getTop = async (locator: Locator) => {
   return locator.evaluate((element) => {
     return element.getBoundingClientRect().top
@@ -265,12 +273,16 @@ test('admin job detail avoids page-level overflow at mobile width with long diag
     await installAdminTelemetryMocks(page, job)
     await page.setViewportSize({height: 900, width: 390})
     await page.goto(`/admin/jobs/${job.id}`)
+    const chart = page.getByTestId('provider-telemetry-history-chart')
 
     await expect(page.getByRole('heading', {name: 'Job'})).toBeVisible()
     await expect(page.getByText(longEndpointIdentity)).toBeVisible()
     await expect(page.getByText(longEndpointKey)).toBeVisible()
     await expect(page.getByText(`Provider key: ${longProviderKey}`)).toHaveCount(3)
     await expect(page.getByText(`Provider error ${longOpaqueValue('provider-error')}`)).toBeVisible()
+    await expect(chart).toBeVisible()
+    await expect(chart.getByRole('img', {name: 'Provider utilization history chart'})).toBeVisible()
+    await assertElementHasNoHorizontalOverflow(chart)
     await assertPageHasNoHorizontalOverflow(page)
     await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
 
