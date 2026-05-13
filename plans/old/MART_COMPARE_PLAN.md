@@ -1,5 +1,11 @@
 # Mart Compare Plan
 
+## Status
+
+Superseded by `plans/old/BETER_PERFORMANCE_FOR_COMPARE_PLAN.md` and the implemented generation-based comparison serving marts: `app.comparison_project_serving_generation`, `mart.comparison_article_serving`, `mart.comparison_cell_serving`, `mart.comparison_filter_member`, and `mart.comparison_filter_stats`.
+
+The sparse `mart.human_answer_fact` idea was not implemented. Keep the current comparison-serving architecture as the Compare Judgments read path. Revisit sparse human facts only if human answers need a shared upstream normalization layer or compare rebuild input cost becomes a measured bottleneck.
+
 ## Goal
 
 Make Compare Judgments use shared mart-backed answer facts without expanding every comparison-project article/prompt/source-project cell up front.

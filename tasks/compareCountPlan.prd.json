@@ -1,0 +1,141 @@
+{
+  "name": "Compare Project Judgment Stats",
+  "branchName": "ralph/compare-project-judgment-stats",
+  "description": "Add project-level comparison stats, Human vs LLM conflict filters, Human vs LLM true-conflict filters, and summary-mode Cohen's kappa to the Compare Project Judgments page.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add comparison stats calculation helpers",
+      "description": "As a developer, I want reusable comparison stats helpers so conflict counts, true-conflict counts, and summary-mode kappa are calculated consistently from serving cells.",
+      "acceptanceCriteria": [
+        "Create focused comparison stats helpers under the existing comparison project route helper area.",
+        "Stats helpers build comparison groups for primary-vs-human, every human-vs-LLM pair, and every LLM-vs-LLM pair.",
+        "Stats helpers compute overlapCount and conflictCount from non-empty normalized answers.",
+        "Stats helpers compute trueConflictCount by normalizing yes and maybe to include and no to exclude.",
+        "Stats helpers compute summary-mode Cohen's kappa only for exactly two summary raters using binary include/exclude decisions.",
+        "Stats helpers return cohensKappa as null for non-summary mode and multi-rater comparisons.",
+        "Unit tests cover no active generation, LLM-vs-LLM conflicts, human-vs-LLM conflicts, maybe-as-include true-conflict semantics, and summary-mode kappa.",
+        "bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts passes",
+        "bun test src/app/routes/+compare-judgments/+$id/+index/compareProjectJudgmentsUrlState.test.ts passes",
+        "bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Extend comparison difference filter contract",
+      "description": "As a developer, I want the shared difference filter contract to include Human vs LLM true conflict and the renamed Human vs LLM conflict label so client and server use one filter vocabulary.",
+      "acceptanceCriteria": [
+        "ComparisonProjectDifferenceFilter includes all, human-vs-llm, human-vs-llm-true-conflict, llm-vs-llm, and any-disagreement.",
+        "getComparisonProjectDifferenceFilterLabel returns Human vs LLM conflict for human-vs-llm.",
+        "getComparisonProjectDifferenceFilterLabel returns Human vs LLM true conflict for human-vs-llm-true-conflict.",
+        "getAvailableComparisonProjectDifferenceFilters includes human-vs-llm-true-conflict only when at least one human column and one LLM column are available.",
+        "Compare Project Judgments URL state preserves and normalizes differenceFilter=human-vs-llm-true-conflict.",
+        "Existing filter behavior for llm-vs-llm and any-disagreement is preserved.",
+        "bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts passes",
+        "bun test src/app/routes/+compare-judgments/+$id/+index/compareProjectJudgmentsUrlState.test.ts passes",
+        "bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Materialize Human vs LLM true conflicts",
+      "description": "As a reviewer, I want Human vs LLM true conflicts materialized in comparison serving rows so true-conflict filtering and stats use the same data.",
+      "acceptanceCriteria": [
+        "Add a DuckDB migration that updates or rebuilds mart.comparison_article_serving with has_human_vs_llm_true_conflict and passes_difference_filter_human_vs_llm_true_conflict.",
+        "The migration adds human-vs-llm-true-conflict support to mart.comparison_filter_member and mart.comparison_filter_stats.",
+        "The migration marks comparison serving stale so rows are rematerialized with the new fields.",
+        "The serving rollup builder normalizes yes and maybe to include and no to exclude for Human vs LLM true-conflict calculation.",
+        "The serving rollup builder sets has_human_vs_llm_true_conflict when any comparable Human vs LLM answer pair is include vs exclude.",
+        "Serving rollup tests cover yes vs no, maybe vs no, yes vs maybe, maybe vs maybe, and no vs no true-conflict behavior.",
+        "bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts passes",
+        "bun test src/app/routes/+compare-judgments/+$id/+index/compareProjectJudgmentsUrlState.test.ts passes",
+        "bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Wire Human vs LLM true-conflict filtering",
+      "description": "As a reviewer, I want to filter Compare Project Judgments to Human vs LLM true conflicts so I can review only workflow-relevant conflicts.",
+      "acceptanceCriteria": [
+        "The comparison judgments page endpoint accepts differenceFilter=human-vs-llm-true-conflict.",
+        "The comparison judgments count endpoint returns counts for human-vs-llm-true-conflict from mart.comparison_filter_stats.",
+        "The comparison export endpoint applies human-vs-llm-true-conflict with the same semantics as the table endpoint.",
+        "Filtered rows include Human vs LLM include-vs-exclude disagreements and exclude maybe-vs-yes disagreements.",
+        "The existing human-vs-llm filter still returns raw Human vs LLM answer disagreements under the new Human vs LLM conflict label.",
+        "Route tests cover page, count, and export behavior for differenceFilter=human-vs-llm-true-conflict.",
+        "bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts passes",
+        "bun test src/app/routes/+compare-judgments/+$id/+index/compareProjectJudgmentsUrlState.test.ts passes",
+        "bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Expose comparison stats API and client service",
+      "description": "As a client developer, I want a comparison stats endpoint and typed service wrapper so the page can load stats separately from paginated judgment rows.",
+      "acceptanceCriteria": [
+        "Add GET /api/comparison-projects/:id/stats and return activeGeneration, isServingReady, servingStatus, servingUpdatedAt, and comparisons.",
+        "The stats route returns empty comparisons when there is no active serving generation or no comparable columns.",
+        "The stats route reads the active comparison serving generation rather than scanning raw judgments on page load.",
+        "src/services/comparisonProjectsService.ts defines ComparisonProjectStats types and fetchComparisonProjectStats.",
+        "Route tests verify response shape, serving metadata, empty states, conflict counts, true-conflict counts, and kappa values.",
+        "bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts passes",
+        "bun test src/app/routes/+compare-judgments/+$id/+index/compareProjectJudgmentsUrlState.test.ts passes",
+        "bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Render Project Stats card on Compare Project Judgments",
+      "description": "As a reviewer, I want a Project Stats card on Compare Project Judgments so I can see conflict counts, true-conflict counts, and summary-mode kappa before reviewing rows.",
+      "acceptanceCriteria": [
+        "CompareProjectJudgmentsPage queries fetchComparisonProjectStats with a separate TanStack Query key.",
+        "The Project Stats card appears after the existing project details container and before serving-status banners.",
+        "The card shows comparison label, overlap, conflicts, true conflicts, and Cohen's kappa.",
+        "Cohen's kappa is formatted to three decimals when present and N/A when null.",
+        "The card includes user-facing true-conflict info copy explaining that Maybe counts as Yes/include and true conflicts are Include vs Exclude.",
+        "The card has inline loading and empty states and does not add a full-page spinner.",
+        "The existing difference filter dropdown shows Human vs LLM conflict and Human vs LLM true conflict when available.",
+        "The shared web/browser Compare Project Judgments flow is checked for the stats card and filter labels; desktop impact is considered because this is shared UI.",
+        "bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts passes",
+        "bun test src/app/routes/+compare-judgments/+$id/+index/compareProjectJudgmentsUrlState.test.ts passes",
+        "bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-005"]
+    }
+  ]
+}
