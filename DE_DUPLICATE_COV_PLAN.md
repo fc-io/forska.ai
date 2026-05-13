@@ -299,6 +299,10 @@ Automatically reuse an existing canonical article when there is a single unambig
 
 For large imports, auto-merge must be implemented as batched joins against `app.article_identifier`, not as one query per source article.
 
+When an incoming row has multiple strong identifiers, auto-merge only when every existing identifier match points to the same canonical article. If one identifier points to article A and another strong identifier points to article B, quarantine the row as a strong-identifier conflict instead of choosing a winner or creating a merged article.
+
+If a source row claims a strong identifier already linked to another canonical article but the canonical fields materially conflict, quarantine the row instead of overwriting canonical fields. If a source batch contains multiple rows with the same strong identifier and materially different article fields, collapse only exact duplicates and quarantine the conflicting rows before canonical writes.
+
 ### Weak-Match Rules
 
 When strong identifiers are missing:
@@ -314,10 +318,12 @@ When strong identifiers are missing:
 Preferred direction:
 
 1. do not silently merge ambiguous weak matches
-2. preserve the raw import record in an unresolved-import or manual-review state
-3. allow explicit operator resolution to either link an existing canonical article or create a new canonical article
-4. keep unresolved records out of normal project review scope until resolved
-5. for high-volume corpus imports, unresolved rows should be stored compactly and queryable by source, batch, identifier presence, and fingerprint rather than as large raw blobs only
+2. do not silently merge strong-identifier conflicts where DOI, PMID, arXiv, bioRxiv, or medRxiv matches resolve to different canonical articles
+3. preserve the raw import record in an unresolved-import or manual-review state
+4. store quarantine payloads with source kind, import run id, source record key, conflicting identifier kinds, conflicting canonical article ids, and operator-review metadata such as status, reviewer, review notes, resolution action, and timestamps
+5. allow explicit operator resolution to either link an existing canonical article or create a new canonical article
+6. keep unresolved records out of normal project review scope until resolved
+7. for high-volume corpus imports, unresolved rows should be stored compactly and queryable by source, batch, identifier presence, fingerprint, and conflict type rather than as large raw blobs only
 
 This is the safest long-term behavior if we want to avoid poisoning canonical article identity.
 
@@ -588,7 +594,7 @@ After all reads and writes have moved:
 8. million-row source imports can exhaust DuckDB or process memory if staging, matching, or JSON payload handling is not chunked
 9. per-row matching queries can make a 50,000-article Covidence import or million-row corpus import unacceptably slow even if correctness is fixed
 10. bulk corpus imports can create excessive mart refresh work unless project-impact detection is explicit
-11. source batches can contain internal duplicates or conflicting identifiers, so staging must collapse or quarantine conflicts before canonical writes
+11. source batches can contain internal duplicates or strong identifier conflicts across DOI, PMID, arXiv, bioRxiv, and medRxiv values, so staging must collapse exact duplicates or quarantine conflicts before canonical writes and must not silently collapse disagreeing canonical matches
 12. legacy queued judgment jobs and saved execution snapshots can lose reproducibility if compatibility adapters for `importRoute` and `originalData` are removed before downstream consumers migrate
 
 ## Migration Notes
@@ -647,6 +653,7 @@ Pass/fail checks for this change:
 24. Performance verify a synthetic or fixture-backed 50,000-record Covidence import completes without per-row matching queries, duplicate canonical articles, or unbounded memory growth
 25. Performance verify a staged broad-source import path can process at least one million identifier-bearing rows in bounded chunks and correctly links rows that match articles previously created by Covidence
 26. Verify broad-source imports that do not affect a project do not trigger rebuilds for unrelated project review marts
+27. Verify strong-identifier conflict handling quarantines rows when multiple identifiers match different canonical articles, and that the quarantine payload includes source kind, import run id, source record key, conflicting identifier kinds, conflicting canonical article ids, and operator-review metadata
 
 ## Commands To Run
 
