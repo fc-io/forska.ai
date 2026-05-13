@@ -58,15 +58,15 @@ Make the repo's exposed HTTP surface explicit so the open-source release can fai
 | `PromptsRoutes.ts` admin paths | `GET /api/prompts/duplicates`, `POST /api/prompts/regenerate-hashes`, `DELETE /api/prompts/:id`, `GET /api/prompts/orphans`, `POST /api/prompts/merge`, `GET /api/prompts/invalid-judgments`, `POST /api/prompts/delete-invalid-judgments` | Prompt cleanup, merge, hash regeneration, invalid judgment cleanup. | `admin/debug` | Gate or keep local-only with explicit operator docs. Not normal product surface. |
 | `ImportRoutes.ts` | `GET /api/import-routes` | Import route list. | `public product`, `local-only` | Keep canonical `/api/import-routes`. Legacy `/api/importroutes` alias removed. |
 | `DataSourcesRoutes.ts` | `GET/POST/PATCH/DELETE /api/datasources`, `GET /api/datasources/archived`, `GET /api/datasources/:id` | Data source CRUD/archive and import state. | `public product`, `local-only` | Keep. |
-| `DataSourcesImportRoutes.ts` | `POST /api/datasources/import/{covidence-analyze,covidence-create,covidence,arxiv,biorxiv,medrxiv,pubmed,europe-pmc-ppr,fhir-ehr-patients,structured-file-analyze,structured-file-create,structured-file}` | File upload/import and external literature/API import workflows. FHIR/EHR path is privacy-sensitive. | `public product`, `unknown/blocker` for FHIR/EHR | Keep normal literature and structured-file imports local-only. Blocker: decide whether FHIR/EHR patient import belongs in public seed. |
-| `DuckdbStudioRoutes.ts` | `POST /api/duckdbStudioSnapshots` | Creates DuckDB snapshots and requires owner role. | `admin/debug`, `operator/infra` | Keep internal/local-only or remove from public seed. Not public product. |
+| `DataSourcesImportRoutes.ts` | `POST /api/datasources/import/{covidence-analyze,covidence-create,covidence,arxiv,biorxiv,medrxiv,pubmed,europe-pmc-ppr,fhir-ehr-patients,structured-file-analyze,structured-file-create,structured-file}` | File upload/import and external literature/API import workflows. FHIR/EHR path is privacy-sensitive. | `public product`, `unknown/blocker` for FHIR/EHR | Keep normal literature and structured-file imports local-only. Blocker: decide whether FHIR/EHR patient import should ship in the public Forska release. |
+| `DuckdbStudioRoutes.ts` | `POST /api/duckdbStudioSnapshots` | Creates DuckDB snapshots and requires owner role. | `admin/debug`, `operator/infra` | Keep internal/local-only or remove before release. Not public product. |
 | `TokensRoutes.ts` | `POST /api/tokens/usage`, `GET /api/tokens`, `GET /api/tokens/largest-*`, `POST /api/tokens/timeline*`, `POST /api/tokens/failed-requests`, `GET /api/tokens/failed-requests/:id` | Token usage analytics and failed request details. | mixed: `public product`, `admin/debug` | Keep local-only. Blocker: failed request detail payloads may include sensitive prompts/content and need redaction/doc decision. |
 | `UsersRoutes.ts` | `GET /api/users`, `PATCH /api/users` | Single-user settings, local app settings, full-text conversion model, Unpaywall email, local binary paths. | `public product`, `local-only` | Keep. Consider renaming/docs to avoid implying multi-user/admin. |
 | `RuntimeAssetsRoutes.ts` | `GET /api/runtime-asset?path=...` | Reads local runtime asset files restricted to paths beginning with `assets/`. | `local-only`, `unknown/blocker` | Keep only local-only. Audit path handling and confirm public docs never expose arbitrary local file reads. |
 | `LlmStatusRoutes.ts` | `GET /api/llmstatus` | LLM runtime metrics from local DB. | `local-only`, `operator/infra` | Keep local-only if status UI needs it. |
 | `NvidiaSmiRoutes.ts` | `GET /api/nvidiasmi` | GPU metrics from local DB. | `local-only`, `operator/infra` | Keep local-only or hide when not applicable. |
 | `SubprojectsRoutes.ts` | `GET /api/subprojects/sources`, `POST /api/subprojects` | Creates subprojects from source projects and prompt filters. | `public product`, `local-only` | Keep. |
-| Private owner mirror | `/__duckdb-owner-rpc/**` | Mirrors product API routes under `duckdbOwnerPrivateApiPrefix` when the current role mounts the DuckDB-owner private API. | `operator/infra` | Keep internal only. Blocker: ensure it is never exposed beyond loopback/private process coordination. |
+| Owner RPC mirror | `/__duckdb-owner-rpc/**` | Mirrors product API routes under `duckdbOwnerPrivateApiPrefix` when the current role mounts the owner RPC API. | `operator/infra` | Keep internal only. Blocker: ensure it is never exposed beyond loopback/process-local coordination. |
 
 ## Current Blockers
 
@@ -76,9 +76,9 @@ Make the repo's exposed HTTP surface explicit so the open-source release can fai
 | Admin/debug/operator routes are mounted together with product routes. | This contradicts the README's no-admin product stance unless every route is intentionally local-only/debug. | Split route decisions into keep public product, keep local-only debug, or remove. |
 | `/api/*` app-server proxy forwards any API path. | A catch-all proxy makes the actual exposed surface broader than docs unless the API server itself is tightly classified. | Keep only with an explicit route manifest/baseline. |
 | `apiRouteClassification.ts` leaves most product routes as `unclassified`. | The owner proxy treats `unclassified` as proxy/fail-closed; this is safe-ish operationally but weak as an audit artifact. | Add an explicit supported-route manifest or extend classification for the release baseline. |
-| Several routes can expose sensitive local state or content. | Provider secrets, failed request details, runtime assets, uploaded PDFs, PDF fetches, Codex login, and token/request traces need public-release decisions. | Review and document each sensitive path before public seed. |
+| Several routes can expose sensitive local state or content. | Provider secrets, failed request details, runtime assets, uploaded PDFs, PDF fetches, Codex login, and token/request traces need public-release decisions. | Review and document each sensitive path before release. |
 | Remaining aliases and questionable paths need decisions. | Aliases and debug/operator controls become public API once open-sourced. | Decide on provider-admission alias paths and the remaining admin/debug/operator route groups. |
-| FHIR/EHR patient import is present. | Patient-related import surface is high-risk for public release and docs. | Remove from public seed or explicitly justify and document safeguards. |
+| FHIR/EHR patient import is present. | Patient-related import surface is high-risk for public release and docs. | Remove before release or explicitly justify and document safeguards. |
 
 ## Suggested Remediation Order
 
@@ -95,7 +95,7 @@ Make the repo's exposed HTTP surface explicit so the open-source release can fai
 | server | API entrypoint, route mounting, route classification, cron plugins. |
 | client/docs | Eden clients and public docs must match the supported route baseline. |
 | desktop | Desktop backend starts the same API server and must inherit local-only guarantees. |
-| release ops | Public seed must exclude or gate internal/debug/operator surfaces. |
+| release ops | Public release must remove, move, gate, or document internal/debug/operator surfaces. |
 
 ## Quality Gates
 
