@@ -160,13 +160,22 @@ const getExplicitPrimaryLlmColumnIds = (
   llmColumns: readonly ComparisonProjectStatsColumn[],
   params: {primaryModelId?: string | null; primarySourceProjectId?: string | null},
 ) => {
+  if (params.primarySourceProjectId) {
+    return new Set(
+      llmColumns
+        .filter((column) => {
+          return column.sourceProjectId === params.primarySourceProjectId
+        })
+        .map((column) => {
+          return column.id
+        }),
+    )
+  }
+
   return new Set(
     llmColumns
       .filter((column) => {
-        return (
-          (Boolean(params.primarySourceProjectId) && column.sourceProjectId === params.primarySourceProjectId)
-          || (Boolean(params.primaryModelId) && column.modelId === params.primaryModelId)
-        )
+        return Boolean(params.primaryModelId) && column.modelId === params.primaryModelId
       })
       .map((column) => {
         return column.id

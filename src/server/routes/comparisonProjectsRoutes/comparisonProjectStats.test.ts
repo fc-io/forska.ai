@@ -74,6 +74,13 @@ const peerSummaryColumn = {
   sourceProjectName: 'Peer project',
 } satisfies ComparisonProjectStatsColumn
 
+const peerSummarySharedModelColumn = {
+  ...peerSummaryColumn,
+  id: 'llm:source-project-2:model-1:1100:summary',
+  modelId: 'model-1',
+  modelLabel: 'Model 1',
+} satisfies ComparisonProjectStatsColumn
+
 const getCell = (
   articleId: string,
   columnId: string,
@@ -136,6 +143,26 @@ test('comparison stats builds primary, human-vs-llm, and llm-vs-llm groups', () 
     {kind: 'primary-vs-human', leftColumnId: humanPromptColumn.id, rightColumnId: primaryPromptColumn.id},
     {kind: 'human-vs-llm', leftColumnId: humanPromptColumn.id, rightColumnId: peerPromptColumn.id},
     {kind: 'llm-vs-llm', leftColumnId: primaryPromptColumn.id, rightColumnId: peerPromptColumn.id},
+  ])
+})
+
+test('comparison stats prefers primary source project over shared model id', () => {
+  const comparisons = getComparisonProjectStatsFromCells({
+    cellRows: [],
+    columns: [humanSummaryColumn, primarySummaryColumn, peerSummarySharedModelColumn],
+    isSummaryMode: true,
+    primaryModelId: 'model-1',
+    primarySourceProjectId: 'source-project-1',
+  })
+
+  expect(
+    comparisons.map((comparison) => {
+      return {kind: comparison.kind, leftColumnId: comparison.leftColumnId, rightColumnId: comparison.rightColumnId}
+    }),
+  ).toEqual([
+    {kind: 'primary-vs-human', leftColumnId: humanSummaryColumn.id, rightColumnId: primarySummaryColumn.id},
+    {kind: 'human-vs-llm', leftColumnId: humanSummaryColumn.id, rightColumnId: peerSummarySharedModelColumn.id},
+    {kind: 'llm-vs-llm', leftColumnId: primarySummaryColumn.id, rightColumnId: peerSummarySharedModelColumn.id},
   ])
 })
 
