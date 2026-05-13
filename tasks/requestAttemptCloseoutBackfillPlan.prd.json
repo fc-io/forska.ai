@@ -1,0 +1,121 @@
+{
+  "name": "Request Attempt Closeout Backfill Plan",
+  "branchName": "ralph/request-attempt-closeout-backfill",
+  "description": "Make legacy token_use closeout projection automatic, bounded, and resumable without blocking startup or requiring user-run maintenance.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Extend backfill state schema",
+      "description": "As a maintainer, I want persistent per-batch backfill state so automatic legacy closeout projection can resume after crashes and restarts.",
+      "acceptanceCriteria": [
+        "Add a DuckDB migration extending `app.request_attempt_closeout_backfill_state`.",
+        "The state table has `cursor_created_at`, `cursor_token_use_id`, `started_at`, `last_run_at`, and `last_error` columns.",
+        "The migration preserves existing state columns and existing rows.",
+        "The migration is idempotent for already-migrated databases.",
+        "`bun run db:mig` passes",
+        "`bun test src/server/services/requestAttemptCloseoutService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Add resumable bounded backfill cycle",
+      "description": "As a maintainer, I want one bounded backfill cycle that processes legacy token-use closeouts in small chunks and records progress after every batch.",
+      "acceptanceCriteria": [
+        "Add a service entry point that processes at most `5` batches per call.",
+        "Each batch reads at most `1000` `app.token_use` rows.",
+        "The batch query includes `request_attempts_json IS NOT NULL`.",
+        "The batch query orders by `created_at, id` and resumes after the stored cursor.",
+        "The backfill captures a stable high-water mark for each run.",
+        "Each successful batch persists cursor, scanned, attempted, projected, batches, `last_run_at`, and clears `last_error` before the next batch starts.",
+        "The service sets `completed_at` only after the final eligible batch is processed.",
+        "Tests cover non-null filtering, cursor persistence, resume behavior, and completion.",
+        "`bun run db:mig` passes",
+        "`bun test src/server/services/requestAttemptCloseoutService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Remove blocking startup backfill",
+      "description": "As a user, I want the app to start without scanning historical token-use rows so startup stays fast as the database grows.",
+      "acceptanceCriteria": [
+        "Remove the blocking `await backfillRequestAttemptCloseoutsOnStartup()` startup call.",
+        "Keep `await reconcileProviderAdmissionLeasesForDurableCloseout()` in startup reconciliation.",
+        "Startup no longer runs a full historical closeout rebuild or full historical closeout backfill.",
+        "Tests prove startup rollout cleanup does not trigger the full historical backfill path.",
+        "`bun run db:mig` passes",
+        "`bun test src/server/services/requestAttemptCloseoutService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Add automatic backfill scheduler",
+      "description": "As a user, I want legacy closeout projection to finish automatically in the background without running maintenance commands.",
+      "acceptanceCriteria": [
+        "Add a scheduler that runs only in the DuckDB-owning maintenance runtime.",
+        "The scheduler wakes every `30s`.",
+        "Each wake runs the bounded cycle with `1000` row batches and `5` max batches.",
+        "Failures are recorded in `last_error`, logged once for the wake, and retried on the next wake.",
+        "The scheduler does no work after `completed_at` is set.",
+        "The scheduler is registered automatically during server startup for the DuckDB-owning runtime.",
+        "The scheduler stops cleanly with the server process.",
+        "Tests cover runtime ownership guard, bounded work per wake, retry behavior, and completed-state no-op behavior.",
+        "`bun run db:mig` passes",
+        "`bun test src/server/services/requestAttemptCloseoutService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Lock projection-only cleanup and writer projection",
+      "description": "As a maintainer, I want regression coverage proving cleanup stays fast and new token-use writes continue to populate closeout projection immediately.",
+      "acceptanceCriteria": [
+        "`tokenUseQueryService.ts` continues to call `projectRequestAttemptCloseoutsForTokenUse` inside token-use insert transactions.",
+        "Tests prove new `token_use` inserts still create `app.request_attempt_closeout` rows immediately.",
+        "`judgmentsJobsCleanupStale.ts` has no query path referencing `app.token_use`.",
+        "`judgmentsJobsCleanupStale.ts` has no query path referencing `request_attempts_json`.",
+        "Tests prove stale cleanup releases leases through `app.request_attempt_closeout` projection only.",
+        "No required user-run maintenance command is introduced for correctness.",
+        "`bun run db:mig` passes",
+        "`bun test src/server/services/requestAttemptCloseoutService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004"
+      ]
+    }
+  ]
+}
