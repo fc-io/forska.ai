@@ -223,6 +223,17 @@ test('owner-backed rollout cleanup keeps accepted claim until durable closeout i
     return Response.json({data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'retry'}})
   }
 
+  const database = new Database(journalPath)
+  const staleAttemptAt = new Date(Date.now() - 61_000).toISOString()
+
+  try {
+    database
+      .query(`UPDATE completion_outbox SET last_attempt_at = ?, updated_at = ? WHERE claim_id = ?`)
+      .run(staleAttemptAt, staleAttemptAt, prompt.claimId)
+  } finally {
+    database.close(false)
+  }
+
   expect(await runJudgeWorkerRolloutCleanup()).toEqual({
     acceptedClaimsDeleted: 1,
     closeoutIntentsInserted: 0,

@@ -707,6 +707,18 @@ test('preserves original enqueue order when stale sent prompts are requeued', as
   }
 
   await service.addReadyPrompts(jobId, [{articleId: 'article-3', promptId: 'prompt-3'}], 'server-a')
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+  const staleHeartbeatAt = new Date(Date.now() - 60_000).toISOString()
+
+  try {
+    sqliteDatabase
+      .query(`UPDATE judge_worker_heartbeat SET heartbeat_at = ?, updated_at = ? WHERE server_id = ?`)
+      .run(staleHeartbeatAt, staleHeartbeatAt, 'server-a')
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
   await service.requeueAbandonedSentPrompts({jobId, serverJobId: 'server-b', staleBefore: new Date(Date.now() + 1000)})
 
   expect(

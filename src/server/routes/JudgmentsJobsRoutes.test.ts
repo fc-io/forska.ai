@@ -432,6 +432,10 @@ const insertUnassessedServingFixture = async ({jobId, projectId}: {jobId: string
     VALUES ('project-article-${articleId}', '${projectId}', '${articleId}')
   `)
   await runDatabase(`
+    INSERT INTO mart.project_scope_article (project_id, article_id, in_curated_scope, in_route_scope, article_created_at, article_updated_at)
+    VALUES ('${projectId}', '${articleId}', TRUE, FALSE, TIMESTAMPTZ '2025-09-09 00:00:00+00', TIMESTAMPTZ '2025-09-10 00:00:00+00')
+  `)
+  await runDatabase(`
     INSERT INTO app.project_review_serving_generation (project_id, active_generation)
     VALUES ('${projectId}', 1)
   `)
