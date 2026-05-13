@@ -41,15 +41,16 @@
 
 ## Workstreams
 
-### 1. Define the public release scope
+### 1. Sanitize public docs and Docker/publication artifacts
 
-- Default to a fresh public mirror exported from an audited snapshot, with no inherited private commit history.
-- Treat preserving the existing git history as an exception that requires a strong reason and a separate cleanup plan.
-- Start from a minimum public carry-over set, not from the full private repo contents.
-- Create an allowlist for what belongs in the public repo: source, tests, docs, sample data, migrations, and scripts needed for normal local development.
-- Create a denylist for what stays private: operational runbooks, backup flows, cluster launch helpers, internal hostnames, unpublished datasets, and anything tied to private infrastructure.
-- Inventory publication artifacts separately: Dockerfiles, compose files, CI/workflow config, release helpers, and remote-run docs. Mark each keep/remove/private.
-- Record a simple release rule: public contributors should be able to clone, install, migrate, and run locally without private infra access.
+- Active implementation plan: [`plans/openSourceDocsDockerPlan.md`](plans/openSourceDocsDockerPlan.md).
+- Inventory docs that are candidates for public release: `README.md`, local-run docs, architecture notes, setup docs, and any docs referenced by those files.
+- Mark each candidate doc as public, sanitize, private, or remove from the first public seed.
+- Sanitize public docs so examples use placeholders, public paths, loopback/local defaults, and no private hostnames, credentials, datasets, stack roots, backup paths, or remote-run assumptions.
+- Inventory Docker and publication artifacts separately: `Dockerfile*`, compose files, CI/workflow config, release helpers, and remote-run docs.
+- For each Docker or compose artifact, mark keep, remove, or private, and require safe local defaults with no private registry, private runner, SSH alias, stack root, remote host, or broad bind assumption.
+- Keep Docker or compose files only if they support a real public workflow; otherwise exclude them from the first public seed until reviewed.
+- Record unresolved scope questions as blockers for the final public release-scope workstream, not as assumptions in public docs or Docker files.
 
 ### 2. Inventory the current server and API surface
 
@@ -130,6 +131,16 @@
 - As one of the last cleanup steps, implement the supported local API manifest from `plans/supportedLocalApi.md` and treat unexpected endpoint, listener, owner/proxy, or CORS changes as review failures.
 - Add a fresh-clone smoke test based only on public docs so new contributors can validate the supported OSS flow without private infra access.
 - Require explicit review before adding new Dockerfiles, remote-run docs, infra scripts, or release helpers to the public repo.
+
+### 11. Finalize the public release scope
+
+- Default to a fresh public mirror exported from an audited snapshot, with no inherited private commit history.
+- Treat preserving the existing git history as an exception that requires a strong reason and a separate cleanup plan.
+- Start from a minimum public carry-over set, not from the full private repo contents.
+- Create an allowlist for what belongs in the public repo: source, tests, sanitized docs, sample data, migrations, and scripts needed for normal local development.
+- Create a denylist for what stays private: operational runbooks, backup flows, cluster launch helpers, internal hostnames, unpublished datasets, and anything tied to private infrastructure.
+- Reconcile the sanitized-docs and Docker/publication-artifact decisions from Workstream 1 with the route, secret, licensing, history, and guardrail findings.
+- Record a simple release rule: public contributors should be able to clone, install, migrate, and run locally without private infra access.
 
 ## Suggested Audit Commands
 
