@@ -293,33 +293,6 @@ const assertSourceCloneRerunState = async ({
   ])
 }
 
-const rebuildMartRefreshQueueWithoutGeneration = async () => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  await runDatabase(`
-    DROP TABLE app.mart_refresh_queue;
-    CREATE TABLE app.mart_refresh_queue (
-      id VARCHAR PRIMARY KEY,
-      refresh_scope VARCHAR NOT NULL,
-      project_id VARCHAR,
-      article_id VARCHAR,
-      project_key VARCHAR NOT NULL DEFAULT '',
-      article_key VARCHAR NOT NULL DEFAULT '',
-      reason VARCHAR,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-      UNIQUE(refresh_scope, project_key, article_key)
-    );
-    CREATE INDEX IF NOT EXISTS idx_app_mart_refresh_queue_created_at ON app.mart_refresh_queue(created_at);
-  `)
-
-  const {getDuckdbMartMaintenanceService} = await import('../services/getDuckdbMartMaintenanceService.ts')
-
-  getDuckdbMartMaintenanceService().resetRuntimeStateForTests()
-}
-
 const insertReviewArticleServingFixtureRows = async ({
   generation,
   projectId,
@@ -463,8 +436,6 @@ test('archive route clears refresh state for archived projects without depending
     modelId: 'archive-model-regression',
     projectId,
   })
-  await rebuildMartRefreshQueueWithoutGeneration()
-
   const response = await app.handle(new Request(`http://localhost/api/projects/${projectId}`, {method: 'DELETE'}))
 
   expect(response.status).toBe(200)
@@ -586,7 +557,7 @@ test('delete archived route rejects active projects', async () => {
   expect(Number(projectRow?.count ?? 0)).toBe(1)
 })
 
-test('delete archived route rejects projects with non-terminal judgment jobs', async () => {
+test('delete archived route tombstones projects with non-terminal judgment jobs', async () => {
   if (!app || !queryDatabase || !runDatabase) {
     throw new Error('Test app not initialized')
   }
@@ -611,18 +582,29 @@ test('delete archived route rejects projects with non-terminal judgment jobs', a
       method: 'POST',
     }),
   )
-  const bodyText = await response.text()
 
-  expect(response.status).toBe(500)
-  expect(bodyText).toContain('Archived project delete requires terminal judgment jobs')
+  expect(response.status).toBe(200)
 
   const [projectRow] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count
     FROM app.project
     WHERE id = '${projectId}'
   `)
+  const [jobRow] = await queryDatabase<{status: string; storageState: string}>(`
+    SELECT status, storage_state AS storageState
+    FROM app.judgment_job
+    WHERE id = 'delete-archived-running-job'
+    LIMIT 1
+  `)
+  const [tombstoneRow] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.archived_project_delete_tombstone
+    WHERE project_id = '${projectId}'
+  `)
 
   expect(Number(projectRow?.count ?? 0)).toBe(1)
+  expect(jobRow).toEqual({status: 'project_removed', storageState: 'draining'})
+  expect(Number(tombstoneRow?.count ?? 0)).toBe(1)
 })
 
 test('archived project cleanup FK inventory matches the live project FK graph', async () => {
@@ -843,25 +825,6 @@ test('delete archived route removes archived project rows and keeps cross-projec
       '${articleId}',
       6,
       7
-    )
-  `)
-  await runDatabase(`
-    INSERT INTO app.mart_refresh_queue (
-      id,
-      refresh_scope,
-      project_id,
-      article_id,
-      project_key,
-      article_key,
-      reason
-    ) VALUES (
-      'delete-archived-project-queue-row',
-      'project',
-      '${sourceProjectId}',
-      NULL,
-      '${sourceProjectId}',
-      '',
-      'delete-archived-stale-project-queue'
     )
   `)
   await runDatabase(`
@@ -1140,6 +1103,14 @@ test('delete archived route removes archived project rows and keeps cross-projec
   const body = JSON.parse(bodyText) as {success: boolean}
   expect(body.success).toBe(true)
 
+  const {getArchivedProjectCleanupService} = await import('../services/archivedProjectCleanupService.ts')
+  const cleanupResult = await getArchivedProjectCleanupService().runArchivedProjectBoundedCleanup({
+    batchSize: 1000,
+    maxBatches: 100,
+  })
+
+  expect(cleanupResult.status).toBe('completed')
+
   const [projectRow] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count
     FROM app.project
@@ -1184,11 +1155,6 @@ test('delete archived route removes archived project rows and keeps cross-projec
     SELECT COUNT(*) AS count
     FROM app.project_mart_refresh_article_state
     WHERE project_id = '${sourceProjectId}'
-  `)
-  const [projectQueueRowCount] = await queryDatabase<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM app.mart_refresh_queue
-    WHERE id = 'delete-archived-project-queue-row'
   `)
   const [reviewAnswerDictionaryRowCount] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count
@@ -1304,7 +1270,6 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(Number(tokenUseRowCount?.count ?? 0)).toBe(0)
   expect(Number(projectRefreshStateRowCount?.count ?? 0)).toBe(0)
   expect(Number(projectRefreshArticleStateRowCount?.count ?? 0)).toBe(0)
-  expect(Number(projectQueueRowCount?.count ?? 0)).toBe(0)
   expect(Number(reviewAnswerDictionaryRowCount?.count ?? 0)).toBe(0)
   expect(Number(servingGenerationRowCount?.count ?? 0)).toBe(0)
   expect(Number(projectScopeArticleRowCount?.count ?? 0)).toBe(0)

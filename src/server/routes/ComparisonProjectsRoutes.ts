@@ -65,7 +65,12 @@ type PromptSelection = {
 type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
 type AppTx = Parameters<AppDatabaseService['transaction']>[0] extends (runner: infer T) => Promise<unknown> ? T : never
 type AppQueryRunner = Pick<AppTx, 'queryJson'>
-type ComparisonProjectReferenceDetachSpec = {sourceTable: string; tempTable: string; whereClause: string}
+type ComparisonProjectReferenceDetachSpec = {
+  restoreOnSuccess?: boolean
+  sourceTable: string
+  tempTable: string
+  whereClause: string
+}
 type ComparisonProjectReferenceDetachPlan = {restoreSpecs: ComparisonProjectReferenceDetachSpec[]}
 type ComparisonProjectContentVariant = {
   key: string
@@ -568,13 +573,24 @@ const getComparisonProjectReferenceDetachPlan = (comparisonProjectId: string): C
     tempTable: getTempTable('comparison_project_source_project'),
     whereClause: `comparison_project_id = ${comparisonProjectLiteral}`,
   }
+  const comparisonProjectConflictResolutionSpec = {
+    restoreOnSuccess: true,
+    sourceTable: comparisonProjectConflictResolutionTable,
+    tempTable: getTempTable('comparison_project_conflict_resolution'),
+    whereClause: `comparison_project_id = ${comparisonProjectLiteral}`,
+  }
 
   return {
-    restoreSpecs: [comparisonProjectPromptSpec, comparisonProjectImportRouteSpec, comparisonProjectSourceProjectSpec],
+    restoreSpecs: [
+      comparisonProjectConflictResolutionSpec,
+      comparisonProjectPromptSpec,
+      comparisonProjectImportRouteSpec,
+      comparisonProjectSourceProjectSpec,
+    ],
   }
 }
 
-const detachComparisonProjectReferencesForUpdate = async (comparisonProjectId: string) => {
+const createComparisonProjectReferenceDetachBackup = async (comparisonProjectId: string) => {
   const detachPlan = getComparisonProjectReferenceDetachPlan(comparisonProjectId)
 
   await runAppStatements(
@@ -582,13 +598,16 @@ const detachComparisonProjectReferencesForUpdate = async (comparisonProjectId: s
       return getCreateDetachBackupStatement(spec)
     }),
   )
+
+  return detachPlan
+}
+
+const deleteDetachedComparisonProjectReferences = async (detachPlan: ComparisonProjectReferenceDetachPlan) => {
   await runAppStatements(
     detachPlan.restoreSpecs.map((spec) => {
       return getDeleteDetachedReferencesStatement(spec)
     }),
   )
-
-  return detachPlan
 }
 
 const restoreDetachedComparisonProjectReferences = async (detachPlan: ComparisonProjectReferenceDetachPlan) => {
@@ -2909,8 +2928,10 @@ const updateComparisonProjectWithDetachedLinks = async (params: {
     FROM ${comparisonProjectSourceProjectTable}
     WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
   `)
-  const detachPlan = await detachComparisonProjectReferencesForUpdate(params.comparisonProjectId)
-  const runUpdateTransaction = (): Promise<ComparisonProjectRecordRow | null> => {
+  const detachPlan = await createComparisonProjectReferenceDetachBackup(params.comparisonProjectId)
+  const runUpdateTransaction = async (): Promise<ComparisonProjectRecordRow | null> => {
+    await deleteDetachedComparisonProjectReferences(detachPlan)
+
     return appDatabaseService.transaction(async (tx) => {
       const updatedComparisonProjectRecord = await updateComparisonProjectTx(tx, {
         comparisonProjectId: params.comparisonProjectId,
@@ -2934,6 +2955,17 @@ const updateComparisonProjectWithDetachedLinks = async (params: {
       } else {
         await insertComparisonProjectSourceProjectRows(tx, params.comparisonProjectId, sourceProjectRows)
       }
+
+      await runTxStatements(
+        tx,
+        detachPlan.restoreSpecs
+          .filter((spec) => {
+            return spec.restoreOnSuccess === true
+          })
+          .map((spec) => {
+            return getRestoreDetachedReferencesStatement(spec)
+          }),
+      )
 
       await runTxStatements(
         tx,

@@ -43,6 +43,7 @@ type MockDatabaseState = {
   }
   conflictResolutionRows: Array<{answerValue: string | null; articleId: string; promptId: string | null}>
   extraLlmRows: MockLlmJudgmentRow[]
+  failDetachDelete: boolean
   failPromptInsert: boolean
   includeSingleAnswerArticle: boolean
   lastConflictResolutionInsertStatement: string | null
@@ -1300,6 +1301,10 @@ const registerModuleMocks = () => {
             if (statement.includes('DELETE FROM app.comparison_project_source_project')) {
               state.sourceProjectLinks.splice(0, state.sourceProjectLinks.length)
             }
+
+            if (state.failDetachDelete && statement.includes('DELETE FROM app.comparison_project')) {
+              throw new Error('comparison project reference detach failed')
+            }
           },
           transaction: async <T>(
             work: (runner: {
@@ -1460,6 +1465,10 @@ const registerModuleMocks = () => {
                   return
                 }
 
+                if (statement.includes('INSERT INTO app.comparison_project_conflict_resolution')) {
+                  return
+                }
+
                 if (statement.includes('DROP TABLE temp_comparison_project_update_')) {
                   detachedComparisonProjectLinks = null
                   return
@@ -1493,6 +1502,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     },
     conflictResolutionRows: [],
     extraLlmRows: [],
+    failDetachDelete: false,
     failPromptInsert: true,
     includeSingleAnswerArticle: false,
     lastConflictResolutionInsertStatement: null,
@@ -1565,6 +1575,40 @@ test('comparison project model relink failure keeps original links intact', asyn
   expect(bodyText).toContain('comparison project prompt insert failed')
   expect(state.transactionCalls).toBe(1)
   expect(state.rootRunStatements.length).toBeGreaterThan(0)
+  expect(state.comparisonProject.modelIds).toEqual(['model-1'])
+  expect(state.routeLinks).toEqual([{id: 'comparison-project-route-1', importRouteId: 'import-route-1'}])
+  expect(state.promptLinks).toEqual([{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}])
+})
+
+test('comparison project model relink detach failure restores original links', async () => {
+  mockDatabaseStateRef.current = {...createMockDatabaseState(), failDetachDelete: true}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1', {
+      body: JSON.stringify({
+        allowConflictResolution: false,
+        compareWithHumans: false,
+        description: 'Rollback test project',
+        modelIds: ['model-2'],
+        name: 'Rollback test project',
+        promptSelections: [{promptId: 'prompt-2', order: 0}],
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('comparison project reference detach failed')
+  expect(state.transactionCalls).toBe(0)
   expect(state.comparisonProject.modelIds).toEqual(['model-1'])
   expect(state.routeLinks).toEqual([{id: 'comparison-project-route-1', importRouteId: 'import-route-1'}])
   expect(state.promptLinks).toEqual([{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}])

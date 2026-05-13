@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
+import {assertArchivedProjectCleanupProjectForeignKeysTx} from './archivedProjectCleanupProjectForeignKeys.ts'
 
 type AppRunner = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 type CleanupPhase =
@@ -46,7 +47,9 @@ const archivedProjectMartCleanupMutations: CleanupMutation[] = [
   'mart.review_article_rollup',
   'mart.prompt_answer_fact',
   'mart.project_scope_article',
+  'app.project_article_ordinal',
   'app.project_review_serving_generation',
+  'app.review_answer_dictionary',
 ].map((tableName) => {
   return {
     phase: 'mart_cleanup',
@@ -229,14 +232,13 @@ const archivedProjectSourceCleanupMutations: CleanupMutation[] = [
       return `source_project_id = ${getSqlLiteral(projectId)}`
     },
   },
-  {
-    phase: 'source_cleanup',
-    setSql: 'summary_source_project_id = NULL, updated_at = current_timestamp',
-    tableName: 'app.comparison_project',
-    whereSql: (projectId: string) => {
-      return `summary_source_project_id = ${getSqlLiteral(projectId)}`
-    },
-  },
+]
+
+const comparisonProjectChildTables = [
+  'app.comparison_project_conflict_resolution',
+  'app.comparison_project_prompt',
+  'app.comparison_project_import_route',
+  'app.comparison_project_source_project',
 ]
 
 const getUniqueProjectIds = (projectIds: string[]) => {
@@ -353,6 +355,7 @@ export const requestArchivedProjectDeletePending = async (
   await getAppDatabaseService().transaction(async (tx) => {
     const projectIdsSql = getProjectIdsSql(uniqueProjectIds)
 
+    await assertArchivedProjectCleanupProjectForeignKeysTx(tx)
     await tx.run(`
       INSERT INTO app.archived_project_delete_tombstone (project_id)
       SELECT project.id
@@ -415,6 +418,18 @@ const mutateRowsBatch = async (mutation: CleanupMutation, projectId: string, bat
   }) as Promise<number>
 }
 
+const runTxStatements = async (tx: AppRunner, statements: string[]) => {
+  return statements.reduce<Promise<void>>((promise, statement) => {
+    return promise.then(() => {
+      return tx.run(statement)
+    })
+  }, Promise.resolve())
+}
+
+const runAppStatements = async (statements: string[]) => {
+  return statements.length === 0 ? undefined : getAppDatabaseService().run(statements.join(';\n'))
+}
+
 const runFirstMutationBatch = async (
   mutations: CleanupMutation[],
   projectId: string,
@@ -446,7 +461,82 @@ const cleanupTombstonedRuntimeReferences = async (projectId: string, batchSize: 
 }
 
 const cleanupTombstonedSourceReferences = async (projectId: string, batchSize: number) => {
-  return runFirstMutationBatch(archivedProjectSourceCleanupMutations, projectId, batchSize)
+  const sourceResult = await runFirstMutationBatch(archivedProjectSourceCleanupMutations, projectId, batchSize)
+
+  return sourceResult ?? cleanupComparisonProjectSummarySourceReferences(projectId, batchSize)
+}
+
+const cleanupComparisonProjectSummarySourceReferences = async (
+  projectId: string,
+  batchSize: number,
+): Promise<ArchivedProjectCleanupBatchResult | null> => {
+  const comparisonProjects = await getAppDatabaseService().queryJson<{id: string}>(`
+    SELECT id
+    FROM app.comparison_project
+    WHERE summary_source_project_id = ${getSqlLiteral(projectId)}
+    ORDER BY id ASC
+    LIMIT ${batchSize}
+  `)
+
+  if (comparisonProjects.length === 0) {
+    return null
+  }
+
+  const comparisonProjectIds = comparisonProjects.map((comparisonProject) => {
+    return comparisonProject.id
+  })
+  const comparisonProjectIdsSql = getQuotedStringList(comparisonProjectIds).join(', ')
+  const tempTableSuffix = crypto.randomUUID().replaceAll('-', '_')
+  const getTempTable = (tableName: string) => {
+    return `temp_archived_project_cleanup_${tableName.replaceAll('.', '_')}_${tempTableSuffix}`
+  }
+  const detachSpecs = comparisonProjectChildTables.map((tableName) => {
+    return {sourceTable: tableName, tempTable: getTempTable(tableName)}
+  })
+  const restoreStatements = detachSpecs.flatMap((spec) => {
+    return [`INSERT INTO ${spec.sourceTable} SELECT * FROM ${spec.tempTable}`, `DROP TABLE ${spec.tempTable}`]
+  })
+
+  await runAppStatements(
+    detachSpecs.map((spec) => {
+      return `
+        CREATE TEMP TABLE ${spec.tempTable} AS
+        SELECT *
+        FROM ${spec.sourceTable}
+        WHERE comparison_project_id IN (${comparisonProjectIdsSql})
+      `
+    }),
+  )
+  await runAppStatements(
+    detachSpecs.map((spec) => {
+      return `
+        DELETE FROM ${spec.sourceTable}
+        WHERE comparison_project_id IN (${comparisonProjectIdsSql})
+      `
+    }),
+  )
+
+  try {
+    return (await getAppDatabaseService().transaction(async (tx) => {
+      await tx.run(`
+        UPDATE app.comparison_project
+        SET summary_source_project_id = NULL,
+            updated_at = current_timestamp
+        WHERE id IN (${comparisonProjectIdsSql})
+      `)
+      await runTxStatements(tx, restoreStatements)
+
+      return {
+        deletedRowCount: comparisonProjects.length,
+        phase: 'source_cleanup',
+        projectId,
+        tableName: 'app.comparison_project',
+      }
+    })) as ArchivedProjectCleanupBatchResult | null
+  } catch (error) {
+    await runAppStatements(restoreStatements)
+    throw error
+  }
 }
 
 const getProjectForeignKeyInventoryTx = async (tx: AppRunner) => {
@@ -564,6 +654,10 @@ export const cleanupNextArchivedProjectBatch = async (
   if (projectId === null) {
     return {deletedRowCount: 0, phase: 'idle', projectId: null, tableName: null}
   }
+
+  await getAppDatabaseService().transaction(async (tx) => {
+    await assertArchivedProjectCleanupProjectForeignKeysTx(tx)
+  })
 
   const martResult = await runFirstMutationBatch(archivedProjectMartCleanupMutations, projectId, batchSize)
   const runtimeResult = martResult ?? (await cleanupTombstonedRuntimeReferences(projectId, batchSize))

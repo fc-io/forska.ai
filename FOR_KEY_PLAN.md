@@ -1,4 +1,4 @@
-# FOR_KEY
+# FOR_KEY_PLAN
 
 ## Goal
 
@@ -423,7 +423,7 @@ For each mutation route/job:
 
 - The remaining unreviewed human-assessment, admin, cron, and maintenance surfaces are now inventoried.
 - New material risks from this pass are: `app.article` parent updates in admin/cron, `app.judgment` soft-delete in admin investigate, and human-assessment dependence on live `project_prompt` membership.
-- The highest-confidence still-unfixed areas remain prompt delete/merge, non-transactional project article insertion, subproject partial writes, provider logical-ref drift after `0029`, and the newly added article/admin audit items.
+- The highest-confidence still-unfixed areas are comparison-project relink crash safety, human-assessment prompt drift, `app.article` parent-update repros, admin-investigate `judgment_assessment` soft-delete repros, cross-store judgment-job cleanup consistency, and remaining logical-ref drift checks.
 
 ## Final Findings
 
@@ -433,9 +433,9 @@ For each mutation route/job:
 - Prompt merge now rewrites `app.comparison_project_prompt`, dedupes `app.judgment` and `app.judgment_human`, then deletes merged prompts in a follow-up phase in `src/server/routes/PromptsRoutes.ts`; covered in `src/server/routes/PromptsRoutes.test.ts`.
 - Project article insert + prompt autolink now commit atomically in `src/server/services/insertArticlesIntoProject.ts`; covered in `src/server/services/insertArticlesIntoProject.test.ts`.
 - Subproject create now keeps project, detached prompt, `app.project_prompt`, and `app.project_article` writes in one transaction in `src/server/routes/SubprojectsRoutes.ts`; covered in `src/server/routes/SubprojectsRoutes.rollback.test.ts`.
-- Comparison-project model relink now snapshots child links, updates parent, and restores links in one transaction in `src/server/routes/ComparisonProjectsRoutes.ts`; covered in `src/server/routes/ComparisonProjectsRoutes.rollback.test.ts`.
+- Comparison-project updates now include `app.comparison_project_conflict_resolution` in the detach/restore set and restore original child links when detach deletion fails before the update transaction in `src/server/routes/ComparisonProjectsRoutes.ts`; covered in `src/server/routes/ComparisonProjectsRoutes.fk.test.ts` and `src/server/routes/ComparisonProjectsRoutes.rollback.test.ts`.
 - Provider logical hardening now keeps `app.model.enabled` + provider config toggles atomic in `src/server/providers/providerModelRepository.ts`, and provider-connection delete/archive cleanup atomic in `src/server/providers/providerConnectionRepository.ts`; covered in `src/server/providers/providerModelRepository.atomic.test.ts`, `src/server/providers/providerConnectionRepository.atomic.test.ts`, and `src/server/routes/providerProjectFlow.e2e.test.ts`.
-- Archived-project purge now asserts live `app.project` FK inventory before cleanup in `src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchived.ts` and `src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchivedProjectForeignKeys.ts`; covered in `src/server/routes/ProjectsRoutes.test.ts`.
+- Archived-project purge now asserts live `app.project` FK inventory before delete requests and cleanup batches, includes the live `project_mart_dirty_refresh_article_quarantine` FK, cleans stale project mart dictionary state, and safely detaches comparison-project children while clearing `summary_source_project_id` in `src/server/services/archivedProjectCleanupService.ts` and `src/server/services/archivedProjectCleanupProjectForeignKeys.ts`; covered in `src/server/routes/ProjectsRoutes.test.ts` and `src/server/services/archivedProjectCleanupService.test.ts`.
 
 ### Accepted risks
 
@@ -448,6 +448,7 @@ For each mutation route/job:
 - `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`: logical-ref drift remains between stored `app.judgment_human` rows and live `app.project_prompt` membership.
 - `src/server/routes/AdminInvestigateRoutes.ts`: soft-delete still updates parent `app.judgment`, so `app.judgment_assessment` needs a direct DuckDB false-positive repro.
 - `src/server/routes/ArticleAdminRoutes.ts`, `src/server/cron/fullTextJobs.ts`, `src/server/cron/fullTextConversionJobs.ts`: high-fanout `app.article` parent updates still need temp-DB repro coverage under live children.
+- `src/server/routes/ComparisonProjectsRoutes.ts`: model relink still detaches child links before the update transaction because DuckDB rejects same-transaction parent updates under live children; true process-crash safety would require FK removal plus app-level validation or a persistent recovery table.
 - `src/server/routes/JudgmentsJobsRoutes.ts`: DuckDB + SQLite delete lifecycle is still compensating, not atomic across stores.
 - `src/server/services/covidenceImportService.ts`, `src/server/routes/ProviderModelsRoutes.ts`: select-then-insert races remain deferred because they are integrity-adjacent but not FK failures proven in this pass.
 

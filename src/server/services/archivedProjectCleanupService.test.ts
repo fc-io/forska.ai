@@ -386,6 +386,35 @@ test('bounded cleanup keeps tombstoned project identity until blockers are clear
   })
 })
 
+test('cleanup rejects project FK inventory drift before mutating rows', () => {
+  const result = runScript<{errorMessage: string; martRows: number; projectRows: number}>(`
+    await database.run(\`
+      CREATE TABLE app.future_project_child (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES app.project(id)
+      )
+    \`)
+
+    const errorMessage = await cleanupNextArchivedProjectBatch({batchSize: 1}).then(
+      () => 'missing error',
+      (error) => error instanceof Error ? error.message : String(error),
+    )
+    const [snapshot] = await database.queryJson(\`
+      SELECT
+        (SELECT COUNT(*) FROM app.project WHERE id = 'archived-cleanup-project')::INTEGER AS projectRows,
+        (SELECT COUNT(*) FROM mart.project_scope_article WHERE project_id = 'archived-cleanup-project')::INTEGER AS martRows
+    \`)
+
+    console.log(JSON.stringify({errorMessage, ...snapshot}))
+    await database.close()
+  `)
+
+  expect(result.errorMessage).toContain('Archived project delete FK inventory drift')
+  expect(result.errorMessage).toContain('app.future_project_child.project_id')
+  expect(result).toMatchObject({martRows: 1, projectRows: 1})
+})
+
 test('cleanup deletes request attempt closeouts before their source token use rows', () => {
   const result = runScript<{
     afterProjection: {closeoutRows: number; tokenUseRows: number}
