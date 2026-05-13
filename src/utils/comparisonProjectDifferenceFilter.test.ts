@@ -13,7 +13,7 @@ test('available difference filters hide non-applicable options', () => {
       {id: 'llm:model-1:prompt-1', kind: 'llm', promptId: 'prompt-1'},
       {id: 'human:prompt-1', kind: 'human', promptId: 'prompt-1'},
     ]),
-  ).toEqual(['all', 'human-vs-llm'])
+  ).toEqual(['all', 'human-vs-llm', 'human-vs-llm-true-conflict'])
 
   expect(
     getAvailableComparisonProjectDifferenceFilters([
@@ -28,12 +28,13 @@ test('available difference filters hide non-applicable options', () => {
       {id: 'llm:model-2:prompt-1', kind: 'llm', promptId: 'prompt-1'},
       {id: 'human:prompt-1', kind: 'human', promptId: 'prompt-1'},
     ]),
-  ).toEqual(['all', 'human-vs-llm', 'llm-vs-llm', 'any-disagreement'])
+  ).toEqual(['all', 'human-vs-llm', 'human-vs-llm-true-conflict', 'llm-vs-llm', 'any-disagreement'])
 })
 
 test('difference filter labels stay user-facing', () => {
   expect(getComparisonProjectDifferenceFilterLabel('all')).toBe('All rows')
-  expect(getComparisonProjectDifferenceFilterLabel('human-vs-llm')).toBe('Human vs LLM differences')
+  expect(getComparisonProjectDifferenceFilterLabel('human-vs-llm')).toBe('Human vs LLM conflict')
+  expect(getComparisonProjectDifferenceFilterLabel('human-vs-llm-true-conflict')).toBe('Human vs LLM true conflict')
   expect(getComparisonProjectDifferenceFilterLabel('llm-vs-llm')).toBe('LLM vs LLM differences')
   expect(getComparisonProjectDifferenceFilterLabel('any-disagreement')).toBe('Any disagreement')
 })
@@ -63,11 +64,39 @@ test('difference matching supports prompt and summary comparisons', () => {
   const summaryCells = {'human:summary': 'maybe', 'llm:model-1:summary': 'no', 'llm:model-2:summary': 'yes'}
 
   expect(getComparisonProjectHasDifferenceFilterMatch(promptCells, promptColumns, 'human-vs-llm')).toBe(true)
+  expect(getComparisonProjectHasDifferenceFilterMatch(promptCells, promptColumns, 'human-vs-llm-true-conflict')).toBe(
+    true,
+  )
   expect(getComparisonProjectHasDifferenceFilterMatch(promptCells, promptColumns, 'llm-vs-llm')).toBe(true)
   expect(getComparisonProjectHasDifferenceFilterMatch(promptCells, promptColumns, 'any-disagreement')).toBe(true)
   expect(getComparisonProjectHasDifferenceFilterMatch(summaryCells, summaryColumns, 'human-vs-llm')).toBe(true)
+  expect(getComparisonProjectHasDifferenceFilterMatch(summaryCells, summaryColumns, 'human-vs-llm-true-conflict')).toBe(
+    true,
+  )
   expect(getComparisonProjectHasDifferenceFilterMatch(summaryCells, summaryColumns, 'llm-vs-llm')).toBe(true)
   expect(getComparisonProjectHasDifferenceFilterMatch(summaryCells, summaryColumns, 'any-disagreement')).toBe(true)
+})
+
+test('true conflict matching treats yes and maybe as include against no', () => {
+  const columns = [
+    {id: 'llm:model-1:summary', kind: 'llm', promptId: 'summary'},
+    {id: 'human:summary', kind: 'human', promptId: 'summary'},
+  ] as const
+
+  expect(
+    getComparisonProjectHasDifferenceFilterMatch(
+      {'human:summary': 'maybe', 'llm:model-1:summary': 'yes'},
+      columns,
+      'human-vs-llm-true-conflict',
+    ),
+  ).toBe(false)
+  expect(
+    getComparisonProjectHasDifferenceFilterMatch(
+      {'human:summary': 'maybe', 'llm:model-1:summary': 'no'},
+      columns,
+      'human-vs-llm-true-conflict',
+    ),
+  ).toBe(true)
 })
 
 test('non-applicable filters normalize back to all rows', () => {

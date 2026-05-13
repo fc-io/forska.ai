@@ -426,9 +426,11 @@ const getComparisonProjectArticleServingInsertSql = ({
       passes_row_filter_fully_answered,
       passes_row_filter_all,
       has_human_vs_llm_difference,
+      has_human_vs_llm_true_conflict,
       has_llm_vs_llm_difference,
       has_any_disagreement,
       passes_difference_filter_human_vs_llm,
+      passes_difference_filter_human_vs_llm_true_conflict,
       passes_difference_filter_llm_vs_llm,
       passes_difference_filter_any_disagreement,
       passes_difference_filter_all,
@@ -515,7 +517,22 @@ const getComparisonProjectArticleServingInsertSql = ({
         prompt_id,
         COUNT(DISTINCT answer_value) AS all_answer_count,
         COUNT(DISTINCT answer_value) FILTER (WHERE kind = 'human') AS human_answer_count,
-        COUNT(DISTINCT answer_value) FILTER (WHERE kind = 'llm') AS llm_answer_count
+        COUNT(DISTINCT answer_value) FILTER (WHERE kind = 'llm') AS llm_answer_count,
+        COUNT(DISTINCT CASE
+          WHEN kind = 'human' AND LOWER(answer_value) IN ('yes', 'maybe') THEN 'include'
+          WHEN kind = 'human' AND LOWER(answer_value) = 'no' THEN 'exclude'
+          ELSE NULL
+        END) AS human_binary_decision_count,
+        COUNT(DISTINCT CASE
+          WHEN kind = 'llm' AND LOWER(answer_value) IN ('yes', 'maybe') THEN 'include'
+          WHEN kind = 'llm' AND LOWER(answer_value) = 'no' THEN 'exclude'
+          ELSE NULL
+        END) AS llm_binary_decision_count,
+        COUNT(DISTINCT CASE
+          WHEN LOWER(answer_value) IN ('yes', 'maybe') THEN 'include'
+          WHEN LOWER(answer_value) = 'no' THEN 'exclude'
+          ELSE NULL
+        END) AS all_binary_decision_count
       FROM cell_answer
       GROUP BY article_id, prompt_id
     ),
@@ -526,6 +543,9 @@ const getComparisonProjectArticleServingInsertSql = ({
         prompt_answer_count.human_answered_count > 0
           AND prompt_answer_count.llm_answered_count > 0
           AND COALESCE(prompt_answer_value_count.all_answer_count, 0) > 1 AS has_human_vs_llm_difference,
+        COALESCE(prompt_answer_value_count.human_binary_decision_count, 0) > 0
+          AND COALESCE(prompt_answer_value_count.llm_binary_decision_count, 0) > 0
+          AND COALESCE(prompt_answer_value_count.all_binary_decision_count, 0) > 1 AS has_human_vs_llm_true_conflict,
         prompt_answer_count.llm_answered_count > 1
           AND COALESCE(prompt_answer_value_count.llm_answer_count, 0) > 1 AS has_llm_vs_llm_difference,
         prompt_answer_count.all_answered_count > 1
@@ -539,6 +559,7 @@ const getComparisonProjectArticleServingInsertSql = ({
       SELECT
         article_id,
         COALESCE(BOOL_OR(has_human_vs_llm_difference), FALSE) AS has_human_vs_llm_difference,
+        COALESCE(BOOL_OR(has_human_vs_llm_true_conflict), FALSE) AS has_human_vs_llm_true_conflict,
         COALESCE(BOOL_OR(has_llm_vs_llm_difference), FALSE) AS has_llm_vs_llm_difference,
         COALESCE(BOOL_OR(has_any_disagreement), FALSE) AS has_any_disagreement
       FROM prompt_difference
@@ -561,6 +582,7 @@ const getComparisonProjectArticleServingInsertSql = ({
           ELSE article_cell_rollup.answered_prompt_count >= 2
         END AS has_multiple_answers,
         COALESCE(article_difference_rollup.has_human_vs_llm_difference, FALSE) AS has_human_vs_llm_difference,
+        COALESCE(article_difference_rollup.has_human_vs_llm_true_conflict, FALSE) AS has_human_vs_llm_true_conflict,
         COALESCE(article_difference_rollup.has_llm_vs_llm_difference, FALSE) AS has_llm_vs_llm_difference,
         COALESCE(article_difference_rollup.has_any_disagreement, FALSE) AS has_any_disagreement,
         difference_filter_availability.has_human_vs_llm_filter,
@@ -606,12 +628,17 @@ const getComparisonProjectArticleServingInsertSql = ({
       article_rollup.has_all_llm_columns AND article_rollup.has_all_human_columns AS passes_row_filter_fully_answered,
       TRUE AS passes_row_filter_all,
       article_rollup.has_human_vs_llm_difference,
+      article_rollup.has_human_vs_llm_true_conflict,
       article_rollup.has_llm_vs_llm_difference,
       article_rollup.has_any_disagreement,
       CASE
         WHEN article_rollup.has_human_vs_llm_filter THEN article_rollup.has_human_vs_llm_difference
         ELSE TRUE
       END AS passes_difference_filter_human_vs_llm,
+      CASE
+        WHEN article_rollup.has_human_vs_llm_filter THEN article_rollup.has_human_vs_llm_true_conflict
+        ELSE TRUE
+      END AS passes_difference_filter_human_vs_llm_true_conflict,
       CASE
         WHEN article_rollup.has_llm_vs_llm_filter THEN article_rollup.has_llm_vs_llm_difference
         ELSE TRUE
@@ -639,7 +666,7 @@ const getComparisonProjectFilterValuesCteSql = () => {
     difference_filter AS (
       SELECT difference_filter
       FROM (
-        VALUES ('all'), ('human-vs-llm'), ('llm-vs-llm'), ('any-disagreement')
+        VALUES ('all'), ('human-vs-llm'), ('human-vs-llm-true-conflict'), ('llm-vs-llm'), ('any-disagreement')
       ) AS difference_filter_value(difference_filter)
     ),
     filter_combination AS (
@@ -693,6 +720,7 @@ const getComparisonProjectFilterMemberInsertSql = ({
         END
         AND CASE filter_combination.difference_filter
           WHEN 'human-vs-llm' THEN article.passes_difference_filter_human_vs_llm
+          WHEN 'human-vs-llm-true-conflict' THEN article.passes_difference_filter_human_vs_llm_true_conflict
           WHEN 'llm-vs-llm' THEN article.passes_difference_filter_llm_vs_llm
           WHEN 'any-disagreement' THEN article.passes_difference_filter_any_disagreement
           ELSE article.passes_difference_filter_all

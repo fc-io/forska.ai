@@ -350,7 +350,13 @@ type MockServingRow = {
   hasConflict: boolean
 }
 
-const differenceFilters = ['all', 'human-vs-llm', 'llm-vs-llm', 'any-disagreement'] as const
+const differenceFilters = [
+  'all',
+  'human-vs-llm',
+  'human-vs-llm-true-conflict',
+  'llm-vs-llm',
+  'any-disagreement',
+] as const
 
 const hasServingCellValue = (value: string | null | undefined) => {
   return (value?.trim() ?? '') !== ''
@@ -2281,6 +2287,7 @@ test('comparison judgments serving path supports every difference filter', async
   expect(responseBodies).toEqual([
     {filter: 'all', titles: ['Article 1']},
     {filter: 'human-vs-llm', titles: ['Article 1']},
+    {filter: 'human-vs-llm-true-conflict', titles: ['Article 1']},
     {filter: 'llm-vs-llm', titles: ['Article 1']},
     {filter: 'any-disagreement', titles: ['Article 1']},
   ])
