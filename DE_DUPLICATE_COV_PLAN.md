@@ -45,6 +45,7 @@ Touched layers: server, database, client
    - canonical derived metadata like journal title and preprint hints
    - full-text link hints used by fetch and admin paths
    - import-scoped Covidence or source payload that should not be article-global
+8. Judgment execution snapshots, queued judgment jobs, queue outbox imports, completion journals, and LLM prompt payloads can preserve or replay article import context. They need explicit compatibility coverage so existing queued work remains reproducible while article import data moves from `app.article` to project-scoped import records.
 
 ## Desired Behavior
 
@@ -384,6 +385,18 @@ This is the safest long-term behavior if we want to avoid poisoning canonical ar
    - `src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts`
 13. any caller that still reads `app.article.article_id`, `import_route`, or the legacy mixed `source_metadata` blob directly
 
+### Judgment Snapshot, Queue, And Prompt Payloads
+
+1. Snapshot payloads:
+   - `src/server/services/judgmentExecutionSnapshotService.ts`
+2. Judgment queue, outbox, and completion journal paths:
+   - `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts`
+   - `src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts`
+   - `src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.test.ts`
+   - `src/server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts`
+3. LLM prompt payload paths:
+   - `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts`
+
 ### Mart Refresh And Rebuild
 
 1. `src/server/services/getDuckdbMartRefreshService.ts`
@@ -479,6 +492,7 @@ Required scenarios:
 9. make PubMed, Europe PMC/PPR, arXiv, bioRxiv, and medRxiv harvesters pass normalized candidates, normalized source identifiers, source record keys, and import-run references to the central matching/write path instead of writing directly to canonical article identity
 10. store source `article_id` values from broad-source harvesters only as source-facing or import-scoped identifiers; they must not become canonical article identity or redefine `app.article.article_id`
 11. ensure a later broad-source import can enrich a Covidence-created canonical article without changing its project-scoped Covidence metadata
+12. keep judgment queue and outbox writes reproducible by resolving article import context through canonical article ids plus project-scoped import records before new jobs or snapshots are created
 
 ### Phase 4. Backfill and merge historical duplicates
 
@@ -529,6 +543,8 @@ Conflict rules when FK rewrites hit unique constraints:
 5. update OLAP readers and filters that currently query `source_metadata.covidence` off `app.article`
 6. update exports and any batch article endpoints that still assume article-global import metadata or article-global external ids
 7. update comparison project read paths, including `ComparisonProjectsRoutes` and `comparisonProjectJudgmentRows`, so judgment row lookups explicitly distinguish canonical article ids from external display ids and never infer identity from `app.article.article_id`
+8. update `judgmentExecutionSnapshotService`, judgment queue/outbox readers, completion journal replay, and LLM prompt payload construction so snapshot payloads expose canonical article fields plus the correct project-scoped external id and import metadata
+9. add an explicit compatibility adapter that derives legacy snapshot `importRoute` and `originalData` fields from scoped import records until downstream snapshot consumers, queued-job readers, and outbox import paths migrate to the canonical and scoped payload shape
 
 ### Phase 6. Rewrite mart refresh and rebuild logic
 
@@ -557,7 +573,8 @@ After all reads and writes have moved:
 3. stop reading the mixed legacy `app.article.source_metadata` blob
 4. stop reading `app.article.article_id` as an import-scoped external id
 5. remove display and URL helper fallbacks that parse source prefixes from `app.article.article_id`
-6. remove or fully deprecate those columns in a later cleanup migration; if a canonical public id is still needed, add an explicitly named field instead of reusing `article_id`
+6. keep article-level import fields in place until queued judgment jobs, judgment snapshot readers, completion journal replay, and outbox import paths no longer depend on legacy `importRoute`, `originalData`, or article-level import metadata
+7. remove or fully deprecate those columns in a later cleanup migration; if a canonical public id is still needed, add an explicitly named field instead of reusing `article_id`
 
 ## Risks
 
@@ -572,6 +589,7 @@ After all reads and writes have moved:
 9. per-row matching queries can make a 50,000-article Covidence import or million-row corpus import unacceptably slow even if correctness is fixed
 10. bulk corpus imports can create excessive mart refresh work unless project-impact detection is explicit
 11. source batches can contain internal duplicates or conflicting identifiers, so staging must collapse or quarantine conflicts before canonical writes
+12. legacy queued judgment jobs and saved execution snapshots can lose reproducibility if compatibility adapters for `importRoute` and `originalData` are removed before downstream consumers migrate
 
 ## Migration Notes
 
