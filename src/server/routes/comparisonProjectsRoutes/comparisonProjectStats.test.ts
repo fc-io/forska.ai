@@ -1,6 +1,8 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {
+  type ComparisonProjectStatsAggregateRow,
   type ComparisonProjectStatsCellRow,
   type ComparisonProjectStatsColumn,
   type ComparisonProjectStatsComparison,
@@ -105,6 +107,14 @@ const findComparison = (
   return comparison
 }
 
+const getComparisonId = (
+  kind: ComparisonProjectStatsComparison['kind'],
+  leftColumnId: string,
+  rightColumnId: string,
+) => {
+  return `${kind}:${leftColumnId}:${rightColumnId}`
+}
+
 test('comparison stats returns no comparisons without an active serving generation', async () => {
   const statements: string[] = []
   const comparisons = await getComparisonProjectStats({
@@ -125,6 +135,152 @@ test('comparison stats returns no comparisons without an active serving generati
   expect(statements).toHaveLength(1)
   expect(statements[0]).toContain('FROM app.comparison_project_serving_generation')
   expect(statements[0]).not.toContain('FROM mart.comparison_cell_serving')
+})
+
+test('comparison stats reads compact aggregate rows from SQL', async () => {
+  const statements: string[] = []
+  const primaryComparisonId = getComparisonId('primary-vs-human', humanPromptColumn.id, primaryPromptColumn.id)
+  const comparisons = await getComparisonProjectStats({
+    columns: [humanPromptColumn, primaryPromptColumn],
+    comparisonProjectId: 'comparison-project-1',
+    isSummaryMode: false,
+    primarySourceProjectId: 'source-project-1',
+    queryRunner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+
+        return statement.includes('FROM app.comparison_project_serving_generation')
+          ? ([{generation: 1}] as T[])
+          : ([
+              {
+                agreementCount: 0,
+                binaryPairCount: 0,
+                comparisonId: primaryComparisonId,
+                conflictCount: 3,
+                leftExcludeCount: 0,
+                leftIncludeCount: 0,
+                overlapCount: 4,
+                rightExcludeCount: 0,
+                rightIncludeCount: 0,
+                trueConflictCount: 1,
+              } satisfies ComparisonProjectStatsAggregateRow,
+            ] as T[])
+      },
+    },
+  })
+  const aggregateStatement = statements[1] ?? ''
+  const primaryComparison = findComparison(comparisons, 'primary-vs-human', primaryPromptColumn.id)
+
+  expect(primaryComparison).toMatchObject({conflictCount: 3, overlapCount: 4, trueConflictCount: 1})
+  expect(aggregateStatement).toContain('FROM mart.comparison_cell_serving cell')
+  expect(aggregateStatement).toContain('GROUP BY comparison_id')
+  expect(aggregateStatement).not.toContain('TO_JSON(cell.normalized_answers)')
+  expect(aggregateStatement).not.toContain('normalizedAnswers')
+})
+
+test('comparison stats computes summary kappa from SQL aggregates', async () => {
+  const primaryComparisonId = getComparisonId('primary-vs-human', humanSummaryColumn.id, primarySummaryColumn.id)
+  const comparisons = await getComparisonProjectStats({
+    columns: [humanSummaryColumn, primarySummaryColumn],
+    comparisonProjectId: 'comparison-project-1',
+    isSummaryMode: true,
+    primarySourceProjectId: 'source-project-1',
+    queryRunner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        return statement.includes('FROM app.comparison_project_serving_generation')
+          ? ([{generation: 1}] as T[])
+          : ([
+              {
+                agreementCount: 4,
+                binaryPairCount: 6,
+                comparisonId: primaryComparisonId,
+                conflictCount: 3,
+                leftExcludeCount: 3,
+                leftIncludeCount: 3,
+                overlapCount: 6,
+                rightExcludeCount: 3,
+                rightIncludeCount: 3,
+                trueConflictCount: 2,
+              } satisfies ComparisonProjectStatsAggregateRow,
+            ] as T[])
+      },
+    },
+  })
+  const primaryComparison = findComparison(comparisons, 'primary-vs-human', primarySummaryColumn.id)
+
+  expect(primaryComparison.overlapCount).toBe(6)
+  expect(primaryComparison.conflictCount).toBe(3)
+  expect(primaryComparison.trueConflictCount).toBe(2)
+  expect(primaryComparison.cohensKappa).toBeCloseTo(1 / 3, 6)
+})
+
+test('comparison stats SQL aggregates serving cells in DuckDB', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`SET memory_limit = '1GB'`)
+    await connection.run(`CREATE SCHEMA app`)
+    await connection.run(`CREATE SCHEMA mart`)
+    await connection.run(`
+      CREATE TABLE app.comparison_project_serving_generation (
+        comparison_project_id VARCHAR,
+        active_generation INTEGER
+      )
+    `)
+    await connection.run(`
+      CREATE TABLE mart.comparison_cell_serving (
+        comparison_project_id VARCHAR,
+        generation INTEGER,
+        article_id VARCHAR,
+        column_id VARCHAR,
+        normalized_answers VARCHAR[]
+      )
+    `)
+    await connection.run(`
+      INSERT INTO app.comparison_project_serving_generation
+      VALUES ('comparison-project-1', 1)
+    `)
+    await connection.run(`
+      INSERT INTO mart.comparison_cell_serving
+      VALUES
+        ('comparison-project-1', 1, 'article-1', '${humanSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-1', '${primarySummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-2', '${humanSummaryColumn.id}', ['maybe']),
+        ('comparison-project-1', 1, 'article-2', '${primarySummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-3', '${humanSummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-3', '${primarySummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-4', '${humanSummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-4', '${primarySummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-5', '${humanSummaryColumn.id}', ['maybe']),
+        ('comparison-project-1', 1, 'article-5', '${primarySummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-6', '${humanSummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-6', '${primarySummaryColumn.id}', ['yes'])
+    `)
+
+    const comparisons = await getComparisonProjectStats({
+      columns: [humanSummaryColumn, primarySummaryColumn],
+      comparisonProjectId: 'comparison-project-1',
+      isSummaryMode: true,
+      primarySourceProjectId: 'source-project-1',
+      queryRunner: {
+        queryJson: async <T>(statement: string): Promise<T[]> => {
+          const reader = await connection.runAndReadAll(statement)
+
+          return reader.getRowObjectsJson() as T[]
+        },
+      },
+    })
+    const primaryComparison = findComparison(comparisons, 'primary-vs-human', primarySummaryColumn.id)
+
+    expect(primaryComparison.overlapCount).toBe(6)
+    expect(primaryComparison.conflictCount).toBe(3)
+    expect(primaryComparison.trueConflictCount).toBe(2)
+    expect(primaryComparison.cohensKappa).toBeCloseTo(1 / 3, 6)
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
 })
 
 test('comparison stats builds primary, human-vs-llm, and llm-vs-llm groups', () => {

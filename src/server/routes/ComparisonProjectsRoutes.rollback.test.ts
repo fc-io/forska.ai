@@ -663,6 +663,138 @@ const getSqlCursorOrdinal = (statement: string) => {
   return Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : null
 }
 
+type MockComparisonProjectStatsGroup = {comparisonId: string; leftColumnId: string; rightColumnId: string}
+type MockComparisonProjectStatsPair = {leftAnswers: string[]; rightAnswers: string[]}
+type MockComparisonProjectStatsBinaryDecision = 'exclude' | 'include'
+type MockComparisonProjectStatsBinaryPair = {
+  leftDecision: MockComparisonProjectStatsBinaryDecision
+  rightDecision: MockComparisonProjectStatsBinaryDecision
+}
+
+const getMockComparisonProjectStatsGroups = (statement: string) => {
+  return Array.from(statement.matchAll(/\('([^']*)', '([^']*)', '([^']*)'\)/g)).map<MockComparisonProjectStatsGroup>(
+    ([, comparisonId, leftColumnId, rightColumnId]) => {
+      return {comparisonId: comparisonId ?? '', leftColumnId: leftColumnId ?? '', rightColumnId: rightColumnId ?? ''}
+    },
+  )
+}
+
+const getMockComparisonProjectStatsAnswers = (value: string | null | undefined) => {
+  return Array.from(
+    new Set(
+      (value?.split('\n') ?? [])
+        .map((answer) => {
+          return answer.trim().toLowerCase()
+        })
+        .filter((answer) => {
+          return answer !== ''
+        }),
+    ),
+  )
+}
+
+const getMockComparisonProjectStatsBinaryDecision = (
+  answer: string,
+): MockComparisonProjectStatsBinaryDecision | null => {
+  return answer === 'yes' || answer === 'maybe' ? 'include' : answer === 'no' ? 'exclude' : null
+}
+
+const getMockComparisonProjectStatsBinaryDecisionSet = (answers: readonly string[]) => {
+  return new Set(
+    answers
+      .map(getMockComparisonProjectStatsBinaryDecision)
+      .filter((decision): decision is MockComparisonProjectStatsBinaryDecision => {
+        return decision !== null
+      }),
+  )
+}
+
+const getMockComparisonProjectStatsBinaryDecisionValue = (answers: readonly string[]) => {
+  const decisions = Array.from(getMockComparisonProjectStatsBinaryDecisionSet(answers))
+
+  return decisions.length === 1 ? (decisions[0] ?? null) : null
+}
+
+const getMockComparisonProjectStatsPairs = (state: MockDatabaseState, group: MockComparisonProjectStatsGroup) => {
+  return getMockServingRows(state)
+    .map<MockComparisonProjectStatsPair | null>((row) => {
+      const leftAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.leftColumnId])
+      const rightAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.rightColumnId])
+
+      return leftAnswers.length > 0 && rightAnswers.length > 0 ? {leftAnswers, rightAnswers} : null
+    })
+    .filter((pair): pair is MockComparisonProjectStatsPair => {
+      return pair !== null
+    })
+}
+
+const getMockComparisonProjectStatsHasConflict = (pair: MockComparisonProjectStatsPair) => {
+  return new Set([...pair.leftAnswers, ...pair.rightAnswers]).size > 1
+}
+
+const getMockComparisonProjectStatsHasTrueConflict = (pair: MockComparisonProjectStatsPair) => {
+  const leftDecisions = getMockComparisonProjectStatsBinaryDecisionSet(pair.leftAnswers)
+  const rightDecisions = getMockComparisonProjectStatsBinaryDecisionSet(pair.rightAnswers)
+
+  return leftDecisions.size > 0 && rightDecisions.size > 0 && new Set([...leftDecisions, ...rightDecisions]).size > 1
+}
+
+const getMockComparisonProjectStatsBinaryPairs = (pairs: readonly MockComparisonProjectStatsPair[]) => {
+  return pairs
+    .map<MockComparisonProjectStatsBinaryPair | null>((pair) => {
+      const leftDecision = getMockComparisonProjectStatsBinaryDecisionValue(pair.leftAnswers)
+      const rightDecision = getMockComparisonProjectStatsBinaryDecisionValue(pair.rightAnswers)
+
+      return leftDecision && rightDecision ? {leftDecision, rightDecision} : null
+    })
+    .filter((pair): pair is MockComparisonProjectStatsBinaryPair => {
+      return pair !== null
+    })
+}
+
+const getMockComparisonProjectStatsDecisionCount = (
+  pairs: readonly MockComparisonProjectStatsBinaryPair[],
+  side: keyof MockComparisonProjectStatsBinaryPair,
+  decision: MockComparisonProjectStatsBinaryDecision,
+) => {
+  return pairs.filter((pair) => {
+    return pair[side] === decision
+  }).length
+}
+
+const getMockComparisonProjectStatsAggregateRow = (
+  state: MockDatabaseState,
+  group: MockComparisonProjectStatsGroup,
+) => {
+  const pairs = getMockComparisonProjectStatsPairs(state, group)
+  const binaryPairs = getMockComparisonProjectStatsBinaryPairs(pairs)
+
+  return {
+    agreementCount: binaryPairs.filter((pair) => {
+      return pair.leftDecision === pair.rightDecision
+    }).length,
+    binaryPairCount: binaryPairs.length,
+    comparisonId: group.comparisonId,
+    conflictCount: pairs.filter(getMockComparisonProjectStatsHasConflict).length,
+    leftExcludeCount: getMockComparisonProjectStatsDecisionCount(binaryPairs, 'leftDecision', 'exclude'),
+    leftIncludeCount: getMockComparisonProjectStatsDecisionCount(binaryPairs, 'leftDecision', 'include'),
+    overlapCount: pairs.length,
+    rightExcludeCount: getMockComparisonProjectStatsDecisionCount(binaryPairs, 'rightDecision', 'exclude'),
+    rightIncludeCount: getMockComparisonProjectStatsDecisionCount(binaryPairs, 'rightDecision', 'include'),
+    trueConflictCount: pairs.filter(getMockComparisonProjectStatsHasTrueConflict).length,
+  }
+}
+
+const getMockComparisonProjectStatsAggregateRows = (statement: string, state: MockDatabaseState) => {
+  return getMockComparisonProjectStatsGroups(statement)
+    .map((group) => {
+      return getMockComparisonProjectStatsAggregateRow(state, group)
+    })
+    .filter((row) => {
+      return row.overlapCount > 0
+    })
+}
+
 const queryJson = async (
   statement: string,
   state: {
@@ -769,6 +901,10 @@ const queryJson = async (
           hasConflict: row.hasConflict,
         }
       })
+  }
+
+  if (statement.includes('FROM mart.comparison_cell_serving cell') && statement.includes('GROUP BY comparison_id')) {
+    return getMockComparisonProjectStatsAggregateRows(statement, getMockDatabaseState())
   }
 
   if (statement.includes('FROM mart.comparison_cell_serving')) {
