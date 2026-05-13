@@ -180,7 +180,12 @@ test('deleteJudgmentJobSafelyTx removes request attempt closeouts before rebuild
     }
 
     const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {
-      finalSnapshot: {closeouts: number | string; jobs: number | string; telemetrySamples: number | string; tokens: number | string}
+      finalSnapshot: {
+        closeouts: number | string
+        jobs: number | string
+        telemetrySamples: number | string
+        tokens: number | string
+      }
       orderSnapshots: Array<{closeoutRows: number | string; point: string; tokenUseRows: number | string}>
       projectionDeleteSql: string
     }

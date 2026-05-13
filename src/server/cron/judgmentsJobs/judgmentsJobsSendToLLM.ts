@@ -358,10 +358,7 @@ const getOwnerBackedPromptClaimChunkLimits = (limit: number): number[] => {
 
   return chunkLimit <= 0
     ? []
-    : [
-        chunkLimit,
-        ...getSteadyPromptClaimChunkLimits(limit - chunkLimit, ownerBackedPromptClaimDispatchChunkSize),
-      ]
+    : [chunkLimit, ...getSteadyPromptClaimChunkLimits(limit - chunkLimit, ownerBackedPromptClaimDispatchChunkSize)]
 }
 
 export const getPromptClaimDispatchChunkLimits = ({

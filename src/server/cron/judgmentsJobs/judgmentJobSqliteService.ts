@@ -5,8 +5,8 @@ import {dirname} from 'node:path'
 import {Database} from 'bun:sqlite'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {
   createJudgmentExecutionSnapshotsForClaims,
   createTransientJudgmentExecutionSnapshotsForClaims,
@@ -3174,12 +3174,7 @@ const getQueuePromptSnapshotSettings = (database: Database, jobId: string): Queu
     )
     .get(jobId) as {useFulltext: number; useFulltextNoImages: number} | null
 
-  return row
-    ? {
-        useFulltext: toBoolean(row.useFulltext),
-        useFulltextNoImages: toBoolean(row.useFulltextNoImages),
-      }
-    : null
+  return row ? {useFulltext: toBoolean(row.useFulltext), useFulltextNoImages: toBoolean(row.useFulltextNoImages)} : null
 }
 
 const markReadyQueuePromptClaimed = ({

@@ -124,7 +124,8 @@ const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
     } catch (error) {
       const acceptedClaimJobs = getAcceptedJudgeWorkerClaimRunningJobs()
       const cachedJobs =
-        ownerBackedRunningJobsCache && Date.now() - ownerBackedRunningJobsCache.updatedAt <= ownerBackedRunningJobsCacheTtlMs
+        ownerBackedRunningJobsCache
+        && Date.now() - ownerBackedRunningJobsCache.updatedAt <= ownerBackedRunningJobsCacheTtlMs
           ? ownerBackedRunningJobsCache.jobs
           : []
       const fallbackJobs = Array.from(
@@ -139,10 +140,7 @@ const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
         runningJobsLogger.warn(
           'judgments-owner-backed-running-jobs-fallback',
           '[judgments] using local owner-backed running job fallback',
-          {
-            error: error instanceof Error ? error.message : String(error),
-            fallbackJobCount: fallbackJobs.length,
-          },
+          {error: error instanceof Error ? error.message : String(error), fallbackJobCount: fallbackJobs.length},
         )
         return fallbackJobs
       }
