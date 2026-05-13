@@ -77,6 +77,16 @@ Touched layers: server, database, client
 10. Import processing must avoid loading complete source packages, complete staging tables, or complete JSON payloads into process memory at once.
 11. Long-running imports must emit progress and checkpoint logs so operators can see throughput, current batch, matched counts, created counts, unresolved counts, and elapsed time.
 
+Concrete local pass/fail thresholds for the first implementation:
+
+| Scenario | Pass Criteria |
+|---|---|
+| 50,000-record Covidence import | Completes within 10 minutes using bounded canonical match/write chunks of at most 500 source records, performs no per-row canonical article lookup, creates no duplicate canonical rows for repeated strong identifiers or repeated source rows, creates no duplicate import-scoped records for the same `(article_id, import_route_id)`, and keeps observed importer process RSS under the configured local memory ceiling. |
+| One million identifier-bearing broad-source rows | Stages, normalizes, and matches all rows within 60 minutes using bounded chunks of at most 500 records for canonical match/write work, links any DOI, PMID, arXiv, bioRxiv, or medRxiv match to a canonical article previously created by Covidence, checkpoints at least every 5,000 source rows or 60 seconds, and can resume from an interrupted checkpoint without duplicating canonical articles or import-scoped records. |
+| Identifier matching query shape | Uses indexed joins or chunked `IN` lookups against normalized relational identifier tables such as `app.article_identifier`; it must not scan import JSON blobs, `app.article.original_data`, `app.article.source_metadata`, or the full `app.article` table to find identifier matches. |
+| Mart refresh impact | A broad-source run that adds or updates no project-linked article must leave unrelated project mart dirty state unchanged and must not enqueue global review or comparison mart rebuild work. |
+| Retry behavior | Re-running an interrupted Covidence or broad-source import with the same `source_kind`, `import_run_id`, `source_record_key`, and `source_record_hash` must be idempotent: no additional canonical articles, no duplicate import-scoped current membership rows, and no duplicate import-scoped source-row records when a child/history table is used. |
+
 ## Key Decisions
 
 ### 1. Keep prompts global and immutable
@@ -703,17 +713,19 @@ Pass/fail checks for this change:
 - confirm a PDF fetch flow still works for an article that only has imported full-text links
 
 23. Desktop verify the same Covidence create and review flow
-24. Performance verify a synthetic or fixture-backed 50,000-record Covidence import completes without per-row matching queries, duplicate canonical articles, or unbounded memory growth
-25. Performance verify a staged broad-source import path can process at least one million identifier-bearing rows in bounded chunks and correctly links rows that match articles previously created by Covidence
-26. Verify broad-source imports that do not affect a project do not trigger rebuilds for unrelated project review marts
-27. Verify strong-identifier conflict handling quarantines rows when multiple identifiers match different canonical articles, and that the quarantine payload includes source kind, import run id, source record key, conflicting identifier kinds, conflicting canonical article ids, and operator-review metadata
-28. Add and run targeted identifier normalization coverage, such as `bun test src/utils/articleIdentifierNormalization.test.ts`, for DOI, PMID, PMCID source-metadata handling, arXiv version suffixes, bioRxiv and medRxiv URL or DOI forms, trusted URL-derived identifiers, malformed values, duplicate normalized values in one batch, and conflicts across identifier kinds
-29. When shared query helpers change, run `bun test src/server/services/getAppQueryService.test.ts` and targeted route tests for the affected reader, adding focused coverage for `appQueryHelpers` or `dataSourceQueryService` if the changed behavior is not covered by an existing route or service test
-30. When admin or investigation routes change, run `bun test src/server/routes/AdminInvestigateRoutes.test.ts` and add or run targeted `ArticleAdminRoutes` coverage for changed admin article metadata, URL, or full-text behavior
-31. When review warning or health routes change, run `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts` and add or run targeted `projectsRoutesGetReviewsHealth` coverage for changed health behavior
-32. When maintenance leases, dirty scopes, or mart refresh workers change, run `bun test src/server/workers/projectMartRefreshWorker.test.ts` plus the relevant maintenance or large-rebuild lease tests such as `bun test src/server/services/getDuckdbMartMaintenanceService.test.ts` or `bun test src/server/services/projectMartLargeRebuildLeaseFencing.test.ts`
-33. When full-text conversion or PDF fetch routing changes, add or run targeted coverage for `fullTextConversionJobs`, `fullTextJobs`, and the affected fetch helper so canonical full-text link hints and scoped source URLs are verified
-34. When `getArticleUrl` or related client source-link helpers change, add or run targeted client utility coverage and verify browser and desktop review flows do not expose legacy route-prefixed `app.article.article_id` values as source URLs or display ids
+24. Performance verify a synthetic or fixture-backed 50,000-record Covidence import passes all of these checks: bounded canonical match/write chunks no larger than 500 source records, no per-row canonical lookup, no duplicate canonical rows for repeated strong identifiers or source rows, no duplicate import-scoped current membership rows, completion within 10 minutes, and observed importer process RSS below the configured local memory ceiling
+25. Performance verify a staged broad-source import path with at least one million identifier-bearing rows passes all of these checks: staged normalization and matching in bounded chunks, canonical match/write chunks no larger than 500 source records, completion within 60 minutes, correct linking to Covidence-created canonical articles through DOI, PMID, arXiv, bioRxiv, or medRxiv identifiers, and resumability after an interrupted run
+26. Verify identifier matching query shape with query inspection, benchmark instrumentation, or an equivalent test: matching must use indexed joins or chunked `IN` lookups against normalized identifier tables such as `app.article_identifier`, and must not use JSON scans, `app.article.original_data`, `app.article.source_metadata`, or full `app.article` scans
+27. Verify broad-source imports that do not affect a project do not mark unrelated project review or comparison marts dirty and do not enqueue unrelated mart rebuild work
+28. Verify re-running an interrupted Covidence or broad-source import with the same `source_kind`, `import_run_id`, `source_record_key`, and `source_record_hash` does not create additional canonical articles, duplicate import-scoped current membership rows, or duplicate import-scoped source-row records when a child/history table is used
+29. Verify strong-identifier conflict handling quarantines rows when multiple identifiers match different canonical articles, and that the quarantine payload includes source kind, import run id, source record key, conflicting identifier kinds, conflicting canonical article ids, and operator-review metadata
+30. Add and run targeted identifier normalization coverage, such as `bun test src/utils/articleIdentifierNormalization.test.ts`, for DOI, PMID, PMCID source-metadata handling, arXiv version suffixes, bioRxiv and medRxiv URL or DOI forms, trusted URL-derived identifiers, malformed values, duplicate normalized values in one batch, and conflicts across identifier kinds
+31. When shared query helpers change, run `bun test src/server/services/getAppQueryService.test.ts` and targeted route tests for the affected reader, adding focused coverage for `appQueryHelpers` or `dataSourceQueryService` if the changed behavior is not covered by an existing route or service test
+32. When admin or investigation routes change, run `bun test src/server/routes/AdminInvestigateRoutes.test.ts` and add or run targeted `ArticleAdminRoutes` coverage for changed admin article metadata, URL, or full-text behavior
+33. When review warning or health routes change, run `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts` and add or run targeted `projectsRoutesGetReviewsHealth` coverage for changed health behavior
+34. When maintenance leases, dirty scopes, or mart refresh workers change, run `bun test src/server/workers/projectMartRefreshWorker.test.ts` plus the relevant maintenance or large-rebuild lease tests such as `bun test src/server/services/getDuckdbMartMaintenanceService.test.ts` or `bun test src/server/services/projectMartLargeRebuildLeaseFencing.test.ts`
+35. When full-text conversion or PDF fetch routing changes, add or run targeted coverage for `fullTextConversionJobs`, `fullTextJobs`, and the affected fetch helper so canonical full-text link hints and scoped source URLs are verified
+36. When `getArticleUrl` or related client source-link helpers change, add or run targeted client utility coverage and verify browser and desktop review flows do not expose legacy route-prefixed `app.article.article_id` values as source URLs or display ids
 
 ## Commands To Run
 
@@ -725,8 +737,9 @@ Pass/fail checks for this change:
 6. run `bun run build` for shared app changes
 7. run `bun run desktop:build` when runtime paths or shared UI are touched
 8. run `bun run lint` before merge
-9. add or run a repo-native import benchmark or integration test for 50,000 Covidence records before accepting the write-path rewrite
-10. add or run a repo-native staged-import benchmark or integration test for million-row Europe PMC or `src:med`/`src:PPR` identifier matching before accepting the broad-source path
+9. add or run a repo-native import benchmark or integration test for 50,000 Covidence records before accepting the write-path rewrite; pass requires chunks of at most 500 source records, no per-row canonical lookups, no duplicate canonical or import-scoped rows, completion within 10 minutes, and importer RSS below the configured local memory ceiling
+10. add or run a repo-native staged-import benchmark or integration test for one million Europe PMC or `src:med`/`src:PPR` identifier-bearing rows before accepting the broad-source path; pass requires chunked staged matching, correct linking to Covidence-created canonical articles, completion within 60 minutes, and successful resume after interruption without duplicate canonical or import-scoped rows
+11. inspect matching query plans or benchmark instrumentation before accepting high-volume import work; pass requires indexed joins or chunked `IN` lookups against normalized identifier tables and no JSON scans or full `app.article` scans for identifier matching
 
 ## Open Decisions During Build
 
@@ -735,6 +748,6 @@ Pass/fail checks for this change:
 3. whether raw Covidence source rows should live in one JSON payload or in a child table for queryability and size control
 4. whether canonical derived metadata that does not justify dedicated columns should live in a small canonical JSON field or explicit columns only
 5. whether high-volume staging should be persistent by default for resumability or temporary for smaller interactive imports
-6. what batch sizes and checkpoint intervals are safe defaults for 50,000-record Covidence imports and million-row corpus imports under the shared DuckDB memory limit
+6. whether to tune these starting local thresholds after the first benchmark run: 10-minute wall-clock budget for 50,000 Covidence records, 60-minute wall-clock budget for one million identifier-bearing broad-source rows, default canonical match/write chunk size of 500 source records, checkpoint interval of 5,000 source rows or 60 seconds whichever comes first, and local memory ceiling of `DUCKDB_MEMORY_LIMIT=20GB` unless explicitly configured lower for the run
 7. whether broad-source imports should disable weak auto-merge by default unless a fingerprint table is present
 8. whether source-row history needs `app.article_import_route_row` or a dedicated import-run row table, and which sources require per-row audit instead of only latest compact membership payloads
