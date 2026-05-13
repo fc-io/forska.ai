@@ -25,7 +25,7 @@ Touched layers: server, database, client
 | Identity Or Field | Owner | Purpose | Migration Rule |
 |---|---|---|---|
 | `app.article.id` | Canonical article row | Internal joins, foreign keys, and durable canonical article identity | Keep as the only durable app join key. Do not expose it as a source-facing article id unless an API explicitly asks for canonical ids. |
-| `app.article_identifier.normalized_value` | Canonical identifier table | Cross-import matching for DOI, PMID, arXiv id, bioRxiv id, and medRxiv id | Use normalized strong identifiers for matching and backfill. Do not use display labels or route-prefixed ids as matching keys. |
+| `app.article_identifier.normalized_value` | Canonical identifier table | Cross-import matching for DOI, PMID, arXiv id, and DOI-shaped bioRxiv or medRxiv values | Use normalized strong identifiers for matching and backfill. Do not use display labels or route-prefixed ids as matching keys. |
 | `app.article_import_route.external_article_id` | Import-scoped article record | Project-scoped source-facing display id, Covidence seeding, exports, and source-specific references | Derive displayed article ids from the selected project-scoped import record. This is where Covidence-local ids and broad-source external ids belong. |
 | `app.article.article_id` | Legacy compatibility field on the canonical article row | Temporary compatibility reads during migration | Do not assign new route-scoped meaning. Do not parse source prefixes from it. Replace callers with canonical ids, normalized identifiers, or import-scoped external ids, then remove or fully deprecate it. |
 | Source URL | Canonical article URL or import-scoped source URL record | Browser links, exports, full-text routing hints, and source landing pages | Store canonical landing URLs on canonical article fields when they are article-level truth. Store source-specific URLs on the import-scoped record or explicit source metadata fields. URL helpers must use explicit URL fields or identifier-derived URL builders instead of parsing `app.article.article_id` prefixes. |
@@ -44,6 +44,18 @@ Use existing route and payload field names where they are already established, b
 | Judgment snapshots, queued jobs, outbox, and LLM prompt payloads | Persist canonical article id as the stable replay and lookup id. | Include the project-scoped external article id when the snapshot or prompt needs source-facing context. | Snapshot canonical article fields plus scoped import metadata; derive legacy `importRoute` and `originalData` only through a compatibility adapter until consumers migrate. | Keep compatibility only for existing queued work and saved snapshots; do not create new dependencies. |
 | Client review UI and URL helpers | Use canonical article id for app actions, route params, selected rows, and mutations. | Display `article_external_id` from the serving payload for source-facing article ids. | Build links from explicit canonical URL fields, scoped source URL fields, or identifier-derived URL builders. | `getArticleUrl` and related helpers must not parse source prefixes from it. |
 | Admin, investigation, and full-text APIs | Use canonical article id for investigation, maintenance, fetch, conversion, and repair actions. | Show scoped external ids only with their source or import-route context. | Use canonical full-text link hints for article-level fetch decisions and scoped source URLs for source-specific inspection. | Treat it as compatibility-only and avoid new admin workflows that depend on its old route-scoped meaning. |
+
+## Legacy `app.article.article_id` Transition Contract
+
+The compatibility field needs an executable cutover so old route-scoped source ids stop controlling canonical article creation.
+
+1. Phase 1 must rebuild `app.article`, or use the DuckDB-equivalent migration path, so `UNIQUE(article_id)` is removed. Keep only a non-unique compatibility index on `article_id` while legacy reads remain.
+2. Existing rows keep their current `article_id` value until the matching import-scoped `external_article_id` rows are backfilled and readers have moved.
+3. New canonical rows created after the matcher cutover must write `NULL` to `app.article.article_id`. The canonical join id is `app.article.id`; source-facing ids go to `app.article_import_route.external_article_id`.
+4. Import writers must stop using `ON CONFLICT(article_id)`, `WHERE article_id IN (...)`, or any `app.article.article_id` lookup as the canonical insert or match path before the new matcher is enabled.
+5. Compatibility reads that receive an old route-scoped source id must resolve it through `(import_route_id, external_article_id)` on `app.article_import_route` when the route context is known. They may fall back to `app.article.article_id` only for old rows during the migration window.
+6. Historical merge scripts must preserve old route-scoped values by backfilling them to import-scoped records and audit tables before any survivor row is nulled, rewritten, or deleted.
+7. After Phase 8, no API may expose `app.article.article_id` as a display id. If a canonical public id is later required, add a new explicitly named column instead of reusing this compatibility field.
 
 ## Current Repo State
 
@@ -84,7 +96,7 @@ Use existing route and payload field names where they are already established, b
 5. Bulk imports must be resumable and idempotent by `source_kind`, `import_run_id`, `source_record_key`, and `source_record_hash`. Restarting an interrupted import must not duplicate canonical articles or duplicate import-scoped records.
 6. High-volume, retryable, or externally triggered import routes must use an import-run lease or equivalent single-writer guard per `source_kind` and import route when racing writers would otherwise process the same source scope.
 7. A Covidence-first then Europe PMC scenario must work:
-   - if Covidence created the canonical article first, a later Europe PMC or `src:med`/`src:PPR` import with the same DOI, PMID, arXiv id, bioRxiv id, or medRxiv id must reuse that existing canonical article
+    - if Covidence created the canonical article first, a later Europe PMC or `src:med`/`src:PPR` import with the same DOI, PMID, arXiv id, or DOI-shaped bioRxiv or medRxiv value must reuse that existing canonical article
    - the later bulk source should add or update its own import-scoped record and add missing canonical identifiers
    - canonical article field updates must go through the deterministic resolver, not overwrite Covidence-derived or user-visible data by last writer wins
 8. Weak fingerprint matching must not require comparing each new article against the full article corpus. For large corpus imports, weak matching is allowed only when backed by an indexed non-unique lookup surface or deferred to a separate candidate-resolution job.
@@ -97,7 +109,7 @@ Concrete local pass/fail thresholds for the first implementation:
 | Scenario | Pass Criteria |
 |---|---|
 | 50,000-record Covidence import | Completes within 10 minutes using bounded canonical match/write chunks of at most 500 source records, performs no per-row canonical article lookup, creates no duplicate canonical rows for repeated strong identifiers or repeated source rows, creates no duplicate import-scoped records for the same `(article_id, import_route_id)`, and keeps observed importer process RSS under the configured local memory ceiling. |
-| One million identifier-bearing broad-source rows | Stages, normalizes, and matches all rows within 60 minutes using bounded chunks of at most 500 records for canonical match/write work, links any DOI, PMID, arXiv, bioRxiv, or medRxiv match to a canonical article previously created by Covidence, checkpoints at least every 5,000 source rows or 60 seconds, and can resume from an interrupted checkpoint without duplicating canonical articles or import-scoped records. |
+| One million identifier-bearing broad-source rows | Stages, normalizes, and matches all rows within 60 minutes using bounded chunks of at most 500 records for canonical match/write work, links any DOI, PMID, arXiv, or DOI-shaped bioRxiv or medRxiv value to a canonical article previously created by Covidence, checkpoints at least every 5,000 source rows or 60 seconds, and can resume from an interrupted checkpoint without duplicating canonical articles or import-scoped records. |
 | Identifier matching query shape | Uses indexed joins or chunked `IN` lookups against normalized relational identifier tables such as `app.article_identifier`; it must not scan import JSON blobs, `app.article.original_data`, `app.article.source_metadata`, or the full `app.article` table to find identifier matches. |
 | Mart refresh impact | A broad-source run that adds or updates no project-linked article must leave unrelated project mart dirty state unchanged and must not enqueue global review or comparison mart rebuild work. |
 | Retry behavior | Re-running an interrupted Covidence or broad-source import with the same `source_kind`, `import_run_id`, `source_record_key`, and `source_record_hash` must be idempotent: no additional canonical articles, no duplicate import-scoped current membership rows, and no duplicate import-scoped source-row records when a child/history table is used. |
@@ -145,11 +157,10 @@ Concrete local pass/fail thresholds for the first implementation:
 ### 5. Use identifier-based matching instead of route-prefixed article ids
 
 1. Strong identifiers should drive canonical matching:
-   - DOI
-   - PMID
-   - arXiv id
-   - bioRxiv id
-   - medRxiv id
+    - DOI, including DOI-shaped bioRxiv and medRxiv identifiers
+    - PMID
+    - arXiv id
+    - future non-DOI source identifiers only after they get an explicit uniqueness and conflict policy
 2. Weak fingerprints are allowed when strong identifiers are missing:
    - normalized title + publication year + first author
 3. Covidence-local ids like `covidence_id` and `reference_id` should stay import-scoped and not become the canonical global identity by default.
@@ -201,6 +212,16 @@ Fields to stop relying on at the article level:
 3. Historical merge jobs and live imports must use the same resolver.
 4. No write path should keep doing last-writer-wins updates directly against canonical article columns.
 
+Resolver starting policy:
+
+1. Manual or operator-curated canonical values win over all imported values until explicitly cleared.
+2. For title and abstract, prefer the highest ranked non-empty candidate by source trust, then completeness, then oldest canonical created timestamp, then stable source record key. Initial source trust order is: PubMed or Europe PMC publisher metadata, DOI or article landing metadata, arXiv or bioRxiv or medRxiv source metadata, Covidence or structured-file reference metadata, broad-source fallback metadata.
+3. For canonical URL, prefer DOI landing URLs when a DOI is present, then PubMed article URLs when a PMID is present, then trusted publisher or preprint landing URLs. Keep source-specific URLs on import-scoped records even when they are not selected as canonical URL.
+4. For publication status, prefer explicit published status from PubMed, Europe PMC, DOI, or publisher metadata over preprint-only status. Do not downgrade a published canonical status to preprint because a later preprint source is imported.
+5. For full-text link hints, merge normalized links by union and keep source, format, and provenance attrs. Do not remove an existing reachable full-text hint unless a fetch or conversion path explicitly marks it invalid.
+6. If two same-rank scalar candidates materially disagree and neither is clearly more complete, keep the existing canonical value, store the alternate value in import-scoped metadata, and emit a resolver conflict warning for operator review.
+7. Historical duplicate merge jobs and live import writes must call the same resolver with the same source trust and tie-break rules so reruns produce stable results.
+
 ### Article Identifier Table
 
 Add `app.article_identifier` with fields like:
@@ -216,18 +237,17 @@ Add `app.article_identifier` with fields like:
 Scope:
 
 1. Store only strong canonical identifiers here:
-    - DOI
+    - DOI, including DOI-shaped bioRxiv and medRxiv values
     - PMID
     - arXiv id
-    - bioRxiv id
-    - medRxiv id
-2. Use `UNIQUE(kind, normalized_value)` for these strong identifiers.
-3. Treat `UNIQUE(kind, normalized_value)` as the final arbiter for concurrent writers. If an identifier insert conflicts, re-read the winning row by `(kind, normalized_value)` before continuing.
-4. If the winning identifier row maps to the same intended canonical article, continue idempotently. If it maps to another canonical article, quarantine the source row as a concurrent strong-identifier conflict instead of creating a duplicate canonical article or choosing a last writer.
-5. Use this table as the canonical matching surface for new imports and for historical backfill.
-6. Add an index that supports batch joins by `(kind, normalized_value)` without scanning `app.article`.
-7. Bulk imports must stage normalized identifier rows first, then join staging rows to this table in chunks.
-8. Duplicate identifiers inside one source batch must be collapsed before canonical article creation to avoid intra-batch races and uniqueness conflicts.
+2. Treat `bioRxiv` and `medRxiv` as source extraction policies for DOI-shaped preprint values, not as separate final `kind` values when the normalized value is a DOI. Store those rows as `kind = 'doi'` and preserve the source subtype and version in import-scoped metadata.
+3. Use `UNIQUE(kind, normalized_value)` for these strong identifiers.
+4. Treat `UNIQUE(kind, normalized_value)` as the final arbiter for concurrent writers. If an identifier insert conflicts, re-read the winning row by `(kind, normalized_value)` before continuing.
+5. If the winning identifier row maps to the same intended canonical article, continue idempotently. If it maps to another canonical article, quarantine the source row as a concurrent strong-identifier conflict instead of creating a duplicate canonical article or choosing a last writer.
+6. Use this table as the canonical matching surface for new imports and for historical backfill.
+7. Add an index that supports batch joins by `(kind, normalized_value)` without scanning `app.article`.
+8. Bulk imports must stage normalized identifier rows first, then join staging rows to this table in chunks.
+9. Duplicate identifiers inside one source batch must be collapsed before canonical article creation to avoid intra-batch races and uniqueness conflicts.
 
 Normalization contract:
 
@@ -235,13 +255,20 @@ Normalization contract:
 |---|---:|---|
 | DOI | Yes | Trim whitespace, lowercase, remove `https://doi.org/`, `http://doi.org/`, `https://dx.doi.org/`, `http://dx.doi.org/`, `doi:`, and safe surrounding punctuation. Accept only DOI-shaped values that start with `10.` and contain a slash after prefix stripping. Store the bare DOI as `normalized_value`. |
 | PMID | Yes | Trim whitespace, remove `pmid:`, `pubmed:`, and trusted PubMed URL prefixes, require ASCII digits only, and store the numeric string without leading zero padding. Reject empty, zero-only, or mixed alphanumeric values as malformed identifiers. |
-| PMCID | No for this plan | PMCID is source metadata and full-text provenance only, not a strong canonical match identifier. Normalize supported source metadata to uppercase `PMC` plus digits after removing `pmcid:`, PubMed Central URL prefixes, and whitespace, but do not write it to `app.article_identifier` or use it for auto-merge unless a later plan explicitly promotes PMCID with uniqueness, backfill, and conflict tests. |
+| PMCID | No for auto-merge in the first implementation | PMCID is source metadata, full-text provenance, and an unresolved-candidate signal, not a strong canonical match identifier for this plan. Normalize supported source metadata to uppercase `PMC` plus digits after removing `pmcid:`, PubMed Central URL prefixes, and whitespace. Store it in import-scoped metadata and, when PMCID-only overlap must be detectable, in a non-unique candidate/provenance lookup surface. Do not write it to `app.article_identifier` or use it for automatic canonical merge unless a later plan explicitly promotes PMCID with uniqueness, backfill, and conflict tests. |
 | arXiv | Yes | Trim whitespace, remove trusted `arxiv.org/abs/`, `arxiv.org/pdf/`, `oai:arxiv.org:`, and `arXiv:` prefixes, lowercase category prefixes, remove query strings, fragments, and PDF suffixes, then validate either modern numeric ids such as `2401.12345` or legacy category ids such as `hep-th/9901001`. Strip trailing version suffixes like `v1` and `v2` from the canonical `normalized_value`, so arXiv versions match the same canonical article; preserve the source version only in import-scoped metadata when needed. |
-| bioRxiv | Yes | Normalize DOI, DOI URL, and trusted `biorxiv.org/content/...` URL forms to one lowercase DOI-shaped value. Remove query strings, fragments, `.full`, `.full.pdf`, and trailing server-path version suffixes before validation. Store the bare preprint DOI as `normalized_value`; keep source URL and version details in import-scoped metadata. |
-| medRxiv | Yes | Normalize DOI, DOI URL, and trusted `medrxiv.org/content/...` URL forms to one lowercase DOI-shaped value. Remove query strings, fragments, `.full`, `.full.pdf`, and trailing server-path version suffixes before validation. Store the bare preprint DOI as `normalized_value`; keep source URL and version details in import-scoped metadata. |
+| bioRxiv | Yes, as DOI kind | Normalize DOI, DOI URL, and trusted `biorxiv.org/content/...` URL forms to one lowercase DOI-shaped value. Remove query strings, fragments, `.full`, `.full.pdf`, and trailing server-path version suffixes before validation. Store the bare preprint DOI as `kind = 'doi'` and `normalized_value`; keep bioRxiv source URL and version details in import-scoped metadata. |
+| medRxiv | Yes, as DOI kind | Normalize DOI, DOI URL, and trusted `medrxiv.org/content/...` URL forms to one lowercase DOI-shaped value. Remove query strings, fragments, `.full`, `.full.pdf`, and trailing server-path version suffixes before validation. Store the bare preprint DOI as `kind = 'doi'` and `normalized_value`; keep medRxiv source URL and version details in import-scoped metadata. |
 | URL-derived identifiers | Depends on extracted kind | Extract identifiers only from trusted DOI, PubMed, PubMed Central, arXiv, bioRxiv, and medRxiv URL patterns. Pass extracted values through the identifier-specific normalizer and store the extracted identifier with its actual kind. Do not store arbitrary normalized URLs as strong identifiers. If an explicit identifier and a URL-derived identifier of the same kind disagree inside one source row, quarantine or mark the row unresolved instead of choosing one silently. |
 
 Malformed values must stay in raw source or import-scoped metadata for operator review, but they must not enter `app.article_identifier`. Normalization must happen before batch deduplication, matching, uniqueness checks, and quarantine decisions so every writer applies the same contract.
+
+Identifier kind equivalence rules:
+
+1. The same DOI-shaped value must never be represented as both `kind = 'doi'` and a source-specific strong kind such as `bioRxiv` or `medRxiv`.
+2. If an incoming row has a DOI field and a bioRxiv or medRxiv URL-derived DOI, they are equivalent only when the normalized DOI values match.
+3. If source fields produce two different DOI-normalized values in one source row, quarantine the row as an identifier disagreement instead of choosing one silently.
+4. PMCID-only overlap is an accepted unresolved-candidate class for this implementation. A PMCID-only row must be counted and surfaced as unresolved or candidate-matched when a PMCID candidate lookup exists; it must not be silently auto-merged or used as a strong canonical identifier.
 
 ### Weak Match Fingerprint
 
@@ -276,6 +303,15 @@ Repeated harvests for the same source record should leave the `app.article_impor
 
 When multiple source rows in one import route resolve to the same canonical article, the writer must either merge import metadata deterministically into the one current membership record or store the individual source rows in a child row table. Deterministic merges should use stable precedence, union distinct identifiers or notes where safe, and produce the same compact payload regardless of source row order. If source-row history or per-row audit is required, keep it in `app.article_import_route_row` or a dedicated import-run row table instead of overloading the current membership row.
 
+Current source-record uniqueness rules:
+
+1. No two current records in the same import route may claim the same `(source_kind, source_record_key)`.
+2. If a source can produce at most one current source row per canonical article, enforce this directly on `app.article_import_route` with `UNIQUE(import_route_id, source_kind, source_record_key)` after nullable legacy rows are backfilled or excluded from the constraint.
+3. If a source can produce multiple source rows that resolve to the same canonical article, the source-row child table is mandatory. In that case `app.article_import_route` remains the current compact membership row, and the child table owns source-row idempotency.
+4. Re-running the same `(source_kind, import_run_id, source_record_key, source_record_hash)` must find the existing source-row write and make no canonical article, membership, or child-row duplicate.
+5. If a repeated `source_record_key` resolves to a different canonical article than its existing current record, quarantine the row as a source-record remap conflict unless an explicit operator resolution says to relink it.
+6. `UNIQUE(article_id, import_route_id)` is still required, but it is not sufficient by itself for retry idempotency or source-record identity.
+
 For Covidence specifically, this record should carry:
 
 1. `studyKey`
@@ -294,19 +330,36 @@ For Covidence specifically, this record should carry:
 14. seeded human answer metadata
 15. package file provenance
 
-### Optional Raw Row Child Table
+### Source Row Child Table
 
-If the Covidence raw source rows are too large or too query-heavy for a single JSON blob, add `app.article_import_route_row`:
+This table is optional only for sources where one compact current membership record can fully represent source-row identity. It is mandatory for high-volume imports, sources that can emit multiple rows per canonical article in one route, and sources that require per-row audit or restart-safe source-row idempotency.
+
+Add `app.article_import_route_row` or a dedicated import-run row table with fields like:
 
 1. `id`
 2. `article_import_route_id`
-3. `row_number`
-4. `file_role`
-5. `source_file_name`
-6. `citation`
-7. `note`
-8. `exclusion_reason`
-9. `tags`
+3. `article_id`
+4. `import_route_id`
+5. `source_kind`
+6. `import_run_id`
+7. `source_record_key`
+8. `source_record_hash`
+9. `row_number`
+10. `file_role`
+11. `source_file_name`
+12. `citation`
+13. `note`
+14. `exclusion_reason`
+15. `tags`
+16. `raw_row_payload` or compact source-row metadata
+17. `is_current`
+18. timestamps
+
+Minimum constraints:
+
+1. `UNIQUE(import_route_id, source_kind, source_record_key, source_record_hash)` prevents duplicate historical child rows for the same source-row version.
+2. A current-row uniqueness surface, either partial where supported or enforced by write logic and tests, prevents more than one current row for `(import_route_id, source_kind, source_record_key)`.
+3. Child rows must link to the current `app.article_import_route` row after canonical matching so source-row retries do not create another canonical article or another current membership row.
 
 ### Bulk Import Staging And Checkpointing
 
@@ -338,21 +391,29 @@ Implementation options:
 4. Covidence badges and related-record views should be driven by project-scoped import records, not article-global metadata.
 5. Display and URL helpers that consume serving rows must use `article_external_id`, explicit source URL fields, canonical URL fields, or identifier-derived URL helpers, not source prefixes parsed from `app.article.article_id`.
 
+Scoped import record selection policy:
+
+1. If an API or mart builder has an explicit `import_route_id`, use that import-scoped record and do not run automatic selection.
+2. If a surface is Covidence-specific, select only Covidence import-scoped records in the target project's import routes. Within those records, prefer the record with matching `studyKey` or stage context when the request provides it.
+3. For generic project review display, choose among records linked by the target project's `project_import_route` rows. Prefer records with a non-empty `external_article_id`, then Covidence records, then records with richer import metadata, then earliest `project_import_route.created_at`, then lowest `import_route.route`, then lowest `import_route.id`.
+4. For curated `project_article` rows that are not in any route scope, return canonical article metadata and a null `article_external_id` unless the route or source scope is explicitly provided.
+5. The selected import record id should be denormalized into serving rows when possible so exports, related-record views, filters, and client detail screens all explain which scoped record supplied `article_external_id` and source metadata.
+6. If multiple scoped records are semantically valid for a surface and the selector cannot choose deterministically under these rules, return a metadata ambiguity warning and require the caller to pass an explicit route or source scope.
+
 ## Matching Policy
 
 ### Auto-Merge Rules
 
 Automatically reuse an existing canonical article when there is a single unambiguous match on:
 
-1. DOI
+1. DOI, including DOI-shaped bioRxiv and medRxiv values stored as DOI identifiers
 2. PMID
 3. arXiv id
-4. bioRxiv id
-5. medRxiv id
+4. future promoted strong identifiers only after they have uniqueness, backfill, and conflict tests
 
 For large imports, auto-merge must be implemented as batched joins against `app.article_identifier`, not as one query per source article.
 
-When an incoming row has multiple strong identifiers, auto-merge only when every existing identifier match points to the same canonical article. If one identifier points to article A and another strong identifier points to article B, quarantine the row as a strong-identifier conflict instead of choosing a winner or creating a merged article.
+When an incoming row has multiple strong identifiers, auto-merge only when every existing identifier match points to the same canonical article. If one identifier points to article A and another strong identifier points to article B, quarantine the row as a strong-identifier conflict instead of choosing a winner or creating a merged article. DOI-shaped bioRxiv and medRxiv values participate in this rule as DOI values, not separate identifier kinds.
 
 If a source row claims a strong identifier already linked to another canonical article but the canonical fields materially conflict, quarantine the row instead of overwriting canonical fields. If a source batch contains multiple rows with the same strong identifier and materially different article fields, collapse only exact duplicates and quarantine the conflicting rows before canonical writes.
 
@@ -371,7 +432,7 @@ When strong identifiers are missing:
 Preferred direction:
 
 1. do not silently merge ambiguous weak matches
-2. do not silently merge strong-identifier conflicts where DOI, PMID, arXiv, bioRxiv, or medRxiv matches resolve to different canonical articles
+2. do not silently merge strong-identifier conflicts where DOI, PMID, arXiv, or DOI-shaped bioRxiv or medRxiv values resolve to different canonical articles
 3. preserve the raw import record in an unresolved-import or manual-review state
 4. store quarantine payloads with source kind, import run id, source record key, conflicting identifier kinds, conflicting canonical article ids, and operator-review metadata such as status, reviewer, review notes, resolution action, and timestamps
 5. allow explicit operator resolution to either link an existing canonical article or create a new canonical article
@@ -475,15 +536,17 @@ Affected system families:
 
 ### Mart Refresh And Rebuild
 
-1. `src/server/services/getDuckdbMartRefreshService.ts`
-2. `src/server/services/projectMartLargeRebuildExecutor.ts`
-3. `src/server/services/maintenanceWorkLeaseService.ts`
-4. `src/server/workers/projectMartRefreshWorker.ts`
-5. Comparison serving builders:
+1. `src/server/services/projectMartDirtyRefreshStateService.ts`
+2. `src/server/services/projectMartDirtyMaterializationService.ts`
+3. `src/server/services/getDuckdbMartMaintenanceService.ts`
+4. `src/server/services/projectMartLargeRebuildExecutor.ts`
+5. `src/server/services/maintenanceWorkLeaseService.ts`
+6. `src/server/workers/projectMartRefreshWorker.ts`
+7. Comparison serving builders:
    - `src/server/services/comparisonProjectServingRollupBuilder.ts`
    - `src/server/services/comparisonProjectServingCellBuilder.ts`
    - `src/server/services/comparisonProjectServingInvalidationService.ts`
-6. related refresh state and worker paths
+8. related refresh state and worker paths
 
 ### Types And Metadata Utilities
 
@@ -513,12 +576,12 @@ Affected system families:
 
 ### Phase 0. Regression coverage first
 
-Add tests that capture the current duplicate behavior and the current query-surface expectations before changing the schema and write paths.
+Add desired-behavior regression tests before changing the schema and write paths. The duplicate-article tests should be reproducers that fail against the current implementation and pass after the canonical matcher is wired in; do not preserve the duplicate behavior as the expected outcome.
 
 Required scenarios:
 
-1. two Covidence imports with overlapping articles currently create duplicate canonical article rows
-2. overlapping Covidence and non-Covidence imports currently create duplicate canonical article rows
+1. two Covidence imports with overlapping strong identifiers reuse one canonical article row
+2. overlapping Covidence and non-Covidence imports with matching strong identifiers reuse one canonical article row
 3. prompt reuse still works across repeated Covidence prompt definitions
 4. archived prompt rows do not create hash conflicts once aligned with immutable prompt behavior
 5. read and query paths that currently depend on article-level metadata are covered before the split:
@@ -535,13 +598,16 @@ Required scenarios:
 ### Phase 1. Add the new schema foundation
 
 1. add `app.article_identifier` for strong identifiers only
-2. expand `app.article_import_route` to hold import-scoped payloads and source external ids
-3. split the legacy mixed article metadata contract into canonical replacements plus import-scoped replacements
-4. add any optional raw-row child table, unresolved queue table, or non-unique weak-fingerprint table if needed
-5. add indexes needed for identifier lookup, unresolved review lookup, and project-scoped import record lookup
-6. add staging and checkpoint tables or an equivalent import-run mechanism for high-volume sources
-7. add indexes that support batch joins from staging rows to `app.article_identifier` and `app.article_import_route`
-8. keep the old article columns temporarily for compatibility during migration
+2. remove the canonical uniqueness dependency on `app.article.article_id` by replacing `UNIQUE(article_id)` with a non-unique compatibility index before route-scoped source ids stop being unique
+3. expand `app.article_import_route` to hold import-scoped payloads and source external ids
+4. add the source-record uniqueness surface required by the chosen current-membership or child-row design
+5. split the legacy mixed article metadata contract into canonical replacements plus import-scoped replacements
+6. add the source-row child table when the source needs per-row idempotency, high-volume resumability, or multiple source rows per canonical article in one route
+7. add any unresolved queue table, PMCID candidate/provenance lookup, or non-unique weak-fingerprint table if needed
+8. add indexes needed for identifier lookup, unresolved review lookup, PMCID candidate lookup when present, and project-scoped import record lookup
+9. add staging and checkpoint tables or an equivalent import-run mechanism for high-volume sources
+10. add indexes that support batch joins from staging rows to `app.article_identifier` and `app.article_import_route`
+11. keep the old article columns temporarily for compatibility during migration
 
 ### Phase 2. Build a canonical article matching and merge service
 
@@ -559,6 +625,7 @@ Required scenarios:
 9. define the bounded transaction contract for write chunks so canonical article creation, identifier insertion, and import-record insertion commit together without spanning an entire import run
 10. treat identifier insert conflicts as concurrency signals: re-read the winning `app.article_identifier` row, continue only when it maps to the same intended canonical article, and quarantine a concurrent strong-identifier conflict when it maps elsewhere
 11. keep all large-source matching paths free of full scans over `app.article.original_data`, `app.article.source_metadata`, or import-scoped JSON blobs
+12. implement the resolver starting policy for title, abstract, canonical URL, publication status, and full-text link hints before any broad-source enrichment path writes canonical article fields
 
 ### Phase 3. Rewrite article write paths
 
@@ -585,21 +652,23 @@ Required scenarios:
 
 ### Phase 4. Backfill and merge historical duplicates
 
-1. backfill `app.article_identifier` from existing article rows
-2. backfill import-scoped payloads from current article-level fields
-3. backfill canonical derived metadata and full-text link hints from existing article rows
-4. detect duplicate canonical articles that should collapse into one
+1. build a non-unique identifier backfill staging table from existing article rows and import-scoped source payloads before writing final unique identifier rows
+2. store staged `article_id`, `kind`, `normalized_value`, source column, source kind, source route, malformed status, and conflict status so duplicate normalized identifiers can be inspected before final insertion
+3. insert only non-conflicting staged identifiers into `app.article_identifier` before merges
+4. detect duplicate canonical articles from staged identifiers, final identifiers, and optional weak fingerprint candidates
 5. choose the survivor deterministically using:
    - strongest identifier coverage
    - most import-route links
    - richest canonical field completeness
    - oldest `created_at`
    - stable id tie-breaker
-6. rewrite all referencing foreign keys with explicit table-level conflict handling
-7. preserve article-import-route records for each original import route
-8. keep migration scripts idempotent and restart-safe
-9. process historical duplicate detection in bounded batches by identifier kind and normalized value
-10. avoid global weak-fingerprint scans unless a materialized indexed fingerprint table exists
+6. record every merge decision in an audit table such as `app.article_merge_map` with old article id, survivor article id, merge reason, identifier evidence, conflict status, reviewed status, and timestamps
+7. rewrite all referencing foreign keys with explicit table-level conflict handling
+8. preserve article-import-route records for each original import route
+9. after FK rewrites, insert final `app.article_identifier` rows for survivor ids from the staged identifier rows, quarantining any remaining uniqueness conflict instead of dropping it
+10. keep migration scripts idempotent and restart-safe by reading `app.article_merge_map` before each batch
+11. process historical duplicate detection in bounded batches by identifier kind and normalized value
+12. avoid global weak-fingerprint scans unless a materialized indexed fingerprint table exists
 
 Main FK tables to rewrite during historical merges:
 
@@ -622,6 +691,15 @@ Conflict rules when FK rewrites hit unique constraints:
 6. `app.judgment_human_summary`: prefer `manual_override` over seeded Covidence origin, then the latest `updated_at`
 7. `app.review`: merge section-complete booleans with logical OR and merge distinct non-empty comments deterministically
 8. refresh, quarantine, and mart state: prefer recompute or rebuild from source tables over hand-merging stale derived state
+
+Durable non-FK reference rules:
+
+1. `app.article_merge_map` is the canonical old-to-new lookup for compatibility readers, retry scripts, queued work, and audit reports until every durable store is migrated or expired.
+2. Immutable or hash-addressed replay payloads, including `app.judgment_execution_snapshot.payload_json`, should not be rewritten in place unless the migration also intentionally recomputes and verifies the corresponding hash fields. Prefer preserving the original payload and mapping article ids through the compatibility adapter at replay time.
+3. Pending queue rows, SQLite judgment queue state, outbox import rows, and completion journal records that have not completed should be rewritten or canonicalized through `app.article_merge_map` before replay. Completed audit records may keep old ids when readers display both old and survivor ids through the merge map.
+4. Cursor and checkpoint fields such as judgment job cursors, mart materialization cursors, dirty refresh high-water marks, and source-scope high-water article ids should be invalidated and recomputed from source tables after merge batches instead of hand-translated when ordering semantics could change.
+5. Any route, admin tool, or worker that accepts an article id during the migration window must canonicalize it through `app.article_merge_map` before writing new judgments, reviews, mart dirty state, or import records.
+6. Historical payload compatibility adapters must be covered by replay tests that prove old snapshot `importRoute`, `originalData`, and article id fields still reproduce the original prompt context while writes land on the survivor canonical article.
 
 ### Phase 5. Rewrite read and query paths
 
@@ -713,12 +791,12 @@ Pass/fail checks for this change:
 4. `bun test src/server/services/getAppQueryService.test.ts`
 5. `bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts`
 6. `bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts`
-7. `bun test src/server/routes/ArticlesRoutes.test.ts`
+7. When `ArticlesRoutes` behavior changes, add targeted route coverage first because there is no dedicated route test today, then run the new targeted test file.
 8. `bun test src/server/routes/ProjectsRoutes.test.ts`
 9. `bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts`
 10. `bun test src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHuman.test.ts`
 11. `bun test src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.test.ts`
-12. `bun test src/server/services/getDuckdbMartRefreshService.test.ts`
+12. `bun test src/server/services/projectMartDirtyRefreshStateService.test.ts src/server/services/getDuckdbMartMaintenanceService.test.ts`
 13. `bun test src/server/services/projectMartLargeRebuildExecutor.test.ts`
 14. `bun test src/services/olap/duckdbOlap.test.ts`
 15. `bun test src/server/services/comparisonProjectServingRollupBuilder.test.ts`
@@ -728,29 +806,30 @@ Pass/fail checks for this change:
 19. `bun run lint`
 20. `bun run build`
 21. `bun run desktop:build`
-22. Browser verify:
-
-- create a Covidence import
-- re-import the same package
-- import an overlapping package from another source
-- confirm one canonical article is reused
-- confirm project-scoped Covidence metadata, related-record views, filters, and displayed external article ids still render correctly
-- confirm a PDF fetch flow still works for an article that only has imported full-text links
+22. Browser verify the Covidence review flow: create a Covidence import, re-import the same package, import an overlapping package from another source, confirm one canonical article is reused, confirm project-scoped Covidence metadata, related-record views, filters, and displayed external article ids still render correctly, and confirm a PDF fetch flow still works for an article that only has imported full-text links.
 
 23. Desktop verify the same Covidence create and review flow
 24. Performance verify a synthetic or fixture-backed 50,000-record Covidence import passes all of these checks: bounded canonical match/write chunks no larger than 500 source records, no per-row canonical lookup, no duplicate canonical rows for repeated strong identifiers or source rows, no duplicate import-scoped current membership rows, completion within 10 minutes, and observed importer process RSS below the configured local memory ceiling
-25. Performance verify a staged broad-source import path with at least one million identifier-bearing rows passes all of these checks: staged normalization and matching in bounded chunks, canonical match/write chunks no larger than 500 source records, completion within 60 minutes, correct linking to Covidence-created canonical articles through DOI, PMID, arXiv, bioRxiv, or medRxiv identifiers, and resumability after an interrupted run
+25. Performance verify a staged broad-source import path with at least one million identifier-bearing rows passes all of these checks: staged normalization and matching in bounded chunks, canonical match/write chunks no larger than 500 source records, completion within 60 minutes, correct linking to Covidence-created canonical articles through DOI, PMID, arXiv, and DOI-shaped bioRxiv or medRxiv identifiers, and resumability after an interrupted run
 26. Verify identifier matching query shape with query inspection, benchmark instrumentation, or an equivalent test: matching must use indexed joins or chunked `IN` lookups against normalized identifier tables such as `app.article_identifier`, and must not use JSON scans, `app.article.original_data`, `app.article.source_metadata`, or full `app.article` scans
 27. Verify broad-source imports that do not affect a project do not mark unrelated project review or comparison marts dirty and do not enqueue unrelated mart rebuild work
 28. Verify re-running an interrupted Covidence or broad-source import with the same `source_kind`, `import_run_id`, `source_record_key`, and `source_record_hash` does not create additional canonical articles, duplicate import-scoped current membership rows, or duplicate import-scoped source-row records when a child/history table is used
 29. Verify strong-identifier conflict handling quarantines rows when multiple identifiers match different canonical articles, and that the quarantine payload includes source kind, import run id, source record key, conflicting identifier kinds, conflicting canonical article ids, and operator-review metadata
-30. Add and run targeted identifier normalization coverage, such as `bun test src/utils/articleIdentifierNormalization.test.ts`, for DOI, PMID, PMCID source-metadata handling, arXiv version suffixes, bioRxiv and medRxiv URL or DOI forms, trusted URL-derived identifiers, malformed values, duplicate normalized values in one batch, and conflicts across identifier kinds
+30. Add and run targeted identifier normalization coverage, creating a dedicated normalization test file if no equivalent adjacent test exists, for DOI, PMID, PMCID source-metadata handling, arXiv version suffixes, bioRxiv and medRxiv URL or DOI forms, trusted URL-derived identifiers, malformed values, duplicate normalized values in one batch, and conflicts across identifier kinds
 31. When shared query helpers change, run `bun test src/server/services/getAppQueryService.test.ts` and targeted route tests for the affected reader, adding focused coverage for `appQueryHelpers` or `dataSourceQueryService` if the changed behavior is not covered by an existing route or service test
 32. When admin or investigation routes change, run `bun test src/server/routes/AdminInvestigateRoutes.test.ts` and add or run targeted `ArticleAdminRoutes` coverage for changed admin article metadata, URL, or full-text behavior
 33. When review warning or health routes change, run `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts` and add or run targeted `projectsRoutesGetReviewsHealth` coverage for changed health behavior
-34. When maintenance leases, dirty scopes, or mart refresh workers change, run `bun test src/server/workers/projectMartRefreshWorker.test.ts` plus the relevant maintenance or large-rebuild lease tests such as `bun test src/server/services/getDuckdbMartMaintenanceService.test.ts` or `bun test src/server/services/projectMartLargeRebuildLeaseFencing.test.ts`
+34. When maintenance leases, dirty scopes, or mart refresh workers change, run `bun test src/server/workers/projectMartRefreshWorker.test.ts src/server/services/projectMartDirtyRefreshStateService.test.ts src/server/services/projectMartDirtyMaterializationService.test.ts` plus the relevant maintenance or large-rebuild lease tests such as `bun test src/server/services/getDuckdbMartMaintenanceService.test.ts` or `bun test src/server/services/projectMartLargeRebuildLeaseFencing.test.ts`
 35. When full-text conversion or PDF fetch routing changes, add or run targeted coverage for `fullTextConversionJobs`, `fullTextJobs`, and the affected fetch helper so canonical full-text link hints and scoped source URLs are verified
 36. When `getArticleUrl` or related client source-link helpers change, add or run targeted client utility coverage and verify browser and desktop review flows do not expose legacy route-prefixed `app.article.article_id` values as source URLs or display ids
+37. Verify the schema phase removes the canonical uniqueness dependency on `app.article.article_id`, keeps only a compatibility lookup surface, and proves new canonical rows can have `NULL` legacy `article_id` values while import-scoped `external_article_id` values remain queryable by route
+38. Verify DOI-shaped bioRxiv and medRxiv values are stored and matched as `kind = 'doi'`, including a test where Covidence supplies a bare DOI and a preprint source supplies a trusted preprint URL for the same DOI
+39. Verify PMCID-only overlap is surfaced as unresolved or candidate-matched, not auto-merged, and that PMCID values remain out of `app.article_identifier`
+40. Verify repeated `source_record_key` handling: same hash is idempotent, changed hash updates or versions the source row, and remapping the same current source record to a different canonical article is quarantined
+41. Verify historical identifier backfill stages duplicate normalized identifiers before final `app.article_identifier` insert and does not fail or silently choose a survivor before merge decisions are recorded
+42. Verify `app.article_merge_map` or the chosen merge audit table canonicalizes old article ids for pending queues, outbox import, completion replay, admin writes, and snapshot compatibility adapters
+43. Verify a project with two import routes for the same canonical article picks the same scoped import record across review list, review detail, export, mart rebuild, and client display according to the selection policy
+44. Verify canonical field resolver tests cover source trust order, completeness tie-breaks, canonical URL precedence, publication-status non-downgrade, full-text hint union, and material scalar conflict warnings
 
 ## Commands To Run
 
@@ -763,7 +842,7 @@ Pass/fail checks for this change:
 7. run `bun run desktop:build` when runtime paths or shared UI are touched
 8. run `bun run lint` before merge
 9. add or run a repo-native import benchmark or integration test for 50,000 Covidence records before accepting the write-path rewrite; pass requires chunks of at most 500 source records, no per-row canonical lookups, no duplicate canonical or import-scoped rows, completion within 10 minutes, and importer RSS below the configured local memory ceiling
-10. add or run a repo-native staged-import benchmark or integration test for one million Europe PMC or `src:med`/`src:PPR` identifier-bearing rows before accepting the broad-source path; pass requires chunked staged matching, correct linking to Covidence-created canonical articles, completion within 60 minutes, and successful resume after interruption without duplicate canonical or import-scoped rows
+10. add or run a repo-native staged-import benchmark or integration test for one million Europe PMC or `src:med`/`src:PPR` identifier-bearing rows before accepting the broad-source path; pass requires chunked staged matching, correct linking to Covidence-created canonical articles through DOI, PMID, arXiv, or DOI-shaped preprint identifiers, completion within 60 minutes, and successful resume after interruption without duplicate canonical or import-scoped rows
 11. inspect matching query plans or benchmark instrumentation before accepting high-volume import work; pass requires indexed joins or chunked `IN` lookups against normalized identifier tables and no JSON scans or full `app.article` scans for identifier matching
 
 ## Findings Coverage Checklist
@@ -772,24 +851,23 @@ This checklist ties the findings fix plan to executable plan content. These item
 
 | Finding | Explicit Plan Coverage |
 |---|---|
-| 1. `app.article.article_id` migration is underspecified | `Identity And Display Contract`, `Surface Identity Contract`, target data model, project-scoped serving metadata, Phase 5, Phase 7, Phase 8, exports, and client URL-helper gates define canonical ids, external ids, source URLs, and compatibility-only lifecycle. |
-| 2. Broad-source harvesters are not explicitly in scope | `Affected system families`, import/write file scope, Phase 3, performance requirements, benchmark gates, and commands cover PubMed, Europe PMC/PPR, `src:med`, `src:PPR`, arXiv, bioRxiv, and medRxiv harvesters and routes. |
-| 3. Comparison project marts and routes are missing | Database, query/serving, mart refresh, test scope, Phase 5, Phase 6, quality gates, and commands cover comparison serving builders, routes, migrations, judgment rows, metadata, and `article_external_id` behavior. |
-| 4. Judgment execution snapshots need a compatibility policy | Current repo state, affected systems, judgment snapshot file scope, Phase 3, Phase 5, Phase 8, risks, and quality gates require reproducible queued work and compatibility adapters for legacy snapshot fields. |
-| 5. Multi-identifier conflict handling is not explicit | Article identifier table rules, matching policy, unresolved cases, Phase 0, Phase 2, Phase 3, risks, and quality gates define strong-identifier disagreement and quarantine behavior. |
-| 6. Concurrent import behavior is undefined | Performance requirements, article identifier uniqueness rules, bulk staging/checkpointing, Phase 1, Phase 2, Phase 3, migration notes, and retry gates define leases, bounded transactions, conflict rereads, and idempotent retries. |
-| 7. Source record history versus current import membership is unclear | Import-scoped article record, optional raw row child table, bulk staging/checkpointing, Phase 3, retry gates, and open decisions distinguish current membership from source-row history and repeated-harvest updates. |
-| 8. Identifier normalization needs exact rules and tests | Article identifier normalization contract, Phase 0, quality gates, and commands define DOI, PMID, PMCID source metadata, arXiv, bioRxiv, medRxiv, trusted URL extraction, malformed values, duplicates, and conflicts. |
-| 9. Additional read and helper surfaces are not named | Query/serving, mart refresh, client, admin, full-text, warning, health, maintenance, and helper file scope plus Phase 5, Phase 6, Phase 7, and targeted quality gates name the affected surfaces. |
-| 10. Performance gates lack concrete budgets | Performance and scale requirements, quality gates, commands, and open decisions define chunk size, wall-clock budgets, memory ceiling, checkpoint interval, query shape, mart refresh scope, and retry pass/fail checks. |
+| 1. `app.article.article_id` migration is still not executable | `Legacy app.article.article_id Transition Contract`, Phase 1, Phase 3, Phase 8, and quality gate 37 require removing canonical uniqueness, writing `NULL` for new canonical rows, resolving old source ids through import-scoped records, and stopping `ON CONFLICT(article_id)` matching. |
+| 2. Preprint DOI matching can miss cross-source duplicates | Article identifier scope, normalization, identifier-kind equivalence rules, matching policy, and quality gate 38 require DOI-shaped bioRxiv and medRxiv values to be stored and matched as `kind = 'doi'`. |
+| 3. Import idempotency is not enforceable with only `UNIQUE(article_id, import_route_id)` | Current source-record uniqueness rules, source-row child table constraints, Phase 1, Phase 3, retry gates, and quality gate 40 require source-record uniqueness, changed-hash handling, and remap quarantine. |
+| 4. Historical identifier backfill needs non-unique staging | Phase 4 now stages identifiers before final unique insertion, records conflict status, chooses survivors after inspection, and quality gate 41 verifies duplicate normalized identifiers cannot break or bias backfill. |
+| 5. Historical merge coverage misses durable non-FK references | Durable non-FK reference rules, Phase 4, Phase 5, Phase 8, and quality gate 42 require `app.article_merge_map` compatibility for snapshots, queues, outbox, completion replay, cursors, and admin or worker writes. |
+| 6. Project-scoped import record selection is underspecified | Scoped import record selection policy, project-scoped serving metadata, Phase 5, Phase 6, browser/desktop checks, and quality gate 43 define deterministic selection and ambiguity behavior. |
+| 7. Canonical field resolver is still a placeholder | Resolver starting policy, Phase 2, Phase 3, and quality gate 44 define source trust order, completeness tie-breaks, canonical URL, publication status, full-text hints, and conflict warnings. |
+| 8. PMCID exclusion should be explicit | PMCID normalization rules, identifier-kind equivalence rules, optional PMCID candidate/provenance lookup, Phase 1, and quality gate 39 define PMCID-only overlap as unresolved or candidate-matched, not a strong auto-merge key. |
 
 ## Open Decisions During Build
 
 1. whether weak fingerprints stay computed on demand or get materialized in a separate non-unique table
 2. whether the expanded import-scoped blob should be named `import_metadata` or `import_source_metadata`
-3. whether raw Covidence source rows should live in one JSON payload or in a child table for queryability and size control
+3. which lower-volume sources can safely skip the source-row child table because one compact current membership record fully represents source-row identity
 4. whether canonical derived metadata that does not justify dedicated columns should live in a small canonical JSON field or explicit columns only
 5. whether high-volume staging should be persistent by default for resumability or temporary for smaller interactive imports
 6. whether to tune these starting local thresholds after the first benchmark run: 10-minute wall-clock budget for 50,000 Covidence records, 60-minute wall-clock budget for one million identifier-bearing broad-source rows, default canonical match/write chunk size of 500 source records, checkpoint interval of 5,000 source rows or 60 seconds whichever comes first, and local memory ceiling of `DUCKDB_MEMORY_LIMIT=20GB` unless explicitly configured lower for the run
 7. whether broad-source imports should disable weak auto-merge by default unless a fingerprint table is present
-8. whether source-row history needs `app.article_import_route_row` or a dedicated import-run row table, and which sources require per-row audit instead of only latest compact membership payloads
+8. whether PMCID candidate matching deserves a dedicated non-unique lookup table in the first implementation or stays as import-scoped metadata plus unresolved reporting
+9. whether resolver source trust order needs project-specific overrides after the first historical backfill dry run
