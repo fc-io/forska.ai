@@ -77,6 +77,29 @@ Layers: server, desktop backend, client, scripts.
 - Do not add Tempo trace generation yet. It is acceptable for log records to leave room for future `traceId` and `spanId` fields, but this rollout should not create spans or require trace context.
 - Do not add Prometheus metrics yet. Counts, durations, queue sizes, and worker health can be added later as metrics after the terminal-noise logging rollout is complete.
 
+## First Test Slice
+
+- Until schema, identity, config, file sink lifecycle, bootstrap, fallback behavior, flush, rollover, retention, and tests are in place, migrate only the first test slice below.
+- First test slice: `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts`.
+- Event: `projects.articles-reviews-count.request-start`, `file-only`, currently emitted near the start of the reviews count route.
+- Event: `projects.articles-reviews-count.request-summary`, `file-only`, with `durationMs`, `totalCount`, and `totalPages`.
+- Event: `projects.articles-reviews-count.error`, `both`, preserving the current error-result behavior while also writing structured JSONL when the sink is installed.
+- This route is the best first test because it is easy to trigger from the reviews UI, does not require streaming, background workers, LLM provider state, full-text jobs, or desktop startup, and still validates both `file-only` and `both` routing.
+- Manual first-slice check: run the server, open a project reviews flow that triggers the count endpoint, and confirm the routine start and summary events land in JSONL without terminal noise.
+- Manual first-slice error check: trigger one count-route failure and confirm the error is terminal-visible and present in JSONL.
+
+## Candidate Backlog After First Slice
+
+- Reviews filters: `projects.articles-reviews-filters.request-start`, `request-summary`, and `error` in `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts`.
+- Reviews rows: `projects.articles-reviews.request-start`, `request-summary`, and `error` in `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts`.
+- Project export: `project.export.start`, `project.export.streamed-count`, `project.export.complete`, and `project.export.error` in `src/server/routes/ProjectExportRoutes.ts`.
+- Mart heartbeat: `project-mart-refresh-worker:loop-start` and `project-mart-large-rebuild-heartbeat:loop-config` in the mart heartbeat utilities.
+- Judgment add-to-queue: add-to-queue tick, top-up, filtered, prioritized, and warning summaries in `src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts`.
+- LLM dispatch: `[llm] Batch complete`, capacity summaries, dispatch skip, dispatch requeue, and dispatch failure events in `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts`.
+- Full-text conversion: batch started, batch empty, article conversion started, article conversion succeeded, retry, and final failure events in `src/server/cron/fullTextConversionJobs.ts`.
+- Full-text fetch: running jobs queried, project scans, fallback articles, selected articles, and fetch/store failures in `src/server/cron/fullTextJobs.ts`.
+- Do not migrate backlog candidates until the first test slice and core logger behavior pass their quality gates.
+
 ## Instance Identity
 
 - Every server-side record must include `runtimeProfile`, `instanceId`, `hostname`, `pid`, `processStartedAt`, `service`, and `listenPort`.
@@ -281,7 +304,8 @@ Implement in this order so the schema, identity, file sink, launchers, and call-
 
 ### 7. Hot Path Migration
 
-- [ ] Migrate the hottest repeating server paths first: judgments jobs, full-text pipeline, export streaming, request summaries.
+- [ ] Migrate only the first test slice in `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts` until the core logger behavior is in place and verified.
+- [ ] After first-slice verification passes, migrate the hottest repeating server paths in this order: reviews filters, reviews rows, export streaming, mart heartbeat, judgments jobs, LLM dispatch, full-text conversion, full-text fetch.
 - [ ] Preserve terminal-visible failure paths while migrating progress logs to JSONL.
 - [ ] Preserve existing exception and error-result propagation after adding file logging.
 - [ ] Replace `console.time` and `console.timeEnd` with explicit duration fields.
@@ -312,7 +336,9 @@ Implement in this order so the schema, identity, file sink, launchers, and call-
 - `bun run build`
 - `bun run desktop:build`
 - Manual check: run `bun run dev:server`, hit a reviews flow and an export flow, confirm the migrated routine progress logs are `file-only` and `logs/runtime/primary/*.jsonl` gains structured entries.
+- Manual check: for the first test slice, run `bun run dev:server`, open a project reviews flow that triggers `/api/articlesreviewscount`, and confirm `projects.articles-reviews-count.request-start` and `projects.articles-reviews-count.request-summary` are written to JSONL without terminal noise.
 - Manual check: trigger one failing request or background-job error path and confirm the error is `both`: visible in terminal stderr and present in the matching JSONL file.
+- Manual check: for the first test slice, trigger one `/api/articlesreviewscount` failure and confirm `projects.articles-reviews-count.error` is visible in terminal stderr and present in the matching JSONL file.
 - Manual check: if multiple same-service processes are started intentionally in one profile and shared-file append mode is enabled on the current platform, confirm their shared daily file contains distinct `instanceId` values for each process and still parses as one valid JSON object per line. If per-instance fallback mode is enabled instead, confirm separate instance-suffixed files are created.
 - Manual check: if runtime-profile launchers are touched, run one `primary` or `secondary` flow via `scripts/runWithRuntimeProfile.ts` and confirm logs land under the matching profile directory.
 - Manual check: run `bun run dev:server:single` or `bun run start:server:single`, confirm logs land under `logs/runtime/local/single-server-*.jsonl`, confirm a direct `SERVER_ROLE=auto` run keeps one `single-server` file even if the per-record `serverRole` changes, and confirm direct `SERVER_ROLE=api`, `SERVER_ROLE=worker`, and `SERVER_ROLE=writer` runs land under `api-server` or `worker-server` rather than `single-server`.
