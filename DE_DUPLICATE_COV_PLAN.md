@@ -343,6 +343,25 @@ This is the safest long-term behavior if we want to avoid poisoning canonical ar
 3. `src/server/services/structuredFileImportService.ts`
 4. `src/server/services/immutablePromptService.ts`
 5. `src/server/routes/ArticlesRoutes.ts`
+6. PubMed and Europe PMC harvesters:
+   - `src/agent/pubmedWorkflowStoreEntries.ts`
+   - `src/agent/pubmedHarvest.ts`
+   - `src/agent/europePmcPprWorkflowStoreEntries.ts`
+   - `src/agent/europePmcPprHarvest.ts`
+7. Preprint harvesters:
+   - `src/agent/biorxivWorkflowStoreEntries.ts`
+   - `src/agent/medrxivWorkflowStoreEntries.ts`
+   - `src/agent/arxivWorkflow/arxivWorkflowStoreEntires.ts`
+8. Broad-source import routes:
+   - `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostPubmed.ts`
+   - `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostEuropePmcPpr.ts`
+   - `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostBiorxiv.ts`
+   - `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostMedrxiv.ts`
+   - `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostArxiv.ts`
+   - `src/server/routes/DataSourcesImportRoutes.ts`
+9. Import tests:
+   - `src/agent/importerStoreEntries.test.ts`
+   - source import route tests when present
 
 ### Query And Serving Paths
 
@@ -438,7 +457,9 @@ Required scenarios:
 6. stop overwriting `app.article.import_route` and the legacy mixed `source_metadata` blob in `ArticlesRoutes`
 7. make Covidence import process records in batches large enough for set-based lookup but small enough to stay within DuckDB memory limits
 8. make Europe PMC, `src:med`, `src:PPR`, and similar source imports use staging, checkpointing, and batch matching before canonical writes
-9. ensure a later broad-source import can enrich a Covidence-created canonical article without changing its project-scoped Covidence metadata
+9. make PubMed, Europe PMC/PPR, arXiv, bioRxiv, and medRxiv harvesters pass normalized candidates, normalized source identifiers, source record keys, and import-run references to the central matching/write path instead of writing directly to canonical article identity
+10. store source `article_id` values from broad-source harvesters only as source-facing or import-scoped identifiers; they must not become canonical article identity or redefine `app.article.article_id`
+11. ensure a later broad-source import can enrich a Covidence-created canonical article without changing its project-scoped Covidence metadata
 
 ### Phase 4. Backfill and merge historical duplicates
 
