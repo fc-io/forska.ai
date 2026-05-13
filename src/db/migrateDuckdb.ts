@@ -12,6 +12,7 @@ const nonTransactionalDuckdbMigrationFiles = new Set([
   '0021_rebuildModelWithProviderConnections.sql',
   '0040_projectPromptCriteriaDispositionCombined.sql',
   '0059_projectMartDirtyMaterializationState.sql',
+  '0076_comparisonServingHumanLlmTrueConflictFilter.sql',
 ])
 
 const getDuckdbMigrationFiles = (folder: string) => {

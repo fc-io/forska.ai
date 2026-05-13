@@ -96,3 +96,53 @@ test('migrateDuckdb preserves the original failure when rollback is already inac
     mock.restore()
   }
 })
+
+test('migrateDuckdb applies comparison serving conflict filter migration outside a transaction', async () => {
+  process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-nontransactional-test.duckdb'
+
+  const targetMigrationFile = '0076_comparisonServingHumanLlmTrueConflictFilter.sql'
+  const targetSql = readFileSync(resolve(migrationsFolder, targetMigrationFile), 'utf8').trim()
+  const appliedNames = getDuckdbMigrationFiles().filter((fileName) => {
+    return fileName !== targetMigrationFile
+  })
+  const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).pathname
+  const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).pathname
+  const runStatements: string[] = []
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          close: async () => {},
+          queryJson: async <T>(statement: string): Promise<T[]> => {
+            return statement.includes('FROM app_schema_migration')
+              ? (appliedNames.map((name) => {
+                  return {name}
+                }) as T[])
+              : []
+          },
+          run: async (statement: string) => {
+            runStatements.push(statement.trim())
+          },
+        }
+      },
+    }
+  })
+
+  try {
+    const {migrateDuckdb} = (await import(
+      `${migrationModulePath}?nontransactional-test=${Date.now()}`
+    )) as MigrateDuckdbModule
+
+    await migrateDuckdb()
+
+    const targetStatementIndex = runStatements.indexOf(targetSql)
+
+    expect(targetStatementIndex).toBeGreaterThan(-1)
+    expect(runStatements).not.toContain('BEGIN TRANSACTION')
+    expect(runStatements).not.toContain('COMMIT')
+    expect(runStatements[targetStatementIndex + 1] ?? '').toContain('INSERT INTO app_schema_migration')
+  } finally {
+    mock.restore()
+  }
+})
