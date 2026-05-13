@@ -1,13 +1,9 @@
 import type {Context} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {
-  escapeSqlString,
-  getProjectScopeClause,
-  getQuotedStringList,
-  getTimestampLiteral,
-} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getProjectScopeClause, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {syncPendingHumanJudgmentsForArticle} from './humanAssessmentPendingJudgments.ts'
 
 type InitResponse = {
   project: {id: string; name: string}
@@ -130,21 +126,17 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
 
     const articleId = randomArticle.id
 
-    const inserted = await getAppDatabaseService().queryJson<{id: string; promptId: string}>(`
-      INSERT INTO app.judgment_human (id, article_id, prompt_id, project_id, is_answered, answer, comment)
-      VALUES ${projectPromptRows
-        .map((prompt) => {
-          return `(${getQuotedStringList([crypto.randomUUID(), articleId, prompt.id, body.projectId]).join(', ')}, FALSE, NULL, NULL)`
-        })
-        .join(', ')}
-      RETURNING id, prompt_id AS promptId
-    `)
+    const syncedPending = await syncPendingHumanJudgmentsForArticle({
+      articleId,
+      projectId: body.projectId,
+      prompts: projectPromptRows,
+    })
 
     const response: InitResponse = {
       project: {id: project.id, name: project.name},
       article: randomArticle,
       prompts: projectPromptRows,
-      judgmentsHuman: inserted,
+      judgmentsHuman: syncedPending,
     }
 
     return {data: response}
@@ -171,13 +163,11 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     return {data: null, error: 'Article not found'}
   }
 
-  const pendingForArticle = await getAppDatabaseService().queryJson<{id: string; promptId: string}>(`
-    SELECT id, prompt_id AS promptId
-    FROM app.judgment_human
-    WHERE project_id = '${escapeSqlString(body.projectId)}'
-      AND article_id = '${escapeSqlString(targetId)}'
-      AND is_answered = FALSE
-  `)
+  const pendingForArticle = await syncPendingHumanJudgmentsForArticle({
+    articleId: targetId,
+    projectId: body.projectId,
+    prompts: projectPromptRows,
+  })
 
   const response: InitResponse = {
     project: {id: project.id, name: project.name},

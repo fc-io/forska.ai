@@ -15,6 +15,16 @@ const queryJsonRef = {
   },
 }
 
+const runRef = {current: async (_statement: string): Promise<void> => {}}
+
+const transactionRef = {
+  current: async <T>(
+    operation: (tx: {queryJson: typeof queryJsonRef.current; run: typeof runRef.current}) => Promise<T>,
+  ) => {
+    return operation({queryJson: queryJsonRef.current, run: runRef.current})
+  },
+}
+
 const registerModuleMocks = () => {
   void mock.module(appQueryServiceModulePath, () => {
     return {
@@ -34,6 +44,12 @@ const registerModuleMocks = () => {
         return {
           queryJson: (statement: string) => {
             return queryJsonRef.current(statement)
+          },
+          run: (statement: string) => {
+            return runRef.current(statement)
+          },
+          transaction: (operation: Parameters<typeof transactionRef.current>[0]) => {
+            return transactionRef.current(operation)
           },
         }
       },
@@ -74,6 +90,12 @@ test('human assessment init inserts project id before the answered flag', async 
               : statement.includes('INSERT INTO app.judgment_human')
                 ? [{id: 'judgment-human-1', promptId: 'prompt-1'}]
                 : []
+  }
+  runRef.current = async (statement) => {
+    statements.push(statement)
+  }
+  transactionRef.current = async (operation) => {
+    return operation({queryJson: queryJsonRef.current, run: runRef.current})
   }
 
   const {humanAssessmentRoutesPostInit} = await loadHandler()
@@ -117,6 +139,12 @@ test('human assessment init rejects summary-mode projects before creating pendin
               : statement.includes('INSERT INTO app.judgment_human_summary')
                 ? [{id: 'judgment-summary-1', promptId: 'summary'}]
                 : []
+  }
+  runRef.current = async (statement) => {
+    statements.push(statement)
+  }
+  transactionRef.current = async (operation) => {
+    return operation({queryJson: queryJsonRef.current, run: runRef.current})
   }
 
   const {humanAssessmentRoutesPostInit} = await loadHandler()

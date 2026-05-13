@@ -5,6 +5,7 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getComparisonProjectServingInvalidationService} from '../../services/comparisonProjectServingInvalidationService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../../services/projectMartDirtyRefreshStateService.ts'
+import {syncPendingHumanJudgmentsForArticle} from './humanAssessmentPendingJudgments.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({
   body,
@@ -25,6 +26,39 @@ export const humanAssessmentRoutesPostSubmit = async ({
     set.status = 409
     return {data: null, error: 'Summary-mode projects do not support prompt-based human assessment'}
   }
+
+  const pendingArticleRows = await getAppDatabaseService().queryJson<{articleId: string}>(`
+    SELECT DISTINCT article_id AS articleId
+    FROM app.judgment_human
+    WHERE project_id = '${escapeSqlString(body.projectId)}'
+      AND is_answered = FALSE
+  `)
+
+  if (pendingArticleRows.length === 0) {
+    set.status = 400
+    return {data: null, error: 'No pending human assessments for this project'}
+  }
+
+  if (pendingArticleRows.length !== 1) {
+    set.status = 400
+    return {data: null, error: 'Multiple pending articles detected; please refresh and try again'}
+  }
+
+  const [pendingArticle] = pendingArticleRows
+  const currentArticleId = pendingArticle?.articleId ?? ''
+  const projectPromptRows = await getAppDatabaseService().queryJson<{id: string}>(`
+    SELECT p.id AS id
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON pp.prompt_id = p.id
+    WHERE pp.project_id = '${escapeSqlString(body.projectId)}'
+    ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
+  `)
+
+  await syncPendingHumanJudgmentsForArticle({
+    articleId: currentArticleId,
+    projectId: body.projectId,
+    prompts: projectPromptRows,
+  })
 
   const pending = await getAppDatabaseService().queryJson<{
     id: string
@@ -48,21 +82,6 @@ export const humanAssessmentRoutesPostSubmit = async ({
     set.status = 400
     return {data: null, error: 'No pending human assessments for this project'}
   }
-
-  const articleIds = Array.from(
-    new Set(
-      pending.map((p) => {
-        return p.articleId
-      }),
-    ),
-  )
-
-  if (articleIds.length !== 1) {
-    set.status = 400
-    return {data: null, error: 'Multiple pending articles detected; please refresh and try again'}
-  }
-
-  const [currentArticleId = ''] = articleIds
 
   const requiredPending = pending.filter((p) => {
     return !(p.type ?? '').toLowerCase().includes('null')

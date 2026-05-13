@@ -324,10 +324,6 @@ For each mutation route/job:
   - project/prompt/article create flow can leave partial state on later failure.
 - `src/server/routes/ComparisonProjectsRoutes.ts`
   - relink/delete/restore work is split across tx boundaries.
-- `src/server/routes/AdminInvestigateRoutes.ts`
-  - soft-delete updates `app.judgment`, a referenced parent of `app.judgment_assessment`; same DuckDB false-positive FK shape as the dropped provider FK.
-- `src/server/routes/ArticleAdminRoutes.ts`, `src/server/cron/fullTextJobs.ts`, `src/server/cron/fullTextConversionJobs.ts`
-  - all update high-fanout parent `app.article`; DuckDB parent-row rewrite risk remains untested on live child refs.
 - `src/server/providers/providerModelRepository.ts`
   - provider config JSON + `app.model.enabled` dual-write can split.
 - `src/server/routes/ProviderModelsRoutes.ts`
@@ -339,10 +335,6 @@ For each mutation route/job:
 
 #### Logical-ref risks
 
-- `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`
-  - pending batches are keyed only by `judgment_human(project_id, article_id, prompt_id)`, but route behavior depends on live `project_prompt` membership; prompt drift can strand or mismatch pending rows.
-- `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`
-  - submit validates against current `project_prompt` membership, not the prompt set used when the batch was initialized.
 - `src/server/providers/providerConnectionRepository.ts`
   - `model.provider_connection_id` is now app-validated only after `0029`.
 - `src/server/routes/DataSourcesImportRoutes/**`
@@ -360,6 +352,12 @@ For each mutation route/job:
   - maintenance-only rebuild of `app.judgment_human`; low risk because it rebuilds one child table and revalidates on reinsert.
 - `src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchived.ts`
   - current rebuild/delete order is intentional and covered, but still needs future-schema guard coverage when new FK children are added.
+- `src/server/routes/ArticleAdminRoutes.ts`, `src/server/cron/fullTextJobs.ts`, `src/server/cron/fullTextConversionJobs.ts`
+  - high-fanout `app.article` parent updates pass temp-DuckDB repro coverage under live child refs.
+- `src/server/routes/AdminInvestigateRoutes.ts`
+  - `app.judgment` soft-delete passes temp-DuckDB repro coverage under live `app.judgment_assessment` refs.
+- `src/server/routes/HumanAssessmentRoutes/**`
+  - prompt-mode human assessment now resyncs unanswered `app.judgment_human` rows to current `app.project_prompt` membership during init and submit.
 
 ### Initial Risk Matrix
 
@@ -380,9 +378,9 @@ For each mutation route/job:
 | likely bug         | judgment job cross-store delete               | `src/server/routes/JudgmentsJobsRoutes.ts`                                                                                | medium | DuckDB delete order is correct, but DuckDB + SQLite lifecycle is not atomic                                                                                                                   | `src/server/routes/JudgmentsJobsRoutes.test.ts` covers token-use delete path                                                                                       | no partial cross-store rollback test               | add consistency test and tighten compensating actions                |
 | likely bug         | comparison project relink on model change     | `src/server/routes/ComparisonProjectsRoutes.ts`                                                                           | medium | Link delete/update/restore is split across transactions, so failure can leave missing links                                                                                                   | no comparison route tests found                                                                                                                                    | add relink failure regression                      | keep relink in one tx                                                |
 | logical-ref risk   | `data_source.import_route` logical ref        | `src/server/routes/DataSourcesImportRoutes/**`                                                                            | medium | String field can drift from actual `import_route` and `project_import_route` rows; no FK catches it                                                                                           | route tests use mocks                                                                                                                                              | no DB-backed drift test                            | add consistency checks or normalize source of truth                  |
-| logical-ref risk   | human assessment prompt membership            | `src/server/routes/HumanAssessmentRoutes/**`                                                                              | medium | `judgment_human` rows persist by `project_id/article_id/prompt_id`, but init/submit logic depends on live `project_prompt` membership, so prompt drift can strand pending rows                | `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.test.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.test.ts` | no prompt-drift or DB-backed pending-row test      | snapshot prompt set or re-sync unanswered rows inside one tx         |
-| likely bug         | `judgment <- judgment_assessment` soft delete | `src/server/routes/AdminInvestigateRoutes.ts`                                                                             | medium | Route soft-deletes `app.judgment`, a referenced parent, so DuckDB parent-row rewrite can still false-positive on `app.judgment_assessment`                                                    | `src/server/routes/AdminInvestigateRoutes.test.ts` only covers append metrics                                                                                      | no soft-delete FK repro                            | avoid parent update or detach/reinsert around assessed rows          |
-| likely bug         | `article` parent updates from admin/cron      | `src/server/routes/ArticleAdminRoutes.ts`; `src/server/cron/fullTextJobs.ts`; `src/server/cron/fullTextConversionJobs.ts` | medium | All three paths update high-fanout parent `app.article`, which remains referenced by `article_import_route`, `project_article`, `review`, `judgment_job_prompt`, `judgment`, `judgment_human` | none found                                                                                                                                                         | no DuckDB parent-update repro on article           | add temp-DB repro; if needed detach/reinsert or drop low-value FK    |
+| fixed logical-ref  | human assessment prompt membership            | `src/server/routes/HumanAssessmentRoutes/**`                                                                              | medium | `judgment_human` rows persist by `project_id/article_id/prompt_id`, so prompt drift could strand pending rows or submit an article without newly added prompts                                | `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPromptDrift.test.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.test.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.test.ts` | covered                                            | resync unanswered rows inside init/submit before returning/updating  |
+| accepted low risk  | `judgment <- judgment_assessment` soft delete | `src/server/routes/AdminInvestigateRoutes.ts`                                                                             | medium | Route soft-deletes `app.judgment`, a referenced parent; current DuckDB accepts the tested parent-update shape with `app.judgment_assessment` child rows                                       | `src/server/routes/AdminInvestigateRoutes.fk.test.ts`                                                                                                               | keep coverage current if new judgment FKs are added | no runtime fix needed while repro remains green                      |
+| accepted low risk  | `article` parent updates from admin/cron      | `src/server/routes/ArticleAdminRoutes.ts`; `src/server/cron/fullTextJobs.ts`; `src/server/cron/fullTextConversionJobs.ts` | medium | All three paths update high-fanout parent `app.article`, which remains referenced by live child rows; current DuckDB accepts the tested parent-update shapes                                | `src/server/routes/ArticleAdminRoutes.fk.test.ts`                                                                                                                   | keep coverage current if new article FKs are added | no runtime fix needed while repro remains green                      |
 | logical-ref risk   | full-text conversion model refs               | `src/server/cron/fullTextConversionJobs.ts`; `src/db/duckdbMigrations/0022_fullTextConversionModelConfig.sql`             | medium | `full_text_conversion_model_id` gets migration-time validation only; later model deletes/rebuilds can orphan `article` and `user_config` refs                                                 | none found                                                                                                                                                         | no post-delete logical-ref test                    | app-level validation on write/read and drift tests                   |
 | logical-ref risk   | llm status model/provider attribution         | `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`                                                            | low    | `app.llm_status` stores logical provider/model identity without FKs; shared worker URLs can attribute rows to the wrong logical model                                                         | none found                                                                                                                                                         | no shared-base-url repro                           | normalize identity key or persist stable IDs                         |
 | already-fixed item | `judgment_human` rebuild nullable project     | `src/db/duckdbMigrations/0028_judgmentHumanNullableProjectId.sql`                                                         | low    | maintenance-only single-table rebuild; reinsert revalidates the live FK edges and matches current nullable design                                                                             | none found                                                                                                                                                         | no migration regression                            | optional migration smoke test only                                   |
@@ -403,27 +401,19 @@ For each mutation route/job:
   - `src/server/routes/ProjectArticlesRoutes.ts`
   - rollback/partial-write cases in `src/server/routes/SubprojectsRoutes.ts`
   - logical-ref integrity after `src/db/duckdbMigrations/0029_dropModelProviderConnectionForeignKey.sql`
-  - prompt-membership drift in `src/server/routes/HumanAssessmentRoutes/**`
-  - soft-delete parent-update safety in `src/server/routes/AdminInvestigateRoutes.ts`
-  - parent-update safety for `app.article` writers in `src/server/routes/ArticleAdminRoutes.ts`
-  - parent-update safety for `app.article` writers in `src/server/cron/fullTextJobs.ts`
-  - parent-update safety for `app.article` writers in `src/server/cron/fullTextConversionJobs.ts`
   - logical-ref drift for `full_text_conversion_model_id`
   - logical attribution drift in `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`
 
 ### Remaining Highest-Value Follow-Up
 
 - Add prompt delete/merge regression tests first.
-- Add temp-DB repros for `app.article` parent updates under live child refs.
-- Add human-assessment prompt-drift regression.
-- Add admin-investigate `judgment_assessment` soft-delete repro.
 - Add DB-backed provider logical-integrity tests after the dropped FK.
 
 ### Current Read
 
 - The remaining unreviewed human-assessment, admin, cron, and maintenance surfaces are now inventoried.
-- New material risks from this pass are: `app.article` parent updates in admin/cron, `app.judgment` soft-delete in admin investigate, and human-assessment dependence on live `project_prompt` membership.
-- The highest-confidence still-unfixed areas are comparison-project relink crash safety, human-assessment prompt drift, `app.article` parent-update repros, admin-investigate `judgment_assessment` soft-delete repros, cross-store judgment-job cleanup consistency, and remaining logical-ref drift checks.
+- New material risks from this pass are remaining logical-ref drift checks.
+- The highest-confidence still-unfixed areas are comparison-project relink crash safety, cross-store judgment-job cleanup consistency, and remaining logical-ref drift checks.
 
 ## Final Findings
 
@@ -436,18 +426,18 @@ For each mutation route/job:
 - Comparison-project updates now include `app.comparison_project_conflict_resolution` in the detach/restore set and restore original child links when detach deletion fails before the update transaction in `src/server/routes/ComparisonProjectsRoutes.ts`; covered in `src/server/routes/ComparisonProjectsRoutes.fk.test.ts` and `src/server/routes/ComparisonProjectsRoutes.rollback.test.ts`.
 - Provider logical hardening now keeps `app.model.enabled` + provider config toggles atomic in `src/server/providers/providerModelRepository.ts`, and provider-connection delete/archive cleanup atomic in `src/server/providers/providerConnectionRepository.ts`; covered in `src/server/providers/providerModelRepository.atomic.test.ts`, `src/server/providers/providerConnectionRepository.atomic.test.ts`, and `src/server/routes/providerProjectFlow.e2e.test.ts`.
 - Archived-project purge now asserts live `app.project` FK inventory before delete requests and cleanup batches, includes the live `project_mart_dirty_refresh_article_quarantine` FK, cleans stale project mart dictionary state, and safely detaches comparison-project children while clearing `summary_source_project_id` in `src/server/services/archivedProjectCleanupService.ts` and `src/server/services/archivedProjectCleanupProjectForeignKeys.ts`; covered in `src/server/routes/ProjectsRoutes.test.ts` and `src/server/services/archivedProjectCleanupService.test.ts`.
+- Human assessment init and submit now resync unanswered `app.judgment_human` rows against current `app.project_prompt` membership before returning or updating prompt-mode pending rows in `src/server/routes/HumanAssessmentRoutes/humanAssessmentPendingJudgments.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`, and `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`; covered in `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPromptDrift.test.ts`.
 
 ### Accepted risks
 
 - `src/db/duckdbMigrations/0029_dropModelProviderConnectionForeignKey.sql`: accepted FK removal for `app.model.provider_connection_id` because DuckDB parent updates already false-positived on normal writes; runtime safety now lives in `src/server/providers/providerConnectionRepository.ts` and `src/server/providers/providerModelRepository.ts`.
 - `src/db/duckdbMigrations/0028_judgmentHumanNullableProjectId.sql`: accepted maintenance-only rebuild risk; this path rebuilds one child table and revalidates on reinsert.
 - `src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchived.ts`: accepted schema-sensitive rebuild strategy, now guarded by live FK inventory checks rather than broader FK removal.
+- `src/server/routes/ArticleAdminRoutes.ts`, `src/server/cron/fullTextJobs.ts`, `src/server/cron/fullTextConversionJobs.ts`: accepted current `app.article` parent-update behavior because temp-DuckDB repro coverage in `src/server/routes/ArticleAdminRoutes.fk.test.ts` passes under live child refs.
+- `src/server/routes/AdminInvestigateRoutes.ts`: accepted current `app.judgment` soft-delete behavior because temp-DuckDB repro coverage in `src/server/routes/AdminInvestigateRoutes.fk.test.ts` passes under live `app.judgment_assessment` refs.
 
 ### Deferred risks
 
-- `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`: logical-ref drift remains between stored `app.judgment_human` rows and live `app.project_prompt` membership.
-- `src/server/routes/AdminInvestigateRoutes.ts`: soft-delete still updates parent `app.judgment`, so `app.judgment_assessment` needs a direct DuckDB false-positive repro.
-- `src/server/routes/ArticleAdminRoutes.ts`, `src/server/cron/fullTextJobs.ts`, `src/server/cron/fullTextConversionJobs.ts`: high-fanout `app.article` parent updates still need temp-DB repro coverage under live children.
 - `src/server/routes/ComparisonProjectsRoutes.ts`: model relink still detaches child links before the update transaction because DuckDB rejects same-transaction parent updates under live children; true process-crash safety would require FK removal plus app-level validation or a persistent recovery table.
 - `src/server/routes/JudgmentsJobsRoutes.ts`: DuckDB + SQLite delete lifecycle is still compensating, not atomic across stores.
 - `src/server/services/covidenceImportService.ts`, `src/server/routes/ProviderModelsRoutes.ts`: select-then-insert races remain deferred because they are integrity-adjacent but not FK failures proven in this pass.

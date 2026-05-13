@@ -112,11 +112,17 @@ test('human assessment submit marks the project dirty in the same transaction fo
   queryJsonRef.current = async (statement) => {
     statements.push(statement)
 
-    return statement.includes('FROM app.judgment_human jh')
-      ? [{id: 'judgment-human-1', promptId: 'prompt-1', articleId: 'article-1', type: 'string'}]
-      : statement.includes('WHERE id IN') && statement.includes('AND is_answered = FALSE')
-        ? [{id: 'judgment-human-1'}]
-        : []
+    return statement.includes('SELECT DISTINCT article_id AS articleId')
+      ? [{articleId: 'article-1'}]
+      : statement.includes('FROM app.project_prompt pp')
+        ? [{id: 'prompt-1'}]
+        : statement.includes('SELECT id, prompt_id AS promptId, is_answered AS isAnswered')
+          ? [{id: 'judgment-human-1', promptId: 'prompt-1', isAnswered: false}]
+          : statement.includes('FROM app.judgment_human jh')
+            ? [{id: 'judgment-human-1', promptId: 'prompt-1', articleId: 'article-1', type: 'string'}]
+            : statement.includes('WHERE id IN') && statement.includes('AND is_answered = FALSE')
+              ? [{id: 'judgment-human-1'}]
+              : []
   }
   runRef.current = async (statement) => {
     statements.push(statement)
