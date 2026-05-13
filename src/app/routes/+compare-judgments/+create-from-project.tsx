@@ -258,89 +258,6 @@ const CreateCompareJudgmentsFromProjectPage = () => {
             />
           </div>
 
-          <div class="border border-input rounded-md p-4 bg-muted/20">
-            <label class="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                class="mt-1"
-                checked={compareWithHumans()}
-                onChange={(event) => {
-                  setCompareWithHumans(event.currentTarget.checked)
-
-                  if (!event.currentTarget.checked) {
-                    setSummaryModeEnabled(false)
-                  }
-                }}
-              />
-              <div class="flex-1">
-                <p class="text-sm font-medium text-gray-900">Compare with humans</p>
-                <p class="text-xs text-muted-foreground mt-1">
-                  Save that this comparison should include human judgments in future result views.
-                </p>
-              </div>
-            </label>
-          </div>
-
-          <div class="border border-input rounded-md p-4 bg-muted/20">
-            <label
-              class="flex items-start gap-3"
-              classList={{
-                'cursor-pointer': isConflictResolutionAvailable(),
-                'opacity-60': !isConflictResolutionAvailable(),
-              }}
-            >
-              <input
-                type="checkbox"
-                class="mt-1"
-                checked={isConflictResolutionAvailable() && allowConflictResolution()}
-                disabled={!isConflictResolutionAvailable()}
-                onChange={(event) => {
-                  return setAllowConflictResolution(event.currentTarget.checked)
-                }}
-              />
-              <div class="flex-1">
-                <p class="text-sm font-medium text-gray-900">Allow conflict resolution</p>
-                <p class="text-xs text-muted-foreground mt-1">
-                  Add an article-level conflict handling column on the judgments comparison page.
-                </p>
-                <Show when={!isConflictResolutionAvailable()}>
-                  <p class="text-xs text-muted-foreground mt-1">Available in Summary mode only.</p>
-                </Show>
-              </div>
-            </label>
-          </div>
-
-          <div class="border border-input rounded-md p-4 bg-muted/20">
-            <label class="flex items-start gap-3" classList={{'cursor-pointer': !summaryModeUnavailableReason()}}>
-              <input
-                type="checkbox"
-                class="mt-1"
-                checked={summaryModeEnabled()}
-                disabled={Boolean(summaryModeUnavailableReason())}
-                onChange={(event) => {
-                  setSummaryModeEnabled(event.currentTarget.checked)
-
-                  if (event.currentTarget.checked) {
-                    setCompareWithHumans(true)
-                  }
-
-                  if (!event.currentTarget.checked) {
-                    setSelectedAdditionalSourceProjectIds([])
-                  }
-                }}
-              />
-              <div class="flex-1">
-                <p class="text-sm font-medium text-gray-900">Summary mode</p>
-                <p class="text-xs text-muted-foreground mt-1">
-                  Use the primary project's overall human decisions and summary prompts for comparison.
-                </p>
-                <Show when={summaryModeUnavailableReason()}>
-                  <p class="text-xs text-muted-foreground mt-1">{summaryModeUnavailableReason()}</p>
-                </Show>
-              </div>
-            </label>
-          </div>
-
           <div>
             <div class="flex items-center justify-between mb-2 gap-3">
               <p class="block text-sm font-medium">Primary Project</p>
@@ -433,6 +350,93 @@ const CreateCompareJudgmentsFromProjectPage = () => {
               </div>
             </Show>
           </div>
+
+          <Show when={selectedSourceProjectId()}>
+            <div class="border border-input rounded-md p-4 bg-muted/20">
+              <label class="flex items-start gap-3" classList={{'cursor-pointer': !summaryModeUnavailableReason()}}>
+                <input
+                  type="checkbox"
+                  class="mt-1"
+                  checked={summaryModeEnabled()}
+                  disabled={Boolean(summaryModeUnavailableReason())}
+                  onChange={(event) => {
+                    setSummaryModeEnabled(event.currentTarget.checked)
+
+                    if (event.currentTarget.checked) {
+                      setCompareWithHumans(true)
+                    }
+
+                    if (!event.currentTarget.checked) {
+                      setSelectedAdditionalSourceProjectIds([])
+                    }
+                  }}
+                />
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-gray-900">Summary mode</p>
+                  <p class="text-xs text-muted-foreground mt-1">
+                    Compare each article using the primary project's final human decision instead of each individual
+                    prompt judgment. This uses the primary project's summary prompts and keeps that project as the main
+                    human reference for any extra projects you compare.
+                  </p>
+                  <Show when={summaryModeUnavailableReason()}>
+                    <p class="text-xs text-muted-foreground mt-1">{summaryModeUnavailableReason()}</p>
+                  </Show>
+                </div>
+              </label>
+            </div>
+
+            <div class="border border-input rounded-md p-4 bg-muted/20">
+              <label
+                class="flex items-start gap-3"
+                classList={{
+                  'cursor-pointer': isConflictResolutionAvailable(),
+                  'opacity-60': !isConflictResolutionAvailable(),
+                }}
+              >
+                <input
+                  type="checkbox"
+                  class="mt-1"
+                  checked={isConflictResolutionAvailable() && allowConflictResolution()}
+                  disabled={!isConflictResolutionAvailable()}
+                  onChange={(event) => {
+                    return setAllowConflictResolution(event.currentTarget.checked)
+                  }}
+                />
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-gray-900">Allow conflict resolution</p>
+                  <p class="text-xs text-muted-foreground mt-1">
+                    Add an article-level conflict handling column on the judgments comparison page.
+                  </p>
+                  <Show when={!isConflictResolutionAvailable()}>
+                    <p class="text-xs text-muted-foreground mt-1">Available in Summary mode only.</p>
+                  </Show>
+                </div>
+              </label>
+            </div>
+
+            <div class="border border-input rounded-md p-4 bg-muted/20">
+              <label class="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  class="mt-1"
+                  checked={compareWithHumans()}
+                  onChange={(event) => {
+                    setCompareWithHumans(event.currentTarget.checked)
+
+                    if (!event.currentTarget.checked) {
+                      setSummaryModeEnabled(false)
+                    }
+                  }}
+                />
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-gray-900">Compare with humans</p>
+                  <p class="text-xs text-muted-foreground mt-1">
+                    Save that this comparison should include human judgments in future result views.
+                  </p>
+                </div>
+              </label>
+            </div>
+          </Show>
 
           <Show when={summaryModeEnabled() && selectedSourceProject()}>
             <details class="border border-input rounded-md p-4 bg-muted/10" open>
