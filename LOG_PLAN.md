@@ -40,6 +40,8 @@ Layers: server, desktop backend, client, scripts.
 - Sink: browser debug logs and temporary inspection logs are `remove-or-dev-only`.
 - Prefer extending `src/server/utils/rateLimitedLogger.ts` with a file sink over adding a legacy logging framework.
 - Preserve Bun crash-safe argument serialization. Reuse the safe serializer already installed in `src/server/utils/installSafeConsoleLogging.ts` or extract a shared helper; do not introduce a second object-printing path.
+- V1 scope is logs only. Do not implement Prometheus metrics, Tempo tracing, Grafana dashboards, or Alloy deployment/configuration as part of this logging rollout.
+- Make the produced JSONL Loki-friendly for a future Alloy tailing pipeline, but keep the app independent of Loki, Grafana, Tempo, Prometheus, and Alloy runtime dependencies.
 
 ## Log Files
 
@@ -60,6 +62,20 @@ Layers: server, desktop backend, client, scripts.
 - This is more granular than just app vs api, because this repo already has a distinct worker runtime and that is where most repeating logs live.
 - Do not split by subsystem in v1. Put `component`, `event`, `jobId`, `projectId`, and `articleId` in each record instead.
 - Split further only after observing real volume or retention pressure. The first candidate would be a dedicated worker LLM file, not per-route or per-module files.
+
+## Loki And Grafana Stack Compatibility
+
+- Target observability shape: Prometheus for metrics, Loki for logs, Tempo for optional traces, Grafana as the UI across them, and Alloy as the collector or agent.
+- Current implementation scope: only the Loki-compatible log producer. Do not add metrics endpoints, trace spans, Grafana dashboards, or Alloy config in this plan.
+- The app should write local structured JSONL files. A future Alloy setup can tail `logs/runtime/<profile>/*.jsonl`, parse each line as JSON, and ship it to Loki.
+- Keep the JSONL schema stable enough for Loki parsing: one complete JSON object per line, ISO timestamp, severity, service, runtime profile, message, event name, and structured attributes.
+- Use Loki labels only for bounded-cardinality fields: `service`, `runtimeProfile`, `serverRole`, and `severity`.
+- Do not use high-cardinality values as Loki labels: `instanceId`, `hostname`, `pid`, `listenPort`, `processStartedAt`, `jobId`, `projectId`, `articleId`, `requestId`, prompt IDs, model IDs, file paths, error messages, or free-form event names.
+- Keep high-cardinality values in the parsed log record as fields so they remain queryable in Loki without exploding label cardinality.
+- Prefer event names that are stable and dotted, such as `llm.batch.complete` or `project.export.progress`, so Grafana Explore queries are predictable.
+- Do not make the application call Loki directly. File logging remains the local durability boundary; collection and remote shipping are external concerns.
+- Do not add Tempo trace generation yet. It is acceptable for log records to leave room for future `traceId` and `spanId` fields, but this rollout should not create spans or require trace context.
+- Do not add Prometheus metrics yet. Counts, durations, queue sizes, and worker health can be added later as metrics after the terminal-noise logging rollout is complete.
 
 ## Instance Identity
 
@@ -106,6 +122,7 @@ Example line:
 
 - OTel-aligned JSONL is modern, machine-readable, and easy to ingest later into Loki, ClickHouse, or an OpenTelemetry pipeline.
 - It preserves useful context like `jobId`, `projectId`, `articleId`, and durations without flooding the terminal.
+- It keeps Grafana/Loki compatibility focused on producing clean structured logs now, without prematurely adding Prometheus metrics, Tempo traces, Grafana dashboards, or Alloy deployment files.
 - It keeps same-service concurrent runs attributable without exploding the number of log files.
 - It fits the repo as-is: `logs/` is already ignored, and `rateLimitedLogger` already exists in the noisy server paths.
 - It matches the runtime shape of this repo better than a flat app/api split because `app-server`, `api`, and `worker` have different noise levels and operator use.
@@ -217,34 +234,65 @@ Example line:
   Files: `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`.
   Reason: temporary server inspection logs should not become part of the structured runtime stream.
 
-## Checklist
+## Implementation Flow Checklist
 
-- [ ] Add a shared file-backed structured logger for server runtimes and background workers.
-- [ ] Partition log files by runtime process: `app-server`, `api-server`, `worker-server`, `dev-single-server`, and `single-server` only for combined one-process backend runs.
+Implement in this order so the schema, identity, file sink, launchers, and call-site migration stay independently reviewable.
+
+### 1. Scope And Schema
+
+- [ ] Keep this rollout scoped to Loki-compatible structured logs; do not add Prometheus metrics, Tempo tracing, Grafana dashboards, or Alloy deployment/configuration.
+- [ ] Define the structured log event shape and severity mapping for server runtimes and background workers.
+- [ ] Keep emitted JSONL Loki-friendly for future Alloy tailing: one JSON object per line, stable field names, bounded label candidates, and high-cardinality values kept as fields rather than labels.
+- [ ] Keep the sink decision explicit for every touched log call: `file-only`, `both`, `terminal-only`, or `remove-or-dev-only`.
+
+### 2. Runtime Profile And Identity
+
 - [ ] Add an explicit runtime-profile marker, for example `FORSKA_RUNTIME_PROFILE`, so `logs/runtime/<profile>/...` resolves stably for `primary`, `secondary`, and `local` runs.
 - [ ] Add one shared runtime-process-identity helper, capture `processStartedAt` in a bootstrap module before importing modules that read it, and emit `runtimeProfile`, `instanceId`, `hostname`, `pid`, `processStartedAt`, `listenPort`, and service fields on every server-side log line.
+- [ ] Partition log files by runtime process: `app-server`, `api-server`, `worker-server`, `dev-single-server`, and `single-server` only for combined one-process backend runs.
 - [ ] Make `writerConnections` and runtime logging share that same identity helper instead of minting timestamps at import time so one process cannot emit different `startedAt` values in heartbeat metadata and JSONL.
+
+### 3. Runtime Config
+
 - [ ] Add runtime config for `LOG_DIR`, `LOG_LEVEL`, and `LOG_STDERR_LEVEL`; default to runtime-writable-root + `logs/runtime/<profile>/`, default `LOG_LEVEL=INFO`, default `LOG_STDERR_LEVEL=WARN`, and load it through `src/server/utils/env.ts` plus `src/server/utils/getAppServerRuntimeConfig.ts` or one shared helper.
+- [ ] Default spawned tests and harnesses that use sink-owning entrypoints to temp `LOG_DIR` locations unless the test is explicitly validating shared profile log paths.
+
+### 4. File Sink Lifecycle
+
+- [ ] Add a shared file-backed structured logger for server runtimes and background workers.
 - [ ] Make the shared daily-file append path explicit: serialize one complete JSONL line per write, queue writes per process, choose shared-file vs per-instance-file mode from a tested platform allowlist at bootstrap, rotate on UTC date boundaries without restart, and use a filename-safe per-instance suffix when shared append mode is disabled.
-- [ ] Repoint every supported sink-owning launcher to the bootstrap-first path, or make `src/server/index.ts` and `src/appServer.ts` themselves be thin bootstrap wrappers so raw direct launches cannot bypass identity and sink setup.
-- [ ] Extend `rateLimitedLogger` so noisy paths can keep rate limiting while writing structured JSONL.
 - [ ] Reuse or extract the safe console serializer so file logging does not reintroduce Bun pretty-print crashes.
 - [ ] Use `Effect` inside the sink for file-handle lifecycle, flush, rollover, and shutdown behavior, without forcing `Effect` at every call site.
-- [ ] Install the runtime file sink by default in dedicated long-lived runtime bootstrap entrypoints, including the legacy direct backend modes, and keep interactive or JSON-contract scripts terminal-only because they never install the sink.
-- [ ] Default spawned tests and harnesses that use sink-owning entrypoints to temp `LOG_DIR` locations unless the test is explicitly validating shared profile log paths.
 - [ ] Add one bounded flush helper and call it before controlled exits in sink-owning runtimes.
 - [ ] Prune managed runtime JSONL files older than 7 UTC days during sink startup and after UTC date rollover.
+
+### 5. Bootstrap And Launchers
+
+- [ ] Repoint every supported sink-owning launcher to the bootstrap-first path, or make `src/server/index.ts` and `src/appServer.ts` themselves be thin bootstrap wrappers so raw direct launches cannot bypass identity and sink setup.
+- [ ] Install the runtime file sink by default in dedicated long-lived runtime bootstrap entrypoints, including the legacy direct backend modes, and keep interactive or JSON-contract scripts terminal-only because they never install the sink.
 - [ ] Keep sink installation process-based, not path-based: moving modules such as current `src/agent` code must not by itself change whether logs write to JSONL.
-- [ ] Migrate the hottest repeating server paths first: judgments jobs, full-text pipeline, export streaming, request summaries.
-- [ ] Keep untouched `console.*` call sites on their current terminal behavior until each one is explicitly migrated.
+- [ ] Leave interactive and JSON-contract scripts on stdout or stderr.
+
+### 6. Logger API And Rate Limiting
+
+- [ ] Extend `rateLimitedLogger` so noisy paths can keep rate limiting while writing structured JSONL.
 - [ ] For touched `file-only` call sites in shared modules, preserve current terminal behavior when the hosting process did not install the runtime file sink.
+- [ ] Keep untouched `console.*` call sites on their current terminal behavior until each one is explicitly migrated.
+
+### 7. Hot Path Migration
+
+- [ ] Migrate the hottest repeating server paths first: judgments jobs, full-text pipeline, export streaming, request summaries.
 - [ ] Preserve terminal-visible failure paths while migrating progress logs to JSONL.
 - [ ] Preserve existing exception and error-result propagation after adding file logging.
 - [ ] Replace `console.time` and `console.timeEnd` with explicit duration fields.
+
+### 8. Desktop And Client Cleanup
+
 - [ ] Keep the desktop backend on the same structured logging model, with runtime JSONL under the desktop data root and `backend.log` retained only as terminal capture.
 - [ ] Remove or dev-gate client-side debug logs and temporary server inspection logs instead of forwarding them to server log files.
-- [ ] Leave interactive and JSON-contract scripts on stdout or stderr.
-- [ ] Keep the sink decision explicit for every touched log call: `file-only`, `both`, `terminal-only`, or `remove-or-dev-only`.
+
+### 9. Tests And Verification
+
 - [ ] Add or update tests for JSONL writing, concurrent append safety, shared-file allowlist selection, rate limiting, path selection, runtime-profile propagation, desktop path resolution, env parsing, and 7-day retention pruning.
 - [ ] Add or update tests for canonical `api-server` and `worker-server` service selection on direct runs, `single-server` selection for combined `SERVER_ROLE=auto` runs, UTC date rollover, bounded flush-before-exit behavior, bootstrap-before-import process identity capture, and shared identity between runtime logging and `writerConnections`.
 - [ ] Verify that terminal output drops to startup, warnings, and real errors only for the explicitly migrated hot paths; untouched legacy call sites may remain terminal-visible until they are converted.
