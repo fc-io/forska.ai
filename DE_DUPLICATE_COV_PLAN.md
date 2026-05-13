@@ -216,6 +216,8 @@ Scope:
 
 Preferred direction: expand `app.article_import_route` instead of inventing a second overlapping table.
 
+`app.article_import_route` represents current canonical article membership for one import route and the latest compact import-scoped payload for that membership. It is not the full append-only history of every source row or every import run that ever mentioned the article.
+
 Add fields like:
 
 1. `external_article_id`
@@ -228,6 +230,12 @@ Add fields like:
 8. `source_record_key`
 9. `source_record_hash`
 10. timestamps
+
+`import_run_id`, `source_record_key`, and `source_record_hash` record the provenance of the latest write to the import-scoped membership record. `source_record_key` must be stable for the source row inside the source/import-route scope, and `source_record_hash` must change when the compact source payload or merge-relevant metadata changes.
+
+Repeated harvests for the same source record should leave the `app.article_import_route` row unchanged when `source_record_hash` matches the latest write. When the hash changes, update the import-scoped record and latest-write provenance without creating another current membership row for the same `(article_id, import_route_id)`.
+
+When multiple source rows in one import route resolve to the same canonical article, the writer must either merge import metadata deterministically into the one current membership record or store the individual source rows in a child row table. Deterministic merges should use stable precedence, union distinct identifiers or notes where safe, and produce the same compact payload regardless of source row order. If source-row history or per-row audit is required, keep it in `app.article_import_route_row` or a dedicated import-run row table instead of overloading the current membership row.
 
 For Covidence specifically, this record should carry:
 
@@ -281,6 +289,7 @@ Implementation options:
 3. periodically compact or delete completed staging rows once canonical writes and import-scoped records are durable
 4. avoid keeping large raw JSON blobs in staging if source rows can be re-read cheaply from a file or cursor
 5. acquire an import-run lease or equivalent guard before canonical writes for any source/import route where two workers can race over the same source records
+6. skip import-scoped record writes for repeated harvest rows whose `source_record_hash` matches the latest membership record, and update only changed hashes so unchanged source rows do not churn payloads, checkpoints, or marts
 
 ### Project-Scoped Serving Metadata
 
@@ -507,6 +516,8 @@ Required scenarios:
 11. ensure a later broad-source import can enrich a Covidence-created canonical article without changing its project-scoped Covidence metadata
 12. keep judgment queue and outbox writes reproducible by resolving article import context through canonical article ids plus project-scoped import records before new jobs or snapshots are created
 13. wrap each bounded write chunk so canonical article creation, `app.article_identifier` insertion, and `app.article_import_route` insertion either commit together or roll back together
+14. update import-scoped records on repeated harvests only when `source_record_hash` changes, preserving unchanged latest-write provenance and avoiding duplicate current membership rows
+15. handle multiple source rows in the same import route that resolve to one canonical article by deterministic metadata merge or by writing the source rows to the chosen child/history table
 
 ### Phase 4. Backfill and merge historical duplicates
 
@@ -686,3 +697,4 @@ Pass/fail checks for this change:
 5. whether high-volume staging should be persistent by default for resumability or temporary for smaller interactive imports
 6. what batch sizes and checkpoint intervals are safe defaults for 50,000-record Covidence imports and million-row corpus imports under the shared DuckDB memory limit
 7. whether broad-source imports should disable weak auto-merge by default unless a fingerprint table is present
+8. whether source-row history needs `app.article_import_route_row` or a dedicated import-run row table, and which sources require per-row audit instead of only latest compact membership payloads
