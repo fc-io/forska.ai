@@ -29,6 +29,19 @@ export type ComparisonProjectStatsComparison = ComparisonProjectStatsComparisonG
 
 export type ComparisonProjectStatsCellRow = {articleId: string; columnId: string; normalizedAnswers: unknown}
 
+export type ComparisonProjectStatsAggregateRow = {
+  agreementCount: unknown
+  binaryPairCount: unknown
+  comparisonId: string
+  conflictCount: unknown
+  leftExcludeCount: unknown
+  leftIncludeCount: unknown
+  overlapCount: unknown
+  rightExcludeCount: unknown
+  rightIncludeCount: unknown
+  trueConflictCount: unknown
+}
+
 type ComparisonProjectStatsQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 
 type ComparisonProjectStatsParams = {
@@ -53,6 +66,18 @@ type BinaryDecisionPair = {leftDecision: BinaryDecision; rightDecision: BinaryDe
 type ComparisonProjectStatsNormalizedCell = {articleId: string; columnId: string; normalizedAnswers: string[]}
 type ComparisonProjectStatsPair = {leftAnswers: string[]; rightAnswers: string[]}
 
+type ComparisonProjectStatsAggregate = {
+  agreementCount: number
+  binaryPairCount: number
+  conflictCount: number
+  leftExcludeCount: number
+  leftIncludeCount: number
+  overlapCount: number
+  rightExcludeCount: number
+  rightIncludeCount: number
+  trueConflictCount: number
+}
+
 const summaryPromptId = 'summary'
 
 const getInClause = (values: readonly string[]) => {
@@ -63,6 +88,12 @@ const getComparisonProjectStatsGenerationValue = (value: unknown) => {
   const parsedValue = typeof value === 'bigint' ? Number(value) : Number(value)
 
   return Number.isSafeInteger(parsedValue) && parsedValue > 0 ? parsedValue : null
+}
+
+const getComparisonProjectStatsCountValue = (value: unknown) => {
+  const parsedValue = typeof value === 'bigint' ? Number(value) : Number(value)
+
+  return Number.isSafeInteger(parsedValue) && parsedValue >= 0 ? parsedValue : 0
 }
 
 const getTrimmedLowercaseValue = (value: string) => {
@@ -266,6 +297,14 @@ const getComparisonProjectStatsColumnIds = (groups: readonly ComparisonProjectSt
   )
 }
 
+const getComparisonProjectStatsGroupValuesSql = (groups: readonly ComparisonProjectStatsComparisonGroup[]) => {
+  return groups
+    .map((group) => {
+      return `(${getSqlLiteral(group.id)}, ${getSqlLiteral(group.leftColumnId)}, ${getSqlLiteral(group.rightColumnId)})`
+    })
+    .join(',\n      ')
+}
+
 const getAnswerUnionSize = (leftAnswers: readonly string[], rightAnswers: readonly string[]) => {
   return new Set([...leftAnswers, ...rightAnswers]).size
 }
@@ -373,6 +412,26 @@ const getCohensKappa = (pairs: readonly ComparisonProjectStatsPair[]) => {
     : (observedAgreement - expectedAgreement) / denominator
 }
 
+const getCohensKappaFromAggregate = (aggregate: ComparisonProjectStatsAggregate) => {
+  const pairCount = aggregate.binaryPairCount
+
+  if (pairCount === 0) {
+    return null
+  }
+
+  const observedAgreement = aggregate.agreementCount / pairCount
+  const expectedAgreement =
+    (aggregate.leftIncludeCount / pairCount) * (aggregate.rightIncludeCount / pairCount)
+    + (aggregate.leftExcludeCount / pairCount) * (aggregate.rightExcludeCount / pairCount)
+  const denominator = 1 - expectedAgreement
+
+  return denominator === 0
+    ? observedAgreement === 1
+      ? 1
+      : null
+    : (observedAgreement - expectedAgreement) / denominator
+}
+
 const getShouldComputeCohensKappa = (params: {
   columns: readonly ComparisonProjectStatsColumn[]
   isSummaryMode: boolean
@@ -412,6 +471,62 @@ export const getComparisonProjectStatsFromCells = (params: ComparisonProjectStat
   })
 }
 
+const getComparisonProjectStatsAggregate = (
+  row: ComparisonProjectStatsAggregateRow,
+): ComparisonProjectStatsAggregate => {
+  return {
+    agreementCount: getComparisonProjectStatsCountValue(row.agreementCount),
+    binaryPairCount: getComparisonProjectStatsCountValue(row.binaryPairCount),
+    conflictCount: getComparisonProjectStatsCountValue(row.conflictCount),
+    leftExcludeCount: getComparisonProjectStatsCountValue(row.leftExcludeCount),
+    leftIncludeCount: getComparisonProjectStatsCountValue(row.leftIncludeCount),
+    overlapCount: getComparisonProjectStatsCountValue(row.overlapCount),
+    rightExcludeCount: getComparisonProjectStatsCountValue(row.rightExcludeCount),
+    rightIncludeCount: getComparisonProjectStatsCountValue(row.rightIncludeCount),
+    trueConflictCount: getComparisonProjectStatsCountValue(row.trueConflictCount),
+  }
+}
+
+const emptyComparisonProjectStatsAggregate = {
+  agreementCount: 0,
+  binaryPairCount: 0,
+  conflictCount: 0,
+  leftExcludeCount: 0,
+  leftIncludeCount: 0,
+  overlapCount: 0,
+  rightExcludeCount: 0,
+  rightIncludeCount: 0,
+  trueConflictCount: 0,
+} satisfies ComparisonProjectStatsAggregate
+
+const getComparisonProjectStatsAggregatesByComparisonId = (rows: readonly ComparisonProjectStatsAggregateRow[]) => {
+  return rows.reduce<Map<string, ComparisonProjectStatsAggregate>>((aggregateMap, row) => {
+    aggregateMap.set(row.comparisonId, getComparisonProjectStatsAggregate(row))
+
+    return aggregateMap
+  }, new Map<string, ComparisonProjectStatsAggregate>())
+}
+
+const getComparisonProjectStatsFromAggregates = (params: {
+  aggregateRows: readonly ComparisonProjectStatsAggregateRow[]
+  groups: readonly ComparisonProjectStatsComparisonGroup[]
+  shouldComputeCohensKappa: boolean
+}) => {
+  const aggregatesByComparisonId = getComparisonProjectStatsAggregatesByComparisonId(params.aggregateRows)
+
+  return params.groups.map((group) => {
+    const aggregate = aggregatesByComparisonId.get(group.id) ?? emptyComparisonProjectStatsAggregate
+
+    return {
+      ...group,
+      cohensKappa: params.shouldComputeCohensKappa ? getCohensKappaFromAggregate(aggregate) : null,
+      conflictCount: aggregate.conflictCount,
+      overlapCount: aggregate.overlapCount,
+      trueConflictCount: aggregate.trueConflictCount,
+    }
+  })
+}
+
 export const getComparisonProjectStatsActiveGenerationSql = (comparisonProjectId: string) => {
   return `
     SELECT CAST(active_generation AS INTEGER) AS generation
@@ -422,23 +537,138 @@ export const getComparisonProjectStatsActiveGenerationSql = (comparisonProjectId
   `
 }
 
-export const getComparisonProjectStatsCellsSql = (params: {
+export const getComparisonProjectStatsAggregatesSql = (params: {
   columnIds: readonly string[]
   comparisonProjectId: string
   generation: number
+  groups: readonly ComparisonProjectStatsComparisonGroup[]
 }) => {
   return `
+    WITH comparison_group(comparison_id, left_column_id, right_column_id) AS (
+      VALUES
+      ${getComparisonProjectStatsGroupValuesSql(params.groups)}
+    ),
+    scoped_cell AS (
+      SELECT
+        cell.article_id,
+        cell.column_id,
+        cell.normalized_answers
+      FROM mart.comparison_cell_serving cell
+      WHERE cell.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+        AND cell.generation = ${getSqlLiteral(params.generation)}
+        AND cell.column_id IN (${getInClause(params.columnIds)})
+        AND cell.normalized_answers IS NOT NULL
+        AND ARRAY_LENGTH(cell.normalized_answers) > 0
+    ),
+    normalized_cell_answer AS (
+      SELECT
+        scoped_cell.article_id,
+        scoped_cell.column_id,
+        LOWER(TRIM(answer.answer_value)) AS answer_value,
+        CASE
+          WHEN LOWER(TRIM(answer.answer_value)) IN ('yes', 'maybe') THEN 'include'
+          WHEN LOWER(TRIM(answer.answer_value)) = 'no' THEN 'exclude'
+          ELSE NULL
+        END AS binary_decision
+      FROM scoped_cell,
+        UNNEST(scoped_cell.normalized_answers) AS answer(answer_value)
+      WHERE NULLIF(TRIM(answer.answer_value), '') IS NOT NULL
+    ),
+    normalized_cell AS (
+      SELECT article_id, column_id
+      FROM normalized_cell_answer
+      GROUP BY article_id, column_id
+    ),
+    comparison_pair AS (
+      SELECT
+        comparison_group.comparison_id,
+        comparison_group.left_column_id,
+        comparison_group.right_column_id,
+        left_cell.article_id
+      FROM comparison_group
+      INNER JOIN normalized_cell left_cell ON left_cell.column_id = comparison_group.left_column_id
+      INNER JOIN normalized_cell right_cell
+        ON right_cell.column_id = comparison_group.right_column_id
+        AND right_cell.article_id = left_cell.article_id
+    ),
+    pair_answer_value AS (
+      SELECT
+        comparison_pair.comparison_id,
+        comparison_pair.article_id,
+        'left' AS answer_side,
+        normalized_cell_answer.answer_value,
+        normalized_cell_answer.binary_decision
+      FROM comparison_pair
+      INNER JOIN normalized_cell_answer
+        ON normalized_cell_answer.article_id = comparison_pair.article_id
+        AND normalized_cell_answer.column_id = comparison_pair.left_column_id
+      UNION ALL
+      SELECT
+        comparison_pair.comparison_id,
+        comparison_pair.article_id,
+        'right' AS answer_side,
+        normalized_cell_answer.answer_value,
+        normalized_cell_answer.binary_decision
+      FROM comparison_pair
+      INNER JOIN normalized_cell_answer
+        ON normalized_cell_answer.article_id = comparison_pair.article_id
+        AND normalized_cell_answer.column_id = comparison_pair.right_column_id
+    ),
+    pair_stats AS (
+      SELECT
+        comparison_id,
+        article_id,
+        COUNT(DISTINCT answer_value) AS answer_value_count,
+        COUNT(DISTINCT binary_decision) FILTER (
+          WHERE answer_side = 'left' AND binary_decision IS NOT NULL
+        ) AS left_binary_decision_count,
+        COUNT(DISTINCT binary_decision) FILTER (
+          WHERE answer_side = 'right' AND binary_decision IS NOT NULL
+        ) AS right_binary_decision_count,
+        COUNT(DISTINCT binary_decision) FILTER (
+          WHERE binary_decision IS NOT NULL
+        ) AS all_binary_decision_count,
+        MIN(binary_decision) FILTER (
+          WHERE answer_side = 'left' AND binary_decision IS NOT NULL
+        ) AS left_binary_decision,
+        MIN(binary_decision) FILTER (
+          WHERE answer_side = 'right' AND binary_decision IS NOT NULL
+        ) AS right_binary_decision
+      FROM pair_answer_value
+      GROUP BY comparison_id, article_id
+    )
     SELECT
-      cell.article_id AS articleId,
-      cell.column_id AS columnId,
-      TO_JSON(cell.normalized_answers) AS normalizedAnswers
-    FROM mart.comparison_cell_serving cell
-    WHERE cell.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
-      AND cell.generation = ${getSqlLiteral(params.generation)}
-      AND cell.column_id IN (${getInClause(params.columnIds)})
-      AND cell.normalized_answers IS NOT NULL
-      AND ARRAY_LENGTH(cell.normalized_answers) > 0
-    ORDER BY cell.article_id ASC, cell.column_order ASC, cell.column_id ASC
+      comparison_id AS comparisonId,
+      CAST(COUNT(*) AS INTEGER) AS overlapCount,
+      CAST(SUM(CASE WHEN answer_value_count > 1 THEN 1 ELSE 0 END) AS INTEGER) AS conflictCount,
+      CAST(SUM(CASE
+        WHEN left_binary_decision_count > 0 AND right_binary_decision_count > 0 AND all_binary_decision_count > 1 THEN 1
+        ELSE 0
+      END) AS INTEGER) AS trueConflictCount,
+      CAST(SUM(CASE WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 THEN 1 ELSE 0 END) AS INTEGER) AS binaryPairCount,
+      CAST(SUM(CASE
+        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND left_binary_decision = right_binary_decision THEN 1
+        ELSE 0
+      END) AS INTEGER) AS agreementCount,
+      CAST(SUM(CASE
+        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND left_binary_decision = 'include' THEN 1
+        ELSE 0
+      END) AS INTEGER) AS leftIncludeCount,
+      CAST(SUM(CASE
+        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND left_binary_decision = 'exclude' THEN 1
+        ELSE 0
+      END) AS INTEGER) AS leftExcludeCount,
+      CAST(SUM(CASE
+        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND right_binary_decision = 'include' THEN 1
+        ELSE 0
+      END) AS INTEGER) AS rightIncludeCount,
+      CAST(SUM(CASE
+        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND right_binary_decision = 'exclude' THEN 1
+        ELSE 0
+      END) AS INTEGER) AS rightExcludeCount
+    FROM pair_stats
+    GROUP BY comparison_id
+    ORDER BY comparison_id ASC
   `
 }
 
@@ -459,9 +689,15 @@ export const getComparisonProjectStats = async (params: ComparisonProjectStatsPa
     return []
   }
 
-  const cellRows = await params.queryRunner.queryJson<ComparisonProjectStatsCellRow>(
-    getComparisonProjectStatsCellsSql({columnIds, comparisonProjectId: params.comparisonProjectId, generation}),
+  const aggregateRows = await params.queryRunner.queryJson<ComparisonProjectStatsAggregateRow>(
+    getComparisonProjectStatsAggregatesSql({
+      columnIds,
+      comparisonProjectId: params.comparisonProjectId,
+      generation,
+      groups,
+    }),
   )
+  const shouldComputeCohensKappa = getShouldComputeCohensKappa(params)
 
-  return getComparisonProjectStatsFromCells({...params, cellRows})
+  return getComparisonProjectStatsFromAggregates({aggregateRows, groups, shouldComputeCohensKappa})
 }
