@@ -66,15 +66,16 @@ Touched layers: server, database, client
    - deduplicate identifiers inside the batch before touching canonical tables
    - join or lookup the batch against indexed canonical identifiers in bounded chunks
    - write canonical articles, identifiers, and import records in bounded transactions
-5. Bulk imports must be resumable and idempotent by import run, source, and source record key. Restarting an interrupted import must not duplicate canonical articles or duplicate import-scoped records.
-6. A Covidence-first then Europe PMC scenario must work:
+5. Bulk imports must be resumable and idempotent by `source_kind`, `import_run_id`, `source_record_key`, and `source_record_hash`. Restarting an interrupted import must not duplicate canonical articles or duplicate import-scoped records.
+6. High-volume, retryable, or externally triggered import routes must use an import-run lease or equivalent single-writer guard per `source_kind` and import route when racing writers would otherwise process the same source scope.
+7. A Covidence-first then Europe PMC scenario must work:
    - if Covidence created the canonical article first, a later Europe PMC or `src:med`/`src:PPR` import with the same DOI, PMID, arXiv id, bioRxiv id, or medRxiv id must reuse that existing canonical article
    - the later bulk source should add or update its own import-scoped record and add missing canonical identifiers
    - canonical article field updates must go through the deterministic resolver, not overwrite Covidence-derived or user-visible data by last writer wins
-7. Weak fingerprint matching must not require comparing each new article against the full article corpus. For large corpus imports, weak matching is allowed only when backed by an indexed non-unique lookup surface or deferred to a separate candidate-resolution job.
-8. Large corpus imports should not trigger global mart rebuilds for every project. Refresh only affected import routes and projects, or enqueue scoped rebuild work.
-9. Import processing must avoid loading complete source packages, complete staging tables, or complete JSON payloads into process memory at once.
-10. Long-running imports must emit progress and checkpoint logs so operators can see throughput, current batch, matched counts, created counts, unresolved counts, and elapsed time.
+8. Weak fingerprint matching must not require comparing each new article against the full article corpus. For large corpus imports, weak matching is allowed only when backed by an indexed non-unique lookup surface or deferred to a separate candidate-resolution job.
+9. Large corpus imports should not trigger global mart rebuilds for every project. Refresh only affected import routes and projects, or enqueue scoped rebuild work.
+10. Import processing must avoid loading complete source packages, complete staging tables, or complete JSON payloads into process memory at once.
+11. Long-running imports must emit progress and checkpoint logs so operators can see throughput, current batch, matched counts, created counts, unresolved counts, and elapsed time.
 
 ## Key Decisions
 
@@ -196,10 +197,12 @@ Scope:
     - bioRxiv id
     - medRxiv id
 2. Use `UNIQUE(kind, normalized_value)` for these strong identifiers.
-3. Use this table as the canonical matching surface for new imports and for historical backfill.
-4. Add an index that supports batch joins by `(kind, normalized_value)` without scanning `app.article`.
-5. Bulk imports must stage normalized identifier rows first, then join staging rows to this table in chunks.
-6. Duplicate identifiers inside one source batch must be collapsed before canonical article creation to avoid intra-batch races and uniqueness conflicts.
+3. Treat `UNIQUE(kind, normalized_value)` as the final arbiter for concurrent writers. If an identifier insert conflicts, re-read the winning row by `(kind, normalized_value)` before continuing.
+4. If the winning identifier row maps to the same intended canonical article, continue idempotently. If it maps to another canonical article, quarantine the source row as a concurrent strong-identifier conflict instead of creating a duplicate canonical article or choosing a last writer.
+5. Use this table as the canonical matching surface for new imports and for historical backfill.
+6. Add an index that supports batch joins by `(kind, normalized_value)` without scanning `app.article`.
+7. Bulk imports must stage normalized identifier rows first, then join staging rows to this table in chunks.
+8. Duplicate identifiers inside one source batch must be collapsed before canonical article creation to avoid intra-batch races and uniqueness conflicts.
 
 ### Weak Match Fingerprint
 
@@ -269,6 +272,7 @@ Minimum staging responsibilities:
 3. store weak fingerprint inputs only if needed for candidate discovery
 4. mark each staged row as matched, created, unresolved, skipped duplicate, or failed
 5. preserve enough source information to retry a failed batch without reparsing the whole source when practical
+6. record lease or ownership state for source/import-route scopes that require a single writer, including enough heartbeat or checkpoint information to detect abandoned runs
 
 Implementation options:
 
@@ -276,6 +280,7 @@ Implementation options:
 2. keep persistent checkpoint state for resumability and operator visibility
 3. periodically compact or delete completed staging rows once canonical writes and import-scoped records are durable
 4. avoid keeping large raw JSON blobs in staging if source rows can be re-read cheaply from a file or cursor
+5. acquire an import-run lease or equivalent guard before canonical writes for any source/import route where two workers can race over the same source records
 
 ### Project-Scoped Serving Metadata
 
@@ -477,8 +482,10 @@ Required scenarios:
     - unresolved and requires manual resolution
 6. expose a batch API that accepts staged rows or normalized article candidates and returns match outcomes in bounded chunks
 7. make the batch API deduplicate source rows and source identifiers before canonical writes
-8. make matching idempotent across retries by source kind, import run, source record key, and normalized identifiers
-9. keep all large-source matching paths free of full scans over `app.article.original_data`, `app.article.source_metadata`, or import-scoped JSON blobs
+8. make matching idempotent across retries by `source_kind`, `import_run_id`, `source_record_key`, `source_record_hash`, and normalized identifiers
+9. define the bounded transaction contract for write chunks so canonical article creation, identifier insertion, and import-record insertion commit together without spanning an entire import run
+10. treat identifier insert conflicts as concurrency signals: re-read the winning `app.article_identifier` row, continue only when it maps to the same intended canonical article, and quarantine a concurrent strong-identifier conflict when it maps elsewhere
+11. keep all large-source matching paths free of full scans over `app.article.original_data`, `app.article.source_metadata`, or import-scoped JSON blobs
 
 ### Phase 3. Rewrite article write paths
 
@@ -499,6 +506,7 @@ Required scenarios:
 10. store source `article_id` values from broad-source harvesters only as source-facing or import-scoped identifiers; they must not become canonical article identity or redefine `app.article.article_id`
 11. ensure a later broad-source import can enrich a Covidence-created canonical article without changing its project-scoped Covidence metadata
 12. keep judgment queue and outbox writes reproducible by resolving article import context through canonical article ids plus project-scoped import records before new jobs or snapshots are created
+13. wrap each bounded write chunk so canonical article creation, `app.article_identifier` insertion, and `app.article_import_route` insertion either commit together or roll back together
 
 ### Phase 4. Backfill and merge historical duplicates
 
@@ -596,6 +604,7 @@ After all reads and writes have moved:
 10. bulk corpus imports can create excessive mart refresh work unless project-impact detection is explicit
 11. source batches can contain internal duplicates or strong identifier conflicts across DOI, PMID, arXiv, bioRxiv, and medRxiv values, so staging must collapse exact duplicates or quarantine conflicts before canonical writes and must not silently collapse disagreeing canonical matches
 12. legacy queued judgment jobs and saved execution snapshots can lose reproducibility if compatibility adapters for `importRoute` and `originalData` are removed before downstream consumers migrate
+13. retries that are not keyed by `source_kind`, `import_run_id`, `source_record_key`, and `source_record_hash` can create duplicate import records or conflicting canonical writes after an interrupted import
 
 ## Migration Notes
 
@@ -607,6 +616,7 @@ After all reads and writes have moved:
 6. record old-to-new article id mappings and merge decisions for auditability and restart safety
 7. for large imports, prefer checkpointed batch cutovers over one monolithic migration transaction
 8. broad corpus imports should be safe to pause, resume, and rerun without changing match decisions for already-processed rows
+9. retry and cutover scripts must be idempotent by `source_kind`, `import_run_id`, `source_record_key`, and `source_record_hash`, with identifier uniqueness resolving races before any duplicate canonical article is accepted
 
 ## Logging
 
