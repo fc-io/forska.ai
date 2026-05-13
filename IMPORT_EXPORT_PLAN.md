@@ -333,21 +333,79 @@
 - `DELETE /api/projects/import/:sessionId`
 - Add proxy tests proving large export download responses stream through the owner proxy without being materialized into memory on follower servers, and proving large import upload requests use the streaming owner-proxy path instead of the generic buffered `ArrayBuffer` path.
 
-## UI Files To Touch
+## UI Implementation Checklist
 
-- rename existing `src/components/main/ProjectsGrid.tsx` to `src/components/main/projectsGrid.tsx` with `git mv` through a temporary filename if needed on case-insensitive filesystems, then update imports and mocks
-- `src/app/routes/+projects/+archived/archivedProjectsTable.tsx`
-- `src/app/routes/+projects/+index.tsx`
-- new `src/app/routes/+projects/+import.tsx`
-- generated `src/app/routeTree.gen.ts` after adding `src/app/routes/+projects/+import.tsx`; do not edit it by hand, and run `bun run build` or the app dev pipeline so the generated static `/projects/import` route is included in the change
-- add small client helpers near `src/app/routes/+admin/+models/providerConnectionsClient.ts` only when the import wizard needs transfer-specific provider/model calls that do not belong in the route component
-- `src/app/utils/decodeAndSanitize.ts` or a small sibling HTML runtime-asset rewrite helper, plus `src/components/main/projects/reviews/review/reviewArticleDetails.tsx`, if imported `fullTextHtml` can contain promoted runtime asset references; keep browser and desktop URL generation through `getRuntimeAssetUrl`, and test rewrite ordering with sanitization so embedded asset references cannot bypass HTML sanitization or stay as raw `assets/...` paths
-- keep new export-package state and helper logic out of the already-large projects grid body when it becomes non-trivial; use a sibling owner folder/helper instead of growing the component further
-- extract a small shared provider-model resolution component from `src/app/routes/+projects/+create.tsx` only if the import flow ends up reusing enough of that UI to justify it
-- Use Eden plus TanStack Query for normal project-transfer session reads and mutations, with the existing client-env base URL behavior that the generated API client already uses. Use `getApiRequestUrl` for manual transfer upload requests and direct download URLs so browser/dev and desktop resolve the same API origin. Use `fetch` only where upload streaming or small inline response handling requires it, and keep those calls local to the wizard/export action. For ready large package downloads, trigger a normal browser/desktop download from the `GET .../download` URL with an anchor or navigation instead of converting the response to a `Blob`/object URL in memory; do not reuse the CSV download helper for package downloads because it materializes a `Blob`. Use session metadata for the filename or expose `Content-Disposition` through CORS before reading it from cross-origin desktop fetch responses.
-- do not blindly reuse `src/services/ensureSelectableModelId.ts` for non-Codex import resolution because its Anthropic ensure path binds to the first enabled Anthropic connection, not a user-selected mapped connection
-- update `src/app/routes/+projects/-+index.vitest.tsx` so `renders project header actions in the expected order` expects `Import Project` immediately before `Create Covidence Project`, with `href: '/projects/import'`
-- add or update an archived-project table test so archived rows expose full-fidelity `Export Project` without exposing the CSV-only `Export data` action; adjust the table action-column width/layout if the extra action would crowd the existing `Unarchive` control
+Use this order while implementing so each step can be tested in the same sequence users will follow.
+
+### 1. Projects Index Page (`/projects`)
+
+- [ ] In `src/app/routes/+projects/+index.tsx`, add `Import Project` immediately to the left of `Create Covidence Project`, with `href: '/projects/import'`.
+- [ ] Keep the current projects index shell and loading model intact; do not suspend the whole route while the import entry point is added.
+- [ ] Update `src/app/routes/+projects/-+index.vitest.tsx` so `renders project header actions in the expected order` expects `Import Project` before `Create Covidence Project`.
+- [ ] Smoke test: `/projects` renders, the action order is correct, and `Import Project` opens `/projects/import` in browser/dev and desktop.
+
+### 2. Active Projects Grid (`/projects` active rows)
+
+- [ ] Rename `src/components/main/ProjectsGrid.tsx` to `src/components/main/projectsGrid.tsx` using a Git-safe temporary filename step on case-insensitive filesystems, then update imports and mocks in the same change.
+- [ ] Add `Export Project` immediately next to the existing `Export data` action for active projects.
+- [ ] Keep `Export data` mapped to the current `/projects/$id/export` CSV page and preserve the existing active-project CSV semantics.
+- [ ] Wire `Export Project` to `POST /api/projects/:id/export-project`, supporting small inline package downloads and large export-session polling with a `preparing download` state.
+- [ ] Keep package-download handling out of the CSV Blob helper; use normal browser/desktop download navigation for ready large package downloads.
+- [ ] Keep new export-package state and helper logic out of the already-large projects grid body when it becomes non-trivial; use a sibling owner folder/helper instead.
+- [ ] Add or update `src/components/main/projectsGrid.vitest.tsx` for action placement, CSV regression behavior, and async export state.
+- [ ] Smoke test: active project CSV export still opens the old CSV flow, and full-fidelity package export either downloads or enters the expected background preparation state.
+
+### 3. Archived Projects Page (`/projects/archived`)
+
+- [ ] In `src/app/routes/+projects/+archived/archivedProjectsTable.tsx`, add the same full-fidelity `Export Project` action for archived projects.
+- [ ] Do not expose the CSV-only `Export data` action for archived rows.
+- [ ] Adjust the action-column width/layout if the additional action crowds the existing `Unarchive` control.
+- [ ] Add or update `src/app/routes/+projects/+archived/archivedProjectsTable.vitest.tsx` so archived rows expose full-fidelity package export without exposing CSV export.
+- [ ] Smoke test: an archived project can start package export without being unarchived, and the existing unarchive action remains usable.
+
+### 4. Import Wizard Page (`/projects/import`)
+
+- [ ] Add `src/app/routes/+projects/+import.tsx` and regenerate `src/app/routeTree.gen.ts` through `bun run build` or the app dev pipeline; do not edit the generated route tree by hand.
+- [ ] Build the wizard as layout-first UI with local loading/progress states; do not suspend the root `<Outlet />` or the whole route.
+- [ ] Use Eden plus TanStack Query for normal project-transfer session reads and mutations, with the generated API client's existing client-env base URL behavior.
+- [ ] Use `getApiRequestUrl` for manual transfer upload requests and direct package download URLs so browser/dev and desktop resolve the same API origin.
+- [ ] Use `fetch` only where streaming upload or small inline response handling requires it, and keep those calls local to the wizard or export action.
+- [ ] Upload step: create an import session, stream the `.forska-project.zip` upload, show upload/extraction/analyze progress, and support cancellation where the session state allows it.
+- [ ] Package review step: show project name, source app version, package counts, omission warnings, and exact duplicate-package warnings.
+- [ ] Dependency resolution step: auto-match safe providers/models, let users select an existing connection or create a new one with sanitized prefill, support managed-provider auth handoff, and run Codex status/login/ensure when needed.
+- [ ] Do not edit existing provider connections in the v1 wizard; if dependency setup leaves the wizard for standalone provider pages, add a `returnTo` or import-session handoff contract first.
+- [ ] Model resolution step: materialize non-Codex models only through the mapped provider connection, use `POST /api/models/ensure` only for Codex, and verify the returned database model is enabled, selectable, and identity-equivalent before marking it resolved.
+- [ ] Plan review step: show reused/new article counts, reused-article field fills, route-link omissions, snapshot project-article links, final model mappings, overlap counts, judgment signature provenance, human/review signature provenance, and all blocking conflicts.
+- [ ] Confirm step: submit the reviewed `planRevision`, show commit progress for large imports, handle stale-plan revalidation responses without writing final project rows, and surface post-import warnings after completion.
+- [ ] Finish step: navigate to the imported active project and keep the completion payload available for idempotent retry display.
+- [ ] Add or update `src/app/routes/+projects/-+import.vitest.tsx` for the wizard shell, session polling states, upload progress, dependency blockers, plan blockers, and commit-ready state.
+- [ ] Smoke test: `/projects/import` loads from the projects index, a small package reaches plan review inline, a large package shows background progress, and unresolved provider/model dependencies block final commit.
+
+### 5. Provider And Model Setup Surfaces
+
+- [ ] Add small client helpers near `src/app/routes/+admin/+models/providerConnectionsClient.ts` only when the import wizard needs transfer-specific provider/model calls that do not belong in the route component.
+- [ ] Extract a small shared provider-model resolution component from `src/app/routes/+projects/+create.tsx` only if the import flow reuses enough of that UI to justify it.
+- [ ] Do not blindly reuse `src/services/ensureSelectableModelId.ts` for non-Codex import resolution because its Anthropic ensure path binds to the first enabled Anthropic connection, not the user-selected mapped connection.
+- [ ] Smoke test: provider/model setup from the wizard returns to the same import session with dependency state refreshed, and the normal project-create model flow still works if shared UI is extracted.
+
+### 6. Imported Project Review Pages
+
+- [ ] If imported `fullTextHtml` can contain promoted runtime asset references, update `src/app/utils/decodeAndSanitize.ts` or a small sibling HTML runtime-asset rewrite helper plus `src/components/main/projects/reviews/review/reviewArticleDetails.tsx`.
+- [ ] Keep browser and desktop URL generation through `getRuntimeAssetUrl`.
+- [ ] Test rewrite ordering with sanitization so embedded asset references cannot bypass HTML sanitization or remain as raw `assets/...` paths.
+- [ ] Smoke test: after import and mart refresh, the imported project opens in review flows with expected prompts, articles, judgments, reviews, and embedded runtime assets.
+
+### UI Checklist Quality Gates
+
+- [ ] `bunx vitest run src/app/routes/+projects/-+index.vitest.tsx`
+- [ ] `bunx vitest run src/components/main/projectsGrid.vitest.tsx`
+- [ ] `bunx vitest run src/app/routes/+projects/+archived/archivedProjectsTable.vitest.tsx`
+- [ ] `bunx vitest run src/app/routes/+projects/-+import.vitest.tsx`
+- [ ] Add and run the chosen `fullTextHtml` runtime-asset rewrite/render helper test, such as `bun test src/app/utils/decodeAndSanitize.test.ts`, when imported HTML asset references are supported.
+- [ ] `bun run build`
+- [ ] `bun run desktop:build`
+- [ ] Browser smoke verify the checklist order: projects index, active package export, archived package export, import wizard, provider/model resolution, commit, and imported project review.
+- [ ] Desktop smoke verify the same flow, including file picking/upload, download navigation, post-import project navigation, and embedded runtime asset display.
 
 ## Phase Checklist
 
