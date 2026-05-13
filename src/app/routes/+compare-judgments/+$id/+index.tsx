@@ -13,6 +13,7 @@ import {
   fetchComparisonProjectJudgmentsCount,
   fetchComparisonProjectJudgmentsMetadata,
   fetchComparisonProjectJudgmentsPage,
+  fetchComparisonProjectStats,
   resetComparisonProjectConflictResolution,
   setComparisonProjectConflictResolution,
 } from '../../../../services/comparisonProjectsService'
@@ -36,6 +37,7 @@ import {
   getInitialCompareProjectJudgmentsUrlState,
 } from './+index/compareProjectJudgmentsUrlState.ts'
 import {ComparisonProjectServingProgress} from './+index/comparisonProjectServingProgress.tsx'
+import {ComparisonProjectStatsCard} from './+index/comparisonProjectStatsCard.tsx'
 
 const getContentSettingsLabel = (contentVariants: Array<{label: string}>) => {
   return contentVariants.length > 0
@@ -249,6 +251,18 @@ const CompareProjectJudgmentsPage = () => {
       },
       refetchOnWindowFocus: false,
       refetchInterval: 5000,
+      staleTime: 5000,
+    }
+  })
+  const comparisonProjectStatsQuery = useQuery(() => {
+    return {
+      queryKey: ['comparison-project-stats', comparisonProjectId()],
+      queryFn: () => {
+        return fetchComparisonProjectStats(comparisonProjectId())
+      },
+      enabled: comparisonProjectId().length > 0,
+      refetchInterval: comparisonProjectQuery.data?.servingStatus === 'refreshing' ? 5000 : false,
+      refetchOnWindowFocus: false,
       staleTime: 5000,
     }
   })
@@ -557,6 +571,13 @@ const CompareProjectJudgmentsPage = () => {
                   </div>
                 </div>
               </div>
+
+              <ComparisonProjectStatsCard
+                error={comparisonProjectStatsQuery.error}
+                isError={comparisonProjectStatsQuery.isError}
+                isLoading={comparisonProjectStatsQuery.isPending}
+                stats={comparisonProjectStatsQuery.data}
+              />
 
               <Show when={getComparisonProjectServingStatusBanner(comparisonProject().servingStatus)}>
                 {(statusBanner) => {
