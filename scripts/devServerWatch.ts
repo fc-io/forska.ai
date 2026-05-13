@@ -322,7 +322,7 @@ const promptForExistingAction = async ({
     `  1. Attach to current stack${getDefaultExistingAction({existingStack}) === 'attach' ? ' (recommended)' : ''}\n`,
   )
   output.write(
-    `  2. Restart stack under this watcher${getDefaultExistingAction({existingStack}) === 'restart' ? ' (recommended)' : ''}\n`,
+    `  2. Stop existing watcher/stack and restart under this watcher${getDefaultExistingAction({existingStack}) === 'restart' ? ' (recommended)' : ''}\n`,
   )
   output.write('  3. Stop existing watcher/stack and exit\n')
   output.write('  4. Cancel\n')
