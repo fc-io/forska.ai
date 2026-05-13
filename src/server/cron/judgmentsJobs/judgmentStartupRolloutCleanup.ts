@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {backfillRequestAttemptCloseoutsOnStartup} from '../../services/requestAttemptCloseoutService.ts'
 import {flushJudgmentJobSqliteOutbox} from './judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 import {judgmentJobAutoDrainStatuses} from './judgmentJobStoragePolicy.ts'
@@ -9,7 +10,7 @@ import {
   type LegacyEvidenceRepairResult,
   repairLegacyTokenUseEvidenceForJob,
 } from './judgmentLegacyEvidenceRepair.ts'
-import {reconcileProviderAdmissionLeasesThroughOwner} from './providerAdmissionLease.ts'
+import {reconcileProviderAdmissionLeasesForDurableCloseout} from './judgmentsJobsCleanupStale.ts'
 
 type RolloutCleanupJobRow = {id: string; status: string; storageState: string}
 
@@ -169,10 +170,9 @@ export const runStartupJudgmentRolloutCleanup = async ({
   claimedBy: string
 }): Promise<JudgmentStartupRolloutCleanupResult> => {
   const result = await cleanupStartupRolloutJobs({claimedBy, jobs: await getStartupRolloutJobRows()})
-  const terminalRequestAttemptCloseouts =
-    await getJudgmentJobSqliteService().getDurableTerminalRequestAttemptCloseoutProofs()
 
-  await reconcileProviderAdmissionLeasesThroughOwner({terminalRequestAttemptCloseouts})
+  await backfillRequestAttemptCloseoutsOnStartup()
+  await reconcileProviderAdmissionLeasesForDurableCloseout()
 
   return result
 }
