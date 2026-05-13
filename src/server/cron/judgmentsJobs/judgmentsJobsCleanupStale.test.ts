@@ -1015,8 +1015,8 @@ test('cleanupStale releases projected closeout request leases without closing pr
   expect(rows).toEqual([{leaseIdentity: probeLeaseIdentity, leaseKind: 'probe'}])
 })
 
-test('cleanupStale releases token-use closeout request leases before projection backfill', async () => {
-  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase) {
+test('startup rollout cleanup backfills token-use closeouts and releases request leases', async () => {
+  if (!queryDatabase || !runDatabase || !runStartupJudgmentRolloutCleanup) {
     throw new Error('Test database not initialized')
   }
 
@@ -1116,7 +1116,14 @@ test('cleanupStale releases token-use closeout request leases before projection 
 
   expect(Number(projectionRow?.count ?? -1)).toBe(0)
 
-  await judgmentsJobsCleanupStale()
+  await runDatabase('DELETE FROM app.request_attempt_closeout_backfill_state')
+  await runStartupJudgmentRolloutCleanup({claimedBy: 'server-a'})
+
+  const [backfilledProjectionRow] = await queryDatabase<{count: number | string | bigint}>(`
+    SELECT COUNT(*) AS count
+    FROM app.request_attempt_closeout
+    WHERE request_attempt_id = ${getSqlLiteral(requestAttemptId)}
+  `)
 
   const rows = await queryDatabase<{leaseIdentity: string; leaseKind: string}>(`
     SELECT lease_identity AS leaseIdentity, lease_kind AS leaseKind
@@ -1125,6 +1132,7 @@ test('cleanupStale releases token-use closeout request leases before projection 
     ORDER BY lease_kind ASC
   `)
 
+  expect(Number(backfilledProjectionRow?.count ?? -1)).toBe(1)
   expect(rows).toEqual([{leaseIdentity: probeLeaseIdentity, leaseKind: 'probe'}])
 })
 
