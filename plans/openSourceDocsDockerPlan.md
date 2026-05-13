@@ -30,6 +30,8 @@ These decisions record intended public-release handling. This workstream does no
 | File or Group | Action | Target Repo/Path | Reason | Blocker |
 | --- | --- | --- | --- | --- |
 | `LICENSE` | Keep as-is | Forska | Apache 2.0 license is already public project material. | None |
+| `SECURITY.md` | Add done | Forska | Public security policy now documents private reporting expectations and local-first security posture. | None |
+| `CONTRIBUTING.md` | Add done | Forska | Public contributor guide now documents setup, checks, and public-safe development notes. | None |
 | `README.md` | Rewrite done | Forska | Public entrypoint now describes the supported local-first web workflow and provider setup. | None |
 | `docs/README_RUN_LOCAL.md` | Rewrite done | Forska | Local run doc avoids private helper repos, internal runtime drills, and admin/debug routes. | None |
 | `docs/README_SPLIT_RUNTIME_VERIFICATION.md` | Remove done | N/A | Internal runtime verification doc described owner RPC, admin diagnostics, and failover drills. | None |
