@@ -404,20 +404,27 @@ This is the safest long-term behavior if we want to avoid poisoning canonical ar
 ### Query And Serving Paths
 
 1. `src/server/services/getAppQueryService.ts`
-2. `src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts`
-3. `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts`
-4. `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsBoth.ts`
-5. `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts`
-6. `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts`
-7. `src/server/routes/ArticlesRoutes.ts`
-8. `src/server/routes/ProjectExportRoutes.ts`
-9. `src/server/routes/ArticleAdminRoutes.ts`
-10. `src/server/cron/fullTextJobs.ts`
-11. `src/services/olap/duckdbOlap.ts`
-12. Comparison routes:
+2. `src/server/services/appQueryHelpers.ts`
+3. `src/server/services/dataSourceQueryService.ts`
+4. `src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts`
+5. `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts`
+6. `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsBoth.ts`
+7. `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts`
+8. `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts`
+9. `src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts`
+10. `src/server/routes/projectsRoutes/projectsRoutesGetReviewsHealth.ts`
+11. `src/server/routes/ArticlesRoutes.ts`
+12. `src/server/routes/ProjectExportRoutes.ts`
+13. `src/server/routes/AdminInvestigateRoutes.ts`
+14. `src/server/routes/ArticleAdminRoutes.ts`
+15. `src/server/cron/fullTextJobs.ts`
+16. `src/server/cron/fullTextConversionJobs.ts`
+17. `src/services/olap/duckdbOlap.ts`
+18. Comparison routes:
    - `src/server/routes/ComparisonProjectsRoutes.ts`
    - `src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts`
-13. any caller that still reads `app.article.article_id`, `import_route`, or the legacy mixed `source_metadata` blob directly
+19. helpers that build source URLs or expose article ids to the UI must read canonical URL fields, explicit source URL fields, project-scoped `external_article_id`, or canonical article ids according to the API contract
+20. any caller that still reads `app.article.article_id`, `import_route`, or the legacy mixed `source_metadata` blob directly
 
 ### Judgment Snapshot, Queue, And Prompt Payloads
 
@@ -435,11 +442,13 @@ This is the safest long-term behavior if we want to avoid poisoning canonical ar
 
 1. `src/server/services/getDuckdbMartRefreshService.ts`
 2. `src/server/services/projectMartLargeRebuildExecutor.ts`
-3. Comparison serving builders:
+3. `src/server/services/maintenanceWorkLeaseService.ts`
+4. `src/server/workers/projectMartRefreshWorker.ts`
+5. Comparison serving builders:
    - `src/server/services/comparisonProjectServingRollupBuilder.ts`
    - `src/server/services/comparisonProjectServingCellBuilder.ts`
    - `src/server/services/comparisonProjectServingInvalidationService.ts`
-4. related refresh state and worker paths
+6. related refresh state and worker paths
 
 ### Types And Metadata Utilities
 
@@ -452,7 +461,9 @@ This is the safest long-term behavior if we want to avoid poisoning canonical ar
 1. Covidence badges and related-record displays
 2. filters and review tables that currently assume one article-global Covidence metadata blob
 3. exports or detail screens that show source-specific article ids
-4. display and URL helpers must stop parsing source prefixes from `app.article.article_id` and instead use project-scoped external ids plus explicit URL fields from the serving payload
+4. `src/app/utils/getArticleUrl.ts`
+5. display and URL helpers must stop parsing source prefixes from `app.article.article_id` and instead use project-scoped external ids plus explicit URL fields from the serving payload
+6. UI helpers that build source URLs or expose article ids must consume the serving payload's explicit canonical id, project-scoped external id, canonical URL, or source URL fields instead of inferring meaning from legacy article id prefixes
 
 ### Tests
 
@@ -579,15 +590,16 @@ Conflict rules when FK rewrites hit unique constraints:
 
 ### Phase 5. Rewrite read and query paths
 
-1. update `getAppQueryService` so article reads expose canonical article fields, canonical metadata, and optionally scoped import data separately
+1. update `getAppQueryService`, `appQueryHelpers`, and `dataSourceQueryService` so article reads expose canonical article fields, canonical metadata, and optionally scoped import data separately
 2. update review-detail Covidence related-record lookups to read import-scoped records
 3. update review list, human list, and human-filter routes that currently query `a.source_metadata` or `a.import_route` off `app.article`
-4. update `fullTextJobs` and `ArticleAdminRoutes` so PDF fetch flows still use canonical full-text link hints after the metadata split
-5. update OLAP readers and filters that currently query `source_metadata.covidence` off `app.article`
-6. update exports and any batch article endpoints that still assume article-global import metadata or article-global external ids
-7. update comparison project read paths, including `ComparisonProjectsRoutes` and `comparisonProjectJudgmentRows`, so judgment row lookups explicitly distinguish canonical article ids from external display ids and never infer identity from `app.article.article_id`
-8. update `judgmentExecutionSnapshotService`, judgment queue/outbox readers, completion journal replay, and LLM prompt payload construction so snapshot payloads expose canonical article fields plus the correct project-scoped external id and import metadata
-9. add an explicit compatibility adapter that derives legacy snapshot `importRoute` and `originalData` fields from scoped import records until downstream snapshot consumers, queued-job readers, and outbox import paths migrate to the canonical and scoped payload shape
+4. update review warning and health routes so they report missing or conflicting scoped article metadata without reading legacy article-level import blobs
+5. update `fullTextJobs`, `fullTextConversionJobs`, `AdminInvestigateRoutes`, and `ArticleAdminRoutes` so PDF fetch, conversion, investigation, and admin flows still use canonical full-text link hints after the metadata split
+6. update OLAP readers and filters that currently query `source_metadata.covidence` off `app.article`
+7. update exports and any batch article endpoints that still assume article-global import metadata or article-global external ids
+8. update comparison project read paths, including `ComparisonProjectsRoutes` and `comparisonProjectJudgmentRows`, so judgment row lookups explicitly distinguish canonical article ids from external display ids and never infer identity from `app.article.article_id`
+9. update `judgmentExecutionSnapshotService`, judgment queue/outbox readers, completion journal replay, and LLM prompt payload construction so snapshot payloads expose canonical article fields plus the correct project-scoped external id and import metadata
+10. add an explicit compatibility adapter that derives legacy snapshot `importRoute` and `originalData` fields from scoped import records until downstream snapshot consumers, queued-job readers, and outbox import paths migrate to the canonical and scoped payload shape
 
 ### Phase 6. Rewrite mart refresh and rebuild logic
 
@@ -600,12 +612,14 @@ Conflict rules when FK rewrites hit unique constraints:
 7. when broad corpus imports enrich articles already linked to Covidence projects, enqueue scoped refreshes only for those affected project and article ids
 8. update comparison project serving marts so comparison `article_external_id` comes from the comparison-project source scope or selected import record, not from `app.article.article_id`
 9. make comparison serving metadata combine canonical article metadata with scoped import metadata instead of copying `app.article.source_metadata` wholesale
+10. update `maintenanceWorkLeaseService` and `projectMartRefreshWorker` so refresh leases, dirty scopes, and worker payloads use canonical article ids and scoped refresh keys rather than legacy article metadata readers
 
 ### Phase 7. Client and UI alignment
 
 1. update review pages to read project-scoped Covidence metadata and source-specific external ids
 2. update duplicate-study and study-conflict filters to use the new serving shape
-3. verify the browser app flow and the desktop app flow both still render Covidence review details correctly
+3. update `getArticleUrl` and related source-link helpers so article links come from explicit URL fields or identifier-derived URL builders
+4. verify the browser app flow and the desktop app flow both still render Covidence review details correctly
 
 ### Phase 8. Remove legacy article-level import fields
 
@@ -694,6 +708,12 @@ Pass/fail checks for this change:
 26. Verify broad-source imports that do not affect a project do not trigger rebuilds for unrelated project review marts
 27. Verify strong-identifier conflict handling quarantines rows when multiple identifiers match different canonical articles, and that the quarantine payload includes source kind, import run id, source record key, conflicting identifier kinds, conflicting canonical article ids, and operator-review metadata
 28. Add and run targeted identifier normalization coverage, such as `bun test src/utils/articleIdentifierNormalization.test.ts`, for DOI, PMID, PMCID source-metadata handling, arXiv version suffixes, bioRxiv and medRxiv URL or DOI forms, trusted URL-derived identifiers, malformed values, duplicate normalized values in one batch, and conflicts across identifier kinds
+29. When shared query helpers change, run `bun test src/server/services/getAppQueryService.test.ts` and targeted route tests for the affected reader, adding focused coverage for `appQueryHelpers` or `dataSourceQueryService` if the changed behavior is not covered by an existing route or service test
+30. When admin or investigation routes change, run `bun test src/server/routes/AdminInvestigateRoutes.test.ts` and add or run targeted `ArticleAdminRoutes` coverage for changed admin article metadata, URL, or full-text behavior
+31. When review warning or health routes change, run `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts` and add or run targeted `projectsRoutesGetReviewsHealth` coverage for changed health behavior
+32. When maintenance leases, dirty scopes, or mart refresh workers change, run `bun test src/server/workers/projectMartRefreshWorker.test.ts` plus the relevant maintenance or large-rebuild lease tests such as `bun test src/server/services/getDuckdbMartMaintenanceService.test.ts` or `bun test src/server/services/projectMartLargeRebuildLeaseFencing.test.ts`
+33. When full-text conversion or PDF fetch routing changes, add or run targeted coverage for `fullTextConversionJobs`, `fullTextJobs`, and the affected fetch helper so canonical full-text link hints and scoped source URLs are verified
+34. When `getArticleUrl` or related client source-link helpers change, add or run targeted client utility coverage and verify browser and desktop review flows do not expose legacy route-prefixed `app.article.article_id` values as source URLs or display ids
 
 ## Commands To Run
 
