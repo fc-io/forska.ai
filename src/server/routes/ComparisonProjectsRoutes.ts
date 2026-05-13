@@ -50,6 +50,10 @@ import {
   getComparisonProjectServingJudgmentCount,
   getComparisonProjectServingJudgmentRowsPage,
 } from './comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
+import {
+  type ComparisonProjectStatsComparison,
+  getComparisonProjectStats,
+} from './comparisonProjectsRoutes/comparisonProjectStats.ts'
 
 type PromptSelection = {
   promptId: string
@@ -132,6 +136,13 @@ type ComparisonProjectScope = {
   models: ComparisonProjectModelConfig[]
   importRouteIds: string[]
   columns: ComparisonProjectJudgmentsColumn[]
+}
+type ComparisonProjectStatsResponse = {
+  activeGeneration: number | null
+  comparisons: ComparisonProjectStatsComparison[]
+  isServingReady: boolean
+  servingStatus: ComparisonProjectServingStatus
+  servingUpdatedAt: Date | null
 }
 type ComparisonProjectLlmRow = ComparisonProjectJudgmentLlmRow
 type ComparisonProjectHumanRow = ComparisonProjectJudgmentHumanRow
@@ -2500,6 +2511,27 @@ const getComparisonProjectJudgmentsCount = async (
   }
 }
 
+const getComparisonProjectStatsResponse = async (
+  scope: ComparisonProjectScope,
+): Promise<ComparisonProjectStatsResponse> => {
+  const comparisons = await getComparisonProjectStats({
+    columns: scope.columns,
+    comparisonProjectId: scope.id,
+    isSummaryMode: getIsSummaryMode(scope),
+    primaryModelId: scope.modelIds?.[0] ?? null,
+    primarySourceProjectId: scope.summarySourceProjectId ?? scope.sourceProjectIds[0] ?? null,
+    queryRunner: appDatabaseService,
+  })
+
+  return {
+    activeGeneration: scope.activeGeneration,
+    comparisons,
+    isServingReady: scope.isServingReady,
+    servingStatus: scope.servingStatus,
+    servingUpdatedAt: scope.servingUpdatedAt,
+  }
+}
+
 const insertComparisonProjectPromptLinks = async (
   tx: AppTx,
   comparisonProjectId: string,
@@ -3141,6 +3173,19 @@ export const comparisonProjectsRoutes = new Elysia()
       set.status = 404
       return {data: null, error: 'Comparison project not found'}
     }
+
+    return {data}
+  })
+  .get('/api/comparison-projects/:id/stats', async (context) => {
+    const {params, set} = context
+    const scope = await getComparisonProjectScope(params.id)
+
+    if (!scope) {
+      set.status = 404
+      return {data: null, error: 'Comparison project not found'}
+    }
+
+    const data = await getComparisonProjectStatsResponse(scope)
 
     return {data}
   })
