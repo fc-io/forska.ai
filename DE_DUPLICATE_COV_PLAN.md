@@ -335,6 +335,9 @@ This is the safest long-term behavior if we want to avoid poisoning canonical ar
 1. `src/db/duckdbMigrations/0000_nativeDuckdbSchema.sql`
 2. follow-up DuckDB migrations for `app.article_identifier`, the expanded import-scoped article model, and any unresolved or fingerprint tables if needed
 3. mart schema migrations where serving metadata and `article_external_id` assumptions change
+4. Comparison serving migrations:
+   - `src/db/duckdbMigrations/0072_comparisonProjectServingSchema.sql`
+   - `src/db/duckdbMigrations/0075_rebuildComparisonServingMarts.sql`
 
 ### Import And Write Paths
 
@@ -376,13 +379,20 @@ This is the safest long-term behavior if we want to avoid poisoning canonical ar
 9. `src/server/routes/ArticleAdminRoutes.ts`
 10. `src/server/cron/fullTextJobs.ts`
 11. `src/services/olap/duckdbOlap.ts`
-12. any caller that still reads `app.article.article_id`, `import_route`, or the legacy mixed `source_metadata` blob directly
+12. Comparison routes:
+   - `src/server/routes/ComparisonProjectsRoutes.ts`
+   - `src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts`
+13. any caller that still reads `app.article.article_id`, `import_route`, or the legacy mixed `source_metadata` blob directly
 
 ### Mart Refresh And Rebuild
 
 1. `src/server/services/getDuckdbMartRefreshService.ts`
 2. `src/server/services/projectMartLargeRebuildExecutor.ts`
-3. related refresh state and worker paths
+3. Comparison serving builders:
+   - `src/server/services/comparisonProjectServingRollupBuilder.ts`
+   - `src/server/services/comparisonProjectServingCellBuilder.ts`
+   - `src/server/services/comparisonProjectServingInvalidationService.ts`
+4. related refresh state and worker paths
 
 ### Types And Metadata Utilities
 
@@ -396,6 +406,15 @@ This is the safest long-term behavior if we want to avoid poisoning canonical ar
 2. filters and review tables that currently assume one article-global Covidence metadata blob
 3. exports or detail screens that show source-specific article ids
 4. display and URL helpers must stop parsing source prefixes from `app.article.article_id` and instead use project-scoped external ids plus explicit URL fields from the serving payload
+
+### Tests
+
+1. Comparison project serving tests:
+   - `src/server/services/comparisonProjectServingRollupBuilder.test.ts`
+   - `src/server/services/comparisonProjectServingCellBuilder.test.ts`
+   - `src/server/services/comparisonProjectServingInvalidationService.test.ts`
+2. Comparison judgment-row tests:
+   - `src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts`
 
 ## Phased Implementation Plan
 
@@ -509,6 +528,7 @@ Conflict rules when FK rewrites hit unique constraints:
 4. update `fullTextJobs` and `ArticleAdminRoutes` so PDF fetch flows still use canonical full-text link hints after the metadata split
 5. update OLAP readers and filters that currently query `source_metadata.covidence` off `app.article`
 6. update exports and any batch article endpoints that still assume article-global import metadata or article-global external ids
+7. update comparison project read paths, including `ComparisonProjectsRoutes` and `comparisonProjectJudgmentRows`, so judgment row lookups explicitly distinguish canonical article ids from external display ids and never infer identity from `app.article.article_id`
 
 ### Phase 6. Rewrite mart refresh and rebuild logic
 
@@ -519,6 +539,8 @@ Conflict rules when FK rewrites hit unique constraints:
 5. keep incremental refresh and large rebuild behavior aligned
 6. when broad corpus imports add millions of canonical articles that are not linked to a project, do not rebuild project review marts for unaffected projects
 7. when broad corpus imports enrich articles already linked to Covidence projects, enqueue scoped refreshes only for those affected project and article ids
+8. update comparison project serving marts so comparison `article_external_id` comes from the comparison-project source scope or selected import record, not from `app.article.article_id`
+9. make comparison serving metadata combine canonical article metadata with scoped import metadata instead of copying `app.article.source_metadata` wholesale
 
 ### Phase 7. Client and UI alignment
 
@@ -587,10 +609,14 @@ Pass/fail checks for this change:
 12. `bun test src/server/services/getDuckdbMartRefreshService.test.ts`
 13. `bun test src/server/services/projectMartLargeRebuildExecutor.test.ts`
 14. `bun test src/services/olap/duckdbOlap.test.ts`
-15. `bun run lint`
-16. `bun run build`
-17. `bun run desktop:build`
-18. Browser verify:
+15. `bun test src/server/services/comparisonProjectServingRollupBuilder.test.ts`
+16. `bun test src/server/services/comparisonProjectServingCellBuilder.test.ts`
+17. `bun test src/server/services/comparisonProjectServingInvalidationService.test.ts`
+18. `bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts`
+19. `bun run lint`
+20. `bun run build`
+21. `bun run desktop:build`
+22. Browser verify:
 
 - create a Covidence import
 - re-import the same package
@@ -599,21 +625,22 @@ Pass/fail checks for this change:
 - confirm project-scoped Covidence metadata, related-record views, filters, and displayed external article ids still render correctly
 - confirm a PDF fetch flow still works for an article that only has imported full-text links
 
-19. Desktop verify the same Covidence create and review flow
-20. Performance verify a synthetic or fixture-backed 50,000-record Covidence import completes without per-row matching queries, duplicate canonical articles, or unbounded memory growth
-21. Performance verify a staged broad-source import path can process at least one million identifier-bearing rows in bounded chunks and correctly links rows that match articles previously created by Covidence
-22. Verify broad-source imports that do not affect a project do not trigger rebuilds for unrelated project review marts
+23. Desktop verify the same Covidence create and review flow
+24. Performance verify a synthetic or fixture-backed 50,000-record Covidence import completes without per-row matching queries, duplicate canonical articles, or unbounded memory growth
+25. Performance verify a staged broad-source import path can process at least one million identifier-bearing rows in bounded chunks and correctly links rows that match articles previously created by Covidence
+26. Verify broad-source imports that do not affect a project do not trigger rebuilds for unrelated project review marts
 
 ## Commands To Run
 
 1. add the new regression tests before behavior changes
 2. run the targeted `bun test` commands before implementation and after each major phase, including `getAppQueryService`, human-review routes, and OLAP coverage when those layers change
-3. run `bun run db:mig` after each schema phase
-4. run `bun run build` for shared app changes
-5. run `bun run desktop:build` when runtime paths or shared UI are touched
-6. run `bun run lint` before merge
-7. add or run a repo-native import benchmark or integration test for 50,000 Covidence records before accepting the write-path rewrite
-8. add or run a repo-native staged-import benchmark or integration test for million-row Europe PMC or `src:med`/`src:PPR` identifier matching before accepting the broad-source path
+3. run comparison project serving and judgment-row tests when comparison routes, read paths, or serving marts change
+4. run `bun run db:mig` after each schema phase
+5. run `bun run build` for shared app changes
+6. run `bun run desktop:build` when runtime paths or shared UI are touched
+7. run `bun run lint` before merge
+8. add or run a repo-native import benchmark or integration test for 50,000 Covidence records before accepting the write-path rewrite
+9. add or run a repo-native staged-import benchmark or integration test for million-row Europe PMC or `src:med`/`src:PPR` identifier matching before accepting the broad-source path
 
 ## Open Decisions During Build
 
