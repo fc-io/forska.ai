@@ -1,4 +1,7 @@
-import type {ComparisonProjectDifferenceFilter} from '../../../../../utils/comparisonProjectDifferenceFilter.ts'
+import {
+  type ComparisonProjectDifferenceFilter,
+  comparisonProjectDifferenceFilters,
+} from '../../../../../utils/comparisonProjectDifferenceFilter.ts'
 import {
   type ComparisonProjectRowFilter,
   comparisonProjectRowFilters,
@@ -64,7 +67,7 @@ const getRowFilterSearchParamValue = (search: Record<string, unknown>): Comparis
 }
 
 const getIsComparisonProjectDifferenceFilter = (value: unknown): value is ComparisonProjectDifferenceFilter => {
-  return value === 'human-vs-llm' || value === 'llm-vs-llm' || value === 'any-disagreement' || value === 'all'
+  return comparisonProjectDifferenceFilters.includes(value as ComparisonProjectDifferenceFilter)
 }
 
 const getDifferenceFilterSearchParamValue = (search: Record<string, unknown>): ComparisonProjectDifferenceFilter => {

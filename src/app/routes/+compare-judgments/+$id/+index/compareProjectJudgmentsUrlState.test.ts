@@ -9,15 +9,15 @@ import {
 
 test('compare judgments URL state preserves canonical filter params', () => {
   const state = getInitialCompareProjectJudgmentsUrlState({
-    differenceFilter: 'human-vs-llm',
+    differenceFilter: 'human-vs-llm-true-conflict',
     limit: '100',
     page: '3',
     rowFilter: 'fully-answered',
   })
 
-  expect(state).toEqual({differenceFilter: 'human-vs-llm', pageLimit: 100, rowFilter: 'fully-answered'})
+  expect(state).toEqual({differenceFilter: 'human-vs-llm-true-conflict', pageLimit: 100, rowFilter: 'fully-answered'})
   expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({
-    differenceFilter: 'human-vs-llm',
+    differenceFilter: 'human-vs-llm-true-conflict',
     limit: '100',
     rowFilter: 'fully-answered',
   })

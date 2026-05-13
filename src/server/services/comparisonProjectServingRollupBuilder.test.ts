@@ -95,7 +95,13 @@ const contentKey = '1100'
 const generation = 1
 const promptProjectId = 'comparison-serving-rollup-prompt'
 const summaryProjectId = 'comparison-serving-rollup-summary'
-const differenceFilters = ['all', 'human-vs-llm', 'llm-vs-llm', 'any-disagreement'] as const
+const differenceFilters = [
+  'all',
+  'human-vs-llm',
+  'human-vs-llm-true-conflict',
+  'llm-vs-llm',
+  'any-disagreement',
+] as const
 
 const promptColumns = [
   {id: 'llm:model-a:1100:prompt-a', kind: 'llm', promptId: 'prompt-a'},

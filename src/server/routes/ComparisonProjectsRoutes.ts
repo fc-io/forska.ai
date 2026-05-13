@@ -3199,6 +3199,7 @@ export const comparisonProjectsRoutes = new Elysia()
           t.Union([
             t.Literal('all'),
             t.Literal('human-vs-llm'),
+            t.Literal('human-vs-llm-true-conflict'),
             t.Literal('llm-vs-llm'),
             t.Literal('any-disagreement'),
           ]),
@@ -3234,6 +3235,7 @@ export const comparisonProjectsRoutes = new Elysia()
           t.Union([
             t.Literal('all'),
             t.Literal('human-vs-llm'),
+            t.Literal('human-vs-llm-true-conflict'),
             t.Literal('llm-vs-llm'),
             t.Literal('any-disagreement'),
           ]),
@@ -3298,6 +3300,7 @@ export const comparisonProjectsRoutes = new Elysia()
           t.Union([
             t.Literal('all'),
             t.Literal('human-vs-llm'),
+            t.Literal('human-vs-llm-true-conflict'),
             t.Literal('llm-vs-llm'),
             t.Literal('any-disagreement'),
           ]),
