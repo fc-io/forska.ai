@@ -204,6 +204,20 @@ Scope:
 7. Bulk imports must stage normalized identifier rows first, then join staging rows to this table in chunks.
 8. Duplicate identifiers inside one source batch must be collapsed before canonical article creation to avoid intra-batch races and uniqueness conflicts.
 
+Normalization contract:
+
+| Identifier | Strong Match Identifier | Normalization Rule |
+|---|---:|---|
+| DOI | Yes | Trim whitespace, lowercase, remove `https://doi.org/`, `http://doi.org/`, `https://dx.doi.org/`, `http://dx.doi.org/`, `doi:`, and safe surrounding punctuation. Accept only DOI-shaped values that start with `10.` and contain a slash after prefix stripping. Store the bare DOI as `normalized_value`. |
+| PMID | Yes | Trim whitespace, remove `pmid:`, `pubmed:`, and trusted PubMed URL prefixes, require ASCII digits only, and store the numeric string without leading zero padding. Reject empty, zero-only, or mixed alphanumeric values as malformed identifiers. |
+| PMCID | No for this plan | PMCID is source metadata and full-text provenance only, not a strong canonical match identifier. Normalize supported source metadata to uppercase `PMC` plus digits after removing `pmcid:`, PubMed Central URL prefixes, and whitespace, but do not write it to `app.article_identifier` or use it for auto-merge unless a later plan explicitly promotes PMCID with uniqueness, backfill, and conflict tests. |
+| arXiv | Yes | Trim whitespace, remove trusted `arxiv.org/abs/`, `arxiv.org/pdf/`, `oai:arxiv.org:`, and `arXiv:` prefixes, lowercase category prefixes, remove query strings, fragments, and PDF suffixes, then validate either modern numeric ids such as `2401.12345` or legacy category ids such as `hep-th/9901001`. Strip trailing version suffixes like `v1` and `v2` from the canonical `normalized_value`, so arXiv versions match the same canonical article; preserve the source version only in import-scoped metadata when needed. |
+| bioRxiv | Yes | Normalize DOI, DOI URL, and trusted `biorxiv.org/content/...` URL forms to one lowercase DOI-shaped value. Remove query strings, fragments, `.full`, `.full.pdf`, and trailing server-path version suffixes before validation. Store the bare preprint DOI as `normalized_value`; keep source URL and version details in import-scoped metadata. |
+| medRxiv | Yes | Normalize DOI, DOI URL, and trusted `medrxiv.org/content/...` URL forms to one lowercase DOI-shaped value. Remove query strings, fragments, `.full`, `.full.pdf`, and trailing server-path version suffixes before validation. Store the bare preprint DOI as `normalized_value`; keep source URL and version details in import-scoped metadata. |
+| URL-derived identifiers | Depends on extracted kind | Extract identifiers only from trusted DOI, PubMed, PubMed Central, arXiv, bioRxiv, and medRxiv URL patterns. Pass extracted values through the identifier-specific normalizer and store the extracted identifier with its actual kind. Do not store arbitrary normalized URLs as strong identifiers. If an explicit identifier and a URL-derived identifier of the same kind disagree inside one source row, quarantine or mark the row unresolved instead of choosing one silently. |
+
+Malformed values must stay in raw source or import-scoped metadata for operator review, but they must not enter `app.article_identifier`. Normalization must happen before batch deduplication, matching, uniqueness checks, and quarantine decisions so every writer applies the same contract.
+
 ### Weak Match Fingerprint
 
 1. Do not put weak fingerprints into `app.article_identifier`.
@@ -467,6 +481,10 @@ Required scenarios:
    - human-review filters
    - export
    - full-text fetch selection
+6. identifier normalization tests cover exact boundary cases for DOI, PMID, PMCID source metadata, arXiv, bioRxiv, medRxiv, and trusted URL extraction
+7. malformed identifier tests prove invalid values stay out of `app.article_identifier` while raw values remain available in source or import-scoped metadata
+8. duplicate-in-one-batch tests prove equivalent normalized identifiers collapse before canonical article creation, including repeated DOI URL and bare DOI forms
+9. conflict tests prove rows are quarantined or unresolved when DOI, PMID, arXiv, bioRxiv, medRxiv, or URL-derived identifiers disagree across identifier kinds or point to different canonical articles
 
 ### Phase 1. Add the new schema foundation
 
@@ -675,18 +693,20 @@ Pass/fail checks for this change:
 25. Performance verify a staged broad-source import path can process at least one million identifier-bearing rows in bounded chunks and correctly links rows that match articles previously created by Covidence
 26. Verify broad-source imports that do not affect a project do not trigger rebuilds for unrelated project review marts
 27. Verify strong-identifier conflict handling quarantines rows when multiple identifiers match different canonical articles, and that the quarantine payload includes source kind, import run id, source record key, conflicting identifier kinds, conflicting canonical article ids, and operator-review metadata
+28. Add and run targeted identifier normalization coverage, such as `bun test src/utils/articleIdentifierNormalization.test.ts`, for DOI, PMID, PMCID source-metadata handling, arXiv version suffixes, bioRxiv and medRxiv URL or DOI forms, trusted URL-derived identifiers, malformed values, duplicate normalized values in one batch, and conflicts across identifier kinds
 
 ## Commands To Run
 
 1. add the new regression tests before behavior changes
 2. run the targeted `bun test` commands before implementation and after each major phase, including `getAppQueryService`, human-review routes, and OLAP coverage when those layers change
-3. run comparison project serving and judgment-row tests when comparison routes, read paths, or serving marts change
-4. run `bun run db:mig` after each schema phase
-5. run `bun run build` for shared app changes
-6. run `bun run desktop:build` when runtime paths or shared UI are touched
-7. run `bun run lint` before merge
-8. add or run a repo-native import benchmark or integration test for 50,000 Covidence records before accepting the write-path rewrite
-9. add or run a repo-native staged-import benchmark or integration test for million-row Europe PMC or `src:med`/`src:PPR` identifier matching before accepting the broad-source path
+3. run targeted identifier normalization tests before accepting matcher or importer changes that depend on DOI, PMID, PMCID source metadata, arXiv, bioRxiv, medRxiv, or URL-derived identifiers
+4. run comparison project serving and judgment-row tests when comparison routes, read paths, or serving marts change
+5. run `bun run db:mig` after each schema phase
+6. run `bun run build` for shared app changes
+7. run `bun run desktop:build` when runtime paths or shared UI are touched
+8. run `bun run lint` before merge
+9. add or run a repo-native import benchmark or integration test for 50,000 Covidence records before accepting the write-path rewrite
+10. add or run a repo-native staged-import benchmark or integration test for million-row Europe PMC or `src:med`/`src:PPR` identifier matching before accepting the broad-source path
 
 ## Open Decisions During Build
 
