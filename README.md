@@ -1,133 +1,79 @@
 # forska.ai - AI Agents for systematic reviews in healthcare
 
-Local-first deep research app for systematic reviews.
+Forska is a local-first deep research app for systematic reviews. It helps reviewers search, screen, compare, and document article-review decisions while keeping project data on the user's machine.
 
-Core product config lives in the Forska UI and the local databases. Avoid `.env` setup for normal local dev. Use shell env only for one-off machine-local overrides, background jobs, or secrets.
+Core product configuration lives in the Forska UI and local databases. Do not create or edit `.env` files for normal local development. Use shell environment variables only for one-off machine-local overrides or secrets.
 
-Goal: standalone single-user app (your own computer). No admin role. No hosted multi-tenant web app.
+Forska is currently designed as a standalone single-user app. It is not a hosted multi-tenant web app.
 
-Current: Bun/Elysia API, SolidJS/Vite client, DuckDB for local app/query data, and SQLite for local job/state storage.
+## Stack
 
-## Abstract
+- Bun and Elysia API
+- SolidJS and Vite client
+- DuckDB for local app/query data
+- SQLite for local job/runtime state
 
-This project aims to enable automatized systematic reviews with a focus on healthcare and medicine.
+## Local Development
 
-We have built and tested our system on a local workstation, but to scale up to handle more articles and allow testing from a broader community, we need a suitable storage and application platform.
-
-Background:
-Creating high quality systematic reviews is an arduous process – formulating an exhaustive search strategy, screening many thousands of abstracts, resolving ambiguous inclusion decisions, extracting heterogeneous data, assessing bias, synthesizing and presenting findings. Keeping up with evolving evidence and tools makes the whole endeavor complex and highly time-consuming. AI has shown promise in streamlining this process, but current deep research offerings, including those aimed at the scientific community, suffer from poor search and screening implementations. The cause is the inherited fundamentals of todays AI models and RAG systems. This has led to an increase in low quality review papers.
-
-With this project we will propose a human-in-the-loop workflow that accelerates searching and screening while preserving accountability at every step. Reviewers define the question and criteria; assistive agents help expand search terms, filter and organize results, de-duplicate records, and surface likely inclusions. Every decision is transparent, logged, and revisitable. Rather than replacing expert judgment, the system enhances it. The platform supports calibration on small sets, structured reasons for inclusion or exclusion, disagreement resolution, and iterative refinement of search strategies as gaps are discovered. The system also allows for blinded comparison of AI and human decisions and output.
-
-Goal and outcomes:
-The goal is to both publish review papers in the healthcare domain and papers on the technical aspects and quality of the system.
-
-Expected outcomes are higher-quality systematic reviews delivered faster and with defensible documentation.
-
-We also plan to release all the code for the system as open source.
-
-## Resource Usage
-
-The app stores article metadata and cached PDFs locally with DuckDB and SQLite. The local API/app can call providers configured in the Forska UI.
-
-Out plan is that the system will be efficiently run on a:
-ssc.large.highmem, 4 vCPU, 16 GB RAM with 4-8 TB of additional storage
-
-The imported article datasets can be very large. For our use case we will dynamically store only what is needed. We don't have an exact number, but rough guess based on our current test set would indicate about ~30-60GB. Then above this we would like to cache a large number of pdfs (~1m), which could add a few additional terabytes.
-
-## Local dev
+Install dependencies and initialize the local database:
 
 ```bash
 bun install
 bun run db:mig
 ```
 
-Primary profile is implicit in the default commands:
+Start the local API/server stack and web app:
 
 ```bash
 bun run dev:server
 bun run dev:app
 ```
 
-That boots the primary profile on app `3000`, API `3001`, DuckDB owner/maintenance worker `3002`, judge worker `3003`, with isolated runtime state under `data/runtime/primary/`.
+The default local profile uses:
 
-Secondary profile uses explicit aliases and its own runtime root:
+- Web app: `http://127.0.0.1:3000`
+- API: `http://127.0.0.1:3001`
+- Runtime data: `data/runtime/primary/`
 
-```bash
-bun run db:mig:secondary
-bun run dev:secondary:server
-bun run dev:secondary:app
-```
+Open the local URL printed by Vite after `bun run dev:app` starts.
 
-That boots the secondary profile on app `3100`, API `3101`, DuckDB owner/maintenance worker `3102`, judge worker `3103`, with isolated runtime state under `data/runtime/secondary/`.
+More local runtime notes: [Run Local](./docs/README_RUN_LOCAL.md)
 
-DuckDB and the judgment-job SQLite state isolate automatically because each profile uses its own root directory: `data/runtime/primary/` or `data/runtime/secondary/`.
+## Configure Providers
 
-Split API, maintenance, and judge commands:
+Configure models and providers in the Forska UI:
 
-```bash
-# primary
-bun run dev:server:api
-bun run dev:server:maintenance
-bun run dev:server:judge
+1. Open `/providers`.
+2. Click `Add Provider`.
+3. Add a local or remote provider connection.
+4. Open the provider, click `Test`, then `Sync Models` or `Add Model`.
+5. Enable the models you want and click `Save Models`.
 
-# secondary
-bun run dev:secondary:server:api
-bun run dev:secondary:server:maintenance
-bun run dev:secondary:server:judge
-```
+Provider credentials and model settings should be entered through the app, not committed into files.
 
-Built app commands:
+## Optional Local llama.cpp
 
-```bash
-# primary
-bun run start
-bun run start:server
-bun run start:app-server
+Forska can use a local OpenAI-compatible endpoint such as `llama-server`.
 
-# secondary
-bun run start:secondary
-bun run start:secondary:server
-bun run start:secondary:app-server
-```
+Install `llama.cpp` / `llama-server` from the upstream project:
 
-Desktop spike scaffold:
+- [Install guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md)
+- [Releases](https://github.com/ggml-org/llama.cpp/releases)
+- [Build from source](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
 
-```bash
-bun run desktop:dev
-bun run desktop:build
-```
+Example model: [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF)
 
-These desktop commands are additive. Keep using `bun run dev:server` and `bun run dev:app` for the normal browser workflow.
-
-Desktop build outputs go to `.desktopBuild/` and `.desktopArtifacts/`. In desktop mode the packaged backend writes its DuckDB, cache, imports, and runtime assets under the desktop app-data root instead of the repo root.
-
-Open the local URL printed by Vite or the built app server URL for the profile you started.
-
-Do not create or edit `.env` files for normal local dev. Configure providers/models in the UI. For one-off machine-local overrides, pass shell env inline with the command.
-
-For Codex provider models, Forska starts turns with `sandboxPolicy.networkAccess: false`, so internet access is disabled inside the Codex sandbox. The Codex CLI still needs its normal network access for login and inference.
-
-Or export once per shell:
-
-```bash
-export VITE_PORT=3100
-export API_SERVER_PORT=3101
-export APP_SERVER_PORT=8180
-```
-
-## Local llama.cpp / llama-server
-
-- Install `llama.cpp` / `llama-server`: [install guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md), [releases](https://github.com/ggml-org/llama.cpp/releases), or [build from source](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
-- Model: [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF) and [files](https://huggingface.co/Qwen/Qwen3-4B-GGUF/tree/main). `-hf Qwen/Qwen3-4B-GGUF:Q4_K_M` downloads the GGUF into the Hugging Face cache automatically, so manual download is optional.
-
-Run locally:
+Run a local server:
 
 ```bash
 llama-server -hf Qwen/Qwen3-4B-GGUF:Q4_K_M --jinja --reasoning-format deepseek -c 8192 --temp 0.6 --top-k 20 --top-p 0.95 --min-p 0
 ```
 
-Default `llama-server` port is `8080`, so Forska should usually point at `http://127.0.0.1:8080/v1`.
+Default `llama-server` port is `8080`, so the provider base URL is usually:
+
+```text
+http://127.0.0.1:8080/v1
+```
 
 Optional check:
 
@@ -135,19 +81,12 @@ Optional check:
 curl http://127.0.0.1:8080/v1/models
 ```
 
-In the Forska UI:
+In the Forska UI, choose an OpenAI-compatible provider, set the base URL to `http://127.0.0.1:8080/v1`, then test and sync models.
 
-- Open `/providers`
-- Click `Add Provider`
-- Choose `LM Studio` for a local OpenAI-compatible endpoint, set base URL to `http://127.0.0.1:8080/v1`, then create the provider
-- Open that provider, click `Test`, then `Sync Models`
-- Enable the discovered Qwen model and click `Save Models`
-- If sync does not find the model, use `Add Model` and paste the model id returned by `/v1/models` into `Remote Model ID`
+## Resource Usage
 
-More local runtime notes: [RUN LOCAL](./docs/README_RUN_LOCAL.md)
+Forska stores article metadata, imported records, generated review state, and optional cached PDFs locally. Disk usage depends on the size of imported datasets and whether full text or PDFs are stored. Large review projects can require substantial local storage.
 
-Split-runtime verification drills: [SPLIT RUNTIME VERIFICATION](./docs/README_SPLIT_RUNTIME_VERIFICATION.md)
+## License
 
-Large rebuild tuning guidance: [RUN LOCAL](./docs/README_RUN_LOCAL.md#project-mart-large-rebuild-tuning)
-
-Remote HPC launch tooling and Docker helpers for SGLang/Docling now live in the sibling `../hpc-manager` project.
+Apache License 2.0. See [LICENSE](./LICENSE).
