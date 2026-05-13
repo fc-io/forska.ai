@@ -1972,6 +1972,19 @@ test('comparison project metadata exposes serving readiness states', async () =>
   }, Promise.resolve())
 })
 
+test('comparison project metadata queues a rebuild when serving is missing', async () => {
+  mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(new Request('http://localhost/api/comparison-projects/comparison-project-1'))
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(state.queuedServingRebuildIds).toEqual(['comparison-project-1'])
+  expect(state.staleServingIds).toEqual([])
+})
+
 test('comparison project create and update mark serving stale and queue rebuilds', async () => {
   mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false, promptLinks: []}
 

@@ -25,6 +25,7 @@ import {assertSelectableProviderModelIds} from '../providers/providerModelReposi
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {
+  type ComparisonProjectServingProgress,
   type ComparisonProjectServingStatusRow,
   getComparisonProjectServingRebuildService,
 } from '../services/comparisonProjectServingRebuildService.ts'
@@ -111,6 +112,7 @@ type ComparisonProjectScope = {
   humanJudgmentMode: HumanJudgmentMode
   isServingReady: boolean
   servingStatus: ComparisonProjectServingStatus
+  servingProgress: ComparisonProjectServingProgress
   servingUpdatedAt: Date | null
   summarySourceProjectId: string | null
   useTitle: boolean
@@ -279,12 +281,32 @@ const getComparisonProjectServingMetadataStatus = (
       : status.servingStatus
 }
 
+const getComparisonProjectServingProgress = (
+  status: ComparisonProjectServingStatusRow,
+): ComparisonProjectServingProgress => {
+  return {
+    completedAt: status.servingCompletedAt,
+    failedAt: status.servingFailedAt,
+    generation: status.servingGeneration,
+    lastError: status.servingError,
+    lastProgressedAt: status.servingLastProgressedAt ?? null,
+    phase: status.servingPhase ?? null,
+    phaseStartedAt: status.servingPhaseStartedAt ?? null,
+    stagedArticleCount: status.servingStagedArticleCount ?? 0,
+    stagedCellCount: status.servingStagedCellCount ?? 0,
+    stagedFilterMemberCount: status.servingStagedFilterMemberCount ?? 0,
+    stagedFilterStatsCount: status.servingStagedFilterStatsCount ?? 0,
+    startedAt: status.servingStartedAt,
+  }
+}
+
 const getComparisonProjectServingMetadata = (status: ComparisonProjectServingStatusRow) => {
   const servingStatus = getComparisonProjectServingMetadataStatus(status)
 
   return {
     activeGeneration: status.activeGeneration,
     isServingReady: servingStatus === 'ready' && status.activeGeneration !== null,
+    servingProgress: getComparisonProjectServingProgress(status),
     servingStatus,
     servingUpdatedAt: getComparisonProjectServingUpdatedAt(status),
   }
@@ -303,6 +325,25 @@ const queueComparisonProjectServingRebuild = (comparisonProjectId: string) => {
         error: getComparisonProjectServingQueueErrorMessage(error),
       })
     })
+}
+
+const queueUnavailableComparisonProjectServingRebuild = (
+  comparisonProject: Pick<ComparisonProjectScope, 'activeGeneration' | 'id' | 'servingProgress' | 'servingStatus'>,
+) => {
+  const isMissingWithoutStartedBuild =
+    comparisonProject.servingStatus === 'refreshing'
+    && comparisonProject.activeGeneration === null
+    && comparisonProject.servingProgress.generation === null
+    && comparisonProject.servingProgress.startedAt === null
+    && comparisonProject.servingProgress.lastProgressedAt === null
+  const isStaleWithoutReadableGeneration =
+    comparisonProject.servingStatus === 'stale' && comparisonProject.activeGeneration === null
+
+  if (!isMissingWithoutStartedBuild && !isStaleWithoutReadableGeneration) {
+    return
+  }
+
+  queueComparisonProjectServingRebuild(comparisonProject.id)
 }
 
 const markComparisonProjectServingStaleAndQueueRebuild = async (comparisonProjectId: string) => {
@@ -3111,6 +3152,8 @@ export const comparisonProjectsRoutes = new Elysia()
       set.status = 404
       return {data: null, error: 'Comparison project not found'}
     }
+
+    queueUnavailableComparisonProjectServingRebuild(data)
 
     return {data}
   })

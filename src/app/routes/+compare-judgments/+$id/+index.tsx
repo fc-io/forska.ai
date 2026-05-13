@@ -35,6 +35,7 @@ import {
   getCompareProjectJudgmentsSearchParams,
   getInitialCompareProjectJudgmentsUrlState,
 } from './+index/compareProjectJudgmentsUrlState.ts'
+import {ComparisonProjectServingProgress} from './+index/comparisonProjectServingProgress.tsx'
 
 const getContentSettingsLabel = (contentVariants: Array<{label: string}>) => {
   return contentVariants.length > 0
@@ -247,7 +248,8 @@ const CompareProjectJudgmentsPage = () => {
         return fetchComparisonProjectJudgmentsMetadata(comparisonProjectId())
       },
       refetchOnWindowFocus: false,
-      staleTime: 5 * 60 * 1000,
+      refetchInterval: 5000,
+      staleTime: 5000,
     }
   })
   const orderedColumns = createMemo<ComparisonProjectJudgmentsTableColumn[]>(() => {
@@ -309,6 +311,7 @@ const CompareProjectJudgmentsPage = () => {
         return lastPage.nextCursor
       },
       initialPageParam: null as string | null,
+      refetchInterval: comparisonProjectQuery.data?.servingStatus === 'refreshing' ? 5000 : false,
       refetchOnWindowFocus: false,
     }
   })
@@ -319,6 +322,7 @@ const CompareProjectJudgmentsPage = () => {
         return fetchComparisonProjectJudgmentsCount(comparisonProjectId(), pageLimit(), rowFilter(), differenceFilter())
       },
       enabled: canFetchJudgmentsPage() && judgmentsPageQuery.isSuccess,
+      refetchInterval: comparisonProjectQuery.data?.servingStatus === 'refreshing' ? 5000 : false,
       refetchOnWindowFocus: false,
     }
   })
@@ -560,6 +564,10 @@ const CompareProjectJudgmentsPage = () => {
                     <div class={`rounded-lg border p-4 ${statusBanner().className}`}>
                       <p class="font-medium">{statusBanner().title}</p>
                       <p class="mt-1 text-sm opacity-90">{statusBanner().body}</p>
+                      <ComparisonProjectServingProgress
+                        progress={comparisonProject().servingProgress}
+                        showWaiting={comparisonProject().servingStatus === 'refreshing'}
+                      />
                     </div>
                   )
                 }}

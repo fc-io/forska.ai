@@ -118,6 +118,30 @@ export type ComparisonProjectJudgmentsColumn = ComparisonProjectDifferenceColumn
 
 export type ComparisonProjectContentVariant = {key: string; label: string}
 
+export type ComparisonProjectServingProgressPhase =
+  | 'cleanup'
+  | 'prompt_cells'
+  | 'promoting'
+  | 'queued'
+  | 'ready'
+  | 'rollups'
+  | 'summary_cells'
+
+export type ComparisonProjectServingProgress = {
+  completedAt: Date | string | null
+  failedAt: Date | string | null
+  generation: number | null
+  lastError: string | null
+  lastProgressedAt: Date | string | null
+  phase: ComparisonProjectServingProgressPhase | null
+  phaseStartedAt: Date | string | null
+  stagedArticleCount: number
+  stagedCellCount: number
+  stagedFilterMemberCount: number
+  stagedFilterStatsCount: number
+  startedAt: Date | string | null
+}
+
 export type ComparisonProjectSummarySourceProject = {
   id: string
   name: string
@@ -149,6 +173,7 @@ export type ComparisonProjectJudgmentsMetadata = {
   allowConflictResolution: boolean
   humanJudgmentMode: HumanJudgmentMode
   isServingReady: boolean
+  servingProgress: ComparisonProjectServingProgress
   servingStatus: ComparisonProjectServingStatus
   servingUpdatedAt: Date | string | null
   summarySourceProjectId: string | null
