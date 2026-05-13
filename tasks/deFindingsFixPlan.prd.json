@@ -1,0 +1,234 @@
+{
+  "name": "Covidence De-duplication Findings Fix Plan",
+  "description": "Update DE_DUPLICATE_COV_PLAN.md so it explicitly addresses the review findings captured in DE_FINDINGS_FIX_PLAN.md.",
+  "branchName": "ralph/covidence-dedupe-findings-fix",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add identity and display contract",
+      "description": "As a maintainer, I want the dedupe plan to define which article identity each system should use so that implementation does not keep overloading app.article.article_id.",
+      "acceptanceCriteria": [
+        "Add an Identity And Display Contract section to DE_DUPLICATE_COV_PLAN.md.",
+        "The section distinguishes app.article.id, app.article_identifier.normalized_value, app.article_import_route.external_article_id, app.article.article_id, and source URL ownership.",
+        "Target Data Model, Project-Scoped Serving Metadata, Client Review Surfaces, and Phase 8 state that display and URL helpers must stop parsing source prefixes from app.article.article_id.",
+        "Re-read DE_DUPLICATE_COV_PLAN.md after editing and confirm this finding is represented as explicit plan content.",
+        "Re-read DE_FINDINGS_FIX_PLAN.md and confirm the edit does not contradict it.",
+        "No code tests are required unless code or test files are changed."
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Add broad-source importer scope",
+      "description": "As a maintainer, I want broad-source harvesters and import routes named in the dedupe plan so that PubMed, Europe PMC, PPR, arXiv, bioRxiv, and medRxiv imports use the same canonical matching path.",
+      "acceptanceCriteria": [
+        "Main Files And Systems To Change lists PubMed and Europe PMC harvesters, preprint harvesters, import routes, and importer tests from DE_FINDINGS_FIX_PLAN.md.",
+        "Phase 3 says broad-source harvesters must pass normalized candidates, source identifiers, source record keys, and import-run references to the central matching/write path.",
+        "The plan states that source article_id values from broad harvesters must not become canonical article identity.",
+        "Re-read DE_DUPLICATE_COV_PLAN.md after editing and confirm this finding is represented as explicit plan content.",
+        "Re-read DE_FINDINGS_FIX_PLAN.md and confirm the edit does not contradict it.",
+        "No code tests are required unless code or test files are changed."
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Add comparison project coverage",
+      "description": "As a maintainer, I want comparison project serving included in the dedupe plan so that comparison marts and routes do not keep copying legacy article identity or metadata.",
+      "acceptanceCriteria": [
+        "Main Files And Systems To Change lists comparison serving builders, comparison routes, comparison migrations, and comparison tests from DE_FINDINGS_FIX_PLAN.md.",
+        "Phase 5 and Phase 6 include comparison project read paths and serving marts.",
+        "The plan states that comparison article_external_id comes from comparison source scope or selected import record, not app.article.article_id.",
+        "The plan states that comparison serving metadata combines canonical metadata with scoped import metadata instead of copying app.article.source_metadata wholesale.",
+        "Re-read DE_DUPLICATE_COV_PLAN.md after editing and confirm this finding is represented as explicit plan content.",
+        "Re-read DE_FINDINGS_FIX_PLAN.md and confirm the edit does not contradict it.",
+        "No code tests are required unless code or test files are changed."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Add judgment snapshot compatibility",
+      "description": "As a maintainer, I want queued jobs and judgment snapshots covered by the dedupe plan so that migration preserves reproducibility and downstream payload compatibility.",
+      "acceptanceCriteria": [
+        "Current Repo State or Main Files And Systems To Change mentions judgmentExecutionSnapshotService, judgment queue/outbox paths, and LLM prompt payload paths.",
+        "Phase 3 or Phase 5 states that snapshot payloads expose canonical article fields plus project-scoped external id and import metadata.",
+        "The plan requires a compatibility adapter for legacy importRoute and originalData fields in snapshot payloads until downstream consumers migrate.",
+        "Phase 8 states article-level import fields cannot be removed until queued jobs, snapshot readers, and outbox import paths no longer depend on them.",
+        "Re-read DE_DUPLICATE_COV_PLAN.md after editing and confirm this finding is represented as explicit plan content.",
+        "Re-read DE_FINDINGS_FIX_PLAN.md and confirm the edit does not contradict it.",
+        "No code tests are required unless code or test files are changed."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Add strong identifier conflict rules",
+      "description": "As a maintainer, I want explicit multi-identifier conflict rules so that the matcher quarantines DOI, PMID, arXiv, bioRxiv, and medRxiv disagreements instead of silently merging wrong articles.",
+      "acceptanceCriteria": [
+        "Matching Policy includes the rule that multiple strong identifiers can auto-merge only when all existing matches point to the same canonical article.",
+        "Matching Policy says conflicting strong identifiers across different canonical articles are quarantined as strong-identifier conflicts.",
+        "Unresolved Cases describes the required quarantine payload fields: source kind, import run id, source record key, conflicting identifier kinds, conflicting canonical article ids, and operator-review metadata.",
+        "Risks mentions that source batches can contain strong identifier conflicts that must not be silently collapsed.",
+        "Re-read DE_DUPLICATE_COV_PLAN.md after editing and confirm this finding is represented as explicit plan content.",
+        "Re-read DE_FINDINGS_FIX_PLAN.md and confirm the edit does not contradict it.",
+        "No code tests are required unless code or test files are changed."
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Add concurrency and transaction policy",
+      "description": "As a maintainer, I want the dedupe plan to define concurrent import behavior so that retries and racing imports remain idempotent and do not create duplicate canonical articles.",
+      "acceptanceCriteria": [
+        "Performance And Scale Requirements or Bulk Import Staging And Checkpointing includes an import-run lease or equivalent single-writer guard per source or import route when needed.",
+        "Phase 2 or Phase 3 states that canonical article creation, identifier insertion, and import-record insertion run in bounded transactions.",
+        "The plan treats UNIQUE(kind, normalized_value) on app.article_identifier as the final arbiter for concurrent writers.",
+        "The plan says identifier insert conflicts must re-read the winning row and either continue with the same canonical article or quarantine a concurrent strong-identifier conflict.",
+        "Migration Notes or Risks says retries must be idempotent by source_kind, import_run_id, source_record_key, and source_record_hash.",
+        "Re-read DE_DUPLICATE_COV_PLAN.md after editing and confirm this finding is represented as explicit plan content.",
+        "Re-read DE_FINDINGS_FIX_PLAN.md and confirm the edit does not contradict it.",
+        "No code tests are required unless code or test files are changed."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Add source record history policy",
+      "description": "As a maintainer, I want the plan to separate current route membership from import-run provenance so that repeated harvests and multiple source rows are handled deterministically.",
+      "acceptanceCriteria": [
+        "Import-Scoped Article Record states that app.article_import_route represents current article membership for a route and latest compact import-scoped payload.",
+        "The plan defines import_run_id, source_record_key, and source_record_hash as provenance for the latest write.",
+        "Bulk Import Staging And Checkpointing or Phase 3 says repeated harvests update import-scoped records only when source_record_hash changes.",
+        "The plan defines behavior for multiple source rows in one import route resolving to the same canonical article: deterministic metadata merge or child row table.",
+        "Open Decisions includes whether source-row history needs app.article_import_route_row or a dedicated import-run row table.",
+        "Re-read DE_DUPLICATE_COV_PLAN.md after editing and confirm this finding is represented as explicit plan content.",
+        "Re-read DE_FINDINGS_FIX_PLAN.md and confirm the edit does not contradict it.",
+        "No code tests are required unless code or test files are changed."
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Add identifier normalization contract",
+      "description": "As a maintainer, I want exact identifier normalization rules in the plan so that matching behavior is deterministic and covered by tests.",
+      "acceptanceCriteria": [
+        "Article Identifier Table or Matching Policy defines normalization rules for DOI, PMID, PMCID if supported, arXiv, bioRxiv, medRxiv, and URL-derived identifiers.",
+        "The arXiv rule explicitly decides whether version suffixes like v1 and v2 match the same canonical article.",
+        "The PMCID rule explicitly decides whether PMCID is a strong identifier or source metadata only.",
+        "Phase 0 requires tests for boundary cases, malformed values, duplicate values in one batch, and conflicts across identifier kinds.",
+        "Quality Gates include targeted identifier normalization tests.",
+        "Re-read DE_DUPLICATE_COV_PLAN.md after editing and confirm this finding is represented as explicit plan content.",
+        "Re-read DE_FINDINGS_FIX_PLAN.md and confirm the edit does not contradict it.",
+        "No code tests are required unless code or test files are changed."
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-007"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Expand read and helper surface list",
+      "description": "As a maintainer, I want all likely affected helper, admin, warning, health, maintenance, and URL surfaces named so that the migration does not miss legacy article metadata readers.",
+      "acceptanceCriteria": [
+        "Main Files And Systems To Change lists fullTextConversionJobs.ts, appQueryHelpers.ts, dataSourceQueryService.ts, AdminInvestigateRoutes.ts, ArticleAdminRoutes.ts, review warning and health routes, maintenanceWorkLeaseService.ts, projectMartRefreshWorker.ts, and getArticleUrl.ts.",
+        "Query And Serving Paths or Client Review Surfaces mentions helpers that build source URLs or expose article ids to the UI.",
+        "Quality Gates include relevant targeted tests when these surfaces are changed during implementation.",
+        "Re-read DE_DUPLICATE_COV_PLAN.md after editing and confirm this finding is represented as explicit plan content.",
+        "Re-read DE_FINDINGS_FIX_PLAN.md and confirm the edit does not contradict it.",
+        "No code tests are required unless code or test files are changed."
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-008"
+      ]
+    },
+    {
+      "id": "US-010",
+      "title": "Make performance gates concrete",
+      "description": "As a maintainer, I want concrete performance and retry gates in the plan so that 50,000-record Covidence imports and million-row broad-source imports have pass/fail criteria.",
+      "acceptanceCriteria": [
+        "Performance And Scale Requirements or Quality Gates includes pass criteria for a 50,000-record Covidence import: bounded chunks, no per-row canonical lookup, no duplicate canonical rows, and memory under the configured budget.",
+        "Quality Gates includes pass criteria for one million identifier-bearing broad-source rows: staged matching in chunks, Covidence-created article linking, and resumability after interruption.",
+        "Quality Gates states identifier matching must use indexed joins or chunked IN lookups against normalized identifier tables, not JSON scans or full app.article scans.",
+        "Quality Gates states broad-source imports with no project-linked changes must not mark unrelated project marts dirty.",
+        "Quality Gates states re-running an interrupted import must not create additional canonical articles or duplicate import-scoped records.",
+        "Open Decisions includes exact local thresholds for wall-clock budget, default chunk size, checkpoint interval, and memory ceiling.",
+        "Re-read DE_DUPLICATE_COV_PLAN.md after editing and confirm this finding is represented as explicit plan content.",
+        "Re-read DE_FINDINGS_FIX_PLAN.md and confirm the edit does not contradict it.",
+        "No code tests are required unless code or test files are changed."
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-009"
+      ]
+    },
+    {
+      "id": "US-011",
+      "title": "Run final plan consistency pass",
+      "description": "As a maintainer, I want a final consistency pass over the dedupe plan so that all findings are represented coherently and the plan remains executable by future implementation agents.",
+      "acceptanceCriteria": [
+        "DE_DUPLICATE_COV_PLAN.md includes all ten findings from DE_FINDINGS_FIX_PLAN.md as explicit plan content, not only as risks.",
+        "The plan states which id each API, mart, export, snapshot, and UI surface should expose.",
+        "The plan lists broad-source harvesters, comparison projects, and judgment snapshot systems as affected systems.",
+        "The plan defines strong-identifier conflicts, concurrent import conflict behavior, and source-record history behavior.",
+        "The plan includes identifier normalization rules and targeted tests.",
+        "The plan includes concrete performance pass/fail checks for 50,000-record Covidence imports and million-row broad-source imports.",
+        "The plan keeps browser and desktop verification requirements for shared UI and runtime-path changes.",
+        "Re-read DE_DUPLICATE_COV_PLAN.md after editing and confirm every item in Findings To Address is represented.",
+        "Re-read DE_FINDINGS_FIX_PLAN.md and confirm the edit does not contradict it.",
+        "No code tests are required unless code or test files are changed."
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-010"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-05-13T13:40:09.148Z"
+  }
+}

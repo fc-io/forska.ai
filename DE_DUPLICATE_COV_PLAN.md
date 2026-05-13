@@ -20,6 +20,16 @@ Touched layers: server, database, client
 5. For those articles, dedupe must fall back to weaker fingerprints and ambiguity handling. A random id does not help match the same article across two imports.
 6. Source-facing article ids still matter, but they belong on the import-scoped article record, not as the canonical article identity.
 
+## Identity And Display Contract
+
+| Identity Or Field | Owner | Purpose | Migration Rule |
+|---|---|---|---|
+| `app.article.id` | Canonical article row | Internal joins, foreign keys, and durable canonical article identity | Keep as the only durable app join key. Do not expose it as a source-facing article id unless an API explicitly asks for canonical ids. |
+| `app.article_identifier.normalized_value` | Canonical identifier table | Cross-import matching for DOI, PMID, arXiv id, bioRxiv id, and medRxiv id | Use normalized strong identifiers for matching and backfill. Do not use display labels or route-prefixed ids as matching keys. |
+| `app.article_import_route.external_article_id` | Import-scoped article record | Project-scoped source-facing display id, Covidence seeding, exports, and source-specific references | Derive displayed article ids from the selected project-scoped import record. This is where Covidence-local ids and broad-source external ids belong. |
+| `app.article.article_id` | Legacy compatibility field on the canonical article row | Temporary compatibility reads during migration | Do not assign new route-scoped meaning. Do not parse source prefixes from it. Replace callers with canonical ids, normalized identifiers, or import-scoped external ids, then remove or fully deprecate it. |
+| Source URL | Canonical article URL or import-scoped source URL record | Browser links, exports, full-text routing hints, and source landing pages | Store canonical landing URLs on canonical article fields when they are article-level truth. Store source-specific URLs on the import-scoped record or explicit source metadata fields. URL helpers must use explicit URL fields or identifier-derived URL builders instead of parsing `app.article.article_id` prefixes. |
+
 ## Current Repo State
 
 1. Prompt bodies are already mostly shared globally by `content_hash` in `app.prompt`.
@@ -44,6 +54,26 @@ Touched layers: server, database, client
 4. Projects should still scope articles by import route and curated project links.
 5. Review screens should show the metadata relevant to the target project's import routes, not a random article-global payload from the last writer.
 6. Browser and desktop flows must keep the same functional behavior.
+
+## Performance And Scale Requirements
+
+1. Treat 50,000-article Covidence packages as normal production input, not as an edge case.
+2. Treat Europe PMC, `src:med`, `src:PPR`, and similar corpus imports as bulk corpus ingestion that can include millions of candidate articles in one run.
+3. Do not perform per-article full-table lookups, JSON scans, or one-transaction-per-row writes during import.
+4. Matching must be batch-oriented and set-based:
+   - normalize identifiers for a batch first
+   - deduplicate identifiers inside the batch before touching canonical tables
+   - join or lookup the batch against indexed canonical identifiers in bounded chunks
+   - write canonical articles, identifiers, and import records in bounded transactions
+5. Bulk imports must be resumable and idempotent by import run, source, and source record key. Restarting an interrupted import must not duplicate canonical articles or duplicate import-scoped records.
+6. A Covidence-first then Europe PMC scenario must work:
+   - if Covidence created the canonical article first, a later Europe PMC or `src:med`/`src:PPR` import with the same DOI, PMID, arXiv id, bioRxiv id, or medRxiv id must reuse that existing canonical article
+   - the later bulk source should add or update its own import-scoped record and add missing canonical identifiers
+   - canonical article field updates must go through the deterministic resolver, not overwrite Covidence-derived or user-visible data by last writer wins
+7. Weak fingerprint matching must not require comparing each new article against the full article corpus. For large corpus imports, weak matching is allowed only when backed by an indexed non-unique lookup surface or deferred to a separate candidate-resolution job.
+8. Large corpus imports should not trigger global mart rebuilds for every project. Refresh only affected import routes and projects, or enqueue scoped rebuild work.
+9. Import processing must avoid loading complete source packages, complete staging tables, or complete JSON payloads into process memory at once.
+10. Long-running imports must emit progress and checkpoint logs so operators can see throughput, current batch, matched counts, created counts, unresolved counts, and elapsed time.
 
 ## Key Decisions
 
@@ -114,6 +144,8 @@ Touched layers: server, database, client
 
 ## Target Data Model
 
+Display and URL helpers in the target model must stop parsing source prefixes from `app.article.article_id`. They should read canonical URL fields, identifier-derived URL builders, or project-scoped import records with explicit `external_article_id` and source URL fields.
+
 ### Canonical Article
 
 Keep `app.article` for canonical fields only:
@@ -157,13 +189,16 @@ Add `app.article_identifier` with fields like:
 Scope:
 
 1. Store only strong canonical identifiers here:
-   - DOI
-   - PMID
-   - arXiv id
-   - bioRxiv id
-   - medRxiv id
+    - DOI
+    - PMID
+    - arXiv id
+    - bioRxiv id
+    - medRxiv id
 2. Use `UNIQUE(kind, normalized_value)` for these strong identifiers.
 3. Use this table as the canonical matching surface for new imports and for historical backfill.
+4. Add an index that supports batch joins by `(kind, normalized_value)` without scanning `app.article`.
+5. Bulk imports must stage normalized identifier rows first, then join staging rows to this table in chunks.
+6. Duplicate identifiers inside one source batch must be collapsed before canonical article creation to avoid intra-batch races and uniqueness conflicts.
 
 ### Weak Match Fingerprint
 
@@ -171,6 +206,7 @@ Scope:
 2. Preferred default: compute normalized title-year-first-author fingerprints in the matching service.
 3. If fingerprint materialization is needed for speed or operator tooling, add a separate table such as `app.article_match_fingerprint` with a non-unique indexed lookup surface.
 4. Ambiguous weak fingerprints must remain representable as many articles sharing one fingerprint.
+5. For million-row corpus imports, do not run weak matching by scanning canonical article text fields. Either use the materialized non-unique fingerprint lookup or mark weak-only rows for deferred resolution.
 
 ### Import-Scoped Article Record
 
@@ -184,7 +220,10 @@ Add fields like:
 4. `import_metadata` or `import_source_metadata`
 5. `match_strategy`
 6. `match_confidence`
-7. timestamps
+7. `import_run_id` or equivalent batch/checkpoint reference
+8. `source_record_key`
+9. `source_record_hash`
+10. timestamps
 
 For Covidence specifically, this record should carry:
 
@@ -218,12 +257,32 @@ If the Covidence raw source rows are too large or too query-heavy for a single J
 8. `exclusion_reason`
 9. `tags`
 
+### Bulk Import Staging And Checkpointing
+
+For high-volume sources, add staging and checkpoint state rather than writing directly from parser output to canonical tables.
+
+Minimum staging responsibilities:
+
+1. record the import run, source kind, source file or cursor, batch number, and source record key
+2. store normalized strong identifiers in a compact relational shape separate from raw JSON payloads
+3. store weak fingerprint inputs only if needed for candidate discovery
+4. mark each staged row as matched, created, unresolved, skipped duplicate, or failed
+5. preserve enough source information to retry a failed batch without reparsing the whole source when practical
+
+Implementation options:
+
+1. use temporary or persistent staging tables for million-row imports
+2. keep persistent checkpoint state for resumability and operator visibility
+3. periodically compact or delete completed staging rows once canonical writes and import-scoped records are durable
+4. avoid keeping large raw JSON blobs in staging if source rows can be re-read cheaply from a file or cursor
+
 ### Project-Scoped Serving Metadata
 
 1. `mart.review_article_serving.source_metadata` should stop being copied wholesale from `app.article.source_metadata`.
 2. Serving rows should combine canonical article metadata with import-scoped metadata filtered to the target project's import routes.
 3. `mart.review_article_serving.article_external_id` should come from the selected project-scoped import record.
 4. Covidence badges and related-record views should be driven by project-scoped import records, not article-global metadata.
+5. Display and URL helpers that consume serving rows must use `article_external_id`, explicit source URL fields, canonical URL fields, or identifier-derived URL helpers, not source prefixes parsed from `app.article.article_id`.
 
 ## Matching Policy
 
@@ -237,6 +296,8 @@ Automatically reuse an existing canonical article when there is a single unambig
 4. bioRxiv id
 5. medRxiv id
 
+For large imports, auto-merge must be implemented as batched joins against `app.article_identifier`, not as one query per source article.
+
 ### Weak-Match Rules
 
 When strong identifiers are missing:
@@ -244,6 +305,8 @@ When strong identifiers are missing:
 1. compute a normalized title-year-first-author fingerprint
 2. only auto-merge if that fingerprint resolves to exactly one candidate and there is no conflicting strong identifier on either side
 3. otherwise mark the record unresolved instead of merged
+4. for million-row corpus imports, run weak matching only against a materialized indexed fingerprint table or defer it to a separate bounded job
+5. allow source-specific policy to disable weak auto-merge for broad corpus imports when precision matters more than recall
 
 ### Unresolved Cases
 
@@ -253,6 +316,7 @@ Preferred direction:
 2. preserve the raw import record in an unresolved-import or manual-review state
 3. allow explicit operator resolution to either link an existing canonical article or create a new canonical article
 4. keep unresolved records out of normal project review scope until resolved
+5. for high-volume corpus imports, unresolved rows should be stored compactly and queryable by source, batch, identifier presence, and fingerprint rather than as large raw blobs only
 
 This is the safest long-term behavior if we want to avoid poisoning canonical article identity.
 
@@ -312,6 +376,7 @@ This is the safest long-term behavior if we want to avoid poisoning canonical ar
 1. Covidence badges and related-record displays
 2. filters and review tables that currently assume one article-global Covidence metadata blob
 3. exports or detail screens that show source-specific article ids
+4. display and URL helpers must stop parsing source prefixes from `app.article.article_id` and instead use project-scoped external ids plus explicit URL fields from the serving payload
 
 ## Phased Implementation Plan
 
@@ -339,7 +404,9 @@ Required scenarios:
 3. split the legacy mixed article metadata contract into canonical replacements plus import-scoped replacements
 4. add any optional raw-row child table, unresolved queue table, or non-unique weak-fingerprint table if needed
 5. add indexes needed for identifier lookup, unresolved review lookup, and project-scoped import record lookup
-6. keep the old article columns temporarily for compatibility during migration
+6. add staging and checkpoint tables or an equivalent import-run mechanism for high-volume sources
+7. add indexes that support batch joins from staging rows to `app.article_identifier` and `app.article_import_route`
+8. keep the old article columns temporarily for compatibility during migration
 
 ### Phase 2. Build a canonical article matching and merge service
 
@@ -348,23 +415,30 @@ Required scenarios:
 3. support weak deterministic fingerprints second without unique constraints
 4. centralize the canonical field resolver so write paths stop doing last-writer-wins article updates
 5. produce explicit match outcomes:
-   - reuse canonical article
-   - create new canonical article
-   - unresolved and requires manual resolution
+    - reuse canonical article
+    - create new canonical article
+    - unresolved and requires manual resolution
+6. expose a batch API that accepts staged rows or normalized article candidates and returns match outcomes in bounded chunks
+7. make the batch API deduplicate source rows and source identifiers before canonical writes
+8. make matching idempotent across retries by source kind, import run, source record key, and normalized identifiers
+9. keep all large-source matching paths free of full scans over `app.article.original_data`, `app.article.source_metadata`, or import-scoped JSON blobs
 
 ### Phase 3. Rewrite article write paths
 
 1. refactor `articleImportStoreService` so it:
-   - resolves canonical article ids
-   - applies the canonical field resolver
-   - writes canonical article data to `app.article`
-   - writes strong identifiers to `app.article_identifier`
-   - writes import-scoped payloads and external ids to `app.article_import_route`
+    - resolves canonical article ids
+    - applies the canonical field resolver
+    - writes canonical article data to `app.article`
+    - writes strong identifiers to `app.article_identifier`
+    - writes import-scoped payloads and external ids to `app.article_import_route`
 2. refactor Covidence import so it no longer uses route-prefixed article ids as canonical identity
 3. refactor Covidence project-scope and seeded-human-answer lookups so they resolve via import records or an explicit compatibility lookup, not via `app.article.article_id`
 4. refactor structured-file import to follow the same canonical model
 5. align Covidence prompt creation with `immutablePromptService`
 6. stop overwriting `app.article.import_route` and the legacy mixed `source_metadata` blob in `ArticlesRoutes`
+7. make Covidence import process records in batches large enough for set-based lookup but small enough to stay within DuckDB memory limits
+8. make Europe PMC, `src:med`, `src:PPR`, and similar source imports use staging, checkpointing, and batch matching before canonical writes
+9. ensure a later broad-source import can enrich a Covidence-created canonical article without changing its project-scoped Covidence metadata
 
 ### Phase 4. Backfill and merge historical duplicates
 
@@ -381,6 +455,8 @@ Required scenarios:
 6. rewrite all referencing foreign keys with explicit table-level conflict handling
 7. preserve article-import-route records for each original import route
 8. keep migration scripts idempotent and restart-safe
+9. process historical duplicate detection in bounded batches by identifier kind and normalized value
+10. avoid global weak-fingerprint scans unless a materialized indexed fingerprint table exists
 
 Main FK tables to rewrite during historical merges:
 
@@ -420,6 +496,8 @@ Conflict rules when FK rewrites hit unique constraints:
 3. derive `article_external_id` from the chosen project-scoped import record
 4. stop denormalizing article-global Covidence metadata into the marts
 5. keep incremental refresh and large rebuild behavior aligned
+6. when broad corpus imports add millions of canonical articles that are not linked to a project, do not rebuild project review marts for unaffected projects
+7. when broad corpus imports enrich articles already linked to Covidence projects, enqueue scoped refreshes only for those affected project and article ids
 
 ### Phase 7. Client and UI alignment
 
@@ -435,7 +513,8 @@ After all reads and writes have moved:
 2. stop reading `app.article.original_data`
 3. stop reading the mixed legacy `app.article.source_metadata` blob
 4. stop reading `app.article.article_id` as an import-scoped external id
-5. remove or fully deprecate those columns in a later cleanup migration; if a canonical public id is still needed, add an explicitly named field instead of reusing `article_id`
+5. remove display and URL helper fallbacks that parse source prefixes from `app.article.article_id`
+6. remove or fully deprecate those columns in a later cleanup migration; if a canonical public id is still needed, add an explicitly named field instead of reusing `article_id`
 
 ## Risks
 
@@ -446,6 +525,10 @@ After all reads and writes have moved:
 5. duplicate historical rows may already have judgments, human judgments, or reviews attached, so survivor selection must be careful and deterministic
 6. full-text fetch, export, and admin flows can regress if the metadata split drops canonical full-text links or source-specific external ids
 7. prompt-slot expectations can leak into this refactor if the product still assumes duplicate visible prompts with identical bodies
+8. million-row source imports can exhaust DuckDB or process memory if staging, matching, or JSON payload handling is not chunked
+9. per-row matching queries can make a 50,000-article Covidence import or million-row corpus import unacceptably slow even if correctness is fixed
+10. bulk corpus imports can create excessive mart refresh work unless project-impact detection is explicit
+11. source batches can contain internal duplicates or conflicting identifiers, so staging must collapse or quarantine conflicts before canonical writes
 
 ## Migration Notes
 
@@ -455,12 +538,15 @@ After all reads and writes have moved:
 4. after each historical merge batch, rebuild the affected marts before trusting review UI behavior
 5. do not blindly rewrite tables with uniqueness constraints; run explicit conflict rules and quarantine unresolved collisions
 6. record old-to-new article id mappings and merge decisions for auditability and restart safety
+7. for large imports, prefer checkpointed batch cutovers over one monolithic migration transaction
+8. broad corpus imports should be safe to pause, resume, and rerun without changing match decisions for already-processed rows
 
 ## Logging
 
 - Emit long-running migration and backfill progress as structured `file-only` runtime events with identifiers such as surviving article id, batch size, merge counts, and elapsed time.
 - Emit unresolved-match, quarantine, and conflict-resolution warnings as `both` so operators see them in the terminal and the runtime JSONL.
 - Make the centralized matching service emit stable structured attrs such as `articleId`, `identifierKind`, `matchStrategy`, and `matchConfidence` instead of ad-hoc text logs.
+- For high-volume imports, emit batch-level throughput attrs such as `importRunId`, `sourceKind`, `batchNumber`, `sourceRows`, `matchedRows`, `createdRows`, `unresolvedRows`, `duplicateSourceRows`, `failedRows`, `elapsedMs`, and `rowsPerSecond`.
 
 ## Quality Gates
 
@@ -493,6 +579,9 @@ Pass/fail checks for this change:
 - confirm a PDF fetch flow still works for an article that only has imported full-text links
 
 19. Desktop verify the same Covidence create and review flow
+20. Performance verify a synthetic or fixture-backed 50,000-record Covidence import completes without per-row matching queries, duplicate canonical articles, or unbounded memory growth
+21. Performance verify a staged broad-source import path can process at least one million identifier-bearing rows in bounded chunks and correctly links rows that match articles previously created by Covidence
+22. Verify broad-source imports that do not affect a project do not trigger rebuilds for unrelated project review marts
 
 ## Commands To Run
 
@@ -502,6 +591,8 @@ Pass/fail checks for this change:
 4. run `bun run build` for shared app changes
 5. run `bun run desktop:build` when runtime paths or shared UI are touched
 6. run `bun run lint` before merge
+7. add or run a repo-native import benchmark or integration test for 50,000 Covidence records before accepting the write-path rewrite
+8. add or run a repo-native staged-import benchmark or integration test for million-row Europe PMC or `src:med`/`src:PPR` identifier matching before accepting the broad-source path
 
 ## Open Decisions During Build
 
@@ -509,3 +600,6 @@ Pass/fail checks for this change:
 2. whether the expanded import-scoped blob should be named `import_metadata` or `import_source_metadata`
 3. whether raw Covidence source rows should live in one JSON payload or in a child table for queryability and size control
 4. whether canonical derived metadata that does not justify dedicated columns should live in a small canonical JSON field or explicit columns only
+5. whether high-volume staging should be persistent by default for resumability or temporary for smaller interactive imports
+6. what batch sizes and checkpoint intervals are safe defaults for 50,000-record Covidence imports and million-row corpus imports under the shared DuckDB memory limit
+7. whether broad-source imports should disable weak auto-merge by default unless a fingerprint table is present
