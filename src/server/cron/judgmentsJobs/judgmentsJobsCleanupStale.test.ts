@@ -1015,6 +1015,119 @@ test('cleanupStale releases projected closeout request leases without closing pr
   expect(rows).toEqual([{leaseIdentity: probeLeaseIdentity, leaseKind: 'probe'}])
 })
 
+test('cleanupStale releases token-use closeout request leases before projection backfill', async () => {
+  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const timestamp = Date.now()
+  const providerKey = `cleanup-stale-token-use-lease-${timestamp}`
+  const requestAttemptId = `cleanup-stale-token-use-attempt-${timestamp}`
+  const tokenUseId = `cleanup-stale-token-use-${timestamp}`
+  const requestLeaseIdentity = getProviderAdmissionRequestLeaseIdentity(requestAttemptId)
+  const endpointAvailabilityKey = `${providerKey}::http://localhost:30001`
+  const probeLeaseIdentity = getProviderAdmissionProbeLeaseIdentity({
+    endpointAvailabilityKey,
+    probeAttemptId: `cleanup-stale-token-use-probe-${timestamp}`,
+  })
+  const requestAttemptsJson = JSON.stringify([
+    {
+      closeoutKind: 'token_use',
+      durableCloseoutRef: {id: tokenUseId, kind: 'token_use', requestAttemptId},
+      finishedAt: '2026-05-04T10:00:01.000Z',
+      lifecycleState: 'completedRequest',
+      outcome: 'success',
+      providerKey,
+      requestAttemptId,
+    },
+  ])
+
+  await runDatabase(`
+    INSERT INTO app.provider_admission_lease (
+      provider_key,
+      lease_kind,
+      lease_identity,
+      request_attempt_id,
+      endpoint_availability_key,
+      probe_attempt_id,
+      holder_token,
+      acquired_at,
+      heartbeat_at,
+      expires_at
+    ) VALUES
+      (
+        ${getSqlLiteral(providerKey)},
+        'request',
+        ${getSqlLiteral(requestLeaseIdentity)},
+        ${getSqlLiteral(requestAttemptId)},
+        NULL,
+        NULL,
+        'request-holder',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2036-05-04T10:00:00.000Z'
+      ),
+      (
+        ${getSqlLiteral(providerKey)},
+        'probe',
+        ${getSqlLiteral(probeLeaseIdentity)},
+        NULL,
+        ${getSqlLiteral(endpointAvailabilityKey)},
+        ${getSqlLiteral(`cleanup-stale-token-use-probe-${timestamp}`)},
+        'probe-holder',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2036-05-04T10:00:00.000Z'
+      )
+  `)
+  await runDatabase(`
+    INSERT INTO app.token_use (
+      id,
+      requests,
+      total_prompt_tokens,
+      total_completion_tokens,
+      total_tokens,
+      successful_requests,
+      failed_requests,
+      created_at,
+      started_at,
+      finished_at,
+      request_attempts_json
+    ) VALUES (
+      ${getSqlLiteral(tokenUseId)},
+      1,
+      10,
+      5,
+      15,
+      1,
+      0,
+      TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+      TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+      TIMESTAMPTZ '2026-05-04T10:00:01.000Z',
+      CAST(${getSqlLiteral(requestAttemptsJson)} AS JSON)
+    )
+  `)
+
+  const [projectionRow] = await queryDatabase<{count: number | string | bigint}>(`
+    SELECT COUNT(*) AS count
+    FROM app.request_attempt_closeout
+    WHERE request_attempt_id = ${getSqlLiteral(requestAttemptId)}
+  `)
+
+  expect(Number(projectionRow?.count ?? -1)).toBe(0)
+
+  await judgmentsJobsCleanupStale()
+
+  const rows = await queryDatabase<{leaseIdentity: string; leaseKind: string}>(`
+    SELECT lease_identity AS leaseIdentity, lease_kind AS leaseKind
+    FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+    ORDER BY lease_kind ASC
+  `)
+
+  expect(rows).toEqual([{leaseIdentity: probeLeaseIdentity, leaseKind: 'probe'}])
+})
+
 test('cleanupStale clears transient locked quarantine after SQLite preflight succeeds', async () => {
   if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
