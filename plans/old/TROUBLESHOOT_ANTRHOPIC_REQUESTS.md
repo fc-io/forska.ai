@@ -137,7 +137,7 @@ Use examples with pathogens, AMR, plasmids, virulence, and outbreaks, but only i
 
 ## Follow-up Plan
 
-There is now a dedicated implementation plan for refusal review, prompt versioning, and replay tooling in `REFUSAL_MANAGMENT_PLAN.md`.
+There is now a dedicated implementation plan for refusal review, prompt versioning, replay tooling, and runtime refusal gating in `REFUSAL_MANAGEMENT_PLAN.md`.
 
 That plan covers:
 
