@@ -232,6 +232,25 @@ export type ComparisonProjectJudgmentsCount = {
   totalCount: number
   totalPages: number
 }
+export type ComparisonProjectStatsComparisonKind = 'primary-vs-human' | 'human-vs-llm' | 'llm-vs-llm'
+export type ComparisonProjectStatsComparison = {
+  id: string
+  kind: ComparisonProjectStatsComparisonKind
+  label: string
+  leftColumnId: string
+  rightColumnId: string
+  cohensKappa: number | null
+  conflictCount: number
+  overlapCount: number
+  trueConflictCount: number
+}
+export type ComparisonProjectStats = {
+  activeGeneration: number | null
+  comparisons: ComparisonProjectStatsComparison[]
+  isServingReady: boolean
+  servingStatus: ComparisonProjectServingStatus
+  servingUpdatedAt: Date | string | null
+}
 export type ComparisonProjectRowsRequestFilters = {
   rowFilter?: ComparisonProjectRowFilter
   differenceFilter?: ComparisonProjectDifferenceFilter
@@ -328,6 +347,12 @@ export const fetchComparisonProjectJudgmentsCount = async (
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.count.post(body)
 
   return getResponseData<ComparisonProjectJudgmentsCount>(response, 'Failed to fetch comparison project judgment count')
+}
+
+export const fetchComparisonProjectStats = async (comparisonProjectId: string) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).stats.get()
+
+  return getResponseData<ComparisonProjectStats>(response, 'Failed to fetch comparison project stats')
 }
 
 export const setComparisonProjectConflictResolution = async (

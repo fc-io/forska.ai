@@ -571,6 +571,10 @@ const postComparisonProjectJudgmentsCount = (
   )
 }
 
+const getComparisonProjectStats = (app: {handle: (request: Request) => Promise<Response>}) => {
+  return app.handle(new Request('http://localhost/api/comparison-projects/comparison-project-1/stats'))
+}
+
 const postComparisonProjectExport = (
   app: {handle: (request: Request) => Promise<Response>},
   body: Record<string, unknown>,
@@ -768,15 +772,29 @@ const queryJson = async (
   }
 
   if (statement.includes('FROM mart.comparison_cell_serving')) {
+    const isStatsCellQuery = statement.includes('normalizedAnswers') || statement.includes('cell.normalized_answers')
+
     return getMockServingRows(getMockDatabaseState())
       .filter((row) => {
-        return statement.includes(`'${row.articleId}'`)
+        return isStatsCellQuery || statement.includes(`'${row.articleId}'`)
       })
       .flatMap((row) => {
-        return Object.entries(row.cells).map(([columnId, displayAnswer]) => {
-          return {articleId: row.articleId, columnId, displayAnswer}
-        })
+        return Object.entries(row.cells)
+          .filter(([columnId, displayAnswer]) => {
+            return isStatsCellQuery ? statement.includes(`'${columnId}'`) && hasServingCellValue(displayAnswer) : true
+          })
+          .map(([columnId, displayAnswer]) => {
+            return isStatsCellQuery
+              ? {articleId: row.articleId, columnId, normalizedAnswers: displayAnswer?.split('\n') ?? []}
+              : {articleId: row.articleId, columnId, displayAnswer}
+          })
       })
+  }
+
+  if (statement.includes('FROM app.comparison_project_serving_generation')) {
+    const generation = getMockDatabaseState().servingStatus.activeGeneration
+
+    return generation === null ? [] : [{generation}]
   }
 
   if (statement.includes('INSERT INTO app.comparison_project') && statement.includes('RETURNING')) {
@@ -2058,6 +2076,227 @@ test('comparison project create and update mark serving stale and queue rebuilds
     'comparison-project-created',
     'comparison-project-1',
   ])
+})
+
+test('comparison stats endpoint returns serving metadata and conflict counts from serving cells', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await getComparisonProjectStats(app)
+  const body = (await response.json()) as {
+    data: {
+      activeGeneration: number | null
+      comparisons: Array<{
+        cohensKappa: number | null
+        conflictCount: number
+        kind: string
+        leftColumnId: string
+        overlapCount: number
+        rightColumnId: string
+        trueConflictCount: number
+      }>
+      isServingReady: boolean
+      servingStatus: string
+      servingUpdatedAt: string | null
+    }
+  }
+  const primaryPrompt2Comparison = body.data.comparisons.find((comparison) => {
+    return comparison.kind === 'primary-vs-human' && comparison.rightColumnId === 'llm:model-1:1100:prompt-2'
+  })
+  const llmPrompt2Comparison = body.data.comparisons.find((comparison) => {
+    return (
+      comparison.kind === 'llm-vs-llm'
+      && comparison.leftColumnId === 'llm:model-1:1100:prompt-2'
+      && comparison.rightColumnId === 'llm:model-2:1100:prompt-2'
+    )
+  })
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect({
+    activeGeneration: body.data.activeGeneration,
+    isServingReady: body.data.isServingReady,
+    servingStatus: body.data.servingStatus,
+    servingUpdatedAt: body.data.servingUpdatedAt,
+  }).toEqual({
+    activeGeneration: 1,
+    isServingReady: true,
+    servingStatus: 'ready',
+    servingUpdatedAt: '2026-04-03T00:00:00.000Z',
+  })
+  expect(body.data.comparisons).toHaveLength(6)
+  expect(primaryPrompt2Comparison).toMatchObject({
+    cohensKappa: null,
+    conflictCount: 1,
+    overlapCount: 1,
+    trueConflictCount: 1,
+  })
+  expect(llmPrompt2Comparison).toMatchObject({conflictCount: 1, overlapCount: 1, trueConflictCount: 1})
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM app.comparison_project_serving_generation')
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_cell_serving cell')
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM app.judgment j') || statement.includes('FROM app.judgment_human')
+    }),
+  ).toBe(false)
+})
+
+test('comparison stats endpoint returns empty comparisons without active serving generation', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await getComparisonProjectStats(app)
+  const body = (await response.json()) as {
+    data: {
+      activeGeneration: number | null
+      comparisons: unknown[]
+      isServingReady: boolean
+      servingStatus: string
+      servingUpdatedAt: string | null
+    }
+  }
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.data).toEqual({
+    activeGeneration: null,
+    comparisons: [],
+    isServingReady: false,
+    servingStatus: 'refreshing',
+    servingUpdatedAt: null,
+  })
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM app.comparison_project_serving_generation')
+    }),
+  ).toBe(true)
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_cell_serving')
+    }),
+  ).toBe(false)
+})
+
+test('comparison stats endpoint returns empty comparisons without comparable columns', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    promptLinks: [{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await getComparisonProjectStats(app)
+  const body = (await response.json()) as {data: {comparisons: unknown[]}}
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.data.comparisons).toEqual([])
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM app.comparison_project_serving_generation')
+    }),
+  ).toBe(false)
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_cell_serving')
+    }),
+  ).toBe(false)
+})
+
+test('comparison stats endpoint returns summary-mode kappa values', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
+        id: 'comparison-project-prompt-1',
+        order: 0,
+        promptId: 'prompt-1',
+      },
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await getComparisonProjectStats(app)
+  const body = (await response.json()) as {
+    data: {
+      comparisons: Array<{
+        cohensKappa: number | null
+        conflictCount: number
+        kind: string
+        overlapCount: number
+        trueConflictCount: number
+      }>
+    }
+  }
+  const [comparison] = body.data.comparisons
+
+  expect(response.status).toBe(200)
+  expect(body.data.comparisons).toHaveLength(1)
+  expect(comparison).toMatchObject({
+    cohensKappa: 0,
+    conflictCount: 1,
+    kind: 'primary-vs-human',
+    overlapCount: 1,
+    trueConflictCount: 1,
+  })
 })
 
 test('comparison judgments normalize missing and invalid rowFilter to multiple answers', async () => {
