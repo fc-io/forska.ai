@@ -256,7 +256,11 @@ const CompareProjectJudgmentsPage = () => {
   })
   const comparisonProjectStatsQuery = useQuery(() => {
     return {
-      queryKey: ['comparison-project-stats', comparisonProjectId()],
+      queryKey: [
+        'comparison-project-stats',
+        comparisonProjectId(),
+        comparisonProjectQuery.data?.activeGeneration ?? null,
+      ],
       queryFn: () => {
         return fetchComparisonProjectStats(comparisonProjectId())
       },
