@@ -30,6 +30,21 @@ Touched layers: server, database, client
 | `app.article.article_id` | Legacy compatibility field on the canonical article row | Temporary compatibility reads during migration | Do not assign new route-scoped meaning. Do not parse source prefixes from it. Replace callers with canonical ids, normalized identifiers, or import-scoped external ids, then remove or fully deprecate it. |
 | Source URL | Canonical article URL or import-scoped source URL record | Browser links, exports, full-text routing hints, and source landing pages | Store canonical landing URLs on canonical article fields when they are article-level truth. Store source-specific URLs on the import-scoped record or explicit source metadata fields. URL helpers must use explicit URL fields or identifier-derived URL builders instead of parsing `app.article.article_id` prefixes. |
 
+## Surface Identity Contract
+
+Use existing route and payload field names where they are already established, but make the identifier meaning explicit on every surface.
+
+| Surface | Id To Use For App Joins | Id To Expose For Users Or Source References | Source URL And Metadata Rule | Legacy `app.article.article_id` Rule |
+|---|---|---|---|---|
+| Import APIs and write services | Use `app.article.id` after canonical matching for project links, judgment links, and import-route membership. | Store Covidence, PubMed, Europe PMC, preprint, and broad-source ids on `app.article_import_route.external_article_id`; use `source_record_key` and `source_record_hash` only for import idempotency and provenance. | Write source-specific URLs and raw payloads to the import-scoped record; write canonical landing URLs through the canonical resolver. | Do not mint route-prefixed canonical article ids or treat source `article_id` as canonical identity. |
+| Project review and article APIs | Return canonical article id for actions that mutate or read app-owned article, judgment, review, full-text, or project-link state. | Return the selected project-scoped `external_article_id` for display, source references, Covidence seeding, and review-detail related-record context. | Return canonical metadata and scoped import metadata separately so clients do not need to parse legacy blobs. | Compatibility reads may exist during migration, but new API contracts must not ask clients to infer source identity from it. |
+| Export APIs, including `ProjectExportRoutes` | Use canonical article id only for explicit internal audit columns or app re-import references. | Export the project-scoped `external_article_id` as the source-facing article id. | Export canonical URL fields and scoped source URL fields explicitly. | Do not export route-prefixed `app.article.article_id` as the article display id. |
+| Review serving marts | Use canonical `article_id` for joins back to `app.article`, judgments, reviews, and project article state. | Populate `article_external_id` from the selected project-scoped import record. | Build serving metadata from canonical article metadata plus scoped import metadata filtered to the project. | Do not denormalize the legacy mixed article metadata blob or route-prefixed id into serving rows. |
+| Comparison serving marts and routes | Use canonical article id for comparison judgment joins and serving rebuild state. | Populate comparison `article_external_id` from the comparison-project source scope or selected import record. | Combine canonical metadata with scoped import metadata for the compared source scope. | Do not infer comparison identity from `app.article.article_id`. |
+| Judgment snapshots, queued jobs, outbox, and LLM prompt payloads | Persist canonical article id as the stable replay and lookup id. | Include the project-scoped external article id when the snapshot or prompt needs source-facing context. | Snapshot canonical article fields plus scoped import metadata; derive legacy `importRoute` and `originalData` only through a compatibility adapter until consumers migrate. | Keep compatibility only for existing queued work and saved snapshots; do not create new dependencies. |
+| Client review UI and URL helpers | Use canonical article id for app actions, route params, selected rows, and mutations. | Display `article_external_id` from the serving payload for source-facing article ids. | Build links from explicit canonical URL fields, scoped source URL fields, or identifier-derived URL builders. | `getArticleUrl` and related helpers must not parse source prefixes from it. |
+| Admin, investigation, and full-text APIs | Use canonical article id for investigation, maintenance, fetch, conversion, and repair actions. | Show scoped external ids only with their source or import-route context. | Use canonical full-text link hints for article-level fetch decisions and scoped source URLs for source-specific inspection. | Treat it as compatibility-only and avoid new admin workflows that depend on its old route-scoped meaning. |
+
 ## Current Repo State
 
 1. Prompt bodies are already mostly shared globally by `content_hash` in `app.prompt`.
@@ -374,6 +389,16 @@ This is the safest long-term behavior if we want to avoid poisoning canonical ar
 5. If the product later needs two visible slots with identical prompt bodies, add explicit slot identity to `app.project_prompt` or a sibling slot table as a follow-up. Do not solve that by duplicating `app.prompt` rows.
 
 ## Main Files And Systems To Change
+
+Affected system families:
+
+1. Covidence import, prompt, seeded-human-answer, and project-scope write paths.
+2. Broad-source harvesters and import routes, including PubMed, Europe PMC/PPR, `src:med`, `src:PPR`, arXiv, bioRxiv, and medRxiv flows.
+3. Review, article, export, admin, investigation, full-text, warning, and health APIs that expose article ids, source URLs, or source metadata.
+4. Review serving marts, comparison project serving marts, comparison project routes, and related mart rebuild or invalidation services.
+5. Judgment execution snapshots, queued judgment jobs, queue outbox imports, completion journal replay, and LLM prompt payload construction.
+6. Browser and desktop client review surfaces, source-link helpers, and runtime paths that consume shared article serving payloads.
+7. Maintenance leases, checkpoint state, project mart refresh workers, and import-run concurrency guards.
 
 ### Database
 
@@ -740,6 +765,23 @@ Pass/fail checks for this change:
 9. add or run a repo-native import benchmark or integration test for 50,000 Covidence records before accepting the write-path rewrite; pass requires chunks of at most 500 source records, no per-row canonical lookups, no duplicate canonical or import-scoped rows, completion within 10 minutes, and importer RSS below the configured local memory ceiling
 10. add or run a repo-native staged-import benchmark or integration test for one million Europe PMC or `src:med`/`src:PPR` identifier-bearing rows before accepting the broad-source path; pass requires chunked staged matching, correct linking to Covidence-created canonical articles, completion within 60 minutes, and successful resume after interruption without duplicate canonical or import-scoped rows
 11. inspect matching query plans or benchmark instrumentation before accepting high-volume import work; pass requires indexed joins or chunked `IN` lookups against normalized identifier tables and no JSON scans or full `app.article` scans for identifier matching
+
+## Findings Coverage Checklist
+
+This checklist ties the findings fix plan to executable plan content. These items are intentionally represented in the plan body, affected systems, phases, commands, and quality gates, not only in risks.
+
+| Finding | Explicit Plan Coverage |
+|---|---|
+| 1. `app.article.article_id` migration is underspecified | `Identity And Display Contract`, `Surface Identity Contract`, target data model, project-scoped serving metadata, Phase 5, Phase 7, Phase 8, exports, and client URL-helper gates define canonical ids, external ids, source URLs, and compatibility-only lifecycle. |
+| 2. Broad-source harvesters are not explicitly in scope | `Affected system families`, import/write file scope, Phase 3, performance requirements, benchmark gates, and commands cover PubMed, Europe PMC/PPR, `src:med`, `src:PPR`, arXiv, bioRxiv, and medRxiv harvesters and routes. |
+| 3. Comparison project marts and routes are missing | Database, query/serving, mart refresh, test scope, Phase 5, Phase 6, quality gates, and commands cover comparison serving builders, routes, migrations, judgment rows, metadata, and `article_external_id` behavior. |
+| 4. Judgment execution snapshots need a compatibility policy | Current repo state, affected systems, judgment snapshot file scope, Phase 3, Phase 5, Phase 8, risks, and quality gates require reproducible queued work and compatibility adapters for legacy snapshot fields. |
+| 5. Multi-identifier conflict handling is not explicit | Article identifier table rules, matching policy, unresolved cases, Phase 0, Phase 2, Phase 3, risks, and quality gates define strong-identifier disagreement and quarantine behavior. |
+| 6. Concurrent import behavior is undefined | Performance requirements, article identifier uniqueness rules, bulk staging/checkpointing, Phase 1, Phase 2, Phase 3, migration notes, and retry gates define leases, bounded transactions, conflict rereads, and idempotent retries. |
+| 7. Source record history versus current import membership is unclear | Import-scoped article record, optional raw row child table, bulk staging/checkpointing, Phase 3, retry gates, and open decisions distinguish current membership from source-row history and repeated-harvest updates. |
+| 8. Identifier normalization needs exact rules and tests | Article identifier normalization contract, Phase 0, quality gates, and commands define DOI, PMID, PMCID source metadata, arXiv, bioRxiv, medRxiv, trusted URL extraction, malformed values, duplicates, and conflicts. |
+| 9. Additional read and helper surfaces are not named | Query/serving, mart refresh, client, admin, full-text, warning, health, maintenance, and helper file scope plus Phase 5, Phase 6, Phase 7, and targeted quality gates name the affected surfaces. |
+| 10. Performance gates lack concrete budgets | Performance and scale requirements, quality gates, commands, and open decisions define chunk size, wall-clock budgets, memory ceiling, checkpoint interval, query shape, mart refresh scope, and retry pass/fail checks. |
 
 ## Open Decisions During Build
 
