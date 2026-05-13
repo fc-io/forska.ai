@@ -15,7 +15,6 @@
       "WebFetch(domain:api.github.com)",
       "Bash(CH_REPLICATOR_PASSWORD='ch_replicator_dev_pass' bun run:*)",
       "Bash(chmod:*)",
-      "Bash(scripts/monitorSyncProgress.sh:*)",
       "Bash(for i in {1..120})",
       "Bash(done)",
       "Bash(S3_ENDPOINT=http://localhost:8333 S3_ACCESS_KEY=admin S3_SECRET_KEY=admin S3_BUCKET=forska-judgments bun:*)",

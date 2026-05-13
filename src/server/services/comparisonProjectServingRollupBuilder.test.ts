@@ -90,11 +90,33 @@ type RollupBuilderResult = {
   statsRows: ActualFilterStats[]
 }
 
+type TrueConflictArticleRollup = {
+  articleId: string
+  hasHumanVsLlmTrueConflict: boolean
+  passesDifferenceFilterHumanVsLlmTrueConflict: boolean
+}
+
+type TrueConflictRollupResult = {
+  articleRows: TrueConflictArticleRollup[]
+  memberRows: Array<{articleId: string; ordinal: number}>
+  statsRows: Array<{totalCount: number}>
+}
+
+type TrueConflictCase = {
+  articleCreatedAt: string
+  articleId: string
+  articleTitle: string
+  hasTrueConflict: boolean
+  humanAnswer: string
+  llmAnswer: string
+}
+
 const contentSettings = {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
 const contentKey = '1100'
 const generation = 1
 const promptProjectId = 'comparison-serving-rollup-prompt'
 const summaryProjectId = 'comparison-serving-rollup-summary'
+const trueConflictProjectId = 'comparison-serving-rollup-true-conflict'
 const differenceFilters = [
   'all',
   'human-vs-llm',
@@ -359,6 +381,49 @@ const fixtureProjects = [
   {articles: promptArticles, cells: promptCells, columns: promptColumns, id: promptProjectId, isSummaryMode: false},
   {articles: summaryArticles, cells: summaryCells, columns: summaryColumns, id: summaryProjectId, isSummaryMode: true},
 ] satisfies FixtureProject[]
+
+const trueConflictCases = [
+  {
+    articleCreatedAt: '2026-07-05T00:00:00.000Z',
+    articleId: 'article-yes-no',
+    articleTitle: 'Yes vs No',
+    hasTrueConflict: true,
+    humanAnswer: 'yes',
+    llmAnswer: 'no',
+  },
+  {
+    articleCreatedAt: '2026-07-04T00:00:00.000Z',
+    articleId: 'article-maybe-no',
+    articleTitle: 'Maybe vs No',
+    hasTrueConflict: true,
+    humanAnswer: 'maybe',
+    llmAnswer: 'no',
+  },
+  {
+    articleCreatedAt: '2026-07-03T00:00:00.000Z',
+    articleId: 'article-yes-maybe',
+    articleTitle: 'Yes vs Maybe',
+    hasTrueConflict: false,
+    humanAnswer: 'yes',
+    llmAnswer: 'maybe',
+  },
+  {
+    articleCreatedAt: '2026-07-02T00:00:00.000Z',
+    articleId: 'article-maybe-maybe',
+    articleTitle: 'Maybe vs Maybe',
+    hasTrueConflict: false,
+    humanAnswer: 'maybe',
+    llmAnswer: 'maybe',
+  },
+  {
+    articleCreatedAt: '2026-07-01T00:00:00.000Z',
+    articleId: 'article-no-no',
+    articleTitle: 'No vs No',
+    hasTrueConflict: false,
+    humanAnswer: 'no',
+    llmAnswer: 'no',
+  },
+] satisfies TrueConflictCase[]
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
@@ -717,6 +782,154 @@ const getRollupScript = () => {
   `
 }
 
+const getTrueConflictRollupScript = () => {
+  return `
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {getSqlLiteral} = await import('./src/server/services/appQueryHelpers.ts')
+    const {getComparisonProjectServingRollupBuilder} = await import('./src/server/services/comparisonProjectServingRollupBuilder.ts')
+
+    const trueConflictCases = ${JSON.stringify(trueConflictCases)}
+    const generation = ${generation}
+    const projectId = '${trueConflictProjectId}'
+
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+    const builder = getComparisonProjectServingRollupBuilder()
+    const getValuesSql = (columns, rows) => {
+      return rows.map((row) => {
+        return '(' + columns.map((column) => getSqlLiteral(row[column])).join(', ') + ')'
+      }).join(',\\n')
+    }
+    const insertRows = async (tableName, columns, rows) => {
+      if (rows.length === 0) {
+        return
+      }
+
+      await database.run(\`
+        INSERT INTO \${tableName} (\${columns.join(', ')})
+        VALUES \${getValuesSql(columns, rows)}
+      \`)
+    }
+
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('provider-true-conflict', 'sglang', 'Provider True Conflict', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.model (
+        id,
+        provider_connection_id,
+        name,
+        remote_model_id,
+        display_name,
+        variant,
+        source,
+        enabled,
+        metadata_json
+      ) VALUES ('model-true-conflict', 'provider-true-conflict', 'Model True Conflict', 'model-true-conflict', 'Model True Conflict', 'manual', 'manual', TRUE, '{}'::JSON)
+    \`)
+
+    await insertRows('app.prompt', ['id', 'original_text', 'prompt_heading', 'content_hash', 'created_at'], [
+      {id: 'prompt-true-conflict', original_text: 'Prompt True Conflict', prompt_heading: 'Prompt True Conflict', content_hash: 'prompt-true-conflict-hash', created_at: '2026-07-01T00:00:00.000Z'}
+    ])
+
+    await insertRows('app.article', ['id', 'article_id', 'article_title', 'article_summary', 'article_created_at', 'article_updated_at'], trueConflictCases.map((testCase) => {
+      return {
+        id: testCase.articleId,
+        article_id: testCase.articleId,
+        article_title: testCase.articleTitle,
+        article_summary: testCase.articleTitle + ' summary',
+        article_created_at: testCase.articleCreatedAt,
+        article_updated_at: testCase.articleCreatedAt
+      }
+    }))
+
+    await insertRows('app.comparison_project', ['id', 'name', 'description', 'model_ids', 'compare_with_humans', 'human_judgment_mode', 'summary_source_project_id', 'use_title', 'use_abstract', 'use_fulltext', 'use_fulltext_no_images'], [
+      {id: projectId, name: 'True Conflict Rollup Project', description: null, model_ids: ['model-true-conflict'], compare_with_humans: true, human_judgment_mode: 'prompt', summary_source_project_id: null, use_title: true, use_abstract: true, use_fulltext: false, use_fulltext_no_images: false}
+    ])
+
+    await insertRows('app.comparison_project_prompt', ['id', 'comparison_project_id', 'prompt_id', 'prompt_order', 'criteria_disposition', 'criteria_section_key', 'criteria_section_label'], [
+      {id: 'comparison-true-conflict-prompt', comparison_project_id: projectId, prompt_id: 'prompt-true-conflict', prompt_order: 0, criteria_disposition: null, criteria_section_key: null, criteria_section_label: null}
+    ])
+
+    await insertRows('mart.comparison_cell_serving', ['comparison_project_id', 'generation', 'article_id', 'column_id', 'column_order', 'kind', 'prompt_id', 'model_id', 'source_project_id', 'content_key', 'display_answer', 'normalized_answers', 'source_created_at', 'source_updated_at'], trueConflictCases.flatMap((testCase) => {
+      return [
+        {
+          comparison_project_id: projectId,
+          generation,
+          article_id: testCase.articleId,
+          column_id: 'llm:model-true-conflict:1100:prompt-true-conflict',
+          column_order: 0,
+          kind: 'llm',
+          prompt_id: 'prompt-true-conflict',
+          model_id: 'model-true-conflict',
+          source_project_id: null,
+          content_key: '1100',
+          display_answer: testCase.llmAnswer,
+          normalized_answers: [testCase.llmAnswer],
+          source_created_at: '2026-07-01T01:00:00.000Z',
+          source_updated_at: '2026-07-01T02:00:00.000Z'
+        },
+        {
+          comparison_project_id: projectId,
+          generation,
+          article_id: testCase.articleId,
+          column_id: 'human:prompt-true-conflict',
+          column_order: 1,
+          kind: 'human',
+          prompt_id: 'prompt-true-conflict',
+          model_id: null,
+          source_project_id: null,
+          content_key: null,
+          display_answer: testCase.humanAnswer,
+          normalized_answers: [testCase.humanAnswer],
+          source_created_at: '2026-07-01T01:00:00.000Z',
+          source_updated_at: '2026-07-01T02:00:00.000Z'
+        }
+      ]
+    }))
+
+    await builder.insertComparisonProjectServingRollups(
+      {comparisonProjectId: projectId, generation},
+      {run: database.run}
+    )
+
+    const articleRows = await database.queryJson(\`
+      SELECT
+        article_id AS articleId,
+        has_human_vs_llm_true_conflict AS hasHumanVsLlmTrueConflict,
+        passes_difference_filter_human_vs_llm_true_conflict AS passesDifferenceFilterHumanVsLlmTrueConflict
+      FROM mart.comparison_article_serving
+      WHERE comparison_project_id = '\${projectId}'
+      ORDER BY article_id ASC
+    \`)
+
+    const memberRows = await database.queryJson(\`
+      SELECT
+        article_id AS articleId,
+        CAST(ordinal AS INTEGER) AS ordinal
+      FROM mart.comparison_filter_member
+      WHERE comparison_project_id = '\${projectId}'
+        AND row_filter = 'all'
+        AND difference_filter = 'human-vs-llm-true-conflict'
+      ORDER BY ordinal ASC
+    \`)
+
+    const statsRows = await database.queryJson(\`
+      SELECT CAST(total_count AS INTEGER) AS totalCount
+      FROM mart.comparison_filter_stats
+      WHERE comparison_project_id = '\${projectId}'
+        AND row_filter = 'all'
+        AND difference_filter = 'human-vs-llm-true-conflict'
+    \`)
+
+    console.log(JSON.stringify({articleRows, memberRows, statsRows}))
+  `
+}
+
 const runScript = <T>(body: string) => {
   const duckdbPath = `/tmp/f1-comparison-project-serving-rollups-${Date.now()}-${Math.random()
     .toString(16)
@@ -800,4 +1013,30 @@ test('serving rollups, filter members, and stats match current page and export f
       })
     })
   })
+})
+
+test('serving rollups materialize human vs llm true conflicts', () => {
+  const result = runScript<TrueConflictRollupResult>(getTrueConflictRollupScript())
+  const expectedArticleRows = trueConflictCases
+    .map((testCase) => {
+      return {
+        articleId: testCase.articleId,
+        hasHumanVsLlmTrueConflict: testCase.hasTrueConflict,
+        passesDifferenceFilterHumanVsLlmTrueConflict: testCase.hasTrueConflict,
+      }
+    })
+    .sort((left, right) => {
+      return left.articleId.localeCompare(right.articleId)
+    })
+  const expectedMemberRows = trueConflictCases
+    .filter((testCase) => {
+      return testCase.hasTrueConflict
+    })
+    .map((testCase, index) => {
+      return {articleId: testCase.articleId, ordinal: index}
+    })
+
+  expect(result.articleRows).toEqual(expectedArticleRows)
+  expect(result.memberRows).toEqual(expectedMemberRows)
+  expect(result.statsRows).toEqual([{totalCount: expectedMemberRows.length}])
 })
