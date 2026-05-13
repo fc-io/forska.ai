@@ -3,6 +3,7 @@
 ## Core Release Principle
 
 - Default to a fail-closed release: if a route, script, doc, asset, or historical secret is not clearly safe for public distribution, treat it as blocked until reviewed.
+- The public Forska repo should contain only public project material. For each current doc, script, artifact, or file group, choose one action before publishing: keep as-is, rewrite, remove, or move to another repo.
 - Do not confuse local integration with public internet exposure. The intended open-source shape includes a documented API for local apps on the same machine, while unsupported internal/debug/operator routes stay clearly separated.
 - Assume exhaustive discovery of every old API use in git history is not realistic. The default public-release path should therefore avoid publishing the existing private history.
 
@@ -14,50 +15,51 @@
 2. Create a new public repo from a clean audited snapshot.
    - Export from one reviewed commit only, or from an orphan clean-history branch.
    - Publish only after the snapshot has passed the route, secret, docs, and infra review.
-3. Carry over only the minimum safe public material.
-   - Include app and server source, tests, migrations, package metadata, normal local-dev scripts, and sanitized docs.
-   - Add fresh public-facing repo docs: `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, and an updated `README.md`.
-   - Exclude private ops scripts, HPC and backup helpers, internal-only runbooks, private datasets, generated runtime data, and any file whose purpose is unclear.
+3. Resolve the current repo contents into public-repo actions.
+   - Keep files as-is when they are safe, useful, and belong in the Forska repo.
+   - Rewrite files that belong in Forska but currently contain private, obsolete, or unsupported assumptions.
+   - Remove files that are generated, obsolete, sensitive, or have no public project value.
+   - Move files that are real workflows for another project, such as remote/HPC helpers that belong in `../hpc-manager`.
 
-## Minimum Public Carry-Over Checklist
+## Public Repo File Decision Rules
 
-- Include only what is needed for the public OSS flow: `bun install`, `bun run db:mig`, `bun run dev:server`, `bun run dev:app`, `bun run build`, and relevant `bun test` commands.
-- Include reviewed product code under `src/`, but only after the route and surface audit removes or gates internal-only endpoints.
-- Include a supported local API contract based on `plans/supportedLocalApi.md`, so local LLM apps, agents, scripts, browser UI, and desktop app know which routes are stable. Implement that contract last, after route cleanup and sensitive-route decisions are complete.
-- Include DuckDB migration files under `src/db/duckdbMigrations/` and any other schema/runtime files required for first boot.
-- Include tests that validate the public product surface, as long as fixtures and snapshots are sanitized.
-- Include root build and tooling files needed for public development, such as `package.json`, `bun.lock`, `tsconfig.json`, `vite.config.ts`, `eslint.config.ts`, `playwright.config.ts`, `.gitignore`, `.prettierrc.js`, `.prettierignore`, and `index.html`.
-- Include only the subset of `scripts/` required for normal local OSS development, setup, migration, build, test, and packaging.
-- Include sanitized public docs only: `README.md`, local-run docs, architecture notes that reveal no sensitive internals, and the new `LICENSE`, `SECURITY.md`, and `CONTRIBUTING.md`.
-- Include `Dockerfile` or compose files only if they support a real public workflow, bind safely by default, and contain no private infra assumptions.
-- Exclude all old git history, private branches, and private tags from the public repo seed.
-- Exclude runtime and generated material: `.env*`, `data/`, `cache/`, `dist/`, `desktopBuild/`, `node_modules/`, `test-results/`, `tmp/`, logs, and local machine artifacts.
-- Exclude structured runtime telemetry such as `logs/runtime/` JSONL files and desktop `backend.log`; confirm those paths stay gitignored and never enter the public seed.
-- Exclude private infra and ops material by default: remote backup helpers, cluster launch helpers, and any script tied to SSH aliases, stack roots, or private environments.
-- Exclude non-public publication artifacts by default: `Dockerfile.sglang`, `Dockerfile.sglang-gateway`, remote-only compose overrides, remote-run docs, CI or release config with private runners or registries, and any release helper that assumes private infrastructure.
-- Exclude ambiguous or internal planning material by default: root plan files, `plans/`, `future/`, `tasks/`, and any document that is not clearly meant for public users or contributors.
-- Exclude all datasets, imported assets, cached PDFs, snapshots, and example files unless they are explicitly reviewed, licensed for redistribution, and scrubbed of sensitive content.
-- If a file is not clearly needed for public users or contributors, leave it out of the first public repo seed and add it later only after review.
+- Keep the normal public OSS flow working from tracked docs: `bun install`, `bun run db:mig`, `bun run dev:server`, `bun run dev:app`, `bun run build`, and relevant `bun test` commands.
+- Keep reviewed product code under `src/`, but only after the route and surface audit removes or gates internal-only endpoints.
+- Keep a supported local API contract based on `plans/supportedLocalApi.md`, so local LLM apps, agents, scripts, browser UI, and desktop app know which routes are stable. Implement that contract last, after route cleanup and sensitive-route decisions are complete.
+- Keep DuckDB migration files under `src/db/duckdbMigrations/` and any other schema/runtime files required for first boot.
+- Keep tests that validate the public product surface, as long as fixtures and snapshots are safe to publish.
+- Keep root build and tooling files needed for public development, such as `package.json`, `bun.lock`, `tsconfig.json`, `vite.config.ts`, `eslint.config.ts`, `playwright.config.ts`, `.gitignore`, `.prettierrc.js`, `.prettierignore`, and `index.html`.
+- Keep, rewrite, remove, or move each `scripts/` file. Normal local OSS setup, migration, build, test, and packaging scripts stay here; remote ops scripts move to their owning repo or are removed.
+- Rewrite public docs that belong in Forska: `README.md`, local-run docs, architecture notes, `SECURITY.md`, and `CONTRIBUTING.md`.
+- Keep `Dockerfile` or compose files only if they support a real public workflow, bind safely by default, and contain no private infra assumptions. Move real remote/HPC Docker workflows to their owning repo, for example `../hpc-manager`.
+- Remove all old git history, private branches, and private tags from the published repo by publishing from a clean snapshot or clean-history branch.
+- Remove runtime and generated material: `.env*`, `data/`, `cache/`, `dist/`, `desktopBuild/`, `node_modules/`, `test-results/`, `tmp/`, logs, and local machine artifacts.
+- Remove structured runtime telemetry such as `logs/runtime/` JSONL files and desktop `backend.log`; confirm those paths stay gitignored and never enter the published repo.
+- Remove or move private infra and ops material: remote backup helpers, cluster launch helpers, and any script tied to SSH aliases, stack roots, or private environments.
+- Remove or move non-Forska publication artifacts: `Dockerfile.sglang`, `Dockerfile.sglang-gateway`, remote-only compose overrides, remote-run docs, CI or release config with private runners or registries, and any release helper that assumes private infrastructure.
+- Resolve ambiguous or internal planning material one file at a time: keep as-is if useful and safe for public contributors, rewrite into public docs if needed, remove if obsolete, or move to another repo if it belongs outside Forska.
+- Remove all datasets, imported assets, cached PDFs, snapshots, and example files unless they are explicitly reviewed, licensed for redistribution, and scrubbed of sensitive content.
+- Any unclear file is a release blocker until it has one of the four actions: keep as-is, rewrite, remove, or move.
 
 ## Workstreams
 
-### 1. Sanitize public docs and Docker/publication artifacts
+### 1. Prepare public docs and Docker/publication artifacts
 
 - Active implementation plan: [`plans/openSourceDocsDockerPlan.md`](plans/openSourceDocsDockerPlan.md).
-- Inventory docs that are candidates for public release: `README.md`, local-run docs, architecture notes, setup docs, and any docs referenced by those files.
-- Mark each candidate doc as public, sanitize, private, or remove from the first public seed.
-- Sanitize public docs so examples use placeholders, public paths, loopback/local defaults, and no private hostnames, credentials, datasets, stack roots, backup paths, or remote-run assumptions.
+- Inventory tracked docs: `README.md`, local-run docs, architecture notes, setup docs, and any docs referenced by those files.
+- Mark each doc as keep as-is, rewrite, remove, or move to another repo.
+- Rewrite kept public docs so examples use placeholders, public paths, loopback/local defaults, and no private hostnames, credentials, datasets, stack roots, backup paths, or remote-run assumptions.
 - Inventory Docker and publication artifacts separately: `Dockerfile*`, compose files, CI/workflow config, release helpers, and remote-run docs.
-- For each Docker or compose artifact, mark keep, remove, or private, and require safe local defaults with no private registry, private runner, SSH alias, stack root, remote host, or broad bind assumption.
-- Keep Docker or compose files only if they support a real public workflow; otherwise exclude them from the first public seed until reviewed.
+- For each Docker or compose artifact, mark keep as-is, rewrite, remove, or move to another repo, and require safe local defaults with no private registry, private runner, SSH alias, stack root, remote host, or broad bind assumption for anything kept here.
+- Keep Docker or compose files in Forska only if they support a real public Forska workflow; otherwise remove them or move them to their owning repo.
 - Record unresolved scope questions as blockers for the final public release-scope workstream, not as assumptions in public docs or Docker files.
 
 ### 2. Inventory the current server and API surface
 
 - Use `plans/supportedLocalApi.md` as the companion decision framework for deciding which localhost routes are stable local integration APIs versus internal/debug implementation details. Do not implement the manifest/docs/regression checks from that plan until late-stage cleanup.
 - Build a network surface inventory from `src/server/index.ts`, `src/server/serverMain.ts`, `src/appServer.ts`, `src/appServerMain.ts`, every file under `src/server/routes/`, and any nested or transitively mounted routes.
-- For each listener, proxy entrypoint, or route, record: bind host, path, methods, mounted role, proxy behavior, client caller, local integration caller, data touched, whether it is required for the product, and whether it is safe to keep in the public seed.
-- Classify each route into one of: supported local API, local diagnostics API, sensitive local API, internal runtime API, maintenance/debug API, or remove from public seed.
+- For each listener, proxy entrypoint, or route, record: bind host, path, methods, mounted role, proxy behavior, client caller, local integration caller, data touched, whether it is required for the product, and whether it should keep shipping, be rewritten/gated, removed, or moved out of this repo.
+- Classify each route into one of: supported local API, local diagnostics API, sensitive local API, internal runtime API, maintenance/debug API, or remove before release.
 - Pay special attention to current hotspots: `AdminInvestigateRoutes`, `ArticleAdminRoutes`, `DuckdbStudioRoutes`, `NvidiaSmiRoutes`, `LlmStatusRoutes`, `ApiProxyRoutes`, `TokensRoutes`, `UsersRoutes`, `RuntimeAssetsRoutes`, the provider routes mounted under `ModelsRoutes`, and the `/api/*` proxy path in `src/appServer.ts`.
 - Compare the route inventory against the README claim that the app is single-user with no admin role, while preserving the intended local integration API for same-machine tools. Any mismatch becomes a release blocker or an explicit product decision.
 
@@ -108,7 +110,7 @@
 - Review bootstrap entrypoints that install runtime logging and process identity, including `src/server/index.ts`, `src/server/serverMain.ts`, `src/appServer.ts`, `src/appServerMain.ts`, and any dedicated bootstrap modules, so the release inventory covers startup-time logging behavior as well as HTTP routes.
 - Confirm the supported OSS flow binds only to loopback by default, or document and explicitly justify any broader bind. Any wider default exposure is a release blocker.
 - Review CORS, desktop-mode exceptions, and writer-proxy behavior to ensure the default network posture stays narrow.
-- Remove or quarantine operational scripts that are useful only inside private environments.
+- Remove or move operational scripts that are useful only inside non-public environments.
 
 ### 8. Audit licensing, data rights, and publishing obligations
 
@@ -127,7 +129,7 @@
 ### 10. Establish public-repo guardrails
 
 - Add a fresh public CI/workflow set rather than copying private automation blindly.
-- Run secret scanning on pull requests and on the default branch, and add denylisted-path checks for private docs, remote helpers, and restricted sample data.
+- Run secret scanning on pull requests and on the default branch, and add checks that removed or moved docs, remote helpers, and restricted sample data do not re-enter the Forska repo.
 - As one of the last cleanup steps, implement the supported local API manifest from `plans/supportedLocalApi.md` and treat unexpected endpoint, listener, owner/proxy, or CORS changes as review failures.
 - Add a fresh-clone smoke test based only on public docs so new contributors can validate the supported OSS flow without private infra access.
 - Require explicit review before adding new Dockerfiles, remote-run docs, infra scripts, or release helpers to the public repo.
@@ -136,10 +138,10 @@
 
 - Default to a fresh public mirror exported from an audited snapshot, with no inherited private commit history.
 - Treat preserving the existing git history as an exception that requires a strong reason and a separate cleanup plan.
-- Start from a minimum public carry-over set, not from the full private repo contents.
-- Create an allowlist for what belongs in the public repo: source, tests, sanitized docs, sample data, migrations, and scripts needed for normal local development.
-- Create a denylist for what stays private: operational runbooks, backup flows, cluster launch helpers, internal hostnames, unpublished datasets, and anything tied to private infrastructure.
-- Reconcile the sanitized-docs and Docker/publication-artifact decisions from Workstream 1 with the route, secret, licensing, history, and guardrail findings.
+- Create a final file-action table for the repo: keep as-is, rewrite, remove, or move to another repo.
+- Record destination repo/path for moved material, especially operational runbooks, backup flows, cluster launch helpers, remote/HPC Docker helpers, unpublished datasets, and anything tied to private infrastructure.
+- Rewrite or remove anything that remains in Forska but still contains internal hostnames, stack roots, unsupported run commands, or sensitive data.
+- Reconcile the docs and Docker/publication-artifact decisions from Workstream 1 with the route, secret, licensing, history, and guardrail findings.
 - Record a simple release rule: public contributors should be able to clone, install, migrate, and run locally without private infra access.
 
 ## Suggested Audit Commands
@@ -158,18 +160,18 @@
 - A current API and network-surface matrix with supported-local/diagnostic/sensitive/internal/debug/remove decisions, bind notes, and transitive mount coverage
 - A late-stage supported local API manifest and documentation, based on `plans/supportedLocalApi.md`, covering local LLM apps, agents, scripts, browser UI, and desktop app callers
 - A git-history findings report covering secrets, old endpoints, and sensitive infra details, with owner, severity, disposition, and closure evidence
-- A release-scope allowlist and private-material denylist
+- A release-scope file-action table covering keep as-is, rewrite, remove, and move decisions
 - A decision memo that defaults to publishing from a fresh clean mirror and explains any exception
-- A public-repo seed checklist for the minimum safe files, scripts, and docs to carry over
+- A public-repo file decision checklist for files, scripts, docs, and moved material
 - A kept-versus-removed publication artifact list covering scripts, Dockerfiles, remote docs, CI, and release helpers
-- A public-repo guardrail plan for secret scanning, denylisted-path checks, and unexpected route or listener changes
-- A logging-surface note covering runtime JSONL env vars, ignored paths, payload shape, bootstrap entrypoints, and retention behavior in the public seed
-- Public-release docs: existing `LICENSE`, new `SECURITY.md`, contributor guidance, and sanitized README updates
+- A public-repo guardrail plan for secret scanning, moved/removed-path checks, and unexpected route or listener changes
+- A logging-surface note covering runtime JSONL env vars, ignored paths, payload shape, bootstrap entrypoints, and retention behavior in the published repo
+- Public-release docs: existing `LICENSE`, new `SECURITY.md`, contributor guidance, and rewritten README updates
 
 ## Exit Criteria
 
 - Every currently mounted route, proxy entrypoint, and listener has an owner and a classification.
-- Every documented local integration route is listed in the supported local API manifest, and every unlisted mounted route is explicitly internal, debug, sensitive, or removed from the public seed.
+- Every documented local integration route is listed in the supported local API manifest, and every unlisted mounted route is explicitly internal, debug, sensitive, or removed before release.
 - No current default route or listener exposure contradicts the intended single-user local-first product stance.
 - Supported OSS listeners bind only to loopback by default, or every broader bind has an explicit documented exception.
 - No unrevoked secret remains reachable in the history that will be public.
@@ -192,7 +194,7 @@
 - `bun run build` if client or route-consumer UI changes land during the cleanup
 - Manual verify: the network surface inventory covers `src/server/index.ts`, `src/server/serverMain.ts`, `src/appServer.ts`, `src/appServerMain.ts`, nested mounts, and proxy entrypoints
 - Manual verify: supported OSS listeners bind only to loopback by default, or every broader bind is documented and approved
-- Manual verify: full-history secret and sensitive-artifact scans rerun clean for all refs that could become public, or every hit is rotated/revoked and excluded from the public seed
-- Manual verify: public seed allowlist and denylist diff is reviewed, including scripts, Dockerfiles, and remote docs
+- Manual verify: full-history secret and sensitive-artifact scans rerun clean for all refs that could become public, or every hit is rotated/revoked and removed from published refs
+- Manual verify: the final diff matches the file-action table, including scripts, Dockerfiles, remote docs, and moved material
 - Manual verify: a fresh clone can `bun install`, `bun run db:mig`, `bun run build`, and boot the supported local OSS flow using only public docs
-- Manual verify: public-repo guardrails are enabled for secret scanning, denylisted-path checks, and unexpected route or listener changes
+- Manual verify: public-repo guardrails are enabled for secret scanning, moved/removed-path checks, and unexpected route or listener changes
