@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {getArticleUrl} from '../../app/utils/getArticleUrl.ts'
 import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
@@ -9,6 +10,7 @@ import {
   getScopedArticleImportJoinSql,
   getScopedArticleImportSelectionCteSql,
   getScopedArticleMetadataExpression,
+  getScopedArticleOriginalDataExpression,
 } from '../services/scopedArticleReadAdapter.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
@@ -38,7 +40,6 @@ const escapeCSV = (value: string): string => {
 
 type PromptDetails = {id: string; promptHeading: string | null; originalText: string | null; type: string | null}
 type PromptInfoRow = {title: string; type: string; prompt: string}
-type ArticleUrlStrategy = {isMatch: (articleId: string) => boolean; buildUrl: (articleId: string) => string}
 type SourceProjectSetting = {
   id: string
   modelId: string | null
@@ -59,49 +60,6 @@ const {
   getQuotedStringList,
   getSqlLiteral,
 } = appQueryHelpers
-
-const articleUrlStrategies: ArticleUrlStrategy[] = [
-  {
-    isMatch: (articleId) => {
-      return articleId.startsWith('oai:arXiv.org:')
-    },
-    buildUrl: (articleId) => {
-      return `https://www.arxiv.org/abs/${articleId.slice(14)}`
-    },
-  },
-  {
-    isMatch: (articleId) => {
-      return articleId.startsWith('pmid:')
-    },
-    buildUrl: (articleId) => {
-      return `https://pubmed.ncbi.nlm.nih.gov/${articleId.slice(5)}/`
-    },
-  },
-  {
-    isMatch: (articleId) => {
-      return articleId.startsWith('medRxiv:')
-    },
-    buildUrl: (articleId) => {
-      return `https://www.medrxiv.org/content/${articleId.slice(8)}`
-    },
-  },
-  {
-    isMatch: (articleId) => {
-      return articleId.startsWith('bioRxiv:')
-    },
-    buildUrl: (articleId) => {
-      return `https://www.biorxiv.org/content/${articleId.slice(8)}`
-    },
-  },
-]
-
-const getArticleUrl = (articleId: string | null): string => {
-  const articleIdValue = articleId ?? ''
-  const matchingStrategy = articleUrlStrategies.find((strategy) => {
-    return strategy.isMatch(articleIdValue)
-  })
-  return matchingStrategy ? matchingStrategy.buildUrl(articleIdValue) : ''
-}
 
 const formatArticleDate = (value: Date | string | null | undefined): string => {
   const dateValue = value ? (typeof value === 'string' ? new Date(value) : value) : null
@@ -354,6 +312,7 @@ export const projectExportRoutes = new Elysia()
       const scopedArticleImportJoin = getScopedArticleImportJoinSql({articleIdExpression: 'a.id'})
       const scopedArticleExternalIdExpression = getScopedArticleExternalIdExpression({articleAlias: 'a'})
       const scopedArticleMetadataExpression = getScopedArticleMetadataExpression({articleAlias: 'a'})
+      const scopedArticleOriginalDataExpression = getScopedArticleOriginalDataExpression({articleAlias: 'a'})
 
       let filteredArticleIds: string[] | null = null
       if (hasPromptFilters && hasPrompts && judgmentConfigCondition) {
@@ -519,14 +478,21 @@ export const projectExportRoutes = new Elysia()
 
               while (true) {
                 const batchData = await appDatabaseService.queryJson<{
+                  arxivId: string | null
                   articleId: string
                   articleExternalId: string | null
                   articleTitle: string | null
                   articleSummary: string | null
                   articleAuthors: unknown
                   articleCreatedAt: unknown
+                  articleOriginalData: unknown
                   articleUpdatedAt: unknown
                   articleSourceMetadata: unknown
+                  articleUrl: string | null
+                  biorxivId: string | null
+                  doi: string | null
+                  medrxivId: string | null
+                  pubmedId: string | null
                   promptId: string
                   answeredOriginal: string | null
                   answeredOriginalAsArray: unknown
@@ -537,12 +503,19 @@ export const projectExportRoutes = new Elysia()
                   SELECT
                     a.id AS articleId,
                     ${scopedArticleExternalIdExpression} AS articleExternalId,
+                    a.arxiv_id AS arxivId,
+                    a.biorxiv_id AS biorxivId,
+                    a.doi AS doi,
+                    a.medrxiv_id AS medrxivId,
+                    a.pubmed_id AS pubmedId,
+                    a.url AS articleUrl,
                     a.article_title AS articleTitle,
                     a.article_summary AS articleSummary,
                     TO_JSON(a.article_authors) AS articleAuthors,
                     a.article_created_at AS articleCreatedAt,
                     a.article_updated_at AS articleUpdatedAt,
-                    ${includeJournal ? `TO_JSON(${scopedArticleMetadataExpression})` : 'NULL'} AS articleSourceMetadata,
+                    ${includeArticleLink ? `TO_JSON(${scopedArticleOriginalDataExpression})` : 'NULL'} AS articleOriginalData,
+                    ${includeJournal || includeArticleLink ? `TO_JSON(${scopedArticleMetadataExpression})` : 'NULL'} AS articleSourceMetadata,
                     j.prompt_id AS promptId,
                     j.answered_original AS answeredOriginal,
                     TO_JSON(j.answered_original_as_array) AS answeredOriginalAsArray,
@@ -590,7 +563,18 @@ export const projectExportRoutes = new Elysia()
                     batchArticleMap.set(row.articleId, {
                       title: row.articleTitle || 'Untitled',
                       articleId: articleExternalId,
-                      articleUrl: includeArticleLink ? getArticleUrl(articleExternalId) : '',
+                      articleUrl: includeArticleLink
+                        ? getArticleUrl({
+                            arxivId: row.arxivId,
+                            biorxivId: row.biorxivId,
+                            doi: row.doi,
+                            medrxivId: row.medrxivId,
+                            originalData: getJsonValue(row.articleOriginalData),
+                            pubmedId: row.pubmedId,
+                            sourceMetadata: getJsonValue(row.articleSourceMetadata),
+                            url: row.articleUrl,
+                          })
+                        : '',
                       authors:
                         includeArticleAuthors && Array.isArray(articleAuthors)
                           ? articleAuthors
@@ -696,25 +680,39 @@ export const projectExportRoutes = new Elysia()
 
               while (true) {
                 const batchData = await appDatabaseService.queryJson<{
+                  arxivId: string | null
                   articleId: string
                   articleExternalId: string | null
                   articleTitle: string | null
                   articleSummary: string | null
                   articleAuthors: unknown
                   articleCreatedAt: unknown
+                  articleOriginalData: unknown
                   articleUpdatedAt: unknown
                   articleSourceMetadata: unknown
+                  articleUrl: string | null
+                  biorxivId: string | null
+                  doi: string | null
+                  medrxivId: string | null
+                  pubmedId: string | null
                 }>(`
                   WITH ${scopedArticleImportCte}
                   SELECT
                     a.id AS articleId,
                     ${scopedArticleExternalIdExpression} AS articleExternalId,
+                    a.arxiv_id AS arxivId,
+                    a.biorxiv_id AS biorxivId,
+                    a.doi AS doi,
+                    a.medrxiv_id AS medrxivId,
+                    a.pubmed_id AS pubmedId,
+                    a.url AS articleUrl,
                     a.article_title AS articleTitle,
                     a.article_summary AS articleSummary,
                     TO_JSON(a.article_authors) AS articleAuthors,
                     a.article_created_at AS articleCreatedAt,
                     a.article_updated_at AS articleUpdatedAt,
-                    ${includeJournal ? `TO_JSON(${scopedArticleMetadataExpression})` : 'NULL'} AS articleSourceMetadata
+                    ${includeArticleLink ? `TO_JSON(${scopedArticleOriginalDataExpression})` : 'NULL'} AS articleOriginalData,
+                    ${includeJournal || includeArticleLink ? `TO_JSON(${scopedArticleMetadataExpression})` : 'NULL'} AS articleSourceMetadata
                   FROM app.article a
                   ${scopedArticleImportJoin}
                   WHERE ${finalScopeCondition}
@@ -730,9 +728,19 @@ export const projectExportRoutes = new Elysia()
                 for (const row of batchData) {
                   const articleExternalId = row.articleExternalId ?? ''
                   const articleAuthors = getJsonValue(row.articleAuthors)
+                  const articleUrl = getArticleUrl({
+                    arxivId: row.arxivId,
+                    biorxivId: row.biorxivId,
+                    doi: row.doi,
+                    medrxivId: row.medrxivId,
+                    originalData: getJsonValue(row.articleOriginalData),
+                    pubmedId: row.pubmedId,
+                    sourceMetadata: getJsonValue(row.articleSourceMetadata),
+                    url: row.articleUrl,
+                  })
                   const csvRow: string[] = [row.articleTitle || 'Untitled']
                   if (includeArticleId) csvRow.push(articleExternalId)
-                  if (includeArticleLink) csvRow.push(getArticleUrl(articleExternalId))
+                  if (includeArticleLink) csvRow.push(articleUrl)
                   if (includeArticleAuthors) {
                     csvRow.push(
                       Array.isArray(articleAuthors)

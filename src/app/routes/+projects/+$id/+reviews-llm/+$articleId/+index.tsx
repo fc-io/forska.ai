@@ -131,7 +131,25 @@ export const ReviewDetail = () => {
                                   <div class="flex flex-wrap items-center justify-between gap-2">
                                     <div>
                                       <p class="font-medium text-stone-900">{record.articleTitle}</p>
-                                      <p class="text-xs text-stone-500">{record.articleExternalId ?? record.id}</p>
+                                      <p class="text-xs text-stone-500">
+                                        <Show
+                                          when={record.articleUrl}
+                                          fallback={<span>{record.articleExternalId ?? record.id}</span>}
+                                        >
+                                          {(url) => {
+                                            return (
+                                              <a
+                                                href={url()}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                class="text-blue-600 hover:underline"
+                                              >
+                                                {record.articleExternalId ?? record.id}
+                                              </a>
+                                            )
+                                          }}
+                                        </Show>
+                                      </p>
                                     </div>
                                     <div class="flex flex-wrap items-center gap-2">
                                       <Show when={record.isCurrentRecord}>

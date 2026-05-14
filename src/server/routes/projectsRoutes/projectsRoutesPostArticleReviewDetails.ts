@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {getArticleUrl} from '../../../app/utils/getArticleUrl.ts'
 import type {
   JudgmentAssessmentRecord,
   JudgmentChunkingStrategy,
@@ -165,6 +166,7 @@ type AssessmentRow = {
 type CovidenceRelatedRecord = {
   articleExternalId: string | null
   articleTitle: string
+  articleUrl: string | null
   covidenceIds: string[]
   hasDuplicateStudyRecords: boolean
   hasStudyDecisionConflict: boolean
@@ -506,9 +508,16 @@ const getCovidenceRelatedRecords = async (params: {
   const rows = await getAppDatabaseService().queryJson<{
     articleExternalId: string | null
     articleTitle: string
+    arxivId: string | null
+    biorxivId: string | null
+    doi: string | null
     isCurrentRecord: boolean
+    medrxivId: string | null
     id: string
+    pubmedId: string | null
+    rawPayload: unknown
     sourceMetadata: unknown
+    url: string | null
   }>(`
     WITH project_route AS (
       SELECT import_route_id
@@ -519,7 +528,14 @@ const getCovidenceRelatedRecords = async (params: {
       source_record.id AS id,
       source_record.external_article_id AS articleExternalId,
       article.article_title AS articleTitle,
+      article.arxiv_id AS arxivId,
+      article.biorxiv_id AS biorxivId,
+      article.doi AS doi,
+      article.medrxiv_id AS medrxivId,
+      article.pubmed_id AS pubmedId,
+      article.url AS url,
       ${currentRecordClause} AS isCurrentRecord,
+      source_record.raw_payload AS rawPayload,
       source_record.import_metadata AS sourceMetadata
     FROM app.article_import_route_source_record source_record
     INNER JOIN project_route ON project_route.import_route_id = source_record.import_route_id
@@ -535,6 +551,17 @@ const getCovidenceRelatedRecords = async (params: {
     return {
       articleExternalId: row.articleExternalId,
       articleTitle: row.articleTitle,
+      articleUrl:
+        getArticleUrl({
+          arxivId: row.arxivId,
+          biorxivId: row.biorxivId,
+          doi: row.doi,
+          medrxivId: row.medrxivId,
+          originalData: getJsonValue(row.rawPayload),
+          pubmedId: row.pubmedId,
+          sourceMetadata: getJsonValue(row.sourceMetadata),
+          url: row.url,
+        }) || null,
       covidenceIds: covidence?.covidenceIds ?? [],
       hasDuplicateStudyRecords: covidence?.hasDuplicateStudyRecords ?? false,
       hasStudyDecisionConflict: covidence?.hasStudyDecisionConflict ?? false,

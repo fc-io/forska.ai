@@ -17,8 +17,14 @@ type ReviewHydrationRow = {
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
   articleId: string | null
+  arxivId: string | null
+  biorxivId: string | null
   canonicalArticleId: string | null
+  doi: string | null
   importRoute: string | null
+  medrxivId: string | null
+  originalData: unknown
+  pubmedId: string | null
   url: string | null
   fullTextPDF: string | null
   fullTextFetchedAt: Date | null
@@ -225,8 +231,14 @@ const getReviewHydrationRows = (database: AppQueryDatabaseService) => {
       articleCreatedAt: unknown
       articleUpdatedAt: unknown
       articleId: string | null
+      arxivId: string | null
+      biorxivId: string | null
       canonicalArticleId: string | null
+      doi: string | null
       importRoute: string | null
+      medrxivId: string | null
+      originalData: unknown
+      pubmedId: string | null
       url: string | null
       fullTextPDF: string | null
       fullTextFetchedAt: unknown
@@ -247,8 +259,14 @@ const getReviewHydrationRows = (database: AppQueryDatabaseService) => {
         a.article_created_at AS articleCreatedAt,
         a.article_updated_at AS articleUpdatedAt,
         ${readSql.articleIdExpression} AS articleId,
+        a.arxiv_id AS arxivId,
+        a.biorxiv_id AS biorxivId,
         a.article_id AS canonicalArticleId,
+        a.doi AS doi,
         ${readSql.importRouteExpression} AS importRoute,
+        a.medrxiv_id AS medrxivId,
+        ${readSql.originalDataExpression} AS originalData,
+        a.pubmed_id AS pubmedId,
         a.url,
         a.full_text_pdf AS fullTextPDF,
         a.full_text_fetched_at AS fullTextFetchedAt,
@@ -282,8 +300,14 @@ const getReviewHydrationRows = (database: AppQueryDatabaseService) => {
         articleCreatedAt: getDateValue(row.articleCreatedAt),
         articleUpdatedAt: getDateValue(row.articleUpdatedAt),
         articleId: compatibilityValues.articleId,
+        arxivId: row.arxivId,
+        biorxivId: row.biorxivId,
         canonicalArticleId: row.canonicalArticleId,
+        doi: row.doi,
         importRoute: row.importRoute,
+        medrxivId: row.medrxivId,
+        originalData: getJsonValue(row.originalData),
+        pubmedId: row.pubmedId,
         url: row.url,
         fullTextPDF: row.fullTextPDF,
         fullTextFetchedAt: getDateValue(row.fullTextFetchedAt),

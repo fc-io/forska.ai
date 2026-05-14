@@ -24,9 +24,10 @@ export const ArticlesTableTable = (props: {articles: Article[]}): JSX.Element =>
       </TableHeader>
       <TableBody>
         <For each={props.articles}>
-          {({articleId, articleTitle, articleAuthors, articleCreatedAt}): JSX.Element => {
+          {(article): JSX.Element => {
+            const {articleId, articleTitle, articleAuthors, articleCreatedAt} = article
             const createdAt = articleCreatedAt ? format(articleCreatedAt, 'yyyy-MM-dd HH:mm') : ''
-            const url = getArticleUrl(articleId)
+            const url = getArticleUrl(article)
 
             return (
               <TableRow>
