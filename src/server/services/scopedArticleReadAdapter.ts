@@ -113,8 +113,7 @@ export const getScopedArticleImportJoinSql = (params: {articleIdExpression: stri
 }
 
 export const getScopedArticleMetadataExpression = (params: {articleAlias: string; scopedImportAlias?: string}) => {
-  const scopedImportAlias = params.scopedImportAlias ?? 'scoped_import'
-  return `COALESCE(${scopedImportAlias}.import_metadata, ${params.articleAlias}.source_metadata)`
+  return getScopedArticleCombinedMetadataExpression(params)
 }
 
 export const getScopedArticleCombinedMetadataExpression = (params: {
@@ -148,6 +147,16 @@ export const getScopedArticleOriginalDataExpression = (params: {articleAlias: st
   return `COALESCE(${scopedImportAlias}.raw_payload, ${params.articleAlias}.original_data)`
 }
 
+const isSourceMetadataRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const getMergedSourceMetadata = (params: {canonicalSourceMetadata: unknown; scopedImportMetadata: unknown}) => {
+  return isSourceMetadataRecord(params.canonicalSourceMetadata) && isSourceMetadataRecord(params.scopedImportMetadata)
+    ? {...params.canonicalSourceMetadata, ...params.scopedImportMetadata}
+    : (params.scopedImportMetadata ?? params.canonicalSourceMetadata)
+}
+
 export const getScopedArticleSourceRecordLookupClause = (params: {
   importRouteId: string | null
   sourceRecordKey: string | null
@@ -164,6 +173,6 @@ export const getScopedArticleCompatibilityValues = <T extends ScopedArticleCompa
     articleId: fields.selectedExternalArticleId ?? fields.canonicalArticleId,
     importRoute: fields.selectedImportRoute ?? fields.canonicalImportRoute,
     originalData: fields.scopedRawPayload ?? fields.canonicalOriginalData ?? null,
-    sourceMetadata: fields.scopedImportMetadata ?? fields.canonicalSourceMetadata,
+    sourceMetadata: getMergedSourceMetadata(fields),
   }
 }
