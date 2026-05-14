@@ -19,6 +19,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
       CREATE TABLE app.project (id VARCHAR PRIMARY KEY, model_id VARCHAR, use_title BOOLEAN NOT NULL DEFAULT TRUE, use_abstract BOOLEAN NOT NULL DEFAULT TRUE, use_fulltext BOOLEAN NOT NULL DEFAULT FALSE, use_fulltext_no_images BOOLEAN NOT NULL DEFAULT FALSE, date_from TIMESTAMPTZ, date_to TIMESTAMPTZ);
       CREATE TABLE app.project_prompt (id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, prompt_id VARCHAR NOT NULL, prompt_order INTEGER, enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp);
       CREATE TABLE app.project_import_route (id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, import_route_id VARCHAR NOT NULL);
+      CREATE TABLE app.import_route (id VARCHAR PRIMARY KEY, route VARCHAR NOT NULL, name VARCHAR, description VARCHAR, active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp);
       CREATE TABLE app.article (
         id VARCHAR PRIMARY KEY,
         created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
@@ -53,13 +54,51 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
         source_metadata JSON,
         publication_status VARCHAR
       );
+      CREATE TABLE app.article_import_route (
+        id VARCHAR PRIMARY KEY,
+        article_id VARCHAR NOT NULL,
+        import_route_id VARCHAR NOT NULL,
+        external_article_id VARCHAR,
+        source_kind VARCHAR,
+        import_metadata JSON,
+        match_metadata JSON,
+        import_run_id VARCHAR,
+        source_record_key VARCHAR,
+        source_record_hash VARCHAR,
+        raw_payload JSON,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+      );
       INSERT INTO app.project (id, model_id, date_from, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
       VALUES ('project-1', 'model-1', '2024-01-01T00:00:00Z', TRUE, TRUE, FALSE, FALSE);
       INSERT INTO app.prompt (id, original_text, prompt_heading, type) VALUES ('prompt-1', 'Prompt body', 'Prompt heading', 'string');
       INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled) VALUES ('pp-1', 'project-1', 'prompt-1', 2, TRUE);
+      INSERT INTO app.import_route (id, route, name) VALUES ('route-1', 'covidence:project-1', 'Covidence');
       INSERT INTO app.project_import_route (id, project_id, import_route_id) VALUES ('pir-1', 'project-1', 'route-1');
       INSERT INTO app.article (id, article_title, article_authors, article_created_at, article_id, full_text_pdf, original_data, source_metadata)
       VALUES ('article-1', 'Article 1', ['Alice', 'Bob'], '2024-01-02T00:00:00Z', 'A-1', '/tmp/a.pdf', '{"journalInfo":{"title":"J1"}}', '{"journalTitle":"J1","preprintSource":null,"preprintHostLabel":null,"isPreprint":false,"fullTextLinks":[]}');
+      INSERT INTO app.article_import_route (
+        id,
+        article_id,
+        import_route_id,
+        external_article_id,
+        source_kind,
+        import_metadata,
+        source_record_key,
+        source_record_hash,
+        raw_payload
+      )
+      VALUES (
+        'air-1',
+        'article-1',
+        'route-1',
+        'covidence:42',
+        'covidence',
+        '{"journalTitle":"Scoped J","preprintSource":null,"preprintHostLabel":null,"isPreprint":false,"fullTextLinks":[],"covidence":{"articleKey":"covidence:42","articleKeySource":"covidence","recordKey":"record-42","recordKeySource":"covidence","studyKey":"study-1","studyKeySource":"covidence","mode":null,"sourceFileNames":[],"stageMembership":{"all":true,"excluded":false,"full_text":false,"included":false,"irrelevant":false},"tags":[],"covidenceIds":["42"],"referenceIds":["ref-42"],"duplicateStudyRecordCount":1,"hasDuplicateStudyRecords":false,"hasStudyDecisionConflict":false,"seededHumanJudgmentAnswer":null,"isSeededHumanJudgmentAnswered":false}}',
+        'record-42',
+        'hash-42',
+        '{"source":"covidence","id":"42"}'
+      );
     `,
   ])
 
@@ -79,8 +118,10 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
           const [promptRow] = await service.getProjectPromptRows('project-1')
           const projectConfig = await service.getProjectReviewConfig('project-1')
           const [reviewHydrationRow] = await service.getReviewHydrationRows(['article-1'])
+          const [scopedReviewHydrationRow] = await service.getReviewHydrationRows(['article-1'], {projectId: 'project-1'})
           const [fullArticleRow] = await service.getFullArticlesByIds(['article-1'])
-          console.log(JSON.stringify({promptRow, projectConfig, reviewHydrationRow, fullArticleRow}))
+          const [scopedFullArticleRow] = await service.getFullArticlesByIds(['article-1'], {includeFullText: false, projectId: 'project-1'})
+          console.log(JSON.stringify({promptRow, projectConfig, reviewHydrationRow, scopedReviewHydrationRow, fullArticleRow, scopedFullArticleRow}))
           await getAppDatabaseService().close()
         `,
       ],
@@ -122,6 +163,29 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
         }
       }
       fullArticleRow: {articleAuthors: string[]}
+      scopedFullArticleRow: {
+        articleId: string
+        canonicalArticleId: string
+        importRoute: string
+        originalData: {source: string; id: string}
+        scopedImportMetadata: {journalTitle: string; covidence: {studyKey: string}}
+        selectedExternalArticleId: string
+        selectedImportRecordId: string
+        selectedImportRouteId: string
+        selectedSourceRecordKey: string
+        sourceMetadata: {journalTitle: string; covidence: {studyKey: string}}
+      }
+      scopedReviewHydrationRow: {
+        articleId: string
+        canonicalArticleId: string
+        importRoute: string
+        scopedImportMetadata: {journalTitle: string; covidence: {studyKey: string}}
+        selectedExternalArticleId: string
+        selectedImportRecordId: string
+        selectedImportRouteId: string
+        selectedSourceRecordKey: string
+        sourceMetadata: {journalTitle: string; covidence: {studyKey: string}}
+      }
     }
 
     expect(parsed.promptRow).toEqual({
@@ -152,6 +216,19 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
       covidence: null,
     })
     expect(parsed.fullArticleRow.articleAuthors).toEqual(['Alice', 'Bob'])
+    expect(parsed.scopedReviewHydrationRow.articleId).toBe('covidence:42')
+    expect(parsed.scopedReviewHydrationRow.canonicalArticleId).toBe('A-1')
+    expect(parsed.scopedReviewHydrationRow.importRoute).toBe('covidence:project-1')
+    expect(parsed.scopedReviewHydrationRow.selectedExternalArticleId).toBe('covidence:42')
+    expect(parsed.scopedReviewHydrationRow.selectedImportRecordId).toBe('air-1')
+    expect(parsed.scopedReviewHydrationRow.selectedImportRouteId).toBe('route-1')
+    expect(parsed.scopedReviewHydrationRow.selectedSourceRecordKey).toBe('record-42')
+    expect(parsed.scopedReviewHydrationRow.scopedImportMetadata.covidence.studyKey).toBe('study-1')
+    expect(parsed.scopedReviewHydrationRow.sourceMetadata.journalTitle).toBe('Scoped J')
+    expect(parsed.scopedFullArticleRow.articleId).toBe('covidence:42')
+    expect(parsed.scopedFullArticleRow.canonicalArticleId).toBe('A-1')
+    expect(parsed.scopedFullArticleRow.originalData).toEqual({source: 'covidence', id: '42'})
+    expect(parsed.scopedFullArticleRow.sourceMetadata.covidence.studyKey).toBe('study-1')
   } finally {
     removeFileIfExists(duckdbPath)
   }

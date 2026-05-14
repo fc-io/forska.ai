@@ -61,7 +61,7 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       return a.id
     })
 
-    const fullArticles = await getAppQueryService().getFullArticlesByIds(articleIds)
+    const fullArticles = await getAppQueryService().getFullArticlesByIds(articleIds, {projectId: body.projectId})
 
     const articleOrder = new Map(
       articleIds.map((id, idx) => {

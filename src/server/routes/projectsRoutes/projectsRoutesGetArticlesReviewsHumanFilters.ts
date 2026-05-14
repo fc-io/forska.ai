@@ -3,6 +3,11 @@ import {Elysia, t} from 'elysia'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getProjectScopeClause, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {
+  getScopedArticleImportJoinSql,
+  getScopedArticleImportSelectionCteSql,
+  getScopedArticleMetadataExpression,
+} from '../../services/scopedArticleReadAdapter.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
@@ -23,6 +28,9 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
       const hasStudyDecisionConflict = query?.covidenceConflicts === '1'
       const projectConfig = await getAppQueryService().getProjectReviewConfig(query.projectId)
       const humanJudgmentMode = projectConfig?.humanJudgmentMode ?? 'prompt'
+      const scopedArticleImportCte = getScopedArticleImportSelectionCteSql({projectIds: [query.projectId]})
+      const scopedArticleImportJoin = getScopedArticleImportJoinSql({articleIdExpression: 'a.id'})
+      const scopedMetadataExpression = getScopedArticleMetadataExpression({articleAlias: 'a'})
 
       const projectPromptRows = await getAppQueryService().getProjectPromptRows(query.projectId)
 
@@ -40,10 +48,10 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
         toDate ? `a.article_created_at <= ${getTimestampLiteral(toDate)}` : null,
         searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
         hasDuplicateStudyRecords
-          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'"
+          ? `LOWER(COALESCE(json_extract_string(${scopedMetadataExpression}, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'`
           : null,
         hasStudyDecisionConflict
-          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'"
+          ? `LOWER(COALESCE(json_extract_string(${scopedMetadataExpression}, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'`
           : null,
       ].filter((part): part is string => {
         return part !== null
@@ -51,9 +59,11 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
 
       if (humanJudgmentMode === 'summary') {
         const grouped = await getAppDatabaseService().queryJson<{answer: string | null}>(`
+          WITH ${scopedArticleImportCte}
           SELECT jhs.answer AS answer
           FROM app.judgment_human_summary jhs
           INNER JOIN app.article a ON a.id = jhs.article_id
+          ${scopedArticleImportJoin}
           WHERE jhs.project_id = '${escapeSqlString(query.projectId)}'
             AND NULLIF(TRIM(COALESCE(jhs.answer, '')), '') IS NOT NULL
             AND ${articleWhereParts.join(' AND ')}
@@ -101,11 +111,13 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
       })
 
       const grouped = await getAppDatabaseService().queryJson<{promptId: string; answer: string | null}>(`
+        WITH ${scopedArticleImportCte}
         SELECT
           jh.prompt_id AS promptId,
           jh.answer AS answer
         FROM app.judgment_human jh
         INNER JOIN app.article a ON a.id = jh.article_id
+        ${scopedArticleImportJoin}
         WHERE ${whereParts.join(' AND ')}
         GROUP BY jh.prompt_id, jh.answer
         ORDER BY jh.prompt_id ASC, jh.answer ASC

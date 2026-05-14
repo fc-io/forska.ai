@@ -1,4 +1,13 @@
 import {type ArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
+import {
+  getScopedArticleCompatibilityValues,
+  getScopedArticleExternalIdExpression,
+  getScopedArticleImportJoinSql,
+  getScopedArticleImportRouteExpression,
+  getScopedArticleImportSelectionCteSql,
+  getScopedArticleMetadataExpression,
+  getScopedArticleOriginalDataExpression,
+} from './scopedArticleReadAdapter.ts'
 
 export type AppQueryDatabaseService = {queryJson: <T>(statement: string) => Promise<T[]>}
 
@@ -8,11 +17,18 @@ type ReviewHydrationRow = {
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
   articleId: string | null
+  canonicalArticleId: string | null
   importRoute: string | null
   url: string | null
   fullTextPDF: string | null
   fullTextFetchedAt: Date | null
   fullTextConversionStatus: string | null
+  canonicalSourceMetadata: ArticleSourceMetadata | null
+  scopedImportMetadata: unknown
+  selectedExternalArticleId: string | null
+  selectedImportRecordId: string | null
+  selectedImportRouteId: string | null
+  selectedSourceRecordKey: string | null
   sourceMetadata: ArticleSourceMetadata | null
 }
 
@@ -25,6 +41,7 @@ type FullArticleRow = {
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
   articleId: string | null
+  canonicalArticleId: string | null
   articleSummary: string | null
   articleVersion: number | null
   arxivId: string | null
@@ -48,6 +65,15 @@ type FullArticleRow = {
   fullTextCharCount: number | null
   contentHash: string | null
   importRoute: string | null
+  originalData: unknown
+  canonicalSourceMetadata: ArticleSourceMetadata | null
+  scopedImportMetadata: unknown
+  scopedRawPayload: unknown
+  selectedExternalArticleId: string | null
+  selectedImportRecordId: string | null
+  selectedImportRouteId: string | null
+  selectedSourceKind: string | null
+  selectedSourceRecordKey: string | null
   sourceMetadata: ArticleSourceMetadata | null
   publicationStatus: string | null
 }
@@ -66,7 +92,9 @@ type ProjectReviewConfig = {
 
 type ProjectPromptRow = {id: string; promptHeading: string | null; originalText: string; type: string | null}
 
-type GetFullArticlesOptions = {includeFullText?: boolean}
+type GetFullArticlesOptions = {includeFullText?: boolean; projectId?: string}
+
+type GetReviewHydrationOptions = {projectId?: string}
 
 const appTableColumnNameCache = new WeakMap<AppQueryDatabaseService, Map<string, Promise<Set<string>>>>()
 
@@ -156,54 +184,117 @@ const getJsonValue = (value: unknown): unknown => {
   }
 }
 
+const getScopedArticleReadSqlParts = (articleIds: string[], projectId: string | undefined) => {
+  const scopedProjectId = typeof projectId === 'string' && projectId.trim() !== '' ? projectId.trim() : null
+  const hasProjectScope = scopedProjectId !== null
+
+  return {
+    articleIdExpression: hasProjectScope ? getScopedArticleExternalIdExpression({articleAlias: 'a'}) : 'a.article_id',
+    importRouteExpression: hasProjectScope
+      ? getScopedArticleImportRouteExpression({articleAlias: 'a'})
+      : 'a.import_route',
+    joinClause: hasProjectScope ? getScopedArticleImportJoinSql({articleIdExpression: 'a.id'}) : '',
+    metadataExpression: hasProjectScope ? getScopedArticleMetadataExpression({articleAlias: 'a'}) : 'a.source_metadata',
+    originalDataExpression: hasProjectScope
+      ? getScopedArticleOriginalDataExpression({articleAlias: 'a'})
+      : 'a.original_data',
+    scopedImportMetadataExpression: hasProjectScope ? 'scoped_import.import_metadata' : 'NULL',
+    scopedRawPayloadExpression: hasProjectScope ? 'scoped_import.raw_payload' : 'NULL',
+    selectedExternalArticleIdExpression: hasProjectScope ? 'scoped_import.external_article_id' : 'NULL',
+    selectedImportRecordIdExpression: hasProjectScope ? 'scoped_import.id' : 'NULL',
+    selectedImportRouteExpression: hasProjectScope ? 'scoped_import.import_route' : 'NULL',
+    selectedImportRouteIdExpression: hasProjectScope ? 'scoped_import.import_route_id' : 'NULL',
+    selectedSourceKindExpression: hasProjectScope ? 'scoped_import.source_kind' : 'NULL',
+    selectedSourceRecordKeyExpression: hasProjectScope ? 'scoped_import.source_record_key' : 'NULL',
+    withClause: hasProjectScope
+      ? `WITH ${getScopedArticleImportSelectionCteSql({articleIds, projectIds: [scopedProjectId]})}`
+      : '',
+  }
+}
+
 const getReviewHydrationRows = (database: AppQueryDatabaseService) => {
-  return async (articleIds: string[]): Promise<ReviewHydrationRow[]> => {
+  return async (articleIds: string[], options: GetReviewHydrationOptions = {}): Promise<ReviewHydrationRow[]> => {
     if (articleIds.length === 0) {
       return []
     }
 
+    const readSql = getScopedArticleReadSqlParts(articleIds, options.projectId)
     const rows = await database.queryJson<{
       id: string
       articleTitle: string
       articleCreatedAt: unknown
       articleUpdatedAt: unknown
       articleId: string | null
+      canonicalArticleId: string | null
       importRoute: string | null
       url: string | null
       fullTextPDF: string | null
       fullTextFetchedAt: unknown
       fullTextConversionStatus: string | null
+      canonicalSourceMetadata: unknown
+      scopedImportMetadata: unknown
+      selectedExternalArticleId: string | null
+      selectedImportRecordId: string | null
+      selectedImportRouteId: string | null
+      selectedImportRoute: string | null
+      selectedSourceRecordKey: string | null
       sourceMetadata: unknown
     }>(`
+      ${readSql.withClause}
       SELECT
-        id,
-        article_title AS articleTitle,
-        article_created_at AS articleCreatedAt,
-        article_updated_at AS articleUpdatedAt,
-        article_id AS articleId,
-        import_route AS importRoute,
-        url,
-        full_text_pdf AS fullTextPDF,
-        full_text_fetched_at AS fullTextFetchedAt,
-        full_text_conversion_status AS fullTextConversionStatus,
-        source_metadata AS sourceMetadata
-      FROM app.article
-      WHERE id IN (${getQuotedStringList(articleIds).join(', ')})
+        a.id,
+        a.article_title AS articleTitle,
+        a.article_created_at AS articleCreatedAt,
+        a.article_updated_at AS articleUpdatedAt,
+        ${readSql.articleIdExpression} AS articleId,
+        a.article_id AS canonicalArticleId,
+        ${readSql.importRouteExpression} AS importRoute,
+        a.url,
+        a.full_text_pdf AS fullTextPDF,
+        a.full_text_fetched_at AS fullTextFetchedAt,
+        a.full_text_conversion_status AS fullTextConversionStatus,
+        a.source_metadata AS canonicalSourceMetadata,
+        ${readSql.scopedImportMetadataExpression} AS scopedImportMetadata,
+        ${readSql.selectedExternalArticleIdExpression} AS selectedExternalArticleId,
+        ${readSql.selectedImportRecordIdExpression} AS selectedImportRecordId,
+        ${readSql.selectedImportRouteIdExpression} AS selectedImportRouteId,
+        ${readSql.selectedImportRouteExpression} AS selectedImportRoute,
+        ${readSql.selectedSourceRecordKeyExpression} AS selectedSourceRecordKey,
+        ${readSql.metadataExpression} AS sourceMetadata
+      FROM app.article a
+      ${readSql.joinClause}
+      WHERE a.id IN (${getQuotedStringList(articleIds).join(', ')})
     `)
 
     return rows.map((row) => {
+      const compatibilityValues = getScopedArticleCompatibilityValues({
+        canonicalArticleId: row.canonicalArticleId,
+        canonicalImportRoute: null,
+        canonicalSourceMetadata: getJsonValue(row.canonicalSourceMetadata),
+        scopedImportMetadata: getJsonValue(row.scopedImportMetadata),
+        selectedExternalArticleId: row.selectedExternalArticleId,
+        selectedImportRoute: row.selectedImportRoute,
+      })
+
       return {
         id: row.id,
         articleTitle: row.articleTitle,
         articleCreatedAt: getDateValue(row.articleCreatedAt),
         articleUpdatedAt: getDateValue(row.articleUpdatedAt),
-        articleId: row.articleId,
+        articleId: compatibilityValues.articleId,
+        canonicalArticleId: row.canonicalArticleId,
         importRoute: row.importRoute,
         url: row.url,
         fullTextPDF: row.fullTextPDF,
         fullTextFetchedAt: getDateValue(row.fullTextFetchedAt),
         fullTextConversionStatus: row.fullTextConversionStatus,
-        sourceMetadata: getArticleSourceMetadataValue(getJsonValue(row.sourceMetadata)),
+        canonicalSourceMetadata: getArticleSourceMetadataValue(getJsonValue(row.canonicalSourceMetadata)),
+        scopedImportMetadata: getJsonValue(row.scopedImportMetadata),
+        selectedExternalArticleId: row.selectedExternalArticleId,
+        selectedImportRecordId: row.selectedImportRecordId,
+        selectedImportRouteId: row.selectedImportRouteId,
+        selectedSourceRecordKey: row.selectedSourceRecordKey,
+        sourceMetadata: getArticleSourceMetadataValue(compatibilityValues.sourceMetadata),
       }
     })
   }
@@ -212,13 +303,14 @@ const getReviewHydrationRows = (database: AppQueryDatabaseService) => {
 const getFullArticlesByIds = (database: AppQueryDatabaseService) => {
   return async (
     articleIds: string[],
-    {includeFullText = true}: GetFullArticlesOptions = {},
+    {includeFullText = true, projectId}: GetFullArticlesOptions = {},
   ): Promise<FullArticleRow[]> => {
     if (articleIds.length === 0) {
       return []
     }
 
     const columnNames = await getAppTableColumnNames(database, 'article')
+    const readSql = getScopedArticleReadSqlParts(articleIds, projectId)
 
     const rows = await database.queryJson<{
       id: string
@@ -229,6 +321,7 @@ const getFullArticlesByIds = (database: AppQueryDatabaseService) => {
       articleCreatedAt: unknown
       articleUpdatedAt: unknown
       articleId: string | null
+      canonicalArticleId: string | null
       articleSummary: string | null
       articleVersion: number | null
       arxivId: string | null
@@ -252,49 +345,82 @@ const getFullArticlesByIds = (database: AppQueryDatabaseService) => {
       fullTextCharCount: number | null
       contentHash: string | null
       importRoute: string | null
+      originalData: unknown
+      canonicalSourceMetadata: unknown
+      scopedImportMetadata: unknown
+      scopedRawPayload: unknown
+      selectedExternalArticleId: string | null
+      selectedImportRecordId: string | null
+      selectedImportRouteId: string | null
+      selectedImportRoute: string | null
+      selectedSourceKind: string | null
+      selectedSourceRecordKey: string | null
       sourceMetadata: unknown
       publicationStatus: string | null
     }>(`
+      ${readSql.withClause}
       SELECT
-        id,
-        created_at AS createdAt,
-        updated_at AS updatedAt,
-        article_title AS articleTitle,
-        TO_JSON(article_authors) AS articleAuthors,
-        article_created_at AS articleCreatedAt,
-        article_updated_at AS articleUpdatedAt,
-        article_id AS articleId,
-        article_summary AS articleSummary,
-        article_version AS articleVersion,
-        arxiv_id AS arxivId,
-        biorxiv_id AS biorxivId,
-        medrxiv_id AS medrxivId,
-        doi,
-        pubmed_id AS pubmedId,
-        url,
-        full_text_fetched_at AS fullTextFetchedAt,
-        ${includeFullText ? 'full_text' : 'NULL'} AS fullText,
-        ${includeFullText ? 'full_text_html' : 'NULL'} AS fullTextHtml,
-        full_text_source AS fullTextSource,
-        full_text_original_format AS fullTextOriginalFormat,
-        full_text_pdf AS fullTextPDF,
-        TO_JSON(full_text_assets) AS fullTextAssets,
-        full_text_conversion_status AS fullTextConversionStatus,
-        full_text_conversion_error AS fullTextConversionError,
-        full_text_conversion_attempts AS fullTextConversionAttempts,
+        a.id,
+        a.created_at AS createdAt,
+        a.updated_at AS updatedAt,
+        a.article_title AS articleTitle,
+        TO_JSON(a.article_authors) AS articleAuthors,
+        a.article_created_at AS articleCreatedAt,
+        a.article_updated_at AS articleUpdatedAt,
+        ${readSql.articleIdExpression} AS articleId,
+        a.article_id AS canonicalArticleId,
+        a.article_summary AS articleSummary,
+        a.article_version AS articleVersion,
+        a.arxiv_id AS arxivId,
+        a.biorxiv_id AS biorxivId,
+        a.medrxiv_id AS medrxivId,
+        a.doi,
+        a.pubmed_id AS pubmedId,
+        a.url,
+        a.full_text_fetched_at AS fullTextFetchedAt,
+        ${includeFullText ? 'a.full_text' : 'NULL'} AS fullText,
+        ${includeFullText ? 'a.full_text_html' : 'NULL'} AS fullTextHtml,
+        a.full_text_source AS fullTextSource,
+        a.full_text_original_format AS fullTextOriginalFormat,
+        a.full_text_pdf AS fullTextPDF,
+        TO_JSON(a.full_text_assets) AS fullTextAssets,
+        a.full_text_conversion_status AS fullTextConversionStatus,
+        a.full_text_conversion_error AS fullTextConversionError,
+        a.full_text_conversion_attempts AS fullTextConversionAttempts,
         ${getOptionalColumnSelect({alias: 'fullTextConversionModelId', columnName: 'full_text_conversion_model_id', columnNames})},
         ${getOptionalColumnSelect({alias: 'fullTextConversionMetadata', columnName: 'full_text_conversion_metadata', columnNames})},
-        full_text_char_count AS fullTextCharCount,
-        content_hash AS contentHash,
-        import_route AS importRoute,
-        source_metadata AS sourceMetadata,
-        publication_status AS publicationStatus
-      FROM app.article
-      WHERE id IN (${getQuotedStringList(articleIds).join(', ')})
+        a.full_text_char_count AS fullTextCharCount,
+        a.content_hash AS contentHash,
+        ${readSql.importRouteExpression} AS importRoute,
+        ${readSql.originalDataExpression} AS originalData,
+        a.source_metadata AS canonicalSourceMetadata,
+        ${readSql.scopedImportMetadataExpression} AS scopedImportMetadata,
+        ${readSql.scopedRawPayloadExpression} AS scopedRawPayload,
+        ${readSql.selectedExternalArticleIdExpression} AS selectedExternalArticleId,
+        ${readSql.selectedImportRecordIdExpression} AS selectedImportRecordId,
+        ${readSql.selectedImportRouteIdExpression} AS selectedImportRouteId,
+        ${readSql.selectedImportRouteExpression} AS selectedImportRoute,
+        ${readSql.selectedSourceKindExpression} AS selectedSourceKind,
+        ${readSql.selectedSourceRecordKeyExpression} AS selectedSourceRecordKey,
+        ${readSql.metadataExpression} AS sourceMetadata,
+        a.publication_status AS publicationStatus
+      FROM app.article a
+      ${readSql.joinClause}
+      WHERE a.id IN (${getQuotedStringList(articleIds).join(', ')})
     `)
 
     return rows.map((row) => {
       const articleAuthors = getJsonValue(row.articleAuthors)
+      const compatibilityValues = getScopedArticleCompatibilityValues({
+        canonicalArticleId: row.canonicalArticleId,
+        canonicalImportRoute: null,
+        canonicalOriginalData: getJsonValue(row.originalData),
+        canonicalSourceMetadata: getJsonValue(row.canonicalSourceMetadata),
+        scopedImportMetadata: getJsonValue(row.scopedImportMetadata),
+        scopedRawPayload: getJsonValue(row.scopedRawPayload),
+        selectedExternalArticleId: row.selectedExternalArticleId,
+        selectedImportRoute: row.selectedImportRoute,
+      })
 
       return {
         id: row.id,
@@ -308,7 +434,8 @@ const getFullArticlesByIds = (database: AppQueryDatabaseService) => {
           : null,
         articleCreatedAt: getDateValue(row.articleCreatedAt),
         articleUpdatedAt: getDateValue(row.articleUpdatedAt),
-        articleId: row.articleId,
+        articleId: compatibilityValues.articleId,
+        canonicalArticleId: row.canonicalArticleId,
         articleSummary: row.articleSummary,
         articleVersion: row.articleVersion,
         arxivId: row.arxivId,
@@ -332,7 +459,16 @@ const getFullArticlesByIds = (database: AppQueryDatabaseService) => {
         fullTextCharCount: row.fullTextCharCount,
         contentHash: row.contentHash,
         importRoute: row.importRoute,
-        sourceMetadata: getArticleSourceMetadataValue(getJsonValue(row.sourceMetadata)),
+        originalData: compatibilityValues.originalData,
+        canonicalSourceMetadata: getArticleSourceMetadataValue(getJsonValue(row.canonicalSourceMetadata)),
+        scopedImportMetadata: getJsonValue(row.scopedImportMetadata),
+        scopedRawPayload: getJsonValue(row.scopedRawPayload),
+        selectedExternalArticleId: row.selectedExternalArticleId,
+        selectedImportRecordId: row.selectedImportRecordId,
+        selectedImportRouteId: row.selectedImportRouteId,
+        selectedSourceKind: row.selectedSourceKind,
+        selectedSourceRecordKey: row.selectedSourceRecordKey,
+        sourceMetadata: getArticleSourceMetadataValue(compatibilityValues.sourceMetadata),
         publicationStatus: row.publicationStatus,
       }
     })

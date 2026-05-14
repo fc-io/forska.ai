@@ -41,10 +41,17 @@ export type ArticleReviewResult = {
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
   articleId?: string | null
+  canonicalArticleId?: string | null
   url?: string | null
   fullTextPDF?: string | null
   fullTextFetchedAt?: Date | null
   fullTextConversionStatus?: string | null
+  canonicalSourceMetadata?: unknown
+  scopedImportMetadata?: unknown
+  selectedExternalArticleId?: string | null
+  selectedImportRecordId?: string | null
+  selectedImportRouteId?: string | null
+  selectedSourceRecordKey?: string | null
   sourceMetadata?: unknown
   judgments: OlapJudgmentRow[]
   judgedPromptIds: string[]
@@ -107,10 +114,17 @@ export type ArticleReviewsBothResult = {
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
   articleId?: string | null
+  canonicalArticleId?: string | null
   url?: string | null
   fullTextPDF?: string | null
   fullTextFetchedAt?: Date | null
   fullTextConversionStatus?: string | null
+  canonicalSourceMetadata?: unknown
+  scopedImportMetadata?: unknown
+  selectedExternalArticleId?: string | null
+  selectedImportRecordId?: string | null
+  selectedImportRouteId?: string | null
+  selectedSourceRecordKey?: string | null
   sourceMetadata?: unknown
   judgments: ArticlesReviewsBothJudgmentRow[]
   humanJudgmentMode?: 'prompt' | 'summary'

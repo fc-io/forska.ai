@@ -10,6 +10,7 @@ const queryJsonRef = {
     return []
   },
 }
+const queryStatements: string[] = []
 
 const projectPromptRowsRef = {
   current: async (_projectId: string): Promise<unknown[]> => {
@@ -29,6 +30,7 @@ const registerModuleMocks = () => {
       getAppDatabaseService: () => {
         return {
           queryJson: (statement: string) => {
+            queryStatements.push(statement)
             return queryJsonRef.current(statement)
           },
         }
@@ -68,6 +70,7 @@ const loadHandler = async (): Promise<typeof import('./projectsRoutesGetArticles
 }
 
 afterEach(() => {
+  queryStatements.length = 0
   mock.restore()
 })
 
@@ -94,10 +97,17 @@ test('articles reviews human filters returns overall summary filter in summary m
 
   const {projectsRoutesGetArticlesReviewsHumanFilters} = await loadHandler()
   const app = new Elysia().use(projectsRoutesGetArticlesReviewsHumanFilters)
-  const response = await app.handle(new Request('http://localhost/api/articlesreviewshumanfilters?projectId=project-1'))
+  const response = await app.handle(
+    new Request('http://localhost/api/articlesreviewshumanfilters?projectId=project-1&covidenceDuplicates=1'),
+  )
   const body = (await response.json()) as {filters: Array<Record<string, unknown>>; humanJudgmentMode: string}
 
   expect(response.status).toBe(200)
+  expect(
+    queryStatements.some((statement) => {
+      return statement.includes('COALESCE(scoped_import.import_metadata, a.source_metadata)')
+    }),
+  ).toBe(true)
   expect(body).toEqual({
     filters: [
       {promptId: 'summary', promptName: 'Overall human screening decision', answeredOriginalValues: ['no', 'yes']},

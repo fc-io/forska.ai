@@ -27,7 +27,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
     const articleIds = result.data.map((a) => {
       return a.id
     })
-    const fullTextRows = await getAppQueryService().getReviewHydrationRows(articleIds)
+    const fullTextRows = await getAppQueryService().getReviewHydrationRows(articleIds, {projectId: body.projectId})
     const fullTextById = fullTextRows.reduce(
       (acc, row) => {
         return {...acc, [row.id]: row}
@@ -45,10 +45,17 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
         articleUpdatedAt: fullText ? fullText.articleUpdatedAt : article.articleUpdatedAt,
         journalTitle: article.journalTitle,
         articleId: fullText?.articleId ?? null,
+        canonicalArticleId: fullText?.canonicalArticleId ?? null,
+        canonicalSourceMetadata: fullText?.canonicalSourceMetadata ?? null,
         url: fullText?.url ?? null,
         fullTextPDF: fullText?.fullTextPDF ?? null,
         fullTextFetchedAt: fullText?.fullTextFetchedAt ?? null,
         fullTextConversionStatus: fullText?.fullTextConversionStatus ?? null,
+        scopedImportMetadata: fullText?.scopedImportMetadata ?? null,
+        selectedExternalArticleId: fullText?.selectedExternalArticleId ?? null,
+        selectedImportRecordId: fullText?.selectedImportRecordId ?? null,
+        selectedImportRouteId: fullText?.selectedImportRouteId ?? null,
+        selectedSourceRecordKey: fullText?.selectedSourceRecordKey ?? null,
         sourceMetadata: fullText?.sourceMetadata ?? (article as {sourceMetadata?: unknown}).sourceMetadata ?? null,
         judgments: article.judgments.map((j) => {
           return {

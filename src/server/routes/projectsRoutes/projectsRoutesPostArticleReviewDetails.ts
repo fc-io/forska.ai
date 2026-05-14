@@ -13,6 +13,7 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
+import {getScopedArticleSourceRecordLookupClause} from '../../services/scopedArticleReadAdapter.ts'
 import {getSystemActor} from '../../utils/getSystemActor.ts'
 import {
   deriveStrictSummaryAnswer,
@@ -488,28 +489,44 @@ const getAssessmentValue = (row: {
 
 const getCovidenceRelatedRecords = async (params: {
   articleId: string
-  importRoute: string | null
+  projectId: string
+  selectedImportRouteId: string | null
+  selectedSourceRecordKey: string | null
   studyKey: string | null
 }): Promise<CovidenceRelatedRecord[]> => {
-  if (!params.importRoute || !params.studyKey) {
+  if (!params.studyKey) {
     return []
   }
 
+  const currentRecordClause = getScopedArticleSourceRecordLookupClause({
+    importRouteId: params.selectedImportRouteId,
+    sourceRecordKey: params.selectedSourceRecordKey,
+    sourceRecordTableAlias: 'source_record',
+  })
   const rows = await getAppDatabaseService().queryJson<{
     articleExternalId: string | null
     articleTitle: string
+    isCurrentRecord: boolean
     id: string
     sourceMetadata: unknown
   }>(`
+    WITH project_route AS (
+      SELECT import_route_id
+      FROM app.project_import_route
+      WHERE project_id = '${escapeSqlString(params.projectId)}'
+    )
     SELECT
-      id,
-      article_id AS articleExternalId,
-      article_title AS articleTitle,
-      source_metadata AS sourceMetadata
-    FROM app.article
-    WHERE import_route = '${escapeSqlString(params.importRoute)}'
-      AND json_extract_string(source_metadata, '$.covidence.studyKey') = '${escapeSqlString(params.studyKey)}'
-    ORDER BY article_title ASC, id ASC
+      source_record.id AS id,
+      source_record.external_article_id AS articleExternalId,
+      article.article_title AS articleTitle,
+      ${currentRecordClause} AS isCurrentRecord,
+      source_record.import_metadata AS sourceMetadata
+    FROM app.article_import_route_source_record source_record
+    INNER JOIN project_route ON project_route.import_route_id = source_record.import_route_id
+    INNER JOIN app.article article ON article.id = source_record.article_id
+    WHERE source_record.quarantined_at IS NULL
+      AND json_extract_string(source_record.import_metadata, '$.covidence.studyKey') = '${escapeSqlString(params.studyKey)}'
+    ORDER BY article.article_title ASC, source_record.external_article_id ASC NULLS LAST, source_record.id ASC
   `)
 
   return rows.map((row) => {
@@ -522,7 +539,7 @@ const getCovidenceRelatedRecords = async (params: {
       hasDuplicateStudyRecords: covidence?.hasDuplicateStudyRecords ?? false,
       hasStudyDecisionConflict: covidence?.hasStudyDecisionConflict ?? false,
       id: row.id,
-      isCurrentRecord: row.id === params.articleId,
+      isCurrentRecord: row.isCurrentRecord || row.id === params.articleId,
       isSeededHumanJudgmentAnswered: covidence?.isSeededHumanJudgmentAnswered ?? false,
       referenceIds: covidence?.referenceIds ?? [],
       seededHumanJudgmentAnswer: covidence?.seededHumanJudgmentAnswer ?? null,
@@ -539,7 +556,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       await assertProjectIsActive(projectId)
 
-      const [article] = await getAppQueryService().getFullArticlesByIds([articleId])
+      const [article] = await getAppQueryService().getFullArticlesByIds([articleId], {projectId})
 
       if (!article) {
         throw new Error('Article not found')
@@ -547,7 +564,9 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       const covidenceRelatedRecordsPromise = getCovidenceRelatedRecords({
         articleId,
-        importRoute: article.importRoute,
+        projectId,
+        selectedImportRouteId: article.selectedImportRouteId,
+        selectedSourceRecordKey: article.selectedSourceRecordKey,
         studyKey: article.sourceMetadata?.covidence?.studyKey ?? null,
       })
 

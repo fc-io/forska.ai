@@ -296,14 +296,19 @@ const getOwnerBackedPromptInput = async (
 const getCachedArticle = async ({
   articleId,
   includeFullText,
+  projectId,
 }: {
   articleId: string
   includeFullText: boolean
+  projectId: string
 }): Promise<ArticleRecord | null> => {
-  const cacheKey = `${articleId}:${includeFullText ? 'fulltext' : 'metadata'}`
+  const cacheKey = `${projectId}:${articleId}:${includeFullText ? 'fulltext' : 'metadata'}`
 
   return withCachedLookup(cachedArticleLookups, cacheKey, async () => {
-    const [article] = await getJudgeWorkerReadOnlyAppQueryService().getFullArticlesByIds([articleId], {includeFullText})
+    const [article] = await getJudgeWorkerReadOnlyAppQueryService().getFullArticlesByIds([articleId], {
+      includeFullText,
+      projectId,
+    })
 
     return article
       ? ({
@@ -525,7 +530,11 @@ const prepareLocalPrompt = async (
   }
 
   const needsFulltext = promptToProcess.useFulltext || promptToProcess.useFulltextNoImages
-  const article = await getCachedArticle({articleId: promptToProcess.articleId, includeFullText: needsFulltext})
+  const article = await getCachedArticle({
+    articleId: promptToProcess.articleId,
+    includeFullText: needsFulltext,
+    projectId: promptToProcess.projectId,
+  })
 
   if (!article) {
     processPromptFailureLogger.error('llm.prompt.articleNotFound', 'Article not found', {
