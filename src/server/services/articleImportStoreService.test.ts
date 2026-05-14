@@ -43,7 +43,9 @@ test('storeImportedArticlesWithTx upserts articles in DuckDB without current_tim
           fullTextConversionAttempts: 1,
           fullTextConversionStatus: 'success',
           fullTextFetchedAt: new Date(updatedAt),
+          fullTextHtml: '<p>Structured import full text</p>',
           fullTextOriginalFormat: 'json',
+          fullTextPDF: 'assets/structured_file_imports/test.pdf',
           fullTextSource: 'structured_file_import',
           importRoute,
           sourceMetadata: {
@@ -62,7 +64,7 @@ test('storeImportedArticlesWithTx upserts articles in DuckDB without current_tim
         })
 
         const [articleRow] = await database.queryJson(
-          "SELECT article.article_id AS legacyArticleId, article.article_title AS articleTitle FROM app.article article INNER JOIN app.article_identifier identifier ON identifier.article_id = article.id WHERE identifier.kind = 'doi' AND identifier.normalized_value = '10.1000/structured-article-1'"
+          "SELECT article.article_id AS legacyArticleId, article.article_title AS articleTitle, article.full_text AS fullText, article.full_text_html AS fullTextHtml, article.full_text_pdf AS fullTextPDF, article.full_text_source AS fullTextSource, article.full_text_original_format AS fullTextOriginalFormat, article.full_text_fetched_at IS NOT NULL AS hasFullTextFetchedAt, article.full_text_conversion_status AS fullTextConversionStatus, article.full_text_conversion_attempts AS fullTextConversionAttempts, article.full_text_char_count AS fullTextCharCount FROM app.article article INNER JOIN app.article_identifier identifier ON identifier.article_id = article.id WHERE identifier.kind = 'doi' AND identifier.normalized_value = '10.1000/structured-article-1'"
         )
         const [articleCountRow] = await database.queryJson(
           "SELECT COUNT(*)::INTEGER AS count FROM app.article article INNER JOIN app.article_identifier identifier ON identifier.article_id = article.id WHERE identifier.kind = 'doi' AND identifier.normalized_value = '10.1000/structured-article-1'"
@@ -113,6 +115,17 @@ test('storeImportedArticlesWithTx upserts articles in DuckDB without current_tim
 
     expect(parsed.articleRow.articleTitle).toBe('Initial title')
     expect(parsed.articleRow.legacyArticleId).toBeNull()
+    expect(parsed.articleRow).toMatchObject({
+      fullText: 'Structured import full text',
+      fullTextCharCount: '27',
+      fullTextConversionAttempts: 1,
+      fullTextConversionStatus: 'success',
+      fullTextHtml: '<p>Structured import full text</p>',
+      fullTextOriginalFormat: 'json',
+      fullTextPDF: 'assets/structured_file_imports/test.pdf',
+      fullTextSource: 'structured_file_import',
+      hasFullTextFetchedAt: true,
+    })
     expect(parsed.articleCountRow.count).toBe(1)
     expect(parsed.importRouteRow).toEqual({route: 'structured-file:test-import'})
     expect(parsed.articleImportRouteCountRow.count).toBe(1)
@@ -417,6 +430,133 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
       sourceRecordHash: 'hash-b',
     })
     expect(parsed.remapLinkCountRow.count).toBe(0)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('syncImportedArticlesWithTx clears stale source records for the synced route', async () => {
+  const duckdbPath = `/tmp/f1-article-import-source-record-sync-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {syncImportedArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const importRoute = 'structured-file:source-record-sync'
+        const createRow = (params) => ({
+          articleAuthors: ['Alice Example'],
+          articleId: params.articleId,
+          articleSummary: 'Structured import summary',
+          articleTitle: params.articleTitle,
+          doi: params.doi,
+          externalArticleId: params.externalArticleId,
+          importRoute,
+          sourceKind: 'structured_file',
+          sourceRecordHash: params.sourceRecordHash,
+          sourceRecordKey: params.sourceRecordKey,
+        })
+
+        await database.transaction(async (tx) => {
+          await syncImportedArticlesWithTx({
+            importRoute,
+            rows: [
+              createRow({
+                articleId: 'sync-old-a',
+                articleTitle: 'Sync Old A',
+                doi: '10.1000/sync-old-a',
+                externalArticleId: 'external-old-a',
+                sourceRecordHash: 'hash-old-a',
+                sourceRecordKey: 'source-old-a',
+              }),
+              createRow({
+                articleId: 'sync-old-b',
+                articleTitle: 'Sync Old B',
+                doi: '10.1000/sync-old-b',
+                externalArticleId: 'external-old-b',
+                sourceRecordHash: 'hash-old-b',
+                sourceRecordKey: 'source-old-b',
+              }),
+            ],
+            tx,
+          })
+        })
+        await database.transaction(async (tx) => {
+          await syncImportedArticlesWithTx({
+            importRoute,
+            rows: [
+              createRow({
+                articleId: 'sync-new-a',
+                articleTitle: 'Sync New A',
+                doi: '10.1000/sync-new-a',
+                externalArticleId: 'external-new-a',
+                sourceRecordHash: 'hash-new-a',
+                sourceRecordKey: 'source-new-a',
+              }),
+            ],
+            tx,
+          })
+        })
+
+        const currentLinkRows = await database.queryJson(
+          "SELECT external_article_id AS externalArticleId, source_record_key AS sourceRecordKey FROM app.article_import_route ORDER BY source_record_key ASC"
+        )
+        const sourceRecordRows = await database.queryJson(
+          "SELECT external_article_id AS externalArticleId, source_record_key AS sourceRecordKey FROM app.article_import_route_source_record ORDER BY source_record_key ASC"
+        )
+
+        console.log(JSON.stringify({currentLinkRows, sourceRecordRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to sync import source records')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      currentLinkRows: Array<{externalArticleId: string; sourceRecordKey: string}>
+      sourceRecordRows: Array<{externalArticleId: string; sourceRecordKey: string}>
+    }
+
+    expect(parsed.currentLinkRows).toEqual([{externalArticleId: 'external-new-a', sourceRecordKey: 'source-new-a'}])
+    expect(parsed.sourceRecordRows).toEqual([{externalArticleId: 'external-new-a', sourceRecordKey: 'source-new-a'}])
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)

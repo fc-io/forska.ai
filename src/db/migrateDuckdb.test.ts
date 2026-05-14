@@ -41,6 +41,10 @@ test('DuckDB migrations drop the obsolete review article filter row mart without
 
 test('DuckDB migrations add canonical article identifiers and keep legacy article ids non-unique', async () => {
   const duckdbPath = `/tmp/forska-canonical-article-identifier-${Date.now()}.duckdb`
+  const canonicalSchemaMigrationSql = readFileSync(
+    resolve(migrationsFolder, '0077_articleIdentifierCanonicalSchema.sql'),
+    'utf8',
+  )
   const result = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -139,6 +143,8 @@ test('DuckDB migrations add canonical article identifiers and keep legacy articl
 
     expect(articleUniqueColumns).not.toContainEqual(['article_id'])
     expect(identifierUniqueColumns).toContainEqual(['kind', 'normalized_value'])
+    expect(canonicalSchemaMigrationSql).toContain('legacy_identifier_candidate AS')
+    expect(canonicalSchemaMigrationSql).toContain('INSERT INTO app.article_identifier')
     expect(parsed.duplicateIdentifierRejected).toBe(true)
     expect(parsed.nullLegacyRow.count).toBe(2)
     expect(parsed.legacyRows).toEqual([
