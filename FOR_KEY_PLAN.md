@@ -324,8 +324,7 @@ For each mutation route/job:
 
 #### Logical-ref risks
 
-- `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`
-  - `app.llm_status` stores provider/model identity without FKs; shared-base-URL workers can drift logical attribution.
+- None currently open.
 
 #### Already-fixed / accepted-low-risk
 
@@ -347,6 +346,8 @@ For each mutation route/job:
   - `user_config.full_text_conversion_model_id` now validates configured conversion models on write and read; historical `article.full_text_conversion_model_id` remains read-only provenance and is covered after model deletion.
 - `src/server/routes/DataSourcesRoutes.ts`, `src/server/routes/DataSourcesImportRoutes/**`
   - `data_source.import_route` is intentionally an open-ended string ref so custom `fhir:<folder>` and future route values can exist before `app.import_route` rows are created by article import storage.
+- `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`
+  - `app.llm_status` now keys status targets by worker URL and labels ambiguous shared-worker model attribution as `multiple` instead of assigning the first running model name.
 
 ### Initial Risk Matrix
 
@@ -371,7 +372,7 @@ For each mutation route/job:
 | accepted low risk  | `judgment <- judgment_assessment` soft delete | `src/server/routes/AdminInvestigateRoutes.ts`                                                                             | medium | Route soft-deletes `app.judgment`, a referenced parent; current DuckDB accepts the tested parent-update shape with `app.judgment_assessment` child rows                                       | `src/server/routes/AdminInvestigateRoutes.fk.test.ts`                                                                                                               | keep coverage current if new judgment FKs are added | no runtime fix needed while repro remains green                      |
 | accepted low risk  | `article` parent updates from admin/cron      | `src/server/routes/ArticleAdminRoutes.ts`; `src/server/cron/fullTextJobs.ts`; `src/server/cron/fullTextConversionJobs.ts` | medium | All three paths update high-fanout parent `app.article`, which remains referenced by live child rows; current DuckDB accepts the tested parent-update shapes                                | `src/server/routes/ArticleAdminRoutes.fk.test.ts`                                                                                                                   | keep coverage current if new article FKs are added | no runtime fix needed while repro remains green                      |
 | fixed logical-ref  | full-text conversion model refs               | `src/server/services/userConfigQueryService.ts`; `src/server/cron/fullTextConversionJobs.ts`; `src/db/duckdbMigrations/0022_fullTextConversionModelConfig.sql` | medium | `user_config.full_text_conversion_model_id` is logical-only and must not select deleted, disabled, archived, or config-disabled models; historical article refs are provenance-only | `src/server/services/userConfigQueryService.test.ts`                                                                                                               | covered                                            | runtime read/write validation; keep article provenance readable      |
-| logical-ref risk   | llm status model/provider attribution         | `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`                                                            | low    | `app.llm_status` stores logical provider/model identity without FKs; shared worker URLs can attribute rows to the wrong logical model                                                         | none found                                                                                                                                                         | no shared-base-url repro                           | normalize identity key or persist stable IDs                         |
+| fixed logical-ref  | llm status model/provider attribution         | `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`                                                            | low    | `app.llm_status` stores logical provider/model identity without FKs; shared worker URLs previously attributed metrics to the first running model                                               | `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.test.ts`                                                                                                | covered                                            | key targets by worker URL and use `multiple` for ambiguous model attribution |
 | already-fixed item | `judgment_human` rebuild nullable project     | `src/db/duckdbMigrations/0028_judgmentHumanNullableProjectId.sql`                                                         | low    | maintenance-only single-table rebuild; reinsert revalidates the live FK edges and matches current nullable design                                                                             | none found                                                                                                                                                         | no migration regression                            | optional migration smoke test only                                   |
 
 ### Existing Test Coverage Snapshot
@@ -381,13 +382,13 @@ For each mutation route/job:
   - `src/server/routes/providerProjectFlow.e2e.test.ts`
   - `src/server/routes/ProviderConnectionsRoutes.test.ts`
   - `src/server/routes/JudgmentsJobsRoutes.test.ts`
+  - `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.test.ts`
   - `src/server/services/userConfigQueryService.test.ts`
   - `src/server/services/covidenceImportService.test.ts`
   - `src/server/services/articleImportStoreService.test.ts`
 - Weak or missing coverage remains for:
   - `src/server/routes/ComparisonProjectsRoutes.ts`
   - `src/server/routes/ProjectArticlesRoutes.ts`
-  - logical attribution drift in `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`
 
 ### Remaining Highest-Value Follow-Up
 
@@ -395,9 +396,9 @@ For each mutation route/job:
 
 ### Current Read
 
-- The current highest-value follow-ups are comparison-project relink crash safety, judgment-job cross-store consistency, and `llm_status` logical attribution.
-- New material risks from this pass are the remaining logical-ref drift checks.
-- The highest-confidence still-unfixed areas are comparison-project relink crash safety, cross-store judgment-job cleanup consistency, and remaining logical-ref drift checks.
+- The current highest-value follow-ups are comparison-project relink crash safety and judgment-job cross-store consistency.
+- New material logical-ref risks from this pass are now resolved or accepted.
+- The highest-confidence still-unfixed areas are comparison-project relink crash safety and cross-store judgment-job cleanup consistency.
 
 ## Final Findings
 
@@ -412,6 +413,7 @@ For each mutation route/job:
 - Archived-project purge now asserts live `app.project` FK inventory before delete requests and cleanup batches, includes the live `project_mart_dirty_refresh_article_quarantine` FK, cleans stale project mart dictionary state, and safely detaches comparison-project children while clearing `summary_source_project_id` in `src/server/services/archivedProjectCleanupService.ts` and `src/server/services/archivedProjectCleanupProjectForeignKeys.ts`; covered in `src/server/routes/ProjectsRoutes.test.ts` and `src/server/services/archivedProjectCleanupService.test.ts`.
 - Human assessment init and submit now resync unanswered `app.judgment_human` rows against current `app.project_prompt` membership before returning or updating prompt-mode pending rows in `src/server/routes/HumanAssessmentRoutes/humanAssessmentPendingJudgments.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`, and `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`; covered in `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPromptDrift.test.ts`.
 - Full-text conversion model selection now validates logical `user_config.full_text_conversion_model_id` refs on write and read in `src/server/services/userConfigQueryService.ts`, ignoring deleted, disabled, provider-disabled, archived, and config-disabled models while preserving historical `article.full_text_conversion_model_id` provenance after model deletion; covered in `src/server/services/userConfigQueryService.test.ts`.
+- LLM status ingestion now keys SGLang status rows by worker URL and labels ambiguous shared-worker model attribution as `multiple` instead of assigning metrics to the first running model in `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`; covered in `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.test.ts`.
 
 ### Accepted risks
 
@@ -430,7 +432,7 @@ For each mutation route/job:
 
 ### Remaining logical-ref checks
 
-- `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`: `app.llm_status` provider/model attribution remains logical only and needs shared-worker drift checks.
+- None currently open.
 
 ## Future Guardrails
 

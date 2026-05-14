@@ -1,4 +1,4 @@
-import {readdirSync, readFileSync} from 'node:fs'
+import {existsSync, readdirSync, readFileSync, unlinkSync} from 'node:fs'
 import {resolve} from 'node:path'
 
 import {expect, mock, test} from 'bun:test'
@@ -16,6 +16,12 @@ const getDuckdbMigrationFiles = () => {
     })
 }
 
+const removeFileIfExists = (filePath: string) => {
+  if (existsSync(filePath)) {
+    unlinkSync(filePath)
+  }
+}
+
 test('DuckDB migrations drop the obsolete review article filter row mart without recreating it', () => {
   const migrationFiles = getDuckdbMigrationFiles()
   const legacyCreateMigrations = migrationFiles.filter((fileName) => {
@@ -31,6 +37,120 @@ test('DuckDB migrations drop the obsolete review article filter row mart without
   expect(migrationFiles).not.toContain('0005_reviewArticleFilterRowMart.sql')
   expect(legacyCreateMigrations).toEqual([])
   expect(dropMigrationSql).toBe('DROP TABLE IF EXISTS mart.review_article_filter_row;')
+})
+
+test('DuckDB migrations add canonical article identifiers and keep legacy article ids non-unique', async () => {
+  const duckdbPath = `/tmp/forska-canonical-article-identifier-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const articleConstraints = await database.queryJson(
+          "SELECT constraint_type AS constraintType, constraint_column_names AS columnNames FROM duckdb_constraints() WHERE schema_name = 'app' AND table_name = 'article' ORDER BY constraint_name"
+        )
+        const identifierConstraints = await database.queryJson(
+          "SELECT constraint_type AS constraintType, constraint_column_names AS columnNames FROM duckdb_constraints() WHERE schema_name = 'app' AND table_name = 'article_identifier' ORDER BY constraint_name"
+        )
+
+        await database.run(
+          "INSERT INTO app.article (id, article_title, article_id) VALUES ('canonical-null-a', 'Null A', NULL), ('canonical-null-b', 'Null B', NULL), ('legacy-a', 'Legacy A', 'legacy:shared'), ('legacy-b', 'Legacy B', 'legacy:shared')"
+        )
+        await database.run(
+          "INSERT INTO app.article_identifier (id, article_id, kind, normalized_value, source) VALUES ('identifier-a', 'legacy-a', 'doi', '10.1000/example', 'test')"
+        )
+
+        const duplicateIdentifierRejected = await database
+          .run("INSERT INTO app.article_identifier (id, article_id, kind, normalized_value, source) VALUES ('identifier-b', 'legacy-b', 'doi', '10.1000/example', 'test')")
+          .then(
+            () => false,
+            () => true,
+          )
+        const [nullLegacyRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article WHERE article_id IS NULL AND id IN ('canonical-null-a', 'canonical-null-b')"
+        )
+        const legacyRows = await database.queryJson(
+          "SELECT legacy_article_id AS legacyArticleId, article_id AS articleId FROM app.article_legacy_id_lookup WHERE legacy_article_id = 'legacy:shared' ORDER BY article_id ASC"
+        )
+
+        console.log(JSON.stringify({articleConstraints, duplicateIdentifierRejected, identifierConstraints, legacyRows, nullLegacyRow}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify DuckDB migrations')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articleConstraints: Array<{constraintType: string; columnNames: string[]}>
+      duplicateIdentifierRejected: boolean
+      identifierConstraints: Array<{constraintType: string; columnNames: string[]}>
+      legacyRows: Array<{articleId: string; legacyArticleId: string}>
+      nullLegacyRow: {count: number}
+    }
+    const articleUniqueColumns = parsed.articleConstraints
+      .filter((constraint) => {
+        return constraint.constraintType === 'UNIQUE'
+      })
+      .map((constraint) => {
+        return constraint.columnNames
+      })
+    const identifierUniqueColumns = parsed.identifierConstraints
+      .filter((constraint) => {
+        return constraint.constraintType === 'UNIQUE'
+      })
+      .map((constraint) => {
+        return constraint.columnNames
+      })
+
+    expect(articleUniqueColumns).not.toContainEqual(['article_id'])
+    expect(identifierUniqueColumns).toContainEqual(['kind', 'normalized_value'])
+    expect(parsed.duplicateIdentifierRejected).toBe(true)
+    expect(parsed.nullLegacyRow.count).toBe(2)
+    expect(parsed.legacyRows).toEqual([
+      {articleId: 'legacy-a', legacyArticleId: 'legacy:shared'},
+      {articleId: 'legacy-b', legacyArticleId: 'legacy:shared'},
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
 })
 
 test('migrateDuckdb preserves the original failure when rollback is already inactive', async () => {
