@@ -1,6 +1,5 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-import {backfillRequestAttemptCloseoutsOnStartup} from '../../services/requestAttemptCloseoutService.ts'
 import {flushJudgmentJobSqliteOutbox} from './judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 import {judgmentJobAutoDrainStatuses} from './judgmentJobStoragePolicy.ts'
@@ -171,7 +170,6 @@ export const runStartupJudgmentRolloutCleanup = async ({
 }): Promise<JudgmentStartupRolloutCleanupResult> => {
   const result = await cleanupStartupRolloutJobs({claimedBy, jobs: await getStartupRolloutJobRows()})
 
-  await backfillRequestAttemptCloseoutsOnStartup()
   await reconcileProviderAdmissionLeasesForDurableCloseout()
 
   return result

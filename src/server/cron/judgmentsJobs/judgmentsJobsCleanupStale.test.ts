@@ -1015,32 +1015,46 @@ test('cleanupStale releases projected closeout request leases without closing pr
   expect(rows).toEqual([{leaseIdentity: probeLeaseIdentity, leaseKind: 'probe'}])
 })
 
-test('startup rollout cleanup backfills token-use closeouts and releases request leases', async () => {
+test('startup rollout cleanup skips historical token-use backfill and releases projected request leases', async () => {
   if (!queryDatabase || !runDatabase || !runStartupJudgmentRolloutCleanup) {
     throw new Error('Test database not initialized')
   }
 
   const timestamp = Date.now()
-  const providerKey = `cleanup-stale-token-use-lease-${timestamp}`
-  const requestAttemptId = `cleanup-stale-token-use-attempt-${timestamp}`
-  const tokenUseId = `cleanup-stale-token-use-${timestamp}`
-  const requestLeaseIdentity = getProviderAdmissionRequestLeaseIdentity(requestAttemptId)
-  const endpointAvailabilityKey = `${providerKey}::http://localhost:30001`
-  const probeLeaseIdentity = getProviderAdmissionProbeLeaseIdentity({
-    endpointAvailabilityKey,
-    probeAttemptId: `cleanup-stale-token-use-probe-${timestamp}`,
+  const historicalProviderKey = `cleanup-stale-historical-token-use-lease-${timestamp}`
+  const historicalRequestAttemptId = `cleanup-stale-historical-token-use-attempt-${timestamp}`
+  const historicalTokenUseId = `cleanup-stale-historical-token-use-${timestamp}`
+  const historicalRequestLeaseIdentity = getProviderAdmissionRequestLeaseIdentity(historicalRequestAttemptId)
+  const historicalEndpointAvailabilityKey = `${historicalProviderKey}::http://localhost:30001`
+  const historicalProbeLeaseIdentity = getProviderAdmissionProbeLeaseIdentity({
+    endpointAvailabilityKey: historicalEndpointAvailabilityKey,
+    probeAttemptId: `cleanup-stale-historical-token-use-probe-${timestamp}`,
+  })
+  const projectedProviderKey = `cleanup-stale-projected-token-use-lease-${timestamp}`
+  const projectedRequestAttemptId = `cleanup-stale-projected-token-use-attempt-${timestamp}`
+  const projectedTokenUseId = `cleanup-stale-projected-token-use-${timestamp}`
+  const projectedRequestLeaseIdentity = getProviderAdmissionRequestLeaseIdentity(projectedRequestAttemptId)
+  const projectedEndpointAvailabilityKey = `${projectedProviderKey}::http://localhost:30001`
+  const projectedProbeLeaseIdentity = getProviderAdmissionProbeLeaseIdentity({
+    endpointAvailabilityKey: projectedEndpointAvailabilityKey,
+    probeAttemptId: `cleanup-stale-projected-token-use-probe-${timestamp}`,
   })
   const requestAttemptsJson = JSON.stringify([
     {
       closeoutKind: 'token_use',
-      durableCloseoutRef: {id: tokenUseId, kind: 'token_use', requestAttemptId},
+      durableCloseoutRef: {id: historicalTokenUseId, kind: 'token_use', requestAttemptId: historicalRequestAttemptId},
       finishedAt: '2026-05-04T10:00:01.000Z',
       lifecycleState: 'completedRequest',
       outcome: 'success',
-      providerKey,
-      requestAttemptId,
+      providerKey: historicalProviderKey,
+      requestAttemptId: historicalRequestAttemptId,
     },
   ])
+  const projectedDurableCloseoutRefJson = JSON.stringify({
+    id: projectedTokenUseId,
+    kind: 'token_use',
+    requestAttemptId: projectedRequestAttemptId,
+  })
 
   await runDatabase(`
     INSERT INTO app.provider_admission_lease (
@@ -1056,10 +1070,10 @@ test('startup rollout cleanup backfills token-use closeouts and releases request
       expires_at
     ) VALUES
       (
-        ${getSqlLiteral(providerKey)},
+        ${getSqlLiteral(historicalProviderKey)},
         'request',
-        ${getSqlLiteral(requestLeaseIdentity)},
-        ${getSqlLiteral(requestAttemptId)},
+        ${getSqlLiteral(historicalRequestLeaseIdentity)},
+        ${getSqlLiteral(historicalRequestAttemptId)},
         NULL,
         NULL,
         'request-holder',
@@ -1068,12 +1082,36 @@ test('startup rollout cleanup backfills token-use closeouts and releases request
         TIMESTAMPTZ '2036-05-04T10:00:00.000Z'
       ),
       (
-        ${getSqlLiteral(providerKey)},
+        ${getSqlLiteral(historicalProviderKey)},
         'probe',
-        ${getSqlLiteral(probeLeaseIdentity)},
+        ${getSqlLiteral(historicalProbeLeaseIdentity)},
         NULL,
-        ${getSqlLiteral(endpointAvailabilityKey)},
-        ${getSqlLiteral(`cleanup-stale-token-use-probe-${timestamp}`)},
+        ${getSqlLiteral(historicalEndpointAvailabilityKey)},
+        ${getSqlLiteral(`cleanup-stale-historical-token-use-probe-${timestamp}`)},
+        'probe-holder',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2036-05-04T10:00:00.000Z'
+      ),
+      (
+        ${getSqlLiteral(projectedProviderKey)},
+        'request',
+        ${getSqlLiteral(projectedRequestLeaseIdentity)},
+        ${getSqlLiteral(projectedRequestAttemptId)},
+        NULL,
+        NULL,
+        'request-holder',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+        TIMESTAMPTZ '2036-05-04T10:00:00.000Z'
+      ),
+      (
+        ${getSqlLiteral(projectedProviderKey)},
+        'probe',
+        ${getSqlLiteral(projectedProbeLeaseIdentity)},
+        NULL,
+        ${getSqlLiteral(projectedEndpointAvailabilityKey)},
+        ${getSqlLiteral(`cleanup-stale-projected-token-use-probe-${timestamp}`)},
         'probe-holder',
         TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
         TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
@@ -1094,7 +1132,7 @@ test('startup rollout cleanup backfills token-use closeouts and releases request
       finished_at,
       request_attempts_json
     ) VALUES (
-      ${getSqlLiteral(tokenUseId)},
+      ${getSqlLiteral(historicalTokenUseId)},
       1,
       10,
       5,
@@ -1107,11 +1145,34 @@ test('startup rollout cleanup backfills token-use closeouts and releases request
       CAST(${getSqlLiteral(requestAttemptsJson)} AS JSON)
     )
   `)
+  await runDatabase(`
+    INSERT INTO app.request_attempt_closeout (
+      token_use_id,
+      token_use_created_at,
+      request_attempt_id,
+      provider_key,
+      closeout_kind,
+      durable_closeout_kind,
+      durable_closeout_id,
+      durable_closeout_ref_json,
+      closed_at
+    ) VALUES (
+      ${getSqlLiteral(projectedTokenUseId)},
+      TIMESTAMPTZ '2026-05-04T10:00:00.000Z',
+      ${getSqlLiteral(projectedRequestAttemptId)},
+      ${getSqlLiteral(projectedProviderKey)},
+      'token_use',
+      'token_use',
+      ${getSqlLiteral(projectedTokenUseId)},
+      CAST(${getSqlLiteral(projectedDurableCloseoutRefJson)} AS JSON),
+      TIMESTAMPTZ '2026-05-04T10:00:01.000Z'
+    )
+  `)
 
   const [projectionRow] = await queryDatabase<{count: number | string | bigint}>(`
     SELECT COUNT(*) AS count
     FROM app.request_attempt_closeout
-    WHERE request_attempt_id = ${getSqlLiteral(requestAttemptId)}
+    WHERE request_attempt_id = ${getSqlLiteral(historicalRequestAttemptId)}
   `)
 
   expect(Number(projectionRow?.count ?? -1)).toBe(0)
@@ -1122,18 +1183,31 @@ test('startup rollout cleanup backfills token-use closeouts and releases request
   const [backfilledProjectionRow] = await queryDatabase<{count: number | string | bigint}>(`
     SELECT COUNT(*) AS count
     FROM app.request_attempt_closeout
-    WHERE request_attempt_id = ${getSqlLiteral(requestAttemptId)}
+    WHERE request_attempt_id = ${getSqlLiteral(historicalRequestAttemptId)}
+  `)
+  const [backfillStateRow] = await queryDatabase<{count: number | string | bigint}>(`
+    SELECT COUNT(*) AS count
+    FROM app.request_attempt_closeout_backfill_state
+    WHERE id = 'initial-token-use-closeout-backfill'
   `)
 
-  const rows = await queryDatabase<{leaseIdentity: string; leaseKind: string}>(`
-    SELECT lease_identity AS leaseIdentity, lease_kind AS leaseKind
+  const rows = await queryDatabase<{leaseIdentity: string; leaseKind: string; providerKey: string}>(`
+    SELECT
+      provider_key AS providerKey,
+      lease_identity AS leaseIdentity,
+      lease_kind AS leaseKind
     FROM app.provider_admission_lease
-    WHERE provider_key = ${getSqlLiteral(providerKey)}
-    ORDER BY lease_kind ASC
+    WHERE provider_key IN (${getSqlLiteral(historicalProviderKey)}, ${getSqlLiteral(projectedProviderKey)})
+    ORDER BY provider_key ASC, lease_kind ASC
   `)
 
-  expect(Number(backfilledProjectionRow?.count ?? -1)).toBe(1)
-  expect(rows).toEqual([{leaseIdentity: probeLeaseIdentity, leaseKind: 'probe'}])
+  expect(Number(backfilledProjectionRow?.count ?? -1)).toBe(0)
+  expect(Number(backfillStateRow?.count ?? -1)).toBe(0)
+  expect(rows).toEqual([
+    {leaseIdentity: historicalProbeLeaseIdentity, leaseKind: 'probe', providerKey: historicalProviderKey},
+    {leaseIdentity: historicalRequestLeaseIdentity, leaseKind: 'request', providerKey: historicalProviderKey},
+    {leaseIdentity: projectedProbeLeaseIdentity, leaseKind: 'probe', providerKey: projectedProviderKey},
+  ])
 })
 
 test('cleanupStale clears transient locked quarantine after SQLite preflight succeeds', async () => {
