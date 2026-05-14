@@ -1,13 +1,22 @@
 import {For, Show} from 'solid-js'
 
-import type {ComparisonProjectStats} from '../../../../../services/comparisonProjectsService.ts'
+import type {
+  ComparisonProjectJudgmentsColumn,
+  ComparisonProjectStats,
+  ComparisonProjectStatsComparison,
+} from '../../../../../services/comparisonProjectsService.ts'
 
 type ComparisonProjectStatsCardProps = {
+  columns: ComparisonProjectJudgmentsColumn[]
   error: unknown
   isError: boolean
   isLoading: boolean
   stats: ComparisonProjectStats | undefined
 }
+
+type ComparisonProjectStatsLabelColumn = ComparisonProjectJudgmentsColumn & {projectName: string | null}
+
+const summaryPromptId = 'summary'
 
 const getCountLabel = (value: number) => {
   return value.toLocaleString()
@@ -23,6 +32,147 @@ const getRateLabel = (value: number | null) => {
 
 const getComparisonProjectStatsErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : 'Failed to load project stats'
+}
+
+const getColumnLabelPart = (value: string | null | undefined) => {
+  const trimmedValue = value?.trim() ?? ''
+
+  return trimmedValue.length > 0 ? trimmedValue : null
+}
+
+const getColumnSourceProjectKey = (column: ComparisonProjectJudgmentsColumn) => {
+  return getColumnLabelPart(column.sourceProjectId) ?? getColumnLabelPart(column.sourceProjectName)
+}
+
+const getAmbiguousLlmModelLabels = (columns: readonly ComparisonProjectJudgmentsColumn[]) => {
+  const sourceProjectKeysByModelLabel = columns
+    .filter((column) => {
+      return column.kind === 'llm'
+    })
+    .reduce<Map<string, Set<string>>>((sourceProjectKeyMap, column) => {
+      const modelLabel = getColumnLabelPart(column.modelLabel)
+      const sourceProjectKey = getColumnSourceProjectKey(column)
+
+      if (!modelLabel || !sourceProjectKey) {
+        return sourceProjectKeyMap
+      }
+
+      const sourceProjectKeys = sourceProjectKeyMap.get(modelLabel) ?? new Set<string>()
+
+      sourceProjectKeys.add(sourceProjectKey)
+      sourceProjectKeyMap.set(modelLabel, sourceProjectKeys)
+      return sourceProjectKeyMap
+    }, new Map<string, Set<string>>())
+
+  return new Set(
+    Array.from(sourceProjectKeysByModelLabel.entries())
+      .filter(([, sourceProjectKeys]) => {
+        return sourceProjectKeys.size > 1
+      })
+      .map(([modelLabel]) => {
+        return modelLabel
+      }),
+  )
+}
+
+const getComparisonColumnsById = (columns: readonly ComparisonProjectJudgmentsColumn[]) => {
+  return columns.reduce<Map<string, ComparisonProjectJudgmentsColumn>>((columnMap, column) => {
+    columnMap.set(column.id, column)
+    return columnMap
+  }, new Map<string, ComparisonProjectJudgmentsColumn>())
+}
+
+const getComparisonProjectStatsLabelColumn = (
+  column: ComparisonProjectJudgmentsColumn,
+  ambiguousLlmModelLabels: ReadonlySet<string>,
+): ComparisonProjectStatsLabelColumn => {
+  const modelLabel = getColumnLabelPart(column.modelLabel)
+  const sourceProjectName = getColumnLabelPart(column.sourceProjectName)
+  const projectName =
+    column.kind === 'llm' && modelLabel && sourceProjectName && ambiguousLlmModelLabels.has(modelLabel)
+      ? sourceProjectName
+      : null
+
+  return {...column, projectName}
+}
+
+const getComparisonProjectStatsLabelColumns = (
+  comparison: ComparisonProjectStatsComparison,
+  columns: readonly ComparisonProjectJudgmentsColumn[],
+) => {
+  const columnsById = getComparisonColumnsById(columns)
+  const leftColumn = columnsById.get(comparison.leftColumnId)
+  const rightColumn = columnsById.get(comparison.rightColumnId)
+  const ambiguousLlmModelLabels = getAmbiguousLlmModelLabels(columns)
+
+  if (!leftColumn || !rightColumn) {
+    return null
+  }
+
+  const firstColumn = comparison.kind === 'llm-vs-llm' ? leftColumn : rightColumn
+  const secondColumn = comparison.kind === 'llm-vs-llm' ? rightColumn : leftColumn
+
+  return [
+    getComparisonProjectStatsLabelColumn(firstColumn, ambiguousLlmModelLabels),
+    getComparisonProjectStatsLabelColumn(secondColumn, ambiguousLlmModelLabels),
+  ] as const
+}
+
+const getComparisonProjectStatsColumnRaterLabel = (column: ComparisonProjectStatsLabelColumn) => {
+  return column.kind === 'human' ? 'Human' : (getColumnLabelPart(column.modelLabel) ?? column.projectName ?? 'LLM')
+}
+
+const getComparisonProjectStatsPromptLabel = (column: ComparisonProjectStatsLabelColumn) => {
+  return column.promptId === summaryPromptId ? null : getColumnLabelPart(column.promptLabel)
+}
+
+const ComparisonProjectStatsLabelSide = (props: {column: ComparisonProjectStatsLabelColumn}) => {
+  return (
+    <span class="inline-flex flex-wrap items-baseline gap-x-1">
+      <span>{getComparisonProjectStatsColumnRaterLabel(props.column)}</span>
+      <Show when={props.column.projectName}>
+        {(projectName) => {
+          return (
+            <span class="inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-sm font-bold text-violet-800 ring-1 ring-inset ring-violet-200">
+              {projectName()}
+            </span>
+          )
+        }}
+      </Show>
+      <Show when={getComparisonProjectStatsPromptLabel(props.column)}>
+        {(promptLabel) => {
+          return <span class="text-gray-700">- {promptLabel()}</span>
+        }}
+      </Show>
+    </span>
+  )
+}
+
+const ComparisonProjectStatsComparisonLabel = (props: {
+  columns: ComparisonProjectJudgmentsColumn[]
+  comparison: ComparisonProjectStatsComparison
+}) => {
+  return (
+    <Show
+      when={getComparisonProjectStatsLabelColumns(props.comparison, props.columns)}
+      fallback={<span>{props.comparison.label}</span>}
+    >
+      {(labelColumns) => {
+        return (
+          <span class="inline-flex flex-wrap items-baseline gap-x-1.5">
+            <ComparisonProjectStatsLabelSide column={labelColumns()[0]} />
+            <span class="text-gray-500">vs</span>
+            <Show
+              when={props.comparison.kind === 'llm-vs-conflict-resolution'}
+              fallback={<ComparisonProjectStatsLabelSide column={labelColumns()[1]} />}
+            >
+              <span>After conflict resolution</span>
+            </Show>
+          </span>
+        )
+      }}
+    </Show>
+  )
 }
 
 export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProps) => {
@@ -97,7 +247,9 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
                 {(comparison) => {
                   return (
                     <tr>
-                      <td class="max-w-[32rem] px-3 py-3 text-gray-900">{comparison.label}</td>
+                      <td class="max-w-[32rem] px-3 py-3 text-gray-900">
+                        <ComparisonProjectStatsComparisonLabel columns={props.columns} comparison={comparison} />
+                      </td>
                       <td class="max-w-[18rem] px-3 py-3 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
                       <td class="px-3 py-3 text-right tabular-nums text-gray-700">
                         {getCountLabel(comparison.overlapCount)}
