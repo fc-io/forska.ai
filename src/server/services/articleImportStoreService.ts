@@ -120,6 +120,7 @@ type ExistingCanonicalArticleRow = {
   sourceMetadata: unknown
   url: string | null
 }
+type ArticleImportRefreshState = {acceptedCount: number; importRouteIds: string[]}
 
 const articleImportBatchSize = 500
 
@@ -921,7 +922,7 @@ const getArticleImportRouteLinkRecords = (params: {
 
 const storeImportedArticleChunkInTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
   if (rows.length === 0) {
-    return {importRouteIds: [] as string[]}
+    return {acceptedCount: 0, importRouteIds: [] as string[]}
   }
 
   const normalizedRows = rows.map((row) => {
@@ -957,11 +958,14 @@ const storeImportedArticleChunkInTx = async (tx: ArticleImportStoreTx, rows: Art
     await insertArticleImportRouteLinks(tx, linkRecords)
   }
 
-  return {importRouteIds: Array.from(routeIdMap.values())}
+  return {acceptedCount: articleIdByCandidateId.size, importRouteIds: Array.from(routeIdMap.values())}
 }
 
-const getMergedImportRefreshState = (states: Array<{importRouteIds: string[]}>) => {
+const getMergedImportRefreshState = (states: ArticleImportRefreshState[]) => {
   return {
+    acceptedCount: states.reduce((sum, state) => {
+      return sum + state.acceptedCount
+    }, 0),
     importRouteIds: getUniqueValues(
       states.flatMap((state) => {
         return state.importRouteIds
@@ -971,7 +975,7 @@ const getMergedImportRefreshState = (states: Array<{importRouteIds: string[]}>) 
 }
 
 const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
-  const states = await getValueChunks(rows).reduce<Promise<Array<{importRouteIds: string[]}>>>(
+  const states = await getValueChunks(rows).reduce<Promise<ArticleImportRefreshState[]>>(
     async (statesPromise, rowChunk) => {
       const states = await statesPromise
       const state = await storeImportedArticleChunkInTx(tx, rowChunk)
@@ -1011,9 +1015,12 @@ const syncImportedArticlesInTx = async (params: {
   }
 
   const importRefreshState =
-    params.rows.length > 0 ? await storeImportedArticlesInTx(params.tx, params.rows) : {importRouteIds: [] as string[]}
+    params.rows.length > 0
+      ? await storeImportedArticlesInTx(params.tx, params.rows)
+      : {acceptedCount: 0, importRouteIds: [] as string[]}
 
   return {
+    acceptedCount: importRefreshState.acceptedCount,
     importRouteIds:
       importRouteId && !importRefreshState.importRouteIds.includes(importRouteId)
         ? [...importRefreshState.importRouteIds, importRouteId]
