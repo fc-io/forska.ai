@@ -105,12 +105,20 @@ test('deleteProviderConnection removes an unreferenced connection and its models
     WHERE provider_connection_id = 'delete-connection'
     LIMIT 1
   `)
+  const [orphanSummary] = await queryDatabase<{orphanModelCount: number}>(`
+    SELECT CAST(COUNT(*) AS INTEGER) AS orphanModelCount
+    FROM app.model m
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE m.provider_connection_id = 'delete-connection'
+      AND pc.id IS NULL
+  `)
 
   expect(result.archived).toBe(false)
   expect(result.deleted).toBe(true)
   expect(Number(result.deletedModelCount)).toBe(1)
   expect(storedConnection).toBeUndefined()
   expect(storedModel).toBeUndefined()
+  expect(orphanSummary?.orphanModelCount).toBe(0)
 })
 
 test('deleteProviderConnection archives a referenced connection without orphaning provider_connection_id values', async () => {
@@ -151,6 +159,58 @@ test('deleteProviderConnection archives a referenced connection without orphanin
   expect(storedConnection?.enabled).toBe(false)
   expect(JSON.parse(storedConnection?.configJson ?? '{}')).toMatchObject({archived: true})
   expect(storedModel).toEqual({enabled: false, providerConnectionId: 'archive-connection'})
+})
+
+test('deleteProviderConnection archives comparison-project-only model usage without orphaning models', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  await insertProviderConnectionFixture({
+    connectionId: 'comparison-archive-connection',
+    modelId: 'comparison-archive-model',
+  })
+  await runDatabase(`
+    INSERT INTO app.comparison_project (id, name, model_ids, compare_with_humans, human_judgment_mode)
+    VALUES ('comparison-archive-project', 'Comparison Archive Project', ['comparison-archive-model'], FALSE, 'prompt')
+  `)
+
+  const result = await deleteProviderConnection('comparison-archive-connection')
+
+  const [storedConnection] = await queryDatabase<{configJson: string; enabled: boolean; id: string}>(`
+    SELECT
+      id,
+      enabled,
+      TO_JSON(config_json) AS configJson
+    FROM app.provider_connection
+    WHERE id = 'comparison-archive-connection'
+    LIMIT 1
+  `)
+  const [storedModel] = await queryDatabase<{enabled: boolean; providerConnectionId: string}>(`
+    SELECT
+      enabled,
+      provider_connection_id AS providerConnectionId
+    FROM app.model
+    WHERE id = 'comparison-archive-model'
+    LIMIT 1
+  `)
+  const [orphanSummary] = await queryDatabase<{orphanModelCount: number}>(`
+    SELECT CAST(COUNT(*) AS INTEGER) AS orphanModelCount
+    FROM app.model m
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE m.provider_connection_id = 'comparison-archive-connection'
+      AND pc.id IS NULL
+  `)
+
+  expect(result.archived).toBe(true)
+  expect(result.deleted).toBe(false)
+  expect(Number(result.comparisonProjectCount)).toBe(1)
+  expect(Number(result.projectCount)).toBe(0)
+  expect(Number(result.judgmentCount)).toBe(0)
+  expect(storedConnection?.enabled).toBe(false)
+  expect(JSON.parse(storedConnection?.configJson ?? '{}')).toMatchObject({archived: true})
+  expect(storedModel).toEqual({enabled: false, providerConnectionId: 'comparison-archive-connection'})
+  expect(orphanSummary?.orphanModelCount).toBe(0)
 })
 
 test('deleteProviderConnection rolls back unreferenced model cleanup when connection cleanup fails later', async () => {

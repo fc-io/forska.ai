@@ -203,9 +203,7 @@ For each mutation route/job:
 - `comparison_project_prompt` / `comparison_project_import_route` mutation safety.
 - `article_import_route` repeated insert + parent delete behavior.
 - `data_source_import_route` if/when live writes exist.
-- Prompt merge collision cases.
 - Full-text conversion model refs after model deletion/change.
-- Provider logical integrity after `0029`.
 
 ## Execution Order
 
@@ -308,24 +306,14 @@ For each mutation route/job:
 
 #### Confirmed bugs
 
-- `src/server/routes/PromptsRoutes.ts`
-  - delete checks miss `comparison_project_prompt`, so app-level allow can still hit live prompt FK on delete.
-  - merge updates `project_prompt`, `judgment`, `judgment_human`, but misses `comparison_project_prompt` before parent prompt delete.
+- None currently open. Prior prompt delete/merge FK bugs are tracked under fixed issues.
 
 #### Likely bugs
 
-- `src/server/routes/PromptsRoutes.ts`
-  - merge can rewrite `app.judgment` and `app.judgment_human` into existing unique keys.
 - `src/server/routes/ProjectsRoutes.ts`
   - child detach/restore around project edits is split across tx boundaries.
-- `src/server/services/insertArticlesIntoProject.ts`
-  - `project_article` insert and prompt autolink are not guaranteed in one tx.
-- `src/server/routes/SubprojectsRoutes.ts`
-  - project/prompt/article create flow can leave partial state on later failure.
 - `src/server/routes/ComparisonProjectsRoutes.ts`
   - relink/delete/restore work is split across tx boundaries.
-- `src/server/providers/providerModelRepository.ts`
-  - provider config JSON + `app.model.enabled` dual-write can split.
 - `src/server/routes/ProviderModelsRoutes.ts`
   - manual create is still read-before-write with no DB-backed duplicate regression.
 - `src/server/services/covidenceImportService.ts`
@@ -335,8 +323,6 @@ For each mutation route/job:
 
 #### Logical-ref risks
 
-- `src/server/providers/providerConnectionRepository.ts`
-  - `model.provider_connection_id` is now app-validated only after `0029`.
 - `src/server/routes/DataSourcesImportRoutes/**`
   - `data_source.import_route` remains a string logical ref.
 - `src/server/cron/fullTextConversionJobs.ts`, `src/db/duckdbMigrations/0022_fullTextConversionModelConfig.sql`
@@ -351,28 +337,30 @@ For each mutation route/job:
 - `src/db/duckdbMigrations/0028_judgmentHumanNullableProjectId.sql`
   - maintenance-only rebuild of `app.judgment_human`; low risk because it rebuilds one child table and revalidates on reinsert.
 - `src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchived.ts`
-  - current rebuild/delete order is intentional and covered, but still needs future-schema guard coverage when new FK children are added.
+  - current rebuild/delete order is intentional and covered by live FK inventory guards.
 - `src/server/routes/ArticleAdminRoutes.ts`, `src/server/cron/fullTextJobs.ts`, `src/server/cron/fullTextConversionJobs.ts`
   - high-fanout `app.article` parent updates pass temp-DuckDB repro coverage under live child refs.
 - `src/server/routes/AdminInvestigateRoutes.ts`
   - `app.judgment` soft-delete passes temp-DuckDB repro coverage under live `app.judgment_assessment` refs.
 - `src/server/routes/HumanAssessmentRoutes/**`
   - prompt-mode human assessment now resyncs unanswered `app.judgment_human` rows to current `app.project_prompt` membership during init and submit.
+- `src/server/providers/providerConnectionRepository.ts`, `src/server/providers/providerModelRepository.ts`
+  - post-`0029` provider/model logical refs are covered by DB-backed delete/archive, rollback, disable, and re-enable tests.
 
 ### Initial Risk Matrix
 
 | Classification     | Edge / surface                                | Writer path                                                                                                               | Risk   | Why it is risky                                                                                                                                                                               | Current tests                                                                                                                                                      | Gap                                                | Likely fix direction                                                 |
 | ------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- | -------------------------------------------------------------------- |
-| confirmed bug      | `prompt <- comparison_project_prompt`         | `src/server/routes/PromptsRoutes.ts` delete                                                                               | high   | Prompt delete checks `project_prompt`, `judgment`, `judgment_human`, but misses `comparison_project_prompt`, so app-level allow can still hit DuckDB FK failure                               | none found for prompts                                                                                                                                             | add prompt delete test with comparison project ref | expand orphan check and keep it in one tx                            |
-| confirmed bug      | `prompt <- comparison_project_prompt`         | `src/server/routes/PromptsRoutes.ts` merge                                                                                | high   | Prompt merge rewrites some child tables but not `comparison_project_prompt`, then deletes the merged prompt                                                                                   | none found for prompts                                                                                                                                             | add prompt merge test with comparison project ref  | update `comparison_project_prompt` before delete                     |
-| likely bug         | `judgment.prompt_id` unique path              | `src/server/routes/PromptsRoutes.ts` merge                                                                                | high   | Merging prompts can rewrite rows into an existing `app.judgment` unique key                                                                                                                   | none found for prompts                                                                                                                                             | add collision repro                                | pre-dedupe or merge rows before update                               |
-| likely bug         | `judgment_human.prompt_id` unique path        | `src/server/routes/PromptsRoutes.ts` merge                                                                                | high   | Same collision shape as `judgment`, but on `app.judgment_human` unique key                                                                                                                    | none found for prompts                                                                                                                                             | add collision repro                                | pre-dedupe or merge rows before update                               |
+| fixed bug          | `prompt <- comparison_project_prompt`         | `src/server/routes/PromptsRoutes.ts` delete                                                                               | high   | Prompt delete previously missed `comparison_project_prompt`, so app-level allow could still hit DuckDB FK failure                                                                             | `src/server/routes/PromptsRoutes.test.ts`                                                                                                                          | covered                                            | preflight `comparison_project_prompt` before delete                  |
+| fixed bug          | `prompt <- comparison_project_prompt`         | `src/server/routes/PromptsRoutes.ts` merge                                                                                | high   | Prompt merge previously rewrote some child tables but not `comparison_project_prompt`, then deleted the merged prompt                                                                         | `src/server/routes/PromptsRoutes.test.ts`                                                                                                                          | covered                                            | update `comparison_project_prompt` before delete                     |
+| fixed bug          | `judgment.prompt_id` unique path              | `src/server/routes/PromptsRoutes.ts` merge                                                                                | high   | Merging prompts could rewrite rows into an existing `app.judgment` unique key                                                                                                                 | `src/server/routes/PromptsRoutes.test.ts`                                                                                                                          | covered                                            | dedupe `app.judgment` rows before prompt merge update                |
+| fixed bug          | `judgment_human.prompt_id` unique path        | `src/server/routes/PromptsRoutes.ts` merge                                                                                | high   | Same collision shape as `judgment`, but on `app.judgment_human` unique key                                                                                                                    | `src/server/routes/PromptsRoutes.test.ts`                                                                                                                          | covered                                            | dedupe `app.judgment_human` rows before prompt merge update          |
 | likely bug         | `project` child detach/restore                | `src/server/routes/ProjectsRoutes.ts` edit                                                                                | high   | Child tables are detached outside the main tx and restored later, which is fragile for crash/concurrency/error windows                                                                        | `src/server/routes/ProjectsRoutes.test.ts` covers populated model-change path                                                                                      | no restore-failure regression                      | keep all detach/restore work inside one tx or remove unneeded detach |
-| likely bug         | `project_article` then `project_prompt`       | `src/server/services/insertArticlesIntoProject.ts`                                                                        | high   | Service inserts `project_article` before prompt autolink without one tx, so partial writes are possible                                                                                       | no direct tests                                                                                                                                                    | add partial-failure repro                          | wrap service in tx or make caller always pass tx                     |
-| likely bug         | subproject create multi-step flow             | `src/server/routes/SubprojectsRoutes.ts`                                                                                  | high   | Project/prompt creation and article linking happen in separate phases, so later failure can leave partial state                                                                               | `src/server/routes/SubprojectsRoutes.test.ts` only covers prompt detachment                                                                                        | missing article-link rollback test                 | make full flow transactional                                         |
-| accepted low risk  | archived project purge rebuild                | `src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchived.ts`                                                    | high   | Rebuild/delete flow is schema-drift sensitive; new FK child tables can silently break deletion later                                                                                          | `src/server/routes/ProjectsRoutes.test.ts` covers current delete-archived behavior                                                                                 | no future-schema guard test                        | centralize FK child inventory or add explicit audit test             |
-| logical-ref risk   | provider logical parent-child                 | `src/server/providers/providerConnectionRepository.ts`                                                                    | high   | Real FK was dropped, so delete/archive safety now depends on app logic and non-transactional sequencing                                                                                       | `src/server/routes/providerProjectFlow.e2e.test.ts`, `src/server/routes/ProviderConnectionsRoutes.test.ts`                                                         | missing DB-backed logical orphan tests             | add app-level validation tests and tighten tx boundaries             |
-| likely bug         | provider model toggle dual-write              | `src/server/providers/providerModelRepository.ts`                                                                         | high   | `config_json.disabledModelIds` and `app.model.enabled` update separately, so one can succeed and the other fail                                                                               | mocked route tests only                                                                                                                                            | add DB-backed partial-write repro                  | wrap both writes in one tx                                           |
+| fixed bug          | `project_article` then `project_prompt`       | `src/server/services/insertArticlesIntoProject.ts`                                                                        | high   | Service inserted `project_article` before prompt autolink without one tx, so partial writes were possible                                                                                     | `src/server/services/insertArticlesIntoProject.test.ts`                                                                                                            | covered                                            | wrap insert + prompt autolink in one tx                              |
+| fixed bug          | subproject create multi-step flow             | `src/server/routes/SubprojectsRoutes.ts`                                                                                  | high   | Project/prompt creation and article linking previously happened in separate phases, so later failure could leave partial state                                                                 | `src/server/routes/SubprojectsRoutes.rollback.test.ts`                                                                                                             | covered                                            | make full flow transactional                                         |
+| accepted low risk  | archived project purge rebuild                | `src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchived.ts`                                                    | high   | Rebuild/delete flow is schema-drift sensitive; new FK child tables can silently break deletion later                                                                                          | `src/server/routes/ProjectsRoutes.test.ts`, `src/server/services/archivedProjectCleanupService.test.ts`                                                            | covered                                            | keep FK child inventory guard current                                |
+| fixed logical-ref  | provider logical parent-child                 | `src/server/providers/providerConnectionRepository.ts`                                                                    | high   | Real FK was dropped, so delete/archive safety depends on app logic; provider delete/archive now keeps model refs non-orphaned or archived                                                     | `src/server/providers/providerConnectionRepository.atomic.test.ts`, `src/server/routes/providerProjectFlow.e2e.test.ts`, `src/server/routes/ProviderConnectionsRoutes.test.ts` | covered                                            | keep delete/archive cleanup transactional                            |
+| fixed bug          | provider model toggle dual-write              | `src/server/providers/providerModelRepository.ts`                                                                         | high   | `config_json.disabledModelIds` and `app.model.enabled` must stay consistent across disable, re-enable, and rollback paths                                                                     | `src/server/providers/providerModelRepository.atomic.test.ts`                                                                                                       | covered                                            | keep model row and provider config writes in one tx                  |
 | likely bug         | manual provider model create race             | `src/server/routes/ProviderModelsRoutes.ts`                                                                               | medium | Route does read-before-write duplicate check with no DB uniqueness backstop shown                                                                                                             | mocked route tests only                                                                                                                                            | add concurrent duplicate test                      | add DB uniqueness or transactional upsert                            |
 | likely bug         | covidence prompt create                       | `src/server/services/covidenceImportService.ts`                                                                           | medium | `getOrCreate` is select-then-insert on unique `content_hash`, so concurrent create can collide                                                                                                | `src/server/services/covidenceImportService.test.ts` covers normal flow                                                                                            | no concurrent duplicate repro                      | use upsert-style pattern or catch/reload                             |
 | likely bug         | judgment job cross-store delete               | `src/server/routes/JudgmentsJobsRoutes.ts`                                                                                | medium | DuckDB delete order is correct, but DuckDB + SQLite lifecycle is not atomic                                                                                                                   | `src/server/routes/JudgmentsJobsRoutes.test.ts` covers token-use delete path                                                                                       | no partial cross-store rollback test               | add consistency test and tighten compensating actions                |
@@ -395,25 +383,20 @@ For each mutation route/job:
   - `src/server/services/covidenceImportService.test.ts`
   - `src/server/services/articleImportStoreService.test.ts`
 - Weak or missing coverage remains for:
-  - `src/server/routes/PromptsRoutes.ts`
   - `src/server/routes/ComparisonProjectsRoutes.ts`
-  - `src/server/services/insertArticlesIntoProject.ts`
   - `src/server/routes/ProjectArticlesRoutes.ts`
-  - rollback/partial-write cases in `src/server/routes/SubprojectsRoutes.ts`
-  - logical-ref integrity after `src/db/duckdbMigrations/0029_dropModelProviderConnectionForeignKey.sql`
   - logical-ref drift for `full_text_conversion_model_id`
   - logical attribution drift in `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`
 
 ### Remaining Highest-Value Follow-Up
 
-- Add prompt delete/merge regression tests first.
-- Add DB-backed provider logical-integrity tests after the dropped FK.
+- Add full-text conversion model-ref drift tests.
 
 ### Current Read
 
-- The remaining unreviewed human-assessment, admin, cron, and maintenance surfaces are now inventoried.
-- New material risks from this pass are remaining logical-ref drift checks.
-- The highest-confidence still-unfixed areas are comparison-project relink crash safety, cross-store judgment-job cleanup consistency, and remaining logical-ref drift checks.
+- The current highest-value follow-ups are full-text conversion model-ref drift, comparison-project relink crash safety, judgment-job cross-store consistency, data-source import-route drift, and `llm_status` logical attribution.
+- New material risks from this pass are the remaining logical-ref drift checks.
+- The highest-confidence still-unfixed areas are full-text conversion model-ref drift, comparison-project relink crash safety, cross-store judgment-job cleanup consistency, and remaining logical-ref drift checks.
 
 ## Final Findings
 
@@ -424,13 +407,13 @@ For each mutation route/job:
 - Project article insert + prompt autolink now commit atomically in `src/server/services/insertArticlesIntoProject.ts`; covered in `src/server/services/insertArticlesIntoProject.test.ts`.
 - Subproject create now keeps project, detached prompt, `app.project_prompt`, and `app.project_article` writes in one transaction in `src/server/routes/SubprojectsRoutes.ts`; covered in `src/server/routes/SubprojectsRoutes.rollback.test.ts`.
 - Comparison-project updates now include `app.comparison_project_conflict_resolution` in the detach/restore set and restore original child links when detach deletion fails before the update transaction in `src/server/routes/ComparisonProjectsRoutes.ts`; covered in `src/server/routes/ComparisonProjectsRoutes.fk.test.ts` and `src/server/routes/ComparisonProjectsRoutes.rollback.test.ts`.
-- Provider logical hardening now keeps `app.model.enabled` + provider config toggles atomic in `src/server/providers/providerModelRepository.ts`, and provider-connection delete/archive cleanup atomic in `src/server/providers/providerConnectionRepository.ts`; covered in `src/server/providers/providerModelRepository.atomic.test.ts`, `src/server/providers/providerConnectionRepository.atomic.test.ts`, and `src/server/routes/providerProjectFlow.e2e.test.ts`.
+- Provider logical hardening now keeps `app.model.enabled` + provider config toggles atomic in `src/server/providers/providerModelRepository.ts`, and provider-connection delete/archive cleanup atomic in `src/server/providers/providerConnectionRepository.ts`; covered in `src/server/providers/providerModelRepository.atomic.test.ts`, `src/server/providers/providerConnectionRepository.atomic.test.ts`, and `src/server/routes/providerProjectFlow.e2e.test.ts`, including DB-backed no-orphan, comparison-project-only archive, rollback, disable, and re-enable paths.
 - Archived-project purge now asserts live `app.project` FK inventory before delete requests and cleanup batches, includes the live `project_mart_dirty_refresh_article_quarantine` FK, cleans stale project mart dictionary state, and safely detaches comparison-project children while clearing `summary_source_project_id` in `src/server/services/archivedProjectCleanupService.ts` and `src/server/services/archivedProjectCleanupProjectForeignKeys.ts`; covered in `src/server/routes/ProjectsRoutes.test.ts` and `src/server/services/archivedProjectCleanupService.test.ts`.
 - Human assessment init and submit now resync unanswered `app.judgment_human` rows against current `app.project_prompt` membership before returning or updating prompt-mode pending rows in `src/server/routes/HumanAssessmentRoutes/humanAssessmentPendingJudgments.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`, and `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`; covered in `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPromptDrift.test.ts`.
 
 ### Accepted risks
 
-- `src/db/duckdbMigrations/0029_dropModelProviderConnectionForeignKey.sql`: accepted FK removal for `app.model.provider_connection_id` because DuckDB parent updates already false-positived on normal writes; runtime safety now lives in `src/server/providers/providerConnectionRepository.ts` and `src/server/providers/providerModelRepository.ts`.
+- `src/db/duckdbMigrations/0029_dropModelProviderConnectionForeignKey.sql`: accepted FK removal for `app.model.provider_connection_id` because DuckDB parent updates already false-positived on normal writes; runtime safety now lives in `src/server/providers/providerConnectionRepository.ts` and `src/server/providers/providerModelRepository.ts` with DB-backed regression coverage.
 - `src/db/duckdbMigrations/0028_judgmentHumanNullableProjectId.sql`: accepted maintenance-only rebuild risk; this path rebuilds one child table and revalidates on reinsert.
 - `src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchived.ts`: accepted schema-sensitive rebuild strategy, now guarded by live FK inventory checks rather than broader FK removal.
 - `src/server/routes/ArticleAdminRoutes.ts`, `src/server/cron/fullTextJobs.ts`, `src/server/cron/fullTextConversionJobs.ts`: accepted current `app.article` parent-update behavior because temp-DuckDB repro coverage in `src/server/routes/ArticleAdminRoutes.fk.test.ts` passes under live child refs.
@@ -444,7 +427,6 @@ For each mutation route/job:
 
 ### Remaining logical-ref checks
 
-- `src/server/providers/providerConnectionRepository.ts`: keep verifying post-`0029` delete/archive logic is the single source of truth for `model.provider_connection_id`.
 - `src/server/routes/DataSourcesImportRoutes/**`: `data_source.import_route` is still a string ref and needs drift detection or normalization.
 - `src/server/cron/fullTextConversionJobs.ts`, `src/db/duckdbMigrations/0022_fullTextConversionModelConfig.sql`: `full_text_conversion_model_id` still needs runtime validation after later model deletes/rebuilds.
 - `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`: `app.llm_status` provider/model attribution remains logical only and needs shared-worker drift checks.

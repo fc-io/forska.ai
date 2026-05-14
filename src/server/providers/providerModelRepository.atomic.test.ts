@@ -117,6 +117,48 @@ test('updateProviderModel disables model row and provider config in one transact
   expect(JSON.parse(storedConnection?.configJson ?? '{}')).toMatchObject({disabledModelIds: ['atomic-toggle-model']})
 })
 
+test('updateProviderModel re-enables model row and removes provider config disabled id', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  await insertProviderModelFixture({connectionId: 'atomic-enable-connection', modelId: 'atomic-enable-model'})
+  await runDatabase(`
+    UPDATE app.model
+    SET enabled = FALSE
+    WHERE id = 'atomic-enable-model'
+  `)
+  await runDatabase(`
+    UPDATE app.provider_connection
+    SET config_json = CAST('{"archived":false,"disabledModelIds":["atomic-enable-model"],"manualWorkerUrls":[],"workerUrlMode":"manual"}' AS JSON)
+    WHERE id = 'atomic-enable-connection'
+  `)
+
+  const updated = await updateProviderModel({
+    displayName: 'OpenRouter Test Model',
+    enabled: true,
+    id: 'atomic-enable-model',
+    variant: null,
+  })
+
+  const [storedModel] = await queryDatabase<{enabled: boolean}>(`
+    SELECT enabled
+    FROM app.model
+    WHERE id = 'atomic-enable-model'
+    LIMIT 1
+  `)
+  const [storedConnection] = await queryDatabase<{configJson: string}>(`
+    SELECT TO_JSON(config_json) AS configJson
+    FROM app.provider_connection
+    WHERE id = 'atomic-enable-connection'
+    LIMIT 1
+  `)
+
+  expect(updated.enabled).toBe(true)
+  expect(storedModel?.enabled).toBe(true)
+  expect(JSON.parse(storedConnection?.configJson ?? '{}')).toMatchObject({disabledModelIds: []})
+})
+
 test('updateProviderModel rolls back model enabled change when provider config write fails later', async () => {
   if (!queryDatabase) {
     throw new Error('Test database not initialized')
