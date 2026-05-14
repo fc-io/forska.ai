@@ -407,7 +407,76 @@ test('project review details falls back to legacy covidence related records when
   ])
   expect(covidenceStatement).toContain('legacy_related_record AS')
   expect(covidenceStatement).toContain("article.import_route = 'legacy-route'")
-  expect(covidenceStatement).toContain('WHERE NOT EXISTS (SELECT 1 FROM source_record_related_record)')
+  expect(covidenceStatement).toContain('source_record.canonicalArticleId = legacy_related_record.canonicalArticleId')
+  expect(covidenceStatement).not.toContain('WHERE NOT EXISTS (SELECT 1 FROM source_record_related_record)')
+})
+
+test('project review details keeps legacy covidence rows when source record coverage is partial', async () => {
+  let covidenceStatement = ''
+  fullArticlesByIdsRef.current = async () => {
+    return [
+      {
+        articleTitle: 'Article 1',
+        id: 'article-1',
+        importRoute: 'legacy-route',
+        selectedImportRouteId: 'route-1',
+        selectedSourceRecordKey: 'record-1',
+        sourceMetadata: {covidence: {studyKey: 'study-1'}},
+      },
+    ]
+  }
+  projectReviewConfigRef.current = async () => {
+    return {
+      humanJudgmentMode: 'prompt',
+      modelId: 'model-1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
+  }
+  queryJsonRef.current = async (statement) => {
+    if (statement.includes('legacy_related_record AS')) {
+      covidenceStatement = statement
+      return [
+        {
+          articleExternalId: 'covidence:1',
+          articleTitle: 'Article 1',
+          id: 'source-record-1',
+          isCurrentRecord: true,
+          rawPayload: {},
+          sourceMetadata: {covidence: {covidenceIds: ['1'], referenceIds: ['ref-1'], studyKey: 'study-1'}},
+        },
+        {
+          articleExternalId: 'legacy:2',
+          articleTitle: 'Legacy Article 2',
+          id: 'article-2',
+          isCurrentRecord: false,
+          rawPayload: {},
+          sourceMetadata: {
+            covidence: {covidenceIds: ['legacy-2'], referenceIds: ['legacy-ref-2'], studyKey: 'study-1'},
+          },
+        },
+      ]
+    }
+
+    return statement.includes('FROM app.project_prompt pp')
+      ? [getPromptRow('prompt-1', 0)]
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow()]
+        : []
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {covidenceRelatedRecords: Array<{id: string}>}
+
+  expect(response.status).toBe(200)
+  expect(
+    body.covidenceRelatedRecords.map((record) => {
+      return record.id
+    }),
+  ).toEqual(['source-record-1', 'article-2'])
+  expect(covidenceStatement).toContain('source_record.canonicalArticleId = legacy_related_record.canonicalArticleId')
 })
 
 test('project review details merges detail mart rows, raw fallback rows, and placeholders', async () => {
