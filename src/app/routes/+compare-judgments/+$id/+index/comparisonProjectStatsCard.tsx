@@ -17,6 +17,10 @@ const getKappaLabel = (value: number | null) => {
   return value === null ? 'N/A' : value.toFixed(3)
 }
 
+const getRateLabel = (value: number | null) => {
+  return value === null ? 'N/A' : `${(value * 100).toFixed(1)}%`
+}
+
 const getComparisonProjectStatsErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : 'Failed to load project stats'
 }
@@ -28,7 +32,9 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
         <div>
           <h2 class="text-lg font-semibold">Project Stats</h2>
           <p class="mt-1 text-sm text-gray-600">
-            Maybe counts as Yes/include. True conflicts are Include vs Exclude decisions.
+            Conflicts compare exact answers. True Conflicts, Cohen's Kappa, sensitivity, and specificity compare Include
+            vs Exclude decisions, with Yes/Maybe as Include and No as Exclude. Sensitivity and specificity use Human or
+            Conflict resolution as the reference when available.
           </p>
         </div>
       </div>
@@ -59,6 +65,9 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
                 <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Comparison
                 </th>
+                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  Column Info
+                </th>
                 <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Overlap
                 </th>
@@ -70,6 +79,15 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
                 </th>
                 <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Cohen's Kappa
+                  <span class="block normal-case tracking-normal">Include vs Exclude</span>
+                </th>
+                <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  Sensitivity
+                  <span class="block normal-case tracking-normal">Human Include</span>
+                </th>
+                <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  Specificity
+                  <span class="block normal-case tracking-normal">Human Exclude</span>
                 </th>
               </tr>
             </thead>
@@ -79,6 +97,7 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
                   return (
                     <tr>
                       <td class="max-w-[32rem] px-3 py-3 text-gray-900">{comparison.label}</td>
+                      <td class="max-w-[18rem] px-3 py-3 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
                       <td class="px-3 py-3 text-right tabular-nums text-gray-700">
                         {getCountLabel(comparison.overlapCount)}
                       </td>
@@ -90,6 +109,12 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
                       </td>
                       <td class="px-3 py-3 text-right tabular-nums text-gray-700">
                         {getKappaLabel(comparison.cohensKappa)}
+                      </td>
+                      <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                        {getRateLabel(comparison.sensitivity)}
+                      </td>
+                      <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                        {getRateLabel(comparison.specificity)}
                       </td>
                     </tr>
                   )

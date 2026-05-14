@@ -664,7 +664,7 @@ const getSqlCursorOrdinal = (statement: string) => {
   return Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : null
 }
 
-type MockComparisonProjectStatsGroup = {comparisonId: string; leftColumnId: string; rightColumnId: string}
+type MockComparisonProjectStatsGroup = {comparisonId: string; kind: string; leftColumnId: string; rightColumnId: string}
 type MockComparisonProjectStatsPair = {leftAnswers: string[]; rightAnswers: string[]}
 type MockComparisonProjectStatsBinaryDecision = 'exclude' | 'include'
 type MockComparisonProjectStatsBinaryPair = {
@@ -673,11 +673,16 @@ type MockComparisonProjectStatsBinaryPair = {
 }
 
 const getMockComparisonProjectStatsGroups = (statement: string) => {
-  return Array.from(statement.matchAll(/\('([^']*)', '([^']*)', '([^']*)'\)/g)).map<MockComparisonProjectStatsGroup>(
-    ([, comparisonId, leftColumnId, rightColumnId]) => {
-      return {comparisonId: comparisonId ?? '', leftColumnId: leftColumnId ?? '', rightColumnId: rightColumnId ?? ''}
-    },
-  )
+  return Array.from(
+    statement.matchAll(/\('([^']*)', '([^']*)', '([^']*)', '([^']*)'\)/g),
+  ).map<MockComparisonProjectStatsGroup>(([, comparisonId, kind, leftColumnId, rightColumnId]) => {
+    return {
+      comparisonId: comparisonId ?? '',
+      kind: kind ?? '',
+      leftColumnId: leftColumnId ?? '',
+      rightColumnId: rightColumnId ?? '',
+    }
+  })
 }
 
 const getMockComparisonProjectStatsAnswers = (value: string | null | undefined) => {
@@ -719,7 +724,16 @@ const getMockComparisonProjectStatsBinaryDecisionValue = (answers: readonly stri
 const getMockComparisonProjectStatsPairs = (state: MockDatabaseState, group: MockComparisonProjectStatsGroup) => {
   return getMockServingRows(state)
     .map<MockComparisonProjectStatsPair | null>((row) => {
-      const leftAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.leftColumnId])
+      const fallbackLeftAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.leftColumnId])
+      const conflictResolutionAnswers = getMockComparisonProjectStatsAnswers(
+        state.conflictResolutionRows.find((resolutionRow) => {
+          return resolutionRow.articleId === row.articleId
+        })?.answerValue,
+      )
+      const leftAnswers =
+        group.kind === 'llm-vs-conflict-resolution' && conflictResolutionAnswers.length > 0
+          ? conflictResolutionAnswers
+          : fallbackLeftAnswers
       const rightAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.rightColumnId])
 
       return leftAnswers.length > 0 && rightAnswers.length > 0 ? {leftAnswers, rightAnswers} : null
@@ -778,7 +792,13 @@ const getMockComparisonProjectStatsAggregateRow = (
     comparisonId: group.comparisonId,
     conflictCount: pairs.filter(getMockComparisonProjectStatsHasConflict).length,
     leftExcludeCount: getMockComparisonProjectStatsDecisionCount(binaryPairs, 'leftDecision', 'exclude'),
+    leftExcludeRightExcludeCount: binaryPairs.filter((pair) => {
+      return pair.leftDecision === 'exclude' && pair.rightDecision === 'exclude'
+    }).length,
     leftIncludeCount: getMockComparisonProjectStatsDecisionCount(binaryPairs, 'leftDecision', 'include'),
+    leftIncludeRightIncludeCount: binaryPairs.filter((pair) => {
+      return pair.leftDecision === 'include' && pair.rightDecision === 'include'
+    }).length,
     overlapCount: pairs.length,
     rightExcludeCount: getMockComparisonProjectStatsDecisionCount(binaryPairs, 'rightDecision', 'exclude'),
     rightIncludeCount: getMockComparisonProjectStatsDecisionCount(binaryPairs, 'rightDecision', 'include'),
@@ -826,7 +846,10 @@ const queryJson = async (
     return [{articleId: statement.includes("'article-2'") ? 'article-2' : 'article-1'}]
   }
 
-  if (statement.includes('FROM app.comparison_project_conflict_resolution')) {
+  if (
+    statement.includes('FROM app.comparison_project_conflict_resolution')
+    && !statement.includes('FROM mart.comparison_cell_serving cell')
+  ) {
     return state.conflictResolutionRows.filter((row) => {
       return statement.includes(`'${row.articleId}'`)
     })
@@ -2433,12 +2456,14 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
   mockDatabaseStateRef.current = {
     ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
+      allowConflictResolution: true,
       compareWithHumans: true,
       humanJudgmentMode: 'summary',
       id: 'comparison-project-1',
       modelIds: ['model-1'],
       summarySourceProjectId: 'source-project-1',
     },
+    conflictResolutionRows: [{answerValue: 'no', articleId: 'article-1', promptId: null}],
     failPromptInsert: false,
     promptLinks: [
       {
@@ -2466,16 +2491,28 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
       }>
     }
   }
-  const [comparison] = body.data.comparisons
+  const comparison = body.data.comparisons.find((candidate) => {
+    return candidate.kind === 'primary-vs-human'
+  })
+  const conflictResolutionComparison = body.data.comparisons.find((candidate) => {
+    return candidate.kind === 'llm-vs-conflict-resolution'
+  })
 
   expect(response.status).toBe(200)
-  expect(body.data.comparisons).toHaveLength(1)
+  expect(body.data.comparisons).toHaveLength(2)
   expect(comparison).toMatchObject({
     cohensKappa: 0,
     conflictCount: 1,
     kind: 'primary-vs-human',
     overlapCount: 1,
     trueConflictCount: 1,
+  })
+  expect(conflictResolutionComparison).toMatchObject({
+    cohensKappa: 1,
+    conflictCount: 0,
+    kind: 'llm-vs-conflict-resolution',
+    overlapCount: 1,
+    trueConflictCount: 0,
   })
 })
 
@@ -3418,7 +3455,7 @@ test('summary comparison project export streams synthetic summary csv columns', 
       'Date added',
       'Overall decision - Model 1 - Article Title and Abstract',
       'Overall decision - Model 2 - Article Title and Abstract',
-      'Summary Source - Overall decision - Human',
+      'Summary Source - Overall decision - Human - Article Title and Abstract',
     ].join(','),
     ['Article 1', 'Article 1 summary', '2026-03-30T00:00:00.000Z', 'no', 'yes', 'maybe'].join(','),
   ])
@@ -3497,7 +3534,7 @@ test('summary comparison judgments use synthetic summary columns and derived cel
     new Request('http://localhost/api/comparison-projects/comparison-project-1'),
   )
   const metadataBody = (await metadataResponse.json()) as {
-    data: {columns: Array<{id: string; promptId: string; promptLabel: string}>}
+    data: {columns: Array<{contentLabel: string | null; id: string; promptId: string; promptLabel: string}>}
   }
   const judgmentsResponse = await app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
@@ -3522,6 +3559,11 @@ test('summary comparison judgments use synthetic summary columns and derived cel
     }),
   ).toEqual(['summary', 'summary', 'summary'])
   expect(metadataBody.data.columns[0]?.promptLabel).toBe('Overall decision')
+  expect(
+    metadataBody.data.columns.find((column) => {
+      return column.id === 'human:summary'
+    })?.contentLabel,
+  ).toBe('Article Title and Abstract')
   expect(judgmentsResponse.status).toBe(200)
   expect(judgmentsBody.data.totalCount).toBeNull()
   expect(judgmentsBody.data.data).toHaveLength(1)

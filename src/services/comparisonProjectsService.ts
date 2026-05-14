@@ -232,8 +232,13 @@ export type ComparisonProjectJudgmentsCount = {
   totalCount: number
   totalPages: number
 }
-export type ComparisonProjectStatsComparisonKind = 'primary-vs-human' | 'human-vs-llm' | 'llm-vs-llm'
+export type ComparisonProjectStatsComparisonKind =
+  | 'primary-vs-human'
+  | 'human-vs-llm'
+  | 'llm-vs-llm'
+  | 'llm-vs-conflict-resolution'
 export type ComparisonProjectStatsComparison = {
+  columnInfo: string | null
   id: string
   kind: ComparisonProjectStatsComparisonKind
   label: string
@@ -242,6 +247,8 @@ export type ComparisonProjectStatsComparison = {
   cohensKappa: number | null
   conflictCount: number
   overlapCount: number
+  sensitivity: number | null
+  specificity: number | null
   trueConflictCount: number
 }
 export type ComparisonProjectStats = {

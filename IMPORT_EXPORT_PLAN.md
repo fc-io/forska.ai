@@ -121,7 +121,7 @@ The package contract consists of these manifest-declared root payloads and asset
 - Runtime-detection cache, worker health, endpoint health, logs, temp files, or machine-local status snapshots.
 - `app.judgment_job`, `app.judgment_job_sqlite_health_projection`, `app.judgment_execution_snapshot`, `app.maintenance_work_lease`, `app.token_use`, `app.llm_status`, `app.nvidia_smi`, or any job-runtime artifacts.
 - Pending or unanswered human judgment workflow rows; preserve durable answered review signal, not local assessment session state.
-- `app.project_mart_refresh_state`, `app.project_mart_refresh_article_state`, `app.project_mart_refresh_article_quarantine`, `app.project_mart_large_rebuild_state`, or any `mart.*` tables.
+- `app.project_mart_refresh_state`, `app.project_mart_refresh_article_state`, `app.project_mart_dirty_refresh_article_quarantine`, `app.project_mart_large_rebuild_state`, or any `mart.*` tables.
 - Derived review-serving support tables such as `app.project_article_ordinal`, `app.review_answer_dictionary`, and `app.project_review_serving_generation`; rebuild them through the normal mart refresh path after import.
 - Unanswered LLM judgment rows; `is_answered = FALSE` rows can block future judging through the natural key without carrying a durable benchmark answer.
 - Soft-deleted judgments; deleted rows stay out of the package.
@@ -261,9 +261,9 @@ The package contract consists of these manifest-declared root payloads and asset
 
 1. Upload package.
    - Create an `awaiting_upload` import session, then transition it to `uploading` while streaming the `.forska-project.zip` upload into that session's runtime temp storage.
-   - Validate zip structure and `manifest.json`.
-   - Extract payload files into the session temp storage.
-   - If the package crosses the configured threshold, continue extraction and analyze asynchronously and show progress until the session is ready.
+   - The upload endpoint only stages the package bytes and returns updated session metadata; zip, manifest, checksum, and payload validation happen through `POST /api/projects/import/:sessionId/analyze` after upload staging succeeds.
+   - The analyze endpoint validates zip structure and `manifest.json`, extracts payload files into the session temp storage, and builds the import plan.
+   - If the package crosses the configured threshold, continue extraction and analysis asynchronously and show progress until the session is ready.
 2. Review package.
    - Show project name, source app version, counts for prompts, project prompt links, import routes, project route links, articles, article route links, project article links, judgments, judgment assessments, human judgments, human summary judgments, reviews, provider connections, models, and packaged assets.
    - Show explicit warnings for fields that were intentionally not exported.
@@ -285,8 +285,8 @@ The package contract consists of these manifest-declared root payloads and asset
 5. Confirm import.
    - Verify the submitted `planRevision`, revalidate stale-sensitive assumptions, run asset promotion into final runtime-owned paths only after revalidation passes, then run one transaction that creates the project, prompts, links, articles, judgments, human judgments, human summary judgments, reviews, assessments, mart refresh dirty state, and completed transfer-history row keyed by the import session id.
    - For large imports, let the server own the long-running commit work and expose session progress while the transactional write is in flight.
-   - After all project-article and route links are written, derive the imported project's date-bounded dirty article ids inside the same transaction, either with `getProjectMartRefreshStateService().getDirtyProjectsForProjectIds(tx, [newProjectId])` or an equivalent explicit imported article id list, and pass those article ids to `getProjectMartRefreshStateService().markProjectsDirtyAtomically({projects: ..., runner: tx})`. Do not mark only `{projectId}` with an empty article list, because the current mart refresh worker treats a dirty claim with zero dirty articles as idle and will not build review serving rows for the imported scope.
-   - If reused article rows were updated by non-destructive merge, also call `getProjectMartRefreshStateService().markArticleProjectsDirtyAtomically({articleIds: ..., runner: tx})` so every active existing project that references those articles is dirtied in the same transaction. The current helper filters archived projects out; the import flow keeps that behavior and must add coverage that unarchive derives dirty article ids from current app tables after archived-project route or article side effects instead of depending on archived dirty rows.
+   - After all project-article and route links are written, mark the imported project dirty inside the same transaction with `getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({projects: [{projectId: newProjectId, articleIds: importedDirtyArticleIds}], runner: tx})`, where `importedDirtyArticleIds` is the date-bounded imported article id set. If relying on the service's project-scope materialization path instead, omit `articleIds` entirely; do not use `getDirtyProjectsForProjectIds` as article derivation because it returns project ids only, and do not pass `articleIds: []` because an explicit empty article list produces no dirty article rows.
+   - If reused article rows were updated by non-destructive merge, also call `getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({articleIds: ..., runner: tx})` so every active existing project that references those articles is dirtied in the same transaction. The current helper filters archived projects out; the import flow keeps that behavior and must add coverage that unarchive derives dirty article ids from current app tables after archived-project route or article side effects instead of depending on archived dirty rows.
 6. Finish.
    - Navigate to the new project.
    - Show post-import warnings, such as omitted route links, omitted article-route links, or provider/model provenance notes that did not affect the committed mapping.
@@ -420,6 +420,111 @@ Use this order while implementing so each step can be tested in the same sequenc
 - [ ] `bun run desktop:build`
 - [ ] Browser smoke verify the checklist order: projects index, active package export, archived package export, import wizard, provider/model resolution, commit, and imported project review.
 - [ ] Desktop smoke verify the same flow, including file picking/upload, download navigation, post-import project navigation, and embedded runtime asset display.
+
+## Ralph Execution Readiness
+
+- Current judgment: do not convert this whole plan verbatim into one `prd.json`. It is ready as an implementation source document, but a ralph loop needs a scoped, flat story map whose stories fit one autonomous iteration each.
+- Recommended first ralph loop: convert only `Ralph User Stories For First Loop` into a `prd.json` focused on Phase 1 foundations. Use `name: "Project Transfer Foundation"`, `branchName: "ralph/project-transfer-foundation"`, and `description` scoped to contracts, route ordering, session/history schema, zip/path safety, upload proxying, and runtime asset hardening.
+- Conversion rule: each `US-*` below maps to one `userStories[]` entry with `passes: false`, `notes: ""`, and explicit `dependsOn`. Do not convert phase checklists, risk lists, or done criteria directly into separate stories.
+- Quality-gate rule: append only the gates needed by each story. Use targeted `bun test <file>` or `bunx vitest run <file>` whenever possible; add `bun run db:mig` for schema stories, `bun run build` for route/API/client contract stories, and `bun run desktop:build` only for shared runtime, upload/download, asset-path, or desktop-relevant behavior. Use `bun run lint` for touched `src` layers without fixing unrelated lint issues.
+- Full product import/export is not ready for one ralph loop until the first foundation loop passes and the Phase 2 through Phase 4 work is split into similarly small story maps.
+
+## Ralph User Stories For First Loop
+
+### US-001: Add project-transfer session and history schema
+
+Depends on: none.
+
+Acceptance criteria:
+
+- Add the next unused DuckDB migration for `app.project_transfer_session` with durable state, plan revision, ownership, heartbeat, progress, completion, error, and expiry fields.
+- Add the same migration coverage for `app.project_transfer_history` with completed-import invariants needed for duplicate warnings and same-session commit retry recovery.
+- Update `src/db/schemaTypes.ts` with project-transfer session and history record types.
+- `bun run db:mig` passes.
+
+### US-002: Add project-transfer session and history repositories
+
+Depends on: US-001.
+
+Acceptance criteria:
+
+- Add repository helpers for session compare-and-set state transitions, plan revision updates, owner-token heartbeats, completion payload persistence, and import-session history lookup.
+- Add tests for stale revision rejection, single-flight commit claiming, completed import history invariants, and same-session completion lookup by session id instead of package fingerprint.
+- Targeted project-transfer repository tests pass.
+
+### US-003: Add transfer route shell and route-shadowing tests
+
+Depends on: US-001.
+
+Acceptance criteria:
+
+- Add `src/server/routes/projectTransferRoutes.ts` with placeholder contract-safe handlers for the planned transfer endpoints.
+- Mount `projectTransferRoutes` before `projectsRoutes` and `projectExportRoutes` in `getProductApiRoutes()`.
+- Add route-shadowing tests for the project-transfer routes and the existing CSV `POST /api/projects/:id/export` route.
+- Targeted route tests pass, and `bun run build` passes if route contract typing changes.
+
+### US-004: Add streaming upload owner-proxy foundation
+
+Depends on: US-003.
+
+Acceptance criteria:
+
+- Add an allowlisted streaming owner-proxy branch for `PUT /api/projects/import/:sessionId/upload` before the generic proxy path can call `request.clone().arrayBuffer()`.
+- No-owner upload requests fail closed before consuming the body.
+- Non-replayable upload streams are not retried after partial forwarding.
+- Targeted `ApiProxyRoutes` and retry tests pass.
+
+### US-005: Add project-transfer path-safety helpers
+
+Depends on: none.
+
+Acceptance criteria:
+
+- Add project-transfer archive-member and runtime-asset path validators that reject absolute paths, raw backslashes, backslash traversal, `..`, normalized-path changes, duplicate normalized paths, unsafe Unicode/case collisions, and paths outside allowed roots.
+- Add tests for valid package payload paths, valid `assets/...` runtime paths, traversal attempts, symlink attempts where applicable, and collision handling.
+- Targeted path tests pass.
+
+### US-006: Add project-transfer zip wrapper
+
+Depends on: US-005.
+
+Acceptance criteria:
+
+- Add `@zip.js/zip.js` with Bun and include lockfile changes.
+- Add a project-transfer zip wrapper for streaming package creation and extraction with checksum verification and ZIP64 coverage or fixture support.
+- Add tests for duplicate normalized paths, checksum mismatch, symlink rejection, manifest-root enforcement, and streamed byte counters.
+- Targeted zip/path tests pass.
+
+### US-007: Add manifest, warning, and fingerprint contracts
+
+Depends on: US-005.
+
+Acceptance criteria:
+
+- Add ArkType validators for manifest, payload declarations, warning shape, asset manifest references, and supported schema-version policy.
+- Add package fingerprint helpers that separate exact payload checksums from logical duplicate-detection inputs.
+- Add tests for fingerprint stability across volatile provenance fields and sensitivity to logical content, warning codes, payload counts, and asset checksums.
+- Targeted manifest/fingerprint tests pass.
+
+### US-008: Add transfer session recovery and cleanup foundation
+
+Depends on: US-002, US-005.
+
+Acceptance criteria:
+
+- Add startup/TTL recovery helpers that run only on the active DuckDB writer, respect owner-token heartbeat staleness, and consult transfer history before deleting promoted assets.
+- Add cleanup tests for abandoned upload/extraction folders, stale non-terminal sessions, completed-session recovery from history, and promotion-manifest orphan decisions.
+- Targeted session recovery tests pass.
+
+### US-009: Harden runtime asset route path validation
+
+Depends on: US-005.
+
+Acceptance criteria:
+
+- Update `/api/runtime-asset` path handling so valid `assets/...` paths still serve while absolute paths, raw backslashes, traversal, and normalized-path changes are rejected before runtime path resolution.
+- Add focused route tests for valid assets and rejected unsafe paths.
+- Targeted runtime asset route tests pass.
 
 ## Phase Checklist
 
@@ -582,7 +687,7 @@ Use this order while implementing so each step can be tested in the same sequenc
 
 #### Phase 1 Implementation Breakdown
 
-- `Database contract` owner files: the next available DuckDB migration, for example `src/db/duckdbMigrations/0048_projectTransferSessionAndHistory.sql` at time of writing, plus `src/db/schemaTypes.ts`. Add the durable transfer-session table, duplicate-history table, and typed records first so later phases can rely on atomic session transitions and idempotent completion recovery. Make sure typed judgment rows expose `deleteGeneration`, account for nullable `JudgmentHumanRecord.projectId`, and add project-transfer-specific row types for exported reviews and any rows not fully modeled by current shared schema types.
+- `Database contract` owner files: the next available DuckDB migration under `src/db/duckdbMigrations/`, named with an unused numeric prefix such as `00NN_projectTransferSessionAndHistory.sql`, plus `src/db/schemaTypes.ts`. Add the durable transfer-session table, duplicate-history table, and typed records first so later phases can rely on atomic session transitions and idempotent completion recovery. Make sure typed judgment rows expose `deleteGeneration`, account for nullable `JudgmentHumanRecord.projectId`, and add project-transfer-specific row types for exported reviews and any rows not fully modeled by current shared schema types.
 - `Route shell` owner files: new `src/server/routes/projectTransferRoutes.ts`, `src/server/serverMain.ts`, `src/server/routes/ApiProxyRoutes.ts`, and `src/server/routes/apiRouteClassification.ts` if the streaming upload path needs explicit classification. First mount the new route module through `getProductApiRoutes()` before `projectsRoutes` and `projectExportRoutes` in `serverMain.ts`, then add route-shadowing tests for every project-transfer route before implementing real handlers.
 - `Upload route contract` owner files: new `src/server/routes/projectTransferRoutes.ts` plus a streaming owner-proxy helper in `src/server/routes/ApiProxyRoutes.ts`. Lock the split session-create, upload, and analyze response shapes early, keep `PUT /api/projects/import/:sessionId/upload` off the generic buffered proxy path, and do not force the upload path into a non-streaming `t.File()` pattern if that would break the large-package requirements.
 - `Manifest contract` owner files: new `src/server/services/projectTransfer/projectTransferSchemas.ts`, new `src/server/services/projectTransfer/projectTransferManifest.ts`, new `src/server/services/projectTransfer/projectTransferFingerprint.ts`. Centralize ArkType validators for manifest and payload boundaries, manifest fields, omission warnings, checksum rules, and stable fingerprinting.
@@ -687,7 +792,7 @@ Use this order while implementing so each step can be tested in the same sequenc
 - [ ] Revalidate the frozen plan at commit time before asset promotion, including both `judgmentInputSignature` and `humanReviewInputSignature` assumptions after fresh article/prompt/model/provider reads, reject stale `planRevision` commits without writes, write transfer history with the import session id, `commitId`, and completion payload inside the successful transaction, persist `completion.json` after transaction success, and make completed-session commit retries return the recorded imported project for that same session instead of replaying the import.
 - [ ] Do not route full-fidelity package articles through `src/server/services/articleImportStoreService.ts`; implement the project-transfer commit writer so it can preserve the locked article field set and omit missing, inactive, or unsafe import route links and legacy route fields with warning instead of auto-creating them.
 - [ ] Leave `project_prompt.origin_project_id` and `project_article.imported_from_project_id` null as intentional package-import semantics, and surface source-package provenance outside those columns.
-- [ ] Mark the new project by deriving dirty projects after scope writes and passing article ids to `getProjectMartRefreshStateService().markProjectsDirtyAtomically({projects: ..., runner: tx})`; also mark active existing projects affected by reused-article field merges with `getProjectMartRefreshStateService().markArticleProjectsDirtyAtomically({articleIds: ..., runner: tx})` as part of the import transaction. Because that helper currently filters archived projects out, the import flow keeps archived projects out of import-time dirty-state writes and must patch/test the unarchive refresh path so it derives date-bounded dirty article ids from current app tables instead of marking only an empty project dirty claim. For large imports, chunk project-transfer row inserts and dirty-state `app.project_mart_refresh_article_state` writes, or extend the refresh-state service to chunk internally, instead of constructing one giant `VALUES` or `IN` statement from the full package. Then navigate to the imported project and surface post-import warnings for omitted links or non-blocking provider/model provenance notes.
+- [ ] Mark the new project after scope writes with `getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({projects: [{projectId: newProjectId, articleIds: importedDirtyArticleIds}], runner: tx})`, or deliberately omit `articleIds` to use project-scope dirty materialization; never pass an explicit empty article list for a project that needs review-serving rows. Also mark active existing projects affected by reused-article field merges with `getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({articleIds: ..., runner: tx})` as part of the import transaction. Because that helper currently filters archived projects out, the import flow keeps archived projects out of import-time dirty-state writes and must patch/test the unarchive refresh path so it derives date-bounded dirty article ids from current app tables instead of marking only an empty project dirty claim. For large imports, chunk project-transfer row inserts and dirty-state `app.project_mart_refresh_article_state` writes, or extend the refresh-state service to chunk internally, instead of constructing one giant `VALUES` or `IN` statement from the full package. Then navigate to the imported project and surface post-import warnings for omitted links or non-blocking provider/model provenance notes.
 - [ ] Emit structured runtime events for commit progress, asset promotion, transactional success, rollback cleanup, and commit recovery decisions.
 - [ ] Add a rollback-path test that promotes assets, forces the database transaction to fail, verifies promoted final assets are best-effort deleted, and verifies session temp files remain governed by failed-session TTL cleanup instead of being treated as committed assets.
 - [ ] Add a crash-recovery test that simulates a successful database transaction and transfer-history write before `completion.json` is written, verifies recovery reconstructs completion from the session id, and verifies promoted final assets are not deleted as orphans.

@@ -10,9 +10,14 @@ export type ComparisonProjectStatsColumn = ComparisonProjectDifferenceColumn & {
   sourceProjectName?: string | null
 }
 
-export type ComparisonProjectStatsComparisonKind = 'primary-vs-human' | 'human-vs-llm' | 'llm-vs-llm'
+export type ComparisonProjectStatsComparisonKind =
+  | 'primary-vs-human'
+  | 'human-vs-llm'
+  | 'llm-vs-llm'
+  | 'llm-vs-conflict-resolution'
 
 export type ComparisonProjectStatsComparisonGroup = {
+  columnInfo: string | null
   id: string
   kind: ComparisonProjectStatsComparisonKind
   label: string
@@ -24,10 +29,14 @@ export type ComparisonProjectStatsComparison = ComparisonProjectStatsComparisonG
   cohensKappa: number | null
   conflictCount: number
   overlapCount: number
+  sensitivity: number | null
+  specificity: number | null
   trueConflictCount: number
 }
 
 export type ComparisonProjectStatsCellRow = {articleId: string; columnId: string; normalizedAnswers: unknown}
+
+export type ComparisonProjectStatsConflictResolutionRow = {answerValue: unknown; articleId: string}
 
 export type ComparisonProjectStatsAggregateRow = {
   agreementCount: unknown
@@ -35,7 +44,9 @@ export type ComparisonProjectStatsAggregateRow = {
   comparisonId: string
   conflictCount: unknown
   leftExcludeCount: unknown
+  leftExcludeRightExcludeCount: unknown
   leftIncludeCount: unknown
+  leftIncludeRightIncludeCount: unknown
   overlapCount: unknown
   rightExcludeCount: unknown
   rightIncludeCount: unknown
@@ -45,6 +56,7 @@ export type ComparisonProjectStatsAggregateRow = {
 type ComparisonProjectStatsQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 
 type ComparisonProjectStatsParams = {
+  allowConflictResolution?: boolean
   columns: readonly ComparisonProjectStatsColumn[]
   comparisonProjectId: string
   isSummaryMode: boolean
@@ -54,8 +66,10 @@ type ComparisonProjectStatsParams = {
 }
 
 type ComparisonProjectStatsFromCellsParams = {
+  allowConflictResolution?: boolean
   cellRows: readonly ComparisonProjectStatsCellRow[]
   columns: readonly ComparisonProjectStatsColumn[]
+  conflictResolutionRows?: readonly ComparisonProjectStatsConflictResolutionRow[]
   isSummaryMode: boolean
   primaryModelId?: string | null
   primarySourceProjectId?: string | null
@@ -71,7 +85,9 @@ type ComparisonProjectStatsAggregate = {
   binaryPairCount: number
   conflictCount: number
   leftExcludeCount: number
+  leftExcludeRightExcludeCount: number
   leftIncludeCount: number
+  leftIncludeRightIncludeCount: number
   overlapCount: number
   rightExcludeCount: number
   rightIncludeCount: number
@@ -79,6 +95,7 @@ type ComparisonProjectStatsAggregate = {
 }
 
 const summaryPromptId = 'summary'
+const comparisonProjectConflictResolutionTable = 'app.comparison_project_conflict_resolution'
 
 const getInClause = (values: readonly string[]) => {
   return getQuotedStringList([...values]).join(', ')
@@ -144,6 +161,23 @@ const getComparisonProjectStatsCellsByColumn = (rows: readonly ComparisonProject
   }, new Map<string, Map<string, ComparisonProjectStatsNormalizedCell>>())
 }
 
+const getComparisonProjectStatsConflictResolutionAnswersByArticleId = (
+  rows: readonly ComparisonProjectStatsConflictResolutionRow[],
+) => {
+  return rows.reduce<Map<string, string[]>>((answerMap, row) => {
+    const normalizedAnswers =
+      typeof row.answerValue === 'string'
+        ? getUniqueNormalizedAnswers([row.answerValue])
+        : getNormalizedAnswerValues(row.answerValue)
+
+    if (normalizedAnswers.length > 0) {
+      answerMap.set(row.articleId, normalizedAnswers)
+    }
+
+    return answerMap
+  }, new Map<string, string[]>())
+}
+
 const getColumnLabelPart = (value: string | null | undefined) => {
   const trimmedValue = value?.trim() ?? ''
 
@@ -151,12 +185,9 @@ const getColumnLabelPart = (value: string | null | undefined) => {
 }
 
 const getComparisonProjectStatsColumnRaterLabel = (column: ComparisonProjectStatsColumn) => {
-  const label =
-    column.kind === 'human'
-      ? (getColumnLabelPart(column.sourceProjectName) ?? 'Human')
-      : (getColumnLabelPart(column.sourceProjectName) ?? getColumnLabelPart(column.modelLabel) ?? 'LLM')
-
-  return column.kind === 'human' || !column.contentLabel ? label : `${label} (${column.contentLabel})`
+  return column.kind === 'human'
+    ? 'Human'
+    : (getColumnLabelPart(column.modelLabel) ?? getColumnLabelPart(column.sourceProjectName) ?? 'LLM')
 }
 
 const getComparisonProjectStatsColumnLabel = (column: ComparisonProjectStatsColumn) => {
@@ -166,11 +197,61 @@ const getComparisonProjectStatsColumnLabel = (column: ComparisonProjectStatsColu
   return promptLabel ? `${raterLabel} - ${promptLabel}` : raterLabel
 }
 
+const getIsComparisonProjectStatsHumanComparison = (kind: ComparisonProjectStatsComparisonKind) => {
+  return kind === 'primary-vs-human' || kind === 'human-vs-llm' || kind === 'llm-vs-conflict-resolution'
+}
+
 const getComparisonProjectStatsGroupLabel = (
+  kind: ComparisonProjectStatsComparisonKind,
   leftColumn: ComparisonProjectStatsColumn,
   rightColumn: ComparisonProjectStatsColumn,
 ) => {
-  return `${getComparisonProjectStatsColumnLabel(leftColumn)} vs ${getComparisonProjectStatsColumnLabel(rightColumn)}`
+  const leftColumnLabel = getComparisonProjectStatsColumnLabel(leftColumn)
+  const rightColumnLabel = getComparisonProjectStatsColumnLabel(rightColumn)
+
+  if (kind === 'llm-vs-conflict-resolution') {
+    return `${rightColumnLabel} vs After conflict resolution`
+  }
+
+  return getIsComparisonProjectStatsHumanComparison(kind)
+    ? `${rightColumnLabel} vs ${leftColumnLabel}`
+    : `${leftColumnLabel} vs ${rightColumnLabel}`
+}
+
+const getComparisonProjectStatsContentLabel = (column: ComparisonProjectStatsColumn) => {
+  return getColumnLabelPart(column.contentLabel)
+}
+
+const getComparisonProjectStatsLlmVsLlmColumnInfo = (leftColumnInfo: string | null, rightColumnInfo: string | null) => {
+  if (leftColumnInfo && rightColumnInfo && leftColumnInfo !== rightColumnInfo) {
+    return `${leftColumnInfo} vs ${rightColumnInfo}`
+  }
+
+  return leftColumnInfo ?? rightColumnInfo
+}
+
+const getComparisonProjectStatsHumanComparisonColumnInfo = (
+  humanColumnInfo: string | null,
+  llmColumnInfo: string | null,
+) => {
+  if (humanColumnInfo && llmColumnInfo && humanColumnInfo !== llmColumnInfo) {
+    return `${llmColumnInfo} vs ${humanColumnInfo}`
+  }
+
+  return llmColumnInfo ?? humanColumnInfo
+}
+
+const getComparisonProjectStatsGroupColumnInfo = (
+  kind: ComparisonProjectStatsComparisonKind,
+  leftColumn: ComparisonProjectStatsColumn,
+  rightColumn: ComparisonProjectStatsColumn,
+) => {
+  const leftColumnInfo = getComparisonProjectStatsContentLabel(leftColumn)
+  const rightColumnInfo = getComparisonProjectStatsContentLabel(rightColumn)
+
+  return getIsComparisonProjectStatsHumanComparison(kind)
+    ? getComparisonProjectStatsHumanComparisonColumnInfo(leftColumnInfo, rightColumnInfo)
+    : getComparisonProjectStatsLlmVsLlmColumnInfo(leftColumnInfo, rightColumnInfo)
 }
 
 const getFallbackPrimaryLlmColumnIds = (llmColumns: readonly ComparisonProjectStatsColumn[]) => {
@@ -229,18 +310,27 @@ const getComparisonProjectStatsGroup = (
   rightColumn: ComparisonProjectStatsColumn,
 ): ComparisonProjectStatsComparisonGroup => {
   return {
+    columnInfo: getComparisonProjectStatsGroupColumnInfo(kind, leftColumn, rightColumn),
     id: `${kind}:${leftColumn.id}:${rightColumn.id}`,
     kind,
-    label: getComparisonProjectStatsGroupLabel(leftColumn, rightColumn),
+    label: getComparisonProjectStatsGroupLabel(kind, leftColumn, rightColumn),
     leftColumnId: leftColumn.id,
     rightColumnId: rightColumn.id,
   }
+}
+
+const getShouldIncludeConflictResolutionStatsGroups = (params: {
+  allowConflictResolution?: boolean
+  isSummaryMode?: boolean
+}) => {
+  return Boolean(params.allowConflictResolution && params.isSummaryMode)
 }
 
 const getHumanVsLlmComparisonProjectStatsGroups = (
   humanColumns: readonly ComparisonProjectStatsColumn[],
   llmColumns: readonly ComparisonProjectStatsColumn[],
   primaryLlmColumnIds: ReadonlySet<string>,
+  includeConflictResolutionGroups: boolean,
 ) => {
   return humanColumns.flatMap((humanColumn) => {
     return llmColumns
@@ -249,9 +339,16 @@ const getHumanVsLlmComparisonProjectStatsGroups = (
       })
       .map((llmColumn) => {
         const kind = primaryLlmColumnIds.has(llmColumn.id) ? 'primary-vs-human' : 'human-vs-llm'
+        const comparisonGroup = getComparisonProjectStatsGroup(kind, humanColumn, llmColumn)
+        const conflictResolutionGroup = getComparisonProjectStatsGroup(
+          'llm-vs-conflict-resolution',
+          humanColumn,
+          llmColumn,
+        )
 
-        return getComparisonProjectStatsGroup(kind, humanColumn, llmColumn)
+        return includeConflictResolutionGroups ? [comparisonGroup, conflictResolutionGroup] : [comparisonGroup]
       })
+      .flat()
   })
 }
 
@@ -269,7 +366,9 @@ const getLlmVsLlmComparisonProjectStatsGroups = (llmColumns: readonly Comparison
 }
 
 export const getComparisonProjectStatsComparisonGroups = (params: {
+  allowConflictResolution?: boolean
   columns: readonly ComparisonProjectStatsColumn[]
+  isSummaryMode?: boolean
   primaryModelId?: string | null
   primarySourceProjectId?: string | null
 }) => {
@@ -280,9 +379,15 @@ export const getComparisonProjectStatsComparisonGroups = (params: {
     return column.kind === 'llm'
   })
   const primaryLlmColumnIds = getPrimaryLlmColumnIds(llmColumns, params)
+  const includeConflictResolutionGroups = getShouldIncludeConflictResolutionStatsGroups(params)
 
   return [
-    ...getHumanVsLlmComparisonProjectStatsGroups(humanColumns, llmColumns, primaryLlmColumnIds),
+    ...getHumanVsLlmComparisonProjectStatsGroups(
+      humanColumns,
+      llmColumns,
+      primaryLlmColumnIds,
+      includeConflictResolutionGroups,
+    ),
     ...getLlmVsLlmComparisonProjectStatsGroups(llmColumns),
   ]
 }
@@ -300,7 +405,7 @@ const getComparisonProjectStatsColumnIds = (groups: readonly ComparisonProjectSt
 const getComparisonProjectStatsGroupValuesSql = (groups: readonly ComparisonProjectStatsComparisonGroup[]) => {
   return groups
     .map((group) => {
-      return `(${getSqlLiteral(group.id)}, ${getSqlLiteral(group.leftColumnId)}, ${getSqlLiteral(group.rightColumnId)})`
+      return `(${getSqlLiteral(group.id)}, ${getSqlLiteral(group.kind)}, ${getSqlLiteral(group.leftColumnId)}, ${getSqlLiteral(group.rightColumnId)})`
     })
     .join(',\n      ')
 }
@@ -341,6 +446,7 @@ const getHasTrueConflict = (pair: ComparisonProjectStatsPair) => {
 const getComparisonProjectStatsPairs = (
   group: ComparisonProjectStatsComparisonGroup,
   cellsByColumn: Map<string, Map<string, ComparisonProjectStatsNormalizedCell>>,
+  conflictResolutionAnswersByArticleId: Map<string, string[]>,
 ) => {
   const leftCellsByArticle =
     cellsByColumn.get(group.leftColumnId) ?? new Map<string, ComparisonProjectStatsNormalizedCell>()
@@ -350,8 +456,12 @@ const getComparisonProjectStatsPairs = (
   return Array.from(leftCellsByArticle.entries())
     .map<ComparisonProjectStatsPair | null>(([articleId, leftCell]) => {
       const rightCell = rightCellsByArticle.get(articleId)
+      const leftAnswers =
+        group.kind === 'llm-vs-conflict-resolution'
+          ? (conflictResolutionAnswersByArticleId.get(articleId) ?? leftCell.normalizedAnswers)
+          : leftCell.normalizedAnswers
 
-      return rightCell ? {leftAnswers: leftCell.normalizedAnswers, rightAnswers: rightCell.normalizedAnswers} : null
+      return rightCell ? {leftAnswers, rightAnswers: rightCell.normalizedAnswers} : null
     })
     .filter((pair): pair is ComparisonProjectStatsPair => {
       return pair !== null
@@ -371,6 +481,10 @@ const getDecisionCount = (pairs: readonly BinaryDecisionPair[], side: keyof Bina
     },
     {exclude: 0, include: 0},
   )
+}
+
+const getRate = (numerator: number, denominator: number) => {
+  return denominator === 0 ? null : numerator / denominator
 }
 
 const getBinaryDecisionPairs = (pairs: readonly ComparisonProjectStatsPair[]) => {
@@ -412,6 +526,28 @@ const getCohensKappa = (pairs: readonly ComparisonProjectStatsPair[]) => {
     : (observedAgreement - expectedAgreement) / denominator
 }
 
+const getBinaryDecisionOutcomeRate = (
+  pairs: readonly ComparisonProjectStatsPair[],
+  referenceDecision: BinaryDecision,
+) => {
+  const referencePairs = getBinaryDecisionPairs(pairs).filter((pair) => {
+    return pair.leftDecision === referenceDecision
+  })
+  const matchingPredictionCount = referencePairs.filter((pair) => {
+    return pair.rightDecision === referenceDecision
+  }).length
+
+  return getRate(matchingPredictionCount, referencePairs.length)
+}
+
+const getSensitivity = (kind: ComparisonProjectStatsComparisonKind, pairs: readonly ComparisonProjectStatsPair[]) => {
+  return getIsComparisonProjectStatsHumanComparison(kind) ? getBinaryDecisionOutcomeRate(pairs, 'include') : null
+}
+
+const getSpecificity = (kind: ComparisonProjectStatsComparisonKind, pairs: readonly ComparisonProjectStatsPair[]) => {
+  return getIsComparisonProjectStatsHumanComparison(kind) ? getBinaryDecisionOutcomeRate(pairs, 'exclude') : null
+}
+
 const getCohensKappaFromAggregate = (aggregate: ComparisonProjectStatsAggregate) => {
   const pairCount = aggregate.binaryPairCount
 
@@ -432,6 +568,24 @@ const getCohensKappaFromAggregate = (aggregate: ComparisonProjectStatsAggregate)
     : (observedAgreement - expectedAgreement) / denominator
 }
 
+const getSensitivityFromAggregate = (
+  kind: ComparisonProjectStatsComparisonKind,
+  aggregate: ComparisonProjectStatsAggregate,
+) => {
+  return getIsComparisonProjectStatsHumanComparison(kind)
+    ? getRate(aggregate.leftIncludeRightIncludeCount, aggregate.leftIncludeCount)
+    : null
+}
+
+const getSpecificityFromAggregate = (
+  kind: ComparisonProjectStatsComparisonKind,
+  aggregate: ComparisonProjectStatsAggregate,
+) => {
+  return getIsComparisonProjectStatsHumanComparison(kind)
+    ? getRate(aggregate.leftExcludeRightExcludeCount, aggregate.leftExcludeCount)
+    : null
+}
+
 const getShouldComputeCohensKappa = (params: {
   columns: readonly ComparisonProjectStatsColumn[]
   isSummaryMode: boolean
@@ -445,10 +599,15 @@ const getShouldComputeCohensKappa = (params: {
 
 const getComparisonProjectStatsComparison = (params: {
   cellsByColumn: Map<string, Map<string, ComparisonProjectStatsNormalizedCell>>
+  conflictResolutionAnswersByArticleId: Map<string, string[]>
   group: ComparisonProjectStatsComparisonGroup
   shouldComputeCohensKappa: boolean
 }) => {
-  const pairs = getComparisonProjectStatsPairs(params.group, params.cellsByColumn)
+  const pairs = getComparisonProjectStatsPairs(
+    params.group,
+    params.cellsByColumn,
+    params.conflictResolutionAnswersByArticleId,
+  )
   const conflictCount = pairs.filter(getHasConflict).length
   const trueConflictCount = pairs.filter(getHasTrueConflict).length
 
@@ -457,6 +616,8 @@ const getComparisonProjectStatsComparison = (params: {
     cohensKappa: params.shouldComputeCohensKappa ? getCohensKappa(pairs) : null,
     conflictCount,
     overlapCount: pairs.length,
+    sensitivity: getSensitivity(params.group.kind, pairs),
+    specificity: getSpecificity(params.group.kind, pairs),
     trueConflictCount,
   }
 }
@@ -464,10 +625,18 @@ const getComparisonProjectStatsComparison = (params: {
 export const getComparisonProjectStatsFromCells = (params: ComparisonProjectStatsFromCellsParams) => {
   const groups = getComparisonProjectStatsComparisonGroups(params)
   const cellsByColumn = getComparisonProjectStatsCellsByColumn(params.cellRows)
+  const conflictResolutionAnswersByArticleId = getComparisonProjectStatsConflictResolutionAnswersByArticleId(
+    params.conflictResolutionRows ?? [],
+  )
   const shouldComputeCohensKappa = getShouldComputeCohensKappa(params)
 
   return groups.map((group) => {
-    return getComparisonProjectStatsComparison({cellsByColumn, group, shouldComputeCohensKappa})
+    return getComparisonProjectStatsComparison({
+      cellsByColumn,
+      conflictResolutionAnswersByArticleId,
+      group,
+      shouldComputeCohensKappa,
+    })
   })
 }
 
@@ -479,7 +648,9 @@ const getComparisonProjectStatsAggregate = (
     binaryPairCount: getComparisonProjectStatsCountValue(row.binaryPairCount),
     conflictCount: getComparisonProjectStatsCountValue(row.conflictCount),
     leftExcludeCount: getComparisonProjectStatsCountValue(row.leftExcludeCount),
+    leftExcludeRightExcludeCount: getComparisonProjectStatsCountValue(row.leftExcludeRightExcludeCount),
     leftIncludeCount: getComparisonProjectStatsCountValue(row.leftIncludeCount),
+    leftIncludeRightIncludeCount: getComparisonProjectStatsCountValue(row.leftIncludeRightIncludeCount),
     overlapCount: getComparisonProjectStatsCountValue(row.overlapCount),
     rightExcludeCount: getComparisonProjectStatsCountValue(row.rightExcludeCount),
     rightIncludeCount: getComparisonProjectStatsCountValue(row.rightIncludeCount),
@@ -492,7 +663,9 @@ const emptyComparisonProjectStatsAggregate = {
   binaryPairCount: 0,
   conflictCount: 0,
   leftExcludeCount: 0,
+  leftExcludeRightExcludeCount: 0,
   leftIncludeCount: 0,
+  leftIncludeRightIncludeCount: 0,
   overlapCount: 0,
   rightExcludeCount: 0,
   rightIncludeCount: 0,
@@ -522,6 +695,8 @@ const getComparisonProjectStatsFromAggregates = (params: {
       cohensKappa: params.shouldComputeCohensKappa ? getCohensKappaFromAggregate(aggregate) : null,
       conflictCount: aggregate.conflictCount,
       overlapCount: aggregate.overlapCount,
+      sensitivity: getSensitivityFromAggregate(group.kind, aggregate),
+      specificity: getSpecificityFromAggregate(group.kind, aggregate),
       trueConflictCount: aggregate.trueConflictCount,
     }
   })
@@ -544,7 +719,7 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
   groups: readonly ComparisonProjectStatsComparisonGroup[]
 }) => {
   return `
-    WITH comparison_group(comparison_id, left_column_id, right_column_id) AS (
+    WITH comparison_group(comparison_id, comparison_kind, left_column_id, right_column_id) AS (
       VALUES
       ${getComparisonProjectStatsGroupValuesSql(params.groups)}
     ),
@@ -579,9 +754,24 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
       FROM normalized_cell_answer
       GROUP BY article_id, column_id
     ),
+    normalized_conflict_resolution_answer AS (
+      SELECT
+        article_id,
+        LOWER(TRIM(answer_value)) AS answer_value,
+        CASE
+          WHEN LOWER(TRIM(answer_value)) IN ('yes', 'maybe') THEN 'include'
+          WHEN LOWER(TRIM(answer_value)) = 'no' THEN 'exclude'
+          ELSE NULL
+        END AS binary_decision
+      FROM ${comparisonProjectConflictResolutionTable}
+      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+        AND answer_value IS NOT NULL
+        AND NULLIF(TRIM(answer_value), '') IS NOT NULL
+    ),
     comparison_pair AS (
       SELECT
         comparison_group.comparison_id,
+        comparison_group.comparison_kind,
         comparison_group.left_column_id,
         comparison_group.right_column_id,
         left_cell.article_id
@@ -596,12 +786,15 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
         comparison_pair.comparison_id,
         comparison_pair.article_id,
         'left' AS answer_side,
-        normalized_cell_answer.answer_value,
-        normalized_cell_answer.binary_decision
+        COALESCE(conflict_resolution.answer_value, normalized_cell_answer.answer_value) AS answer_value,
+        COALESCE(conflict_resolution.binary_decision, normalized_cell_answer.binary_decision) AS binary_decision
       FROM comparison_pair
       INNER JOIN normalized_cell_answer
         ON normalized_cell_answer.article_id = comparison_pair.article_id
         AND normalized_cell_answer.column_id = comparison_pair.left_column_id
+      LEFT JOIN normalized_conflict_resolution_answer conflict_resolution
+        ON conflict_resolution.article_id = comparison_pair.article_id
+        AND comparison_pair.comparison_kind = 'llm-vs-conflict-resolution'
       UNION ALL
       SELECT
         comparison_pair.comparison_id,
@@ -655,9 +848,17 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
         ELSE 0
       END) AS INTEGER) AS leftIncludeCount,
       CAST(SUM(CASE
+        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND left_binary_decision = 'include' AND right_binary_decision = 'include' THEN 1
+        ELSE 0
+      END) AS INTEGER) AS leftIncludeRightIncludeCount,
+      CAST(SUM(CASE
         WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND left_binary_decision = 'exclude' THEN 1
         ELSE 0
       END) AS INTEGER) AS leftExcludeCount,
+      CAST(SUM(CASE
+        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND left_binary_decision = 'exclude' AND right_binary_decision = 'exclude' THEN 1
+        ELSE 0
+      END) AS INTEGER) AS leftExcludeRightExcludeCount,
       CAST(SUM(CASE
         WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND right_binary_decision = 'include' THEN 1
         ELSE 0

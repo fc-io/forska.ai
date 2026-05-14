@@ -158,7 +158,9 @@ test('comparison stats reads compact aggregate rows from SQL', async () => {
                 comparisonId: primaryComparisonId,
                 conflictCount: 3,
                 leftExcludeCount: 0,
+                leftExcludeRightExcludeCount: 0,
                 leftIncludeCount: 0,
+                leftIncludeRightIncludeCount: 0,
                 overlapCount: 4,
                 rightExcludeCount: 0,
                 rightIncludeCount: 0,
@@ -196,7 +198,9 @@ test('comparison stats computes summary kappa from SQL aggregates', async () => 
                 comparisonId: primaryComparisonId,
                 conflictCount: 3,
                 leftExcludeCount: 3,
+                leftExcludeRightExcludeCount: 2,
                 leftIncludeCount: 3,
+                leftIncludeRightIncludeCount: 2,
                 overlapCount: 6,
                 rightExcludeCount: 3,
                 rightIncludeCount: 3,
@@ -212,6 +216,8 @@ test('comparison stats computes summary kappa from SQL aggregates', async () => 
   expect(primaryComparison.conflictCount).toBe(3)
   expect(primaryComparison.trueConflictCount).toBe(2)
   expect(primaryComparison.cohensKappa).toBeCloseTo(1 / 3, 6)
+  expect(primaryComparison.sensitivity).toBeCloseTo(2 / 3, 6)
+  expect(primaryComparison.specificity).toBeCloseTo(2 / 3, 6)
 })
 
 test('comparison stats SQL aggregates serving cells in DuckDB', async () => {
@@ -238,6 +244,13 @@ test('comparison stats SQL aggregates serving cells in DuckDB', async () => {
       )
     `)
     await connection.run(`
+      CREATE TABLE app.comparison_project_conflict_resolution (
+        comparison_project_id VARCHAR,
+        article_id VARCHAR,
+        answer_value VARCHAR
+      )
+    `)
+    await connection.run(`
       INSERT INTO app.comparison_project_serving_generation
       VALUES ('comparison-project-1', 1)
     `)
@@ -257,8 +270,15 @@ test('comparison stats SQL aggregates serving cells in DuckDB', async () => {
         ('comparison-project-1', 1, 'article-6', '${humanSummaryColumn.id}', ['no']),
         ('comparison-project-1', 1, 'article-6', '${primarySummaryColumn.id}', ['yes'])
     `)
+    await connection.run(`
+      INSERT INTO app.comparison_project_conflict_resolution
+      VALUES
+        ('comparison-project-1', 'article-5', 'no'),
+        ('comparison-project-1', 'article-6', 'yes')
+    `)
 
     const comparisons = await getComparisonProjectStats({
+      allowConflictResolution: true,
       columns: [humanSummaryColumn, primarySummaryColumn],
       comparisonProjectId: 'comparison-project-1',
       isSummaryMode: true,
@@ -272,11 +292,27 @@ test('comparison stats SQL aggregates serving cells in DuckDB', async () => {
       },
     })
     const primaryComparison = findComparison(comparisons, 'primary-vs-human', primarySummaryColumn.id)
+    const conflictResolutionComparison = findComparison(
+      comparisons,
+      'llm-vs-conflict-resolution',
+      primarySummaryColumn.id,
+    )
 
     expect(primaryComparison.overlapCount).toBe(6)
     expect(primaryComparison.conflictCount).toBe(3)
     expect(primaryComparison.trueConflictCount).toBe(2)
     expect(primaryComparison.cohensKappa).toBeCloseTo(1 / 3, 6)
+    expect(primaryComparison.sensitivity).toBeCloseTo(2 / 3, 6)
+    expect(primaryComparison.specificity).toBeCloseTo(2 / 3, 6)
+    expect(conflictResolutionComparison).toMatchObject({
+      conflictCount: 1,
+      label: 'Model 1 vs After conflict resolution',
+      overlapCount: 6,
+      sensitivity: 1,
+      specificity: 1,
+      trueConflictCount: 0,
+    })
+    expect(conflictResolutionComparison.cohensKappa).toBe(1)
   } finally {
     connection.closeSync()
     duckdbInstance.closeSync()
@@ -293,12 +329,36 @@ test('comparison stats builds primary, human-vs-llm, and llm-vs-llm groups', () 
 
   expect(
     comparisons.map((comparison) => {
-      return {kind: comparison.kind, leftColumnId: comparison.leftColumnId, rightColumnId: comparison.rightColumnId}
+      return {
+        columnInfo: comparison.columnInfo,
+        kind: comparison.kind,
+        label: comparison.label,
+        leftColumnId: comparison.leftColumnId,
+        rightColumnId: comparison.rightColumnId,
+      }
     }),
   ).toEqual([
-    {kind: 'primary-vs-human', leftColumnId: humanPromptColumn.id, rightColumnId: primaryPromptColumn.id},
-    {kind: 'human-vs-llm', leftColumnId: humanPromptColumn.id, rightColumnId: peerPromptColumn.id},
-    {kind: 'llm-vs-llm', leftColumnId: primaryPromptColumn.id, rightColumnId: peerPromptColumn.id},
+    {
+      columnInfo: null,
+      kind: 'primary-vs-human',
+      label: 'Model 1 - Prompt 1 vs Human - Prompt 1',
+      leftColumnId: humanPromptColumn.id,
+      rightColumnId: primaryPromptColumn.id,
+    },
+    {
+      columnInfo: null,
+      kind: 'human-vs-llm',
+      label: 'Model 2 - Prompt 1 vs Human - Prompt 1',
+      leftColumnId: humanPromptColumn.id,
+      rightColumnId: peerPromptColumn.id,
+    },
+    {
+      columnInfo: null,
+      kind: 'llm-vs-llm',
+      label: 'Model 1 - Prompt 1 vs Model 2 - Prompt 1',
+      leftColumnId: primaryPromptColumn.id,
+      rightColumnId: peerPromptColumn.id,
+    },
   ])
 })
 
@@ -313,13 +373,105 @@ test('comparison stats prefers primary source project over shared model id', () 
 
   expect(
     comparisons.map((comparison) => {
-      return {kind: comparison.kind, leftColumnId: comparison.leftColumnId, rightColumnId: comparison.rightColumnId}
+      return {
+        columnInfo: comparison.columnInfo,
+        kind: comparison.kind,
+        label: comparison.label,
+        leftColumnId: comparison.leftColumnId,
+        rightColumnId: comparison.rightColumnId,
+      }
     }),
   ).toEqual([
-    {kind: 'primary-vs-human', leftColumnId: humanSummaryColumn.id, rightColumnId: primarySummaryColumn.id},
-    {kind: 'human-vs-llm', leftColumnId: humanSummaryColumn.id, rightColumnId: peerSummarySharedModelColumn.id},
-    {kind: 'llm-vs-llm', leftColumnId: primarySummaryColumn.id, rightColumnId: peerSummarySharedModelColumn.id},
+    {
+      columnInfo: null,
+      kind: 'primary-vs-human',
+      label: 'Model 1 vs Human',
+      leftColumnId: humanSummaryColumn.id,
+      rightColumnId: primarySummaryColumn.id,
+    },
+    {
+      columnInfo: null,
+      kind: 'human-vs-llm',
+      label: 'Model 1 vs Human',
+      leftColumnId: humanSummaryColumn.id,
+      rightColumnId: peerSummarySharedModelColumn.id,
+    },
+    {
+      columnInfo: null,
+      kind: 'llm-vs-llm',
+      label: 'Model 1 vs Model 1',
+      leftColumnId: primarySummaryColumn.id,
+      rightColumnId: peerSummarySharedModelColumn.id,
+    },
   ])
+})
+
+test('comparison stats labels source-project summary comparisons with model name against human', () => {
+  const projectName = 'cov | GPT 5.5 xhigh | 2.2'
+  const modelName = 'GPT 5.5 xhigh | 2.2'
+  const comparisons = getComparisonProjectStatsFromCells({
+    cellRows: [],
+    columns: [
+      {...humanSummaryColumn, sourceProjectName: projectName},
+      {
+        ...primarySummaryColumn,
+        contentLabel: 'Article Title and Abstract',
+        modelLabel: modelName,
+        sourceProjectName: projectName,
+      },
+    ],
+    isSummaryMode: true,
+    primarySourceProjectId: 'source-project-1',
+  })
+  const primaryComparison = findComparison(comparisons, 'primary-vs-human', primarySummaryColumn.id)
+
+  expect(primaryComparison.label).toBe('GPT 5.5 xhigh | 2.2 vs Human')
+  expect(primaryComparison.columnInfo).toBe('Article Title and Abstract')
+})
+
+test('comparison stats adds conflict resolution comparison with resolved answers', () => {
+  const cellRows = [
+    getCell('article-1', humanSummaryColumn.id, ['yes']),
+    getCell('article-1', primarySummaryColumn.id, ['yes']),
+    getCell('article-2', humanSummaryColumn.id, ['maybe']),
+    getCell('article-2', primarySummaryColumn.id, ['yes']),
+    getCell('article-3', humanSummaryColumn.id, ['no']),
+    getCell('article-3', primarySummaryColumn.id, ['no']),
+    getCell('article-4', humanSummaryColumn.id, ['no']),
+    getCell('article-4', primarySummaryColumn.id, ['no']),
+    getCell('article-5', humanSummaryColumn.id, ['maybe']),
+    getCell('article-5', primarySummaryColumn.id, ['no']),
+    getCell('article-6', humanSummaryColumn.id, ['no']),
+    getCell('article-6', primarySummaryColumn.id, ['yes']),
+  ]
+  const comparisons = getComparisonProjectStatsFromCells({
+    allowConflictResolution: true,
+    cellRows,
+    columns: [humanSummaryColumn, primarySummaryColumn],
+    conflictResolutionRows: [
+      {answerValue: 'no', articleId: 'article-5'},
+      {answerValue: 'yes', articleId: 'article-6'},
+    ],
+    isSummaryMode: true,
+    primarySourceProjectId: 'source-project-1',
+  })
+  const primaryComparison = findComparison(comparisons, 'primary-vs-human', primarySummaryColumn.id)
+  const conflictResolutionComparison = findComparison(
+    comparisons,
+    'llm-vs-conflict-resolution',
+    primarySummaryColumn.id,
+  )
+
+  expect(primaryComparison.trueConflictCount).toBe(2)
+  expect(conflictResolutionComparison).toMatchObject({
+    conflictCount: 1,
+    label: 'Model 1 vs After conflict resolution',
+    overlapCount: 6,
+    sensitivity: 1,
+    specificity: 1,
+    trueConflictCount: 0,
+  })
+  expect(conflictResolutionComparison.cohensKappa).toBe(1)
 })
 
 test('comparison stats counts llm-vs-llm overlaps and conflicts from normalized answers', () => {
@@ -339,7 +491,14 @@ test('comparison stats counts llm-vs-llm overlaps and conflicts from normalized 
   })
   const llmComparison = findComparison(comparisons, 'llm-vs-llm')
 
-  expect(llmComparison).toMatchObject({cohensKappa: null, conflictCount: 2, overlapCount: 3, trueConflictCount: 1})
+  expect(llmComparison).toMatchObject({
+    cohensKappa: null,
+    conflictCount: 2,
+    overlapCount: 3,
+    sensitivity: null,
+    specificity: null,
+    trueConflictCount: 1,
+  })
 })
 
 test('comparison stats counts human-vs-llm conflicts from non-empty normalized answers', () => {
@@ -364,6 +523,8 @@ test('comparison stats counts human-vs-llm conflicts from non-empty normalized a
     cohensKappa: null,
     conflictCount: 2,
     overlapCount: 3,
+    sensitivity: 0.5,
+    specificity: 1,
     trueConflictCount: 1,
   })
 })
@@ -386,7 +547,13 @@ test('comparison stats treats maybe as include for true conflicts', () => {
   })
   const primaryComparison = findComparison(comparisons, 'primary-vs-human', primaryPromptColumn.id)
 
-  expect(primaryComparison).toMatchObject({conflictCount: 3, overlapCount: 4, trueConflictCount: 1})
+  expect(primaryComparison).toMatchObject({
+    conflictCount: 3,
+    overlapCount: 4,
+    sensitivity: 2 / 3,
+    specificity: 1,
+    trueConflictCount: 1,
+  })
 })
 
 test('comparison stats computes summary-mode kappa only for exactly two summary raters', () => {
@@ -423,5 +590,9 @@ test('comparison stats computes summary-mode kappa only for exactly two summary 
   expect(primaryComparison.conflictCount).toBe(3)
   expect(primaryComparison.trueConflictCount).toBe(2)
   expect(primaryComparison.cohensKappa).toBeCloseTo(1 / 3, 6)
+  expect(primaryComparison.sensitivity).toBeCloseTo(2 / 3, 6)
+  expect(primaryComparison.specificity).toBeCloseTo(2 / 3, 6)
   expect(multiRaterPrimaryComparison.cohensKappa).toBeNull()
+  expect(multiRaterPrimaryComparison.sensitivity).toBeCloseTo(2 / 3, 6)
+  expect(multiRaterPrimaryComparison.specificity).toBeCloseTo(2 / 3, 6)
 })

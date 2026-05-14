@@ -590,10 +590,10 @@ Required scenarios:
    - human-review filters
    - export
    - full-text fetch selection
-6. identifier normalization tests cover exact boundary cases for DOI, PMID, PMCID source metadata, arXiv, bioRxiv, medRxiv, and trusted URL extraction
+6. identifier normalization tests cover exact boundary cases for DOI, PMID, PMCID source metadata, arXiv, bioRxiv and medRxiv URL forms, and trusted URL extraction
 7. malformed identifier tests prove invalid values stay out of `app.article_identifier` while raw values remain available in source or import-scoped metadata
 8. duplicate-in-one-batch tests prove equivalent normalized identifiers collapse before canonical article creation, including repeated DOI URL and bare DOI forms
-9. conflict tests prove rows are quarantined or unresolved when DOI, PMID, arXiv, bioRxiv, medRxiv, or URL-derived identifiers disagree across identifier kinds or point to different canonical articles
+9. conflict tests prove rows are quarantined or unresolved when DOI, PMID, arXiv, DOI-shaped bioRxiv or medRxiv, or URL-derived identifiers disagree across identifier kinds or point to different canonical articles
 
 ### Phase 1. Add the new schema foundation
 
@@ -758,7 +758,7 @@ After all reads and writes have moved:
 8. million-row source imports can exhaust DuckDB or process memory if staging, matching, or JSON payload handling is not chunked
 9. per-row matching queries can make a 50,000-article Covidence import or million-row corpus import unacceptably slow even if correctness is fixed
 10. bulk corpus imports can create excessive mart refresh work unless project-impact detection is explicit
-11. source batches can contain internal duplicates or strong identifier conflicts across DOI, PMID, arXiv, bioRxiv, and medRxiv values, so staging must collapse exact duplicates or quarantine conflicts before canonical writes and must not silently collapse disagreeing canonical matches
+11. source batches can contain internal duplicates or strong identifier conflicts across DOI, PMID, arXiv, and DOI-shaped bioRxiv or medRxiv values, so staging must collapse exact duplicates or quarantine conflicts before canonical writes and must not silently collapse disagreeing canonical matches
 12. legacy queued judgment jobs and saved execution snapshots can lose reproducibility if compatibility adapters for `importRoute` and `originalData` are removed before downstream consumers migrate
 13. retries that are not keyed by `source_kind`, `import_run_id`, `source_record_key`, and `source_record_hash` can create duplicate import records or conflicting canonical writes after an interrupted import
 
@@ -781,9 +781,244 @@ After all reads and writes have moved:
 - Make the centralized matching service emit stable structured attrs such as `articleId`, `identifierKind`, `matchStrategy`, and `matchConfidence` instead of ad-hoc text logs.
 - For high-volume imports, emit batch-level throughput attrs such as `importRunId`, `sourceKind`, `batchNumber`, `sourceRows`, `matchedRows`, `createdRows`, `unresolvedRows`, `duplicateSourceRows`, `failedRows`, `elapsedMs`, and `rowsPerSecond`.
 
+## Ralph Execution Readiness
+
+Current judgment: ready for a first Ralph loop only if converted from the story map below, not from the whole document verbatim.
+
+Direct whole-document conversion is not ready because the phase plan is intentionally broad and contains multi-week concerns that are too large for one Ralph iteration. A suitable `.prd.json` should use a flat root object with `name`, `branchName`, `description`, and `userStories`, and each `userStories[]` entry should come from one `US-*` item below.
+
+Recommended first Ralph PRD:
+
+1. Name: `Covidence Canonical Article Dedupe Foundation`
+2. Branch name: `ralph/covidence-dedupe-foundation`
+3. Scope: implement the Covidence-first vertical slice through scoped reads, marts, judgment snapshot compatibility, and client source-link alignment.
+4. Exclude from the first PRD: million-row broad-source staging, historical duplicate merge execution, full legacy column removal, and optional PMCID candidate lookup unless a first-loop story explicitly needs them.
+
+Ralph conversion rules:
+
+1. Convert only the `Ralph User Stories For First Loop` section into `.prd.json` for the first run.
+2. Preserve each `Depends on` list as `dependsOn` in JSON.
+3. Append only the universal quality gates plus the story's applicable conditional gates; do not append the full `Phase Acceptance Checks` list to every story.
+4. Keep `passes: false` and `notes: ""` for every story at conversion time.
+5. Split any story further before conversion if the implementer cannot describe the code change in two or three sentences.
+
+Deferred Ralph PRDs:
+
+1. Broad-source scale PRD: PubMed, Europe PMC/PPR, arXiv, bioRxiv, medRxiv, staging, checkpointing, leases, and million-row performance gates.
+2. Historical merge PRD: identifier backfill staging, `app.article_merge_map`, FK rewrites, durable non-FK references, and affected mart rebuilds.
+3. Legacy cleanup PRD: remove or fully deprecate article-level import fields after readers, queued work, snapshots, and outbox paths no longer depend on them.
+
+## Ralph User Stories For First Loop
+
+### US-001: Add Identifier Normalization Utilities
+
+Description: As a maintainer, I need shared identifier normalization so all importers match canonical articles with the same rules.
+
+Depends on: none
+
+Acceptance criteria:
+
+1. DOI, PMID, arXiv, bioRxiv URL, and medRxiv URL inputs normalize according to the normalization contract.
+2. DOI-shaped bioRxiv and medRxiv values are returned as DOI identifiers, not source-specific strong kinds.
+3. PMCID values are normalized only for metadata or candidate reporting and are not returned as strong identifiers.
+4. Malformed and disagreeing source-row identifiers are represented as rejected or conflicted outcomes with enough detail for quarantine.
+5. Targeted identifier normalization tests cover boundary, malformed, duplicate, and disagreement cases.
+
+### US-002: Add Canonical Identifier Schema
+
+Description: As a maintainer, I need a canonical identifier table and a non-unique legacy article id lookup surface so strong identifiers can drive matching instead of route-prefixed ids.
+
+Depends on: none
+
+Acceptance criteria:
+
+1. A DuckDB migration adds `app.article_identifier` with `article_id`, `kind`, `normalized_value`, source/provenance fields, timestamps, and a unique `(kind, normalized_value)` constraint.
+2. The schema migration removes the canonical uniqueness dependency on `app.article.article_id` and leaves only a compatibility lookup surface for legacy reads.
+3. New canonical article rows can have `NULL` legacy `article_id` values.
+4. `bun run db:mig` succeeds.
+
+### US-003: Expand Import-Scoped Article Records
+
+Description: As a maintainer, I need import-scoped article records to own source-facing ids, raw payloads, source-record identity, and retry idempotency.
+
+Depends on: US-002
+
+Acceptance criteria:
+
+1. `app.article_import_route` stores `external_article_id`, source kind, import metadata, match metadata, import-run reference, source record key, source record hash, and timestamps.
+2. The chosen current-membership or child-row design enforces source-record idempotency without relying only on `UNIQUE(article_id, import_route_id)`.
+3. Repeated source rows with the same key and hash are idempotent, changed hashes update or version the source row, and remaps to a different canonical article are quarantined.
+4. Migration and schema tests cover nullable legacy rows and the final uniqueness surface.
+
+### US-004: Add Canonical Field Resolver
+
+Description: As a maintainer, I need a deterministic resolver so live imports and historical merges update canonical article fields consistently.
+
+Depends on: US-001, US-002
+
+Acceptance criteria:
+
+1. The resolver implements source trust order, completeness tie-breaks, canonical URL precedence, publication-status non-downgrade, full-text hint union, and material scalar conflict warnings.
+2. Manual or operator-curated values win until explicitly cleared.
+3. Resolver tests prove reruns are stable and do not overwrite article fields by last-writer-wins behavior.
+
+### US-005: Add Batch Canonical Matcher
+
+Description: As a maintainer, I need one batch matcher that reuses or creates canonical articles from normalized candidates without per-row full-table lookups.
+
+Depends on: US-001, US-002, US-004
+
+Acceptance criteria:
+
+1. The matcher accepts bounded batches of normalized article candidates and returns explicit reuse, create, or unresolved outcomes.
+2. Duplicate identifiers inside one batch collapse before canonical writes.
+3. Multiple strong identifiers auto-merge only when every existing match points to the same canonical article.
+4. Identifier insert conflicts re-read the winning row and quarantine conflicting canonical article mappings.
+5. Query-shape tests or instrumentation prove strong matching uses `app.article_identifier` lookups instead of JSON scans or full `app.article` scans.
+
+### US-006: Wire Article Import Store To Canonical Matching
+
+Description: As a maintainer, I need the shared article import store to write canonical articles, identifiers, and scoped import records through the new matcher.
+
+Depends on: US-003, US-005
+
+Acceptance criteria:
+
+1. `articleImportStoreService` stops using `ON CONFLICT(article_id)`, `WHERE article_id IN (...)`, or route-prefixed legacy ids as the canonical match path.
+2. Each bounded write chunk commits canonical article creation, identifier insertion, and import-scoped record insertion atomically.
+3. Import-scoped records write source-facing ids to `external_article_id` and update unchanged repeated harvest rows only when `source_record_hash` changes.
+4. Targeted `articleImportStoreService` tests cover duplicate strong identifiers, retry idempotency, and source-record remap quarantine.
+
+### US-007: Refactor Covidence Import To Reuse Canonical Articles
+
+Description: As a reviewer, I want overlapping Covidence imports to reuse one canonical article while preserving project-specific Covidence metadata.
+
+Depends on: US-006
+
+Acceptance criteria:
+
+1. Covidence import no longer mints `covidence:<datasourceId>:<articleKey>` as canonical article identity.
+2. Two Covidence imports with overlapping DOI, PMID, arXiv, or DOI-shaped preprint values reuse one canonical article row.
+3. Study keys, record keys, article keys, notes, tags, stage membership, duplicate flags, and seeded human answer metadata are stored on import-scoped records.
+4. Covidence project-scope and seeded-human-answer lookups resolve through import-scoped records or the explicit compatibility adapter.
+5. Targeted Covidence import tests pass for duplicate package, overlapping package, and seeded-answer scenarios.
+
+### US-008: Align Covidence Prompt Reuse With Immutable Prompts
+
+Description: As a reviewer, I want repeated Covidence prompt definitions to reuse canonical prompt rows without archived-prompt hash conflicts.
+
+Depends on: none
+
+Acceptance criteria:
+
+1. Covidence prompt creation uses the same reuse semantics as `immutablePromptService`.
+2. Covidence section and criteria metadata remain on `app.project_prompt`.
+3. Archived prompt rows do not create content-hash conflicts.
+4. Targeted prompt reuse tests cover repeated and archived Covidence prompt definitions.
+
+### US-009: Add Scoped Article Read Compatibility
+
+Description: As a reviewer, I need review and article APIs to expose canonical article fields separately from project-scoped import metadata during the migration.
+
+Depends on: US-003, US-007
+
+Acceptance criteria:
+
+1. Shared query helpers expose canonical article fields, canonical metadata, selected `external_article_id`, selected import record id, and scoped import metadata without parsing `app.article.article_id`.
+2. Review list, review detail, human-review filters, warning, health, export, and batch article paths read scoped import metadata where relevant.
+3. Compatibility reads can derive legacy `importRoute` and `originalData` only through the adapter during the migration window.
+4. Targeted route and query tests pass for project-scoped article display, related-record lookup, filters, and export identity.
+
+### US-010: Preserve Judgment Snapshot And Queue Replay Context
+
+Description: As a maintainer, I need queued judgments and saved snapshots to remain reproducible while article import data moves to scoped records.
+
+Depends on: US-009
+
+Acceptance criteria:
+
+1. New snapshot and prompt payloads include canonical article fields plus the project-scoped external id and import metadata required by the prompt context.
+2. Existing queued work and saved snapshots can replay legacy `importRoute`, `originalData`, and article id fields through a compatibility adapter.
+3. Outbox import, completion journal, and prompt payload paths canonicalize article ids before writing new app-owned state.
+4. Targeted judgment queue, outbox, completion journal, and prompt payload tests cover old and new payload shapes.
+
+### US-011: Build Project-Scoped Review Serving Marts
+
+Description: As a reviewer, I need review marts to denormalize the selected project-scoped import record instead of article-global Covidence metadata.
+
+Depends on: US-009
+
+Acceptance criteria:
+
+1. Review serving builders select scoped import records by the documented deterministic policy.
+2. `article_external_id` comes from the selected project-scoped import record, and serving metadata combines canonical article metadata with scoped import metadata.
+3. Dirty state and refresh work are scoped to affected project and article ids instead of relying on article-global metadata readers.
+4. Incremental refresh and large rebuild produce the same serving shape for the same project scope.
+5. Targeted review mart, dirty refresh, and large-rebuild tests pass.
+
+### US-012: Build Project-Scoped Comparison Serving Marts
+
+Description: As a reviewer, I need comparison marts and judgment rows to distinguish canonical article ids from source-facing external ids.
+
+Depends on: US-009, US-011
+
+Acceptance criteria:
+
+1. Comparison serving builders select scoped import records by the documented deterministic policy for the comparison source scope.
+2. Comparison `article_external_id` comes from the selected import record instead of `app.article.article_id`.
+3. Comparison serving metadata combines canonical article metadata with scoped import metadata.
+4. Comparison judgment-row routes expose canonical ids for joins and external ids for display without inferring identity from legacy prefixes.
+5. Targeted comparison serving and judgment-row tests pass.
+
+### US-013: Align Client Source Identity And URL Helpers
+
+Description: As a reviewer, I want browser and desktop review surfaces to show source-specific ids and links without parsing legacy article id prefixes.
+
+Depends on: US-009, US-011, US-012
+
+Acceptance criteria:
+
+1. Client review surfaces display `article_external_id` from serving payloads for source-facing ids.
+2. `getArticleUrl` and related helpers build links from explicit canonical URL fields, scoped source URL fields, or identifier-derived URL helpers.
+3. Covidence badges, duplicate-study displays, study-conflict filters, and related-record views use project-scoped import metadata.
+4. Browser and desktop Covidence review flows render expected source ids, source links, and related metadata.
+
+### US-014: Verify First-Loop Integration
+
+Description: As a maintainer, I need an end-to-end check proving the first Ralph loop can ship without breaking browser, desktop, judgment, or mart behavior.
+
+Depends on: US-007, US-008, US-010, US-011, US-012, US-013
+
+Acceptance criteria:
+
+1. Re-importing the same Covidence package creates no additional canonical articles for repeated strong identifiers or repeated source rows.
+2. Importing an overlapping package from another source reuses Covidence-created canonical articles for DOI, PMID, arXiv, and DOI-shaped preprint matches.
+3. Project-scoped Covidence metadata, related-record views, filters, displayed external ids, and PDF fetch behavior still work in browser review flows.
+4. Desktop Covidence create and review flow still works for the shared serving payload shape.
+5. The first-loop targeted test set, `bun run db:mig`, `bun run lint`, `bun run build`, and `bun run desktop:build` pass or have documented, unrelated blockers.
+
 ## Quality Gates
 
-Pass/fail checks for this change:
+Use this section as the `.prd.json` quality-gate source. Do not append every detailed item in `Phase Acceptance Checks` to every Ralph story.
+
+Universal gates for every Ralph story:
+
+1. `bun run lint`
+2. Run the narrowest targeted `bun test ...` command for changed files, or document why no targeted test exists.
+
+Conditional gates:
+
+1. Schema stories: `bun run db:mig`
+2. Shared server/query/import stories: run the affected service or route tests named in `Phase Acceptance Checks`.
+3. Shared app or client stories: `bun run build`
+4. Desktop-impacting shared UI, runtime-path, or serving-payload stories: `bun run desktop:build`
+5. Browser review-flow stories: browser verify the Covidence review flow for source ids, source links, filters, related records, and PDF fetch behavior.
+6. Desktop review-flow stories: desktop verify the same Covidence create and review flow.
+7. High-volume import stories: run or add the relevant repo-native benchmark or integration test before marking the story done.
+
+## Phase Acceptance Checks
+
+Pass/fail checks for the overall change:
 
 1. `bun run db:mig`
 2. `bun test src/server/services/articleImportStoreService.test.ts`
@@ -835,7 +1070,7 @@ Pass/fail checks for this change:
 
 1. add the new regression tests before behavior changes
 2. run the targeted `bun test` commands before implementation and after each major phase, including `getAppQueryService`, human-review routes, and OLAP coverage when those layers change
-3. run targeted identifier normalization tests before accepting matcher or importer changes that depend on DOI, PMID, PMCID source metadata, arXiv, bioRxiv, medRxiv, or URL-derived identifiers
+3. run targeted identifier normalization tests before accepting matcher or importer changes that depend on DOI, PMID, PMCID source metadata, arXiv, DOI-shaped bioRxiv or medRxiv values, or URL-derived identifiers
 4. run comparison project serving and judgment-row tests when comparison routes, read paths, or serving marts change
 5. run `bun run db:mig` after each schema phase
 6. run `bun run build` for shared app changes

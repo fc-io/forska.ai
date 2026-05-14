@@ -1351,6 +1351,7 @@ const getComparisonProjectColumns = (
   compareWithHumans: boolean,
   humanJudgmentMode: HumanJudgmentMode,
   summarySourceProjectId: string | null,
+  summarySourceProject: ComparisonProjectSummarySourceProject | null,
   sourceProjects: ComparisonProjectLinkedSourceProject[],
   useSourceProjectLlmColumns: boolean,
 ) => {
@@ -1429,6 +1430,11 @@ const getComparisonProjectColumns = (
   })
   const llmColumns = sourceProjectLlmColumns.length > 0 ? sourceProjectLlmColumns : modelLlmColumns
   const humanSourceProject = summarySourceProjectId ? sourceProjectsById.get(summarySourceProjectId) : null
+  const humanSourceProjectName = summarySourceProject?.name ?? humanSourceProject?.name ?? null
+  const humanContentLabel =
+    humanJudgmentMode === 'summary' && summarySourceProject
+      ? getComparisonProjectContentLabel(summarySourceProject)
+      : null
   const humanColumns = compareWithHumans
     ? shownPromptRows.map<ComparisonProjectJudgmentsColumn>((promptRow) => {
         return {
@@ -1438,9 +1444,9 @@ const getComparisonProjectColumns = (
           promptLabel: promptRow.promptLabel,
           modelId: null,
           modelLabel: 'Human',
-          contentLabel: null,
+          contentLabel: humanContentLabel,
           sourceProjectId: humanJudgmentMode === 'summary' ? summarySourceProjectId : null,
-          sourceProjectName: humanJudgmentMode === 'summary' ? (humanSourceProject?.name ?? null) : null,
+          sourceProjectName: humanJudgmentMode === 'summary' ? humanSourceProjectName : null,
         }
       })
     : []
@@ -1587,6 +1593,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     normalizedComparisonProjectRow.compareWithHumans,
     normalizedComparisonProjectRow.humanJudgmentMode,
     normalizedComparisonProjectRow.summarySourceProjectId,
+    summarySourceProject,
     sourceProjects,
     useSourceProjectLlmColumns,
   )
@@ -2534,6 +2541,7 @@ const getComparisonProjectStatsResponse = async (
   scope: ComparisonProjectScope,
 ): Promise<ComparisonProjectStatsResponse> => {
   const comparisons = await getComparisonProjectStats({
+    allowConflictResolution: scope.allowConflictResolution,
     columns: scope.columns,
     comparisonProjectId: scope.id,
     isSummaryMode: getIsSummaryMode(scope),
