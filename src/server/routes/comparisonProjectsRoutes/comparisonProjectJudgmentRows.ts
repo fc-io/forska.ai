@@ -13,9 +13,11 @@ import {getJudgmentDisplayAnswer, hasAnyJudgmentAnswer} from '../../utils/judgme
 
 export type ComparisonProjectScopedArticle = {
   id: string
+  articleExternalId?: string | null
   articleTitle: string | null
   articleSummary: string | null
   articleCreatedAt: Date | null
+  canonicalArticleId?: string
 }
 
 export type ComparisonProjectJudgmentLlmRow = {
@@ -41,9 +43,11 @@ export type ComparisonProjectJudgmentHumanRow = {
 
 export type ComparisonProjectJudgmentRow = {
   id: string
+  articleExternalId: string | null
   articleTitle: string | null
   articleSummary: string | null
   articleCreatedAt: Date | null
+  canonicalArticleId: string
   cells: Record<string, string | null>
   hasConflict: boolean
 }
@@ -59,10 +63,12 @@ type ComparisonProjectScopedArticleQueryRunner = {queryJson: <T>(statement: stri
 type ComparisonProjectServingMemberRow = {articleId: string; generation: unknown; ordinal: unknown}
 
 type ComparisonProjectServingArticleRow = {
+  articleExternalId: string | null
   articleCreatedAt: unknown
   articleId: string
   articleSummary: string | null
   articleTitle: string | null
+  canonicalArticleId: string
   hasConflict: boolean
 }
 
@@ -273,6 +279,8 @@ export const getComparisonProjectScopedArticleBatchSql = (params: {
   return `
       SELECT
         id,
+        id AS canonicalArticleId,
+        article_id AS articleExternalId,
         article_title AS articleTitle,
         article_summary AS articleSummary,
         article_created_at AS articleCreatedAt
@@ -340,6 +348,8 @@ export const getComparisonProjectServingArticlesSql = (params: {
   return `
     SELECT
       article.article_id AS articleId,
+      article.article_id AS canonicalArticleId,
+      article.article_external_id AS articleExternalId,
       article.article_title AS articleTitle,
       article.article_summary AS articleSummary,
       article.article_created_at AS articleCreatedAt,
@@ -421,11 +431,13 @@ const getComparisonProjectServingJudgmentRows = (params: {
       return articleRow
         ? {
             articleCreatedAt: getDateValue(articleRow.articleCreatedAt),
+            articleExternalId: articleRow.articleExternalId,
             articleSummary: articleRow.articleSummary,
             articleTitle: articleRow.articleTitle,
+            canonicalArticleId: articleRow.canonicalArticleId,
             cells: cellsByArticle[memberRow.articleId] ?? {},
             hasConflict: articleRow.hasConflict,
-            id: memberRow.articleId,
+            id: articleRow.canonicalArticleId,
           }
         : null
     })
@@ -606,12 +618,14 @@ export const getComparisonProjectBatchRows = (params: ComparisonProjectBatchRows
 
       return hasArticleData && passesRowFilter && passesDifferenceFilter
         ? {
-            id: article.id,
+            articleExternalId: article.articleExternalId ?? null,
             articleTitle: article.articleTitle,
             articleSummary: article.articleSummary,
             articleCreatedAt: article.articleCreatedAt,
+            canonicalArticleId: article.canonicalArticleId ?? article.id,
             cells: articleCells,
             hasConflict: getComparisonProjectHasAnyConflict(articleCells, params.columns),
+            id: article.canonicalArticleId ?? article.id,
           }
         : null
     })

@@ -1,5 +1,9 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
+import {
+  getScopedArticleCombinedMetadataExpression,
+  getScopedArticleExternalIdExpression,
+} from './scopedArticleReadAdapter.ts'
 
 type ComparisonProjectServingRollupBuilderRunner = {run: (statement: string) => Promise<void>}
 
@@ -11,6 +15,7 @@ const comparisonArticleServingTable = 'mart.comparison_article_serving'
 const comparisonCellServingTable = 'mart.comparison_cell_serving'
 const comparisonFilterMemberTable = 'mart.comparison_filter_member'
 const comparisonFilterStatsTable = 'mart.comparison_filter_stats'
+const comparisonScopedImportAlias = 'selected_import'
 const summaryPromptId = 'summary'
 
 const getDefaultComparisonProjectServingRollupBuilderDependencies =
@@ -124,6 +129,88 @@ const getComparisonProjectScopeCtesSql = () => {
         scope_config.source_project_link_count = 0
         AND scope_config.import_route_link_count = 0
       )
+    )
+  `
+}
+
+const getComparisonProjectScopedImportSelectionCteSql = () => {
+  return `
+    comparison_article_import_candidate AS (
+      SELECT
+        0 AS scope_order,
+        cpsp.source_project_id,
+        air.article_id,
+        air.external_article_id,
+        air.import_metadata,
+        air.import_route_id,
+        air.id AS import_record_id
+      FROM app.comparison_project_source_project cpsp
+      INNER JOIN comparison_project cp ON cp.id = cpsp.comparison_project_id
+      INNER JOIN app.project_import_route pir ON pir.project_id = cpsp.source_project_id
+      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+
+      UNION ALL
+
+      SELECT
+        1 AS scope_order,
+        NULL AS source_project_id,
+        air.article_id,
+        air.external_article_id,
+        air.import_metadata,
+        air.import_route_id,
+        air.id AS import_record_id
+      FROM app.comparison_project_import_route cpir
+      INNER JOIN comparison_project cp ON cp.id = cpir.comparison_project_id
+      INNER JOIN app.article_import_route air ON air.import_route_id = cpir.import_route_id
+
+      UNION ALL
+
+      SELECT
+        2 AS scope_order,
+        NULL AS source_project_id,
+        air.article_id,
+        air.external_article_id,
+        air.import_metadata,
+        air.import_route_id,
+        air.id AS import_record_id
+      FROM app.article_import_route air
+    ),
+    selected_comparison_article_import AS (
+      SELECT
+        article_id,
+        external_article_id,
+        import_metadata
+      FROM (
+        SELECT
+          comparison_article_import_candidate.article_id,
+          comparison_article_import_candidate.external_article_id,
+          comparison_article_import_candidate.import_metadata,
+          ROW_NUMBER() OVER (
+            PARTITION BY comparison_article_import_candidate.article_id
+            ORDER BY
+              comparison_article_import_candidate.scope_order ASC,
+              comparison_article_import_candidate.source_project_id ASC NULLS LAST,
+              comparison_article_import_candidate.import_route_id ASC,
+              comparison_article_import_candidate.import_record_id ASC
+          ) AS selected_rank
+        FROM comparison_article_import_candidate
+        CROSS JOIN scope_config
+        WHERE (
+          scope_config.source_project_link_count > 0
+          AND comparison_article_import_candidate.scope_order = 0
+        )
+        OR (
+          scope_config.source_project_link_count = 0
+          AND scope_config.import_route_link_count > 0
+          AND comparison_article_import_candidate.scope_order = 1
+        )
+        OR (
+          scope_config.source_project_link_count = 0
+          AND scope_config.import_route_link_count = 0
+          AND comparison_article_import_candidate.scope_order = 2
+        )
+      ) ranked_comparison_article_import
+      WHERE selected_rank = 1
     )
   `
 }
@@ -391,6 +478,14 @@ const getComparisonProjectArticleServingInsertSql = ({
 }: ComparisonProjectServingRollupBuilderParams) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getComparisonProjectServingGenerationSql(generation)
+  const articleExternalIdExpression = getScopedArticleExternalIdExpression({
+    articleAlias: 'article',
+    scopedImportAlias: comparisonScopedImportAlias,
+  })
+  const sourceMetadataExpression = getScopedArticleCombinedMetadataExpression({
+    articleAlias: 'article',
+    scopedImportAlias: comparisonScopedImportAlias,
+  })
 
   return `
     INSERT INTO ${comparisonArticleServingTable} (
@@ -449,6 +544,7 @@ const getComparisonProjectArticleServingInsertSql = ({
       FROM comparison_project cp
     ),
     ${getComparisonProjectRequiredColumnCtesSql()},
+    ${getComparisonProjectScopedImportSelectionCteSql()},
     required_column_counts AS (
       SELECT
         CAST(COUNT(*) AS INTEGER) AS required_column_count,
@@ -603,13 +699,13 @@ const getComparisonProjectArticleServingInsertSql = ({
       article.article_updated_at,
       COALESCE(article.article_title, ''),
       article.article_summary,
-      article.article_id AS article_external_id,
-      json_extract_string(article.source_metadata, '$.journalTitle') AS journal_title,
+      ${articleExternalIdExpression} AS article_external_id,
+      json_extract_string(${sourceMetadataExpression}, '$.journalTitle') AS journal_title,
       article.url,
       article.full_text_pdf,
       article.full_text_fetched_at,
       article.full_text_conversion_status,
-      article.source_metadata,
+      ${sourceMetadataExpression},
       article.article_created_at AS row_sort_created_at,
       COALESCE(article.article_title, '') AS row_sort_title,
       article_rollup.article_id AS row_sort_article_id,
@@ -652,6 +748,8 @@ const getComparisonProjectArticleServingInsertSql = ({
       current_timestamp AS serving_updated_at
     FROM article_rollup
     INNER JOIN app.article article ON article.id = article_rollup.article_id
+    LEFT JOIN selected_comparison_article_import ${comparisonScopedImportAlias}
+      ON ${comparisonScopedImportAlias}.article_id = article_rollup.article_id
   `
 }
 
