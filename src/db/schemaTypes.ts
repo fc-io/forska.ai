@@ -1,4 +1,5 @@
 export type PublicationStatus = 'preprint' | 'submitted' | 'accepted' | 'published' | 'retracted'
+export type ArticleIdentifierKind = 'doi' | 'pmid' | 'arxiv'
 
 export type JudgmentsJobStatus =
   | 'not_started'
@@ -89,6 +90,18 @@ export type ArticleRecord = {
   originalData: unknown
   sourceMetadata: unknown
   publicationStatus: PublicationStatus | null
+}
+
+export type ArticleIdentifierRecord = {
+  id: string
+  articleId: string
+  kind: ArticleIdentifierKind
+  normalizedValue: string
+  source: string
+  provenance: unknown
+  isPrimary: boolean
+  createdAt: Date
+  updatedAt: Date
 }
 
 export type ModelRecord = {

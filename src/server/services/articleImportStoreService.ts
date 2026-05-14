@@ -223,9 +223,9 @@ const getExistingArticleIds = async (tx: ArticleImportStoreTx, articleIds: strin
     async (rowsPromise, articleIdChunk) => {
       const existingRows = await rowsPromise
       const chunkRows = await tx.queryJson<{articleId: string}>(`
-        SELECT article_id AS articleId
-        FROM app.article
-        WHERE article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})
+        SELECT legacy_article_id AS articleId
+        FROM app.article_legacy_id_lookup
+        WHERE legacy_article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})
       `)
 
       return [...existingRows, ...chunkRows]
@@ -256,7 +256,6 @@ const insertImportedArticlesInTx = async (params: {
       return params.tx.run(`
         INSERT INTO app.article (${columnNames.join(', ')})
         VALUES ${getArticleValues({includedKeys: params.includedKeys, includeInternalId: true, rows: rowChunk})}
-        ON CONFLICT(article_id) DO NOTHING
       `)
     })
   }, Promise.resolve())
@@ -267,9 +266,9 @@ const getUpsertedArticles = async (tx: ArticleImportStoreTx, articleIds: string[
     async (rowsPromise, articleIdChunk) => {
       const rows = await rowsPromise
       const chunkRows = await tx.queryJson<UpsertedArticleRow>(`
-        SELECT id, article_id AS articleId
-        FROM app.article
-        WHERE article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})
+        SELECT article_id AS id, legacy_article_id AS articleId
+        FROM app.article_legacy_id_lookup
+        WHERE legacy_article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})
       `)
 
       return [...rows, ...chunkRows]

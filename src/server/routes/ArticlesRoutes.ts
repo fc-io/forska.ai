@@ -1,7 +1,6 @@
 import {Elysia, t} from 'elysia'
 
 import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
-import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
@@ -10,9 +9,9 @@ import {
   getJsonValue,
   getProjectScopeClause,
   getQuotedStringList,
-  getSqlLiteral,
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
+import {storeImportedArticlesWithTx} from '../services/articleImportStoreService.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
 import {getPdfFetchJob, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -336,123 +335,25 @@ export const articlesRoutes = new Elysia()
     '/api/articles/batch-upsert',
     async ({body}) => {
       const {entries} = body
-      const normalizedEntries = entries.map((entry) => {
-        const doi = normalizeDoi(entry.doi) ?? getOriginalDoi(entry.original_data)
-        const sourceMetadata = getArticleSourceMetadata({
+      const rows = entries.map((entry) => {
+        return {
+          articleAuthors: entry.article_authors,
+          articleCreatedAt: new Date(entry.article_created_at),
           articleId: entry.article_id,
+          articleSummary: entry.article_summary,
+          articleTitle: entry.article_title,
+          articleUpdatedAt: new Date(entry.article_updated_at),
+          articleVersion: Number.parseInt(entry.article_version, 10),
+          arxivId: entry.arxiv_id ?? null,
+          doi: entry.doi ?? null,
           importRoute: entry.import_route,
-          originalData: entry.original_data,
-        })
-
-        return {...entry, doi, sourceMetadata}
+          originalData: entry.original_data as unknown,
+          pubmedId: entry.pubmed_id ?? null,
+        }
       })
 
       await getAppDatabaseService().transaction(async (tx) => {
-        const updatedAt = new Date()
-        const inserted = await tx.queryJson<{id: string; articleId: string | null}>(`
-          INSERT INTO app.article (
-            id,
-            article_id,
-            article_title,
-            article_summary,
-            article_authors,
-            article_updated_at,
-            article_created_at,
-            article_version,
-            arxiv_id,
-            doi,
-            pubmed_id,
-            import_route,
-            source_metadata,
-            updated_at
-          )
-          VALUES ${normalizedEntries
-            .map((entry) => {
-              return `(${[
-                crypto.randomUUID(),
-                entry.article_id,
-                entry.article_title,
-                entry.article_summary,
-                entry.article_authors,
-                new Date(entry.article_updated_at),
-                new Date(entry.article_created_at),
-                Number.parseInt(entry.article_version, 10),
-                entry.arxiv_id ?? null,
-                entry.doi ?? null,
-                entry.pubmed_id ?? null,
-                entry.import_route,
-                entry.sourceMetadata,
-                updatedAt,
-              ]
-                .map((value) => {
-                  return getSqlLiteral(value)
-                })
-                .join(', ')})`
-            })
-            .join(', ')}
-          ON CONFLICT(article_id) DO UPDATE SET
-            article_title = EXCLUDED.article_title,
-            article_summary = EXCLUDED.article_summary,
-            article_authors = EXCLUDED.article_authors,
-            article_updated_at = EXCLUDED.article_updated_at,
-            article_version = EXCLUDED.article_version,
-            arxiv_id = EXCLUDED.arxiv_id,
-            doi = EXCLUDED.doi,
-            pubmed_id = EXCLUDED.pubmed_id,
-            import_route = EXCLUDED.import_route,
-            source_metadata = EXCLUDED.source_metadata,
-            updated_at = ${getTimestampLiteral(updatedAt)}
-          RETURNING id, article_id AS articleId
-        `)
-
-        const articleIdToRoute = new Map(
-          normalizedEntries.map((entry) => {
-            return [entry.article_id, entry.import_route]
-          }),
-        )
-        const routeList = Array.from(
-          new Set(
-            normalizedEntries
-              .map((entry) => {
-                return entry.import_route
-              })
-              .filter((route): route is string => {
-                return typeof route === 'string' && route.trim() !== ''
-              }),
-          ),
-        )
-
-        if (routeList.length > 0 && inserted.length > 0) {
-          const importRoutes = await tx.queryJson<{id: string; route: string}>(`
-            SELECT id, route
-            FROM app.import_route
-            WHERE route IN (${getQuotedStringList(routeList).join(', ')})
-          `)
-          const routeMap = new Map(
-            importRoutes.map((route) => {
-              return [route.route, route.id]
-            }),
-          )
-          const linkValues = inserted
-            .map((article) => {
-              const route = article.articleId ? articleIdToRoute.get(article.articleId) : null
-              const importRouteId = typeof route === 'string' ? routeMap.get(route) : null
-              return importRouteId
-                ? `(${getQuotedStringList([crypto.randomUUID(), article.id, importRouteId]).join(', ')}, current_timestamp, current_timestamp)`
-                : null
-            })
-            .filter((value): value is string => {
-              return value !== null
-            })
-
-          if (linkValues.length > 0) {
-            await tx.run(`
-              INSERT INTO app.article_import_route (id, article_id, import_route_id, created_at, updated_at)
-              VALUES ${linkValues.join(', ')}
-              ON CONFLICT(article_id, import_route_id) DO NOTHING
-            `)
-          }
-        }
+        await storeImportedArticlesWithTx(tx, rows)
       })
 
       return {success: true, count: entries.length}
