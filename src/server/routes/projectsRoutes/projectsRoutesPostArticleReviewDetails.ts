@@ -11,7 +11,13 @@ import type {
 import {getArticleSourceMetadataValue} from '../../../utils/articleSourceMetadata.ts'
 import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getDateValue, getJsonValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
+import {
+  escapeSqlString,
+  getDateValue,
+  getJsonValue,
+  getQuotedStringList,
+  getSqlLiteral,
+} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {getScopedArticleSourceRecordLookupClause} from '../../services/scopedArticleReadAdapter.ts'
@@ -491,6 +497,7 @@ const getAssessmentValue = (row: {
 
 const getCovidenceRelatedRecords = async (params: {
   articleId: string
+  importRoute: string | null
   projectId: string
   selectedImportRouteId: string | null
   selectedSourceRecordKey: string | null
@@ -522,27 +529,79 @@ const getCovidenceRelatedRecords = async (params: {
     WITH project_route AS (
       SELECT import_route_id
       FROM app.project_import_route
-      WHERE project_id = '${escapeSqlString(params.projectId)}'
+      WHERE project_id = ${getSqlLiteral(params.projectId)}
+    ),
+    source_record_related_record AS (
+      SELECT
+        source_record.id AS id,
+        source_record.external_article_id AS articleExternalId,
+        article.article_title AS articleTitle,
+        article.arxiv_id AS arxivId,
+        article.biorxiv_id AS biorxivId,
+        article.doi AS doi,
+        article.medrxiv_id AS medrxivId,
+        article.pubmed_id AS pubmedId,
+        article.url AS url,
+        ${currentRecordClause} AS isCurrentRecord,
+        source_record.raw_payload AS rawPayload,
+        source_record.import_metadata AS sourceMetadata
+      FROM app.article_import_route_source_record source_record
+      INNER JOIN project_route ON project_route.import_route_id = source_record.import_route_id
+      INNER JOIN app.article article ON article.id = source_record.article_id
+      WHERE source_record.quarantined_at IS NULL
+        AND json_extract_string(source_record.import_metadata, '$.covidence.studyKey') = ${getSqlLiteral(params.studyKey)}
+    ),
+    legacy_related_record AS (
+      SELECT
+        article.id AS id,
+        article.article_id AS articleExternalId,
+        article.article_title AS articleTitle,
+        article.arxiv_id AS arxivId,
+        article.biorxiv_id AS biorxivId,
+        article.doi AS doi,
+        article.medrxiv_id AS medrxivId,
+        article.pubmed_id AS pubmedId,
+        article.url AS url,
+        ${getSqlLiteral(params.articleId)} = article.id AS isCurrentRecord,
+        article.original_data AS rawPayload,
+        article.source_metadata AS sourceMetadata
+      FROM app.article article
+      WHERE article.import_route = ${getSqlLiteral(params.importRoute)}
+        AND json_extract_string(article.source_metadata, '$.covidence.studyKey') = ${getSqlLiteral(params.studyKey)}
     )
     SELECT
-      source_record.id AS id,
-      source_record.external_article_id AS articleExternalId,
-      article.article_title AS articleTitle,
-      article.arxiv_id AS arxivId,
-      article.biorxiv_id AS biorxivId,
-      article.doi AS doi,
-      article.medrxiv_id AS medrxivId,
-      article.pubmed_id AS pubmedId,
-      article.url AS url,
-      ${currentRecordClause} AS isCurrentRecord,
-      source_record.raw_payload AS rawPayload,
-      source_record.import_metadata AS sourceMetadata
-    FROM app.article_import_route_source_record source_record
-    INNER JOIN project_route ON project_route.import_route_id = source_record.import_route_id
-    INNER JOIN app.article article ON article.id = source_record.article_id
-    WHERE source_record.quarantined_at IS NULL
-      AND json_extract_string(source_record.import_metadata, '$.covidence.studyKey') = '${escapeSqlString(params.studyKey)}'
-    ORDER BY article.article_title ASC, source_record.external_article_id ASC NULLS LAST, source_record.id ASC
+      id,
+      articleExternalId,
+      articleTitle,
+      arxivId,
+      biorxivId,
+      doi,
+      medrxivId,
+      pubmedId,
+      url,
+      isCurrentRecord,
+      rawPayload,
+      sourceMetadata
+    FROM source_record_related_record
+
+    UNION ALL
+
+    SELECT
+      id,
+      articleExternalId,
+      articleTitle,
+      arxivId,
+      biorxivId,
+      doi,
+      medrxivId,
+      pubmedId,
+      url,
+      isCurrentRecord,
+      rawPayload,
+      sourceMetadata
+    FROM legacy_related_record
+    WHERE NOT EXISTS (SELECT 1 FROM source_record_related_record)
+    ORDER BY articleTitle ASC, articleExternalId ASC NULLS LAST, id ASC
   `)
 
   return rows.map((row) => {
@@ -591,6 +650,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       const covidenceRelatedRecordsPromise = getCovidenceRelatedRecords({
         articleId,
+        importRoute: article.importRoute ?? null,
         projectId,
         selectedImportRouteId: article.selectedImportRouteId,
         selectedSourceRecordKey: article.selectedSourceRecordKey,

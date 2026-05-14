@@ -1081,11 +1081,13 @@ const getScopedImportRollupScript = () => {
     ])
 
     await insertRows('app.comparison_project', ['id', 'name', 'description', 'model_ids', 'compare_with_humans', 'human_judgment_mode', 'summary_source_project_id', 'use_title', 'use_abstract', 'use_fulltext', 'use_fulltext_no_images'], [
+      {id: 'comparison-no-scope', name: 'Comparison No Scope', description: null, model_ids: ['model-scoped-import'], compare_with_humans: false, human_judgment_mode: 'prompt', summary_source_project_id: null, use_title: true, use_abstract: true, use_fulltext: false, use_fulltext_no_images: false},
       {id: 'comparison-source-scope', name: 'Comparison Source Scope', description: null, model_ids: ['model-scoped-import'], compare_with_humans: false, human_judgment_mode: 'prompt', summary_source_project_id: null, use_title: true, use_abstract: true, use_fulltext: false, use_fulltext_no_images: false},
       {id: 'comparison-route-scope', name: 'Comparison Route Scope', description: null, model_ids: ['model-scoped-import'], compare_with_humans: false, human_judgment_mode: 'prompt', summary_source_project_id: null, use_title: true, use_abstract: true, use_fulltext: false, use_fulltext_no_images: false}
     ])
 
     await insertRows('app.comparison_project_prompt', ['id', 'comparison_project_id', 'prompt_id', 'prompt_order', 'criteria_disposition', 'criteria_section_key', 'criteria_section_label'], [
+      {id: 'comparison-no-scope-prompt', comparison_project_id: 'comparison-no-scope', prompt_id: 'prompt-scoped-import', prompt_order: 0, criteria_disposition: null, criteria_section_key: null, criteria_section_label: null},
       {id: 'comparison-source-prompt', comparison_project_id: 'comparison-source-scope', prompt_id: 'prompt-scoped-import', prompt_order: 0, criteria_disposition: null, criteria_section_key: null, criteria_section_label: null},
       {id: 'comparison-route-prompt', comparison_project_id: 'comparison-route-scope', prompt_id: 'prompt-scoped-import', prompt_order: 0, criteria_disposition: null, criteria_section_key: null, criteria_section_label: null}
     ])
@@ -1102,10 +1104,15 @@ const getScopedImportRollupScript = () => {
     ])
 
     await insertRows('mart.comparison_cell_serving', ['comparison_project_id', 'generation', 'article_id', 'column_id', 'column_order', 'kind', 'prompt_id', 'model_id', 'source_project_id', 'content_key', 'display_answer', 'normalized_answers', 'source_created_at', 'source_updated_at'], [
+      {comparison_project_id: 'comparison-no-scope', generation, article_id: 'canonical-scoped-import-article', column_id: 'llm:model-scoped-import:1100:prompt-scoped-import', column_order: 0, kind: 'llm', prompt_id: 'prompt-scoped-import', model_id: 'model-scoped-import', source_project_id: null, content_key: '1100', display_answer: 'yes', normalized_answers: ['yes'], source_created_at: '2026-08-01T02:00:00.000Z', source_updated_at: '2026-08-01T03:00:00.000Z'},
       {comparison_project_id: 'comparison-source-scope', generation, article_id: 'canonical-scoped-import-article', column_id: 'llm:model-scoped-import:1100:prompt-scoped-import', column_order: 0, kind: 'llm', prompt_id: 'prompt-scoped-import', model_id: 'model-scoped-import', source_project_id: null, content_key: '1100', display_answer: 'yes', normalized_answers: ['yes'], source_created_at: '2026-08-01T02:00:00.000Z', source_updated_at: '2026-08-01T03:00:00.000Z'},
       {comparison_project_id: 'comparison-route-scope', generation, article_id: 'canonical-scoped-import-article', column_id: 'llm:model-scoped-import:1100:prompt-scoped-import', column_order: 0, kind: 'llm', prompt_id: 'prompt-scoped-import', model_id: 'model-scoped-import', source_project_id: null, content_key: '1100', display_answer: 'yes', normalized_answers: ['yes'], source_created_at: '2026-08-01T02:00:00.000Z', source_updated_at: '2026-08-01T03:00:00.000Z'}
     ])
 
+    await builder.insertComparisonProjectServingRollups(
+      {comparisonProjectId: 'comparison-no-scope', generation},
+      {run: database.run}
+    )
     await builder.insertComparisonProjectServingRollups(
       {comparisonProjectId: 'comparison-source-scope', generation},
       {run: database.run}
@@ -1124,7 +1131,7 @@ const getScopedImportRollupScript = () => {
         json_extract_string(source_metadata, '$.scopedOnly') AS scopedOnly,
         json_extract_string(source_metadata, '$.same') AS sameValue
       FROM mart.comparison_article_serving
-      WHERE comparison_project_id IN ('comparison-source-scope', 'comparison-route-scope')
+      WHERE comparison_project_id IN ('comparison-no-scope', 'comparison-source-scope', 'comparison-route-scope')
       ORDER BY comparison_project_id ASC
     \`)
 
@@ -1247,6 +1254,14 @@ test('serving rollups use selected scoped import external ids and merged metadat
   const result = runScript<ScopedImportRollupResult>(getScopedImportRollupScript())
 
   expect(result.articleRows).toEqual([
+    {
+      articleExternalId: 'legacy-article-id',
+      canonicalOnly: 'canonical',
+      comparisonProjectId: 'comparison-no-scope',
+      journalTitle: 'Canonical Journal',
+      sameValue: 'canonical',
+      scopedOnly: null,
+    },
     {
       articleExternalId: 'external-route-a',
       canonicalOnly: 'canonical',

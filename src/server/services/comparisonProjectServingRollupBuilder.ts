@@ -162,18 +162,6 @@ const getComparisonProjectScopedImportSelectionCteSql = () => {
       FROM app.comparison_project_import_route cpir
       INNER JOIN comparison_project cp ON cp.id = cpir.comparison_project_id
       INNER JOIN app.article_import_route air ON air.import_route_id = cpir.import_route_id
-
-      UNION ALL
-
-      SELECT
-        2 AS scope_order,
-        NULL AS source_project_id,
-        air.article_id,
-        air.external_article_id,
-        air.import_metadata,
-        air.import_route_id,
-        air.id AS import_record_id
-      FROM app.article_import_route air
     ),
     selected_comparison_article_import AS (
       SELECT
@@ -203,11 +191,6 @@ const getComparisonProjectScopedImportSelectionCteSql = () => {
           scope_config.source_project_link_count = 0
           AND scope_config.import_route_link_count > 0
           AND comparison_article_import_candidate.scope_order = 1
-        )
-        OR (
-          scope_config.source_project_link_count = 0
-          AND scope_config.import_route_link_count = 0
-          AND comparison_article_import_candidate.scope_order = 2
         )
       ) ranked_comparison_article_import
       WHERE selected_rank = 1

@@ -39,16 +39,13 @@ const getArticleIdResolutionSql = (inputs: Array<Required<ArticleIdResolutionInp
     WITH article_id_input(input_order, article_id, project_id) AS (
       VALUES ${getResolutionInputValuesSql(inputs)}
     ),
-    ranked_article_id_resolution AS (
+    article_id_resolution_candidate AS (
       SELECT
         input_order,
         article_id,
         project_id,
         canonical_article_id,
-        ROW_NUMBER() OVER (
-          PARTITION BY input_order
-          ORDER BY resolution_rank ASC, canonical_article_id ASC
-        ) AS resolution_order
+        resolution_rank
       FROM (
         SELECT
           input.input_order,
@@ -101,16 +98,35 @@ const getArticleIdResolutionSql = (inputs: Array<Required<ArticleIdResolutionInp
         INNER JOIN app.article_import_route_source_record source_record
           ON source_record.import_route_id = project_import_route.import_route_id
          AND source_record.external_article_id = input.article_id
+         AND source_record.quarantined_at IS NULL
       ) article_id_resolution_candidates
+    ),
+    selected_article_id_resolution AS (
+      SELECT
+        candidate.input_order,
+        candidate.article_id,
+        candidate.project_id,
+        CASE
+          WHEN COUNT(DISTINCT candidate.canonical_article_id) = 1 THEN MIN(candidate.canonical_article_id)
+          ELSE NULL
+        END AS canonical_article_id
+      FROM article_id_resolution_candidate candidate
+      INNER JOIN (
+        SELECT input_order, MIN(resolution_rank) AS resolution_rank
+        FROM article_id_resolution_candidate
+        GROUP BY input_order
+      ) best_candidate
+        ON best_candidate.input_order = candidate.input_order
+       AND best_candidate.resolution_rank = candidate.resolution_rank
+      GROUP BY candidate.input_order, candidate.article_id, candidate.project_id
     )
     SELECT
       input.article_id AS articleId,
       resolution.canonical_article_id AS canonicalArticleId,
       input.project_id AS projectId
     FROM article_id_input input
-    LEFT JOIN ranked_article_id_resolution resolution
+    LEFT JOIN selected_article_id_resolution resolution
       ON resolution.input_order = input.input_order
-     AND resolution.resolution_order = 1
     ORDER BY input.input_order ASC
   `
 }
