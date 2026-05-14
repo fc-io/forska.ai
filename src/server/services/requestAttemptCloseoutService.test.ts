@@ -980,3 +980,338 @@ test('startup backfill cycle filters null request attempts, persists cursor, res
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
+
+const runBackfillSchedulerGuardCase = ({
+  canOwnDuckdb,
+  canRunMaintenance,
+}: {
+  canOwnDuckdb: boolean
+  canRunMaintenance: boolean
+}) => {
+  const runResult = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const schedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
+        const serviceModulePath = getModulePath('./src/server/services/requestAttemptCloseoutService.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const calls = []
+
+        void mock.module(serviceModulePath, () => {
+          return {
+            recordRequestAttemptCloseoutBackfillFailure: async () => {},
+            runRequestAttemptCloseoutBackfillCycle: async (input) => {
+              calls.push(input)
+              return {attempted: 0, batches: 0, completed: true, cursor: null, highWaterMark: null, mode: 'online', projected: 0, scanned: 0, skipped: true}
+            },
+          }
+        })
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => ${JSON.stringify(canOwnDuckdb)},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => ${JSON.stringify(canRunMaintenance)},
+          }
+        })
+        const {startRequestAttemptCloseoutBackfillScheduler} = await import(schedulerModulePath + '?guard=' + Date.now())
+        const stop = startRequestAttemptCloseoutBackfillScheduler({intervalMs: 1})
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20)
+        })
+        stop()
+
+        console.log(JSON.stringify({calls}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runResult.exitCode !== 0) {
+    throw new Error(
+      runResult.stderr.toString() || runResult.stdout.toString() || 'backfill scheduler guard test failed',
+    )
+  }
+
+  return JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {calls: Array<{batchSize: number}>}
+}
+
+test('request attempt closeout backfill scheduler requires a DuckDB-owning maintenance runtime', () => {
+  const allowed = runBackfillSchedulerGuardCase({canOwnDuckdb: true, canRunMaintenance: true})
+  const blockedWithoutOwner = runBackfillSchedulerGuardCase({canOwnDuckdb: false, canRunMaintenance: true})
+  const blockedWithoutMaintenance = runBackfillSchedulerGuardCase({canOwnDuckdb: true, canRunMaintenance: false})
+
+  expect(allowed.calls.length).toBeGreaterThan(0)
+  expect(
+    allowed.calls.every((call) => {
+      return call.batchSize === 1000
+    }),
+  ).toBe(true)
+  expect(blockedWithoutOwner.calls).toHaveLength(0)
+  expect(blockedWithoutMaintenance.calls).toHaveLength(0)
+})
+
+test('request attempt closeout backfill scheduler records a failed wake and retries the next wake', () => {
+  const duckdbPath = `/tmp/f1-request-attempt-closeout-scheduler-retry-${Date.now()}.duckdb`
+  const runResult = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const schedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
+        const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
+        const runtimeLogger = await import(runtimeLoggerModulePath)
+        const logs = []
+
+        void mock.module(runtimeLoggerModulePath, () => {
+          return {
+            ...runtimeLogger,
+            writeRuntimeFailureLogEvent: (input) => {
+              logs.push(input)
+            },
+          }
+        })
+
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+
+        const quote = (value) => {
+          return "'" + String(value).replaceAll("'", "''") + "'"
+        }
+        const timestampLiteral = (value) => {
+          return 'TIMESTAMPTZ ' + quote(value)
+        }
+        const jsonLiteral = (value) => {
+          return 'CAST(' + quote(JSON.stringify(value)) + ' AS JSON)'
+        }
+        const attempt = {
+          closeoutKind: 'token_use',
+          durableCloseoutRef: {id: 'durable-scheduler-retry', kind: 'token_use', jobId: 'job-scheduler-retry'},
+          finishedAt: '2026-05-04T00:00:01.700Z',
+          lifecycleState: 'completedRequest',
+          outcome: 'success',
+          providerKey: 'provider:scheduler-retry',
+          requestAttemptId: 'attempt-scheduler-retry',
+        }
+        const getState = async () => {
+          const [row] = await db.queryJson(\`
+            SELECT
+              completed_at IS NOT NULL AS completed,
+              last_error AS lastError,
+              scanned,
+              batches
+            FROM app.request_attempt_closeout_backfill_state
+            WHERE id = 'initial-token-use-closeout-backfill'
+          \`)
+
+          return row ?? null
+        }
+
+        await migrateDuckdb()
+        const db = getAppDatabaseService()
+        await db.run(\`
+          INSERT INTO app.token_use (
+            id, requests, total_prompt_tokens, total_completion_tokens, total_tokens,
+            started_at, finished_at, created_at, request_attempts_json
+          ) VALUES (
+            'token-use-scheduler-retry', 1, 1, 1, 1,
+            \${timestampLiteral('2026-05-04T00:00:01.100Z')},
+            \${timestampLiteral('2026-05-04T00:00:01.900Z')},
+            \${timestampLiteral('2026-05-04T00:00:01.000Z')},
+            \${jsonLiteral([attempt])}
+          )
+        \`)
+
+        const states = []
+        let failedBatch = false
+        let tokenUseBatchAttempts = 0
+        const runner = {
+          queryJson: async (statement) => {
+            if (
+              statement.includes('FROM app.token_use')
+              && statement.includes('ORDER BY created_at, id')
+              && statement.includes('LIMIT 1')
+            ) {
+              tokenUseBatchAttempts += 1
+
+              if (!failedBatch) {
+                failedBatch = true
+                throw new Error('scheduler retry failure')
+              }
+            }
+
+            return db.queryJson(statement)
+          },
+          run: async (statement) => {
+            await db.run(statement)
+
+            if (statement.includes('app.request_attempt_closeout_backfill_state')) {
+              states.push(await getState())
+            }
+          },
+        }
+
+        const {startRequestAttemptCloseoutBackfillScheduler} = await import(schedulerModulePath + '?retry=' + Date.now())
+        const stop = startRequestAttemptCloseoutBackfillScheduler({batchSize: 1, intervalMs: 1, runner})
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 80)
+        })
+        stop()
+
+        const closeoutRows = await db.queryJson(\`
+          SELECT request_attempt_id AS requestAttemptId
+          FROM app.request_attempt_closeout
+          ORDER BY request_attempt_id
+        \`)
+        const finalState = await getState()
+
+        console.log(JSON.stringify({closeoutRows, finalState, logs, states, tokenUseBatchAttempts}))
+        await db.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runResult.exitCode !== 0) {
+      throw new Error(
+        runResult.stderr.toString() || runResult.stdout.toString() || 'backfill scheduler retry test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {
+      closeoutRows: Array<{requestAttemptId: string}>
+      finalState: {batches: number | string; completed: boolean; lastError: string | null; scanned: number | string}
+      logs: Array<{event: string}>
+      states: Array<{lastError: string | null}>
+      tokenUseBatchAttempts: number
+    }
+
+    expect(result.tokenUseBatchAttempts).toBe(2)
+    expect(result.logs).toHaveLength(1)
+    expect(result.logs[0]?.event).toBe('request-attempt-closeout-backfill.scheduler.failure')
+    expect(
+      result.states.some((state) => {
+        return state.lastError === 'scheduler retry failure'
+      }),
+    ).toBe(true)
+    expect(result.finalState).toMatchObject({completed: true, lastError: null})
+    expect(Number(result.finalState.scanned)).toBe(1)
+    expect(Number(result.finalState.batches)).toBe(1)
+    expect(result.closeoutRows).toEqual([{requestAttemptId: 'attempt-scheduler-retry'}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('request attempt closeout backfill scheduler does not scan token use after completion', () => {
+  const duckdbPath = `/tmp/f1-request-attempt-closeout-scheduler-completed-${Date.now()}.duckdb`
+  const runResult = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const schedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
+
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+
+        await migrateDuckdb()
+        const db = getAppDatabaseService()
+        await db.run(\`
+          INSERT INTO app.request_attempt_closeout_backfill_state (
+            id,
+            completed_at,
+            last_run_at
+          ) VALUES (
+            'initial-token-use-closeout-backfill',
+            current_timestamp,
+            current_timestamp
+          )
+        \`)
+
+        let tokenUseQueryCount = 0
+        const runner = {
+          queryJson: async (statement) => {
+            if (statement.includes('FROM app.token_use')) {
+              tokenUseQueryCount += 1
+            }
+
+            return db.queryJson(statement)
+          },
+          run: async (statement) => {
+            await db.run(statement)
+          },
+        }
+
+        const {startRequestAttemptCloseoutBackfillScheduler} = await import(schedulerModulePath + '?completed=' + Date.now())
+        const stop = startRequestAttemptCloseoutBackfillScheduler({batchSize: 1, intervalMs: 1, runner})
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 30)
+        })
+        stop()
+
+        console.log(JSON.stringify({tokenUseQueryCount}))
+        await db.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runResult.exitCode !== 0) {
+      throw new Error(
+        runResult.stderr.toString() || runResult.stdout.toString() || 'backfill scheduler completed test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {tokenUseQueryCount: number}
+
+    expect(result.tokenUseQueryCount).toBe(0)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})

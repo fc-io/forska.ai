@@ -36,6 +36,7 @@ const runStartBackgroundWork = (role: 'api' | 'judge-worker' | 'maintenance-work
         const martRefreshDrainEligibilityModulePath = getModulePath('./src/server/utils/martRefreshDrainEligibility.ts')
         const projectMartLargeRebuildHeartbeatModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildHeartbeat.ts')
         const projectMartRefreshWorkerHeartbeatModulePath = getModulePath('./src/server/utils/projectMartRefreshWorkerHeartbeat.ts')
+        const requestAttemptCloseoutBackfillSchedulerModulePath = getModulePath('./src/server/utils/startRequestAttemptCloseoutBackfillScheduler.ts')
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
         const duckdbOwnerConnectionHeartbeatModulePath = getModulePath('./src/server/utils/duckdbOwnerConnectionHeartbeat.ts')
         const calls = []
@@ -59,6 +60,13 @@ const runStartBackgroundWork = (role: 'api' | 'judge-worker' | 'maintenance-work
           return {
             startProjectMartRefreshWorkerHeartbeat: () => {
               calls.push('projectMartRefreshWorkerHeartbeat')
+            },
+          }
+        })
+        void mock.module(requestAttemptCloseoutBackfillSchedulerModulePath, () => {
+          return {
+            startRequestAttemptCloseoutBackfillScheduler: () => {
+              calls.push('requestAttemptCloseoutBackfillScheduler')
             },
           }
         })
@@ -101,6 +109,7 @@ test('startBackgroundWork starts shared infrastructure and maintenance work for 
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
+    'requestAttemptCloseoutBackfillScheduler',
     'projectMartRefreshWorkerHeartbeat',
     'projectMartLargeRebuildHeartbeat',
   ])

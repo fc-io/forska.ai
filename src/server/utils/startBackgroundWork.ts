@@ -3,9 +3,16 @@ import {shouldCurrentRuntimeRunMartRefreshDrain} from './martRefreshDrainEligibi
 import {startProjectMartLargeRebuildHeartbeat} from './projectMartLargeRebuildHeartbeat.ts'
 import {startProjectMartRefreshWorkerHeartbeat} from './projectMartRefreshWorkerHeartbeat.ts'
 import {shouldCurrentServerRunMaintenanceLoops, startServerRuntimeRoleMonitor} from './serverRuntimeRole.ts'
+import {startRequestAttemptCloseoutBackfillScheduler} from './startRequestAttemptCloseoutBackfillScheduler.ts'
 
 const startMaintenanceBackgroundWork = () => {
-  if (!shouldCurrentServerRunMaintenanceLoops() || !shouldCurrentRuntimeRunMartRefreshDrain()) {
+  if (!shouldCurrentServerRunMaintenanceLoops()) {
+    return
+  }
+
+  startRequestAttemptCloseoutBackfillScheduler()
+
+  if (!shouldCurrentRuntimeRunMartRefreshDrain()) {
     return
   }
 
