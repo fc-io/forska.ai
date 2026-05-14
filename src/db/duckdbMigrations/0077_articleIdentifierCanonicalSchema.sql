@@ -176,17 +176,24 @@ CREATE TABLE app.article_identifier (
   UNIQUE(kind, normalized_value)
 );
 
-INSERT INTO app.article_identifier (
-  id,
-  article_id,
-  kind,
-  normalized_value,
-  source,
-  provenance,
-  is_primary,
-  created_at,
-  updated_at
-)
+CREATE TABLE IF NOT EXISTS app.article_canonical_match_quarantine (
+  id VARCHAR PRIMARY KEY,
+  source_kind VARCHAR,
+  import_run_id VARCHAR,
+  source_record_key VARCHAR,
+  source_record_hash VARCHAR,
+  requested_article_id VARCHAR,
+  winning_article_id VARCHAR,
+  kind VARCHAR NOT NULL CHECK (kind IN ('doi', 'pmid', 'arxiv')),
+  normalized_value VARCHAR NOT NULL,
+  reason VARCHAR NOT NULL,
+  metadata JSON,
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+);
+
+CREATE TEMP TABLE us002_valid_legacy_identifier AS
 WITH legacy_identifier_candidate AS (
   SELECT
     article.id || ':legacy-doi' AS id,
@@ -197,6 +204,8 @@ WITH legacy_identifier_candidate AS (
       '^doi:',
       ''
     ) AS normalized_value,
+    'doi' AS source_column,
+    article.doi AS raw_value,
     'legacy_article' AS source,
     json_object('sourceColumn', 'doi', 'rawValue', article.doi) AS provenance,
     TRUE AS is_primary,
@@ -217,6 +226,8 @@ WITH legacy_identifier_candidate AS (
       '^0+',
       ''
     ) AS normalized_value,
+    'pubmed_id' AS source_column,
+    article.pubmed_id AS raw_value,
     'legacy_article' AS source,
     json_object('sourceColumn', 'pubmed_id', 'rawValue', article.pubmed_id) AS provenance,
     TRUE AS is_primary,
@@ -245,6 +256,8 @@ WITH legacy_identifier_candidate AS (
       'v[0-9]+$|\.pdf$',
       ''
     ) AS normalized_value,
+    'arxiv_id' AS source_column,
+    article.arxiv_id AS raw_value,
     'legacy_article' AS source,
     json_object('sourceColumn', 'arxiv_id', 'rawValue', article.arxiv_id) AS provenance,
     TRUE AS is_primary,
@@ -271,11 +284,26 @@ WITH legacy_identifier_candidate AS (
         OR regexp_matches(normalized_value, '^[a-z][a-z-]+(\.[a-z-]+)?/[0-9]{7}$')
       )
     )
-), ranked_legacy_identifier AS (
+)
+SELECT *
+FROM valid_legacy_identifier;
+
+INSERT INTO app.article_identifier (
+  id,
+  article_id,
+  kind,
+  normalized_value,
+  source,
+  provenance,
+  is_primary,
+  created_at,
+  updated_at
+)
+WITH counted_legacy_identifier AS (
   SELECT
     *,
-    ROW_NUMBER() OVER (PARTITION BY kind, normalized_value ORDER BY article_id ASC) AS identifier_rank
-  FROM valid_legacy_identifier
+    COUNT(*) OVER (PARTITION BY kind, normalized_value) AS identifier_article_count
+  FROM us002_valid_legacy_identifier
 )
 SELECT
   id,
@@ -287,8 +315,48 @@ SELECT
   is_primary,
   created_at,
   updated_at
-FROM ranked_legacy_identifier
-WHERE identifier_rank = 1;
+FROM counted_legacy_identifier
+WHERE identifier_article_count = 1;
+
+INSERT INTO app.article_canonical_match_quarantine (
+  id,
+  source_kind,
+  source_record_key,
+  requested_article_id,
+  winning_article_id,
+  kind,
+  normalized_value,
+  reason,
+  metadata,
+  created_at,
+  updated_at
+)
+WITH counted_legacy_identifier AS (
+  SELECT
+    *,
+    COUNT(*) OVER (PARTITION BY kind, normalized_value) AS identifier_article_count
+  FROM us002_valid_legacy_identifier
+)
+SELECT
+  article_id || ':legacy-' || kind || '-duplicate-identifier' AS id,
+  'legacy_article' AS source_kind,
+  article_id AS source_record_key,
+  article_id AS requested_article_id,
+  NULL AS winning_article_id,
+  kind,
+  normalized_value,
+  'duplicate_legacy_identifier' AS reason,
+  json_object(
+    'sourceColumn', source_column,
+    'rawValue', raw_value,
+    'duplicateCount', identifier_article_count
+  ) AS metadata,
+  created_at,
+  updated_at
+FROM counted_legacy_identifier
+WHERE identifier_article_count > 1;
+
+DROP TABLE us002_valid_legacy_identifier;
 
 CREATE TABLE app.article_import_route (
   id VARCHAR PRIMARY KEY,

@@ -83,7 +83,20 @@ export const getScopedArticleImportSelectionCteSql = (params: ScopedArticleImpor
           air.source_record_key,
           ROW_NUMBER() OVER (
             PARTITION BY air.article_id
-            ORDER BY pir.project_id ASC, air.import_route_id ASC, air.id ASC
+            ORDER BY
+              CASE
+                WHEN json_extract_string(air.import_metadata, '$.covidence.hasDuplicateStudyRecords') = 'true'
+                  OR json_extract_string(air.import_metadata, '$.covidence.hasStudyDecisionConflict') = 'true'
+                  THEN 0
+                WHEN json_extract_string(air.import_metadata, '$.covidence.studyKey') IS NOT NULL THEN 1
+                WHEN air.import_metadata IS NOT NULL THEN 2
+                ELSE 3
+              END ASC,
+              CASE WHEN air.external_article_id IS NOT NULL THEN 0 ELSE 1 END ASC,
+              CASE WHEN air.raw_payload IS NOT NULL THEN 0 ELSE 1 END ASC,
+              pir.project_id ASC,
+              air.import_route_id ASC,
+              air.id ASC
           ) AS selected_rank
         FROM app.article_import_route air
         INNER JOIN app.project_import_route pir ON pir.import_route_id = air.import_route_id
