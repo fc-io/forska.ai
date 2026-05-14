@@ -577,6 +577,7 @@ const CompareProjectJudgmentsPage = () => {
               </div>
 
               <ComparisonProjectStatsCard
+                columns={orderedColumns()}
                 error={comparisonProjectStatsQuery.error}
                 isError={comparisonProjectStatsQuery.isError}
                 isLoading={comparisonProjectStatsQuery.isPending}
