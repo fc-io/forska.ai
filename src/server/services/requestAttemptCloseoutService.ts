@@ -56,7 +56,15 @@ export type RequestAttemptCloseoutOnlineRebuildInput = {
 export type RequestAttemptCloseoutRebuildInput =
   | RequestAttemptCloseoutMaintenanceRebuildInput
   | RequestAttemptCloseoutOnlineRebuildInput
-export type RequestAttemptCloseoutStartupBackfillResult = RequestAttemptCloseoutRebuildResult & {skipped: boolean}
+export type RequestAttemptCloseoutBackfillCycleInput = {
+  batchSize?: number
+  runner?: RequestAttemptCloseoutDatabaseRunner
+}
+export type RequestAttemptCloseoutStartupBackfillResult = RequestAttemptCloseoutRebuildResult & {
+  completed: boolean
+  cursor: RequestAttemptCloseoutRebuildCursor | null
+  skipped: boolean
+}
 
 type RequestAttemptCloseoutTokenUseRebuildRow = {
   createdAt: JudgmentRequestAttemptCloseoutProjectionInput['tokenUseCreatedAt']
@@ -73,9 +81,33 @@ type RequestAttemptCloseoutRebuildAccumulator = {
   scanned: number
 }
 
-type RequestAttemptCloseoutBackfillStateRow = {completedAt: unknown}
+type RequestAttemptCloseoutBackfillState = {
+  attempted: number
+  batches: number
+  completed: boolean
+  cursor: RequestAttemptCloseoutRebuildCursor | null
+  highWaterMark: RequestAttemptCloseoutRebuildCursor | null
+  projected: number
+  scanned: number
+}
+
+type RequestAttemptCloseoutBackfillStateRow = {
+  attempted: number | string | bigint
+  batches: number | string | bigint
+  completedAt: unknown
+  cursorCreatedAt: unknown
+  cursorTokenUseId: string | null
+  highWaterCreatedAt: unknown
+  highWaterTokenUseId: string | null
+  projected: number | string | bigint
+  scanned: number | string | bigint
+}
+
+type RequestAttemptCloseoutBackfillBatchResult = {processed: boolean; state: RequestAttemptCloseoutBackfillState}
 
 const requestAttemptCloseoutStartupBackfillStateId = 'initial-token-use-closeout-backfill'
+const requestAttemptCloseoutStartupBackfillMaxBatches = 5
+const requestAttemptCloseoutStartupBackfillMaxBatchSize = 1000
 
 const getJsonLiteral = (value: unknown): string => {
   return `CAST(${getSqlLiteral(JSON.stringify(value) ?? 'null')} AS JSON)`
@@ -260,6 +292,10 @@ const getPositiveBatchSize = (batchSize: number | undefined): number => {
   return Math.max(1, Math.floor(batchSize ?? 1000))
 }
 
+const getRequestAttemptCloseoutStartupBackfillBatchSize = (batchSize: number | undefined): number => {
+  return Math.min(requestAttemptCloseoutStartupBackfillMaxBatchSize, getPositiveBatchSize(batchSize))
+}
+
 const getRequestAttemptCloseoutRebuildCursor = (
   row: {createdAt: unknown; id: string} | undefined,
 ): RequestAttemptCloseoutRebuildCursor | null => {
@@ -289,14 +325,20 @@ const getRequestAttemptCloseoutRebuildHighWaterClause = (
     : 'TRUE'
 }
 
+const getRequestAttemptCloseoutRequestAttemptsJsonClause = (requestAttemptsJsonOnly: boolean): string => {
+  return requestAttemptsJsonOnly ? 'request_attempts_json IS NOT NULL' : 'TRUE'
+}
+
 const getRequestAttemptCloseoutTokenUseBatchSql = ({
   batchSize,
   cursor,
   highWaterMark,
+  requestAttemptsJsonOnly = false,
 }: {
   batchSize: number
   cursor: RequestAttemptCloseoutRebuildCursor | null
   highWaterMark: RequestAttemptCloseoutRebuildCursor | null
+  requestAttemptsJsonOnly?: boolean
 }): string => {
   return `
     SELECT
@@ -308,6 +350,7 @@ const getRequestAttemptCloseoutTokenUseBatchSql = ({
     FROM app.token_use
     WHERE ${getRequestAttemptCloseoutRebuildCursorClause(cursor)}
       AND ${getRequestAttemptCloseoutRebuildHighWaterClause(highWaterMark)}
+      AND ${getRequestAttemptCloseoutRequestAttemptsJsonClause(requestAttemptsJsonOnly)}
     ORDER BY created_at, id
     LIMIT ${batchSize}
   `
@@ -315,12 +358,14 @@ const getRequestAttemptCloseoutTokenUseBatchSql = ({
 
 const getRequestAttemptCloseoutHighWaterMark = async (
   runner: RequestAttemptCloseoutQueryRunner,
+  requestAttemptsJsonOnly = false,
 ): Promise<RequestAttemptCloseoutRebuildCursor | null> => {
   const [row] = await runner.queryJson<{createdAt: unknown; id: string}>(`
     SELECT
       created_at AS createdAt,
       id
     FROM app.token_use
+    WHERE ${getRequestAttemptCloseoutRequestAttemptsJsonClause(requestAttemptsJsonOnly)}
     ORDER BY created_at DESC, id DESC
     LIMIT 1
   `)
@@ -332,15 +377,17 @@ const getRequestAttemptCloseoutTokenUseRows = async ({
   batchSize,
   cursor,
   highWaterMark,
+  requestAttemptsJsonOnly = false,
   runner,
 }: {
   batchSize: number
   cursor: RequestAttemptCloseoutRebuildCursor | null
   highWaterMark: RequestAttemptCloseoutRebuildCursor | null
+  requestAttemptsJsonOnly?: boolean
   runner: RequestAttemptCloseoutQueryRunner
 }): Promise<RequestAttemptCloseoutTokenUseRebuildRow[]> => {
   return runner.queryJson<RequestAttemptCloseoutTokenUseRebuildRow>(
-    getRequestAttemptCloseoutTokenUseBatchSql({batchSize, cursor, highWaterMark}),
+    getRequestAttemptCloseoutTokenUseBatchSql({batchSize, cursor, highWaterMark, requestAttemptsJsonOnly}),
   )
 }
 
@@ -508,59 +555,141 @@ const rebuildRequestAttemptCloseoutsOnline = async (
   }
 }
 
-const getSkippedRequestAttemptCloseoutStartupBackfillResult = (): RequestAttemptCloseoutStartupBackfillResult => {
-  return {attempted: 0, batches: 0, highWaterMark: null, mode: 'online', projected: 0, scanned: 0, skipped: true}
+const getRequestAttemptCloseoutBackfillNumber = (value: number | string | bigint | undefined): number => {
+  const numberValue = Number(value ?? 0)
+
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : 0
 }
 
-const getRequestAttemptCloseoutBackfillCompleted = async (
+const getInitialRequestAttemptCloseoutBackfillState = (): RequestAttemptCloseoutBackfillState => {
+  return {attempted: 0, batches: 0, completed: false, cursor: null, highWaterMark: null, projected: 0, scanned: 0}
+}
+
+const getRequestAttemptCloseoutBackfillStateCursor = ({
+  createdAt,
+  id,
+}: {
+  createdAt: unknown
+  id: string | null | undefined
+}): RequestAttemptCloseoutRebuildCursor | null => {
+  return getRequestAttemptCloseoutRebuildCursor({createdAt, id: id ?? ''})
+}
+
+const getRequestAttemptCloseoutBackfillStateFromRow = (
+  row: RequestAttemptCloseoutBackfillStateRow | undefined,
+): RequestAttemptCloseoutBackfillState => {
+  return row
+    ? {
+        attempted: getRequestAttemptCloseoutBackfillNumber(row.attempted),
+        batches: getRequestAttemptCloseoutBackfillNumber(row.batches),
+        completed: Boolean(getDateValue(row.completedAt)),
+        cursor: getRequestAttemptCloseoutBackfillStateCursor({
+          createdAt: row.cursorCreatedAt,
+          id: row.cursorTokenUseId,
+        }),
+        highWaterMark: getRequestAttemptCloseoutBackfillStateCursor({
+          createdAt: row.highWaterCreatedAt,
+          id: row.highWaterTokenUseId,
+        }),
+        projected: getRequestAttemptCloseoutBackfillNumber(row.projected),
+        scanned: getRequestAttemptCloseoutBackfillNumber(row.scanned),
+      }
+    : getInitialRequestAttemptCloseoutBackfillState()
+}
+
+const getRequestAttemptCloseoutBackfillState = async (
   runner: RequestAttemptCloseoutQueryRunner,
-): Promise<boolean> => {
+): Promise<RequestAttemptCloseoutBackfillState> => {
   const [row] = await runner.queryJson<RequestAttemptCloseoutBackfillStateRow>(`
-    SELECT completed_at AS completedAt
+    SELECT
+      high_water_created_at AS highWaterCreatedAt,
+      high_water_token_use_id AS highWaterTokenUseId,
+      cursor_created_at AS cursorCreatedAt,
+      cursor_token_use_id AS cursorTokenUseId,
+      scanned,
+      attempted,
+      projected,
+      batches,
+      completed_at AS completedAt
     FROM app.request_attempt_closeout_backfill_state
     WHERE id = ${getSqlLiteral(requestAttemptCloseoutStartupBackfillStateId)}
     LIMIT 1
   `)
 
-  return Boolean(getDateValue(row?.completedAt))
+  return getRequestAttemptCloseoutBackfillStateFromRow(row)
 }
 
-const recordRequestAttemptCloseoutBackfillCompleted = async ({
-  result,
-  runner,
+const getRequestAttemptCloseoutStartupBackfillResult = ({
+  skipped,
+  state,
 }: {
-  result: RequestAttemptCloseoutRebuildResult
+  skipped: boolean
+  state: RequestAttemptCloseoutBackfillState
+}): RequestAttemptCloseoutStartupBackfillResult => {
+  return {
+    attempted: state.attempted,
+    batches: state.batches,
+    completed: state.completed,
+    cursor: state.cursor,
+    highWaterMark: state.highWaterMark,
+    mode: 'online',
+    projected: state.projected,
+    scanned: state.scanned,
+    skipped,
+  }
+}
+
+const recordRequestAttemptCloseoutBackfillState = async ({
+  runner,
+  state,
+}: {
   runner: RequestAttemptCloseoutRunner
+  state: RequestAttemptCloseoutBackfillState
 }): Promise<void> => {
   await runner.run(`
     INSERT INTO app.request_attempt_closeout_backfill_state (
       id,
       high_water_created_at,
       high_water_token_use_id,
+      cursor_created_at,
+      cursor_token_use_id,
       scanned,
       attempted,
       projected,
       batches,
+      started_at,
+      last_run_at,
+      last_error,
       completed_at,
       updated_at
     ) VALUES (
       ${getSqlLiteral(requestAttemptCloseoutStartupBackfillStateId)},
-      ${result.highWaterMark ? getTimestampSqlLiteral(result.highWaterMark.createdAt) : 'NULL'},
-      ${getSqlLiteral(result.highWaterMark?.id ?? null)},
-      ${getSqlLiteral(result.scanned)},
-      ${getSqlLiteral(result.attempted)},
-      ${getSqlLiteral(result.projected)},
-      ${getSqlLiteral(result.batches)},
+      ${state.highWaterMark ? getTimestampSqlLiteral(state.highWaterMark.createdAt) : 'NULL'},
+      ${getSqlLiteral(state.highWaterMark?.id ?? null)},
+      ${state.cursor ? getTimestampSqlLiteral(state.cursor.createdAt) : 'NULL'},
+      ${getSqlLiteral(state.cursor?.id ?? null)},
+      ${getSqlLiteral(state.scanned)},
+      ${getSqlLiteral(state.attempted)},
+      ${getSqlLiteral(state.projected)},
+      ${getSqlLiteral(state.batches)},
       current_timestamp,
+      current_timestamp,
+      NULL,
+      ${state.completed ? 'current_timestamp' : 'NULL'},
       current_timestamp
     )
     ON CONFLICT(id) DO UPDATE SET
       high_water_created_at = EXCLUDED.high_water_created_at,
       high_water_token_use_id = EXCLUDED.high_water_token_use_id,
+      cursor_created_at = EXCLUDED.cursor_created_at,
+      cursor_token_use_id = EXCLUDED.cursor_token_use_id,
       scanned = EXCLUDED.scanned,
       attempted = EXCLUDED.attempted,
       projected = EXCLUDED.projected,
       batches = EXCLUDED.batches,
+      started_at = COALESCE(started_at, EXCLUDED.started_at),
+      last_run_at = EXCLUDED.last_run_at,
+      last_error = NULL,
       completed_at = EXCLUDED.completed_at,
       updated_at = EXCLUDED.updated_at
   `)
@@ -582,6 +711,149 @@ const upsertRequestAttemptCloseoutRowsIntoTable = async ({
   }
 
   return {attempted: rows.length, projected: earliestRows.length}
+}
+
+const getRequestAttemptCloseoutBackfillBatchCompleted = ({
+  batchSize,
+  cursor,
+  highWaterMark,
+  rowCount,
+}: {
+  batchSize: number
+  cursor: RequestAttemptCloseoutRebuildCursor | null
+  highWaterMark: RequestAttemptCloseoutRebuildCursor | null
+  rowCount: number
+}): boolean => {
+  const reachedHighWater =
+    cursor && highWaterMark && cursor.createdAt === highWaterMark.createdAt && cursor.id === highWaterMark.id
+
+  return rowCount === 0 || rowCount < batchSize || Boolean(reachedHighWater)
+}
+
+const getNextRequestAttemptCloseoutBackfillState = ({
+  batchSize,
+  cursor,
+  projection,
+  state,
+  tokenUseRows,
+}: {
+  batchSize: number
+  cursor: RequestAttemptCloseoutRebuildCursor | null
+  projection: RequestAttemptCloseoutProjectionResult
+  state: RequestAttemptCloseoutBackfillState
+  tokenUseRows: RequestAttemptCloseoutTokenUseRebuildRow[]
+}): RequestAttemptCloseoutBackfillState => {
+  return {
+    ...state,
+    attempted: state.attempted + projection.attempted,
+    batches: state.batches + (tokenUseRows.length > 0 ? 1 : 0),
+    completed: getRequestAttemptCloseoutBackfillBatchCompleted({
+      batchSize,
+      cursor,
+      highWaterMark: state.highWaterMark,
+      rowCount: tokenUseRows.length,
+    }),
+    cursor: cursor ?? state.cursor,
+    projected: state.projected + projection.projected,
+    scanned: state.scanned + tokenUseRows.length,
+  }
+}
+
+const runRequestAttemptCloseoutBackfillBatchTx = async ({
+  batchSize,
+  runner,
+  state,
+}: {
+  batchSize: number
+  runner: RequestAttemptCloseoutQueryRunner
+  state: RequestAttemptCloseoutBackfillState
+}): Promise<RequestAttemptCloseoutBackfillBatchResult> => {
+  const tokenUseRows = await getRequestAttemptCloseoutTokenUseRows({
+    batchSize,
+    cursor: state.cursor,
+    highWaterMark: state.highWaterMark,
+    requestAttemptsJsonOnly: true,
+    runner,
+  })
+  const rows = getRequestAttemptCloseoutRowsForTokenUseRows(tokenUseRows)
+  const projection = await upsertRequestAttemptCloseoutRowsIntoTable({
+    rows,
+    runner,
+    targetTableName: 'app.request_attempt_closeout',
+  })
+  const nextState = getNextRequestAttemptCloseoutBackfillState({
+    batchSize,
+    cursor: getRequestAttemptCloseoutRebuildCursor(tokenUseRows.at(-1)),
+    projection,
+    state,
+    tokenUseRows,
+  })
+
+  await recordRequestAttemptCloseoutBackfillState({runner, state: nextState})
+
+  return {processed: tokenUseRows.length > 0, state: nextState}
+}
+
+const runRequestAttemptCloseoutBackfillBatch = async ({
+  batchSize,
+  runner,
+  state,
+}: {
+  batchSize: number
+  runner: RequestAttemptCloseoutDatabaseRunner
+  state: RequestAttemptCloseoutBackfillState
+}): Promise<RequestAttemptCloseoutBackfillBatchResult> => {
+  return runner.transaction
+    ? runner.transaction((tx) => {
+        return runRequestAttemptCloseoutBackfillBatchTx({batchSize, runner: tx, state})
+      })
+    : runRequestAttemptCloseoutBackfillBatchTx({batchSize, runner, state})
+}
+
+const runRequestAttemptCloseoutBackfillBatches = async ({
+  batchSize,
+  batchesRemaining,
+  runner,
+  state,
+}: {
+  batchSize: number
+  batchesRemaining: number
+  runner: RequestAttemptCloseoutDatabaseRunner
+  state: RequestAttemptCloseoutBackfillState
+}): Promise<RequestAttemptCloseoutBackfillState> => {
+  if (state.completed || batchesRemaining <= 0) {
+    return state
+  }
+
+  const result = await runRequestAttemptCloseoutBackfillBatch({batchSize, runner, state})
+
+  return result.processed && !result.state.completed
+    ? runRequestAttemptCloseoutBackfillBatches({
+        batchSize,
+        batchesRemaining: batchesRemaining - 1,
+        runner,
+        state: result.state,
+      })
+    : result.state
+}
+
+const getRequestAttemptCloseoutBackfillStateForCycle = async ({
+  runner,
+  state,
+}: {
+  runner: RequestAttemptCloseoutQueryRunner
+  state: RequestAttemptCloseoutBackfillState
+}): Promise<RequestAttemptCloseoutBackfillState> => {
+  if (state.completed || state.highWaterMark) {
+    return state
+  }
+
+  const highWaterMark = await getRequestAttemptCloseoutHighWaterMark(runner, true)
+  const nextState = {...state, completed: !highWaterMark, highWaterMark}
+
+  await recordRequestAttemptCloseoutBackfillState({runner, state: nextState})
+
+  return nextState
 }
 
 export const upsertRequestAttemptCloseoutRows = async ({
@@ -612,20 +884,24 @@ export const rebuildRequestAttemptCloseouts = async (
     : rebuildRequestAttemptCloseoutsOnline(input)
 }
 
-export const backfillRequestAttemptCloseoutsOnStartup = async ({
+export const runRequestAttemptCloseoutBackfillCycle = async ({
   batchSize,
   runner = getAppDatabaseService() as RequestAttemptCloseoutDatabaseRunner,
-}: {
-  batchSize?: number
-  runner?: RequestAttemptCloseoutDatabaseRunner
-} = {}): Promise<RequestAttemptCloseoutStartupBackfillResult> => {
-  if (await getRequestAttemptCloseoutBackfillCompleted(runner)) {
-    return getSkippedRequestAttemptCloseoutStartupBackfillResult()
-  }
+}: RequestAttemptCloseoutBackfillCycleInput = {}): Promise<RequestAttemptCloseoutStartupBackfillResult> => {
+  const initialState = await getRequestAttemptCloseoutBackfillState(runner)
+  const state = await getRequestAttemptCloseoutBackfillStateForCycle({runner, state: initialState})
+  const nextState = await runRequestAttemptCloseoutBackfillBatches({
+    batchSize: getRequestAttemptCloseoutStartupBackfillBatchSize(batchSize),
+    batchesRemaining: requestAttemptCloseoutStartupBackfillMaxBatches,
+    runner,
+    state,
+  })
 
-  const result = await rebuildRequestAttemptCloseoutsOnline({batchSize, mode: 'online', runner})
+  return getRequestAttemptCloseoutStartupBackfillResult({skipped: initialState.completed, state: nextState})
+}
 
-  await recordRequestAttemptCloseoutBackfillCompleted({result, runner})
-
-  return {...result, skipped: false}
+export const backfillRequestAttemptCloseoutsOnStartup = async (
+  input: RequestAttemptCloseoutBackfillCycleInput = {},
+): Promise<RequestAttemptCloseoutStartupBackfillResult> => {
+  return runRequestAttemptCloseoutBackfillCycle(input)
 }
