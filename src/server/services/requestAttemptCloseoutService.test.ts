@@ -656,3 +656,327 @@ test('online rebuild stages to a high-water mark and preserves live writer close
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
+
+test('startup backfill cycle filters null request attempts, persists cursor, resumes, and completes', () => {
+  const duckdbPath = `/tmp/f1-request-attempt-closeout-backfill-cycle-${Date.now()}.duckdb`
+  const runResult = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {runRequestAttemptCloseoutBackfillCycle} = await import('./src/server/services/requestAttemptCloseoutService.ts')
+
+        const quote = (value) => {
+          return "'" + String(value).replaceAll("'", "''") + "'"
+        }
+        const timestampLiteral = (value) => {
+          return 'TIMESTAMPTZ ' + quote(value)
+        }
+        const jsonLiteral = (value) => {
+          return 'CAST(' + quote(JSON.stringify(value)) + ' AS JSON)'
+        }
+        const nullableJsonLiteral = (value) => {
+          return value === null ? 'NULL' : jsonLiteral(value)
+        }
+        const pad = (value) => {
+          return String(value).padStart(3, '0')
+        }
+        const getSecond = (value) => {
+          return String(value).padStart(2, '0')
+        }
+        const getAttempt = (value) => {
+          return {
+            closeoutKind: 'token_use',
+            durableCloseoutRef: {
+              id: 'durable-backfill-' + pad(value),
+              kind: 'token_use',
+              jobId: 'job-backfill-cycle',
+            },
+            finishedAt: '2026-05-03T00:00:' + getSecond(value) + '.700Z',
+            lifecycleState: 'completedRequest',
+            outcome: 'success',
+            providerKey: 'provider:backfill-cycle',
+            requestAttemptId: 'attempt-backfill-' + pad(value),
+          }
+        }
+        const getEligibleRow = (value) => {
+          return {
+            createdAt: '2026-05-03T00:00:' + getSecond(value) + '.000Z',
+            finishedAt: '2026-05-03T00:00:' + getSecond(value) + '.900Z',
+            id: 'token-use-backfill-' + pad(value),
+            requestAttempts: [getAttempt(value)],
+            startedAt: '2026-05-03T00:00:' + getSecond(value) + '.100Z',
+          }
+        }
+        const getInsertTokenUseSql = ({createdAt, finishedAt, id, requestAttempts, startedAt}) => {
+          return [
+            'INSERT INTO app.token_use (',
+            'id, requests, total_prompt_tokens, total_completion_tokens, total_tokens, ',
+            'started_at, finished_at, created_at, request_attempts_json',
+            ') VALUES (',
+            quote(id),
+            ', 1, 1, 1, 1, ',
+            timestampLiteral(startedAt),
+            ', ',
+            timestampLiteral(finishedAt),
+            ', ',
+            timestampLiteral(createdAt),
+            ', ',
+            nullableJsonLiteral(requestAttempts),
+            ')',
+          ].join('')
+        }
+        const insertTokenUse = async (input) => {
+          await db.run(getInsertTokenUseSql(input))
+        }
+        const insertRows = async (rows) => {
+          const [row, ...remaining] = rows
+
+          return row ? insertTokenUse(row).then(() => insertRows(remaining)) : Promise.resolve()
+        }
+        const getState = async () => {
+          const [row] = await db.queryJson(\`
+            SELECT
+              high_water_token_use_id AS highWaterTokenUseId,
+              cursor_token_use_id AS cursorTokenUseId,
+              scanned,
+              attempted,
+              projected,
+              batches,
+              completed_at IS NOT NULL AS completed,
+              last_run_at IS NOT NULL AS hasLastRunAt,
+              last_error AS lastError
+            FROM app.request_attempt_closeout_backfill_state
+            WHERE id = 'initial-token-use-closeout-backfill'
+          \`)
+
+          return row ?? null
+        }
+        const getCloseoutRows = async () => {
+          return db.queryJson(\`
+            SELECT request_attempt_id AS requestAttemptId, token_use_id AS tokenUseId
+            FROM app.request_attempt_closeout
+            ORDER BY request_attempt_id
+          \`)
+        }
+        const batchSql = []
+        const persistedStates = []
+        const runner = {
+          queryJson: async (statement) => {
+            if (statement.includes('FROM app.token_use') && statement.includes('LIMIT 2')) {
+              batchSql.push(statement.replace(/\\s+/g, ' ').trim())
+            }
+
+            return db.queryJson(statement)
+          },
+          run: async (statement) => {
+            await db.run(statement)
+
+            if (statement.includes('INSERT INTO app.request_attempt_closeout_backfill_state')) {
+              persistedStates.push(await getState())
+            }
+          },
+        }
+
+        await migrateDuckdb()
+        const db = getAppDatabaseService()
+        await insertRows([
+          {
+            createdAt: '2026-05-03T00:00:00.500Z',
+            finishedAt: '2026-05-03T00:00:00.900Z',
+            id: 'token-use-backfill-null-a',
+            requestAttempts: null,
+            startedAt: '2026-05-03T00:00:00.100Z',
+          },
+          ...Array.from({length: 12}, (_, index) => {
+            return getEligibleRow(index + 1)
+          }),
+          {
+            createdAt: '2026-05-03T00:00:05.500Z',
+            finishedAt: '2026-05-03T00:00:05.900Z',
+            id: 'token-use-backfill-null-b',
+            requestAttempts: null,
+            startedAt: '2026-05-03T00:00:05.100Z',
+          },
+          {
+            createdAt: '2026-05-03T00:00:13.000Z',
+            finishedAt: '2026-05-03T00:00:13.900Z',
+            id: 'token-use-backfill-null-c',
+            requestAttempts: null,
+            startedAt: '2026-05-03T00:00:13.100Z',
+          },
+        ])
+        await db.run(
+          "INSERT INTO app.request_attempt_closeout_backfill_state (id, last_error) VALUES ('initial-token-use-closeout-backfill', 'previous failure')",
+        )
+
+        const firstResult = await runRequestAttemptCloseoutBackfillCycle({batchSize: 2, runner})
+        const stateAfterFirst = await getState()
+        const persistedAfterFirst = persistedStates.filter((state) => {
+          return state?.cursorTokenUseId
+        }).length
+
+        await insertTokenUse({
+          createdAt: '2026-05-03T00:00:20.000Z',
+          finishedAt: '2026-05-03T00:00:20.900Z',
+          id: 'token-use-backfill-live-after-highwater',
+          requestAttempts: [getAttempt(99)],
+          startedAt: '2026-05-03T00:00:20.100Z',
+        })
+
+        const secondResult = await runRequestAttemptCloseoutBackfillCycle({batchSize: 2, runner})
+        const stateAfterSecond = await getState()
+        const thirdResult = await runRequestAttemptCloseoutBackfillCycle({batchSize: 2, runner})
+        const rows = await getCloseoutRows()
+        const persistedAfterSecond = persistedStates.filter((state) => {
+          return state?.cursorTokenUseId
+        }).length
+
+        console.log(
+          JSON.stringify({
+            batchSql,
+            firstResult,
+            persistedAfterFirst,
+            persistedAfterSecond,
+            rows,
+            secondResult,
+            stateAfterFirst,
+            stateAfterSecond,
+            thirdResult,
+          }),
+        )
+        await db.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runResult.exitCode !== 0) {
+      throw new Error(
+        runResult.stderr.toString() || runResult.stdout.toString() || 'backfill closeout cycle test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {
+      batchSql: string[]
+      firstResult: {
+        attempted: number
+        batches: number
+        completed: boolean
+        cursor: {id: string} | null
+        highWaterMark: {id: string} | null
+        projected: number
+        scanned: number
+        skipped: boolean
+      }
+      persistedAfterFirst: number
+      persistedAfterSecond: number
+      rows: Array<{requestAttemptId: string; tokenUseId: string}>
+      secondResult: {
+        attempted: number
+        batches: number
+        completed: boolean
+        cursor: {id: string} | null
+        highWaterMark: {id: string} | null
+        projected: number
+        scanned: number
+        skipped: boolean
+      }
+      stateAfterFirst: {
+        attempted: number | string
+        batches: number | string
+        completed: boolean
+        cursorTokenUseId: string
+        hasLastRunAt: boolean
+        highWaterTokenUseId: string
+        lastError: string | null
+        projected: number | string
+        scanned: number | string
+      } | null
+      stateAfterSecond: {
+        attempted: number | string
+        batches: number | string
+        completed: boolean
+        cursorTokenUseId: string
+        hasLastRunAt: boolean
+        highWaterTokenUseId: string
+        lastError: string | null
+        projected: number | string
+        scanned: number | string
+      } | null
+      thirdResult: {completed: boolean; skipped: boolean}
+    }
+
+    expect(result.batchSql[0]).toContain('request_attempts_json IS NOT NULL')
+    expect(result.batchSql[0]).toContain('ORDER BY created_at, id')
+    expect(result.batchSql[0]).toContain('LIMIT 2')
+    expect(
+      result.batchSql.some((statement) => {
+        return statement.includes("id > 'token-use-backfill-010'")
+      }),
+    ).toBe(true)
+    expect(result.firstResult).toMatchObject({
+      attempted: 10,
+      batches: 5,
+      completed: false,
+      cursor: {id: 'token-use-backfill-010'},
+      highWaterMark: {id: 'token-use-backfill-012'},
+      projected: 10,
+      scanned: 10,
+      skipped: false,
+    })
+    expect(result.persistedAfterFirst).toBe(5)
+    expect(result.stateAfterFirst).toMatchObject({
+      completed: false,
+      cursorTokenUseId: 'token-use-backfill-010',
+      hasLastRunAt: true,
+      highWaterTokenUseId: 'token-use-backfill-012',
+      lastError: null,
+    })
+    expect(Number(result.stateAfterFirst?.scanned ?? 0)).toBe(10)
+    expect(result.secondResult).toMatchObject({
+      attempted: 12,
+      batches: 6,
+      completed: true,
+      cursor: {id: 'token-use-backfill-012'},
+      highWaterMark: {id: 'token-use-backfill-012'},
+      projected: 12,
+      scanned: 12,
+      skipped: false,
+    })
+    expect(result.persistedAfterSecond).toBe(6)
+    expect(result.stateAfterSecond).toMatchObject({
+      completed: true,
+      cursorTokenUseId: 'token-use-backfill-012',
+      hasLastRunAt: true,
+      highWaterTokenUseId: 'token-use-backfill-012',
+      lastError: null,
+    })
+    expect(Number(result.stateAfterSecond?.attempted ?? 0)).toBe(12)
+    expect(Number(result.stateAfterSecond?.projected ?? 0)).toBe(12)
+    expect(Number(result.stateAfterSecond?.scanned ?? 0)).toBe(12)
+    expect(result.rows).toHaveLength(12)
+    expect(
+      result.rows.some((row) => {
+        return row.tokenUseId === 'token-use-backfill-live-after-highwater'
+      }),
+    ).toBe(false)
+    expect(result.thirdResult).toMatchObject({completed: true, skipped: true})
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
