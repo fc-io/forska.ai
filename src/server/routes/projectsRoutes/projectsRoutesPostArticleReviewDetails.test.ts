@@ -200,6 +200,119 @@ test('project review details falls back to app judgments when detail mart rows a
   ).toEqual(['judgment-fallback'])
 })
 
+test('project review details resolves covidence related records through scoped source records', async () => {
+  fullArticlesByIdsRef.current = async () => {
+    return [
+      {
+        articleTitle: 'Article 1',
+        id: 'article-1',
+        selectedImportRouteId: 'route-1',
+        selectedSourceRecordKey: 'record-1',
+        sourceMetadata: {covidence: {studyKey: 'study-1'}},
+      },
+    ]
+  }
+  projectReviewConfigRef.current = async () => {
+    return {
+      humanJudgmentMode: 'prompt',
+      modelId: 'model-1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
+  }
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('FROM app.article_import_route_source_record source_record')
+      ? [
+          {
+            articleExternalId: 'covidence:1',
+            articleTitle: 'Article 1',
+            id: 'source-record-1',
+            isCurrentRecord: true,
+            sourceMetadata: {
+              covidence: {
+                articleKey: 'covidence:1',
+                articleKeySource: 'covidence',
+                covidenceIds: ['1'],
+                duplicateStudyRecordCount: 2,
+                hasDuplicateStudyRecords: true,
+                hasStudyDecisionConflict: true,
+                isSeededHumanJudgmentAnswered: true,
+                mode: null,
+                recordKey: 'record-1',
+                recordKeySource: 'covidence',
+                referenceIds: ['ref-1'],
+                seededHumanJudgmentAnswer: 'yes',
+                sourceFileNames: [],
+                stageMembership: {all: true, excluded: false, full_text: false, included: true, irrelevant: false},
+                studyKey: 'study-1',
+                studyKeySource: 'covidence',
+                tags: [],
+              },
+              fullTextLinks: [],
+              isPreprint: false,
+              journalTitle: null,
+              preprintHostLabel: null,
+              preprintSource: null,
+            },
+          },
+          {
+            articleExternalId: 'covidence:2',
+            articleTitle: 'Article 1 duplicate',
+            id: 'source-record-2',
+            isCurrentRecord: false,
+            sourceMetadata: {
+              covidence: {
+                articleKey: 'covidence:2',
+                articleKeySource: 'covidence',
+                covidenceIds: ['2'],
+                duplicateStudyRecordCount: 2,
+                hasDuplicateStudyRecords: true,
+                hasStudyDecisionConflict: true,
+                isSeededHumanJudgmentAnswered: true,
+                mode: null,
+                recordKey: 'record-2',
+                recordKeySource: 'covidence',
+                referenceIds: ['ref-2'],
+                seededHumanJudgmentAnswer: 'no',
+                sourceFileNames: [],
+                stageMembership: {all: true, excluded: true, full_text: false, included: false, irrelevant: false},
+                studyKey: 'study-1',
+                studyKeySource: 'covidence',
+                tags: [],
+              },
+              fullTextLinks: [],
+              isPreprint: false,
+              journalTitle: null,
+              preprintHostLabel: null,
+              preprintSource: null,
+            },
+          },
+        ]
+      : statement.includes('FROM app.project_prompt pp')
+        ? [getPromptRow('prompt-1', 0)]
+        : statement.includes('FROM app.project_mart_refresh_state')
+          ? [getFreshnessRow()]
+          : []
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    covidenceRelatedRecords: Array<{articleExternalId: string | null; id: string; isCurrentRecord: boolean}>
+  }
+
+  expect(response.status).toBe(200)
+  expect(
+    body.covidenceRelatedRecords.map((record) => {
+      return {articleExternalId: record.articleExternalId, id: record.id, isCurrentRecord: record.isCurrentRecord}
+    }),
+  ).toEqual([
+    {articleExternalId: 'covidence:1', id: 'source-record-1', isCurrentRecord: true},
+    {articleExternalId: 'covidence:2', id: 'source-record-2', isCurrentRecord: false},
+  ])
+})
+
 test('project review details merges detail mart rows, raw fallback rows, and placeholders', async () => {
   let detailStatement = ''
   const getDetailRows = (statement: string) => {

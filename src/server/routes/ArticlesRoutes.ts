@@ -14,6 +14,11 @@ import {
 import {storeImportedArticlesWithTx} from '../services/articleImportStoreService.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
 import {getPdfFetchJob, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
+import {
+  getScopedArticleImportJoinSql,
+  getScopedArticleImportSelectionCteSql,
+  getScopedArticleMetadataExpression,
+} from '../services/scopedArticleReadAdapter.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type ArticleJudgmentRow = {
@@ -236,6 +241,9 @@ export const articlesRoutes = new Elysia()
         }
         return projectBounds.dateTo ?? toDate
       })()
+      const scopedArticleImportCte = getScopedArticleImportSelectionCteSql({projectIds: [body.projectId]})
+      const scopedArticleImportJoin = getScopedArticleImportJoinSql({articleIdExpression: 'a.id'})
+      const scopedMetadataExpression = getScopedArticleMetadataExpression({articleAlias: 'a'})
 
       const whereParts = [
         getProjectScopeClause({
@@ -247,18 +255,20 @@ export const articlesRoutes = new Elysia()
         effectiveToDate ? `a.article_created_at <= ${getTimestampLiteral(effectiveToDate)}` : null,
         searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
         body.hasDuplicateStudyRecords
-          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'"
+          ? `LOWER(COALESCE(json_extract_string(${scopedMetadataExpression}, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'`
           : null,
         body.hasStudyDecisionConflict
-          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'"
+          ? `LOWER(COALESCE(json_extract_string(${scopedMetadataExpression}, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'`
           : null,
       ].filter((part): part is string => {
         return part !== null
       })
 
       const idRows = await getAppDatabaseService().queryJson<{id: string}>(`
+        WITH ${scopedArticleImportCte}
         SELECT a.id AS id
         FROM app.article a
+        ${scopedArticleImportJoin}
         WHERE ${whereParts.join(' AND ')}
       `)
 

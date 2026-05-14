@@ -9,6 +9,11 @@ import {
   getTimestampLiteral,
 } from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {
+  getScopedArticleImportJoinSql,
+  getScopedArticleImportSelectionCteSql,
+  getScopedArticleMetadataExpression,
+} from '../../services/scopedArticleReadAdapter.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
@@ -26,6 +31,9 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
       const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
       const projectConfig = await getAppQueryService().getProjectReviewConfig(body.projectId)
       const humanJudgmentMode = projectConfig?.humanJudgmentMode ?? 'prompt'
+      const scopedArticleImportCte = getScopedArticleImportSelectionCteSql({projectIds: [body.projectId]})
+      const scopedArticleImportJoin = getScopedArticleImportJoinSql({articleIdExpression: 'a.id'})
+      const scopedMetadataExpression = getScopedArticleMetadataExpression({articleAlias: 'a'})
 
       const buildArticleWhereParts = (candidateArticleIds: string[]) => {
         return [
@@ -41,10 +49,10 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
           toDate ? `a.article_created_at <= ${getTimestampLiteral(toDate)}` : null,
           searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
           body.hasDuplicateStudyRecords
-            ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'"
+            ? `LOWER(COALESCE(json_extract_string(${scopedMetadataExpression}, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'`
             : null,
           body.hasStudyDecisionConflict
-            ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'"
+            ? `LOWER(COALESCE(json_extract_string(${scopedMetadataExpression}, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'`
             : null,
         ].filter((part): part is string => {
           return part !== null
@@ -81,13 +89,17 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         const whereParts = buildArticleWhereParts(candidateArticleIds)
         const [countRows, pageArticleIdRows] = await Promise.all([
           getAppDatabaseService().queryJson<{count: number}>(`
+            WITH ${scopedArticleImportCte}
             SELECT COUNT(*) AS count
             FROM app.article a
+            ${scopedArticleImportJoin}
             WHERE ${whereParts.join(' AND ')}
           `),
           getAppDatabaseService().queryJson<{id: string}>(`
+            WITH ${scopedArticleImportCte}
             SELECT a.id AS id
             FROM app.article a
+            ${scopedArticleImportJoin}
             WHERE ${whereParts.join(' AND ')}
             ORDER BY a.article_created_at DESC NULLS LAST, a.id ASC
             LIMIT ${limit}
@@ -100,7 +112,7 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
           return row.id
         })
         const [articlesWithHumanJudgments, allHumanSummaryJudgments] = await Promise.all([
-          getAppQueryService().getFullArticlesByIds(articleIds),
+          getAppQueryService().getFullArticlesByIds(articleIds, {projectId: body.projectId}),
           articleIds.length > 0
             ? getAppDatabaseService().queryJson<{
                 id: string
@@ -238,13 +250,17 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
 
       const [countRows, pageArticleIdRows] = await Promise.all([
         getAppDatabaseService().queryJson<{count: number}>(`
+          WITH ${scopedArticleImportCte}
           SELECT COUNT(*) AS count
           FROM app.article a
+          ${scopedArticleImportJoin}
           WHERE ${whereParts.join(' AND ')}
         `),
         getAppDatabaseService().queryJson<{id: string}>(`
+          WITH ${scopedArticleImportCte}
           SELECT a.id AS id
           FROM app.article a
+          ${scopedArticleImportJoin}
           WHERE ${whereParts.join(' AND ')}
           ORDER BY a.article_created_at DESC NULLS LAST, a.id ASC
           LIMIT ${limit}
@@ -256,7 +272,9 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
       const articleIds = pageArticleIdRows.map((row) => {
         return row.id
       })
-      const articlesWithHumanJudgments = await getAppQueryService().getFullArticlesByIds(articleIds)
+      const articlesWithHumanJudgments = await getAppQueryService().getFullArticlesByIds(articleIds, {
+        projectId: body.projectId,
+      })
       const allHumanJudgments =
         articleIds.length > 0
           ? await getAppDatabaseService().queryJson<{

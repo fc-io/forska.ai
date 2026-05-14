@@ -4,6 +4,12 @@ import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.t
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
+import {
+  getScopedArticleExternalIdExpression,
+  getScopedArticleImportJoinSql,
+  getScopedArticleImportSelectionCteSql,
+  getScopedArticleMetadataExpression,
+} from '../services/scopedArticleReadAdapter.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -341,6 +347,13 @@ export const projectExportRoutes = new Elysia()
         return row.importRouteId
       })
       const scopeCondition = getSourceScopeClause(sourceProjectIds, allImportRouteIds) ?? 'FALSE'
+      const scopedArticleImportCte = getScopedArticleImportSelectionCteSql({
+        importRouteIds: allImportRouteIds,
+        projectIds: sourceProjectIds,
+      })
+      const scopedArticleImportJoin = getScopedArticleImportJoinSql({articleIdExpression: 'a.id'})
+      const scopedArticleExternalIdExpression = getScopedArticleExternalIdExpression({articleAlias: 'a'})
+      const scopedArticleMetadataExpression = getScopedArticleMetadataExpression({articleAlias: 'a'})
 
       let filteredArticleIds: string[] | null = null
       if (hasPromptFilters && hasPrompts && judgmentConfigCondition) {
@@ -520,21 +533,23 @@ export const projectExportRoutes = new Elysia()
                   explanation: string | null
                   quotes: unknown
                 }>(`
+                  WITH ${scopedArticleImportCte}
                   SELECT
                     a.id AS articleId,
-                    a.article_id AS articleExternalId,
+                    ${scopedArticleExternalIdExpression} AS articleExternalId,
                     a.article_title AS articleTitle,
                     a.article_summary AS articleSummary,
                     TO_JSON(a.article_authors) AS articleAuthors,
                     a.article_created_at AS articleCreatedAt,
                     a.article_updated_at AS articleUpdatedAt,
-                    ${includeJournal ? 'TO_JSON(a.source_metadata)' : 'NULL'} AS articleSourceMetadata,
+                    ${includeJournal ? `TO_JSON(${scopedArticleMetadataExpression})` : 'NULL'} AS articleSourceMetadata,
                     j.prompt_id AS promptId,
                     j.answered_original AS answeredOriginal,
                     TO_JSON(j.answered_original_as_array) AS answeredOriginalAsArray,
                     j.explanation AS explanation,
                     TO_JSON(j.quotes) AS quotes
                   FROM app.article a
+                  ${scopedArticleImportJoin}
                   INNER JOIN app.judgment j ON ${getAndClause([
                     'j.article_id = a.id',
                     `j.prompt_id IN (${getQuotedStringList(promptIds).join(', ')})`,
@@ -690,16 +705,18 @@ export const projectExportRoutes = new Elysia()
                   articleUpdatedAt: unknown
                   articleSourceMetadata: unknown
                 }>(`
+                  WITH ${scopedArticleImportCte}
                   SELECT
                     a.id AS articleId,
-                    a.article_id AS articleExternalId,
+                    ${scopedArticleExternalIdExpression} AS articleExternalId,
                     a.article_title AS articleTitle,
                     a.article_summary AS articleSummary,
                     TO_JSON(a.article_authors) AS articleAuthors,
                     a.article_created_at AS articleCreatedAt,
                     a.article_updated_at AS articleUpdatedAt,
-                    ${includeJournal ? 'TO_JSON(a.source_metadata)' : 'NULL'} AS articleSourceMetadata
+                    ${includeJournal ? `TO_JSON(${scopedArticleMetadataExpression})` : 'NULL'} AS articleSourceMetadata
                   FROM app.article a
+                  ${scopedArticleImportJoin}
                   WHERE ${finalScopeCondition}
                   ORDER BY a.id ASC
                   LIMIT ${BATCH_SIZE}
