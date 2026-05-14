@@ -228,6 +228,23 @@ export type ArticleImportRouteSourceRecord = {
   updatedAt: Date
 }
 
+export type ArticleCanonicalMatchQuarantineRecord = {
+  id: string
+  sourceKind: string | null
+  importRunId: string | null
+  sourceRecordKey: string | null
+  sourceRecordHash: string | null
+  requestedArticleId: string | null
+  winningArticleId: string | null
+  kind: ArticleIdentifierKind
+  normalizedValue: string
+  reason: string
+  metadata: unknown
+  resolvedAt: Date | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 export type ComparisonProjectRecord = {
   id: string
   name: string
