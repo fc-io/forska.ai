@@ -312,13 +312,27 @@ export const articlesRoutes = new Elysia()
       articleTitle: string
       articleAuthors: unknown
       articleCreatedAt: unknown
+      arxivId: string | null
+      biorxivId: string | null
+      doi: string | null
+      medrxivId: string | null
+      pubmedId: string | null
+      sourceMetadata: unknown
+      url: string | null
     }>(`
       SELECT
         id,
         article_id AS articleId,
         article_title AS articleTitle,
         TO_JSON(article_authors) AS articleAuthors,
-        article_created_at AS articleCreatedAt
+        article_created_at AS articleCreatedAt,
+        arxiv_id AS arxivId,
+        biorxiv_id AS biorxivId,
+        doi,
+        medrxiv_id AS medrxivId,
+        pubmed_id AS pubmedId,
+        TO_JSON(source_metadata) AS sourceMetadata,
+        url
       FROM app.article
       ORDER BY COALESCE(article_created_at, created_at) DESC, created_at DESC, id DESC
       LIMIT 200
@@ -336,6 +350,13 @@ export const articlesRoutes = new Elysia()
             })
           : null,
         articleCreatedAt: getDateValue(row.articleCreatedAt),
+        arxivId: row.arxivId,
+        biorxivId: row.biorxivId,
+        doi: row.doi,
+        medrxivId: row.medrxivId,
+        pubmedId: row.pubmedId,
+        sourceMetadata: getJsonValue(row.sourceMetadata),
+        url: row.url,
       }
     })
 
@@ -343,7 +364,7 @@ export const articlesRoutes = new Elysia()
   })
   .post(
     '/api/articles/batch-upsert',
-    async ({body}) => {
+    async ({body, set}) => {
       const {entries} = body
       const rows = entries.map((entry) => {
         return {
@@ -362,11 +383,21 @@ export const articlesRoutes = new Elysia()
         }
       })
 
+      let importRefreshState = {acceptedCount: 0, importRouteIds: [] as string[]}
+
       await getAppDatabaseService().transaction(async (tx) => {
-        await storeImportedArticlesWithTx(tx, rows)
+        importRefreshState = await storeImportedArticlesWithTx(tx, rows)
       })
 
-      return {success: true, count: entries.length}
+      if (importRefreshState.acceptedCount !== entries.length) {
+        set.status = 400
+        return {
+          data: null,
+          error: `Failed to upsert all articles: accepted ${importRefreshState.acceptedCount} of ${entries.length} entries`,
+        }
+      }
+
+      return {success: true, count: importRefreshState.acceptedCount}
     },
     {
       body: t.Object({
