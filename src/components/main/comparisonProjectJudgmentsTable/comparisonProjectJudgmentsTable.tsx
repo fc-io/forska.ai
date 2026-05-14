@@ -154,13 +154,13 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                             >
                               <select
                                 value=""
-                                disabled={getIsConflictResolutionPending(row.id)}
+                                disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
                                 class="w-full max-w-[180px] rounded-md border border-gray-300 bg-white px-2 py-1 text-sm disabled:opacity-60"
                                 onChange={(event) => {
                                   const value = event.currentTarget.value
 
                                   if (value) {
-                                    void props.onConflictResolutionSelect?.(row.id, value)
+                                    void props.onConflictResolutionSelect?.(row.canonicalArticleId, value)
                                   }
                                 }}
                               >
@@ -190,9 +190,9 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                   class="inline-flex size-7 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
                                   title="Reset conflict resolution"
                                   aria-label={`Reset conflict resolution for ${row.articleTitle?.trim() || 'article'}`}
-                                  disabled={getIsConflictResolutionPending(row.id)}
+                                  disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
                                   onClick={() => {
-                                    void props.onConflictResolutionReset?.(row.id)
+                                    void props.onConflictResolutionReset?.(row.canonicalArticleId)
                                   }}
                                 >
                                   <svg
@@ -233,7 +233,7 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                 return (
                                   <Link
                                     to="/projects/$id/reviews-llm/$articleId"
-                                    params={{articleId: row.id, id: sourceProjectId()} as never}
+                                    params={{articleId: row.canonicalArticleId, id: sourceProjectId()} as never}
                                     class="block whitespace-pre-wrap break-words leading-6 text-blue-600 hover:underline"
                                   >
                                     {cellValue}

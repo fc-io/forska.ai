@@ -103,8 +103,10 @@ test('batch cell assembly preserves shared row shape and row-filter semantics', 
   expect(rows).toEqual([
     {
       articleCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+      articleExternalId: null,
       articleSummary: 'Article 1 summary',
       articleTitle: 'Article 1',
+      canonicalArticleId: 'article-1',
       cells: {'human:prompt-1': 'yes', 'llm:model-1:1100:prompt-1': 'yes', 'llm:model-1:1100:prompt-2': 'no'},
       hasConflict: false,
       id: 'article-1',
@@ -207,6 +209,8 @@ test('serving hydration sql scopes articles and cells to returned article ids', 
   })
 
   expect(articleSql).toContain('FROM mart.comparison_article_serving article')
+  expect(articleSql).toContain('article.article_id AS canonicalArticleId')
+  expect(articleSql).toContain('article.article_external_id AS articleExternalId')
   expect(articleSql).toContain("article.article_id IN ('article-1', 'article-2')")
   expect(cellSql).toContain('FROM mart.comparison_cell_serving cell')
   expect(cellSql).toContain("cell.article_id IN ('article-1', 'article-2')")
@@ -282,16 +286,20 @@ test('serving judgment rows return next cursor and hydrate page rows only', asyn
             ? ([
                 {
                   articleCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+                  articleExternalId: 'external-1',
                   articleId: 'article-1',
                   articleSummary: 'Article 1 summary',
                   articleTitle: 'Article 1',
+                  canonicalArticleId: 'article-1',
                   hasConflict: true,
                 },
                 {
                   articleCreatedAt: new Date('2026-04-02T00:00:00.000Z'),
+                  articleExternalId: 'external-2',
                   articleId: 'article-2',
                   articleSummary: 'Article 2 summary',
                   articleTitle: 'Article 2',
+                  canonicalArticleId: 'article-2',
                   hasConflict: false,
                 },
               ] as T[])
@@ -308,16 +316,20 @@ test('serving judgment rows return next cursor and hydrate page rows only', asyn
   expect(page.rows).toEqual([
     {
       articleCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+      articleExternalId: 'external-1',
       articleSummary: 'Article 1 summary',
       articleTitle: 'Article 1',
+      canonicalArticleId: 'article-1',
       cells: {'llm:model-1:1100:prompt-1': 'yes'},
       hasConflict: true,
       id: 'article-1',
     },
     {
       articleCreatedAt: new Date('2026-04-02T00:00:00.000Z'),
+      articleExternalId: 'external-2',
       articleSummary: 'Article 2 summary',
       articleTitle: 'Article 2',
+      canonicalArticleId: 'article-2',
       cells: {'llm:model-1:1100:prompt-1': 'no'},
       hasConflict: false,
       id: 'article-2',
@@ -362,9 +374,11 @@ test('serving row batch iterator walks filter members by ordinal cursor', async 
                   .map((articleId) => {
                     return {
                       articleCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+                      articleExternalId: `external-${articleId}`,
                       articleId,
                       articleSummary: `${articleId} summary`,
                       articleTitle: articleId,
+                      canonicalArticleId: articleId,
                       hasConflict: false,
                     }
                   }) as T[])

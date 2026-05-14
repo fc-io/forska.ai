@@ -2179,7 +2179,7 @@ const getComparisonProjectConflictResolutions = async (
       return row.hasConflict
     })
     .map((row) => {
-      return row.id
+      return row.canonicalArticleId
     })
 
   if (!scope.allowConflictResolution || articleIds.length === 0) {
@@ -2221,7 +2221,10 @@ const getComparisonProjectRowsWithConflictResolutions = async (
   const conflictResolutions = await getComparisonProjectConflictResolutions(scope, rows)
 
   return rows.map((row) => {
-    return {...row, conflictResolution: row.hasConflict ? (conflictResolutions.get(row.id) ?? null) : null}
+    return {
+      ...row,
+      conflictResolution: row.hasConflict ? (conflictResolutions.get(row.canonicalArticleId) ?? null) : null,
+    }
   })
 }
 

@@ -203,9 +203,11 @@ export type ComparisonProjectJudgmentsMetadata = {
 
 export type ComparisonProjectJudgmentsRow = {
   id: string
+  articleExternalId: string | null
   articleTitle: string | null
   articleSummary: string | null
   articleCreatedAt: Date | string | null
+  canonicalArticleId: string
   cells: Record<string, string | null>
   hasConflict: boolean
   conflictResolution: {articleId: string; label: string; value: string} | null

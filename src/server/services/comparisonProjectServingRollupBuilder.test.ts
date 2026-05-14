@@ -102,6 +102,17 @@ type TrueConflictRollupResult = {
   statsRows: Array<{totalCount: number}>
 }
 
+type ScopedImportRollupRow = {
+  articleExternalId: string | null
+  canonicalOnly: string | null
+  comparisonProjectId: string
+  journalTitle: string | null
+  sameValue: string | null
+  scopedOnly: string | null
+}
+
+type ScopedImportRollupResult = {articleRows: ScopedImportRollupRow[]}
+
 type TrueConflictCase = {
   articleCreatedAt: string
   articleId: string
@@ -930,6 +941,197 @@ const getTrueConflictRollupScript = () => {
   `
 }
 
+const getScopedImportRollupScript = () => {
+  return `
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {getSqlLiteral} = await import('./src/server/services/appQueryHelpers.ts')
+    const {getComparisonProjectServingRollupBuilder} = await import('./src/server/services/comparisonProjectServingRollupBuilder.ts')
+
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+    const builder = getComparisonProjectServingRollupBuilder()
+    const generation = ${generation}
+    const getValuesSql = (columns, rows) => {
+      return rows.map((row) => {
+        return '(' + columns.map((column) => getSqlLiteral(row[column])).join(', ') + ')'
+      }).join(',\\n')
+    }
+    const insertRows = async (tableName, columns, rows) => {
+      if (rows.length === 0) {
+        return
+      }
+
+      await database.run(\`
+        INSERT INTO \${tableName} (\${columns.join(', ')})
+        VALUES \${getValuesSql(columns, rows)}
+      \`)
+    }
+
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('provider-scoped-import', 'sglang', 'Provider Scoped Import', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.model (
+        id,
+        provider_connection_id,
+        name,
+        remote_model_id,
+        display_name,
+        variant,
+        source,
+        enabled,
+        metadata_json
+      ) VALUES ('model-scoped-import', 'provider-scoped-import', 'Model Scoped Import', 'model-scoped-import', 'Model Scoped Import', 'manual', 'manual', TRUE, '{}'::JSON)
+    \`)
+
+    await insertRows('app.prompt', ['id', 'original_text', 'prompt_heading', 'content_hash', 'created_at'], [
+      {id: 'prompt-scoped-import', original_text: 'Prompt Scoped Import', prompt_heading: 'Prompt Scoped Import', content_hash: 'prompt-scoped-import-hash', created_at: '2026-08-01T00:00:00.000Z'}
+    ])
+
+    await database.run(\`
+      INSERT INTO app.article (
+        id,
+        article_id,
+        article_title,
+        article_summary,
+        article_created_at,
+        article_updated_at,
+        source_metadata
+      ) VALUES (
+        'canonical-scoped-import-article',
+        'legacy-article-id',
+        'Scoped Import Article',
+        'Scoped Import Summary',
+        TIMESTAMPTZ '2026-08-01T00:00:00.000Z',
+        TIMESTAMPTZ '2026-08-01T01:00:00.000Z',
+        CAST('{"canonicalOnly":"canonical","same":"canonical","journalTitle":"Canonical Journal"}' AS JSON)
+      )
+    \`)
+
+    await insertRows('app.project', ['id', 'name', 'description', 'model_id', 'human_judgment_mode', 'use_title', 'use_abstract', 'use_fulltext', 'use_fulltext_no_images'], [
+      {id: 'source-project-a', name: 'Source Project A', description: null, model_id: 'model-scoped-import', human_judgment_mode: 'prompt', use_title: true, use_abstract: true, use_fulltext: false, use_fulltext_no_images: false},
+      {id: 'source-project-b', name: 'Source Project B', description: null, model_id: 'model-scoped-import', human_judgment_mode: 'prompt', use_title: true, use_abstract: true, use_fulltext: false, use_fulltext_no_images: false}
+    ])
+
+    await insertRows('app.import_route', ['id', 'route', 'name', 'description'], [
+      {id: 'route-a', route: 'route-a', name: 'Route A', description: null},
+      {id: 'route-b', route: 'route-b', name: 'Route B', description: null},
+      {id: 'route-z', route: 'route-z', name: 'Route Z', description: null}
+    ])
+
+    await insertRows('app.project_import_route', ['id', 'project_id', 'import_route_id'], [
+      {id: 'project-route-a', project_id: 'source-project-a', import_route_id: 'route-a'},
+      {id: 'project-route-b', project_id: 'source-project-b', import_route_id: 'route-b'}
+    ])
+
+    await database.run(\`
+      INSERT INTO app.article_import_route (
+        id,
+        article_id,
+        import_route_id,
+        external_article_id,
+        source_kind,
+        import_metadata,
+        source_record_key,
+        source_record_hash,
+        raw_payload
+      ) VALUES
+        (
+          'air-route-b',
+          'canonical-scoped-import-article',
+          'route-b',
+          'external-route-b',
+          'test',
+          CAST('{"scopedOnly":"route-b","same":"route-b","journalTitle":"Route B Journal"}' AS JSON),
+          'source-b-record',
+          'source-b-hash',
+          CAST('{}' AS JSON)
+        ),
+        (
+          'air-route-a',
+          'canonical-scoped-import-article',
+          'route-a',
+          'external-route-a',
+          'test',
+          CAST('{"scopedOnly":"route-a","same":"route-a","journalTitle":"Route A Journal"}' AS JSON),
+          'source-a-record',
+          'source-a-hash',
+          CAST('{}' AS JSON)
+        ),
+        (
+          'air-route-z',
+          'canonical-scoped-import-article',
+          'route-z',
+          'external-route-z',
+          'test',
+          CAST('{"scopedOnly":"route-z","same":"route-z","journalTitle":"Route Z Journal"}' AS JSON),
+          'source-z-record',
+          'source-z-hash',
+          CAST('{}' AS JSON)
+        )
+    \`)
+
+    await insertRows('app.project_article', ['id', 'project_id', 'article_id'], [
+      {id: 'project-article-a', project_id: 'source-project-a', article_id: 'canonical-scoped-import-article'},
+      {id: 'project-article-b', project_id: 'source-project-b', article_id: 'canonical-scoped-import-article'}
+    ])
+
+    await insertRows('app.comparison_project', ['id', 'name', 'description', 'model_ids', 'compare_with_humans', 'human_judgment_mode', 'summary_source_project_id', 'use_title', 'use_abstract', 'use_fulltext', 'use_fulltext_no_images'], [
+      {id: 'comparison-source-scope', name: 'Comparison Source Scope', description: null, model_ids: ['model-scoped-import'], compare_with_humans: false, human_judgment_mode: 'prompt', summary_source_project_id: null, use_title: true, use_abstract: true, use_fulltext: false, use_fulltext_no_images: false},
+      {id: 'comparison-route-scope', name: 'Comparison Route Scope', description: null, model_ids: ['model-scoped-import'], compare_with_humans: false, human_judgment_mode: 'prompt', summary_source_project_id: null, use_title: true, use_abstract: true, use_fulltext: false, use_fulltext_no_images: false}
+    ])
+
+    await insertRows('app.comparison_project_prompt', ['id', 'comparison_project_id', 'prompt_id', 'prompt_order', 'criteria_disposition', 'criteria_section_key', 'criteria_section_label'], [
+      {id: 'comparison-source-prompt', comparison_project_id: 'comparison-source-scope', prompt_id: 'prompt-scoped-import', prompt_order: 0, criteria_disposition: null, criteria_section_key: null, criteria_section_label: null},
+      {id: 'comparison-route-prompt', comparison_project_id: 'comparison-route-scope', prompt_id: 'prompt-scoped-import', prompt_order: 0, criteria_disposition: null, criteria_section_key: null, criteria_section_label: null}
+    ])
+
+    await insertRows('app.comparison_project_source_project', ['id', 'comparison_project_id', 'source_project_id', 'created_at'], [
+      {id: 'comparison-source-link-b', comparison_project_id: 'comparison-source-scope', source_project_id: 'source-project-b', created_at: '2026-08-01T00:00:00.000Z'},
+      {id: 'comparison-source-link-a', comparison_project_id: 'comparison-source-scope', source_project_id: 'source-project-a', created_at: '2026-08-02T00:00:00.000Z'}
+    ])
+
+    await insertRows('app.comparison_project_import_route', ['id', 'comparison_project_id', 'import_route_id'], [
+      {id: 'comparison-source-route-z', comparison_project_id: 'comparison-source-scope', import_route_id: 'route-z'},
+      {id: 'comparison-route-route-z', comparison_project_id: 'comparison-route-scope', import_route_id: 'route-z'},
+      {id: 'comparison-route-route-a', comparison_project_id: 'comparison-route-scope', import_route_id: 'route-a'}
+    ])
+
+    await insertRows('mart.comparison_cell_serving', ['comparison_project_id', 'generation', 'article_id', 'column_id', 'column_order', 'kind', 'prompt_id', 'model_id', 'source_project_id', 'content_key', 'display_answer', 'normalized_answers', 'source_created_at', 'source_updated_at'], [
+      {comparison_project_id: 'comparison-source-scope', generation, article_id: 'canonical-scoped-import-article', column_id: 'llm:model-scoped-import:1100:prompt-scoped-import', column_order: 0, kind: 'llm', prompt_id: 'prompt-scoped-import', model_id: 'model-scoped-import', source_project_id: null, content_key: '1100', display_answer: 'yes', normalized_answers: ['yes'], source_created_at: '2026-08-01T02:00:00.000Z', source_updated_at: '2026-08-01T03:00:00.000Z'},
+      {comparison_project_id: 'comparison-route-scope', generation, article_id: 'canonical-scoped-import-article', column_id: 'llm:model-scoped-import:1100:prompt-scoped-import', column_order: 0, kind: 'llm', prompt_id: 'prompt-scoped-import', model_id: 'model-scoped-import', source_project_id: null, content_key: '1100', display_answer: 'yes', normalized_answers: ['yes'], source_created_at: '2026-08-01T02:00:00.000Z', source_updated_at: '2026-08-01T03:00:00.000Z'}
+    ])
+
+    await builder.insertComparisonProjectServingRollups(
+      {comparisonProjectId: 'comparison-source-scope', generation},
+      {run: database.run}
+    )
+    await builder.insertComparisonProjectServingRollups(
+      {comparisonProjectId: 'comparison-route-scope', generation},
+      {run: database.run}
+    )
+
+    const articleRows = await database.queryJson(\`
+      SELECT
+        comparison_project_id AS comparisonProjectId,
+        article_external_id AS articleExternalId,
+        journal_title AS journalTitle,
+        json_extract_string(source_metadata, '$.canonicalOnly') AS canonicalOnly,
+        json_extract_string(source_metadata, '$.scopedOnly') AS scopedOnly,
+        json_extract_string(source_metadata, '$.same') AS sameValue
+      FROM mart.comparison_article_serving
+      WHERE comparison_project_id IN ('comparison-source-scope', 'comparison-route-scope')
+      ORDER BY comparison_project_id ASC
+    \`)
+
+    console.log(JSON.stringify({articleRows}))
+  `
+}
+
 const runScript = <T>(body: string) => {
   const duckdbPath = `/tmp/f1-comparison-project-serving-rollups-${Date.now()}-${Math.random()
     .toString(16)
@@ -1039,4 +1241,27 @@ test('serving rollups materialize human vs llm true conflicts', () => {
   expect(result.articleRows).toEqual(expectedArticleRows)
   expect(result.memberRows).toEqual(expectedMemberRows)
   expect(result.statsRows).toEqual([{totalCount: expectedMemberRows.length}])
+})
+
+test('serving rollups use selected scoped import external ids and merged metadata', () => {
+  const result = runScript<ScopedImportRollupResult>(getScopedImportRollupScript())
+
+  expect(result.articleRows).toEqual([
+    {
+      articleExternalId: 'external-route-a',
+      canonicalOnly: 'canonical',
+      comparisonProjectId: 'comparison-route-scope',
+      journalTitle: 'Route A Journal',
+      sameValue: 'route-a',
+      scopedOnly: 'route-a',
+    },
+    {
+      articleExternalId: 'external-route-a',
+      canonicalOnly: 'canonical',
+      comparisonProjectId: 'comparison-source-scope',
+      journalTitle: 'Route A Journal',
+      sameValue: 'route-a',
+      scopedOnly: 'route-a',
+    },
+  ])
 })
