@@ -552,7 +552,19 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
         })
+        const archivedDefinition = covidenceImportService.buildCovidencePromptDefinition({
+          answerSet: 'yes|no',
+          exclusionCriteria: 'Animal studies',
+          inclusionCriteria: 'Randomized trials',
+          mode: 'full_text',
+        })
         const contentHash = computePromptContentHash(definition.originalText, null, definition.promptHeading, definition.type)
+        const archivedContentHash = computePromptContentHash(
+          archivedDefinition.originalText,
+          null,
+          archivedDefinition.promptHeading,
+          archivedDefinition.type,
+        )
 
         await database.run(\`
           INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
@@ -564,6 +576,15 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
             \${getSqlLiteral(definition.type)},
             \${getSqlLiteral(contentHash)},
             FALSE
+          ),
+          (
+            'prompt-archived',
+            \${getSqlLiteral(archivedDefinition.originalText)},
+            NULL,
+            \${getSqlLiteral(archivedDefinition.promptHeading)},
+            \${getSqlLiteral(archivedDefinition.type)},
+            \${getSqlLiteral(archivedContentHash)},
+            TRUE
           )
         \`)
 
@@ -579,13 +600,22 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
         })
+        const repeatedPrompt = await covidenceImportService.getOrCreateCovidencePrompt({
+          answerSet: 'yes|no',
+          exclusionCriteria: 'Case reports',
+          inclusionCriteria: 'Adults with confirmed disease',
+          mode: 'title_abstract',
+        })
+        const archivedPrompt = await covidenceImportService.getOrCreateCovidencePrompt({
+          promptDefinition: archivedDefinition,
+        })
         const promptRows = await database.queryJson(\`
-          SELECT id, prompt_heading AS promptHeading, type, original_text AS originalText
+          SELECT id, archived, prompt_heading AS promptHeading, type, original_text AS originalText
           FROM app.prompt
-          ORDER BY created_at ASC, id ASC
+          ORDER BY id ASC
         \`)
 
-        console.log(JSON.stringify({createdPrompt, promptRows, reusedPrompt}))
+        console.log(JSON.stringify({archivedPrompt, createdPrompt, promptRows, repeatedPrompt, reusedPrompt}))
         await database.close()
       `,
     ],
@@ -618,8 +648,10 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
         return line.length > 0
       })
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      archivedPrompt: {created: boolean; criteriaDisposition?: string; id: string; promptHeading: string; type: string}
       createdPrompt: {created: boolean; criteriaDisposition?: string; id: string; type: string}
-      promptRows: Array<{id: string; originalText: string; promptHeading: string; type: string}>
+      promptRows: Array<{archived: boolean; id: string; originalText: string; promptHeading: string; type: string}>
+      repeatedPrompt: {created: boolean; criteriaDisposition?: string; id: string; type: string}
       reusedPrompt: {created: boolean; criteriaDisposition?: string; id: string; type: string}
     }
 
@@ -634,9 +666,30 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
     expect(parsed.createdPrompt.criteriaDisposition).toBe('combined')
     expect(parsed.createdPrompt.id).not.toBe('prompt-existing')
     expect(parsed.createdPrompt.type).toBe("'yes' | 'no'")
-    expect(parsed.promptRows).toHaveLength(2)
-    expect(parsed.promptRows[0]?.id).toBe('prompt-existing')
-    expect(parsed.promptRows[1]?.promptHeading).toBe('Covidence title/abstract screening')
+    expect(parsed.repeatedPrompt).toMatchObject({
+      created: false,
+      criteriaDisposition: 'combined',
+      id: parsed.createdPrompt.id,
+      type: "'yes' | 'no'",
+    })
+    expect(parsed.archivedPrompt).toMatchObject({
+      created: false,
+      criteriaDisposition: 'combined',
+      id: 'prompt-archived',
+      promptHeading: 'Covidence full-text screening',
+      type: "'yes' | 'no'",
+    })
+    expect(parsed.promptRows).toHaveLength(3)
+    expect(
+      parsed.promptRows.map((row) => {
+        return {archived: row.archived, id: row.id, promptHeading: row.promptHeading}
+      }),
+    ).toContainEqual({archived: false, id: 'prompt-existing', promptHeading: 'Covidence title/abstract screening'})
+    expect(
+      parsed.promptRows.map((row) => {
+        return {archived: row.archived, id: row.id, promptHeading: row.promptHeading}
+      }),
+    ).toContainEqual({archived: false, id: 'prompt-archived', promptHeading: 'Covidence full-text screening'})
   } finally {
     ;[
       duckdbPath,

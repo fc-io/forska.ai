@@ -15,13 +15,17 @@ import {
   syncImportedArticlesWithTx,
 } from './articleImportStoreService.ts'
 import {getComparisonProjectServingInvalidationService} from './comparisonProjectServingInvalidationService.ts'
+import {getOrCreateImmutablePromptTx} from './immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidenceFileFormat = 'csv' | 'ris'
 type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe' | 'yes_no' | 'yes_no_maybe'
-type CovidencePromptTx = {queryJson: <TRow>(statement: string) => Promise<TRow[]>}
+type CovidencePromptTx = {
+  queryJson: <TRow>(statement: string) => Promise<TRow[]>
+  run: (statement: string) => Promise<void>
+}
 type CovidenceProjectTx = CovidencePromptTx & {run: (statement: string) => Promise<void>}
 type CovidenceCsvParseErrorCode =
   | 'duplicate_header'
@@ -2247,33 +2251,21 @@ export const getOrCreateCovidencePrompt = async (
     SELECT id
     FROM app.prompt
     WHERE content_hash = ${getSqlLiteral(contentHash)}
-      AND archived = FALSE
     LIMIT 1
   `)
+  const promptId = await getOrCreateImmutablePromptTx(queryRunner, {
+    archived: false,
+    originalText: promptDefinition.originalText,
+    promptHeading: promptDefinition.promptHeading,
+    transformedText: null,
+    type: promptDefinition.type,
+  })
 
-  if (existingPrompt) {
-    return {...promptDefinition, created: false, id: existingPrompt.id}
-  }
-
-  const [insertedPrompt] = await queryRunner.queryJson<{id: string}>(`
-    INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
-    VALUES (
-      '${escapeSqlString(globalThis.crypto.randomUUID())}',
-      ${getSqlLiteral(promptDefinition.originalText)},
-      NULL,
-      ${getSqlLiteral(promptDefinition.promptHeading)},
-      ${getSqlLiteral(promptDefinition.type)},
-      ${getSqlLiteral(contentHash)},
-      FALSE
-    )
-    RETURNING id
-  `)
-
-  if (!insertedPrompt) {
+  if (!promptId) {
     throw new Error('Failed to create Covidence prompt')
   }
 
-  return {...promptDefinition, created: true, id: insertedPrompt.id}
+  return {...promptDefinition, created: !existingPrompt, id: promptId}
 }
 
 export const syncCovidenceProjectPrompts = async (params: {
