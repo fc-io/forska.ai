@@ -75,26 +75,45 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       )
       const data = result.data.map((article) => {
         const fullText = fullTextById[article.id]
-        return {
-          ...article,
-          articleTitle: fullText ? fullText.articleTitle : article.articleTitle,
-          articleCreatedAt: fullText ? fullText.articleCreatedAt : article.articleCreatedAt,
-          articleUpdatedAt: fullText ? fullText.articleUpdatedAt : article.articleUpdatedAt,
-          journalTitle: fullText?.sourceMetadata?.journalTitle ?? article.journalTitle,
-          articleId: fullText?.articleId ?? null,
-          canonicalArticleId: fullText?.canonicalArticleId ?? null,
-          canonicalSourceMetadata: fullText?.canonicalSourceMetadata ?? null,
-          url: fullText?.url ?? null,
-          fullTextPDF: fullText?.fullTextPDF ?? null,
-          fullTextFetchedAt: fullText?.fullTextFetchedAt ?? null,
-          fullTextConversionStatus: fullText?.fullTextConversionStatus ?? null,
-          scopedImportMetadata: fullText?.scopedImportMetadata ?? null,
-          selectedExternalArticleId: fullText?.selectedExternalArticleId ?? null,
-          selectedImportRecordId: fullText?.selectedImportRecordId ?? null,
-          selectedImportRouteId: fullText?.selectedImportRouteId ?? null,
-          selectedSourceRecordKey: fullText?.selectedSourceRecordKey ?? null,
-          sourceMetadata: fullText?.sourceMetadata ?? null,
-        }
+        const hydratedFields = fullText
+          ? {
+              articleTitle: fullText.articleTitle,
+              articleCreatedAt: fullText.articleCreatedAt,
+              articleUpdatedAt: fullText.articleUpdatedAt,
+              journalTitle: fullText.sourceMetadata?.journalTitle ?? article.journalTitle,
+              articleId: fullText.articleId,
+              arxivId: fullText.arxivId,
+              biorxivId: fullText.biorxivId,
+              canonicalArticleId: fullText.canonicalArticleId,
+              canonicalSourceMetadata: fullText.canonicalSourceMetadata,
+              doi: fullText.doi,
+              medrxivId: fullText.medrxivId,
+              originalData: fullText.originalData,
+              pubmedId: fullText.pubmedId,
+              url: fullText.url,
+              fullTextPDF: fullText.fullTextPDF,
+              fullTextFetchedAt: fullText.fullTextFetchedAt,
+              fullTextConversionStatus: fullText.fullTextConversionStatus,
+              scopedImportMetadata: fullText.scopedImportMetadata,
+              selectedExternalArticleId: fullText.selectedExternalArticleId,
+              selectedImportRecordId: fullText.selectedImportRecordId,
+              selectedImportRouteId: fullText.selectedImportRouteId,
+              selectedSourceRecordKey: fullText.selectedSourceRecordKey,
+              sourceMetadata: fullText.sourceMetadata,
+            }
+          : {
+              articleTitle: article.articleTitle,
+              articleCreatedAt: article.articleCreatedAt,
+              articleUpdatedAt: article.articleUpdatedAt,
+              journalTitle: article.journalTitle,
+              articleId: null,
+              url: null,
+              fullTextPDF: null,
+              fullTextFetchedAt: null,
+              fullTextConversionStatus: null,
+              sourceMetadata: null,
+            }
+        return {...article, ...hydratedFields}
       })
 
       articlesReviewsLogger.force(

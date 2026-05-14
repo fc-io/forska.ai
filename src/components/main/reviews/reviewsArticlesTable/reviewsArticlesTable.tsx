@@ -4,7 +4,7 @@ import {format} from 'date-fns'
 import type {Accessor, Setter} from 'solid-js'
 import {For, Show} from 'solid-js'
 
-import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
+import {type ArticleUrlInput, getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import {getJournalDisplayTitleForArticle} from '../../../../utils/getJournalDisplayTitleForArticle.ts'
 import {ReviewsCovidenceBadges} from '../reviewsCovidenceBadges.tsx'
 import {ReviewsArticlesPdfCell} from './reviewsArticlesPdfCell.tsx'
@@ -27,26 +27,27 @@ type JudgmentData = {
 
 // Minimal article data required for the reviews table
 // This supports both the full article schema and the denormalized API response
-export type ArticleWithJudgments = {
+export type ArticleWithJudgments = ArticleUrlInput & {
   id: string
   articleTitle: string | null
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
   judgments: Array<JudgmentData>
   journalTitle?: string | null
-  // Optional fields from full article schema
-  url?: string | null
+  canonicalArticleId?: string | null
   fullTextPDF?: string | null
   fullTextFetchedAt?: Date | null
   fullTextConversionStatus?: string | null
-  sourceMetadata?: unknown
   humanJudgmentMode?: 'prompt' | 'summary'
   humanAnswersByPrompt?: Record<string, string[]>
   humanSummaryAnswer?: string | null
   llmSummaryAnswer?: string | null
-  // Judged status (from new API response)
   judgedPromptIds?: string[]
   isFullyJudged?: boolean
+  selectedExternalArticleId?: string | null
+  selectedImportRecordId?: string | null
+  selectedImportRouteId?: string | null
+  selectedSourceRecordKey?: string | null
 }
 
 interface ReviewsArticlesTableProps {
@@ -167,6 +168,12 @@ const getJudgmentComparisonHeadingClassName = () => {
 
 const getJudgmentComparisonValueClassName = () => {
   return 'px-1.5 py-1 text-center text-xs font-semibold text-gray-900'
+}
+
+const getSourceArticleId = (article: ArticleWithJudgments) => {
+  const value = article.articleId ?? article.selectedExternalArticleId
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  return trimmed ? trimmed : null
 }
 
 const selectionColumn: ColumnDef<ArticleWithJudgments, unknown> = {
@@ -296,17 +303,38 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
     size: 180,
     minSize: 120,
     cell: (info) => {
-      const articleId = info.getValue() as string
+      const article = info.row.original
+      const articleId = getSourceArticleId(article)
+      const articleUrl = getArticleUrl(article)
       return (
-        <a
-          href={getArticleUrl(articleId)}
-          target="_blank"
-          rel="noopener noreferrer"
-          class="text-blue-600 hover:underline block truncate"
-          title={articleId}
-        >
-          {articleId}
-        </a>
+        <Show when={articleId} fallback={<span class="text-gray-400">—</span>}>
+          {(displayId) => {
+            return (
+              <Show
+                when={articleUrl}
+                fallback={
+                  <span class="block truncate" title={displayId()}>
+                    {displayId()}
+                  </span>
+                }
+              >
+                {(url) => {
+                  return (
+                    <a
+                      href={url()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-blue-600 hover:underline block truncate"
+                      title={displayId()}
+                    >
+                      {displayId()}
+                    </a>
+                  )
+                }}
+              </Show>
+            )
+          }}
+        </Show>
       )
     },
   },

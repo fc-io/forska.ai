@@ -41,7 +41,13 @@ export type ArticleReviewResult = {
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
   articleId?: string | null
+  arxivId?: string | null
+  biorxivId?: string | null
   canonicalArticleId?: string | null
+  doi?: string | null
+  medrxivId?: string | null
+  originalData?: unknown
+  pubmedId?: string | null
   url?: string | null
   fullTextPDF?: string | null
   fullTextFetchedAt?: Date | null
@@ -114,7 +120,13 @@ export type ArticleReviewsBothResult = {
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
   articleId?: string | null
+  arxivId?: string | null
+  biorxivId?: string | null
   canonicalArticleId?: string | null
+  doi?: string | null
+  medrxivId?: string | null
+  originalData?: unknown
+  pubmedId?: string | null
   url?: string | null
   fullTextPDF?: string | null
   fullTextFetchedAt?: Date | null

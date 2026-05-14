@@ -31,9 +31,20 @@ type ReviewArticleDetailsArticle = {
   articleAuthors?: string[] | null
   articleSummary?: string | null
   articleId: string | null
+  arxivId?: string | null
+  biorxivId?: string | null
+  doi?: string | null
   fullText?: string | null
   fullTextHtml?: string | null
   fullTextPDF?: string | null
+  medrxivId?: string | null
+  originalData?: unknown
+  pubmedId?: string | null
+  scopedImportMetadata?: unknown
+  scopedRawPayload?: unknown
+  selectedExternalArticleId?: string | null
+  sourceMetadata?: unknown
+  url?: string | null
   contentHash?: string | null
 }
 
@@ -105,6 +116,12 @@ const getArticleFulltextSanitizeOptions = (article: ReviewArticleDetailsArticle)
 const isFhirPatientRecordArticleId = (articleId: string | null | undefined): boolean => {
   const id = String(articleId ?? '').trim()
   return id.startsWith('fhir:') && id.includes(':Patient/')
+}
+
+const getReviewArticleSourceId = (article: ReviewArticleDetailsArticle) => {
+  const value = article.articleId ?? article.selectedExternalArticleId
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  return trimmed ? trimmed : null
 }
 
 const getNormalizedQuotes = (judgment: Judgment | undefined): string[] => {
@@ -240,6 +257,12 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
 
   const isFhirPatientRecord = createMemo(() => {
     return isFhirPatientRecordArticleId(props.article.articleId)
+  })
+  const articleSourceId = createMemo(() => {
+    return getReviewArticleSourceId(props.article)
+  })
+  const articleUrl = createMemo(() => {
+    return getArticleUrl(props.article)
   })
 
   const patientTimelineCollapsedByBucketKey = new Map<string, boolean>()
@@ -879,16 +902,28 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
           {/* Article ID link - shown in summary and all modes */}
           <Show when={viewMode() === 'all' || viewMode() === 'summary'}>
             <Show when={!isFhirPatientRecord()}>
-              <p class="text-gray-600">
-                <a
-                  href={getArticleUrl(props.article.articleId)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="text-blue-600 hover:underline break-all"
-                >
-                  {props.article.articleId}
-                </a>
-              </p>
+              <Show when={articleSourceId()}>
+                {(sourceId) => {
+                  return (
+                    <p class="text-gray-600">
+                      <Show when={articleUrl()} fallback={<span class="break-all">{sourceId()}</span>}>
+                        {(url) => {
+                          return (
+                            <a
+                              href={url()}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              class="text-blue-600 hover:underline break-all"
+                            >
+                              {sourceId()}
+                            </a>
+                          )
+                        }}
+                      </Show>
+                    </p>
+                  )
+                }}
+              </Show>
 
               <Show when={props.article.articleAuthors}>
                 <p class="text-gray-600">Authors: {props.article.articleAuthors?.join(', ')}</p>

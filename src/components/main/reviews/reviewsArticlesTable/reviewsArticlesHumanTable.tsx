@@ -4,7 +4,7 @@ import {format} from 'date-fns'
 import type {Accessor, Setter} from 'solid-js'
 import {For, Show} from 'solid-js'
 
-import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
+import {type ArticleUrlInput, getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import type {ArticleRecord, JudgmentHumanRecord} from '../../../../db/schemaTypes.ts'
 import {getJournalDisplayTitleForArticle} from '../../../../utils/getJournalDisplayTitleForArticle.ts'
 import {ReviewsCovidenceBadges} from '../reviewsCovidenceBadges.tsx'
@@ -20,10 +20,13 @@ declare module '@tanstack/solid-table' {
 
 type HumanJudgmentType = JudgmentHumanRecord
 
-type ArticleWithHumanJudgments = Omit<ArticleRecord, 'judgments'> & {
-  judgments: Array<HumanJudgmentType>
-  humanJudgmentMode?: 'prompt' | 'summary'
-}
+type ArticleWithHumanJudgments = Omit<ArticleRecord, 'judgments'>
+  & ArticleUrlInput & {
+    canonicalArticleId?: string | null
+    judgments: Array<HumanJudgmentType>
+    humanJudgmentMode?: 'prompt' | 'summary'
+    selectedExternalArticleId?: string | null
+  }
 
 interface ReviewsArticlesHumanTableProps {
   articles: ArticleWithHumanJudgments[]
@@ -57,6 +60,12 @@ const selectionColumn: ColumnDef<ArticleWithHumanJudgments, unknown> = {
       />
     )
   },
+}
+
+const getSourceArticleId = (article: ArticleWithHumanJudgments) => {
+  const value = article.articleId ?? article.selectedExternalArticleId
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  return trimmed ? trimmed : null
 }
 
 const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
@@ -129,17 +138,38 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
     size: 180,
     minSize: 120,
     cell: (info) => {
-      const articleId = info.getValue() as string
+      const article = info.row.original
+      const articleId = getSourceArticleId(article)
+      const articleUrl = getArticleUrl(article)
       return (
-        <a
-          href={getArticleUrl(articleId)}
-          target="_blank"
-          rel="noopener noreferrer"
-          class="text-blue-600 hover:underline block truncate"
-          title={articleId}
-        >
-          {articleId}
-        </a>
+        <Show when={articleId} fallback={<span class="text-gray-400">—</span>}>
+          {(displayId) => {
+            return (
+              <Show
+                when={articleUrl}
+                fallback={
+                  <span class="block truncate" title={displayId()}>
+                    {displayId()}
+                  </span>
+                }
+              >
+                {(url) => {
+                  return (
+                    <a
+                      href={url()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-blue-600 hover:underline block truncate"
+                      title={displayId()}
+                    >
+                      {displayId()}
+                    </a>
+                  )
+                }}
+              </Show>
+            )
+          }}
+        </Show>
       )
     },
   },
