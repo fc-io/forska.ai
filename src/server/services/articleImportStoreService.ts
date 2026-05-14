@@ -24,7 +24,8 @@ export type ArticleImportStoreTx = {
   run: (statement: string) => Promise<void>
 }
 
-type ArticleImportStoreRow = {
+export type ArticleImportStoreRow = {
+  allowUnidentifiedCreate?: boolean
   articleId: string
   articleTitle: string
   articleSummary: string | null
@@ -829,6 +830,7 @@ const getCanonicalArticleImportCandidateRecord = (
       articleCreatedAt: row.articleCreatedAt,
       articleSummary: row.articleSummary,
       articleTitle: row.articleTitle,
+      allowUnidentifiedCreate: row.allowUnidentifiedCreate,
       arxivId: row.arxivId,
       biorxivId: row.biorxivId,
       candidateId: `${row.sourceRecordKey}\u0000${index}`,

@@ -23,6 +23,7 @@ export type CanonicalArticleMatchIdentifier = {
 }
 
 export type CanonicalArticleMatchCandidate = {
+  allowUnidentifiedCreate?: boolean
   articleAuthors?: string[] | null
   articleCreatedAt?: Date | string | null
   articleSummary?: string | null
@@ -358,9 +359,14 @@ const getGroupPlan = (
   identifierMatchMap: Map<string, ExistingArticleIdentifierRow>,
 ): GroupPlan => {
   const matchedArticleIds = getGroupMatchedArticleIds(group, identifierMatchMap)
+  const canCreateUnidentifiedArticle = group.candidates.every((candidate) => {
+    return candidate.allowUnidentifiedCreate === true
+  })
 
   return group.identifiers.length === 0
-    ? {group, metadata: {candidateIds: group.candidateIds}, reason: 'no-strong-identifiers', status: 'unresolved'}
+    ? canCreateUnidentifiedArticle
+      ? {articleId: crypto.randomUUID(), group, status: 'create'}
+      : {group, metadata: {candidateIds: group.candidateIds}, reason: 'no-strong-identifiers', status: 'unresolved'}
     : matchedArticleIds.length > 1
       ? {
           group,
