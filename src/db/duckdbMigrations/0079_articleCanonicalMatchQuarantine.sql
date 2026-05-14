@@ -1,4 +1,4 @@
-CREATE TABLE app.article_canonical_match_quarantine (
+CREATE TABLE IF NOT EXISTS app.article_canonical_match_quarantine (
   id VARCHAR PRIMARY KEY,
   source_kind VARCHAR,
   import_run_id VARCHAR,

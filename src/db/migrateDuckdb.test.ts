@@ -145,6 +145,9 @@ test('DuckDB migrations add canonical article identifiers and keep legacy articl
     expect(identifierUniqueColumns).toContainEqual(['kind', 'normalized_value'])
     expect(canonicalSchemaMigrationSql).toContain('legacy_identifier_candidate AS')
     expect(canonicalSchemaMigrationSql).toContain('INSERT INTO app.article_identifier')
+    expect(canonicalSchemaMigrationSql).toContain('identifier_article_count = 1')
+    expect(canonicalSchemaMigrationSql).toContain('duplicate_legacy_identifier')
+    expect(canonicalSchemaMigrationSql).not.toContain('ROW_NUMBER() OVER (PARTITION BY kind, normalized_value')
     expect(parsed.duplicateIdentifierRejected).toBe(true)
     expect(parsed.nullLegacyRow.count).toBe(2)
     expect(parsed.legacyRows).toEqual([
@@ -161,6 +164,10 @@ test('DuckDB migrations add canonical article identifiers and keep legacy articl
 
 test('DuckDB migrations add import-scoped source record identity and idempotency constraints', async () => {
   const duckdbPath = `/tmp/forska-import-scoped-source-record-${Date.now()}.duckdb`
+  const sourceRecordMigrationSql = readFileSync(
+    resolve(migrationsFolder, '0078_articleImportRouteSourceRecords.sql'),
+    'utf8',
+  )
   const result = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -186,6 +193,9 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
         )
         const sourceRecordConstraints = await database.queryJson(
           "SELECT constraint_type AS constraintType, constraint_column_names AS columnNames FROM duckdb_constraints() WHERE schema_name = 'app' AND table_name = 'article_import_route_source_record' ORDER BY constraint_name"
+        )
+        const indexRows = await database.queryJson(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE schema_name = 'app' AND table_name IN ('article_import_route', 'article_import_route_source_record') ORDER BY index_name ASC"
         )
 
         await database.run(
@@ -217,7 +227,7 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
           "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route WHERE import_route_id = 'source-record-route' AND external_article_id IS NULL AND source_record_key IS NULL AND source_record_hash IS NULL"
         )
 
-        console.log(JSON.stringify({duplicateCurrentMembershipRejected, duplicateSourceKeyRejected, importRouteColumns, importRouteConstraints, nullableLegacyRow, sourceRecordConstraints}))
+        console.log(JSON.stringify({duplicateCurrentMembershipRejected, duplicateSourceKeyRejected, importRouteColumns, importRouteConstraints, indexRows, nullableLegacyRow, sourceRecordConstraints}))
         await database.close()
       `,
     ],
@@ -254,9 +264,13 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
       duplicateSourceKeyRejected: boolean
       importRouteColumns: Array<{columnName: string}>
       importRouteConstraints: Array<{constraintType: string; columnNames: string[]}>
+      indexRows: Array<{indexName: string}>
       nullableLegacyRow: {count: number}
       sourceRecordConstraints: Array<{constraintType: string; columnNames: string[]}>
     }
+    const indexNames = parsed.indexRows.map((row) => {
+      return row.indexName
+    })
     const importRouteColumnNames = parsed.importRouteColumns.map((column) => {
       return column.columnName
     })
@@ -283,8 +297,11 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
     expect(importRouteColumnNames).toContain('source_record_key')
     expect(importRouteColumnNames).toContain('source_record_hash')
     expect(importRouteColumnNames).toContain('raw_payload')
+    expect(sourceRecordMigrationSql).toContain('SET external_article_id =')
     expect(currentUniqueColumns).toContainEqual(['article_id', 'import_route_id'])
     expect(sourceRecordUniqueColumns).toContainEqual(['import_route_id', 'source_record_key'])
+    expect(indexNames).toContain('idx_app_article_import_route_external_article_id')
+    expect(indexNames).toContain('idx_app_article_import_route_source_record_external_article_id')
     expect(parsed.duplicateCurrentMembershipRejected).toBe(true)
     expect(parsed.duplicateSourceKeyRejected).toBe(true)
     expect(parsed.nullableLegacyRow.count).toBe(2)
