@@ -846,6 +846,116 @@ test('imports SQLite-backed judgments into DuckDB in batches', async () => {
   expect((await service.getPendingOutboxBatch({jobId, maxBytes: 1024 * 1024, maxRows: 10})).length).toBe(0)
 })
 
+test('outbox import canonicalizes scoped external article ids before DuckDB writes', async () => {
+  if (!runDatabase || !queryDatabase || !sqliteService || !importOutboxBatch) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const suffix = Date.now()
+  const connectionId = `canonical-outbox-connection-${suffix}`
+  const modelId = `canonical-outbox-model-${suffix}`
+  const projectId = `canonical-outbox-project-${suffix}`
+  const jobId = `canonical-outbox-job-${suffix}`
+  const promptId = `canonical-outbox-prompt-${suffix}`
+  const articleId = `canonical-outbox-article-${suffix}`
+  const externalArticleId = `covidence-outbox:${suffix}`
+  const importRouteId = `canonical-outbox-route-${suffix}`
+  const judgmentId = `canonical-outbox-judgment-${suffix}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Canonical Outbox Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Canonical Outbox Article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name)
+    VALUES ('${importRouteId}', 'covidence:outbox-${suffix}', 'manual')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES ('project-import-route-${suffix}', '${projectId}', '${importRouteId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article_import_route (
+      id,
+      article_id,
+      import_route_id,
+      external_article_id,
+      source_record_key,
+      source_record_hash
+    ) VALUES (
+      'article-import-route-${suffix}',
+      '${articleId}',
+      '${importRouteId}',
+      '${externalArticleId}',
+      'source-record-${suffix}',
+      'source-hash-${suffix}'
+    )
+  `)
+
+  await service.initializeJob(jobId)
+  await service.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: externalArticleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId,
+    modelId,
+    projectId,
+    promptId,
+    queuePromptId: `canonical-outbox-queue-${suffix}`,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: null,
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  expect(await importOutboxBatch()).toBe(1)
+
+  const judgmentRows = await queryDatabase<{articleId: string; id: string}>(`
+    SELECT id, article_id AS articleId
+    FROM app.judgment
+    WHERE id = '${judgmentId}'
+  `)
+  const markerRows = await queryDatabase<{articleId: string}>(`
+    SELECT article_id AS articleId
+    FROM app.judgment_job_sqlite_outbox_import
+    WHERE judgment_id = '${judgmentId}'
+  `)
+
+  expect(judgmentRows).toEqual([{articleId, id: judgmentId}])
+  expect(markerRows).toEqual([{articleId}])
+})
+
 test('drops orphaned SQLite-backed judgments when the article no longer exists', async () => {
   if (!runDatabase || !queryDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
     throw new Error('Test database not initialized')

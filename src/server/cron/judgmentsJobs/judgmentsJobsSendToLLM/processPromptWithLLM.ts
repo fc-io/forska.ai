@@ -266,7 +266,7 @@ const getOwnerBackedPromptInput = async (
         contentHash: getStringValue(articlePayload.contentHash),
         importRoute: getStringValue(articlePayload.importRoute),
         originalData: articlePayload.originalData ?? null,
-        sourceMetadata: null,
+        sourceMetadata: articlePayload.sourceMetadata ?? null,
         publicationStatus: getPublicationStatus(articlePayload.publicationStatus),
       },
       prompt: {

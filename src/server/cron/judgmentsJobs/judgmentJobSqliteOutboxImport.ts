@@ -1,5 +1,9 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {
+  getCanonicalArticleIdResolutionKey,
+  getCanonicalArticleIdResolutionMap,
+} from '../../services/articleIdCompatibilityAdapter.ts'
 import {getMaintenanceWorkLeaseService} from '../../services/maintenanceWorkLeaseService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
@@ -68,6 +72,24 @@ type JudgmentOutboxFailureSample = {
   queuePromptId: string
   quoteCount: number | null
   rawResponseJsonBytes: number | null
+}
+
+const canonicalizeOutboxEntryArticleIds = async (
+  entries: JudgmentJobSqliteOutboxEntry[],
+): Promise<JudgmentJobSqliteOutboxEntry[]> => {
+  const articleIdMap = await getCanonicalArticleIdResolutionMap(
+    getAppDatabaseService(),
+    entries.map((entry) => {
+      return {articleId: entry.articleId, projectId: entry.projectId}
+    }),
+  )
+
+  return entries.map((entry) => {
+    const canonicalArticleId = articleIdMap.get(
+      getCanonicalArticleIdResolutionKey({articleId: entry.articleId, projectId: entry.projectId}),
+    )
+    return canonicalArticleId ? {...entry, articleId: canonicalArticleId} : entry
+  })
 }
 
 const getUniqueValues = (values: string[]) => {
@@ -493,7 +515,8 @@ export const claimJudgmentJobSqliteImportBatch = async ({
 export const importRecoveredJudgmentJobSqliteOutboxEntries = async (
   entries: JudgmentJobSqliteOutboxEntry[],
 ): Promise<JudgmentJobRecoveredOutboxImportResult> => {
-  const {discardedEntries, importableEntries} = await partitionImportableEntries(entries)
+  const canonicalEntries = await canonicalizeOutboxEntryArticleIds(entries)
+  const {discardedEntries, importableEntries} = await partitionImportableEntries(canonicalEntries)
   const dirtyWorkResult = await commitJudgmentSqliteOutboxImportDirtyWork({discardedEntries, importableEntries})
 
   return {
@@ -541,7 +564,8 @@ export const runJudgmentJobSqliteOutboxImportCycleForClaimedBatch = async ({
   const projectId = await claimJudgmentImportMaintenanceWork({claim, claimedBy})
 
   try {
-    const {discardedEntries, importableEntries} = await partitionImportableEntries(rows)
+    const canonicalRows = await canonicalizeOutboxEntryArticleIds(rows)
+    const {discardedEntries, importableEntries} = await partitionImportableEntries(canonicalRows)
     const dirtyWorkResult = await commitJudgmentSqliteOutboxImportDirtyWork({
       discardedEntries,
       importableEntries,

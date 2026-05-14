@@ -8,6 +8,10 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {
+  getCanonicalArticleIdResolutionKey,
+  getCanonicalArticleIdResolutionMap,
+} from '../../services/articleIdCompatibilityAdapter.ts'
+import {
   createJudgmentExecutionSnapshotsForClaims,
   createTransientJudgmentExecutionSnapshotsForClaims,
 } from '../../services/judgmentExecutionSnapshotService.ts'
@@ -136,6 +140,40 @@ type QueuePromptClaim = {
   useFulltext: boolean
   useFulltextNoImages: boolean
   useTitle: boolean
+}
+
+const getJobProjectIdForArticleResolution = async (jobId: string): Promise<string | null> => {
+  const [row] = await getAppDatabaseService().queryJson<{projectId: string | null}>(`
+    SELECT project_id AS projectId
+    FROM app.judgment_job
+    WHERE id = ${getSqlLiteral(jobId)}
+    LIMIT 1
+  `)
+
+  return row?.projectId ?? null
+}
+
+const canonicalizeQueuePromptEntries = async <T extends {articleId: string}>(
+  jobId: string,
+  entries: T[],
+): Promise<T[]> => {
+  const projectId = entries.length === 0 ? null : await getJobProjectIdForArticleResolution(jobId)
+  const articleIdMap =
+    projectId === null
+      ? new Map<string, string>()
+      : await getCanonicalArticleIdResolutionMap(
+          getAppDatabaseService(),
+          entries.map((entry) => {
+            return {articleId: entry.articleId, projectId}
+          }),
+        )
+
+  return entries.map((entry) => {
+    const canonicalArticleId = articleIdMap.get(
+      getCanonicalArticleIdResolutionKey({articleId: entry.articleId, projectId}),
+    )
+    return canonicalArticleId ? {...entry, articleId: canonicalArticleId} : entry
+  })
 }
 
 const queuePromptReadyOrderColumnName = 'ready_insert_seq'
@@ -3194,6 +3232,7 @@ const markReadyQueuePromptClaimed = ({
       `
         UPDATE queue_prompt
         SET status = 'claimed',
+            article_id = ?,
             sent_at = ?,
             updated_at = ?,
             server_id = ?,
@@ -3204,9 +3243,16 @@ const markReadyQueuePromptClaimed = ({
           AND status = 'ready'
       `,
     )
-    .run(now, now, serverJobId, claim.claimId, claim.executionSnapshotId, claim.executionSnapshotHash, row.id) as {
-    changes?: number
-  }
+    .run(
+      row.articleId,
+      now,
+      now,
+      serverJobId,
+      claim.claimId,
+      claim.executionSnapshotId,
+      claim.executionSnapshotHash,
+      row.id,
+    ) as {changes?: number}
 
   return Number(result.changes ?? 0) === 1
 }
@@ -3228,7 +3274,8 @@ const claimReadyQueuePromptRows = async ({
     return []
   }
 
-  const rowClaims = rows.map((row) => {
+  const canonicalRows = await canonicalizeQueuePromptEntries(jobId, rows)
+  const rowClaims = canonicalRows.map((row) => {
     return {claimId: randomUUID(), row}
   })
   const snapshotSettings = getQueuePromptSnapshotSettings(database, jobId)
@@ -3848,6 +3895,7 @@ const sqliteService = {
     serverJobId: string,
     maxInserted = Number.POSITIVE_INFINITY,
   ): Promise<number> => {
+    const canonicalPromptEntries = await canonicalizeQueuePromptEntries(jobId, promptEntries)
     const insertedCount = await withOwnedJobDatabase(
       jobId,
       false,
@@ -3856,7 +3904,7 @@ const sqliteService = {
           ? Math.max(0, Math.floor(maxInserted))
           : Number.POSITIVE_INFINITY
 
-        if (promptEntries.length === 0 || normalizedMaxInserted === 0) {
+        if (canonicalPromptEntries.length === 0 || normalizedMaxInserted === 0) {
           return 0
         }
 
@@ -3908,7 +3956,7 @@ const sqliteService = {
             },
             {count: 0, nextReadyInsertSeq: maxReadyInsertSeq + 1},
           ).count
-        })(promptEntries)
+        })(canonicalPromptEntries)
       },
       serverJobId,
     )
