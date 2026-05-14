@@ -924,12 +924,14 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         \`)
         const projectArticleRows = await database.queryJson(\`
           SELECT
-            a.article_id AS articleExternalId,
+            air.external_article_id AS articleExternalId,
             a.article_title AS articleTitle,
             pa.imported_from_project_id AS importedFromProjectId,
             pa.project_id AS projectId
           FROM app.project_article pa
           INNER JOIN app.article a ON a.id = pa.article_id
+          INNER JOIN app.article_import_route air ON air.article_id = pa.article_id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id AND ir.route = '\${importRoute}'
           ORDER BY a.article_title ASC
         \`)
         const refreshStateRows = await database.queryJson(\`
@@ -1196,11 +1198,13 @@ test('syncCovidenceProjectScopeFromConfig marks removed and added full-text arti
 
         const projectArticleRows = await database.queryJson(\`
           SELECT
-            a.article_id AS articleExternalId,
+            air.external_article_id AS articleExternalId,
             a.article_title AS articleTitle,
             pa.project_id AS projectId
           FROM app.project_article pa
           INNER JOIN app.article a ON a.id = pa.article_id
+          INNER JOIN app.article_import_route air ON air.article_id = pa.article_id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id AND ir.route = '\${importRoute}'
           WHERE pa.project_id = '\${project.id}'
           ORDER BY a.article_title ASC
         \`)
@@ -1214,14 +1218,16 @@ test('syncCovidenceProjectScopeFromConfig marks removed and added full-text arti
         \`)
         const refreshArticleStateRows = await database.queryJson(\`
           SELECT
-            a.article_id AS articleExternalId,
+            air.external_article_id AS articleExternalId,
             CAST(article_state.first_dirty_token AS INTEGER) AS firstDirtyToken,
             CAST(article_state.last_dirty_token AS INTEGER) AS lastDirtyToken,
             article_state.project_id AS projectId
           FROM app.project_mart_refresh_article_state article_state
           INNER JOIN app.article a ON a.id = article_state.article_id
+          INNER JOIN app.article_import_route air ON air.article_id = article_state.article_id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id AND ir.route = '\${importRoute}'
           WHERE article_state.project_id = '\${project.id}'
-          ORDER BY a.article_id ASC
+          ORDER BY air.external_article_id ASC
         \`)
 
         console.log(JSON.stringify({projectArticleRows, projectId: project.id, refreshArticleStateRows, refreshStateRows}))
@@ -1401,7 +1407,7 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
 
         const judgmentRows = await database.queryJson(\`
           SELECT
-            a.article_id AS articleExternalId,
+            air.external_article_id AS articleExternalId,
             a.article_title AS articleTitle,
             jh.article_id AS articleId,
             jh.is_answered AS isAnswered,
@@ -1410,6 +1416,8 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
             jh.prompt_id AS promptId
           FROM app.judgment_human jh
           INNER JOIN app.article a ON a.id = jh.article_id
+          INNER JOIN app.article_import_route air ON air.article_id = jh.article_id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id AND ir.route = '\${importRoute}'
           WHERE jh.project_id = '\${project.id}'
           ORDER BY a.article_title ASC, jh.prompt_id ASC
         \`)
@@ -1423,14 +1431,16 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
         \`)
         const refreshArticleStateRows = await database.queryJson(\`
           SELECT
-            a.article_id AS articleExternalId,
+            air.external_article_id AS articleExternalId,
             CAST(article_state.first_dirty_token AS INTEGER) AS firstDirtyToken,
             CAST(article_state.last_dirty_token AS INTEGER) AS lastDirtyToken,
             article_state.project_id AS projectId
           FROM app.project_mart_refresh_article_state article_state
           INNER JOIN app.article a ON a.id = article_state.article_id
+          INNER JOIN app.article_import_route air ON air.article_id = article_state.article_id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id AND ir.route = '\${importRoute}'
           WHERE article_state.project_id = '\${project.id}'
-          ORDER BY a.article_id ASC
+          ORDER BY air.external_article_id ASC
         \`)
 
         console.log(JSON.stringify({judgmentRows, projectId: project.id, promptId: prompt.id, refreshArticleStateRows, refreshStateRows}))
@@ -1620,13 +1630,15 @@ test('seedCovidenceHumanJudgmentsFromConfig treats disjoint screen irrelevant an
 
         const judgmentRows = await database.queryJson(
           \`SELECT
-            a.article_id AS articleExternalId,
+            air.external_article_id AS articleExternalId,
             a.article_title AS articleTitle,
             jh.is_answered AS isAnswered,
             jh.answer AS answer,
             jh.prompt_id AS promptId
           FROM app.judgment_human jh
           INNER JOIN app.article a ON a.id = jh.article_id
+          INNER JOIN app.article_import_route air ON air.article_id = jh.article_id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id AND ir.route = '\${importRoute}'
           WHERE jh.project_id = '\${project.id}'
           ORDER BY a.article_title ASC, jh.prompt_id ASC\`
         )
@@ -2223,7 +2235,7 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
 
         const judgmentRows = await database.queryJson(\`
           SELECT
-            a.article_id AS articleExternalId,
+            air.external_article_id AS articleExternalId,
             a.article_title AS articleTitle,
             jh.article_id AS articleId,
             jh.is_answered AS isAnswered,
@@ -2232,17 +2244,21 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
             jh.prompt_id AS promptId
           FROM app.judgment_human jh
           INNER JOIN app.article a ON a.id = jh.article_id
+          INNER JOIN app.article_import_route air ON air.article_id = jh.article_id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id AND ir.route = '\${importRoute}'
           WHERE jh.project_id = '\${project.id}'
           ORDER BY a.article_title ASC, jh.prompt_id ASC
         \`)
         const projectArticleRows = await database.queryJson(\`
           SELECT
-            a.article_id AS articleExternalId,
+            air.external_article_id AS articleExternalId,
             a.article_title AS articleTitle,
             pa.imported_from_project_id AS importedFromProjectId,
             pa.project_id AS projectId
           FROM app.project_article pa
           INNER JOIN app.article a ON a.id = pa.article_id
+          INNER JOIN app.article_import_route air ON air.article_id = pa.article_id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id AND ir.route = '\${importRoute}'
           WHERE pa.project_id = '\${project.id}'
           ORDER BY a.article_title ASC
         \`)
@@ -2256,14 +2272,16 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
         \`)
         const refreshArticleStateRows = await database.queryJson(\`
           SELECT
-            a.article_id AS articleExternalId,
+            air.external_article_id AS articleExternalId,
             CAST(article_state.first_dirty_token AS INTEGER) AS firstDirtyToken,
             CAST(article_state.last_dirty_token AS INTEGER) AS lastDirtyToken,
             article_state.project_id AS projectId
           FROM app.project_mart_refresh_article_state article_state
           INNER JOIN app.article a ON a.id = article_state.article_id
+          INNER JOIN app.article_import_route air ON air.article_id = article_state.article_id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id AND ir.route = '\${importRoute}'
           WHERE article_state.project_id = '\${project.id}'
-          ORDER BY a.article_id ASC
+          ORDER BY air.external_article_id ASC
         \`)
 
         console.log(JSON.stringify({judgmentRows, projectArticleRows, projectId: project.id, promptId: prompt.id, refreshArticleStateRows, refreshStateRows}))
@@ -2473,12 +2491,14 @@ test('seedCovidenceHumanJudgmentsFromConfig seeds one summary judgment row per i
 
         const summaryRows = await database.queryJson(\`
           SELECT
-            a.article_id AS articleExternalId,
+            air.external_article_id AS articleExternalId,
             a.article_title AS articleTitle,
             jhs.answer AS answer,
             jhs.origin AS origin
           FROM app.judgment_human_summary jhs
           INNER JOIN app.article a ON a.id = jhs.article_id
+          INNER JOIN app.article_import_route air ON air.article_id = jhs.article_id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id AND ir.route = '\${importRoute}'
           WHERE jhs.project_id = '\${project.id}'
           ORDER BY a.article_title ASC
         \`)
@@ -2614,16 +2634,20 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
 
         const articles = await database.queryJson(\`
           SELECT
-            article_id AS articleId,
-            article_title AS articleTitle,
-            article_summary AS articleSummary,
-            doi,
-            pubmed_id AS pubmedId,
-            TO_JSON(original_data) AS originalData,
-            TO_JSON(source_metadata) AS sourceMetadata
-          FROM app.article
-          WHERE article_id LIKE '${importRoute}:%'
-          ORDER BY article_id
+            air.external_article_id AS articleId,
+            a.article_id AS canonicalLegacyArticleId,
+            a.article_title AS articleTitle,
+            a.article_summary AS articleSummary,
+            a.doi,
+            a.pubmed_id AS pubmedId,
+            TO_JSON(air.raw_payload) AS originalData,
+            TO_JSON(air.import_metadata) AS importMetadata,
+            TO_JSON(a.source_metadata) AS sourceMetadata
+          FROM app.article a
+          INNER JOIN app.article_import_route air ON air.article_id = a.id
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id
+          WHERE ir.route = '${importRoute}'
+          ORDER BY air.external_article_id
         \`)
         const linkedArticles = await database.queryJson(\`
           SELECT COUNT(*)::INTEGER AS count
@@ -2634,6 +2658,8 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
         const normalizedArticles = articles.map((article) => {
           return {
             ...article,
+            importMetadata:
+              typeof article.importMetadata === 'string' ? JSON.parse(article.importMetadata) : article.importMetadata,
             originalData: typeof article.originalData === 'string' ? JSON.parse(article.originalData) : article.originalData,
             sourceMetadata:
               typeof article.sourceMetadata === 'string' ? JSON.parse(article.sourceMetadata) : article.sourceMetadata,
@@ -2676,10 +2702,12 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
         articleId: string
         articleSummary: string | null
         articleTitle: string
+        canonicalLegacyArticleId: string | null
         doi: string | null
+        importMetadata: {covidence: {mode: string; stageMembership: Record<string, boolean>}}
         originalData: {covidence: {citation: {title: string}; sourceRows: Array<{sourceFileName: string}>}}
         pubmedId: string | null
-        sourceMetadata: {covidence: {mode: string; stageMembership: Record<string, boolean>}}
+        sourceMetadata: {journalTitle: string | null}
       }>
       linkedArticles: Array<{count: number}>
     }
@@ -2687,13 +2715,16 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
     expect(parsed.articles).toHaveLength(2)
     expect(parsed.linkedArticles[0]?.count).toBe(2)
     expect(parsed.articles[0]?.articleId).toContain(`${importRoute}:`)
+    expect(parsed.articles[0]?.canonicalLegacyArticleId).toBeNull()
     expect(parsed.articles[0]?.articleTitle).toBe('Study A')
     expect(parsed.articles[0]?.articleSummary).toBe('Summary A')
     expect(parsed.articles[0]?.doi).toBe('10.1000/alpha')
     expect(parsed.articles[0]?.originalData.covidence.citation.title).toBe('Study A')
     expect(parsed.articles[0]?.originalData.covidence.sourceRows).toHaveLength(2)
-    expect(parsed.articles[0]?.sourceMetadata.covidence.mode).toBe('title_abstract')
-    expect(parsed.articles[0]?.sourceMetadata.covidence.stageMembership).toEqual({
+    expect(parsed.articles[0]?.sourceMetadata).toMatchObject({journalTitle: null})
+    expect('covidence' in (parsed.articles[0]?.sourceMetadata ?? {})).toBe(false)
+    expect(parsed.articles[0]?.importMetadata.covidence.mode).toBe('title_abstract')
+    expect(parsed.articles[0]?.importMetadata.covidence.stageMembership).toEqual({
       all: true,
       excluded: false,
       full_text: true,
@@ -2703,6 +2734,374 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
     expect(parsed.articles[1]?.articleTitle).toBe('Study B')
   } finally {
     deleteCovidencePackageFiles(datasourceId)
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
+
+      return filePath
+    })
+  }
+})
+
+test('importCovidencePackageFromConfig stores duplicate Covidence records on import-scoped source records', async () => {
+  const duckdbPath = `/tmp/f1-covidence-duplicate-records-${Date.now()}.duckdb`
+  const datasourceId = `covidence-duplicate-records-${Date.now()}`
+  const importRoute = `covidence:${datasourceId}`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const datasourceId = ${JSON.stringify(datasourceId)}
+        const importRoute = ${JSON.stringify(importRoute)}
+        const files = await covidenceImportService.storeCovidencePackageFiles({
+          datasourceId,
+          files: [
+            {file: new File(['Title,Authors,Year,DOI,Covidence #,Tags,Notes\\nDuplicate A,"Doe, Jane",2024,10.1000/duplicate,#1001,tag-a,note-a\\nDuplicate B,"Doe, Jane",2024,10.1000/duplicate,#1002,tag-b,note-b\\n'], 'all.csv', {type: 'text/csv'}), fileRole: 'all'},
+            {file: new File(['Title,Authors,Year,DOI,Covidence #\\nDuplicate A,"Doe, Jane",2024,10.1000/duplicate,#1001\\n'], 'irrelevant.csv', {type: 'text/csv'}), fileRole: 'irrelevant'},
+            {file: new File(['Title,Authors,Year,DOI,Covidence #\\nDuplicate B,"Doe, Jane",2024,10.1000/duplicate,#1002\\n'], 'full_text.csv', {type: 'text/csv'}), fileRole: 'full_text'},
+          ],
+        })
+        const config = covidenceImportService.buildCovidencePackageConfig({files, mode: 'title_abstract'})
+
+        await database.transaction(async (tx) => {
+          await covidenceImportService.importCovidencePackageFromConfig({config, datasourceId, importRoute, tx})
+        })
+
+        const articleRows = await database.queryJson(\`
+          SELECT id, article_id AS legacyArticleId, doi
+          FROM app.article
+          WHERE doi = '10.1000/duplicate'
+        \`)
+        const sourceRecordRows = await database.queryJson(\`
+          SELECT
+            source_record.article_id AS articleId,
+            source_record.external_article_id AS externalArticleId,
+            source_record.source_record_key AS sourceRecordKey,
+            json_extract_string(source_record.import_metadata, '$.covidence.hasDuplicateStudyRecords') AS hasDuplicateStudyRecords,
+            json_extract_string(source_record.import_metadata, '$.covidence.hasStudyDecisionConflict') AS hasStudyDecisionConflict,
+            json_extract_string(source_record.import_metadata, '$.covidence.seededHumanJudgmentAnswer') AS seededHumanJudgmentAnswer,
+            json_extract_string(source_record.import_metadata, '$.covidence.stageMembership.irrelevant') AS isIrrelevant,
+            json_extract_string(source_record.import_metadata, '$.covidence.stageMembership.full_text') AS isFullText
+          FROM app.article_import_route_source_record source_record
+          INNER JOIN app.import_route ir ON ir.id = source_record.import_route_id
+          WHERE ir.route = '\${importRoute}'
+          ORDER BY source_record.source_record_key ASC
+        \`)
+        const currentLinkRows = await database.queryJson(\`
+          SELECT COUNT(*)::INTEGER AS count
+          FROM app.article_import_route air
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id
+          WHERE ir.route = '\${importRoute}'
+        \`)
+
+        console.log(JSON.stringify({articleRows, currentLinkRows, sourceRecordRows}))
+        covidenceImportService.deleteCovidencePackageFiles(datasourceId)
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39981',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39982',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to import duplicate Covidence records',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articleRows: Array<{doi: string; id: string; legacyArticleId: string | null}>
+      currentLinkRows: Array<{count: number}>
+      sourceRecordRows: Array<{
+        articleId: string
+        externalArticleId: string
+        hasDuplicateStudyRecords: string
+        hasStudyDecisionConflict: string
+        isFullText: string
+        isIrrelevant: string
+        seededHumanJudgmentAnswer: string | null
+        sourceRecordKey: string
+      }>
+    }
+
+    expect(parsed.articleRows).toHaveLength(1)
+    expect(parsed.articleRows[0]?.legacyArticleId).toBeNull()
+    expect(parsed.currentLinkRows[0]?.count).toBe(1)
+    expect(parsed.sourceRecordRows).toHaveLength(2)
+    expect(
+      parsed.sourceRecordRows.every((row) => {
+        return row.articleId === parsed.articleRows[0]?.id
+      }),
+    ).toBe(true)
+    expect(
+      parsed.sourceRecordRows.map((row) => {
+        return {
+          externalArticleId: row.externalArticleId,
+          hasDuplicateStudyRecords: row.hasDuplicateStudyRecords,
+          hasStudyDecisionConflict: row.hasStudyDecisionConflict,
+          isFullText: row.isFullText,
+          isIrrelevant: row.isIrrelevant,
+          seededHumanJudgmentAnswer: row.seededHumanJudgmentAnswer,
+          sourceRecordKey: row.sourceRecordKey,
+        }
+      }),
+    ).toEqual([
+      {
+        externalArticleId: `${importRoute}:covidence%3A%231001`,
+        hasDuplicateStudyRecords: 'true',
+        hasStudyDecisionConflict: 'true',
+        isFullText: 'false',
+        isIrrelevant: 'true',
+        seededHumanJudgmentAnswer: 'no',
+        sourceRecordKey: 'covidence:#1001',
+      },
+      {
+        externalArticleId: `${importRoute}:covidence%3A%231002`,
+        hasDuplicateStudyRecords: 'true',
+        hasStudyDecisionConflict: 'true',
+        isFullText: 'true',
+        isIrrelevant: 'false',
+        seededHumanJudgmentAnswer: 'yes',
+        sourceRecordKey: 'covidence:#1002',
+      },
+    ])
+  } finally {
+    deleteCovidencePackageFiles(datasourceId)
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
+
+      return filePath
+    })
+  }
+})
+
+test('overlapping Covidence imports reuse canonical articles for strong identifiers and preprint DOI values', async () => {
+  const duckdbPath = `/tmp/f1-covidence-overlap-${Date.now()}.duckdb`
+  const firstDatasourceId = `covidence-overlap-a-${Date.now()}`
+  const secondDatasourceId = `covidence-overlap-b-${Date.now()}`
+  const firstImportRoute = `covidence:${firstDatasourceId}`
+  const secondImportRoute = `covidence:${secondDatasourceId}`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const firstDatasourceId = ${JSON.stringify(firstDatasourceId)}
+        const secondDatasourceId = ${JSON.stringify(secondDatasourceId)}
+        const firstImportRoute = ${JSON.stringify(firstImportRoute)}
+        const secondImportRoute = ${JSON.stringify(secondImportRoute)}
+        const firstAllRows = [
+          'Title,Authors,Year,DOI,PMID,arXiv,bioRxiv',
+          'DOI Study,"Doe, Jane",2024,10.1000/overlap-doi,,,',
+          'PMID Study,"Roe, John",2024,,0001234,,',
+          'arXiv Study,"Lane, Kim",2024,,,2301.12345,',
+          'Preprint Study,"Poe, Sam",2024,,,,10.1101/2024.01.01.123456',
+          '',
+        ].join('\\n')
+        const secondAllRows = [
+          'Title,Authors,Year,DOI,PMID,arXiv,bioRxiv',
+          'DOI Study Imported Again,"Doe, Jane",2024,https://doi.org/10.1000/overlap-doi,,,',
+          'PMID Study Imported Again,"Roe, John",2024,,PMID:1234,,',
+          'arXiv Study Imported Again,"Lane, Kim",2024,,,https://arxiv.org/abs/2301.12345v2,',
+          'Preprint Study Imported Again,"Poe, Sam",2024,,,,https://www.biorxiv.org/content/10.1101/2024.01.01.123456v1.full.pdf',
+          '',
+        ].join('\\n')
+        const createConfig = async (datasourceId, allRows) => {
+          const files = await covidenceImportService.storeCovidencePackageFiles({
+            datasourceId,
+            files: [
+              {file: new File([allRows], 'all.csv', {type: 'text/csv'}), fileRole: 'all'},
+              {file: new File(['Title,Authors,Year,DOI,PMID,arXiv,bioRxiv\\n'], 'irrelevant.csv', {type: 'text/csv'}), fileRole: 'irrelevant'},
+              {file: new File([allRows], 'full_text.csv', {type: 'text/csv'}), fileRole: 'full_text'},
+            ],
+          })
+
+          return covidenceImportService.buildCovidencePackageConfig({files, mode: 'title_abstract'})
+        }
+        const firstConfig = await createConfig(firstDatasourceId, firstAllRows)
+        const secondConfig = await createConfig(secondDatasourceId, secondAllRows)
+
+        await database.transaction(async (tx) => {
+          await covidenceImportService.importCovidencePackageFromConfig({
+            config: firstConfig,
+            datasourceId: firstDatasourceId,
+            importRoute: firstImportRoute,
+            tx,
+          })
+          await covidenceImportService.importCovidencePackageFromConfig({
+            config: secondConfig,
+            datasourceId: secondDatasourceId,
+            importRoute: secondImportRoute,
+            tx,
+          })
+        })
+
+        const articleRows = await database.queryJson(\`
+          SELECT
+            id,
+            article_id AS legacyArticleId,
+            article_title AS articleTitle,
+            arxiv_id AS arxivId,
+            doi,
+            pubmed_id AS pubmedId
+          FROM app.article
+          ORDER BY article_title ASC
+        \`)
+        const identifierRows = await database.queryJson(\`
+          SELECT kind, normalized_value AS normalizedValue, article_id AS articleId
+          FROM app.article_identifier
+          ORDER BY kind ASC, normalized_value ASC
+        \`)
+        const currentLinkRows = await database.queryJson(\`
+          SELECT COUNT(*)::INTEGER AS count
+          FROM app.article_import_route
+        \`)
+        const sourceRecordRows = await database.queryJson(\`
+          SELECT COUNT(*)::INTEGER AS count
+          FROM app.article_import_route_source_record
+        \`)
+        const legacyCovidenceArticleRows = await database.queryJson(\`
+          SELECT COUNT(*)::INTEGER AS count
+          FROM app.article
+          WHERE article_id LIKE 'covidence:%'
+        \`)
+
+        console.log(JSON.stringify({articleRows, currentLinkRows, identifierRows, legacyCovidenceArticleRows, sourceRecordRows}))
+        covidenceImportService.deleteCovidencePackageFiles(firstDatasourceId)
+        covidenceImportService.deleteCovidencePackageFiles(secondDatasourceId)
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39979',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39980',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to import overlapping Covidence packages',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articleRows: Array<{
+        arxivId: string | null
+        articleTitle: string
+        doi: string | null
+        id: string
+        legacyArticleId: string | null
+        pubmedId: string | null
+      }>
+      currentLinkRows: Array<{count: number}>
+      identifierRows: Array<{articleId: string; kind: string; normalizedValue: string}>
+      legacyCovidenceArticleRows: Array<{count: number}>
+      sourceRecordRows: Array<{count: number}>
+    }
+
+    expect(parsed.articleRows).toHaveLength(4)
+    expect(
+      parsed.articleRows.every((row) => {
+        return row.legacyArticleId === null
+      }),
+    ).toBe(true)
+    expect(parsed.currentLinkRows[0]?.count).toBe(8)
+    expect(parsed.sourceRecordRows[0]?.count).toBe(8)
+    expect(parsed.legacyCovidenceArticleRows[0]?.count).toBe(0)
+    expect(
+      parsed.identifierRows.map((row) => {
+        return {kind: row.kind, normalizedValue: row.normalizedValue}
+      }),
+    ).toEqual([
+      {kind: 'arxiv', normalizedValue: '2301.12345'},
+      {kind: 'doi', normalizedValue: '10.1000/overlap-doi'},
+      {kind: 'doi', normalizedValue: '10.1101/2024.01.01.123456'},
+      {kind: 'pmid', normalizedValue: '1234'},
+    ])
+    expect(
+      new Set(
+        parsed.identifierRows.map((row) => {
+          return row.articleId
+        }),
+      ).size,
+    ).toBe(4)
+  } finally {
+    deleteCovidencePackageFiles(firstDatasourceId)
+    deleteCovidencePackageFiles(secondDatasourceId)
     ;[
       duckdbPath,
       `${duckdbPath}.wal`,

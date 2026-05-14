@@ -214,6 +214,7 @@ type CovidenceProjectRecord = {
   useTitle: boolean
 }
 type CovidenceHumanJudgmentSeed = {answer: 'no' | 'yes' | null; articleExternalId: string; isAnswered: boolean}
+type CovidenceMappedHumanJudgmentSeed = CovidenceHumanJudgmentSeed & {articleId: string}
 type CovidenceProjectScopeSeed = {articleExternalId: string}
 type CovidenceProjectPromptLink = {
   criteriaDisposition?: CovidenceEligibilityFieldDisposition
@@ -294,6 +295,9 @@ const covidenceRisFieldNames = {
   y1: 'publication_date',
 } as const satisfies Record<string, string>
 const covidencePmidKeys = ['pmid', 'pubmed_id']
+const covidenceArxivKeys = ['arxiv', 'arxiv_id']
+const covidenceBiorxivKeys = ['biorxiv', 'biorxiv_id', 'bio_rxiv', 'bio_rxiv_id']
+const covidenceMedrxivKeys = ['medrxiv', 'medrxiv_id', 'med_rxiv', 'med_rxiv_id']
 const covidenceRecordCovidenceKeys = ['covidence', 'covidence_id']
 const covidenceRecordReferenceKeys = ['reference_id', 'ref']
 const covidenceStudyReferenceKeys = ['reference_id', 'ref']
@@ -1769,6 +1773,14 @@ const getCovidenceImportSourceMetadata = (params: {
   }
 }
 
+const getCovidenceCanonicalSourceMetadata = (candidate: CovidenceMergedArticleCandidate) => {
+  return {journalTitle: candidate.citation.journal ?? null}
+}
+
+const getCovidenceArticleExternalId = (params: {candidate: CovidenceMergedArticleCandidate; importRoute: string}) => {
+  return `${params.importRoute}:${getSafeIdentityPart(params.candidate.articleKey)}`
+}
+
 const getCovidenceImportRows = (params: {
   config: CovidencePackageConfig
   importRoute: string
@@ -1777,10 +1789,12 @@ const getCovidenceImportRows = (params: {
   const mergedResult = params.packageRows ?? getCovidencePackageRowsFromConfig(params.config)
 
   return mergedResult.candidates.map((candidate) => {
-    const articleId = `${params.importRoute}:${getSafeIdentityPart(candidate.articleKey)}`
+    const externalArticleId = getCovidenceArticleExternalId({candidate, importRoute: params.importRoute})
     const originalData = getCovidenceImportOriginalData(candidate)
+    const importMetadata = getCovidenceImportSourceMetadata({candidate, config: params.config})
 
     return {
+      allowUnidentifiedCreate: true,
       articleAuthors: candidate.citation.authors
         ? candidate.citation.authors
             .split(';')
@@ -1791,14 +1805,22 @@ const getCovidenceImportRows = (params: {
               return author !== ''
             })
         : null,
-      articleId,
+      articleId: candidate.articleKey,
       articleSummary: candidate.citation.abstract ?? null,
       articleTitle: candidate.citation.title?.trim() || `Covidence article ${candidate.articleKey}`,
+      arxivId: getCovidenceCitationValue(candidate.citation, covidenceArxivKeys),
+      biorxivId: getCovidenceCitationValue(candidate.citation, covidenceBiorxivKeys),
       doi: normalizeDoi(candidate.citation.doi),
+      externalArticleId,
+      importMetadata,
       importRoute: params.importRoute,
+      medrxivId: getCovidenceCitationValue(candidate.citation, covidenceMedrxivKeys),
       originalData,
       pubmedId: getCovidenceCitationValue(candidate.citation, covidencePmidKeys),
-      sourceMetadata: getCovidenceImportSourceMetadata({candidate, config: params.config}),
+      rawPayload: originalData,
+      sourceKind: 'covidence',
+      sourceMetadata: getCovidenceCanonicalSourceMetadata(candidate),
+      sourceRecordKey: candidate.articleKey,
       url: candidate.citation.url ?? null,
     }
   })
@@ -1868,7 +1890,7 @@ const getCovidenceHumanJudgmentSeeds = (params: {
       ? [
           {
             answer,
-            articleExternalId: `${params.importRoute}:${getSafeIdentityPart(candidate.articleKey)}`,
+            articleExternalId: getCovidenceArticleExternalId({candidate, importRoute: params.importRoute}),
             isAnswered: answer !== null,
           },
         ]
@@ -1887,7 +1909,7 @@ const getCovidenceFullTextProjectScopeSeeds = (params: {
     return candidate.stageMembership.full_text
       || candidate.stageMembership.excluded
       || candidate.stageMembership.included
-      ? [{articleExternalId: `${params.importRoute}:${getSafeIdentityPart(candidate.articleKey)}`}]
+      ? [{articleExternalId: getCovidenceArticleExternalId({candidate, importRoute: params.importRoute})}]
       : []
   })
 }
@@ -1911,9 +1933,9 @@ const getCovidenceValueChunks = <TValue>(values: TValue[], chunkSize = covidence
 }
 
 const getChunkedCovidenceHumanJudgmentSeeds = (
-  seeds: CovidenceHumanJudgmentSeed[],
+  seeds: CovidenceMappedHumanJudgmentSeed[],
   chunkSize: number,
-): CovidenceHumanJudgmentSeed[][] => {
+): CovidenceMappedHumanJudgmentSeed[][] => {
   return seeds.length <= chunkSize
     ? [seeds]
     : [seeds.slice(0, chunkSize), ...getChunkedCovidenceHumanJudgmentSeeds(seeds.slice(chunkSize), chunkSize)]
@@ -1932,13 +1954,70 @@ const getCovidenceInternalArticleIds = async (params: {articleExternalIds: strin
           articleExternalId: string
           articleId: string
         }>(`
-          SELECT article_id AS articleExternalId, id AS articleId
-          FROM app.article
-          WHERE article_id IN (${getQuotedStringList(articleExternalIdChunk).join(', ')})
+          SELECT articleExternalId, articleId
+          FROM (
+            SELECT
+              current_link.external_article_id AS articleExternalId,
+              current_link.article_id AS articleId
+            FROM app.article_import_route current_link
+            WHERE current_link.external_article_id IN (${getQuotedStringList(articleExternalIdChunk).join(', ')})
+            UNION ALL
+            SELECT
+              source_record.external_article_id AS articleExternalId,
+              source_record.article_id AS articleId
+            FROM app.article_import_route_source_record source_record
+            WHERE source_record.external_article_id IN (${getQuotedStringList(articleExternalIdChunk).join(', ')})
+              AND source_record.quarantined_at IS NULL
+          ) covidence_article_lookup
+          WHERE articleExternalId IS NOT NULL
+          GROUP BY articleExternalId, articleId
         `)
 
         return [...rows, ...chunkRows]
       }, Promise.resolve([]))
+}
+
+const getMergedCovidenceHumanJudgmentSeed = (
+  articleId: string,
+  seeds: CovidenceHumanJudgmentSeed[],
+): CovidenceMappedHumanJudgmentSeed => {
+  const firstSeed = seeds[0]
+  const answers = Array.from(
+    new Set(
+      seeds.flatMap((seed) => {
+        return seed.answer ? [seed.answer] : []
+      }),
+    ),
+  )
+  const answer = answers.length === 1 ? (answers[0] ?? null) : null
+
+  if (!firstSeed) {
+    throw new Error('Expected Covidence human judgment seed')
+  }
+
+  return {...firstSeed, answer, articleId, isAnswered: answer !== null}
+}
+
+const getCovidenceMappedHumanJudgmentSeeds = (params: {
+  articleIdByExternalId: Map<string, string>
+  judgmentSeeds: CovidenceHumanJudgmentSeed[]
+}) => {
+  return Array.from(
+    params.judgmentSeeds
+      .reduce<Map<string, CovidenceHumanJudgmentSeed[]>>((seedMap, judgmentSeed) => {
+        const articleId = params.articleIdByExternalId.get(judgmentSeed.articleExternalId)
+        const existingSeeds = articleId ? (seedMap.get(articleId) ?? []) : []
+
+        if (articleId) {
+          seedMap.set(articleId, [...existingSeeds, judgmentSeed])
+        }
+
+        return seedMap
+      }, new Map())
+      .entries(),
+  ).map(([articleId, seeds]) => {
+    return getMergedCovidenceHumanJudgmentSeed(articleId, seeds)
+  })
 }
 
 const createCovidenceProjectArticleInputTable = async (params: {
@@ -2456,13 +2535,12 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
       return [articleRow.articleExternalId, articleRow.articleId]
     }),
   )
-  const articleIds = judgmentSeeds.flatMap((judgmentSeed) => {
-    const articleId = articleIdByExternalId.get(judgmentSeed.articleExternalId)
-
-    return articleId ? [articleId] : []
+  const mappedJudgmentSeeds = getCovidenceMappedHumanJudgmentSeeds({articleIdByExternalId, judgmentSeeds})
+  const articleIds = mappedJudgmentSeeds.map((judgmentSeed) => {
+    return judgmentSeed.articleId
   })
 
-  if (articleRows.length === 0) {
+  if (mappedJudgmentSeeds.length === 0) {
     return
   }
 
@@ -2470,19 +2548,12 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
   await syncCovidenceSeededProjectArticles({articleIds, projectId: project.id, tx: params.tx})
 
   if (project.humanJudgmentMode === 'summary') {
-    await getChunkedCovidenceHumanJudgmentSeeds(judgmentSeeds, 500).reduce<Promise<void>>(
+    await getChunkedCovidenceHumanJudgmentSeeds(mappedJudgmentSeeds, 500).reduce<Promise<void>>(
       (previousRun, judgmentSeedChunk) => {
         return previousRun.then(() => {
           const insertValues = judgmentSeedChunk
             .map((judgmentSeed) => {
-              const articleId = articleIdByExternalId.get(judgmentSeed.articleExternalId)
-
-              return articleId
-                ? `(${getQuotedStringList([globalThis.crypto.randomUUID(), project.id, articleId]).join(', ')}, ${getSqlLiteral(judgmentSeed.answer)}, 'covidence_import')`
-                : null
-            })
-            .filter((value): value is string => {
-              return value !== null
+              return `(${getQuotedStringList([globalThis.crypto.randomUUID(), project.id, judgmentSeed.articleId]).join(', ')}, ${getSqlLiteral(judgmentSeed.answer)}, 'covidence_import')`
             })
             .join(', ')
 
@@ -2520,21 +2591,14 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
     return
   }
 
-  await getChunkedCovidenceHumanJudgmentSeeds(judgmentSeeds, 500).reduce<Promise<void>>(
+  await getChunkedCovidenceHumanJudgmentSeeds(mappedJudgmentSeeds, 500).reduce<Promise<void>>(
     (previousRun, judgmentSeedChunk) => {
       return previousRun.then(() => {
         const insertValues = promptIds
           .flatMap((promptId) => {
             return judgmentSeedChunk.map((judgmentSeed) => {
-              const articleId = articleIdByExternalId.get(judgmentSeed.articleExternalId)
-
-              return articleId
-                ? `(${getQuotedStringList([globalThis.crypto.randomUUID(), project.id, articleId, promptId]).join(', ')}, ${getSqlLiteral(judgmentSeed.isAnswered)}, ${getSqlLiteral(judgmentSeed.answer)}, NULL)`
-                : null
+              return `(${getQuotedStringList([globalThis.crypto.randomUUID(), project.id, judgmentSeed.articleId, promptId]).join(', ')}, ${getSqlLiteral(judgmentSeed.isAnswered)}, ${getSqlLiteral(judgmentSeed.answer)}, NULL)`
             })
-          })
-          .filter((value): value is string => {
-            return value !== null
           })
           .join(', ')
 
