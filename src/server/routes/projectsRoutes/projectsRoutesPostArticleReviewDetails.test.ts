@@ -313,6 +313,103 @@ test('project review details resolves covidence related records through scoped s
   ])
 })
 
+test('project review details falls back to legacy covidence related records when source records are absent', async () => {
+  let covidenceStatement = ''
+  fullArticlesByIdsRef.current = async () => {
+    return [
+      {
+        articleTitle: 'Article 1',
+        id: 'article-1',
+        importRoute: 'legacy-route',
+        selectedImportRouteId: null,
+        selectedSourceRecordKey: null,
+        sourceMetadata: {covidence: {studyKey: 'study-1'}},
+      },
+    ]
+  }
+  projectReviewConfigRef.current = async () => {
+    return {
+      humanJudgmentMode: 'prompt',
+      modelId: 'model-1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
+  }
+  queryJsonRef.current = async (statement) => {
+    if (statement.includes('legacy_related_record AS')) {
+      covidenceStatement = statement
+      return [
+        {
+          articleExternalId: 'legacy:1',
+          articleTitle: 'Legacy Article 1',
+          id: 'article-1',
+          isCurrentRecord: true,
+          rawPayload: {},
+          sourceMetadata: {
+            covidence: {
+              articleKey: 'legacy:1',
+              articleKeySource: 'covidence',
+              covidenceIds: ['legacy-1'],
+              hasDuplicateStudyRecords: true,
+              hasStudyDecisionConflict: false,
+              isSeededHumanJudgmentAnswered: true,
+              recordKey: 'legacy-record-1',
+              recordKeySource: 'covidence',
+              referenceIds: ['legacy-ref-1'],
+              seededHumanJudgmentAnswer: 'yes',
+              stageMembership: {all: true, included: true},
+              studyKey: 'study-1',
+            },
+          },
+        },
+      ]
+    }
+
+    return statement.includes('FROM app.project_prompt pp')
+      ? [getPromptRow('prompt-1', 0)]
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow()]
+        : []
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    covidenceRelatedRecords: Array<{
+      articleExternalId: string | null
+      covidenceIds: string[]
+      id: string
+      isCurrentRecord: boolean
+      referenceIds: string[]
+    }>
+  }
+
+  expect(response.status).toBe(200)
+  expect(
+    body.covidenceRelatedRecords.map((record) => {
+      return {
+        articleExternalId: record.articleExternalId,
+        covidenceIds: record.covidenceIds,
+        id: record.id,
+        isCurrentRecord: record.isCurrentRecord,
+        referenceIds: record.referenceIds,
+      }
+    }),
+  ).toEqual([
+    {
+      articleExternalId: 'legacy:1',
+      covidenceIds: ['legacy-1'],
+      id: 'article-1',
+      isCurrentRecord: true,
+      referenceIds: ['legacy-ref-1'],
+    },
+  ])
+  expect(covidenceStatement).toContain('legacy_related_record AS')
+  expect(covidenceStatement).toContain("article.import_route = 'legacy-route'")
+  expect(covidenceStatement).toContain('WHERE NOT EXISTS (SELECT 1 FROM source_record_related_record)')
+})
+
 test('project review details merges detail mart rows, raw fallback rows, and placeholders', async () => {
   let detailStatement = ''
   const getDetailRows = (statement: string) => {
