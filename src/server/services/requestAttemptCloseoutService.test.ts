@@ -225,6 +225,161 @@ test('request attempt closeout projection is idempotent and preserves earliest s
   }
 })
 
+test('token-use writer inserts closeout projections immediately', () => {
+  const duckdbPath = `/tmp/f1-request-attempt-closeout-token-use-writer-${Date.now()}.duckdb`
+  const runResult = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {tokenUseQueryService} = await import('./src/server/services/tokenUseQueryService.ts')
+
+        const getAttempt = ({durableId, providerKey, requestAttemptId}) => {
+          return {
+            closeoutKind: 'token_use',
+            durableCloseoutRef: {id: durableId, kind: 'token_use', requestAttemptId},
+            finishedAt: '2026-05-05T10:00:01.000Z',
+            lifecycleState: 'completedRequest',
+            outcome: 'success',
+            providerKey,
+            requestAttemptId,
+          }
+        }
+        const getRows = async (db) => {
+          return db.queryJson(\`
+            SELECT
+              durable_closeout_id AS durableCloseoutId,
+              provider_key AS providerKey,
+              request_attempt_id AS requestAttemptId,
+              token_use_id AS tokenUseId
+            FROM app.request_attempt_closeout
+            ORDER BY request_attempt_id ASC
+          \`)
+        }
+
+        await migrateDuckdb()
+        const db = getAppDatabaseService()
+        const inserted = await tokenUseQueryService.insertTokenUse({
+          id: 'token-use-writer-insert',
+          judgment_job_id: null,
+          requests: 1,
+          total_prompt_tokens: 10,
+          total_completion_tokens: 5,
+          total_tokens: 15,
+          successful_requests: 1,
+          failed_requests: 0,
+          started_at: new Date('2026-05-05T10:00:00.000Z'),
+          finished_at: new Date('2026-05-05T10:00:01.000Z'),
+          request_attempts_json: JSON.stringify([
+            getAttempt({
+              durableId: 'durable-writer-insert',
+              providerKey: 'provider:writer-insert',
+              requestAttemptId: 'attempt-writer-insert',
+            }),
+          ]),
+        })
+        const rowsAfterInsert = await getRows(db)
+        const insertedOnce = await tokenUseQueryService.insertTokenUseOnce({
+          id: 'token-use-writer-insert-once',
+          judgment_job_id: null,
+          requests: 1,
+          total_prompt_tokens: 11,
+          total_completion_tokens: 6,
+          total_tokens: 17,
+          successful_requests: 1,
+          failed_requests: 0,
+          started_at: new Date('2026-05-05T10:01:00.000Z'),
+          finished_at: new Date('2026-05-05T10:01:01.000Z'),
+          request_attempts_json: JSON.stringify([
+            getAttempt({
+              durableId: 'durable-writer-insert-once',
+              providerKey: 'provider:writer-insert-once',
+              requestAttemptId: 'attempt-writer-insert-once',
+            }),
+          ]),
+        })
+        const rowsAfterInsertOnce = await getRows(db)
+
+        console.log(
+          JSON.stringify({
+            insertedId: inserted?.id ?? null,
+            insertedOnceId: insertedOnce?.id ?? null,
+            rowsAfterInsert,
+            rowsAfterInsertOnce,
+          }),
+        )
+        await db.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runResult.exitCode !== 0) {
+      throw new Error(
+        runResult.stderr.toString() || runResult.stdout.toString() || 'token-use writer projection test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {
+      insertedId: string | null
+      insertedOnceId: string | null
+      rowsAfterInsert: Array<{
+        durableCloseoutId: string
+        providerKey: string
+        requestAttemptId: string
+        tokenUseId: string
+      }>
+      rowsAfterInsertOnce: Array<{
+        durableCloseoutId: string
+        providerKey: string
+        requestAttemptId: string
+        tokenUseId: string
+      }>
+    }
+
+    expect(result.insertedId).toBe('token-use-writer-insert')
+    expect(result.insertedOnceId).toBe('token-use-writer-insert-once')
+    expect(result.rowsAfterInsert).toEqual([
+      {
+        durableCloseoutId: 'durable-writer-insert',
+        providerKey: 'provider:writer-insert',
+        requestAttemptId: 'attempt-writer-insert',
+        tokenUseId: 'token-use-writer-insert',
+      },
+    ])
+    expect(result.rowsAfterInsertOnce).toEqual([
+      {
+        durableCloseoutId: 'durable-writer-insert',
+        providerKey: 'provider:writer-insert',
+        requestAttemptId: 'attempt-writer-insert',
+        tokenUseId: 'token-use-writer-insert',
+      },
+      {
+        durableCloseoutId: 'durable-writer-insert-once',
+        providerKey: 'provider:writer-insert-once',
+        requestAttemptId: 'attempt-writer-insert-once',
+        tokenUseId: 'token-use-writer-insert-once',
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('maintenance rebuild truncates and rebuilds request attempt closeouts in bounded token-use batches', () => {
   const duckdbPath = `/tmp/f1-request-attempt-closeout-maintenance-rebuild-${Date.now()}.duckdb`
   const runResult = globalThis.Bun.spawnSync(
