@@ -1586,6 +1586,90 @@ test('judge-worker prompt execution uses owner-backed snapshots instead of live 
   expect(flushJudgeWorkerCompletionOutboxForClaim).toHaveBeenCalledWith('claim-a')
 })
 
+test('judge-worker prompt execution hydrates scoped snapshot payload compatibility fields', async () => {
+  useJudgeWorkerOwnerHandoffMocks = true
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  hasUnackedJudgeWorkerCompletion.mockImplementation(async () => {
+    return true
+  })
+
+  await processPromptWithLLM({
+    ...createPromptToProcess(),
+    articleId: 'canonical-article-a',
+    executionSnapshotPayload: {
+      article: {
+        articleCreatedAt: '2026-04-25T10:00:00.000Z',
+        articleId: 'covidence:123',
+        articleSummary: 'Scoped snapshot summary',
+        articleTitle: 'Scoped snapshot title',
+        articleUpdatedAt: '2026-04-25T10:05:00.000Z',
+        articleVersion: 1,
+        canonicalArticleId: 'legacy-article-a',
+        canonicalImportRoute: 'legacy:first-source',
+        canonicalOriginalData: {legacy: 'payload'},
+        canonicalSourceMetadata: {canonical: 'metadata'},
+        contentHash: 'content-hash-a',
+        doi: null,
+        externalArticleId: 'covidence:123',
+        fullText: null,
+        fullTextAssets: null,
+        fullTextCharCount: null,
+        fullTextConversionAttempts: null,
+        fullTextConversionError: null,
+        fullTextConversionMetadata: null,
+        fullTextConversionModelId: null,
+        fullTextConversionStatus: null,
+        fullTextFetchedAt: null,
+        fullTextHtml: null,
+        fullTextOriginalFormat: null,
+        fullTextPdf: null,
+        fullTextSource: null,
+        id: 'canonical-article-a',
+        importRoute: 'covidence:review',
+        originalData: {covidenceId: 'covidence:123'},
+        publicationStatus: null,
+        scopedImportMetadata: {stage: 'title_abstract'},
+        selectedExternalArticleId: 'covidence:123',
+        selectedImportRoute: 'covidence:review',
+        sourceMetadata: {stage: 'title_abstract'},
+        url: null,
+      },
+      prompt: {
+        id: 'prompt-a',
+        order: 1,
+        originalText: 'Scoped snapshot prompt text',
+        promptHeading: 'Scoped snapshot prompt heading',
+        type: 'single',
+      },
+      snapshotVersion: 2,
+    },
+  })
+
+  const firstJudgeCall = judgeSinglePrompt.mock.calls[0]?.[0] as
+    | {
+        article: {
+          articleId: string | null
+          id: string
+          importRoute: string | null
+          originalData: unknown
+          sourceMetadata: unknown
+        }
+        prompt: {originalText: string}
+      }
+    | undefined
+
+  expect(firstJudgeCall?.article).toMatchObject({
+    articleId: 'covidence:123',
+    id: 'canonical-article-a',
+    importRoute: 'covidence:review',
+    originalData: {covidenceId: 'covidence:123'},
+    sourceMetadata: {stage: 'title_abstract'},
+  })
+  expect(firstJudgeCall?.prompt.originalText).toBe('Scoped snapshot prompt text')
+  expect(getOwnerBackedJudgmentExecutionSnapshot).not.toHaveBeenCalled()
+})
+
 test('judge-worker prompt execution requeues when snapshot fulltext is not yet frozen', async () => {
   useJudgeWorkerOwnerHandoffMocks = true
   const {processPromptWithLLM} = await loadProcessPromptModule()

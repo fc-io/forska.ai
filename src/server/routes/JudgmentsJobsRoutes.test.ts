@@ -617,6 +617,173 @@ test('owner-backed claim route returns immutable execution snapshot identity and
   await sqliteService.closeAll()
 })
 
+test('owner-backed claim snapshots resolve legacy scoped article ids through import compatibility', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqlitePath} = await import('../cron/judgmentsJobs/judgmentJobPaths.ts')
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const suffix = Date.now()
+  const projectId = `snapshot-scoped-project-${suffix}`
+  const modelId = `snapshot-scoped-model-${suffix}`
+  const connectionId = `snapshot-scoped-connection-${suffix}`
+  const jobId = `snapshot-scoped-job-${suffix}`
+  const articleId = `snapshot-scoped-canonical-article-${suffix}`
+  const externalArticleId = `covidence:${suffix}`
+  const legacyArticleId = `legacy-covidence-${suffix}`
+  const importRouteId = `snapshot-scoped-import-route-${suffix}`
+  const promptId = `snapshot-scoped-prompt-${suffix}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name)
+    VALUES ('${importRouteId}', 'covidence:review-${suffix}', 'Covidence ${suffix}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES ('project-import-route-${suffix}', '${projectId}', '${importRouteId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (
+      id,
+      article_id,
+      article_title,
+      article_summary,
+      import_route,
+      original_data,
+      source_metadata
+    ) VALUES (
+      '${articleId}',
+      '${legacyArticleId}',
+      'Scoped snapshot article',
+      'Scoped snapshot summary',
+      'legacy:first-source',
+      '{"legacy":"canonical-original"}'::JSON,
+      '{"canonical":"metadata"}'::JSON
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.article_import_route (
+      id,
+      article_id,
+      import_route_id,
+      external_article_id,
+      source_kind,
+      import_metadata,
+      source_record_key,
+      source_record_hash,
+      raw_payload
+    ) VALUES (
+      'article-import-route-${suffix}',
+      '${articleId}',
+      '${importRouteId}',
+      '${externalArticleId}',
+      'covidence',
+      '{"studyId":"study-${suffix}","stage":"title_abstract"}'::JSON,
+      'source-record-${suffix}',
+      'source-hash-${suffix}',
+      '{"covidenceId":"${externalArticleId}","row":"raw scoped payload"}'::JSON
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Scoped snapshot prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order)
+    VALUES ('project-prompt-${promptId}', '${projectId}', '${promptId}', 0)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    sqliteDatabase
+      .query(`UPDATE queue_prompt SET article_id = ? WHERE job_id = ? AND prompt_id = ?`)
+      .run(externalArticleId, jobId, promptId)
+  } finally {
+    sqliteDatabase.close()
+  }
+
+  const claimResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-a', limit: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const claimBody = (await claimResponse.json()) as {
+    data: {
+      claims: Array<{
+        articleId: string
+        claimId: string
+        executionSnapshotHash: string
+        executionSnapshotId: string
+        recordId: string
+      }>
+    }
+  }
+  const [claim] = claimBody.data.claims
+
+  expect(claimResponse.status).toBe(200)
+  expect(claim?.articleId).toBe(articleId)
+
+  const snapshotResponse = await app.handle(
+    new Request(
+      `http://localhost/api/judgmentsjobs/execution-snapshots/${claim?.executionSnapshotId}?executionSnapshotHash=${claim?.executionSnapshotHash}`,
+    ),
+  )
+  const snapshotBody = (await snapshotResponse.json()) as {
+    data: {
+      articleId: string
+      payload: {
+        article: {
+          articleId: string
+          canonicalArticleId: string
+          canonicalImportRoute: string
+          externalArticleId: string
+          importRoute: string
+          originalData: {covidenceId: string; row: string}
+          scopedImportMetadata: {stage: string; studyId: string}
+          selectedExternalArticleId: string
+          selectedImportRoute: string
+          selectedImportRouteId: string
+          sourceMetadata: {stage: string; studyId: string}
+        }
+        identity: {articleId: string; queueRecordId: string}
+        snapshotVersion: number
+      }
+    }
+  }
+
+  expect(snapshotResponse.status).toBe(200)
+  expect(snapshotBody.data.articleId).toBe(articleId)
+  expect(snapshotBody.data.payload.identity).toMatchObject({articleId, queueRecordId: claim?.recordId})
+  expect(snapshotBody.data.payload.article).toMatchObject({
+    articleId: externalArticleId,
+    canonicalArticleId: legacyArticleId,
+    canonicalImportRoute: 'legacy:first-source',
+    externalArticleId,
+    importRoute: `covidence:review-${suffix}`,
+    originalData: {covidenceId: externalArticleId, row: 'raw scoped payload'},
+    scopedImportMetadata: {stage: 'title_abstract', studyId: `study-${suffix}`},
+    selectedExternalArticleId: externalArticleId,
+    selectedImportRoute: `covidence:review-${suffix}`,
+    selectedImportRouteId: importRouteId,
+    sourceMetadata: {stage: 'title_abstract', studyId: `study-${suffix}`},
+  })
+  expect(snapshotBody.data.payload.snapshotVersion).toBe(2)
+
+  await sqliteService.closeAll()
+})
+
 test('owner-backed claim route honors claim limits above 100', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

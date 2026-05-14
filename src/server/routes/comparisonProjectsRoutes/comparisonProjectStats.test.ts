@@ -362,8 +362,9 @@ test('comparison stats builds primary, human-vs-llm, and llm-vs-llm groups', () 
   ])
 })
 
-test('comparison stats prefers primary source project over shared model id', () => {
+test('comparison stats prefers primary source project over shared model id and disambiguates shared model labels', () => {
   const comparisons = getComparisonProjectStatsFromCells({
+    allowConflictResolution: true,
     cellRows: [],
     columns: [humanSummaryColumn, primarySummaryColumn, peerSummarySharedModelColumn],
     isSummaryMode: true,
@@ -385,21 +386,35 @@ test('comparison stats prefers primary source project over shared model id', () 
     {
       columnInfo: null,
       kind: 'primary-vs-human',
-      label: 'Model 1 vs Human',
+      label: 'Model 1 (Primary project) vs Human',
+      leftColumnId: humanSummaryColumn.id,
+      rightColumnId: primarySummaryColumn.id,
+    },
+    {
+      columnInfo: null,
+      kind: 'llm-vs-conflict-resolution',
+      label: 'Model 1 (Primary project) vs After conflict resolution',
       leftColumnId: humanSummaryColumn.id,
       rightColumnId: primarySummaryColumn.id,
     },
     {
       columnInfo: null,
       kind: 'human-vs-llm',
-      label: 'Model 1 vs Human',
+      label: 'Model 1 (Peer project) vs Human',
+      leftColumnId: humanSummaryColumn.id,
+      rightColumnId: peerSummarySharedModelColumn.id,
+    },
+    {
+      columnInfo: null,
+      kind: 'llm-vs-conflict-resolution',
+      label: 'Model 1 (Peer project) vs After conflict resolution',
       leftColumnId: humanSummaryColumn.id,
       rightColumnId: peerSummarySharedModelColumn.id,
     },
     {
       columnInfo: null,
       kind: 'llm-vs-llm',
-      label: 'Model 1 vs Model 1',
+      label: 'Model 1 (Primary project) vs Model 1 (Peer project)',
       leftColumnId: primarySummaryColumn.id,
       rightColumnId: peerSummarySharedModelColumn.id,
     },

@@ -79,6 +79,7 @@ type BinaryDecision = 'exclude' | 'include'
 type BinaryDecisionPair = {leftDecision: BinaryDecision; rightDecision: BinaryDecision}
 type ComparisonProjectStatsNormalizedCell = {articleId: string; columnId: string; normalizedAnswers: string[]}
 type ComparisonProjectStatsPair = {leftAnswers: string[]; rightAnswers: string[]}
+type ComparisonProjectStatsLabelContext = {ambiguousLlmModelLabels: ReadonlySet<string>}
 
 type ComparisonProjectStatsAggregate = {
   agreementCount: number
@@ -184,14 +185,72 @@ const getColumnLabelPart = (value: string | null | undefined) => {
   return trimmedValue.length > 0 ? trimmedValue : null
 }
 
-const getComparisonProjectStatsColumnRaterLabel = (column: ComparisonProjectStatsColumn) => {
-  return column.kind === 'human'
-    ? 'Human'
-    : (getColumnLabelPart(column.modelLabel) ?? getColumnLabelPart(column.sourceProjectName) ?? 'LLM')
+const getComparisonProjectStatsColumnModelLabel = (column: ComparisonProjectStatsColumn) => {
+  return getColumnLabelPart(column.modelLabel)
 }
 
-const getComparisonProjectStatsColumnLabel = (column: ComparisonProjectStatsColumn) => {
-  const raterLabel = getComparisonProjectStatsColumnRaterLabel(column)
+const getComparisonProjectStatsColumnSourceProjectName = (column: ComparisonProjectStatsColumn) => {
+  return getColumnLabelPart(column.sourceProjectName)
+}
+
+const getComparisonProjectStatsColumnSourceProjectKey = (column: ComparisonProjectStatsColumn) => {
+  return getColumnLabelPart(column.sourceProjectId) ?? getComparisonProjectStatsColumnSourceProjectName(column)
+}
+
+const getComparisonProjectStatsAmbiguousLlmModelLabels = (columns: readonly ComparisonProjectStatsColumn[]) => {
+  const sourceProjectKeysByModelLabel = columns
+    .filter((column) => {
+      return column.kind === 'llm'
+    })
+    .reduce<Map<string, Set<string>>>((sourceProjectKeyMap, column) => {
+      const modelLabel = getComparisonProjectStatsColumnModelLabel(column)
+      const sourceProjectKey = getComparisonProjectStatsColumnSourceProjectKey(column)
+
+      if (!modelLabel || !sourceProjectKey) {
+        return sourceProjectKeyMap
+      }
+
+      const sourceProjectKeys = sourceProjectKeyMap.get(modelLabel) ?? new Set<string>()
+
+      sourceProjectKeys.add(sourceProjectKey)
+      sourceProjectKeyMap.set(modelLabel, sourceProjectKeys)
+      return sourceProjectKeyMap
+    }, new Map<string, Set<string>>())
+
+  return new Set(
+    Array.from(sourceProjectKeysByModelLabel.entries())
+      .filter(([, sourceProjectKeys]) => {
+        return sourceProjectKeys.size > 1
+      })
+      .map(([modelLabel]) => {
+        return modelLabel
+      }),
+  )
+}
+
+const getComparisonProjectStatsLabelContext = (columns: readonly ComparisonProjectStatsColumn[]) => {
+  return {ambiguousLlmModelLabels: getComparisonProjectStatsAmbiguousLlmModelLabels(columns)}
+}
+
+const getComparisonProjectStatsColumnRaterLabel = (
+  column: ComparisonProjectStatsColumn,
+  context: ComparisonProjectStatsLabelContext,
+) => {
+  const modelLabel = getComparisonProjectStatsColumnModelLabel(column)
+  const sourceProjectName = getComparisonProjectStatsColumnSourceProjectName(column)
+
+  return column.kind === 'human'
+    ? 'Human'
+    : modelLabel && sourceProjectName && context.ambiguousLlmModelLabels.has(modelLabel)
+      ? `${modelLabel} (${sourceProjectName})`
+      : (modelLabel ?? sourceProjectName ?? 'LLM')
+}
+
+const getComparisonProjectStatsColumnLabel = (
+  column: ComparisonProjectStatsColumn,
+  context: ComparisonProjectStatsLabelContext,
+) => {
+  const raterLabel = getComparisonProjectStatsColumnRaterLabel(column, context)
   const promptLabel = column.promptId === summaryPromptId ? null : getColumnLabelPart(column.promptLabel)
 
   return promptLabel ? `${raterLabel} - ${promptLabel}` : raterLabel
@@ -205,9 +264,10 @@ const getComparisonProjectStatsGroupLabel = (
   kind: ComparisonProjectStatsComparisonKind,
   leftColumn: ComparisonProjectStatsColumn,
   rightColumn: ComparisonProjectStatsColumn,
+  context: ComparisonProjectStatsLabelContext,
 ) => {
-  const leftColumnLabel = getComparisonProjectStatsColumnLabel(leftColumn)
-  const rightColumnLabel = getComparisonProjectStatsColumnLabel(rightColumn)
+  const leftColumnLabel = getComparisonProjectStatsColumnLabel(leftColumn, context)
+  const rightColumnLabel = getComparisonProjectStatsColumnLabel(rightColumn, context)
 
   if (kind === 'llm-vs-conflict-resolution') {
     return `${rightColumnLabel} vs After conflict resolution`
@@ -308,12 +368,13 @@ const getComparisonProjectStatsGroup = (
   kind: ComparisonProjectStatsComparisonKind,
   leftColumn: ComparisonProjectStatsColumn,
   rightColumn: ComparisonProjectStatsColumn,
+  context: ComparisonProjectStatsLabelContext,
 ): ComparisonProjectStatsComparisonGroup => {
   return {
     columnInfo: getComparisonProjectStatsGroupColumnInfo(kind, leftColumn, rightColumn),
     id: `${kind}:${leftColumn.id}:${rightColumn.id}`,
     kind,
-    label: getComparisonProjectStatsGroupLabel(kind, leftColumn, rightColumn),
+    label: getComparisonProjectStatsGroupLabel(kind, leftColumn, rightColumn, context),
     leftColumnId: leftColumn.id,
     rightColumnId: rightColumn.id,
   }
@@ -331,6 +392,7 @@ const getHumanVsLlmComparisonProjectStatsGroups = (
   llmColumns: readonly ComparisonProjectStatsColumn[],
   primaryLlmColumnIds: ReadonlySet<string>,
   includeConflictResolutionGroups: boolean,
+  context: ComparisonProjectStatsLabelContext,
 ) => {
   return humanColumns.flatMap((humanColumn) => {
     return llmColumns
@@ -339,11 +401,12 @@ const getHumanVsLlmComparisonProjectStatsGroups = (
       })
       .map((llmColumn) => {
         const kind = primaryLlmColumnIds.has(llmColumn.id) ? 'primary-vs-human' : 'human-vs-llm'
-        const comparisonGroup = getComparisonProjectStatsGroup(kind, humanColumn, llmColumn)
+        const comparisonGroup = getComparisonProjectStatsGroup(kind, humanColumn, llmColumn, context)
         const conflictResolutionGroup = getComparisonProjectStatsGroup(
           'llm-vs-conflict-resolution',
           humanColumn,
           llmColumn,
+          context,
         )
 
         return includeConflictResolutionGroups ? [comparisonGroup, conflictResolutionGroup] : [comparisonGroup]
@@ -352,7 +415,10 @@ const getHumanVsLlmComparisonProjectStatsGroups = (
   })
 }
 
-const getLlmVsLlmComparisonProjectStatsGroups = (llmColumns: readonly ComparisonProjectStatsColumn[]) => {
+const getLlmVsLlmComparisonProjectStatsGroups = (
+  llmColumns: readonly ComparisonProjectStatsColumn[],
+  context: ComparisonProjectStatsLabelContext,
+) => {
   return llmColumns.flatMap((leftColumn, leftIndex) => {
     return llmColumns
       .slice(leftIndex + 1)
@@ -360,7 +426,7 @@ const getLlmVsLlmComparisonProjectStatsGroups = (llmColumns: readonly Comparison
         return rightColumn.promptId === leftColumn.promptId
       })
       .map((rightColumn) => {
-        return getComparisonProjectStatsGroup('llm-vs-llm', leftColumn, rightColumn)
+        return getComparisonProjectStatsGroup('llm-vs-llm', leftColumn, rightColumn, context)
       })
   })
 }
@@ -380,6 +446,7 @@ export const getComparisonProjectStatsComparisonGroups = (params: {
   })
   const primaryLlmColumnIds = getPrimaryLlmColumnIds(llmColumns, params)
   const includeConflictResolutionGroups = getShouldIncludeConflictResolutionStatsGroups(params)
+  const labelContext = getComparisonProjectStatsLabelContext(params.columns)
 
   return [
     ...getHumanVsLlmComparisonProjectStatsGroups(
@@ -387,8 +454,9 @@ export const getComparisonProjectStatsComparisonGroups = (params: {
       llmColumns,
       primaryLlmColumnIds,
       includeConflictResolutionGroups,
+      labelContext,
     ),
-    ...getLlmVsLlmComparisonProjectStatsGroups(llmColumns),
+    ...getLlmVsLlmComparisonProjectStatsGroups(llmColumns, labelContext),
   ]
 }
 

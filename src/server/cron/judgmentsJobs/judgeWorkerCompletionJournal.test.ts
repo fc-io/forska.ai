@@ -417,6 +417,37 @@ test('completion flushes are globally bounded so owner ack cannot stampede', asy
   expect(getCompletionOutboxRow(journalPath, 'claim-0')?.ackedAt).not.toBeNull()
 })
 
+test('completion replay preserves legacy external and canonical article ids in payloads', async () => {
+  const receivedArticleIds: string[] = []
+  setupJournalTest(async (request) => {
+    const body = (await request.json()) as JudgeWorkerCompletionPayload
+    receivedArticleIds.push(body.articleId)
+
+    return Response.json({
+      data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: body.status ?? 'retry'},
+      error: null,
+    })
+  })
+  const legacyPayload = createCompletionPayload({
+    articleId: 'covidence:legacy-article',
+    claimId: 'claim-legacy-article',
+    queueRecordId: 'queue-legacy-article',
+    status: 'retry',
+  })
+  const canonicalPayload = createCompletionPayload({
+    articleId: 'canonical-article-a',
+    claimId: 'claim-canonical-article',
+    queueRecordId: 'queue-canonical-article',
+    status: 'retry',
+  })
+
+  await enqueueJudgeWorkerCompletion(legacyPayload)
+  await enqueueJudgeWorkerCompletion(canonicalPayload)
+
+  expect(await replayJudgeWorkerCompletionOutbox()).toEqual({ackedCount: 2, discardedCount: 0, failedCount: 0})
+  expect(receivedArticleIds.sort()).toEqual(['canonical-article-a', 'covidence:legacy-article'])
+})
+
 test('completion replay discards stale missing-claim responses', async () => {
   const {journalPath} = setupJournalTest(async () => {
     return new Response('missing claimed prompt identity', {status: 409})

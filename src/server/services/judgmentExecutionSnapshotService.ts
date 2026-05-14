@@ -3,6 +3,7 @@ import {createHash, randomUUID} from 'node:crypto'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getDateValue, getJsonValue, getSqlLiteral} from './appQueryHelpers.ts'
 import type {AppReadOnlyDatabaseService} from './appReadOnlyDatabaseService.ts'
+import {getScopedArticleCompatibilityValues} from './scopedArticleReadAdapter.ts'
 
 type JudgmentExecutionSnapshotRow = {
   articleCreatedAt: unknown
@@ -67,6 +68,15 @@ type JudgmentExecutionSnapshotRow = {
   queueRecordId: string
   requestedArticleId: string
   requestedPromptId: string
+  scopedImportMetadata: unknown
+  scopedRawPayload: unknown
+  selectedExternalArticleId: string | null
+  selectedImportRecordId: string | null
+  selectedImportRoute: string | null
+  selectedImportRouteId: string | null
+  selectedSourceKind: string | null
+  selectedSourceRecordKey: string | null
+  sourceMetadata: unknown
   url: string | null
   useAbstract: boolean
   useFulltext: boolean
@@ -215,6 +225,116 @@ const getSnapshotRows = async (
   return database.queryJson<JudgmentExecutionSnapshotRow>(`
     WITH snapshot_request(request_order, article_id, claim_id, job_id, prompt_id, queue_record_id) AS (
       VALUES ${getSnapshotRequestValuesSql(requests)}
+    ),
+    snapshot_request_project AS (
+      SELECT
+        snapshot_request.*,
+        judgment_job.project_id AS snapshot_project_id
+      FROM snapshot_request
+      INNER JOIN app.judgment_job judgment_job ON judgment_job.id = snapshot_request.job_id
+    ),
+    ranked_snapshot_article_resolution AS (
+      SELECT
+        request_order,
+        article_id,
+        canonical_article_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY request_order
+          ORDER BY resolution_rank ASC, canonical_article_id ASC
+        ) AS resolution_order
+      FROM (
+        SELECT
+          snapshot_request_project.request_order,
+          snapshot_request_project.article_id,
+          article.id AS canonical_article_id,
+          0 AS resolution_rank
+        FROM snapshot_request_project
+        INNER JOIN app.article article ON article.id = snapshot_request_project.article_id
+
+        UNION ALL
+
+        SELECT
+          snapshot_request_project.request_order,
+          snapshot_request_project.article_id,
+          legacy.article_id AS canonical_article_id,
+          1 AS resolution_rank
+        FROM snapshot_request_project
+        INNER JOIN app.article_legacy_id_lookup legacy
+          ON legacy.legacy_article_id = snapshot_request_project.article_id
+
+        UNION ALL
+
+        SELECT
+          snapshot_request_project.request_order,
+          snapshot_request_project.article_id,
+          current_import.article_id AS canonical_article_id,
+          2 AS resolution_rank
+        FROM snapshot_request_project
+        INNER JOIN app.project_import_route project_import_route
+          ON project_import_route.project_id = snapshot_request_project.snapshot_project_id
+        INNER JOIN app.article_import_route current_import
+          ON current_import.import_route_id = project_import_route.import_route_id
+         AND current_import.external_article_id = snapshot_request_project.article_id
+
+        UNION ALL
+
+        SELECT
+          snapshot_request_project.request_order,
+          snapshot_request_project.article_id,
+          source_record.article_id AS canonical_article_id,
+          3 AS resolution_rank
+        FROM snapshot_request_project
+        INNER JOIN app.project_import_route project_import_route
+          ON project_import_route.project_id = snapshot_request_project.snapshot_project_id
+        INNER JOIN app.article_import_route_source_record source_record
+          ON source_record.import_route_id = project_import_route.import_route_id
+         AND source_record.external_article_id = snapshot_request_project.article_id
+      ) snapshot_article_resolution_candidates
+    ),
+    snapshot_article_resolution AS (
+      SELECT request_order, canonical_article_id
+      FROM ranked_snapshot_article_resolution
+      WHERE resolution_order = 1
+    ),
+    selected_scoped_article_import AS (
+      SELECT
+        request_order,
+        article_id,
+        external_article_id,
+        id,
+        import_metadata,
+        import_route,
+        import_route_id,
+        raw_payload,
+        source_kind,
+        source_record_key
+      FROM (
+        SELECT
+          snapshot_request_project.request_order,
+          current_import.article_id,
+          current_import.external_article_id,
+          current_import.id,
+          current_import.import_metadata,
+          import_route.route AS import_route,
+          current_import.import_route_id,
+          current_import.raw_payload,
+          current_import.source_kind,
+          current_import.source_record_key,
+          ROW_NUMBER() OVER (
+            PARTITION BY snapshot_request_project.request_order
+            ORDER BY project_import_route.project_id ASC, current_import.import_route_id ASC, current_import.id ASC
+          ) AS selected_rank
+        FROM snapshot_request_project
+        INNER JOIN snapshot_article_resolution
+          ON snapshot_article_resolution.request_order = snapshot_request_project.request_order
+        INNER JOIN app.project_import_route project_import_route
+          ON project_import_route.project_id = snapshot_request_project.snapshot_project_id
+        INNER JOIN app.article_import_route current_import
+          ON current_import.import_route_id = project_import_route.import_route_id
+         AND current_import.article_id = snapshot_article_resolution.canonical_article_id
+        LEFT JOIN app.import_route import_route ON import_route.id = current_import.import_route_id
+      ) ranked_scoped_article_import
+      WHERE selected_rank = 1
     )
     SELECT
       jj.id AS jobId,
@@ -241,12 +361,12 @@ const getSnapshotRows = async (
       pr.updated_at AS promptUpdatedAt,
       pp.prompt_order AS promptOrder,
       a.id AS articleId,
-       a.article_id AS externalArticleId,
-       a.article_title AS articleTitle,
-       a.article_summary AS articleSummary,
-       a.import_route AS articleImportRoute,
-       a.article_version AS articleVersion,
-       a.article_created_at AS articleCreatedAt,
+      a.article_id AS externalArticleId,
+      a.article_title AS articleTitle,
+      a.article_summary AS articleSummary,
+      a.import_route AS articleImportRoute,
+      a.article_version AS articleVersion,
+      a.article_created_at AS articleCreatedAt,
       a.article_updated_at AS articleUpdatedAt,
       a.doi AS doi,
       a.url AS url,
@@ -266,6 +386,15 @@ const getSnapshotRows = async (
       a.content_hash AS contentHash,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'TO_JSON(a.original_data)'})} AS originalData,
       a.publication_status AS publicationStatus,
+      TO_JSON(a.source_metadata) AS sourceMetadata,
+      TO_JSON(scoped_import.import_metadata) AS scopedImportMetadata,
+      TO_JSON(scoped_import.raw_payload) AS scopedRawPayload,
+      scoped_import.external_article_id AS selectedExternalArticleId,
+      scoped_import.id AS selectedImportRecordId,
+      scoped_import.import_route AS selectedImportRoute,
+      scoped_import.import_route_id AS selectedImportRouteId,
+      scoped_import.source_kind AS selectedSourceKind,
+      scoped_import.source_record_key AS selectedSourceRecordKey,
       m.name AS modelName,
       m.remote_model_id AS modelRemoteModelId,
       m.display_name AS modelDisplayName,
@@ -283,14 +412,18 @@ const getSnapshotRows = async (
       TO_JSON(pc.config_json) AS providerConfigJson,
       pc.secret_ref AS providerSecretRef,
       pc.secret_ref AS modelSecretRef
-    FROM snapshot_request
+    FROM snapshot_request_project snapshot_request
     INNER JOIN app.judgment_job jj ON jj.id = snapshot_request.job_id
     INNER JOIN app.project p ON p.id = jj.project_id
     INNER JOIN app.model m ON m.id = p.model_id
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     LEFT JOIN app.prompt pr ON pr.id = snapshot_request.prompt_id
     LEFT JOIN app.project_prompt pp ON pp.project_id = p.id AND pp.prompt_id = pr.id
-    LEFT JOIN app.article a ON a.id = snapshot_request.article_id
+    LEFT JOIN snapshot_article_resolution article_resolution
+      ON article_resolution.request_order = snapshot_request.request_order
+    LEFT JOIN app.article a ON a.id = article_resolution.canonical_article_id
+    LEFT JOIN selected_scoped_article_import scoped_import
+      ON scoped_import.request_order = snapshot_request.request_order
     ORDER BY snapshot_request.request_order ASC
   `)
 }
@@ -298,17 +431,36 @@ const getSnapshotRows = async (
 const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
   const articleId = row.articleId ?? row.requestedArticleId
   const promptId = row.promptId ?? row.requestedPromptId
+  const canonicalOriginalData = getJsonValue(row.originalData)
+  const canonicalSourceMetadata = getJsonValue(row.sourceMetadata)
+  const scopedImportMetadata = getJsonValue(row.scopedImportMetadata)
+  const scopedRawPayload = getJsonValue(row.scopedRawPayload)
+  const compatibilityValues = getScopedArticleCompatibilityValues({
+    canonicalArticleId: row.externalArticleId,
+    canonicalImportRoute: row.articleImportRoute,
+    canonicalOriginalData,
+    canonicalSourceMetadata,
+    scopedImportMetadata,
+    scopedRawPayload,
+    selectedExternalArticleId: row.selectedExternalArticleId,
+    selectedImportRoute: row.selectedImportRoute,
+  })
 
   return {
     article: {
       articleCreatedAt: getDateIsoValue(row.articleCreatedAt),
-      articleId: row.externalArticleId,
+      articleId: compatibilityValues.articleId,
       articleSummary: row.articleSummary,
       articleTitle: row.articleTitle,
       articleUpdatedAt: getDateIsoValue(row.articleUpdatedAt),
       articleVersion: row.articleVersion,
+      canonicalArticleId: row.externalArticleId,
+      canonicalImportRoute: row.articleImportRoute,
+      canonicalOriginalData,
+      canonicalSourceMetadata,
       contentHash: row.contentHash,
       doi: row.doi,
+      externalArticleId: compatibilityValues.articleId,
       fullText: row.fullText,
       fullTextAssets: getJsonValue(row.fullTextAssets),
       fullTextCharCount: row.fullTextCharCount,
@@ -319,13 +471,22 @@ const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
       fullTextConversionStatus: row.fullTextConversionStatus,
       fullTextFetchedAt: getDateIsoValue(row.fullTextFetchedAt),
       fullTextHtml: row.fullTextHtml,
-      importRoute: row.articleImportRoute,
+      importRoute: compatibilityValues.importRoute,
       fullTextOriginalFormat: row.fullTextOriginalFormat,
       fullTextPdf: row.fullTextPdf,
       fullTextSource: row.fullTextSource,
       id: articleId,
-      originalData: getJsonValue(row.originalData),
+      originalData: compatibilityValues.originalData,
       publicationStatus: row.publicationStatus,
+      scopedImportMetadata,
+      scopedRawPayload,
+      selectedExternalArticleId: row.selectedExternalArticleId,
+      selectedImportRecordId: row.selectedImportRecordId,
+      selectedImportRoute: row.selectedImportRoute,
+      selectedImportRouteId: row.selectedImportRouteId,
+      selectedSourceKind: row.selectedSourceKind,
+      selectedSourceRecordKey: row.selectedSourceRecordKey,
+      sourceMetadata: compatibilityValues.sourceMetadata,
       url: row.url,
     },
     contentSettings: {
@@ -381,7 +542,7 @@ const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
       maxInflightRequests: row.providerMaxInflightRequests,
       secretRef: row.providerSecretRef,
     },
-    snapshotVersion: 1,
+    snapshotVersion: 2,
   }
 }
 
