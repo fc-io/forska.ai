@@ -60,6 +60,7 @@ export type RequestAttemptCloseoutBackfillCycleInput = {
   batchSize?: number
   runner?: RequestAttemptCloseoutDatabaseRunner
 }
+export type RequestAttemptCloseoutBackfillFailureInput = {error: unknown; runner?: RequestAttemptCloseoutRunner}
 export type RequestAttemptCloseoutStartupBackfillResult = RequestAttemptCloseoutRebuildResult & {
   completed: boolean
   cursor: RequestAttemptCloseoutRebuildCursor | null
@@ -639,6 +640,12 @@ const getRequestAttemptCloseoutStartupBackfillResult = ({
   }
 }
 
+const getRequestAttemptCloseoutBackfillErrorMessage = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error)
+
+  return message.trim().length > 0 ? message : 'Unknown request attempt closeout backfill failure'
+}
+
 const recordRequestAttemptCloseoutBackfillState = async ({
   runner,
   state,
@@ -691,6 +698,32 @@ const recordRequestAttemptCloseoutBackfillState = async ({
       last_run_at = EXCLUDED.last_run_at,
       last_error = NULL,
       completed_at = EXCLUDED.completed_at,
+      updated_at = EXCLUDED.updated_at
+  `)
+}
+
+export const recordRequestAttemptCloseoutBackfillFailure = async ({
+  error,
+  runner = getAppDatabaseService() as RequestAttemptCloseoutRunner,
+}: RequestAttemptCloseoutBackfillFailureInput): Promise<void> => {
+  await runner.run(`
+    INSERT INTO app.request_attempt_closeout_backfill_state (
+      id,
+      started_at,
+      last_run_at,
+      last_error,
+      updated_at
+    ) VALUES (
+      ${getSqlLiteral(requestAttemptCloseoutStartupBackfillStateId)},
+      current_timestamp,
+      current_timestamp,
+      ${getSqlLiteral(getRequestAttemptCloseoutBackfillErrorMessage(error))},
+      current_timestamp
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      started_at = COALESCE(started_at, EXCLUDED.started_at),
+      last_run_at = EXCLUDED.last_run_at,
+      last_error = EXCLUDED.last_error,
       updated_at = EXCLUDED.updated_at
   `)
 }
