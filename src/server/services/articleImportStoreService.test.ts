@@ -37,6 +37,7 @@ test('storeImportedArticlesWithTx upserts articles in DuckDB without current_tim
           articleSummary: 'Structured import summary',
           articleTitle,
           articleUpdatedAt: new Date(updatedAt),
+          doi: '10.1000/structured-article-1',
           fullText: 'Structured import full text',
           fullTextCharCount: 27,
           fullTextConversionAttempts: 1,
@@ -61,16 +62,16 @@ test('storeImportedArticlesWithTx upserts articles in DuckDB without current_tim
         })
 
         const [articleRow] = await database.queryJson(
-          "SELECT article_title AS articleTitle, article_updated_at AS articleUpdatedAt FROM app.article WHERE article_id = 'structured-file-article-1'"
+          "SELECT article.article_id AS legacyArticleId, article.article_title AS articleTitle FROM app.article article INNER JOIN app.article_identifier identifier ON identifier.article_id = article.id WHERE identifier.kind = 'doi' AND identifier.normalized_value = '10.1000/structured-article-1'"
         )
         const [articleCountRow] = await database.queryJson(
-          "SELECT COUNT(*)::INTEGER AS count FROM app.article WHERE article_id = 'structured-file-article-1'"
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article article INNER JOIN app.article_identifier identifier ON identifier.article_id = article.id WHERE identifier.kind = 'doi' AND identifier.normalized_value = '10.1000/structured-article-1'"
         )
         const [importRouteRow] = await database.queryJson(
           "SELECT route FROM app.import_route WHERE route = 'structured-file:test-import'"
         )
         const [articleImportRouteCountRow] = await database.queryJson(
-          "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route air INNER JOIN app.article a ON a.id = air.article_id INNER JOIN app.import_route ir ON ir.id = air.import_route_id WHERE a.article_id = 'structured-file-article-1' AND ir.route = 'structured-file:test-import'"
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route air INNER JOIN app.import_route ir ON ir.id = air.import_route_id WHERE air.external_article_id = 'structured-file-article-1' AND ir.route = 'structured-file:test-import'"
         )
 
         console.log(JSON.stringify({articleRow, articleCountRow, importRouteRow, articleImportRouteCountRow}))
@@ -104,17 +105,136 @@ test('storeImportedArticlesWithTx upserts articles in DuckDB without current_tim
         return line.length > 0
       })
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
-      articleRow: {articleTitle: string; articleUpdatedAt: string | null}
+      articleRow: {articleTitle: string; legacyArticleId: string | null}
       articleCountRow: {count: number}
       importRouteRow: {route: string}
       articleImportRouteCountRow: {count: number}
     }
 
     expect(parsed.articleRow.articleTitle).toBe('Initial title')
-    expect(new Date(parsed.articleRow.articleUpdatedAt ?? '').toISOString()).toBe('2026-01-02T00:00:00.000Z')
+    expect(parsed.articleRow.legacyArticleId).toBeNull()
     expect(parsed.articleCountRow.count).toBe(1)
     expect(parsed.importRouteRow).toEqual({route: 'structured-file:test-import'})
     expect(parsed.articleImportRouteCountRow.count).toBe(1)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('storeImportedArticlesWithTx collapses duplicate strong identifiers into one canonical article', async () => {
+  const duckdbPath = `/tmp/f1-article-import-duplicate-identifier-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {storeImportedArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const importRoute = 'structured-file:duplicate-identifier'
+        const createRow = (params) => ({
+          articleAuthors: ['Alice Example'],
+          articleId: params.articleId,
+          articleSummary: 'Duplicate identifier summary',
+          articleTitle: params.articleTitle,
+          doi: params.doi,
+          importRoute,
+          sourceKind: 'structured_file',
+          sourceRecordHash: params.sourceRecordHash,
+          sourceRecordKey: params.sourceRecordKey,
+        })
+
+        await database.transaction(async (tx) => {
+          await storeImportedArticlesWithTx(tx, [
+            createRow({
+              articleId: 'external-duplicate-a',
+              articleTitle: 'Duplicate title A',
+              doi: 'https://doi.org/10.1000/duplicate-import',
+              sourceRecordHash: 'hash-duplicate-a',
+              sourceRecordKey: 'source-duplicate-a',
+            }),
+            createRow({
+              articleId: 'external-duplicate-b',
+              articleTitle: 'Duplicate title B',
+              doi: '10.1000/duplicate-import',
+              sourceRecordHash: 'hash-duplicate-b',
+              sourceRecordKey: 'source-duplicate-b',
+            }),
+          ])
+        })
+
+        const [articleCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article"
+        )
+        const identifierRows = await database.queryJson(
+          "SELECT kind, normalized_value AS normalizedValue FROM app.article_identifier ORDER BY kind ASC, normalized_value ASC"
+        )
+        const sourceRecordRows = await database.queryJson(
+          "SELECT external_article_id AS externalArticleId, source_record_key AS sourceRecordKey FROM app.article_import_route_source_record ORDER BY source_record_key ASC"
+        )
+        const [currentLinkCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route"
+        )
+
+        console.log(JSON.stringify({articleCountRow, currentLinkCountRow, identifierRows, sourceRecordRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to collapse duplicate identifiers',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articleCountRow: {count: number}
+      currentLinkCountRow: {count: number}
+      identifierRows: Array<{kind: string; normalizedValue: string}>
+      sourceRecordRows: Array<{externalArticleId: string; sourceRecordKey: string}>
+    }
+
+    expect(parsed.articleCountRow.count).toBe(1)
+    expect(parsed.currentLinkCountRow.count).toBe(1)
+    expect(parsed.identifierRows).toEqual([{kind: 'doi', normalizedValue: '10.1000/duplicate-import'}])
+    expect(parsed.sourceRecordRows).toEqual([
+      {externalArticleId: 'external-duplicate-a', sourceRecordKey: 'source-duplicate-a'},
+      {externalArticleId: 'external-duplicate-b', sourceRecordKey: 'source-duplicate-b'},
+    ])
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
@@ -149,11 +269,12 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
           articleId: params.articleId,
           articleSummary: 'Structured import summary',
           articleTitle: params.articleTitle,
+          doi: params.doi,
           externalArticleId: params.externalArticleId,
           importMetadata: {batch: params.batch},
           importRoute,
           importRunId: params.importRunId,
-          matchMetadata: {mode: 'legacy'},
+          matchMetadata: {mode: 'canonical'},
           originalData: {version: params.version},
           rawPayload: {version: params.version},
           sourceKind: 'structured_file',
@@ -167,6 +288,7 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
               articleId: 'structured-file-article-a',
               articleTitle: 'Initial title',
               batch: 1,
+              doi: '10.1000/source-record-a',
               externalArticleId: 'external-a',
               importRunId: 'run-a',
               sourceRecordHash: 'hash-a',
@@ -180,6 +302,7 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
               articleId: 'structured-file-article-a',
               articleTitle: 'Initial title',
               batch: 1,
+              doi: '10.1000/source-record-a',
               externalArticleId: 'external-a',
               importRunId: 'run-a',
               sourceRecordHash: 'hash-a',
@@ -193,6 +316,7 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
               articleId: 'structured-file-article-a',
               articleTitle: 'Changed payload title',
               batch: 2,
+              doi: '10.1000/source-record-a',
               externalArticleId: 'external-a',
               importRunId: 'run-b',
               sourceRecordHash: 'hash-b',
@@ -206,6 +330,7 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
               articleId: 'structured-file-article-remap',
               articleTitle: 'Remapped title',
               batch: 3,
+              doi: '10.1000/source-record-remap',
               externalArticleId: 'external-remap',
               importRunId: 'run-c',
               sourceRecordHash: 'hash-c',
@@ -221,10 +346,10 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
           "SELECT source_record_hash AS sourceRecordHash, import_run_id AS importRunId, json_extract_string(raw_payload, '$.version') AS payloadVersion, quarantine_reason AS quarantineReason, quarantined_at IS NOT NULL AS quarantined, json_extract_string(quarantine_metadata, '$.incomingExternalArticleId') AS incomingExternalArticleId FROM app.article_import_route_source_record WHERE source_record_key = 'stable-source-key'"
         )
         const [currentLinkRow] = await database.queryJson(
-          "SELECT air.external_article_id AS externalArticleId, air.source_kind AS sourceKind, air.source_record_hash AS sourceRecordHash, json_extract_string(air.import_metadata, '$.batch') AS batch, json_extract_string(air.raw_payload, '$.version') AS payloadVersion FROM app.article_import_route air INNER JOIN app.article article ON article.id = air.article_id WHERE article.article_id = 'structured-file-article-a'"
+          "SELECT air.external_article_id AS externalArticleId, air.source_kind AS sourceKind, air.source_record_hash AS sourceRecordHash, json_extract_string(air.import_metadata, '$.batch') AS batch, json_extract_string(air.raw_payload, '$.version') AS payloadVersion FROM app.article_import_route air WHERE air.external_article_id = 'external-a'"
         )
         const [remapLinkCountRow] = await database.queryJson(
-          "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route air INNER JOIN app.article article ON article.id = air.article_id WHERE article.article_id = 'structured-file-article-remap'"
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route air WHERE air.external_article_id = 'external-remap'"
         )
 
         console.log(JSON.stringify({currentLinkRow, remapLinkCountRow, sourceRecordCountRow, sourceRecordRow}))
@@ -325,6 +450,7 @@ test('storeImportedArticlesWithTx resolves canonical fields without lower-trust 
           articleId: 'canonical-resolver-article',
           articleSummary: params.summary,
           articleTitle: params.title,
+          doi: '10.1000/canonical-resolver',
           importRoute: params.importRoute,
           pubmedId: params.pubmedId ?? null,
           sourceKind: params.sourceKind,
@@ -367,7 +493,7 @@ test('storeImportedArticlesWithTx resolves canonical fields without lower-trust 
         })
 
         const [articleRow] = await database.queryJson(
-          "SELECT article_title AS articleTitle, article_summary AS articleSummary, pubmed_id AS pubmedId, url, publication_status AS publicationStatus FROM app.article WHERE article_id = 'canonical-resolver-article'"
+          "SELECT article.article_id AS legacyArticleId, article.article_title AS articleTitle, article.article_summary AS articleSummary, article.pubmed_id AS pubmedId, article.url, article.publication_status AS publicationStatus FROM app.article article INNER JOIN app.article_identifier identifier ON identifier.article_id = article.id WHERE identifier.kind = 'doi' AND identifier.normalized_value = '10.1000/canonical-resolver'"
         )
 
         console.log(JSON.stringify({articleRow}))
@@ -406,6 +532,7 @@ test('storeImportedArticlesWithTx resolves canonical fields without lower-trust 
       articleRow: {
         articleSummary: string
         articleTitle: string
+        legacyArticleId: string | null
         publicationStatus: string
         pubmedId: string
         url: string
@@ -415,9 +542,10 @@ test('storeImportedArticlesWithTx resolves canonical fields without lower-trust 
     expect(parsed.articleRow).toEqual({
       articleSummary: 'Publisher summary',
       articleTitle: 'PubMed title',
+      legacyArticleId: null,
       publicationStatus: 'published',
       pubmedId: '12345',
-      url: 'https://pubmed.ncbi.nlm.nih.gov/12345/',
+      url: 'https://doi.org/10.1000/canonical-resolver',
     })
   } finally {
     removeFileIfExists(duckdbPath)
@@ -451,12 +579,12 @@ test('storeImportedArticlesWithTx reimports referenced articles without foreign 
         const createRow = (articleTitle) => ({
           articleAuthors: ['Alice Example'],
           articleCreatedAt: new Date('2026-01-01T00:00:00.000Z'),
-          articleId: 'pmid:referenced-article-1',
+          articleId: 'pmid:991001',
           articleSummary: 'PubMed summary',
           articleTitle,
           articleUpdatedAt: new Date('2026-01-02T00:00:00.000Z'),
           importRoute,
-          pubmedId: 'referenced-article-1',
+          pubmedId: '991001',
         })
 
         await database.transaction(async (tx) => {
@@ -464,7 +592,7 @@ test('storeImportedArticlesWithTx reimports referenced articles without foreign 
         })
 
         const [articleRow] = await database.queryJson(
-          "SELECT id, article_title AS articleTitle FROM app.article WHERE article_id = 'pmid:referenced-article-1'"
+          "SELECT article.id, article.article_title AS articleTitle FROM app.article article INNER JOIN app.article_identifier identifier ON identifier.article_id = article.id WHERE identifier.kind = 'pmid' AND identifier.normalized_value = '991001'"
         )
 
         await database.run(
@@ -485,7 +613,7 @@ test('storeImportedArticlesWithTx reimports referenced articles without foreign 
         })
 
         const [updatedArticleRow] = await database.queryJson(
-          "SELECT id, article_title AS articleTitle FROM app.article WHERE article_id = 'pmid:referenced-article-1'"
+          "SELECT article.id, article.article_title AS articleTitle FROM app.article article INNER JOIN app.article_identifier identifier ON identifier.article_id = article.id WHERE identifier.kind = 'pmid' AND identifier.normalized_value = '991001'"
         )
         const [articleImportRouteCountRow] = await database.queryJson(
           "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route WHERE article_id = '" + articleRow.id + "'"
