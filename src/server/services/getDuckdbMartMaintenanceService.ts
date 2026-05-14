@@ -6,6 +6,12 @@ import {
 } from './projectMartDirtyRefreshStateService.ts'
 import {getProjectMartLargeRebuildStateService} from './projectMartLargeRebuildStateService.ts'
 import {getProjectVisibleJudgmentScopeSql} from './projectVisibleJudgmentRule.ts'
+import {
+  getScopedArticleCombinedMetadataExpression,
+  getScopedArticleExternalIdExpression,
+  getScopedArticleImportJoinSql,
+  getScopedArticleImportSelectionCteSql,
+} from './scopedArticleReadAdapter.ts'
 
 type ProjectRefreshBatchCursor = {articleCreatedAt: Date | string | null; articleId: string}
 
@@ -48,6 +54,7 @@ const martPromptAnswerFactLookupIndexQualifiedName = `mart.${martPromptAnswerFac
 const martPromptAnswerFactResetReplacementTableName = 'mart.prompt_answer_fact_project_refresh_rewrite'
 const martReviewArticleServingCleanupReplacementTableName = 'mart.review_article_serving_project_cleanup_rewrite'
 const martReviewArticleServingOrderIndexName = 'idx_mart_review_article_serving_order'
+const martReviewArticleServingScopedImportCteName = 'selected_review_article_serving_import'
 const martRefreshArticleBatchTableName = 'temp_project_mart_refresh_article_batch'
 const martRefreshJudgmentFactArticleBatchTableName = 'temp_dirty_judgment_fact_article'
 const martRefreshFatalInvalidationErrorFragments = [
@@ -1134,6 +1141,22 @@ const getProjectReviewServingSetupSql = (projectId: string) => {
   `
 }
 
+const getProjectReviewServingScopedImportCteSql = (projectId: string) => {
+  return getScopedArticleImportSelectionCteSql({
+    articleIdFilterSql: getProjectRefreshArticleBatchExistsSql('air.article_id'),
+    cteName: martReviewArticleServingScopedImportCteName,
+    projectIds: [projectId],
+  })
+}
+
+const getProjectReviewServingScopedImportJoinSql = (articleIdExpression: string) => {
+  return getScopedArticleImportJoinSql({articleIdExpression, cteName: martReviewArticleServingScopedImportCteName})
+}
+
+const getProjectReviewServingSourceMetadataExpression = () => {
+  return getScopedArticleCombinedMetadataExpression({articleAlias: 'article'})
+}
+
 const getProjectReviewServingBatchSql = (projectId: string, articleIds: string[]) => {
   return `
     BEGIN TRANSACTION;
@@ -1176,6 +1199,7 @@ const getProjectReviewServingBatchBodySql = (projectId: string) => {
       latest_review_updated_at,
       serving_updated_at
     )
+    WITH ${getProjectReviewServingScopedImportCteSql(projectId)}
     SELECT
       rollup.project_id,
       (
@@ -1187,13 +1211,13 @@ const getProjectReviewServingBatchBodySql = (projectId: string) => {
       rollup.article_created_at,
       rollup.article_updated_at,
       article.article_title,
-      article.article_id,
-      json_extract_string(article.source_metadata, '$.journalTitle'),
+      ${getScopedArticleExternalIdExpression({articleAlias: 'article'})},
+      json_extract_string(${getProjectReviewServingSourceMetadataExpression()}, '$.journalTitle'),
       article.url,
       article.full_text_pdf,
       article.full_text_fetched_at,
       article.full_text_conversion_status,
-      article.source_metadata,
+      ${getProjectReviewServingSourceMetadataExpression()},
       rollup.has_all_llm_judgments,
       rollup.llm_judged_prompt_count,
       rollup.llm_judged_prompt_ids,
@@ -1209,6 +1233,7 @@ const getProjectReviewServingBatchBodySql = (projectId: string) => {
       current_timestamp
     FROM mart.review_article_rollup rollup
     INNER JOIN app.article article ON article.id = rollup.article_id
+    ${getProjectReviewServingScopedImportJoinSql('rollup.article_id')}
     WHERE rollup.project_id = ${projectLiteral}
       AND ${getProjectRefreshArticleBatchExistsSql('rollup.article_id')};
     INSERT INTO mart.review_article_filter_member (
@@ -1387,6 +1412,7 @@ const getProjectReviewActiveServingBatchRefreshBodySql = (projectId: string) => 
       latest_review_updated_at,
       serving_updated_at
     )
+    WITH ${getProjectReviewServingScopedImportCteSql(projectId)}
     SELECT
       rollup.project_id,
       (
@@ -1398,13 +1424,13 @@ const getProjectReviewActiveServingBatchRefreshBodySql = (projectId: string) => 
       rollup.article_created_at,
       rollup.article_updated_at,
       article.article_title,
-      article.article_id,
-      json_extract_string(article.source_metadata, '$.journalTitle'),
+      ${getScopedArticleExternalIdExpression({articleAlias: 'article'})},
+      json_extract_string(${getProjectReviewServingSourceMetadataExpression()}, '$.journalTitle'),
       article.url,
       article.full_text_pdf,
       article.full_text_fetched_at,
       article.full_text_conversion_status,
-      article.source_metadata,
+      ${getProjectReviewServingSourceMetadataExpression()},
       rollup.has_all_llm_judgments,
       rollup.llm_judged_prompt_count,
       rollup.llm_judged_prompt_ids,
@@ -1420,6 +1446,7 @@ const getProjectReviewActiveServingBatchRefreshBodySql = (projectId: string) => 
       current_timestamp
     FROM mart.review_article_rollup rollup
     INNER JOIN app.article article ON article.id = rollup.article_id
+    ${getProjectReviewServingScopedImportJoinSql('rollup.article_id')}
     WHERE rollup.project_id = ${projectLiteral}
       AND ${getProjectRefreshArticleBatchExistsSql('rollup.article_id')};
     INSERT INTO mart.review_article_filter_member (

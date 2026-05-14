@@ -364,7 +364,7 @@ const getDuckdbScopedArticleExternalIdExpression = (articleAlias: string) => {
 }
 
 const getDuckdbServingArticleExternalIdExpression = () => {
-  return 'COALESCE(scoped_import.external_article_id, s.article_external_id)'
+  return 's.article_external_id'
 }
 
 const getDuckdbActiveGenerationWithScopedImportPrefix = (scope: ProjectOlapScope) => {
@@ -681,8 +681,8 @@ const getReviewedPageRowsFromServingMart = async (params: {
   cursor?: string | null
   prompts?: Record<string, string[]>
 }) => {
-  const scopedMetadataExpression = getDuckdbScopedArticleMetadataExpression('s')
-  const whereParts = getDuckdbServingWhereParts({...params, sourceMetadataExpression: scopedMetadataExpression})
+  const sourceMetadataExpression = 's.source_metadata'
+  const whereParts = getDuckdbServingWhereParts({...params, sourceMetadataExpression})
   const offset = params.cursor ? 0 : Math.max(params.page - 1, 0) * params.limit
   const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
   const withPrefix = getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)
@@ -728,7 +728,7 @@ const getReviewedPageRowsFromServingMart = async (params: {
       scoped_import.id AS selectedImportRecordId,
       scoped_import.import_route_id AS selectedImportRouteId,
       scoped_import.source_record_key AS selectedSourceRecordKey,
-      ${scopedMetadataExpression} AS sourceMetadata
+      ${sourceMetadataExpression} AS sourceMetadata
     FROM mart.review_article_serving s
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
@@ -789,12 +789,8 @@ const countReviewedServingRows = async (params: {
   search?: string | null
   prompts?: Record<string, string[]>
 }) => {
-  const scopedMetadataExpression = getDuckdbScopedArticleMetadataExpression('s')
-  const whereParts = getDuckdbServingWhereParts({
-    ...params,
-    cursor: null,
-    sourceMetadataExpression: scopedMetadataExpression,
-  })
+  const sourceMetadataExpression = 's.source_metadata'
+  const whereParts = getDuckdbServingWhereParts({...params, cursor: null, sourceMetadataExpression})
   const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
   const withPrefix = getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)
   const withClause = postingSelection ? `${withPrefix}, ${postingSelection.sql}` : withPrefix
@@ -829,12 +825,12 @@ const getBothPageRowsFromServing = async (params: {
   prompts?: Record<string, string[]>
 }) => {
   const offset = Math.max(params.page - 1, 0) * params.limit
-  const scopedMetadataExpression = getDuckdbScopedArticleMetadataExpression('s')
+  const sourceMetadataExpression = 's.source_metadata'
   const whereParts = getDuckdbServingReviewWhereParts({
     ...params,
     requireAllHumanAnswers: true,
     requireAllLlmJudgments: true,
-    sourceMetadataExpression: scopedMetadataExpression,
+    sourceMetadataExpression,
   })
   const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
   const withPrefix = getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)
@@ -868,7 +864,7 @@ const getBothPageRowsFromServing = async (params: {
       s.article_title AS articleTitle,
       s.article_created_at AS articleCreatedAt,
       s.article_updated_at AS articleUpdatedAt,
-      ${scopedMetadataExpression} AS sourceMetadata
+      ${sourceMetadataExpression} AS sourceMetadata
     FROM mart.review_article_serving s
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
@@ -903,12 +899,8 @@ const countUnassessedRowsFromServing = async (params: {
   to?: string | null
   search?: string | null
 }) => {
-  const scopedMetadataExpression = getDuckdbScopedArticleMetadataExpression('s')
-  const whereParts = getDuckdbServingReviewWhereParts({
-    ...params,
-    requireIncompleteLlm: true,
-    sourceMetadataExpression: scopedMetadataExpression,
-  })
+  const sourceMetadataExpression = 's.source_metadata'
+  const whereParts = getDuckdbServingReviewWhereParts({...params, requireIncompleteLlm: true, sourceMetadataExpression})
   const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
     ${getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)}
     SELECT COUNT(*) AS totalCount
@@ -934,12 +926,8 @@ const getUnassessedRowsFromServing = async (params: {
   search?: string | null
 }) => {
   const totalCount = await countUnassessedRowsFromServing(params)
-  const scopedMetadataExpression = getDuckdbScopedArticleMetadataExpression('s')
-  const whereParts = getDuckdbServingReviewWhereParts({
-    ...params,
-    requireIncompleteLlm: true,
-    sourceMetadataExpression: scopedMetadataExpression,
-  })
+  const sourceMetadataExpression = 's.source_metadata'
+  const whereParts = getDuckdbServingReviewWhereParts({...params, requireIncompleteLlm: true, sourceMetadataExpression})
   const limitClause = params.limit == null ? '' : `LIMIT ${params.limit}`
   const offsetClause = params.offset == null ? '' : `OFFSET ${params.offset}`
   const rows = await runDuckdbJsonQuery<{
@@ -987,12 +975,8 @@ const getUnassessedCandidateRowsFromServing = async (params: {
   cursor: UnassessedPairsCursor | null
   limit: number
 }) => {
-  const scopedMetadataExpression = getDuckdbScopedArticleMetadataExpression('s')
-  const whereParts = getDuckdbServingReviewWhereParts({
-    ...params,
-    requireIncompleteLlm: true,
-    sourceMetadataExpression: scopedMetadataExpression,
-  })
+  const sourceMetadataExpression = 's.source_metadata'
+  const whereParts = getDuckdbServingReviewWhereParts({...params, requireIncompleteLlm: true, sourceMetadataExpression})
   const activityExpression =
     "COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')"
   const priorityBucketExpression = getDuckdbServingUnassessedPairsPriorityBucketExpression(params.scope)
@@ -1064,12 +1048,12 @@ const getReviewedArticleIdsFromServing = async (params: {
   requireAllHumanAnswers?: boolean
   requireAllLlmJudgments?: boolean
 }) => {
-  const scopedMetadataExpression = getDuckdbScopedArticleMetadataExpression('s')
+  const sourceMetadataExpression = 's.source_metadata'
   const whereParts = getDuckdbServingReviewWhereParts({
     ...params,
     ...getLlmStatusWhereParts(params.requireAllLlmJudgments ? 'complete' : params.llmStatus),
     requireAllHumanAnswers: params.requireAllHumanAnswers,
-    sourceMetadataExpression: scopedMetadataExpression,
+    sourceMetadataExpression,
   })
   const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
   const withPrefix = getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)
@@ -1104,11 +1088,11 @@ const getHumanReviewedArticleIdsFromServing = async (params: {
   to?: string | null
   search?: string | null
 }) => {
-  const scopedMetadataExpression = getDuckdbScopedArticleMetadataExpression('s')
+  const sourceMetadataExpression = 's.source_metadata'
   const whereParts = getDuckdbServingReviewWhereParts({
     ...params,
     requireAllHumanAnswers: true,
-    sourceMetadataExpression: scopedMetadataExpression,
+    sourceMetadataExpression,
   })
   const rows = await runDuckdbJsonQuery<{articleId: string}>(`
     ${getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)}
