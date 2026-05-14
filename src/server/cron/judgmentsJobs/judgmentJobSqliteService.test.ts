@@ -408,6 +408,129 @@ test('claims ready prompts in insertion order for a fresh SQLite queue', async (
   await service.closeAll()
 })
 
+test('claimReadyPrompts skips legacy duplicate rows when a canonical queue row exists', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const suffix = `${Date.now()}`
+  const connectionId = `connection-canonical-duplicate-${suffix}`
+  const modelId = `model-canonical-duplicate-${suffix}`
+  const projectId = `project-canonical-duplicate-${suffix}`
+  const jobId = `job-canonical-duplicate-${suffix}`
+  const canonicalArticleId = `article-canonical-duplicate-${suffix}`
+  const legacyArticleId = `legacy-canonical-duplicate-${suffix}`
+  const legacyQueueId = `queue-legacy-duplicate-${suffix}`
+  const canonicalQueueId = `queue-canonical-duplicate-${suffix}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Canonical Duplicate Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title)
+    VALUES ('${canonicalArticleId}', '${legacyArticleId}', 'Canonical Duplicate Article')
+  `)
+
+  await service.initializeJob(jobId)
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+  const now = new Date().toISOString()
+
+  try {
+    sqliteDatabase
+      .query(
+        `
+          INSERT INTO queue_prompt (
+            id,
+            job_id,
+            article_id,
+            prompt_id,
+            status,
+            server_id,
+            ready_insert_seq,
+            created_at,
+            updated_at
+          ) VALUES (?, ?, ?, 'prompt-canonical-duplicate', 'ready', 'server-a', ?, ?, ?)
+        `,
+      )
+      .run(legacyQueueId, jobId, legacyArticleId, 1, now, now)
+    sqliteDatabase
+      .query(
+        `
+          INSERT INTO queue_prompt (
+            id,
+            job_id,
+            article_id,
+            prompt_id,
+            status,
+            server_id,
+            ready_insert_seq,
+            created_at,
+            updated_at
+          ) VALUES (?, ?, ?, 'prompt-canonical-duplicate', 'ready', 'server-a', ?, ?, ?)
+        `,
+      )
+      .run(canonicalQueueId, jobId, canonicalArticleId, 2, now, now)
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  const claimed = await service.claimReadyPrompts(jobId, 'server-a', 2)
+  const resultDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    const rows = resultDatabase
+      .query(
+        `
+          SELECT
+            id,
+            article_id AS articleId,
+            status,
+            terminal_kind AS terminalKind,
+            skip_reason AS skipReason
+          FROM queue_prompt
+          WHERE id IN (?, ?)
+          ORDER BY ready_insert_seq ASC
+        `,
+      )
+      .all(legacyQueueId, canonicalQueueId)
+
+    expect(
+      claimed.map((prompt) => {
+        return {articleId: prompt.articleId, recordId: prompt.recordId}
+      }),
+    ).toEqual([{articleId: canonicalArticleId, recordId: canonicalQueueId}])
+    expect(rows).toEqual([
+      {
+        articleId: legacyArticleId,
+        id: legacyQueueId,
+        skipReason: 'duplicate_canonical_article_prompt',
+        status: 'judged',
+        terminalKind: 'skipped',
+      },
+      {articleId: canonicalArticleId, id: canonicalQueueId, skipReason: null, status: 'claimed', terminalKind: null},
+    ])
+  } finally {
+    resultDatabase.close(false)
+  }
+
+  await service.closeAll()
+})
+
 test('claimReadyPrompts skips delayed retry rows until their retry window opens', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

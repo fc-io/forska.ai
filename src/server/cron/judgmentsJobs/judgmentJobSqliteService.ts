@@ -120,8 +120,9 @@ export type JobCursor = {lastDate: Date; lastArticleId: string; priorityBucket: 
 
 type QueueCountRow = {count: number; status: string}
 
-type QueuePromptRow = {articleId: string; id: string; promptId: string}
+type QueuePromptRow = {articleId: string; id: string; promptId: string; readyInsertSeq: number}
 type QueuePromptSnapshotSettings = {useFulltext: boolean; useFulltextNoImages: boolean}
+type CanonicalQueuePromptRow = QueuePromptRow & {originalArticleId: string}
 
 type QueuePromptInsert = {articleId: string; promptId: string}
 
@@ -174,6 +175,21 @@ const canonicalizeQueuePromptEntries = async <T extends {articleId: string}>(
     )
     return canonicalArticleId ? {...entry, articleId: canonicalArticleId} : entry
   })
+}
+
+const getCanonicalQueuePromptRows = async (
+  jobId: string,
+  rows: QueuePromptRow[],
+): Promise<CanonicalQueuePromptRow[]> => {
+  const canonicalRows = await canonicalizeQueuePromptEntries(jobId, rows)
+
+  return canonicalRows.map((row, index) => {
+    return {...row, originalArticleId: rows[index]?.articleId ?? row.articleId}
+  })
+}
+
+const getQueuePromptCanonicalKey = (row: Pick<QueuePromptRow, 'articleId' | 'promptId'>) => {
+  return `${row.articleId}\u0000${row.promptId}`
 }
 
 const queuePromptReadyOrderColumnName = 'ready_insert_seq'
@@ -3187,7 +3203,11 @@ const getReadyQueuePromptRows = (database: Database, limit: number): QueuePrompt
   return database
     .query(
       `
-        SELECT id, article_id AS articleId, prompt_id AS promptId
+        SELECT
+          id,
+          article_id AS articleId,
+          prompt_id AS promptId,
+          ready_insert_seq AS readyInsertSeq
         FROM queue_prompt
         WHERE status = 'ready'
           AND (retry_after_at IS NULL OR retry_after_at <= ?)
@@ -3213,6 +3233,80 @@ const getQueuePromptSnapshotSettings = (database: Database, jobId: string): Queu
     .get(jobId) as {useFulltext: number; useFulltextNoImages: number} | null
 
   return row ? {useFulltext: toBoolean(row.useFulltext), useFulltextNoImages: toBoolean(row.useFulltextNoImages)} : null
+}
+
+const hasStoredCanonicalQueuePromptDuplicate = ({
+  database,
+  jobId,
+  row,
+}: {
+  database: Database
+  jobId: string
+  row: CanonicalQueuePromptRow
+}) => {
+  const duplicate = database
+    .query(
+      `
+        SELECT id
+        FROM queue_prompt
+        WHERE job_id = ?
+          AND article_id = ?
+          AND prompt_id = ?
+          AND id <> ?
+        LIMIT 1
+      `,
+    )
+    .get(jobId, row.articleId, row.promptId, row.id) as {id: string} | null
+
+  return duplicate !== null
+}
+
+const markReadyQueuePromptCanonicalDuplicateSkipped = (database: Database, row: CanonicalQueuePromptRow) => {
+  const now = new Date().toISOString()
+
+  database
+    .query(
+      `
+        UPDATE queue_prompt
+        SET status = 'judged',
+            terminal_kind = 'skipped',
+            skip_reason = 'duplicate_canonical_article_prompt',
+            judged_at = ?,
+            updated_at = ?
+        WHERE id = ?
+          AND status = 'ready'
+      `,
+    )
+    .run(now, now, row.id)
+}
+
+const getClaimableCanonicalQueuePromptRows = ({
+  database,
+  jobId,
+  rows,
+}: {
+  database: Database
+  jobId: string
+  rows: CanonicalQueuePromptRow[]
+}) => {
+  const result = rows.reduce(
+    (state, row) => {
+      const canonicalKey = getQueuePromptCanonicalKey(row)
+      const hasStoredDuplicate =
+        row.originalArticleId !== row.articleId && hasStoredCanonicalQueuePromptDuplicate({database, jobId, row})
+      const shouldSkip = state.canonicalKeys.has(canonicalKey) || hasStoredDuplicate
+
+      if (shouldSkip) {
+        markReadyQueuePromptCanonicalDuplicateSkipped(database, row)
+        return state
+      }
+
+      return {canonicalKeys: new Set(state.canonicalKeys).add(canonicalKey), rows: [...state.rows, row]}
+    },
+    {canonicalKeys: new Set<string>(), rows: [] as CanonicalQueuePromptRow[]},
+  )
+
+  return result.rows
 }
 
 const markReadyQueuePromptClaimed = ({
@@ -3274,8 +3368,14 @@ const claimReadyQueuePromptRows = async ({
     return []
   }
 
-  const canonicalRows = await canonicalizeQueuePromptEntries(jobId, rows)
-  const rowClaims = canonicalRows.map((row) => {
+  const canonicalRows = await getCanonicalQueuePromptRows(jobId, rows)
+  const claimableRows = getClaimableCanonicalQueuePromptRows({database, jobId, rows: canonicalRows})
+
+  if (claimableRows.length === 0) {
+    return []
+  }
+
+  const rowClaims = claimableRows.map((row) => {
     return {claimId: randomUUID(), row}
   })
   const snapshotSettings = getQueuePromptSnapshotSettings(database, jobId)

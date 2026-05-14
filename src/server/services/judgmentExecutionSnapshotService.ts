@@ -233,15 +233,12 @@ const getSnapshotRows = async (
       FROM snapshot_request
       INNER JOIN app.judgment_job judgment_job ON judgment_job.id = snapshot_request.job_id
     ),
-    ranked_snapshot_article_resolution AS (
+    snapshot_article_resolution_candidate AS (
       SELECT
         request_order,
         article_id,
         canonical_article_id,
-        ROW_NUMBER() OVER (
-          PARTITION BY request_order
-          ORDER BY resolution_rank ASC, canonical_article_id ASC
-        ) AS resolution_order
+        resolution_rank
       FROM (
         SELECT
           snapshot_request_project.request_order,
@@ -289,12 +286,78 @@ const getSnapshotRows = async (
         INNER JOIN app.article_import_route_source_record source_record
           ON source_record.import_route_id = project_import_route.import_route_id
          AND source_record.external_article_id = snapshot_request_project.article_id
+         AND source_record.quarantined_at IS NULL
       ) snapshot_article_resolution_candidates
     ),
     snapshot_article_resolution AS (
-      SELECT request_order, canonical_article_id
-      FROM ranked_snapshot_article_resolution
-      WHERE resolution_order = 1
+      SELECT
+        candidate.request_order,
+        CASE
+          WHEN COUNT(DISTINCT candidate.canonical_article_id) = 1 THEN MIN(candidate.canonical_article_id)
+          ELSE NULL
+        END AS canonical_article_id
+      FROM snapshot_article_resolution_candidate candidate
+      INNER JOIN (
+        SELECT request_order, MIN(resolution_rank) AS resolution_rank
+        FROM snapshot_article_resolution_candidate
+        GROUP BY request_order
+      ) best_candidate
+        ON best_candidate.request_order = candidate.request_order
+       AND best_candidate.resolution_rank = candidate.resolution_rank
+      GROUP BY candidate.request_order
+    ),
+    scoped_article_import_candidate AS (
+      SELECT
+        snapshot_request_project.request_order,
+        current_import.article_id,
+        current_import.external_article_id,
+        current_import.id,
+        current_import.import_metadata,
+        import_route.route AS import_route,
+        current_import.import_route_id,
+        current_import.raw_payload,
+        current_import.source_kind,
+        current_import.source_record_key,
+        project_import_route.project_id,
+        CASE WHEN current_import.external_article_id = snapshot_request_project.article_id THEN 0 ELSE 1 END AS selected_identifier_rank,
+        0 AS selected_source_rank
+      FROM snapshot_request_project
+      INNER JOIN snapshot_article_resolution
+        ON snapshot_article_resolution.request_order = snapshot_request_project.request_order
+      INNER JOIN app.project_import_route project_import_route
+        ON project_import_route.project_id = snapshot_request_project.snapshot_project_id
+      INNER JOIN app.article_import_route current_import
+        ON current_import.import_route_id = project_import_route.import_route_id
+       AND current_import.article_id = snapshot_article_resolution.canonical_article_id
+      LEFT JOIN app.import_route import_route ON import_route.id = current_import.import_route_id
+
+      UNION ALL
+
+      SELECT
+        snapshot_request_project.request_order,
+        source_record.article_id,
+        source_record.external_article_id,
+        source_record.id,
+        source_record.import_metadata,
+        import_route.route AS import_route,
+        source_record.import_route_id,
+        source_record.raw_payload,
+        source_record.source_kind,
+        source_record.source_record_key,
+        project_import_route.project_id,
+        0 AS selected_identifier_rank,
+        1 AS selected_source_rank
+      FROM snapshot_request_project
+      INNER JOIN snapshot_article_resolution
+        ON snapshot_article_resolution.request_order = snapshot_request_project.request_order
+      INNER JOIN app.project_import_route project_import_route
+        ON project_import_route.project_id = snapshot_request_project.snapshot_project_id
+      INNER JOIN app.article_import_route_source_record source_record
+        ON source_record.import_route_id = project_import_route.import_route_id
+       AND source_record.article_id = snapshot_article_resolution.canonical_article_id
+       AND source_record.external_article_id = snapshot_request_project.article_id
+       AND source_record.quarantined_at IS NULL
+      LEFT JOIN app.import_route import_route ON import_route.id = source_record.import_route_id
     ),
     selected_scoped_article_import AS (
       SELECT
@@ -310,29 +373,21 @@ const getSnapshotRows = async (
         source_record_key
       FROM (
         SELECT
-          snapshot_request_project.request_order,
-          current_import.article_id,
-          current_import.external_article_id,
-          current_import.id,
-          current_import.import_metadata,
-          import_route.route AS import_route,
-          current_import.import_route_id,
-          current_import.raw_payload,
-          current_import.source_kind,
-          current_import.source_record_key,
+          request_order,
+          article_id,
+          external_article_id,
+          id,
+          import_metadata,
+          import_route,
+          import_route_id,
+          raw_payload,
+          source_kind,
+          source_record_key,
           ROW_NUMBER() OVER (
-            PARTITION BY snapshot_request_project.request_order
-            ORDER BY project_import_route.project_id ASC, current_import.import_route_id ASC, current_import.id ASC
+            PARTITION BY request_order
+            ORDER BY selected_identifier_rank ASC, selected_source_rank ASC, project_id ASC, import_route_id ASC, id ASC
           ) AS selected_rank
-        FROM snapshot_request_project
-        INNER JOIN snapshot_article_resolution
-          ON snapshot_article_resolution.request_order = snapshot_request_project.request_order
-        INNER JOIN app.project_import_route project_import_route
-          ON project_import_route.project_id = snapshot_request_project.snapshot_project_id
-        INNER JOIN app.article_import_route current_import
-          ON current_import.import_route_id = project_import_route.import_route_id
-         AND current_import.article_id = snapshot_article_resolution.canonical_article_id
-        LEFT JOIN app.import_route import_route ON import_route.id = current_import.import_route_id
+        FROM scoped_article_import_candidate
       ) ranked_scoped_article_import
       WHERE selected_rank = 1
     )

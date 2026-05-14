@@ -533,6 +533,7 @@ const getCovidenceRelatedRecords = async (params: {
     ),
     source_record_related_record AS (
       SELECT
+        article.id AS canonicalArticleId,
         source_record.id AS id,
         source_record.external_article_id AS articleExternalId,
         article.article_title AS articleTitle,
@@ -553,6 +554,7 @@ const getCovidenceRelatedRecords = async (params: {
     ),
     legacy_related_record AS (
       SELECT
+        article.id AS canonicalArticleId,
         article.id AS id,
         article.article_id AS articleExternalId,
         article.article_title AS articleTitle,
@@ -600,7 +602,11 @@ const getCovidenceRelatedRecords = async (params: {
       rawPayload,
       sourceMetadata
     FROM legacy_related_record
-    WHERE NOT EXISTS (SELECT 1 FROM source_record_related_record)
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM source_record_related_record source_record
+      WHERE source_record.canonicalArticleId = legacy_related_record.canonicalArticleId
+    )
     ORDER BY articleTitle ASC, articleExternalId ASC NULLS LAST, id ASC
   `)
 
