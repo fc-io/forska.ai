@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto'
+
 import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
@@ -35,8 +37,51 @@ type ArticleImportStoreRow = {
   fullTextConversionError?: string | null
   fullTextConversionAttempts?: number | null
   fullTextCharCount?: number | null
+  externalArticleId?: string | null
+  sourceKind?: string | null
+  importMetadata?: unknown
+  matchMetadata?: unknown
+  importRunId?: string | null
+  sourceRecordKey?: string | null
+  sourceRecordHash?: string | null
+  rawPayload?: unknown
 }
 type UpsertedArticleRow = {articleId: string; id: string}
+type ScopedArticleImportStoreRow = ArticleImportStoreRow & {
+  externalArticleId: string | null
+  sourceKind: string | null
+  importMetadata: unknown
+  matchMetadata: unknown
+  importRunId: string | null
+  sourceRecordKey: string
+  sourceRecordHash: string
+  rawPayload: unknown
+}
+type ArticleImportRouteLinkRecord = {
+  articleId: string
+  externalArticleId: string | null
+  importMetadata: unknown
+  importRouteId: string
+  importRunId: string | null
+  matchMetadata: unknown
+  rawPayload: unknown
+  sourceKind: string | null
+  sourceRecordHash: string
+  sourceRecordKey: string
+}
+type ExistingArticleImportRouteLink = {
+  articleId: string
+  importRouteId: string
+  sourceRecordHash: string | null
+  sourceRecordKey: string | null
+}
+type ExistingArticleImportSourceRecord = {
+  articleId: string
+  importRouteId: string
+  legacyArticleId: string | null
+  sourceRecordHash: string
+  sourceRecordKey: string
+}
 
 const articleColumnMap = {
   articleId: 'article_id',
@@ -135,6 +180,77 @@ const getNormalizedArticleImportRow = (row: ArticleImportStoreRow): ArticleImpor
     })
 
   return {...row, doi, sourceMetadata}
+}
+
+const isObjectRecord = (value: unknown): value is Record<string, unknown> => {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)
+}
+
+const getStableJsonValue = (value: unknown): string => {
+  return value instanceof Date
+    ? JSON.stringify(value.toISOString())
+    : Array.isArray(value)
+      ? `[${value
+          .map((entry) => {
+            return getStableJsonValue(entry)
+          })
+          .join(',')}]`
+      : isObjectRecord(value)
+        ? `{${Object.keys(value)
+            .sort((left, right) => {
+              return left.localeCompare(right)
+            })
+            .map((key) => {
+              return `${JSON.stringify(key)}:${getStableJsonValue(value[key])}`
+            })
+            .join(',')}}`
+        : (JSON.stringify(value) ?? 'null')
+}
+
+const getSourceRecordHash = (value: unknown) => {
+  return createHash('sha256').update(getStableJsonValue(value)).digest('hex')
+}
+
+const getSourceKindFromImportRoute = (importRoute: string) => {
+  const routePart = importRoute.split('/').filter(Boolean).at(-1) ?? importRoute
+  const sourceKind = routePart.split(':')[0]?.trim() ?? ''
+
+  return sourceKind === '' ? null : sourceKind
+}
+
+const getSourceRecordHashPayload = (row: ArticleImportStoreRow, rawPayload: unknown) => {
+  return (
+    rawPayload ?? {
+      articleAuthors: row.articleAuthors,
+      articleId: row.articleId,
+      articleSummary: row.articleSummary,
+      articleTitle: row.articleTitle,
+      articleUpdatedAt: row.articleUpdatedAt,
+      doi: row.doi,
+      pubmedId: row.pubmedId,
+      sourceMetadata: row.sourceMetadata,
+      url: row.url,
+    }
+  )
+}
+
+const getScopedArticleImportStoreRow = (row: ArticleImportStoreRow): ScopedArticleImportStoreRow => {
+  const rawPayload = row.rawPayload ?? row.originalData ?? null
+  const externalArticleId = row.externalArticleId ?? row.articleId
+  const sourceRecordKey = row.sourceRecordKey ?? externalArticleId
+  const sourceRecordHash = row.sourceRecordHash ?? getSourceRecordHash(getSourceRecordHashPayload(row, rawPayload))
+
+  return {
+    ...row,
+    externalArticleId,
+    importMetadata: row.importMetadata ?? row.sourceMetadata ?? null,
+    importRunId: row.importRunId ?? null,
+    matchMetadata: row.matchMetadata ?? null,
+    rawPayload,
+    sourceKind: row.sourceKind ?? getSourceKindFromImportRoute(row.importRoute),
+    sourceRecordHash,
+    sourceRecordKey,
+  }
 }
 
 const getArticleValues = (params: {
@@ -277,16 +393,292 @@ const getUpsertedArticles = async (tx: ArticleImportStoreTx, articleIds: string[
   )
 }
 
-const insertArticleImportRouteLinks = async (tx: ArticleImportStoreTx, linkValues: string[]) => {
-  await getValueChunks(linkValues).reduce<Promise<void>>((previousRun, linkValueChunk) => {
+const getArticleImportRouteSourceRecordKey = (record: {importRouteId: string; sourceRecordKey: string}) => {
+  return `${record.importRouteId}\u0000${record.sourceRecordKey}`
+}
+
+const getArticleImportRouteCurrentLinkKey = (record: {articleId: string; importRouteId: string}) => {
+  return `${record.articleId}\u0000${record.importRouteId}`
+}
+
+const currentArticleImportRouteColumns = [
+  'id',
+  'article_id',
+  'import_route_id',
+  'external_article_id',
+  'source_kind',
+  'import_metadata',
+  'match_metadata',
+  'import_run_id',
+  'source_record_key',
+  'source_record_hash',
+  'raw_payload',
+] as const
+
+const articleImportRouteSourceRecordColumns = [
+  'id',
+  'article_id',
+  'import_route_id',
+  'external_article_id',
+  'source_kind',
+  'import_metadata',
+  'match_metadata',
+  'import_run_id',
+  'source_record_key',
+  'source_record_hash',
+  'raw_payload',
+] as const
+
+const getArticleImportRouteLinkValue = (record: ArticleImportRouteLinkRecord) => {
+  return `(${[
+    crypto.randomUUID(),
+    record.articleId,
+    record.importRouteId,
+    record.externalArticleId,
+    record.sourceKind,
+    record.importMetadata,
+    record.matchMetadata,
+    record.importRunId,
+    record.sourceRecordKey,
+    record.sourceRecordHash,
+    record.rawPayload,
+  ]
+    .map((value) => {
+      return getSqlLiteral(value)
+    })
+    .join(', ')})`
+}
+
+const getExistingArticleImportRouteSourceRecords = async (
+  tx: ArticleImportStoreTx,
+  records: ArticleImportRouteLinkRecord[],
+) => {
+  const routeIds = getUniqueValues(
+    records.map((record) => {
+      return record.importRouteId
+    }),
+  )
+  const sourceRecordKeys = getUniqueValues(
+    records.map((record) => {
+      return record.sourceRecordKey
+    }),
+  )
+
+  if (routeIds.length === 0 || sourceRecordKeys.length === 0) {
+    return new Map<string, ExistingArticleImportSourceRecord>()
+  }
+
+  const rows = await getValueChunks(sourceRecordKeys).reduce<Promise<ExistingArticleImportSourceRecord[]>>(
+    async (rowsPromise, sourceRecordKeyChunk) => {
+      const existingRows = await rowsPromise
+      const chunkRows = await tx.queryJson<ExistingArticleImportSourceRecord>(`
+        SELECT
+          source_record.article_id AS articleId,
+          source_record.import_route_id AS importRouteId,
+          article.article_id AS legacyArticleId,
+          source_record.source_record_hash AS sourceRecordHash,
+          source_record.source_record_key AS sourceRecordKey
+        FROM app.article_import_route_source_record source_record
+        INNER JOIN app.article article ON article.id = source_record.article_id
+        WHERE source_record.import_route_id IN (${getQuotedStringList(routeIds).join(', ')})
+          AND source_record.source_record_key IN (${getQuotedStringList(sourceRecordKeyChunk).join(', ')})
+      `)
+
+      return [...existingRows, ...chunkRows]
+    },
+    Promise.resolve([]),
+  )
+
+  return new Map(
+    rows.map((row) => {
+      return [getArticleImportRouteSourceRecordKey(row), row]
+    }),
+  )
+}
+
+const getExistingArticleImportRouteLinks = async (
+  tx: ArticleImportStoreTx,
+  records: ArticleImportRouteLinkRecord[],
+) => {
+  const articleIds = getUniqueValues(
+    records.map((record) => {
+      return record.articleId
+    }),
+  )
+  const routeIds = getUniqueValues(
+    records.map((record) => {
+      return record.importRouteId
+    }),
+  )
+
+  if (articleIds.length === 0 || routeIds.length === 0) {
+    return new Map<string, ExistingArticleImportRouteLink>()
+  }
+
+  const rows = await getValueChunks(articleIds).reduce<Promise<ExistingArticleImportRouteLink[]>>(
+    async (rowsPromise, articleIdChunk) => {
+      const existingRows = await rowsPromise
+      const chunkRows = await tx.queryJson<ExistingArticleImportRouteLink>(`
+        SELECT
+          article_id AS articleId,
+          import_route_id AS importRouteId,
+          source_record_hash AS sourceRecordHash,
+          source_record_key AS sourceRecordKey
+        FROM app.article_import_route
+        WHERE article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})
+          AND import_route_id IN (${getQuotedStringList(routeIds).join(', ')})
+      `)
+
+      return [...existingRows, ...chunkRows]
+    },
+    Promise.resolve([]),
+  )
+
+  return new Map(
+    rows.map((row) => {
+      return [getArticleImportRouteCurrentLinkKey(row), row]
+    }),
+  )
+}
+
+const getDeduplicatedSourceRecords = (records: ArticleImportRouteLinkRecord[]) => {
+  return Array.from(
+    records
+      .reduce<Map<string, ArticleImportRouteLinkRecord>>((acc, record) => {
+        acc.set(getArticleImportRouteSourceRecordKey(record), record)
+        return acc
+      }, new Map())
+      .values(),
+  )
+}
+
+const getDeduplicatedCurrentLinks = (records: ArticleImportRouteLinkRecord[]) => {
+  return Array.from(
+    records
+      .reduce<Map<string, ArticleImportRouteLinkRecord>>((acc, record) => {
+        acc.set(getArticleImportRouteCurrentLinkKey(record), record)
+        return acc
+      }, new Map())
+      .values(),
+  )
+}
+
+const upsertArticleImportRouteCurrentLinks = async (
+  tx: ArticleImportStoreTx,
+  records: ArticleImportRouteLinkRecord[],
+) => {
+  const deduplicatedRecords = getDeduplicatedCurrentLinks(records)
+  const existingLinks = await getExistingArticleImportRouteLinks(tx, deduplicatedRecords)
+  const recordsToWrite = deduplicatedRecords.filter((record) => {
+    const existingLink = existingLinks.get(getArticleImportRouteCurrentLinkKey(record))
+
+    return (
+      !existingLink
+      || existingLink.sourceRecordKey !== record.sourceRecordKey
+      || existingLink.sourceRecordHash !== record.sourceRecordHash
+    )
+  })
+
+  await getValueChunks(recordsToWrite).reduce<Promise<void>>((previousRun, recordChunk) => {
+    return previousRun.then(() => {
+      return recordChunk.length === 0
+        ? Promise.resolve()
+        : tx.run(`
+          INSERT INTO app.article_import_route (${currentArticleImportRouteColumns.join(', ')})
+          VALUES ${recordChunk.map(getArticleImportRouteLinkValue).join(', ')}
+          ON CONFLICT(article_id, import_route_id) DO UPDATE SET
+            external_article_id = excluded.external_article_id,
+            source_kind = excluded.source_kind,
+            import_metadata = excluded.import_metadata,
+            match_metadata = excluded.match_metadata,
+            import_run_id = excluded.import_run_id,
+            source_record_key = excluded.source_record_key,
+            source_record_hash = excluded.source_record_hash,
+            raw_payload = excluded.raw_payload,
+            updated_at = now()
+        `)
+    })
+  }, Promise.resolve())
+}
+
+const upsertArticleImportRouteSourceRecords = async (
+  tx: ArticleImportStoreTx,
+  records: ArticleImportRouteLinkRecord[],
+  existingSourceRecords: Map<string, ExistingArticleImportSourceRecord>,
+) => {
+  const deduplicatedRecords = getDeduplicatedSourceRecords(records)
+  const recordsToWrite = deduplicatedRecords.filter((record) => {
+    const existingRecord = existingSourceRecords.get(getArticleImportRouteSourceRecordKey(record))
+
+    return !existingRecord || existingRecord.sourceRecordHash !== record.sourceRecordHash
+  })
+
+  await getValueChunks(recordsToWrite).reduce<Promise<void>>((previousRun, recordChunk) => {
+    return previousRun.then(() => {
+      return recordChunk.length === 0
+        ? Promise.resolve()
+        : tx.run(`
+          INSERT INTO app.article_import_route_source_record (${articleImportRouteSourceRecordColumns.join(', ')})
+          VALUES ${recordChunk.map(getArticleImportRouteLinkValue).join(', ')}
+          ON CONFLICT(import_route_id, source_record_key) DO UPDATE SET
+            article_id = excluded.article_id,
+            external_article_id = excluded.external_article_id,
+            source_kind = excluded.source_kind,
+            import_metadata = excluded.import_metadata,
+            match_metadata = excluded.match_metadata,
+            import_run_id = excluded.import_run_id,
+            source_record_hash = excluded.source_record_hash,
+            raw_payload = excluded.raw_payload,
+            quarantined_at = NULL,
+            quarantine_reason = NULL,
+            quarantine_metadata = NULL,
+            updated_at = now()
+        `)
+    })
+  }, Promise.resolve())
+}
+
+const quarantineRemappedArticleImportSourceRecords = async (
+  tx: ArticleImportStoreTx,
+  records: ArticleImportRouteLinkRecord[],
+) => {
+  await records.reduce<Promise<void>>((previousRun, record) => {
     return previousRun.then(() => {
       return tx.run(`
-        INSERT INTO app.article_import_route (id, article_id, import_route_id)
-        VALUES ${linkValueChunk.join(', ')}
-        ON CONFLICT(article_id, import_route_id) DO NOTHING
+        UPDATE app.article_import_route_source_record
+        SET
+          quarantined_at = now(),
+          quarantine_reason = 'source_record_remap',
+          quarantine_metadata = ${getSqlLiteral({
+            incomingArticleId: record.articleId,
+            incomingExternalArticleId: record.externalArticleId,
+            incomingImportRunId: record.importRunId,
+            incomingSourceRecordHash: record.sourceRecordHash,
+          })},
+          updated_at = now()
+        WHERE import_route_id = ${getSqlLiteral(record.importRouteId)}
+          AND source_record_key = ${getSqlLiteral(record.sourceRecordKey)}
       `)
     })
   }, Promise.resolve())
+}
+
+const insertArticleImportRouteLinks = async (tx: ArticleImportStoreTx, records: ArticleImportRouteLinkRecord[]) => {
+  const existingSourceRecords = await getExistingArticleImportRouteSourceRecords(tx, records)
+  const remappedRecords = records.filter((record) => {
+    const existingRecord = existingSourceRecords.get(getArticleImportRouteSourceRecordKey(record))
+
+    return Boolean(existingRecord && existingRecord.articleId !== record.articleId)
+  })
+  const acceptedRecords = records.filter((record) => {
+    const existingRecord = existingSourceRecords.get(getArticleImportRouteSourceRecordKey(record))
+
+    return !existingRecord || existingRecord.articleId === record.articleId
+  })
+
+  await quarantineRemappedArticleImportSourceRecords(tx, remappedRecords)
+  await upsertArticleImportRouteSourceRecords(tx, acceptedRecords, existingSourceRecords)
+  await upsertArticleImportRouteCurrentLinks(tx, acceptedRecords)
 }
 
 const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
@@ -294,16 +686,18 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
     return {importRouteIds: [] as string[]}
   }
 
-  const normalizedRows = Array.from(
-    rows
-      .reduce<Map<string, ArticleImportStoreRow>>((acc, row) => {
-        const normalizedRow = getNormalizedArticleImportRow(row)
-        acc.set(normalizedRow.articleId, normalizedRow)
+  const normalizedRows = rows.map((row) => {
+    return getScopedArticleImportStoreRow(getNormalizedArticleImportRow(row))
+  })
+  const articleRows = Array.from(
+    normalizedRows
+      .reduce<Map<string, ScopedArticleImportStoreRow>>((acc, row) => {
+        acc.set(row.articleId, row)
         return acc
       }, new Map())
       .values(),
   )
-  const includedKeys = getIncludedArticleKeys(normalizedRows)
+  const includedKeys = getIncludedArticleKeys(articleRows)
   const routes = Array.from(
     new Set(
       normalizedRows
@@ -315,13 +709,14 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
         }),
     ),
   )
+  const routeIdMap = await ensureImportRoutes(tx, routes)
   const existingArticleIds = await getExistingArticleIds(
     tx,
-    normalizedRows.map((row) => {
+    articleRows.map((row) => {
       return row.articleId
     }),
   )
-  const rowsToInsert = normalizedRows.filter((row) => {
+  const rowsToInsert = articleRows.filter((row) => {
     return !existingArticleIds.has(row.articleId)
   })
 
@@ -329,31 +724,42 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
 
   const upsertedArticles = await getUpsertedArticles(
     tx,
-    normalizedRows.map((row) => {
+    articleRows.map((row) => {
       return row.articleId
     }),
   )
 
-  const routeIdMap = await ensureImportRoutes(tx, routes)
-  const articleIdToRoute = new Map(
-    normalizedRows.map((row) => {
-      return [row.articleId, row.importRoute]
+  const articleIdToArticle = new Map(
+    upsertedArticles.map((article) => {
+      return [article.articleId, article.id]
     }),
   )
-  const linkValues = upsertedArticles
+  const linkRecords = normalizedRows
     .map((article) => {
-      const route = articleIdToRoute.get(article.articleId)
-      const importRouteId = route ? routeIdMap.get(route) : null
-      return importRouteId
-        ? `(${getQuotedStringList([crypto.randomUUID(), article.id, importRouteId]).join(', ')})`
+      const articleId = articleIdToArticle.get(article.articleId)
+      const importRouteId = routeIdMap.get(article.importRoute)
+
+      return articleId && importRouteId
+        ? {
+            articleId,
+            externalArticleId: article.externalArticleId,
+            importMetadata: article.importMetadata,
+            importRouteId,
+            importRunId: article.importRunId,
+            matchMetadata: article.matchMetadata,
+            rawPayload: article.rawPayload,
+            sourceKind: article.sourceKind,
+            sourceRecordHash: article.sourceRecordHash,
+            sourceRecordKey: article.sourceRecordKey,
+          }
         : null
     })
-    .filter((value): value is string => {
+    .filter((value): value is ArticleImportRouteLinkRecord => {
       return value !== null
     })
 
-  if (linkValues.length > 0) {
-    await insertArticleImportRouteLinks(tx, linkValues)
+  if (linkRecords.length > 0) {
+    await insertArticleImportRouteLinks(tx, linkRecords)
   }
 
   return {importRouteIds: Array.from(routeIdMap.values())}

@@ -199,6 +199,33 @@ export type ArticleRouteLinkRecord = {
   updatedAt: Date
   articleId: string
   importRouteId: string
+  externalArticleId: string | null
+  sourceKind: string | null
+  importMetadata: unknown
+  matchMetadata: unknown
+  importRunId: string | null
+  sourceRecordKey: string | null
+  sourceRecordHash: string | null
+  rawPayload: unknown
+}
+
+export type ArticleImportRouteSourceRecord = {
+  id: string
+  articleId: string
+  importRouteId: string
+  externalArticleId: string | null
+  sourceKind: string | null
+  importMetadata: unknown
+  matchMetadata: unknown
+  importRunId: string | null
+  sourceRecordKey: string
+  sourceRecordHash: string
+  rawPayload: unknown
+  quarantinedAt: Date | null
+  quarantineReason: string | null
+  quarantineMetadata: unknown
+  createdAt: Date
+  updatedAt: Date
 }
 
 export type ComparisonProjectRecord = {

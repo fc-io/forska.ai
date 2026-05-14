@@ -153,6 +153,143 @@ test('DuckDB migrations add canonical article identifiers and keep legacy articl
   }
 })
 
+test('DuckDB migrations add import-scoped source record identity and idempotency constraints', async () => {
+  const duckdbPath = `/tmp/forska-import-scoped-source-record-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const importRouteColumns = await database.queryJson(
+          "SELECT column_name AS columnName FROM duckdb_columns() WHERE schema_name = 'app' AND table_name = 'article_import_route' ORDER BY column_name"
+        )
+        const importRouteConstraints = await database.queryJson(
+          "SELECT constraint_type AS constraintType, constraint_column_names AS columnNames FROM duckdb_constraints() WHERE schema_name = 'app' AND table_name = 'article_import_route' ORDER BY constraint_name"
+        )
+        const sourceRecordConstraints = await database.queryJson(
+          "SELECT constraint_type AS constraintType, constraint_column_names AS columnNames FROM duckdb_constraints() WHERE schema_name = 'app' AND table_name = 'article_import_route_source_record' ORDER BY constraint_name"
+        )
+
+        await database.run(
+          "INSERT INTO app.import_route (id, route, name) VALUES ('source-record-route', 'source-record:test', 'Source Record Test')"
+        )
+        await database.run(
+          "INSERT INTO app.article (id, article_title, article_id) VALUES ('source-record-article-a', 'Article A', NULL), ('source-record-article-b', 'Article B', NULL)"
+        )
+        await database.run(
+          "INSERT INTO app.article_import_route (id, article_id, import_route_id) VALUES ('source-record-link-a', 'source-record-article-a', 'source-record-route'), ('source-record-link-b', 'source-record-article-b', 'source-record-route')"
+        )
+        await database.run(
+          "INSERT INTO app.article_import_route_source_record (id, article_id, import_route_id, source_record_key, source_record_hash) VALUES ('source-record-row-a', 'source-record-article-a', 'source-record-route', 'source-key-a', 'hash-a')"
+        )
+
+        const duplicateCurrentMembershipRejected = await database
+          .run("INSERT INTO app.article_import_route (id, article_id, import_route_id) VALUES ('source-record-link-duplicate', 'source-record-article-a', 'source-record-route')")
+          .then(
+            () => false,
+            () => true,
+          )
+        const duplicateSourceKeyRejected = await database
+          .run("INSERT INTO app.article_import_route_source_record (id, article_id, import_route_id, source_record_key, source_record_hash) VALUES ('source-record-row-b', 'source-record-article-b', 'source-record-route', 'source-key-a', 'hash-b')")
+          .then(
+            () => false,
+            () => true,
+          )
+        const [nullableLegacyRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route WHERE import_route_id = 'source-record-route' AND external_article_id IS NULL AND source_record_key IS NULL AND source_record_hash IS NULL"
+        )
+
+        console.log(JSON.stringify({duplicateCurrentMembershipRejected, duplicateSourceKeyRejected, importRouteColumns, importRouteConstraints, nullableLegacyRow, sourceRecordConstraints}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify import-scoped source record schema',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      duplicateCurrentMembershipRejected: boolean
+      duplicateSourceKeyRejected: boolean
+      importRouteColumns: Array<{columnName: string}>
+      importRouteConstraints: Array<{constraintType: string; columnNames: string[]}>
+      nullableLegacyRow: {count: number}
+      sourceRecordConstraints: Array<{constraintType: string; columnNames: string[]}>
+    }
+    const importRouteColumnNames = parsed.importRouteColumns.map((column) => {
+      return column.columnName
+    })
+    const currentUniqueColumns = parsed.importRouteConstraints
+      .filter((constraint) => {
+        return constraint.constraintType === 'UNIQUE'
+      })
+      .map((constraint) => {
+        return constraint.columnNames
+      })
+    const sourceRecordUniqueColumns = parsed.sourceRecordConstraints
+      .filter((constraint) => {
+        return constraint.constraintType === 'UNIQUE'
+      })
+      .map((constraint) => {
+        return constraint.columnNames
+      })
+
+    expect(importRouteColumnNames).toContain('external_article_id')
+    expect(importRouteColumnNames).toContain('source_kind')
+    expect(importRouteColumnNames).toContain('import_metadata')
+    expect(importRouteColumnNames).toContain('match_metadata')
+    expect(importRouteColumnNames).toContain('import_run_id')
+    expect(importRouteColumnNames).toContain('source_record_key')
+    expect(importRouteColumnNames).toContain('source_record_hash')
+    expect(importRouteColumnNames).toContain('raw_payload')
+    expect(currentUniqueColumns).toContainEqual(['article_id', 'import_route_id'])
+    expect(sourceRecordUniqueColumns).toContainEqual(['import_route_id', 'source_record_key'])
+    expect(parsed.duplicateCurrentMembershipRejected).toBe(true)
+    expect(parsed.duplicateSourceKeyRejected).toBe(true)
+    expect(parsed.nullableLegacyRow.count).toBe(2)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('migrateDuckdb preserves the original failure when rollback is already inactive', async () => {
   process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-test.duckdb'
 
