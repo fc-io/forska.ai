@@ -835,6 +835,16 @@ const getCanonicalArticleImportCandidateRecord = (
       biorxivId: row.biorxivId,
       candidateId: `${row.sourceRecordKey}\u0000${index}`,
       doi: row.doi,
+      fullText: row.fullText,
+      fullTextCharCount: row.fullTextCharCount,
+      fullTextConversionAttempts: row.fullTextConversionAttempts,
+      fullTextConversionError: row.fullTextConversionError,
+      fullTextConversionStatus: row.fullTextConversionStatus,
+      fullTextFetchedAt: row.fullTextFetchedAt,
+      fullTextHtml: row.fullTextHtml,
+      fullTextOriginalFormat: row.fullTextOriginalFormat,
+      fullTextPDF: row.fullTextPDF,
+      fullTextSource: row.fullTextSource,
       importRoute: row.importRoute,
       importRunId: row.importRunId,
       medrxivId: row.medrxivId,
@@ -975,6 +985,11 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
 }
 
 const clearImportRouteLinks = async (tx: ArticleImportStoreTx, importRouteId: string) => {
+  await tx.run(`
+    DELETE FROM app.article_import_route_source_record
+    WHERE import_route_id = ${getSqlLiteral(importRouteId)}
+  `)
+
   await tx.run(`
     DELETE FROM app.article_import_route
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}

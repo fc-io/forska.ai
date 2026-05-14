@@ -176,6 +176,120 @@ CREATE TABLE app.article_identifier (
   UNIQUE(kind, normalized_value)
 );
 
+INSERT INTO app.article_identifier (
+  id,
+  article_id,
+  kind,
+  normalized_value,
+  source,
+  provenance,
+  is_primary,
+  created_at,
+  updated_at
+)
+WITH legacy_identifier_candidate AS (
+  SELECT
+    article.id || ':legacy-doi' AS id,
+    article.id AS article_id,
+    'doi' AS kind,
+    regexp_replace(
+      regexp_replace(lower(trim(article.doi)), '^https?://(dx\.)?doi\.org/', ''),
+      '^doi:',
+      ''
+    ) AS normalized_value,
+    'legacy_article' AS source,
+    json_object('sourceColumn', 'doi', 'rawValue', article.doi) AS provenance,
+    TRUE AS is_primary,
+    article.created_at,
+    article.updated_at
+  FROM app.article article
+  WHERE article.doi IS NOT NULL
+    AND trim(article.doi) <> ''
+
+  UNION ALL
+
+  SELECT
+    article.id || ':legacy-pmid' AS id,
+    article.id AS article_id,
+    'pmid' AS kind,
+    regexp_replace(
+      regexp_replace(regexp_replace(lower(trim(article.pubmed_id)), '^pmid:', ''), '^pubmed:', ''),
+      '^0+',
+      ''
+    ) AS normalized_value,
+    'legacy_article' AS source,
+    json_object('sourceColumn', 'pubmed_id', 'rawValue', article.pubmed_id) AS provenance,
+    TRUE AS is_primary,
+    article.created_at,
+    article.updated_at
+  FROM app.article article
+  WHERE article.pubmed_id IS NOT NULL
+    AND trim(article.pubmed_id) <> ''
+
+  UNION ALL
+
+  SELECT
+    article.id || ':legacy-arxiv' AS id,
+    article.id AS article_id,
+    'arxiv' AS kind,
+    regexp_replace(
+      regexp_replace(
+        regexp_replace(
+          regexp_replace(lower(trim(article.arxiv_id)), '^https?://(www\.)?arxiv\.org/(abs|pdf)/', ''),
+          '^oai:arxiv\.org:',
+          ''
+        ),
+        '^arxiv:',
+        ''
+      ),
+      'v[0-9]+$|\.pdf$',
+      ''
+    ) AS normalized_value,
+    'legacy_article' AS source,
+    json_object('sourceColumn', 'arxiv_id', 'rawValue', article.arxiv_id) AS provenance,
+    TRUE AS is_primary,
+    article.created_at,
+    article.updated_at
+  FROM app.article article
+  WHERE article.arxiv_id IS NOT NULL
+    AND trim(article.arxiv_id) <> ''
+), valid_legacy_identifier AS (
+  SELECT *
+  FROM legacy_identifier_candidate
+  WHERE (
+      kind = 'doi'
+      AND regexp_matches(normalized_value, '^10\.[^[:space:]/]+/[^[:space:]]+$')
+    )
+    OR (
+      kind = 'pmid'
+      AND regexp_matches(normalized_value, '^[0-9]+$')
+    )
+    OR (
+      kind = 'arxiv'
+      AND (
+        regexp_matches(normalized_value, '^[0-9]{4}\.[0-9]{4,5}$')
+        OR regexp_matches(normalized_value, '^[a-z][a-z-]+(\.[a-z-]+)?/[0-9]{7}$')
+      )
+    )
+), ranked_legacy_identifier AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (PARTITION BY kind, normalized_value ORDER BY article_id ASC) AS identifier_rank
+  FROM valid_legacy_identifier
+)
+SELECT
+  id,
+  article_id,
+  kind,
+  normalized_value,
+  source,
+  provenance,
+  is_primary,
+  created_at,
+  updated_at
+FROM ranked_legacy_identifier
+WHERE identifier_rank = 1;
+
 CREATE TABLE app.article_import_route (
   id VARCHAR PRIMARY KEY,
   article_id VARCHAR NOT NULL REFERENCES app.article(id),

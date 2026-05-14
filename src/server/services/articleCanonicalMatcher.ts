@@ -32,6 +32,16 @@ export type CanonicalArticleMatchCandidate = {
   biorxivId?: string | null
   candidateId: string
   doi?: string | null
+  fullText?: string | null
+  fullTextCharCount?: number | null
+  fullTextConversionAttempts?: number | null
+  fullTextConversionError?: string | null
+  fullTextConversionStatus?: string | null
+  fullTextFetchedAt?: Date | string | null
+  fullTextHtml?: string | null
+  fullTextOriginalFormat?: string | null
+  fullTextPDF?: string | null
+  fullTextSource?: string | null
   importRoute?: string | null
   importRunId?: string | null
   medrxivId?: string | null
@@ -445,6 +455,16 @@ const getResolvedCreateArticleValue = (plan: AcceptedGroupPlan) => {
     arxivId: resolved.arxivId,
     biorxivId: resolved.biorxivId,
     doi: resolved.doi,
+    fullText: baseCandidate?.fullText ?? null,
+    fullTextCharCount: baseCandidate?.fullTextCharCount ?? null,
+    fullTextConversionAttempts: baseCandidate?.fullTextConversionAttempts ?? null,
+    fullTextConversionError: baseCandidate?.fullTextConversionError ?? null,
+    fullTextConversionStatus: baseCandidate?.fullTextConversionStatus ?? null,
+    fullTextFetchedAt: baseCandidate?.fullTextFetchedAt ?? null,
+    fullTextHtml: baseCandidate?.fullTextHtml ?? null,
+    fullTextOriginalFormat: baseCandidate?.fullTextOriginalFormat ?? null,
+    fullTextPDF: baseCandidate?.fullTextPDF ?? null,
+    fullTextSource: baseCandidate?.fullTextSource ?? null,
     id: plan.articleId,
     importRoute: baseCandidate?.importRoute ?? null,
     medrxivId: resolved.medrxivId,
@@ -471,6 +491,16 @@ const getCreateArticleInsertValue = (plan: AcceptedGroupPlan) => {
     value.doi,
     value.pubmedId,
     value.url,
+    value.fullText,
+    value.fullTextHtml,
+    value.fullTextPDF,
+    value.fullTextSource,
+    value.fullTextOriginalFormat,
+    value.fullTextFetchedAt,
+    value.fullTextConversionStatus,
+    value.fullTextConversionError,
+    value.fullTextConversionAttempts,
+    value.fullTextCharCount,
     value.importRoute,
     value.publicationStatus,
     value.sourceMetadata,
@@ -504,6 +534,16 @@ const insertCreatedArticles = async (tx: CanonicalArticleMatcherTx, plans: Accep
             doi,
             pubmed_id,
             url,
+            full_text,
+            full_text_html,
+            full_text_pdf,
+            full_text_source,
+            full_text_original_format,
+            full_text_fetched_at,
+            full_text_conversion_status,
+            full_text_conversion_error,
+            full_text_conversion_attempts,
+            full_text_char_count,
             import_route,
             publication_status,
             source_metadata
