@@ -32,6 +32,11 @@ type FullTextConversionModelConfigRow = {
   remoteModelId: string | null
 }
 
+type FullTextConversionModelAvailabilityRow = Pick<
+  FullTextConversionModelConfigRow,
+  'modelId' | 'providerConfigJson' | 'providerKind'
+>
+
 const userConfigSelectClause = `
   id,
   name,
@@ -223,6 +228,13 @@ const getOrCreateUserConfig = async (): Promise<UserRecord> => {
   return loaded ? syncLocalProjectMartLargeRebuildSettings(loaded) : getDefaultUserRecord()
 }
 
+const getFullTextConversionModelAvailability = (row: FullTextConversionModelAvailabilityRow) => {
+  const config = getProviderConnectionConfigFromJson({providerKind: row.providerKind, value: row.providerConfigJson})
+  const isSelectable = !config.archived && !config.disabledModelIds?.includes(row.modelId)
+
+  return {config, isSelectable}
+}
+
 const getValidatedFullTextConversionModelId = async (value: string | null | undefined): Promise<string | null> => {
   const normalizedModelId = getNullableTrimmedValue(value)
 
@@ -230,8 +242,11 @@ const getValidatedFullTextConversionModelId = async (value: string | null | unde
     return null
   }
 
-  const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
-    SELECT m.id AS id
+  const [row] = await getAppDatabaseService().queryJson<FullTextConversionModelAvailabilityRow>(`
+    SELECT
+      m.id AS modelId,
+      TO_JSON(pc.config_json) AS providerConfigJson,
+      pc.provider_kind AS providerKind
     FROM app.model m
     INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE m.id = ${getSqlLiteral(normalizedModelId)}
@@ -241,7 +256,9 @@ const getValidatedFullTextConversionModelId = async (value: string | null | unde
     LIMIT 1
   `)
 
-  if (!row) {
+  const availability = row ? getFullTextConversionModelAvailability(row) : null
+
+  if (!availability?.isSelectable) {
     throw new Error('Selected PDF conversion model is not available')
   }
 
@@ -369,7 +386,12 @@ const getFullTextConversionModelConfig = async (): Promise<{
     return null
   }
 
-  const config = getProviderConnectionConfigFromJson({providerKind: row.providerKind, value: row.providerConfigJson})
+  const {config, isSelectable} = getFullTextConversionModelAvailability(row)
+
+  if (!isSelectable) {
+    return null
+  }
+
   const baseURL = getProviderConnectionEffectiveBaseURL({baseURL: row.baseURL, config, providerKind: row.providerKind})
   const modelName = getNullableTrimmedValue(row.remoteModelId ?? row.displayName)
 

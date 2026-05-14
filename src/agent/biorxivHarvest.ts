@@ -1,5 +1,6 @@
 import {type} from 'arktype'
 
+import {normalizeBiorxivIdentifier} from '../utils/articleIdentifierNormalization.ts'
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 import {biorxivWorkflowStoreEntries} from './biorxivWorkflowStoreEntries.ts'
@@ -23,13 +24,9 @@ const toStringOr = (value: unknown, fallback = ''): string => {
 }
 
 const normalizeDoi = (value: unknown): string => {
-  const raw = toStringOr(value, '').trim()
-  const lower = raw.toLowerCase()
-  const prefixes = ['https://doi.org/', 'http://doi.org/', 'doi:']
-  const prefix = prefixes.find((p) => {
-    return lower.startsWith(p)
-  })
-  return prefix ? raw.slice(prefix.length) : raw
+  const outcome = normalizeBiorxivIdentifier(value)
+
+  return outcome.status === 'accepted' ? outcome.identifier.normalizedValue : ''
 }
 
 const toIsoDate = (value: unknown): string => {

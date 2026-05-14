@@ -1,5 +1,6 @@
 import {type} from 'arktype'
 
+import {normalizeDoiIdentifier} from '../utils/articleIdentifierNormalization.ts'
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 import {pubmedHarvestGetIdParams} from './pubmedHarvest/pubmedHarvestGetIdParams.ts'
@@ -148,15 +149,9 @@ const extractTitle = (t: unknown): string => {
 }
 
 const normalizeDoi = (value: unknown): string | undefined => {
-  const raw = typeof value === 'string' ? value.trim() : ''
-  const lower = raw.toLowerCase()
-  const prefixes = ['https://doi.org/', 'http://doi.org/', 'https://dx.doi.org/', 'http://dx.doi.org/', 'doi:']
-  const prefix = prefixes.find((candidate) => {
-    return lower.startsWith(candidate)
-  })
-  const normalized = prefix ? raw.slice(prefix.length).trim() : raw
+  const outcome = normalizeDoiIdentifier(value)
 
-  return normalized === '' ? undefined : normalized
+  return outcome.status === 'accepted' ? outcome.identifier.normalizedValue : undefined
 }
 
 const buildQuery = (from: string, to: string): string => {

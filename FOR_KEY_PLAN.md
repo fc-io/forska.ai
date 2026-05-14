@@ -298,6 +298,7 @@ For each mutation route/job:
   - `src/server/routes/ArticleAdminRoutes.ts`
   - `src/server/cron/fullTextJobs.ts`
   - `src/server/cron/fullTextConversionJobs.ts`
+  - `src/server/services/userConfigQueryService.ts`
   - `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`
   - `src/db/duckdbMigrations/0028_judgmentHumanNullableProjectId.sql`
   - `src/db/duckdbMigrations/0022_fullTextConversionModelConfig.sql`
@@ -323,10 +324,6 @@ For each mutation route/job:
 
 #### Logical-ref risks
 
-- `src/server/routes/DataSourcesImportRoutes/**`
-  - `data_source.import_route` remains a string logical ref.
-- `src/server/cron/fullTextConversionJobs.ts`, `src/db/duckdbMigrations/0022_fullTextConversionModelConfig.sql`
-  - `article.full_text_conversion_model_id` and `user_config.full_text_conversion_model_id` only get one-shot migration validation; later model deletes/rebuilds can orphan refs.
 - `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`
   - `app.llm_status` stores provider/model identity without FKs; shared-base-URL workers can drift logical attribution.
 
@@ -346,6 +343,10 @@ For each mutation route/job:
   - prompt-mode human assessment now resyncs unanswered `app.judgment_human` rows to current `app.project_prompt` membership during init and submit.
 - `src/server/providers/providerConnectionRepository.ts`, `src/server/providers/providerModelRepository.ts`
   - post-`0029` provider/model logical refs are covered by DB-backed delete/archive, rollback, disable, and re-enable tests.
+- `src/server/services/userConfigQueryService.ts`, `src/server/cron/fullTextConversionJobs.ts`
+  - `user_config.full_text_conversion_model_id` now validates configured conversion models on write and read; historical `article.full_text_conversion_model_id` remains read-only provenance and is covered after model deletion.
+- `src/server/routes/DataSourcesRoutes.ts`, `src/server/routes/DataSourcesImportRoutes/**`
+  - `data_source.import_route` is intentionally an open-ended string ref so custom `fhir:<folder>` and future route values can exist before `app.import_route` rows are created by article import storage.
 
 ### Initial Risk Matrix
 
@@ -365,11 +366,11 @@ For each mutation route/job:
 | likely bug         | covidence prompt create                       | `src/server/services/covidenceImportService.ts`                                                                           | medium | `getOrCreate` is select-then-insert on unique `content_hash`, so concurrent create can collide                                                                                                | `src/server/services/covidenceImportService.test.ts` covers normal flow                                                                                            | no concurrent duplicate repro                      | use upsert-style pattern or catch/reload                             |
 | likely bug         | judgment job cross-store delete               | `src/server/routes/JudgmentsJobsRoutes.ts`                                                                                | medium | DuckDB delete order is correct, but DuckDB + SQLite lifecycle is not atomic                                                                                                                   | `src/server/routes/JudgmentsJobsRoutes.test.ts` covers token-use delete path                                                                                       | no partial cross-store rollback test               | add consistency test and tighten compensating actions                |
 | likely bug         | comparison project relink on model change     | `src/server/routes/ComparisonProjectsRoutes.ts`                                                                           | medium | Link delete/update/restore is split across transactions, so failure can leave missing links                                                                                                   | no comparison route tests found                                                                                                                                    | add relink failure regression                      | keep relink in one tx                                                |
-| logical-ref risk   | `data_source.import_route` logical ref        | `src/server/routes/DataSourcesImportRoutes/**`                                                                            | medium | String field can drift from actual `import_route` and `project_import_route` rows; no FK catches it                                                                                           | route tests use mocks                                                                                                                                              | no DB-backed drift test                            | add consistency checks or normalize source of truth                  |
+| accepted low risk  | `data_source.import_route` logical ref        | `src/server/routes/DataSourcesRoutes.ts`; `src/server/routes/DataSourcesImportRoutes/**`                                  | medium | String field is intentionally open-ended for custom imports, including `fhir:<folder>` data sources before `app.import_route` rows exist; import storage creates stable route rows before article links | route tests use mocks                                                                                                                                              | keep behavior documented                           | do not add existence validation that would break pre-import custom routes |
 | fixed logical-ref  | human assessment prompt membership            | `src/server/routes/HumanAssessmentRoutes/**`                                                                              | medium | `judgment_human` rows persist by `project_id/article_id/prompt_id`, so prompt drift could strand pending rows or submit an article without newly added prompts                                | `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPromptDrift.test.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.test.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.test.ts` | covered                                            | resync unanswered rows inside init/submit before returning/updating  |
 | accepted low risk  | `judgment <- judgment_assessment` soft delete | `src/server/routes/AdminInvestigateRoutes.ts`                                                                             | medium | Route soft-deletes `app.judgment`, a referenced parent; current DuckDB accepts the tested parent-update shape with `app.judgment_assessment` child rows                                       | `src/server/routes/AdminInvestigateRoutes.fk.test.ts`                                                                                                               | keep coverage current if new judgment FKs are added | no runtime fix needed while repro remains green                      |
 | accepted low risk  | `article` parent updates from admin/cron      | `src/server/routes/ArticleAdminRoutes.ts`; `src/server/cron/fullTextJobs.ts`; `src/server/cron/fullTextConversionJobs.ts` | medium | All three paths update high-fanout parent `app.article`, which remains referenced by live child rows; current DuckDB accepts the tested parent-update shapes                                | `src/server/routes/ArticleAdminRoutes.fk.test.ts`                                                                                                                   | keep coverage current if new article FKs are added | no runtime fix needed while repro remains green                      |
-| logical-ref risk   | full-text conversion model refs               | `src/server/cron/fullTextConversionJobs.ts`; `src/db/duckdbMigrations/0022_fullTextConversionModelConfig.sql`             | medium | `full_text_conversion_model_id` gets migration-time validation only; later model deletes/rebuilds can orphan `article` and `user_config` refs                                                 | none found                                                                                                                                                         | no post-delete logical-ref test                    | app-level validation on write/read and drift tests                   |
+| fixed logical-ref  | full-text conversion model refs               | `src/server/services/userConfigQueryService.ts`; `src/server/cron/fullTextConversionJobs.ts`; `src/db/duckdbMigrations/0022_fullTextConversionModelConfig.sql` | medium | `user_config.full_text_conversion_model_id` is logical-only and must not select deleted, disabled, archived, or config-disabled models; historical article refs are provenance-only | `src/server/services/userConfigQueryService.test.ts`                                                                                                               | covered                                            | runtime read/write validation; keep article provenance readable      |
 | logical-ref risk   | llm status model/provider attribution         | `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`                                                            | low    | `app.llm_status` stores logical provider/model identity without FKs; shared worker URLs can attribute rows to the wrong logical model                                                         | none found                                                                                                                                                         | no shared-base-url repro                           | normalize identity key or persist stable IDs                         |
 | already-fixed item | `judgment_human` rebuild nullable project     | `src/db/duckdbMigrations/0028_judgmentHumanNullableProjectId.sql`                                                         | low    | maintenance-only single-table rebuild; reinsert revalidates the live FK edges and matches current nullable design                                                                             | none found                                                                                                                                                         | no migration regression                            | optional migration smoke test only                                   |
 
@@ -380,23 +381,23 @@ For each mutation route/job:
   - `src/server/routes/providerProjectFlow.e2e.test.ts`
   - `src/server/routes/ProviderConnectionsRoutes.test.ts`
   - `src/server/routes/JudgmentsJobsRoutes.test.ts`
+  - `src/server/services/userConfigQueryService.test.ts`
   - `src/server/services/covidenceImportService.test.ts`
   - `src/server/services/articleImportStoreService.test.ts`
 - Weak or missing coverage remains for:
   - `src/server/routes/ComparisonProjectsRoutes.ts`
   - `src/server/routes/ProjectArticlesRoutes.ts`
-  - logical-ref drift for `full_text_conversion_model_id`
   - logical attribution drift in `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`
 
 ### Remaining Highest-Value Follow-Up
 
-- Add full-text conversion model-ref drift tests.
+- Continue the remaining logical-ref and rollback-safety checks.
 
 ### Current Read
 
-- The current highest-value follow-ups are full-text conversion model-ref drift, comparison-project relink crash safety, judgment-job cross-store consistency, data-source import-route drift, and `llm_status` logical attribution.
+- The current highest-value follow-ups are comparison-project relink crash safety, judgment-job cross-store consistency, and `llm_status` logical attribution.
 - New material risks from this pass are the remaining logical-ref drift checks.
-- The highest-confidence still-unfixed areas are full-text conversion model-ref drift, comparison-project relink crash safety, cross-store judgment-job cleanup consistency, and remaining logical-ref drift checks.
+- The highest-confidence still-unfixed areas are comparison-project relink crash safety, cross-store judgment-job cleanup consistency, and remaining logical-ref drift checks.
 
 ## Final Findings
 
@@ -410,6 +411,7 @@ For each mutation route/job:
 - Provider logical hardening now keeps `app.model.enabled` + provider config toggles atomic in `src/server/providers/providerModelRepository.ts`, and provider-connection delete/archive cleanup atomic in `src/server/providers/providerConnectionRepository.ts`; covered in `src/server/providers/providerModelRepository.atomic.test.ts`, `src/server/providers/providerConnectionRepository.atomic.test.ts`, and `src/server/routes/providerProjectFlow.e2e.test.ts`, including DB-backed no-orphan, comparison-project-only archive, rollback, disable, and re-enable paths.
 - Archived-project purge now asserts live `app.project` FK inventory before delete requests and cleanup batches, includes the live `project_mart_dirty_refresh_article_quarantine` FK, cleans stale project mart dictionary state, and safely detaches comparison-project children while clearing `summary_source_project_id` in `src/server/services/archivedProjectCleanupService.ts` and `src/server/services/archivedProjectCleanupProjectForeignKeys.ts`; covered in `src/server/routes/ProjectsRoutes.test.ts` and `src/server/services/archivedProjectCleanupService.test.ts`.
 - Human assessment init and submit now resync unanswered `app.judgment_human` rows against current `app.project_prompt` membership before returning or updating prompt-mode pending rows in `src/server/routes/HumanAssessmentRoutes/humanAssessmentPendingJudgments.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`, and `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`; covered in `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPromptDrift.test.ts`.
+- Full-text conversion model selection now validates logical `user_config.full_text_conversion_model_id` refs on write and read in `src/server/services/userConfigQueryService.ts`, ignoring deleted, disabled, provider-disabled, archived, and config-disabled models while preserving historical `article.full_text_conversion_model_id` provenance after model deletion; covered in `src/server/services/userConfigQueryService.test.ts`.
 
 ### Accepted risks
 
@@ -418,6 +420,7 @@ For each mutation route/job:
 - `src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchived.ts`: accepted schema-sensitive rebuild strategy, now guarded by live FK inventory checks rather than broader FK removal.
 - `src/server/routes/ArticleAdminRoutes.ts`, `src/server/cron/fullTextJobs.ts`, `src/server/cron/fullTextConversionJobs.ts`: accepted current `app.article` parent-update behavior because temp-DuckDB repro coverage in `src/server/routes/ArticleAdminRoutes.fk.test.ts` passes under live child refs.
 - `src/server/routes/AdminInvestigateRoutes.ts`: accepted current `app.judgment` soft-delete behavior because temp-DuckDB repro coverage in `src/server/routes/AdminInvestigateRoutes.fk.test.ts` passes under live `app.judgment_assessment` refs.
+- `src/server/routes/DataSourcesRoutes.ts`, `src/server/routes/DataSourcesImportRoutes/**`: accepted `data_source.import_route` as an intentionally open-ended route string because custom imports can be configured before `app.import_route` exists; article import storage owns creation of canonical `app.import_route` rows before article links are written.
 
 ### Deferred risks
 
@@ -427,8 +430,6 @@ For each mutation route/job:
 
 ### Remaining logical-ref checks
 
-- `src/server/routes/DataSourcesImportRoutes/**`: `data_source.import_route` is still a string ref and needs drift detection or normalization.
-- `src/server/cron/fullTextConversionJobs.ts`, `src/db/duckdbMigrations/0022_fullTextConversionModelConfig.sql`: `full_text_conversion_model_id` still needs runtime validation after later model deletes/rebuilds.
 - `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`: `app.llm_status` provider/model attribution remains logical only and needs shared-worker drift checks.
 
 ## Future Guardrails
