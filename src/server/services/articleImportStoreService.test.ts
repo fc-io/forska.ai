@@ -300,6 +300,133 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
   }
 })
 
+test('storeImportedArticlesWithTx resolves canonical fields without lower-trust last-writer overwrites', async () => {
+  const duckdbPath = `/tmp/f1-article-import-canonical-resolver-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {storeImportedArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const createRow = (params) => ({
+          articleAuthors: ['Alice Example'],
+          articleId: 'canonical-resolver-article',
+          articleSummary: params.summary,
+          articleTitle: params.title,
+          importRoute: params.importRoute,
+          pubmedId: params.pubmedId ?? null,
+          sourceKind: params.sourceKind,
+          sourceRecordKey: params.sourceRecordKey,
+        })
+
+        await database.transaction(async (tx) => {
+          await storeImportedArticlesWithTx(tx, [
+            createRow({
+              importRoute: 'structured-file:canonical-resolver',
+              sourceKind: 'structured_file',
+              sourceRecordKey: 'structured-a',
+              summary: 'Structured summary',
+              title: 'Structured title',
+            }),
+          ])
+        })
+        await database.transaction(async (tx) => {
+          await storeImportedArticlesWithTx(tx, [
+            createRow({
+              importRoute: '/api/datasources/import/pubmed',
+              pubmedId: '12345',
+              sourceKind: 'pubmed',
+              sourceRecordKey: 'pubmed-a',
+              summary: 'Publisher summary',
+              title: 'PubMed title',
+            }),
+          ])
+        })
+        await database.transaction(async (tx) => {
+          await storeImportedArticlesWithTx(tx, [
+            createRow({
+              importRoute: 'structured-file:canonical-resolver',
+              sourceKind: 'structured_file',
+              sourceRecordKey: 'structured-b',
+              summary: 'Structured summary with later lower trust detail',
+              title: 'Structured title with later lower trust detail',
+            }),
+          ])
+        })
+
+        const [articleRow] = await database.queryJson(
+          "SELECT article_title AS articleTitle, article_summary AS articleSummary, pubmed_id AS pubmedId, url, publication_status AS publicationStatus FROM app.article WHERE article_id = 'canonical-resolver-article'"
+        )
+
+        console.log(JSON.stringify({articleRow}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to resolve canonical article fields',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articleRow: {
+        articleSummary: string
+        articleTitle: string
+        publicationStatus: string
+        pubmedId: string
+        url: string
+      }
+    }
+
+    expect(parsed.articleRow).toEqual({
+      articleSummary: 'Publisher summary',
+      articleTitle: 'PubMed title',
+      publicationStatus: 'published',
+      pubmedId: '12345',
+      url: 'https://pubmed.ncbi.nlm.nih.gov/12345/',
+    })
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('storeImportedArticlesWithTx reimports referenced articles without foreign key errors', async () => {
   const duckdbPath = `/tmp/f1-article-import-store-update-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(
