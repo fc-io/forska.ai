@@ -200,6 +200,120 @@ test('project scope mart batch reads frozen scope rows instead of live scope', (
   ])
 })
 
+test('large rebuild serving rows match incremental scoped import serving shape', () => {
+  const result = runScript<{
+    incrementalRows: Array<{
+      articleExternalId: string | null
+      canonicalOnly: string | null
+      journalTitle: string | null
+      sameValue: string | null
+      scopedOnly: string | null
+    }>
+    largeRebuildRows: Array<{
+      articleExternalId: string | null
+      canonicalOnly: string | null
+      journalTitle: string | null
+      sameValue: string | null
+      scopedOnly: string | null
+    }>
+  }>(`
+    const {getDuckdbMartMaintenanceService} = await import('./src/server/services/getDuckdbMartMaintenanceService.ts')
+
+    await database.run(\`
+      INSERT INTO app.article (
+        id,
+        article_title,
+        article_created_at,
+        article_updated_at,
+        article_id,
+        source_metadata
+      ) VALUES (
+        'article-scoped-large-rebuild',
+        'Scoped Large Rebuild Article',
+        TIMESTAMPTZ '2026-04-05T00:00:00.000Z',
+        TIMESTAMPTZ '2026-04-05T01:00:00.000Z',
+        'canonical-scoped-large-rebuild',
+        CAST('{"journalTitle":"Canonical Journal","canonicalOnly":"canonical","same":"canonical"}' AS JSON)
+      )
+    \`)
+    await database.run(\`
+      INSERT INTO app.article_import_route (
+        id,
+        article_id,
+        import_route_id,
+        external_article_id,
+        import_metadata,
+        source_record_key
+      ) VALUES (
+        'article-import-route-scoped-large-rebuild',
+        'article-scoped-large-rebuild',
+        'import-route-1',
+        'scoped-large-rebuild',
+        CAST('{"journalTitle":"Scoped Journal","scopedOnly":"scoped","same":"scoped"}' AS JSON),
+        'source-record-scoped-large-rebuild'
+      )
+    \`)
+
+    const selectServingShape = async () => {
+      return await database.queryJson(\`
+        SELECT
+          serving.article_external_id AS articleExternalId,
+          serving.journal_title AS journalTitle,
+          json_extract_string(serving.source_metadata, '$.canonicalOnly') AS canonicalOnly,
+          json_extract_string(serving.source_metadata, '$.scopedOnly') AS scopedOnly,
+          json_extract_string(serving.source_metadata, '$.same') AS sameValue
+        FROM mart.review_article_serving serving
+        INNER JOIN app.project_review_serving_generation generation
+          ON generation.project_id = serving.project_id
+         AND generation.active_generation = serving.generation
+        WHERE serving.project_id = 'large-rebuild-executor-project'
+          AND serving.article_id = 'article-scoped-large-rebuild'
+        ORDER BY serving.article_id ASC
+      \`)
+    }
+
+    const martRefreshService = getDuckdbMartMaintenanceService()
+    await martRefreshService.refreshProject('large-rebuild-executor-project')
+    const incrementalRows = await selectServingShape()
+    const scopeRows = await executor.getProjectScopeMartBatch({
+      batchSize: 10,
+      projectId: 'large-rebuild-executor-project',
+    })
+    const articleIds = scopeRows.map((row) => row.articleId)
+    const targetGeneration = 2
+
+    await executor.resetProjectPromptAnswerFact('large-rebuild-executor-project')
+    await executor.rebuildProjectPromptAnswerFactBatch('large-rebuild-executor-project', articleIds)
+    await executor.rebuildProjectReviewAnswerDictionaryBatch('large-rebuild-executor-project', articleIds)
+    await executor.setupProjectReviewServingStaging('large-rebuild-executor-project', targetGeneration)
+    await executor.rebuildProjectReviewArticleFilterMemberBatch(
+      'large-rebuild-executor-project',
+      articleIds,
+      targetGeneration,
+    )
+    await executor.resetProjectReviewArticleRollup('large-rebuild-executor-project')
+    await executor.rebuildProjectReviewArticleRollupBatch('large-rebuild-executor-project', articleIds)
+    await executor.rebuildProjectReviewServingBatch('large-rebuild-executor-project', articleIds, targetGeneration)
+    await executor.finalizeProjectReviewServing('large-rebuild-executor-project', targetGeneration)
+
+    const largeRebuildRows = await selectServingShape()
+
+    console.log(JSON.stringify({incrementalRows, largeRebuildRows}))
+    await database.close()
+  `)
+
+  expect(result.incrementalRows).toEqual([
+    {
+      articleExternalId: 'scoped-large-rebuild',
+      canonicalOnly: 'canonical',
+      journalTitle: 'Scoped Journal',
+      sameValue: 'scoped',
+      scopedOnly: 'scoped',
+    },
+  ])
+  expect(result.largeRebuildRows).toEqual(result.incrementalRows)
+})
+
 test('project scope and judgment fact batch rebuilds are replay safe without removing unrelated facts', () => {
   const result = runScript<{
     judgmentRows: Array<{articleId: string; judgmentId: string}>

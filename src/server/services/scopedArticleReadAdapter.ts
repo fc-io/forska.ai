@@ -1,6 +1,7 @@
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 
 export type ScopedArticleImportSelectionParams = {
+  articleIdFilterSql?: string
   articleIds?: string[]
   cteName?: string
   importRouteIds?: string[]
@@ -55,6 +56,7 @@ const getScopedArticleImportWhereClause = (params: ScopedArticleImportSelectionP
     params.articleIds && params.articleIds.length > 0
       ? `air.article_id IN (${getQuotedStringList(params.articleIds).join(', ')})`
       : null,
+    params.articleIdFilterSql ?? null,
   ].filter((part): part is string => {
     return part !== null
   })
@@ -100,6 +102,22 @@ export const getScopedArticleImportJoinSql = (params: {articleIdExpression: stri
 export const getScopedArticleMetadataExpression = (params: {articleAlias: string; scopedImportAlias?: string}) => {
   const scopedImportAlias = params.scopedImportAlias ?? 'scoped_import'
   return `COALESCE(${scopedImportAlias}.import_metadata, ${params.articleAlias}.source_metadata)`
+}
+
+export const getScopedArticleCombinedMetadataExpression = (params: {
+  articleAlias: string
+  scopedImportAlias?: string
+}) => {
+  const scopedImportAlias = params.scopedImportAlias ?? 'scoped_import'
+  return `CASE
+    WHEN ${params.articleAlias}.source_metadata IS NULL
+      AND ${scopedImportAlias}.import_metadata IS NULL
+      THEN NULL
+    ELSE json_merge_patch(
+      COALESCE(${params.articleAlias}.source_metadata, CAST('{}' AS JSON)),
+      COALESCE(${scopedImportAlias}.import_metadata, CAST('{}' AS JSON))
+    )
+  END`
 }
 
 export const getScopedArticleExternalIdExpression = (params: {articleAlias: string; scopedImportAlias?: string}) => {

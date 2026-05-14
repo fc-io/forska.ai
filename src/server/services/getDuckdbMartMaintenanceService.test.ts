@@ -966,6 +966,192 @@ test('mart refresh populates review article serving v3 tables', () => {
   }
 })
 
+test('review serving dirty refresh denormalizes selected project scoped import metadata', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-scoped-serving-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartMaintenanceService} = await import('./src/server/services/getDuckdbMartMaintenanceService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-scoped-serving-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-scoped-serving-test', 'connection-scoped-serving-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-scoped-serving-test', 'Scoped Serving Project', 'model-scoped-serving-test', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (
+            id,
+            article_title,
+            article_created_at,
+            article_updated_at,
+            article_id,
+            source_metadata
+          ) VALUES (
+            'article-scoped-serving-test',
+            'Scoped Serving Article',
+            TIMESTAMPTZ '2026-04-02T00:00:00.000Z',
+            TIMESTAMPTZ '2026-04-02T01:00:00.000Z',
+            'canonical-scoped-serving',
+            CAST('{"journalTitle":"Canonical Journal","canonicalOnly":"canonical","same":"canonical"}' AS JSON)
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.import_route (id, route, name)
+          VALUES
+            ('import-route-scoped-a', 'scoped-serving:a', 'Scoped A'),
+            ('import-route-scoped-b', 'scoped-serving:b', 'Scoped B')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_import_route (id, project_id, import_route_id)
+          VALUES
+            ('project-import-route-scoped-a', 'project-scoped-serving-test', 'import-route-scoped-a'),
+            ('project-import-route-scoped-b', 'project-scoped-serving-test', 'import-route-scoped-b')
+        \`)
+        await database.run(\`
+          INSERT INTO app.article_import_route (
+            id,
+            article_id,
+            import_route_id,
+            external_article_id,
+            import_metadata,
+            source_record_key
+          ) VALUES
+            (
+              'article-import-route-scoped-b',
+              'article-scoped-serving-test',
+              'import-route-scoped-b',
+              'covidence-b',
+              CAST('{"journalTitle":"Scoped B Journal","scopedOnly":"b","same":"b"}' AS JSON),
+              'source-record-b'
+            ),
+            (
+              'article-import-route-scoped-a',
+              'article-scoped-serving-test',
+              'import-route-scoped-a',
+              'covidence-a',
+              CAST('{"journalTitle":"Scoped A Journal","scopedOnly":"a","same":"a"}' AS JSON),
+              'source-record-a'
+            )
+        \`)
+
+        const getServingRows = async () => {
+          return await database.queryJson(\`
+            SELECT
+              article_external_id AS articleExternalId,
+              journal_title AS journalTitle,
+              json_extract_string(source_metadata, '$.canonicalOnly') AS canonicalOnly,
+              json_extract_string(source_metadata, '$.scopedOnly') AS scopedOnly,
+              json_extract_string(source_metadata, '$.same') AS sameValue
+            FROM mart.review_article_serving serving
+            INNER JOIN app.project_review_serving_generation generation
+              ON generation.project_id = serving.project_id
+             AND generation.active_generation = serving.generation
+            WHERE serving.project_id = 'project-scoped-serving-test'
+              AND serving.article_id = 'article-scoped-serving-test'
+            ORDER BY serving.article_id ASC
+          \`)
+        }
+
+        const martRefreshService = getDuckdbMartMaintenanceService()
+
+        await martRefreshService.refreshProject('project-scoped-serving-test')
+        const fullRefreshRows = await getServingRows()
+
+        await database.run(\`
+          UPDATE app.article_import_route
+          SET external_article_id = 'covidence-a-updated',
+              import_metadata = CAST('{"journalTitle":"Scoped A Updated","scopedOnly":"a-updated","same":"a-updated"}' AS JSON)
+          WHERE id = 'article-import-route-scoped-a'
+        \`)
+        await martRefreshService.refreshDirtyProjectArticleBatch('project-scoped-serving-test', [
+          'article-scoped-serving-test',
+        ])
+        const dirtyRefreshRows = await getServingRows()
+
+        console.log(JSON.stringify({dirtyRefreshRows, fullRefreshRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString()
+          || runScript.stdout.toString()
+          || 'Scoped review serving dirty refresh regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      dirtyRefreshRows: Array<{
+        articleExternalId: string | null
+        canonicalOnly: string | null
+        journalTitle: string | null
+        sameValue: string | null
+        scopedOnly: string | null
+      }>
+      fullRefreshRows: Array<{
+        articleExternalId: string | null
+        canonicalOnly: string | null
+        journalTitle: string | null
+        sameValue: string | null
+        scopedOnly: string | null
+      }>
+    }
+
+    expect(result.fullRefreshRows).toEqual([
+      {
+        articleExternalId: 'covidence-a',
+        canonicalOnly: 'canonical',
+        journalTitle: 'Scoped A Journal',
+        sameValue: 'a',
+        scopedOnly: 'a',
+      },
+    ])
+    expect(result.dirtyRefreshRows).toEqual([
+      {
+        articleExternalId: 'covidence-a-updated',
+        canonicalOnly: 'canonical',
+        journalTitle: 'Scoped A Updated',
+        sameValue: 'a-updated',
+        scopedOnly: 'a-updated',
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists('/tmp/duckdb-temp')
+  }
+})
+
 test('mart refresh repairs missing judgment facts during a full project refresh', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-stale-judgment-fact-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(

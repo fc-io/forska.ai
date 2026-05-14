@@ -2,6 +2,12 @@ import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 import {getMaintenanceWorkLeaseService} from './maintenanceWorkLeaseService.ts'
 import {getProjectVisibleJudgmentScopeSql} from './projectVisibleJudgmentRule.ts'
+import {
+  getScopedArticleCombinedMetadataExpression,
+  getScopedArticleExternalIdExpression,
+  getScopedArticleImportJoinSql,
+  getScopedArticleImportSelectionCteSql,
+} from './scopedArticleReadAdapter.ts'
 
 type ProjectMartLargeRebuildBatchCursor = {articleCreatedAt: Date | string | null; articleId: string}
 
@@ -48,6 +54,7 @@ const projectReviewServingGenerationCleanupDefaultWorkerId = 'project-review-ser
 const batchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
 const promptAnswerFactLookupIndexName = 'idx_mart_prompt_answer_fact_lookup'
 const promptAnswerFactLookupIndexQualifiedName = `mart.${promptAnswerFactLookupIndexName}`
+const reviewArticleServingScopedImportCteName = 'selected_review_article_serving_import'
 const projectReviewServingGenerationCleanupRetryableErrorFragments = [
   'Failed to delete all rows from index',
   'Out of Memory Error',
@@ -771,6 +778,22 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
   `
 }
 
+const getProjectReviewServingScopedImportCteSql = (projectId: string, articleIds: string[]) => {
+  return getScopedArticleImportSelectionCteSql({
+    articleIds,
+    cteName: reviewArticleServingScopedImportCteName,
+    projectIds: [projectId],
+  })
+}
+
+const getProjectReviewServingScopedImportJoinSql = (articleIdExpression: string) => {
+  return getScopedArticleImportJoinSql({articleIdExpression, cteName: reviewArticleServingScopedImportCteName})
+}
+
+const getProjectReviewServingSourceMetadataExpression = () => {
+  return getScopedArticleCombinedMetadataExpression({articleAlias: 'article'})
+}
+
 const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: string[], targetGeneration: number) => {
   const projectLiteral = getSqlLiteral(projectId)
   const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
@@ -793,6 +816,7 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
       human_answered_prompt_count, human_answered_prompt_ids, has_all_human_answers, review_opened,
       review_sections_completed, latest_llm_created_at, latest_human_updated_at, latest_review_updated_at, serving_updated_at
     )
+    WITH ${getProjectReviewServingScopedImportCteSql(projectId, articleIds)}
     SELECT
       rollup.project_id,
       ${targetGenerationLiteral},
@@ -800,13 +824,13 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
       rollup.article_created_at,
       rollup.article_updated_at,
       article.article_title,
-      article.article_id,
-      json_extract_string(article.source_metadata, '$.journalTitle'),
+      ${getScopedArticleExternalIdExpression({articleAlias: 'article'})},
+      json_extract_string(${getProjectReviewServingSourceMetadataExpression()}, '$.journalTitle'),
       article.url,
       article.full_text_pdf,
       article.full_text_fetched_at,
       article.full_text_conversion_status,
-      article.source_metadata,
+      ${getProjectReviewServingSourceMetadataExpression()},
       rollup.has_all_llm_judgments,
       rollup.llm_judged_prompt_count,
       rollup.llm_judged_prompt_ids,
@@ -822,6 +846,7 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
       current_timestamp
     FROM mart.review_article_rollup rollup
     INNER JOIN app.article article ON article.id = rollup.article_id
+    ${getProjectReviewServingScopedImportJoinSql('rollup.article_id')}
     WHERE rollup.project_id = ${projectLiteral}
       AND rollup.article_id IN (${articleIdsSql});
     INSERT INTO mart.review_article_serving_detail (
