@@ -1,7 +1,7 @@
 {
   "name": "Request Attempt Closeout Backfill Plan",
-  "branchName": "ralph/request-attempt-closeout-backfill",
   "description": "Make legacy token_use closeout projection automatic, bounded, and resumable without blocking startup or requiring user-run maintenance.",
+  "branchName": "ralph/request-attempt-closeout-backfill",
   "userStories": [
     {
       "id": "US-001",
@@ -18,9 +18,10 @@
         "`bun run lint` passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -117,5 +118,8 @@
         "US-004"
       ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-05-14T06:34:07.027Z"
+  }
 }
