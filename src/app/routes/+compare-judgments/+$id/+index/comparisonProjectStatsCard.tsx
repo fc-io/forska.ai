@@ -33,8 +33,8 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
           <h2 class="text-lg font-semibold">Project Stats</h2>
           <p class="mt-1 text-sm text-gray-600">
             Conflicts compare exact answers. True Conflicts, Cohen's Kappa, sensitivity, and specificity compare Include
-            vs Exclude decisions, with Yes/Maybe as Include and No as Exclude. Sensitivity and specificity use Human or
-            Conflict resolution as the reference when available.
+            vs Exclude decisions, with Yes/Maybe as Include and No as Exclude. Sensitivity and specificity use Human
+            decisions as the reference. If there is no Human column, they use Conflict resolution instead.
           </p>
         </div>
       </div>

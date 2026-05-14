@@ -1,3 +1,4 @@
+import {normalizeDoiIdentifier} from './articleIdentifierNormalization.ts'
 import {getJournalTitleFromOriginalData} from './getJournalTitleFromOriginalData.ts'
 
 export type ArticleSourceLink = {
@@ -63,19 +64,9 @@ const asNonEmptyString = (value: unknown) => {
 }
 
 export const normalizeDoi = (value: unknown) => {
-  const raw = asNonEmptyString(value)
+  const outcome = normalizeDoiIdentifier(value)
 
-  if (!raw) {
-    return null
-  }
-
-  const lower = raw.toLowerCase()
-  const prefixes = ['https://doi.org/', 'http://doi.org/', 'https://dx.doi.org/', 'http://dx.doi.org/', 'doi:']
-  const prefix = prefixes.find((candidate) => {
-    return lower.startsWith(candidate)
-  })
-
-  return prefix ? raw.slice(prefix.length).trim() : raw
+  return outcome.status === 'accepted' ? outcome.identifier.normalizedValue : null
 }
 
 const getValueAtPath = (value: unknown, path: string[]): unknown => {
