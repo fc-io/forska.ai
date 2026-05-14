@@ -1,8 +1,15 @@
 import {createHash} from 'node:crypto'
 
+import type {PublicationStatus} from '../../db/schemaTypes.ts'
 import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
+import {getJsonValue, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
+import {
+  type CanonicalArticleFieldCandidate,
+  type CurrentCanonicalArticleFields,
+  getCanonicalArticleSourceTrustRank,
+  resolveCanonicalArticleFields,
+} from './articleCanonicalFieldResolver.ts'
 import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 
 export type ArticleImportStoreTx = {
@@ -37,6 +44,7 @@ type ArticleImportStoreRow = {
   fullTextConversionError?: string | null
   fullTextConversionAttempts?: number | null
   fullTextCharCount?: number | null
+  publicationStatus?: PublicationStatus | null
   externalArticleId?: string | null
   sourceKind?: string | null
   importMetadata?: unknown
@@ -82,6 +90,25 @@ type ExistingArticleImportSourceRecord = {
   sourceRecordHash: string
   sourceRecordKey: string
 }
+type ExistingCanonicalArticleRow = {
+  articleAuthors: unknown
+  articleCreatedAt: Date | string | null
+  articleId: string | null
+  articleSummary: string | null
+  articleTitle: string
+  arxivId: string | null
+  biorxivId: string | null
+  createdAt: Date | string | null
+  doi: string | null
+  id: string
+  importRoute: string | null
+  legacyArticleId: string
+  medrxivId: string | null
+  publicationStatus: PublicationStatus | null
+  pubmedId: string | null
+  sourceMetadata: unknown
+  url: string | null
+}
 
 const articleColumnMap = {
   articleId: 'article_id',
@@ -110,6 +137,7 @@ const articleColumnMap = {
   fullTextConversionError: 'full_text_conversion_error',
   fullTextConversionAttempts: 'full_text_conversion_attempts',
   fullTextCharCount: 'full_text_char_count',
+  publicationStatus: 'publication_status',
 } as const
 
 type PersistedArticleKey = keyof typeof articleColumnMap
@@ -144,6 +172,7 @@ const optionalArticleKeys = [
   'fullTextConversionError',
   'fullTextConversionAttempts',
   'fullTextCharCount',
+  'publicationStatus',
 ] as const satisfies readonly PersistedArticleKey[]
 const articleImportBatchSize = 500
 
@@ -227,6 +256,7 @@ const getSourceRecordHashPayload = (row: ArticleImportStoreRow, rawPayload: unkn
       articleTitle: row.articleTitle,
       articleUpdatedAt: row.articleUpdatedAt,
       doi: row.doi,
+      publicationStatus: row.publicationStatus,
       pubmedId: row.pubmedId,
       sourceMetadata: row.sourceMetadata,
       url: row.url,
@@ -251,6 +281,128 @@ const getScopedArticleImportStoreRow = (row: ArticleImportStoreRow): ScopedArtic
     sourceRecordHash,
     sourceRecordKey,
   }
+}
+
+const getImportRowSourceRank = (row: ScopedArticleImportStoreRow) => {
+  return getCanonicalArticleSourceTrustRank({
+    importRoute: row.importRoute,
+    sourceKind: row.sourceKind,
+    sourceMetadata: row.sourceMetadata,
+  })
+}
+
+const compareScopedArticleImportRows = (left: ScopedArticleImportStoreRow, right: ScopedArticleImportStoreRow) => {
+  const rankDiff = getImportRowSourceRank(left) - getImportRowSourceRank(right)
+  const keyDiff = left.sourceRecordKey.localeCompare(right.sourceRecordKey)
+
+  return rankDiff || keyDiff || left.articleId.localeCompare(right.articleId)
+}
+
+const getPublicationStatus = (value: unknown): PublicationStatus | null => {
+  const normalizedValue = typeof value === 'string' ? value.trim() : ''
+  const statuses = ['accepted', 'preprint', 'published', 'retracted', 'submitted'] as const
+  const matched = statuses.find((status) => {
+    return status === normalizedValue
+  })
+
+  return matched ?? null
+}
+
+const getStringArrayValue = (value: unknown) => {
+  const parsed = getJsonValue(value)
+  const arrayValue = Array.isArray(parsed) ? parsed : []
+
+  return arrayValue
+    .map((entry) => {
+      return typeof entry === 'string' ? entry.trim() : ''
+    })
+    .filter((entry) => {
+      return entry !== ''
+    })
+}
+
+const getCanonicalArticleFieldCandidate = (row: ScopedArticleImportStoreRow): CanonicalArticleFieldCandidate => {
+  return {
+    articleAuthors: row.articleAuthors,
+    articleCreatedAt: row.articleCreatedAt,
+    articleSummary: row.articleSummary,
+    articleTitle: row.articleTitle,
+    arxivId: row.arxivId,
+    biorxivId: row.biorxivId,
+    doi: row.doi,
+    importRoute: row.importRoute,
+    medrxivId: row.medrxivId,
+    publicationStatus: row.publicationStatus,
+    pubmedId: row.pubmedId,
+    sourceKind: row.sourceKind,
+    sourceMetadata: row.sourceMetadata,
+    sourceRecordKey: row.sourceRecordKey,
+    url: row.url,
+  }
+}
+
+const getCurrentCanonicalArticleFields = (row: ExistingCanonicalArticleRow): CurrentCanonicalArticleFields => {
+  return {
+    articleAuthors: getStringArrayValue(row.articleAuthors),
+    articleCreatedAt: row.articleCreatedAt,
+    articleSummary: row.articleSummary,
+    articleTitle: row.articleTitle,
+    arxivId: row.arxivId,
+    biorxivId: row.biorxivId,
+    createdAt: row.createdAt,
+    doi: row.doi,
+    id: row.id,
+    importRoute: row.importRoute,
+    medrxivId: row.medrxivId,
+    publicationStatus: getPublicationStatus(row.publicationStatus),
+    pubmedId: row.pubmedId,
+    sourceKind: row.importRoute ? getSourceKindFromImportRoute(row.importRoute) : null,
+    sourceMetadata: getJsonValue(row.sourceMetadata),
+    sourceRecordKey: row.legacyArticleId,
+    url: row.url,
+  }
+}
+
+const getArticleGroups = (rows: ScopedArticleImportStoreRow[]) => {
+  return rows.reduce<Map<string, ScopedArticleImportStoreRow[]>>((acc, row) => {
+    const existingRows = acc.get(row.articleId) ?? []
+    acc.set(row.articleId, [...existingRows, row])
+    return acc
+  }, new Map())
+}
+
+const getResolvedArticleImportStoreRow = (rows: ScopedArticleImportStoreRow[]) => {
+  const sortedRows = [...rows].sort(compareScopedArticleImportRows)
+  const base = sortedRows[0]
+  const resolved = resolveCanonicalArticleFields({
+    candidates: sortedRows.map(getCanonicalArticleFieldCandidate),
+    current: null,
+  })
+
+  return base
+    ? {
+        ...base,
+        articleAuthors: resolved.articleAuthors,
+        articleSummary: resolved.articleSummary,
+        articleTitle: resolved.articleTitle,
+        arxivId: resolved.arxivId,
+        biorxivId: resolved.biorxivId,
+        doi: resolved.doi,
+        medrxivId: resolved.medrxivId,
+        publicationStatus: resolved.publicationStatus,
+        pubmedId: resolved.pubmedId,
+        sourceMetadata: resolved.sourceMetadata,
+        url: resolved.url,
+      }
+    : null
+}
+
+const getResolvedArticleImportStoreRows = (articleGroups: Map<string, ScopedArticleImportStoreRow[]>) => {
+  return Array.from(articleGroups.values())
+    .map(getResolvedArticleImportStoreRow)
+    .filter((row): row is ScopedArticleImportStoreRow => {
+      return row !== null
+    })
 }
 
 const getArticleValues = (params: {
@@ -356,6 +508,51 @@ const getExistingArticleIds = async (tx: ArticleImportStoreTx, articleIds: strin
   )
 }
 
+const getExistingCanonicalArticles = async (tx: ArticleImportStoreTx, articleIds: string[]) => {
+  const uniqueArticleIds = getUniqueValues(articleIds)
+
+  if (uniqueArticleIds.length === 0) {
+    return new Map<string, ExistingCanonicalArticleRow>()
+  }
+
+  const rows = await getValueChunks(uniqueArticleIds).reduce<Promise<ExistingCanonicalArticleRow[]>>(
+    async (rowsPromise, articleIdChunk) => {
+      const existingRows = await rowsPromise
+      const chunkRows = await tx.queryJson<ExistingCanonicalArticleRow>(`
+        SELECT
+          article.id AS id,
+          article.article_id AS articleId,
+          legacy.legacy_article_id AS legacyArticleId,
+          article.article_title AS articleTitle,
+          article.article_summary AS articleSummary,
+          TO_JSON(article.article_authors) AS articleAuthors,
+          article.article_created_at AS articleCreatedAt,
+          article.arxiv_id AS arxivId,
+          article.biorxiv_id AS biorxivId,
+          article.medrxiv_id AS medrxivId,
+          article.doi AS doi,
+          article.pubmed_id AS pubmedId,
+          article.url AS url,
+          article.import_route AS importRoute,
+          article.publication_status AS publicationStatus,
+          article.created_at AS createdAt,
+          TO_JSON(article.source_metadata) AS sourceMetadata
+        FROM app.article_legacy_id_lookup legacy
+        INNER JOIN app.article article ON article.id = legacy.article_id
+        WHERE legacy.legacy_article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})
+        ORDER BY legacy.legacy_article_id ASC, article.created_at ASC, article.id ASC
+      `)
+
+      return [...existingRows, ...chunkRows]
+    },
+    Promise.resolve([]),
+  )
+
+  return rows.reduce<Map<string, ExistingCanonicalArticleRow>>((acc, row) => {
+    return acc.has(row.legacyArticleId) ? acc : acc.set(row.legacyArticleId, row)
+  }, new Map())
+}
+
 const insertImportedArticlesInTx = async (params: {
   includedKeys: PersistedArticleKey[]
   rows: ArticleImportStoreRow[]
@@ -377,6 +574,116 @@ const insertImportedArticlesInTx = async (params: {
   }, Promise.resolve())
 }
 
+const canonicalArticleUpdateColumnMap = {
+  articleAuthors: 'article_authors',
+  articleSummary: 'article_summary',
+  articleTitle: 'article_title',
+  arxivId: 'arxiv_id',
+  biorxivId: 'biorxiv_id',
+  doi: 'doi',
+  medrxivId: 'medrxiv_id',
+  publicationStatus: 'publication_status',
+  pubmedId: 'pubmed_id',
+  sourceMetadata: 'source_metadata',
+  url: 'url',
+} as const
+
+type CanonicalArticleUpdateKey = keyof typeof canonicalArticleUpdateColumnMap
+type CanonicalArticleUpdateValues = Record<CanonicalArticleUpdateKey, unknown>
+
+const getExistingCanonicalArticleUpdateValues = (row: ExistingCanonicalArticleRow): CanonicalArticleUpdateValues => {
+  return {
+    articleAuthors: getStringArrayValue(row.articleAuthors),
+    articleSummary: row.articleSummary,
+    articleTitle: row.articleTitle,
+    arxivId: row.arxivId,
+    biorxivId: row.biorxivId,
+    doi: row.doi,
+    medrxivId: row.medrxivId,
+    publicationStatus: getPublicationStatus(row.publicationStatus),
+    pubmedId: row.pubmedId,
+    sourceMetadata: getJsonValue(row.sourceMetadata),
+    url: row.url,
+  }
+}
+
+const getResolvedCanonicalArticleUpdateValues = (
+  current: ExistingCanonicalArticleRow,
+  rows: ScopedArticleImportStoreRow[],
+): CanonicalArticleUpdateValues => {
+  const sortedRows = [...rows].sort(compareScopedArticleImportRows)
+  const resolved = resolveCanonicalArticleFields({
+    candidates: sortedRows.map(getCanonicalArticleFieldCandidate),
+    current: getCurrentCanonicalArticleFields(current),
+  })
+
+  return {
+    articleAuthors: resolved.articleAuthors,
+    articleSummary: resolved.articleSummary,
+    articleTitle: resolved.articleTitle,
+    arxivId: resolved.arxivId,
+    biorxivId: resolved.biorxivId,
+    doi: resolved.doi,
+    medrxivId: resolved.medrxivId,
+    publicationStatus: resolved.publicationStatus,
+    pubmedId: resolved.pubmedId,
+    sourceMetadata: resolved.sourceMetadata,
+    url: resolved.url,
+  }
+}
+
+const hasCanonicalArticleValueChanged = (left: unknown, right: unknown) => {
+  return getStableJsonValue(left) !== getStableJsonValue(right)
+}
+
+const getChangedCanonicalArticleUpdateValues = (params: {
+  current: ExistingCanonicalArticleRow
+  rows: ScopedArticleImportStoreRow[]
+}) => {
+  const existingValues = getExistingCanonicalArticleUpdateValues(params.current)
+  const resolvedValues = getResolvedCanonicalArticleUpdateValues(params.current, params.rows)
+  const changedEntries = Object.entries(resolvedValues).filter(
+    (entry): entry is [CanonicalArticleUpdateKey, unknown] => {
+      return hasCanonicalArticleValueChanged(existingValues[entry[0] as CanonicalArticleUpdateKey], entry[1])
+    },
+  )
+
+  return Object.fromEntries(changedEntries) as Partial<CanonicalArticleUpdateValues>
+}
+
+const updateExistingCanonicalArticlesInTx = async (params: {
+  articleGroups: Map<string, ScopedArticleImportStoreRow[]>
+  existingArticles: Map<string, ExistingCanonicalArticleRow>
+  tx: ArticleImportStoreTx
+}) => {
+  const updates = Array.from(params.articleGroups.entries())
+    .map((entry) => {
+      const current = params.existingArticles.get(entry[0])
+      const values = current ? getChangedCanonicalArticleUpdateValues({current, rows: entry[1]}) : null
+
+      return current && values && Object.keys(values).length > 0 ? {current, values} : null
+    })
+    .filter((entry): entry is {current: ExistingCanonicalArticleRow; values: Partial<CanonicalArticleUpdateValues>} => {
+      return entry !== null
+    })
+
+  await updates.reduce<Promise<void>>((previousRun, update) => {
+    return previousRun.then(() => {
+      const assignments = Object.entries(update.values).map((entry) => {
+        return `${canonicalArticleUpdateColumnMap[entry[0] as CanonicalArticleUpdateKey]} = ${getSqlLiteral(entry[1])}`
+      })
+
+      return params.tx.run(`
+        UPDATE app.article
+        SET
+          ${assignments.join(',\n          ')},
+          updated_at = now()
+        WHERE id = ${getSqlLiteral(update.current.id)}
+      `)
+    })
+  }, Promise.resolve())
+}
+
 const getUpsertedArticles = async (tx: ArticleImportStoreTx, articleIds: string[]) => {
   return await getValueChunks(getUniqueValues(articleIds)).reduce<Promise<UpsertedArticleRow[]>>(
     async (rowsPromise, articleIdChunk) => {
@@ -385,6 +692,7 @@ const getUpsertedArticles = async (tx: ArticleImportStoreTx, articleIds: string[
         SELECT article_id AS id, legacy_article_id AS articleId
         FROM app.article_legacy_id_lookup
         WHERE legacy_article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})
+        ORDER BY legacy_article_id ASC, created_at ASC, article_id ASC
       `)
 
       return [...rows, ...chunkRows]
@@ -689,14 +997,8 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
   const normalizedRows = rows.map((row) => {
     return getScopedArticleImportStoreRow(getNormalizedArticleImportRow(row))
   })
-  const articleRows = Array.from(
-    normalizedRows
-      .reduce<Map<string, ScopedArticleImportStoreRow>>((acc, row) => {
-        acc.set(row.articleId, row)
-        return acc
-      }, new Map())
-      .values(),
-  )
+  const articleGroups = getArticleGroups(normalizedRows)
+  const articleRows = getResolvedArticleImportStoreRows(articleGroups)
   const includedKeys = getIncludedArticleKeys(articleRows)
   const routes = Array.from(
     new Set(
@@ -716,11 +1018,18 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
       return row.articleId
     }),
   )
+  const existingCanonicalArticles = await getExistingCanonicalArticles(
+    tx,
+    articleRows.map((row) => {
+      return row.articleId
+    }),
+  )
   const rowsToInsert = articleRows.filter((row) => {
     return !existingArticleIds.has(row.articleId)
   })
 
   await insertImportedArticlesInTx({includedKeys, rows: rowsToInsert, tx})
+  await updateExistingCanonicalArticlesInTx({articleGroups, existingArticles: existingCanonicalArticles, tx})
 
   const upsertedArticles = await getUpsertedArticles(
     tx,
