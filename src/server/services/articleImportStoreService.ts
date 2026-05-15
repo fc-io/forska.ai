@@ -962,6 +962,29 @@ const getArticleIdentifierNormalization = (row: ScopedArticleImportStoreRow) => 
   return normalizeSourceRowIdentifiers(getArticleIdentifierInputs(row))
 }
 
+const getStrongIdentifierNormalizedValue = (
+  identifierNormalization: NormalizedSourceRowIdentifiers,
+  kind: ArticleStrongIdentifierKind,
+) => {
+  return (
+    identifierNormalization.strongIdentifiers.find((identifier) => {
+      return identifier.kind === kind
+    })?.normalizedValue ?? null
+  )
+}
+
+const getRowWithNormalizedStrongIdentifiers = (
+  row: ScopedArticleImportStoreRow,
+  identifierNormalization: NormalizedSourceRowIdentifiers,
+): ScopedArticleImportStoreRow => {
+  return {
+    ...row,
+    arxivId: getStrongIdentifierNormalizedValue(identifierNormalization, 'arxiv'),
+    doi: getStrongIdentifierNormalizedValue(identifierNormalization, 'doi'),
+    pubmedId: getStrongIdentifierNormalizedValue(identifierNormalization, 'pmid'),
+  }
+}
+
 const getCanonicalArticleMatchIdentifiers = (
   row: ScopedArticleImportStoreRow,
   normalized: NormalizedSourceRowIdentifiers,
@@ -981,42 +1004,43 @@ const getCanonicalArticleImportCandidateRecord = (
   index: number,
 ): CanonicalArticleImportCandidateRecord => {
   const identifierNormalization = getArticleIdentifierNormalization(row)
+  const candidateRow = getRowWithNormalizedStrongIdentifiers(row, identifierNormalization)
 
   return {
     candidate: {
-      articleAuthors: row.articleAuthors,
-      articleCreatedAt: row.articleCreatedAt,
-      articleSummary: row.articleSummary,
-      articleTitle: row.articleTitle,
-      allowUnidentifiedCreate: row.allowUnidentifiedCreate,
-      arxivId: row.arxivId,
-      biorxivId: row.biorxivId,
+      articleAuthors: candidateRow.articleAuthors,
+      articleCreatedAt: candidateRow.articleCreatedAt,
+      articleSummary: candidateRow.articleSummary,
+      articleTitle: candidateRow.articleTitle,
+      allowUnidentifiedCreate: candidateRow.allowUnidentifiedCreate,
+      arxivId: candidateRow.arxivId,
+      biorxivId: candidateRow.biorxivId,
       candidateId: `${row.sourceRecordKey}\u0000${index}`,
-      doi: row.doi,
-      fullText: row.fullText,
-      fullTextCharCount: row.fullTextCharCount,
-      fullTextConversionAttempts: row.fullTextConversionAttempts,
-      fullTextConversionError: row.fullTextConversionError,
-      fullTextConversionStatus: row.fullTextConversionStatus,
-      fullTextFetchedAt: row.fullTextFetchedAt,
-      fullTextHtml: row.fullTextHtml,
-      fullTextOriginalFormat: row.fullTextOriginalFormat,
-      fullTextPDF: row.fullTextPDF,
-      fullTextSource: row.fullTextSource,
-      importRoute: row.importRoute,
-      importRunId: row.importRunId,
-      medrxivId: row.medrxivId,
-      publicationStatus: row.publicationStatus,
-      pubmedId: row.pubmedId,
-      sourceKind: row.sourceKind,
-      sourceMetadata: row.sourceMetadata,
-      sourceRecordHash: row.sourceRecordHash,
-      sourceRecordKey: row.sourceRecordKey,
+      doi: candidateRow.doi,
+      fullText: candidateRow.fullText,
+      fullTextCharCount: candidateRow.fullTextCharCount,
+      fullTextConversionAttempts: candidateRow.fullTextConversionAttempts,
+      fullTextConversionError: candidateRow.fullTextConversionError,
+      fullTextConversionStatus: candidateRow.fullTextConversionStatus,
+      fullTextFetchedAt: candidateRow.fullTextFetchedAt,
+      fullTextHtml: candidateRow.fullTextHtml,
+      fullTextOriginalFormat: candidateRow.fullTextOriginalFormat,
+      fullTextPDF: candidateRow.fullTextPDF,
+      fullTextSource: candidateRow.fullTextSource,
+      importRoute: candidateRow.importRoute,
+      importRunId: candidateRow.importRunId,
+      medrxivId: candidateRow.medrxivId,
+      publicationStatus: candidateRow.publicationStatus,
+      pubmedId: candidateRow.pubmedId,
+      sourceKind: candidateRow.sourceKind,
+      sourceMetadata: candidateRow.sourceMetadata,
+      sourceRecordHash: candidateRow.sourceRecordHash,
+      sourceRecordKey: candidateRow.sourceRecordKey,
       strongIdentifiers: getCanonicalArticleMatchIdentifiers(row, identifierNormalization),
-      url: row.url,
+      url: candidateRow.url,
     },
     identifierNormalization,
-    row,
+    row: candidateRow,
   }
 }
 
@@ -1155,7 +1179,10 @@ const getAcceptedIdentifierCandidateRecords = (
   )
 
   return candidateRecords.filter((record) => {
-    return !quarantinedCandidateIds.has(record.candidate.candidateId)
+    return (
+      !quarantinedCandidateIds.has(record.candidate.candidateId)
+      || record.identifierNormalization.strongIdentifiers.length > 0
+    )
   })
 }
 

@@ -448,7 +448,7 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
   }
 })
 
-test('storeImportedArticlesWithTx quarantines source-row identifier conflicts before matching', async () => {
+test('storeImportedArticlesWithTx quarantines source-row identifier conflicts and keeps valid rows matchable', async () => {
   const duckdbPath = `/tmp/f1-article-import-identifier-conflict-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(
     [
@@ -505,9 +505,21 @@ test('storeImportedArticlesWithTx quarantines source-row identifier conflicts be
               sourceRecordHash: 'hash-malformed',
               sourceRecordKey: 'source-row-malformed',
             }),
+            createRow({
+              articleId: 'source-row-valid-with-malformed-pmid',
+              articleTitle: 'Valid DOI malformed PMID row',
+              doi: '10.1000/valid-with-malformed-pmid',
+              externalArticleId: 'external-valid-with-malformed-pmid',
+              pubmedId: '12A',
+              sourceRecordHash: 'hash-valid-with-malformed-pmid',
+              sourceRecordKey: 'source-row-valid-with-malformed-pmid',
+            }),
           ])
         })
 
+        const articleRows = await database.queryJson(
+          "SELECT article_title AS articleTitle, doi, pubmed_id AS pubmedId FROM app.article ORDER BY article_title ASC"
+        )
         const [articleCountRow] = await database.queryJson(
           "SELECT COUNT(*)::INTEGER AS count FROM app.article"
         )
@@ -524,7 +536,7 @@ test('storeImportedArticlesWithTx quarantines source-row identifier conflicts be
           "SELECT source_record_key AS sourceRecordKey, kind, normalized_value AS normalizedValue, reason FROM app.article_canonical_match_quarantine ORDER BY source_record_key ASC, kind ASC, normalized_value ASC"
         )
 
-        console.log(JSON.stringify({articleCountRow, currentLinkCountRow, identifierCountRow, quarantineRows, sourceRecordCountRow}))
+        console.log(JSON.stringify({articleRows, articleCountRow, currentLinkCountRow, identifierCountRow, quarantineRows, sourceRecordCountRow}))
         await database.close()
       `,
     ],
@@ -557,6 +569,7 @@ test('storeImportedArticlesWithTx quarantines source-row identifier conflicts be
         return line.length > 0
       })
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articleRows: Array<{articleTitle: string; doi: string | null; pubmedId: string | null}>
       articleCountRow: {count: number}
       currentLinkCountRow: {count: number}
       identifierCountRow: {count: number}
@@ -564,10 +577,13 @@ test('storeImportedArticlesWithTx quarantines source-row identifier conflicts be
       sourceRecordCountRow: {count: number}
     }
 
-    expect(parsed.articleCountRow.count).toBe(0)
-    expect(parsed.identifierCountRow.count).toBe(0)
-    expect(parsed.sourceRecordCountRow.count).toBe(0)
-    expect(parsed.currentLinkCountRow.count).toBe(0)
+    expect(parsed.articleRows).toEqual([
+      {articleTitle: 'Valid DOI malformed PMID row', doi: '10.1000/valid-with-malformed-pmid', pubmedId: null},
+    ])
+    expect(parsed.articleCountRow.count).toBe(1)
+    expect(parsed.identifierCountRow.count).toBe(1)
+    expect(parsed.sourceRecordCountRow.count).toBe(1)
+    expect(parsed.currentLinkCountRow.count).toBe(1)
     expect(parsed.quarantineRows).toEqual([
       {
         kind: 'doi',
@@ -586,6 +602,12 @@ test('storeImportedArticlesWithTx quarantines source-row identifier conflicts be
         normalizedValue: '12A',
         reason: 'source-row-identifier-malformed',
         sourceRecordKey: 'source-row-malformed',
+      },
+      {
+        kind: 'pmid',
+        normalizedValue: '12A',
+        reason: 'source-row-identifier-malformed',
+        sourceRecordKey: 'source-row-valid-with-malformed-pmid',
       },
     ])
   } finally {
