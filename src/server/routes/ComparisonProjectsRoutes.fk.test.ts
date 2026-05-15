@@ -105,6 +105,30 @@ const seedComparisonProjectFixture = async () => {
   `)
 }
 
+test('comparison project child tables do not keep parent foreign keys', async () => {
+  if (!database) {
+    throw new Error('Database not initialized')
+  }
+
+  const rows = await database.queryJson<{columnNames: unknown; tableName: string}>(`
+    SELECT
+      table_name AS tableName,
+      constraint_column_names AS columnNames
+    FROM duckdb_constraints()
+    WHERE schema_name = 'app'
+      AND constraint_type = 'FOREIGN KEY'
+      AND referenced_table = 'comparison_project'
+      AND table_name IN (
+        'comparison_project_prompt',
+        'comparison_project_import_route',
+        'comparison_project_source_project',
+        'comparison_project_conflict_resolution'
+      )
+  `)
+
+  expect(rows).toEqual([])
+})
+
 test('patch updates comparison project while preserving conflict resolution children', async () => {
   if (!app || !database) {
     throw new Error('Test app not initialized')
