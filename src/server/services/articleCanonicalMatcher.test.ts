@@ -309,6 +309,91 @@ test('matchCanonicalArticlesWithTx leaves conflicting existing strong identifier
   }
 })
 
+test('matchCanonicalArticlesWithTx reuses existing source-record matches for unidentified candidates', async () => {
+  const duckdbPath = `/tmp/forska-article-canonical-matcher-unidentified-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {matchCanonicalArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleCanonicalMatcher.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        await database.run("INSERT INTO app.import_route (id, route, name) VALUES ('route-unidentified', 'covidence:unidentified', 'Covidence unidentified')")
+        await database.run("INSERT INTO app.article (id, article_title, article_id) VALUES ('existing-unidentified-article', 'Existing unidentified title', NULL)")
+        await database.run("INSERT INTO app.article_import_route_source_record (id, article_id, import_route_id, external_article_id, source_record_key, source_record_hash) VALUES ('source-record-unidentified', 'existing-unidentified-article', 'route-unidentified', 'covidence:unidentified:1', 'covidence:1', 'hash-1')")
+
+        const matchResult = await database.transaction(async (tx) => {
+          return await matchCanonicalArticlesWithTx(tx, [
+            {
+              allowUnidentifiedCreate: true,
+              articleTitle: 'Reimported unidentified title',
+              candidateId: 'candidate-unidentified',
+              importRoute: 'covidence:unidentified',
+              sourceKind: 'covidence',
+              sourceRecordKey: 'covidence:1',
+              strongIdentifiers: [],
+            },
+          ])
+        })
+        const articleRows = await database.queryJson("SELECT id FROM app.article ORDER BY id ASC")
+
+        console.log(JSON.stringify({articleRows, matchResult}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify unidentified canonical reuse',
+      )
+    }
+
+    const parsed = getStdoutJson<{
+      articleRows: Array<{id: string}>
+      matchResult: {outcomes: Array<{articleId?: string; candidateId: string; status: string}>}
+    }>(result.stdout)
+
+    expect(parsed.articleRows).toEqual([{id: 'existing-unidentified-article'}])
+    expect(parsed.matchResult.outcomes).toEqual([
+      {
+        articleId: 'existing-unidentified-article',
+        candidateId: 'candidate-unidentified',
+        identifiers: [],
+        status: 'reuse',
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('matchCanonicalArticlesWithTx re-reads winning identifiers after insert conflicts', async () => {
   const runStatements: string[] = []
   const lookupStatements: string[] = []

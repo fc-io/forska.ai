@@ -1612,6 +1612,144 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
   }
 })
 
+test('seedCovidenceHumanJudgmentsFromConfig rejects ambiguous external article mappings', async () => {
+  const duckdbPath = `/tmp/f1-covidence-human-seed-ambiguous-${Date.now()}.duckdb`
+  const datasourceId = `covidence-human-seed-ambiguous-${Date.now()}`
+  const importRoute = `covidence:${datasourceId}`
+  datasourceIdsToDelete.add(datasourceId)
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const datasourceId = ${JSON.stringify(datasourceId)}
+        const importRoute = ${JSON.stringify(importRoute)}
+        const files = await covidenceImportService.storeCovidencePackageFiles({
+          datasourceId,
+          files: [
+            {file: new File([${JSON.stringify('Title,Authors,Year,Covidence #\nAmbiguous A,"Doe, Jane",2024,#1001\n')}], 'all.csv', {type: 'text/csv'}), fileRole: 'all'},
+            {file: new File([${JSON.stringify('Title,Authors,Year,Covidence #\nAmbiguous A,"Doe, Jane",2024,#1001\n')}], 'irrelevant.csv', {type: 'text/csv'}), fileRole: 'irrelevant'},
+            {file: new File([${JSON.stringify('Title,Authors,Year,Covidence #\n')}], 'full_text.csv', {type: 'text/csv'}), fileRole: 'full_text'},
+          ],
+        })
+        const config = covidenceImportService.buildCovidencePackageConfig({files, mode: 'title_abstract'})
+        const externalArticleId = importRoute + ':covidence%3A%231001'
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, label, provider_kind, enabled)
+          VALUES ('pc-covidence-ambiguous-seed', 'Covidence provider', 'openai-compatible', TRUE);
+
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, enabled)
+          VALUES ('model-covidence-ambiguous-seed', 'pc-covidence-ambiguous-seed', 'gpt-covidence', 'gpt-covidence', TRUE);
+
+          INSERT INTO app.import_route (id, route, name, active)
+          VALUES ('route-covidence-ambiguous-seed', '\${importRoute}', '\${importRoute}', TRUE);
+
+          INSERT INTO app.article (id, article_title, article_id)
+          VALUES
+            ('ambiguous-article-a', 'Ambiguous Article A', NULL),
+            ('ambiguous-article-b', 'Ambiguous Article B', NULL);
+
+          INSERT INTO app.article_import_route (id, article_id, import_route_id, external_article_id, source_record_key, source_record_hash)
+          VALUES
+            ('ambiguous-link-a', 'ambiguous-article-a', 'route-covidence-ambiguous-seed', '\${externalArticleId}', 'covidence:#1001-a', 'hash-a'),
+            ('ambiguous-link-b', 'ambiguous-article-b', 'route-covidence-ambiguous-seed', '\${externalArticleId}', 'covidence:#1001-b', 'hash-b');
+        \`)
+
+        const prompt = await covidenceImportService.getOrCreateCovidencePrompt({
+          answerSet: 'yes|no|maybe',
+          exclusionCriteria: 'Case reports',
+          inclusionCriteria: 'Adults with confirmed disease',
+          mode: 'title_abstract',
+        })
+        const project = await covidenceImportService.getOrCreateCovidenceProject({
+          importRoute,
+          mode: 'title_abstract',
+          promptId: prompt.id,
+          title: 'Covidence ambiguous seeded project',
+        })
+        await database.run(\`UPDATE app.project SET human_judgment_mode = 'prompt' WHERE id = '\${project.id}'\`)
+
+        let errorMessage = null
+        await database.transaction(async (tx) => {
+          try {
+            await covidenceImportService.seedCovidenceHumanJudgmentsFromConfig({config, importRoute, projectId: project.id, tx})
+          } catch (error) {
+            errorMessage = error instanceof Error ? error.message : String(error)
+          }
+        })
+        const [judgmentCountRow] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.judgment_human")
+
+        console.log(JSON.stringify({errorMessage, judgmentCountRow}))
+        covidenceImportService.deleteCovidencePackageFiles(datasourceId)
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39993',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39994',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to reject ambiguous Covidence seeding',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      errorMessage: string | null
+      judgmentCountRow: {count: number}
+    }
+
+    expect(parsed.errorMessage).toContain('Ambiguous Covidence article mappings')
+    expect(parsed.errorMessage).toContain(`${importRoute}:covidence%3A%231001`)
+    expect(parsed.judgmentCountRow.count).toBe(0)
+  } finally {
+    deleteCovidencePackageFiles(datasourceId)
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
+      return filePath
+    })
+  }
+})
+
 test('seedCovidenceHumanJudgmentsFromConfig treats disjoint screen irrelevant and select rows as null no yes', async () => {
   const duckdbPath = `/tmp/f1-covidence-human-screen-union-${Date.now()}.duckdb`
   const datasourceId = `covidence-human-screen-union-${Date.now()}`

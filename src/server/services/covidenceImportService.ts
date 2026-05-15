@@ -1947,38 +1947,57 @@ const getChunkedCovidenceHumanJudgmentSeeds = (
 
 const getCovidenceInternalArticleIds = async (params: {articleExternalIds: string[]; tx?: CovidenceProjectTx}) => {
   const articleExternalIds = Array.from(new Set(params.articleExternalIds))
-
-  return articleExternalIds.length === 0
-    ? []
-    : await getCovidenceValueChunks(articleExternalIds).reduce<
-        Promise<Array<{articleExternalId: string; articleId: string}>>
-      >(async (rowsPromise, articleExternalIdChunk) => {
-        const rows = await rowsPromise
-        const chunkRows = await getCovidenceProjectQueryRunner(params.tx).queryJson<{
-          articleExternalId: string
-          articleId: string
-        }>(`
-          SELECT articleExternalId, articleId
-          FROM (
+  const rows =
+    articleExternalIds.length === 0
+      ? []
+      : await getCovidenceValueChunks(articleExternalIds).reduce<
+          Promise<Array<{articleExternalId: string; articleId: string; articleIdCount: number}>>
+        >(async (rowsPromise, articleExternalIdChunk) => {
+          const rows = await rowsPromise
+          const chunkRows = await getCovidenceProjectQueryRunner(params.tx).queryJson<{
+            articleExternalId: string
+            articleId: string
+            articleIdCount: number
+          }>(`
             SELECT
-              current_link.external_article_id AS articleExternalId,
-              current_link.article_id AS articleId
-            FROM app.article_import_route current_link
-            WHERE current_link.external_article_id IN (${getQuotedStringList(articleExternalIdChunk).join(', ')})
-            UNION ALL
-            SELECT
-              source_record.external_article_id AS articleExternalId,
-              source_record.article_id AS articleId
-            FROM app.article_import_route_source_record source_record
-            WHERE source_record.external_article_id IN (${getQuotedStringList(articleExternalIdChunk).join(', ')})
-              AND source_record.quarantined_at IS NULL
-          ) covidence_article_lookup
-          WHERE articleExternalId IS NOT NULL
-          GROUP BY articleExternalId, articleId
-        `)
+              articleExternalId,
+              MIN(articleId) AS articleId,
+              CAST(COUNT(DISTINCT articleId) AS INTEGER) AS articleIdCount
+            FROM (
+              SELECT
+                current_link.external_article_id AS articleExternalId,
+                current_link.article_id AS articleId
+              FROM app.article_import_route current_link
+              WHERE current_link.external_article_id IN (${getQuotedStringList(articleExternalIdChunk).join(', ')})
+              UNION ALL
+              SELECT
+                source_record.external_article_id AS articleExternalId,
+                source_record.article_id AS articleId
+              FROM app.article_import_route_source_record source_record
+              WHERE source_record.external_article_id IN (${getQuotedStringList(articleExternalIdChunk).join(', ')})
+                AND source_record.quarantined_at IS NULL
+            ) covidence_article_lookup
+            WHERE articleExternalId IS NOT NULL
+            GROUP BY articleExternalId
+          `)
 
-        return [...rows, ...chunkRows]
-      }, Promise.resolve([]))
+          return [...rows, ...chunkRows]
+        }, Promise.resolve([]))
+  const ambiguousExternalIds = rows
+    .filter((row) => {
+      return row.articleIdCount > 1
+    })
+    .map((row) => {
+      return row.articleExternalId
+    })
+
+  if (ambiguousExternalIds.length > 0) {
+    throw new Error(`Ambiguous Covidence article mappings for external IDs: ${ambiguousExternalIds.join(', ')}`)
+  }
+
+  return rows.map((row) => {
+    return {articleExternalId: row.articleExternalId, articleId: row.articleId}
+  })
 }
 
 const getMergedCovidenceHumanJudgmentSeed = (

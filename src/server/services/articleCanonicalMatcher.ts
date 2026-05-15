@@ -64,6 +64,7 @@ export type CanonicalArticleMatchOutcome =
       reason:
         | 'batch-too-large'
         | 'conflicting-existing-strong-identifiers'
+        | 'conflicting-existing-source-record'
         | 'identifier-insert-conflict'
         | 'identifier-insert-missing'
         | 'no-strong-identifiers'
@@ -81,6 +82,7 @@ export type CanonicalArticleMatchResult = {
 }
 
 type ExistingArticleIdentifierRow = {articleId: string; kind: ArticleStrongIdentifierKind; normalizedValue: string}
+type ExistingUnidentifiedArticleRow = {articleId: string; importRoute: string; sourceRecordKey: string}
 
 type CandidateMatchGroup = {
   candidateIds: string[]
@@ -349,6 +351,103 @@ const getIdentifierMatchMap = (rows: ExistingArticleIdentifierRow[]) => {
   }, new Map())
 }
 
+const getSourceRecordLookupKey = (value: {importRoute?: string | null; sourceRecordKey?: string | null}) => {
+  const importRoute = getStringValue(value.importRoute)
+  const sourceRecordKey = getStringValue(value.sourceRecordKey)
+
+  return importRoute && sourceRecordKey ? `${importRoute}\u0000${sourceRecordKey}` : null
+}
+
+const getUnidentifiedArticleLookupCandidates = (candidates: CanonicalArticleMatchCandidate[]) => {
+  return Array.from(
+    candidates
+      .filter((candidate) => {
+        return getCandidateIdentifiers(candidate).length === 0
+      })
+      .reduce<Map<string, {importRoute: string; sourceRecordKey: string}>>((acc, candidate) => {
+        const key = getSourceRecordLookupKey(candidate)
+        const importRoute = getStringValue(candidate.importRoute)
+        const sourceRecordKey = getStringValue(candidate.sourceRecordKey)
+
+        if (key && importRoute && sourceRecordKey) {
+          acc.set(key, {importRoute, sourceRecordKey})
+        }
+
+        return acc
+      }, new Map())
+      .values(),
+  )
+}
+
+const getUnidentifiedArticleLookupStatement = (candidates: Array<{importRoute: string; sourceRecordKey: string}>) => {
+  return candidates.length === 0
+    ? null
+    : `
+      WITH candidate_source_record(import_route, source_record_key) AS (
+        VALUES ${candidates
+          .map((candidate) => {
+            return `(${getSqlLiteral(candidate.importRoute)}, ${getSqlLiteral(candidate.sourceRecordKey)})`
+          })
+          .join(', ')}
+      ),
+      existing_source_record_match AS (
+        SELECT
+          ir.route AS importRoute,
+          source_record.source_record_key AS sourceRecordKey,
+          source_record.article_id AS articleId
+        FROM app.article_import_route_source_record source_record
+        INNER JOIN app.import_route ir ON ir.id = source_record.import_route_id
+        INNER JOIN candidate_source_record candidate
+          ON candidate.import_route = ir.route
+         AND candidate.source_record_key = source_record.source_record_key
+        WHERE source_record.quarantined_at IS NULL
+
+        UNION ALL
+
+        SELECT
+          ir.route AS importRoute,
+          current_link.source_record_key AS sourceRecordKey,
+          current_link.article_id AS articleId
+        FROM app.article_import_route current_link
+        INNER JOIN app.import_route ir ON ir.id = current_link.import_route_id
+        INNER JOIN candidate_source_record candidate
+          ON candidate.import_route = ir.route
+         AND candidate.source_record_key = current_link.source_record_key
+      )
+      SELECT importRoute, sourceRecordKey, articleId
+      FROM existing_source_record_match
+      GROUP BY importRoute, sourceRecordKey, articleId
+      ORDER BY importRoute ASC, sourceRecordKey ASC, articleId ASC
+    `
+}
+
+const getExistingUnidentifiedArticleRows = async (params: {
+  candidates: CanonicalArticleMatchCandidate[]
+  tx: CanonicalArticleMatcherTx
+}) => {
+  return await getValueChunks(getUnidentifiedArticleLookupCandidates(params.candidates)).reduce<
+    Promise<ExistingUnidentifiedArticleRow[]>
+  >(async (rowsPromise, candidateChunk) => {
+    const rows = await rowsPromise
+    const statement = getUnidentifiedArticleLookupStatement(candidateChunk)
+
+    return statement ? [...rows, ...(await params.tx.queryJson<ExistingUnidentifiedArticleRow>(statement))] : rows
+  }, Promise.resolve([]))
+}
+
+const getUnidentifiedArticleMatchMap = (rows: ExistingUnidentifiedArticleRow[]) => {
+  return rows.reduce<Map<string, string[]>>((acc, row) => {
+    const key = getSourceRecordLookupKey(row)
+    const existingArticleIds = key ? (acc.get(key) ?? []) : []
+
+    if (key && !existingArticleIds.includes(row.articleId)) {
+      acc.set(key, [...existingArticleIds, row.articleId])
+    }
+
+    return acc
+  }, new Map())
+}
+
 const getGroupMatchedArticleIds = (
   group: CandidateMatchGroup,
   identifierMatchMap: Map<string, ExistingArticleIdentifierRow>,
@@ -364,19 +463,43 @@ const getGroupMatchedArticleIds = (
   )
 }
 
+const getGroupMatchedUnidentifiedArticleIds = (
+  group: CandidateMatchGroup,
+  unidentifiedArticleMatchMap: Map<string, string[]>,
+) => {
+  return getUniqueValues(
+    group.candidates.flatMap((candidate) => {
+      const key = getSourceRecordLookupKey(candidate)
+
+      return key ? (unidentifiedArticleMatchMap.get(key) ?? []) : []
+    }),
+  )
+}
+
 const getGroupPlan = (
   group: CandidateMatchGroup,
   identifierMatchMap: Map<string, ExistingArticleIdentifierRow>,
+  unidentifiedArticleMatchMap: Map<string, string[]>,
 ): GroupPlan => {
   const matchedArticleIds = getGroupMatchedArticleIds(group, identifierMatchMap)
+  const matchedUnidentifiedArticleIds = getGroupMatchedUnidentifiedArticleIds(group, unidentifiedArticleMatchMap)
   const canCreateUnidentifiedArticle = group.candidates.every((candidate) => {
     return candidate.allowUnidentifiedCreate === true
   })
 
   return group.identifiers.length === 0
-    ? canCreateUnidentifiedArticle
-      ? {articleId: crypto.randomUUID(), group, status: 'create'}
-      : {group, metadata: {candidateIds: group.candidateIds}, reason: 'no-strong-identifiers', status: 'unresolved'}
+    ? matchedUnidentifiedArticleIds.length > 1
+      ? {
+          group,
+          metadata: {candidateIds: group.candidateIds, matchedArticleIds: matchedUnidentifiedArticleIds},
+          reason: 'conflicting-existing-source-record',
+          status: 'unresolved',
+        }
+      : matchedUnidentifiedArticleIds[0]
+        ? {articleId: matchedUnidentifiedArticleIds[0], group, status: 'reuse'}
+        : canCreateUnidentifiedArticle
+          ? {articleId: crypto.randomUUID(), group, status: 'create'}
+          : {group, metadata: {candidateIds: group.candidateIds}, reason: 'no-strong-identifiers', status: 'unresolved'}
     : matchedArticleIds.length > 1
       ? {
           group,
@@ -940,8 +1063,11 @@ export const matchCanonicalArticlesWithTx = async (
     tx,
   })
   const initialMatchMap = getIdentifierMatchMap(existingIdentifierRows)
+  const unidentifiedArticleMatchMap = getUnidentifiedArticleMatchMap(
+    await getExistingUnidentifiedArticleRows({candidates, tx}),
+  )
   const plans = groups.map((group) => {
-    return getGroupPlan(group, initialMatchMap)
+    return getGroupPlan(group, initialMatchMap, unidentifiedArticleMatchMap)
   })
   const acceptedPlans = plans.filter((plan): plan is AcceptedGroupPlan => {
     return plan.status === 'create' || plan.status === 'reuse'
