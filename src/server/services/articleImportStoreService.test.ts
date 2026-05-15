@@ -565,6 +565,103 @@ test('syncImportedArticlesWithTx clears stale source records for the synced rout
   }
 })
 
+test('syncImportedArticlesWithTx reuses id-less source records across reimports', async () => {
+  const duckdbPath = `/tmp/f1-article-import-idless-reimport-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {syncImportedArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const importRoute = 'covidence:idless-reimport'
+        const createRow = (articleTitle) => ({
+          allowUnidentifiedCreate: true,
+          articleAuthors: ['Alice Example'],
+          articleId: 'covidence:1',
+          articleSummary: 'ID-less import summary',
+          articleTitle,
+          externalArticleId: 'covidence:idless-reimport:1',
+          importRoute,
+          sourceKind: 'covidence',
+          sourceRecordHash: articleTitle,
+          sourceRecordKey: 'covidence:1',
+        })
+
+        await database.transaction(async (tx) => {
+          await syncImportedArticlesWithTx({importRoute, rows: [createRow('Initial ID-less title')], tx})
+        })
+        await database.transaction(async (tx) => {
+          await syncImportedArticlesWithTx({importRoute, rows: [createRow('Updated ID-less title')], tx})
+        })
+
+        const articleRows = await database.queryJson("SELECT id, article_title AS articleTitle FROM app.article ORDER BY id ASC")
+        const sourceRecordRows = await database.queryJson("SELECT article_id AS articleId, external_article_id AS externalArticleId, source_record_key AS sourceRecordKey FROM app.article_import_route_source_record ORDER BY source_record_key ASC")
+        const currentLinkRows = await database.queryJson("SELECT article_id AS articleId, external_article_id AS externalArticleId, source_record_key AS sourceRecordKey FROM app.article_import_route ORDER BY source_record_key ASC")
+
+        console.log(JSON.stringify({articleRows, currentLinkRows, sourceRecordRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to reimport ID-less article')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articleRows: Array<{articleTitle: string; id: string}>
+      currentLinkRows: Array<{articleId: string; externalArticleId: string; sourceRecordKey: string}>
+      sourceRecordRows: Array<{articleId: string; externalArticleId: string; sourceRecordKey: string}>
+    }
+    const articleId = parsed.articleRows[0]?.id
+
+    expect(parsed.articleRows).toHaveLength(1)
+    expect(parsed.currentLinkRows).toEqual([
+      {articleId, externalArticleId: 'covidence:idless-reimport:1', sourceRecordKey: 'covidence:1'},
+    ])
+    expect(parsed.sourceRecordRows).toEqual([
+      {articleId, externalArticleId: 'covidence:idless-reimport:1', sourceRecordKey: 'covidence:1'},
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('storeImportedArticlesWithTx resolves canonical fields without lower-trust last-writer overwrites', async () => {
   const duckdbPath = `/tmp/f1-article-import-canonical-resolver-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(

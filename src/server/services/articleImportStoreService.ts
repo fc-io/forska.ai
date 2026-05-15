@@ -988,16 +988,39 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
   return getMergedImportRefreshState(states)
 }
 
-const clearImportRouteLinks = async (tx: ArticleImportStoreTx, importRouteId: string) => {
+const clearStaleImportRouteLinks = async (
+  tx: ArticleImportStoreTx,
+  importRouteId: string,
+  sourceRecordKeys: string[],
+) => {
+  const sourceRecordKeyClause =
+    sourceRecordKeys.length === 0
+      ? ''
+      : `AND source_record_key NOT IN (${getQuotedStringList(sourceRecordKeys).join(', ')})`
+  const currentLinkSourceRecordKeyClause =
+    sourceRecordKeys.length === 0
+      ? ''
+      : `AND (source_record_key IS NULL OR source_record_key NOT IN (${getQuotedStringList(sourceRecordKeys).join(', ')}))`
+
   await tx.run(`
     DELETE FROM app.article_import_route_source_record
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}
+      ${sourceRecordKeyClause}
   `)
 
   await tx.run(`
     DELETE FROM app.article_import_route
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}
+      ${currentLinkSourceRecordKeyClause}
   `)
+}
+
+const getImportRowSourceRecordKeys = (rows: ArticleImportStoreRow[]) => {
+  return getUniqueValues(
+    rows.map((row) => {
+      return getScopedArticleImportStoreRow(getNormalizedArticleImportRow(row)).sourceRecordKey
+    }),
+  )
 }
 
 const syncImportedArticlesInTx = async (params: {
@@ -1010,14 +1033,14 @@ const syncImportedArticlesInTx = async (params: {
   const routeIdMap = await ensureImportRoutes(params.tx, routes)
   const importRouteId = routeIdMap.get(importRoute)
 
-  if (importRouteId) {
-    await clearImportRouteLinks(params.tx, importRouteId)
-  }
-
   const importRefreshState =
     params.rows.length > 0
       ? await storeImportedArticlesInTx(params.tx, params.rows)
       : {acceptedCount: 0, importRouteIds: [] as string[]}
+
+  if (importRouteId) {
+    await clearStaleImportRouteLinks(params.tx, importRouteId, getImportRowSourceRecordKeys(params.rows))
+  }
 
   return {
     acceptedCount: importRefreshState.acceptedCount,
