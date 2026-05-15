@@ -151,9 +151,27 @@ const isSourceMetadataRecord = (value: unknown): value is Record<string, unknown
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+const getMergedSourceMetadataRecord = (
+  canonicalSourceMetadata: Record<string, unknown>,
+  scopedImportMetadata: Record<string, unknown>,
+): Record<string, unknown> => {
+  return Object.entries(scopedImportMetadata).reduce<Record<string, unknown>>(
+    (merged, [key, scopedValue]) => {
+      const canonicalValue = merged[key]
+      const value =
+        isSourceMetadataRecord(canonicalValue) && isSourceMetadataRecord(scopedValue)
+          ? getMergedSourceMetadataRecord(canonicalValue, scopedValue)
+          : scopedValue
+
+      return {...merged, [key]: value}
+    },
+    {...canonicalSourceMetadata},
+  )
+}
+
 const getMergedSourceMetadata = (params: {canonicalSourceMetadata: unknown; scopedImportMetadata: unknown}) => {
   return isSourceMetadataRecord(params.canonicalSourceMetadata) && isSourceMetadataRecord(params.scopedImportMetadata)
-    ? {...params.canonicalSourceMetadata, ...params.scopedImportMetadata}
+    ? getMergedSourceMetadataRecord(params.canonicalSourceMetadata, params.scopedImportMetadata)
     : (params.scopedImportMetadata ?? params.canonicalSourceMetadata)
 }
 
