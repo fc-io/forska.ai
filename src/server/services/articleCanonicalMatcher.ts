@@ -42,6 +42,7 @@ export type CanonicalArticleMatchCandidate = {
   fullTextOriginalFormat?: string | null
   fullTextPDF?: string | null
   fullTextSource?: string | null
+  forcedArticleId?: string | null
   importRoute?: string | null
   importRunId?: string | null
   medrxivId?: string | null
@@ -476,40 +477,96 @@ const getGroupMatchedUnidentifiedArticleIds = (
   )
 }
 
+const getGroupForcedArticleIds = (group: CandidateMatchGroup) => {
+  return getUniqueValues(
+    group.candidates
+      .map((candidate) => {
+        return getStringValue(candidate.forcedArticleId)
+      })
+      .filter((articleId): articleId is string => {
+        return articleId !== null
+      }),
+  )
+}
+
+const getForcedGroupPlan = (params: {
+  forcedArticleIds: string[]
+  group: CandidateMatchGroup
+  matchedArticleIds: string[]
+  matchedUnidentifiedArticleIds: string[]
+}): GroupPlan | null => {
+  if (params.forcedArticleIds.length === 0) {
+    return null
+  }
+
+  const forcedArticleId = params.forcedArticleIds[0]
+  const mismatchedArticleIds = getUniqueValues(
+    [...params.matchedArticleIds, ...params.matchedUnidentifiedArticleIds].filter((articleId) => {
+      return articleId !== forcedArticleId
+    }),
+  )
+
+  return params.forcedArticleIds.length > 1 || mismatchedArticleIds.length > 0
+    ? {
+        group: params.group,
+        metadata: {
+          candidateIds: params.group.candidateIds,
+          forcedArticleIds: params.forcedArticleIds,
+          matchedArticleIds: getUniqueValues([
+            ...params.forcedArticleIds,
+            ...params.matchedArticleIds,
+            ...params.matchedUnidentifiedArticleIds,
+          ]),
+        },
+        reason: 'conflicting-existing-source-record',
+        status: 'unresolved',
+      }
+    : {articleId: forcedArticleId, group: params.group, status: 'reuse'}
+}
+
 const getGroupPlan = (
   group: CandidateMatchGroup,
   identifierMatchMap: Map<string, ExistingArticleIdentifierRow>,
   unidentifiedArticleMatchMap: Map<string, string[]>,
 ): GroupPlan => {
+  const forcedArticleIds = getGroupForcedArticleIds(group)
   const matchedArticleIds = getGroupMatchedArticleIds(group, identifierMatchMap)
   const matchedUnidentifiedArticleIds = getGroupMatchedUnidentifiedArticleIds(group, unidentifiedArticleMatchMap)
   const canCreateUnidentifiedArticle = group.candidates.every((candidate) => {
     return candidate.allowUnidentifiedCreate === true
   })
+  const forcedPlan = getForcedGroupPlan({forcedArticleIds, group, matchedArticleIds, matchedUnidentifiedArticleIds})
 
-  return group.identifiers.length === 0
-    ? matchedUnidentifiedArticleIds.length > 1
-      ? {
-          group,
-          metadata: {candidateIds: group.candidateIds, matchedArticleIds: matchedUnidentifiedArticleIds},
-          reason: 'conflicting-existing-source-record',
-          status: 'unresolved',
-        }
-      : matchedUnidentifiedArticleIds[0]
-        ? {articleId: matchedUnidentifiedArticleIds[0], group, status: 'reuse'}
-        : canCreateUnidentifiedArticle
-          ? {articleId: crypto.randomUUID(), group, status: 'create'}
-          : {group, metadata: {candidateIds: group.candidateIds}, reason: 'no-strong-identifiers', status: 'unresolved'}
-    : matchedArticleIds.length > 1
-      ? {
-          group,
-          metadata: {candidateIds: group.candidateIds, matchedArticleIds},
-          reason: 'conflicting-existing-strong-identifiers',
-          status: 'unresolved',
-        }
-      : matchedArticleIds[0]
-        ? {articleId: matchedArticleIds[0], group, status: 'reuse'}
-        : {articleId: crypto.randomUUID(), group, status: 'create'}
+  return forcedPlan
+    ? forcedPlan
+    : group.identifiers.length === 0
+      ? matchedUnidentifiedArticleIds.length > 1
+        ? {
+            group,
+            metadata: {candidateIds: group.candidateIds, matchedArticleIds: matchedUnidentifiedArticleIds},
+            reason: 'conflicting-existing-source-record',
+            status: 'unresolved',
+          }
+        : matchedUnidentifiedArticleIds[0]
+          ? {articleId: matchedUnidentifiedArticleIds[0], group, status: 'reuse'}
+          : canCreateUnidentifiedArticle
+            ? {articleId: crypto.randomUUID(), group, status: 'create'}
+            : {
+                group,
+                metadata: {candidateIds: group.candidateIds},
+                reason: 'no-strong-identifiers',
+                status: 'unresolved',
+              }
+      : matchedArticleIds.length > 1
+        ? {
+            group,
+            metadata: {candidateIds: group.candidateIds, matchedArticleIds},
+            reason: 'conflicting-existing-strong-identifiers',
+            status: 'unresolved',
+          }
+        : matchedArticleIds[0]
+          ? {articleId: matchedArticleIds[0], group, status: 'reuse'}
+          : {articleId: crypto.randomUUID(), group, status: 'create'}
 }
 
 const getCandidateIdentifierValue = (candidate: CanonicalArticleMatchCandidate, kind: ArticleStrongIdentifierKind) => {

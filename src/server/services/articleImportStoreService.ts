@@ -1,7 +1,11 @@
 import {createHash} from 'node:crypto'
 
 import type {PublicationStatus} from '../../db/schemaTypes.ts'
-import {type ArticleIdentifierInput, normalizeSourceRowIdentifiers} from '../../utils/articleIdentifierNormalization.ts'
+import {
+  type ArticleIdentifierInput,
+  type ArticleStrongIdentifierKind,
+  normalizeSourceRowIdentifiers,
+} from '../../utils/articleIdentifierNormalization.ts'
 import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
@@ -88,6 +92,19 @@ type ArticleImportRouteLinkRecord = {
   sourceRecordHash: string
   sourceRecordKey: string
 }
+type ArticleImportRouteRemapRecord = {
+  externalArticleId: string | null
+  importRouteId: string
+  importRunId: string | null
+  incomingArticleId: string | null
+  sourceRecordHash: string
+  sourceRecordKey: string
+}
+type ArticleImportRouteSourceRecordLookup = {importRouteId: string; sourceRecordKey: string}
+type ArticleImportRouteSourceRecordCandidate = {
+  candidateRecord: CanonicalArticleImportCandidateRecord
+  importRouteId: string
+}
 type ExistingArticleImportRouteLink = {
   articleId: string
   importRouteId: string
@@ -100,6 +117,11 @@ type ExistingArticleImportSourceRecord = {
   legacyArticleId: string | null
   sourceRecordHash: string
   sourceRecordKey: string
+}
+type ExistingCanonicalArticleIdentifierRow = {
+  articleId: string
+  kind: ArticleStrongIdentifierKind
+  normalizedValue: string
 }
 type ExistingCanonicalArticleRow = {
   articleAuthors: unknown
@@ -390,6 +412,92 @@ const getExistingCanonicalArticles = async (tx: ArticleImportStoreTx, articleIds
   )
 }
 
+const getIdentifierKey = (identifier: Pick<ExistingCanonicalArticleIdentifierRow, 'kind' | 'normalizedValue'>) => {
+  return `${identifier.kind}\u0000${identifier.normalizedValue}`
+}
+
+const getExistingCanonicalArticleIdentifierRows = async (tx: ArticleImportStoreTx, articleIds: string[]) => {
+  const uniqueArticleIds = getUniqueValues(articleIds)
+
+  if (uniqueArticleIds.length === 0) {
+    return []
+  }
+
+  return await getValueChunks(uniqueArticleIds).reduce<Promise<ExistingCanonicalArticleIdentifierRow[]>>(
+    async (rowsPromise, articleIdChunk) => {
+      const rows = await rowsPromise
+      const chunkRows = await tx.queryJson<ExistingCanonicalArticleIdentifierRow>(`
+        SELECT
+          article_id AS articleId,
+          kind,
+          normalized_value AS normalizedValue
+        FROM app.article_identifier
+        WHERE article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})
+          AND kind IN ('doi', 'pmid', 'arxiv')
+        ORDER BY article_id ASC, kind ASC, normalized_value ASC
+      `)
+
+      return [...rows, ...chunkRows]
+    },
+    Promise.resolve([]),
+  )
+}
+
+const getCanonicalArticleIdentifierInputs = (article: ExistingCanonicalArticleRow): ArticleIdentifierInput[] => {
+  return [
+    {inputKind: 'doi', source: 'article.doi', value: article.doi},
+    {inputKind: 'pmid', source: 'article.pubmed_id', value: article.pubmedId},
+    {inputKind: 'arxiv', source: 'article.arxiv_id', value: article.arxivId},
+  ].filter((input) => {
+    return input.value !== null && input.value !== undefined
+  })
+}
+
+const getCanonicalArticleFieldIdentifiers = (article: ExistingCanonicalArticleRow) => {
+  return normalizeSourceRowIdentifiers(getCanonicalArticleIdentifierInputs(article)).strongIdentifiers.map(
+    (identifier) => {
+      return {articleId: article.id, kind: identifier.kind, normalizedValue: identifier.normalizedValue}
+    },
+  )
+}
+
+const getCanonicalArticleIdentifiersByArticleId = (params: {
+  articles: Map<string, ExistingCanonicalArticleRow>
+  identifierRows: ExistingCanonicalArticleIdentifierRow[]
+}) => {
+  return [
+    ...params.identifierRows,
+    ...Array.from(params.articles.values()).flatMap(getCanonicalArticleFieldIdentifiers),
+  ].reduce<Map<string, ExistingCanonicalArticleIdentifierRow[]>>((acc, identifier) => {
+    const existing = acc.get(identifier.articleId) ?? []
+    const existingKeys = new Set(
+      existing.map((entry) => {
+        return getIdentifierKey(entry)
+      }),
+    )
+
+    return existingKeys.has(getIdentifierKey(identifier))
+      ? acc
+      : acc.set(identifier.articleId, [...existing, identifier])
+  }, new Map())
+}
+
+const hasExistingSourceRecordIdentifierRemap = (params: {
+  existingIdentifiers: ExistingCanonicalArticleIdentifierRow[]
+  incomingIdentifiers: CanonicalArticleMatchIdentifier[]
+}) => {
+  return params.incomingIdentifiers.some((incomingIdentifier) => {
+    const sameKindExistingIdentifiers = params.existingIdentifiers.filter((existingIdentifier) => {
+      return existingIdentifier.kind === incomingIdentifier.kind
+    })
+    const hasSameIdentifier = sameKindExistingIdentifiers.some((existingIdentifier) => {
+      return existingIdentifier.normalizedValue === incomingIdentifier.normalizedValue
+    })
+
+    return sameKindExistingIdentifiers.length > 0 && !hasSameIdentifier
+  })
+}
+
 const canonicalArticleUpdateColumnMap = {
   articleAuthors: 'article_authors',
   articleSummary: 'article_summary',
@@ -558,7 +666,7 @@ const getArticleImportRouteLinkValue = (record: ArticleImportRouteLinkRecord) =>
 
 const getExistingArticleImportRouteSourceRecords = async (
   tx: ArticleImportStoreTx,
-  records: ArticleImportRouteLinkRecord[],
+  records: ArticleImportRouteSourceRecordLookup[],
 ) => {
   const routeIds = getUniqueValues(
     records.map((record) => {
@@ -677,6 +785,30 @@ const getDeduplicatedCurrentLinks = (records: ArticleImportRouteLinkRecord[]) =>
   )
 }
 
+const getArticleImportRouteRemapRecordFromLinkRecord = (
+  record: ArticleImportRouteLinkRecord,
+): ArticleImportRouteRemapRecord => {
+  return {
+    externalArticleId: record.externalArticleId,
+    importRouteId: record.importRouteId,
+    importRunId: record.importRunId,
+    incomingArticleId: record.articleId,
+    sourceRecordHash: record.sourceRecordHash,
+    sourceRecordKey: record.sourceRecordKey,
+  }
+}
+
+const getDeduplicatedRemapRecords = (records: ArticleImportRouteRemapRecord[]) => {
+  return Array.from(
+    records
+      .reduce<Map<string, ArticleImportRouteRemapRecord>>((acc, record) => {
+        acc.set(getArticleImportRouteSourceRecordKey(record), record)
+        return acc
+      }, new Map())
+      .values(),
+  )
+}
+
 const upsertArticleImportRouteCurrentLinks = async (
   tx: ArticleImportStoreTx,
   records: ArticleImportRouteLinkRecord[],
@@ -754,7 +886,7 @@ const upsertArticleImportRouteSourceRecords = async (
 
 const quarantineRemappedArticleImportSourceRecords = async (
   tx: ArticleImportStoreTx,
-  records: ArticleImportRouteLinkRecord[],
+  records: ArticleImportRouteRemapRecord[],
 ) => {
   await records.reduce<Promise<void>>((previousRun, record) => {
     return previousRun.then(() => {
@@ -764,7 +896,7 @@ const quarantineRemappedArticleImportSourceRecords = async (
           quarantined_at = now(),
           quarantine_reason = 'source_record_remap',
           quarantine_metadata = ${getSqlLiteral({
-            incomingArticleId: record.articleId,
+            incomingArticleId: record.incomingArticleId,
             incomingExternalArticleId: record.externalArticleId,
             incomingImportRunId: record.importRunId,
             incomingSourceRecordHash: record.sourceRecordHash,
@@ -790,7 +922,10 @@ const insertArticleImportRouteLinks = async (tx: ArticleImportStoreTx, records: 
     return !existingRecord || existingRecord.articleId === record.articleId
   })
 
-  await quarantineRemappedArticleImportSourceRecords(tx, remappedRecords)
+  await quarantineRemappedArticleImportSourceRecords(
+    tx,
+    remappedRecords.map(getArticleImportRouteRemapRecordFromLinkRecord),
+  )
   await upsertArticleImportRouteSourceRecords(tx, acceptedRecords, existingSourceRecords)
   await upsertArticleImportRouteCurrentLinks(tx, acceptedRecords)
 }
@@ -920,6 +1055,144 @@ const getArticleImportRouteLinkRecords = (params: {
     })
 }
 
+const getArticleImportRouteSourceRecordCandidates = (params: {
+  candidateRecords: CanonicalArticleImportCandidateRecord[]
+  routeIdMap: Map<string, string>
+}) => {
+  return params.candidateRecords
+    .map((candidateRecord) => {
+      const importRouteId = params.routeIdMap.get(candidateRecord.row.importRoute)
+
+      return importRouteId ? {candidateRecord, importRouteId} : null
+    })
+    .filter((record): record is ArticleImportRouteSourceRecordCandidate => {
+      return record !== null
+    })
+}
+
+const getArticleImportRouteSourceRecordCandidateKey = (record: ArticleImportRouteSourceRecordCandidate) => {
+  return getArticleImportRouteSourceRecordKey({
+    importRouteId: record.importRouteId,
+    sourceRecordKey: record.candidateRecord.row.sourceRecordKey,
+  })
+}
+
+const getArticleImportRouteRemapRecordFromSourceRecordCandidate = (
+  record: ArticleImportRouteSourceRecordCandidate,
+): ArticleImportRouteRemapRecord => {
+  return {
+    externalArticleId: record.candidateRecord.row.externalArticleId,
+    importRouteId: record.importRouteId,
+    importRunId: record.candidateRecord.row.importRunId,
+    incomingArticleId: null,
+    sourceRecordHash: record.candidateRecord.row.sourceRecordHash,
+    sourceRecordKey: record.candidateRecord.row.sourceRecordKey,
+  }
+}
+
+const getForcedCanonicalArticleCandidateRecord = (
+  record: CanonicalArticleImportCandidateRecord,
+  articleId: string,
+): CanonicalArticleImportCandidateRecord => {
+  return {...record, candidate: {...record.candidate, forcedArticleId: articleId}}
+}
+
+const getSourceRecordPreflightResult = async (params: {
+  candidateRecords: CanonicalArticleImportCandidateRecord[]
+  routeIdMap: Map<string, string>
+  tx: ArticleImportStoreTx
+}) => {
+  const sourceRecordCandidates = getArticleImportRouteSourceRecordCandidates(params)
+  const sourceRecordCandidateByCandidateId = new Map(
+    sourceRecordCandidates.map((record) => {
+      return [record.candidateRecord.candidate.candidateId, record]
+    }),
+  )
+  const existingSourceRecords = await getExistingArticleImportRouteSourceRecords(
+    params.tx,
+    sourceRecordCandidates.map((record) => {
+      return {importRouteId: record.importRouteId, sourceRecordKey: record.candidateRecord.row.sourceRecordKey}
+    }),
+  )
+  const existingSourceRecordArticleIds = getUniqueValues(
+    Array.from(existingSourceRecords.values()).map((record) => {
+      return record.articleId
+    }),
+  )
+  const existingArticles = await getExistingCanonicalArticles(params.tx, existingSourceRecordArticleIds)
+  const existingIdentifierRows = await getExistingCanonicalArticleIdentifierRows(
+    params.tx,
+    existingSourceRecordArticleIds,
+  )
+  const existingIdentifiersByArticleId = getCanonicalArticleIdentifiersByArticleId({
+    articles: existingArticles,
+    identifierRows: existingIdentifierRows,
+  })
+  const remappedSourceRecordKeys = new Set(
+    sourceRecordCandidates
+      .filter((record) => {
+        const existingRecord = existingSourceRecords.get(getArticleImportRouteSourceRecordCandidateKey(record))
+        const existingIdentifiers = existingRecord
+          ? (existingIdentifiersByArticleId.get(existingRecord.articleId) ?? [])
+          : []
+
+        return existingRecord
+          ? hasExistingSourceRecordIdentifierRemap({
+              existingIdentifiers,
+              incomingIdentifiers: record.candidateRecord.candidate.strongIdentifiers,
+            })
+          : false
+      })
+      .map(getArticleImportRouteSourceRecordCandidateKey),
+  )
+  const remappedRecords = sourceRecordCandidates
+    .filter((record) => {
+      return remappedSourceRecordKeys.has(getArticleImportRouteSourceRecordCandidateKey(record))
+    })
+    .map(getArticleImportRouteRemapRecordFromSourceRecordCandidate)
+  const acceptedCandidateRecords = params.candidateRecords
+    .map((record) => {
+      const sourceRecordCandidate = sourceRecordCandidateByCandidateId.get(record.candidate.candidateId)
+      const sourceRecordCandidateKey = sourceRecordCandidate
+        ? getArticleImportRouteSourceRecordCandidateKey(sourceRecordCandidate)
+        : null
+      const existingRecord = sourceRecordCandidateKey ? existingSourceRecords.get(sourceRecordCandidateKey) : null
+
+      return sourceRecordCandidateKey && remappedSourceRecordKeys.has(sourceRecordCandidateKey)
+        ? null
+        : existingRecord
+          ? getForcedCanonicalArticleCandidateRecord(record, existingRecord.articleId)
+          : record
+    })
+    .filter((record): record is CanonicalArticleImportCandidateRecord => {
+      return record !== null
+    })
+
+  return {acceptedCandidateRecords, existingSourceRecords, remappedRecords}
+}
+
+const getUnresolvedSourceRecordRemapRecords = (params: {
+  candidateRecords: CanonicalArticleImportCandidateRecord[]
+  existingSourceRecords: Map<string, ExistingArticleImportSourceRecord>
+  outcomes: CanonicalArticleMatchOutcome[]
+  routeIdMap: Map<string, string>
+}) => {
+  const outcomeByCandidateId = new Map(
+    params.outcomes.map((outcome) => {
+      return [outcome.candidateId, outcome]
+    }),
+  )
+
+  return getArticleImportRouteSourceRecordCandidates(params)
+    .filter((record) => {
+      const existingRecord = params.existingSourceRecords.get(getArticleImportRouteSourceRecordCandidateKey(record))
+      const outcome = outcomeByCandidateId.get(record.candidateRecord.candidate.candidateId)
+
+      return Boolean(existingRecord && outcome?.status === 'unresolved')
+    })
+    .map(getArticleImportRouteRemapRecordFromSourceRecordCandidate)
+}
+
 const storeImportedArticleChunkInTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
   if (rows.length === 0) {
     return {acceptedCount: 0, importRouteIds: [] as string[]}
@@ -941,21 +1214,39 @@ const storeImportedArticleChunkInTx = async (tx: ArticleImportStoreTx, rows: Art
   )
   const routeIdMap = await ensureImportRoutes(tx, routes)
   const candidateRecords = normalizedRows.map(getCanonicalArticleImportCandidateRecord)
+  const sourceRecordPreflight = await getSourceRecordPreflightResult({candidateRecords, routeIdMap, tx})
   const matchResult = await matchCanonicalArticlesWithTx(
     tx,
-    candidateRecords.map((record) => {
+    sourceRecordPreflight.acceptedCandidateRecords.map((record) => {
       return record.candidate
     }),
   )
   const articleIdByCandidateId = getAcceptedOutcomeArticleIdByCandidateId(matchResult.outcomes)
-  const articleGroups = getMatchedArticleGroups(candidateRecords, articleIdByCandidateId)
+  const articleGroups = getMatchedArticleGroups(sourceRecordPreflight.acceptedCandidateRecords, articleIdByCandidateId)
   const existingCanonicalArticles = await getExistingCanonicalArticles(tx, Array.from(articleGroups.keys()))
-  const linkRecords = getArticleImportRouteLinkRecords({articleIdByCandidateId, candidateRecords, routeIdMap})
+  const linkRecords = getArticleImportRouteLinkRecords({
+    articleIdByCandidateId,
+    candidateRecords: sourceRecordPreflight.acceptedCandidateRecords,
+    routeIdMap,
+  })
+  const remappedSourceRecords = getDeduplicatedRemapRecords([
+    ...sourceRecordPreflight.remappedRecords,
+    ...getUnresolvedSourceRecordRemapRecords({
+      candidateRecords: sourceRecordPreflight.acceptedCandidateRecords,
+      existingSourceRecords: sourceRecordPreflight.existingSourceRecords,
+      outcomes: matchResult.outcomes,
+      routeIdMap,
+    }),
+  ])
 
   await updateExistingCanonicalArticlesInTx({articleGroups, existingArticles: existingCanonicalArticles, tx})
 
   if (linkRecords.length > 0) {
     await insertArticleImportRouteLinks(tx, linkRecords)
+  }
+
+  if (remappedSourceRecords.length > 0) {
+    await quarantineRemappedArticleImportSourceRecords(tx, remappedSourceRecords)
   }
 
   return {acceptedCount: articleIdByCandidateId.size, importRouteIds: Array.from(routeIdMap.values())}

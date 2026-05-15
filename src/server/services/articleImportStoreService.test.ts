@@ -364,8 +364,14 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
         const [remapLinkCountRow] = await database.queryJson(
           "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route air WHERE air.external_article_id = 'external-remap'"
         )
+        const [articleCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article"
+        )
+        const identifierRows = await database.queryJson(
+          "SELECT kind, normalized_value AS normalizedValue FROM app.article_identifier ORDER BY kind ASC, normalized_value ASC"
+        )
 
-        console.log(JSON.stringify({currentLinkRow, remapLinkCountRow, sourceRecordCountRow, sourceRecordRow}))
+        console.log(JSON.stringify({articleCountRow, currentLinkRow, identifierRows, remapLinkCountRow, sourceRecordCountRow, sourceRecordRow}))
         await database.close()
       `,
     ],
@@ -396,6 +402,7 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
         return line.length > 0
       })
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articleCountRow: {count: number}
       currentLinkRow: {
         batch: string
         externalArticleId: string
@@ -403,6 +410,7 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
         sourceKind: string
         sourceRecordHash: string
       }
+      identifierRows: Array<{kind: string; normalizedValue: string}>
       remapLinkCountRow: {count: number}
       sourceRecordCountRow: {count: number}
       sourceRecordRow: {
@@ -422,6 +430,8 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
     expect(parsed.sourceRecordRow.quarantined).toBe(true)
     expect(parsed.sourceRecordRow.quarantineReason).toBe('source_record_remap')
     expect(parsed.sourceRecordRow.incomingExternalArticleId).toBe('external-remap')
+    expect(parsed.articleCountRow.count).toBe(1)
+    expect(parsed.identifierRows).toEqual([{kind: 'doi', normalizedValue: '10.1000/source-record-a'}])
     expect(parsed.currentLinkRow).toEqual({
       batch: '2',
       externalArticleId: 'external-a',
