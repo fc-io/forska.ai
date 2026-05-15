@@ -3730,11 +3730,11 @@ export const judgmentsJobsRoutes = new Elysia()
         await flushJudgmentJobSqliteOutbox({claimedBy: judgmentJobServerId, jobId: params.id})
       }
 
-      await sqliteService.deleteJob(params.id)
-
       await getAppDatabaseService().transaction(async (tx) => {
         await deleteJudgmentJobSafelyTx({jobId: params.id, tx})
       })
+
+      await sqliteService.deleteJob(params.id)
 
       return {data: {jobId: existingJob.id}, error: null}
     },

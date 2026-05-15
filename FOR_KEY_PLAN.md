@@ -320,7 +320,7 @@ For each mutation route/job:
 - `src/server/services/covidenceImportService.ts`
   - prompt get-or-create remains select-then-insert on unique `content_hash`.
 - `src/server/routes/JudgmentsJobsRoutes.ts`
-  - DuckDB + SQLite delete lifecycle is still not atomic across stores.
+  - residual DuckDB + SQLite cleanup is still not fully atomic if local SQLite deletion fails after the DuckDB job row is deleted.
 
 #### Logical-ref risks
 
@@ -348,6 +348,8 @@ For each mutation route/job:
   - `data_source.import_route` is intentionally an open-ended string ref so custom `fhir:<folder>` and future route values can exist before `app.import_route` rows are created by article import storage.
 - `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`
   - `app.llm_status` now keys status targets by worker URL and labels ambiguous shared-worker model attribution as `multiple` instead of assigning the first running model name.
+- `src/server/routes/JudgmentsJobsRoutes.ts`
+  - delete now keeps local SQLite state until the DuckDB job deletion transaction succeeds, so a DuckDB delete failure no longer strands a DuckDB job without its local SQLite state.
 
 ### Initial Risk Matrix
 
@@ -365,7 +367,7 @@ For each mutation route/job:
 | fixed bug          | provider model toggle dual-write              | `src/server/providers/providerModelRepository.ts`                                                                         | high   | `config_json.disabledModelIds` and `app.model.enabled` must stay consistent across disable, re-enable, and rollback paths                                                                     | `src/server/providers/providerModelRepository.atomic.test.ts`                                                                                                       | covered                                            | keep model row and provider config writes in one tx                  |
 | likely bug         | manual provider model create race             | `src/server/routes/ProviderModelsRoutes.ts`                                                                               | medium | Route does read-before-write duplicate check with no DB uniqueness backstop shown                                                                                                             | mocked route tests only                                                                                                                                            | add concurrent duplicate test                      | add DB uniqueness or transactional upsert                            |
 | likely bug         | covidence prompt create                       | `src/server/services/covidenceImportService.ts`                                                                           | medium | `getOrCreate` is select-then-insert on unique `content_hash`, so concurrent create can collide                                                                                                | `src/server/services/covidenceImportService.test.ts` covers normal flow                                                                                            | no concurrent duplicate repro                      | use upsert-style pattern or catch/reload                             |
-| likely bug         | judgment job cross-store delete               | `src/server/routes/JudgmentsJobsRoutes.ts`                                                                                | medium | DuckDB delete order is correct, but DuckDB + SQLite lifecycle is not atomic                                                                                                                   | `src/server/routes/JudgmentsJobsRoutes.test.ts` covers token-use delete path                                                                                       | no partial cross-store rollback test               | add consistency test and tighten compensating actions                |
+| fixed bug          | judgment job DuckDB/SQLite delete ordering    | `src/server/routes/JudgmentsJobsRoutes.ts`                                                                                | medium | Delete previously removed local SQLite before the DuckDB deletion transaction, so DuckDB failure could leave a job row without its local queue state                                          | `src/server/routes/JudgmentsJobsRoutes.test.ts`, `src/server/routes/JudgmentsJobsRoutes.crashContainment.test.ts`                                                  | residual local cleanup failure after DuckDB commit | delete DuckDB row first; defer full atomicity to a recovery design    |
 | likely bug         | comparison project relink on model change     | `src/server/routes/ComparisonProjectsRoutes.ts`                                                                           | medium | Link delete/update/restore is split across transactions, so failure can leave missing links                                                                                                   | no comparison route tests found                                                                                                                                    | add relink failure regression                      | keep relink in one tx                                                |
 | accepted low risk  | `data_source.import_route` logical ref        | `src/server/routes/DataSourcesRoutes.ts`; `src/server/routes/DataSourcesImportRoutes/**`                                  | medium | String field is intentionally open-ended for custom imports, including `fhir:<folder>` data sources before `app.import_route` rows exist; import storage creates stable route rows before article links | route tests use mocks                                                                                                                                              | keep behavior documented                           | do not add existence validation that would break pre-import custom routes |
 | fixed logical-ref  | human assessment prompt membership            | `src/server/routes/HumanAssessmentRoutes/**`                                                                              | medium | `judgment_human` rows persist by `project_id/article_id/prompt_id`, so prompt drift could strand pending rows or submit an article without newly added prompts                                | `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPromptDrift.test.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.test.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.test.ts` | covered                                            | resync unanswered rows inside init/submit before returning/updating  |
@@ -382,6 +384,7 @@ For each mutation route/job:
   - `src/server/routes/providerProjectFlow.e2e.test.ts`
   - `src/server/routes/ProviderConnectionsRoutes.test.ts`
   - `src/server/routes/JudgmentsJobsRoutes.test.ts`
+  - `src/server/routes/JudgmentsJobsRoutes.crashContainment.test.ts`
   - `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.test.ts`
   - `src/server/services/userConfigQueryService.test.ts`
   - `src/server/services/covidenceImportService.test.ts`
@@ -392,13 +395,13 @@ For each mutation route/job:
 
 ### Remaining Highest-Value Follow-Up
 
-- Continue the remaining logical-ref and rollback-safety checks.
+- Continue the remaining rollback-safety checks.
 
 ### Current Read
 
-- The current highest-value follow-ups are comparison-project relink crash safety and judgment-job cross-store consistency.
+- The current highest-value follow-ups are comparison-project relink crash safety and residual judgment-job local cleanup recovery.
 - New material logical-ref risks from this pass are now resolved or accepted.
-- The highest-confidence still-unfixed areas are comparison-project relink crash safety and cross-store judgment-job cleanup consistency.
+- The highest-confidence still-unfixed areas are comparison-project relink crash safety and residual cross-store judgment-job cleanup consistency.
 
 ## Final Findings
 
@@ -414,6 +417,7 @@ For each mutation route/job:
 - Human assessment init and submit now resync unanswered `app.judgment_human` rows against current `app.project_prompt` membership before returning or updating prompt-mode pending rows in `src/server/routes/HumanAssessmentRoutes/humanAssessmentPendingJudgments.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`, and `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`; covered in `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPromptDrift.test.ts`.
 - Full-text conversion model selection now validates logical `user_config.full_text_conversion_model_id` refs on write and read in `src/server/services/userConfigQueryService.ts`, ignoring deleted, disabled, provider-disabled, archived, and config-disabled models while preserving historical `article.full_text_conversion_model_id` provenance after model deletion; covered in `src/server/services/userConfigQueryService.test.ts`.
 - LLM status ingestion now keys SGLang status rows by worker URL and labels ambiguous shared-worker model attribution as `multiple` instead of assigning metrics to the first running model in `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`; covered in `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.test.ts`.
+- Judgment job deletion now performs the DuckDB deletion transaction before deleting local SQLite state in `src/server/routes/JudgmentsJobsRoutes.ts`, preventing DuckDB deletion failures from leaving a retained job without its local SQLite queue; covered in `src/server/routes/JudgmentsJobsRoutes.crashContainment.test.ts`.
 
 ### Accepted risks
 
@@ -427,7 +431,7 @@ For each mutation route/job:
 ### Deferred risks
 
 - `src/server/routes/ComparisonProjectsRoutes.ts`: model relink still detaches child links before the update transaction because DuckDB rejects same-transaction parent updates under live children; true process-crash safety would require FK removal plus app-level validation or a persistent recovery table.
-- `src/server/routes/JudgmentsJobsRoutes.ts`: DuckDB + SQLite delete lifecycle is still compensating, not atomic across stores.
+- `src/server/routes/JudgmentsJobsRoutes.ts`: residual DuckDB + SQLite cleanup is still compensating if local SQLite deletion fails after the DuckDB job deletion commits; full atomicity would require a tombstone/recovery queue or persistent cleanup marker.
 - `src/server/services/covidenceImportService.ts`, `src/server/routes/ProviderModelsRoutes.ts`: select-then-insert races remain deferred because they are integrity-adjacent but not FK failures proven in this pass.
 
 ### Remaining logical-ref checks

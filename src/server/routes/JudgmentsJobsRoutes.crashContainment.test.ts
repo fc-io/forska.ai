@@ -226,6 +226,107 @@ test('delete route fails safely for quarantined crash-path jobs when isolated fl
   expect(result.job?.storageState).toBe('quarantined')
 })
 
+test('delete route keeps local SQLite when DuckDB delete fails', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+        const {createTempRuntimeRoot} = await import('./src/server/test/createTempRuntimeRoot.ts')
+
+        const tempRuntimeRoot = createTempRuntimeRoot('f1-judgments-routes-delete-duckdb-fail')
+        const tempDbPath = tempRuntimeRoot.duckdbPath
+        process.env.SERVER_ROLE = 'dev-single'
+        process.env.DUCKDB_PATH = tempDbPath
+        process.env.API_SERVER_PORT = '3996'
+        process.env.VITE_PORT = '3000'
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const deleteServiceModulePath = getModulePath('./src/server/services/judgmentJobDeleteService.ts')
+
+        void mock.module(deleteServiceModulePath, () => {
+          return {
+            deleteJudgmentJobSafelyTx: async () => {
+              throw new Error('duckdb delete failed after local SQLite should remain')
+            },
+          }
+        })
+
+        const [
+          {migrateDuckdb},
+          {getAppDatabaseService},
+          {resetDuckdbServiceForTests},
+          {resetServerRuntimeRoleForTests},
+          {judgmentsJobsRoutes},
+          {getJudgmentJobSqliteService},
+          {Elysia},
+        ] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/routes/JudgmentsJobsRoutes.ts?delete-duckdb-fail=' + Date.now()),
+          import('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'),
+          import('elysia'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const db = getAppDatabaseService()
+        const sqliteService = getJudgmentJobSqliteService()
+        const app = new Elysia().use(judgmentsJobsRoutes)
+        const now = Date.now()
+        const connectionId = 'delete-duckdb-fail-connection-' + now
+        const modelId = 'delete-duckdb-fail-model-' + now
+        const projectId = 'delete-duckdb-fail-project-' + now
+        const jobId = 'delete-duckdb-fail-job-' + now
+
+        await db.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('" + connectionId + "', 'sglang', 'SGLang', TRUE, 'none')")
+        await db.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('" + modelId + "', '" + connectionId + "', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)")
+        await db.run("INSERT INTO app.project (id, name, model_id) VALUES ('" + projectId + "', 'Delete DuckDB Fail Project', '" + modelId + "')")
+        await db.run("INSERT INTO app.judgment_job (id, project_id, status, storage_state) VALUES ('" + jobId + "', '" + projectId + "', 'paused', 'active')")
+        await sqliteService.initializeJob(jobId)
+
+        const response = await app.handle(new Request('http://localhost/api/judgmentsjobs/' + jobId, {method: 'DELETE'}))
+        const body = await response.text()
+        const rows = await db.queryJson("SELECT id FROM app.judgment_job WHERE id = '" + jobId + "' LIMIT 1")
+        const sqliteHasJob = sqliteService.hasJob(jobId)
+
+        console.log(JSON.stringify({body, job: rows[0] ?? null, sqliteHasJob, status: response.status}))
+
+        await sqliteService.closeAll()
+        await db.close()
+        tempRuntimeRoot.cleanup()
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'DuckDB delete failure regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    body: string
+    job: {id: string} | null
+    sqliteHasJob: boolean
+    status: number
+  }
+
+  expect(result.status).toBe(500)
+  expect(result.body).toContain('duckdb delete failed')
+  expect(result.job).not.toBeNull()
+  expect(result.sqliteHasJob).toBe(true)
+})
+
 test('claim route returns maintenance unavailable for transient SQLite lease failures', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
