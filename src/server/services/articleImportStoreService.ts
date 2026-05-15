@@ -2,9 +2,12 @@ import {createHash} from 'node:crypto'
 
 import type {PublicationStatus} from '../../db/schemaTypes.ts'
 import {
+  type ArticleIdentifierConflict,
   type ArticleIdentifierInput,
   type ArticleStrongIdentifierKind,
+  type NormalizedSourceRowIdentifiers,
   normalizeSourceRowIdentifiers,
+  type RejectedArticleIdentifierNormalization,
 } from '../../utils/articleIdentifierNormalization.ts'
 import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
@@ -78,6 +81,7 @@ type ScopedArticleImportStoreRow = ArticleImportStoreRow & {
 }
 type CanonicalArticleImportCandidateRecord = {
   candidate: CanonicalArticleMatchCandidate
+  identifierNormalization: NormalizedSourceRowIdentifiers
   row: ScopedArticleImportStoreRow
 }
 type ArticleImportRouteLinkRecord = {
@@ -104,6 +108,17 @@ type ArticleImportRouteSourceRecordLookup = {importRouteId: string; sourceRecord
 type ArticleImportRouteSourceRecordCandidate = {
   candidateRecord: CanonicalArticleImportCandidateRecord
   importRouteId: string
+}
+type ArticleIdentifierQuarantineRecord = {
+  candidateId: string
+  importRunId: string | null
+  kind: ArticleStrongIdentifierKind
+  metadata: unknown
+  normalizedValue: string
+  reason: string
+  sourceKind: string | null
+  sourceRecordHash: string
+  sourceRecordKey: string
 }
 type ExistingArticleImportRouteLink = {
   articleId: string
@@ -943,9 +958,14 @@ const getArticleIdentifierInputs = (row: ScopedArticleImportStoreRow): ArticleId
   })
 }
 
-const getCanonicalArticleMatchIdentifiers = (row: ScopedArticleImportStoreRow): CanonicalArticleMatchIdentifier[] => {
-  const normalized = normalizeSourceRowIdentifiers(getArticleIdentifierInputs(row))
+const getArticleIdentifierNormalization = (row: ScopedArticleImportStoreRow) => {
+  return normalizeSourceRowIdentifiers(getArticleIdentifierInputs(row))
+}
 
+const getCanonicalArticleMatchIdentifiers = (
+  row: ScopedArticleImportStoreRow,
+  normalized: NormalizedSourceRowIdentifiers,
+): CanonicalArticleMatchIdentifier[] => {
   return normalized.strongIdentifiers.map((identifier) => {
     return {
       evidence: identifier.evidence,
@@ -960,6 +980,8 @@ const getCanonicalArticleImportCandidateRecord = (
   row: ScopedArticleImportStoreRow,
   index: number,
 ): CanonicalArticleImportCandidateRecord => {
+  const identifierNormalization = getArticleIdentifierNormalization(row)
+
   return {
     candidate: {
       articleAuthors: row.articleAuthors,
@@ -990,11 +1012,151 @@ const getCanonicalArticleImportCandidateRecord = (
       sourceMetadata: row.sourceMetadata,
       sourceRecordHash: row.sourceRecordHash,
       sourceRecordKey: row.sourceRecordKey,
-      strongIdentifiers: getCanonicalArticleMatchIdentifiers(row),
+      strongIdentifiers: getCanonicalArticleMatchIdentifiers(row, identifierNormalization),
       url: row.url,
     },
+    identifierNormalization,
     row,
   }
+}
+
+const getIdentifierConflictQuarantineRecords = (
+  record: CanonicalArticleImportCandidateRecord,
+  conflict: ArticleIdentifierConflict,
+) => {
+  return conflict.normalizedValues.map((normalizedValue): ArticleIdentifierQuarantineRecord => {
+    return {
+      candidateId: record.candidate.candidateId,
+      importRunId: record.row.importRunId,
+      kind: conflict.kind,
+      metadata: {
+        candidates: conflict.candidates,
+        detail: conflict.detail,
+        normalizedValues: conflict.normalizedValues,
+        status: conflict.status,
+      },
+      normalizedValue,
+      reason: conflict.reason,
+      sourceKind: record.row.sourceKind,
+      sourceRecordHash: record.row.sourceRecordHash,
+      sourceRecordKey: record.row.sourceRecordKey,
+    }
+  })
+}
+
+const getRejectedIdentifierKind = (rejected: RejectedArticleIdentifierNormalization) => {
+  return rejected.inputKind === 'doi' || rejected.inputKind === 'pmid' || rejected.inputKind === 'arxiv'
+    ? rejected.inputKind
+    : rejected.inputKind === 'biorxiv' || rejected.inputKind === 'medrxiv'
+      ? 'doi'
+      : null
+}
+
+const getRejectedIdentifierQuarantineRecord = (
+  record: CanonicalArticleImportCandidateRecord,
+  rejected: RejectedArticleIdentifierNormalization,
+) => {
+  const kind = getRejectedIdentifierKind(rejected)
+  const normalizedValue = rejected.rawValue.trim()
+
+  return kind && rejected.reason !== 'empty' && normalizedValue !== ''
+    ? {
+        candidateId: record.candidate.candidateId,
+        importRunId: record.row.importRunId,
+        kind,
+        metadata: {
+          detail: rejected.detail,
+          inputKind: rejected.inputKind,
+          rawValue: rejected.rawValue,
+          rejectionReason: rejected.reason,
+          source: rejected.source,
+          status: rejected.status,
+        },
+        normalizedValue,
+        reason: `source-row-identifier-${rejected.reason}`,
+        sourceKind: record.row.sourceKind,
+        sourceRecordHash: record.row.sourceRecordHash,
+        sourceRecordKey: record.row.sourceRecordKey,
+      }
+    : null
+}
+
+const getIdentifierNormalizationQuarantineRecords = (record: CanonicalArticleImportCandidateRecord) => {
+  const conflictRecords = record.identifierNormalization.conflicts.flatMap((conflict) => {
+    return getIdentifierConflictQuarantineRecords(record, conflict)
+  })
+  const rejectionRecords = record.identifierNormalization.rejected
+    .map((rejected) => {
+      return getRejectedIdentifierQuarantineRecord(record, rejected)
+    })
+    .filter((entry): entry is ArticleIdentifierQuarantineRecord => {
+      return entry !== null
+    })
+
+  return [...conflictRecords, ...rejectionRecords]
+}
+
+const getIdentifierNormalizationQuarantineInsertValue = (record: ArticleIdentifierQuarantineRecord) => {
+  return `(${[
+    crypto.randomUUID(),
+    record.sourceKind,
+    record.importRunId,
+    record.sourceRecordKey,
+    record.sourceRecordHash,
+    null,
+    null,
+    record.kind,
+    record.normalizedValue,
+    record.reason,
+    record.metadata,
+  ]
+    .map((entry) => {
+      return getSqlLiteral(entry)
+    })
+    .join(', ')})`
+}
+
+const insertIdentifierNormalizationQuarantineRecords = async (
+  tx: ArticleImportStoreTx,
+  records: ArticleIdentifierQuarantineRecord[],
+) => {
+  await getValueChunks(records).reduce<Promise<void>>((previousRun, recordChunk) => {
+    return previousRun.then(() => {
+      return recordChunk.length === 0
+        ? Promise.resolve()
+        : tx.run(`
+          INSERT INTO app.article_canonical_match_quarantine (
+            id,
+            source_kind,
+            import_run_id,
+            source_record_key,
+            source_record_hash,
+            requested_article_id,
+            winning_article_id,
+            kind,
+            normalized_value,
+            reason,
+            metadata
+          )
+          VALUES ${recordChunk.map(getIdentifierNormalizationQuarantineInsertValue).join(', ')}
+        `)
+    })
+  }, Promise.resolve())
+}
+
+const getAcceptedIdentifierCandidateRecords = (
+  candidateRecords: CanonicalArticleImportCandidateRecord[],
+  quarantineRecords: ArticleIdentifierQuarantineRecord[],
+) => {
+  const quarantinedCandidateIds = new Set(
+    quarantineRecords.map((record) => {
+      return record.candidateId
+    }),
+  )
+
+  return candidateRecords.filter((record) => {
+    return !quarantinedCandidateIds.has(record.candidate.candidateId)
+  })
 }
 
 const getAcceptedOutcomeArticleIdByCandidateId = (outcomes: CanonicalArticleMatchOutcome[]) => {
@@ -1214,7 +1376,19 @@ const storeImportedArticleChunkInTx = async (tx: ArticleImportStoreTx, rows: Art
   )
   const routeIdMap = await ensureImportRoutes(tx, routes)
   const candidateRecords = normalizedRows.map(getCanonicalArticleImportCandidateRecord)
-  const sourceRecordPreflight = await getSourceRecordPreflightResult({candidateRecords, routeIdMap, tx})
+  const identifierQuarantineRecords = candidateRecords.flatMap(getIdentifierNormalizationQuarantineRecords)
+  const identifierAcceptedCandidateRecords = getAcceptedIdentifierCandidateRecords(
+    candidateRecords,
+    identifierQuarantineRecords,
+  )
+  const sourceRecordPreflight = await getSourceRecordPreflightResult({
+    candidateRecords: identifierAcceptedCandidateRecords,
+    routeIdMap,
+    tx,
+  })
+
+  await insertIdentifierNormalizationQuarantineRecords(tx, identifierQuarantineRecords)
+
   const matchResult = await matchCanonicalArticlesWithTx(
     tx,
     sourceRecordPreflight.acceptedCandidateRecords.map((record) => {

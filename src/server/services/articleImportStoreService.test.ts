@@ -448,6 +448,154 @@ test('storeImportedArticlesWithTx keeps source records idempotent and quarantine
   }
 })
 
+test('storeImportedArticlesWithTx quarantines source-row identifier conflicts before matching', async () => {
+  const duckdbPath = `/tmp/f1-article-import-identifier-conflict-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {storeImportedArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const importRoute = 'structured-file:identifier-conflict-test'
+        const createRow = (params) => ({
+          allowUnidentifiedCreate: true,
+          articleAuthors: ['Alice Example'],
+          articleId: params.articleId,
+          articleSummary: 'Identifier conflict summary',
+          articleTitle: params.articleTitle,
+          biorxivId: params.biorxivId ?? null,
+          doi: params.doi ?? null,
+          externalArticleId: params.externalArticleId,
+          importRoute,
+          importRunId: 'identifier-conflict-run',
+          pubmedId: params.pubmedId ?? null,
+          sourceKind: 'structured_file',
+          sourceRecordHash: params.sourceRecordHash,
+          sourceRecordKey: params.sourceRecordKey,
+        })
+
+        await database.transaction(async (tx) => {
+          await storeImportedArticlesWithTx(tx, [
+            createRow({
+              articleId: 'source-row-conflict',
+              articleTitle: 'Conflicting DOI row',
+              biorxivId: 'https://www.biorxiv.org/content/10.1101/2024.01.01.123456v1',
+              doi: '10.1000/source-row-conflict',
+              externalArticleId: 'external-conflict',
+              sourceRecordHash: 'hash-conflict',
+              sourceRecordKey: 'source-row-conflict',
+            }),
+            createRow({
+              articleId: 'source-row-malformed',
+              articleTitle: 'Malformed PMID row',
+              externalArticleId: 'external-malformed',
+              pubmedId: '12A',
+              sourceRecordHash: 'hash-malformed',
+              sourceRecordKey: 'source-row-malformed',
+            }),
+          ])
+        })
+
+        const [articleCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article"
+        )
+        const [identifierCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article_identifier"
+        )
+        const [sourceRecordCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route_source_record"
+        )
+        const [currentLinkCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route"
+        )
+        const quarantineRows = await database.queryJson(
+          "SELECT source_record_key AS sourceRecordKey, kind, normalized_value AS normalizedValue, reason FROM app.article_canonical_match_quarantine ORDER BY source_record_key ASC, kind ASC, normalized_value ASC"
+        )
+
+        console.log(JSON.stringify({articleCountRow, currentLinkCountRow, identifierCountRow, quarantineRows, sourceRecordCountRow}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to quarantine identifier conflicts',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articleCountRow: {count: number}
+      currentLinkCountRow: {count: number}
+      identifierCountRow: {count: number}
+      quarantineRows: Array<{kind: string; normalizedValue: string; reason: string; sourceRecordKey: string}>
+      sourceRecordCountRow: {count: number}
+    }
+
+    expect(parsed.articleCountRow.count).toBe(0)
+    expect(parsed.identifierCountRow.count).toBe(0)
+    expect(parsed.sourceRecordCountRow.count).toBe(0)
+    expect(parsed.currentLinkCountRow.count).toBe(0)
+    expect(parsed.quarantineRows).toEqual([
+      {
+        kind: 'doi',
+        normalizedValue: '10.1000/source-row-conflict',
+        reason: 'source-row-identifier-disagreement',
+        sourceRecordKey: 'source-row-conflict',
+      },
+      {
+        kind: 'doi',
+        normalizedValue: '10.1101/2024.01.01.123456',
+        reason: 'source-row-identifier-disagreement',
+        sourceRecordKey: 'source-row-conflict',
+      },
+      {
+        kind: 'pmid',
+        normalizedValue: '12A',
+        reason: 'source-row-identifier-malformed',
+        sourceRecordKey: 'source-row-malformed',
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('syncImportedArticlesWithTx clears stale source records for the synced route', async () => {
   const duckdbPath = `/tmp/f1-article-import-source-record-sync-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(
