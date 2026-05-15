@@ -512,6 +512,9 @@ const getCovidenceRelatedRecords = async (params: {
     sourceRecordKey: params.selectedSourceRecordKey,
     sourceRecordTableAlias: 'source_record',
   })
+  const selectedImportRouteClause = params.selectedImportRouteId
+    ? `source_record.import_route_id = ${getSqlLiteral(params.selectedImportRouteId)}`
+    : 'FALSE'
   const rows = await getAppDatabaseService().queryJson<{
     articleExternalId: string | null
     articleTitle: string
@@ -550,6 +553,7 @@ const getCovidenceRelatedRecords = async (params: {
       INNER JOIN project_route ON project_route.import_route_id = source_record.import_route_id
       INNER JOIN app.article article ON article.id = source_record.article_id
       WHERE source_record.quarantined_at IS NULL
+        AND ${selectedImportRouteClause}
         AND json_extract_string(source_record.import_metadata, '$.covidence.studyKey') = ${getSqlLiteral(params.studyKey)}
     ),
     legacy_related_record AS (

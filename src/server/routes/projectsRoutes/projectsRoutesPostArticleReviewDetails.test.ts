@@ -201,6 +201,7 @@ test('project review details falls back to app judgments when detail mart rows a
 })
 
 test('project review details resolves covidence related records through scoped source records', async () => {
+  let covidenceStatement = ''
   fullArticlesByIdsRef.current = async () => {
     return [
       {
@@ -223,78 +224,81 @@ test('project review details resolves covidence related records through scoped s
     }
   }
   queryJsonRef.current = async (statement) => {
-    return statement.includes('FROM app.article_import_route_source_record source_record')
-      ? [
-          {
-            articleExternalId: 'covidence:1',
-            articleTitle: 'Article 1',
-            id: 'source-record-1',
-            isCurrentRecord: true,
-            sourceMetadata: {
-              covidence: {
-                articleKey: 'covidence:1',
-                articleKeySource: 'covidence',
-                covidenceIds: ['1'],
-                duplicateStudyRecordCount: 2,
-                hasDuplicateStudyRecords: true,
-                hasStudyDecisionConflict: true,
-                isSeededHumanJudgmentAnswered: true,
-                mode: null,
-                recordKey: 'record-1',
-                recordKeySource: 'covidence',
-                referenceIds: ['ref-1'],
-                seededHumanJudgmentAnswer: 'yes',
-                sourceFileNames: [],
-                stageMembership: {all: true, excluded: false, full_text: false, included: true, irrelevant: false},
-                studyKey: 'study-1',
-                studyKeySource: 'covidence',
-                tags: [],
-              },
-              fullTextLinks: [],
-              isPreprint: false,
-              journalTitle: null,
-              preprintHostLabel: null,
-              preprintSource: null,
+    if (statement.includes('FROM app.article_import_route_source_record source_record')) {
+      covidenceStatement = statement
+      return [
+        {
+          articleExternalId: 'covidence:1',
+          articleTitle: 'Article 1',
+          id: 'source-record-1',
+          isCurrentRecord: true,
+          sourceMetadata: {
+            covidence: {
+              articleKey: 'covidence:1',
+              articleKeySource: 'covidence',
+              covidenceIds: ['1'],
+              duplicateStudyRecordCount: 2,
+              hasDuplicateStudyRecords: true,
+              hasStudyDecisionConflict: true,
+              isSeededHumanJudgmentAnswered: true,
+              mode: null,
+              recordKey: 'record-1',
+              recordKeySource: 'covidence',
+              referenceIds: ['ref-1'],
+              seededHumanJudgmentAnswer: 'yes',
+              sourceFileNames: [],
+              stageMembership: {all: true, excluded: false, full_text: false, included: true, irrelevant: false},
+              studyKey: 'study-1',
+              studyKeySource: 'covidence',
+              tags: [],
             },
+            fullTextLinks: [],
+            isPreprint: false,
+            journalTitle: null,
+            preprintHostLabel: null,
+            preprintSource: null,
           },
-          {
-            articleExternalId: 'covidence:2',
-            articleTitle: 'Article 1 duplicate',
-            id: 'source-record-2',
-            isCurrentRecord: false,
-            sourceMetadata: {
-              covidence: {
-                articleKey: 'covidence:2',
-                articleKeySource: 'covidence',
-                covidenceIds: ['2'],
-                duplicateStudyRecordCount: 2,
-                hasDuplicateStudyRecords: true,
-                hasStudyDecisionConflict: true,
-                isSeededHumanJudgmentAnswered: true,
-                mode: null,
-                recordKey: 'record-2',
-                recordKeySource: 'covidence',
-                referenceIds: ['ref-2'],
-                seededHumanJudgmentAnswer: 'no',
-                sourceFileNames: [],
-                stageMembership: {all: true, excluded: true, full_text: false, included: false, irrelevant: false},
-                studyKey: 'study-1',
-                studyKeySource: 'covidence',
-                tags: [],
-              },
-              fullTextLinks: [],
-              isPreprint: false,
-              journalTitle: null,
-              preprintHostLabel: null,
-              preprintSource: null,
+        },
+        {
+          articleExternalId: 'covidence:2',
+          articleTitle: 'Article 1 duplicate',
+          id: 'source-record-2',
+          isCurrentRecord: false,
+          sourceMetadata: {
+            covidence: {
+              articleKey: 'covidence:2',
+              articleKeySource: 'covidence',
+              covidenceIds: ['2'],
+              duplicateStudyRecordCount: 2,
+              hasDuplicateStudyRecords: true,
+              hasStudyDecisionConflict: true,
+              isSeededHumanJudgmentAnswered: true,
+              mode: null,
+              recordKey: 'record-2',
+              recordKeySource: 'covidence',
+              referenceIds: ['ref-2'],
+              seededHumanJudgmentAnswer: 'no',
+              sourceFileNames: [],
+              stageMembership: {all: true, excluded: true, full_text: false, included: false, irrelevant: false},
+              studyKey: 'study-1',
+              studyKeySource: 'covidence',
+              tags: [],
             },
+            fullTextLinks: [],
+            isPreprint: false,
+            journalTitle: null,
+            preprintHostLabel: null,
+            preprintSource: null,
           },
-        ]
-      : statement.includes('FROM app.project_prompt pp')
-        ? [getPromptRow('prompt-1', 0)]
-        : statement.includes('FROM app.project_mart_refresh_state')
-          ? [getFreshnessRow()]
-          : []
+        },
+      ]
+    }
+
+    return statement.includes('FROM app.project_prompt pp')
+      ? [getPromptRow('prompt-1', 0)]
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow()]
+        : []
   }
 
   const response = await postReviewDetailsRequest()
@@ -311,6 +315,7 @@ test('project review details resolves covidence related records through scoped s
     {articleExternalId: 'covidence:1', id: 'source-record-1', isCurrentRecord: true},
     {articleExternalId: 'covidence:2', id: 'source-record-2', isCurrentRecord: false},
   ])
+  expect(covidenceStatement).toContain("source_record.import_route_id = 'route-1'")
 })
 
 test('project review details falls back to legacy covidence related records when source records are absent', async () => {

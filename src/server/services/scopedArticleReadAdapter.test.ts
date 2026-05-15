@@ -27,10 +27,11 @@ test('scoped article compatibility values merge canonical and scoped source meta
     canonicalArticleId: 'canonical-article',
     canonicalImportRoute: 'canonical-route',
     canonicalSourceMetadata: {
+      covidence: {articleKey: 'canonical-article-key', stageMembership: {all: true, included: false}},
       fullTextLinks: [{label: 'Full text', url: 'https://example.com/full'}],
       journalTitle: 'Canonical Journal',
     },
-    scopedImportMetadata: {covidence: {studyKey: 'study-1'}},
+    scopedImportMetadata: {covidence: {stageMembership: {included: true}, studyKey: 'study-1'}},
     selectedExternalArticleId: 'scoped-article',
     selectedImportRoute: 'scoped-route',
   })
@@ -39,7 +40,11 @@ test('scoped article compatibility values merge canonical and scoped source meta
     articleId: 'scoped-article',
     importRoute: 'scoped-route',
     sourceMetadata: {
-      covidence: {studyKey: 'study-1'},
+      covidence: {
+        articleKey: 'canonical-article-key',
+        stageMembership: {all: true, included: true},
+        studyKey: 'study-1',
+      },
       fullTextLinks: [{label: 'Full text', url: 'https://example.com/full'}],
       journalTitle: 'Canonical Journal',
     },
