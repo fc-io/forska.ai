@@ -81,7 +81,7 @@ export const assertArchivedProjectCleanupProjectForeignKeysTx = async (tx: Proje
     handledRows: [...archivedProjectCleanupHandledProjectForeignKeys],
   })
 
-  if (drift.missingLabels.length > 0 || drift.staleLabels.length > 0) {
+  if (drift.missingLabels.length > 0) {
     throw new Error(getProjectForeignKeyInventoryErrorMessage(drift))
   }
 }

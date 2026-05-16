@@ -18,28 +18,7 @@ export const getOrCreateImmutablePromptTx = async (queryRunner: PromptQueryRunne
     params.promptHeading,
     params.type,
   )
-  const [existingPrompt] = await queryRunner.queryJson<{archived: boolean; id: string}>(`
-    SELECT id,
-           archived
-    FROM app.prompt
-    WHERE content_hash = ${getSqlLiteral(contentHash)}
-    LIMIT 1
-  `)
-
-  if (existingPrompt) {
-    if (existingPrompt.archived && !params.archived) {
-      await queryRunner.run(`
-        UPDATE app.prompt
-        SET archived = FALSE,
-            updated_at = current_timestamp
-        WHERE id = '${escapeSqlString(existingPrompt.id)}'
-      `)
-    }
-
-    return existingPrompt.id
-  }
-
-  const [insertedPrompt] = await queryRunner.queryJson<{id: string}>(`
+  const [prompt] = await queryRunner.queryJson<{id: string}>(`
     INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
     VALUES (
       '${escapeSqlString(crypto.randomUUID())}',
@@ -50,8 +29,22 @@ export const getOrCreateImmutablePromptTx = async (queryRunner: PromptQueryRunne
       ${getSqlLiteral(contentHash)},
       ${params.archived ? 'TRUE' : 'FALSE'}
     )
+    ON CONFLICT(content_hash) DO UPDATE SET
+      archived = CASE WHEN excluded.archived = FALSE THEN FALSE ELSE app.prompt.archived END,
+      updated_at = CASE WHEN excluded.archived = FALSE AND app.prompt.archived = TRUE THEN now() ELSE app.prompt.updated_at END
     RETURNING id
   `)
 
-  return insertedPrompt?.id ?? null
+  return prompt?.id ?? null
+}
+
+export const getImmutablePromptIdByContentHash = async (queryRunner: PromptQueryRunner, contentHash: string) => {
+  const [existingPrompt] = await queryRunner.queryJson<{id: string}>(`
+    SELECT id
+    FROM app.prompt
+    WHERE content_hash = ${getSqlLiteral(contentHash)}
+    LIMIT 1
+  `)
+
+  return existingPrompt?.id ?? null
 }

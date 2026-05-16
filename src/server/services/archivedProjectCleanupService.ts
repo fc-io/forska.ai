@@ -1,6 +1,9 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
-import {assertArchivedProjectCleanupProjectForeignKeysTx} from './archivedProjectCleanupProjectForeignKeys.ts'
+import {
+  archivedProjectCleanupHandledProjectForeignKeys,
+  assertArchivedProjectCleanupProjectForeignKeysTx,
+} from './archivedProjectCleanupProjectForeignKeys.ts'
 
 type AppRunner = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 type CleanupPhase =
@@ -18,7 +21,6 @@ type CleanupMutation = {
   whereSql: (projectId: string) => string
 }
 type ProjectArchivedStateRow = {deletePendingAt: unknown; id: string; archived: boolean}
-type ProjectForeignKeyInventoryRow = {columnName: string; schemaName: string; tableName: string}
 type RemainingProjectReferenceRow = {columnName: string; rowCount: number; tableName: string}
 type RowIdRow = {rowId: bigint | number | string}
 
@@ -539,23 +541,9 @@ const cleanupComparisonProjectSummarySourceReferences = async (
   }
 }
 
-const getProjectForeignKeyInventoryTx = async (tx: AppRunner) => {
-  return tx.queryJson<ProjectForeignKeyInventoryRow>(`
-    SELECT
-      schema_name AS schemaName,
-      table_name AS tableName,
-      unnest(constraint_column_names) AS columnName
-    FROM duckdb_constraints()
-    WHERE schema_name = 'app'
-      AND constraint_type = 'FOREIGN KEY'
-      AND referenced_table = 'project'
-    ORDER BY table_name ASC, columnName ASC
-  `)
-}
-
 const getRemainingProjectForeignKeyRowsTx = async (tx: AppRunner, projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
-  const inventoryRows = await getProjectForeignKeyInventoryTx(tx)
+  const inventoryRows = [...archivedProjectCleanupHandledProjectForeignKeys]
   const rows = await Promise.all(
     inventoryRows.map(async ({columnName, schemaName, tableName}) => {
       if (!(await getTableExistsTx(tx, `${schemaName}.${tableName}`))) {

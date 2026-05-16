@@ -109,6 +109,63 @@ const getProviderModelRowById = async (id: string): Promise<ProviderModelRow | n
   return getProviderModelRowByIdWithRunner(getAppDatabaseService(), id)
 }
 
+const getProviderModelRowByNaturalKey = async ({
+  databaseRunner,
+  providerConnectionId,
+  remoteModelId,
+  variant,
+}: {
+  databaseRunner: DatabaseQueryRunner
+  providerConnectionId: string
+  remoteModelId: string
+  variant: string | null
+}) => {
+  const existingId = await getExistingProviderModelId({databaseRunner, providerConnectionId, remoteModelId, variant})
+
+  return existingId ? getProviderModelRowByIdWithRunner(databaseRunner, existingId) : null
+}
+
+const isProviderModelNaturalKeyConflict = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+
+  return (
+    message.includes('Duplicate key')
+    && message.includes('provider_connection_id')
+    && message.includes('remote_model_id')
+  )
+}
+
+const queryProviderModelReturnRows = async ({
+  databaseRunner,
+  providerConnectionId,
+  remoteModelId,
+  statement,
+  variant,
+}: {
+  databaseRunner: DatabaseRunner
+  providerConnectionId: string
+  remoteModelId: string
+  statement: string
+  variant: string | null
+}) => {
+  try {
+    return await databaseRunner.queryJson<ProviderModelRow>(getProviderModelReturnQuery(statement))
+  } catch (error) {
+    if (!isProviderModelNaturalKeyConflict(error)) {
+      throw error
+    }
+
+    const existingRow = await getProviderModelRowByNaturalKey({
+      databaseRunner,
+      providerConnectionId,
+      remoteModelId,
+      variant,
+    })
+
+    return existingRow ? [existingRow] : []
+  }
+}
+
 const updateProviderConnectionDisabledModelIds = async ({
   connectionConfigJson,
   databaseRunner,
@@ -241,9 +298,12 @@ const upsertDiscoveredProviderModelsRecursively = async ({
   const [saved] =
     shouldPreserveReferencedModel && existingRow
       ? [existingRow]
-      : await databaseRunner.queryJson<ProviderModelRow>(
-          existingId
-            ? getProviderModelReturnQuery(`
+      : await queryProviderModelReturnRows({
+          databaseRunner,
+          providerConnectionId: connection.id,
+          remoteModelId,
+          statement: existingId
+            ? `
             UPDATE app.model
             SET name = ${getSqlLiteral(displayName)},
                 remote_model_id = ${getSqlLiteral(remoteModelId)},
@@ -253,8 +313,8 @@ const upsertDiscoveredProviderModelsRecursively = async ({
                 metadata_json = ${getJsonSqlLiteral(persistedMetadataJson)},
                 updated_at = current_timestamp
             WHERE id = ${getSqlLiteral(existingId)}
-          `)
-            : getProviderModelReturnQuery(`
+          `
+            : `
             INSERT INTO app.model (
               id,
               provider_connection_id,
@@ -277,14 +337,24 @@ const upsertDiscoveredProviderModelsRecursively = async ({
               TRUE,
               ${getJsonSqlLiteral(persistedMetadataJson)}
             )
-          `),
-        )
+            ON CONFLICT DO NOTHING
+          `,
+          variant,
+        })
+  const savedRow =
+    saved
+    ?? (await getProviderModelRowByNaturalKey({
+      databaseRunner,
+      providerConnectionId: connection.id,
+      remoteModelId,
+      variant,
+    }))
 
   return upsertDiscoveredProviderModelsRecursively({
     connection,
     databaseRunner,
     discoveredModels: rest,
-    processed: saved ? [...processed, getProviderModelRecordFromRow(saved)] : processed,
+    processed: savedRow ? [...processed, getProviderModelRecordFromRow(savedRow)] : processed,
   })
 }
 
@@ -317,8 +387,12 @@ export const createProviderModel = async ({
     providerKind: connection.providerKind,
     source: source === 'manual' ? 'manual' : 'provider',
   })
-  const [created] = await getAppDatabaseService().queryJson<ProviderModelRow>(
-    getProviderModelReturnQuery(`
+  const databaseRunner = getAppDatabaseService()
+  const [created] = await queryProviderModelReturnRows({
+    databaseRunner,
+    providerConnectionId: connection.id,
+    remoteModelId,
+    statement: `
       INSERT INTO app.model (
         id,
         provider_connection_id,
@@ -341,14 +415,24 @@ export const createProviderModel = async ({
         TRUE,
         ${getJsonSqlLiteral(persistedMetadataJson)}
       )
-    `),
-  )
+      ON CONFLICT DO NOTHING
+    `,
+    variant,
+  })
+  const createdRow =
+    created
+    ?? (await getProviderModelRowByNaturalKey({
+      databaseRunner,
+      providerConnectionId: connection.id,
+      remoteModelId,
+      variant,
+    }))
 
-  if (!created) {
+  if (!createdRow) {
     throw new Error('Failed to create provider model')
   }
 
-  return getProviderModelRecordFromRow(created)
+  return getProviderModelRecordFromRow(createdRow)
 }
 
 export const updateProviderModel = async (
