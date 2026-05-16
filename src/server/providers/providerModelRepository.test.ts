@@ -11,6 +11,7 @@ process.env.API_SERVER_PORT = process.env.API_SERVER_PORT ?? '3001'
 process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 let closeDatabase: (() => Promise<void>) | null = null
+let createProviderModel: typeof import('./providerModelRepository.ts').createProviderModel
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let upsertDiscoveredModels: typeof import('./providerModelRepository.ts').upsertDiscoveredModels
@@ -46,6 +47,7 @@ beforeAll(async () => {
   runDatabase = (statement: string) => {
     return database.run(statement)
   }
+  createProviderModel = repository.createProviderModel
   upsertDiscoveredModels = repository.upsertDiscoveredModels
 })
 
@@ -129,6 +131,70 @@ test('upsertDiscoveredModels persists discovered models through the transaction 
       source: 'discovered',
     },
   ])
+})
+
+test('createProviderModel reuses an existing provider remote variant natural key', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, config_json)
+    VALUES (
+      'create-natural-key-connection',
+      'openrouter',
+      'OpenRouter',
+      TRUE,
+      'api-key',
+      CAST('{"archived":false,"disabledModelIds":[],"manualWorkerUrls":[],"workerUrlMode":"manual"}' AS JSON)
+    )
+  `)
+
+  const connection = {
+    authMode: 'api-key' as const,
+    baseURL: 'https://openrouter.ai/api/v1',
+    config: {disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual' as const},
+    createdAt: null,
+    enabled: true,
+    hasSecret: true,
+    id: 'create-natural-key-connection',
+    label: 'OpenRouter',
+    lastCheckedAt: null,
+    lastError: null,
+    maxInflightRequests: null,
+    providerKind: 'openrouter',
+    secretRef: 'secret:test',
+    updatedAt: null,
+  }
+  const firstModel = await createProviderModel({
+    connection,
+    displayName: 'Manual Duplicate Model',
+    metadataJson: {},
+    modelName: 'manual/duplicate',
+    remoteModelId: 'manual/duplicate',
+    source: 'manual',
+    variant: null,
+    version: null,
+  })
+  const secondModel = await createProviderModel({
+    connection,
+    displayName: 'Manual Duplicate Model',
+    metadataJson: {},
+    modelName: 'manual/duplicate',
+    remoteModelId: 'manual/duplicate',
+    source: 'manual',
+    variant: null,
+    version: null,
+  })
+  const [row] = await queryDatabase<{rowCount: number}>(`
+    SELECT COUNT(*) AS rowCount
+    FROM app.model
+    WHERE provider_connection_id = 'create-natural-key-connection'
+      AND remote_model_id = 'manual/duplicate'
+  `)
+
+  expect(secondModel.id).toBe(firstModel.id)
+  expect(Number(row?.rowCount ?? 0)).toBe(1)
 })
 
 test('upsertDiscoveredModels preserves stored model options when refreshing discovery metadata', async () => {

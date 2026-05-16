@@ -1,3 +1,4 @@
+import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
 import {deleteJudgmentProviderTelemetryHistoryForJob} from './judgmentProviderTelemetryHistoryService.ts'
 
@@ -5,6 +6,8 @@ type JudgmentJobDeleteTx = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
 }
+type JudgmentJobSqliteDeletePendingRow = {jobId: string}
+type JudgmentJobLocalStateDeleter = {deleteJob: (jobId: string) => Promise<void>; hasJob: (jobId: string) => boolean}
 
 const tokenUseCreateSql = `
   CREATE TABLE app.token_use (
@@ -147,4 +150,85 @@ export const deleteJudgmentJobSafelyTx = async ({jobId, tx}: {jobId: string; tx:
     DELETE FROM app.judgment_job
     WHERE id = ${getSqlLiteral(jobId)}
   `)
+}
+
+export const markJudgmentJobSqliteDeletePendingTx = async ({jobId, tx}: {jobId: string; tx: JudgmentJobDeleteTx}) => {
+  await tx.run(`
+    INSERT INTO app.judgment_job_sqlite_delete_pending (job_id)
+    VALUES (${getSqlLiteral(jobId)})
+    ON CONFLICT(job_id) DO UPDATE SET
+      updated_at = now()
+  `)
+}
+
+export const clearJudgmentJobSqliteDeletePending = async (jobId: string) => {
+  await getAppDatabaseService().run(`
+    DELETE FROM app.judgment_job_sqlite_delete_pending
+    WHERE job_id = ${getSqlLiteral(jobId)}
+  `)
+}
+
+const recordJudgmentJobSqliteDeletePendingFailure = async (params: {error: unknown; jobId: string}) => {
+  const message = params.error instanceof Error ? params.error.message : String(params.error)
+
+  await getAppDatabaseService().run(`
+    UPDATE app.judgment_job_sqlite_delete_pending
+    SET last_attempt_at = current_timestamp,
+        attempt_count = attempt_count + 1,
+        last_error = ${getSqlLiteral(message)},
+        updated_at = current_timestamp
+    WHERE job_id = ${getSqlLiteral(params.jobId)}
+  `)
+}
+
+const getPendingJudgmentJobSqliteDeleteRows = async (limit: number) => {
+  return getAppDatabaseService().queryJson<JudgmentJobSqliteDeletePendingRow>(`
+    SELECT job_id AS jobId
+    FROM app.judgment_job_sqlite_delete_pending
+    ORDER BY requested_at ASC, job_id ASC
+    LIMIT ${limit}
+  `)
+}
+
+const retryPendingJudgmentJobSqliteDelete = async (params: {
+  jobId: string
+  sqliteService: JudgmentJobLocalStateDeleter
+}) => {
+  try {
+    if (params.sqliteService.hasJob(params.jobId)) {
+      await params.sqliteService.deleteJob(params.jobId)
+    }
+
+    await clearJudgmentJobSqliteDeletePending(params.jobId)
+    return {deleted: true, jobId: params.jobId}
+  } catch (error) {
+    await recordJudgmentJobSqliteDeletePendingFailure({error, jobId: params.jobId})
+    return {deleted: false, jobId: params.jobId}
+  }
+}
+
+export const retryPendingJudgmentJobSqliteDeletes = async (params: {
+  limit?: number
+  sqliteService: JudgmentJobLocalStateDeleter
+}) => {
+  const rows = await getPendingJudgmentJobSqliteDeleteRows(params.limit ?? 25)
+  const results = await rows.reduce<Promise<Array<{deleted: boolean; jobId: string}>>>(async (promise, row) => {
+    const completed = await promise
+    const result = await retryPendingJudgmentJobSqliteDelete({jobId: row.jobId, sqliteService: params.sqliteService})
+    return [...completed, result]
+  }, Promise.resolve([]))
+  const deletedCount = results.filter((result) => {
+    return result.deleted
+  }).length
+
+  return {deletedCount, attemptedCount: results.length}
+}
+
+export const deletePendingJudgmentJobSqliteState = async (params: {
+  jobId: string
+  sqliteService: JudgmentJobLocalStateDeleter
+}) => {
+  const result = await retryPendingJudgmentJobSqliteDelete(params)
+
+  return {localCleanupPending: !result.deleted}
 }

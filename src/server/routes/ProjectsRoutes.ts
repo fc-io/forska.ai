@@ -76,12 +76,6 @@ const getProjectModelLabel = ({
 type AppQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 type AppTx = AppQueryRunner & {run: (statement: string) => Promise<void>}
 
-type ProjectReferenceDetachSpec = {sourceTable: string; tempTable: string; whereClause: string}
-type ProjectReferenceDetachPlan = {
-  deleteSpecs: ProjectReferenceDetachSpec[]
-  restoreSpecs: ProjectReferenceDetachSpec[]
-}
-
 type ProjectRow = {
   humanJudgmentMode?: 'prompt' | 'summary' | null
   id: string
@@ -159,186 +153,6 @@ const updateProjectTx = async (tx: AppTx, params: {projectId: string; updatePart
   `)
 
   return getProjectRow(tx, params.projectId)
-}
-
-const runTxStatements = async (tx: AppTx, statements: string[]) => {
-  return statements.reduce<Promise<void>>((promise, statement) => {
-    return promise.then(() => {
-      return tx.run(statement)
-    })
-  }, Promise.resolve())
-}
-
-const runAppStatements = async (statements: string[]) => {
-  return statements.length === 0 ? undefined : getAppDatabaseService().run(statements.join(';\n'))
-}
-
-const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetachPlan => {
-  const projectLiteral = getSqlLiteral(projectId)
-  const suffix = crypto.randomUUID().replaceAll('-', '_')
-  const getTempTable = (tableName: string) => {
-    return `temp_project_update_${tableName}_${suffix}`
-  }
-
-  const projectPromptSpec = {
-    sourceTable: 'app.project_prompt',
-    tempTable: getTempTable('project_prompt'),
-    whereClause: `project_id = ${projectLiteral}`,
-  }
-  const projectImportRouteSpec = {
-    sourceTable: 'app.project_import_route',
-    tempTable: getTempTable('project_import_route'),
-    whereClause: `project_id = ${projectLiteral}`,
-  }
-  const projectArticleSpec = {
-    sourceTable: 'app.project_article',
-    tempTable: getTempTable('project_article'),
-    whereClause: `project_id = ${projectLiteral} OR imported_from_project_id = ${projectLiteral}`,
-  }
-  const judgmentSpec = {
-    sourceTable: 'app.judgment',
-    tempTable: getTempTable('judgment'),
-    whereClause: `project_id = ${projectLiteral}`,
-  }
-  const judgmentAssessmentSpec = {
-    sourceTable: 'app.judgment_assessment',
-    tempTable: getTempTable('judgment_assessment'),
-    whereClause: `judgment_id IN (SELECT id FROM app.judgment WHERE project_id = ${projectLiteral})`,
-  }
-  const judgmentHumanSpec = {
-    sourceTable: 'app.judgment_human',
-    tempTable: getTempTable('judgment_human'),
-    whereClause: `project_id = ${projectLiteral}`,
-  }
-  const judgmentHumanSummarySpec = {
-    sourceTable: 'app.judgment_human_summary',
-    tempTable: getTempTable('judgment_human_summary'),
-    whereClause: `project_id = ${projectLiteral}`,
-  }
-  const projectMartRefreshStateSpec = {
-    sourceTable: 'app.project_mart_refresh_state',
-    tempTable: getTempTable('project_mart_refresh_state'),
-    whereClause: `project_id = ${projectLiteral}`,
-  }
-  const projectMartRefreshArticleStateSpec = {
-    sourceTable: 'app.project_mart_refresh_article_state',
-    tempTable: getTempTable('project_mart_refresh_article_state'),
-    whereClause: `project_id = ${projectLiteral}`,
-  }
-  const projectMartDirtyMaterializationStateSpec = {
-    sourceTable: 'app.project_mart_dirty_materialization_state',
-    tempTable: getTempTable('project_mart_dirty_materialization_state'),
-    whereClause: `project_id = ${projectLiteral}`,
-  }
-  const reviewSpec = {
-    sourceTable: 'app.review',
-    tempTable: getTempTable('review'),
-    whereClause: `project_id = ${projectLiteral}`,
-  }
-  const projectMartLargeRebuildStateSpec = {
-    sourceTable: 'app.project_mart_large_rebuild_state',
-    tempTable: getTempTable('project_mart_large_rebuild_state'),
-    whereClause: `project_id = ${projectLiteral}`,
-  }
-
-  return {
-    deleteSpecs: [
-      projectPromptSpec,
-      projectImportRouteSpec,
-      projectArticleSpec,
-      judgmentAssessmentSpec,
-      judgmentSpec,
-      judgmentHumanSpec,
-      judgmentHumanSummarySpec,
-      projectMartDirtyMaterializationStateSpec,
-      projectMartRefreshArticleStateSpec,
-      projectMartRefreshStateSpec,
-      projectMartLargeRebuildStateSpec,
-      reviewSpec,
-    ],
-    restoreSpecs: [
-      projectPromptSpec,
-      projectImportRouteSpec,
-      projectArticleSpec,
-      judgmentSpec,
-      judgmentAssessmentSpec,
-      judgmentHumanSpec,
-      judgmentHumanSummarySpec,
-      projectMartDirtyMaterializationStateSpec,
-      projectMartRefreshStateSpec,
-      projectMartRefreshArticleStateSpec,
-      projectMartLargeRebuildStateSpec,
-      reviewSpec,
-    ],
-  }
-}
-
-const getCreateDetachBackupStatement = (spec: ProjectReferenceDetachSpec) => {
-  return `
-    CREATE TEMP TABLE ${spec.tempTable} AS
-    SELECT *
-    FROM ${spec.sourceTable}
-    WHERE ${spec.whereClause}
-  `
-}
-
-const getDeleteDetachedReferencesStatement = (spec: ProjectReferenceDetachSpec) => {
-  return `
-    DELETE FROM ${spec.sourceTable}
-    WHERE ${spec.whereClause}
-  `
-}
-
-const getRestoreDetachedReferencesStatement = (spec: ProjectReferenceDetachSpec) => {
-  return `
-    INSERT INTO ${spec.sourceTable}
-    SELECT *
-    FROM ${spec.tempTable}
-  `
-}
-
-const getDropDetachBackupStatement = (spec: ProjectReferenceDetachSpec) => {
-  return `DROP TABLE ${spec.tempTable}`
-}
-
-const detachProjectReferencesForModelUpdate = async (projectId: string) => {
-  const detachPlan = getProjectReferenceDetachPlan(projectId)
-
-  await runAppStatements(
-    detachPlan.restoreSpecs.map((spec) => {
-      return getCreateDetachBackupStatement(spec)
-    }),
-  )
-  await runAppStatements(
-    detachPlan.deleteSpecs.map((spec) => {
-      return getDeleteDetachedReferencesStatement(spec)
-    }),
-  )
-
-  return detachPlan
-}
-
-const restoreDetachedProjectReferences = async (detachPlan: ProjectReferenceDetachPlan) => {
-  return runAppStatements([
-    ...detachPlan.restoreSpecs.map((spec) => {
-      return getRestoreDetachedReferencesStatement(spec)
-    }),
-    ...detachPlan.restoreSpecs.map((spec) => {
-      return getDropDetachBackupStatement(spec)
-    }),
-  ])
-}
-
-const runWithDetachedProjectReferenceRecovery = async <T>(
-  operation: () => Promise<T>,
-  detachPlan: ProjectReferenceDetachPlan,
-): Promise<T> => {
-  try {
-    return await operation()
-  } catch (error) {
-    await restoreDetachedProjectReferences(detachPlan)
-    throw error
-  }
 }
 
 const upsertProjectPromptTx = async (
@@ -1125,7 +939,6 @@ export const projectsRoutes = new Elysia()
       }
 
       const hasModelIdUpdate = body.modelId !== undefined && body.modelId !== currentProject.modelId
-      const detachPlan = hasModelIdUpdate ? await detachProjectReferencesForModelUpdate(params.id) : null
 
       const runEditTransaction = () => {
         return getAppDatabaseService().transaction(async (tx) => {
@@ -1163,15 +976,6 @@ export const projectsRoutes = new Elysia()
           })
 
           const updatedProject = await updateProjectTx(tx, {projectId: params.id, updateParts})
-
-          if (detachPlan) {
-            await runTxStatements(
-              tx,
-              detachPlan.restoreSpecs.map((spec) => {
-                return getRestoreDetachedReferencesStatement(spec)
-              }),
-            )
-          }
 
           if (!updatedProject) {
             throw new Error('Project not found')
@@ -1407,15 +1211,6 @@ export const projectsRoutes = new Elysia()
           ORDER BY pp.prompt_order ASC NULLS LAST
         `)
 
-          if (detachPlan) {
-            await runTxStatements(
-              tx,
-              detachPlan.restoreSpecs.map((spec) => {
-                return getDropDetachBackupStatement(spec)
-              }),
-            )
-          }
-
           const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(tx, [
             params.id,
           ])
@@ -1430,9 +1225,7 @@ export const projectsRoutes = new Elysia()
         })
       }
 
-      const result = detachPlan
-        ? await runWithDetachedProjectReferenceRecovery(runEditTransaction, detachPlan)
-        : await runEditTransaction()
+      const result = await runEditTransaction()
 
       return {data: result}
     },

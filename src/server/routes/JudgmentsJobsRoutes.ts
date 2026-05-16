@@ -62,7 +62,12 @@ import {
   getJudgmentExecutionSnapshot,
   isJudgmentExecutionSnapshotIdentityValid,
 } from '../services/judgmentExecutionSnapshotService.ts'
-import {deleteJudgmentJobSafelyTx} from '../services/judgmentJobDeleteService.ts'
+import {
+  deleteJudgmentJobSafelyTx,
+  deletePendingJudgmentJobSqliteState,
+  markJudgmentJobSqliteDeletePendingTx,
+  retryPendingJudgmentJobSqliteDeletes,
+} from '../services/judgmentJobDeleteService.ts'
 import {
   getJudgmentJobSqliteHealthProjectionService,
   type JudgmentJobSqliteHealthProjectionReader,
@@ -3685,6 +3690,9 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs/:id',
     async ({params}) => {
       const sqliteService = getJudgmentJobSqliteService()
+
+      await retryPendingJudgmentJobSqliteDeletes({sqliteService})
+
       const [existingJob] = await getAppDatabaseService().queryJson<{
         id: string
         quarantineReason: string | null
@@ -3731,12 +3739,13 @@ export const judgmentsJobsRoutes = new Elysia()
       }
 
       await getAppDatabaseService().transaction(async (tx) => {
+        await markJudgmentJobSqliteDeletePendingTx({jobId: params.id, tx})
         await deleteJudgmentJobSafelyTx({jobId: params.id, tx})
       })
 
-      await sqliteService.deleteJob(params.id)
+      const localCleanup = await deletePendingJudgmentJobSqliteState({jobId: params.id, sqliteService})
 
-      return {data: {jobId: existingJob.id}, error: null}
+      return {data: {jobId: existingJob.id, ...localCleanup}, error: null}
     },
     {params: t.Object({id: t.String()})},
   )

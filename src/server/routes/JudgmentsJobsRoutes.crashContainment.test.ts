@@ -250,8 +250,15 @@ test('delete route keeps local SQLite when DuckDB delete fails', () => {
 
         void mock.module(deleteServiceModulePath, () => {
           return {
+            deletePendingJudgmentJobSqliteState: async () => {
+              return {localCleanupPending: false}
+            },
             deleteJudgmentJobSafelyTx: async () => {
               throw new Error('duckdb delete failed after local SQLite should remain')
+            },
+            markJudgmentJobSqliteDeletePendingTx: async () => {},
+            retryPendingJudgmentJobSqliteDeletes: async () => {
+              return {attemptedCount: 0, deletedCount: 0}
             },
           }
         })
@@ -325,6 +332,138 @@ test('delete route keeps local SQLite when DuckDB delete fails', () => {
   expect(result.body).toContain('duckdb delete failed')
   expect(result.job).not.toBeNull()
   expect(result.sqliteHasJob).toBe(true)
+})
+
+test('delete route records and recovers pending local SQLite cleanup after DuckDB delete', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {createTempRuntimeRoot} = await import('./src/server/test/createTempRuntimeRoot.ts')
+
+        const tempRuntimeRoot = createTempRuntimeRoot('f1-judgments-routes-delete-local-recovery')
+        const tempDbPath = tempRuntimeRoot.duckdbPath
+        process.env.SERVER_ROLE = 'dev-single'
+        process.env.DUCKDB_PATH = tempDbPath
+        process.env.API_SERVER_PORT = '3995'
+        process.env.VITE_PORT = '3000'
+
+        const [
+          {migrateDuckdb},
+          {getAppDatabaseService},
+          {resetDuckdbServiceForTests},
+          {resetServerRuntimeRoleForTests},
+          {judgmentsJobsRoutes},
+          {getJudgmentJobSqliteService},
+          {retryPendingJudgmentJobSqliteDeletes},
+          {Elysia},
+        ] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/routes/JudgmentsJobsRoutes.ts?delete-local-recovery=' + Date.now()),
+          import('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'),
+          import('./src/server/services/judgmentJobDeleteService.ts'),
+          import('elysia'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const db = getAppDatabaseService()
+        const sqliteService = getJudgmentJobSqliteService()
+        const app = new Elysia().use(judgmentsJobsRoutes)
+        const now = Date.now()
+        const connectionId = 'delete-local-recovery-connection-' + now
+        const modelId = 'delete-local-recovery-model-' + now
+        const projectId = 'delete-local-recovery-project-' + now
+        const jobId = 'delete-local-recovery-job-' + now
+
+        await db.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('" + connectionId + "', 'sglang', 'SGLang', TRUE, 'none')")
+        await db.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('" + modelId + "', '" + connectionId + "', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)")
+        await db.run("INSERT INTO app.project (id, name, model_id) VALUES ('" + projectId + "', 'Delete Local Recovery Project', '" + modelId + "')")
+        await db.run("INSERT INTO app.judgment_job (id, project_id, status, storage_state) VALUES ('" + jobId + "', '" + projectId + "', 'paused', 'active')")
+        await sqliteService.initializeJob(jobId)
+
+        const originalDeleteJob = sqliteService.deleteJob.bind(sqliteService)
+        let failDelete = true
+        sqliteService.deleteJob = async (targetJobId) => {
+          if (failDelete) {
+            throw new Error('local sqlite delete failed after duckdb commit')
+          }
+
+          return originalDeleteJob(targetJobId)
+        }
+
+        const response = await app.handle(new Request('http://localhost/api/judgmentsjobs/' + jobId, {method: 'DELETE'}))
+        const bodyText = await response.text()
+        const body = response.status === 200 ? JSON.parse(bodyText) : null
+        const rowsAfterDelete = await db.queryJson("SELECT id FROM app.judgment_job WHERE id = '" + jobId + "' LIMIT 1")
+        const pendingAfterDelete = await db.queryJson("SELECT job_id AS jobId, attempt_count AS attemptCount, last_error AS lastError FROM app.judgment_job_sqlite_delete_pending WHERE job_id = '" + jobId + "'")
+        const sqliteHasJobAfterDelete = sqliteService.hasJob(jobId)
+
+        failDelete = false
+        const retryResult = await retryPendingJudgmentJobSqliteDeletes({sqliteService})
+        const pendingAfterRetry = await db.queryJson("SELECT job_id AS jobId FROM app.judgment_job_sqlite_delete_pending WHERE job_id = '" + jobId + "'")
+        const sqliteHasJobAfterRetry = sqliteService.hasJob(jobId)
+
+        console.log(JSON.stringify({
+          body,
+          bodyText,
+          jobAfterDelete: rowsAfterDelete[0] ?? null,
+          pendingAfterDelete,
+          pendingAfterRetry,
+          retryResult,
+          sqliteHasJobAfterDelete,
+          sqliteHasJobAfterRetry,
+          status: response.status,
+        }))
+
+        await sqliteService.closeAll()
+        await db.close()
+        tempRuntimeRoot.cleanup()
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Local SQLite delete recovery regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    body: {data: {jobId: string; localCleanupPending: boolean}; error: null} | null
+    bodyText: string
+    jobAfterDelete: {id: string} | null
+    pendingAfterDelete: Array<{attemptCount: number; jobId: string; lastError: string | null}>
+    pendingAfterRetry: Array<{jobId: string}>
+    retryResult: {attemptedCount: number; deletedCount: number}
+    sqliteHasJobAfterDelete: boolean
+    sqliteHasJobAfterRetry: boolean
+    status: number
+  }
+
+  if (result.status !== 200) {
+    throw new Error(result.bodyText)
+  }
+
+  expect(result.status).toBe(200)
+  expect(result.body?.data.localCleanupPending).toBe(true)
+  expect(result.jobAfterDelete).toBeNull()
+  expect(result.sqliteHasJobAfterDelete).toBe(true)
+  expect(result.pendingAfterDelete).toHaveLength(1)
+  expect(result.pendingAfterDelete[0]?.attemptCount).toBe(1)
+  expect(result.pendingAfterDelete[0]?.lastError).toContain('local sqlite delete failed')
+  expect(result.retryResult).toEqual({attemptedCount: 1, deletedCount: 1})
+  expect(result.pendingAfterRetry).toEqual([])
+  expect(result.sqliteHasJobAfterRetry).toBe(false)
 })
 
 test('claim route returns maintenance unavailable for transient SQLite lease failures', () => {
