@@ -313,6 +313,157 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
   }
 })
 
+test('provider model natural key migration deduplicates existing model references before adding the index', async () => {
+  const duckdbPath = `/tmp/forska-provider-model-natural-key-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {readFileSync} = await import('node:fs')
+        const [{getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+
+        const database = getAppDatabaseService()
+        await database.run("CREATE SCHEMA app")
+        await database.run("CREATE SCHEMA mart")
+        await database.run("CREATE TABLE app.model (id VARCHAR PRIMARY KEY, provider_connection_id VARCHAR NOT NULL, name VARCHAR NOT NULL, remote_model_id VARCHAR, display_name VARCHAR, variant VARCHAR, source VARCHAR, enabled BOOLEAN NOT NULL DEFAULT TRUE, metadata_json JSON, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp)")
+        await database.run("CREATE TABLE app.project (id VARCHAR PRIMARY KEY, model_id VARCHAR NOT NULL REFERENCES app.model(id), updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp)")
+        await database.run("CREATE TABLE app.user_config (id VARCHAR PRIMARY KEY, full_text_conversion_model_id VARCHAR, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp)")
+        await database.run("CREATE TABLE app.article (id VARCHAR PRIMARY KEY, full_text_conversion_model_id VARCHAR, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp)")
+        await database.run("CREATE TABLE app.comparison_project (id VARCHAR PRIMARY KEY, model_ids VARCHAR[], updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp)")
+        await database.run("CREATE TABLE app.judgment (id VARCHAR PRIMARY KEY, article_id VARCHAR NOT NULL, prompt_id VARCHAR NOT NULL, model_id VARCHAR NOT NULL REFERENCES app.model(id), use_title BOOLEAN NOT NULL DEFAULT TRUE, use_abstract BOOLEAN NOT NULL DEFAULT TRUE, use_fulltext BOOLEAN NOT NULL DEFAULT FALSE, use_fulltext_no_images BOOLEAN NOT NULL DEFAULT FALSE, delete_generation BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, UNIQUE(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, delete_generation))")
+        await database.run("CREATE TABLE app.judgment_assessment (id VARCHAR PRIMARY KEY, judgment_id VARCHAR NOT NULL REFERENCES app.judgment(id), assessment_is_correct BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, UNIQUE(judgment_id))")
+        await database.run("CREATE TABLE app.judgment_execution_snapshot (id VARCHAR PRIMARY KEY, model_id VARCHAR NOT NULL)")
+        await database.run("CREATE TABLE app.judgment_job_sqlite_outbox_import (job_id VARCHAR NOT NULL, outbox_seq BIGINT NOT NULL, judgment_id VARCHAR, model_id VARCHAR, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, PRIMARY KEY (job_id, outbox_seq))")
+        await database.run("CREATE TABLE mart.judgment_fact (judgment_id VARCHAR PRIMARY KEY, model_id VARCHAR NOT NULL)")
+        await database.run("CREATE TABLE mart.prompt_answer_fact (project_id VARCHAR NOT NULL, judgment_id VARCHAR NOT NULL, answer_value VARCHAR NOT NULL, model_id VARCHAR NOT NULL, PRIMARY KEY(project_id, judgment_id, answer_value))")
+        await database.run("CREATE TABLE mart.review_article_serving_detail (project_id VARCHAR NOT NULL, generation BIGINT NOT NULL, judgment_id VARCHAR NOT NULL, model_id VARCHAR NOT NULL, PRIMARY KEY(project_id, generation, judgment_id))")
+        await database.run("CREATE TABLE mart.comparison_cell_serving (comparison_project_id VARCHAR NOT NULL, generation BIGINT NOT NULL, article_id VARCHAR NOT NULL, column_id VARCHAR NOT NULL, model_id VARCHAR, PRIMARY KEY(comparison_project_id, generation, article_id, column_id))")
+        await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, variant, source, enabled, created_at) VALUES ('model-a', 'connection-1', 'Remote 1', 'remote-1', 'Remote 1', NULL, 'manual', TRUE, TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('model-b', 'connection-1', 'Remote 1 Duplicate', 'remote-1', 'Remote 1 Duplicate', '', 'manual', TRUE, TIMESTAMPTZ '2026-01-02T00:00:00Z'), ('model-null-a', 'connection-1', 'Null A', NULL, 'Null A', NULL, 'manual', TRUE, TIMESTAMPTZ '2026-01-03T00:00:00Z'), ('model-null-b', 'connection-1', 'Null B', NULL, 'Null B', NULL, 'manual', TRUE, TIMESTAMPTZ '2026-01-04T00:00:00Z')")
+        await database.run("INSERT INTO app.project (id, model_id) VALUES ('project-1', 'model-b')")
+        await database.run("INSERT INTO app.user_config (id, full_text_conversion_model_id) VALUES ('user-1', 'model-b')")
+        await database.run("INSERT INTO app.article (id, full_text_conversion_model_id) VALUES ('article-conversion-1', 'model-b')")
+        await database.run("INSERT INTO app.comparison_project (id, model_ids) VALUES ('comparison-1', ['model-a', 'model-b', 'model-null-a'])")
+        await database.run("INSERT INTO app.judgment (id, article_id, prompt_id, model_id, created_at) VALUES ('judgment-a', 'article-1', 'prompt-1', 'model-a', TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('judgment-b', 'article-1', 'prompt-1', 'model-b', TIMESTAMPTZ '2026-01-02T00:00:00Z'), ('judgment-c', 'article-1', 'prompt-2', 'model-b', TIMESTAMPTZ '2026-01-03T00:00:00Z')")
+        await database.run("INSERT INTO app.judgment_assessment (id, judgment_id, assessment_is_correct, created_at) VALUES ('assessment-a', 'judgment-a', TRUE, TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('assessment-b', 'judgment-b', FALSE, TIMESTAMPTZ '2026-01-02T00:00:00Z'), ('assessment-c', 'judgment-c', TRUE, TIMESTAMPTZ '2026-01-03T00:00:00Z')")
+        await database.run("INSERT INTO app.judgment_execution_snapshot (id, model_id) VALUES ('snapshot-1', 'model-b')")
+        await database.run("INSERT INTO app.judgment_job_sqlite_outbox_import (job_id, outbox_seq, judgment_id, model_id) VALUES ('job-1', 1, 'judgment-b', 'model-b'), ('job-1', 2, 'judgment-c', 'model-b')")
+        await database.run("INSERT INTO mart.judgment_fact (judgment_id, model_id) VALUES ('judgment-b', 'model-b'), ('judgment-c', 'model-b')")
+        await database.run("INSERT INTO mart.prompt_answer_fact (project_id, judgment_id, answer_value, model_id) VALUES ('project-1', 'judgment-b', 'yes', 'model-b'), ('project-1', 'judgment-c', 'no', 'model-b')")
+        await database.run("INSERT INTO mart.review_article_serving_detail (project_id, generation, judgment_id, model_id) VALUES ('project-1', 1, 'judgment-b', 'model-b'), ('project-1', 1, 'judgment-c', 'model-b')")
+        await database.run("INSERT INTO mart.comparison_cell_serving (comparison_project_id, generation, article_id, column_id, model_id) VALUES ('comparison-1', 1, 'article-1', 'llm:model-b:prompt-1', 'model-b')")
+
+        await database.run(readFileSync('./src/db/duckdbMigrations/0083_providerModelNaturalKey.sql', 'utf8'))
+
+        const duplicateInsertRejected = await database
+          .run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, variant) VALUES ('model-duplicate-rejected', 'connection-1', 'Duplicate Rejected', 'remote-1', NULL)")
+          .then(
+            () => false,
+            () => true,
+          )
+        const models = await database.queryJson("SELECT id, remote_model_id AS remoteModelId FROM app.model ORDER BY id ASC")
+        const [project] = await database.queryJson("SELECT model_id AS modelId FROM app.project WHERE id = 'project-1'")
+        const [userConfig] = await database.queryJson("SELECT full_text_conversion_model_id AS modelId FROM app.user_config WHERE id = 'user-1'")
+        const [article] = await database.queryJson("SELECT full_text_conversion_model_id AS modelId FROM app.article WHERE id = 'article-conversion-1'")
+        const [comparisonProject] = await database.queryJson("SELECT model_ids AS modelIds FROM app.comparison_project WHERE id = 'comparison-1'")
+        const judgments = await database.queryJson("SELECT id, model_id AS modelId FROM app.judgment ORDER BY id ASC")
+        const assessments = await database.queryJson("SELECT id, judgment_id AS judgmentId FROM app.judgment_assessment ORDER BY id ASC")
+        const [snapshot] = await database.queryJson("SELECT model_id AS modelId FROM app.judgment_execution_snapshot WHERE id = 'snapshot-1'")
+        const outboxRows = await database.queryJson("SELECT outbox_seq::INTEGER AS outboxSeq, judgment_id AS judgmentId, model_id AS modelId FROM app.judgment_job_sqlite_outbox_import ORDER BY outbox_seq ASC")
+        const martJudgmentFacts = await database.queryJson("SELECT judgment_id AS judgmentId, model_id AS modelId FROM mart.judgment_fact ORDER BY judgment_id ASC")
+        const martPromptFacts = await database.queryJson("SELECT judgment_id AS judgmentId, model_id AS modelId FROM mart.prompt_answer_fact ORDER BY judgment_id ASC")
+        const martReviewDetails = await database.queryJson("SELECT judgment_id AS judgmentId, model_id AS modelId FROM mart.review_article_serving_detail ORDER BY judgment_id ASC")
+        const [comparisonCell] = await database.queryJson("SELECT model_id AS modelId FROM mart.comparison_cell_serving WHERE comparison_project_id = 'comparison-1'")
+
+        console.log(JSON.stringify({article, assessments, comparisonCell, comparisonProject, duplicateInsertRejected, judgments, martJudgmentFacts, martPromptFacts, martReviewDetails, models, outboxRows, project, snapshot, userConfig}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to verify provider model dedupe')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      article: {modelId: string}
+      assessments: Array<{id: string; judgmentId: string}>
+      comparisonCell: {modelId: string}
+      comparisonProject: {modelIds: string[]}
+      duplicateInsertRejected: boolean
+      judgments: Array<{id: string; modelId: string}>
+      martJudgmentFacts: Array<{judgmentId: string; modelId: string}>
+      martPromptFacts: Array<{judgmentId: string; modelId: string}>
+      martReviewDetails: Array<{judgmentId: string; modelId: string}>
+      models: Array<{id: string; remoteModelId: string | null}>
+      outboxRows: Array<{judgmentId: string; modelId: string; outboxSeq: number}>
+      project: {modelId: string}
+      snapshot: {modelId: string}
+      userConfig: {modelId: string}
+    }
+
+    expect(parsed.duplicateInsertRejected).toBe(true)
+    expect(parsed.models).toEqual([
+      {id: 'model-a', remoteModelId: 'remote-1'},
+      {id: 'model-null-a', remoteModelId: null},
+      {id: 'model-null-b', remoteModelId: null},
+    ])
+    expect(parsed.project.modelId).toBe('model-a')
+    expect(parsed.userConfig.modelId).toBe('model-a')
+    expect(parsed.article.modelId).toBe('model-a')
+    expect(parsed.comparisonProject.modelIds).toEqual(['model-a', 'model-null-a'])
+    expect(parsed.judgments).toEqual([
+      {id: 'judgment-a', modelId: 'model-a'},
+      {id: 'judgment-c', modelId: 'model-a'},
+    ])
+    expect(parsed.assessments).toEqual([
+      {id: 'assessment-a', judgmentId: 'judgment-a'},
+      {id: 'assessment-c', judgmentId: 'judgment-c'},
+    ])
+    expect(parsed.snapshot.modelId).toBe('model-a')
+    expect(parsed.outboxRows).toEqual([
+      {judgmentId: 'judgment-a', modelId: 'model-a', outboxSeq: 1},
+      {judgmentId: 'judgment-c', modelId: 'model-a', outboxSeq: 2},
+    ])
+    expect(parsed.martJudgmentFacts).toEqual([{judgmentId: 'judgment-c', modelId: 'model-a'}])
+    expect(parsed.martPromptFacts).toEqual([{judgmentId: 'judgment-c', modelId: 'model-a'}])
+    expect(parsed.martReviewDetails).toEqual([{judgmentId: 'judgment-c', modelId: 'model-a'}])
+    expect(parsed.comparisonCell.modelId).toBe('model-a')
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('migrateDuckdb preserves the original failure when rollback is already inactive', async () => {
   process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-test.duckdb'
 
