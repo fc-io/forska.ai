@@ -745,6 +745,136 @@ test('syncImportedArticlesWithTx clears stale source records for the synced rout
   }
 })
 
+test('syncImportedArticlesWithTx clears source records that reimport with only quarantined identifiers', async () => {
+  const duckdbPath = `/tmp/f1-article-import-quarantined-source-record-sync-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {syncImportedArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const importRoute = 'structured-file:source-record-quarantine-sync'
+        const createRow = (params) => ({
+          articleAuthors: ['Alice Example'],
+          articleId: params.articleId,
+          articleSummary: 'Structured import summary',
+          articleTitle: params.articleTitle,
+          doi: params.doi ?? null,
+          externalArticleId: 'external-quarantine-sync',
+          importRoute,
+          pubmedId: params.pubmedId ?? null,
+          sourceKind: 'structured_file',
+          sourceRecordHash: params.sourceRecordHash,
+          sourceRecordKey: 'source-quarantine-sync',
+        })
+
+        await database.transaction(async (tx) => {
+          await syncImportedArticlesWithTx({
+            importRoute,
+            rows: [
+              createRow({
+                articleId: 'sync-quarantine-valid',
+                articleTitle: 'Sync quarantine valid',
+                doi: '10.1000/sync-quarantine-valid',
+                sourceRecordHash: 'hash-valid',
+              }),
+            ],
+            tx,
+          })
+        })
+        await database.transaction(async (tx) => {
+          await syncImportedArticlesWithTx({
+            importRoute,
+            rows: [
+              createRow({
+                articleId: 'sync-quarantine-malformed',
+                articleTitle: 'Sync quarantine malformed',
+                pubmedId: '12A',
+                sourceRecordHash: 'hash-malformed',
+              }),
+            ],
+            tx,
+          })
+        })
+
+        const currentLinkRows = await database.queryJson(
+          "SELECT source_record_key AS sourceRecordKey FROM app.article_import_route ORDER BY source_record_key ASC"
+        )
+        const sourceRecordRows = await database.queryJson(
+          "SELECT source_record_key AS sourceRecordKey FROM app.article_import_route_source_record ORDER BY source_record_key ASC"
+        )
+        const quarantineRows = await database.queryJson(
+          "SELECT kind, normalized_value AS normalizedValue, reason, source_record_key AS sourceRecordKey FROM app.article_canonical_match_quarantine ORDER BY source_record_key ASC, kind ASC"
+        )
+
+        console.log(JSON.stringify({currentLinkRows, quarantineRows, sourceRecordRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to sync quarantined source record',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      currentLinkRows: Array<{sourceRecordKey: string}>
+      quarantineRows: Array<{kind: string; normalizedValue: string; reason: string; sourceRecordKey: string}>
+      sourceRecordRows: Array<{sourceRecordKey: string}>
+    }
+
+    expect(parsed.currentLinkRows).toEqual([])
+    expect(parsed.sourceRecordRows).toEqual([])
+    expect(parsed.quarantineRows).toEqual([
+      {
+        kind: 'pmid',
+        normalizedValue: '12A',
+        reason: 'source-row-identifier-malformed',
+        sourceRecordKey: 'source-quarantine-sync',
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('syncImportedArticlesWithTx reuses id-less source records across reimports', async () => {
   const duckdbPath = `/tmp/f1-article-import-idless-reimport-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(

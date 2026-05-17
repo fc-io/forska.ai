@@ -157,7 +157,11 @@ type ExistingCanonicalArticleRow = {
   sourceMetadata: unknown
   url: string | null
 }
-type ArticleImportRefreshState = {acceptedCount: number; importRouteIds: string[]}
+type ArticleImportRefreshState = {
+  acceptedCount: number
+  acceptedSourceRecords: ArticleImportRouteSourceRecordLookup[]
+  importRouteIds: string[]
+}
 
 const articleImportBatchSize = 500
 
@@ -627,6 +631,17 @@ const getArticleImportRouteSourceRecordKey = (record: {importRouteId: string; so
   return `${record.importRouteId}\u0000${record.sourceRecordKey}`
 }
 
+const getDeduplicatedSourceRecordLookups = (records: ArticleImportRouteSourceRecordLookup[]) => {
+  return Array.from(
+    records
+      .reduce<Map<string, ArticleImportRouteSourceRecordLookup>>((acc, record) => {
+        acc.set(getArticleImportRouteSourceRecordKey(record), record)
+        return acc
+      }, new Map())
+      .values(),
+  )
+}
+
 const getArticleImportRouteCurrentLinkKey = (record: {articleId: string; importRouteId: string}) => {
   return `${record.articleId}\u0000${record.importRouteId}`
 }
@@ -787,6 +802,12 @@ const getDeduplicatedSourceRecords = (records: ArticleImportRouteLinkRecord[]) =
       }, new Map())
       .values(),
   )
+}
+
+const getArticleImportRouteLinkSourceRecordLookups = (records: ArticleImportRouteLinkRecord[]) => {
+  return getDeduplicatedSourceRecords(records).map((record) => {
+    return {importRouteId: record.importRouteId, sourceRecordKey: record.sourceRecordKey}
+  })
 }
 
 const getDeduplicatedCurrentLinks = (records: ArticleImportRouteLinkRecord[]) => {
@@ -1384,7 +1405,7 @@ const getUnresolvedSourceRecordRemapRecords = (params: {
 
 const storeImportedArticleChunkInTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
   if (rows.length === 0) {
-    return {acceptedCount: 0, importRouteIds: [] as string[]}
+    return {acceptedCount: 0, acceptedSourceRecords: [], importRouteIds: [] as string[]}
   }
 
   const normalizedRows = rows.map((row) => {
@@ -1450,7 +1471,11 @@ const storeImportedArticleChunkInTx = async (tx: ArticleImportStoreTx, rows: Art
     await quarantineRemappedArticleImportSourceRecords(tx, remappedSourceRecords)
   }
 
-  return {acceptedCount: articleIdByCandidateId.size, importRouteIds: Array.from(routeIdMap.values())}
+  return {
+    acceptedCount: articleIdByCandidateId.size,
+    acceptedSourceRecords: getArticleImportRouteLinkSourceRecordLookups(linkRecords),
+    importRouteIds: Array.from(routeIdMap.values()),
+  }
 }
 
 const getMergedImportRefreshState = (states: ArticleImportRefreshState[]) => {
@@ -1458,6 +1483,11 @@ const getMergedImportRefreshState = (states: ArticleImportRefreshState[]) => {
     acceptedCount: states.reduce((sum, state) => {
       return sum + state.acceptedCount
     }, 0),
+    acceptedSourceRecords: getDeduplicatedSourceRecordLookups(
+      states.flatMap((state) => {
+        return state.acceptedSourceRecords
+      }),
+    ),
     importRouteIds: getUniqueValues(
       states.flatMap((state) => {
         return state.importRouteIds
@@ -1507,11 +1537,18 @@ const clearStaleImportRouteLinks = async (
   `)
 }
 
-const getImportRowSourceRecordKeys = (rows: ArticleImportStoreRow[]) => {
+const getAcceptedImportRouteSourceRecordKeys = (
+  records: ArticleImportRouteSourceRecordLookup[],
+  importRouteId: string,
+) => {
   return getUniqueValues(
-    rows.map((row) => {
-      return getScopedArticleImportStoreRow(getNormalizedArticleImportRow(row)).sourceRecordKey
-    }),
+    records
+      .filter((record) => {
+        return record.importRouteId === importRouteId
+      })
+      .map((record) => {
+        return record.sourceRecordKey
+      }),
   )
 }
 
@@ -1528,10 +1565,14 @@ const syncImportedArticlesInTx = async (params: {
   const importRefreshState =
     params.rows.length > 0
       ? await storeImportedArticlesInTx(params.tx, params.rows)
-      : {acceptedCount: 0, importRouteIds: [] as string[]}
+      : {acceptedCount: 0, acceptedSourceRecords: [], importRouteIds: [] as string[]}
 
   if (importRouteId) {
-    await clearStaleImportRouteLinks(params.tx, importRouteId, getImportRowSourceRecordKeys(params.rows))
+    await clearStaleImportRouteLinks(
+      params.tx,
+      importRouteId,
+      getAcceptedImportRouteSourceRecordKeys(importRefreshState.acceptedSourceRecords, importRouteId),
+    )
   }
 
   return {
@@ -1572,7 +1613,9 @@ export const markImportedArticleProjectsDirty = async (importRouteIds: string[])
 }
 
 export const storeImportedArticlesWithTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
-  return await storeImportedArticlesInTx(tx, rows)
+  const state = await storeImportedArticlesInTx(tx, rows)
+
+  return {acceptedCount: state.acceptedCount, importRouteIds: state.importRouteIds}
 }
 
 export const syncImportedArticlesWithTx = async (params: {
