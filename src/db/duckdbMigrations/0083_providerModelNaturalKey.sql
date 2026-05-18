@@ -1,13 +1,90 @@
+CREATE TEMP TABLE provider_model_natural_key_model_reference AS
+SELECT
+  model.id AS model_id,
+  CASE
+    WHEN model.id IN (
+      SELECT model_id
+      FROM app.project
+    )
+      OR model.id IN (
+        SELECT selected_model.model_id
+        FROM app.comparison_project
+        CROSS JOIN UNNEST(model_ids) AS selected_model(model_id)
+      )
+    THEN 0
+    ELSE 1
+  END AS project_reference_rank,
+  CASE
+    WHEN model.id IN (
+      SELECT full_text_conversion_model_id
+      FROM app.user_config
+      WHERE full_text_conversion_model_id IS NOT NULL
+    )
+      OR model.id IN (
+        SELECT full_text_conversion_model_id
+        FROM app.article
+        WHERE full_text_conversion_model_id IS NOT NULL
+      )
+    THEN 0
+    ELSE 1
+  END AS conversion_reference_rank,
+  CASE
+    WHEN model.id IN (
+      SELECT model_id
+      FROM app.judgment
+    )
+      OR model.id IN (
+        SELECT model_id
+        FROM app.judgment_execution_snapshot
+      )
+      OR model.id IN (
+        SELECT model_id
+        FROM app.judgment_job_sqlite_outbox_import
+        WHERE model_id IS NOT NULL
+      )
+      OR model.id IN (
+        SELECT model_id
+        FROM mart.judgment_fact
+      )
+      OR model.id IN (
+        SELECT model_id
+        FROM mart.prompt_answer_fact
+      )
+      OR model.id IN (
+        SELECT model_id
+        FROM mart.review_article_serving_detail
+      )
+      OR model.id IN (
+        SELECT model_id
+        FROM mart.comparison_cell_serving
+        WHERE model_id IS NOT NULL
+      )
+    THEN 0
+    ELSE 1
+  END AS judgment_reference_rank,
+  CASE
+    WHEN COALESCE(model.enabled, TRUE) = FALSE OR model.metadata_json IS NOT NULL THEN 0
+    ELSE 1
+  END AS configured_rank
+FROM app.model model;
+
 CREATE TEMP TABLE provider_model_natural_key_model_map AS
 WITH ranked_model AS (
   SELECT
-    id,
-    FIRST_VALUE(id) OVER (
-      PARTITION BY provider_connection_id, remote_model_id, COALESCE(variant, '')
-      ORDER BY created_at ASC, id ASC
+    model.id,
+    FIRST_VALUE(model.id) OVER (
+      PARTITION BY model.provider_connection_id, model.remote_model_id, COALESCE(model.variant, '')
+      ORDER BY
+        model_reference.project_reference_rank ASC,
+        model_reference.conversion_reference_rank ASC,
+        model_reference.judgment_reference_rank ASC,
+        model_reference.configured_rank ASC,
+        model.created_at ASC,
+        model.id ASC
     ) AS canonical_model_id
-  FROM app.model
-  WHERE remote_model_id IS NOT NULL
+  FROM app.model model
+  INNER JOIN provider_model_natural_key_model_reference model_reference ON model_reference.model_id = model.id
+  WHERE model.remote_model_id IS NOT NULL
 )
 SELECT
   id AS duplicate_model_id,
@@ -96,6 +173,25 @@ SELECT
   target_judgment_id,
   target_rank
 FROM ranked_assessment;
+
+CREATE TEMP TABLE provider_model_natural_key_comparison_project_serving_target AS
+SELECT DISTINCT id AS comparison_project_id
+FROM app.comparison_project
+WHERE EXISTS (
+  SELECT 1
+  FROM UNNEST(model_ids) AS selected_model(model_id)
+  WHERE selected_model.model_id IN (
+    SELECT duplicate_model_id
+    FROM provider_model_natural_key_model_map
+  )
+)
+UNION
+SELECT DISTINCT comparison_project_id
+FROM mart.comparison_cell_serving
+WHERE model_id IN (
+  SELECT duplicate_model_id
+  FROM provider_model_natural_key_model_map
+);
 
 DELETE FROM app.judgment_assessment
 WHERE id IN (
@@ -233,6 +329,35 @@ WHERE EXISTS (
   )
 );
 
+UPDATE app.provider_connection
+SET
+  config_json = json_merge_patch(
+    COALESCE(config_json, CAST('{}' AS JSON)),
+    json_object(
+      'disabledModelIds',
+      (
+        SELECT list(disabled_model_id ORDER BY first_ordinal)
+        FROM (
+          SELECT
+            COALESCE(model_map.canonical_model_id, disabled_model.model_id) AS disabled_model_id,
+            MIN(disabled_model.ordinal) AS first_ordinal
+          FROM UNNEST(CAST(json_extract(config_json, '$.disabledModelIds') AS VARCHAR[])) WITH ORDINALITY AS disabled_model(model_id, ordinal)
+          LEFT JOIN provider_model_natural_key_model_map model_map ON model_map.duplicate_model_id = disabled_model.model_id
+          GROUP BY disabled_model_id
+        )
+      )
+    )
+  ),
+  updated_at = current_timestamp
+WHERE EXISTS (
+  SELECT 1
+  FROM UNNEST(CAST(json_extract(config_json, '$.disabledModelIds') AS VARCHAR[])) AS disabled_model(model_id)
+  WHERE disabled_model.model_id IN (
+    SELECT duplicate_model_id
+    FROM provider_model_natural_key_model_map
+  )
+);
+
 UPDATE app.comparison_project_serving_generation
 SET
   active_generation = 0,
@@ -251,12 +376,8 @@ SET
   serving_staged_filter_stats_count = 0,
   generation_updated_at = current_timestamp
 WHERE comparison_project_id IN (
-  SELECT DISTINCT comparison_project_id
-  FROM mart.comparison_cell_serving
-  WHERE model_id IN (
-    SELECT duplicate_model_id
-    FROM provider_model_natural_key_model_map
-  )
+  SELECT comparison_project_id
+  FROM provider_model_natural_key_comparison_project_serving_target
 );
 
 UPDATE app.judgment
@@ -367,6 +488,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_app_model_provider_remote_variant_unique
 ON app.model(provider_connection_id, remote_model_id, COALESCE(variant, ''));
 
 DROP TABLE provider_model_natural_key_updated_judgment_assessment_backup;
+DROP TABLE provider_model_natural_key_comparison_project_serving_target;
 DROP TABLE provider_model_natural_key_judgment_assessment_target;
 DROP TABLE provider_model_natural_key_judgment_map;
 DROP TABLE provider_model_natural_key_model_map;
+DROP TABLE provider_model_natural_key_model_reference;
