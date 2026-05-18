@@ -1527,6 +1527,7 @@ const clearStaleImportRouteLinks = async (
   await tx.run(`
     DELETE FROM app.article_import_route_source_record
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}
+      AND (quarantined_at IS NULL OR COALESCE(quarantine_reason, '') <> 'source_record_remap')
       ${sourceRecordKeyClause}
   `)
 

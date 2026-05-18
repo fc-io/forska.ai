@@ -66,7 +66,7 @@ const getExistingProviderModelId = async ({
     FROM app.model
     WHERE provider_connection_id = ${getSqlLiteral(providerConnectionId)}
       AND remote_model_id = ${getSqlLiteral(remoteModelId)}
-      AND ${variant ? `variant = ${getSqlLiteral(variant)}` : 'variant IS NULL'}
+      AND COALESCE(variant, '') = ${getSqlLiteral(variant ?? '')}
     LIMIT 1
   `)
 

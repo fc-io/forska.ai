@@ -745,6 +745,144 @@ test('syncImportedArticlesWithTx clears stale source records for the synced rout
   }
 })
 
+test('syncImportedArticlesWithTx preserves source record remap quarantine evidence', async () => {
+  const duckdbPath = `/tmp/f1-article-import-source-record-remap-sync-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {syncImportedArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const importRoute = 'structured-file:source-record-remap-sync'
+        const createRow = (params) => ({
+          articleAuthors: ['Alice Example'],
+          articleId: params.articleId,
+          articleSummary: 'Structured import summary',
+          articleTitle: params.articleTitle,
+          doi: params.doi,
+          externalArticleId: params.externalArticleId,
+          importRoute,
+          importRunId: params.importRunId,
+          sourceKind: 'structured_file',
+          sourceRecordHash: params.sourceRecordHash,
+          sourceRecordKey: 'source-remap-sync',
+        })
+
+        await database.transaction(async (tx) => {
+          await syncImportedArticlesWithTx({
+            importRoute,
+            rows: [
+              createRow({
+                articleId: 'sync-remap-old',
+                articleTitle: 'Sync Remap Old',
+                doi: '10.1000/sync-remap-old',
+                externalArticleId: 'external-remap-old',
+                importRunId: 'run-old',
+                sourceRecordHash: 'hash-old',
+              }),
+            ],
+            tx,
+          })
+        })
+        await database.transaction(async (tx) => {
+          await syncImportedArticlesWithTx({
+            importRoute,
+            rows: [
+              createRow({
+                articleId: 'sync-remap-new',
+                articleTitle: 'Sync Remap New',
+                doi: '10.1000/sync-remap-new',
+                externalArticleId: 'external-remap-new',
+                importRunId: 'run-new',
+                sourceRecordHash: 'hash-new',
+              }),
+            ],
+            tx,
+          })
+        })
+
+        const currentLinkRows = await database.queryJson(
+          "SELECT source_record_key AS sourceRecordKey FROM app.article_import_route ORDER BY source_record_key ASC"
+        )
+        const sourceRecordRows = await database.queryJson(
+          "SELECT external_article_id AS externalArticleId, source_record_hash AS sourceRecordHash, source_record_key AS sourceRecordKey, quarantine_reason AS quarantineReason, quarantined_at IS NOT NULL AS quarantined, json_extract_string(quarantine_metadata, '$.incomingExternalArticleId') AS incomingExternalArticleId FROM app.article_import_route_source_record ORDER BY source_record_key ASC"
+        )
+
+        console.log(JSON.stringify({currentLinkRows, sourceRecordRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to preserve source record remap quarantine',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      currentLinkRows: Array<{sourceRecordKey: string}>
+      sourceRecordRows: Array<{
+        externalArticleId: string
+        incomingExternalArticleId: string
+        quarantineReason: string
+        quarantined: boolean
+        sourceRecordHash: string
+        sourceRecordKey: string
+      }>
+    }
+
+    expect(parsed.currentLinkRows).toEqual([])
+    expect(parsed.sourceRecordRows).toEqual([
+      {
+        externalArticleId: 'external-remap-old',
+        incomingExternalArticleId: 'external-remap-new',
+        quarantineReason: 'source_record_remap',
+        quarantined: true,
+        sourceRecordHash: 'hash-old',
+        sourceRecordKey: 'source-remap-sync',
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('syncImportedArticlesWithTx clears source records that reimport with only quarantined identifiers', async () => {
   const duckdbPath = `/tmp/f1-article-import-quarantined-source-record-sync-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(

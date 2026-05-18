@@ -197,6 +197,83 @@ test('createProviderModel reuses an existing provider remote variant natural key
   expect(Number(row?.rowCount ?? 0)).toBe(1)
 })
 
+test('createProviderModel reuses an existing empty variant model for null variant input', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, config_json)
+    VALUES (
+      'create-empty-variant-connection',
+      'openrouter',
+      'OpenRouter Empty Variant',
+      TRUE,
+      'api-key',
+      CAST('{"archived":false,"disabledModelIds":[],"manualWorkerUrls":[],"workerUrlMode":"manual"}' AS JSON)
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (
+      id,
+      provider_connection_id,
+      name,
+      remote_model_id,
+      display_name,
+      variant,
+      source,
+      enabled,
+      metadata_json
+    )
+    VALUES (
+      'empty-variant-model',
+      'create-empty-variant-connection',
+      'Manual Empty Variant Model',
+      'manual/empty-variant',
+      'Manual Empty Variant Model',
+      '',
+      'manual',
+      TRUE,
+      '{}'::JSON
+    )
+  `)
+
+  const model = await createProviderModel({
+    connection: {
+      authMode: 'api-key',
+      baseURL: 'https://openrouter.ai/api/v1',
+      config: {disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+      createdAt: null,
+      enabled: true,
+      hasSecret: true,
+      id: 'create-empty-variant-connection',
+      label: 'OpenRouter Empty Variant',
+      lastCheckedAt: null,
+      lastError: null,
+      maxInflightRequests: null,
+      providerKind: 'openrouter',
+      secretRef: 'secret:test',
+      updatedAt: null,
+    },
+    displayName: 'Manual Empty Variant Model',
+    metadataJson: {},
+    modelName: 'manual/empty-variant',
+    remoteModelId: 'manual/empty-variant',
+    source: 'manual',
+    variant: null,
+    version: null,
+  })
+  const [row] = await queryDatabase<{rowCount: number}>(`
+    SELECT COUNT(*) AS rowCount
+    FROM app.model
+    WHERE provider_connection_id = 'create-empty-variant-connection'
+      AND remote_model_id = 'manual/empty-variant'
+  `)
+
+  expect(model.id).toBe('empty-variant-model')
+  expect(Number(row?.rowCount ?? 0)).toBe(1)
+})
+
 test('upsertDiscoveredModels preserves stored model options when refreshing discovery metadata', async () => {
   if (!queryDatabase || !runDatabase) {
     throw new Error('Test database not initialized')
