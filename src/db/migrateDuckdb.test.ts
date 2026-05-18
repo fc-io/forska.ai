@@ -333,6 +333,7 @@ test('provider model natural key migration deduplicates existing model reference
         const database = getAppDatabaseService()
         await database.run("CREATE SCHEMA app")
         await database.run("CREATE SCHEMA mart")
+        await database.run("CREATE TABLE app.provider_connection (id VARCHAR PRIMARY KEY, provider_kind VARCHAR NOT NULL, label VARCHAR NOT NULL, config_json JSON, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp)")
         await database.run("CREATE TABLE app.model (id VARCHAR PRIMARY KEY, provider_connection_id VARCHAR NOT NULL, name VARCHAR NOT NULL, remote_model_id VARCHAR, display_name VARCHAR, variant VARCHAR, source VARCHAR, enabled BOOLEAN NOT NULL DEFAULT TRUE, metadata_json JSON, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp)")
         await database.run("CREATE TABLE app.project (id VARCHAR PRIMARY KEY, model_id VARCHAR NOT NULL REFERENCES app.model(id), updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp)")
         await database.run("CREATE TABLE app.user_config (id VARCHAR PRIMARY KEY, full_text_conversion_model_id VARCHAR, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp)")
@@ -347,7 +348,8 @@ test('provider model natural key migration deduplicates existing model reference
         await database.run("CREATE TABLE mart.prompt_answer_fact (project_id VARCHAR NOT NULL, judgment_id VARCHAR NOT NULL, answer_value VARCHAR NOT NULL, model_id VARCHAR NOT NULL, PRIMARY KEY(project_id, judgment_id, answer_value))")
         await database.run("CREATE TABLE mart.review_article_serving_detail (project_id VARCHAR NOT NULL, generation BIGINT NOT NULL, judgment_id VARCHAR NOT NULL, model_id VARCHAR NOT NULL, PRIMARY KEY(project_id, generation, judgment_id))")
         await database.run("CREATE TABLE mart.comparison_cell_serving (comparison_project_id VARCHAR NOT NULL, generation BIGINT NOT NULL, article_id VARCHAR NOT NULL, column_id VARCHAR NOT NULL, model_id VARCHAR, PRIMARY KEY(comparison_project_id, generation, article_id, column_id))")
-        await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, variant, source, enabled, created_at) VALUES ('model-a', 'connection-1', 'Remote 1', 'remote-1', 'Remote 1', NULL, 'manual', TRUE, TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('model-b', 'connection-1', 'Remote 1 Duplicate', 'remote-1', 'Remote 1 Duplicate', '', 'manual', TRUE, TIMESTAMPTZ '2026-01-02T00:00:00Z'), ('model-null-a', 'connection-1', 'Null A', NULL, 'Null A', NULL, 'manual', TRUE, TIMESTAMPTZ '2026-01-03T00:00:00Z'), ('model-null-b', 'connection-1', 'Null B', NULL, 'Null B', NULL, 'manual', TRUE, TIMESTAMPTZ '2026-01-04T00:00:00Z')")
+        await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, config_json) VALUES ('connection-1', 'openai', 'Connection 1', CAST('{\\"archived\\":false,\\"disabledModelIds\\":[\\"model-a\\",\\"model-b\\"],\\"manualWorkerUrls\\":[],\\"workerUrlMode\\":\\"manual\\"}' AS JSON))")
+        await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, variant, source, enabled, metadata_json, created_at) VALUES ('model-a', 'connection-1', 'Remote 1', 'remote-1', 'Remote 1', NULL, 'manual', TRUE, NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('model-b', 'connection-1', 'Remote 1 Duplicate', 'remote-1', 'Remote 1 Duplicate', '', 'manual', FALSE, CAST('{\\"options\\":{\\"thinking\\":\\"high\\"}}' AS JSON), TIMESTAMPTZ '2026-01-02T00:00:00Z'), ('model-null-a', 'connection-1', 'Null A', NULL, 'Null A', NULL, 'manual', TRUE, NULL, TIMESTAMPTZ '2026-01-03T00:00:00Z'), ('model-null-b', 'connection-1', 'Null B', NULL, 'Null B', NULL, 'manual', TRUE, NULL, TIMESTAMPTZ '2026-01-04T00:00:00Z')")
         await database.run("INSERT INTO app.project (id, model_id) VALUES ('project-1', 'model-b')")
         await database.run("INSERT INTO app.user_config (id, full_text_conversion_model_id) VALUES ('user-1', 'model-b')")
         await database.run("INSERT INTO app.article (id, full_text_conversion_model_id) VALUES ('article-conversion-1', 'model-b')")
@@ -370,7 +372,8 @@ test('provider model natural key migration deduplicates existing model reference
             () => false,
             () => true,
           )
-        const models = await database.queryJson("SELECT id, remote_model_id AS remoteModelId FROM app.model ORDER BY id ASC")
+        const models = await database.queryJson("SELECT id, COALESCE(enabled, TRUE) AS enabled, remote_model_id AS remoteModelId, json_extract_string(metadata_json, '$.options.thinking') AS thinking FROM app.model ORDER BY id ASC")
+        const [providerConnection] = await database.queryJson("SELECT CAST(config_json AS VARCHAR) AS configJson FROM app.provider_connection WHERE id = 'connection-1'")
         const [project] = await database.queryJson("SELECT model_id AS modelId FROM app.project WHERE id = 'project-1'")
         const [userConfig] = await database.queryJson("SELECT full_text_conversion_model_id AS modelId FROM app.user_config WHERE id = 'user-1'")
         const [article] = await database.queryJson("SELECT full_text_conversion_model_id AS modelId FROM app.article WHERE id = 'article-conversion-1'")
@@ -385,7 +388,7 @@ test('provider model natural key migration deduplicates existing model reference
         const [comparisonCell] = await database.queryJson("SELECT model_id AS modelId FROM mart.comparison_cell_serving WHERE comparison_project_id = 'comparison-1'")
         const [comparisonServingGeneration] = await database.queryJson("SELECT CAST(active_generation AS INTEGER) AS activeGeneration, serving_status AS servingStatus FROM app.comparison_project_serving_generation WHERE comparison_project_id = 'comparison-1'")
 
-        console.log(JSON.stringify({article, assessments, comparisonCell, comparisonProject, comparisonServingGeneration, duplicateInsertRejected, judgments, martJudgmentFacts, martPromptFacts, martReviewDetails, models, outboxRows, project, snapshot, userConfig}))
+        console.log(JSON.stringify({article, assessments, comparisonCell, comparisonProject, comparisonServingGeneration, duplicateInsertRejected, judgments, martJudgmentFacts, martPromptFacts, martReviewDetails, models, outboxRows, project, providerConnection, snapshot, userConfig}))
         await database.close()
       `,
     ],
@@ -426,40 +429,51 @@ test('provider model natural key migration deduplicates existing model reference
       martJudgmentFacts: Array<{judgmentId: string; modelId: string}>
       martPromptFacts: Array<{judgmentId: string; modelId: string}>
       martReviewDetails: Array<{judgmentId: string; modelId: string}>
-      models: Array<{id: string; remoteModelId: string | null}>
+      models: Array<{enabled: boolean; id: string; remoteModelId: string | null; thinking: string | null}>
       outboxRows: Array<{judgmentId: string; modelId: string; outboxSeq: number}>
       project: {modelId: string}
+      providerConnection: {configJson: string}
       snapshot: {modelId: string}
       userConfig: {modelId: string}
     }
 
     expect(parsed.duplicateInsertRejected).toBe(true)
     expect(parsed.models).toEqual([
-      {id: 'model-a', remoteModelId: 'remote-1'},
-      {id: 'model-null-a', remoteModelId: null},
-      {id: 'model-null-b', remoteModelId: null},
+      {enabled: false, id: 'model-b', remoteModelId: 'remote-1', thinking: 'high'},
+      {enabled: true, id: 'model-null-a', remoteModelId: null, thinking: null},
+      {enabled: true, id: 'model-null-b', remoteModelId: null, thinking: null},
     ])
-    expect(parsed.project.modelId).toBe('model-a')
-    expect(parsed.userConfig.modelId).toBe('model-a')
-    expect(parsed.article.modelId).toBe('model-a')
-    expect(parsed.comparisonProject.modelIds).toEqual(['model-a', 'model-null-a'])
+    expect(JSON.parse(parsed.providerConnection.configJson)).toMatchObject({disabledModelIds: ['model-b']})
+    expect(parsed.project.modelId).toBe('model-b')
+    expect(parsed.userConfig.modelId).toBe('model-b')
+    expect(parsed.article.modelId).toBe('model-b')
+    expect(parsed.comparisonProject.modelIds).toEqual(['model-b', 'model-null-a'])
     expect(parsed.judgments).toEqual([
-      {id: 'judgment-a', modelId: 'model-a'},
-      {id: 'judgment-c', modelId: 'model-a'},
+      {id: 'judgment-b', modelId: 'model-b'},
+      {id: 'judgment-c', modelId: 'model-b'},
     ])
     expect(parsed.assessments).toEqual([
-      {id: 'assessment-a', judgmentId: 'judgment-a'},
+      {id: 'assessment-b', judgmentId: 'judgment-b'},
       {id: 'assessment-c', judgmentId: 'judgment-c'},
     ])
-    expect(parsed.snapshot.modelId).toBe('model-a')
+    expect(parsed.snapshot.modelId).toBe('model-b')
     expect(parsed.outboxRows).toEqual([
-      {judgmentId: 'judgment-a', modelId: 'model-a', outboxSeq: 1},
-      {judgmentId: 'judgment-c', modelId: 'model-a', outboxSeq: 2},
+      {judgmentId: 'judgment-b', modelId: 'model-b', outboxSeq: 1},
+      {judgmentId: 'judgment-c', modelId: 'model-b', outboxSeq: 2},
     ])
-    expect(parsed.martJudgmentFacts).toEqual([{judgmentId: 'judgment-c', modelId: 'model-a'}])
-    expect(parsed.martPromptFacts).toEqual([{judgmentId: 'judgment-c', modelId: 'model-a'}])
-    expect(parsed.martReviewDetails).toEqual([{judgmentId: 'judgment-c', modelId: 'model-a'}])
-    expect(parsed.comparisonCell.modelId).toBe('model-a')
+    expect(parsed.martJudgmentFacts).toEqual([
+      {judgmentId: 'judgment-b', modelId: 'model-b'},
+      {judgmentId: 'judgment-c', modelId: 'model-b'},
+    ])
+    expect(parsed.martPromptFacts).toEqual([
+      {judgmentId: 'judgment-b', modelId: 'model-b'},
+      {judgmentId: 'judgment-c', modelId: 'model-b'},
+    ])
+    expect(parsed.martReviewDetails).toEqual([
+      {judgmentId: 'judgment-b', modelId: 'model-b'},
+      {judgmentId: 'judgment-c', modelId: 'model-b'},
+    ])
+    expect(parsed.comparisonCell.modelId).toBe('model-b')
     expect(parsed.comparisonServingGeneration).toEqual({activeGeneration: 0, servingStatus: 'stale'})
   } finally {
     removeFileIfExists(duckdbPath)
