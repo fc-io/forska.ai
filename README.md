@@ -1,8 +1,6 @@
-# forska.ai - AI Agents for systematic reviews in healthcare
+# forska.ai - AI Agents for reseracg
 
-Forska is a local-first deep research app for systematic reviews. It helps reviewers search, screen, compare, and document article-review decisions while keeping project data on the user's machine.
-
-Core product configuration lives in the Forska UI and local databases. Do not create or edit `.env` files for normal local development. Use shell environment variables only for one-off machine-local overrides or secrets.
+Forska is a local-first very deep, deep research app.
 
 Forska is currently designed as a standalone single-user app. It is not a hosted multi-tenant web app.
 
