@@ -205,3 +205,88 @@ test('deleteJudgmentJobSafelyTx removes request attempt closeouts before rebuild
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
+
+test('retryPendingJudgmentJobSqliteDeletes rotates failed pending rows behind unattempted rows', () => {
+  const duckdbPath = `/tmp/f1-judgment-job-delete-service-rotation-${Date.now()}.duckdb`
+  const runResult = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {retryPendingJudgmentJobSqliteDeletes} = await import('./src/server/services/judgmentJobDeleteService.ts')
+
+        await migrateDuckdb()
+        const db = getAppDatabaseService()
+        await db.run(\`
+          INSERT INTO app.judgment_job_sqlite_delete_pending (job_id, requested_at)
+          VALUES
+            ('old-a', TIMESTAMPTZ '2026-01-01T00:00:00Z'),
+            ('old-b', TIMESTAMPTZ '2026-01-02T00:00:00Z')
+        \`)
+
+        const attempts = []
+        const sqliteService = {
+          deleteJob: async (jobId) => {
+            attempts.push(jobId)
+
+            if (jobId.startsWith('old-')) {
+              throw new Error('still failing ' + jobId)
+            }
+          },
+          hasJob: () => true,
+        }
+
+        await retryPendingJudgmentJobSqliteDeletes({limit: 2, sqliteService})
+        await db.run(\`
+          INSERT INTO app.judgment_job_sqlite_delete_pending (job_id, requested_at)
+          VALUES ('newer', TIMESTAMPTZ '2026-01-03T00:00:00Z')
+        \`)
+        const firstAttemptCount = attempts.length
+        const retryResult = await retryPendingJudgmentJobSqliteDeletes({limit: 2, sqliteService})
+        const secondAttempts = attempts.slice(firstAttemptCount)
+        const pendingRows = await db.queryJson(\`
+          SELECT job_id AS jobId
+          FROM app.judgment_job_sqlite_delete_pending
+          ORDER BY job_id ASC
+        \`)
+
+        console.log(JSON.stringify({pendingRows, retryResult, secondAttempts}))
+        await db.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runResult.exitCode !== 0) {
+      throw new Error(
+        runResult.stderr.toString() || runResult.stdout.toString() || 'SQLite delete retry rotation test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {
+      pendingRows: Array<{jobId: string}>
+      retryResult: {attemptedCount: number; deletedCount: number}
+      secondAttempts: string[]
+    }
+
+    expect(result.retryResult).toEqual({attemptedCount: 2, deletedCount: 1})
+    expect(result.secondAttempts[0]).toBe('newer')
+    expect(result.pendingRows).toEqual([{jobId: 'old-a'}, {jobId: 'old-b'}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})

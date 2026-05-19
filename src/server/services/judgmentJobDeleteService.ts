@@ -185,7 +185,7 @@ const getPendingJudgmentJobSqliteDeleteRows = async (limit: number) => {
   return getAppDatabaseService().queryJson<JudgmentJobSqliteDeletePendingRow>(`
     SELECT job_id AS jobId
     FROM app.judgment_job_sqlite_delete_pending
-    ORDER BY requested_at ASC, job_id ASC
+    ORDER BY last_attempt_at ASC NULLS FIRST, requested_at ASC, job_id ASC
     LIMIT ${limit}
   `)
 }
