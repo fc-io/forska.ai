@@ -3,6 +3,7 @@ import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
+import {getRuntimeProfileDuckdbPath} from '../src/utils/runtimeProfile.ts'
 import {getRuntimeProfileCommandEnv} from './runWithRuntimeProfile.ts'
 
 type SpawnedProcess = ReturnType<typeof globalThis.Bun.spawn>
@@ -167,7 +168,7 @@ test('stacked server launcher carries split-role port and journal identity wirin
     API_SERVER_PORT: '3001',
     BACKGROUND_JUDGE_PORT: '3003',
     BACKGROUND_MAINTENANCE_PORT: '3002',
-    DUCKDB_PATH: 'data/runtime/primary/forska.duckdb',
+    DUCKDB_PATH: getRuntimeProfileDuckdbPath({profileName: 'primary'}),
     FORSKA_RUNTIME_PROFILE: 'primary',
     FORSKA_RUNTIME_SERVICE: 'dev-single-server',
     JUDGE_WORKER_ID: 'primary-judge-worker',
