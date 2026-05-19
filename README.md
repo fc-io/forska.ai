@@ -1,4 +1,4 @@
-# forska.ai - AI Agents for reseracg
+# forska.ai - AI Agents for research
 
 Forska is a local-first very deep, deep research app.
 
