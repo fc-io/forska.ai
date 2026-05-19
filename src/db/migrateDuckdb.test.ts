@@ -504,6 +504,7 @@ test('migrateDuckdb preserves the original failure when rollback is already inac
       getAppDatabaseService: () => {
         return {
           close: async () => {},
+          maintenance: async () => {},
           queryJson: async <T>(statement: string): Promise<T[]> => {
             return statement.includes('FROM app_schema_migration')
               ? (appliedNames.map((name) => {
@@ -557,6 +558,7 @@ test('migrateDuckdb applies comparison serving conflict filter migration outside
   })
   const appDatabaseServiceModulePath = new URL('../server/services/appDatabaseService.ts', import.meta.url).pathname
   const migrationModulePath = new URL('./migrateDuckdb.ts', import.meta.url).pathname
+  const maintenanceCommands: string[] = []
   const runStatements: string[] = []
 
   void mock.module(appDatabaseServiceModulePath, () => {
@@ -564,6 +566,9 @@ test('migrateDuckdb applies comparison serving conflict filter migration outside
       getAppDatabaseService: () => {
         return {
           close: async () => {},
+          maintenance: async (command: string) => {
+            maintenanceCommands.push(command)
+          },
           queryJson: async <T>(statement: string): Promise<T[]> => {
             return statement.includes('FROM app_schema_migration')
               ? (appliedNames.map((name) => {
@@ -592,6 +597,7 @@ test('migrateDuckdb applies comparison serving conflict filter migration outside
     expect(runStatements).not.toContain('BEGIN TRANSACTION')
     expect(runStatements).not.toContain('COMMIT')
     expect(runStatements[targetStatementIndex + 1] ?? '').toContain('INSERT INTO app_schema_migration')
+    expect(maintenanceCommands).toEqual(['checkpoint'])
   } finally {
     mock.restore()
   }

@@ -140,6 +140,7 @@ export const migrateDuckdb = async (): Promise<void> => {
 
   await ensureDuckdbMigrationsTable()
   await applyDuckdbMigrationFiles(migrationFiles, await getAppliedDuckdbMigrationNames())
+  await getAppDatabaseService().maintenance('checkpoint')
 
   console.log('[db:duck:mig] DuckDB migrations applied successfully')
 }

@@ -676,11 +676,31 @@ const getAppendConnectionCloseErrors = (appendConnections: DuckDBConnection[]): 
   })
 }
 
+const checkpointDuckdbBeforeClose = async (connection: DuckDBConnection | null) => {
+  if (connection === null) {
+    return
+  }
+
+  try {
+    await connection.run('CHECKPOINT')
+  } catch (error) {
+    writeRuntimeFailureLogEvent({
+      attrs: {error},
+      event: 'duckdb.shutdown.checkpoint-failure',
+      message: '[duckdb] failed to checkpoint before shutdown',
+      severity: 'WARN',
+      terminalArgs: [getCompactDuckdbErrorMessage(error)],
+    })
+  }
+}
+
 const closeDuckdbServiceWithoutBarrier = async () => {
   const activeConnection = duckdbServiceState.controlConnection
   const activeAppendConnections = [...duckdbServiceState.appendConnections]
   const activeBackgroundConnection = duckdbServiceState.backgroundConnection
   const activeInstance = duckdbServiceState.duckdbInstance
+
+  await checkpointDuckdbBeforeClose(activeConnection)
 
   resetDuckdbRuntimeState()
 
