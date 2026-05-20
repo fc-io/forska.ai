@@ -5,6 +5,7 @@ import type {
   ComparisonProjectStats,
   ComparisonProjectStatsComparison,
 } from '../../../../../services/comparisonProjectsService.ts'
+import {ComparisonProjectAdditionalStatsSection} from './comparisonProjectStatsCard/comparisonProjectAdditionalStatsSection.tsx'
 
 type ComparisonProjectStatsCardProps = {
   columns: ComparisonProjectJudgmentsColumn[]
@@ -287,6 +288,12 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
             </tbody>
           </table>
         </div>
+      </Show>
+
+      <Show when={!props.isLoading && !props.isError && props.stats}>
+        {(stats) => {
+          return <ComparisonProjectAdditionalStatsSection additionalStats={stats().additionalProjectStats} />
+        }}
       </Show>
     </div>
   )
