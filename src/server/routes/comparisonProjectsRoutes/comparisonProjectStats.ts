@@ -126,6 +126,7 @@ type ComparisonProjectStatsParams = {
   allowConflictResolution?: boolean
   columns: readonly ComparisonProjectStatsColumn[]
   comparisonProjectId: string
+  generation?: number | null
   isSummaryMode: boolean
   primaryModelId?: string | null
   primarySourceProjectId?: string | null
@@ -1337,6 +1338,22 @@ export const getComparisonProjectStatsActiveGenerationSql = (comparisonProjectId
   `
 }
 
+const getComparisonProjectStatsActiveGeneration = async (params: {
+  comparisonProjectId: string
+  generation?: number | null
+  queryRunner: ComparisonProjectStatsQueryRunner
+}) => {
+  if (params.generation !== undefined) {
+    return getComparisonProjectStatsGenerationValue(params.generation)
+  }
+
+  const [generationRow] = await params.queryRunner.queryJson<{generation: unknown}>(
+    getComparisonProjectStatsActiveGenerationSql(params.comparisonProjectId),
+  )
+
+  return getComparisonProjectStatsGenerationValue(generationRow?.generation)
+}
+
 export const getComparisonProjectStatsAggregatesSql = (params: {
   columnIds: readonly string[]
   comparisonProjectId: string
@@ -1694,10 +1711,7 @@ export const getComparisonProjectStats = async (params: ComparisonProjectStatsPa
     return []
   }
 
-  const [generationRow] = await params.queryRunner.queryJson<{generation: unknown}>(
-    getComparisonProjectStatsActiveGenerationSql(params.comparisonProjectId),
-  )
-  const generation = getComparisonProjectStatsGenerationValue(generationRow?.generation)
+  const generation = await getComparisonProjectStatsActiveGeneration(params)
 
   if (generation === null) {
     return []
@@ -1729,10 +1743,7 @@ export const getComparisonProjectAdditionalStats = async (
     return {resolvedTruthComparisons: []}
   }
 
-  const [generationRow] = await params.queryRunner.queryJson<{generation: unknown}>(
-    getComparisonProjectStatsActiveGenerationSql(params.comparisonProjectId),
-  )
-  const generation = getComparisonProjectStatsGenerationValue(generationRow?.generation)
+  const generation = await getComparisonProjectStatsActiveGeneration(params)
 
   if (generation === null) {
     return {resolvedTruthComparisons: []}

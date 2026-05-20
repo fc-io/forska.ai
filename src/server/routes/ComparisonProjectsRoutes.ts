@@ -2421,6 +2421,7 @@ const getComparisonProjectStatsResponse = async (
     allowConflictResolution: scope.allowConflictResolution,
     columns: scope.columns,
     comparisonProjectId: scope.id,
+    generation: scope.activeGeneration,
     isSummaryMode: getIsSummaryMode(scope),
     primaryModelId: scope.modelIds?.[0] ?? null,
     primarySourceProjectId: scope.summarySourceProjectId ?? scope.sourceProjectIds[0] ?? null,
