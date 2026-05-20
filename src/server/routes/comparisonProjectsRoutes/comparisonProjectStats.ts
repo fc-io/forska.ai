@@ -952,7 +952,11 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
         END AS answer_value,
         CASE
           WHEN comparison_pair.comparison_kind = 'human-vs-conflict-resolution' THEN conflict_resolution.binary_decision
-          WHEN comparison_pair.comparison_kind = 'llm-vs-conflict-resolution' THEN COALESCE(conflict_resolution.binary_decision, normalized_cell_answer.binary_decision)
+          WHEN comparison_pair.comparison_kind = 'llm-vs-conflict-resolution' THEN
+            CASE
+              WHEN conflict_resolution.answer_value IS NOT NULL THEN conflict_resolution.binary_decision
+              ELSE normalized_cell_answer.binary_decision
+            END
           ELSE normalized_cell_answer.binary_decision
         END AS binary_decision
       FROM comparison_pair
