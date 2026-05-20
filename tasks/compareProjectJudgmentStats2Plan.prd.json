@@ -1,0 +1,117 @@
+{
+  "name": "Compare Project Judgment Stats 2 Plan",
+  "description": "Add adjudicated conflict-resolution truth stats to the Compare Project Judgments page without changing judgment data, with resolved-only truth metrics and clearly labeled fallback behavior.",
+  "branchName": "ralph/compare-project-judgment-stats-2",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add resolved-only human conflict-resolution stats kind",
+      "description": "As a maintainer, I want a dedicated Human vs conflict-resolution stats kind so adjudicated truth metrics do not reuse the existing fallback conflict-resolution behavior.",
+      "acceptanceCriteria": [
+        "Add a server comparison kind such as `human-vs-conflict-resolution` for `Human vs After conflict resolution (resolved only)`.",
+        "Include the new comparison only when conflict resolution is enabled and the page is in summary mode.",
+        "For the in-memory helper path, include only articles where saved conflict resolution and Human each have one valid binary decision.",
+        "For the new comparison, do not fall back to Human when saved conflict resolution is missing or non-binary.",
+        "For the new comparison, `Overlap` is the resolved-only denominator used by the row's counts and rates.",
+        "For the new comparison, `Cohen's Kappa`, `Sensitivity`, and `Specificity` use conflict resolution as truth and Human as prediction.",
+        "Existing Human vs LLM, LLM vs LLM, and LLM vs After conflict resolution group generation remains unchanged.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Compute resolved-only conflict-resolution stats in SQL",
+      "description": "As a maintainer, I want the production SQL aggregate path to compute the same resolved-only Human vs conflict-resolution metrics as the in-memory helper path.",
+      "acceptanceCriteria": [
+        "Update `getComparisonProjectStatsAggregatesSql` to produce the `human-vs-conflict-resolution` row using saved conflict resolution answers only.",
+        "The SQL path excludes unresolved articles, non-binary conflict-resolution answers, and Human answers that are missing or non-binary for the new row.",
+        "The SQL path computes `Overlap`, conflicts, true conflicts, kappa, sensitivity, and specificity with the same resolved-only denominator as the in-memory helper path.",
+        "The existing `llm-vs-conflict-resolution` SQL fallback behavior is preserved for post-resolution fallback rows.",
+        "Tests cover SQL/helper parity for counts, kappa, sensitivity, specificity, missing resolution exclusion, and non-binary resolution exclusion.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Clarify main project stats conflict-resolution rows",
+      "description": "As a user, I want the main Project Stats table to make resolved-only rows and fallback rows visually clear so I know which denominator and truth source each row uses.",
+      "acceptanceCriteria": [
+        "Show the new row as `Human vs After conflict resolution (resolved only)` in the current `Project Stats` table.",
+        "Label existing `LLM vs After conflict resolution` rows as `post-resolution fallback` without changing their fallback behavior.",
+        "Update the table description so each `After conflict resolution` row explains whether it is resolved-only or post-resolution fallback.",
+        "Keep the main table columns unchanged: `Comparison`, `Column Info`, `Overlap`, `Conflicts`, `True Conflicts`, `Cohen's Kappa`, `Sensitivity`, `Specificity`.",
+        "The main table still renders existing Human vs LLM and LLM vs LLM rows with no behavior change.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Add resolved-only head-to-head stats backend",
+      "description": "As a maintainer, I want backend stats that compare Human and each LLM against saved conflict-resolution truth so the UI can show adjudicated head-to-head results.",
+      "acceptanceCriteria": [
+        "Add backend response data for an `Additional Project Stats` resolved-only truth comparison section.",
+        "Return one head-to-head row per LLM, with each LLM using its own denominator: rows where Human, that LLM, and saved conflict resolution all have one valid binary decision.",
+        "Return `Resolved count`, `Human correct vs truth`, `Human errors vs truth`, `LLM correct vs truth`, `LLM errors vs truth`, and `Winner` for each LLM row.",
+        "Return `Both correct`, `Both wrong`, `Human only correct`, `LLM only correct`, and `LLM advantage` for each LLM row.",
+        "Compute confusion matrix metrics against conflict resolution truth: accuracy, balanced accuracy, precision, NPV, F1, truth prevalence, true correct, and true errors.",
+        "Return `N/A`-ready null values for rates when a denominator is zero, including McNemar chi-square when `LLM only correct + Human only correct = 0`.",
+        "Tests prove unresolved rows and non-binary rows do not affect head-to-head results.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002"]
+    },
+    {
+      "id": "US-005",
+      "title": "Render additional project stats section",
+      "description": "As a user, I want an expandable Additional Project Stats section so I can compare Human and LLM performance against adjudicated truth without cluttering the main table.",
+      "acceptanceCriteria": [
+        "Add an expandable `Additional Project Stats` section below the current stats table.",
+        "Add a `Resolved-only truth comparison` subsection that renders one row per LLM from the backend head-to-head stats.",
+        "Show `Resolved count`, `Human correct vs truth`, `Human errors vs truth`, `LLM correct vs truth`, `LLM errors vs truth`, `Winner`, `Both correct`, `Both wrong`, `Human only correct`, `LLM only correct`, and `LLM advantage`.",
+        "Show simple labels and short help text for additional metrics, including confusion matrix metrics and McNemar chi-square.",
+        "Display `N/A` when a metric denominator is zero or the backend value is null.",
+        "Keep headers, table shell, and loading/error handling consistent with the existing `Project Stats` card on browser and desktop flows.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003", "US-004"]
+    }
+  ]
+}
