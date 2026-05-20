@@ -670,6 +670,12 @@ type MockComparisonProjectStatsBinaryPair = {
   leftDecision: MockComparisonProjectStatsBinaryDecision
   rightDecision: MockComparisonProjectStatsBinaryDecision
 }
+type MockComparisonProjectStatsResolvedTruthGroup = {comparisonId: string; humanColumnId: string; llmColumnId: string}
+type MockComparisonProjectStatsResolvedTruthDecision = {
+  humanDecision: MockComparisonProjectStatsBinaryDecision
+  llmDecision: MockComparisonProjectStatsBinaryDecision
+  truthDecision: MockComparisonProjectStatsBinaryDecision
+}
 
 const getMockComparisonProjectStatsGroups = (statement: string) => {
   return Array.from(
@@ -681,6 +687,14 @@ const getMockComparisonProjectStatsGroups = (statement: string) => {
       leftColumnId: leftColumnId ?? '',
       rightColumnId: rightColumnId ?? '',
     }
+  })
+}
+
+const getMockComparisonProjectStatsResolvedTruthGroups = (statement: string) => {
+  return Array.from(
+    statement.matchAll(/\('([^']*)', '([^']*)', '([^']*)'\)/g),
+  ).map<MockComparisonProjectStatsResolvedTruthGroup>(([, comparisonId, humanColumnId, llmColumnId]) => {
+    return {comparisonId: comparisonId ?? '', humanColumnId: humanColumnId ?? '', llmColumnId: llmColumnId ?? ''}
   })
 }
 
@@ -839,6 +853,112 @@ const getMockComparisonProjectStatsAggregateRows = (statement: string, state: Mo
     })
 }
 
+const getMockComparisonProjectStatsResolvedTruthDecision = (
+  state: MockDatabaseState,
+  row: MockServingRow,
+  group: MockComparisonProjectStatsResolvedTruthGroup,
+) => {
+  const humanAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.humanColumnId])
+  const llmAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.llmColumnId])
+  const truthAnswers = getMockComparisonProjectStatsAnswers(
+    state.conflictResolutionRows.find((resolutionRow) => {
+      return resolutionRow.articleId === row.articleId
+    })?.answerValue,
+  )
+  const humanDecision = getMockComparisonProjectStatsHasOneValidBinaryDecision(humanAnswers)
+    ? getMockComparisonProjectStatsBinaryDecisionValue(humanAnswers)
+    : null
+  const llmDecision = getMockComparisonProjectStatsHasOneValidBinaryDecision(llmAnswers)
+    ? getMockComparisonProjectStatsBinaryDecisionValue(llmAnswers)
+    : null
+  const truthDecision = getMockComparisonProjectStatsHasOneValidBinaryDecision(truthAnswers)
+    ? getMockComparisonProjectStatsBinaryDecisionValue(truthAnswers)
+    : null
+
+  return humanDecision && llmDecision && truthDecision ? {humanDecision, llmDecision, truthDecision} : null
+}
+
+const getMockComparisonProjectStatsResolvedTruthDecisions = (
+  state: MockDatabaseState,
+  group: MockComparisonProjectStatsResolvedTruthGroup,
+) => {
+  return getMockServingRows(state)
+    .map<MockComparisonProjectStatsResolvedTruthDecision | null>((row) => {
+      return getMockComparisonProjectStatsResolvedTruthDecision(state, row, group)
+    })
+    .filter((decision): decision is MockComparisonProjectStatsResolvedTruthDecision => {
+      return decision !== null
+    })
+}
+
+const getMockComparisonProjectStatsResolvedTruthAggregateRow = (
+  state: MockDatabaseState,
+  group: MockComparisonProjectStatsResolvedTruthGroup,
+) => {
+  const decisions = getMockComparisonProjectStatsResolvedTruthDecisions(state, group)
+  const humanCorrectDecisions = decisions.filter((decision) => {
+    return decision.humanDecision === decision.truthDecision
+  })
+  const llmCorrectDecisions = decisions.filter((decision) => {
+    return decision.llmDecision === decision.truthDecision
+  })
+
+  return {
+    bothCorrectCount: decisions.filter((decision) => {
+      return decision.humanDecision === decision.truthDecision && decision.llmDecision === decision.truthDecision
+    }).length,
+    bothWrongCount: decisions.filter((decision) => {
+      return decision.humanDecision !== decision.truthDecision && decision.llmDecision !== decision.truthDecision
+    }).length,
+    comparisonId: group.comparisonId,
+    humanCorrectVsTruthCount: humanCorrectDecisions.length,
+    humanErrorsVsTruthCount: decisions.length - humanCorrectDecisions.length,
+    humanFalseNegativeCount: decisions.filter((decision) => {
+      return decision.truthDecision === 'include' && decision.humanDecision === 'exclude'
+    }).length,
+    humanFalsePositiveCount: decisions.filter((decision) => {
+      return decision.truthDecision === 'exclude' && decision.humanDecision === 'include'
+    }).length,
+    humanOnlyCorrectCount: decisions.filter((decision) => {
+      return decision.humanDecision === decision.truthDecision && decision.llmDecision !== decision.truthDecision
+    }).length,
+    humanTrueNegativeCount: decisions.filter((decision) => {
+      return decision.truthDecision === 'exclude' && decision.humanDecision === 'exclude'
+    }).length,
+    humanTruePositiveCount: decisions.filter((decision) => {
+      return decision.truthDecision === 'include' && decision.humanDecision === 'include'
+    }).length,
+    llmCorrectVsTruthCount: llmCorrectDecisions.length,
+    llmErrorsVsTruthCount: decisions.length - llmCorrectDecisions.length,
+    llmFalseNegativeCount: decisions.filter((decision) => {
+      return decision.truthDecision === 'include' && decision.llmDecision === 'exclude'
+    }).length,
+    llmFalsePositiveCount: decisions.filter((decision) => {
+      return decision.truthDecision === 'exclude' && decision.llmDecision === 'include'
+    }).length,
+    llmOnlyCorrectCount: decisions.filter((decision) => {
+      return decision.llmDecision === decision.truthDecision && decision.humanDecision !== decision.truthDecision
+    }).length,
+    llmTrueNegativeCount: decisions.filter((decision) => {
+      return decision.truthDecision === 'exclude' && decision.llmDecision === 'exclude'
+    }).length,
+    llmTruePositiveCount: decisions.filter((decision) => {
+      return decision.truthDecision === 'include' && decision.llmDecision === 'include'
+    }).length,
+    resolvedCount: decisions.length,
+  }
+}
+
+const getMockComparisonProjectStatsResolvedTruthAggregateRows = (statement: string, state: MockDatabaseState) => {
+  return getMockComparisonProjectStatsResolvedTruthGroups(statement)
+    .map((group) => {
+      return getMockComparisonProjectStatsResolvedTruthAggregateRow(state, group)
+    })
+    .filter((row) => {
+      return row.resolvedCount > 0
+    })
+}
+
 const queryJson = async (
   statement: string,
   state: {
@@ -949,6 +1069,10 @@ const queryJson = async (
           hasConflict: row.hasConflict,
         }
       })
+  }
+
+  if (statement.includes('WITH resolved_truth_group')) {
+    return getMockComparisonProjectStatsResolvedTruthAggregateRows(statement, getMockDatabaseState())
   }
 
   if (statement.includes('FROM mart.comparison_cell_serving cell') && statement.includes('GROUP BY comparison_id')) {
@@ -2383,6 +2507,7 @@ test('comparison stats endpoint returns empty comparisons without active serving
   expect(response.status).toBe(200)
   expect(body.data).toEqual({
     activeGeneration: null,
+    additionalProjectStats: {resolvedTruthComparisons: []},
     comparisons: [],
     isServingReady: false,
     servingStatus: 'refreshing',
@@ -2464,6 +2589,17 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
   const response = await getComparisonProjectStats(app)
   const body = (await response.json()) as {
     data: {
+      additionalProjectStats: {
+        resolvedTruthComparisons: Array<{
+          humanCorrectVsTruthCount: number
+          llmAdvantage: number
+          llmCorrectVsTruthCount: number
+          llmOnlyCorrectCount: number
+          mcnemarChiSquare: number | null
+          resolvedCount: number
+          winner: string
+        }>
+      }
       comparisons: Array<{
         cohensKappa: number | null
         conflictCount: number
@@ -2505,6 +2641,16 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
     kind: 'human-vs-conflict-resolution',
     overlapCount: 1,
     trueConflictCount: 1,
+  })
+  expect(body.data.additionalProjectStats.resolvedTruthComparisons).toHaveLength(1)
+  expect(body.data.additionalProjectStats.resolvedTruthComparisons[0]).toMatchObject({
+    humanCorrectVsTruthCount: 0,
+    llmAdvantage: 1,
+    llmCorrectVsTruthCount: 1,
+    llmOnlyCorrectCount: 1,
+    mcnemarChiSquare: 0,
+    resolvedCount: 1,
+    winner: 'LLM',
   })
 })
 

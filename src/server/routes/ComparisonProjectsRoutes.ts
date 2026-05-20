@@ -51,7 +51,9 @@ import {
   getComparisonProjectServingJudgmentRowsPage,
 } from './comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
 import {
+  type ComparisonProjectAdditionalStats,
   type ComparisonProjectStatsComparison,
+  getComparisonProjectAdditionalStats,
   getComparisonProjectStats,
 } from './comparisonProjectsRoutes/comparisonProjectStats.ts'
 
@@ -137,6 +139,7 @@ type ComparisonProjectScope = {
 }
 type ComparisonProjectStatsResponse = {
   activeGeneration: number | null
+  additionalProjectStats: ComparisonProjectAdditionalStats
   comparisons: ComparisonProjectStatsComparison[]
   isServingReady: boolean
   servingStatus: ComparisonProjectServingStatus
@@ -2414,7 +2417,7 @@ const getComparisonProjectJudgmentsCount = async (
 const getComparisonProjectStatsResponse = async (
   scope: ComparisonProjectScope,
 ): Promise<ComparisonProjectStatsResponse> => {
-  const comparisons = await getComparisonProjectStats({
+  const statsParams = {
     allowConflictResolution: scope.allowConflictResolution,
     columns: scope.columns,
     comparisonProjectId: scope.id,
@@ -2422,10 +2425,13 @@ const getComparisonProjectStatsResponse = async (
     primaryModelId: scope.modelIds?.[0] ?? null,
     primarySourceProjectId: scope.summarySourceProjectId ?? scope.sourceProjectIds[0] ?? null,
     queryRunner: appDatabaseService,
-  })
+  }
+  const comparisons = await getComparisonProjectStats(statsParams)
+  const additionalProjectStats = await getComparisonProjectAdditionalStats(statsParams)
 
   return {
     activeGeneration: scope.activeGeneration,
+    additionalProjectStats,
     comparisons,
     isServingReady: scope.isServingReady,
     servingStatus: scope.servingStatus,

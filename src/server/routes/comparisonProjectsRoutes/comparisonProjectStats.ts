@@ -35,6 +35,51 @@ export type ComparisonProjectStatsComparison = ComparisonProjectStatsComparisonG
   trueConflictCount: number
 }
 
+export type ComparisonProjectStatsTruthWinner = 'Human' | 'LLM' | 'Tie'
+
+export type ComparisonProjectStatsTruthConfusionMetrics = {
+  accuracy: number | null
+  balancedAccuracy: number | null
+  f1: number | null
+  falseNegativeCount: number
+  falsePositiveCount: number
+  negativePredictiveValue: number | null
+  precision: number | null
+  sensitivity: number | null
+  specificity: number | null
+  trueCorrectCount: number
+  trueErrorCount: number
+  trueNegativeCount: number
+  truePositiveCount: number
+  truthPrevalence: number | null
+}
+
+export type ComparisonProjectStatsResolvedTruthComparison = {
+  bothCorrectCount: number
+  bothWrongCount: number
+  columnInfo: string | null
+  humanColumnId: string
+  humanCorrectVsTruthCount: number
+  humanErrorsVsTruthCount: number
+  humanMetrics: ComparisonProjectStatsTruthConfusionMetrics
+  humanOnlyCorrectCount: number
+  id: string
+  label: string
+  llmAdvantage: number
+  llmColumnId: string
+  llmCorrectVsTruthCount: number
+  llmErrorsVsTruthCount: number
+  llmMetrics: ComparisonProjectStatsTruthConfusionMetrics
+  llmOnlyCorrectCount: number
+  mcnemarChiSquare: number | null
+  resolvedCount: number
+  winner: ComparisonProjectStatsTruthWinner
+}
+
+export type ComparisonProjectAdditionalStats = {
+  resolvedTruthComparisons: ComparisonProjectStatsResolvedTruthComparison[]
+}
+
 export type ComparisonProjectStatsCellRow = {articleId: string; columnId: string; normalizedAnswers: unknown}
 
 export type ComparisonProjectStatsConflictResolutionRow = {answerValue: unknown; articleId: string}
@@ -52,6 +97,27 @@ export type ComparisonProjectStatsAggregateRow = {
   rightExcludeCount: unknown
   rightIncludeCount: unknown
   trueConflictCount: unknown
+}
+
+export type ComparisonProjectStatsResolvedTruthAggregateRow = {
+  bothCorrectCount: unknown
+  bothWrongCount: unknown
+  comparisonId: string
+  humanCorrectVsTruthCount: unknown
+  humanErrorsVsTruthCount: unknown
+  humanFalseNegativeCount: unknown
+  humanFalsePositiveCount: unknown
+  humanOnlyCorrectCount: unknown
+  humanTrueNegativeCount: unknown
+  humanTruePositiveCount: unknown
+  llmCorrectVsTruthCount: unknown
+  llmErrorsVsTruthCount: unknown
+  llmFalseNegativeCount: unknown
+  llmFalsePositiveCount: unknown
+  llmOnlyCorrectCount: unknown
+  llmTrueNegativeCount: unknown
+  llmTruePositiveCount: unknown
+  resolvedCount: unknown
 }
 
 type ComparisonProjectStatsQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
@@ -81,6 +147,18 @@ type BinaryDecisionPair = {leftDecision: BinaryDecision; rightDecision: BinaryDe
 type ComparisonProjectStatsNormalizedCell = {articleId: string; columnId: string; normalizedAnswers: string[]}
 type ComparisonProjectStatsPair = {leftAnswers: string[]; rightAnswers: string[]}
 type ComparisonProjectStatsLabelContext = {ambiguousLlmModelLabels: ReadonlySet<string>}
+type ComparisonProjectStatsResolvedTruthComparisonGroup = {
+  columnInfo: string | null
+  humanColumnId: string
+  id: string
+  label: string
+  llmColumnId: string
+}
+type ComparisonProjectStatsTruthDecision = {
+  humanDecision: BinaryDecision
+  llmDecision: BinaryDecision
+  truthDecision: BinaryDecision
+}
 
 type ComparisonProjectStatsAggregate = {
   agreementCount: number
@@ -94,6 +172,26 @@ type ComparisonProjectStatsAggregate = {
   rightExcludeCount: number
   rightIncludeCount: number
   trueConflictCount: number
+}
+
+type ComparisonProjectStatsResolvedTruthCounts = {
+  bothCorrectCount: number
+  bothWrongCount: number
+  humanCorrectVsTruthCount: number
+  humanErrorsVsTruthCount: number
+  humanFalseNegativeCount: number
+  humanFalsePositiveCount: number
+  humanOnlyCorrectCount: number
+  humanTrueNegativeCount: number
+  humanTruePositiveCount: number
+  llmCorrectVsTruthCount: number
+  llmErrorsVsTruthCount: number
+  llmFalseNegativeCount: number
+  llmFalsePositiveCount: number
+  llmOnlyCorrectCount: number
+  llmTrueNegativeCount: number
+  llmTruePositiveCount: number
+  resolvedCount: number
 }
 
 const summaryPromptId = 'summary'
@@ -454,6 +552,50 @@ const getHumanVsConflictResolutionComparisonProjectStatsGroups = (
     })
 }
 
+const getComparisonProjectStatsResolvedTruthColumnInfo = (
+  humanColumn: ComparisonProjectStatsColumn,
+  llmColumn: ComparisonProjectStatsColumn,
+) => {
+  return getComparisonProjectStatsHumanComparisonColumnInfo(
+    getComparisonProjectStatsContentLabel(humanColumn),
+    getComparisonProjectStatsContentLabel(llmColumn),
+  )
+}
+
+const getComparisonProjectStatsResolvedTruthGroup = (
+  humanColumn: ComparisonProjectStatsColumn,
+  llmColumn: ComparisonProjectStatsColumn,
+  context: ComparisonProjectStatsLabelContext,
+): ComparisonProjectStatsResolvedTruthComparisonGroup => {
+  return {
+    columnInfo: getComparisonProjectStatsResolvedTruthColumnInfo(humanColumn, llmColumn),
+    humanColumnId: humanColumn.id,
+    id: `resolved-truth:${humanColumn.id}:${llmColumn.id}`,
+    label: getComparisonProjectStatsColumnLabel(llmColumn, context),
+    llmColumnId: llmColumn.id,
+  }
+}
+
+const getComparisonProjectStatsResolvedTruthGroups = (
+  humanColumns: readonly ComparisonProjectStatsColumn[],
+  llmColumns: readonly ComparisonProjectStatsColumn[],
+  context: ComparisonProjectStatsLabelContext,
+) => {
+  return humanColumns
+    .filter((humanColumn) => {
+      return humanColumn.promptId === summaryPromptId
+    })
+    .flatMap((humanColumn) => {
+      return llmColumns
+        .filter((llmColumn) => {
+          return llmColumn.promptId === summaryPromptId
+        })
+        .map((llmColumn) => {
+          return getComparisonProjectStatsResolvedTruthGroup(humanColumn, llmColumn, context)
+        })
+    })
+}
+
 export const getComparisonProjectStatsComparisonGroups = (params: {
   allowConflictResolution?: boolean
   columns: readonly ComparisonProjectStatsColumn[]
@@ -486,6 +628,26 @@ export const getComparisonProjectStatsComparisonGroups = (params: {
   ]
 }
 
+export const getComparisonProjectAdditionalStatsGroups = (params: {
+  allowConflictResolution?: boolean
+  columns: readonly ComparisonProjectStatsColumn[]
+  isSummaryMode?: boolean
+}) => {
+  if (!getShouldIncludeConflictResolutionStatsGroups(params)) {
+    return []
+  }
+
+  const humanColumns = params.columns.filter((column) => {
+    return column.kind === 'human'
+  })
+  const llmColumns = params.columns.filter((column) => {
+    return column.kind === 'llm'
+  })
+  const labelContext = getComparisonProjectStatsLabelContext(params.columns)
+
+  return getComparisonProjectStatsResolvedTruthGroups(humanColumns, llmColumns, labelContext)
+}
+
 const getComparisonProjectStatsColumnIds = (groups: readonly ComparisonProjectStatsComparisonGroup[]) => {
   return Array.from(
     new Set(
@@ -500,6 +662,28 @@ const getComparisonProjectStatsGroupValuesSql = (groups: readonly ComparisonProj
   return groups
     .map((group) => {
       return `(${getSqlLiteral(group.id)}, ${getSqlLiteral(group.kind)}, ${getSqlLiteral(group.leftColumnId)}, ${getSqlLiteral(group.rightColumnId)})`
+    })
+    .join(',\n      ')
+}
+
+const getComparisonProjectStatsResolvedTruthColumnIds = (
+  groups: readonly ComparisonProjectStatsResolvedTruthComparisonGroup[],
+) => {
+  return Array.from(
+    new Set(
+      groups.flatMap((group) => {
+        return [group.humanColumnId, group.llmColumnId]
+      }),
+    ),
+  )
+}
+
+const getComparisonProjectStatsResolvedTruthGroupValuesSql = (
+  groups: readonly ComparisonProjectStatsResolvedTruthComparisonGroup[],
+) => {
+  return groups
+    .map((group) => {
+      return `(${getSqlLiteral(group.id)}, ${getSqlLiteral(group.humanColumnId)}, ${getSqlLiteral(group.llmColumnId)})`
     })
     .join(',\n      ')
 }
@@ -643,6 +827,213 @@ const getDecisionCount = (pairs: readonly BinaryDecisionPair[], side: keyof Bina
 
 const getRate = (numerator: number, denominator: number) => {
   return denominator === 0 ? null : numerator / denominator
+}
+
+const getValidBinaryDecisionValue = (answers: readonly string[]) => {
+  return getHasOneValidBinaryDecision(answers) ? getBinaryDecisionValue(answers) : null
+}
+
+const getComparisonProjectStatsTruthConfusionMetrics = (params: {
+  falseNegativeCount: number
+  falsePositiveCount: number
+  trueNegativeCount: number
+  truePositiveCount: number
+}): ComparisonProjectStatsTruthConfusionMetrics => {
+  const trueCorrectCount = params.truePositiveCount + params.trueNegativeCount
+  const trueErrorCount = params.falsePositiveCount + params.falseNegativeCount
+  const resolvedCount = trueCorrectCount + trueErrorCount
+  const sensitivity = getRate(params.truePositiveCount, params.truePositiveCount + params.falseNegativeCount)
+  const specificity = getRate(params.trueNegativeCount, params.trueNegativeCount + params.falsePositiveCount)
+  const balancedAccuracy = sensitivity === null || specificity === null ? null : (sensitivity + specificity) / 2
+
+  return {
+    accuracy: getRate(trueCorrectCount, resolvedCount),
+    balancedAccuracy,
+    f1: getRate(
+      2 * params.truePositiveCount,
+      2 * params.truePositiveCount + params.falsePositiveCount + params.falseNegativeCount,
+    ),
+    falseNegativeCount: params.falseNegativeCount,
+    falsePositiveCount: params.falsePositiveCount,
+    negativePredictiveValue: getRate(params.trueNegativeCount, params.trueNegativeCount + params.falseNegativeCount),
+    precision: getRate(params.truePositiveCount, params.truePositiveCount + params.falsePositiveCount),
+    sensitivity,
+    specificity,
+    trueCorrectCount,
+    trueErrorCount,
+    trueNegativeCount: params.trueNegativeCount,
+    truePositiveCount: params.truePositiveCount,
+    truthPrevalence: getRate(params.truePositiveCount + params.falseNegativeCount, resolvedCount),
+  }
+}
+
+const getComparisonProjectStatsTruthWinner = (
+  humanCorrectVsTruthCount: number,
+  llmCorrectVsTruthCount: number,
+): ComparisonProjectStatsTruthWinner => {
+  return llmCorrectVsTruthCount > humanCorrectVsTruthCount
+    ? 'LLM'
+    : humanCorrectVsTruthCount > llmCorrectVsTruthCount
+      ? 'Human'
+      : 'Tie'
+}
+
+const getMcnemarChiSquare = (llmOnlyCorrectCount: number, humanOnlyCorrectCount: number) => {
+  const denominator = llmOnlyCorrectCount + humanOnlyCorrectCount
+
+  return denominator === 0 ? null : (Math.abs(llmOnlyCorrectCount - humanOnlyCorrectCount) - 1) ** 2 / denominator
+}
+
+const emptyComparisonProjectStatsResolvedTruthCounts = {
+  bothCorrectCount: 0,
+  bothWrongCount: 0,
+  humanCorrectVsTruthCount: 0,
+  humanErrorsVsTruthCount: 0,
+  humanFalseNegativeCount: 0,
+  humanFalsePositiveCount: 0,
+  humanOnlyCorrectCount: 0,
+  humanTrueNegativeCount: 0,
+  humanTruePositiveCount: 0,
+  llmCorrectVsTruthCount: 0,
+  llmErrorsVsTruthCount: 0,
+  llmFalseNegativeCount: 0,
+  llmFalsePositiveCount: 0,
+  llmOnlyCorrectCount: 0,
+  llmTrueNegativeCount: 0,
+  llmTruePositiveCount: 0,
+  resolvedCount: 0,
+} satisfies ComparisonProjectStatsResolvedTruthCounts
+
+const getComparisonProjectStatsResolvedTruthCounts = (
+  decisions: readonly ComparisonProjectStatsTruthDecision[],
+): ComparisonProjectStatsResolvedTruthCounts => {
+  return decisions.reduce<ComparisonProjectStatsResolvedTruthCounts>((counts, decision) => {
+    const humanCorrect = decision.humanDecision === decision.truthDecision
+    const llmCorrect = decision.llmDecision === decision.truthDecision
+
+    return {
+      bothCorrectCount: counts.bothCorrectCount + (humanCorrect && llmCorrect ? 1 : 0),
+      bothWrongCount: counts.bothWrongCount + (!humanCorrect && !llmCorrect ? 1 : 0),
+      humanCorrectVsTruthCount: counts.humanCorrectVsTruthCount + (humanCorrect ? 1 : 0),
+      humanErrorsVsTruthCount: counts.humanErrorsVsTruthCount + (humanCorrect ? 0 : 1),
+      humanFalseNegativeCount:
+        counts.humanFalseNegativeCount
+        + (decision.truthDecision === 'include' && decision.humanDecision === 'exclude' ? 1 : 0),
+      humanFalsePositiveCount:
+        counts.humanFalsePositiveCount
+        + (decision.truthDecision === 'exclude' && decision.humanDecision === 'include' ? 1 : 0),
+      humanOnlyCorrectCount: counts.humanOnlyCorrectCount + (humanCorrect && !llmCorrect ? 1 : 0),
+      humanTrueNegativeCount:
+        counts.humanTrueNegativeCount
+        + (decision.truthDecision === 'exclude' && decision.humanDecision === 'exclude' ? 1 : 0),
+      humanTruePositiveCount:
+        counts.humanTruePositiveCount
+        + (decision.truthDecision === 'include' && decision.humanDecision === 'include' ? 1 : 0),
+      llmCorrectVsTruthCount: counts.llmCorrectVsTruthCount + (llmCorrect ? 1 : 0),
+      llmErrorsVsTruthCount: counts.llmErrorsVsTruthCount + (llmCorrect ? 0 : 1),
+      llmFalseNegativeCount:
+        counts.llmFalseNegativeCount
+        + (decision.truthDecision === 'include' && decision.llmDecision === 'exclude' ? 1 : 0),
+      llmFalsePositiveCount:
+        counts.llmFalsePositiveCount
+        + (decision.truthDecision === 'exclude' && decision.llmDecision === 'include' ? 1 : 0),
+      llmOnlyCorrectCount: counts.llmOnlyCorrectCount + (llmCorrect && !humanCorrect ? 1 : 0),
+      llmTrueNegativeCount:
+        counts.llmTrueNegativeCount
+        + (decision.truthDecision === 'exclude' && decision.llmDecision === 'exclude' ? 1 : 0),
+      llmTruePositiveCount:
+        counts.llmTruePositiveCount
+        + (decision.truthDecision === 'include' && decision.llmDecision === 'include' ? 1 : 0),
+      resolvedCount: counts.resolvedCount + 1,
+    }
+  }, emptyComparisonProjectStatsResolvedTruthCounts)
+}
+
+const getComparisonProjectStatsResolvedTruthComparisonFromCounts = (
+  group: ComparisonProjectStatsResolvedTruthComparisonGroup,
+  counts: ComparisonProjectStatsResolvedTruthCounts,
+): ComparisonProjectStatsResolvedTruthComparison => {
+  return {
+    ...group,
+    bothCorrectCount: counts.bothCorrectCount,
+    bothWrongCount: counts.bothWrongCount,
+    humanCorrectVsTruthCount: counts.humanCorrectVsTruthCount,
+    humanErrorsVsTruthCount: counts.humanErrorsVsTruthCount,
+    humanMetrics: getComparisonProjectStatsTruthConfusionMetrics({
+      falseNegativeCount: counts.humanFalseNegativeCount,
+      falsePositiveCount: counts.humanFalsePositiveCount,
+      trueNegativeCount: counts.humanTrueNegativeCount,
+      truePositiveCount: counts.humanTruePositiveCount,
+    }),
+    humanOnlyCorrectCount: counts.humanOnlyCorrectCount,
+    llmAdvantage: counts.llmOnlyCorrectCount - counts.humanOnlyCorrectCount,
+    llmCorrectVsTruthCount: counts.llmCorrectVsTruthCount,
+    llmErrorsVsTruthCount: counts.llmErrorsVsTruthCount,
+    llmMetrics: getComparisonProjectStatsTruthConfusionMetrics({
+      falseNegativeCount: counts.llmFalseNegativeCount,
+      falsePositiveCount: counts.llmFalsePositiveCount,
+      trueNegativeCount: counts.llmTrueNegativeCount,
+      truePositiveCount: counts.llmTruePositiveCount,
+    }),
+    llmOnlyCorrectCount: counts.llmOnlyCorrectCount,
+    mcnemarChiSquare: getMcnemarChiSquare(counts.llmOnlyCorrectCount, counts.humanOnlyCorrectCount),
+    resolvedCount: counts.resolvedCount,
+    winner: getComparisonProjectStatsTruthWinner(counts.humanCorrectVsTruthCount, counts.llmCorrectVsTruthCount),
+  }
+}
+
+const getComparisonProjectStatsResolvedTruthDecision = (params: {
+  conflictResolutionAnswersByArticleId: Map<string, string[]>
+  humanCell: ComparisonProjectStatsNormalizedCell
+  llmCell: ComparisonProjectStatsNormalizedCell
+}) => {
+  const truthDecision = getValidBinaryDecisionValue(
+    params.conflictResolutionAnswersByArticleId.get(params.humanCell.articleId) ?? [],
+  )
+  const humanDecision = getValidBinaryDecisionValue(params.humanCell.normalizedAnswers)
+  const llmDecision = getValidBinaryDecisionValue(params.llmCell.normalizedAnswers)
+
+  return truthDecision && humanDecision && llmDecision ? {humanDecision, llmDecision, truthDecision} : null
+}
+
+const getComparisonProjectStatsResolvedTruthDecisions = (
+  group: ComparisonProjectStatsResolvedTruthComparisonGroup,
+  cellsByColumn: Map<string, Map<string, ComparisonProjectStatsNormalizedCell>>,
+  conflictResolutionAnswersByArticleId: Map<string, string[]>,
+) => {
+  const humanCellsByArticle =
+    cellsByColumn.get(group.humanColumnId) ?? new Map<string, ComparisonProjectStatsNormalizedCell>()
+  const llmCellsByArticle =
+    cellsByColumn.get(group.llmColumnId) ?? new Map<string, ComparisonProjectStatsNormalizedCell>()
+
+  return Array.from(humanCellsByArticle.values())
+    .map<ComparisonProjectStatsTruthDecision | null>((humanCell) => {
+      const llmCell = llmCellsByArticle.get(humanCell.articleId)
+
+      return llmCell
+        ? getComparisonProjectStatsResolvedTruthDecision({conflictResolutionAnswersByArticleId, humanCell, llmCell})
+        : null
+    })
+    .filter((decision): decision is ComparisonProjectStatsTruthDecision => {
+      return decision !== null
+    })
+}
+
+const getComparisonProjectStatsResolvedTruthComparison = (params: {
+  cellsByColumn: Map<string, Map<string, ComparisonProjectStatsNormalizedCell>>
+  conflictResolutionAnswersByArticleId: Map<string, string[]>
+  group: ComparisonProjectStatsResolvedTruthComparisonGroup
+}) => {
+  const decisions = getComparisonProjectStatsResolvedTruthDecisions(
+    params.group,
+    params.cellsByColumn,
+    params.conflictResolutionAnswersByArticleId,
+  )
+
+  return getComparisonProjectStatsResolvedTruthComparisonFromCounts(
+    params.group,
+    getComparisonProjectStatsResolvedTruthCounts(decisions),
+  )
 }
 
 const getBinaryDecisionPairs = (pairs: readonly ComparisonProjectStatsPair[]) => {
@@ -798,6 +1189,26 @@ export const getComparisonProjectStatsFromCells = (params: ComparisonProjectStat
   })
 }
 
+export const getComparisonProjectAdditionalStatsFromCells = (
+  params: ComparisonProjectStatsFromCellsParams,
+): ComparisonProjectAdditionalStats => {
+  const groups = getComparisonProjectAdditionalStatsGroups(params)
+  const cellsByColumn = getComparisonProjectStatsCellsByColumn(params.cellRows)
+  const conflictResolutionAnswersByArticleId = getComparisonProjectStatsConflictResolutionAnswersByArticleId(
+    params.conflictResolutionRows ?? [],
+  )
+
+  return {
+    resolvedTruthComparisons: groups.map((group) => {
+      return getComparisonProjectStatsResolvedTruthComparison({
+        cellsByColumn,
+        conflictResolutionAnswersByArticleId,
+        group,
+      })
+    }),
+  }
+}
+
 const getComparisonProjectStatsAggregate = (
   row: ComparisonProjectStatsAggregateRow,
 ): ComparisonProjectStatsAggregate => {
@@ -830,12 +1241,46 @@ const emptyComparisonProjectStatsAggregate = {
   trueConflictCount: 0,
 } satisfies ComparisonProjectStatsAggregate
 
+const getComparisonProjectStatsResolvedTruthAggregate = (
+  row: ComparisonProjectStatsResolvedTruthAggregateRow,
+): ComparisonProjectStatsResolvedTruthCounts => {
+  return {
+    bothCorrectCount: getComparisonProjectStatsCountValue(row.bothCorrectCount),
+    bothWrongCount: getComparisonProjectStatsCountValue(row.bothWrongCount),
+    humanCorrectVsTruthCount: getComparisonProjectStatsCountValue(row.humanCorrectVsTruthCount),
+    humanErrorsVsTruthCount: getComparisonProjectStatsCountValue(row.humanErrorsVsTruthCount),
+    humanFalseNegativeCount: getComparisonProjectStatsCountValue(row.humanFalseNegativeCount),
+    humanFalsePositiveCount: getComparisonProjectStatsCountValue(row.humanFalsePositiveCount),
+    humanOnlyCorrectCount: getComparisonProjectStatsCountValue(row.humanOnlyCorrectCount),
+    humanTrueNegativeCount: getComparisonProjectStatsCountValue(row.humanTrueNegativeCount),
+    humanTruePositiveCount: getComparisonProjectStatsCountValue(row.humanTruePositiveCount),
+    llmCorrectVsTruthCount: getComparisonProjectStatsCountValue(row.llmCorrectVsTruthCount),
+    llmErrorsVsTruthCount: getComparisonProjectStatsCountValue(row.llmErrorsVsTruthCount),
+    llmFalseNegativeCount: getComparisonProjectStatsCountValue(row.llmFalseNegativeCount),
+    llmFalsePositiveCount: getComparisonProjectStatsCountValue(row.llmFalsePositiveCount),
+    llmOnlyCorrectCount: getComparisonProjectStatsCountValue(row.llmOnlyCorrectCount),
+    llmTrueNegativeCount: getComparisonProjectStatsCountValue(row.llmTrueNegativeCount),
+    llmTruePositiveCount: getComparisonProjectStatsCountValue(row.llmTruePositiveCount),
+    resolvedCount: getComparisonProjectStatsCountValue(row.resolvedCount),
+  }
+}
+
 const getComparisonProjectStatsAggregatesByComparisonId = (rows: readonly ComparisonProjectStatsAggregateRow[]) => {
   return rows.reduce<Map<string, ComparisonProjectStatsAggregate>>((aggregateMap, row) => {
     aggregateMap.set(row.comparisonId, getComparisonProjectStatsAggregate(row))
 
     return aggregateMap
   }, new Map<string, ComparisonProjectStatsAggregate>())
+}
+
+const getComparisonProjectStatsResolvedTruthAggregatesByComparisonId = (
+  rows: readonly ComparisonProjectStatsResolvedTruthAggregateRow[],
+) => {
+  return rows.reduce<Map<string, ComparisonProjectStatsResolvedTruthCounts>>((aggregateMap, row) => {
+    aggregateMap.set(row.comparisonId, getComparisonProjectStatsResolvedTruthAggregate(row))
+
+    return aggregateMap
+  }, new Map<string, ComparisonProjectStatsResolvedTruthCounts>())
 }
 
 const getComparisonProjectStatsFromAggregates = (params: {
@@ -858,6 +1303,22 @@ const getComparisonProjectStatsFromAggregates = (params: {
       trueConflictCount: aggregate.trueConflictCount,
     }
   })
+}
+
+const getComparisonProjectAdditionalStatsFromAggregates = (params: {
+  aggregateRows: readonly ComparisonProjectStatsResolvedTruthAggregateRow[]
+  groups: readonly ComparisonProjectStatsResolvedTruthComparisonGroup[]
+}): ComparisonProjectAdditionalStats => {
+  const aggregatesByComparisonId = getComparisonProjectStatsResolvedTruthAggregatesByComparisonId(params.aggregateRows)
+
+  return {
+    resolvedTruthComparisons: params.groups.map((group) => {
+      return getComparisonProjectStatsResolvedTruthComparisonFromCounts(
+        group,
+        aggregatesByComparisonId.get(group.id) ?? emptyComparisonProjectStatsResolvedTruthCounts,
+      )
+    }),
+  }
 }
 
 export const getComparisonProjectStatsActiveGenerationSql = (comparisonProjectId: string) => {
@@ -1085,6 +1546,140 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
   `
 }
 
+export const getComparisonProjectStatsResolvedTruthAggregatesSql = (params: {
+  columnIds: readonly string[]
+  comparisonProjectId: string
+  generation: number
+  groups: readonly ComparisonProjectStatsResolvedTruthComparisonGroup[]
+}) => {
+  return `
+    WITH resolved_truth_group(comparison_id, human_column_id, llm_column_id) AS (
+      VALUES
+      ${getComparisonProjectStatsResolvedTruthGroupValuesSql(params.groups)}
+    ),
+    scoped_cell AS (
+      SELECT
+        cell.article_id,
+        cell.column_id,
+        cell.normalized_answers
+      FROM mart.comparison_cell_serving cell
+      WHERE cell.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+        AND cell.generation = ${getSqlLiteral(params.generation)}
+        AND cell.column_id IN (${getInClause(params.columnIds)})
+        AND cell.normalized_answers IS NOT NULL
+        AND ARRAY_LENGTH(cell.normalized_answers) > 0
+    ),
+    normalized_cell_answer AS (
+      SELECT
+        scoped_cell.article_id,
+        scoped_cell.column_id,
+        LOWER(TRIM(answer.answer_value)) AS answer_value,
+        CASE
+          WHEN LOWER(TRIM(answer.answer_value)) IN ('yes', 'maybe') THEN 'include'
+          WHEN LOWER(TRIM(answer.answer_value)) = 'no' THEN 'exclude'
+          ELSE NULL
+        END AS binary_decision
+      FROM scoped_cell,
+        UNNEST(scoped_cell.normalized_answers) AS answer(answer_value)
+      WHERE NULLIF(TRIM(answer.answer_value), '') IS NOT NULL
+    ),
+    normalized_cell_decision AS (
+      SELECT
+        article_id,
+        column_id,
+        COUNT(DISTINCT binary_decision) FILTER (
+          WHERE binary_decision IS NOT NULL
+        ) AS binary_decision_count,
+        COUNT(DISTINCT answer_value) FILTER (
+          WHERE answer_value IS NOT NULL AND binary_decision IS NULL
+        ) AS non_binary_answer_value_count,
+        MIN(binary_decision) FILTER (
+          WHERE binary_decision IS NOT NULL
+        ) AS binary_decision
+      FROM normalized_cell_answer
+      GROUP BY article_id, column_id
+    ),
+    eligible_cell_decision AS (
+      SELECT article_id, column_id, binary_decision
+      FROM normalized_cell_decision
+      WHERE binary_decision_count = 1
+        AND non_binary_answer_value_count = 0
+    ),
+    normalized_conflict_resolution_answer AS (
+      SELECT
+        article_id,
+        LOWER(TRIM(answer_value)) AS answer_value,
+        CASE
+          WHEN LOWER(TRIM(answer_value)) IN ('yes', 'maybe') THEN 'include'
+          WHEN LOWER(TRIM(answer_value)) = 'no' THEN 'exclude'
+          ELSE NULL
+        END AS binary_decision
+      FROM ${comparisonProjectConflictResolutionTable}
+      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+        AND answer_value IS NOT NULL
+        AND NULLIF(TRIM(answer_value), '') IS NOT NULL
+    ),
+    normalized_conflict_resolution_decision AS (
+      SELECT
+        article_id,
+        COUNT(DISTINCT binary_decision) FILTER (
+          WHERE binary_decision IS NOT NULL
+        ) AS binary_decision_count,
+        COUNT(DISTINCT answer_value) FILTER (
+          WHERE answer_value IS NOT NULL AND binary_decision IS NULL
+        ) AS non_binary_answer_value_count,
+        MIN(binary_decision) FILTER (
+          WHERE binary_decision IS NOT NULL
+        ) AS binary_decision
+      FROM normalized_conflict_resolution_answer
+      GROUP BY article_id
+    ),
+    eligible_conflict_resolution_decision AS (
+      SELECT article_id, binary_decision
+      FROM normalized_conflict_resolution_decision
+      WHERE binary_decision_count = 1
+        AND non_binary_answer_value_count = 0
+    ),
+    comparison_decision AS (
+      SELECT
+        resolved_truth_group.comparison_id,
+        truth_decision.binary_decision AS truth_decision,
+        human_decision.binary_decision AS human_decision,
+        llm_decision.binary_decision AS llm_decision
+      FROM resolved_truth_group
+      INNER JOIN eligible_cell_decision human_decision
+        ON human_decision.column_id = resolved_truth_group.human_column_id
+      INNER JOIN eligible_cell_decision llm_decision
+        ON llm_decision.column_id = resolved_truth_group.llm_column_id
+        AND llm_decision.article_id = human_decision.article_id
+      INNER JOIN eligible_conflict_resolution_decision truth_decision
+        ON truth_decision.article_id = human_decision.article_id
+    )
+    SELECT
+      comparison_id AS comparisonId,
+      CAST(COUNT(*) AS INTEGER) AS resolvedCount,
+      CAST(SUM(CASE WHEN human_decision = truth_decision THEN 1 ELSE 0 END) AS INTEGER) AS humanCorrectVsTruthCount,
+      CAST(SUM(CASE WHEN human_decision <> truth_decision THEN 1 ELSE 0 END) AS INTEGER) AS humanErrorsVsTruthCount,
+      CAST(SUM(CASE WHEN llm_decision = truth_decision THEN 1 ELSE 0 END) AS INTEGER) AS llmCorrectVsTruthCount,
+      CAST(SUM(CASE WHEN llm_decision <> truth_decision THEN 1 ELSE 0 END) AS INTEGER) AS llmErrorsVsTruthCount,
+      CAST(SUM(CASE WHEN human_decision = truth_decision AND llm_decision = truth_decision THEN 1 ELSE 0 END) AS INTEGER) AS bothCorrectCount,
+      CAST(SUM(CASE WHEN human_decision <> truth_decision AND llm_decision <> truth_decision THEN 1 ELSE 0 END) AS INTEGER) AS bothWrongCount,
+      CAST(SUM(CASE WHEN human_decision = truth_decision AND llm_decision <> truth_decision THEN 1 ELSE 0 END) AS INTEGER) AS humanOnlyCorrectCount,
+      CAST(SUM(CASE WHEN llm_decision = truth_decision AND human_decision <> truth_decision THEN 1 ELSE 0 END) AS INTEGER) AS llmOnlyCorrectCount,
+      CAST(SUM(CASE WHEN truth_decision = 'include' AND human_decision = 'include' THEN 1 ELSE 0 END) AS INTEGER) AS humanTruePositiveCount,
+      CAST(SUM(CASE WHEN truth_decision = 'include' AND human_decision = 'exclude' THEN 1 ELSE 0 END) AS INTEGER) AS humanFalseNegativeCount,
+      CAST(SUM(CASE WHEN truth_decision = 'exclude' AND human_decision = 'exclude' THEN 1 ELSE 0 END) AS INTEGER) AS humanTrueNegativeCount,
+      CAST(SUM(CASE WHEN truth_decision = 'exclude' AND human_decision = 'include' THEN 1 ELSE 0 END) AS INTEGER) AS humanFalsePositiveCount,
+      CAST(SUM(CASE WHEN truth_decision = 'include' AND llm_decision = 'include' THEN 1 ELSE 0 END) AS INTEGER) AS llmTruePositiveCount,
+      CAST(SUM(CASE WHEN truth_decision = 'include' AND llm_decision = 'exclude' THEN 1 ELSE 0 END) AS INTEGER) AS llmFalseNegativeCount,
+      CAST(SUM(CASE WHEN truth_decision = 'exclude' AND llm_decision = 'exclude' THEN 1 ELSE 0 END) AS INTEGER) AS llmTrueNegativeCount,
+      CAST(SUM(CASE WHEN truth_decision = 'exclude' AND llm_decision = 'include' THEN 1 ELSE 0 END) AS INTEGER) AS llmFalsePositiveCount
+    FROM comparison_decision
+    GROUP BY comparison_id
+    ORDER BY comparison_id ASC
+  `
+}
+
 export const getComparisonProjectStats = async (params: ComparisonProjectStatsParams) => {
   const groups = getComparisonProjectStatsComparisonGroups(params)
   const columnIds = getComparisonProjectStatsColumnIds(groups)
@@ -1113,4 +1708,35 @@ export const getComparisonProjectStats = async (params: ComparisonProjectStatsPa
   const shouldComputeCohensKappa = getShouldComputeCohensKappa(params)
 
   return getComparisonProjectStatsFromAggregates({aggregateRows, groups, shouldComputeCohensKappa})
+}
+
+export const getComparisonProjectAdditionalStats = async (
+  params: ComparisonProjectStatsParams,
+): Promise<ComparisonProjectAdditionalStats> => {
+  const groups = getComparisonProjectAdditionalStatsGroups(params)
+  const columnIds = getComparisonProjectStatsResolvedTruthColumnIds(groups)
+
+  if (columnIds.length === 0) {
+    return {resolvedTruthComparisons: []}
+  }
+
+  const [generationRow] = await params.queryRunner.queryJson<{generation: unknown}>(
+    getComparisonProjectStatsActiveGenerationSql(params.comparisonProjectId),
+  )
+  const generation = getComparisonProjectStatsGenerationValue(generationRow?.generation)
+
+  if (generation === null) {
+    return {resolvedTruthComparisons: []}
+  }
+
+  const aggregateRows = await params.queryRunner.queryJson<ComparisonProjectStatsResolvedTruthAggregateRow>(
+    getComparisonProjectStatsResolvedTruthAggregatesSql({
+      columnIds,
+      comparisonProjectId: params.comparisonProjectId,
+      generation,
+      groups,
+    }),
+  )
+
+  return getComparisonProjectAdditionalStatsFromAggregates({aggregateRows, groups})
 }
