@@ -74,6 +74,10 @@ const getResolutionScript = () => {
       VALUES
         ('article-a', 'legacy-a', 'Article A'),
         ('article-b', 'legacy-b', 'Article B'),
+        ('article-scoped-current', NULL, 'Article Scoped Current'),
+        ('article-scoped-source', NULL, 'Article Scoped Source'),
+        ('article-legacy-current-collision', 'scoped-current-collision', 'Legacy Current Collision'),
+        ('article-legacy-source-collision', 'scoped-source-collision', 'Legacy Source Collision'),
         ('article-legacy-a', 'duplicate-legacy', 'Legacy A'),
         ('article-legacy-b', 'duplicate-legacy', 'Legacy B')
     \`)
@@ -82,7 +86,8 @@ const getResolutionScript = () => {
       INSERT INTO app.article_import_route (id, article_id, import_route_id, external_article_id)
       VALUES
         ('air-a', 'article-a', 'route-a', 'duplicate-current'),
-        ('air-b', 'article-b', 'route-b', 'duplicate-current')
+        ('air-b', 'article-b', 'route-b', 'duplicate-current'),
+        ('air-scoped-current', 'article-scoped-current', 'route-a', 'scoped-current-collision')
     \`)
 
     await database.run(\`
@@ -97,12 +102,17 @@ const getResolutionScript = () => {
       ) VALUES
         ('source-quarantined-only', 'article-a', 'route-a', 'quarantined-source', 'record-quarantined-only', 'hash-quarantined-only', TIMESTAMPTZ '2026-01-01T00:00:00.000Z'),
         ('source-quarantined', 'article-a', 'route-a', 'active-source', 'record-quarantined', 'hash-quarantined', TIMESTAMPTZ '2026-01-01T00:00:00.000Z'),
-        ('source-active', 'article-b', 'route-b', 'active-source', 'record-active', 'hash-active', NULL)
+        ('source-active', 'article-b', 'route-b', 'active-source', 'record-active', 'hash-active', NULL),
+        ('source-scoped-collision', 'article-scoped-source', 'route-a', 'scoped-source-collision', 'record-scoped-collision', 'hash-scoped-collision', NULL)
     \`)
 
     const rows = await resolveCanonicalArticleIds(database, [
       {articleId: 'duplicate-current', projectId: 'project-1'},
       {articleId: 'duplicate-legacy', projectId: 'project-1'},
+      {articleId: 'scoped-current-collision', projectId: 'project-1'},
+      {articleId: 'scoped-current-collision'},
+      {articleId: 'scoped-source-collision', projectId: 'project-1'},
+      {articleId: 'scoped-source-collision'},
       {articleId: 'quarantined-source', projectId: 'project-1'},
       {articleId: 'active-source', projectId: 'project-1'},
       {articleId: 'article-a', projectId: 'project-1'},
@@ -145,6 +155,10 @@ test('canonical article ID resolution rejects ambiguous matches and ignores quar
   expect(result.rows).toEqual([
     {articleId: 'duplicate-current', canonicalArticleId: null, projectId: 'project-1'},
     {articleId: 'duplicate-legacy', canonicalArticleId: null, projectId: 'project-1'},
+    {articleId: 'scoped-current-collision', canonicalArticleId: 'article-scoped-current', projectId: 'project-1'},
+    {articleId: 'scoped-current-collision', canonicalArticleId: 'article-legacy-current-collision', projectId: null},
+    {articleId: 'scoped-source-collision', canonicalArticleId: 'article-scoped-source', projectId: 'project-1'},
+    {articleId: 'scoped-source-collision', canonicalArticleId: 'article-legacy-source-collision', projectId: null},
     {articleId: 'quarantined-source', canonicalArticleId: null, projectId: 'project-1'},
     {articleId: 'active-source', canonicalArticleId: 'article-b', projectId: 'project-1'},
     {articleId: 'article-a', canonicalArticleId: 'article-a', projectId: 'project-1'},
