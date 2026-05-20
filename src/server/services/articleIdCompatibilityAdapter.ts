@@ -63,7 +63,7 @@ const getArticleIdResolutionSql = (inputs: Array<Required<ArticleIdResolutionInp
           input.article_id,
           input.project_id,
           legacy.article_id AS canonical_article_id,
-          1 AS resolution_rank
+          3 AS resolution_rank
         FROM article_id_input input
         INNER JOIN app.article_legacy_id_lookup legacy ON legacy.legacy_article_id = input.article_id
 
@@ -74,7 +74,7 @@ const getArticleIdResolutionSql = (inputs: Array<Required<ArticleIdResolutionInp
           input.article_id,
           input.project_id,
           current_import.article_id AS canonical_article_id,
-          2 AS resolution_rank
+          1 AS resolution_rank
         FROM article_id_input input
         INNER JOIN app.project_import_route project_import_route
           ON input.project_id IS NOT NULL
@@ -90,7 +90,7 @@ const getArticleIdResolutionSql = (inputs: Array<Required<ArticleIdResolutionInp
           input.article_id,
           input.project_id,
           source_record.article_id AS canonical_article_id,
-          3 AS resolution_rank
+          2 AS resolution_rank
         FROM article_id_input input
         INNER JOIN app.project_import_route project_import_route
           ON input.project_id IS NOT NULL
