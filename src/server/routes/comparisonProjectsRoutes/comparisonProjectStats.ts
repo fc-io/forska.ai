@@ -276,7 +276,7 @@ const getComparisonProjectStatsGroupLabel = (
   const rightColumnLabel = getComparisonProjectStatsColumnLabel(rightColumn, context)
 
   if (kind === 'llm-vs-conflict-resolution') {
-    return `${rightColumnLabel} vs After conflict resolution`
+    return `${rightColumnLabel} vs After conflict resolution (post-resolution fallback)`
   }
 
   if (kind === 'human-vs-conflict-resolution') {
