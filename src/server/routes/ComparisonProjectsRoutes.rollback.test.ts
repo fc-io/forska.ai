@@ -720,6 +720,26 @@ const getMockComparisonProjectStatsBinaryDecisionValue = (answers: readonly stri
   return decisions.length === 1 ? (decisions[0] ?? null) : null
 }
 
+const getMockComparisonProjectStatsHasOneValidBinaryDecision = (answers: readonly string[]) => {
+  return (
+    answers.length > 0
+    && answers.every((answer) => {
+      return getMockComparisonProjectStatsBinaryDecision(answer) !== null
+    })
+    && getMockComparisonProjectStatsBinaryDecisionValue(answers) !== null
+  )
+}
+
+const getMockComparisonProjectStatsResolvedHumanPair = (
+  humanAnswers: readonly string[],
+  conflictResolutionAnswers: readonly string[],
+) => {
+  return getMockComparisonProjectStatsHasOneValidBinaryDecision(humanAnswers)
+    && getMockComparisonProjectStatsHasOneValidBinaryDecision(conflictResolutionAnswers)
+    ? {leftAnswers: [...conflictResolutionAnswers], rightAnswers: [...humanAnswers]}
+    : null
+}
+
 const getMockComparisonProjectStatsPairs = (state: MockDatabaseState, group: MockComparisonProjectStatsGroup) => {
   return getMockServingRows(state)
     .map<MockComparisonProjectStatsPair | null>((row) => {
@@ -729,6 +749,10 @@ const getMockComparisonProjectStatsPairs = (state: MockDatabaseState, group: Moc
           return resolutionRow.articleId === row.articleId
         })?.answerValue,
       )
+      if (group.kind === 'human-vs-conflict-resolution') {
+        return getMockComparisonProjectStatsResolvedHumanPair(fallbackLeftAnswers, conflictResolutionAnswers)
+      }
+
       const leftAnswers =
         group.kind === 'llm-vs-conflict-resolution' && conflictResolutionAnswers.length > 0
           ? conflictResolutionAnswers
@@ -2455,9 +2479,12 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
   const conflictResolutionComparison = body.data.comparisons.find((candidate) => {
     return candidate.kind === 'llm-vs-conflict-resolution'
   })
+  const humanConflictResolutionComparison = body.data.comparisons.find((candidate) => {
+    return candidate.kind === 'human-vs-conflict-resolution'
+  })
 
   expect(response.status).toBe(200)
-  expect(body.data.comparisons).toHaveLength(2)
+  expect(body.data.comparisons).toHaveLength(3)
   expect(comparison).toMatchObject({
     cohensKappa: 0,
     conflictCount: 1,
@@ -2471,6 +2498,13 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
     kind: 'llm-vs-conflict-resolution',
     overlapCount: 1,
     trueConflictCount: 0,
+  })
+  expect(humanConflictResolutionComparison).toMatchObject({
+    cohensKappa: 0,
+    conflictCount: 1,
+    kind: 'human-vs-conflict-resolution',
+    overlapCount: 1,
+    trueConflictCount: 1,
   })
 })
 

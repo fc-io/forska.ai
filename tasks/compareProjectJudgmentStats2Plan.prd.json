@@ -22,9 +22,10 @@
         "`bun run desktop:build` passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -45,7 +46,9 @@
       "priority": 2,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-003",
@@ -66,7 +69,9 @@
       "priority": 3,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002"]
+      "dependsOn": [
+        "US-002"
+      ]
     },
     {
       "id": "US-004",
@@ -89,7 +94,9 @@
       "priority": 4,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002"]
+      "dependsOn": [
+        "US-002"
+      ]
     },
     {
       "id": "US-005",
@@ -111,7 +118,13 @@
       "priority": 5,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003", "US-004"]
+      "dependsOn": [
+        "US-003",
+        "US-004"
+      ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-05-20T13:45:39.237Z"
+  }
 }

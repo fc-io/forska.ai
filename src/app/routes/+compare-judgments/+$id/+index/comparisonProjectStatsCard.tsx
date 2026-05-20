@@ -126,6 +126,16 @@ const getComparisonProjectStatsPromptLabel = (column: ComparisonProjectStatsLabe
   return column.promptId === summaryPromptId ? null : getColumnLabelPart(column.promptLabel)
 }
 
+const getComparisonProjectStatsConflictResolutionLabel = (comparison: ComparisonProjectStatsComparison) => {
+  return comparison.kind === 'human-vs-conflict-resolution'
+    ? 'After conflict resolution (resolved only)'
+    : 'After conflict resolution'
+}
+
+const getIsComparisonProjectStatsConflictResolutionComparison = (comparison: ComparisonProjectStatsComparison) => {
+  return comparison.kind === 'llm-vs-conflict-resolution' || comparison.kind === 'human-vs-conflict-resolution'
+}
+
 const ComparisonProjectStatsLabelSide = (props: {column: ComparisonProjectStatsLabelColumn}) => {
   return (
     <span class="inline-flex flex-wrap items-baseline gap-x-1">
@@ -163,10 +173,10 @@ const ComparisonProjectStatsComparisonLabel = (props: {
             <ComparisonProjectStatsLabelSide column={labelColumns()[0]} />
             <span class="text-gray-500">vs</span>
             <Show
-              when={props.comparison.kind === 'llm-vs-conflict-resolution'}
+              when={getIsComparisonProjectStatsConflictResolutionComparison(props.comparison)}
               fallback={<ComparisonProjectStatsLabelSide column={labelColumns()[1]} />}
             >
-              <span>After conflict resolution</span>
+              <span>{getComparisonProjectStatsConflictResolutionLabel(props.comparison)}</span>
             </Show>
           </span>
         )
@@ -184,8 +194,8 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
           <p class="mt-1 text-sm text-gray-600">
             Conflicts compare exact answers. True Conflicts, Cohen's Kappa, sensitivity, and specificity compare Include
             vs Exclude decisions, with Yes/Maybe as Include and No as Exclude. Sensitivity and specificity use the
-            comparison's reference side: Human for Human rows. For After conflict resolution rows, resolved articles use
-            the resolved answer; unresolved articles use Human.
+            comparison's reference side: Human for Human rows. Resolved-only conflict resolution rows use saved binary
+            resolutions; LLM conflict resolution rows use saved resolutions when present and Human otherwise.
           </p>
         </div>
       </div>
