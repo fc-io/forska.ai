@@ -340,7 +340,7 @@ test('provider model natural key migration deduplicates existing model reference
         await database.run("CREATE TABLE app.article (id VARCHAR PRIMARY KEY, full_text_conversion_model_id VARCHAR, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp)")
         await database.run("CREATE TABLE app.comparison_project (id VARCHAR PRIMARY KEY, model_ids VARCHAR[], updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp)")
         await database.run("CREATE TABLE app.comparison_project_serving_generation (comparison_project_id VARCHAR NOT NULL PRIMARY KEY, active_generation BIGINT NOT NULL, generation_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, serving_status VARCHAR DEFAULT 'missing', serving_generation BIGINT, serving_started_at TIMESTAMPTZ, serving_completed_at TIMESTAMPTZ, serving_failed_at TIMESTAMPTZ, serving_error VARCHAR, serving_phase VARCHAR, serving_phase_started_at TIMESTAMPTZ, serving_last_progressed_at TIMESTAMPTZ, serving_staged_article_count BIGINT DEFAULT 0, serving_staged_cell_count BIGINT DEFAULT 0, serving_staged_filter_member_count BIGINT DEFAULT 0, serving_staged_filter_stats_count BIGINT DEFAULT 0)")
-        await database.run("CREATE TABLE app.judgment (id VARCHAR PRIMARY KEY, article_id VARCHAR NOT NULL, prompt_id VARCHAR NOT NULL, model_id VARCHAR NOT NULL REFERENCES app.model(id), use_title BOOLEAN NOT NULL DEFAULT TRUE, use_abstract BOOLEAN NOT NULL DEFAULT TRUE, use_fulltext BOOLEAN NOT NULL DEFAULT FALSE, use_fulltext_no_images BOOLEAN NOT NULL DEFAULT FALSE, delete_generation BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, UNIQUE(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, delete_generation))")
+        await database.run("CREATE TABLE app.judgment (id VARCHAR PRIMARY KEY, article_id VARCHAR NOT NULL, prompt_id VARCHAR NOT NULL, model_id VARCHAR NOT NULL REFERENCES app.model(id), use_title BOOLEAN NOT NULL DEFAULT TRUE, use_abstract BOOLEAN NOT NULL DEFAULT TRUE, use_fulltext BOOLEAN NOT NULL DEFAULT FALSE, use_fulltext_no_images BOOLEAN NOT NULL DEFAULT FALSE, is_answered BOOLEAN NOT NULL DEFAULT FALSE, answered_original VARCHAR, answered_original_as_array VARCHAR[], delete_generation BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, UNIQUE(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, delete_generation))")
         await database.run("CREATE TABLE app.judgment_assessment (id VARCHAR PRIMARY KEY, judgment_id VARCHAR NOT NULL REFERENCES app.judgment(id), assessment_is_correct BOOLEAN NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, UNIQUE(judgment_id))")
         await database.run("CREATE TABLE app.judgment_execution_snapshot (id VARCHAR PRIMARY KEY, model_id VARCHAR NOT NULL)")
         await database.run("CREATE TABLE app.judgment_job_sqlite_outbox_import (job_id VARCHAR NOT NULL, outbox_seq BIGINT NOT NULL, judgment_id VARCHAR, model_id VARCHAR, updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp, PRIMARY KEY (job_id, outbox_seq))")
@@ -349,19 +349,19 @@ test('provider model natural key migration deduplicates existing model reference
         await database.run("CREATE TABLE mart.review_article_serving_detail (project_id VARCHAR NOT NULL, generation BIGINT NOT NULL, judgment_id VARCHAR NOT NULL, model_id VARCHAR NOT NULL, PRIMARY KEY(project_id, generation, judgment_id))")
         await database.run("CREATE TABLE mart.comparison_cell_serving (comparison_project_id VARCHAR NOT NULL, generation BIGINT NOT NULL, article_id VARCHAR NOT NULL, column_id VARCHAR NOT NULL, model_id VARCHAR, PRIMARY KEY(comparison_project_id, generation, article_id, column_id))")
         await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, config_json) VALUES ('connection-1', 'openai', 'Connection 1', CAST('{\\"archived\\":false,\\"disabledModelIds\\":[\\"model-a\\",\\"model-b\\"],\\"manualWorkerUrls\\":[],\\"workerUrlMode\\":\\"manual\\"}' AS JSON))")
-        await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, variant, source, enabled, metadata_json, created_at) VALUES ('model-a', 'connection-1', 'Remote 1', 'remote-1', 'Remote 1', NULL, 'manual', TRUE, NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('model-b', 'connection-1', 'Remote 1 Duplicate', 'remote-1', 'Remote 1 Duplicate', '', 'manual', FALSE, CAST('{\\"options\\":{\\"thinking\\":\\"high\\"}}' AS JSON), TIMESTAMPTZ '2026-01-02T00:00:00Z'), ('model-null-a', 'connection-1', 'Null A', NULL, 'Null A', NULL, 'manual', TRUE, NULL, TIMESTAMPTZ '2026-01-03T00:00:00Z'), ('model-null-b', 'connection-1', 'Null B', NULL, 'Null B', NULL, 'manual', TRUE, NULL, TIMESTAMPTZ '2026-01-04T00:00:00Z')")
+        await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, variant, source, enabled, metadata_json, created_at) VALUES ('model-a', 'connection-1', 'Remote 1', 'remote-1', 'Remote 1', NULL, 'manual', TRUE, NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('model-b', 'connection-1', 'Remote 1 Duplicate', 'remote-1', 'Remote 1 Duplicate', '', 'manual', FALSE, CAST('{\\"options\\":{\\"thinking\\":\\"high\\"}}' AS JSON), TIMESTAMPTZ '2026-01-02T00:00:00Z'), ('model-answer-canonical', 'connection-1', 'Remote Answer', 'remote-answer', 'Remote Answer', NULL, 'manual', TRUE, NULL, TIMESTAMPTZ '2026-01-03T00:00:00Z'), ('model-answer-duplicate', 'connection-1', 'Remote Answer Duplicate', 'remote-answer', 'Remote Answer Duplicate', NULL, 'manual', TRUE, NULL, TIMESTAMPTZ '2026-01-04T00:00:00Z'), ('model-null-a', 'connection-1', 'Null A', NULL, 'Null A', NULL, 'manual', TRUE, NULL, TIMESTAMPTZ '2026-01-05T00:00:00Z'), ('model-null-b', 'connection-1', 'Null B', NULL, 'Null B', NULL, 'manual', TRUE, NULL, TIMESTAMPTZ '2026-01-06T00:00:00Z')")
         await database.run("INSERT INTO app.project (id, model_id) VALUES ('project-1', 'model-b')")
         await database.run("INSERT INTO app.user_config (id, full_text_conversion_model_id) VALUES ('user-1', 'model-b')")
         await database.run("INSERT INTO app.article (id, full_text_conversion_model_id) VALUES ('article-conversion-1', 'model-b')")
         await database.run("INSERT INTO app.comparison_project (id, model_ids) VALUES ('comparison-1', ['model-a', 'model-b', 'model-null-a'])")
         await database.run("INSERT INTO app.comparison_project_serving_generation (comparison_project_id, active_generation, serving_status, serving_generation, serving_completed_at) VALUES ('comparison-1', 1, 'ready', 1, current_timestamp)")
-        await database.run("INSERT INTO app.judgment (id, article_id, prompt_id, model_id, created_at) VALUES ('judgment-a', 'article-1', 'prompt-1', 'model-a', TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('judgment-b', 'article-1', 'prompt-1', 'model-b', TIMESTAMPTZ '2026-01-02T00:00:00Z'), ('judgment-c', 'article-1', 'prompt-2', 'model-b', TIMESTAMPTZ '2026-01-03T00:00:00Z')")
-        await database.run("INSERT INTO app.judgment_assessment (id, judgment_id, assessment_is_correct, created_at) VALUES ('assessment-a', 'judgment-a', TRUE, TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('assessment-b', 'judgment-b', FALSE, TIMESTAMPTZ '2026-01-02T00:00:00Z'), ('assessment-c', 'judgment-c', TRUE, TIMESTAMPTZ '2026-01-03T00:00:00Z')")
+        await database.run("INSERT INTO app.judgment (id, article_id, prompt_id, model_id, is_answered, answered_original, answered_original_as_array, created_at) VALUES ('judgment-a', 'article-1', 'prompt-1', 'model-a', FALSE, NULL, NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('judgment-b', 'article-1', 'prompt-1', 'model-b', FALSE, NULL, NULL, TIMESTAMPTZ '2026-01-02T00:00:00Z'), ('judgment-c', 'article-1', 'prompt-2', 'model-b', FALSE, NULL, NULL, TIMESTAMPTZ '2026-01-03T00:00:00Z'), ('judgment-unanswered-canonical', 'article-answer-1', 'prompt-answer-1', 'model-answer-canonical', FALSE, NULL, NULL, TIMESTAMPTZ '2026-01-04T00:00:00Z'), ('judgment-answered-duplicate', 'article-answer-1', 'prompt-answer-1', 'model-answer-duplicate', TRUE, 'include', ['include'], TIMESTAMPTZ '2026-01-05T00:00:00Z')")
+        await database.run("INSERT INTO app.judgment_assessment (id, judgment_id, assessment_is_correct, created_at) VALUES ('assessment-a', 'judgment-a', TRUE, TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('assessment-b', 'judgment-b', FALSE, TIMESTAMPTZ '2026-01-02T00:00:00Z'), ('assessment-c', 'judgment-c', TRUE, TIMESTAMPTZ '2026-01-03T00:00:00Z'), ('assessment-unanswered-canonical', 'judgment-unanswered-canonical', FALSE, TIMESTAMPTZ '2026-01-04T00:00:00Z'), ('assessment-answered-duplicate', 'judgment-answered-duplicate', TRUE, TIMESTAMPTZ '2026-01-05T00:00:00Z')")
         await database.run("INSERT INTO app.judgment_execution_snapshot (id, model_id) VALUES ('snapshot-1', 'model-b')")
         await database.run("INSERT INTO app.judgment_job_sqlite_outbox_import (job_id, outbox_seq, judgment_id, model_id) VALUES ('job-1', 1, 'judgment-b', 'model-b'), ('job-1', 2, 'judgment-c', 'model-b')")
-        await database.run("INSERT INTO mart.judgment_fact (judgment_id, model_id) VALUES ('judgment-b', 'model-b'), ('judgment-c', 'model-b')")
-        await database.run("INSERT INTO mart.prompt_answer_fact (project_id, judgment_id, answer_value, model_id) VALUES ('project-1', 'judgment-b', 'yes', 'model-b'), ('project-1', 'judgment-c', 'no', 'model-b')")
-        await database.run("INSERT INTO mart.review_article_serving_detail (project_id, generation, judgment_id, model_id) VALUES ('project-1', 1, 'judgment-b', 'model-b'), ('project-1', 1, 'judgment-c', 'model-b')")
+        await database.run("INSERT INTO mart.judgment_fact (judgment_id, model_id) VALUES ('judgment-b', 'model-b'), ('judgment-c', 'model-b'), ('judgment-answered-duplicate', 'model-answer-duplicate')")
+        await database.run("INSERT INTO mart.prompt_answer_fact (project_id, judgment_id, answer_value, model_id) VALUES ('project-1', 'judgment-b', 'yes', 'model-b'), ('project-1', 'judgment-c', 'no', 'model-b'), ('project-answer', 'judgment-answered-duplicate', 'include', 'model-answer-duplicate')")
+        await database.run("INSERT INTO mart.review_article_serving_detail (project_id, generation, judgment_id, model_id) VALUES ('project-1', 1, 'judgment-b', 'model-b'), ('project-1', 1, 'judgment-c', 'model-b'), ('project-answer', 1, 'judgment-answered-duplicate', 'model-answer-duplicate')")
         await database.run("INSERT INTO mart.comparison_cell_serving (comparison_project_id, generation, article_id, column_id, model_id) VALUES ('comparison-1', 1, 'article-1', 'llm:model-b:prompt-1', 'model-b')")
 
         await database.run(readFileSync('./src/db/duckdbMigrations/0083_providerModelNaturalKey.sql', 'utf8'))
@@ -379,6 +379,7 @@ test('provider model natural key migration deduplicates existing model reference
         const [article] = await database.queryJson("SELECT full_text_conversion_model_id AS modelId FROM app.article WHERE id = 'article-conversion-1'")
         const [comparisonProject] = await database.queryJson("SELECT model_ids AS modelIds FROM app.comparison_project WHERE id = 'comparison-1'")
         const judgments = await database.queryJson("SELECT id, model_id AS modelId FROM app.judgment ORDER BY id ASC")
+        const answeredJudgments = await database.queryJson("SELECT id, model_id AS modelId, is_answered AS isAnswered, answered_original AS answeredOriginal FROM app.judgment WHERE article_id = 'article-answer-1' ORDER BY id ASC")
         const assessments = await database.queryJson("SELECT id, judgment_id AS judgmentId FROM app.judgment_assessment ORDER BY id ASC")
         const [snapshot] = await database.queryJson("SELECT model_id AS modelId FROM app.judgment_execution_snapshot WHERE id = 'snapshot-1'")
         const outboxRows = await database.queryJson("SELECT outbox_seq::INTEGER AS outboxSeq, judgment_id AS judgmentId, model_id AS modelId FROM app.judgment_job_sqlite_outbox_import ORDER BY outbox_seq ASC")
@@ -388,7 +389,7 @@ test('provider model natural key migration deduplicates existing model reference
         const [comparisonCell] = await database.queryJson("SELECT model_id AS modelId FROM mart.comparison_cell_serving WHERE comparison_project_id = 'comparison-1'")
         const [comparisonServingGeneration] = await database.queryJson("SELECT CAST(active_generation AS INTEGER) AS activeGeneration, serving_status AS servingStatus FROM app.comparison_project_serving_generation WHERE comparison_project_id = 'comparison-1'")
 
-        console.log(JSON.stringify({article, assessments, comparisonCell, comparisonProject, comparisonServingGeneration, duplicateInsertRejected, judgments, martJudgmentFacts, martPromptFacts, martReviewDetails, models, outboxRows, project, providerConnection, snapshot, userConfig}))
+        console.log(JSON.stringify({answeredJudgments, article, assessments, comparisonCell, comparisonProject, comparisonServingGeneration, duplicateInsertRejected, judgments, martJudgmentFacts, martPromptFacts, martReviewDetails, models, outboxRows, project, providerConnection, snapshot, userConfig}))
         await database.close()
       `,
     ],
@@ -419,6 +420,7 @@ test('provider model natural key migration deduplicates existing model reference
         return line.length > 0
       })
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      answeredJudgments: Array<{answeredOriginal: string | null; id: string; isAnswered: boolean; modelId: string}>
       article: {modelId: string}
       assessments: Array<{id: string; judgmentId: string}>
       comparisonCell: {modelId: string}
@@ -439,6 +441,7 @@ test('provider model natural key migration deduplicates existing model reference
 
     expect(parsed.duplicateInsertRejected).toBe(true)
     expect(parsed.models).toEqual([
+      {enabled: true, id: 'model-answer-canonical', remoteModelId: 'remote-answer', thinking: null},
       {enabled: false, id: 'model-b', remoteModelId: 'remote-1', thinking: 'high'},
       {enabled: true, id: 'model-null-a', remoteModelId: null, thinking: null},
       {enabled: true, id: 'model-null-b', remoteModelId: null, thinking: null},
@@ -449,10 +452,20 @@ test('provider model natural key migration deduplicates existing model reference
     expect(parsed.article.modelId).toBe('model-b')
     expect(parsed.comparisonProject.modelIds).toEqual(['model-b', 'model-null-a'])
     expect(parsed.judgments).toEqual([
+      {id: 'judgment-answered-duplicate', modelId: 'model-answer-canonical'},
       {id: 'judgment-b', modelId: 'model-b'},
       {id: 'judgment-c', modelId: 'model-b'},
     ])
+    expect(parsed.answeredJudgments).toEqual([
+      {
+        answeredOriginal: 'include',
+        id: 'judgment-answered-duplicate',
+        isAnswered: true,
+        modelId: 'model-answer-canonical',
+      },
+    ])
     expect(parsed.assessments).toEqual([
+      {id: 'assessment-answered-duplicate', judgmentId: 'judgment-answered-duplicate'},
       {id: 'assessment-b', judgmentId: 'judgment-b'},
       {id: 'assessment-c', judgmentId: 'judgment-c'},
     ])
@@ -462,14 +475,17 @@ test('provider model natural key migration deduplicates existing model reference
       {judgmentId: 'judgment-c', modelId: 'model-b', outboxSeq: 2},
     ])
     expect(parsed.martJudgmentFacts).toEqual([
+      {judgmentId: 'judgment-answered-duplicate', modelId: 'model-answer-canonical'},
       {judgmentId: 'judgment-b', modelId: 'model-b'},
       {judgmentId: 'judgment-c', modelId: 'model-b'},
     ])
     expect(parsed.martPromptFacts).toEqual([
+      {judgmentId: 'judgment-answered-duplicate', modelId: 'model-answer-canonical'},
       {judgmentId: 'judgment-b', modelId: 'model-b'},
       {judgmentId: 'judgment-c', modelId: 'model-b'},
     ])
     expect(parsed.martReviewDetails).toEqual([
+      {judgmentId: 'judgment-answered-duplicate', modelId: 'model-answer-canonical'},
       {judgmentId: 'judgment-b', modelId: 'model-b'},
       {judgmentId: 'judgment-c', modelId: 'model-b'},
     ])

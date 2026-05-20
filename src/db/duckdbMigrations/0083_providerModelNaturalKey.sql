@@ -105,6 +105,9 @@ WITH judgment_target AS (
     j.use_fulltext,
     j.use_fulltext_no_images,
     j.delete_generation,
+    j.is_answered,
+    j.answered_original,
+    j.answered_original_as_array,
     j.created_at
   FROM app.judgment j
   LEFT JOIN provider_model_natural_key_model_map model_map ON model_map.duplicate_model_id = j.model_id
@@ -128,6 +131,18 @@ ranked_judgment AS (
         use_fulltext_no_images,
         delete_generation
       ORDER BY
+        CASE
+          WHEN is_answered = TRUE
+            AND (
+              NULLIF(TRIM(COALESCE(answered_original, '')), '') IS NOT NULL
+              OR (answered_original_as_array IS NOT NULL AND array_length(answered_original_as_array) > 0)
+            )
+          THEN 0
+          ELSE 1
+        END ASC,
+        CASE WHEN is_answered = TRUE THEN 0 ELSE 1 END ASC,
+        CASE WHEN NULLIF(TRIM(COALESCE(answered_original, '')), '') IS NOT NULL THEN 0 ELSE 1 END ASC,
+        CASE WHEN answered_original_as_array IS NOT NULL AND array_length(answered_original_as_array) > 0 THEN 0 ELSE 1 END ASC,
         CASE WHEN model_id = canonical_model_id THEN 0 ELSE 1 END ASC,
         created_at ASC,
         id ASC
