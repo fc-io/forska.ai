@@ -2460,7 +2460,7 @@ test('comparison stats endpoint returns serving metadata and conflict counts fro
     state.queryStatements.some((statement) => {
       return statement.includes('FROM app.comparison_project_serving_generation')
     }),
-  ).toBe(true)
+  ).toBe(false)
   expect(
     state.queryStatements.some((statement) => {
       return statement.includes('FROM mart.comparison_cell_serving cell')
@@ -2517,7 +2517,7 @@ test('comparison stats endpoint returns empty comparisons without active serving
     state.queryStatements.some((statement) => {
       return statement.includes('FROM app.comparison_project_serving_generation')
     }),
-  ).toBe(true)
+  ).toBe(false)
   expect(
     state.queryStatements.some((statement) => {
       return statement.includes('FROM mart.comparison_cell_serving')
@@ -2618,6 +2618,10 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
   const humanConflictResolutionComparison = body.data.comparisons.find((candidate) => {
     return candidate.kind === 'human-vs-conflict-resolution'
   })
+  const state = getMockDatabaseState()
+  const comparisonCellStatements = state.queryStatements.filter((statement) => {
+    return statement.includes('FROM mart.comparison_cell_serving cell')
+  })
 
   expect(response.status).toBe(200)
   expect(body.data.comparisons).toHaveLength(3)
@@ -2652,6 +2656,17 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
     resolvedCount: 1,
     winner: 'LLM',
   })
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM app.comparison_project_serving_generation')
+    }),
+  ).toBe(false)
+  expect(comparisonCellStatements).toHaveLength(2)
+  expect(
+    comparisonCellStatements.every((statement) => {
+      return statement.includes('cell.generation = 1')
+    }),
+  ).toBe(true)
 })
 
 test('comparison judgments normalize missing and invalid rowFilter to multiple answers', async () => {
