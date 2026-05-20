@@ -13,7 +13,7 @@
 - `branchName`: `ralph/project-transfer-foundation`
 - `description`: `Add the safe project-transfer foundation: schema, route ordering, session/history repositories, upload proxying, zip/path safety, manifest and payload contracts, execution gates, recovery, and runtime asset hardening.`
 - Convert only `Ralph User Stories` into `userStories[]`.
-- For each story, combine `Acceptance criteria` with the relevant commands from `Phase 1 Checklist` into `acceptanceCriteria[]`.
+- For each story, combine `Acceptance criteria` with the relevant requirements and commands from `Phase 1 Checklist` into `acceptanceCriteria[]`.
 - Use `dependsOn` as the implementation order; heading order is not guaranteed to be topological.
 
 ## Ralph User Stories
@@ -31,7 +31,7 @@ Acceptance criteria:
 - Lock required `app.project_transfer_session` columns: `id`, `direction`, `state`, `plan_revision`, nullable `package_fingerprint`, nullable `commit_id`, nullable `owner_token`, nullable `heartbeat_at`, `expires_at`, nullable `progress_json`, nullable `plan_summary_json`, nullable `completion_payload_json`, nullable `error_json`, `created_at`, and `updated_at`.
 - Lock required `app.project_transfer_history` columns: `id`, `direction`, nullable `session_id`, nullable `commit_id`, `package_fingerprint`, `schema_version`, nullable `source_project_id`, `source_project_name`, nullable `target_project_id`, nullable `target_project_name`, `payload_counts_json`, nullable `completion_payload_json`, and `created_at`.
 - Do not add live foreign keys from project-transfer tables to mutable app entities such as `app.project`, `app.model`, `app.provider_connection`, `app.article`, or `app.prompt`; recent and earlier cleanup migrations intentionally leave several project/model/provider parent-child relationships unenforced, so transfer rows must store snapshot/provenance ids and enforce import/export invariants in repositories.
-- Add DB-level or repository-enforced invariants for direction values, known session states, completed-import fields, duplicate warning lookup, non-null session-id completion lookup, and stale-session recovery lookup.
+- Add DB-level or repository-enforced invariants for direction values, session states, completed-import fields, duplicate warning lookup, non-null session-id completion lookup, and stale-session recovery lookup.
 - Because `project_transfer_history.session_id` is nullable, enforce same-session import completion uniqueness for non-null session ids at the repository layer.
 - Update `src/db/schemaTypes.ts` with `ProjectTransferSessionRecord`, `ProjectTransferHistoryRecord`, a missing `ReviewRecord`, `JudgmentRecord.deleteGeneration`, `JudgmentRecord.confidenceOriginal` as a non-null/defaulted package-write value, and nullable `JudgmentHumanRecord.projectId`.
 
@@ -70,9 +70,7 @@ dependsOn: ["US-003"]
 
 Acceptance criteria:
 
-- Add an allowlisted streaming owner-proxy branch for `PUT /api/projects/import/:sessionId/upload` inside `src/server/routes/ApiProxyRoutes.ts` before any generic proxy helper can call `request.clone().arrayBuffer()` or otherwise consume a non-GET/non-HEAD body.
-- Keep project-transfer upload routes on the normal owner-proxied `/api/*` path; do not add a writer-direct or follower-local upload bypass.
-- No-owner upload requests fail closed before consuming the body, bypass the buffered `DuckdbOwnerProxyRequestTemplate`, stream once to the owner private API, and never retry after forwarding starts.
+- Add an allowlisted streaming owner-proxy branch for `PUT /api/projects/import/:sessionId/upload` inside `src/server/routes/ApiProxyRoutes.ts` before generic body buffering can run.
 - Add owner-proxy regression coverage for streaming upload and export-package download behavior.
 
 ### US-005: Add project-transfer path-safety helpers
@@ -84,9 +82,8 @@ dependsOn: []
 Acceptance criteria:
 
 - Add `src/server/services/projectTransfer/projectTransferPaths.ts`.
-- Add archive-member and runtime-asset validators for traversal, absolute paths, raw backslashes, path normalization changes, length limits, duplicate/colliding normalized paths, allowed package payload roots, and `assets/**` runtime paths.
-- Keep untrusted package, temp, and asset-promotion paths on validated relative POSIX paths under `resolveRuntimeWritablePath()`; reserve `resolveRuntimeFilePath()` for already-trusted persisted runtime paths.
-- Add tests for valid paths, traversal, symlink or non-regular files where applicable, payload allowlist rejection, length rejection, and collision handling.
+- Add archive-member and runtime-asset validators that apply the checklist path rules.
+- Add tests for the checklist path rules, including valid paths and unsafe-path rejection.
 
 ### US-006: Add project-transfer zip wrapper
 
@@ -98,9 +95,8 @@ Acceptance criteria:
 
 - Add `@zip.js/zip.js` with Bun and include `package.json` and `bun.lock` changes.
 - Add `src/server/services/projectTransfer/projectTransferZip.ts`.
-- Add a project-transfer zip wrapper for streaming package creation/extraction, checksum verification, ZIP64 coverage or deterministic fixture support, manifest-root enforcement, allowed payload path enforcement, and authoritative streamed byte counters.
-- Treat manifest-declared sizes and zip directory sizes as advisory; tests must prove streamed counters and checksums are authoritative.
-- Add tests for duplicate normalized paths, checksum mismatch, symlinks, manifest-root enforcement, ZIP64 handling, advisory-size mismatch, and streamed byte counters.
+- Add a project-transfer zip wrapper that applies the checklist zip rules.
+- Add tests for the checklist zip rules.
 
 ### US-007: Add manifest, warning, and fingerprint contracts
 
@@ -113,10 +109,8 @@ Acceptance criteria:
 - Add `src/server/services/projectTransfer/projectTransferSchemas.ts`.
 - Add `src/server/services/projectTransfer/projectTransferManifest.ts`.
 - Add `src/server/services/projectTransfer/projectTransferFingerprint.ts`.
-- Add ArkType validators for the locked manifest root payload list, payload declarations, warning shape, asset manifest references, asset summaries, supported schema-version policy, and package project settings validation.
-- Add package fingerprint helpers that separate exact payload checksums from logical duplicate-detection inputs and exclude volatile or provenance-only fields.
-- Lock canonical JSON serialization, deterministic NDJSON ordering, and SHA-256 checksum/fingerprint inputs.
-- Add tests for unsupported schema versions, fingerprint stability across volatile fields, and fingerprint sensitivity to logical content, warnings, counts, and asset checksums.
+- Add ArkType validators and fingerprint helpers that apply the checklist manifest/fingerprint rules.
+- Add tests for schema-version rejection, fingerprint stability, and fingerprint sensitivity.
 
 ### US-008: Add transfer session recovery and cleanup foundation
 
@@ -127,9 +121,8 @@ dependsOn: ["US-002", "US-005"]
 Acceptance criteria:
 
 - Add `src/server/services/projectTransfer/projectTransferSessionRecovery.ts`.
-- Add active-writer-only startup/TTL recovery after DuckDB migration, with batch-limited stale-session scans, heartbeat checks, atomic transitions before cleanup, and transfer-history checks before promoted-asset deletion.
-- Successful completed-session cleanup removes only temp upload/extraction files; promoted final `assets/...` files are never deleted when completed history exists.
-- Add cleanup tests for abandoned folders, stale non-terminal sessions, completed-session recovery from history, promotion-manifest orphan decisions, and post-promotion failure paths.
+- Add active-writer-only startup/TTL recovery that applies the checklist recovery rules.
+- Add cleanup and recovery tests for the checklist recovery rules.
 
 ### US-009: Harden runtime asset route path validation
 
@@ -139,9 +132,8 @@ dependsOn: ["US-005"]
 
 Acceptance criteria:
 
-- Reuse the project-transfer runtime asset path validator before `resolveRuntimeFilePath()` so valid `assets/...` paths still serve and unsafe paths are rejected before filesystem access.
-- Keep `/api/runtime-asset` owner-proxied by explicitly testing its route classification behavior, whether it stays intentionally `unclassified` or becomes `owner-dependent`.
-- Add focused route tests for valid assets and rejected unsafe paths.
+- Reuse the project-transfer runtime asset validator before runtime file resolution.
+- Add route classification and route tests for the checklist runtime-asset rules.
 
 ### US-010: Add transfer contract schemas and execution gates
 
@@ -152,9 +144,8 @@ dependsOn: ["US-001", "US-002", "US-005", "US-007"]
 Acceptance criteria:
 
 - Add `src/server/services/projectTransfer/projectTransferContracts.ts` or equivalent for session responses, cancellation rules, upload/session shapes, dependency statuses, overlap summaries, conflict counts, asset-promotion metadata, thresholds, resource gates, and runtime event fields.
-- Lock progress fields, monotonic progress behavior, stale `planRevision` behavior, writer-only cancellation/cleanup states, and dependency statuses for provider/model resolution edge cases.
-- Lock inline/background thresholds, resource/parser gates, and the rule that thresholds are execution-mode switches rather than product hard caps.
-- Add tests for threshold boundaries, background handoff, resource/parser failures, dependency-status validation, and `ready_to_commit` requiring concrete conflict counts after provider/model dependencies resolve.
+- Lock contract behavior plus the checklist threshold/resource rules.
+- Add tests for threshold/resource rules, dependency-status validation, and `ready_to_commit` conflict-count requirements.
 
 ### US-011: Lock payload and identifier contracts
 
@@ -165,19 +156,30 @@ dependsOn: ["US-005", "US-007"]
 Acceptance criteria:
 
 - Add `src/server/services/projectTransfer/projectTransferPayloadSchemas.ts` or equivalent validators/helpers for every manifest-declared payload.
-- Lock camelCase package keys, package-specific row types/serializers, source projection contract stubs, project setting validation, signature/provenance fields, warning shapes, and omission/redaction codes without implementing export assembly.
-- Lock payload fixtures for articles, article identifiers, article import-route metadata, provider/model descriptors, prompts, project links, route links, judgments, assessments, human judgments, human summaries, reviews, and assets.
-- Keep source ids, provider/model/link ids, prompt hashes, `secretRef`, route source references, and source database identifier-row ids as provenance only unless the package contract explicitly says otherwise.
-- Reuse `src/utils/articleIdentifierNormalization.ts`; add project-transfer wrappers only if a narrower package comparison shape is needed, and keep bioRxiv/medRxiv as DOI strong identifiers under the current `ArticleIdentifierKind` contract.
-- Add tests for minimal valid empty payloads, raw DB key rejection, acronym casing rejection, project setting validation, warning stability, identifier boundaries, nullable article-route source fields, provider/model edge cases, and required signature fields.
+- Lock payload shape, fixtures, provenance, warning, omission/redaction, and identifier contracts without implementing export assembly.
+- Reuse `src/utils/articleIdentifierNormalization.ts`; add project-transfer wrappers only if a narrower package comparison shape is needed.
+- Add tests for payload shape, project settings, warnings, identifier boundaries, provider/model edge cases, and required signature fields.
 
 ## Phase 1 Checklist
 
 - Migration uses the next numeric prefix after the highest migration at completion time. At this review that is `0084` after `0083_providerModelNaturalKey.sql`.
-- Transfer tables store provenance ids without live app-entity foreign keys, include recovery/history lookup indexes, and enforce same-session import completion uniqueness.
+- Transfer tables store provenance ids without live app-entity foreign keys, include recovery/history lookup indexes, enforce same-session import completion uniqueness, and require completed import rows to have non-null `completion_payload_json`, `session_id`, `commit_id`, `target_project_id`, and `target_project_name`.
+- Duplicate warnings use `direction = 'import'` plus package fingerprint; commit retry and crash recovery use `direction = 'import'` plus session id.
+- Import states are `awaiting_upload`, `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, `ready_to_commit`, `committing`, `completed`, `failed`, `cancelled`, and `expired`; export states are `queued`, `assembling`, `packaging`, `ready`, `failed`, and `expired`.
+- Import artifacts are `upload.zip`, `manifest.json`, `extracted/`, `analysis.json`, `plan.json`, `promotionManifest.json`, `completion.json`, and `progress.json`; export artifacts are `build/`, `manifest.json`, `package.zip`, `completion.json`, and `progress.json`.
 - Product route composition is side-effect-free for tests, mounts transfer routes before generic project routes, and keeps all transfer endpoints owner-proxied or explicitly fail-closed.
-- Upload proxy streams without buffering or retrying non-replayable bodies; no-owner upload failure does not consume the body; export download stays streaming-safe.
-- Path, zip, manifest, fingerprint, payload, contract, recovery, and runtime-asset behavior match the story-local acceptance criteria above.
+- Upload proxy stays on normal `/api/*`, has no writer-direct/follower-local bypass, streams without buffering or retrying non-replayable bodies, fails no-owner uploads before consuming the body, and keeps export download streaming-safe.
+- Path rules reject traversal, absolute paths, raw backslashes, normalization changes, length excess, and duplicate/colliding paths; package roots are allowlisted and runtime assets stay under `assets/**`.
+- Runtime path helpers keep untrusted package/temp/promotion paths under `resolveRuntimeWritablePath()` and use `resolveRuntimeFilePath()` only after persisted runtime asset paths are validated.
+- Zip rules require `manifest.json` at root, enforce allowed payload paths, reject symlinks and normalized duplicates, support ZIP64 or fixtures, and treat streamed counters/checksums as authoritative over advisory sizes.
+- Manifest/fingerprint rules use ArkType, canonical JSON, deterministic NDJSON ordering, SHA-256 checksums, and logical duplicate fingerprints that exclude volatile or provenance-only fields.
+- Thresholds: export inline at package `<= 128 MB` and assets `<= 64 MB`; import analyze inline at zip `<= 128 MB` and uncompressed payload-plus-assets `<= 512 MB`; commit background at `>= 25,000` articles, `>= 250,000` judgments, or `>= 2 GB` extracted assets.
+- Resource gates cover writable temp roots, 10% disk headroom, archive member/inode budgets, path and file-size limits, NDJSON line size, JSON depth/member count, streaming parse requirements, and decompression ratio or expanded-byte budgets.
+- Contract rules cover progress fields, monotonic totals, stale `planRevision`, writer-only cancellation/cleanup states, dependency statuses, overlap/conflict counts, and concrete conflict counts before `ready_to_commit`.
+- Recovery runs only on the active writer after migration, batch-limits stale scans, atomically transitions sessions before cleanup, checks transfer history before promoted-asset deletion, and deletes only temp files for completed sessions.
+- Runtime asset serving validates persisted `assets/**` paths before `resolveRuntimeFilePath()`, rejects unsafe paths before filesystem access, and keeps `/api/runtime-asset` owner-proxied through route-classification coverage.
+- Payload rules use camelCase package keys, package-specific serializers/fixtures, project-setting validation, warning/omission codes, signature/provenance fields, and source ids as provenance only.
+- Identifier comparison uses shared DOI, PubMed/PMID, arXiv, medRxiv, and bioRxiv helpers for analyze, duplicate summaries, overlap summaries, and commit; bioRxiv/medRxiv remain accepted as DOI strong identifiers under the current contract.
 - `bun run db:mig`
 - `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferHistoryRepository.test.ts`
