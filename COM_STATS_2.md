@@ -16,15 +16,27 @@ Add adjudicated truth stats to the Compare Project Judgments page without changi
 
 ## Main Project Stats Table
 
-- [ ] 1. Add `Human vs After conflict resolution (resolved only)` to the current `Project Stats` table.
-- [ ] 2. Calculate `Cohen's Kappa`, `Sensitivity`, and `Specificity` with conflict resolution as truth and Human as prediction.
-- [ ] 3. Use resolved-only rows for `Human vs After conflict resolution`: include only rows where conflict resolution has a valid binary answer and Human has one valid binary answer.
-- [ ] 4. Set `Overlap` for `Human vs After conflict resolution` to the resolved-only row count used by that comparison.
-- [ ] 5. Update server stats types with a new comparison kind such as `human-vs-conflict-resolution`.
-- [ ] 6. Update stats SQL and in-memory test helper paths so they compute the same resolved-only results.
-- [ ] 7. Keep current table columns unchanged: `Comparison`, `Column Info`, `Overlap`, `Conflicts`, `True Conflicts`, `Cohen's Kappa`, `Sensitivity`, `Specificity`.
-- [ ] 8. Update the table description so each `After conflict resolution` row says either `resolved only` or `post-resolution fallback`.
-- [ ] 9. Add targeted tests for Human vs conflict resolution counts, kappa, sensitivity, specificity, missing resolution exclusion, and non-binary resolution exclusion.
+Visible row behavior:
+
+| Row | Add or change | Included articles | Metric reference |
+| --- | --- | --- | --- |
+| `Human vs After conflict resolution (resolved only)` | Add a new row to `Project Stats`. | Articles where Human and saved conflict resolution each have one valid binary decision. | Conflict resolution is truth; Human is prediction. |
+| Existing `LLM vs After conflict resolution` rows | Keep the existing fallback behavior, but label it as `post-resolution fallback`. | Existing fallback set: saved conflict resolution when present, otherwise Human. | The reference side is saved conflict resolution when present, otherwise Human fallback. |
+| Existing Human vs LLM and LLM vs LLM rows | No behavior change. | Existing overlap logic. | Existing reference rules. |
+
+Implementation changes:
+
+| Done | # | Change | What it adds or changes |
+| --- | --- | --- | --- |
+| [ ] | 1 | Add the new `Human vs After conflict resolution (resolved only)` row. | Adds one visible main-table row when conflict resolution is enabled and the page is in summary mode. |
+| [ ] | 2 | Compute `Cohen's Kappa`, `Sensitivity`, and `Specificity` for the new row. | Uses saved conflict resolution as truth and Human as prediction, so TP/FN/TN/FP are not reversed. |
+| [ ] | 3 | Filter the new row to resolved-only binary data. | Excludes rows without saved conflict resolution, rows with non-binary conflict resolution, and rows where Human is missing or non-binary. |
+| [ ] | 4 | Define `Overlap` for the new row. | Shows the exact resolved-only denominator used for the new row's counts and rates. |
+| [ ] | 5 | Add a server comparison kind such as `human-vs-conflict-resolution`. | Gives the new row its own type so it does not reuse fallback `llm-vs-conflict-resolution` behavior by accident. |
+| [ ] | 6 | Update SQL and in-memory helper paths. | Makes production stats and test-helper stats return the same resolved-only result for the new row. |
+| [ ] | 7 | Keep the main table columns unchanged. | Adds the new row without adding, removing, or renaming columns: `Comparison`, `Column Info`, `Overlap`, `Conflicts`, `True Conflicts`, `Cohen's Kappa`, `Sensitivity`, `Specificity`. |
+| [ ] | 8 | Update UI labels and help text for `After conflict resolution`. | Makes each row say whether it is `resolved only` or `post-resolution fallback`, so users know which denominator and truth source they are seeing. |
+| [ ] | 9 | Add targeted tests. | Covers counts, kappa, sensitivity, specificity, missing resolution exclusion, non-binary resolution exclusion, and SQL/helper parity. |
 
 ## Additional Project Stats
 
