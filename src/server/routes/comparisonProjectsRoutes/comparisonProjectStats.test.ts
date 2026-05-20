@@ -360,7 +360,7 @@ test('comparison stats SQL matches helper for resolved-only conflict resolution 
     expect(primaryComparison.cohensKappa).toBeCloseTo(expectedPrimaryComparison.cohensKappa ?? 0, 6)
     expect(conflictResolutionComparison).toMatchObject({
       conflictCount: expectedConflictResolutionComparison.conflictCount,
-      label: 'Model 1 vs After conflict resolution',
+      label: 'Model 1 vs After conflict resolution (post-resolution fallback)',
       overlapCount: expectedConflictResolutionComparison.overlapCount,
       sensitivity: expectedConflictResolutionComparison.sensitivity,
       specificity: expectedConflictResolutionComparison.specificity,
@@ -467,7 +467,7 @@ test('comparison stats prefers primary source project over shared model id and d
     {
       columnInfo: null,
       kind: 'llm-vs-conflict-resolution',
-      label: 'Model 1 (Primary project) vs After conflict resolution',
+      label: 'Model 1 (Primary project) vs After conflict resolution (post-resolution fallback)',
       leftColumnId: humanSummaryColumn.id,
       rightColumnId: primarySummaryColumn.id,
     },
@@ -481,7 +481,7 @@ test('comparison stats prefers primary source project over shared model id and d
     {
       columnInfo: null,
       kind: 'llm-vs-conflict-resolution',
-      label: 'Model 1 (Peer project) vs After conflict resolution',
+      label: 'Model 1 (Peer project) vs After conflict resolution (post-resolution fallback)',
       leftColumnId: humanSummaryColumn.id,
       rightColumnId: peerSummarySharedModelColumn.id,
     },
@@ -561,7 +561,7 @@ test('comparison stats adds conflict resolution comparison with resolved answers
   expect(primaryComparison.trueConflictCount).toBe(2)
   expect(conflictResolutionComparison).toMatchObject({
     conflictCount: 1,
-    label: 'Model 1 vs After conflict resolution',
+    label: 'Model 1 vs After conflict resolution (post-resolution fallback)',
     overlapCount: 6,
     sensitivity: 1,
     specificity: 1,
