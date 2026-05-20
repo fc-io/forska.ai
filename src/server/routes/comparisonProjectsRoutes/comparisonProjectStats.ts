@@ -1137,13 +1137,14 @@ const getSpecificityFromAggregate = (
 
 const getShouldComputeCohensKappa = (params: {
   columns: readonly ComparisonProjectStatsColumn[]
+  group: ComparisonProjectStatsComparisonGroup
   isSummaryMode: boolean
 }) => {
   const summaryColumnCount = params.columns.filter((column) => {
     return column.promptId === summaryPromptId
   }).length
 
-  return params.isSummaryMode && summaryColumnCount === 2
+  return params.isSummaryMode && (summaryColumnCount === 2 || params.group.kind === 'human-vs-conflict-resolution')
 }
 
 const getComparisonProjectStatsComparison = (params: {
@@ -1177,14 +1178,13 @@ export const getComparisonProjectStatsFromCells = (params: ComparisonProjectStat
   const conflictResolutionAnswersByArticleId = getComparisonProjectStatsConflictResolutionAnswersByArticleId(
     params.conflictResolutionRows ?? [],
   )
-  const shouldComputeCohensKappa = getShouldComputeCohensKappa(params)
 
   return groups.map((group) => {
     return getComparisonProjectStatsComparison({
       cellsByColumn,
       conflictResolutionAnswersByArticleId,
       group,
-      shouldComputeCohensKappa,
+      shouldComputeCohensKappa: getShouldComputeCohensKappa({...params, group}),
     })
   })
 }
@@ -1285,17 +1285,23 @@ const getComparisonProjectStatsResolvedTruthAggregatesByComparisonId = (
 
 const getComparisonProjectStatsFromAggregates = (params: {
   aggregateRows: readonly ComparisonProjectStatsAggregateRow[]
+  columns: readonly ComparisonProjectStatsColumn[]
   groups: readonly ComparisonProjectStatsComparisonGroup[]
-  shouldComputeCohensKappa: boolean
+  isSummaryMode: boolean
 }) => {
   const aggregatesByComparisonId = getComparisonProjectStatsAggregatesByComparisonId(params.aggregateRows)
 
   return params.groups.map((group) => {
     const aggregate = aggregatesByComparisonId.get(group.id) ?? emptyComparisonProjectStatsAggregate
+    const shouldComputeCohensKappa = getShouldComputeCohensKappa({
+      columns: params.columns,
+      group,
+      isSummaryMode: params.isSummaryMode,
+    })
 
     return {
       ...group,
-      cohensKappa: params.shouldComputeCohensKappa ? getCohensKappaFromAggregate(aggregate) : null,
+      cohensKappa: shouldComputeCohensKappa ? getCohensKappaFromAggregate(aggregate) : null,
       conflictCount: aggregate.conflictCount,
       overlapCount: aggregate.overlapCount,
       sensitivity: getSensitivityFromAggregate(group.kind, aggregate),
@@ -1705,9 +1711,12 @@ export const getComparisonProjectStats = async (params: ComparisonProjectStatsPa
       groups,
     }),
   )
-  const shouldComputeCohensKappa = getShouldComputeCohensKappa(params)
-
-  return getComparisonProjectStatsFromAggregates({aggregateRows, groups, shouldComputeCohensKappa})
+  return getComparisonProjectStatsFromAggregates({
+    aggregateRows,
+    columns: params.columns,
+    groups,
+    isSummaryMode: params.isSummaryMode,
+  })
 }
 
 export const getComparisonProjectAdditionalStats = async (

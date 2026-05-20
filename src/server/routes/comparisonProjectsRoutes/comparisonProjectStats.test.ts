@@ -238,6 +238,52 @@ test('comparison stats computes summary kappa from SQL aggregates', async () => 
   expect(primaryComparison.specificity).toBeCloseTo(2 / 3, 6)
 })
 
+test('comparison stats computes resolved-only human conflict resolution kappa from SQL aggregates with multiple summary LLMs', async () => {
+  const humanConflictResolutionComparisonId = getComparisonId(
+    'human-vs-conflict-resolution',
+    humanSummaryColumn.id,
+    humanSummaryColumn.id,
+  )
+  const comparisons = await getComparisonProjectStats({
+    allowConflictResolution: true,
+    columns: [humanSummaryColumn, primarySummaryColumn, peerSummaryColumn],
+    comparisonProjectId: 'comparison-project-1',
+    isSummaryMode: true,
+    primarySourceProjectId: 'source-project-1',
+    queryRunner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        return statement.includes('FROM app.comparison_project_serving_generation')
+          ? ([{generation: 1}] as T[])
+          : ([
+              {
+                agreementCount: 2,
+                binaryPairCount: 3,
+                comparisonId: humanConflictResolutionComparisonId,
+                conflictCount: 1,
+                leftExcludeCount: 1,
+                leftExcludeRightExcludeCount: 1,
+                leftIncludeCount: 2,
+                leftIncludeRightIncludeCount: 1,
+                overlapCount: 3,
+                rightExcludeCount: 2,
+                rightIncludeCount: 1,
+                trueConflictCount: 1,
+              } satisfies ComparisonProjectStatsAggregateRow,
+            ] as T[])
+      },
+    },
+  })
+  const primaryComparison = findComparison(comparisons, 'primary-vs-human', primarySummaryColumn.id)
+  const humanConflictResolutionComparison = findComparison(
+    comparisons,
+    'human-vs-conflict-resolution',
+    humanSummaryColumn.id,
+  )
+
+  expect(primaryComparison.cohensKappa).toBeNull()
+  expect(humanConflictResolutionComparison.cohensKappa).toBeCloseTo(0.4, 6)
+})
+
 test('comparison stats SQL matches helper for resolved-only conflict resolution metrics', async () => {
   const cellRows = [
     getCell('article-1', humanSummaryColumn.id, ['yes']),
@@ -848,7 +894,7 @@ test('comparison stats adds resolved-only human conflict resolution comparison',
   const comparisons = getComparisonProjectStatsFromCells({
     allowConflictResolution: true,
     cellRows,
-    columns: [humanSummaryColumn, primarySummaryColumn],
+    columns: [humanSummaryColumn, primarySummaryColumn, peerSummaryColumn],
     conflictResolutionRows: [
       {answerValue: 'yes', articleId: 'article-1'},
       {answerValue: 'maybe', articleId: 'article-2'},
