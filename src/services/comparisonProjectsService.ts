@@ -254,8 +254,50 @@ export type ComparisonProjectStatsComparison = {
   specificity: number | null
   trueConflictCount: number
 }
+export type ComparisonProjectStatsTruthWinner = 'Human' | 'LLM' | 'Tie'
+export type ComparisonProjectStatsTruthConfusionMetrics = {
+  accuracy: number | null
+  balancedAccuracy: number | null
+  f1: number | null
+  falseNegativeCount: number
+  falsePositiveCount: number
+  negativePredictiveValue: number | null
+  precision: number | null
+  sensitivity: number | null
+  specificity: number | null
+  trueCorrectCount: number
+  trueErrorCount: number
+  trueNegativeCount: number
+  truePositiveCount: number
+  truthPrevalence: number | null
+}
+export type ComparisonProjectStatsResolvedTruthComparison = {
+  bothCorrectCount: number
+  bothWrongCount: number
+  columnInfo: string | null
+  humanColumnId: string
+  humanCorrectVsTruthCount: number
+  humanErrorsVsTruthCount: number
+  humanMetrics: ComparisonProjectStatsTruthConfusionMetrics
+  humanOnlyCorrectCount: number
+  id: string
+  label: string
+  llmAdvantage: number
+  llmColumnId: string
+  llmCorrectVsTruthCount: number
+  llmErrorsVsTruthCount: number
+  llmMetrics: ComparisonProjectStatsTruthConfusionMetrics
+  llmOnlyCorrectCount: number
+  mcnemarChiSquare: number | null
+  resolvedCount: number
+  winner: ComparisonProjectStatsTruthWinner
+}
+export type ComparisonProjectAdditionalStats = {
+  resolvedTruthComparisons: ComparisonProjectStatsResolvedTruthComparison[]
+}
 export type ComparisonProjectStats = {
   activeGeneration: number | null
+  additionalProjectStats: ComparisonProjectAdditionalStats
   comparisons: ComparisonProjectStatsComparison[]
   isServingReady: boolean
   servingStatus: ComparisonProjectServingStatus

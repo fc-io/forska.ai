@@ -6,6 +6,9 @@ import {
   type ComparisonProjectStatsCellRow,
   type ComparisonProjectStatsColumn,
   type ComparisonProjectStatsComparison,
+  type ComparisonProjectStatsResolvedTruthComparison,
+  getComparisonProjectAdditionalStats,
+  getComparisonProjectAdditionalStatsFromCells,
   getComparisonProjectStats,
   getComparisonProjectStatsFromCells,
 } from './comparisonProjectStats.ts'
@@ -102,6 +105,21 @@ const findComparison = (
 
   if (!comparison) {
     throw new Error(`Missing comparison ${kind}`)
+  }
+
+  return comparison
+}
+
+const findResolvedTruthComparison = (
+  comparisons: readonly ComparisonProjectStatsResolvedTruthComparison[],
+  llmColumnId: string,
+) => {
+  const comparison = comparisons.find((candidate) => {
+    return candidate.llmColumnId === llmColumnId
+  })
+
+  if (!comparison) {
+    throw new Error(`Missing resolved truth comparison ${llmColumnId}`)
   }
 
   return comparison
@@ -391,6 +409,248 @@ test('comparison stats SQL matches helper for resolved-only conflict resolution 
     connection.closeSync()
     duckdbInstance.closeSync()
   }
+})
+
+test('additional stats SQL matches helper for resolved-only head-to-head truth metrics', async () => {
+  const cellRows = [
+    getCell('article-1', humanSummaryColumn.id, ['yes']),
+    getCell('article-1', primarySummaryColumn.id, ['yes']),
+    getCell('article-1', peerSummaryColumn.id, ['no']),
+    getCell('article-2', humanSummaryColumn.id, ['yes']),
+    getCell('article-2', primarySummaryColumn.id, ['no']),
+    getCell('article-2', peerSummaryColumn.id, ['no']),
+    getCell('article-3', humanSummaryColumn.id, ['no']),
+    getCell('article-3', primarySummaryColumn.id, ['no']),
+    getCell('article-3', peerSummaryColumn.id, ['yes']),
+    getCell('article-4', humanSummaryColumn.id, ['no']),
+    getCell('article-4', primarySummaryColumn.id, ['yes']),
+    getCell('article-4', peerSummaryColumn.id, ['yes']),
+    getCell('article-5', humanSummaryColumn.id, ['maybe']),
+    getCell('article-5', primarySummaryColumn.id, ['no']),
+    getCell('article-5', peerSummaryColumn.id, ['yes']),
+    getCell('article-6', humanSummaryColumn.id, ['yes']),
+    getCell('article-6', primarySummaryColumn.id, ['yes']),
+    getCell('article-6', peerSummaryColumn.id, ['yes']),
+    getCell('article-7', humanSummaryColumn.id, ['yes']),
+    getCell('article-7', primarySummaryColumn.id, ['yes']),
+    getCell('article-7', peerSummaryColumn.id, ['yes']),
+    getCell('article-8', humanSummaryColumn.id, ['unclear']),
+    getCell('article-8', primarySummaryColumn.id, ['yes']),
+    getCell('article-8', peerSummaryColumn.id, ['yes']),
+    getCell('article-9', humanSummaryColumn.id, ['no']),
+    getCell('article-9', primarySummaryColumn.id, ['unclear']),
+    getCell('article-9', peerSummaryColumn.id, ['no']),
+  ]
+  const conflictResolutionRows = [
+    {answerValue: 'yes', articleId: 'article-1'},
+    {answerValue: 'no', articleId: 'article-2'},
+    {answerValue: 'yes', articleId: 'article-3'},
+    {answerValue: 'no', articleId: 'article-4'},
+    {answerValue: 'maybe', articleId: 'article-5'},
+    {answerValue: 'unclear', articleId: 'article-7'},
+    {answerValue: 'yes', articleId: 'article-8'},
+    {answerValue: 'no', articleId: 'article-9'},
+  ]
+  const expectedAdditionalStats = getComparisonProjectAdditionalStatsFromCells({
+    allowConflictResolution: true,
+    cellRows,
+    columns: [humanSummaryColumn, primarySummaryColumn, peerSummaryColumn],
+    conflictResolutionRows,
+    isSummaryMode: true,
+    primarySourceProjectId: 'source-project-1',
+  })
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`SET memory_limit = '1GB'`)
+    await connection.run(`CREATE SCHEMA app`)
+    await connection.run(`CREATE SCHEMA mart`)
+    await connection.run(`
+      CREATE TABLE app.comparison_project_serving_generation (
+        comparison_project_id VARCHAR,
+        active_generation INTEGER
+      )
+    `)
+    await connection.run(`
+      CREATE TABLE mart.comparison_cell_serving (
+        comparison_project_id VARCHAR,
+        generation INTEGER,
+        article_id VARCHAR,
+        column_id VARCHAR,
+        normalized_answers VARCHAR[]
+      )
+    `)
+    await connection.run(`
+      CREATE TABLE app.comparison_project_conflict_resolution (
+        comparison_project_id VARCHAR,
+        article_id VARCHAR,
+        answer_value VARCHAR
+      )
+    `)
+    await connection.run(`
+      INSERT INTO app.comparison_project_serving_generation
+      VALUES ('comparison-project-1', 1)
+    `)
+    await connection.run(`
+      INSERT INTO mart.comparison_cell_serving
+      VALUES
+        ('comparison-project-1', 1, 'article-1', '${humanSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-1', '${primarySummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-1', '${peerSummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-2', '${humanSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-2', '${primarySummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-2', '${peerSummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-3', '${humanSummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-3', '${primarySummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-3', '${peerSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-4', '${humanSummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-4', '${primarySummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-4', '${peerSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-5', '${humanSummaryColumn.id}', ['maybe']),
+        ('comparison-project-1', 1, 'article-5', '${primarySummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-5', '${peerSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-6', '${humanSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-6', '${primarySummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-6', '${peerSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-7', '${humanSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-7', '${primarySummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-7', '${peerSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-8', '${humanSummaryColumn.id}', ['unclear']),
+        ('comparison-project-1', 1, 'article-8', '${primarySummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-8', '${peerSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-9', '${humanSummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-9', '${primarySummaryColumn.id}', ['unclear']),
+        ('comparison-project-1', 1, 'article-9', '${peerSummaryColumn.id}', ['no'])
+    `)
+    await connection.run(`
+      INSERT INTO app.comparison_project_conflict_resolution
+      VALUES
+        ('comparison-project-1', 'article-1', 'yes'),
+        ('comparison-project-1', 'article-2', 'no'),
+        ('comparison-project-1', 'article-3', 'yes'),
+        ('comparison-project-1', 'article-4', 'no'),
+        ('comparison-project-1', 'article-5', 'maybe'),
+        ('comparison-project-1', 'article-7', 'unclear'),
+        ('comparison-project-1', 'article-8', 'yes'),
+        ('comparison-project-1', 'article-9', 'no')
+    `)
+
+    const additionalStats = await getComparisonProjectAdditionalStats({
+      allowConflictResolution: true,
+      columns: [humanSummaryColumn, primarySummaryColumn, peerSummaryColumn],
+      comparisonProjectId: 'comparison-project-1',
+      isSummaryMode: true,
+      primarySourceProjectId: 'source-project-1',
+      queryRunner: {
+        queryJson: async <T>(statement: string): Promise<T[]> => {
+          const reader = await connection.runAndReadAll(statement)
+
+          return reader.getRowObjectsJson() as T[]
+        },
+      },
+    })
+    const primaryComparison = findResolvedTruthComparison(
+      additionalStats.resolvedTruthComparisons,
+      primarySummaryColumn.id,
+    )
+    const peerComparison = findResolvedTruthComparison(additionalStats.resolvedTruthComparisons, peerSummaryColumn.id)
+
+    expect(additionalStats).toEqual(expectedAdditionalStats)
+    expect(primaryComparison).toMatchObject({
+      bothCorrectCount: 1,
+      bothWrongCount: 1,
+      humanCorrectVsTruthCount: 3,
+      humanErrorsVsTruthCount: 2,
+      humanOnlyCorrectCount: 2,
+      llmAdvantage: -1,
+      llmCorrectVsTruthCount: 2,
+      llmErrorsVsTruthCount: 3,
+      llmOnlyCorrectCount: 1,
+      mcnemarChiSquare: 0,
+      resolvedCount: 5,
+      winner: 'Human',
+    })
+    expect(primaryComparison.humanMetrics.accuracy).toBeCloseTo(3 / 5, 6)
+    expect(primaryComparison.humanMetrics.balancedAccuracy).toBeCloseTo(7 / 12, 6)
+    expect(primaryComparison.humanMetrics.precision).toBeCloseTo(2 / 3, 6)
+    expect(primaryComparison.humanMetrics.negativePredictiveValue).toBeCloseTo(1 / 2, 6)
+    expect(primaryComparison.humanMetrics.f1).toBeCloseTo(2 / 3, 6)
+    expect(primaryComparison.humanMetrics.truthPrevalence).toBeCloseTo(3 / 5, 6)
+    expect(primaryComparison.llmMetrics.accuracy).toBeCloseTo(2 / 5, 6)
+    expect(primaryComparison.llmMetrics.balancedAccuracy).toBeCloseTo(5 / 12, 6)
+    expect(primaryComparison.llmMetrics.precision).toBeCloseTo(1 / 2, 6)
+    expect(primaryComparison.llmMetrics.negativePredictiveValue).toBeCloseTo(1 / 3, 6)
+    expect(primaryComparison.llmMetrics.f1).toBeCloseTo(2 / 5, 6)
+    expect(primaryComparison.llmMetrics.truthPrevalence).toBeCloseTo(3 / 5, 6)
+    expect(peerComparison).toMatchObject({
+      bothCorrectCount: 2,
+      bothWrongCount: 0,
+      humanCorrectVsTruthCount: 4,
+      humanErrorsVsTruthCount: 2,
+      humanOnlyCorrectCount: 2,
+      llmAdvantage: 0,
+      llmCorrectVsTruthCount: 4,
+      llmErrorsVsTruthCount: 2,
+      llmOnlyCorrectCount: 2,
+      mcnemarChiSquare: 0.25,
+      resolvedCount: 6,
+      winner: 'Tie',
+    })
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+})
+
+test('additional stats returns null rates for zero denominators', () => {
+  const additionalStats = getComparisonProjectAdditionalStatsFromCells({
+    allowConflictResolution: true,
+    cellRows: [
+      getCell('article-1', humanSummaryColumn.id, ['no']),
+      getCell('article-1', primarySummaryColumn.id, ['no']),
+      getCell('article-2', humanSummaryColumn.id, ['no']),
+      getCell('article-2', primarySummaryColumn.id, ['no']),
+    ],
+    columns: [humanSummaryColumn, primarySummaryColumn],
+    conflictResolutionRows: [
+      {answerValue: 'yes', articleId: 'article-1'},
+      {answerValue: 'yes', articleId: 'article-2'},
+    ],
+    isSummaryMode: true,
+    primarySourceProjectId: 'source-project-1',
+  })
+  const comparison = findResolvedTruthComparison(additionalStats.resolvedTruthComparisons, primarySummaryColumn.id)
+
+  expect(comparison).toMatchObject({
+    bothCorrectCount: 0,
+    bothWrongCount: 2,
+    humanCorrectVsTruthCount: 0,
+    humanErrorsVsTruthCount: 2,
+    llmCorrectVsTruthCount: 0,
+    llmErrorsVsTruthCount: 2,
+    mcnemarChiSquare: null,
+    resolvedCount: 2,
+    winner: 'Tie',
+  })
+  expect(comparison.humanMetrics).toMatchObject({
+    accuracy: 0,
+    balancedAccuracy: null,
+    f1: 0,
+    negativePredictiveValue: 0,
+    precision: null,
+    specificity: null,
+    truthPrevalence: 1,
+  })
+  expect(comparison.llmMetrics).toMatchObject({
+    accuracy: 0,
+    balancedAccuracy: null,
+    f1: 0,
+    negativePredictiveValue: 0,
+    precision: null,
+    specificity: null,
+    truthPrevalence: 1,
+  })
 })
 
 test('comparison stats builds primary, human-vs-llm, and llm-vs-llm groups', () => {
