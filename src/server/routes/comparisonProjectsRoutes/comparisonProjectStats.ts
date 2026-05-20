@@ -15,6 +15,7 @@ export type ComparisonProjectStatsComparisonKind =
   | 'human-vs-llm'
   | 'llm-vs-llm'
   | 'llm-vs-conflict-resolution'
+  | 'human-vs-conflict-resolution'
 
 export type ComparisonProjectStatsComparisonGroup = {
   columnInfo: string | null
@@ -257,7 +258,12 @@ const getComparisonProjectStatsColumnLabel = (
 }
 
 const getIsComparisonProjectStatsHumanComparison = (kind: ComparisonProjectStatsComparisonKind) => {
-  return kind === 'primary-vs-human' || kind === 'human-vs-llm' || kind === 'llm-vs-conflict-resolution'
+  return (
+    kind === 'primary-vs-human'
+    || kind === 'human-vs-llm'
+    || kind === 'llm-vs-conflict-resolution'
+    || kind === 'human-vs-conflict-resolution'
+  )
 }
 
 const getComparisonProjectStatsGroupLabel = (
@@ -271,6 +277,10 @@ const getComparisonProjectStatsGroupLabel = (
 
   if (kind === 'llm-vs-conflict-resolution') {
     return `${rightColumnLabel} vs After conflict resolution`
+  }
+
+  if (kind === 'human-vs-conflict-resolution') {
+    return `${leftColumnLabel} vs After conflict resolution (resolved only)`
   }
 
   return getIsComparisonProjectStatsHumanComparison(kind)
@@ -431,6 +441,19 @@ const getLlmVsLlmComparisonProjectStatsGroups = (
   })
 }
 
+const getHumanVsConflictResolutionComparisonProjectStatsGroups = (
+  humanColumns: readonly ComparisonProjectStatsColumn[],
+  context: ComparisonProjectStatsLabelContext,
+) => {
+  return humanColumns
+    .filter((humanColumn) => {
+      return humanColumn.promptId === summaryPromptId
+    })
+    .map((humanColumn) => {
+      return getComparisonProjectStatsGroup('human-vs-conflict-resolution', humanColumn, humanColumn, context)
+    })
+}
+
 export const getComparisonProjectStatsComparisonGroups = (params: {
   allowConflictResolution?: boolean
   columns: readonly ComparisonProjectStatsColumn[]
@@ -456,6 +479,9 @@ export const getComparisonProjectStatsComparisonGroups = (params: {
       includeConflictResolutionGroups,
       labelContext,
     ),
+    ...(includeConflictResolutionGroups
+      ? getHumanVsConflictResolutionComparisonProjectStatsGroups(humanColumns, labelContext)
+      : []),
     ...getLlmVsLlmComparisonProjectStatsGroups(llmColumns, labelContext),
   ]
 }
@@ -500,6 +526,16 @@ const getBinaryDecisionValue = (answers: readonly string[]) => {
   return decisions.length === 1 ? (decisions[0] ?? null) : null
 }
 
+const getHasOneValidBinaryDecision = (answers: readonly string[]) => {
+  return (
+    answers.length > 0
+    && answers.every((answer) => {
+      return getBinaryDecision(answer) !== null
+    })
+    && getBinaryDecisionValue(answers) !== null
+  )
+}
+
 const getHasConflict = (pair: ComparisonProjectStatsPair) => {
   return getAnswerUnionSize(pair.leftAnswers, pair.rightAnswers) > 1
 }
@@ -509,6 +545,58 @@ const getHasTrueConflict = (pair: ComparisonProjectStatsPair) => {
   const rightDecisions = getBinaryDecisionSet(pair.rightAnswers)
 
   return leftDecisions.size > 0 && rightDecisions.size > 0 && new Set([...leftDecisions, ...rightDecisions]).size > 1
+}
+
+const getComparisonProjectStatsLeftAnswers = (
+  group: ComparisonProjectStatsComparisonGroup,
+  articleId: string,
+  leftCell: ComparisonProjectStatsNormalizedCell,
+  conflictResolutionAnswersByArticleId: Map<string, string[]>,
+) => {
+  return group.kind === 'llm-vs-conflict-resolution'
+    ? (conflictResolutionAnswersByArticleId.get(articleId) ?? leftCell.normalizedAnswers)
+    : leftCell.normalizedAnswers
+}
+
+const getComparisonProjectStatsResolvedHumanPair = (
+  articleId: string,
+  humanCell: ComparisonProjectStatsNormalizedCell,
+  conflictResolutionAnswersByArticleId: Map<string, string[]>,
+) => {
+  const conflictResolutionAnswers = conflictResolutionAnswersByArticleId.get(articleId) ?? []
+  const humanAnswers = humanCell.normalizedAnswers
+
+  return getHasOneValidBinaryDecision(conflictResolutionAnswers) && getHasOneValidBinaryDecision(humanAnswers)
+    ? {leftAnswers: conflictResolutionAnswers, rightAnswers: humanAnswers}
+    : null
+}
+
+const getComparisonProjectStatsPair = (params: {
+  articleId: string
+  conflictResolutionAnswersByArticleId: Map<string, string[]>
+  group: ComparisonProjectStatsComparisonGroup
+  leftCell: ComparisonProjectStatsNormalizedCell
+  rightCell: ComparisonProjectStatsNormalizedCell | undefined
+}) => {
+  if (!params.rightCell) {
+    return null
+  }
+
+  return params.group.kind === 'human-vs-conflict-resolution'
+    ? getComparisonProjectStatsResolvedHumanPair(
+        params.articleId,
+        params.rightCell,
+        params.conflictResolutionAnswersByArticleId,
+      )
+    : {
+        leftAnswers: getComparisonProjectStatsLeftAnswers(
+          params.group,
+          params.articleId,
+          params.leftCell,
+          params.conflictResolutionAnswersByArticleId,
+        ),
+        rightAnswers: params.rightCell.normalizedAnswers,
+      }
 }
 
 const getComparisonProjectStatsPairs = (
@@ -524,12 +612,14 @@ const getComparisonProjectStatsPairs = (
   return Array.from(leftCellsByArticle.entries())
     .map<ComparisonProjectStatsPair | null>(([articleId, leftCell]) => {
       const rightCell = rightCellsByArticle.get(articleId)
-      const leftAnswers =
-        group.kind === 'llm-vs-conflict-resolution'
-          ? (conflictResolutionAnswersByArticleId.get(articleId) ?? leftCell.normalizedAnswers)
-          : leftCell.normalizedAnswers
 
-      return rightCell ? {leftAnswers, rightAnswers: rightCell.normalizedAnswers} : null
+      return getComparisonProjectStatsPair({
+        articleId,
+        conflictResolutionAnswersByArticleId,
+        group,
+        leftCell,
+        rightCell,
+      })
     })
     .filter((pair): pair is ComparisonProjectStatsPair => {
       return pair !== null
@@ -852,20 +942,30 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
     pair_answer_value AS (
       SELECT
         comparison_pair.comparison_id,
+        comparison_pair.comparison_kind,
         comparison_pair.article_id,
         'left' AS answer_side,
-        COALESCE(conflict_resolution.answer_value, normalized_cell_answer.answer_value) AS answer_value,
-        COALESCE(conflict_resolution.binary_decision, normalized_cell_answer.binary_decision) AS binary_decision
+        CASE
+          WHEN comparison_pair.comparison_kind = 'human-vs-conflict-resolution' THEN conflict_resolution.answer_value
+          WHEN comparison_pair.comparison_kind = 'llm-vs-conflict-resolution' THEN COALESCE(conflict_resolution.answer_value, normalized_cell_answer.answer_value)
+          ELSE normalized_cell_answer.answer_value
+        END AS answer_value,
+        CASE
+          WHEN comparison_pair.comparison_kind = 'human-vs-conflict-resolution' THEN conflict_resolution.binary_decision
+          WHEN comparison_pair.comparison_kind = 'llm-vs-conflict-resolution' THEN COALESCE(conflict_resolution.binary_decision, normalized_cell_answer.binary_decision)
+          ELSE normalized_cell_answer.binary_decision
+        END AS binary_decision
       FROM comparison_pair
       INNER JOIN normalized_cell_answer
         ON normalized_cell_answer.article_id = comparison_pair.article_id
         AND normalized_cell_answer.column_id = comparison_pair.left_column_id
       LEFT JOIN normalized_conflict_resolution_answer conflict_resolution
         ON conflict_resolution.article_id = comparison_pair.article_id
-        AND comparison_pair.comparison_kind = 'llm-vs-conflict-resolution'
+        AND comparison_pair.comparison_kind IN ('llm-vs-conflict-resolution', 'human-vs-conflict-resolution')
       UNION ALL
       SELECT
         comparison_pair.comparison_id,
+        comparison_pair.comparison_kind,
         comparison_pair.article_id,
         'right' AS answer_side,
         normalized_cell_answer.answer_value,
@@ -878,8 +978,21 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
     pair_stats AS (
       SELECT
         comparison_id,
+        comparison_kind,
         article_id,
         COUNT(DISTINCT answer_value) AS answer_value_count,
+        COUNT(DISTINCT answer_value) FILTER (
+          WHERE answer_side = 'left' AND answer_value IS NOT NULL
+        ) AS left_answer_value_count,
+        COUNT(DISTINCT answer_value) FILTER (
+          WHERE answer_side = 'right' AND answer_value IS NOT NULL
+        ) AS right_answer_value_count,
+        COUNT(DISTINCT answer_value) FILTER (
+          WHERE answer_side = 'left' AND answer_value IS NOT NULL AND binary_decision IS NULL
+        ) AS left_non_binary_answer_value_count,
+        COUNT(DISTINCT answer_value) FILTER (
+          WHERE answer_side = 'right' AND answer_value IS NOT NULL AND binary_decision IS NULL
+        ) AS right_non_binary_answer_value_count,
         COUNT(DISTINCT binary_decision) FILTER (
           WHERE answer_side = 'left' AND binary_decision IS NOT NULL
         ) AS left_binary_decision_count,
@@ -896,46 +1009,73 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
           WHERE answer_side = 'right' AND binary_decision IS NOT NULL
         ) AS right_binary_decision
       FROM pair_answer_value
-      GROUP BY comparison_id, article_id
+      GROUP BY comparison_id, comparison_kind, article_id
+    ),
+    eligible_pair_stats AS (
+      SELECT
+        *,
+        (
+          comparison_kind <> 'human-vs-conflict-resolution'
+          OR (
+            left_answer_value_count > 0
+            AND right_answer_value_count > 0
+            AND left_binary_decision_count = 1
+            AND right_binary_decision_count = 1
+            AND left_non_binary_answer_value_count = 0
+            AND right_non_binary_answer_value_count = 0
+          )
+        ) AS is_included_pair,
+        (
+          left_binary_decision_count = 1
+          AND right_binary_decision_count = 1
+          AND (
+            comparison_kind <> 'human-vs-conflict-resolution'
+            OR (
+              left_non_binary_answer_value_count = 0
+              AND right_non_binary_answer_value_count = 0
+            )
+          )
+        ) AS is_binary_pair
+      FROM pair_stats
     )
     SELECT
       comparison_id AS comparisonId,
-      CAST(COUNT(*) AS INTEGER) AS overlapCount,
-      CAST(SUM(CASE WHEN answer_value_count > 1 THEN 1 ELSE 0 END) AS INTEGER) AS conflictCount,
+      CAST(COUNT(*) FILTER (WHERE is_included_pair) AS INTEGER) AS overlapCount,
+      CAST(SUM(CASE WHEN is_included_pair AND answer_value_count > 1 THEN 1 ELSE 0 END) AS INTEGER) AS conflictCount,
       CAST(SUM(CASE
-        WHEN left_binary_decision_count > 0 AND right_binary_decision_count > 0 AND all_binary_decision_count > 1 THEN 1
+        WHEN is_included_pair AND left_binary_decision_count > 0 AND right_binary_decision_count > 0 AND all_binary_decision_count > 1 THEN 1
         ELSE 0
       END) AS INTEGER) AS trueConflictCount,
-      CAST(SUM(CASE WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 THEN 1 ELSE 0 END) AS INTEGER) AS binaryPairCount,
+      CAST(SUM(CASE WHEN is_binary_pair THEN 1 ELSE 0 END) AS INTEGER) AS binaryPairCount,
       CAST(SUM(CASE
-        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND left_binary_decision = right_binary_decision THEN 1
+        WHEN is_binary_pair AND left_binary_decision = right_binary_decision THEN 1
         ELSE 0
       END) AS INTEGER) AS agreementCount,
       CAST(SUM(CASE
-        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND left_binary_decision = 'include' THEN 1
+        WHEN is_binary_pair AND left_binary_decision = 'include' THEN 1
         ELSE 0
       END) AS INTEGER) AS leftIncludeCount,
       CAST(SUM(CASE
-        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND left_binary_decision = 'include' AND right_binary_decision = 'include' THEN 1
+        WHEN is_binary_pair AND left_binary_decision = 'include' AND right_binary_decision = 'include' THEN 1
         ELSE 0
       END) AS INTEGER) AS leftIncludeRightIncludeCount,
       CAST(SUM(CASE
-        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND left_binary_decision = 'exclude' THEN 1
+        WHEN is_binary_pair AND left_binary_decision = 'exclude' THEN 1
         ELSE 0
       END) AS INTEGER) AS leftExcludeCount,
       CAST(SUM(CASE
-        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND left_binary_decision = 'exclude' AND right_binary_decision = 'exclude' THEN 1
+        WHEN is_binary_pair AND left_binary_decision = 'exclude' AND right_binary_decision = 'exclude' THEN 1
         ELSE 0
       END) AS INTEGER) AS leftExcludeRightExcludeCount,
       CAST(SUM(CASE
-        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND right_binary_decision = 'include' THEN 1
+        WHEN is_binary_pair AND right_binary_decision = 'include' THEN 1
         ELSE 0
       END) AS INTEGER) AS rightIncludeCount,
       CAST(SUM(CASE
-        WHEN left_binary_decision_count = 1 AND right_binary_decision_count = 1 AND right_binary_decision = 'exclude' THEN 1
+        WHEN is_binary_pair AND right_binary_decision = 'exclude' THEN 1
         ELSE 0
       END) AS INTEGER) AS rightExcludeCount
-    FROM pair_stats
+    FROM eligible_pair_stats
     GROUP BY comparison_id
     ORDER BY comparison_id ASC
   `

@@ -239,6 +239,7 @@ export type ComparisonProjectStatsComparisonKind =
   | 'human-vs-llm'
   | 'llm-vs-llm'
   | 'llm-vs-conflict-resolution'
+  | 'human-vs-conflict-resolution'
 export type ComparisonProjectStatsComparison = {
   columnInfo: string | null
   id: string

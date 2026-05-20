@@ -297,6 +297,11 @@ test('comparison stats SQL aggregates serving cells in DuckDB', async () => {
       'llm-vs-conflict-resolution',
       primarySummaryColumn.id,
     )
+    const humanConflictResolutionComparison = findComparison(
+      comparisons,
+      'human-vs-conflict-resolution',
+      humanSummaryColumn.id,
+    )
 
     expect(primaryComparison.overlapCount).toBe(6)
     expect(primaryComparison.conflictCount).toBe(3)
@@ -313,6 +318,15 @@ test('comparison stats SQL aggregates serving cells in DuckDB', async () => {
       trueConflictCount: 0,
     })
     expect(conflictResolutionComparison.cohensKappa).toBe(1)
+    expect(humanConflictResolutionComparison).toMatchObject({
+      conflictCount: 2,
+      label: 'Human vs After conflict resolution (resolved only)',
+      overlapCount: 2,
+      sensitivity: 0,
+      specificity: 0,
+      trueConflictCount: 2,
+    })
+    expect(humanConflictResolutionComparison.cohensKappa).toBe(-1)
   } finally {
     connection.closeSync()
     duckdbInstance.closeSync()
@@ -413,6 +427,13 @@ test('comparison stats prefers primary source project over shared model id and d
     },
     {
       columnInfo: null,
+      kind: 'human-vs-conflict-resolution',
+      label: 'Human vs After conflict resolution (resolved only)',
+      leftColumnId: humanSummaryColumn.id,
+      rightColumnId: humanSummaryColumn.id,
+    },
+    {
+      columnInfo: null,
       kind: 'llm-vs-llm',
       label: 'Model 1 (Primary project) vs Model 1 (Peer project)',
       leftColumnId: primarySummaryColumn.id,
@@ -487,6 +508,58 @@ test('comparison stats adds conflict resolution comparison with resolved answers
     trueConflictCount: 0,
   })
   expect(conflictResolutionComparison.cohensKappa).toBe(1)
+})
+
+test('comparison stats adds resolved-only human conflict resolution comparison', () => {
+  const cellRows = [
+    getCell('article-1', humanSummaryColumn.id, ['yes']),
+    getCell('article-1', primarySummaryColumn.id, ['no']),
+    getCell('article-2', humanSummaryColumn.id, ['no']),
+    getCell('article-2', primarySummaryColumn.id, ['yes']),
+    getCell('article-3', humanSummaryColumn.id, ['no']),
+    getCell('article-3', primarySummaryColumn.id, ['no']),
+    getCell('article-4', humanSummaryColumn.id, ['yes']),
+    getCell('article-4', primarySummaryColumn.id, ['yes']),
+    getCell('article-5', humanSummaryColumn.id, ['yes']),
+    getCell('article-5', primarySummaryColumn.id, ['yes']),
+    getCell('article-6', humanSummaryColumn.id, ['unclear']),
+    getCell('article-6', primarySummaryColumn.id, ['yes']),
+  ]
+  const comparisons = getComparisonProjectStatsFromCells({
+    allowConflictResolution: true,
+    cellRows,
+    columns: [humanSummaryColumn, primarySummaryColumn],
+    conflictResolutionRows: [
+      {answerValue: 'yes', articleId: 'article-1'},
+      {answerValue: 'maybe', articleId: 'article-2'},
+      {answerValue: 'no', articleId: 'article-3'},
+      {answerValue: 'unclear', articleId: 'article-5'},
+      {answerValue: 'yes', articleId: 'article-6'},
+    ],
+    isSummaryMode: true,
+    primarySourceProjectId: 'source-project-1',
+  })
+  const fallbackConflictResolutionComparison = findComparison(
+    comparisons,
+    'llm-vs-conflict-resolution',
+    primarySummaryColumn.id,
+  )
+  const humanConflictResolutionComparison = findComparison(
+    comparisons,
+    'human-vs-conflict-resolution',
+    humanSummaryColumn.id,
+  )
+
+  expect(fallbackConflictResolutionComparison.overlapCount).toBe(6)
+  expect(humanConflictResolutionComparison).toMatchObject({
+    conflictCount: 1,
+    label: 'Human vs After conflict resolution (resolved only)',
+    overlapCount: 3,
+    sensitivity: 0.5,
+    specificity: 1,
+    trueConflictCount: 1,
+  })
+  expect(humanConflictResolutionComparison.cohensKappa).toBeCloseTo(0.4, 6)
 })
 
 test('comparison stats counts llm-vs-llm overlaps and conflicts from normalized answers', () => {
