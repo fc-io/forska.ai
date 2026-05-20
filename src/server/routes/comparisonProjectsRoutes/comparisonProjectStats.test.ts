@@ -220,7 +220,38 @@ test('comparison stats computes summary kappa from SQL aggregates', async () => 
   expect(primaryComparison.specificity).toBeCloseTo(2 / 3, 6)
 })
 
-test('comparison stats SQL aggregates serving cells in DuckDB', async () => {
+test('comparison stats SQL matches helper for resolved-only conflict resolution metrics', async () => {
+  const cellRows = [
+    getCell('article-1', humanSummaryColumn.id, ['yes']),
+    getCell('article-1', primarySummaryColumn.id, ['no']),
+    getCell('article-2', humanSummaryColumn.id, ['no']),
+    getCell('article-2', primarySummaryColumn.id, ['yes']),
+    getCell('article-3', humanSummaryColumn.id, ['no']),
+    getCell('article-3', primarySummaryColumn.id, ['no']),
+    getCell('article-4', humanSummaryColumn.id, ['yes']),
+    getCell('article-4', primarySummaryColumn.id, ['yes']),
+    getCell('article-5', humanSummaryColumn.id, ['yes']),
+    getCell('article-5', primarySummaryColumn.id, ['yes']),
+    getCell('article-6', humanSummaryColumn.id, ['unclear']),
+    getCell('article-6', primarySummaryColumn.id, ['yes']),
+    getCell('article-7', primarySummaryColumn.id, ['yes']),
+  ]
+  const conflictResolutionRows = [
+    {answerValue: 'yes', articleId: 'article-1'},
+    {answerValue: 'maybe', articleId: 'article-2'},
+    {answerValue: 'no', articleId: 'article-3'},
+    {answerValue: 'unclear', articleId: 'article-5'},
+    {answerValue: 'yes', articleId: 'article-6'},
+    {answerValue: 'yes', articleId: 'article-7'},
+  ]
+  const expectedComparisons = getComparisonProjectStatsFromCells({
+    allowConflictResolution: true,
+    cellRows,
+    columns: [humanSummaryColumn, primarySummaryColumn],
+    conflictResolutionRows,
+    isSummaryMode: true,
+    primarySourceProjectId: 'source-project-1',
+  })
   const duckdbInstance = await DuckDBInstance.create(':memory:')
   const connection = await duckdbInstance.connect()
 
@@ -258,23 +289,28 @@ test('comparison stats SQL aggregates serving cells in DuckDB', async () => {
       INSERT INTO mart.comparison_cell_serving
       VALUES
         ('comparison-project-1', 1, 'article-1', '${humanSummaryColumn.id}', ['yes']),
-        ('comparison-project-1', 1, 'article-1', '${primarySummaryColumn.id}', ['yes']),
-        ('comparison-project-1', 1, 'article-2', '${humanSummaryColumn.id}', ['maybe']),
+        ('comparison-project-1', 1, 'article-1', '${primarySummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-2', '${humanSummaryColumn.id}', ['no']),
         ('comparison-project-1', 1, 'article-2', '${primarySummaryColumn.id}', ['yes']),
         ('comparison-project-1', 1, 'article-3', '${humanSummaryColumn.id}', ['no']),
         ('comparison-project-1', 1, 'article-3', '${primarySummaryColumn.id}', ['no']),
-        ('comparison-project-1', 1, 'article-4', '${humanSummaryColumn.id}', ['no']),
-        ('comparison-project-1', 1, 'article-4', '${primarySummaryColumn.id}', ['no']),
-        ('comparison-project-1', 1, 'article-5', '${humanSummaryColumn.id}', ['maybe']),
-        ('comparison-project-1', 1, 'article-5', '${primarySummaryColumn.id}', ['no']),
-        ('comparison-project-1', 1, 'article-6', '${humanSummaryColumn.id}', ['no']),
-        ('comparison-project-1', 1, 'article-6', '${primarySummaryColumn.id}', ['yes'])
+        ('comparison-project-1', 1, 'article-4', '${humanSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-4', '${primarySummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-5', '${humanSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-5', '${primarySummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-6', '${humanSummaryColumn.id}', ['unclear']),
+        ('comparison-project-1', 1, 'article-6', '${primarySummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-7', '${primarySummaryColumn.id}', ['yes'])
     `)
     await connection.run(`
       INSERT INTO app.comparison_project_conflict_resolution
       VALUES
-        ('comparison-project-1', 'article-5', 'no'),
-        ('comparison-project-1', 'article-6', 'yes')
+        ('comparison-project-1', 'article-1', 'yes'),
+        ('comparison-project-1', 'article-2', 'maybe'),
+        ('comparison-project-1', 'article-3', 'no'),
+        ('comparison-project-1', 'article-5', 'unclear'),
+        ('comparison-project-1', 'article-6', 'yes'),
+        ('comparison-project-1', 'article-7', 'yes')
     `)
 
     const comparisons = await getComparisonProjectStats({
@@ -292,8 +328,14 @@ test('comparison stats SQL aggregates serving cells in DuckDB', async () => {
       },
     })
     const primaryComparison = findComparison(comparisons, 'primary-vs-human', primarySummaryColumn.id)
+    const expectedPrimaryComparison = findComparison(expectedComparisons, 'primary-vs-human', primarySummaryColumn.id)
     const conflictResolutionComparison = findComparison(
       comparisons,
+      'llm-vs-conflict-resolution',
+      primarySummaryColumn.id,
+    )
+    const expectedConflictResolutionComparison = findComparison(
+      expectedComparisons,
       'llm-vs-conflict-resolution',
       primarySummaryColumn.id,
     )
@@ -302,31 +344,49 @@ test('comparison stats SQL aggregates serving cells in DuckDB', async () => {
       'human-vs-conflict-resolution',
       humanSummaryColumn.id,
     )
+    const expectedHumanConflictResolutionComparison = findComparison(
+      expectedComparisons,
+      'human-vs-conflict-resolution',
+      humanSummaryColumn.id,
+    )
 
-    expect(primaryComparison.overlapCount).toBe(6)
-    expect(primaryComparison.conflictCount).toBe(3)
-    expect(primaryComparison.trueConflictCount).toBe(2)
-    expect(primaryComparison.cohensKappa).toBeCloseTo(1 / 3, 6)
-    expect(primaryComparison.sensitivity).toBeCloseTo(2 / 3, 6)
-    expect(primaryComparison.specificity).toBeCloseTo(2 / 3, 6)
+    expect(primaryComparison).toMatchObject({
+      conflictCount: expectedPrimaryComparison.conflictCount,
+      overlapCount: expectedPrimaryComparison.overlapCount,
+      sensitivity: expectedPrimaryComparison.sensitivity,
+      specificity: expectedPrimaryComparison.specificity,
+      trueConflictCount: expectedPrimaryComparison.trueConflictCount,
+    })
+    expect(primaryComparison.cohensKappa).toBeCloseTo(expectedPrimaryComparison.cohensKappa ?? 0, 6)
     expect(conflictResolutionComparison).toMatchObject({
-      conflictCount: 1,
+      conflictCount: expectedConflictResolutionComparison.conflictCount,
       label: 'Model 1 vs After conflict resolution',
-      overlapCount: 6,
-      sensitivity: 1,
-      specificity: 1,
-      trueConflictCount: 0,
+      overlapCount: expectedConflictResolutionComparison.overlapCount,
+      sensitivity: expectedConflictResolutionComparison.sensitivity,
+      specificity: expectedConflictResolutionComparison.specificity,
+      trueConflictCount: expectedConflictResolutionComparison.trueConflictCount,
     })
-    expect(conflictResolutionComparison.cohensKappa).toBe(1)
+    expect(conflictResolutionComparison.cohensKappa).toBeCloseTo(
+      expectedConflictResolutionComparison.cohensKappa ?? 0,
+      6,
+    )
+    expect(conflictResolutionComparison.overlapCount).toBe(6)
     expect(humanConflictResolutionComparison).toMatchObject({
-      conflictCount: 2,
+      conflictCount: expectedHumanConflictResolutionComparison.conflictCount,
       label: 'Human vs After conflict resolution (resolved only)',
-      overlapCount: 2,
-      sensitivity: 0,
-      specificity: 0,
-      trueConflictCount: 2,
+      overlapCount: expectedHumanConflictResolutionComparison.overlapCount,
+      sensitivity: expectedHumanConflictResolutionComparison.sensitivity,
+      specificity: expectedHumanConflictResolutionComparison.specificity,
+      trueConflictCount: expectedHumanConflictResolutionComparison.trueConflictCount,
     })
-    expect(humanConflictResolutionComparison.cohensKappa).toBe(-1)
+    expect(humanConflictResolutionComparison.overlapCount).toBe(3)
+    expect(humanConflictResolutionComparison.conflictCount).toBe(1)
+    expect(humanConflictResolutionComparison.trueConflictCount).toBe(1)
+    expect(humanConflictResolutionComparison.cohensKappa).toBeCloseTo(
+      expectedHumanConflictResolutionComparison.cohensKappa ?? 0,
+      6,
+    )
+    expect(humanConflictResolutionComparison.cohensKappa).toBeCloseTo(0.4, 6)
   } finally {
     connection.closeSync()
     duckdbInstance.closeSync()
