@@ -479,6 +479,7 @@ export type ProjectTransferSessionRecord = {
   completionPayloadJson: unknown
   errorJson: unknown
   createdAt: Date
+  terminalCleanupAt: Date | null
   updatedAt: Date
 }
 

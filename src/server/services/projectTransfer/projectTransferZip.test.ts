@@ -6,11 +6,13 @@ import {projectTransferPathLimits} from './projectTransferPaths.ts'
 import {
   type ProjectTransferZipJsEntry,
   type ProjectTransferZipJsModule,
+  type ProjectTransferZipJsUint8ArrayWriter,
   readProjectTransferZipPackage,
   writeProjectTransferZipPackage,
 } from './projectTransferZip.ts'
 
 type FakeZipReadEntry = ProjectTransferZipJsEntry & {readCount: () => number}
+type FakeZipReadWriter = ProjectTransferZipJsUint8ArrayWriter & {appendChunks: (chunks: readonly Uint8Array[]) => void}
 
 type FakeZipState = {
   closeOptions: Record<string, unknown> | null
@@ -52,12 +54,12 @@ const getSymlinkExternalFileAttributes = () => {
   return 0o120000 * 0x10000
 }
 
-const writeFakeChunks = async (writer: WritableStreamDefaultWriter<Uint8Array>, chunks: readonly Uint8Array[]) => {
-  await chunks.reduce<Promise<void>>(async (previousWrite, chunk) => {
-    await previousWrite
-    await writer.write(chunk)
-  }, Promise.resolve())
-  await writer.close()
+const getFakeReadWriter = (writer: ProjectTransferZipJsUint8ArrayWriter): FakeZipReadWriter => {
+  if (!('appendChunks' in writer)) {
+    throw new Error('Expected project transfer ZIP reads to use Uint8ArrayWriter')
+  }
+
+  return writer as FakeZipReadWriter
 }
 
 const getFakeZipEntry = ({
@@ -90,7 +92,9 @@ const getFakeZipEntry = ({
     filename,
     getData: async (writable) => {
       state.readCount += 1
-      await writeFakeChunks(writable.getWriter(), chunks)
+      const writer = getFakeReadWriter(writable)
+      writer.appendChunks(chunks)
+      return writer.getData()
     },
     readCount: () => {
       return state.readCount
@@ -119,7 +123,26 @@ const getFakeZipModule = (readEntries: readonly ProjectTransferZipJsEntry[] = []
     }
   }
 
-  class FakeUint8ArrayWriter {}
+  class FakeUint8ArrayWriter {
+    chunks: Uint8Array[] = []
+
+    appendChunks = (chunks: readonly Uint8Array[]) => {
+      this.chunks = [...this.chunks, ...chunks]
+    }
+
+    getData = () => {
+      const size = this.chunks.reduce((total, chunk) => {
+        return total + chunk.byteLength
+      }, 0)
+
+      return Buffer.concat(
+        this.chunks.map((chunk) => {
+          return Buffer.from(chunk)
+        }),
+        size,
+      )
+    }
+  }
 
   class FakeZipReader {
     constructor(_reader: unknown, options?: Record<string, unknown>) {
@@ -201,7 +224,7 @@ test('writes a ZIP64 project-transfer package after validating payload paths and
   expect(result.checksumSha256).toBe(getSha256Digest(result.bytes))
 })
 
-test('reads project-transfer packages using streamed counters and checksums instead of advisory sizes', async () => {
+test('reads project-transfer packages using writer bytes for counters and checksums instead of advisory sizes', async () => {
   const manifestChunks = [getBytes('{"schema'), getBytes('Version":1}')]
   const assetChunks = [getBytes('asset-'), getBytes('bytes')]
   const manifestBytes = getBytes('{"schemaVersion":1}')
