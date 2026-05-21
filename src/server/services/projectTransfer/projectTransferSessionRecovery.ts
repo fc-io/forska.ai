@@ -149,6 +149,7 @@ const transitionImportSessionToCompletedFromHistory = async ({
       package_fingerprint = ${getSqlLiteral(history.packageFingerprint)},
       owner_token = NULL,
       completion_payload_json = ${getJsonLiteral(completionPayload)},
+      error_json = NULL,
       updated_at = ${getTimestampLiteral(now)}
     WHERE id = ${getSqlLiteral(session.id)}
       AND direction = 'import'
