@@ -470,6 +470,7 @@ test('DuckDB migrations add project transfer session and history invariants', as
       'error_json',
       'created_at',
       'updated_at',
+      'terminal_cleanup_at',
     ])
     expect(historyColumnNames).toEqual([
       'id',

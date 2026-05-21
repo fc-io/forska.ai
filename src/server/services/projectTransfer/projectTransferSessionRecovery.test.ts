@@ -191,6 +191,102 @@ test('project transfer recovery runs only on active writer and batch-limits stal
   expect(result.tempAfterBatch).toEqual({'future-a': true, 'stale-a': false, 'stale-b': false, 'stale-c': true})
 })
 
+test('project transfer recovery marks terminal cleanup and prioritizes stale active sessions', () => {
+  const result = runRecoveryScript<{
+    afterFirstStates: Record<string, string>
+    afterSecondStates: Record<string, string>
+    afterThirdStates: Record<string, string>
+    firstResult: {expiredSessionCount: number; scannedSessionCount: number}
+    secondResult: {expiredSessionCount: number; scannedSessionCount: number}
+    tempAfterFirst: Record<string, boolean>
+    tempAfterSecond: Record<string, boolean>
+    thirdResult: {expiredSessionCount: number; scannedSessionCount: number}
+  }>(`
+    const sessionIds = ['terminal-a', 'terminal-b', 'terminal-c', 'stale-active']
+    await Promise.all(sessionIds.map(async (sessionId) => {
+      const layout = getProjectTransferImportTempLayout(sessionId)
+      await sessionRepository.createProjectTransferSession({
+        direction: 'import',
+        expiresAt: sessionId.startsWith('terminal') ? expiredAt : new Date('2026-05-21T11:00:00.000Z'),
+        id: sessionId,
+        state: sessionId.startsWith('terminal') ? 'completed' : 'queued',
+      })
+      await writeRuntimeFile(layout.uploadPath)
+    }))
+
+    const getTempState = async () => {
+      return Object.fromEntries(await Promise.all(sessionIds.map(async (sessionId) => {
+        const layout = getProjectTransferImportTempLayout(sessionId)
+        return [sessionId, await fileExists(layout.uploadPath)]
+      })))
+    }
+    const firstResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 2,
+      cwd: runtimeRoot,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const afterFirstStates = await getStates()
+    const tempAfterFirst = await getTempState()
+    const secondResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 2,
+      cwd: runtimeRoot,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const afterSecondStates = await getStates()
+    const tempAfterSecond = await getTempState()
+    const thirdResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 2,
+      cwd: runtimeRoot,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const afterThirdStates = await getStates()
+
+    console.log(JSON.stringify({
+      afterFirstStates,
+      afterSecondStates,
+      afterThirdStates,
+      firstResult,
+      secondResult,
+      tempAfterFirst,
+      tempAfterSecond,
+      thirdResult,
+    }))
+  `)
+
+  expect(result.firstResult.scannedSessionCount).toBe(2)
+  expect(result.firstResult.expiredSessionCount).toBe(1)
+  expect(result.afterFirstStates).toEqual({
+    'stale-active': 'expired',
+    'terminal-a': 'completed',
+    'terminal-b': 'completed',
+    'terminal-c': 'completed',
+  })
+  expect(result.tempAfterFirst).toEqual({
+    'stale-active': false,
+    'terminal-a': false,
+    'terminal-b': true,
+    'terminal-c': true,
+  })
+  expect(result.secondResult.scannedSessionCount).toBe(2)
+  expect(result.secondResult.expiredSessionCount).toBe(0)
+  expect(result.afterSecondStates).toEqual(result.afterFirstStates)
+  expect(result.tempAfterSecond).toEqual({
+    'stale-active': false,
+    'terminal-a': false,
+    'terminal-b': false,
+    'terminal-c': false,
+  })
+  expect(result.thirdResult.scannedSessionCount).toBe(0)
+  expect(result.thirdResult.expiredSessionCount).toBe(0)
+  expect(result.afterThirdStates).toEqual(result.afterFirstStates)
+})
+
 test('project transfer recovery uses import session history and completed sessions only clean temp files', () => {
   const result = runRecoveryScript<{
     crashPromotedExists: boolean

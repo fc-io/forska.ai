@@ -10,16 +10,18 @@ export type ProjectTransferZipJsEntry = {
   directory?: boolean
   externalFileAttributes?: number
   filename: string
-  getData: (writer: WritableStream<Uint8Array>) => Promise<unknown>
+  getData: (writer: ProjectTransferZipJsUint8ArrayWriter) => Promise<unknown>
   signature?: number
   uncompressedSize?: number
   unixMode?: number
   zip64?: boolean
 }
 
+export type ProjectTransferZipJsUint8ArrayWriter = {getData: () => Promise<Uint8Array> | Uint8Array}
+
 export type ProjectTransferZipJsModule = {
   Uint8ArrayReader: new (bytes: Uint8Array) => unknown
-  Uint8ArrayWriter: new () => unknown
+  Uint8ArrayWriter: new () => ProjectTransferZipJsUint8ArrayWriter
   ZipReader: new (
     reader: unknown,
     options?: Record<string, unknown>,
@@ -66,8 +68,6 @@ type ProjectTransferZipWriteOptions = {
   entries: readonly ProjectTransferZipEntryInput[]
   zipModule?: ProjectTransferZipJsModule
 }
-
-type ProjectTransferZipStreamState = {chunks: Uint8Array[]; checksum: ReturnType<typeof createHash>; size: number}
 
 const projectTransferManifestPath = 'manifest.json'
 const projectTransferZipPackageName = '@zip.js/zip.js'
@@ -151,51 +151,52 @@ const getSha256Digest = (bytes: Uint8Array) => {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
-const getReadableChunk = (chunk: Uint8Array) => {
-  return chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk)
+const getProjectTransferZipEntryBytes = (value: unknown) => {
+  if (value instanceof Uint8Array) {
+    return value
+  }
+
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value)
+  }
+
+  return ArrayBuffer.isView(value) ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength) : null
 }
 
-const updateProjectTransferZipStreamState = (state: ProjectTransferZipStreamState, chunk: Uint8Array) => {
-  const bytes = getReadableChunk(chunk)
+const readProjectTransferZipWriterBytes = async ({
+  data,
+  writer,
+}: {
+  data: unknown
+  writer: ProjectTransferZipJsUint8ArrayWriter
+}) => {
+  const returnedBytes = getProjectTransferZipEntryBytes(data)
 
-  state.chunks.push(bytes)
-  state.checksum.update(bytes)
-  state.size += bytes.byteLength
-}
+  if (returnedBytes) {
+    return returnedBytes
+  }
 
-const getProjectTransferZipEntryWritableStream = (state: ProjectTransferZipStreamState) => {
-  return new WritableStream<Uint8Array>({
-    write: async (chunk) => {
-      updateProjectTransferZipStreamState(state, chunk)
-    },
-  })
-}
+  const writerBytes = getProjectTransferZipEntryBytes(await writer.getData())
 
-const concatProjectTransferZipChunks = (chunks: readonly Uint8Array[], size: number) => {
-  return Buffer.concat(
-    chunks.map((chunk) => {
-      return Buffer.from(chunk)
-    }),
-    size,
-  )
+  return writerBytes ?? throwProjectTransferZipError('entry_data', 'Entry data writer did not return bytes')
 }
 
 const readProjectTransferZipEntryData = async (
   entry: ProjectTransferZipJsEntry,
+  zipModule: ProjectTransferZipJsModule,
 ): Promise<ProjectTransferZipReadEntry> => {
-  const streamState: ProjectTransferZipStreamState = {checksum: createHash('sha256'), chunks: [], size: 0}
-
-  await entry.getData(getProjectTransferZipEntryWritableStream(streamState))
+  const writer = new zipModule.Uint8ArrayWriter()
+  const bytes = await readProjectTransferZipWriterBytes({data: await entry.getData(writer), writer})
 
   return {
     advisoryCompressedSize: getNumberOrNull(entry.compressedSize),
     advisoryCrc32: getNumberOrNull(entry.signature),
     advisoryUncompressedSize: getNumberOrNull(entry.uncompressedSize),
-    bytes: concatProjectTransferZipChunks(streamState.chunks, streamState.size),
-    checksumSha256: streamState.checksum.digest('hex'),
+    bytes,
+    checksumSha256: getSha256Digest(bytes),
     compressedSize: getNumberOrNull(entry.compressedSize),
     path: entry.filename,
-    uncompressedSize: streamState.size,
+    uncompressedSize: bytes.byteLength,
     zip64: entry.zip64 === true,
   }
 }
@@ -257,7 +258,7 @@ export const readProjectTransferZipPackage = async ({
 
     const entries = await Promise.all(
       zipEntries.map((entry) => {
-        return readProjectTransferZipEntryData(entry)
+        return readProjectTransferZipEntryData(entry, resolvedZipModule)
       }),
     )
     const manifest = assertProjectTransferZipHasManifest(entries)

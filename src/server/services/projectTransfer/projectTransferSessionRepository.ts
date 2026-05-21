@@ -117,6 +117,7 @@ const getProjectTransferSessionSelectSql = () => {
     TO_JSON(completion_payload_json) AS completionPayloadJson,
     TO_JSON(error_json) AS errorJson,
     created_at AS createdAt,
+    terminal_cleanup_at AS terminalCleanupAt,
     updated_at AS updatedAt
   `
 }

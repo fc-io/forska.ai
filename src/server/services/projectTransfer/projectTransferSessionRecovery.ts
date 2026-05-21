@@ -7,7 +7,7 @@ import type {
 } from '../../../db/schemaTypes.ts'
 import {canCurrentServerOwnDuckdb} from '../../utils/serverRuntimeRole.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
-import {getJsonValue, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
+import {getJsonValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
 import type {ProjectTransferAssetPromotionMetadata} from './projectTransferContracts.ts'
 import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
 import {
@@ -19,6 +19,7 @@ import {
   getProjectTransferImportTempLayout,
   isProjectTransferTerminalState,
   parseProjectTransferCompletionPayload,
+  projectTransferTerminalStates,
 } from './projectTransferSession.ts'
 
 type ProjectTransferSessionRecoveryRunner = {
@@ -62,6 +63,7 @@ type ProjectTransferSessionRecoveryResult = ProjectTransferPromotedAssetCleanupR
 
 const defaultRecoveryBatchSize = 50
 const maxRecoveryBatchSize = 500
+const terminalStateListSql = getQuotedStringList([...projectTransferTerminalStates]).join(', ')
 
 const emptyRecoveryResult = (skippedActiveWriterCheck: boolean): ProjectTransferSessionRecoveryResult => {
   return {
@@ -111,7 +113,12 @@ const getStaleProjectTransferSessions = async ({
       state
     FROM app.project_transfer_session
     WHERE expires_at <= ${getTimestampLiteral(now)}
-    ORDER BY expires_at ASC, updated_at ASC, id ASC
+      AND (state NOT IN (${terminalStateListSql}) OR terminal_cleanup_at IS NULL)
+    ORDER BY
+      CASE WHEN state IN (${terminalStateListSql}) THEN 1 ELSE 0 END ASC,
+      expires_at ASC,
+      updated_at ASC,
+      id ASC
     LIMIT ${batchSize}
   `)
 }
@@ -460,6 +467,31 @@ const getCleanupCounts = async ({
   )
 }
 
+const markTerminalCleanupComplete = async ({
+  now,
+  plans,
+  runner,
+}: {
+  now: Date
+  plans: ProjectTransferRecoveryCleanupPlan[]
+  runner: ProjectTransferSessionRecoveryRunner
+}) => {
+  const sessionIds = plans.map((plan) => {
+    return plan.id
+  })
+
+  if (sessionIds.length === 0) {
+    return
+  }
+
+  await runner.run(`
+    UPDATE app.project_transfer_session
+    SET terminal_cleanup_at = ${getTimestampLiteral(now)}
+    WHERE id IN (${getQuotedStringList(sessionIds).join(', ')})
+      AND state IN (${terminalStateListSql})
+  `)
+}
+
 const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionRecoveryParams = {}) => {
   const isActiveWriter = params.isActiveWriter ?? canCurrentServerOwnDuckdb
 
@@ -479,6 +511,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
     : await getCleanupPlans({now, ownerToken, runner, sessions})
   const recoveryCounts = getRecoveryCounts(plans)
   const cleanupCounts = await getCleanupCounts({plans, runtimeOptions: {cwd: params.cwd, envValues: params.envValues}})
+  await markTerminalCleanupComplete({now, plans, runner})
 
   return {...recoveryCounts, ...cleanupCounts, scannedSessionCount: sessions.length, skippedActiveWriterCheck: false}
 }
