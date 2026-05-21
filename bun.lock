@@ -20,6 +20,7 @@
         "@tanstack/solid-router": "^1.166.7",
         "@tanstack/solid-router-devtools": "^1.166.7",
         "@tanstack/solid-table": "^8.21.3",
+        "@zip.js/zip.js": "^2.7.73",
         "ai": "^6.0.116",
         "arktype": "^2.2.0",
         "chart.js": "^4.5.1",
@@ -685,6 +686,8 @@
     "@zag-js/types": ["@zag-js/types@1.35.3", "", { "dependencies": { "csstype": "3.2.3" } }, "sha512-Fnm3AMs1lfb55hlkip/eJeWHOjFB3gSi1JkZlkkdltG2l7y/zsHkumPSe6jIKy+DRRIFKRCyXVTatbPN27bO3w=="],
 
     "@zag-js/utils": ["@zag-js/utils@1.35.3", "", {}, "sha512-LHcC+9y6TFhDsIz9I3koYxONl2JFfx5yQDzc6ZEQO2cqzXedRcN0R9IPqNGCX7JuhGt14ctDkVCm1JWGP2J6Wg=="],
+
+    "@zip.js/zip.js": ["@zip.js/zip.js@2.7.73", "", {}, "sha512-I2UP8/rdQE5hTtVVL08B7P8XuwXiKuuMUPjNuFOVL/9b+8IsExR9S5jz2H58u0rJjU4M1BikLgqEMG8gZJZVBw=="],
 
     "acorn": ["acorn@8.15.0", "", { "bin": { "acorn": "bin/acorn" } }, "sha512-NZyJarBfL7nWwIq+FDL6Zp/yHEhePMNnnJ0y3qfieCrmNvYct8uvtiV41UvlSe6apAfk0fY1FbWx+NwfmpvtTg=="],
 
