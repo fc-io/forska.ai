@@ -11,34 +11,12 @@ import {getDefaultJudgmentServerJobId} from './cron/judgmentsJobs/judgmentJobSer
 import {getJudgmentJobSqliteService} from './cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {runStartupJudgmentRolloutCleanup} from './cron/judgmentsJobs/judgmentStartupRolloutCleanup.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
-import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
 import {apiProxyRoutes} from './routes/ApiProxyRoutes.ts'
 import {duckdbOwnerPrivateApiPrefix} from './routes/apiRouteClassification.ts'
-import {articleAdminRoutes} from './routes/ArticleAdminRoutes.ts'
-import {articlesRoutes} from './routes/ArticlesRoutes.ts'
-import {comparisonProjectsRoutes} from './routes/ComparisonProjectsRoutes.ts'
-import {dataSourcesImportRoutes} from './routes/DataSourcesImportRoutes.ts'
-import {dataSourcesRoutes} from './routes/DataSourcesRoutes.ts'
 import {duckdbOwnerConnectionsRoutes} from './routes/DuckdbOwnerConnectionsRoutes.ts'
-import {duckdbStudioRoutes} from './routes/DuckdbStudioRoutes.ts'
-import {humanAssessmentRoutes} from './routes/HumanAssessmentRoutes.ts'
-import {importRoutes} from './routes/ImportRoutes.ts'
 import {judgmentDispatchTelemetryRoutes} from './routes/JudgmentDispatchTelemetryRoutes.ts'
-import {judgmentsJobsRoutes} from './routes/JudgmentsJobsRoutes.ts'
-import {llmStatusRoutes} from './routes/LlmStatusRoutes.ts'
-import {modelsRoutes} from './routes/ModelsRoutes.ts'
-import {nvidiaSmiRoutes} from './routes/NvidiaSmiRoutes.ts'
-import {projectArticlesRoutes} from './routes/ProjectArticlesRoutes.ts'
-import {projectExportRoutes} from './routes/ProjectExportRoutes.ts'
-import {projectsAddArticlesRoutes} from './routes/ProjectsAddArticlesRoutes.ts'
-import {projectsRoutes} from './routes/ProjectsRoutes.ts'
-import {promptsRoutes} from './routes/PromptsRoutes.ts'
-import {providerAdmissionLeaseRoutes} from './routes/providerAdmissionLeaseRoutes.ts'
-import {runtimeAssetsRoutes} from './routes/RuntimeAssetsRoutes.ts'
+import {getProductApiRoutes} from './routes/productApiRoutes.ts'
 import {runtimeReadyRoutes} from './routes/runtimeReadyRoutes.ts'
-import {subprojectsRoutes} from './routes/SubprojectsRoutes.ts'
-import {tokensRoutes} from './routes/TokensRoutes'
-import {usersRoutes} from './routes/UsersRoutes'
 import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
 import {env} from './utils/env'
 import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
@@ -181,32 +159,6 @@ const maintenanceCronRoutes = shouldMountMaintenanceCrons
   : new Elysia()
 const judgmentCronRoutes = shouldMountJudgingCrons ? new Elysia().use(judgmentsJobsJudgingCron) : new Elysia()
 const shouldWarmCodex = shouldServerRoleRunCodexStartup(getCurrentServerRole())
-const getProductApiRoutes = () => {
-  return new Elysia()
-    .use(adminInvestigateRoutes)
-    .use(comparisonProjectsRoutes)
-    .use(judgmentsJobsRoutes)
-    .use(articlesRoutes)
-    .use(articleAdminRoutes)
-    .use(humanAssessmentRoutes)
-    .use(modelsRoutes)
-    .use(providerAdmissionLeaseRoutes)
-    .use(projectsRoutes)
-    .use(projectExportRoutes)
-    .use(projectsAddArticlesRoutes)
-    .use(projectArticlesRoutes)
-    .use(promptsRoutes)
-    .use(runtimeAssetsRoutes)
-    .use(importRoutes)
-    .use(dataSourcesRoutes)
-    .use(dataSourcesImportRoutes)
-    .use(duckdbStudioRoutes)
-    .use(tokensRoutes)
-    .use(usersRoutes)
-    .use(llmStatusRoutes)
-    .use(nvidiaSmiRoutes)
-    .use(subprojectsRoutes)
-}
 const publicProductApiRoutes = shouldCurrentServerMountPublicProductApi() ? getProductApiRoutes() : new Elysia()
 const duckdbOwnerPrivateApiRoutes = shouldCurrentServerMountDuckdbOwnerPrivateApi()
   ? new Elysia({prefix: duckdbOwnerPrivateApiPrefix}).use(getProductApiRoutes())
