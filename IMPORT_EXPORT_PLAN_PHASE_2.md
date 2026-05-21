@@ -16,7 +16,7 @@
 - `description`: `Implement full-fidelity project package export on the Phase 1 project-transfer foundation, including scoped app-table reads, signatures, redaction, assets, export routes, export session metadata, and export actions.`
 - Convert only `Ralph User Stories` into `userStories[]`.
 - Use `dependsOn` as the implementation order; heading order is not guaranteed to be topological.
-- For each story, combine `Acceptance criteria` with the relevant commands from `Quality gates` and the final `Phase 2 Checklist` into `acceptanceCriteria[]`.
+- For each story, combine `Acceptance criteria` with that story's `Quality gates`. Use the final `Phase 2 Checklist` as cross-story context instead of copying every checklist command into every story.
 
 ## Ralph User Stories
 
@@ -69,7 +69,7 @@ dependsOn: ["US-001"]
 Acceptance criteria:
 
 - Add `src/server/services/projectTransfer/projectTransferRedaction.ts` for package-boundary redaction serializers covering project fields, prompt fields, article fields, provider fields, model metadata/config, URLs, full-text-derived fields, and free-form JSON/string fields.
-- Extend the existing Phase 1 manifest/payload warning, redaction, omission, and severity contracts when new export warnings are needed, including `fidelity` and `blocking` severities from the orchestrator contract; do not emit one-off warning shapes outside the manifest/payload contracts.
+- Extend the existing Phase 1 manifest/payload warning, redaction, omission, and severity contracts when new export warnings are needed, including `fidelity` and `blocking` severities plus stable `scope`, `action`, `jsonPointer`, and safe `sourceRef` fields from the orchestrator contract; do not emit one-off warning shapes outside the manifest/payload contracts.
 - Required package fields remain importable through safe placeholders, parent-row failure, or parent-row omission with warnings.
 - Decision fields that would change meaning are omitted with dependent rows and structured fidelity warnings rather than sanitized in place.
 
@@ -113,7 +113,11 @@ Acceptance criteria:
 - Support inline small package creation and background export session artifact creation using Phase 1 session foundations, `projectTransferExportArtifacts`, and `getProjectTransferExportTempLayout()`.
 - Use the Phase 1 thresholds in `projectTransferExecutionThresholds`: inline when package `<= 128 MB` and assets `<= 64 MB`; otherwise create an export session.
 - Persist export session state/progress through `projectTransferSessionRepository.ts`, including `queued -> assembling -> packaging -> ready` transitions, failure, expiration, package fingerprint, and downloadable artifact metadata.
-- Treat export `ready` as the downloadable state, not as import-style `completed`; extend the session response or completion payload contract only as needed for export package metadata such as filename, byte length, checksum, and download path.
+- Treat export `ready` as the downloadable state, not as import-style `completed`.
+- Keep export `ready` non-terminal under the Phase 1 state contract; the export remains downloadable only until `expiresAt`, after which recovery/TTL cleanup may transition it to `expired` and delete temp package artifacts.
+- If export metadata is stored in `completion_payload_json`, first change `ProjectTransferCompletionPayload` into a direction-aware union so import completion keeps `status: 'completed'` while export readiness uses an export-specific status such as `ready`; do not overload import-only fields like `projectId`, `projectName`, or `importWarnings` for export packages.
+- If `ProjectTransferSessionResponse.completion` is widened for export metadata, update `parseProjectTransferCompletionPayload()`, `toProjectTransferSessionResponse()`, and their tests so import completion recovery still accepts only import `status: 'completed'` payloads where required.
+- Export package metadata includes filename, byte length, SHA-256 checksum, package fingerprint, download path, and expiry, and is returned by polling without exposing unvalidated filesystem paths.
 - Do not write export rows to `project_transfer_history` unless Phase 2 adds explicit tested export-history invariants; the existing history helpers are primarily for completed import duplicate warnings and same-session commit recovery.
 - Extend `ProjectTransferRuntimeEventType` only if export-specific events are needed beyond the existing `export_assembly` and `export_package` progress phases.
 - Emit structured runtime events or progress records for progress, omitted assets, redaction warnings, checksum failures, and package finalization.
@@ -123,6 +127,7 @@ Quality gates:
 - `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferFingerprint.test.ts` passes.
+- `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes if session response, completion payload, runtime event, or threshold contracts are changed.
 - `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` passes if export session mutations are changed.
 - `bun run build` passes.
 - `bun run lint` passes for touched `src` files.
@@ -141,7 +146,9 @@ Acceptance criteria:
 - Existing CSV `POST /api/projects/:id/export` still resolves to the CSV export flow.
 - Large export downloads stream through the owner proxy without materializing package bytes on follower servers.
 - Download rejects non-ready, expired, failed, missing, or wrong-direction sessions before filesystem access.
+- Download rejects sessions whose `expiresAt` has passed even if cleanup has not yet removed temp artifacts.
 - Download sets package filename and content headers from export metadata, not from untrusted request input.
+- Update `projectTransferRoutes.test.ts` so implemented export endpoints assert export behavior while import endpoints continue to assert contract-safe `501` placeholders.
 - Keep import placeholder endpoints returning contract-safe `501` responses; import analyze/commit behavior remains out of scope.
 
 Quality gates:
@@ -164,7 +171,7 @@ Acceptance criteria:
 - Rename `src/components/main/ProjectsGrid.tsx` to `src/components/main/projectsGrid.tsx` with a Git-safe temporary filename step and update imports/mocks.
 - Add `Export Project` next to `Export data` for active projects and preserve CSV `Export data` behavior.
 - Add `Export Project` for archived projects without exposing CSV export for archived rows.
-- Use Eden/RPC and `useQuery` from `@tanstack/solid-query` for client API calls; use direct download navigation or `fetch` only where package download bytes require it.
+- Use Eden/RPC plus `useQuery`/mutations from `@tanstack/solid-query` for client API calls; use direct download navigation or `fetch` only where package download bytes require it.
 - Support inline downloads and large export-session polling with a preparing-download state that does not block the projects route shell.
 - Verify both browser/web and desktop runtime behavior for the download URL and route path.
 
@@ -188,13 +195,16 @@ Quality gates:
 - Export routes replace only export placeholder handlers; import placeholder handlers remain contract-safe and route-shadowing tests stay green.
 - Background export sessions use the Phase 1 export state set and temp layout: `queued`, `assembling`, `packaging`, `ready`, `failed`, `expired`; `tmp/project-transfer/export/:sessionId/build`, `manifest.json`, `package.zip`, `completion.json`, and `progress.json`.
 - Export `ready` means downloadable; do not introduce an export `completed` state unless Phase 1 state contracts and tests are intentionally updated.
-- Export package metadata includes enough information for polling and download headers without trusting request input: filename, byte length, SHA-256 checksum, package fingerprint, and expiry.
+- Export `ready` is not terminal in the Phase 1 helper set; expired ready exports are cleaned up by TTL/recovery rather than preserved indefinitely.
+- Export package metadata includes enough information for polling and download headers without trusting request input: filename, byte length, SHA-256 checksum, package fingerprint, download path, and expiry.
+- If `ProjectTransferCompletionPayload` is extended for export metadata, it becomes a direction-aware union and import completion tests must continue proving import idempotency and recovery semantics.
 - Large package download is owner-proxied and streaming-safe; followers do not materialize package bytes.
 - Browser and desktop flows use the same API/download contract.
 - `bun test src/server/services/projectTransfer/projectTransferExport.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferFingerprint.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` if session response, completion payload, runtime event, or threshold contracts are changed
 - `bun test src/server/services/projectTransfer/projectTransferPaths.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferPayloadSchemas.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` if export session repository behavior changes
