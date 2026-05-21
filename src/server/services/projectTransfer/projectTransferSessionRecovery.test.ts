@@ -297,6 +297,7 @@ test('project transfer recovery uses import session history and completed sessio
     rows: Array<{
       commitId: string | null
       completionProjectId: string | null
+      errorMessage: string | null
       id: string
       packageFingerprint: string | null
       state: string
@@ -312,8 +313,13 @@ test('project transfer recovery uses import session history and completed sessio
       expiresAt: expiredAt,
       id: 'session-crash',
       packageFingerprint: 'fingerprint-before-history',
-      state: 'committing',
+      state: 'failed',
     })
+    await database.run(\`
+      UPDATE app.project_transfer_session
+      SET error_json = CAST('{"message":"stale failure"}' AS JSON)
+      WHERE id = 'session-crash'
+    \`)
     await sessionRepository.createProjectTransferSession({
       direction: 'import',
       expiresAt: expiredAt,
@@ -354,6 +360,7 @@ test('project transfer recovery uses import session history and completed sessio
         state,
         package_fingerprint AS packageFingerprint,
         commit_id AS commitId,
+        error_json->>'message' AS errorMessage,
         completion_payload_json->>'projectId' AS completionProjectId
       FROM app.project_transfer_session
       ORDER BY id ASC
@@ -380,6 +387,7 @@ test('project transfer recovery uses import session history and completed sessio
     {
       commitId: null,
       completionProjectId: null,
+      errorMessage: null,
       id: 'session-completed',
       packageFingerprint: 'fingerprint-completed',
       state: 'completed',
@@ -387,6 +395,7 @@ test('project transfer recovery uses import session history and completed sessio
     {
       commitId: 'commit-history',
       completionProjectId: 'target-project-history',
+      errorMessage: null,
       id: 'session-crash',
       packageFingerprint: 'fingerprint-history',
       state: 'completed',
