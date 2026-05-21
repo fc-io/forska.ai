@@ -92,15 +92,31 @@ export type ProjectTransferExportTempLayout = {
 }
 
 const getImportRootPath = (sessionId: string) => {
+  assertProjectTransferSessionId(sessionId)
+
   return `tmp/project-transfer/import/${sessionId}`
 }
 
 const getExportRootPath = (sessionId: string) => {
+  assertProjectTransferSessionId(sessionId)
+
   return `tmp/project-transfer/export/${sessionId}`
 }
 
 const getArtifactPath = (rootPath: string, artifact: string) => {
   return `${rootPath}/${artifact}`
+}
+
+const projectTransferSessionIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+
+export const isProjectTransferSessionId = (sessionId: string) => {
+  return projectTransferSessionIdPattern.test(sessionId)
+}
+
+export const assertProjectTransferSessionId = (sessionId: string) => {
+  if (!isProjectTransferSessionId(sessionId)) {
+    throw new Error('Project transfer session id must be path-safe')
+  }
 }
 
 export const isProjectTransferImportState = (state: string): state is ProjectTransferImportState => {

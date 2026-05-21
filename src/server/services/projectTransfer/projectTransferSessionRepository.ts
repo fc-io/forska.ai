@@ -6,6 +6,7 @@ import type {
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
 import {
+  assertProjectTransferSessionId,
   isProjectTransferStateForDirection,
   isProjectTransferWriterOnlyState,
   parseProjectTransferPlanSummary,
@@ -247,6 +248,7 @@ const createProjectTransferSession = async (params: CreateProjectTransferSession
   const currentNow = getNow(params.now)
   const state = params.state ?? (params.direction === 'import' ? 'awaiting_upload' : 'queued')
   const runner = getRunner(params.runner)
+  assertProjectTransferSessionId(params.id)
   assertSessionStateForDirection(params.direction, state)
 
   const [row] = await runner.queryJson<

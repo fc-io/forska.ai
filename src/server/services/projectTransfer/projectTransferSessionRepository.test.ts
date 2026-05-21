@@ -23,6 +23,7 @@ const getSessionRepositoryScript = (body: string) => {
   return `
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
     const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {getProjectTransferImportTempLayout} = await import('./src/server/services/projectTransfer/projectTransferSession.ts')
     const {getProjectTransferSessionRepository} = await import('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
 
     await migrateDuckdb()
@@ -96,6 +97,49 @@ const runSessionRepositoryScript = <T>(body: string) => {
     removeFileIfExists('/tmp/duckdb-temp')
   }
 }
+
+test('project transfer session ids must be path-safe before persistence or temp layout use', () => {
+  const result = runSessionRepositoryScript<{
+    createErrors: Array<string | null>
+    layoutError: string | null
+    persistedCount: number
+  }>(`
+    const invalidSessionIds = ['../bad', 'bad/id', 'bad\\\\id', ' bad']
+    const createErrors = await Promise.all(invalidSessionIds.map((sessionId) => {
+      return catchMessage(() => {
+        return sessionRepository.createProjectTransferSession({
+          direction: 'import',
+          expiresAt,
+          id: sessionId,
+          state: 'queued',
+        })
+      })
+    }))
+    const layoutError = await catchMessage(() => {
+      getProjectTransferImportTempLayout('../bad')
+      return Promise.resolve()
+    })
+    const [{count}] = await database.queryJson(\`
+      SELECT COUNT(*) AS count
+      FROM app.project_transfer_session
+    \`)
+
+    console.log(JSON.stringify({
+      createErrors,
+      layoutError,
+      persistedCount: Number(count),
+    }))
+  `)
+
+  expect(result.createErrors).toEqual([
+    'Project transfer session id must be path-safe',
+    'Project transfer session id must be path-safe',
+    'Project transfer session id must be path-safe',
+    'Project transfer session id must be path-safe',
+  ])
+  expect(result.layoutError).toBe('Project transfer session id must be path-safe')
+  expect(result.persistedCount).toBe(0)
+})
 
 test('project transfer session transitions reject stale plan revisions', () => {
   const result = runSessionRepositoryScript<{
