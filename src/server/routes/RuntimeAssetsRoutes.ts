@@ -1,12 +1,15 @@
 import {Elysia, t} from 'elysia'
 
+import {
+  resolveProjectTransferPersistedRuntimeAssetPath,
+  validateProjectTransferRuntimeAssetPath,
+} from '../services/projectTransfer/projectTransferPaths.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
-import {resolveRuntimeFilePath} from '../utils/runtimeWritablePath.ts'
 
 const getRuntimeAssetPath = (value: string) => {
-  const normalizedValue = value.trim().replace(/\\/g, '/')
+  const validatedPath = validateProjectTransferRuntimeAssetPath(value)
 
-  return normalizedValue.startsWith('assets/') ? normalizedValue : null
+  return validatedPath.ok ? validatedPath.value.path : null
 }
 
 export const runtimeAssetsRoutes = new Elysia().use(withErrorHandler()).get(
@@ -18,7 +21,7 @@ export const runtimeAssetsRoutes = new Elysia().use(withErrorHandler()).get(
       throw new Error('Runtime asset not found')
     }
 
-    const assetFile = globalThis.Bun.file(resolveRuntimeFilePath({pathValue: assetPath}))
+    const assetFile = globalThis.Bun.file(resolveProjectTransferPersistedRuntimeAssetPath({pathValue: assetPath}))
 
     if (!(await assetFile.exists())) {
       throw new Error('Runtime asset not found')
