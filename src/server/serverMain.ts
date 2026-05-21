@@ -17,7 +17,11 @@ import {duckdbOwnerConnectionsRoutes} from './routes/DuckdbOwnerConnectionsRoute
 import {judgmentDispatchTelemetryRoutes} from './routes/JudgmentDispatchTelemetryRoutes.ts'
 import {getProductApiRoutes} from './routes/productApiRoutes.ts'
 import {runtimeReadyRoutes} from './routes/runtimeReadyRoutes.ts'
-import {runProjectTransferStartupRecovery} from './services/projectTransfer/projectTransferSessionRecovery.ts'
+import {
+  type ProjectTransferSessionRecoveryResult,
+  runProjectTransferStartupRecovery,
+  runProjectTransferTtlRecovery,
+} from './services/projectTransfer/projectTransferSessionRecovery.ts'
 import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
 import {env} from './utils/env'
 import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
@@ -25,7 +29,7 @@ import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
 import {initializeJudgeWorkerJournalIdentity} from './utils/judgeWorkerJournalIdentity.ts'
 import {validateOwnerlessRouteBackends} from './utils/ownerlessReadableBackends.ts'
-import {writeRuntimeOperatorLogEvent} from './utils/runtimeLogger.ts'
+import {writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from './utils/runtimeLogger.ts'
 import {
   shouldServerRoleMountJudgingCrons,
   shouldServerRoleMountMaintenanceCrons,
@@ -42,6 +46,7 @@ import {
 import {startBackgroundWork} from './utils/startBackgroundWork.ts'
 
 const parentMonitorIntervalMs = 1_000
+const projectTransferTtlRecoveryIntervalMs = 60_000
 const parentPid = process.ppid
 let parentDisconnectSignalSent = false
 
@@ -80,6 +85,85 @@ const startParentDisconnectMonitor = () => {
 
 startParentDisconnectMonitor()
 
+const hasProjectTransferRecoveryProgress = (recovery: ProjectTransferSessionRecoveryResult) => {
+  return (
+    recovery.cleanupTempArtifactCount > 0
+    || recovery.deletedPromotedAssetCount > 0
+    || recovery.expiredSessionCount > 0
+    || recovery.recoveredCompletionCount > 0
+  )
+}
+
+const writeProjectTransferRecoveryLogEvent = ({
+  recovery,
+  recoveryMode,
+}: {
+  recovery: ProjectTransferSessionRecoveryResult
+  recoveryMode: 'startup' | 'ttl'
+}) => {
+  if (!hasProjectTransferRecoveryProgress(recovery)) {
+    return
+  }
+
+  writeRuntimeOperatorLogEvent({
+    attrs: recovery,
+    event: `project-transfer.${recoveryMode}-recovery`,
+    message:
+      `[project-transfer] ${recoveryMode} recovery scanned ${recovery.scannedSessionCount} session(s), `
+      + `${recovery.recoveredCompletionCount} recovered, `
+      + `${recovery.expiredSessionCount} expired, `
+      + `${recovery.cleanupTempArtifactCount} temp cleanup(s), `
+      + `${recovery.deletedPromotedAssetCount} promoted asset(s) deleted`,
+    severity: 'INFO',
+  })
+}
+
+const getProjectTransferRecoveryErrorMessage = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+
+  return message.trim().length > 0 ? message : 'Unknown project transfer TTL recovery failure'
+}
+
+const writeProjectTransferTtlRecoveryFailureLogEvent = (error: unknown) => {
+  const errorMessage = getProjectTransferRecoveryErrorMessage(error)
+
+  writeRuntimeFailureLogEvent({
+    attrs: {error, errorMessage},
+    event: 'project-transfer.ttl-recovery.failure',
+    message: `[project-transfer] TTL recovery failed: ${errorMessage}`,
+    terminalArgs: [errorMessage],
+  })
+}
+
+const startProjectTransferTtlRecoveryScheduler = () => {
+  let running = false
+
+  const runWake = async () => {
+    if (running || !canCurrentServerOwnDuckdb()) {
+      return
+    }
+
+    running = true
+
+    try {
+      writeProjectTransferRecoveryLogEvent({recovery: await runProjectTransferTtlRecovery(), recoveryMode: 'ttl'})
+    } catch (error) {
+      writeProjectTransferTtlRecoveryFailureLogEvent(error)
+    } finally {
+      running = false
+    }
+  }
+
+  const interval = setInterval(() => {
+    void runWake()
+  }, projectTransferTtlRecoveryIntervalMs)
+
+  interval.unref()
+  process.once('exit', () => {
+    clearInterval(interval)
+  })
+}
+
 const appServerRuntimeConfig = getAppServerRuntimeConfig()
 const desktopAllowedOrigins = process.env.FORSKA_DESKTOP_MODE === 'true' ? ['null', 'views://mainview'] : []
 const allowedOrigins = [
@@ -107,25 +191,8 @@ if (getCurrentServerRole() === 'judge-worker') {
 if (canCurrentServerOwnDuckdb()) {
   await migrateDuckdb()
   const projectTransferRecovery = await runProjectTransferStartupRecovery()
-
-  if (
-    projectTransferRecovery.cleanupTempArtifactCount > 0
-    || projectTransferRecovery.deletedPromotedAssetCount > 0
-    || projectTransferRecovery.expiredSessionCount > 0
-    || projectTransferRecovery.recoveredCompletionCount > 0
-  ) {
-    writeRuntimeOperatorLogEvent({
-      attrs: projectTransferRecovery,
-      event: 'project-transfer.startup-recovery',
-      message:
-        `[project-transfer] startup recovery scanned ${projectTransferRecovery.scannedSessionCount} session(s), `
-        + `${projectTransferRecovery.recoveredCompletionCount} recovered, `
-        + `${projectTransferRecovery.expiredSessionCount} expired, `
-        + `${projectTransferRecovery.cleanupTempArtifactCount} temp cleanup(s), `
-        + `${projectTransferRecovery.deletedPromotedAssetCount} promoted asset(s) deleted`,
-      severity: 'INFO',
-    })
-  }
+  writeProjectTransferRecoveryLogEvent({recovery: projectTransferRecovery, recoveryMode: 'startup'})
+  startProjectTransferTtlRecoveryScheduler()
 }
 
 if (getCurrentServerRole() !== 'judge-worker' && shouldCurrentServerRunJudgingLoops()) {

@@ -21,6 +21,8 @@ type ProjectTransferLogicalPackageFingerprintInput = {
   payloads: Partial<Record<ProjectTransferPayloadKey, unknown>>
 }
 
+type ProjectTransferPayloadInputValue = {orderInsensitiveRecords: boolean; value: unknown}
+
 type ProjectTransferCanonicalPayloadChecksumInput =
   | {format: 'json'; value: unknown}
   | {format: 'ndjson'; records: readonly unknown[]}
@@ -98,26 +100,28 @@ const getLogicalObjectEntries = (value: Record<string, unknown>, excludedKeys: S
     .sort(compareStableStrings)
 }
 
-const getPayloadInputValue = (value: unknown) => {
+const getPayloadInputValue = (value: unknown): ProjectTransferPayloadInputValue => {
   return isObjectRecord(value) && hasOwn(value, 'records')
-    ? value.records
+    ? {orderInsensitiveRecords: true, value: value.records}
     : isObjectRecord(value) && hasOwn(value, 'value')
-      ? value.value
-      : value
+      ? {orderInsensitiveRecords: false, value: value.value}
+      : {orderInsensitiveRecords: false, value}
 }
 
 const getCanonicalPayloadValue = ({
   excludedKeys,
   format,
+  orderInsensitiveRecords,
   value,
 }: {
   excludedKeys: Set<string>
   format: ProjectTransferPayloadFormat
+  orderInsensitiveRecords: boolean
   value: unknown
 }) => {
   const logicalValue = getProjectTransferLogicalFingerprintValue(value, excludedKeys)
 
-  return format === 'ndjson' && Array.isArray(logicalValue)
+  return (format === 'ndjson' || orderInsensitiveRecords) && Array.isArray(logicalValue)
     ? getProjectTransferCanonicalNdjson(logicalValue)
     : getProjectTransferCanonicalJson(logicalValue)
 }
@@ -194,6 +198,7 @@ export const getProjectTransferLogicalPackageFingerprintPayload = ({
       })
       .map((key) => {
         const manifestPayload = manifest.payloads[key]
+        const payloadInputValue = getPayloadInputValue(payloads[key])
 
         return {
           format: manifestPayload?.format ?? 'json',
@@ -201,7 +206,8 @@ export const getProjectTransferLogicalPackageFingerprintPayload = ({
           value: getCanonicalPayloadValue({
             excludedKeys: excludedKeySet,
             format: manifestPayload?.format ?? 'json',
-            value: getPayloadInputValue(payloads[key]),
+            orderInsensitiveRecords: payloadInputValue.orderInsensitiveRecords,
+            value: payloadInputValue.value,
           }),
         }
       }),

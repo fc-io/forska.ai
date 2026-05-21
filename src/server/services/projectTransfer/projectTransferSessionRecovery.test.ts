@@ -452,3 +452,57 @@ test('project transfer recovery deletes promoted assets only for abandoned impor
   expect(result.promotedAssetExists).toBe(false)
   expect(result.outsideAssetExists).toBe(true)
 })
+
+test('project transfer recovery keeps cleanup pending when promoted asset deletion fails', () => {
+  const result = runRecoveryScript<{
+    deleteError: string | null
+    promotedAssetExists: boolean
+    state: string
+    tempRootExists: boolean
+    terminalCleanupAt: string | null
+  }>(`
+    const sessionId = 'session-delete-failure'
+    const layout = getProjectTransferImportTempLayout(sessionId)
+    const promotedPath = 'assets/project-transfer/session-delete-failure/article-1.pdf'
+
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt: expiredAt,
+      id: sessionId,
+      state: 'analyzing',
+    })
+    await writeRuntimeFile(layout.uploadPath)
+    await mkdir(runtimePath(promotedPath), {recursive: true})
+    await writePromotionManifest(sessionId, [promotionMetadata(sessionId, promotedPath)])
+
+    const deleteError = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: runtimeRoot,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    }).then(
+      () => null,
+      (error) => error instanceof Error ? error.message : String(error),
+    )
+    const [row] = await database.queryJson(\`
+      SELECT state, terminal_cleanup_at AS terminalCleanupAt
+      FROM app.project_transfer_session
+      WHERE id = 'session-delete-failure'
+    \`)
+
+    console.log(JSON.stringify({
+      deleteError,
+      promotedAssetExists: await fileExists(promotedPath),
+      state: row.state,
+      tempRootExists: await fileExists(layout.rootPath),
+      terminalCleanupAt: row.terminalCleanupAt,
+    }))
+  `)
+
+  expect(result.deleteError).not.toBeNull()
+  expect(result.state).toBe('expired')
+  expect(result.terminalCleanupAt).toBeNull()
+  expect(result.tempRootExists).toBe(true)
+  expect(result.promotedAssetExists).toBe(true)
+})

@@ -13,6 +13,7 @@ import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepos
 import {
   resolveProjectTransferPromotionWritablePath,
   resolveProjectTransferTempWritablePath,
+  validateProjectTransferPromotionWritablePath,
 } from './projectTransferPaths.ts'
 import {
   getProjectTransferExportTempLayout,
@@ -367,13 +368,15 @@ const removePromotedAsset = async ({
   metadata: ProjectTransferAssetPromotionMetadata
   runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
 }): Promise<ProjectTransferPromotedAssetCleanupResult> => {
-  try {
-    const promotedPath = getResolvedPromotionPath({pathValue: metadata.promotedPath, runtimeOptions})
-    await rm(promotedPath, {force: true, recursive: false})
-    return {deletedPromotedAssetCount: 1, skippedPromotedAssetCount: 0}
-  } catch {
+  const validation = validateProjectTransferPromotionWritablePath(metadata.promotedPath)
+
+  if (!validation.ok) {
     return {deletedPromotedAssetCount: 0, skippedPromotedAssetCount: 1}
   }
+
+  const promotedPath = getResolvedPromotionPath({pathValue: metadata.promotedPath, runtimeOptions})
+  await rm(promotedPath, {force: true, recursive: false})
+  return {deletedPromotedAssetCount: 1, skippedPromotedAssetCount: 0}
 }
 
 const mergePromotedAssetCleanupResult = (
