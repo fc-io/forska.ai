@@ -1,4 +1,4 @@
-import {access, readFile, rm} from 'node:fs/promises'
+import {readFile, rm} from 'node:fs/promises'
 
 import type {
   ProjectTransferDirection,
@@ -299,24 +299,24 @@ const getResolvedPromotionPath = ({
   return resolveProjectTransferPromotionWritablePath({...runtimeOptions, pathValue})
 }
 
-const readJsonFileIfPresent = async (filePath: string) => {
-  const exists = await access(filePath).then(
-    () => {
-      return true
-    },
-    () => {
-      return false
-    },
+const isMissingFileError = (error: unknown) => {
+  return (
+    typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && ((error as {code: unknown}).code === 'ENOENT' || (error as {code: unknown}).code === 'ENOTDIR')
   )
+}
 
-  if (!exists) {
-    return null
-  }
-
+const readJsonFileIfPresent = async (filePath: string) => {
   try {
     return getJsonValue(JSON.parse(await readFile(filePath, 'utf8')))
-  } catch {
-    return null
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return null
+    }
+
+    throw new Error(`Project transfer promotion manifest is unreadable or malformed: ${filePath}`, {cause: error})
   }
 }
 

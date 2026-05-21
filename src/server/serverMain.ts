@@ -121,18 +121,32 @@ const writeProjectTransferRecoveryLogEvent = ({
 const getProjectTransferRecoveryErrorMessage = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error)
 
-  return message.trim().length > 0 ? message : 'Unknown project transfer TTL recovery failure'
+  return message.trim().length > 0 ? message : 'Unknown project transfer recovery failure'
 }
 
-const writeProjectTransferTtlRecoveryFailureLogEvent = (error: unknown) => {
+const writeProjectTransferRecoveryFailureLogEvent = ({
+  error,
+  recoveryMode,
+}: {
+  error: unknown
+  recoveryMode: 'startup' | 'ttl'
+}) => {
   const errorMessage = getProjectTransferRecoveryErrorMessage(error)
 
   writeRuntimeFailureLogEvent({
     attrs: {error, errorMessage},
-    event: 'project-transfer.ttl-recovery.failure',
-    message: `[project-transfer] TTL recovery failed: ${errorMessage}`,
+    event: `project-transfer.${recoveryMode}-recovery.failure`,
+    message: `[project-transfer] ${recoveryMode} recovery failed: ${errorMessage}`,
     terminalArgs: [errorMessage],
   })
+}
+
+const runProjectTransferStartupRecoveryWithLogging = async () => {
+  try {
+    writeProjectTransferRecoveryLogEvent({recovery: await runProjectTransferStartupRecovery(), recoveryMode: 'startup'})
+  } catch (error) {
+    writeProjectTransferRecoveryFailureLogEvent({error, recoveryMode: 'startup'})
+  }
 }
 
 const startProjectTransferTtlRecoveryScheduler = () => {
@@ -148,7 +162,7 @@ const startProjectTransferTtlRecoveryScheduler = () => {
     try {
       writeProjectTransferRecoveryLogEvent({recovery: await runProjectTransferTtlRecovery(), recoveryMode: 'ttl'})
     } catch (error) {
-      writeProjectTransferTtlRecoveryFailureLogEvent(error)
+      writeProjectTransferRecoveryFailureLogEvent({error, recoveryMode: 'ttl'})
     } finally {
       running = false
     }
@@ -190,8 +204,7 @@ if (getCurrentServerRole() === 'judge-worker') {
 
 if (canCurrentServerOwnDuckdb()) {
   await migrateDuckdb()
-  const projectTransferRecovery = await runProjectTransferStartupRecovery()
-  writeProjectTransferRecoveryLogEvent({recovery: projectTransferRecovery, recoveryMode: 'startup'})
+  await runProjectTransferStartupRecoveryWithLogging()
   startProjectTransferTtlRecoveryScheduler()
 }
 
