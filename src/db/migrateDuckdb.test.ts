@@ -313,6 +313,200 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
   }
 })
 
+test('DuckDB migrations add project transfer session and history invariants', async () => {
+  const duckdbPath = `/tmp/forska-project-transfer-schema-${Date.now()}.duckdb`
+  const transferMigrationSql = readFileSync(resolve(migrationsFolder, '0084_projectTransferSessionHistory.sql'), 'utf8')
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const sessionColumns = await database.queryJson(
+          "SELECT column_name AS columnName FROM duckdb_columns() WHERE schema_name = 'app' AND table_name = 'project_transfer_session' ORDER BY column_index"
+        )
+        const historyColumns = await database.queryJson(
+          "SELECT column_name AS columnName FROM duckdb_columns() WHERE schema_name = 'app' AND table_name = 'project_transfer_history' ORDER BY column_index"
+        )
+        const constraints = await database.queryJson(
+          "SELECT table_name AS tableName, constraint_type AS constraintType, constraint_column_names AS columnNames FROM duckdb_constraints() WHERE schema_name = 'app' AND table_name IN ('project_transfer_session', 'project_transfer_history') ORDER BY table_name ASC, constraint_name ASC"
+        )
+        const indexRows = await database.queryJson(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE schema_name = 'app' AND table_name IN ('project_transfer_session', 'project_transfer_history') ORDER BY index_name ASC"
+        )
+
+        await database.run(
+          "INSERT INTO app.project_transfer_session (id, direction, state, expires_at) VALUES ('transfer-import-session', 'import', 'awaiting_upload', TIMESTAMPTZ '2026-01-01T00:00:00Z'), ('transfer-export-session', 'export', 'queued', TIMESTAMPTZ '2026-01-01T00:00:00Z')"
+        )
+        const importStateRejected = await database
+          .run("INSERT INTO app.project_transfer_session (id, direction, state, expires_at) VALUES ('transfer-import-state-bad', 'import', 'ready', TIMESTAMPTZ '2026-01-01T00:00:00Z')")
+          .then(
+            () => false,
+            () => true,
+          )
+        const exportStateRejected = await database
+          .run("INSERT INTO app.project_transfer_session (id, direction, state, expires_at) VALUES ('transfer-export-state-bad', 'export', 'awaiting_upload', TIMESTAMPTZ '2026-01-01T00:00:00Z')")
+          .then(
+            () => false,
+            () => true,
+          )
+        const directionRejected = await database
+          .run("INSERT INTO app.project_transfer_session (id, direction, state, expires_at) VALUES ('transfer-direction-bad', 'sync', 'queued', TIMESTAMPTZ '2026-01-01T00:00:00Z')")
+          .then(
+            () => false,
+            () => true,
+          )
+
+        await database.run(
+          "INSERT INTO app.project_transfer_history (id, direction, session_id, commit_id, package_fingerprint, schema_version, source_project_id, source_project_name, target_project_id, target_project_name, payload_counts_json, completion_payload_json) VALUES ('transfer-history-import', 'import', 'transfer-import-session', 'commit-import-1', 'fingerprint-import-1', 1, 'source-project-1', 'Source Project', 'target-project-1', 'Target Project', CAST('{\\"articles\\":1}' AS JSON), CAST('{\\"status\\":\\"completed\\"}' AS JSON))"
+        )
+        const importCompletionRejected = await database
+          .run("INSERT INTO app.project_transfer_history (id, direction, session_id, commit_id, package_fingerprint, schema_version, source_project_name, target_project_id, target_project_name, payload_counts_json) VALUES ('transfer-history-import-incomplete', 'import', 'transfer-import-session-incomplete', 'commit-import-incomplete', 'fingerprint-import-incomplete', 1, 'Source Project', 'target-project-incomplete', 'Target Project', CAST('{\\"articles\\":1}' AS JSON))")
+          .then(
+            () => false,
+            () => true,
+          )
+        const sameSessionRejected = await database
+          .run("INSERT INTO app.project_transfer_history (id, direction, session_id, commit_id, package_fingerprint, schema_version, source_project_name, target_project_id, target_project_name, payload_counts_json, completion_payload_json) VALUES ('transfer-history-import-retry', 'import', 'transfer-import-session', 'commit-import-retry', 'fingerprint-import-retry', 1, 'Source Project', 'target-project-retry', 'Target Project', CAST('{\\"articles\\":1}' AS JSON), CAST('{\\"status\\":\\"completed\\"}' AS JSON))")
+          .then(
+            () => false,
+            () => true,
+          )
+        const duplicatePackageAllowed = await database
+          .run("INSERT INTO app.project_transfer_history (id, direction, session_id, commit_id, package_fingerprint, schema_version, source_project_name, target_project_id, target_project_name, payload_counts_json, completion_payload_json) VALUES ('transfer-history-import-duplicate-package', 'import', 'transfer-import-session-2', 'commit-import-2', 'fingerprint-import-1', 1, 'Source Project', 'target-project-2', 'Target Project', CAST('{\\"articles\\":1}' AS JSON), CAST('{\\"status\\":\\"completed\\"}' AS JSON))")
+          .then(
+            () => true,
+            () => false,
+          )
+        const exportHistoryAllowed = await database
+          .run("INSERT INTO app.project_transfer_history (id, direction, package_fingerprint, schema_version, source_project_name, payload_counts_json) VALUES ('transfer-history-export', 'export', 'fingerprint-export-1', 1, 'Source Project', CAST('{\\"articles\\":1}' AS JSON))")
+          .then(
+            () => true,
+            () => false,
+          )
+
+        console.log(JSON.stringify({constraints, directionRejected, duplicatePackageAllowed, exportHistoryAllowed, exportStateRejected, historyColumns, importCompletionRejected, importStateRejected, indexRows, sameSessionRejected, sessionColumns}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify project transfer schema',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      constraints: Array<{columnNames: string[]; constraintType: string; tableName: string}>
+      directionRejected: boolean
+      duplicatePackageAllowed: boolean
+      exportHistoryAllowed: boolean
+      exportStateRejected: boolean
+      historyColumns: Array<{columnName: string}>
+      importCompletionRejected: boolean
+      importStateRejected: boolean
+      indexRows: Array<{indexName: string}>
+      sameSessionRejected: boolean
+      sessionColumns: Array<{columnName: string}>
+    }
+    const sessionColumnNames = parsed.sessionColumns.map((column) => {
+      return column.columnName
+    })
+    const historyColumnNames = parsed.historyColumns.map((column) => {
+      return column.columnName
+    })
+    const indexNames = parsed.indexRows.map((row) => {
+      return row.indexName
+    })
+    const foreignKeyConstraints = parsed.constraints.filter((constraint) => {
+      return constraint.constraintType === 'FOREIGN KEY'
+    })
+
+    expect(sessionColumnNames).toEqual([
+      'id',
+      'direction',
+      'state',
+      'plan_revision',
+      'package_fingerprint',
+      'commit_id',
+      'owner_token',
+      'heartbeat_at',
+      'expires_at',
+      'progress_json',
+      'plan_summary_json',
+      'completion_payload_json',
+      'error_json',
+      'created_at',
+      'updated_at',
+    ])
+    expect(historyColumnNames).toEqual([
+      'id',
+      'direction',
+      'session_id',
+      'commit_id',
+      'package_fingerprint',
+      'schema_version',
+      'source_project_id',
+      'source_project_name',
+      'target_project_id',
+      'target_project_name',
+      'payload_counts_json',
+      'completion_payload_json',
+      'created_at',
+    ])
+    expect(transferMigrationSql).not.toContain('REFERENCES app.')
+    expect(foreignKeyConstraints).toEqual([])
+    expect(indexNames).toContain('idx_app_project_transfer_session_stale_recovery')
+    expect(indexNames).toContain('idx_app_project_transfer_history_duplicate_warning')
+    expect(indexNames).toContain('idx_app_project_transfer_history_session_completion')
+    expect(indexNames).toContain('idx_app_project_transfer_history_direction_session_unique')
+    expect(parsed.importStateRejected).toBe(true)
+    expect(parsed.exportStateRejected).toBe(true)
+    expect(parsed.directionRejected).toBe(true)
+    expect(parsed.importCompletionRejected).toBe(true)
+    expect(parsed.sameSessionRejected).toBe(true)
+    expect(parsed.duplicatePackageAllowed).toBe(true)
+    expect(parsed.exportHistoryAllowed).toBe(true)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('provider model natural key migration deduplicates existing model references before adding the index', async () => {
   const duckdbPath = `/tmp/forska-provider-model-natural-key-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(

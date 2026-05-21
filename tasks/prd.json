@@ -1,20 +1,25 @@
 {
-  "name": "Better Performance For Compare Judgments",
-  "description": "Make compare judgments filters and pagination scale by introducing generation-based comparison serving marts, cursor reads, async counts, and serving-backed export.",
-  "branchName": "ralph/better-performance-compare",
+  "name": "Project Transfer Foundation",
+  "description": "Add the safe project-transfer foundation: schema, route ordering, session/history repositories, upload proxying, zip/path safety, manifest and payload contracts, execution gates, recovery, and runtime asset hardening.",
+  "branchName": "ralph/project-transfer-foundation",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Fix compare filter initialization",
-      "description": "As a compare judgments user, I want URL filters to be preserved on first load so the page does not accidentally fetch a slower or incorrect filter.",
+      "title": "Add project-transfer session and history schema",
+      "description": "As an implementer, I need durable project-transfer session and history tables so later import/export work can rely on atomic state transitions and idempotent completion recovery.",
       "acceptanceCriteria": [
-        "The compare judgments page does not reset `differenceFilter` until metadata columns are loaded.",
-        "The judgments query does not run until metadata confirms the selected difference filter is valid.",
-        "A route or helper test covers initial load with `differenceFilter=human-vs-llm` and preserves that filter.",
-        "`bun test src/app/routes/+compare-judgments/+$id/+index/compareProjectJudgmentsUrlState.test.ts` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "Add the next unused DuckDB migration for `app.project_transfer_session` with durable state, plan revision, ownership, heartbeat, progress, completion, error, and expiry fields.",
+        "Add the same migration coverage for `app.project_transfer_history` with completed-import invariants needed for duplicate warnings and same-session commit retry recovery.",
+        "Lock required `app.project_transfer_session` columns: `id`, `direction`, `state`, `plan_revision`, nullable `package_fingerprint`, nullable `commit_id`, nullable `owner_token`, nullable `heartbeat_at`, `expires_at`, nullable `progress_json`, nullable `plan_summary_json`, nullable `completion_payload_json`, nullable `error_json`, `created_at`, and `updated_at`.",
+        "Lock required `app.project_transfer_history` columns: `id`, `direction`, nullable `session_id`, nullable `commit_id`, `package_fingerprint`, `schema_version`, nullable `source_project_id`, `source_project_name`, nullable `target_project_id`, nullable `target_project_name`, `payload_counts_json`, nullable `completion_payload_json`, and `created_at`.",
+        "Do not add live foreign keys from project-transfer tables to mutable app entities such as `app.project`, `app.model`, `app.provider_connection`, `app.article`, or `app.prompt`; transfer rows store snapshot/provenance ids and enforce import/export invariants in repositories.",
+        "Add DB-level or repository-enforced invariants for direction values, session states, completed-import fields, duplicate warning lookup, non-null session-id completion lookup, and stale-session recovery lookup.",
+        "Because `project_transfer_history.session_id` is nullable, enforce same-session import completion uniqueness for non-null session ids at the repository layer.",
+        "Update `src/db/schemaTypes.ts` with `ProjectTransferSessionRecord`, `ProjectTransferHistoryRecord`, a missing `ReviewRecord`, `JudgmentRecord.deleteGeneration`, `JudgmentRecord.confidenceOriginal` as a non-null/defaulted package-write value, and nullable `JudgmentHumanRecord.projectId`.",
+        "Migration uses the next numeric prefix after the highest migration at completion time.",
+        "Transfer tables store provenance ids without live app-entity foreign keys, include recovery/history lookup indexes, enforce same-session import completion uniqueness, and require completed import rows to have non-null `completion_payload_json`, `session_id`, `commit_id`, `target_project_id`, and `target_project_name`.",
+        "Import states are `awaiting_upload`, `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, `ready_to_commit`, `committing`, `completed`, `failed`, `cancelled`, and `expired`; export states are `queued`, `assembling`, `packaging`, `ready`, `failed`, and `expired`.",
+        "`bun run db:mig` passes",
         "`bun run lint` passes"
       ],
       "priority": 1,
@@ -24,333 +29,232 @@
       "completionNotes": "Completed by agent"
     },
     {
-      "id": "US-002",
-      "title": "Add comparison serving schema",
-      "description": "As a maintainer, I want DuckDB serving tables for comparison projects so filtered comparison rows can be materialized and read efficiently.",
+      "id": "US-005",
+      "title": "Add project-transfer path-safety helpers",
+      "description": "As an implementer, I need shared project-transfer path validators so zip extraction, asset promotion, and runtime serving reject unsafe paths consistently.",
       "acceptanceCriteria": [
-        "Add DuckDB migrations for `app.comparison_project_serving_generation`, `mart.comparison_article_serving`, `mart.comparison_cell_serving`, `mart.comparison_filter_member`, and `mart.comparison_filter_stats`.",
-        "The article serving table stores article metadata, row sort fields, answered counts, row-filter flags, difference-filter flags, and conflict flags.",
-        "The cell serving table stores comparison project id, generation, article id, column id, column order, kind, prompt id, model id, source project id, content key, display answer, normalized answers, and source timestamps.",
-        "The filter member table stores comparison project id, generation, row filter, difference filter, article id, ordinal, article created at, and article title.",
-        "The stats table stores comparison project id, generation, row filter, difference filter, total count, and stats updated timestamp.",
-        "Indexes support active generation reads, filter membership reads, cell lookups, and stats lookups.",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "Add `src/server/services/projectTransfer/projectTransferPaths.ts`.",
+        "Add archive-member and runtime-asset validators that apply the checklist path rules.",
+        "Add tests for the checklist path rules, including valid paths and unsafe-path rejection.",
+        "Path rules reject traversal, absolute paths, raw backslashes, normalization changes, length excess, and duplicate/colliding paths; package roots are allowlisted and runtime assets stay under `assets/**`.",
+        "Runtime path helpers keep untrusted package/temp/promotion paths under `resolveRuntimeWritablePath()` and use `resolveRuntimeFilePath()` only after persisted runtime asset paths are validated.",
+        "`bun test src/server/services/projectTransfer/projectTransferPaths.test.ts` passes",
         "`bun run lint` passes"
       ],
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [],
-      "completionNotes": "Completed by agent"
+      "dependsOn": []
     },
     {
-      "id": "US-003",
-      "title": "Add serving generation helpers",
-      "description": "As a maintainer, I want reusable helpers for comparison serving generations so rebuilds can stage data and atomically promote a complete generation.",
+      "id": "US-002",
+      "title": "Add project-transfer session and history repositories",
+      "description": "As an implementer, I need repository helpers for project-transfer sessions and history so route handlers and background jobs can mutate transfer state safely without trusting filesystem artifacts.",
       "acceptanceCriteria": [
-        "Add server helpers to read the active comparison serving generation for a comparison project.",
-        "Add server helpers to create a new inactive generation for a comparison project.",
-        "Add server helpers to promote a staged generation atomically after a successful rebuild.",
-        "Add cleanup helpers that remove old generations without deleting the active generation.",
-        "Failed rebuild helper paths preserve the last active generation.",
-        "Unit tests cover missing generation, staged generation, promotion, cleanup, and failed rebuild preservation.",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "Add `src/server/services/projectTransfer/projectTransferSessionRepository.ts`.",
+        "Add `src/server/services/projectTransfer/projectTransferHistoryRepository.ts`.",
+        "Add `src/server/services/projectTransfer/projectTransferSession.ts` for session states, progress payloads, session response shapes, and temp-layout metadata.",
+        "Add repository helpers for session compare-and-set state transitions over expected state, plan revision, and owner token; plan revision updates; owner-token heartbeats; completion payload persistence; duplicate-history lookup by package fingerprint; and import-session completion lookup by session id.",
+        "Add tests for stale revision rejection, single-flight commit claiming, owner-token mismatch rejection, monotonic progress updates, completed import history invariants, duplicate-warning lookup by package fingerprint, and same-session completion lookup by session id instead of package fingerprint.",
+        "Duplicate warnings use `direction = 'import'` plus package fingerprint; commit retry and crash recovery use `direction = 'import'` plus session id.",
+        "Import artifacts are `upload.zip`, `manifest.json`, `extracted/`, `analysis.json`, `plan.json`, `promotionManifest.json`, `completion.json`, and `progress.json`; export artifacts are `build/`, `manifest.json`, `package.zip`, `completion.json`, and `progress.json`.",
+        "Contract rules cover progress fields, monotonic totals, stale `planRevision`, writer-only cancellation/cleanup states, dependency statuses, overlap/conflict counts, and concrete conflict counts before `ready_to_commit`.",
+        "`bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` passes",
+        "`bun test src/server/services/projectTransfer/projectTransferHistoryRepository.test.ts` passes",
         "`bun run lint` passes"
       ],
       "priority": 3,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
-        "US-002"
-      ],
-      "completionNotes": "Completed by agent"
-    },
-    {
-      "id": "US-004",
-      "title": "Materialize prompt-mode comparison cells",
-      "description": "As a maintainer, I want prompt-mode comparison cells built in SQL so LLM and human prompt answers are stored once per serving generation.",
-      "acceptanceCriteria": [
-        "Add a set-based SQL builder for prompt-mode LLM comparison cells using configured prompts, models, content variants, and source project scope.",
-        "Add a set-based SQL builder for prompt-mode human comparison cells using the latest answered human prompt judgments.",
-        "Cell `column_id` values match the existing `getComparisonProjectColumnId` conventions.",
-        "Cell `display_answer` and `normalized_answers` preserve current answer normalization semantics.",
-        "Tests compare prompt-mode serving cells against current TypeScript row assembly for representative LLM, human, array-answer, and missing-answer cases.",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
-        "`bun run lint` passes"
-      ],
-      "priority": 4,
-      "passes": true,
-      "notes": "",
-      "dependsOn": [
-        "US-002",
-        "US-003"
-      ],
-      "completionNotes": "Completed by agent"
-    },
-    {
-      "id": "US-005",
-      "title": "Materialize summary-mode comparison cells",
-      "description": "As a maintainer, I want summary-mode comparison cells built in SQL so derived LLM summary answers and human summary answers are materialized consistently.",
-      "acceptanceCriteria": [
-        "Add a set-based SQL builder for summary-mode LLM cells using source project summary prompt groups.",
-        "Summary-mode LLM derivation matches current `deriveStrictSummaryAnswer` behavior for include and exclude criteria.",
-        "Add a set-based SQL builder for summary-mode human cells using normalized human summary answers.",
-        "Summary-mode cell `column_id` values match the existing summary column conventions.",
-        "Tests cover yes, no, maybe, missing criteria metadata, missing prompt answers, source project grouping, and human summary normalization.",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
-        "`bun run lint` passes"
-      ],
-      "priority": 5,
-      "passes": true,
-      "notes": "",
-      "dependsOn": [
-        "US-004"
-      ],
-      "completionNotes": "Completed by agent"
+        "US-001"
+      ]
     },
     {
       "id": "US-006",
-      "title": "Build comparison rollups and filters",
-      "description": "As a maintainer, I want article rollups, filter memberships, and filter stats generated from materialized cells so every compare filter is fast.",
+      "title": "Add project-transfer zip wrapper",
+      "description": "As an implementer, I need a zip wrapper around `@zip.js/zip.js` so package read/write behavior is tested before route handlers depend on it.",
       "acceptanceCriteria": [
-        "Build `mart.comparison_article_serving` rows from materialized cells and scoped article metadata.",
-        "Compute `answered_column_count`, `answered_prompt_count`, `has_all_llm_columns`, `has_all_human_columns`, and `has_multiple_answers` in SQL.",
-        "Compute `has_human_vs_llm_difference`, `has_llm_vs_llm_difference`, `has_any_disagreement`, and `has_conflict` in SQL with existing filter semantics.",
-        "Build `mart.comparison_filter_member` rows for all supported row-filter and difference-filter combinations.",
-        "Build `mart.comparison_filter_stats` from filter membership counts.",
-        "Filter member ordinals are stable for `article_created_at DESC`, `article_title ASC`, and `article_id ASC` ordering.",
-        "Serving builder tests cover prompt mode, summary mode, all row filters, all difference filters, and page/export parity fixtures.",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "Add `@zip.js/zip.js` with Bun and include `package.json` and `bun.lock` changes.",
+        "Add `src/server/services/projectTransfer/projectTransferZip.ts`.",
+        "Add a project-transfer zip wrapper that applies the checklist zip rules.",
+        "Add tests for the checklist zip rules.",
+        "Zip rules require `manifest.json` at root, enforce allowed payload paths, reject symlinks and normalized duplicates, support ZIP64 or fixtures, and treat streamed counters/checksums as authoritative over advisory sizes.",
+        "Path rules reject traversal, absolute paths, raw backslashes, normalization changes, length excess, and duplicate/colliding paths before archive members are accepted.",
+        "`bun test src/server/services/projectTransfer/projectTransferZip.test.ts` passes",
         "`bun run lint` passes"
       ],
-      "priority": 6,
-      "passes": true,
+      "priority": 4,
+      "passes": false,
       "notes": "",
       "dependsOn": [
-        "US-004",
         "US-005"
-      ],
-      "completionNotes": "Completed by agent"
+      ]
     },
     {
       "id": "US-007",
-      "title": "Execute comparison serving rebuilds",
-      "description": "As a maintainer, I want a rebuild service that stages, builds, promotes, and cleans comparison serving generations so reads remain stable during rebuilds.",
+      "title": "Add manifest, warning, and fingerprint contracts",
+      "description": "As an implementer, I need manifest validators and fingerprint helpers so package integrity and duplicate-detection semantics are locked before export and import handlers exist.",
       "acceptanceCriteria": [
-        "Add a comparison serving rebuild service that creates a staged generation, builds cells, builds rollups, builds filter members, builds stats, promotes the generation, and cleans old generations.",
-        "The rebuild service runs all multi-table changes in safe transactions where practical.",
-        "Failed rebuilds record an error state and do not replace the active generation.",
-        "A successful rebuild updates serving status fields for metadata reads.",
-        "Tests cover successful rebuild, failed rebuild, stale active generation preservation, and old generation cleanup.",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "Add `src/server/services/projectTransfer/projectTransferSchemas.ts`.",
+        "Add `src/server/services/projectTransfer/projectTransferManifest.ts`.",
+        "Add `src/server/services/projectTransfer/projectTransferFingerprint.ts`.",
+        "Add ArkType validators and fingerprint helpers that apply the checklist manifest/fingerprint rules.",
+        "Add tests for schema-version rejection, fingerprint stability, and fingerprint sensitivity.",
+        "Manifest/fingerprint rules use ArkType, canonical JSON, deterministic NDJSON ordering, SHA-256 checksums, and logical duplicate fingerprints that exclude volatile or provenance-only fields.",
+        "Payload rules use camelCase package keys for manifest-declared payload references.",
+        "`bun test src/server/services/projectTransfer/projectTransferManifest.test.ts` passes",
+        "`bun test src/server/services/projectTransfer/projectTransferFingerprint.test.ts` passes",
         "`bun run lint` passes"
       ],
-      "priority": 7,
-      "passes": true,
+      "priority": 5,
+      "passes": false,
       "notes": "",
       "dependsOn": [
-        "US-006"
-      ],
-      "completionNotes": "Completed by agent"
-    },
-    {
-      "id": "US-008",
-      "title": "Expose serving status and create-edit rebuilds",
-      "description": "As a compare judgments user, I want comparison metadata to show whether fast serving data is ready so the page can avoid silent slow scans.",
-      "acceptanceCriteria": [
-        "Comparison project metadata includes `servingStatus`, `activeGeneration`, `isServingReady`, and `servingUpdatedAt`.",
-        "Comparison project create requests queue or run an initial comparison serving rebuild.",
-        "Comparison project edit requests mark serving stale and queue or run a rebuild.",
-        "The metadata endpoint returns a clear materializing or stale state when no active serving generation exists.",
-        "Route tests cover metadata status fields for ready, missing, stale, refreshing, and failed serving states.",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
-        "`bun run lint` passes"
-      ],
-      "priority": 8,
-      "passes": true,
-      "notes": "",
-      "dependsOn": [
-        "US-007"
-      ],
-      "completionNotes": "Completed by agent"
-    },
-    {
-      "id": "US-009",
-      "title": "Invalidate serving on source changes",
-      "description": "As a maintainer, I want comparison serving data marked stale when dependent LLM or human judgments change so fast reads do not show obsolete comparisons indefinitely.",
-      "acceptanceCriteria": [
-        "LLM judgment changes mark affected comparison projects stale when model, prompt, content settings, and source project scope overlap.",
-        "Human prompt judgment changes mark affected prompt-mode comparison projects stale.",
-        "Human summary judgment changes mark affected summary-mode comparison projects stale.",
-        "Conflict resolution changes do not trigger a serving rebuild because conflict resolution is joined at read time.",
-        "Tests cover LLM dependency matching, prompt human dependency matching, summary human dependency matching, and conflict resolution exclusion.",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
-        "`bun run lint` passes"
-      ],
-      "priority": 9,
-      "passes": true,
-      "notes": "",
-      "dependsOn": [
-        "US-008"
-      ],
-      "completionNotes": "Completed by agent"
+        "US-005"
+      ]
     },
     {
       "id": "US-010",
-      "title": "Read judgments with cursor serving path",
-      "description": "As a compare judgments user, I want the judgments endpoint to return a page of rows from serving data so any filter loads quickly regardless of total matching rows.",
+      "title": "Add transfer contract schemas and execution gates",
+      "description": "As an implementer, I need shared project-transfer contracts for session responses, plan summaries, cancellation, thresholds, and resource gates so later export/import handlers cannot invent incompatible behavior.",
       "acceptanceCriteria": [
-        "`/api/comparison-projects/:id/judgments` supports `limit`, `cursor`, `rowFilter`, and `differenceFilter` request fields.",
-        "The endpoint resolves the active serving generation and reads matching article ids from `mart.comparison_filter_member` by cursor and limit.",
-        "The endpoint joins article metadata from `mart.comparison_article_serving` only for returned article ids.",
-        "The endpoint joins cells from `mart.comparison_cell_serving` only for returned article ids.",
-        "The endpoint joins conflict resolutions only for returned article ids.",
-        "The endpoint returns `nextCursor`, `totalCount: null`, `totalPages: null`, and serving status without blocking on exact counts.",
-        "Route tests cover cursor pagination, every row filter, every difference filter, missing active generation, and conflict resolution hydration.",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "Add `src/server/services/projectTransfer/projectTransferContracts.ts` or equivalent for session responses, cancellation rules, upload/session shapes, dependency statuses, overlap summaries, conflict counts, asset-promotion metadata, thresholds, resource gates, and runtime event fields.",
+        "Lock contract behavior plus the checklist threshold/resource rules.",
+        "Add tests for threshold/resource rules, dependency-status validation, and `ready_to_commit` conflict-count requirements.",
+        "Thresholds: export inline at package `<= 128 MB` and assets `<= 64 MB`; import analyze inline at zip `<= 128 MB` and uncompressed payload-plus-assets `<= 512 MB`; commit background at `>= 25,000` articles, `>= 250,000` judgments, or `>= 2 GB` extracted assets.",
+        "Resource gates cover writable temp roots, 10% disk headroom, archive member/inode budgets, path and file-size limits, NDJSON line size, JSON depth/member count, streaming parse requirements, and decompression ratio or expanded-byte budgets.",
+        "Contract rules cover progress fields, monotonic totals, stale `planRevision`, writer-only cancellation/cleanup states, dependency statuses, overlap/conflict counts, and concrete conflict counts before `ready_to_commit`.",
+        "`bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes",
         "`bun run lint` passes"
       ],
-      "priority": 10,
-      "passes": true,
-      "notes": "",
-      "dependsOn": [
-        "US-008"
-      ],
-      "completionNotes": "Completed by agent"
-    },
-    {
-      "id": "US-011",
-      "title": "Add comparison judgments count endpoint",
-      "description": "As a compare judgments user, I want exact counts to load separately so the table can render before totals are available.",
-      "acceptanceCriteria": [
-        "Add `/api/comparison-projects/:id/judgments/count` with `rowFilter`, `differenceFilter`, and `limit` request fields.",
-        "The count endpoint reads `total_count` from `mart.comparison_filter_stats` for the active generation.",
-        "The count endpoint returns `totalCount`, `totalPages`, and serving status.",
-        "The count endpoint does not scan comparison cells or rebuild row filters on request.",
-        "Route tests cover every row filter, every difference filter, missing stats, and missing active generation.",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
-        "`bun run lint` passes"
-      ],
-      "priority": 11,
-      "passes": true,
-      "notes": "",
-      "dependsOn": [
-        "US-010"
-      ],
-      "completionNotes": "Completed by agent"
-    },
-    {
-      "id": "US-012",
-      "title": "Convert compare UI to load-more pagination",
-      "description": "As a compare judgments user, I want rows to load with cursor pagination and counts to appear asynchronously so large filters stay responsive.",
-      "acceptanceCriteria": [
-        "The compare judgments page uses cursor/load-more pagination instead of exact page navigation for row data.",
-        "The page fetches rows first and fetches exact counts separately from the count endpoint.",
-        "The page shows a count skeleton or pending state while exact counts load.",
-        "The page preserves row filter, difference filter, and limit state in the URL.",
-        "The page shows materializing, stale, or failed serving status when metadata reports it.",
-        "Browser verification confirms `differenceFilter=human-vs-llm` is preserved, rows load before count, and load-more works.",
-        "`bun run build` passes",
-        "`bun run desktop:build` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
-        "`bun run lint` passes"
-      ],
-      "priority": 12,
-      "passes": true,
+      "priority": 6,
+      "passes": false,
       "notes": "",
       "dependsOn": [
         "US-001",
-        "US-010",
-        "US-011"
-      ],
-      "completionNotes": "Completed by agent"
+        "US-002",
+        "US-005",
+        "US-007"
+      ]
     },
     {
-      "id": "US-013",
-      "title": "Stream compare export from serving marts",
-      "description": "As a compare judgments user, I want exports to use the same fast filter membership as the page so exporting large filtered comparisons does not recompute all rows.",
+      "id": "US-003",
+      "title": "Add transfer route shell and route-shadowing tests",
+      "description": "As an implementer, I need a mounted project-transfer route shell so transfer endpoints have stable ordering and cannot be shadowed by existing project id routes.",
       "acceptanceCriteria": [
-        "The compare export endpoint iterates `mart.comparison_filter_member` in ordinal batches for the selected row and difference filters.",
-        "The export joins article rows and cells per batch from comparison serving tables.",
-        "The export preserves page filter semantics for all row filters and difference filters.",
-        "The export does not call the old TypeScript full-scan row builder during normal serving-ready operation.",
-        "Export/page parity tests cover every row filter and difference filter.",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
-        "`bun run lint` passes"
-      ],
-      "priority": 13,
-      "passes": true,
-      "notes": "",
-      "dependsOn": [
-        "US-008"
-      ],
-      "completionNotes": "Completed by agent"
-    },
-    {
-      "id": "US-014",
-      "title": "Remove normal slow fallback",
-      "description": "As a maintainer, I want normal compare reads to avoid unbounded request-time scans so missing serving data is surfaced as a materializing state instead of hidden latency.",
-      "acceptanceCriteria": [
-        "Normal judgments page reads do not use the TypeScript full-scan row builder when no active generation exists.",
-        "The API returns a clear materializing or stale status when serving data is not ready.",
-        "The UI handles the not-ready status without showing an empty successful table.",
-        "Any remaining fallback is explicitly bounded to small local development cases or tests.",
-        "Regression tests verify missing serving data does not trigger unbounded article scanning.",
-        "Browser verification confirms the compare page shows a clear materializing or stale state when serving data is unavailable.",
+        "Add `src/server/routes/projectTransferRoutes.ts` with placeholder contract-safe handlers for the planned transfer endpoints: `POST /api/projects/:id/export-project`, `GET /api/projects/export/:exportId`, `GET /api/projects/export/:exportId/download`, `POST /api/projects/import/sessions`, `PUT /api/projects/import/:sessionId/upload`, `POST /api/projects/import/:sessionId/analyze`, `GET /api/projects/import/:sessionId`, `POST /api/projects/import/:sessionId/resolve-dependencies`, `POST /api/projects/import/:sessionId/commit`, and `DELETE /api/projects/import/:sessionId`.",
+        "Placeholder handlers validate route params and bodies where applicable, use the shared contract helpers from `US-010` for response shapes, and do not assemble exports, analyze uploads, commit imports, write final app tables, or implement UI wizard behavior.",
+        "Extract or expose a side-effect-free product route composition helper, then mount `projectTransferRoutes` before `projectsRoutes`, `projectExportRoutes`, and other `/api/projects/:id...` modules everywhere product routes are mounted.",
+        "Add route-shadowing and route-classification/proxy tests for every transfer route plus the existing CSV `POST /api/projects/:id/export`, covering normal `/api/...` and `duckdbOwnerPrivateApiPrefix` (`/__duckdb-owner-rpc`) paths.",
+        "Product route composition is side-effect-free for tests, mounts transfer routes before generic project routes, and keeps all transfer endpoints owner-proxied or explicitly fail-closed.",
+        "`bun test src/server/routes/projectTransferRoutes.test.ts` passes",
+        "`bun test src/server/routes/apiRouteClassification.test.ts` passes",
+        "`bun test src/server/routes/ApiProxyRoutes.test.ts` passes",
         "`bun run build` passes",
         "`bun run desktop:build` passes",
-        "`bun run db:mig` passes",
-        "`bun test src/utils/comparisonProjectDifferenceFilter.test.ts` passes",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
         "`bun run lint` passes"
       ],
-      "priority": 14,
-      "passes": true,
+      "priority": 7,
+      "passes": false,
       "notes": "",
       "dependsOn": [
-        "US-012",
-        "US-013"
+        "US-001",
+        "US-010"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Add streaming upload owner-proxy foundation",
+      "description": "As an implementer, I need project-transfer uploads to stream through the DuckDB-owner proxy without buffering or unsafe retry behavior.",
+      "acceptanceCriteria": [
+        "Add an allowlisted streaming owner-proxy branch for `PUT /api/projects/import/:sessionId/upload` inside `src/server/routes/ApiProxyRoutes.ts` before generic body buffering can run.",
+        "Add owner-proxy regression coverage for streaming upload and export-package download behavior.",
+        "Upload proxy stays on normal `/api/*`, has no writer-direct/follower-local bypass, streams without buffering or retrying non-replayable bodies, fails no-owner uploads before consuming the body, and keeps export download streaming-safe.",
+        "Product route composition keeps transfer upload and download endpoints owner-proxied or explicitly fail-closed.",
+        "`bun test src/server/routes/ApiProxyRoutes.test.ts` passes",
+        "`bun test src/server/routes/ApiProxyRoutes.retry.test.ts` passes",
+        "`bun run lint` passes"
       ],
-      "completionNotes": "Completed by agent"
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Add transfer session recovery and cleanup foundation",
+      "description": "As an implementer, I need writer-owned transfer session recovery and cleanup so abandoned sessions and promoted assets are handled safely after crashes or TTL expiry.",
+      "acceptanceCriteria": [
+        "Add `src/server/services/projectTransfer/projectTransferSessionRecovery.ts`.",
+        "Add active-writer-only startup/TTL recovery that applies the checklist recovery rules.",
+        "Add cleanup and recovery tests for the checklist recovery rules.",
+        "Recovery runs only on the active writer after migration, batch-limits stale scans, atomically transitions sessions before cleanup, checks transfer history before promoted-asset deletion, and deletes only temp files for completed sessions.",
+        "Duplicate warnings use `direction = 'import'` plus package fingerprint; commit retry and crash recovery use `direction = 'import'` plus session id.",
+        "Runtime path helpers keep untrusted package/temp/promotion paths under `resolveRuntimeWritablePath()`.",
+        "`bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Harden runtime asset route path validation",
+      "description": "As an implementer, I need `/api/runtime-asset` to use the same path-safety guarantees so imported article assets cannot be served through unsafe persisted paths.",
+      "acceptanceCriteria": [
+        "Reuse the project-transfer runtime asset validator before runtime file resolution.",
+        "Add route classification and route tests for the checklist runtime-asset rules.",
+        "Runtime asset serving validates persisted `assets/**` paths before `resolveRuntimeFilePath()`, rejects unsafe paths before filesystem access, and keeps `/api/runtime-asset` owner-proxied through route-classification coverage.",
+        "Runtime path helpers use `resolveRuntimeFilePath()` only after persisted runtime asset paths are validated.",
+        "`bun test src/server/routes/RuntimeAssetsRoutes.test.ts` passes",
+        "`bun test src/server/routes/apiRouteClassification.test.ts` passes",
+        "`bun test src/app/utils/getRuntimeAssetUrl.test.ts` passes if browser or desktop runtime asset URL contracts change",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-011",
+      "title": "Lock payload and identifier contracts",
+      "description": "As an implementer, I need package payload schemas, identifier normalization helpers, and omission/redaction contract fixtures so later export assembly and import analysis use the same field names and matching semantics.",
+      "acceptanceCriteria": [
+        "Add `src/server/services/projectTransfer/projectTransferPayloadSchemas.ts` or equivalent validators/helpers for every manifest-declared payload.",
+        "Lock payload shape, fixtures, provenance, warning, omission/redaction, and identifier contracts without implementing export assembly.",
+        "Reuse `src/utils/articleIdentifierNormalization.ts`; add project-transfer wrappers only if a narrower package comparison shape is needed.",
+        "Add tests for payload shape, project settings, warnings, identifier boundaries, provider/model edge cases, and required signature fields.",
+        "Payload rules use camelCase package keys, package-specific serializers/fixtures, project-setting validation, warning/omission codes, signature/provenance fields, and source ids as provenance only.",
+        "Identifier comparison uses shared DOI, PubMed/PMID, arXiv, medRxiv, and bioRxiv helpers for analyze, duplicate summaries, overlap summaries, and commit; bioRxiv/medRxiv remain accepted as DOI strong identifiers under the current contract.",
+        "Manifest-declared payload validators reject missing required signature fields and invalid provider/model edge cases.",
+        "`bun test src/server/services/projectTransfer/projectTransferPayloadSchemas.test.ts` passes",
+        "`bun test src/utils/articleIdentifierNormalization.test.ts` passes",
+        "`bun test src/server/services/projectTransfer/projectTransferIdentifierNormalization.test.ts` passes if project-transfer comparison wrappers are added",
+        "`bun run lint` passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005",
+        "US-007"
+      ]
     }
   ],
   "metadata": {
-    "updatedAt": "2026-05-12T22:39:32.457Z"
+    "updatedAt": "2026-05-21T06:55:11.876Z"
   }
 }
