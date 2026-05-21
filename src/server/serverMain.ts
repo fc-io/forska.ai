@@ -17,6 +17,7 @@ import {duckdbOwnerConnectionsRoutes} from './routes/DuckdbOwnerConnectionsRoute
 import {judgmentDispatchTelemetryRoutes} from './routes/JudgmentDispatchTelemetryRoutes.ts'
 import {getProductApiRoutes} from './routes/productApiRoutes.ts'
 import {runtimeReadyRoutes} from './routes/runtimeReadyRoutes.ts'
+import {runProjectTransferStartupRecovery} from './services/projectTransfer/projectTransferSessionRecovery.ts'
 import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
 import {env} from './utils/env'
 import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
@@ -105,6 +106,26 @@ if (getCurrentServerRole() === 'judge-worker') {
 
 if (canCurrentServerOwnDuckdb()) {
   await migrateDuckdb()
+  const projectTransferRecovery = await runProjectTransferStartupRecovery()
+
+  if (
+    projectTransferRecovery.cleanupTempArtifactCount > 0
+    || projectTransferRecovery.deletedPromotedAssetCount > 0
+    || projectTransferRecovery.expiredSessionCount > 0
+    || projectTransferRecovery.recoveredCompletionCount > 0
+  ) {
+    writeRuntimeOperatorLogEvent({
+      attrs: projectTransferRecovery,
+      event: 'project-transfer.startup-recovery',
+      message:
+        `[project-transfer] startup recovery scanned ${projectTransferRecovery.scannedSessionCount} session(s), `
+        + `${projectTransferRecovery.recoveredCompletionCount} recovered, `
+        + `${projectTransferRecovery.expiredSessionCount} expired, `
+        + `${projectTransferRecovery.cleanupTempArtifactCount} temp cleanup(s), `
+        + `${projectTransferRecovery.deletedPromotedAssetCount} promoted asset(s) deleted`,
+      severity: 'INFO',
+    })
+  }
 }
 
 if (getCurrentServerRole() !== 'judge-worker' && shouldCurrentServerRunJudgingLoops()) {

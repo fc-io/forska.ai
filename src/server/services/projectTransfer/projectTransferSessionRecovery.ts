@@ -1,0 +1,500 @@
+import {access, readFile, rm} from 'node:fs/promises'
+
+import type {
+  ProjectTransferDirection,
+  ProjectTransferHistoryRecord,
+  ProjectTransferSessionState,
+} from '../../../db/schemaTypes.ts'
+import {canCurrentServerOwnDuckdb} from '../../utils/serverRuntimeRole.ts'
+import {getAppDatabaseService} from '../appDatabaseService.ts'
+import {getJsonValue, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
+import type {ProjectTransferAssetPromotionMetadata} from './projectTransferContracts.ts'
+import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
+import {
+  resolveProjectTransferPromotionWritablePath,
+  resolveProjectTransferTempWritablePath,
+} from './projectTransferPaths.ts'
+import {
+  getProjectTransferExportTempLayout,
+  getProjectTransferImportTempLayout,
+  isProjectTransferTerminalState,
+  parseProjectTransferCompletionPayload,
+} from './projectTransferSession.ts'
+
+type ProjectTransferSessionRecoveryRunner = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+  transaction?: <T>(operation: (runner: ProjectTransferSessionRecoveryRunner) => Promise<T>) => Promise<T>
+}
+
+type ProjectTransferSessionRecoveryRuntimeOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
+
+type ProjectTransferSessionRecoveryParams = ProjectTransferSessionRecoveryRuntimeOptions & {
+  batchSize?: number
+  isActiveWriter?: () => boolean
+  now?: Date
+  ownerToken?: string
+  runner?: ProjectTransferSessionRecoveryRunner
+}
+
+type ProjectTransferRecoveryCandidate = {
+  direction: ProjectTransferDirection
+  id: string
+  state: ProjectTransferSessionState
+}
+
+type ProjectTransferRecoveryCleanupPlan = ProjectTransferRecoveryCandidate & {
+  deletePromotedAssets: boolean
+  deleteTempArtifacts: boolean
+  recoveredFromHistory: boolean
+  transitionedToExpired: boolean
+}
+
+type ProjectTransferPromotedAssetCleanupResult = {deletedPromotedAssetCount: number; skippedPromotedAssetCount: number}
+
+type ProjectTransferSessionRecoveryResult = ProjectTransferPromotedAssetCleanupResult & {
+  cleanupTempArtifactCount: number
+  expiredSessionCount: number
+  recoveredCompletionCount: number
+  scannedSessionCount: number
+  skippedActiveWriterCheck: boolean
+}
+
+const defaultRecoveryBatchSize = 50
+const maxRecoveryBatchSize = 500
+
+const emptyRecoveryResult = (skippedActiveWriterCheck: boolean): ProjectTransferSessionRecoveryResult => {
+  return {
+    cleanupTempArtifactCount: 0,
+    deletedPromotedAssetCount: 0,
+    expiredSessionCount: 0,
+    recoveredCompletionCount: 0,
+    scannedSessionCount: 0,
+    skippedActiveWriterCheck,
+    skippedPromotedAssetCount: 0,
+  }
+}
+
+const getRecoveryBatchSize = (batchSize: number | undefined) => {
+  const normalized = Math.floor(batchSize ?? defaultRecoveryBatchSize)
+
+  return Math.max(1, Math.min(maxRecoveryBatchSize, normalized))
+}
+
+const getRunner = (runner?: ProjectTransferSessionRecoveryRunner) => {
+  return runner ?? getAppDatabaseService()
+}
+
+const getJsonLiteral = (value: unknown) => {
+  return value === null || value === undefined ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(value))} AS JSON)`
+}
+
+const getRecoveryOwnerToken = (ownerToken: string | undefined) => {
+  return typeof ownerToken === 'string' && ownerToken.trim().length > 0
+    ? ownerToken
+    : `project-transfer-recovery-${process.pid}`
+}
+
+const getStaleProjectTransferSessions = async ({
+  batchSize,
+  now,
+  runner,
+}: {
+  batchSize: number
+  now: Date
+  runner: ProjectTransferSessionRecoveryRunner
+}) => {
+  return runner.queryJson<ProjectTransferRecoveryCandidate>(`
+    SELECT
+      direction,
+      id,
+      state
+    FROM app.project_transfer_session
+    WHERE expires_at <= ${getTimestampLiteral(now)}
+    ORDER BY expires_at ASC, updated_at ASC, id ASC
+    LIMIT ${batchSize}
+  `)
+}
+
+const transitionImportSessionToCompletedFromHistory = async ({
+  history,
+  now,
+  runner,
+  session,
+}: {
+  history: ProjectTransferHistoryRecord
+  now: Date
+  runner: ProjectTransferSessionRecoveryRunner
+  session: ProjectTransferRecoveryCandidate
+}) => {
+  const completionPayload = parseProjectTransferCompletionPayload(history.completionPayloadJson)
+
+  if (completionPayload?.status !== 'completed') {
+    return null
+  }
+
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+    UPDATE app.project_transfer_session
+    SET
+      state = 'completed',
+      commit_id = ${getSqlLiteral(history.commitId)},
+      package_fingerprint = ${getSqlLiteral(history.packageFingerprint)},
+      owner_token = NULL,
+      completion_payload_json = ${getJsonLiteral(completionPayload)},
+      updated_at = ${getTimestampLiteral(now)}
+    WHERE id = ${getSqlLiteral(session.id)}
+      AND direction = 'import'
+      AND state = ${getSqlLiteral(session.state)}
+      AND expires_at <= ${getTimestampLiteral(now)}
+    RETURNING direction, id, state
+  `)
+
+  return row ?? null
+}
+
+const transitionSessionToExpired = async ({
+  now,
+  ownerToken,
+  runner,
+  session,
+}: {
+  now: Date
+  ownerToken: string
+  runner: ProjectTransferSessionRecoveryRunner
+  session: ProjectTransferRecoveryCandidate
+}) => {
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+    UPDATE app.project_transfer_session
+    SET
+      state = 'expired',
+      owner_token = ${getSqlLiteral(ownerToken)},
+      error_json = ${getJsonLiteral({reason: 'project_transfer_session_recovery_expired'})},
+      updated_at = ${getTimestampLiteral(now)}
+    WHERE id = ${getSqlLiteral(session.id)}
+      AND state = ${getSqlLiteral(session.state)}
+      AND expires_at <= ${getTimestampLiteral(now)}
+    RETURNING direction, id, state
+  `)
+
+  return row ?? null
+}
+
+const getCompletedImportHistory = async ({
+  runner,
+  session,
+}: {
+  runner: ProjectTransferSessionRecoveryRunner
+  session: ProjectTransferRecoveryCandidate
+}) => {
+  return session.direction === 'import'
+    ? getProjectTransferHistoryRepository().getCompletedImportHistoryBySessionId({runner, sessionId: session.id})
+    : null
+}
+
+const getCleanupPlanForSession = async ({
+  now,
+  ownerToken,
+  runner,
+  session,
+}: {
+  now: Date
+  ownerToken: string
+  runner: ProjectTransferSessionRecoveryRunner
+  session: ProjectTransferRecoveryCandidate
+}): Promise<ProjectTransferRecoveryCleanupPlan | null> => {
+  const history = await getCompletedImportHistory({runner, session})
+  const shouldRecoverFromHistory = history !== null && session.state !== 'completed'
+
+  if (shouldRecoverFromHistory) {
+    const completedSession = await transitionImportSessionToCompletedFromHistory({history, now, runner, session})
+
+    return completedSession === null
+      ? null
+      : {
+          ...session,
+          deletePromotedAssets: false,
+          deleteTempArtifacts: true,
+          recoveredFromHistory: true,
+          transitionedToExpired: false,
+        }
+  }
+
+  if (isProjectTransferTerminalState(session.state)) {
+    return {
+      ...session,
+      deletePromotedAssets: session.direction === 'import' && session.state !== 'completed' && history === null,
+      deleteTempArtifacts: true,
+      recoveredFromHistory: false,
+      transitionedToExpired: false,
+    }
+  }
+
+  const expiredSession = await transitionSessionToExpired({now, ownerToken, runner, session})
+
+  return expiredSession === null
+    ? null
+    : {
+        ...session,
+        deletePromotedAssets: session.direction === 'import' && history === null,
+        deleteTempArtifacts: true,
+        recoveredFromHistory: false,
+        transitionedToExpired: true,
+      }
+}
+
+const getCleanupPlans = async ({
+  now,
+  ownerToken,
+  runner,
+  sessions,
+}: {
+  now: Date
+  ownerToken: string
+  runner: ProjectTransferSessionRecoveryRunner
+  sessions: ProjectTransferRecoveryCandidate[]
+}) => {
+  return sessions.reduce<Promise<ProjectTransferRecoveryCleanupPlan[]>>(async (promise, session) => {
+    const plans = await promise
+    const plan = await getCleanupPlanForSession({now, ownerToken, runner, session})
+
+    return plan === null ? plans : [...plans, plan]
+  }, Promise.resolve([]))
+}
+
+const getTempRootPath = (plan: ProjectTransferRecoveryCleanupPlan) => {
+  return plan.direction === 'import'
+    ? getProjectTransferImportTempLayout(plan.id).rootPath
+    : getProjectTransferExportTempLayout(plan.id).rootPath
+}
+
+const getPromotionManifestPath = (plan: ProjectTransferRecoveryCleanupPlan) => {
+  return getProjectTransferImportTempLayout(plan.id).promotionManifestPath
+}
+
+const getResolvedTempPath = ({
+  pathValue,
+  runtimeOptions,
+}: {
+  pathValue: string
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+}) => {
+  return resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue})
+}
+
+const getResolvedPromotionPath = ({
+  pathValue,
+  runtimeOptions,
+}: {
+  pathValue: string
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+}) => {
+  return resolveProjectTransferPromotionWritablePath({...runtimeOptions, pathValue})
+}
+
+const readJsonFileIfPresent = async (filePath: string) => {
+  const exists = await access(filePath).then(
+    () => {
+      return true
+    },
+    () => {
+      return false
+    },
+  )
+
+  if (!exists) {
+    return null
+  }
+
+  try {
+    return getJsonValue(JSON.parse(await readFile(filePath, 'utf8')))
+  } catch {
+    return null
+  }
+}
+
+const isPromotionMetadata = (value: unknown): value is ProjectTransferAssetPromotionMetadata => {
+  return (
+    typeof value === 'object'
+    && value !== null
+    && !Array.isArray(value)
+    && typeof (value as ProjectTransferAssetPromotionMetadata).promotedPath === 'string'
+  )
+}
+
+const getPromotionMetadataArray = (value: unknown) => {
+  const parsed = getJsonValue(value)
+
+  if (Array.isArray(parsed)) {
+    return parsed.filter(isPromotionMetadata)
+  }
+
+  if (typeof parsed !== 'object' || parsed === null) {
+    return []
+  }
+
+  const record = parsed as Record<string, unknown>
+  const values = [record.assets, record.promotedAssets, record.promotions]
+  const metadata = values.find((entry) => {
+    return Array.isArray(entry)
+  })
+
+  return Array.isArray(metadata) ? metadata.filter(isPromotionMetadata) : []
+}
+
+const removeTempArtifacts = async ({
+  plan,
+  runtimeOptions,
+}: {
+  plan: ProjectTransferRecoveryCleanupPlan
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+}) => {
+  const tempPath = getResolvedTempPath({pathValue: getTempRootPath(plan), runtimeOptions})
+  await rm(tempPath, {force: true, recursive: true})
+  return 1
+}
+
+const removePromotedAsset = async ({
+  metadata,
+  runtimeOptions,
+}: {
+  metadata: ProjectTransferAssetPromotionMetadata
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+}): Promise<ProjectTransferPromotedAssetCleanupResult> => {
+  try {
+    const promotedPath = getResolvedPromotionPath({pathValue: metadata.promotedPath, runtimeOptions})
+    await rm(promotedPath, {force: true, recursive: false})
+    return {deletedPromotedAssetCount: 1, skippedPromotedAssetCount: 0}
+  } catch {
+    return {deletedPromotedAssetCount: 0, skippedPromotedAssetCount: 1}
+  }
+}
+
+const mergePromotedAssetCleanupResult = (
+  left: ProjectTransferPromotedAssetCleanupResult,
+  right: ProjectTransferPromotedAssetCleanupResult,
+): ProjectTransferPromotedAssetCleanupResult => {
+  return {
+    deletedPromotedAssetCount: left.deletedPromotedAssetCount + right.deletedPromotedAssetCount,
+    skippedPromotedAssetCount: left.skippedPromotedAssetCount + right.skippedPromotedAssetCount,
+  }
+}
+
+const removePromotedAssets = async ({
+  plan,
+  runtimeOptions,
+}: {
+  plan: ProjectTransferRecoveryCleanupPlan
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+}): Promise<ProjectTransferPromotedAssetCleanupResult> => {
+  if (!plan.deletePromotedAssets) {
+    return {deletedPromotedAssetCount: 0, skippedPromotedAssetCount: 0}
+  }
+
+  const manifestPath = getResolvedTempPath({pathValue: getPromotionManifestPath(plan), runtimeOptions})
+  const metadata = getPromotionMetadataArray(await readJsonFileIfPresent(manifestPath))
+
+  return metadata.reduce<Promise<ProjectTransferPromotedAssetCleanupResult>>(
+    async (promise, entry) => {
+      const current = await promise
+      const next = await removePromotedAsset({metadata: entry, runtimeOptions})
+
+      return mergePromotedAssetCleanupResult(current, next)
+    },
+    Promise.resolve({deletedPromotedAssetCount: 0, skippedPromotedAssetCount: 0}),
+  )
+}
+
+const cleanupRecoveredSessionArtifacts = async ({
+  plan,
+  runtimeOptions,
+}: {
+  plan: ProjectTransferRecoveryCleanupPlan
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+}) => {
+  const promotedAssetCleanup = await removePromotedAssets({plan, runtimeOptions})
+  const cleanupTempArtifactCount = plan.deleteTempArtifacts ? await removeTempArtifacts({plan, runtimeOptions}) : 0
+
+  return {...promotedAssetCleanup, cleanupTempArtifactCount}
+}
+
+const getRecoveryCounts = (
+  plans: ProjectTransferRecoveryCleanupPlan[],
+): Pick<ProjectTransferSessionRecoveryResult, 'expiredSessionCount' | 'recoveredCompletionCount'> => {
+  return plans.reduce(
+    (counts, plan) => {
+      return {
+        expiredSessionCount: counts.expiredSessionCount + (plan.transitionedToExpired ? 1 : 0),
+        recoveredCompletionCount: counts.recoveredCompletionCount + (plan.recoveredFromHistory ? 1 : 0),
+      }
+    },
+    {expiredSessionCount: 0, recoveredCompletionCount: 0},
+  )
+}
+
+const getCleanupCounts = async ({
+  plans,
+  runtimeOptions,
+}: {
+  plans: ProjectTransferRecoveryCleanupPlan[]
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+}) => {
+  return plans.reduce<
+    Promise<
+      Pick<
+        ProjectTransferSessionRecoveryResult,
+        'cleanupTempArtifactCount' | 'deletedPromotedAssetCount' | 'skippedPromotedAssetCount'
+      >
+    >
+  >(
+    async (promise, plan) => {
+      const counts = await promise
+      const cleanup = await cleanupRecoveredSessionArtifacts({plan, runtimeOptions})
+
+      return {
+        cleanupTempArtifactCount: counts.cleanupTempArtifactCount + cleanup.cleanupTempArtifactCount,
+        deletedPromotedAssetCount: counts.deletedPromotedAssetCount + cleanup.deletedPromotedAssetCount,
+        skippedPromotedAssetCount: counts.skippedPromotedAssetCount + cleanup.skippedPromotedAssetCount,
+      }
+    },
+    Promise.resolve({cleanupTempArtifactCount: 0, deletedPromotedAssetCount: 0, skippedPromotedAssetCount: 0}),
+  )
+}
+
+const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionRecoveryParams = {}) => {
+  const isActiveWriter = params.isActiveWriter ?? canCurrentServerOwnDuckdb
+
+  if (!isActiveWriter()) {
+    return emptyRecoveryResult(true)
+  }
+
+  const now = params.now ?? new Date()
+  const ownerToken = getRecoveryOwnerToken(params.ownerToken)
+  const runner = getRunner(params.runner)
+  const batchSize = getRecoveryBatchSize(params.batchSize)
+  const sessions = await getStaleProjectTransferSessions({batchSize, now, runner})
+  const plans = runner.transaction
+    ? await runner.transaction((tx) => {
+        return getCleanupPlans({now, ownerToken, runner: tx, sessions})
+      })
+    : await getCleanupPlans({now, ownerToken, runner, sessions})
+  const recoveryCounts = getRecoveryCounts(plans)
+  const cleanupCounts = await getCleanupCounts({plans, runtimeOptions: {cwd: params.cwd, envValues: params.envValues}})
+
+  return {...recoveryCounts, ...cleanupCounts, scannedSessionCount: sessions.length, skippedActiveWriterCheck: false}
+}
+
+const projectTransferSessionRecoveryService = {
+  runProjectTransferSessionRecovery,
+  runProjectTransferStartupRecovery: runProjectTransferSessionRecovery,
+  runProjectTransferTtlRecovery: runProjectTransferSessionRecovery,
+}
+
+export const getProjectTransferSessionRecoveryService = () => {
+  return projectTransferSessionRecoveryService
+}
+
+export const runProjectTransferStartupRecovery = projectTransferSessionRecoveryService.runProjectTransferStartupRecovery
+
+export const runProjectTransferTtlRecovery = projectTransferSessionRecoveryService.runProjectTransferTtlRecovery
+
+export type {ProjectTransferSessionRecoveryParams, ProjectTransferSessionRecoveryResult}
