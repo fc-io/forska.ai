@@ -146,6 +146,14 @@ export type ProjectTransferSessionCreationRequest = {
   sessionId: string
 }
 
+export type ProjectTransferApiResponse<TData> = {data: TData; error: null} | {data: null; error: string}
+
+export const getProjectTransferPlaceholderResponse = <TData = never>(
+  endpoint: string,
+): ProjectTransferApiResponse<TData> => {
+  return {data: null, error: `Project transfer ${endpoint} endpoint is not implemented yet`}
+}
+
 export type ProjectTransferCancellationReason = 'cleanup_failed' | 'session_expired' | 'user_cancelled'
 
 export type ProjectTransferCancellationRequest = {
