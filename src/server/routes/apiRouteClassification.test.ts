@@ -10,10 +10,11 @@ import {
 import {projectTransferRouteSpecs} from './projectTransferRoutes.ts'
 
 const csvExportRoute = {endpoint: 'csv-export', method: 'POST', samplePath: '/api/projects/project-1/export'} as const
-const ownerRoutedProjectRoutes = [...projectTransferRouteSpecs, csvExportRoute]
+const runtimeAssetRoute = {endpoint: 'runtime-asset', method: 'GET', samplePath: '/api/runtime-asset'} as const
+const ownerRoutedRoutes = [...projectTransferRouteSpecs, csvExportRoute, runtimeAssetRoute]
 
-test('project transfer routes and CSV export route proxy to the DuckDB owner and fail closed without one', () => {
-  const results = ownerRoutedProjectRoutes.map((route) => {
+test('project transfer, CSV export, and runtime asset routes proxy to the DuckDB owner and fail closed without one', () => {
+  const results = ownerRoutedRoutes.map((route) => {
     const classification = classifyApiRoute(route.samplePath, route.method)
 
     return {
@@ -26,7 +27,7 @@ test('project transfer routes and CSV export route proxy to the DuckDB owner and
   })
 
   expect(results).toEqual(
-    ownerRoutedProjectRoutes.map((route) => {
+    ownerRoutedRoutes.map((route) => {
       return {
         classification: 'owner-dependent',
         endpoint: route.endpoint,
@@ -38,8 +39,8 @@ test('project transfer routes and CSV export route proxy to the DuckDB owner and
   )
 })
 
-test('owner-private project transfer routes and CSV export route do not re-proxy', () => {
-  const results = ownerRoutedProjectRoutes.map((route) => {
+test('owner-private project transfer, CSV export, and runtime asset routes do not re-proxy', () => {
+  const results = ownerRoutedRoutes.map((route) => {
     const pathname = `${duckdbOwnerPrivateApiPrefix}${route.samplePath}`
     const classification = classifyApiRoute(pathname, route.method)
 
@@ -53,7 +54,7 @@ test('owner-private project transfer routes and CSV export route do not re-proxy
   })
 
   expect(results).toEqual(
-    ownerRoutedProjectRoutes.map((route) => {
+    ownerRoutedRoutes.map((route) => {
       const pathname = `${duckdbOwnerPrivateApiPrefix}${route.samplePath}`
 
       return {
