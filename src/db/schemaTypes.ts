@@ -37,6 +37,22 @@ export type ProjectMartLargeRebuildPhase =
   | 'review_article_filter_member'
   | 'review_article_rollup'
   | 'review_article_serving'
+export type ProjectTransferDirection = 'import' | 'export'
+export type ProjectTransferImportState =
+  | 'awaiting_upload'
+  | 'uploading'
+  | 'queued'
+  | 'extracting'
+  | 'analyzing'
+  | 'awaiting_resolution'
+  | 'ready_to_commit'
+  | 'committing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'expired'
+export type ProjectTransferExportState = 'queued' | 'assembling' | 'packaging' | 'ready' | 'failed' | 'expired'
+export type ProjectTransferSessionState = ProjectTransferImportState | ProjectTransferExportState
 
 export type UserRecord = {
   id: string
@@ -382,9 +398,10 @@ export type JudgmentRecord = {
   isAnswered: boolean
   answeredOriginal: string | null
   answeredOriginalAsArray: string[] | null
-  confidenceOriginal: number | null
+  confidenceOriginal: number
   explanation: string | null
   quotes: unknown[]
+  deleteGeneration: number
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
 }
@@ -398,7 +415,7 @@ export type JudgmentHumanRecord = {
   isAnswered: boolean
   answer: string | null
   comment: string | null
-  projectId: string
+  projectId: string | null
 }
 
 export type JudgmentHumanSummaryRecord = {
@@ -411,6 +428,33 @@ export type JudgmentHumanSummaryRecord = {
   origin: JudgmentHumanSummaryOrigin
 }
 
+export type ReviewRecord = {
+  id: string
+  projectId: string
+  articleId: string
+  opened: boolean
+  reviewedTitle: boolean
+  reviewedTitleComment: string | null
+  reviewedAbstract: boolean
+  reviewedAbstractComment: string | null
+  reviewedIntro: boolean
+  reviewedIntroComment: string | null
+  reviewedMethod: boolean
+  reviewedMethodComment: string | null
+  reviewedResults: boolean
+  reviewedResultsComment: string | null
+  reviewedDiscussion: boolean
+  reviewedDiscussionComment: string | null
+  reviewedConclusion: boolean
+  reviewedConclusionComment: string | null
+  reviewedAppendix: boolean
+  reviewedAppendixComment: string | null
+  reviewedOther: boolean
+  reviewedOtherComment: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 export type ProjectArticleRecord = {
   id: string
   createdAt: Date
@@ -418,6 +462,40 @@ export type ProjectArticleRecord = {
   projectId: string
   importedFromProjectId: string | null
   articleId: string
+}
+
+export type ProjectTransferSessionRecord = {
+  id: string
+  direction: ProjectTransferDirection
+  state: ProjectTransferSessionState
+  planRevision: number
+  packageFingerprint: string | null
+  commitId: string | null
+  ownerToken: string | null
+  heartbeatAt: Date | null
+  expiresAt: Date
+  progressJson: unknown
+  planSummaryJson: unknown
+  completionPayloadJson: unknown
+  errorJson: unknown
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type ProjectTransferHistoryRecord = {
+  id: string
+  direction: ProjectTransferDirection
+  sessionId: string | null
+  commitId: string | null
+  packageFingerprint: string
+  schemaVersion: number
+  sourceProjectId: string | null
+  sourceProjectName: string
+  targetProjectId: string | null
+  targetProjectName: string | null
+  payloadCountsJson: unknown
+  completionPayloadJson: unknown
+  createdAt: Date
 }
 
 export type ProjectMartDirtyRefreshStateRecord = {
