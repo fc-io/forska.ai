@@ -128,6 +128,7 @@ test('locks project-transfer resource gates for temp roots, disk headroom, budge
 
   expect(validateProjectTransferResourceGates(getValidResourceGateInput())).toEqual({ok: true})
   expect(getResourceGateError({tempRootPath: 'assets/project-transfer/session-1'})).toContain('temp root')
+  expect(getResourceGateError({tempRootPath: 'tmp/project-transfer/../outside'})).toContain('traversal')
   expect(getResourceGateError({availableDiskBytes: 1_099})).toContain('disk headroom')
   expect(
     getResourceGateError({archiveMemberCount: projectTransferResourceGateLimits.maxArchiveMemberCount + 1}),

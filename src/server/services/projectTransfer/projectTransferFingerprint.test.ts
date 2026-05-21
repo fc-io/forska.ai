@@ -24,6 +24,12 @@ const getManifest = (checksumSeed: string) => {
         path: 'project.json',
         recordCount: 1,
       }),
+      providerConnections: getProjectTransferManifestPayloadEntry({
+        bytes: `provider-connections-${checksumSeed}`,
+        format: 'json',
+        path: 'providerConnections.json',
+        recordCount: 2,
+      }),
     },
     source: {projectId: `source-project-${checksumSeed}`, projectName: 'Source Project'},
   })
@@ -77,6 +83,40 @@ const logicallyEquivalentArticlesPayload = [
   },
 ]
 
+const providerConnectionsPayload = {
+  records: [
+    {
+      createdAt: '2026-05-21T07:00:00.000Z',
+      id: 'provider-connection-b',
+      provider: 'provider-b',
+      settings: {baseUrl: 'https://provider-b.example.test'},
+    },
+    {
+      createdAt: '2026-05-21T07:00:00.000Z',
+      id: 'provider-connection-a',
+      provider: 'provider-a',
+      settings: {baseUrl: 'https://provider-a.example.test'},
+    },
+  ],
+}
+
+const logicallyEquivalentProviderConnectionsPayload = {
+  records: [
+    {
+      createdAt: '2026-05-22T07:00:00.000Z',
+      id: 'provider-connection-a-reimport',
+      provider: 'provider-a',
+      settings: {baseUrl: 'https://provider-a.example.test'},
+    },
+    {
+      createdAt: '2026-05-22T07:00:00.000Z',
+      id: 'provider-connection-b-reimport',
+      provider: 'provider-b',
+      settings: {baseUrl: 'https://provider-b.example.test'},
+    },
+  ],
+}
+
 test('canonical JSON and NDJSON helpers produce deterministic checksum input', () => {
   expect(getProjectTransferCanonicalJson({b: 1, a: {d: 4, c: 3}})).toBe('{"a":{"c":3,"d":4},"b":1}')
   expect(getProjectTransferCanonicalNdjson([{b: 2}, {a: 1}])).toBe('{"a":1}\n{"b":2}\n')
@@ -86,11 +126,15 @@ test('canonical JSON and NDJSON helpers produce deterministic checksum input', (
 test('project-transfer duplicate fingerprints are stable across ordering and provenance changes', () => {
   const firstFingerprint = getProjectTransferLogicalPackageFingerprint({
     manifest: getManifest('1'),
-    payloads: {articles: articlesPayload, project: projectPayload},
+    payloads: {articles: articlesPayload, project: projectPayload, providerConnections: providerConnectionsPayload},
   })
   const secondFingerprint = getProjectTransferLogicalPackageFingerprint({
     manifest: getManifest('2'),
-    payloads: {articles: logicallyEquivalentArticlesPayload, project: logicallyEquivalentProjectPayload},
+    payloads: {
+      articles: logicallyEquivalentArticlesPayload,
+      project: logicallyEquivalentProjectPayload,
+      providerConnections: logicallyEquivalentProviderConnectionsPayload,
+    },
   })
 
   expect(firstFingerprint).toBe(secondFingerprint)

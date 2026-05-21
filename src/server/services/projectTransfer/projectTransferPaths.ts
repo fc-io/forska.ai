@@ -316,11 +316,27 @@ export const validateProjectTransferRuntimeAssetPaths = ({
   return validateProjectTransferPathList(paths, validateProjectTransferRuntimeAssetPath)
 }
 
+export const validateProjectTransferTempWritablePath = (
+  pathValue: string,
+): ProjectTransferPathValidationResult<ProjectTransferValidatedPath> => {
+  return validateProjectTransferWritablePath(pathValue, [projectTransferTempRoot])
+}
+
+export const validateProjectTransferPromotionWritablePath = (
+  pathValue: string,
+): ProjectTransferPathValidationResult<ProjectTransferValidatedPath> => {
+  const runtimeAssetPath = validateProjectTransferRuntimeAssetPath(pathValue)
+
+  return runtimeAssetPath.ok
+    ? validateProjectTransferWritablePath(pathValue, [projectTransferPromotionAssetRoot])
+    : runtimeAssetPath
+}
+
 export const resolveProjectTransferTempWritablePath = ({
   pathValue,
   ...runtimeOptions
 }: RuntimePathOptions & {pathValue: string}) => {
-  assertProjectTransferPathResult(validateProjectTransferWritablePath(pathValue, [projectTransferTempRoot]))
+  assertProjectTransferPathResult(validateProjectTransferTempWritablePath(pathValue))
 
   return resolveRuntimeWritablePath({...runtimeOptions, pathValue})
 }
@@ -343,8 +359,7 @@ export const resolveProjectTransferPromotionWritablePath = ({
   pathValue,
   ...runtimeOptions
 }: RuntimePathOptions & {pathValue: string}) => {
-  assertProjectTransferPathResult(validateProjectTransferRuntimeAssetPath(pathValue))
-  assertProjectTransferPathResult(validateProjectTransferWritablePath(pathValue, [projectTransferPromotionAssetRoot]))
+  assertProjectTransferPathResult(validateProjectTransferPromotionWritablePath(pathValue))
 
   return resolveRuntimeWritablePath({...runtimeOptions, pathValue})
 }

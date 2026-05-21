@@ -8,6 +8,7 @@ import {
   projectTransferPathLimits,
   validateProjectTransferArchiveMemberPath,
   validateProjectTransferRuntimeAssetPath,
+  validateProjectTransferTempWritablePath,
 } from './projectTransferPaths.ts'
 
 const projectTransferMiB = 1024 * 1024
@@ -369,14 +370,14 @@ const getDiskHeadroomTargetBytes = (targetWriteBytes: number) => {
 }
 
 const validateTempRoot = (tempRootPath: string): ProjectTransferValidationResult => {
-  const isTempRoot =
-    tempRootPath === projectTransferResourceGateLimits.writableTempRoot
-    || tempRootPath.startsWith(`${projectTransferResourceGateLimits.writableTempRoot}/`)
+  const validation = validateProjectTransferTempWritablePath(tempRootPath)
 
-  return isTempRoot
+  return validation.ok
     ? {ok: true}
     : {
-        error: `Project transfer temp root must stay under ${projectTransferResourceGateLimits.writableTempRoot}`,
+        error:
+          `Project transfer temp root must stay under ${projectTransferResourceGateLimits.writableTempRoot}: `
+          + `${validation.error.message}: ${tempRootPath}`,
         ok: false,
       }
 }
