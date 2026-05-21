@@ -292,6 +292,15 @@ const getProjectTransferSession = async ({runner, sessionId}: GetProjectTransfer
   return getProjectTransferSessionRecord(getRunner(runner), sessionId)
 }
 
+const getPlanSummaryForTransitionValidation = (
+  params: TransitionProjectTransferSessionStateParams,
+  current: ProjectTransferSessionRecord,
+) => {
+  return Object.hasOwn(params, 'planSummary')
+    ? (params.planSummary ?? null)
+    : parseProjectTransferPlanSummary(current.planSummaryJson)
+}
+
 const transitionProjectTransferSessionState = async (params: TransitionProjectTransferSessionStateParams) => {
   const runner = getRunner(params.runner)
   const current = await getProjectTransferSessionRecord(runner, params.sessionId)
@@ -302,10 +311,7 @@ const transitionProjectTransferSessionState = async (params: TransitionProjectTr
 
   assertSessionStateForDirection(current.direction, params.nextState)
   assertWriterOnlyStateOwnerToken(params.nextState, params.expectedOwnerToken)
-  assertReadyToCommitPlan(
-    params.nextState,
-    params.planSummary ?? parseProjectTransferPlanSummary(current.planSummaryJson),
-  )
+  assertReadyToCommitPlan(params.nextState, getPlanSummaryForTransitionValidation(params, current))
   assertProgressUpdate({next: params.progress, previous: parseProjectTransferProgressPayload(current.progressJson)})
 
   const currentNow = getNow(params.now)
