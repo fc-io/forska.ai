@@ -57,6 +57,30 @@ const isOwnerBackedJudgmentJobPath = (pathname: string, method: string) => {
   )
 }
 
+const isOwnerBackedProjectTransferPath = (pathname: string, method: string) => {
+  const normalizedMethod = method.toUpperCase()
+  const exportProjectMatch = pathname.match(/^\/api\/projects\/[^/]+\/export-project$/)
+  const exportPackageMatch = pathname.match(/^\/api\/projects\/export\/[^/]+(?:\/download)?$/)
+  const createImportSessionMatch = pathname === '/api/projects/import/sessions'
+  const uploadImportSessionMatch = pathname.match(/^\/api\/projects\/import\/[^/]+\/upload$/)
+  const analyzeImportSessionMatch = pathname.match(/^\/api\/projects\/import\/[^/]+\/analyze$/)
+  const importSessionMatch = pathname.match(/^\/api\/projects\/import\/[^/]+$/)
+  const resolveImportDependenciesMatch = pathname.match(/^\/api\/projects\/import\/[^/]+\/resolve-dependencies$/)
+  const commitImportSessionMatch = pathname.match(/^\/api\/projects\/import\/[^/]+\/commit$/)
+  const csvExportMatch = pathname.match(/^\/api\/projects\/[^/]+\/export$/)
+
+  return (
+    (normalizedMethod === 'POST'
+      && (exportProjectMatch !== null || createImportSessionMatch || csvExportMatch !== null))
+    || (normalizedMethod === 'GET' && (exportPackageMatch !== null || importSessionMatch !== null))
+    || (normalizedMethod === 'PUT' && uploadImportSessionMatch !== null)
+    || (normalizedMethod === 'DELETE' && importSessionMatch !== null)
+    || (normalizedMethod === 'POST' && analyzeImportSessionMatch !== null)
+    || (normalizedMethod === 'POST' && resolveImportDependenciesMatch !== null)
+    || (normalizedMethod === 'POST' && commitImportSessionMatch !== null)
+  )
+}
+
 export const classifyApiRoute = (pathname: string, method = 'GET'): ApiRouteClassification => {
   const normalizedPathname = normalizePathname(pathname)
 
@@ -70,9 +94,11 @@ export const classifyApiRoute = (pathname: string, method = 'GET'): ApiRouteClas
           ? 'ownerless-readable-diagnostics'
           : isOwnerBackedJudgmentJobPath(normalizedPathname, method)
             ? 'owner-dependent'
-            : ownerDependentPaths.includes(normalizedPathname)
+            : isOwnerBackedProjectTransferPath(normalizedPathname, method)
               ? 'owner-dependent'
-              : 'unclassified'
+              : ownerDependentPaths.includes(normalizedPathname)
+                ? 'owner-dependent'
+                : 'unclassified'
 }
 
 export const shouldApiRouteProxyToDuckdbOwner = (classification: ApiRouteClassification) => {
