@@ -453,6 +453,60 @@ test('project transfer recovery deletes promoted assets only for abandoned impor
   expect(result.outsideAssetExists).toBe(true)
 })
 
+test('project transfer recovery keeps cleanup pending when promotion manifest is malformed', () => {
+  const result = runRecoveryScript<{
+    manifestError: string | null
+    promotedAssetExists: boolean
+    state: string
+    tempRootExists: boolean
+    terminalCleanupAt: string | null
+  }>(`
+    const sessionId = 'session-malformed-manifest'
+    const layout = getProjectTransferImportTempLayout(sessionId)
+    const promotedPath = 'assets/project-transfer/session-malformed-manifest/article-1.pdf'
+
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt: expiredAt,
+      id: sessionId,
+      state: 'analyzing',
+    })
+    await writeRuntimeFile(layout.uploadPath)
+    await writeRuntimeFile(promotedPath)
+    await writeRuntimeFile(layout.promotionManifestPath, '{malformed')
+
+    const manifestError = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: runtimeRoot,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    }).then(
+      () => null,
+      (error) => error instanceof Error ? error.message : String(error),
+    )
+    const [row] = await database.queryJson(\`
+      SELECT state, terminal_cleanup_at AS terminalCleanupAt
+      FROM app.project_transfer_session
+      WHERE id = 'session-malformed-manifest'
+    \`)
+
+    console.log(JSON.stringify({
+      manifestError,
+      promotedAssetExists: await fileExists(promotedPath),
+      state: row.state,
+      tempRootExists: await fileExists(layout.rootPath),
+      terminalCleanupAt: row.terminalCleanupAt,
+    }))
+  `)
+
+  expect(result.manifestError).toContain('promotion manifest is unreadable or malformed')
+  expect(result.state).toBe('expired')
+  expect(result.terminalCleanupAt).toBeNull()
+  expect(result.tempRootExists).toBe(true)
+  expect(result.promotedAssetExists).toBe(true)
+})
+
 test('project transfer recovery keeps cleanup pending when promoted asset deletion fails', () => {
   const result = runRecoveryScript<{
     deleteError: string | null

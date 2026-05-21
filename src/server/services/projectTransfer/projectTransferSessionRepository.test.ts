@@ -149,6 +149,55 @@ test('project transfer session transitions reject stale plan revisions', () => {
   expect(result.currentRevision).toBe(1)
 })
 
+test('project transfer ready transitions validate the explicitly persisted plan summary', () => {
+  const result = runSessionRepositoryScript<{
+    currentPlanSummary: unknown
+    currentState: string | null
+    readyError: string | null
+  }>(`
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt,
+      id: 'session-explicit-null-plan',
+      planSummary: readyPlan,
+      state: 'awaiting_resolution',
+    })
+
+    const readyError = await catchMessage(() => {
+      return sessionRepository.transitionProjectTransferSessionState({
+        expectedState: 'awaiting_resolution',
+        nextState: 'ready_to_commit',
+        planSummary: null,
+        sessionId: 'session-explicit-null-plan',
+      })
+    })
+    const current = await sessionRepository.getProjectTransferSession({sessionId: 'session-explicit-null-plan'})
+
+    console.log(JSON.stringify({
+      currentPlanSummary: current?.planSummaryJson ?? null,
+      currentState: current?.state ?? null,
+      readyError,
+    }))
+  `)
+
+  expect(result.readyError).toContain('Project transfer plan summary is required before ready_to_commit')
+  expect(result.currentState).toBe('awaiting_resolution')
+  expect(result.currentPlanSummary).toEqual({
+    blockerCount: 0,
+    conflictCounts: {
+      articleIdentifier: 0,
+      dependency: 0,
+      humanReview: 0,
+      judgment: 0,
+      packageContract: 0,
+      projectPrompt: 0,
+    },
+    dependencyStatuses: {model: 'resolved', providerConnection: 'resolved'},
+    overlapCounts: {exactDuplicateImports: 0, reusedArticles: 0},
+    warningCount: 0,
+  })
+})
+
 test('project transfer session commit claims are single-flight and owner-token fenced', () => {
   const result = runSessionRepositoryScript<{
     completionOwner: string | null
