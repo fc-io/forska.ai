@@ -13,12 +13,22 @@ import {getCurrentServerDuckdbOwnerUrl, shouldCurrentServerProxyApiToOwner} from
 import {
   classifyApiRoute,
   getDuckdbOwnerProxyPathname,
+  isProjectTransferStreamingUploadPath,
   shouldApiRouteFailClosedWithoutDuckdbOwner,
   shouldApiRouteProxyToDuckdbOwner,
 } from './apiRouteClassification.ts'
 
 type DuckdbOwnerProxyRequestTemplate = {
   body: ArrayBuffer | null
+  failClosedWithoutDuckdbOwner: boolean
+  headers: Headers
+  method: string
+  pathname: string
+  search: string
+}
+
+type DuckdbOwnerStreamingProxyRequestTemplate = {
+  body: ReadableStream<Uint8Array> | null
   failClosedWithoutDuckdbOwner: boolean
   headers: Headers
   method: string
@@ -63,15 +73,15 @@ const waitForDuckdbOwnerProxyRetry = async () => {
   })
 }
 
+const getDuckdbOwnerProxyHeaders = (request: Request) => {
+  return new Headers({...Object.fromEntries(request.headers.entries()), ...getDuckdbOwnerConnectionProxyHeaders()})
+}
+
 const getDuckdbOwnerProxyRequestTemplate = async (
   request: Request,
 ): Promise<DuckdbOwnerProxyRequestTemplate | null> => {
   const requestUrl = new URL(request.url)
   const classification = classifyApiRoute(requestUrl.pathname, request.method)
-  const requestHeaders = new Headers({
-    ...Object.fromEntries(request.headers.entries()),
-    ...getDuckdbOwnerConnectionProxyHeaders(),
-  })
   const hasRequestBody = request.method !== 'GET' && request.method !== 'HEAD'
 
   return !shouldApiRouteProxyToDuckdbOwner(classification)
@@ -79,7 +89,26 @@ const getDuckdbOwnerProxyRequestTemplate = async (
     : {
         body: hasRequestBody ? await request.clone().arrayBuffer() : null,
         failClosedWithoutDuckdbOwner: shouldApiRouteFailClosedWithoutDuckdbOwner(classification),
-        headers: requestHeaders,
+        headers: getDuckdbOwnerProxyHeaders(request),
+        method: request.method,
+        pathname: getDuckdbOwnerProxyPathname({classification, pathname: requestUrl.pathname}),
+        search: requestUrl.search,
+      }
+}
+
+const getDuckdbOwnerStreamingProxyRequestTemplate = (
+  request: Request,
+): DuckdbOwnerStreamingProxyRequestTemplate | null => {
+  const requestUrl = new URL(request.url)
+  const classification = classifyApiRoute(requestUrl.pathname, request.method)
+  const shouldStreamUpload = isProjectTransferStreamingUploadPath(requestUrl.pathname, request.method)
+
+  return !shouldStreamUpload || !shouldApiRouteProxyToDuckdbOwner(classification)
+    ? null
+    : {
+        body: request.body,
+        failClosedWithoutDuckdbOwner: shouldApiRouteFailClosedWithoutDuckdbOwner(classification),
+        headers: getDuckdbOwnerProxyHeaders(request),
         method: request.method,
         pathname: getDuckdbOwnerProxyPathname({classification, pathname: requestUrl.pathname}),
         search: requestUrl.search,
@@ -89,6 +118,17 @@ const getDuckdbOwnerProxyRequestTemplate = async (
 const getDuckdbOwnerProxyRequest = (requestTemplate: DuckdbOwnerProxyRequestTemplate, duckdbOwnerUrl: string) => {
   return new Request(`${duckdbOwnerUrl}${requestTemplate.pathname}${requestTemplate.search}`, {
     body: requestTemplate.body === null ? undefined : requestTemplate.body.slice(0),
+    headers: requestTemplate.headers,
+    method: requestTemplate.method,
+  })
+}
+
+const getDuckdbOwnerStreamingProxyRequest = (
+  requestTemplate: DuckdbOwnerStreamingProxyRequestTemplate,
+  duckdbOwnerUrl: string,
+) => {
+  return new Request(`${duckdbOwnerUrl}${requestTemplate.pathname}${requestTemplate.search}`, {
+    body: requestTemplate.body ?? undefined,
     headers: requestTemplate.headers,
     method: requestTemplate.method,
   })
@@ -107,6 +147,15 @@ const fetchDuckdbOwnerProxyResponse = async (
   const incompatibleTargetResponse = await getIncompatibleDuckdbOwnerTargetResponse(duckdbOwnerUrl)
 
   return incompatibleTargetResponse ?? fetch(getDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl))
+}
+
+const fetchDuckdbOwnerStreamingProxyResponse = async (
+  requestTemplate: DuckdbOwnerStreamingProxyRequestTemplate,
+  duckdbOwnerUrl: string,
+) => {
+  const incompatibleTargetResponse = await getIncompatibleDuckdbOwnerTargetResponse(duckdbOwnerUrl)
+
+  return incompatibleTargetResponse ?? fetch(getDuckdbOwnerStreamingProxyRequest(requestTemplate, duckdbOwnerUrl))
 }
 
 const getRetriedProxyResponse = async (
@@ -133,7 +182,7 @@ const getDuckdbOwnerProxyUnavailableResponse = () => {
   return Response.json({data: null, error: 'DuckDB owner proxy target unavailable'}, {status: 502})
 }
 
-const getDuckdbOwnerProxyFailureResponse = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+const getDuckdbOwnerProxyFailureResponse = (requestTemplate: {failClosedWithoutDuckdbOwner: boolean}) => {
   return requestTemplate.failClosedWithoutDuckdbOwner ? getDuckdbOwnerProxyUnavailableResponse() : null
 }
 
@@ -147,43 +196,81 @@ const getIncompatibleDuckdbOwnerPeerResponse = (request: Request) => {
   return error === null ? null : Response.json({data: null, error: error.message}, {status: 426})
 }
 
-const forwardApiRequestToDuckdbOwner = async (request: Request): Promise<Response | null> => {
-  if (!shouldCurrentServerProxyApiToOwner()) {
-    return null
+const getDuckdbOwnerProxyTargetFailureResponse = async (requestTemplate: {
+  failClosedWithoutDuckdbOwner: boolean
+}): Promise<{duckdbOwnerUrl: string} | {response: Response | null}> => {
+  const duckdbOwnerUrl = await getCurrentServerDuckdbOwnerUrl()
+  if (duckdbOwnerUrl === null) {
+    return {response: getDuckdbOwnerProxyFailureResponse(requestTemplate)}
   }
 
+  if (isCurrentServerDuckdbOwnerUrl(duckdbOwnerUrl)) {
+    return {
+      response: Response.json(
+        {data: null, error: `DuckDB owner proxy target must not point to this same API server (${duckdbOwnerUrl})`},
+        {status: 500},
+      ),
+    }
+  }
+
+  return {duckdbOwnerUrl}
+}
+
+const forwardStreamingApiRequestToDuckdbOwner = async (
+  requestTemplate: DuckdbOwnerStreamingProxyRequestTemplate,
+): Promise<Response | null> => {
+  const target = await getDuckdbOwnerProxyTargetFailureResponse(requestTemplate)
+
+  if ('response' in target) {
+    return target.response
+  }
+
+  try {
+    return await fetchDuckdbOwnerStreamingProxyResponse(requestTemplate, target.duckdbOwnerUrl)
+  } catch {
+    return getDuckdbOwnerProxyFailureResponse(requestTemplate)
+  }
+}
+
+const forwardBufferedApiRequestToDuckdbOwner = async (request: Request): Promise<Response | null> => {
   const requestTemplate = await getDuckdbOwnerProxyRequestTemplate(request)
 
   if (requestTemplate === null) {
     return null
   }
 
-  const duckdbOwnerUrl = await getCurrentServerDuckdbOwnerUrl()
-  if (duckdbOwnerUrl === null) {
-    return requestTemplate.failClosedWithoutDuckdbOwner ? getDuckdbOwnerProxyUnavailableResponse() : null
-  }
+  const target = await getDuckdbOwnerProxyTargetFailureResponse(requestTemplate)
 
-  if (isCurrentServerDuckdbOwnerUrl(duckdbOwnerUrl)) {
-    return Response.json(
-      {data: null, error: `DuckDB owner proxy target must not point to this same API server (${duckdbOwnerUrl})`},
-      {status: 500},
-    )
+  if ('response' in target) {
+    return target.response
   }
 
   const shouldRetryProxyRequest = duckdbOwnerProxyRetryableMethods.has(requestTemplate.method)
 
   try {
-    return await fetchDuckdbOwnerProxyResponse(requestTemplate, duckdbOwnerUrl)
+    return await fetchDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
   } catch {
     if (!shouldRetryProxyRequest) {
       return getDuckdbOwnerProxyFailureResponse(requestTemplate)
     }
 
     return (
-      (await getRetriedProxyResponse(requestTemplate, duckdbOwnerUrl))
+      (await getRetriedProxyResponse(requestTemplate, target.duckdbOwnerUrl))
       ?? getDuckdbOwnerProxyFailureResponse(requestTemplate)
     )
   }
+}
+
+const forwardApiRequestToDuckdbOwner = async (request: Request): Promise<Response | null> => {
+  if (!shouldCurrentServerProxyApiToOwner()) {
+    return null
+  }
+
+  const streamingRequestTemplate = getDuckdbOwnerStreamingProxyRequestTemplate(request)
+
+  return streamingRequestTemplate === null
+    ? forwardBufferedApiRequestToDuckdbOwner(request)
+    : forwardStreamingApiRequestToDuckdbOwner(streamingRequestTemplate)
 }
 
 export const apiProxyRoutes = new Elysia().use(withErrorHandler()).onRequest(async ({request}) => {
