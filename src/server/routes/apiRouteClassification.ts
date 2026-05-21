@@ -13,6 +13,7 @@ export type ApiRouteClassification =
 
 const duckdbOwnerDiagnosticsPaths = ['/api/duckdb_owner_connections', '/api/duckdb_owner_connections/heartbeat']
 const ownerDependentPaths = [duckdbStudioSnapshotPath]
+const ownerDependentReadablePaths = ['/api/runtime-asset']
 const ownerlessReadableDiagnosticsPaths = [
   runtimeStatePath,
   '/api/admin/worker-runtime-diagnostics',
@@ -101,9 +102,11 @@ export const classifyApiRoute = (pathname: string, method = 'GET'): ApiRouteClas
             ? 'owner-dependent'
             : isOwnerBackedProjectTransferPath(normalizedPathname, method)
               ? 'owner-dependent'
-              : ownerDependentPaths.includes(normalizedPathname)
+              : method.toUpperCase() === 'GET' && ownerDependentReadablePaths.includes(normalizedPathname)
                 ? 'owner-dependent'
-                : 'unclassified'
+                : ownerDependentPaths.includes(normalizedPathname)
+                  ? 'owner-dependent'
+                  : 'unclassified'
 }
 
 export const shouldApiRouteProxyToDuckdbOwner = (classification: ApiRouteClassification) => {
