@@ -57,12 +57,17 @@ const isOwnerBackedJudgmentJobPath = (pathname: string, method: string) => {
   )
 }
 
+export const isProjectTransferStreamingUploadPath = (pathname: string, method: string) => {
+  const normalizedPathname = normalizePathname(pathname)
+
+  return method.toUpperCase() === 'PUT' && normalizedPathname.match(/^\/api\/projects\/import\/[^/]+\/upload$/) !== null
+}
+
 const isOwnerBackedProjectTransferPath = (pathname: string, method: string) => {
   const normalizedMethod = method.toUpperCase()
   const exportProjectMatch = pathname.match(/^\/api\/projects\/[^/]+\/export-project$/)
   const exportPackageMatch = pathname.match(/^\/api\/projects\/export\/[^/]+(?:\/download)?$/)
   const createImportSessionMatch = pathname === '/api/projects/import/sessions'
-  const uploadImportSessionMatch = pathname.match(/^\/api\/projects\/import\/[^/]+\/upload$/)
   const analyzeImportSessionMatch = pathname.match(/^\/api\/projects\/import\/[^/]+\/analyze$/)
   const importSessionMatch = pathname.match(/^\/api\/projects\/import\/[^/]+$/)
   const resolveImportDependenciesMatch = pathname.match(/^\/api\/projects\/import\/[^/]+\/resolve-dependencies$/)
@@ -73,7 +78,7 @@ const isOwnerBackedProjectTransferPath = (pathname: string, method: string) => {
     (normalizedMethod === 'POST'
       && (exportProjectMatch !== null || createImportSessionMatch || csvExportMatch !== null))
     || (normalizedMethod === 'GET' && (exportPackageMatch !== null || importSessionMatch !== null))
-    || (normalizedMethod === 'PUT' && uploadImportSessionMatch !== null)
+    || isProjectTransferStreamingUploadPath(pathname, normalizedMethod)
     || (normalizedMethod === 'DELETE' && importSessionMatch !== null)
     || (normalizedMethod === 'POST' && analyzeImportSessionMatch !== null)
     || (normalizedMethod === 'POST' && resolveImportDependenciesMatch !== null)
