@@ -405,6 +405,7 @@ test('project transfer recovery uses import session history and completed sessio
 
 test('project transfer recovery deletes promoted assets only for abandoned imports without history', () => {
   const result = runRecoveryScript<{
+    otherSessionPromotedExists: boolean
     outsideAssetExists: boolean
     promotedAssetExists: boolean
     recoveryResult: {deletedPromotedAssetCount: number; expiredSessionCount: number; skippedPromotedAssetCount: number}
@@ -414,6 +415,7 @@ test('project transfer recovery deletes promoted assets only for abandoned impor
     const sessionId = 'session-abandoned'
     const layout = getProjectTransferImportTempLayout(sessionId)
     const promotedPath = 'assets/project-transfer/session-abandoned/article-1.pdf'
+    const otherSessionPromotedPath = 'assets/project-transfer/other-session/article-2.pdf'
     const unsafeTraversalPath = 'assets/project-transfer/session-abandoned/../../outside.pdf'
     const outsideAssetPath = 'assets/outside.pdf'
 
@@ -425,9 +427,11 @@ test('project transfer recovery deletes promoted assets only for abandoned impor
     })
     await writeRuntimeFile(layout.uploadPath)
     await writeRuntimeFile(promotedPath)
+    await writeRuntimeFile(otherSessionPromotedPath)
     await writeRuntimeFile(outsideAssetPath)
     await writePromotionManifest(sessionId, [
       promotionMetadata(sessionId, promotedPath),
+      promotionMetadata(sessionId, otherSessionPromotedPath),
       promotionMetadata(sessionId, unsafeTraversalPath),
     ])
 
@@ -446,6 +450,7 @@ test('project transfer recovery deletes promoted assets only for abandoned impor
 
     console.log(JSON.stringify({
       outsideAssetExists: await fileExists(outsideAssetPath),
+      otherSessionPromotedExists: await fileExists(otherSessionPromotedPath),
       promotedAssetExists: await fileExists(promotedPath),
       recoveryResult,
       state: row.state,
@@ -456,9 +461,10 @@ test('project transfer recovery deletes promoted assets only for abandoned impor
   expect(result.state).toBe('expired')
   expect(result.recoveryResult.expiredSessionCount).toBe(1)
   expect(result.recoveryResult.deletedPromotedAssetCount).toBe(1)
-  expect(result.recoveryResult.skippedPromotedAssetCount).toBe(1)
+  expect(result.recoveryResult.skippedPromotedAssetCount).toBe(2)
   expect(result.tempExists).toBe(false)
   expect(result.promotedAssetExists).toBe(false)
+  expect(result.otherSessionPromotedExists).toBe(true)
   expect(result.outsideAssetExists).toBe(true)
 })
 

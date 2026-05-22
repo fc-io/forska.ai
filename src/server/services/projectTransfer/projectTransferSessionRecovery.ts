@@ -364,14 +364,18 @@ const removeTempArtifacts = async ({
 
 const removePromotedAsset = async ({
   metadata,
+  plan,
   runtimeOptions,
 }: {
   metadata: ProjectTransferAssetPromotionMetadata
+  plan: ProjectTransferRecoveryCleanupPlan
   runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
 }): Promise<ProjectTransferPromotedAssetCleanupResult> => {
   const validation = validateProjectTransferPromotionWritablePath(metadata.promotedPath)
+  const isOwnedBySession =
+    metadata.sessionId === plan.id && metadata.promotedPath.startsWith(`assets/project-transfer/${plan.id}/`)
 
-  if (!validation.ok) {
+  if (!validation.ok || !isOwnedBySession) {
     return {deletedPromotedAssetCount: 0, skippedPromotedAssetCount: 1}
   }
 
@@ -407,7 +411,7 @@ const removePromotedAssets = async ({
   return metadata.reduce<Promise<ProjectTransferPromotedAssetCleanupResult>>(
     async (promise, entry) => {
       const current = await promise
-      const next = await removePromotedAsset({metadata: entry, runtimeOptions})
+      const next = await removePromotedAsset({metadata: entry, plan, runtimeOptions})
 
       return mergePromotedAssetCleanupResult(current, next)
     },
