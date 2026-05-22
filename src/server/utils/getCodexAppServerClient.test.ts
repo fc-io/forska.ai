@@ -1,11 +1,12 @@
 import {EventEmitter} from 'node:events'
 
-import {expect, test} from 'bun:test'
+import {expect, mock, test} from 'bun:test'
 
 import {
   createCodexAppServerClient,
   getCodexThreadTokenUsageUpdate,
   getCodexTurnAgentMessageText,
+  resetCodexStderrLogRateLimitForTests,
   type SpawnCodexAppServer,
 } from './getCodexAppServerClient.ts'
 
@@ -18,6 +19,79 @@ type MockJsonRpcRequest = {
 type MockNotification =
   | {inputText: string; kind: 'item'; text: string}
   | {error?: unknown; inputText: string; kind: 'complete'; status: 'completed' | 'failed'}
+
+const withCapturedConsole = async (work: () => Promise<void>) => {
+  const originalError = console.error
+  const originalWarn = console.warn
+  const errors: unknown[][] = []
+  const warnings: unknown[][] = []
+  const error = mock((...args: unknown[]) => {
+    errors.push(args)
+  })
+  const warn = mock((...args: unknown[]) => {
+    warnings.push(args)
+  })
+
+  console.error = error as typeof console.error
+  console.warn = warn as typeof console.warn
+
+  try {
+    await work()
+    return {errors, warnings}
+  } finally {
+    console.error = originalError
+    console.warn = originalWarn
+  }
+}
+
+const createMockModelListCodexClient = () => {
+  const stdout = new EventEmitter()
+  const stderr = new EventEmitter()
+  const proc = new EventEmitter() as EventEmitter & {
+    stderr: EventEmitter
+    stdin: {write: (data: string) => boolean}
+    stdout: EventEmitter
+  }
+
+  const send = (message: unknown) => {
+    stdout.emit('data', Buffer.from(`${JSON.stringify(message)}\n`))
+  }
+
+  proc.stdout = stdout
+  proc.stderr = stderr
+  proc.stdin = {
+    write(payload) {
+      String(payload)
+        .split('\n')
+        .map((line) => {
+          return line.trim()
+        })
+        .filter((line) => {
+          return line.length > 0
+        })
+        .forEach((line) => {
+          const message = JSON.parse(line) as MockJsonRpcRequest
+
+          if (message.method === 'initialize') {
+            send({id: message.id, result: {}})
+            return
+          }
+
+          if (message.method === 'model/list') {
+            send({id: message.id, result: {data: [], nextCursor: null}})
+          }
+        })
+
+      return true
+    },
+  }
+
+  const spawnProcess: SpawnCodexAppServer = () => {
+    return proc
+  }
+
+  return {client: createCodexAppServerClient({spawnProcess}), stderr}
+}
 
 const createMockConcurrentCodexClient = ({
   expectedTurnCount = 2,
@@ -271,6 +345,114 @@ test('runJsonTurn sends Codex-safe sandbox policy without deprecated readOnlyAcc
     sandboxPolicy: {excludeSlashTmp: true, excludeTmpdirEnvVar: true, networkAccess: false, type: 'workspaceWrite'},
   })
   expect(JSON.stringify(turnStartParams[0])).not.toContain('readOnlyAccess')
+})
+
+test('modelList stops the app-server process when initialize times out', async () => {
+  const stdout = new EventEmitter()
+  const stderr = new EventEmitter()
+  let killed = false
+  const proc = new EventEmitter() as EventEmitter & {
+    kill: () => boolean
+    stderr: EventEmitter
+    stdin: {write: (data: string) => boolean}
+    stdout: EventEmitter
+  }
+
+  proc.stdout = stdout
+  proc.stderr = stderr
+  proc.stdin = {
+    write() {
+      return true
+    },
+  }
+  proc.kill = () => {
+    killed = true
+    return true
+  }
+
+  const spawnProcess: SpawnCodexAppServer = () => {
+    return proc
+  }
+  const client = createCodexAppServerClient({initializeTimeoutMs: 1, spawnProcess})
+  const result = await client.modelList().then(
+    () => {
+      return null
+    },
+    (error: unknown) => {
+      return error
+    },
+  )
+
+  expect(result).toBeInstanceOf(Error)
+  expect(result instanceof Error ? result.message : '').toBe('codex app-server timeout: initialize')
+  expect(killed).toBe(true)
+})
+
+test('downgrades known transient Codex stderr to rate-limited warnings', async () => {
+  resetCodexStderrLogRateLimitForTests()
+  const {client, stderr} = createMockModelListCodexClient()
+  const captured = await withCapturedConsole(async () => {
+    await client.modelList()
+    stderr.emit(
+      'data',
+      Buffer.from(
+        '2026-05-22T08:18:18.226798Z ERROR codex_models_manager::manager: failed to renew cache TTL: EOF while parsing a value at line 1 column 0\n',
+      ),
+    )
+    stderr.emit(
+      'data',
+      Buffer.from(
+        '2026-05-22T08:22:53.499992Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 503 Service Unavailable, url: wss://chatgpt.com/backend-api/codex/responses\n',
+      ),
+    )
+    stderr.emit(
+      'data',
+      Buffer.from(
+        '2026-05-22T08:30:38.081059Z ERROR rmcp::transport::worker: worker quit with fatal: Unexpected content type: Some("text/plain; body: upstream connect error or disconnect/reset before headers. reset reason: connection termination"), when send initialized notification\n',
+      ),
+    )
+  })
+
+  expect(captured.errors).toEqual([])
+  expect(
+    captured.warnings.map(([message]) => {
+      return String(message)
+    }),
+  ).toEqual([
+    '[codex] Codex model cache TTL renewal failed; treating as transient Codex cache state.',
+    '[codex] Codex responses websocket returned HTTP 503; treating as transient Codex backend availability.',
+    '[codex] Codex upstream connection reset while app-server worker initialized; treating as transient upstream availability.',
+  ])
+})
+
+test('rate-limits repeated transient Codex stderr warnings', async () => {
+  resetCodexStderrLogRateLimitForTests()
+  const {client, stderr} = createMockModelListCodexClient()
+  const captured = await withCapturedConsole(async () => {
+    await client.modelList()
+    const line =
+      '2026-05-22T08:22:53.499992Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 429 Too Many Requests, url: wss://chatgpt.com/backend-api/codex/responses\n'
+
+    stderr.emit('data', Buffer.from(line))
+    stderr.emit('data', Buffer.from(line))
+  })
+
+  expect(captured.errors).toEqual([])
+  expect(captured.warnings).toHaveLength(1)
+  expect(String(captured.warnings[0]?.[0])).toContain('HTTP 429')
+})
+
+test('keeps unknown Codex stderr at error level', async () => {
+  resetCodexStderrLogRateLimitForTests()
+  const {client, stderr} = createMockModelListCodexClient()
+  const captured = await withCapturedConsole(async () => {
+    await client.modelList()
+    stderr.emit('data', Buffer.from('unexpected fatal stderr\n'))
+  })
+
+  expect(captured.warnings).toEqual([])
+  expect(captured.errors).toHaveLength(1)
+  expect(String(captured.errors[0]?.[0])).toBe('[codex] unexpected fatal stderr')
 })
 
 test('runJsonTurn keeps concurrent success scoped when another turn fails out of order', async () => {

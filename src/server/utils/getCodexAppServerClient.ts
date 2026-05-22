@@ -23,6 +23,7 @@ type LifecycleListener = (error: Error) => void
 type CodexAppServerProcess = {
   on: ((event: 'error', listener: (error: Error) => void) => unknown)
     & ((event: 'exit', listener: (code: number | null, signal: string | null) => void) => unknown)
+  kill?: (signal?: string | number) => boolean
   stderr: {on: (event: 'data', listener: (data: Buffer) => void) => unknown}
   stdin: {write: (data: string) => unknown}
   stdout: {on: (event: 'data', listener: (data: Buffer) => void) => unknown}
@@ -35,6 +36,7 @@ export type SpawnCodexAppServer = (
 ) => CodexAppServerProcess
 
 const CODEx_DEFAULT_TIMEOUT_MS = 30_000
+const CODEX_INITIALIZE_TIMEOUT_MS = 30_000
 const CODEX_THREAD_READ_TIMEOUT_MS = 60_000
 const CODEX_THREAD_READ_MAX_ATTEMPTS = 3
 const CODEX_THREAD_READ_RETRY_DELAY_MS = 250
@@ -249,35 +251,99 @@ const appendDebug = (current: string, chunk: string): string => {
   return next
 }
 
-const codexWebsocketForbiddenLogIntervalMs = 60_000
-let lastCodexWebsocketForbiddenLogAt = 0
+type CodexStderrEvent = {key: string; message: string}
 
-const isCodexWebsocketForbiddenStderr = (value: string): boolean => {
+const codexTransientStderrLogIntervalMs = 60_000
+const lastCodexTransientStderrLogAt = new Map<string, number>()
+
+const getCodexResponsesWebsocketStatus = (normalized: string): number | null => {
+  const status = Number(normalized.match(/http error:\s*(\d{3})/)?.[1])
+
+  return Number.isFinite(status) ? status : null
+}
+
+const isTransientCodexResponsesWebsocketStatus = (status: number | null): boolean => {
+  return status === 403 || status === 429 || (status !== null && status >= 500)
+}
+
+const getCodexResponsesWebsocketStderrEvent = (normalized: string): CodexStderrEvent | null => {
+  const status = getCodexResponsesWebsocketStatus(normalized)
+  const isResponsesWebsocket =
+    normalized.includes('responses_websocket') && normalized.includes('backend-api/codex/responses')
+
+  return isResponsesWebsocket && isTransientCodexResponsesWebsocketStatus(status)
+    ? {
+        key: `codex:responses-websocket:${status ?? 'unknown'}`,
+        message: `[codex] Codex responses websocket returned HTTP ${status ?? 'unknown'}; treating as transient Codex backend availability.`,
+      }
+    : null
+}
+
+const getCodexCacheTtlStderrEvent = (normalized: string): CodexStderrEvent | null => {
+  return normalized.includes('failed to renew cache ttl') && normalized.includes('eof while parsing a value')
+    ? {
+        key: 'codex:cache-ttl-renewal',
+        message: '[codex] Codex model cache TTL renewal failed; treating as transient Codex cache state.',
+      }
+    : null
+}
+
+const getCodexUpstreamResetStderrEvent = (normalized: string): CodexStderrEvent | null => {
+  const isUpstreamReset =
+    normalized.includes('rmcp::transport::worker')
+    && normalized.includes('unexpected content type')
+    && normalized.includes('upstream connect error')
+    && (normalized.includes('disconnect/reset before headers')
+      || normalized.includes('reset reason: connection termination'))
+
+  return isUpstreamReset
+    ? {
+        key: 'codex:upstream-reset',
+        message:
+          '[codex] Codex upstream connection reset while app-server worker initialized; treating as transient upstream availability.',
+      }
+    : null
+}
+
+const getCodexTransientStderrEvent = (value: string): CodexStderrEvent | null => {
   const normalized = value.toLowerCase()
 
   return (
-    normalized.includes('responses_websocket')
-    && normalized.includes('http error: 403 forbidden')
-    && normalized.includes('backend-api/codex/responses')
+    getCodexResponsesWebsocketStderrEvent(normalized)
+    ?? getCodexCacheTtlStderrEvent(normalized)
+    ?? getCodexUpstreamResetStderrEvent(normalized)
   )
+}
+
+const shouldLogCodexTransientStderr = (key: string): boolean => {
+  const now = Date.now()
+  const lastLoggedAt = lastCodexTransientStderrLogAt.get(key) ?? 0
+  const shouldLog = now - lastLoggedAt >= codexTransientStderrLogIntervalMs
+
+  if (shouldLog) {
+    lastCodexTransientStderrLogAt.set(key, now)
+  }
+
+  return shouldLog
 }
 
 const logCodexStderr = (value: string): void => {
   const trimmed = value.trim()
   if (trimmed.length === 0) return
+  const transientEvent = getCodexTransientStderrEvent(trimmed)
 
-  if (!isCodexWebsocketForbiddenStderr(trimmed)) {
+  if (!transientEvent) {
     console.error(`[codex] ${trimmed}`)
     return
   }
 
-  const now = Date.now()
-  if (now - lastCodexWebsocketForbiddenLogAt < codexWebsocketForbiddenLogIntervalMs) return
+  if (!shouldLogCodexTransientStderr(transientEvent.key)) return
 
-  lastCodexWebsocketForbiddenLogAt = now
-  console.warn(
-    '[codex] Codex websocket returned 403 Forbidden; treating it as transient Codex throttling/backpressure. If it repeats, lower CODEX_MAX_INFLIGHT.',
-  )
+  console.warn(transientEvent.message)
+}
+
+export const resetCodexStderrLogRateLimitForTests = (): void => {
+  lastCodexTransientStderrLogAt.clear()
 }
 
 export const warmCodexAppServer = async (): Promise<void> => {
@@ -292,6 +358,7 @@ export const warmCodexAppServer = async (): Promise<void> => {
 }
 
 export const createCodexAppServerClient = ({
+  initializeTimeoutMs,
   spawnProcess = (command, args, options) => {
     return spawn(command, args, options)
   },
@@ -299,6 +366,7 @@ export const createCodexAppServerClient = ({
   threadReadRetryDelayMs,
   threadReadTimeoutMs,
 }: {
+  initializeTimeoutMs?: number
   spawnProcess?: SpawnCodexAppServer
   threadReadMaxAttempts?: number
   threadReadRetryDelayMs?: number
@@ -309,6 +377,7 @@ export const createCodexAppServerClient = ({
   const listeners = new Set<Listener>()
   const lifecycleListeners = new Set<LifecycleListener>()
   const codexBin = getCodexBinPath()
+  const resolvedInitializeTimeoutMs = getPositiveInteger(initializeTimeoutMs, CODEX_INITIALIZE_TIMEOUT_MS)
   const resolvedThreadReadMaxAttempts = getPositiveInteger(threadReadMaxAttempts, CODEX_THREAD_READ_MAX_ATTEMPTS)
   const resolvedThreadReadRetryDelayMs = getPositiveInteger(threadReadRetryDelayMs, CODEX_THREAD_READ_RETRY_DELAY_MS)
   const resolvedThreadReadTimeoutMs = getPositiveInteger(threadReadTimeoutMs, CODEX_THREAD_READ_TIMEOUT_MS)
@@ -369,10 +438,21 @@ export const createCodexAppServerClient = ({
     return new Error(`codex app-server exited (${details}). ${hint}`)
   }
 
-  const failAppServer = (error: Error): void => {
+  const stopAppServer = (): void => {
+    try {
+      proc.kill?.('SIGTERM')
+    } catch {
+      return undefined
+    }
+  }
+
+  const failAppServer = (error: Error, {stopProcess = false}: {stopProcess?: boolean} = {}): void => {
     if (closedError) return
 
     closedError = error
+    if (stopProcess) {
+      stopAppServer()
+    }
     pending.forEach((p) => {
       p.reject(error)
     })
@@ -469,23 +549,29 @@ export const createCodexAppServerClient = ({
   listeners.add(onMessage)
 
   const initialize = async (): Promise<void> => {
-    await request(
-      'initialize',
-      {
-        clientInfo: {name: 'forska_ai', title: 'Forska.ai', version: '0.1.0'},
-        capabilities: {
-          optOutNotificationMethods: [
-            'item/agentMessage/delta',
-            'item/commandExecution/outputDelta',
-            'item/plan/delta',
-            'item/reasoning/textDelta',
-            'item/reasoning/summaryTextDelta',
-          ],
+    try {
+      await request(
+        'initialize',
+        {
+          clientInfo: {name: 'forska_ai', title: 'Forska.ai', version: '0.1.0'},
+          capabilities: {
+            optOutNotificationMethods: [
+              'item/agentMessage/delta',
+              'item/commandExecution/outputDelta',
+              'item/plan/delta',
+              'item/reasoning/textDelta',
+              'item/reasoning/summaryTextDelta',
+            ],
+          },
         },
-      },
-      10_000,
-    )
-    send({method: 'initialized', params: {}})
+        resolvedInitializeTimeoutMs,
+      )
+      send({method: 'initialized', params: {}})
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error))
+      failAppServer(err, {stopProcess: true})
+      throw err
+    }
   }
 
   const initPromise = initialize()

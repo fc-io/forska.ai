@@ -162,6 +162,23 @@ const getErrorCode = (error: unknown): string | null => {
   return typeof code === 'string' ? code : null
 }
 
+const isCodexInitializeTimeoutError = ({
+  error,
+  providerKind,
+  statusCode,
+}: {
+  error: unknown
+  providerKind: string | null
+  statusCode: number | null
+}): boolean => {
+  const message = getErrorMessage(error).toLowerCase()
+  const code = getErrorCode(error)
+  const isCodexContext =
+    providerKind === 'codex' || code === 'codex_transient_turn_failure' || message.includes('codex app-server')
+
+  return isCodexContext && statusCode === null && message.includes('codex app-server timeout: initialize')
+}
+
 const isCodexTransientPromptError = ({
   endpointPath,
   error,
@@ -187,7 +204,13 @@ const isCodexTransientPromptError = ({
     || message.includes('codex app-server timeout:')
     || message.includes('operation timed out')
 
-  return isCodexContext && endpointPath === null && statusCode === null && isPromptScopedTurnFailure
+  return (
+    isCodexContext
+    && endpointPath === null
+    && statusCode === null
+    && isPromptScopedTurnFailure
+    && !message.includes('codex app-server timeout: initialize')
+  )
 }
 
 const getLikelyCause = ({
@@ -279,6 +302,11 @@ export const classifyConnectionFailure = ({
     statusCode,
   })
   const isCodexTransientUpstream = isCodexTransientUpstreamError({error, providerKind: normalizedContext.providerKind})
+  const isCodexInitializeTimeout = isCodexInitializeTimeoutError({
+    error,
+    providerKind: normalizedContext.providerKind,
+    statusCode,
+  })
   const isCodexTransientPrompt = isCodexTransientPromptError({
     endpointPath,
     error,
@@ -291,21 +319,23 @@ export const classifyConnectionFailure = ({
       ? 'rate_limited'
       : isCodexWebsocketForbidden
         ? 'rate_limited'
-        : isCodexTransientUpstream || isCodexTransientPrompt
-          ? 'other'
-          : isRequiredOpenAICompatibleEndpoint && statusCode === 404
-            ? 'endpoint_unavailable'
-            : isRequiredOpenAICompatibleEndpoint && (statusCode === 405 || statusCode === 501)
-              ? 'endpoint_misconfigured'
-              : statusCode === 408
-                ? 'network_unavailable'
-                : statusCode != null && statusCode >= 500
-                  ? 'endpoint_unavailable'
-                  : statusCode != null && statusCode >= 400
-                    ? 'other'
-                    : isNetworkError(error)
-                      ? 'network_unavailable'
-                      : 'other'
+        : isCodexInitializeTimeout
+          ? 'network_unavailable'
+          : isCodexTransientUpstream || isCodexTransientPrompt
+            ? 'other'
+            : isRequiredOpenAICompatibleEndpoint && statusCode === 404
+              ? 'endpoint_unavailable'
+              : isRequiredOpenAICompatibleEndpoint && (statusCode === 405 || statusCode === 501)
+                ? 'endpoint_misconfigured'
+                : statusCode === 408
+                  ? 'network_unavailable'
+                  : statusCode != null && statusCode >= 500
+                    ? 'endpoint_unavailable'
+                    : statusCode != null && statusCode >= 400
+                      ? 'other'
+                      : isNetworkError(error)
+                        ? 'network_unavailable'
+                        : 'other'
   const likelyCause = getLikelyCause({endpointPath, kind, statusCode})
 
   return {

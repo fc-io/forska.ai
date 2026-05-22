@@ -150,6 +150,23 @@ test('keeps Codex transient turn timeouts out of the outage path', () => {
   ).toBe('healthy')
 })
 
+test('classifies Codex initialize timeouts as connection failures', () => {
+  const error = Object.assign(new Error('codex app-server timeout: initialize'), {code: 'codex_transient_turn_failure'})
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: 'codex://app-server', endpointPath: null, providerKind: 'codex'},
+    error,
+  })
+
+  recordConnectionFailure({effectiveBaseURL: 'codex://app-server', failure, providerConnectionId: null})
+
+  expect(failure.kind).toBe('network_unavailable')
+  expect(failure.shouldPauseConnection).toBe(true)
+  expect(isConnectionError(error)).toBe(true)
+  expect(
+    getJudgmentEndpointAvailability({effectiveBaseURL: 'codex://app-server', providerConnectionId: null}).status,
+  ).toBe('cooldown')
+})
+
 test('classifies circuit-open failures with typed connection errors', () => {
   const error = createConnectionError({
     context: {effectiveBaseURL: 'http://127.0.0.1:1234/v1', endpointPath: null, providerKind: 'sglang'},
