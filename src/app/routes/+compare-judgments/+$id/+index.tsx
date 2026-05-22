@@ -455,6 +455,9 @@ const CompareProjectJudgmentsPage = () => {
   const refetchCurrentJudgmentsPage = async () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-page', comparisonProjectId()]})
   }
+  const refetchComparisonProjectStats = async () => {
+    await queryClient.invalidateQueries({queryKey: ['comparison-project-stats', comparisonProjectId()]})
+  }
   const handleConflictResolutionSelect = async (articleId: string, value: string) => {
     setConflictResolutionPendingArticleId(articleId)
     setConflictResolutionError(null)
@@ -462,7 +465,7 @@ const CompareProjectJudgmentsPage = () => {
     try {
       const conflictResolution = await setComparisonProjectConflictResolution(comparisonProjectId(), {articleId, value})
       updateCurrentJudgmentsPageConflictResolution(articleId, conflictResolution)
-      await refetchCurrentJudgmentsPage()
+      await Promise.all([refetchCurrentJudgmentsPage(), refetchComparisonProjectStats()])
     } catch (error) {
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to save conflict resolution')
     } finally {
@@ -476,7 +479,7 @@ const CompareProjectJudgmentsPage = () => {
     try {
       await resetComparisonProjectConflictResolution(comparisonProjectId(), {articleId})
       updateCurrentJudgmentsPageConflictResolution(articleId, null)
-      await refetchCurrentJudgmentsPage()
+      await Promise.all([refetchCurrentJudgmentsPage(), refetchComparisonProjectStats()])
     } catch (error) {
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to reset conflict resolution')
     } finally {
