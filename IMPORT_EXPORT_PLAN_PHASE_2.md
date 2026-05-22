@@ -28,10 +28,13 @@ dependsOn: []
 
 Acceptance criteria:
 
-- Add project-transfer export query helpers for project settings, prompts, project prompt links, import routes, project route links, articles, article route links, project article links, judgments, assessments, human judgments, human summaries, reviews, provider connections, and models, matching the existing `providerConnections` and `models` payload keys.
+- Add project-transfer export query helpers for project settings, prompts, project prompt links, import routes, project route links, articles, article route links, project article links, judgments, judgment assessments, human judgments, human judgment summaries, reviews, provider connections, and models, matching the existing `judgmentAssessments`, `humanJudgmentSummaries`, `providerConnections`, and `models` payload keys.
+- Model export preserves nullable `remoteModelId` rows by carrying fallback identity fields such as `modelName`, `name`, `displayName`, `variant`, and `version`; do not silently omit required project or judgment models only because the current Phase 1 model payload validator requires non-empty `remoteModelId`.
 - Export scope uses project date bounds and current review semantics directly from app tables, including archived source projects and `NULL article_created_at` date-bound behavior from the orchestrator.
+- Before assembly, validate source project settings and fail export clearly without writing a package when date bounds are invalid (`date_from > date_to`) or mutually exclusive full-text toggles (`use_fulltext` and `use_fulltext_no_images`) are both enabled.
 - Query helpers do not reuse CSV export routes, review-detail helpers, mart tables, or active-only access guards such as `assertProjectIsActive`.
-- Query tests cover archived package export, inactive source routes contributing to scope, date-bounded route and curated article scope, disabled prompt-mode human judgment rows that current review detail exposes, summary-mode human/review rows, answered active judgment filtering, active visible-key judgment duplicate ambiguity, and missing provider/model rows that must not be silently inner-join-dropped.
+- Before writing `judgments.ndjson`, scan all active source judgments matching project scope and judgment configuration before answered-only filtering; if multiple rows share the review-visible natural key excluding `deleteGeneration`, omit affected judgments and dependents with fidelity warnings or fail export before manifest finalization.
+- Query tests cover archived package export, inactive source routes contributing to scope, date-bounded route and curated article scope, disabled prompt-mode human judgment rows that current review detail exposes, summary-mode human/review rows, answered active judgment filtering, active visible-key judgment duplicate ambiguity, missing provider/model rows that must not be silently inner-join-dropped, and nullable `remoteModelId` model descriptors.
 
 Quality gates:
 
@@ -50,6 +53,7 @@ Acceptance criteria:
 
 - Add versioned `judgmentInputSignature` helper covering provider, model, prompt, article, content toggles, full-text processing, quote-validation, and chunking inputs from the orchestrator contract.
 - Add versioned `humanReviewInputSignature` helper for prompt-mode human judgments, summary-mode human judgments, and review rows.
+- Add explicit payload fields named `judgmentInputSignature`, `judgmentInputSignatureProvenance`, `humanReviewInputSignature`, and `humanReviewInputSignatureProvenance` where the orchestrator requires them; do not rely only on the current generic `signature` and `provenance` fields for exported durable state.
 - Place signature helpers with the export package code or existing payload schema code; do not add a second package-schema layer that bypasses `projectTransferPayloadSchemas.ts`.
 - Keep source and target database ids out of signatures, matching the existing `projectTransferPayloadSchemas.ts` signature contract.
 - Omit chunked-mode judgments without durable final-prompt/evidence proof and emit structured fidelity warnings.
@@ -71,6 +75,7 @@ Acceptance criteria:
 
 - Add `src/server/services/projectTransfer/projectTransferRedaction.ts` for package-boundary redaction serializers covering project fields, prompt fields, article fields, provider fields, model metadata/config, URLs, full-text-derived fields, and free-form JSON/string fields.
 - Extend `ProjectTransferManifestWarning`, `ProjectTransferPayloadWarning`, and `ProjectTransferWarningSeverity` from the current path/payloadKey/field-only shapes to the orchestrator warning shape: `code`, `severity` (`info`, `warning`, `fidelity`, or `blocking`), `scope`, `action`, `message`, optional `payload`, optional `jsonPointer`, optional `sourceRef`, and optional safe `details`; do not emit one-off warning shapes outside the manifest/payload contracts.
+- Migrate or serialize `ProjectTransferPayloadOmission` and `ProjectTransferPayloadRedaction` through the same warning shape before writing final packages. If the separate `omissions` or `redactions` arrays remain in code, treat them as internal assembly annotations only, not as additional package warning contracts.
 - Required package fields remain importable through safe placeholders, parent-row failure, or parent-row omission with warnings.
 - Decision fields that would change meaning are omitted with dependent rows and structured fidelity warnings rather than sanitized in place.
 
@@ -91,8 +96,8 @@ dependsOn: ["US-001", "US-003"]
 Acceptance criteria:
 
 - Copy eligible runtime-relative `assets/...` files into package `assets/` after path validation and checksum verification.
-- Write `assetManifest.json` with package path, checksum, byte size, and explicit `references[]` for `fullTextPdf`, `fullTextAssets`, and embedded `fullTextHtml` asset URLs.
-- Extend `ProjectTransferAssetPayloadRecord` to include the asset reference metadata required by the orchestrator before export assembly writes `assetManifest.json`.
+- Write `assetManifest.json` with the orchestrator top-level `entries[]` contract, not the current Phase 1 generic payload-record envelope or `assets[]` payload shape, with package path, checksum, byte size, and explicit `references[]` for `fullTextPdf`, `fullTextAssets`, and embedded `fullTextHtml` asset URLs.
+- Extend or rename the current `ProjectTransferAssetManifestPayload` / `ProjectTransferAssetPayloadRecord` contract to include the asset reference metadata required by the orchestrator before export assembly writes `assetManifest.json`; final packages must not emit both `assets[]` and `entries[]`, nor generic `signature`/`provenance` envelope fields, unless the orchestrator contract is explicitly changed.
 - Missing, unreadable, symlinked, outside-root, and checksum-changing assets either fail export or omit and rewrite affected fields before manifest finalization.
 - Export never writes manifest asset references for files that were not copied and checksummed.
 
@@ -113,7 +118,10 @@ Acceptance criteria:
 
 - Assemble package payloads from one consistent DuckDB read transaction or equivalent snapshot.
 - Write canonical JSON and deterministic NDJSON payloads, exact payload checksums, asset summary, warnings, and stable package fingerprint.
-- Use existing Phase 1 payload keys and paths from `projectTransferSchemas.ts`; every manifest-declared payload is present even when empty.
+- Use existing Phase 1 payload keys and paths from `projectTransferSchemas.ts`; every `projectTransferPayloadKeys` entry is declared in `manifest.payloads` and every corresponding payload file is written, even when empty.
+- Align JSON collection payload shapes with the orchestrator package contract before export assembly writes files: `providerConnections.json`, `models.json`, `prompts.json`, `projectPrompts.json`, `importRoutes.json`, and `projectImportRoutes.json` are top-level JSON arrays, not the current Phase 1 generic `{records, signature, provenance}` collection envelope.
+- Align the Phase 1 manifest contract with the orchestrator package names before writing export packages: use `exportedAt` and `sourceAppVersion` in the package manifest instead of the current `generatedAt` and nested `source.appVersion` shape, add the orchestrator-required `project` summary with source id, name, counts, human judgment mode, and current model reference, and update manifest/fingerprint tests for the renamed non-fingerprint metadata fields.
+- Update project and model payload contracts for orchestrator fidelity before package assembly: serialize `humanJudgmentMode` as `prompt` or `summary` only by normalizing source `NULL` to `prompt`, and allow model descriptors with `remoteModelId: null` only when the fallback identity fields needed for import resolution are present.
 - Support inline small package creation and background export session artifact creation using Phase 1 session foundations, `projectTransferExportArtifacts`, and `getProjectTransferExportTempLayout()`.
 - Use the Phase 1 thresholds in `projectTransferExecutionThresholds`: inline when package `<= 128 MB` and assets `<= 64 MB`; otherwise create an export session.
 - Persist export session state/progress through `projectTransferSessionRepository.ts`, including `queued -> assembling -> packaging -> ready` transitions, failure, expiration, package fingerprint, and downloadable artifact metadata.
@@ -124,14 +132,15 @@ Acceptance criteria:
 - Do not use `persistProjectTransferSessionCompletion()` for export readiness because it is an import-completion helper that enforces `status: 'completed'` and transitions to import `completed`; add and test an export-specific repository helper, for example `persistProjectTransferSessionExportReady()`, that compare-and-sets `packaging -> ready` and persists export readiness metadata.
 - Export package metadata includes filename, byte length, SHA-256 checksum, package fingerprint, public `downloadUrl`, and expiry. Any internal package artifact path stays server-only, is derived from `getProjectTransferExportTempLayout()`, and is never returned to the client.
 - Do not write export rows to `project_transfer_history` unless Phase 2 adds explicit tested export-history invariants; the existing history helpers are primarily for completed import duplicate warnings and same-session commit recovery.
-- Use the existing `export_assembly` and `export_package` `ProjectTransferProgressPhase` values for export progress. Extend `ProjectTransferRuntimeEventType` only if export-specific event types are needed beyond the current runtime event set.
-- Emit structured runtime events or progress records for progress, omitted assets, redaction warnings, checksum failures, and package finalization.
+- Use the existing `export_assembly` and `export_package` `ProjectTransferProgressPhase` values for export progress, and extend `ProjectTransferRuntimeEventType` with a tested export progress event type such as `export_progress` because the current runtime event set has import/upload/commit progress events but no export progress event.
+- Emit structured file-only runtime events plus persisted progress records for export progress, omitted assets, redaction warnings, checksum failures, and package finalization.
 
 Quality gates:
 
 - Add or update `src/server/services/projectTransfer/projectTransferExport.test.ts`, then `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferFingerprint.test.ts` passes.
+- `bun test src/server/services/projectTransfer/projectTransferPayloadSchemas.test.ts` passes if project, model, asset manifest, warning, redaction, or omission payload contracts are changed.
 - `bun test src/server/services/projectTransfer/projectTransferZip.test.ts` passes if package zip finalization helpers are touched.
 - `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes if session response, completion payload, runtime event, or threshold contracts are changed.
 - `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` passes if export session mutations are changed.
@@ -152,7 +161,7 @@ Acceptance criteria:
 - Add large export session polling under `GET /api/projects/export/:exportId` using the existing `ProjectTransferApiResponse` wrapper for JSON responses.
 - Existing CSV `POST /api/projects/:id/export` still resolves to the CSV export flow.
 - Large export downloads stream through the owner proxy without materializing package bytes on follower servers.
-- Download rejects non-ready, expired, failed, missing, or wrong-direction sessions before filesystem access, returning a non-2xx `ProjectTransferApiResponse` error instead of touching package artifacts.
+- Download checks session state before filesystem access. Ready sessions return the ZIP; non-ready sessions may return session-state JSON through the `ProjectTransferApiResponse` wrapper; expired, failed, missing, or wrong-direction sessions return a non-2xx `ProjectTransferApiResponse` error without touching package artifacts.
 - Download rejects sessions whose `expiresAt` has passed even if cleanup has not yet removed temp artifacts.
 - Download sets package filename and content headers from export metadata, not from untrusted request input.
 - Update `projectTransferRoutes.test.ts` so implemented export endpoints assert export behavior while import endpoints continue to assert contract-safe `501` placeholders.
@@ -162,8 +171,8 @@ Quality gates:
 
 - Update `src/server/routes/projectTransferRoutes.test.ts` for implemented export endpoints and retained import `501` placeholders, then `bun test src/server/routes/projectTransferRoutes.test.ts` passes.
 - `bun test src/server/routes/ProjectExportRoutes.test.ts` passes if the CSV export route or CSV validation shape is touched.
-- Update `src/server/routes/ApiProxyRoutes.test.ts` with large export download owner-proxy streaming coverage, then `bun test src/server/routes/ApiProxyRoutes.test.ts` passes.
-- `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` passes if proxy retry/download behavior changes.
+- `bun test src/server/routes/ApiProxyRoutes.test.ts` passes for route classification and owner-proxy coverage.
+- Add or update `src/server/routes/ApiProxyRoutes.retry.test.ts` with large export download owner-proxy streaming coverage, then `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` passes.
 - `bun test src/server/routes/ProjectsRoutes.test.ts` passes if shared project routing or active/archive access behavior changes.
 - `bun run build` passes.
 - `bun run lint` passes for touched `src` files.
@@ -198,6 +207,7 @@ Quality gates:
 - Do not implement import analyze, import dependency resolution, import commit, or the import wizard in this phase.
 - Reuse existing Phase 1 contracts under `src/server/services/projectTransfer/`; extend them only where export assembly exposes a missing locked field or warning code.
 - All package payload filenames, formats, checksums, row counts, and empty-payload behavior match `projectTransferSchemas.ts` and `projectTransferPayloadSchemas.ts`.
+- Before export packages are written, align Phase 1 schema placeholders with the orchestrator package contract for manifest metadata (`exportedAt`, `sourceAppVersion`, and `project` summary), top-level JSON array collection payloads, asset manifest entries (`entries[]` with `references[]`), explicit durable-state signature/provenance fields, project `humanJudgmentMode` normalization (`NULL -> prompt`), nullable model `remoteModelId` fallback identity, and the shared warning shape.
 - Export package fingerprints use `getProjectTransferLogicalPackageFingerprint()` and exclude volatile/session/provenance-only ids consistently with Phase 1.
 - Export routes replace only export placeholder handlers; import placeholder handlers remain contract-safe and route-shadowing tests stay green.
 - Background export sessions use the Phase 1 export state set and temp layout: `queued`, `assembling`, `packaging`, `ready`, `failed`, `expired`; `tmp/project-transfer/export/:sessionId/build`, `manifest.json`, `package.zip`, `completion.json`, and `progress.json`.
@@ -219,8 +229,8 @@ Quality gates:
 - `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` if export session repository behavior changes
 - Update `src/server/routes/projectTransferRoutes.test.ts` for implemented export endpoints and retained import `501` placeholders, then run `bun test src/server/routes/projectTransferRoutes.test.ts`
 - `bun test src/server/routes/ProjectExportRoutes.test.ts` if the CSV export route or CSV validation shape is touched
-- Update `src/server/routes/ApiProxyRoutes.test.ts` with large export download owner-proxy streaming coverage, then run `bun test src/server/routes/ApiProxyRoutes.test.ts`
-- `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` if proxy retry/download behavior changes
+- `bun test src/server/routes/ApiProxyRoutes.test.ts` for route classification and owner-proxy coverage
+- Add or update `src/server/routes/ApiProxyRoutes.retry.test.ts` with large export download owner-proxy streaming coverage, then run `bun test src/server/routes/ApiProxyRoutes.retry.test.ts`
 - `bun test src/server/routes/ProjectsRoutes.test.ts` if shared project routing or active/archive access behavior changes
 - `bun test src/services/olap/duckdbOlap.test.ts` if queue/date-scope parity is touched
 - Update `src/app/routes/+projects/-+index.vitest.tsx` for the renamed `projectsGrid` import/mock, then run `bunx vitest run src/app/routes/+projects/-+index.vitest.tsx`
