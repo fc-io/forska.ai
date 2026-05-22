@@ -33,6 +33,7 @@ type TelemetryHistoryChartPoint = {
   minY: number | null
   x: number
 }
+type TelemetryHistoryTooltip = {bucket: JudgmentJobProviderTelemetryHistoryBucket; label: string; x: number; y: number}
 type TelemetryHistoryBucketSummaryProps = {
   bucket: JudgmentJobProviderTelemetryHistoryBucket
   label: string
@@ -47,6 +48,8 @@ type TelemetryHistoryEmptyProps = {
   range: JudgmentJobProviderTelemetryHistoryRange
 }
 type TelemetryHistoryMetricProps = {label: string; value: string}
+type TelemetryHistoryTooltipPanelProps = {tooltip: TelemetryHistoryTooltip}
+type TelemetryHistoryTooltipRowProps = {label: string; value: string; valueClass?: string}
 
 const chartDimensions = {bottom: 178, height: 210, left: 44, right: 16, top: 18, width: 920}
 
@@ -123,27 +126,6 @@ const getBucketRangeLabel = (
   return `${formatter.format(new Date(bucket.bucketStart))} - ${formatter.format(new Date(bucket.bucketEnd))}`
 }
 
-const getBucketTooltip = (
-  bucket: JudgmentJobProviderTelemetryHistoryBucket,
-  range: JudgmentJobProviderTelemetryHistoryRange,
-): string => {
-  return [
-    getBucketRangeLabel(bucket, range),
-    `Average: ${formatTelemetryUtilization(bucket.avgUtilization)}`,
-    `Minimum: ${formatTelemetryUtilization(bucket.minUtilization)}`,
-    `Maximum: ${formatTelemetryUtilization(bucket.maxUtilization)}`,
-    `Samples: ${formatTelemetryCount(bucket.sampleCount)}`,
-    `Adherence: ${getProviderTelemetryAdherenceStateLabel(bucket.adherenceState)}`,
-    `Bottleneck: ${getProviderTelemetryBottleneckSummaryLabel(bucket)}`,
-    bucket.bottleneckSource ? `Source: ${bucket.bottleneckSource}` : null,
-    bucket.bottleneckSubreason ? `Subreason: ${formatTelemetryEnumValue(bucket.bottleneckSubreason)}` : null,
-  ]
-    .filter((line): line is string => {
-      return line !== null
-    })
-    .join('\n')
-}
-
 const getPlotHeight = () => {
   return chartDimensions.bottom - chartDimensions.top
 }
@@ -191,6 +173,27 @@ const getChartPoints = (
   })
 }
 
+const getChartPointHitbox = (params: {count: number; point: TelemetryHistoryChartPoint}) => {
+  const plotWidth = getPlotWidth()
+  const rawWidth = params.count <= 1 ? plotWidth : Math.max(18, plotWidth / (params.count - 1))
+  const leftBound = chartDimensions.left
+  const rightBound = chartDimensions.width - chartDimensions.right
+  const x = Math.max(leftBound, params.point.x - rawWidth / 2)
+
+  return {width: Math.min(rawWidth, rightBound - x), x}
+}
+
+const getTelemetryHistoryTooltipPosition = (params: {container: HTMLDivElement | undefined; event: PointerEvent}) => {
+  const containerRect = params.container?.getBoundingClientRect()
+
+  return containerRect
+    ? {
+        x: Math.min(Math.max(params.event.clientX - containerRect.left, 128), containerRect.width - 128),
+        y: Math.max(params.event.clientY - containerRect.top, 24),
+      }
+    : null
+}
+
 const getAveragePolylinePoints = (points: TelemetryHistoryChartPoint[]): string => {
   return points
     .filter((point) => {
@@ -215,6 +218,67 @@ const TelemetryHistoryMetric = (props: TelemetryHistoryMetricProps): JSX.Element
     <div class="min-w-0 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
       <p class="break-words text-xs font-medium uppercase text-gray-500">{props.label}</p>
       <p class="mt-1 break-words text-sm font-semibold text-gray-900">{props.value}</p>
+    </div>
+  )
+}
+
+const TelemetryHistoryTooltipRow = (props: TelemetryHistoryTooltipRowProps): JSX.Element => {
+  return (
+    <div class="flex items-start justify-between gap-5">
+      <span class="shrink-0 text-gray-300">{props.label}</span>
+      <span class={`min-w-0 break-words text-right font-medium tabular-nums text-white ${props.valueClass ?? ''}`}>
+        {props.value}
+      </span>
+    </div>
+  )
+}
+
+const TelemetryHistoryTooltipPanel = (props: TelemetryHistoryTooltipPanelProps): JSX.Element => {
+  return (
+    <div
+      class="pointer-events-none absolute z-20 min-w-64 max-w-80 rounded-md bg-gray-950/90 px-3 py-2 text-xs text-white shadow-xl ring-1 ring-black/10 backdrop-blur-sm"
+      style={{
+        left: `${props.tooltip.x}px`,
+        top: `${props.tooltip.y}px`,
+        transform: 'translate(-50%, calc(-100% - 12px))',
+      }}
+    >
+      <div class="mb-2 font-semibold leading-tight text-white">{props.tooltip.label}</div>
+      <div class="space-y-1 text-gray-100">
+        <TelemetryHistoryTooltipRow
+          label="Average"
+          value={formatTelemetryUtilization(props.tooltip.bucket.avgUtilization)}
+        />
+        <TelemetryHistoryTooltipRow
+          label="Minimum"
+          value={formatTelemetryUtilization(props.tooltip.bucket.minUtilization)}
+        />
+        <TelemetryHistoryTooltipRow
+          label="Maximum"
+          value={formatTelemetryUtilization(props.tooltip.bucket.maxUtilization)}
+        />
+      </div>
+      <div class="mt-2 space-y-1 border-t border-white/20 pt-2 text-gray-100">
+        <TelemetryHistoryTooltipRow label="Samples" value={formatTelemetryCount(props.tooltip.bucket.sampleCount)} />
+        <TelemetryHistoryTooltipRow
+          label="Adherence"
+          value={getProviderTelemetryAdherenceStateLabel(props.tooltip.bucket.adherenceState)}
+        />
+        <TelemetryHistoryTooltipRow
+          label="Bottleneck"
+          value={getProviderTelemetryBottleneckSummaryLabel(props.tooltip.bucket)}
+        />
+        <Show when={props.tooltip.bucket.bottleneckSource}>
+          {(source) => {
+            return <TelemetryHistoryTooltipRow label="Source" value={source()} valueClass="break-all" />
+          }}
+        </Show>
+        <Show when={props.tooltip.bucket.bottleneckSubreason}>
+          {(subreason) => {
+            return <TelemetryHistoryTooltipRow label="Subreason" value={formatTelemetryEnumValue(subreason())} />
+          }}
+        </Show>
+      </div>
     </div>
   )
 }
@@ -271,6 +335,8 @@ const TelemetryHistoryBucketSummary = (props: TelemetryHistoryBucketSummaryProps
 }
 
 const TelemetryHistoryChart = (props: TelemetryHistoryChartProps): JSX.Element => {
+  const [tooltip, setTooltip] = createSignal<TelemetryHistoryTooltip | null>(null)
+  let chartContainer: HTMLDivElement | undefined
   const scaleMax = createMemo(() => {
     return getProviderTelemetryHistoryUtilizationScaleMax(props.buckets)
   })
@@ -281,8 +347,28 @@ const TelemetryHistoryChart = (props: TelemetryHistoryChartProps): JSX.Element =
     return getAveragePolylinePoints(chartPoints())
   })
 
+  const showPointTooltip = (point: TelemetryHistoryChartPoint, event: PointerEvent) => {
+    const position = getTelemetryHistoryTooltipPosition({container: chartContainer, event})
+
+    if (!position) {
+      return
+    }
+
+    setTooltip({
+      bucket: point.bucket,
+      label: getBucketRangeLabel(point.bucket, props.range),
+      x: position.x,
+      y: position.y,
+    })
+  }
+
   return (
-    <div class="min-w-0 overflow-hidden rounded-md border border-gray-200 bg-white">
+    <div
+      ref={(element) => {
+        chartContainer = element
+      }}
+      class="relative min-w-0 rounded-md border border-gray-200 bg-white"
+    >
       <div class="grid grid-cols-[auto_1fr] gap-2 px-3 pt-3 text-xs text-gray-500">
         <span class="text-right">{formatTelemetryUtilization(scaleMax())}</span>
         <span class="border-t border-gray-200 pt-1">Scale maximum</span>
@@ -292,6 +378,9 @@ const TelemetryHistoryChart = (props: TelemetryHistoryChartProps): JSX.Element =
       <svg
         aria-label="Provider utilization history chart"
         class="block h-56 w-full max-w-full"
+        onPointerLeave={() => {
+          setTooltip(null)
+        }}
         role="img"
         viewBox={`0 0 ${chartDimensions.width} ${chartDimensions.height}`}
       >
@@ -336,9 +425,22 @@ const TelemetryHistoryChart = (props: TelemetryHistoryChartProps): JSX.Element =
         </Show>
         <For each={chartPoints()}>
           {(point) => {
+            const hitbox = getChartPointHitbox({count: chartPoints().length, point})
+
             return (
-              <g>
-                <title>{getBucketTooltip(point.bucket, props.range)}</title>
+              <g
+                onPointerMove={(event) => {
+                  return showPointTooltip(point, event)
+                }}
+              >
+                <rect
+                  fill="transparent"
+                  height={getPlotHeight()}
+                  pointer-events="all"
+                  width={hitbox.width}
+                  x={hitbox.x}
+                  y={chartDimensions.top}
+                />
                 <Show when={point.minY !== null && point.maxY !== null}>
                   <line
                     stroke={getAdherenceSvgColor(point.bucket.adherenceState)}
@@ -376,6 +478,11 @@ const TelemetryHistoryChart = (props: TelemetryHistoryChartProps): JSX.Element =
           }}
         </For>
       </svg>
+      <Show when={tooltip()}>
+        {(currentTooltip) => {
+          return <TelemetryHistoryTooltipPanel tooltip={currentTooltip()} />
+        }}
+      </Show>
       <div class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-t border-gray-200 px-3 py-2 text-xs text-gray-600">
         <span class="inline-flex items-center gap-1">
           <span class="h-2.5 w-5 rounded-full bg-blue-600" /> Average
