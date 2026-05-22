@@ -35,6 +35,21 @@ const getManifest = (checksumSeed: string) => {
   })
 }
 
+const getAssetManifest = (checksumSeed: string) => {
+  return buildProjectTransferManifest({
+    generatedAt: `2026-05-21T07:00:0${checksumSeed}.000Z`,
+    payloads: {
+      assetManifest: getProjectTransferManifestPayloadEntry({
+        bytes: `asset-manifest-${checksumSeed}`,
+        format: 'json',
+        path: 'assetManifest.json',
+        recordCount: 1,
+      }),
+    },
+    source: {projectId: `source-project-${checksumSeed}`, projectName: 'Source Project'},
+  })
+}
+
 const projectPayload = {
   createdAt: '2026-05-21T07:00:00.000Z',
   id: 'source-project-a',
@@ -117,6 +132,20 @@ const logicallyEquivalentProviderConnectionsPayload = {
   ],
 }
 
+const getAssetManifestPayload = (checksumSha256: string, byteLength = 11) => {
+  return {
+    assets: [
+      {
+        byteLength,
+        checksumSha256,
+        contentType: 'application/pdf',
+        packagePath: 'assets/article-pdfs/article-1.pdf',
+        signature: {checksumSha256, packagePath: 'assets/article-pdfs/article-1.pdf'},
+      },
+    ],
+  }
+}
+
 test('canonical JSON and NDJSON helpers produce deterministic checksum input', () => {
   expect(getProjectTransferCanonicalJson({b: 1, a: {d: 4, c: 3}})).toBe('{"a":{"c":3,"d":4},"b":1}')
   expect(getProjectTransferCanonicalNdjson([{b: 2}, {a: 1}])).toBe('{"a":1}\n{"b":2}\n')
@@ -138,6 +167,24 @@ test('project-transfer duplicate fingerprints are stable across ordering and pro
   })
 
   expect(firstFingerprint).toBe(secondFingerprint)
+})
+
+test('project-transfer duplicate fingerprints keep asset content checksums', () => {
+  const firstFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getAssetManifest('1'),
+    payloads: {assetManifest: getAssetManifestPayload('a'.repeat(64))},
+  })
+  const secondFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getAssetManifest('2'),
+    payloads: {assetManifest: getAssetManifestPayload('a'.repeat(64), 12)},
+  })
+  const changedFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getAssetManifest('2'),
+    payloads: {assetManifest: getAssetManifestPayload('b'.repeat(64))},
+  })
+
+  expect(firstFingerprint).toBe(secondFingerprint)
+  expect(changedFingerprint).not.toBe(firstFingerprint)
 })
 
 test('project-transfer duplicate fingerprints change when logical package content changes', () => {
