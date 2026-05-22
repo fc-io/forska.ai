@@ -220,7 +220,13 @@ const assertFieldsPresent = (record: JsonRecord, fields: readonly string[], labe
 }
 
 const isSourceOrTargetIdSignatureKey = (key: string) => {
-  return key === 'id' || /^source[A-Z].*Id$/.test(key) || /^target[A-Z].*Id$/.test(key)
+  return (
+    key === 'id'
+    || key === 'sourceId'
+    || key === 'targetId'
+    || /^source[A-Z].*Id$/.test(key)
+    || /^target[A-Z].*Id$/.test(key)
+  )
 }
 
 const getFirstDisallowedSignatureField = (value: unknown, path: string): string | null => {

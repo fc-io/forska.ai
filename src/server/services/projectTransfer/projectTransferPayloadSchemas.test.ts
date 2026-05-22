@@ -114,10 +114,20 @@ test('rejects missing required signature fields and source ids outside provenanc
     ...project,
     signature: {...project.signature, sourceProjectId: 'source-project-1'},
   })
+  const genericSourceIdInSignatureResult = validateProjectTransferPayload('project', {
+    ...project,
+    signature: {...project.signature, sourceId: 'source-project-1'},
+  })
+  const genericTargetIdInSignatureResult = validateProjectTransferPayload('project', {
+    ...project,
+    signature: {...project.signature, targetId: 'target-project-1'},
+  })
   const targetIdResult = validateProjectTransferPayload('articles', [{...article, id: 'target-article-1'}])
 
   expect(getValidationError(missingSignatureResult)).toContain('missing required field modelSignature')
   expect(getValidationError(sourceIdInSignatureResult)).toContain('must not contain source or target ids')
+  expect(getValidationError(genericSourceIdInSignatureResult)).toContain('must not contain source or target ids')
+  expect(getValidationError(genericTargetIdInSignatureResult)).toContain('must not contain source or target ids')
   expect(getValidationError(targetIdResult)).toContain('source ids must stay in provenance fields')
 })
 
@@ -129,10 +139,14 @@ test('locks article identifier signature boundaries with shared DOI, PMID, arXiv
   const rejectedIdentifierResult = validateProjectTransferPayload('articles', [
     {...article, doi: '10.1000', signature: {...article.signature, identifierKeys: []}},
   ])
+  const publisherUrlResult = validateProjectTransferPayload('articles', [
+    {...article, url: 'https://www.thelancet.com/journals/lancet/article/piis0140-6736(23)00000-0/fulltext'},
+  ])
 
   expect(article.signature.identifierKeys).toEqual(['arxiv:2401.12345', 'doi:10.1101/2024.01.01.123456', 'pmid:12345'])
   expect(getValidationError(mismatchedSignatureResult)).toContain('must match normalized strong identifiers')
   expect(getValidationError(rejectedIdentifierResult)).toContain('rejected identifier inputs')
+  expect(publisherUrlResult.ok).toBe(true)
 })
 
 test('rejects provider/model edge cases while normalizing empty model variants to null', () => {
