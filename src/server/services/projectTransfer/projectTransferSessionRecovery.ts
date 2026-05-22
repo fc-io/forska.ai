@@ -62,6 +62,18 @@ type ProjectTransferSessionRecoveryResult = ProjectTransferPromotedAssetCleanupR
   skippedActiveWriterCheck: boolean
 }
 
+type ProjectTransferCleanupCounts = Pick<
+  ProjectTransferSessionRecoveryResult,
+  'cleanupTempArtifactCount' | 'deletedPromotedAssetCount' | 'skippedPromotedAssetCount'
+>
+
+type ProjectTransferCleanupFailure = {error: unknown; plan: ProjectTransferRecoveryCleanupPlan}
+
+type ProjectTransferCleanupResult = ProjectTransferCleanupCounts & {
+  failedPlans: ProjectTransferCleanupFailure[]
+  successfulPlans: ProjectTransferRecoveryCleanupPlan[]
+}
+
 const defaultRecoveryBatchSize = 50
 const maxRecoveryBatchSize = 500
 const terminalStateListSql = getQuotedStringList([...projectTransferTerminalStates]).join(', ')
@@ -446,33 +458,86 @@ const getRecoveryCounts = (
   )
 }
 
+const emptyCleanupResult = (): ProjectTransferCleanupResult => {
+  return {
+    cleanupTempArtifactCount: 0,
+    deletedPromotedAssetCount: 0,
+    failedPlans: [],
+    skippedPromotedAssetCount: 0,
+    successfulPlans: [],
+  }
+}
+
+const getCleanupFailureError = (failedPlans: ProjectTransferCleanupFailure[]) => {
+  if (failedPlans.length === 0) {
+    return null
+  }
+
+  if (failedPlans.length === 1) {
+    return failedPlans[0]?.error ?? new Error('Project transfer cleanup failed')
+  }
+
+  const sessionIds = failedPlans.map((failure) => {
+    return failure.plan.id
+  })
+
+  return new AggregateError(
+    failedPlans.map((failure) => {
+      return failure.error
+    }),
+    `Project transfer cleanup failed for ${failedPlans.length} sessions: ${sessionIds.join(', ')}`,
+  )
+}
+
+const throwFailedCleanupPlans = (failedPlans: ProjectTransferCleanupFailure[]) => {
+  const error = getCleanupFailureError(failedPlans)
+
+  if (error !== null) {
+    throw error
+  }
+}
+
+const getCleanupAttempt = async ({
+  plan,
+  runtimeOptions,
+}: {
+  plan: ProjectTransferRecoveryCleanupPlan
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+}) => {
+  try {
+    return {ok: true as const, result: await cleanupRecoveredSessionArtifacts({plan, runtimeOptions})}
+  } catch (error) {
+    return {error, ok: false as const}
+  }
+}
+
 const getCleanupCounts = async ({
   plans,
   runtimeOptions,
 }: {
   plans: ProjectTransferRecoveryCleanupPlan[]
   runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
-}) => {
-  return plans.reduce<
-    Promise<
-      Pick<
-        ProjectTransferSessionRecoveryResult,
-        'cleanupTempArtifactCount' | 'deletedPromotedAssetCount' | 'skippedPromotedAssetCount'
-      >
-    >
-  >(
-    async (promise, plan) => {
-      const counts = await promise
-      const cleanup = await cleanupRecoveredSessionArtifacts({plan, runtimeOptions})
+}): Promise<ProjectTransferCleanupResult> => {
+  return plans.reduce<Promise<ProjectTransferCleanupResult>>(async (promise, plan) => {
+    const counts = await promise
+    const cleanup = await getCleanupAttempt({plan, runtimeOptions})
 
-      return {
-        cleanupTempArtifactCount: counts.cleanupTempArtifactCount + cleanup.cleanupTempArtifactCount,
-        deletedPromotedAssetCount: counts.deletedPromotedAssetCount + cleanup.deletedPromotedAssetCount,
-        skippedPromotedAssetCount: counts.skippedPromotedAssetCount + cleanup.skippedPromotedAssetCount,
-      }
-    },
-    Promise.resolve({cleanupTempArtifactCount: 0, deletedPromotedAssetCount: 0, skippedPromotedAssetCount: 0}),
-  )
+    if (!cleanup.ok) {
+      counts.failedPlans.push({error: cleanup.error, plan})
+
+      return counts
+    }
+
+    counts.successfulPlans.push(plan)
+
+    return {
+      cleanupTempArtifactCount: counts.cleanupTempArtifactCount + cleanup.result.cleanupTempArtifactCount,
+      deletedPromotedAssetCount: counts.deletedPromotedAssetCount + cleanup.result.deletedPromotedAssetCount,
+      failedPlans: counts.failedPlans,
+      skippedPromotedAssetCount: counts.skippedPromotedAssetCount + cleanup.result.skippedPromotedAssetCount,
+      successfulPlans: counts.successfulPlans,
+    }
+  }, Promise.resolve(emptyCleanupResult()))
 }
 
 const markTerminalCleanupComplete = async ({
@@ -519,9 +584,16 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
     : await getCleanupPlans({now, ownerToken, runner, sessions})
   const recoveryCounts = getRecoveryCounts(plans)
   const cleanupCounts = await getCleanupCounts({plans, runtimeOptions: {cwd: params.cwd, envValues: params.envValues}})
-  await markTerminalCleanupComplete({now, plans, runner})
+  const {failedPlans, successfulPlans, ...cleanupResultCounts} = cleanupCounts
+  await markTerminalCleanupComplete({now, plans: successfulPlans, runner})
+  throwFailedCleanupPlans(failedPlans)
 
-  return {...recoveryCounts, ...cleanupCounts, scannedSessionCount: sessions.length, skippedActiveWriterCheck: false}
+  return {
+    ...recoveryCounts,
+    ...cleanupResultCounts,
+    scannedSessionCount: sessions.length,
+    skippedActiveWriterCheck: false,
+  }
 }
 
 const projectTransferSessionRecoveryService = {
