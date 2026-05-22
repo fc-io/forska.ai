@@ -31,7 +31,6 @@ const textEncoder = new TextEncoder()
 
 export const projectTransferLogicalFingerprintExcludedKeys = [
   'byteLength',
-  'checksumSha256',
   'commitId',
   'completedAt',
   'createdAt',
