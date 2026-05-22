@@ -269,12 +269,14 @@ test('reads project-transfer packages using writer bytes for counters and checks
 })
 
 test('rejects missing root manifest before accepting a project-transfer package', async () => {
-  const {zipModule} = getFakeZipModule([getFakeZipEntry({filename: 'assets/article-pdfs/article-1.pdf'})])
+  const entry = getFakeZipEntry({filename: 'assets/article-pdfs/article-1.pdf'})
+  const {zipModule} = getFakeZipModule([entry])
 
   await expectPromiseToRejectWithMessage(
     readProjectTransferZipPackage({bytes: getBytes('fake-archive'), zipModule}),
     'Project transfer zip missing_manifest',
   )
+  expect(entry.readCount()).toBe(0)
 })
 
 test('rejects unsafe project-transfer zip paths before reading entry data', async () => {

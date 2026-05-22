@@ -246,6 +246,8 @@ test('project transfer session commit claims are single-flight and owner-token f
   const result = runSessionRepositoryScript<{
     completionOwner: string | null
     completionProjectId: string | null
+    firstClaimExpiresAt: string | null
+    firstClaimHeartbeatAt: string | null
     firstClaimOwner: string | null
     heartbeatOwner: string | null
     mismatchHeartbeat: unknown
@@ -262,13 +264,16 @@ test('project transfer session commit claims are single-flight and owner-token f
       state: 'ready_to_commit',
     })
 
+    const claimNow = new Date('2026-05-21T12:30:00.000Z')
     const firstClaim = await sessionRepository.transitionProjectTransferSessionState({
       commitId: 'commit-claim-1',
       expectedOwnerToken: null,
       expectedPlanRevision: 0,
       expectedState: 'ready_to_commit',
+      nextOwnerLeaseMs: 60_000,
       nextOwnerToken: 'owner-a',
       nextState: 'committing',
+      now: claimNow,
       sessionId: 'session-commit-claim',
     })
     const secondClaim = await sessionRepository.transitionProjectTransferSessionState({
@@ -314,6 +319,8 @@ test('project transfer session commit claims are single-flight and owner-token f
     console.log(JSON.stringify({
       completionOwner: completion?.ownerToken ?? null,
       completionProjectId: completion?.completionPayloadJson?.projectId ?? null,
+      firstClaimExpiresAt: firstClaim?.expiresAt ? new Date(firstClaim.expiresAt).toISOString() : null,
+      firstClaimHeartbeatAt: firstClaim?.heartbeatAt ? new Date(firstClaim.heartbeatAt).toISOString() : null,
       firstClaimOwner: firstClaim?.ownerToken ?? null,
       heartbeatOwner: heartbeat?.ownerToken ?? null,
       mismatchHeartbeat,
@@ -325,6 +332,8 @@ test('project transfer session commit claims are single-flight and owner-token f
   `)
 
   expect(result.firstClaimOwner).toBe('owner-a')
+  expect(result.firstClaimHeartbeatAt).toBe('2026-05-21T12:30:00.000Z')
+  expect(result.firstClaimExpiresAt).toBe('2026-05-21T12:31:00.000Z')
   expect(result.secondClaim).toBeNull()
   expect(result.mismatchHeartbeat).toBeNull()
   expect(result.heartbeatOwner).toBe('owner-a')
