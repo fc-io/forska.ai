@@ -255,6 +255,11 @@ export const readProjectTransferZipPackage = async ({
       }),
     )
     assertProjectTransferZipEntryMetadata(zipEntries)
+    assertProjectTransferZipHasManifest(
+      zipEntries.map((entry) => {
+        return {path: entry.filename}
+      }),
+    )
 
     const entries = await Promise.all(
       zipEntries.map((entry) => {

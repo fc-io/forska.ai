@@ -45,6 +45,7 @@ type TransitionProjectTransferSessionStateParams = ProjectTransferOwnerTokenCond
     completionPayload?: ProjectTransferCompletionPayload | null
     error?: unknown
     expectedState: ProjectTransferSessionState | ProjectTransferSessionState[]
+    nextOwnerLeaseMs?: number
     nextOwnerToken?: string | null
     nextState: ProjectTransferSessionState
     now?: Date
@@ -89,6 +90,8 @@ type PersistProjectTransferSessionCompletionParams = {
 }
 
 type GetProjectTransferSessionParams = {runner?: ProjectTransferSessionRunner; sessionId: string}
+
+const defaultProjectTransferOwnerLeaseMs = 60_000
 
 const getNow = (now?: Date) => {
   return now ?? new Date()
@@ -164,6 +167,18 @@ const getLeaseExpiresAt = ({leaseMs, now}: {leaseMs: number; now: Date}) => {
   return new Date(now.getTime() + leaseMs)
 }
 
+const getOwnerClaimLeaseMs = (leaseMs: number | undefined) => {
+  if (leaseMs === undefined) {
+    return defaultProjectTransferOwnerLeaseMs
+  }
+
+  if (!Number.isFinite(leaseMs) || leaseMs <= 0) {
+    throw new Error('Project transfer owner lease must be positive')
+  }
+
+  return Math.floor(leaseMs)
+}
+
 const getProjectTransferSessionRecord = async (runner: ProjectTransferSessionRunner, sessionId: string) => {
   const [row] = await runner.queryJson<
     Omit<ProjectTransferSessionRecord, 'completionPayloadJson' | 'errorJson' | 'planSummaryJson' | 'progressJson'> & {
@@ -224,11 +239,27 @@ const assertProgressUpdate = ({
   }
 }
 
+const getOwnerTokenUpdateSets = (params: TransitionProjectTransferSessionStateParams, now: Date) => {
+  if (!Object.hasOwn(params, 'nextOwnerToken')) {
+    return []
+  }
+
+  if (typeof params.nextOwnerToken !== 'string') {
+    return [`owner_token = ${getSqlLiteral(params.nextOwnerToken ?? null)}`]
+  }
+
+  return [
+    `owner_token = ${getSqlLiteral(params.nextOwnerToken)}`,
+    `heartbeat_at = ${getTimestampLiteral(now)}`,
+    `expires_at = ${getTimestampLiteral(getLeaseExpiresAt({leaseMs: getOwnerClaimLeaseMs(params.nextOwnerLeaseMs), now}))}`,
+  ]
+}
+
 const getTransitionUpdateSets = (params: TransitionProjectTransferSessionStateParams, now: Date) => {
   return [
     `state = ${getSqlLiteral(params.nextState)}`,
     `updated_at = ${getTimestampLiteral(now)}`,
-    Object.hasOwn(params, 'nextOwnerToken') ? `owner_token = ${getSqlLiteral(params.nextOwnerToken ?? null)}` : null,
+    ...getOwnerTokenUpdateSets(params, now),
     Object.hasOwn(params, 'commitId') ? `commit_id = ${getSqlLiteral(params.commitId ?? null)}` : null,
     Object.hasOwn(params, 'packageFingerprint')
       ? `package_fingerprint = ${getSqlLiteral(params.packageFingerprint ?? null)}`
