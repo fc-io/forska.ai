@@ -45,6 +45,10 @@ export type JudgmentProviderTelemetryHistoryBucket = JudgmentProviderTelemetryBo
   avgUtilization: number | null
   bucketEnd: Date
   bucketStart: Date
+  latestNormalRequestCapacity: number | null
+  latestProviderLeasedLiveRequests: number | null
+  latestProviderLeasedPhysicalCalls: number | null
+  latestProviderLimit: number | null
   maxUtilization: number | null
   minUtilization: number | null
   sampleCount: number
@@ -282,6 +286,34 @@ const getUtilizationSummary = (samples: JudgmentProviderTelemetryHistorySample[]
       }
 }
 
+const getLatestHistorySample = (
+  samples: JudgmentProviderTelemetryHistorySample[],
+): JudgmentProviderTelemetryHistorySample | null => {
+  return samples.reduce<JudgmentProviderTelemetryHistorySample | null>((latestSample, sample) => {
+    return latestSample === null || sample.sampledAt.getTime() >= latestSample.sampledAt.getTime()
+      ? sample
+      : latestSample
+  }, null)
+}
+
+const getRequestLimitSummary = (samples: JudgmentProviderTelemetryHistorySample[]) => {
+  const latestSample = getLatestHistorySample(samples)
+
+  return latestSample === null
+    ? {
+        latestNormalRequestCapacity: null,
+        latestProviderLeasedLiveRequests: null,
+        latestProviderLeasedPhysicalCalls: null,
+        latestProviderLimit: null,
+      }
+    : {
+        latestNormalRequestCapacity: latestSample.normalRequestCapacity,
+        latestProviderLeasedLiveRequests: latestSample.providerLeasedLiveRequests,
+        latestProviderLeasedPhysicalCalls: latestSample.providerLeasedPhysicalCalls,
+        latestProviderLimit: latestSample.providerLimit,
+      }
+}
+
 const getBetterBottleneckCandidate = (
   current: BottleneckCandidate | null,
   candidate: BottleneckCandidate,
@@ -328,10 +360,12 @@ const getHistoryBucket = (params: {
 }): JudgmentProviderTelemetryHistoryBucket => {
   const utilizationSummary = getUtilizationSummary(params.samples)
   const bottleneckSummary = getJudgmentProviderTelemetryBottleneckSummary(params.samples)
+  const requestLimitSummary = getRequestLimitSummary(params.samples)
 
   return {
     ...bottleneckSummary,
     ...utilizationSummary,
+    ...requestLimitSummary,
     adherenceState: getJudgmentProviderTelemetryBucketAdherenceState(params.samples),
     bucketEnd: new Date(params.bucketStart.getTime() + params.bucketSizeMs),
     bucketStart: params.bucketStart,

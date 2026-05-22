@@ -458,6 +458,136 @@ test('matchCanonicalArticlesWithTx re-reads winning identifiers after insert con
   ).toBe(true)
 })
 
+test('matchCanonicalArticlesWithTx keeps conflicted created articles with child references', async () => {
+  const duckdbPath = `/tmp/forska-article-canonical-matcher-referenced-conflict-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {matchCanonicalArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleCanonicalMatcher.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        const matchResult = await database.transaction(async (tx) => {
+          let injected = false
+          const wrappedTx = {
+            queryJson: tx.queryJson.bind(tx),
+            run: async (statement) => {
+              await tx.run(statement)
+
+              if (!injected && statement.includes('INSERT INTO app.article (')) {
+                injected = true
+
+                const [createdArticle] = await tx.queryJson(
+                  "SELECT id FROM app.article WHERE article_title = 'Race cleanup article' LIMIT 1"
+                )
+
+                await tx.run("INSERT INTO app.article (id, article_title, article_id) VALUES ('winning-article', 'Winning article', NULL)")
+                await tx.run("INSERT INTO app.article_identifier (id, article_id, kind, normalized_value, source) VALUES ('winning-identifier', 'winning-article', 'doi', '10.1000/race-cleanup', 'test')")
+                await tx.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('cleanup-model', 'provider-connection-1', 'Cleanup Model', 'cleanup-model', 'Cleanup Model', 'manual', TRUE)")
+                await tx.run("INSERT INTO app.project (id, name, model_id) VALUES ('cleanup-project', 'Cleanup Project', 'cleanup-model')")
+                await tx.run("INSERT INTO app.project_article (id, project_id, article_id) VALUES ('cleanup-project-article', 'cleanup-project', '" + createdArticle.id + "')")
+              }
+            },
+          }
+
+          return await matchCanonicalArticlesWithTx(wrappedTx, [
+            {
+              articleTitle: 'Race cleanup article',
+              candidateId: 'candidate-race-cleanup',
+              sourceKind: 'covidence',
+              sourceRecordKey: 'source-race-cleanup',
+              strongIdentifiers: [{kind: 'doi', normalizedValue: '10.1000/race-cleanup', source: 'test'}],
+            },
+          ])
+        })
+        const articleRows = await database.queryJson(
+          "SELECT id, article_title AS articleTitle FROM app.article ORDER BY article_title ASC"
+        )
+        const identifierRows = await database.queryJson(
+          "SELECT article_id AS articleId, kind, normalized_value AS normalizedValue FROM app.article_identifier ORDER BY article_id ASC"
+        )
+        const projectArticleRows = await database.queryJson(
+          "SELECT article_id AS articleId FROM app.project_article ORDER BY article_id ASC"
+        )
+        const quarantineRows = await database.queryJson(
+          "SELECT requested_article_id AS requestedArticleId, winning_article_id AS winningArticleId, reason FROM app.article_canonical_match_quarantine ORDER BY requested_article_id ASC"
+        )
+
+        console.log(JSON.stringify({articleRows, identifierRows, matchResult, projectArticleRows, quarantineRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify referenced conflict cleanup',
+      )
+    }
+
+    const parsed = getStdoutJson<{
+      articleRows: Array<{articleTitle: string; id: string}>
+      identifierRows: Array<{articleId: string; kind: string; normalizedValue: string}>
+      matchResult: {
+        outcomes: Array<{candidateId: string; metadata?: {requestedArticleId: string}; reason?: string; status: string}>
+      }
+      projectArticleRows: Array<{articleId: string}>
+      quarantineRows: Array<{reason: string; requestedArticleId: string; winningArticleId: string}>
+    }>(result.stdout)
+    const outcome = parsed.matchResult.outcomes[0]
+    const referencedArticleId = parsed.projectArticleRows[0]?.articleId
+
+    expect(outcome).toMatchObject({
+      candidateId: 'candidate-race-cleanup',
+      reason: 'identifier-insert-conflict',
+      status: 'unresolved',
+    })
+    expect(outcome?.metadata?.requestedArticleId).toBe(referencedArticleId)
+    expect(parsed.articleRows).toEqual([
+      {articleTitle: 'Race cleanup article', id: referencedArticleId ?? ''},
+      {articleTitle: 'Winning article', id: 'winning-article'},
+    ])
+    expect(parsed.identifierRows).toEqual([
+      {articleId: 'winning-article', kind: 'doi', normalizedValue: '10.1000/race-cleanup'},
+    ])
+    expect(parsed.quarantineRows).toEqual([
+      {
+        reason: 'identifier-insert-conflict',
+        requestedArticleId: referencedArticleId ?? '',
+        winningArticleId: 'winning-article',
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('matchCanonicalArticlesWithTx returns unresolved outcomes for oversized batches without writes', async () => {
   const tx = {
     queryJson: async <T>(): Promise<T[]> => {

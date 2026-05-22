@@ -385,6 +385,16 @@ export const getPromptClaimDispatchRequestedCount = ({
   }, 0)
 }
 
+export const shouldWarnPromptClaimCountMismatch = ({
+  fetched,
+  requested,
+}: {
+  fetched: number
+  requested: number
+}): boolean => {
+  return fetched > requested
+}
+
 const enqueueClaimedPromptBatch = async ({
   label,
   prompts,
@@ -1252,7 +1262,7 @@ const sendToLLMForJobs = async (
     return sum + result.fetched
   }, 0)
 
-  if (totalPromptsFetched !== expectedPromptsToFetch) {
+  if (shouldWarnPromptClaimCountMismatch({fetched: totalPromptsFetched, requested: expectedPromptsToFetch})) {
     schedulerFailureLogger.warn(`llm.claimPrompts.mismatch.${label}`, `[capacity:${label}] claim count mismatch`, {
       component: sendToLLMComponent,
       event: 'claimCountMismatch',

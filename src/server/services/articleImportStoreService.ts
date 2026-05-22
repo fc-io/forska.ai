@@ -157,6 +157,7 @@ type ExistingCanonicalArticleRow = {
   sourceMetadata: unknown
   url: string | null
 }
+type ArticleReferenceTableRow = {schemaName: string; tableName: string}
 type ArticleImportRefreshState = {
   acceptedCount: number
   acceptedSourceRecords: ArticleImportRouteSourceRecordLookup[]
@@ -594,12 +595,73 @@ const getChangedCanonicalArticleUpdateValues = (params: {
   return Object.fromEntries(changedEntries) as Partial<CanonicalArticleUpdateValues>
 }
 
+const isSafeSqlIdentifier = (value: string) => {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value)
+}
+
+const getSafeArticleReferenceTableName = (row: ArticleReferenceTableRow) => {
+  return isSafeSqlIdentifier(row.schemaName) && isSafeSqlIdentifier(row.tableName)
+    ? `${row.schemaName}.${row.tableName}`
+    : null
+}
+
+const getCanonicalArticleUpdateBlockingReferenceTables = async (tx: ArticleImportStoreTx) => {
+  const rows = await tx.queryJson<ArticleReferenceTableRow>(`
+    SELECT schema_name AS schemaName, table_name AS tableName
+    FROM duckdb_constraints()
+    WHERE constraint_type = 'FOREIGN KEY'
+      AND referenced_table = 'article'
+    ORDER BY schema_name ASC, table_name ASC
+  `)
+
+  return rows.map(getSafeArticleReferenceTableName).filter((tableName): tableName is string => {
+    return tableName !== null
+  })
+}
+
+const getCanonicalArticleUpdateBlockedArticleIds = async (tx: ArticleImportStoreTx, articleIds: string[]) => {
+  const uniqueArticleIds = getUniqueValues(articleIds)
+
+  if (uniqueArticleIds.length === 0) {
+    return new Set<string>()
+  }
+
+  const referenceTables = await getCanonicalArticleUpdateBlockingReferenceTables(tx)
+
+  if (referenceTables.length === 0) {
+    return new Set<string>()
+  }
+
+  const rows = await getValueChunks(uniqueArticleIds).reduce<Promise<Array<{articleId: string}>>>(
+    async (rowsPromise, articleIdChunk) => {
+      const existingRows = await rowsPromise
+      const quotedArticleIds = getQuotedStringList(articleIdChunk).join(', ')
+      const chunkRows = await tx.queryJson<{articleId: string}>(`
+        ${referenceTables
+          .map((tableName) => {
+            return `SELECT article_id AS articleId FROM ${tableName} WHERE article_id IN (${quotedArticleIds})`
+          })
+          .join('\nUNION\n')}
+      `)
+
+      return [...existingRows, ...chunkRows]
+    },
+    Promise.resolve([]),
+  )
+
+  return new Set(
+    rows.map((row) => {
+      return row.articleId
+    }),
+  )
+}
+
 const updateExistingCanonicalArticlesInTx = async (params: {
   articleGroups: Map<string, ScopedArticleImportStoreRow[]>
   existingArticles: Map<string, ExistingCanonicalArticleRow>
   tx: ArticleImportStoreTx
 }) => {
-  const updates = Array.from(params.articleGroups.entries())
+  const candidateUpdates = Array.from(params.articleGroups.entries())
     .map((entry) => {
       const current = params.existingArticles.get(entry[0])
       const values = current ? getChangedCanonicalArticleUpdateValues({current, rows: entry[1]}) : null
@@ -609,6 +671,15 @@ const updateExistingCanonicalArticlesInTx = async (params: {
     .filter((entry): entry is {current: ExistingCanonicalArticleRow; values: Partial<CanonicalArticleUpdateValues>} => {
       return entry !== null
     })
+  const blockedArticleIds = await getCanonicalArticleUpdateBlockedArticleIds(
+    params.tx,
+    candidateUpdates.map((update) => {
+      return update.current.id
+    }),
+  )
+  const updates = candidateUpdates.filter((update) => {
+    return !blockedArticleIds.has(update.current.id)
+  })
 
   await updates.reduce<Promise<void>>((previousRun, update) => {
     return previousRun.then(() => {

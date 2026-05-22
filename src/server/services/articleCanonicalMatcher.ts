@@ -941,20 +941,16 @@ const getInsertConflictQuarantineRecords = (
   })
 }
 
-const deleteCreatedArticles = async (tx: CanonicalArticleMatcherTx, articleIds: string[]) => {
+const deleteCreatedArticleIdentifiers = async (tx: CanonicalArticleMatcherTx, articleIds: string[]) => {
   const uniqueArticleIds = getUniqueValues(articleIds)
 
   await getValueChunks(uniqueArticleIds).reduce<Promise<void>>((previousRun, articleIdChunk) => {
     return previousRun.then(() => {
+      const quotedArticleIds = getQuotedStringList(articleIdChunk).join(', ')
+
       return articleIdChunk.length === 0
         ? Promise.resolve()
-        : tx
-            .run(
-              `DELETE FROM app.article_identifier WHERE article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})`,
-            )
-            .then(() => {
-              return tx.run(`DELETE FROM app.article WHERE id IN (${getQuotedStringList(articleIdChunk).join(', ')})`)
-            })
+        : tx.run(`DELETE FROM app.article_identifier WHERE article_id IN (${quotedArticleIds})`)
     })
   }, Promise.resolve())
 }
@@ -1170,7 +1166,7 @@ export const matchCanonicalArticlesWithTx = async (
 
   await insertQuarantineRecords(tx, insertedConflictQuarantineRecords)
   await deleteFreshConflictedIdentifiers(tx, freshConflictedIdentifierRecords)
-  await deleteCreatedArticles(tx, conflictedCreateArticleIds)
+  await deleteCreatedArticleIdentifiers(tx, conflictedCreateArticleIds)
 
   return {instrumentation, outcomes: getOutcomes(candidates, getFinalPlans(plans, insertConflicts))}
 }

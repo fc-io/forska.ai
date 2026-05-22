@@ -1110,7 +1110,7 @@ test('syncImportedArticlesWithTx reuses id-less source records across reimports'
   }
 })
 
-test('storeImportedArticlesWithTx resolves canonical fields without lower-trust last-writer overwrites', async () => {
+test('storeImportedArticlesWithTx keeps existing canonical fields stable across reimports', async () => {
   const duckdbPath = `/tmp/f1-article-import-canonical-resolver-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(
     [
@@ -1200,7 +1200,7 @@ test('storeImportedArticlesWithTx resolves canonical fields without lower-trust 
   try {
     if (result.exitCode !== 0) {
       throw new Error(
-        result.stderr.toString() || result.stdout.toString() || 'Failed to resolve canonical article fields',
+        result.stderr.toString() || result.stdout.toString() || 'Failed to keep existing canonical article fields',
       )
     }
 
@@ -1225,11 +1225,11 @@ test('storeImportedArticlesWithTx resolves canonical fields without lower-trust 
     }
 
     expect(parsed.articleRow).toEqual({
-      articleSummary: 'Publisher summary',
-      articleTitle: 'PubMed title',
+      articleSummary: 'Structured summary',
+      articleTitle: 'Structured title',
       legacyArticleId: null,
-      publicationStatus: 'published',
-      pubmedId: '12345',
+      publicationStatus: null,
+      pubmedId: null,
       url: 'https://doi.org/10.1000/canonical-resolver',
     })
   } finally {
@@ -1350,6 +1350,213 @@ test('storeImportedArticlesWithTx reimports referenced articles without foreign 
     expect(parsed.updatedArticleRow.id).toBe(parsed.articleRow.id)
     expect(parsed.articleImportRouteCountRow.count).toBe(1)
     expect(parsed.projectArticleCountRow.count).toBe(1)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('storeImportedArticlesWithTx skips canonical field updates for project-referenced articles', async () => {
+  const duckdbPath = `/tmp/f1-article-import-store-referenced-update-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {storeImportedArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const articleId = 'referenced-canonical-update-article'
+
+        await database.run(
+          "INSERT INTO app.article (id, article_title, article_summary, doi, source_metadata) VALUES ('" + articleId + "', 'Existing title', NULL, '10.1000/referenced-update', NULL)"
+        )
+        await database.run(
+          "INSERT INTO app.article_identifier (id, article_id, kind, normalized_value, source) VALUES ('referenced-canonical-update-identifier', '" + articleId + "', 'doi', '10.1000/referenced-update', 'test')"
+        )
+        await database.run(
+          "INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('referenced-canonical-update-model', 'provider-connection-1', 'Referenced Update Model', 'referenced-canonical-update-model', 'Referenced Update Model', 'manual', TRUE)"
+        )
+        await database.run(
+          "INSERT INTO app.project (id, name, model_id) VALUES ('referenced-canonical-update-project', 'Referenced Update Project', 'referenced-canonical-update-model')"
+        )
+        await database.run(
+          "INSERT INTO app.project_article (id, project_id, article_id) VALUES ('referenced-canonical-update-project-article', 'referenced-canonical-update-project', '" + articleId + "')"
+        )
+
+        await database.transaction(async (tx) => {
+          await storeImportedArticlesWithTx(tx, [
+            {
+              articleAuthors: ['Alice Example'],
+              articleId: 'covidence-referenced-update-1',
+              articleSummary: 'Better summary',
+              articleTitle: 'Better title',
+              doi: '10.1000/referenced-update',
+              importRoute: 'covidence:referenced-update',
+              sourceKind: 'covidence',
+              sourceMetadata: {covidence: true},
+              sourceRecordKey: 'covidence-referenced-update-1',
+            },
+          ])
+        })
+
+        const [articleRow] = await database.queryJson(
+          "SELECT article_title AS articleTitle, article_summary AS articleSummary FROM app.article WHERE id = '" + articleId + "'"
+        )
+        const [routeLinkCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route WHERE article_id = '" + articleId + "'"
+        )
+
+        console.log(JSON.stringify({articleRow, routeLinkCountRow}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to import project-referenced article',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articleRow: {articleSummary: string | null; articleTitle: string}
+      routeLinkCountRow: {count: number}
+    }
+
+    expect(parsed.articleRow).toEqual({articleSummary: null, articleTitle: 'Existing title'})
+    expect(parsed.routeLinkCountRow.count).toBe(1)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('storeImportedArticlesWithTx skips canonical field updates for identifier-referenced articles', async () => {
+  const duckdbPath = `/tmp/f1-article-import-store-identifier-update-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {storeImportedArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const articleId = 'identifier-canonical-update-article'
+
+        await database.run(
+          "INSERT INTO app.article (id, article_title, article_summary, doi, source_metadata) VALUES ('" + articleId + "', 'Identifier title', NULL, '10.1000/identifier-update', NULL)"
+        )
+        await database.run(
+          "INSERT INTO app.article_identifier (id, article_id, kind, normalized_value, source) VALUES ('identifier-canonical-update-identifier', '" + articleId + "', 'doi', '10.1000/identifier-update', 'test')"
+        )
+
+        await database.transaction(async (tx) => {
+          await storeImportedArticlesWithTx(tx, [
+            {
+              articleAuthors: ['Alice Example'],
+              articleId: 'covidence-identifier-update-1',
+              articleSummary: 'Better summary',
+              articleTitle: 'Better title',
+              doi: '10.1000/identifier-update',
+              importRoute: 'covidence:identifier-update',
+              sourceKind: 'covidence',
+              sourceMetadata: {covidence: true},
+              sourceRecordKey: 'covidence-identifier-update-1',
+            },
+          ])
+        })
+
+        const [articleRow] = await database.queryJson(
+          "SELECT article_title AS articleTitle, article_summary AS articleSummary FROM app.article WHERE id = '" + articleId + "'"
+        )
+        const [routeLinkCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route WHERE article_id = '" + articleId + "'"
+        )
+
+        console.log(JSON.stringify({articleRow, routeLinkCountRow}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to import identifier-referenced article',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articleRow: {articleSummary: string | null; articleTitle: string}
+      routeLinkCountRow: {count: number}
+    }
+
+    expect(parsed.articleRow).toEqual({articleSummary: null, articleTitle: 'Identifier title'})
+    expect(parsed.routeLinkCountRow.count).toBe(1)
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)

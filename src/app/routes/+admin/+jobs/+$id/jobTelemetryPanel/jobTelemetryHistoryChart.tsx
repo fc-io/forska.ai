@@ -11,6 +11,7 @@ import {
 import {
   formatTelemetryCount,
   formatTelemetryEnumValue,
+  formatTelemetryRatio,
   formatTelemetryUtilization,
   getActionErrorMessage,
   getProviderTelemetryAdherenceStateLabel,
@@ -124,6 +125,16 @@ const getBucketRangeLabel = (
   const formatter = isWideRange(range) ? dateTimeFormatter : shortTimeFormatter
 
   return `${formatter.format(new Date(bucket.bucketStart))} - ${formatter.format(new Date(bucket.bucketEnd))}`
+}
+
+const formatTelemetryBucketCount = (value: number | null | undefined): string => {
+  return value === null || value === undefined ? 'N/A' : formatTelemetryCount(value)
+}
+
+const formatTelemetryBucketRatio = (value: number | null | undefined, target: number | null | undefined): string => {
+  return value === null || value === undefined || target === null || target === undefined
+    ? 'N/A'
+    : formatTelemetryRatio(value, target)
 }
 
 const getPlotHeight = () => {
@@ -259,6 +270,24 @@ const TelemetryHistoryTooltipPanel = (props: TelemetryHistoryTooltipPanelProps):
         />
       </div>
       <div class="mt-2 space-y-1 border-t border-white/20 pt-2 text-gray-100">
+        <TelemetryHistoryTooltipRow
+          label="Latest Requests"
+          value={formatTelemetryBucketRatio(
+            props.tooltip.bucket.latestProviderLeasedLiveRequests,
+            props.tooltip.bucket.latestNormalRequestCapacity,
+          )}
+        />
+        <TelemetryHistoryTooltipRow
+          label="Provider Limit"
+          value={formatTelemetryBucketCount(props.tooltip.bucket.latestProviderLimit)}
+        />
+        <TelemetryHistoryTooltipRow
+          label="Physical Calls"
+          value={formatTelemetryBucketRatio(
+            props.tooltip.bucket.latestProviderLeasedPhysicalCalls,
+            props.tooltip.bucket.latestProviderLimit,
+          )}
+        />
         <TelemetryHistoryTooltipRow label="Samples" value={formatTelemetryCount(props.tooltip.bucket.sampleCount)} />
         <TelemetryHistoryTooltipRow
           label="Adherence"
@@ -305,6 +334,26 @@ const TelemetryHistoryBucketSummary = (props: TelemetryHistoryBucketSummaryProps
         <TelemetryHistoryMetric label="Average" value={formatTelemetryUtilization(props.bucket.avgUtilization)} />
         <TelemetryHistoryMetric label="Minimum" value={formatTelemetryUtilization(props.bucket.minUtilization)} />
         <TelemetryHistoryMetric label="Maximum" value={formatTelemetryUtilization(props.bucket.maxUtilization)} />
+      </div>
+      <div class="mt-3 grid min-w-0 gap-2 sm:grid-cols-3">
+        <TelemetryHistoryMetric
+          label="Latest Requests"
+          value={formatTelemetryBucketRatio(
+            props.bucket.latestProviderLeasedLiveRequests,
+            props.bucket.latestNormalRequestCapacity,
+          )}
+        />
+        <TelemetryHistoryMetric
+          label="Provider Limit"
+          value={formatTelemetryBucketCount(props.bucket.latestProviderLimit)}
+        />
+        <TelemetryHistoryMetric
+          label="Physical Calls"
+          value={formatTelemetryBucketRatio(
+            props.bucket.latestProviderLeasedPhysicalCalls,
+            props.bucket.latestProviderLimit,
+          )}
+        />
       </div>
       <div class="mt-3 min-w-0 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs leading-5 text-gray-600">
         <p class="break-words">

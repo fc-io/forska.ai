@@ -98,7 +98,6 @@ const buildSafeTurnConfig = () => {
       networkAccess: false,
       excludeSlashTmp: true,
       excludeTmpdirEnvVar: true,
-      readOnlyAccess: {type: 'restricted', includePlatformDefaults: false, readableRoots: [cwd]},
     },
   } as const
 }

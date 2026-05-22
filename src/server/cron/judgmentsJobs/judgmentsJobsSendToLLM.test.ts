@@ -14,6 +14,7 @@ import {
   processClaimedPromptsByConnection,
   requeueAndFilterRunningJobs,
   resetDispatchProviderWarmupForTests,
+  shouldWarnPromptClaimCountMismatch,
 } from './judgmentsJobsSendToLLM.ts'
 
 type PromptToProcess = import('./judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts').PromptToProcess
@@ -614,6 +615,12 @@ test('caps owner-backed prompt claim chunks per dispatch pass', () => {
   expect(getPromptClaimDispatchChunkLimits({limit: 145, ownerBacked: false})).toEqual([16, 64, 64, 1])
   expect(getPromptClaimDispatchRequestedCount({limit: 600, ownerBacked: true})).toBe(288)
   expect(getPromptClaimDispatchRequestedCount({limit: 145, ownerBacked: false})).toBe(145)
+})
+
+test('does not warn when prompt claim fetches fewer rows than requested', () => {
+  expect(shouldWarnPromptClaimCountMismatch({fetched: 0, requested: 5})).toBe(false)
+  expect(shouldWarnPromptClaimCountMismatch({fetched: 5, requested: 5})).toBe(false)
+  expect(shouldWarnPromptClaimCountMismatch({fetched: 6, requested: 5})).toBe(true)
 })
 
 test('dispatch availability skips 404 misroutes during cooldown, probes once after expiry, and skips misconfigured endpoints', () => {

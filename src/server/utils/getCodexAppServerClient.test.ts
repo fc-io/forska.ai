@@ -9,17 +9,25 @@ import {
   type SpawnCodexAppServer,
 } from './getCodexAppServerClient.ts'
 
-type MockJsonRpcRequest = {id?: number; method?: string; params?: {input?: Array<{text?: string}>; threadId?: string}}
+type MockJsonRpcRequest = {
+  id?: number
+  method?: string
+  params?: {input?: Array<{text?: string}>; sandboxPolicy?: unknown; threadId?: string}
+}
 
 type MockNotification =
   | {inputText: string; kind: 'item'; text: string}
   | {error?: unknown; inputText: string; kind: 'complete'; status: 'completed' | 'failed'}
 
 const createMockConcurrentCodexClient = ({
+  expectedTurnCount = 2,
   notifications,
+  onTurnStart,
   threadReadTextByInputText,
 }: {
+  expectedTurnCount?: number
   notifications: MockNotification[]
+  onTurnStart?: (params: MockJsonRpcRequest['params']) => void
   threadReadTextByInputText: Record<string, string>
 }) => {
   let threadCount = 0
@@ -43,7 +51,7 @@ const createMockConcurrentCodexClient = ({
   }
 
   const maybeScheduleNotifications = () => {
-    if (notificationsScheduled || turnsByThreadId.size !== 2) {
+    if (notificationsScheduled || turnsByThreadId.size !== expectedTurnCount) {
       return
     }
 
@@ -112,6 +120,7 @@ const createMockConcurrentCodexClient = ({
             const turnId = `turn-${turnCount}`
             const inputText = message.params?.input?.[0]?.text
             const threadId = message.params?.threadId
+            onTurnStart?.(message.params)
 
             if (!threadId) {
               throw new Error('Missing threadId for turn/start')
@@ -242,6 +251,26 @@ test('getCodexTurnAgentMessageText does not fall back to another turn', () => {
   )
 
   expect(result).toBe('')
+})
+
+test('runJsonTurn sends Codex-safe sandbox policy without deprecated readOnlyAccess', async () => {
+  const turnStartParams: unknown[] = []
+  const {client} = createMockConcurrentCodexClient({
+    expectedTurnCount: 1,
+    notifications: [{inputText: 'safe request', kind: 'complete', status: 'completed'}],
+    onTurnStart: (params) => {
+      turnStartParams.push(params)
+    },
+    threadReadTextByInputText: {'safe request': 'safe response'},
+  })
+  const result = await client.runJsonTurn({model: 'gpt-5.4', inputText: 'safe request', outputSchema: {type: 'object'}})
+
+  expect(result.text).toBe('safe response')
+  expect(turnStartParams).toHaveLength(1)
+  expect(turnStartParams[0]).toMatchObject({
+    sandboxPolicy: {excludeSlashTmp: true, excludeTmpdirEnvVar: true, networkAccess: false, type: 'workspaceWrite'},
+  })
+  expect(JSON.stringify(turnStartParams[0])).not.toContain('readOnlyAccess')
 })
 
 test('runJsonTurn keeps concurrent success scoped when another turn fails out of order', async () => {

@@ -103,6 +103,10 @@ type TelemetryHistoryRouteBody = {
     bottleneckSubreason: string | null
     bucketEnd: string
     bucketStart: string
+    latestNormalRequestCapacity: number | null
+    latestProviderLeasedLiveRequests: number | null
+    latestProviderLeasedPhysicalCalls: number | null
+    latestProviderLimit: number | null
     maxUtilization: number | null
     minUtilization: number | null
     sampleCount: number
@@ -1455,6 +1459,10 @@ test('provider telemetry history route defaults to current provider and summariz
     bottleneckSampleCount: 2,
     bottleneckSource: 'provider.latest',
     bottleneckSubreason: 'providerTargetReached',
+    latestNormalRequestCapacity: 10,
+    latestProviderLeasedLiveRequests: 4,
+    latestProviderLeasedPhysicalCalls: 5,
+    latestProviderLimit: 12,
     maxUtilization: 100,
     minUtilization: 40,
     sampleCount: 3,
@@ -1463,11 +1471,15 @@ test('provider telemetry history route defaults to current provider and summariz
   expect(nullUtilizationBucket).toMatchObject({
     adherenceState: 'atLimit',
     avgUtilization: null,
+    latestNormalRequestCapacity: 0,
+    latestProviderLeasedLiveRequests: 0,
+    latestProviderLeasedPhysicalCalls: 0,
+    latestProviderLimit: 12,
     maxUtilization: null,
     minUtilization: null,
     sampleCount: 1,
   })
-  expect(explicitBucket).toMatchObject({avgUtilization: 90, sampleCount: 1})
+  expect(explicitBucket).toMatchObject({avgUtilization: 90, latestProviderLeasedLiveRequests: 9, sampleCount: 1})
   await runDatabase(`
     DELETE FROM app.judgment_job
     WHERE id = '${jobId}'
