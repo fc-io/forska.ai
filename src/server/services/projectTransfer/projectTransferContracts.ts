@@ -475,6 +475,26 @@ const validateExpandedArchiveBudget = (expandedBytes: number | null | undefined)
     : {error: 'Project transfer expanded archive byte budget exceeded', ok: false as const}
 }
 
+const getDecompressionRatio = ({
+  expandedBytes,
+  zipBytes,
+}: {
+  expandedBytes: number | null | undefined
+  zipBytes: number | null | undefined
+}) => {
+  const expandedByteCount = expandedBytes ?? 0
+
+  if (zipBytes === null || zipBytes === undefined) {
+    return null
+  }
+
+  if (zipBytes === 0) {
+    return expandedByteCount === 0 ? 0 : Number.POSITIVE_INFINITY
+  }
+
+  return expandedByteCount / zipBytes
+}
+
 const validateDecompressionRatio = ({
   expandedBytes,
   zipBytes,
@@ -482,7 +502,7 @@ const validateDecompressionRatio = ({
   expandedBytes: number | null | undefined
   zipBytes: number | null | undefined
 }) => {
-  const ratio = zipBytes === null || zipBytes === undefined || zipBytes === 0 ? null : (expandedBytes ?? 0) / zipBytes
+  const ratio = getDecompressionRatio({expandedBytes, zipBytes})
 
   return ratio === null || ratio <= projectTransferResourceGateLimits.maxDecompressionRatio
     ? {ok: true as const}

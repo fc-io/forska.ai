@@ -184,12 +184,13 @@ const validateProjectTransferPathCollisions = <TValue extends ProjectTransferVal
     (state, pathValue) => {
       const conflictingPath = state.pathsByCollisionKey.get(pathValue.collisionKey)
 
-      return conflictingPath
-        ? {...state, duplicatePath: state.duplicatePath ?? {conflictingPath, path: pathValue.path}}
-        : {
-            duplicatePath: state.duplicatePath,
-            pathsByCollisionKey: new Map([...state.pathsByCollisionKey, [pathValue.collisionKey, pathValue.path]]),
-          }
+      if (conflictingPath) {
+        return {...state, duplicatePath: state.duplicatePath ?? {conflictingPath, path: pathValue.path}}
+      }
+
+      state.pathsByCollisionKey.set(pathValue.collisionKey, pathValue.path)
+
+      return state
     },
     {duplicatePath: null, pathsByCollisionKey: new Map()},
   )
@@ -216,7 +217,13 @@ const validateProjectTransferPathList = <TValue extends ProjectTransferValidated
 
       const validatedPath = validatePath(pathValue)
 
-      return validatedPath.ok ? {ok: true, value: [...state.value, validatedPath.value]} : validatedPath
+      if (!validatedPath.ok) {
+        return validatedPath
+      }
+
+      state.value.push(validatedPath.value)
+
+      return state
     },
     {ok: true, value: []},
   )
