@@ -375,11 +375,11 @@ const getComparisonProjectStatsGroupLabel = (
   const rightColumnLabel = getComparisonProjectStatsColumnLabel(rightColumn, context)
 
   if (kind === 'llm-vs-conflict-resolution') {
-    return `${rightColumnLabel} vs After conflict resolution (post-resolution fallback)`
+    return `${rightColumnLabel} vs Conflict resolution (fallback to human answer if no resolution provided)`
   }
 
   if (kind === 'human-vs-conflict-resolution') {
-    return `${leftColumnLabel} vs After conflict resolution (resolved only)`
+    return `${leftColumnLabel} vs Conflict resolution (no fallback)`
   }
 
   return getIsComparisonProjectStatsHumanComparison(kind)

@@ -530,7 +530,12 @@ const CompareProjectJudgmentsPage = () => {
               <div class="rounded-lg bg-white p-6 shadow">
                 <div class="grid gap-4 md:grid-cols-4">
                   <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Description</p>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Description</p>
+                      <span class="rounded bg-gray-100 px-2 py-0.5 font-mono text-xs text-gray-600">
+                        ID: {comparisonProject().id}
+                      </span>
+                    </div>
                     <p class="mt-2 text-sm text-gray-700">
                       {comparisonProject().description?.trim() || 'No description provided.'}
                     </p>

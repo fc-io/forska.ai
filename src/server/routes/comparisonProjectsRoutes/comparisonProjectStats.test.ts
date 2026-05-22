@@ -238,7 +238,7 @@ test('comparison stats computes summary kappa from SQL aggregates', async () => 
   expect(primaryComparison.specificity).toBeCloseTo(2 / 3, 6)
 })
 
-test('comparison stats computes resolved-only human conflict resolution kappa from SQL aggregates with multiple summary LLMs', async () => {
+test('comparison stats computes no-fallback human conflict resolution kappa from SQL aggregates with multiple summary LLMs', async () => {
   const humanConflictResolutionComparisonId = getComparisonId(
     'human-vs-conflict-resolution',
     humanSummaryColumn.id,
@@ -284,7 +284,7 @@ test('comparison stats computes resolved-only human conflict resolution kappa fr
   expect(humanConflictResolutionComparison.cohensKappa).toBeCloseTo(0.4, 6)
 })
 
-test('comparison stats SQL matches helper for resolved-only conflict resolution metrics', async () => {
+test('comparison stats SQL matches helper for no-fallback conflict resolution metrics', async () => {
   const cellRows = [
     getCell('article-1', humanSummaryColumn.id, ['yes']),
     getCell('article-1', primarySummaryColumn.id, ['no']),
@@ -424,7 +424,7 @@ test('comparison stats SQL matches helper for resolved-only conflict resolution 
     expect(primaryComparison.cohensKappa).toBeCloseTo(expectedPrimaryComparison.cohensKappa ?? 0, 6)
     expect(conflictResolutionComparison).toMatchObject({
       conflictCount: expectedConflictResolutionComparison.conflictCount,
-      label: 'Model 1 vs After conflict resolution (post-resolution fallback)',
+      label: 'Model 1 vs Conflict resolution (fallback to human answer if no resolution provided)',
       overlapCount: expectedConflictResolutionComparison.overlapCount,
       sensitivity: expectedConflictResolutionComparison.sensitivity,
       specificity: expectedConflictResolutionComparison.specificity,
@@ -437,7 +437,7 @@ test('comparison stats SQL matches helper for resolved-only conflict resolution 
     expect(conflictResolutionComparison.overlapCount).toBe(6)
     expect(humanConflictResolutionComparison).toMatchObject({
       conflictCount: expectedHumanConflictResolutionComparison.conflictCount,
-      label: 'Human vs After conflict resolution (resolved only)',
+      label: 'Human vs Conflict resolution (no fallback)',
       overlapCount: expectedHumanConflictResolutionComparison.overlapCount,
       sensitivity: expectedHumanConflictResolutionComparison.sensitivity,
       specificity: expectedHumanConflictResolutionComparison.specificity,
@@ -457,7 +457,7 @@ test('comparison stats SQL matches helper for resolved-only conflict resolution 
   }
 })
 
-test('additional stats SQL matches helper for resolved-only head-to-head truth metrics', async () => {
+test('additional stats SQL matches helper for no-fallback head-to-head truth metrics', async () => {
   const cellRows = [
     getCell('article-1', humanSummaryColumn.id, ['yes']),
     getCell('article-1', primarySummaryColumn.id, ['yes']),
@@ -773,7 +773,7 @@ test('comparison stats prefers primary source project over shared model id and d
     {
       columnInfo: null,
       kind: 'llm-vs-conflict-resolution',
-      label: 'Model 1 (Primary project) vs After conflict resolution (post-resolution fallback)',
+      label: 'Model 1 (Primary project) vs Conflict resolution (fallback to human answer if no resolution provided)',
       leftColumnId: humanSummaryColumn.id,
       rightColumnId: primarySummaryColumn.id,
     },
@@ -787,14 +787,14 @@ test('comparison stats prefers primary source project over shared model id and d
     {
       columnInfo: null,
       kind: 'llm-vs-conflict-resolution',
-      label: 'Model 1 (Peer project) vs After conflict resolution (post-resolution fallback)',
+      label: 'Model 1 (Peer project) vs Conflict resolution (fallback to human answer if no resolution provided)',
       leftColumnId: humanSummaryColumn.id,
       rightColumnId: peerSummarySharedModelColumn.id,
     },
     {
       columnInfo: null,
       kind: 'human-vs-conflict-resolution',
-      label: 'Human vs After conflict resolution (resolved only)',
+      label: 'Human vs Conflict resolution (no fallback)',
       leftColumnId: humanSummaryColumn.id,
       rightColumnId: humanSummaryColumn.id,
     },
@@ -867,7 +867,7 @@ test('comparison stats adds conflict resolution comparison with resolved answers
   expect(primaryComparison.trueConflictCount).toBe(2)
   expect(conflictResolutionComparison).toMatchObject({
     conflictCount: 1,
-    label: 'Model 1 vs After conflict resolution (post-resolution fallback)',
+    label: 'Model 1 vs Conflict resolution (fallback to human answer if no resolution provided)',
     overlapCount: 6,
     sensitivity: 1,
     specificity: 1,
@@ -876,7 +876,7 @@ test('comparison stats adds conflict resolution comparison with resolved answers
   expect(conflictResolutionComparison.cohensKappa).toBe(1)
 })
 
-test('comparison stats adds resolved-only human conflict resolution comparison', () => {
+test('comparison stats adds no-fallback human conflict resolution comparison', () => {
   const cellRows = [
     getCell('article-1', humanSummaryColumn.id, ['yes']),
     getCell('article-1', primarySummaryColumn.id, ['no']),
@@ -919,7 +919,7 @@ test('comparison stats adds resolved-only human conflict resolution comparison',
   expect(fallbackConflictResolutionComparison.overlapCount).toBe(6)
   expect(humanConflictResolutionComparison).toMatchObject({
     conflictCount: 1,
-    label: 'Human vs After conflict resolution (resolved only)',
+    label: 'Human vs Conflict resolution (no fallback)',
     overlapCount: 3,
     sensitivity: 0.5,
     specificity: 1,

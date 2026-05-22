@@ -69,7 +69,7 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
       <div class="mt-4 space-y-5">
         <section>
           <div>
-            <h4 class="text-sm font-semibold text-gray-900">Resolved-only truth comparison</h4>
+            <h4 class="text-sm font-semibold text-gray-900">No-fallback truth comparison</h4>
             <p class="mt-1 text-sm text-gray-600">
               Rows include articles where Human, the LLM, and the saved conflict resolution all have one binary Include
               or Exclude decision. McNemar chi-square uses the paired Human-only and LLM-only correct counts.
@@ -78,7 +78,7 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
 
           <Show when={getResolvedTruthComparisons(props.additionalStats).length === 0}>
             <div class="mt-3 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
-              No resolved-only truth comparison stats are available yet.
+              No truth comparison stats with no fallback are available yet.
             </div>
           </Show>
 

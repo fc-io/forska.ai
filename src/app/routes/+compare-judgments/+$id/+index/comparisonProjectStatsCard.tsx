@@ -129,8 +129,8 @@ const getComparisonProjectStatsPromptLabel = (column: ComparisonProjectStatsLabe
 
 const getComparisonProjectStatsConflictResolutionLabel = (comparison: ComparisonProjectStatsComparison) => {
   return comparison.kind === 'human-vs-conflict-resolution'
-    ? 'After conflict resolution (resolved only)'
-    : 'After conflict resolution (post-resolution fallback)'
+    ? 'Conflict resolution (no fallback)'
+    : 'Conflict resolution (fallback to human answer if no resolution provided)'
 }
 
 const getIsComparisonProjectStatsConflictResolutionComparison = (comparison: ComparisonProjectStatsComparison) => {
@@ -195,9 +195,9 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
           <p class="mt-1 text-sm text-gray-600">
             Conflicts compare exact answers. True Conflicts, Cohen's Kappa, sensitivity, and specificity compare Include
             vs Exclude decisions, with Yes/Maybe as Include and No as Exclude. Sensitivity and specificity use the
-            comparison's reference side: Human for Human rows. After conflict resolution (resolved only) rows include
-            saved binary resolutions only. After conflict resolution (post-resolution fallback) rows keep the LLM/Human
-            overlap denominator, using saved resolutions when present and Human otherwise.
+            comparison's reference side: Human for Human rows. Conflict resolution (no fallback) rows include saved
+            binary resolutions only. Conflict resolution (fallback to human answer if no resolution provided) rows keep
+            the LLM/Human overlap denominator, using saved resolutions when present and Human otherwise.
           </p>
         </div>
       </div>
