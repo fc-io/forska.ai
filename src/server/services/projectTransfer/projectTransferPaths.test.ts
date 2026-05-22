@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {projectTransferResourceGateLimits} from './projectTransferContracts.ts'
 import {
   type ProjectTransferPathErrorCode,
   projectTransferPathLimits,
@@ -90,6 +91,16 @@ test('rejects duplicate and colliding project transfer archive paths', () => {
   expectInvalidPath(exactDuplicate, 'duplicate_path')
   expectInvalidPath(caseCollision, 'duplicate_path')
   expectInvalidPath(unicodeCollision, 'duplicate_path')
+})
+
+test('accepts duplicate-free archive member paths at the package member limit', () => {
+  const paths = Array.from({length: projectTransferResourceGateLimits.maxArchiveMemberCount}, (_, index) => {
+    return `assets/article-pdfs/article-${index}.pdf`
+  })
+  const result = validateProjectTransferArchiveMemberPaths({paths})
+
+  expect(result.ok).toBe(true)
+  expect(result.ok ? result.value.length : 0).toBe(projectTransferResourceGateLimits.maxArchiveMemberCount)
 })
 
 test('accepts valid runtime asset paths and rejects unsafe persisted asset paths', () => {

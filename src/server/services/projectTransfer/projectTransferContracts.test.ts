@@ -150,6 +150,10 @@ test('locks project-transfer resource gates for temp roots, disk headroom, budge
   expect(getResourceGateError({expandedBytes: 101 * projectTransferMiB, zipBytes: 1 * projectTransferMiB})).toContain(
     'decompression ratio',
   )
+  expect(getResourceGateError({expandedBytes: 1, zipBytes: 0})).toContain('decompression ratio')
+  expect(validateProjectTransferResourceGates(getValidResourceGateInput({expandedBytes: 0, zipBytes: 0}))).toEqual({
+    ok: true,
+  })
   expect(getResourceGateError({resourcePaths: [{kind: 'archive_member', pathValue: '../project.json'}]})).toContain(
     'traversal',
   )
