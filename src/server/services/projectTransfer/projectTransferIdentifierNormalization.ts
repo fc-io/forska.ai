@@ -56,7 +56,6 @@ const getArticleFieldIdentifierInputs = (article: ProjectTransferArticleIdentifi
     ...getOptionalIdentifierInput({inputKind: 'arxiv', source: 'arxivId', value: article.arxivId}),
     ...getOptionalIdentifierInput({inputKind: 'biorxiv', source: 'biorxivId', value: article.biorxivId}),
     ...getOptionalIdentifierInput({inputKind: 'medrxiv', source: 'medrxivId', value: article.medrxivId}),
-    ...getOptionalIdentifierInput({inputKind: 'url', source: 'url', value: article.url}),
   ]
 }
 
