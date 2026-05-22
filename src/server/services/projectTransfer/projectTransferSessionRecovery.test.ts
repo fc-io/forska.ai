@@ -522,6 +522,82 @@ test('project transfer recovery keeps cleanup pending when promotion manifest is
   expect(result.promotedAssetExists).toBe(true)
 })
 
+test('project transfer recovery isolates cleanup failures and marks later sessions complete', () => {
+  const result = runRecoveryScript<{
+    badPromotedAssetExists: boolean
+    badTempRootExists: boolean
+    cleanupError: string | null
+    goodTempRootExists: boolean
+    rows: Array<{id: string; state: string; terminalCleanupAt: string | null}>
+  }>(`
+    const badSessionId = 'session-bad-manifest-batch'
+    const goodSessionId = 'session-good-later-batch'
+    const badLayout = getProjectTransferImportTempLayout(badSessionId)
+    const goodLayout = getProjectTransferImportTempLayout(goodSessionId)
+    const badPromotedPath = 'assets/project-transfer/session-bad-manifest-batch/article-1.pdf'
+
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt: expiredAt,
+      id: badSessionId,
+      state: 'analyzing',
+    })
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt: expiredAt,
+      id: goodSessionId,
+      state: 'analyzing',
+    })
+    await writeRuntimeFile(badLayout.uploadPath)
+    await writeRuntimeFile(goodLayout.uploadPath)
+    await writeRuntimeFile(badPromotedPath)
+    await writeRuntimeFile(badLayout.promotionManifestPath, '{malformed')
+
+    const cleanupError = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: runtimeRoot,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    }).then(
+      () => null,
+      (error) => error instanceof Error ? error.message : String(error),
+    )
+    const rows = await database.queryJson(\`
+      SELECT
+        id,
+        state,
+        terminal_cleanup_at AS terminalCleanupAt
+      FROM app.project_transfer_session
+      WHERE id IN ('session-bad-manifest-batch', 'session-good-later-batch')
+      ORDER BY id ASC
+    \`)
+
+    console.log(JSON.stringify({
+      badPromotedAssetExists: await fileExists(badPromotedPath),
+      badTempRootExists: await fileExists(badLayout.rootPath),
+      cleanupError,
+      goodTempRootExists: await fileExists(goodLayout.rootPath),
+      rows: rows.map((row) => {
+        return {
+          id: row.id,
+          state: row.state,
+          terminalCleanupAt: row.terminalCleanupAt === null ? null : new Date(row.terminalCleanupAt).toISOString(),
+        }
+      }),
+    }))
+  `)
+
+  expect(result.cleanupError).toContain('promotion manifest is unreadable or malformed')
+  expect(result.badTempRootExists).toBe(true)
+  expect(result.badPromotedAssetExists).toBe(true)
+  expect(result.goodTempRootExists).toBe(false)
+  expect(result.rows).toEqual([
+    {id: 'session-bad-manifest-batch', state: 'expired', terminalCleanupAt: null},
+    {id: 'session-good-later-batch', state: 'expired', terminalCleanupAt: '2026-05-21T12:00:00.000Z'},
+  ])
+})
+
 test('project transfer recovery keeps cleanup pending when promoted asset deletion fails', () => {
   const result = runRecoveryScript<{
     deleteError: string | null
