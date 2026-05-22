@@ -28,14 +28,14 @@ dependsOn: []
 
 Acceptance criteria:
 
-- Add project-transfer export query helpers for project settings, prompts, project prompt links, import routes, project route links, articles, article route links, project article links, judgments, assessments, human judgments, human summaries, reviews, provider descriptors, and model descriptors.
+- Add project-transfer export query helpers for project settings, prompts, project prompt links, import routes, project route links, articles, article route links, project article links, judgments, assessments, human judgments, human summaries, reviews, provider connections, and models, matching the existing `providerConnections` and `models` payload keys.
 - Export scope uses project date bounds and current review semantics directly from app tables, including archived source projects and `NULL article_created_at` date-bound behavior from the orchestrator.
 - Query helpers do not reuse CSV export routes, review-detail helpers, mart tables, or active-only access guards such as `assertProjectIsActive`.
 - Query tests cover archived package export, inactive source routes contributing to scope, date-bounded route and curated article scope, disabled prompt-mode human judgment rows that current review detail exposes, summary-mode human/review rows, answered active judgment filtering, active visible-key judgment duplicate ambiguity, and missing provider/model rows that must not be silently inner-join-dropped.
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
+- Add or update `src/server/services/projectTransfer/projectTransferExport.test.ts`, then `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
 - `bun test src/services/olap/duckdbOlap.test.ts` passes if the queue/date-scope parity patch is touched.
 - `bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts` passes if review-detail date-scope or human-prompt scope semantics are changed.
 - `bun run lint` passes for touched `src` files.
@@ -57,7 +57,8 @@ Acceptance criteria:
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
+- Add or update `src/server/services/projectTransfer/projectTransferExport.test.ts`, then `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
+- `bun test src/server/services/projectTransfer/projectTransferPayloadSchemas.test.ts` passes if signature fields are added to the payload contract.
 - `bun run lint` passes for touched `src` files.
 
 ### US-003: Add package redaction and omission serializers
@@ -69,14 +70,16 @@ dependsOn: ["US-001"]
 Acceptance criteria:
 
 - Add `src/server/services/projectTransfer/projectTransferRedaction.ts` for package-boundary redaction serializers covering project fields, prompt fields, article fields, provider fields, model metadata/config, URLs, full-text-derived fields, and free-form JSON/string fields.
-- Extend the existing Phase 1 manifest/payload warning, redaction, omission, and severity contracts when new export warnings are needed, including `fidelity` and `blocking` severities plus stable `scope`, `action`, `jsonPointer`, and safe `sourceRef` fields from the orchestrator contract; do not emit one-off warning shapes outside the manifest/payload contracts.
+- Extend `ProjectTransferManifestWarning`, `ProjectTransferPayloadWarning`, and `ProjectTransferWarningSeverity` from the current path/payloadKey/field-only shapes to the orchestrator warning shape: `code`, `severity` (`info`, `warning`, `fidelity`, or `blocking`), `scope`, `action`, `message`, optional `payload`, optional `jsonPointer`, optional `sourceRef`, and optional safe `details`; do not emit one-off warning shapes outside the manifest/payload contracts.
 - Required package fields remain importable through safe placeholders, parent-row failure, or parent-row omission with warnings.
 - Decision fields that would change meaning are omitted with dependent rows and structured fidelity warnings rather than sanitized in place.
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts` passes.
-- `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
+- Add `src/server/services/projectTransfer/projectTransferRedaction.test.ts` covering the new `projectTransferRedaction.ts` serializers, then `bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts` passes.
+- Add or update `src/server/services/projectTransfer/projectTransferExport.test.ts`, then `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
+- `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts` passes if manifest warning contracts are changed.
+- `bun test src/server/services/projectTransfer/projectTransferPayloadSchemas.test.ts` passes if payload warning, redaction, or omission contracts are changed.
 - `bun run lint` passes for touched `src` files.
 
 ### US-004: Add export asset collection and asset manifest writer
@@ -95,7 +98,8 @@ Acceptance criteria:
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
+- Add or update `src/server/services/projectTransfer/projectTransferExport.test.ts`, then `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
+- `bun test src/server/services/projectTransfer/projectTransferPayloadSchemas.test.ts` passes if asset payload contracts are changed.
 - `bun test src/server/services/projectTransfer/projectTransferPaths.test.ts` passes.
 - `bun run lint` passes for touched `src` files.
 
@@ -115,19 +119,20 @@ Acceptance criteria:
 - Persist export session state/progress through `projectTransferSessionRepository.ts`, including `queued -> assembling -> packaging -> ready` transitions, failure, expiration, package fingerprint, and downloadable artifact metadata.
 - Treat export `ready` as the downloadable state, not as import-style `completed`.
 - Keep export `ready` non-terminal under the Phase 1 state contract; the export remains downloadable only until `expiresAt`, after which recovery/TTL cleanup may transition it to `expired` and delete temp package artifacts.
-- If export metadata is stored in `completion_payload_json`, first change `ProjectTransferCompletionPayload` into a direction-aware union so import completion keeps `status: 'completed'` while export readiness uses an export-specific status such as `ready`; do not overload import-only fields like `projectId`, `projectName`, or `importWarnings` for export packages.
+- Persist export readiness metadata through an export-specific payload, not the current import-only completion shape. If that payload is stored in `completion_payload_json` or exposed through `ProjectTransferSessionResponse.completion`, first change `ProjectTransferCompletionPayload` into a direction-aware union so import completion keeps `status: 'completed'` while export readiness uses an export-specific status such as `ready` plus filename, byte length, SHA-256 checksum, package fingerprint, public `downloadUrl`, and expiry; do not overload import-only fields like `projectId`, `projectName`, or `importWarnings` for export packages.
 - If `ProjectTransferSessionResponse.completion` is widened for export metadata, update `parseProjectTransferCompletionPayload()`, `toProjectTransferSessionResponse()`, and their tests so import completion recovery still accepts only import `status: 'completed'` payloads where required.
-- Do not use `persistProjectTransferSessionCompletion()` for export readiness because it is an import-completion helper that enforces `status: 'completed'` and transitions to import `completed`; add an export-specific repository helper or use a tested compare-and-set transition from `packaging` to export `ready` with export metadata.
+- Do not use `persistProjectTransferSessionCompletion()` for export readiness because it is an import-completion helper that enforces `status: 'completed'` and transitions to import `completed`; add and test an export-specific repository helper, for example `persistProjectTransferSessionExportReady()`, that compare-and-sets `packaging -> ready` and persists export readiness metadata.
 - Export package metadata includes filename, byte length, SHA-256 checksum, package fingerprint, public `downloadUrl`, and expiry. Any internal package artifact path stays server-only, is derived from `getProjectTransferExportTempLayout()`, and is never returned to the client.
 - Do not write export rows to `project_transfer_history` unless Phase 2 adds explicit tested export-history invariants; the existing history helpers are primarily for completed import duplicate warnings and same-session commit recovery.
-- Extend `ProjectTransferRuntimeEventType` only if export-specific events are needed beyond the existing `export_assembly` and `export_package` progress phases.
+- Use the existing `export_assembly` and `export_package` `ProjectTransferProgressPhase` values for export progress. Extend `ProjectTransferRuntimeEventType` only if export-specific event types are needed beyond the current runtime event set.
 - Emit structured runtime events or progress records for progress, omitted assets, redaction warnings, checksum failures, and package finalization.
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
+- Add or update `src/server/services/projectTransfer/projectTransferExport.test.ts`, then `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferFingerprint.test.ts` passes.
+- `bun test src/server/services/projectTransfer/projectTransferZip.test.ts` passes if package zip finalization helpers are touched.
 - `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes if session response, completion payload, runtime event, or threshold contracts are changed.
 - `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` passes if export session mutations are changed.
 - `bun run build` passes.
@@ -143,19 +148,21 @@ Acceptance criteria:
 
 - Replace the Phase 1 placeholder handlers in `projectTransferRoutes.ts` for `POST /api/projects/:id/export-project`, `GET /api/projects/export/:exportId`, and `GET /api/projects/export/:exportId/download`.
 - Add `POST /api/projects/:id/export-project` for active and archived source projects without `assertProjectIsActive`.
-- Add large export session polling and download endpoints under `/api/projects/export/:exportId`, returning the existing `{data, error}` response shape for JSON polling endpoints.
+- `POST /api/projects/:id/export-project` returns either `200 application/zip` for inline exports or `202 application/json` using the Phase 1 `ProjectTransferApiResponse` wrapper with `data: {exportId, status, filename, downloadUrl, expiresAt}` for large exports; route and client code must test both response paths.
+- Add large export session polling under `GET /api/projects/export/:exportId` using the existing `ProjectTransferApiResponse` wrapper for JSON responses.
 - Existing CSV `POST /api/projects/:id/export` still resolves to the CSV export flow.
 - Large export downloads stream through the owner proxy without materializing package bytes on follower servers.
-- Download rejects non-ready, expired, failed, missing, or wrong-direction sessions before filesystem access.
+- Download rejects non-ready, expired, failed, missing, or wrong-direction sessions before filesystem access, returning a non-2xx `ProjectTransferApiResponse` error instead of touching package artifacts.
 - Download rejects sessions whose `expiresAt` has passed even if cleanup has not yet removed temp artifacts.
 - Download sets package filename and content headers from export metadata, not from untrusted request input.
 - Update `projectTransferRoutes.test.ts` so implemented export endpoints assert export behavior while import endpoints continue to assert contract-safe `501` placeholders.
-- Keep import placeholder endpoints returning contract-safe `501` responses; import analyze/commit behavior remains out of scope.
+- Keep import session, upload, analyze, dependency-resolution, commit, delete, and wizard behavior out of scope; import route handlers continue returning contract-safe `501` placeholders in Phase 2.
 
 Quality gates:
 
-- `bun test src/server/routes/projectTransferRoutes.test.ts` passes.
-- `bun test src/server/routes/ApiProxyRoutes.test.ts` passes.
+- Update `src/server/routes/projectTransferRoutes.test.ts` for implemented export endpoints and retained import `501` placeholders, then `bun test src/server/routes/projectTransferRoutes.test.ts` passes.
+- `bun test src/server/routes/ProjectExportRoutes.test.ts` passes if the CSV export route or CSV validation shape is touched.
+- Update `src/server/routes/ApiProxyRoutes.test.ts` with large export download owner-proxy streaming coverage, then `bun test src/server/routes/ApiProxyRoutes.test.ts` passes.
 - `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` passes if proxy retry/download behavior changes.
 - `bun test src/server/routes/ProjectsRoutes.test.ts` passes if shared project routing or active/archive access behavior changes.
 - `bun run build` passes.
@@ -169,19 +176,18 @@ dependsOn: ["US-006"]
 
 Acceptance criteria:
 
-- Rename `src/components/main/ProjectsGrid.tsx` to `src/components/main/projectsGrid.tsx` with a Git-safe temporary filename step and update imports/mocks.
+- Rename `src/components/main/ProjectsGrid.tsx` to `src/components/main/projectsGrid.tsx` with a Git-safe temporary filename step, then update imports and mocks including `src/app/routes/+projects/+index.tsx` and `src/app/routes/+projects/-+index.vitest.tsx`.
 - Add `Export Project` next to `Export data` for active projects and preserve CSV `Export data` behavior.
 - Add `Export Project` for archived projects without exposing CSV export for archived rows.
-- Use Eden/RPC plus `useQuery`/mutations from `@tanstack/solid-query` for JSON polling and session metadata. Use direct download navigation or local `fetch` handling for `POST /api/projects/:id/export-project` and download endpoints because either path may return package bytes instead of JSON.
+- Use Eden/RPC plus `useQuery`/mutations from `@tanstack/solid-query` for JSON polling and session metadata. Use local `fetch` through `getApiRequestUrl` for `POST /api/projects/:id/export-project` because it can return either JSON session metadata or package bytes. Use `getApiRequestUrl` plus browser/desktop-safe download navigation, or local `fetch` only when response handling requires it, for `GET /api/projects/export/:exportId/download`; keep binary package responses out of Eden/RPC.
 - Support inline downloads and large export-session polling with a preparing-download state that does not block the projects route shell.
 - Verify both browser/web and desktop runtime behavior for the download URL and route path.
 
 Quality gates:
 
-- `bunx vitest run src/app/routes/+projects/-+index.vitest.tsx` passes after import/mocking updates.
-- Add or update UI tests for the renamed active projects grid and archived projects table export actions.
-- `bunx vitest run src/components/main/projectsGrid.vitest.tsx` passes after the active grid test is added.
-- `bunx vitest run src/app/routes/+projects/+archived/archivedProjectsTable.vitest.tsx` passes after the archived-table test is added.
+- Update `src/app/routes/+projects/-+index.vitest.tsx` to mock/import `../../../components/main/projectsGrid` after the case-only rename, then `bunx vitest run src/app/routes/+projects/-+index.vitest.tsx` passes.
+- Add `src/components/main/projectsGrid.vitest.tsx` for the renamed active projects grid export action, then `bunx vitest run src/components/main/projectsGrid.vitest.tsx` passes.
+- Add `src/app/routes/+projects/+archived/archivedProjectsTable.vitest.tsx` for the archived projects table export action, then `bunx vitest run src/app/routes/+projects/+archived/archivedProjectsTable.vitest.tsx` passes.
 - `bun run build` passes.
 - `bun run desktop:build` passes.
 - `bun run lint` passes for touched `src` files.
@@ -196,28 +202,30 @@ Quality gates:
 - Export routes replace only export placeholder handlers; import placeholder handlers remain contract-safe and route-shadowing tests stay green.
 - Background export sessions use the Phase 1 export state set and temp layout: `queued`, `assembling`, `packaging`, `ready`, `failed`, `expired`; `tmp/project-transfer/export/:sessionId/build`, `manifest.json`, `package.zip`, `completion.json`, and `progress.json`.
 - Export `ready` means downloadable; do not introduce an export `completed` state unless Phase 1 state contracts and tests are intentionally updated.
-- Export `ready` is not terminal in the Phase 1 helper set; expired ready exports are cleaned up by TTL/recovery rather than preserved indefinitely.
+- Export `ready` is not terminal in `isProjectTransferTerminalState()`; expired ready exports are cleaned up by TTL/recovery rather than preserved indefinitely.
 - Export package metadata includes enough information for polling and download headers without trusting request input: filename, byte length, SHA-256 checksum, package fingerprint, public `downloadUrl`, and expiry. Internal artifact paths are server-only.
-- If `ProjectTransferCompletionPayload` is extended for export metadata, it becomes a direction-aware union and import completion tests must continue proving import idempotency and recovery semantics.
+- Export readiness metadata uses an export-specific payload. If `ProjectTransferCompletionPayload` is extended for that metadata, it becomes a direction-aware union and import completion tests must continue proving import idempotency and recovery semantics.
 - Export readiness must not call `persistProjectTransferSessionCompletion()`; import completion and export readiness remain separate repository semantics.
 - Large package download is owner-proxied and streaming-safe; followers do not materialize package bytes.
 - Browser and desktop flows use the same API/download contract.
-- `bun test src/server/services/projectTransfer/projectTransferExport.test.ts`
-- `bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts`
+- Add or update `src/server/services/projectTransfer/projectTransferExport.test.ts`, then run `bun test src/server/services/projectTransfer/projectTransferExport.test.ts`
+- Add `src/server/services/projectTransfer/projectTransferRedaction.test.ts`, then run `bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferFingerprint.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferZip.test.ts` if package zip finalization helpers are touched
 - `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` if session response, completion payload, runtime event, or threshold contracts are changed
 - `bun test src/server/services/projectTransfer/projectTransferPaths.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferPayloadSchemas.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` if export session repository behavior changes
-- `bun test src/server/routes/projectTransferRoutes.test.ts`
-- `bun test src/server/routes/ApiProxyRoutes.test.ts`
+- Update `src/server/routes/projectTransferRoutes.test.ts` for implemented export endpoints and retained import `501` placeholders, then run `bun test src/server/routes/projectTransferRoutes.test.ts`
+- `bun test src/server/routes/ProjectExportRoutes.test.ts` if the CSV export route or CSV validation shape is touched
+- Update `src/server/routes/ApiProxyRoutes.test.ts` with large export download owner-proxy streaming coverage, then run `bun test src/server/routes/ApiProxyRoutes.test.ts`
 - `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` if proxy retry/download behavior changes
 - `bun test src/server/routes/ProjectsRoutes.test.ts` if shared project routing or active/archive access behavior changes
 - `bun test src/services/olap/duckdbOlap.test.ts` if queue/date-scope parity is touched
-- `bunx vitest run src/app/routes/+projects/-+index.vitest.tsx`
-- `bunx vitest run src/components/main/projectsGrid.vitest.tsx`
-- `bunx vitest run src/app/routes/+projects/+archived/archivedProjectsTable.vitest.tsx`
+- Update `src/app/routes/+projects/-+index.vitest.tsx` for the renamed `projectsGrid` import/mock, then run `bunx vitest run src/app/routes/+projects/-+index.vitest.tsx`
+- Add `src/components/main/projectsGrid.vitest.tsx`, then run `bunx vitest run src/components/main/projectsGrid.vitest.tsx`
+- Add `src/app/routes/+projects/+archived/archivedProjectsTable.vitest.tsx`, then run `bunx vitest run src/app/routes/+projects/+archived/archivedProjectsTable.vitest.tsx`
 - `bun run lint`
 - `bun run build`
 - `bun run desktop:build`
