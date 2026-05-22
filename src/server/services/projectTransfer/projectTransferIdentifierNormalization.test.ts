@@ -49,3 +49,21 @@ test('keeps bioRxiv and medRxiv accepted as DOI strong identifiers for overlap m
     'doi:10.1101/2024.01.01.123456',
   ])
 })
+
+test('does not treat article publisher URLs as transfer identifier inputs', () => {
+  const normalized = getProjectTransferNormalizedArticleIdentifiers({
+    doi: '10.1016/s0140-6736(23)00000-0',
+    url: 'https://www.thelancet.com/journals/lancet/article/piis0140-6736(23)00000-0/fulltext',
+  })
+
+  expect(normalized.rejected).toEqual([])
+  expect(getProjectTransferStrongIdentifierComparisonKeys({doi: '10.1016/s0140-6736(23)00000-0'})).toEqual([
+    'doi:10.1016/s0140-6736(23)00000-0',
+  ])
+  expect(
+    getProjectTransferStrongIdentifierComparisonKeys({
+      doi: '10.1016/s0140-6736(23)00000-0',
+      url: 'https://www.thelancet.com/journals/lancet/article/piis0140-6736(23)00000-0/fulltext',
+    }),
+  ).toEqual(['doi:10.1016/s0140-6736(23)00000-0'])
+})
