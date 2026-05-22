@@ -261,6 +261,7 @@ const {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} = appQuer
 const summaryPromptId = 'summary'
 const summaryPromptLabel = 'Overall decision'
 const comparisonProjectJudgmentArticleBatchSize = 20000
+const comparisonProjectRoutesLoadedAt = new Date()
 
 const getRequestedPositiveInteger = (value: string | number | null | undefined, fallback: number) => {
   const parsedValue = Number.parseInt(String(value ?? ''), 10)
@@ -342,16 +343,26 @@ const queueComparisonProjectServingRebuild = (comparisonProjectId: string) => {
 const queueUnavailableComparisonProjectServingRebuild = (
   comparisonProject: Pick<ComparisonProjectScope, 'activeGeneration' | 'id' | 'servingProgress' | 'servingStatus'>,
 ) => {
+  const latestProgressedAt =
+    comparisonProject.servingProgress.lastProgressedAt ?? comparisonProject.servingProgress.startedAt
   const isMissingWithoutStartedBuild =
     comparisonProject.servingStatus === 'refreshing'
     && comparisonProject.activeGeneration === null
     && comparisonProject.servingProgress.generation === null
     && comparisonProject.servingProgress.startedAt === null
     && comparisonProject.servingProgress.lastProgressedAt === null
-  const isStaleWithoutReadableGeneration =
-    comparisonProject.servingStatus === 'stale' && comparisonProject.activeGeneration === null
+  const isStaleWithoutStartedBuild =
+    comparisonProject.servingStatus === 'stale'
+    && comparisonProject.servingProgress.generation === null
+    && comparisonProject.servingProgress.startedAt === null
+    && comparisonProject.servingProgress.lastProgressedAt === null
+  const isRefreshingFromPreviousRouteLoad =
+    comparisonProject.servingStatus === 'refreshing'
+    && comparisonProject.servingProgress.generation !== null
+    && latestProgressedAt !== null
+    && latestProgressedAt < comparisonProjectRoutesLoadedAt
 
-  if (!isMissingWithoutStartedBuild && !isStaleWithoutReadableGeneration) {
+  if (!isMissingWithoutStartedBuild && !isStaleWithoutStartedBuild && !isRefreshingFromPreviousRouteLoad) {
     return
   }
 

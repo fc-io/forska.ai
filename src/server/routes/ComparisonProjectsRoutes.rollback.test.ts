@@ -2318,6 +2318,50 @@ test('comparison project metadata queues a rebuild when serving is missing', asy
   expect(state.staleServingIds).toEqual([])
 })
 
+test('comparison project metadata queues a rebuild when serving is stale with a readable generation', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    failPromptInsert: false,
+    servingStatus: getMockServingStatus({
+      activeGeneration: 1,
+      generationUpdatedAt: new Date('2026-04-04T00:00:00.000Z'),
+      servingStatus: 'stale',
+    }),
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(new Request('http://localhost/api/comparison-projects/comparison-project-1'))
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(state.queuedServingRebuildIds).toEqual(['comparison-project-1'])
+  expect(state.staleServingIds).toEqual([])
+})
+
+test('comparison project metadata queues a rebuild when serving refresh was abandoned by a previous route load', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    failPromptInsert: false,
+    servingStatus: getMockServingStatus({
+      activeGeneration: 1,
+      generationUpdatedAt: new Date('2026-04-04T00:00:00.000Z'),
+      servingGeneration: 2,
+      servingStartedAt: new Date(0),
+      servingStatus: 'refreshing',
+    }),
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(new Request('http://localhost/api/comparison-projects/comparison-project-1'))
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(state.queuedServingRebuildIds).toEqual(['comparison-project-1'])
+  expect(state.staleServingIds).toEqual([])
+})
+
 test('comparison project create and update mark serving stale and queue rebuilds', async () => {
   mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false, promptLinks: []}
 
