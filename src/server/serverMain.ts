@@ -205,8 +205,8 @@ if (getCurrentServerRole() === 'judge-worker') {
 if (canCurrentServerOwnDuckdb()) {
   await migrateDuckdb()
   await runProjectTransferStartupRecoveryWithLogging()
-  startProjectTransferTtlRecoveryScheduler()
 }
+startProjectTransferTtlRecoveryScheduler()
 
 if (getCurrentServerRole() !== 'judge-worker' && shouldCurrentServerRunJudgingLoops()) {
   await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
