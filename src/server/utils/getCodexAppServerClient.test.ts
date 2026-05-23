@@ -16,7 +16,7 @@ import {
 type MockJsonRpcRequest = {
   id?: number
   method?: string
-  params?: {input?: Array<{text?: string}>; sandboxPolicy?: unknown; threadId?: string}
+  params?: Record<string, unknown> & {input?: Array<{text?: string}>; sandboxPolicy?: unknown; threadId?: string}
 }
 
 type MockNotification =
@@ -47,7 +47,9 @@ const withCapturedConsole = async (work: () => Promise<void>) => {
   }
 }
 
-const createMockModelListCodexClient = () => {
+const createMockModelListCodexClient = ({
+  onInitialize,
+}: {onInitialize?: (params: MockJsonRpcRequest['params']) => void} = {}) => {
   const stdout = new EventEmitter()
   const stderr = new EventEmitter()
   const proc = new EventEmitter() as EventEmitter & {
@@ -76,6 +78,7 @@ const createMockModelListCodexClient = () => {
           const message = JSON.parse(line) as MockJsonRpcRequest
 
           if (message.method === 'initialize') {
+            onInitialize?.(message.params)
             send({id: message.id, result: {}})
             return
           }
@@ -441,6 +444,20 @@ test('downgrades known transient Codex stderr to rate-limited warnings', async (
     '[codex] Codex responses websocket returned HTTP 503; treating as transient Codex backend availability.',
     '[codex] Codex upstream connection reset while app-server worker initialized; treating as transient upstream availability.',
   ])
+})
+
+test('initialize enables Codex experimental API for turn environments', async () => {
+  const initializeParams: unknown[] = []
+  const {client} = createMockModelListCodexClient({
+    onInitialize: (params) => {
+      initializeParams.push(params)
+    },
+  })
+
+  await client.modelList()
+
+  expect(initializeParams).toHaveLength(1)
+  expect(initializeParams[0]).toMatchObject({capabilities: {experimentalApi: true}})
 })
 
 test('rate-limits repeated transient Codex stderr warnings', async () => {

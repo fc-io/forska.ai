@@ -612,6 +612,7 @@ export const createCodexAppServerClient = ({
         {
           clientInfo: {name: 'forska_ai', title: 'Forska.ai', version: '0.1.0'},
           capabilities: {
+            experimentalApi: true,
             optOutNotificationMethods: [
               'item/agentMessage/delta',
               'item/commandExecution/outputDelta',
