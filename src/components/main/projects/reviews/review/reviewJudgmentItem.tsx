@@ -240,7 +240,6 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
         <div class="group relative">
           <p
             class="-mx-1 rounded px-1 text-sm font-medium text-gray-900 line-clamp-2 transition-colors group-hover:bg-gray-100 group-focus-within:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-            title={props.judgment.prompt.originalText}
             tabIndex={0}
             aria-label={props.judgment.prompt.originalText}
           >
