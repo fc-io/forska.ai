@@ -50,6 +50,39 @@ const getAssetManifest = (checksumSeed: string) => {
   })
 }
 
+const getProvenanceIdManifest = (checksumSeed: string) => {
+  return buildProjectTransferManifest({
+    generatedAt: `2026-05-21T07:00:0${checksumSeed}.000Z`,
+    payloads: {
+      humanJudgments: getProjectTransferManifestPayloadEntry({
+        bytes: `human-judgments-${checksumSeed}`,
+        format: 'ndjson',
+        path: 'humanJudgments.ndjson',
+        recordCount: 1,
+      }),
+      judgments: getProjectTransferManifestPayloadEntry({
+        bytes: `judgments-${checksumSeed}`,
+        format: 'ndjson',
+        path: 'judgments.ndjson',
+        recordCount: 1,
+      }),
+      projectPrompts: getProjectTransferManifestPayloadEntry({
+        bytes: `project-prompts-${checksumSeed}`,
+        format: 'json',
+        path: 'projectPrompts.json',
+        recordCount: 1,
+      }),
+      reviews: getProjectTransferManifestPayloadEntry({
+        bytes: `reviews-${checksumSeed}`,
+        format: 'ndjson',
+        path: 'reviews.ndjson',
+        recordCount: 1,
+      }),
+    },
+    source: {projectId: `source-project-${checksumSeed}`, projectName: 'Source Project'},
+  })
+}
+
 const projectPayload = {
   createdAt: '2026-05-21T07:00:00.000Z',
   id: 'source-project-a',
@@ -132,6 +165,57 @@ const logicallyEquivalentProviderConnectionsPayload = {
   ],
 }
 
+const getProvenanceIdPayloads = (idSeed: string) => {
+  return {
+    humanJudgments: [
+      {
+        answer: 'yes',
+        isAnswered: true,
+        sourceArticleId: `source-article-${idSeed}`,
+        sourceHumanJudgmentId: `source-human-judgment-${idSeed}`,
+        sourceProjectId: `source-project-${idSeed}`,
+        sourcePromptId: `source-prompt-${idSeed}`,
+      },
+    ],
+    judgments: [
+      {
+        answer: 'yes',
+        confidenceOriginal: 90,
+        contentSettings: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+        isAnswered: true,
+        quotes: ['same quote'],
+        sourceArticleId: `source-article-${idSeed}`,
+        sourceJudgmentId: `source-judgment-${idSeed}`,
+        sourceModelId: `source-model-${idSeed}`,
+        sourcePromptId: `source-prompt-${idSeed}`,
+      },
+    ],
+    projectPrompts: {
+      records: [
+        {
+          enabled: true,
+          order: 1,
+          promptLabel: 'Eligibility',
+          sourceProjectId: `source-project-${idSeed}`,
+          sourceProjectPromptId: `source-project-prompt-${idSeed}`,
+          sourcePromptId: `source-prompt-${idSeed}`,
+          targetProjectId: `target-project-${idSeed}`,
+        },
+      ],
+    },
+    reviews: [
+      {
+        opened: true,
+        sections: {decision: 'include'},
+        sourceArticleId: `source-article-${idSeed}`,
+        sourceProjectId: `source-project-${idSeed}`,
+        sourceReviewId: `source-review-${idSeed}`,
+        targetId: `target-review-${idSeed}`,
+      },
+    ],
+  }
+}
+
 const getAssetManifestPayload = (checksumSha256: string, byteLength = 11) => {
   return {
     assets: [
@@ -164,6 +248,19 @@ test('project-transfer duplicate fingerprints are stable across ordering and pro
       project: logicallyEquivalentProjectPayload,
       providerConnections: logicallyEquivalentProviderConnectionsPayload,
     },
+  })
+
+  expect(firstFingerprint).toBe(secondFingerprint)
+})
+
+test('project-transfer duplicate fingerprints ignore source and target id fields across payloads', () => {
+  const firstFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getProvenanceIdManifest('1'),
+    payloads: getProvenanceIdPayloads('a'),
+  })
+  const secondFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getProvenanceIdManifest('2'),
+    payloads: getProvenanceIdPayloads('b'),
   })
 
   expect(firstFingerprint).toBe(secondFingerprint)
