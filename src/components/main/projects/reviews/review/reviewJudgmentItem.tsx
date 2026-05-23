@@ -238,10 +238,15 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
           </div>
         </Show>
         <div class="group relative">
-          <p class="-mx-1 rounded px-1 text-sm font-medium text-gray-900 line-clamp-2 transition-colors group-hover:bg-gray-100">
+          <p
+            class="-mx-1 rounded px-1 text-sm font-medium text-gray-900 line-clamp-2 transition-colors group-hover:bg-gray-100 group-focus-within:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            title={props.judgment.prompt.originalText}
+            tabIndex={0}
+            aria-label={props.judgment.prompt.originalText}
+          >
             {props.judgment.prompt.originalText}
           </p>
-          <div class="pointer-events-none absolute left-0 top-full z-20 mt-2 hidden max-w-xl rounded-md bg-gray-950/90 px-3 py-2 text-xs text-white shadow-xl ring-1 ring-black/10 backdrop-blur-sm group-hover:block">
+          <div class="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-[calc(100vw-2rem)] max-w-xl rounded-md bg-gray-950/90 px-3 py-2 text-xs text-white shadow-xl ring-1 ring-black/10 backdrop-blur-sm group-hover:block group-focus-within:block">
             <div class="whitespace-pre-wrap break-words leading-relaxed text-gray-100">
               {props.judgment.prompt.originalText}
             </div>
