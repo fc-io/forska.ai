@@ -237,9 +237,16 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
             </span>
           </div>
         </Show>
-        <p class="text-sm font-medium text-gray-900 line-clamp-2" title={props.judgment.prompt.originalText}>
-          {props.judgment.prompt.originalText}
-        </p>
+        <div class="group relative">
+          <p class="-mx-1 rounded px-1 text-sm font-medium text-gray-900 line-clamp-2 transition-colors group-hover:bg-gray-100">
+            {props.judgment.prompt.originalText}
+          </p>
+          <div class="pointer-events-none absolute left-0 top-full z-20 mt-2 hidden max-w-xl rounded-md bg-gray-950/90 px-3 py-2 text-xs text-white shadow-xl ring-1 ring-black/10 backdrop-blur-sm group-hover:block">
+            <div class="whitespace-pre-wrap break-words leading-relaxed text-gray-100">
+              {props.judgment.prompt.originalText}
+            </div>
+          </div>
+        </div>
         <div class="mt-1 text-[11px] text-gray-500 space-y-0.5 break-words">
           {promptId() ? <div>Prompt ID: {String(promptId()).slice(0, 8)}</div> : null}
           {modelLabel() ? <div>Model: {modelLabel()}</div> : null}
