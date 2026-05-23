@@ -151,6 +151,64 @@ test('project transfer history enforces completed import invariants and session-
   expect(result.rowCount).toBe(1)
 })
 
+test('project transfer history rereads completed import after insert conflict', async () => {
+  const {getProjectTransferHistoryRepository} = await import('./projectTransferHistoryRepository.ts')
+  const statements: string[] = []
+  const existingRow = {
+    commitId: 'commit-existing',
+    completionPayloadJson: {
+      projectId: 'target-project-existing',
+      projectName: 'Target Project Existing',
+      status: 'completed',
+    },
+    createdAt: new Date('2026-05-21T10:00:00.000Z'),
+    direction: 'import',
+    id: 'existing-import-history',
+    packageFingerprint: 'fingerprint-existing',
+    payloadCountsJson: {articles: 1},
+    schemaVersion: 1,
+    sessionId: 'conflicting-session',
+    sourceProjectId: 'source-project-existing',
+    sourceProjectName: 'Source Project Existing',
+    targetProjectId: 'target-project-existing',
+    targetProjectName: 'Target Project Existing',
+  }
+  const runner = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      return statement.includes('INSERT INTO app.project_transfer_history') ? [] : ([existingRow] as T[])
+    },
+  }
+
+  const history = await getProjectTransferHistoryRepository().createProjectTransferHistory({
+    commitId: 'commit-retry',
+    completionPayload: {
+      packageFingerprint: 'fingerprint-retry',
+      projectId: 'target-project-retry',
+      projectName: 'Target Project Retry',
+      status: 'completed',
+    },
+    direction: 'import',
+    id: 'retry-import-history',
+    packageFingerprint: 'fingerprint-retry',
+    payloadCounts: {articles: 99},
+    runner,
+    schemaVersion: 1,
+    sessionId: 'conflicting-session',
+    sourceProjectName: 'Source Project Retry',
+    targetProjectId: 'target-project-retry',
+    targetProjectName: 'Target Project Retry',
+  })
+
+  expect(history.id).toBe('existing-import-history')
+  expect(statements).toHaveLength(2)
+  expect(statements[0]).toContain('INSERT INTO app.project_transfer_history')
+  expect(statements[0]).toContain('ON CONFLICT(direction, session_id) DO NOTHING')
+  expect(statements[1]).toContain('WHERE direction =')
+  expect(statements[1]).toContain("session_id = 'conflicting-session'")
+})
+
 test('project transfer history duplicate warnings use fingerprint while completion recovery uses session id', () => {
   const result = runHistoryRepositoryScript<{
     completionBySessionId: string | null
