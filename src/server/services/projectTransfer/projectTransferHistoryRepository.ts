@@ -185,16 +185,8 @@ const createProjectTransferHistory = async (params: CreateProjectTransferHistory
   assertProjectTransferHistoryParams(params)
 
   const runner = getRunner(params.runner)
-  const existingImportCompletion =
-    params.direction === 'import'
-      ? await getCompletedImportHistoryBySessionId({runner, sessionId: params.sessionId ?? ''})
-      : null
-
-  if (existingImportCompletion) {
-    return existingImportCompletion
-  }
-
   const currentNow = params.now ?? new Date()
+  const conflictClause = params.direction === 'import' ? 'ON CONFLICT(direction, session_id) DO NOTHING' : ''
   const [row] = await runner.queryJson<
     Omit<ProjectTransferHistoryRecord, 'completionPayloadJson' | 'payloadCountsJson'> & {
       completionPayloadJson: unknown
@@ -230,14 +222,20 @@ const createProjectTransferHistory = async (params: CreateProjectTransferHistory
       ${getJsonLiteral(params.completionPayload ?? null)},
       ${getTimestampLiteral(currentNow)}
     )
+    ${conflictClause}
     RETURNING ${getProjectTransferHistorySelectSql()}
   `)
+  const history =
+    (row ? mapProjectTransferHistoryRecord(row) : null)
+    ?? (params.direction === 'import'
+      ? await getCompletedImportHistoryBySessionId({runner, sessionId: params.sessionId ?? ''})
+      : null)
 
-  if (!row) {
+  if (!history) {
     throw new Error('Failed to create project transfer history record')
   }
 
-  return mapProjectTransferHistoryRecord(row)
+  return history
 }
 
 const projectTransferHistoryRepository = {
