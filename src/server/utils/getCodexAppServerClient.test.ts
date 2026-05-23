@@ -3,10 +3,13 @@ import {EventEmitter} from 'node:events'
 import {expect, mock, test} from 'bun:test'
 
 import {
+  type CodexAppServerClient,
   createCodexAppServerClient,
+  getCodexAppServerSingletonForTests,
   getCodexThreadTokenUsageUpdate,
   getCodexTurnAgentMessageText,
   resetCodexStderrLogRateLimitForTests,
+  setCodexAppServerSingletonForTests,
   type SpawnCodexAppServer,
 } from './getCodexAppServerClient.ts'
 
@@ -95,11 +98,13 @@ const createMockModelListCodexClient = () => {
 
 const createMockConcurrentCodexClient = ({
   expectedTurnCount = 2,
+  maxTurnsBeforeRecycle,
   notifications,
   onTurnStart,
   threadReadTextByInputText,
 }: {
   expectedTurnCount?: number
+  maxTurnsBeforeRecycle?: number
   notifications: MockNotification[]
   onTurnStart?: (params: MockJsonRpcRequest['params']) => void
   threadReadTextByInputText: Record<string, string>
@@ -115,10 +120,12 @@ const createMockConcurrentCodexClient = ({
   const stdout = new EventEmitter()
   const stderr = new EventEmitter()
   const proc = new EventEmitter() as EventEmitter & {
+    kill: () => boolean
     stderr: EventEmitter
     stdin: {write: (data: string) => boolean}
     stdout: EventEmitter
   }
+  let killCount = 0
 
   const send = (message: unknown) => {
     stdout.emit('data', Buffer.from(`${JSON.stringify(message)}\n`))
@@ -163,6 +170,10 @@ const createMockConcurrentCodexClient = ({
 
   proc.stdout = stdout
   proc.stderr = stderr
+  proc.kill = () => {
+    killCount += 1
+    return true
+  }
   proc.stdin = {
     write(payload) {
       String(payload)
@@ -249,7 +260,13 @@ const createMockConcurrentCodexClient = ({
     return proc
   }
 
-  return {client: createCodexAppServerClient({spawnProcess}), threadReadInputs}
+  return {
+    client: createCodexAppServerClient({maxTurnsBeforeRecycle, spawnProcess}),
+    getKillCount: () => {
+      return killCount
+    },
+    threadReadInputs,
+  }
 }
 
 const getNormalizedResults = (
@@ -342,6 +359,7 @@ test('runJsonTurn sends Codex-safe sandbox policy without deprecated readOnlyAcc
   expect(result.text).toBe('safe response')
   expect(turnStartParams).toHaveLength(1)
   expect(turnStartParams[0]).toMatchObject({
+    environments: [],
     sandboxPolicy: {excludeSlashTmp: true, excludeTmpdirEnvVar: true, networkAccess: false, type: 'workspaceWrite'},
   })
   expect(JSON.stringify(turnStartParams[0])).not.toContain('readOnlyAccess')
@@ -442,6 +460,27 @@ test('rate-limits repeated transient Codex stderr warnings', async () => {
   expect(String(captured.warnings[0]?.[0])).toContain('HTTP 429')
 })
 
+test('downgrades user-rejected Codex tool stderr to a warning', async () => {
+  resetCodexStderrLogRateLimitForTests()
+  const {client, stderr} = createMockModelListCodexClient()
+  const captured = await withCapturedConsole(async () => {
+    await client.modelList()
+    stderr.emit(
+      'data',
+      Buffer.from(
+        '2026-05-22T16:46:09.109860Z ERROR codex_core::tools::router: error=exec_command failed for `/bin/zsh -lc "sed -n \'196,216p\' /Users/fredrik/.codex/memories/MEMORY.md"`: CreateProcess { message: "Rejected(\\"rejected by user\\")" }\n',
+      ),
+    )
+  })
+
+  expect(captured.errors).toEqual([])
+  expect(
+    captured.warnings.map(([message]) => {
+      return String(message)
+    }),
+  ).toEqual(['[codex] Codex tool command was rejected by user; treating as intentional tool permission denial.'])
+})
+
 test('keeps unknown Codex stderr at error level', async () => {
   resetCodexStderrLogRateLimitForTests()
   const {client, stderr} = createMockModelListCodexClient()
@@ -456,7 +495,7 @@ test('keeps unknown Codex stderr at error level', async () => {
 })
 
 test('runJsonTurn keeps concurrent success scoped when another turn fails out of order', async () => {
-  const {client} = createMockConcurrentCodexClient({
+  const {client, getKillCount} = createMockConcurrentCodexClient({
     notifications: [
       {inputText: 'success request', kind: 'item', text: 'success turn text'},
       {inputText: 'failed request', kind: 'item', text: 'failed turn partial'},
@@ -475,6 +514,214 @@ test('runJsonTurn keeps concurrent success scoped when another turn fails out of
     {status: 'fulfilled', text: 'success turn text'},
     {status: 'rejected', reason: 'codex app-server: turn failed'},
   ])
+  expect(getKillCount()).toBe(1)
+})
+
+test('runJsonTurn keeps a replacement singleton when the recycled app-server drains', async () => {
+  const stdout = new EventEmitter()
+  const stderr = new EventEmitter()
+  const proc = new EventEmitter() as EventEmitter & {
+    kill: () => boolean
+    stderr: EventEmitter
+    stdin: {write: (data: string) => boolean}
+    stdout: EventEmitter
+  }
+  const inputTextByThreadId = new Map<string, string>()
+  const turnIdByInputText = new Map<string, string>()
+  let killCount = 0
+  let resolveTurnsStarted: () => void = () => {
+    return undefined
+  }
+  let threadCount = 0
+  let turnCount = 0
+  const turnsStarted = new Promise<void>((resolve) => {
+    resolveTurnsStarted = resolve
+  })
+  const send = (message: unknown) => {
+    stdout.emit('data', Buffer.from(`${JSON.stringify(message)}\n`))
+  }
+  const sendCompletedTurn = (inputText: string, status: 'completed' | 'failed') => {
+    send({method: 'turn/completed', params: {turn: {id: turnIdByInputText.get(inputText), status}}})
+  }
+
+  proc.stdout = stdout
+  proc.stderr = stderr
+  proc.kill = () => {
+    killCount += 1
+    return true
+  }
+  proc.stdin = {
+    write(payload) {
+      String(payload)
+        .split('\n')
+        .map((line) => {
+          return line.trim()
+        })
+        .filter((line) => {
+          return line.length > 0
+        })
+        .forEach((line) => {
+          const message = JSON.parse(line) as MockJsonRpcRequest
+
+          if (message.method === 'initialize') {
+            send({id: message.id, result: {}})
+            return
+          }
+
+          if (message.method === 'thread/start') {
+            threadCount += 1
+            send({id: message.id, result: {thread: {id: `thread-${threadCount}`}}})
+            return
+          }
+
+          if (message.method === 'turn/start') {
+            turnCount += 1
+            const threadId = message.params?.threadId
+            const inputText = message.params?.input?.[0]?.text
+            if (!threadId || typeof inputText !== 'string') {
+              throw new Error('Missing turn/start test params')
+            }
+
+            const turnId = `turn-${turnCount}`
+            inputTextByThreadId.set(threadId, inputText)
+            turnIdByInputText.set(inputText, turnId)
+            send({id: message.id, result: {turn: {id: turnId}}})
+
+            if (turnCount === 2) {
+              setTimeout(resolveTurnsStarted, 0)
+            }
+            return
+          }
+
+          if (message.method === 'thread/read') {
+            const threadId = message.params?.threadId
+            const inputText = typeof threadId === 'string' ? inputTextByThreadId.get(threadId) : null
+            const turnId = inputText ? turnIdByInputText.get(inputText) : null
+
+            send({
+              id: message.id,
+              result: {thread: {turns: [{id: turnId, items: [{type: 'agentMessage', text: `${inputText} response`}]}]}},
+            })
+          }
+        })
+
+      return true
+    },
+  }
+
+  const spawnProcess: SpawnCodexAppServer = () => {
+    return proc
+  }
+  const oldClient = createCodexAppServerClient({spawnProcess})
+  const replacementClient: CodexAppServerClient = {
+    modelList: async () => {
+      return {data: [], nextCursor: null}
+    },
+    runJsonTurn: async () => {
+      return {text: 'replacement response', usage: null}
+    },
+  }
+
+  try {
+    setCodexAppServerSingletonForTests(oldClient)
+    const successPromise = oldClient.runJsonTurn({
+      model: 'gpt-5.4',
+      inputText: 'success request',
+      outputSchema: {type: 'object'},
+    })
+    const failedPromise = oldClient
+      .runJsonTurn({model: 'gpt-5.4', inputText: 'failed request', outputSchema: {type: 'object'}})
+      .then(
+        () => {
+          return null
+        },
+        (error: unknown) => {
+          return error
+        },
+      )
+
+    await turnsStarted
+    sendCompletedTurn('failed request', 'failed')
+    const failedResult = await failedPromise
+    setCodexAppServerSingletonForTests(replacementClient)
+    sendCompletedTurn('success request', 'completed')
+    const successResult = await successPromise
+
+    expect(failedResult).toBeInstanceOf(Error)
+    expect(failedResult instanceof Error ? failedResult.message : '').toBe('codex app-server: turn failed')
+    expect(successResult.text).toBe('success request response')
+    expect(killCount).toBe(1)
+    expect(getCodexAppServerSingletonForTests()).toBe(replacementClient)
+  } finally {
+    setCodexAppServerSingletonForTests(null)
+  }
+})
+
+test('runJsonTurn recycles the app-server after a failed turn', async () => {
+  const {client, getKillCount} = createMockConcurrentCodexClient({
+    expectedTurnCount: 1,
+    notifications: [{inputText: 'failed request', kind: 'complete', status: 'failed'}],
+    threadReadTextByInputText: {'failed request': ''},
+  })
+  const result = await client
+    .runJsonTurn({model: 'gpt-5.4', inputText: 'failed request', outputSchema: {type: 'object'}})
+    .then(
+      () => {
+        return null
+      },
+      (error: unknown) => {
+        return error
+      },
+    )
+
+  expect(result).toBeInstanceOf(Error)
+  expect(result instanceof Error ? result.message : '').toBe('codex app-server: turn failed')
+  expect(getKillCount()).toBe(1)
+})
+
+test('runJsonTurn recycles the app-server after a turn timeout', async () => {
+  const {client, getKillCount} = createMockConcurrentCodexClient({
+    expectedTurnCount: 1,
+    notifications: [],
+    threadReadTextByInputText: {},
+  })
+  const result = await client
+    .runJsonTurn({model: 'gpt-5.4', inputText: 'timeout request', outputSchema: {type: 'object'}, timeoutMs: 1})
+    .then(
+      () => {
+        return null
+      },
+      (error: unknown) => {
+        return error
+      },
+    )
+
+  expect(result).toBeInstanceOf(Error)
+  expect(result instanceof Error ? result.message : '').toBe('codex app-server: turn timeout')
+  expect(getKillCount()).toBe(1)
+})
+
+test('runJsonTurn recycles after max completed turns only once active turns drain', async () => {
+  const {client, getKillCount} = createMockConcurrentCodexClient({
+    expectedTurnCount: 2,
+    maxTurnsBeforeRecycle: 1,
+    notifications: [
+      {inputText: 'first request', kind: 'complete', status: 'completed'},
+      {inputText: 'second request', kind: 'complete', status: 'completed'},
+    ],
+    threadReadTextByInputText: {'first request': 'first response', 'second request': 'second response'},
+  })
+
+  const results = await Promise.allSettled([
+    client.runJsonTurn({model: 'gpt-5.4', inputText: 'first request', outputSchema: {type: 'object'}}),
+    client.runJsonTurn({model: 'gpt-5.4', inputText: 'second request', outputSchema: {type: 'object'}}),
+  ])
+
+  expect(getNormalizedResults(results)).toEqual([
+    {status: 'fulfilled', text: 'first response'},
+    {status: 'fulfilled', text: 'second response'},
+  ])
+  expect(getKillCount()).toBe(1)
 })
 
 test('runJsonTurn ignores failed partial agent text when only the successful turn gets thread-read output', async () => {

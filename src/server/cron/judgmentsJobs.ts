@@ -49,6 +49,7 @@ const SAMPLE_PROVIDER_TELEMETRY = '*/30 * * * * *'
 const CHECK_LLM_STATUS = '*/30 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */1 * * * *'
 const START_DELAY_MS = 1000
+const ADD_TO_QUEUE_STILL_RUNNING_WARN_AFTER_MS = 30_000
 const lowMemoryJudgmentsWorkerDuckdbLimitMiB = 6400
 
 let isAddingToQueue = false
@@ -68,10 +69,13 @@ const runAddToQueue = async (): Promise<void> => {
 
   if (isAddingToQueue) {
     const runningForMs = addToQueueStartedAtMs ? Date.now() - addToQueueStartedAtMs : null
-    cronLogger.warn('cron:add-to-queue:already-running', '[cron] add-to-queue still running', {
-      serverJobId,
-      runningForMs,
-    })
+    if (runningForMs !== null && runningForMs >= ADD_TO_QUEUE_STILL_RUNNING_WARN_AFTER_MS) {
+      cronLogger.warn('cron:add-to-queue:already-running', '[cron] add-to-queue still running', {
+        serverJobId,
+        runningForMs,
+        warnAfterMs: ADD_TO_QUEUE_STILL_RUNNING_WARN_AFTER_MS,
+      })
+    }
     return
   }
 
