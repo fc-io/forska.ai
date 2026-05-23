@@ -40,6 +40,7 @@ const CODEX_INITIALIZE_TIMEOUT_MS = 30_000
 const CODEX_THREAD_READ_TIMEOUT_MS = 60_000
 const CODEX_THREAD_READ_MAX_ATTEMPTS = 3
 const CODEX_THREAD_READ_RETRY_DELAY_MS = 250
+const CODEX_MAX_TURNS_BEFORE_RECYCLE = 25
 
 const MAX_DEBUG_OUTPUT_CHARS = 8_000
 
@@ -159,6 +160,12 @@ export type CodexAppServerClient = {
 }
 
 let singleton: CodexAppServerClient | null = null
+
+const clearSingletonIfCurrent = (client: CodexAppServerClient | null): void => {
+  if (singleton === client) {
+    singleton = null
+  }
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object')
@@ -305,6 +312,18 @@ const getCodexUpstreamResetStderrEvent = (normalized: string): CodexStderrEvent 
     : null
 }
 
+const getCodexUserRejectedToolStderrEvent = (normalized: string): CodexStderrEvent | null => {
+  const isUserRejected =
+    normalized.includes('rejected("rejected by user")') || normalized.includes('rejected(\\"rejected by user\\")')
+
+  return normalized.includes('codex_core::tools::router') && isUserRejected
+    ? {
+        key: 'codex:tool-rejected-by-user',
+        message: '[codex] Codex tool command was rejected by user; treating as intentional tool permission denial.',
+      }
+    : null
+}
+
 const getCodexTransientStderrEvent = (value: string): CodexStderrEvent | null => {
   const normalized = value.toLowerCase()
 
@@ -312,6 +331,7 @@ const getCodexTransientStderrEvent = (value: string): CodexStderrEvent | null =>
     getCodexResponsesWebsocketStderrEvent(normalized)
     ?? getCodexCacheTtlStderrEvent(normalized)
     ?? getCodexUpstreamResetStderrEvent(normalized)
+    ?? getCodexUserRejectedToolStderrEvent(normalized)
   )
 }
 
@@ -359,6 +379,7 @@ export const warmCodexAppServer = async (): Promise<void> => {
 
 export const createCodexAppServerClient = ({
   initializeTimeoutMs,
+  maxTurnsBeforeRecycle,
   spawnProcess = (command, args, options) => {
     return spawn(command, args, options)
   },
@@ -367,6 +388,7 @@ export const createCodexAppServerClient = ({
   threadReadTimeoutMs,
 }: {
   initializeTimeoutMs?: number
+  maxTurnsBeforeRecycle?: number
   spawnProcess?: SpawnCodexAppServer
   threadReadMaxAttempts?: number
   threadReadRetryDelayMs?: number
@@ -381,12 +403,17 @@ export const createCodexAppServerClient = ({
   const resolvedThreadReadMaxAttempts = getPositiveInteger(threadReadMaxAttempts, CODEX_THREAD_READ_MAX_ATTEMPTS)
   const resolvedThreadReadRetryDelayMs = getPositiveInteger(threadReadRetryDelayMs, CODEX_THREAD_READ_RETRY_DELAY_MS)
   const resolvedThreadReadTimeoutMs = getPositiveInteger(threadReadTimeoutMs, CODEX_THREAD_READ_TIMEOUT_MS)
+  const resolvedMaxTurnsBeforeRecycle = getPositiveInteger(maxTurnsBeforeRecycle, CODEX_MAX_TURNS_BEFORE_RECYCLE)
 
   const proc = spawnProcess(codexBin, ['app-server'], {stdio: ['pipe', 'pipe', 'pipe']})
 
   let rawStdout = ''
   let rawStderr = ''
   let closedError: Error | null = null
+  let activeTurnCount = 0
+  let completedTurnCount = 0
+  let recycleWhenIdle = false
+  let clientInstance: CodexAppServerClient | null = null
 
   let buffer = ''
   proc.stdout.on('data', (data: Buffer) => {
@@ -461,7 +488,37 @@ export const createCodexAppServerClient = ({
       listener(error)
     })
     lifecycleListeners.clear()
-    singleton = null
+    clearSingletonIfCurrent(clientInstance)
+  }
+
+  const getRecycleError = (): Error => {
+    return new Error(`codex app-server recycled after ${completedTurnCount} completed turns`)
+  }
+
+  const recycleAppServerIfIdle = (): void => {
+    if (!recycleWhenIdle || activeTurnCount > 0 || closedError) return
+
+    failAppServer(getRecycleError(), {stopProcess: true})
+  }
+
+  const markRecycleWhenIdle = (): void => {
+    recycleWhenIdle = true
+    clearSingletonIfCurrent(clientInstance)
+    recycleAppServerIfIdle()
+  }
+
+  const startTrackedTurn = (): void => {
+    activeTurnCount += 1
+  }
+
+  const finishTrackedTurn = ({completed, recycle}: {completed: boolean; recycle: boolean}): void => {
+    activeTurnCount = Math.max(0, activeTurnCount - 1)
+    if (completed) {
+      completedTurnCount += 1
+    }
+    if (recycle || recycleWhenIdle || completedTurnCount >= resolvedMaxTurnsBeforeRecycle) {
+      markRecycleWhenIdle()
+    }
   }
 
   proc.on('exit', (code, signal) => {
@@ -602,93 +659,119 @@ export const createCodexAppServerClient = ({
     timeoutMs?: number
   }): Promise<{text: string; usage: CodexThreadTokenUsage | null}> => {
     await initPromise
-    const safe = buildSafeTurnConfig()
-    const started = await request('thread/start', {model: params.model, cwd: safe.cwd})
-    const threadId = (started as {thread?: {id?: unknown}}).thread?.id
-    if (typeof threadId !== 'string') {
-      throw new Error('codex app-server: thread/start missing threadId')
+    if (recycleWhenIdle) {
+      recycleAppServerIfIdle()
+      throw new Error('codex app-server: turn failed: app-server recycling after failed turn')
     }
 
-    const turnStart = await request(
-      'turn/start',
-      {
-        threadId,
-        input: [{type: 'text', text: params.inputText}],
-        model: params.model,
-        effort: params.effort ?? null,
-        approvalPolicy: safe.approvalPolicy,
-        cwd: safe.cwd,
-        sandboxPolicy: safe.sandboxPolicy,
-        outputSchema: params.outputSchema,
-      },
-      params.timeoutMs,
-    )
-    const turnId = (turnStart as {turn?: {id?: unknown}}).turn?.id
-    if (typeof turnId !== 'string') {
-      throw new Error('codex app-server: turn/start missing turnId')
-    }
+    startTrackedTurn()
+    let completedTurn = false
+    let recycleAfterTurn = false
 
-    return await new Promise<{text: string; usage: CodexThreadTokenUsage | null}>((resolve, reject) => {
-      let handler: Listener = () => {
-        return undefined
+    try {
+      const safe = buildSafeTurnConfig()
+      const started = await request('thread/start', {model: params.model, cwd: safe.cwd})
+      const threadId = (started as {thread?: {id?: unknown}}).thread?.id
+      if (typeof threadId !== 'string') {
+        throw new Error('codex app-server: thread/start missing threadId')
       }
-      const onClosed: LifecycleListener = (error) => {
-        fail(error)
-      }
-      const cleanup = (): void => {
-        clearTimeout(timeout)
-        listeners.delete(handler)
-        lifecycleListeners.delete(onClosed)
-      }
-      const fail = (error: Error): void => {
-        cleanup()
-        reject(error)
-      }
-      const timeout = setTimeout(() => {
-        fail(new Error('codex app-server: turn timeout'))
-      }, params.timeoutMs ?? CODEx_DEFAULT_TIMEOUT_MS)
 
-      let turnUsage: CodexThreadTokenUsage | null = null
+      const turnStart = await request(
+        'turn/start',
+        {
+          threadId,
+          input: [{type: 'text', text: params.inputText}],
+          model: params.model,
+          effort: params.effort ?? null,
+          approvalPolicy: safe.approvalPolicy,
+          cwd: safe.cwd,
+          environments: [],
+          sandboxPolicy: safe.sandboxPolicy,
+          outputSchema: params.outputSchema,
+        },
+        params.timeoutMs,
+      )
+      const turnId = (turnStart as {turn?: {id?: unknown}}).turn?.id
+      if (typeof turnId !== 'string') {
+        throw new Error('codex app-server: turn/start missing turnId')
+      }
 
-      handler = (msg) => {
-        const tokenUsageUpdate = getCodexThreadTokenUsageUpdate(msg)
-        if (tokenUsageUpdate && tokenUsageUpdate.turnId === turnId) {
-          turnUsage = tokenUsageUpdate.tokenUsage
+      return await new Promise<{text: string; usage: CodexThreadTokenUsage | null}>((resolve, reject) => {
+        let handler: Listener = () => {
           return undefined
         }
-
-        if (isNotification(msg) && msg.method === 'turn/completed') {
-          const completionParams = msg.params as
-            | {error?: unknown; turn?: {error?: unknown; id?: unknown; status?: unknown}}
-            | undefined
-          const completedTurnId = completionParams?.turn?.id
-          const status = completionParams?.turn?.status
-          if (completedTurnId !== turnId) return
+        const onClosed: LifecycleListener = (error) => {
+          fail(error)
+        }
+        const cleanup = (): void => {
+          clearTimeout(timeout)
+          listeners.delete(handler)
+          lifecycleListeners.delete(onClosed)
+        }
+        const fail = (error: Error): void => {
           cleanup()
+          recycleAfterTurn = true
+          reject(error)
+        }
+        const timeout = setTimeout(() => {
+          fail(new Error('codex app-server: turn timeout'))
+        }, params.timeoutMs ?? CODEx_DEFAULT_TIMEOUT_MS)
 
-          if (status === 'failed') {
-            reject(getCodexTurnFailedError(completionParams?.turn?.error ?? completionParams?.error))
+        let turnUsage: CodexThreadTokenUsage | null = null
+
+        handler = (msg) => {
+          const tokenUsageUpdate = getCodexThreadTokenUsageUpdate(msg)
+          if (tokenUsageUpdate && tokenUsageUpdate.turnId === turnId) {
+            turnUsage = tokenUsageUpdate.tokenUsage
             return undefined
           }
 
-          void readThreadWithRetry(threadId)
-            .then((threadRead) => {
-              resolve({text: getCodexTurnAgentMessageText(threadRead, turnId), usage: turnUsage})
-            })
-            .catch(reject)
+          if (isNotification(msg) && msg.method === 'turn/completed') {
+            const completionParams = msg.params as
+              | {error?: unknown; turn?: {error?: unknown; id?: unknown; status?: unknown}}
+              | undefined
+            const completedTurnId = completionParams?.turn?.id
+            const status = completionParams?.turn?.status
+            if (completedTurnId !== turnId) return
+            cleanup()
+
+            if (status === 'failed') {
+              recycleAfterTurn = true
+              reject(getCodexTurnFailedError(completionParams?.turn?.error ?? completionParams?.error))
+              return undefined
+            }
+
+            void readThreadWithRetry(threadId)
+              .then((threadRead) => {
+                completedTurn = true
+                resolve({text: getCodexTurnAgentMessageText(threadRead, turnId), usage: turnUsage})
+              })
+              .catch((error) => {
+                recycleAfterTurn = true
+                reject(error)
+              })
+          }
         }
-      }
 
-      listeners.add(handler)
-      lifecycleListeners.add(onClosed)
+        listeners.add(handler)
+        lifecycleListeners.add(onClosed)
 
-      if (closedError) {
-        fail(closedError)
-      }
-    })
+        if (closedError) {
+          fail(closedError)
+        }
+      })
+    } catch (error) {
+      recycleAfterTurn = true
+      throw error
+    } finally {
+      finishTrackedTurn({completed: completedTurn, recycle: recycleAfterTurn})
+    }
   }
 
-  return {modelList, runJsonTurn}
+  const client = {modelList, runJsonTurn}
+  clientInstance = client
+
+  return client
 }
 
 export const getCodexAppServerClient = (): CodexAppServerClient => {
@@ -696,4 +779,12 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
 
   singleton = createCodexAppServerClient()
   return singleton
+}
+
+export const getCodexAppServerSingletonForTests = (): CodexAppServerClient | null => {
+  return singleton
+}
+
+export const setCodexAppServerSingletonForTests = (client: CodexAppServerClient | null): void => {
+  singleton = client
 }
