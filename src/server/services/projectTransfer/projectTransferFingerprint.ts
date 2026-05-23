@@ -45,19 +45,9 @@ export const projectTransferLogicalFingerprintExcludedKeys = [
   'ownerToken',
   'packageFingerprint',
   'sessionId',
-  'sourceArticleId',
-  'sourceId',
-  'sourceImportRouteId',
-  'sourceModelId',
-  'sourceProjectId',
   'sourceProjectName',
-  'sourcePromptId',
-  'sourceProviderConnectionId',
   'sourceRecordHash',
-  'sourceRecordId',
   'sourceRecordKey',
-  'sourceSessionId',
-  'targetProjectId',
   'targetProjectName',
   'transferId',
   'updatedAt',
@@ -83,6 +73,14 @@ const getExcludedKeySet = (excludedKeys: readonly string[] = []) => {
   return new Set([...projectTransferLogicalFingerprintExcludedKeys, ...excludedKeys])
 }
 
+const isSourceOrTargetIdKey = (key: string) => {
+  return (key.startsWith('source') || key.startsWith('target')) && key.endsWith('Id')
+}
+
+const isLogicalFingerprintExcludedKey = (key: string, excludedKeys: Set<string>) => {
+  return excludedKeys.has(key) || isSourceOrTargetIdKey(key)
+}
+
 const getCanonicalObjectEntries = (value: Record<string, unknown>) => {
   return Object.keys(value)
     .filter((key) => {
@@ -94,7 +92,7 @@ const getCanonicalObjectEntries = (value: Record<string, unknown>) => {
 const getLogicalObjectEntries = (value: Record<string, unknown>, excludedKeys: Set<string>) => {
   return Object.keys(value)
     .filter((key) => {
-      return value[key] !== undefined && !excludedKeys.has(key)
+      return value[key] !== undefined && !isLogicalFingerprintExcludedKey(key, excludedKeys)
     })
     .sort(compareStableStrings)
 }
