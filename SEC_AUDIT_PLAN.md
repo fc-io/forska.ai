@@ -49,7 +49,28 @@ Before running tools, confirm current CLI flags with `gitleaks --help` and `truf
 
 ```bash
 git fetch --all --tags --prune
+export REPO_ROOT="$(git rev-parse --show-toplevel)"
 export AUDIT_DIR="${AUDIT_DIR:-../forska-security-audit}"
+AUDIT_DIR_ABS=""
+if test -e "$AUDIT_DIR"; then
+  AUDIT_DIR_ABS="$(cd "$AUDIT_DIR" 2>/dev/null && pwd -P)"
+else
+  AUDIT_PARENT="$(cd "$(dirname "$AUDIT_DIR")" 2>/dev/null && pwd -P)"
+  if test -n "$AUDIT_PARENT"; then
+    AUDIT_DIR_ABS="$AUDIT_PARENT/$(basename "$AUDIT_DIR")"
+  fi
+fi
+if test -z "$AUDIT_DIR_ABS"; then
+  echo "Stop: AUDIT_DIR parent must exist and resolve outside the repository." >&2
+  exit 1
+fi
+export AUDIT_DIR="$AUDIT_DIR_ABS"
+case "$AUDIT_DIR/" in
+  "$REPO_ROOT"/*)
+    echo "Stop: AUDIT_DIR must resolve outside the repository before reports are written." >&2
+    exit 1
+    ;;
+esac
 export AUDIT_TREE="$AUDIT_DIR/current-tree"
 mkdir -p "$AUDIT_DIR/reports" "$AUDIT_DIR/findings"
 git status --short > "$AUDIT_DIR/reports/working-tree-status.txt"
@@ -74,10 +95,10 @@ git ls-tree -r -z --name-only HEAD > "$AUDIT_DIR/reports/tracked-current-tree-fi
 
 - Do not commit raw scanner reports.
 - Do not paste unredacted secrets into markdown findings.
+- Stop before writing reports if `AUDIT_DIR` resolves inside the repo. Do not rely on `.git/info/exclude` to protect raw audit output from accidental publication.
 - Stop if `working-tree-status.txt` is non-empty. The current-tree archive is `HEAD`, so uncommitted product edits must be committed, removed, or explicitly excluded from the release candidate before scanning.
 - Run current-tree content scans against `$AUDIT_TREE`, not the live working directory, so ignored local data and audit reports do not get scanned as product content.
 - Use `rg --hidden --no-ignore` for `$AUDIT_TREE` scans. The archived tree contains `.gitignore`, but tracked ignored files still need audit coverage.
-- If reports must be written inside the repo, add that folder to `.git/info/exclude` before any current-tree scanner runs and verify the scanner does not scan its own report output.
 - Treat raw `rg`, `git log`, `gitleaks`, and `trufflehog` report files as sensitive evidence. Keep them outside git and copy only redacted summaries into findings.
 - Record tool versions, command lines, scan date, scanned commit, scanned refs, and the `$AUDIT_TREE` path.
 
@@ -179,6 +200,7 @@ For each flow, record:
 
 ```bash
 git ls-tree -r --name-only HEAD | rg "fixture|fixtures|sample|example|snapshot|export|pdf|ndjson|jsonl|log|data|cache|tmp|artifact|backup|covidence|openalex|fhir|ehr|token|secret|credential|key|user_uploaded" > "$AUDIT_DIR/reports/tracked-artifact-paths.txt" || true
+git ls-tree -r --name-only HEAD | rg -i "\.(zip|tar|tgz|gz|bz2|xz|7z|rar|pdf|docx|xlsx|pptx|sqlite|duckdb|db|parquet|arrow|png|jpe?g|webp|wasm|bin)$" > "$AUDIT_DIR/reports/tracked-binary-artifact-paths.txt" || true
 git status --ignored --short > "$AUDIT_DIR/reports/git-status-ignored.txt"
 find data cache logs tmp .tmp .temp temp test-results coverage out dist desktopBuild desktopArtifacts .desktopBuild .desktopArtifacts .cache .secrets assets/article_pdfs assets/user_uploaded_article_pdfs assets/covidence_2 assets/covidence_imports assets/covidence_running assets/covidence_study assets/structured_file_imports backups openalex_snapshot models pgdata init-db -type f -print 2>/dev/null > "$AUDIT_DIR/reports/local-generated-files.txt" || true
 ```
@@ -189,6 +211,7 @@ For each tracked or publishable artifact, decide:
 - Whether it contains article content, PHI, PDFs, API responses, provider metadata, prompt text, model output, local paths, or machine identifiers.
 - Whether redistribution rights are clear.
 - Whether the artifact belongs in Forska or another repo.
+- Whether binary, archive, office, image, database, and columnar artifacts were actually inspected. Do not treat a clean text `rg` scan as coverage for embedded content; extract archives, open structured formats with appropriate tooling, or remove/move the artifact before release.
 
 4. Audit structured runtime logging.
 
@@ -236,6 +259,7 @@ The `.audit-sentinel` paths do not need to exist. Treat any `ignored-path-check.
 - A security finding log with redacted evidence and closure status.
 - A secret rotation/revocation log for any real credential.
 - A config and local-data inventory with keep/rewrite/remove/move decisions.
+- A binary and archive artifact inventory with inspection method, redistribution decision, and closure status.
 - A logging-surface note covering runtime JSONL env vars, ignored paths, payload shape, filename pattern, and retention behavior.
 - Final recommendation for clean mirror, history rewrite, or keeping the current repo private.
 
@@ -258,8 +282,9 @@ The `.audit-sentinel` paths do not need to exist. Treat any `ignored-path-check.
 - Manual `rg --hidden --no-ignore` searches cover current-tree secrets, private infra strings, env vars, provider credentials, token storage, runtime logs, fixtures, samples, generated artifacts, publication artifacts, and hidden config.
 - Every real secret is rotated or revoked before any public release decision.
 - Every current tracked fixture, sample, export, snapshot, PDF, NDJSON, JSONL, log-like artifact, and ignored/generated local data family has a keep/rewrite/remove/move decision or is explicitly excluded from the public snapshot.
+- Every tracked binary, archive, office, image, database, or columnar artifact has an inspection method and keep/rewrite/remove/move decision; clean text scans alone are not accepted as coverage.
 - Runtime JSONL payload shape, retention behavior, and ignored paths are documented and public-safe.
-- Audit reports are written outside the repo or ignored before scanners run, current-tree scanners do not scan their own report output, and `.gitignore` or `.git/info/exclude` keeps local runtime data out of git.
+- Audit reports are written outside the repo, current-tree scanners do not scan their own report output, and `.gitignore` keeps local runtime data out of git.
 - `git check-ignore -vn` shows a real ignore source for every protected local-data path and no `::` non-match lines.
 - Final public release uses a clean audited snapshot or an explicitly justified, re-scanned history exception.
 - For markdown-only changes to this plan, run `bunx prettier --check SEC_AUDIT_PLAN.md`.
