@@ -25,6 +25,7 @@ type ProjectTransferSessionRunner = {
 }
 
 type CreateProjectTransferSessionParams = {
+  completionPayload?: ProjectTransferCompletionPayload | null
   direction: ProjectTransferDirection
   expiresAt: Date
   id: string
@@ -333,6 +334,7 @@ const createProjectTransferSession = async (params: CreateProjectTransferSession
       state,
       package_fingerprint,
       expires_at,
+      completion_payload_json,
       progress_json,
       plan_summary_json,
       created_at,
@@ -343,6 +345,7 @@ const createProjectTransferSession = async (params: CreateProjectTransferSession
       ${getSqlLiteral(state)},
       ${getSqlLiteral(params.packageFingerprint ?? null)},
       ${getTimestampLiteral(params.expiresAt)},
+      ${getJsonLiteral(params.completionPayload ?? null)},
       ${getJsonLiteral(params.progress ?? null)},
       ${getJsonLiteral(params.planSummary ?? null)},
       ${getTimestampLiteral(currentNow)},

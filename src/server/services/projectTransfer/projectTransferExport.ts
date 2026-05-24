@@ -515,6 +515,13 @@ const getProjectTransferExportJudgmentCandidateWhereSql = () => {
   `
 }
 
+const getProjectTransferExportAnsweredJudgmentCandidateWhereSql = () => {
+  return `
+    ${getProjectTransferExportJudgmentCandidateWhereSql()}
+    AND j.is_answered = TRUE
+  `
+}
+
 const getProjectTransferExportAmbiguousJudgmentCteSql = () => {
   return `
     project_transfer_ambiguous_judgment_visible_key AS (
@@ -530,7 +537,7 @@ const getProjectTransferExportAmbiguousJudgmentCteSql = () => {
       INNER JOIN project_transfer_scope_article scope ON scope.article_id = j.article_id
       INNER JOIN project_transfer_source_project project ON TRUE
       INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
-      WHERE ${getProjectTransferExportJudgmentCandidateWhereSql()}
+      WHERE ${getProjectTransferExportAnsweredJudgmentCandidateWhereSql()}
       GROUP BY
         j.article_id,
         j.prompt_id,
@@ -908,7 +915,7 @@ const getProjectTransferExportAmbiguousJudgmentWarnings = async (
     INNER JOIN project_transfer_scope_article scope ON scope.article_id = j.article_id
     INNER JOIN project_transfer_source_project project ON TRUE
     INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
-    WHERE ${getProjectTransferExportJudgmentCandidateWhereSql()}
+    WHERE ${getProjectTransferExportAnsweredJudgmentCandidateWhereSql()}
     GROUP BY
       j.article_id,
       j.prompt_id,
@@ -999,8 +1006,7 @@ const getProjectTransferExportJudgmentRows = async (projectId: string, database:
     INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
     LEFT JOIN project_transfer_ambiguous_judgment_visible_key ambiguous
       ON ${getProjectTransferExportJudgmentAmbiguityJoinSql()}
-    WHERE ${getProjectTransferExportJudgmentCandidateWhereSql()}
-      AND j.is_answered = TRUE
+    WHERE ${getProjectTransferExportAnsweredJudgmentCandidateWhereSql()}
       AND ambiguous.article_id IS NULL
     ORDER BY j.article_id ASC, project_prompt.prompt_order ASC NULLS LAST, j.created_at DESC, j.id ASC
   `)
@@ -1019,8 +1025,7 @@ const getProjectTransferExportJudgmentAssessmentRows = async (projectId: string,
       INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
       LEFT JOIN project_transfer_ambiguous_judgment_visible_key ambiguous
         ON ${getProjectTransferExportJudgmentAmbiguityJoinSql()}
-      WHERE ${getProjectTransferExportJudgmentCandidateWhereSql()}
-        AND j.is_answered = TRUE
+      WHERE ${getProjectTransferExportAnsweredJudgmentCandidateWhereSql()}
         AND ambiguous.article_id IS NULL
     )
     SELECT
@@ -2266,7 +2271,7 @@ const getProjectTransferExportPreflightPackageEstimate = async (
       INNER JOIN project_transfer_scope_article scope ON scope.article_id = j.article_id
       INNER JOIN project_transfer_source_project project ON TRUE
       INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
-      WHERE ${getProjectTransferExportJudgmentCandidateWhereSql()}
+      WHERE ${getProjectTransferExportAnsweredJudgmentCandidateWhereSql()}
         AND j.chunking_strategy IS NULL
     ),
     project_transfer_required_model AS (

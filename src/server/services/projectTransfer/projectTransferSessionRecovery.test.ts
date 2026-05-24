@@ -348,6 +348,72 @@ test('project transfer recovery fails stale export workers but keeps ready artif
   expect(result.states).toMatchObject({'export-ready-future': 'ready', 'export-stale-worker': 'failed'})
 })
 
+test('project transfer recovery re-checks export worker staleness before failing active sessions', () => {
+  const result = runRecoveryScript<{
+    packageExists: boolean
+    recoveryResult: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}
+    states: Record<string, string>
+  }>(`
+    const layout = getProjectTransferExportTempLayout('export-race')
+    await sessionRepository.createProjectTransferSession({
+      direction: 'export',
+      expiresAt: futureAt,
+      id: 'export-race',
+      state: 'queued',
+    })
+    await sessionRepository.claimProjectTransferExportSessionOwner({
+      expectedState: 'queued',
+      nextState: 'assembling',
+      now: new Date('2026-05-21T11:00:00.000Z'),
+      ownerToken: 'export-owner-race',
+      sessionId: 'export-race',
+    })
+    await writeRuntimeFile(layout.packagePath)
+
+    let selectedStaleSessions = false
+    const racingRunner = {
+      queryJson: async (statement) => {
+        const rows = await database.queryJson(statement)
+        if (!selectedStaleSessions && statement.includes("state IN ('assembling', 'packaging')") && statement.includes('LIMIT')) {
+          selectedStaleSessions = true
+          await sessionRepository.heartbeatProjectTransferExportSessionOwner({
+            now: new Date('2026-05-21T11:59:30.000Z'),
+            ownerToken: 'export-owner-race',
+            sessionId: 'export-race',
+          })
+        }
+
+        return rows
+      },
+      run: (statement) => {
+        return database.run(statement)
+      },
+    }
+    const recoveryResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: runtimeRoot,
+      exportOwnerHeartbeatStaleMs: 60_000,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+      runner: racingRunner,
+    })
+    const states = await getStates()
+
+    console.log(JSON.stringify({
+      packageExists: await fileExists(layout.packagePath),
+      recoveryResult,
+      states,
+    }))
+  `)
+
+  expect(result.recoveryResult.scannedSessionCount).toBe(1)
+  expect(result.recoveryResult.expiredSessionCount).toBe(0)
+  expect(result.recoveryResult.cleanupTempArtifactCount).toBe(0)
+  expect(result.packageExists).toBe(true)
+  expect(result.states).toMatchObject({'export-race': 'assembling'})
+})
+
 test('project transfer recovery expires ready export artifacts only after public expiry', () => {
   const result = runRecoveryScript<{
     packageExists: boolean

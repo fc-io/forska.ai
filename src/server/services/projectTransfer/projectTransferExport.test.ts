@@ -151,7 +151,6 @@ test('project-transfer export reads archived app-table scope and serializes lock
     assetManifestHasAssets: boolean
     assetManifestHasEnvelope: boolean
     buildTempCleaned: boolean
-    duplicateWarning: unknown
     chunkedWarning: unknown
     humanJudgmentIds: string[]
     humanReviewProvenanceKinds: string[]
@@ -818,7 +817,6 @@ test('project-transfer export reads archived app-table scope and serializes lock
       assetManifestHasEnvelope: Object.hasOwn(archived.payloads.assetManifest, 'signature') || Object.hasOwn(archived.payloads.assetManifest, 'provenance'),
       buildTempCleaned: !(await Bun.file(packageLayout.buildPath).exists()),
       chunkedWarning: archived.warnings.find((warning) => warning.code === 'chunkedJudgmentInputProofMissing') ?? null,
-      duplicateWarning: archived.warnings[0] ?? null,
       humanJudgmentIds: archived.payloads.humanJudgments.map((judgment) => judgment.sourceHumanJudgmentId),
       humanReviewProvenanceKinds: [
         ...archived.payloads.humanJudgments.map((judgment) => judgment.humanReviewInputSignatureProvenance.kind),
@@ -898,8 +896,8 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.articleImportRouteIds).toEqual(['air-route-in'])
   expect(result.projectArticleIds).toEqual(['article-curated-in'])
   expect(result.importRouteActiveValues).toEqual([false])
-  expect(result.judgmentIds).toEqual(['judgment-export'])
-  expect(result.judgmentAssessmentIds).toEqual(['assessment-export'])
+  expect(result.judgmentIds).toEqual(['judgment-duplicate-answered', 'judgment-export'])
+  expect(result.judgmentAssessmentIds).toEqual(['assessment-duplicate', 'assessment-export'])
   expect(result.humanJudgmentIds).toEqual(['human-disabled'])
   expect(result.humanSummaryIds).toEqual(['summary-human'])
   expect(result.reviewIds).toEqual(['review-archived'])
@@ -1008,18 +1006,12 @@ test('project-transfer export reads archived app-table scope and serializes lock
   )
   expect(result.serializedArticleFullTextHtml ?? '').not.toContain('/api/runtime-asset')
   expect(result.serializedJudgmentHasDeleteGeneration).toBe(true)
-  expect(result.warningCodes).toContain('ambiguousJudgmentVisibleKey')
   expect(result.warningCodes).toContain('articleFullTextOmitted')
   expect(result.warningCodes).toContain('chunkedJudgmentInputProofMissing')
   expect(result.warningCodes).toContain('currentReviewRowsHumanReviewInputSignature')
   expect(result.warningCodes).toContain('currentReviewRowsJudgmentInputSignature')
+  expect(result.warningCodes).not.toContain('ambiguousJudgmentVisibleKey')
   expect(result.warningsHaveSharedShape).toBe(true)
-  expect(result.duplicateWarning).toMatchObject({
-    action: 'omitted',
-    code: 'ambiguousJudgmentVisibleKey',
-    scope: 'judgments',
-    severity: 'fidelity',
-  })
   expect(result.chunkedWarning).toMatchObject({
     action: 'omitted',
     code: 'chunkedJudgmentInputProofMissing',

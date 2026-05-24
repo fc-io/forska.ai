@@ -60,6 +60,7 @@ type CreateProjectTransferExportInput = ProjectTransferExportRuntimeOptions & {
   exportedAt?: Date
   projectId: string
   sessionId?: string
+  zipModule?: ProjectTransferZipJsModule
 }
 
 type RunProjectTransferExportSessionInput = ProjectTransferExportRuntimeOptions & {
@@ -69,6 +70,7 @@ type RunProjectTransferExportSessionInput = ProjectTransferExportRuntimeOptions 
   ownerToken?: string
   projectId: string
   sessionId: string
+  zipModule?: ProjectTransferZipJsModule
 }
 
 export type ProjectTransferExportPackageMetadata = {
@@ -409,6 +411,77 @@ const getQueuedExportMetadata = ({
   }
 }
 
+const getReadyExportPayload = (build: ProjectTransferExportPackageBuild): ProjectTransferExportReadyPayload => {
+  return {status: 'ready', ...build.metadata}
+}
+
+const getProjectTransferExportBuildRowCount = (build: ProjectTransferExportPackageBuild) => {
+  return Object.values(build.manifest.project.counts).reduce((total, count) => {
+    return total + count
+  }, 0)
+}
+
+const getReadyProgress = ({
+  build,
+  expiresAt,
+  startedAt,
+}: {
+  build: ProjectTransferExportPackageBuild
+  expiresAt: Date
+  startedAt: Date
+}) => {
+  const bytesTotal = build.metadata.byteLength + build.assetBytes
+  const rowCount = getProjectTransferExportBuildRowCount(build)
+
+  return getProgress({
+    bytesProcessed: bytesTotal,
+    bytesTotal,
+    expiresAt,
+    phase: 'export_package',
+    rowCountProcessed: rowCount,
+    rowCountTotal: rowCount,
+    startedAt,
+    status: 'completed',
+    warningCount: build.manifest.warnings?.length ?? 0,
+  })
+}
+
+const persistCompletedProjectTransferExportBuild = async ({
+  build,
+  expiresAt,
+  input,
+  layout,
+  sessionId,
+  startedAt,
+}: {
+  build: ProjectTransferExportPackageBuild
+  expiresAt: Date
+  input: ProjectTransferExportRuntimeOptions
+  layout: ProjectTransferExportTempLayout
+  sessionId: string
+  startedAt: Date
+}) => {
+  const repository = getProjectTransferSessionRepository()
+  const readyPayload = getReadyExportPayload(build)
+  const readyProgress = getReadyProgress({build, expiresAt, startedAt})
+
+  await writePackageArtifact({layout, packageBytes: build.packageBytes, runtimeOptions: input})
+  await writeManifestArtifact({layout, manifest: build.manifest, runtimeOptions: input})
+  await writeExportCompletionFile({layout, metadata: readyPayload, runtimeOptions: input})
+  await writeExportProgressFile({layout, progress: readyProgress, runtimeOptions: input})
+  writeProjectTransferExportRuntimeEvent({progress: readyProgress, sessionId, state: 'ready'})
+
+  return repository.createProjectTransferSession({
+    completionPayload: readyPayload,
+    direction: 'export',
+    expiresAt,
+    id: sessionId,
+    packageFingerprint: build.metadata.packageFingerprint,
+    progress: readyProgress,
+    state: 'ready',
+  })
+}
+
 const startDetachedProjectTransferExportSession = (input: RunProjectTransferExportSessionInput) => {
   void runProjectTransferExportSession(input).catch((error) => {
     logProjectTransferExportDetachedWorkerError(input.sessionId, error)
@@ -672,24 +745,9 @@ export const runProjectTransferExportSession = async (input: RunProjectTransferE
     await writePackageArtifact({layout, packageBytes: build.packageBytes, runtimeOptions: input})
     await writeManifestArtifact({layout, manifest: build.manifest, runtimeOptions: input})
 
-    const readyPayload = {status: 'ready' as const, ...build.metadata}
+    const readyPayload = getReadyExportPayload(build)
     await writeExportCompletionFile({layout, metadata: readyPayload, runtimeOptions: input})
-
-    const readyProgress = getProgress({
-      bytesProcessed: build.metadata.byteLength + build.assetBytes,
-      bytesTotal: build.metadata.byteLength + build.assetBytes,
-      expiresAt,
-      phase: 'export_package',
-      rowCountProcessed: Object.values(build.manifest.project.counts).reduce((total, count) => {
-        return total + count
-      }, 0),
-      rowCountTotal: Object.values(build.manifest.project.counts).reduce((total, count) => {
-        return total + count
-      }, 0),
-      startedAt,
-      status: 'completed',
-      warningCount: build.manifest.warnings?.length ?? 0,
-    })
+    const readyProgress = getReadyProgress({build, expiresAt, startedAt})
 
     await writeExportProgressFile({layout, progress: readyProgress, runtimeOptions: input})
     writeProjectTransferExportRuntimeEvent({progress: readyProgress, sessionId: input.sessionId, state: 'ready'})
@@ -758,9 +816,21 @@ export const createProjectTransferExport = async (
         metadata: {...build.metadata, expiresAt: expiresAt.toISOString()},
         packageBytes: build.packageBytes,
       }
-    : queueExport({
-        downloadUrl: build.metadata.downloadUrl,
-        expiresAt: build.metadata.expiresAt,
-        filename: build.metadata.filename,
-      })
+    : {
+        executionMode: 'background',
+        metadata: {
+          downloadUrl: build.metadata.downloadUrl,
+          expiresAt: build.metadata.expiresAt,
+          filename: build.metadata.filename,
+        },
+        session: await persistCompletedProjectTransferExportBuild({
+          build,
+          expiresAt,
+          input,
+          layout,
+          sessionId,
+          startedAt: exportedAt,
+        }),
+        sessionId,
+      }
 }
