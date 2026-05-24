@@ -2,7 +2,11 @@ import {rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
-import {assertProjectTransferExportModelDependencies} from './projectTransferExport.ts'
+import {
+  assertProjectTransferExportModelDependencies,
+  getProjectTransferExportHumanReviewInputSignature,
+  getProjectTransferExportJudgmentInputSignature,
+} from './projectTransferExport.ts'
 import {projectTransferPayloadKeys} from './projectTransferSchemas.ts'
 
 const removeFileIfExists = (filePath: string) => {
@@ -86,14 +90,24 @@ test('project-transfer export reads archived app-table scope and serializes lock
     articleImportRouteIds: string[]
     articleKeys: string[]
     duplicateWarning: unknown
+    chunkedWarning: unknown
     humanJudgmentIds: string[]
+    humanReviewProvenanceKinds: string[]
+    humanReviewSignatureModes: string[]
     humanSummaryIds: string[]
     importRouteActiveValues: boolean[]
     invalidDateMessage: string | null
     invalidFulltextMessage: string | null
     judgmentAssessmentIds: string[]
+    judgmentInputSignature: {
+      model: {modelOptions: {thinking: string | null}; promptTokenLimit: number}
+      provider: {transportFamily: string | null}
+      request: {invocationTemperature: number; reservedCompletionTokens: number}
+      version: number
+    }
     judgmentIds: string[]
     judgmentKeys: string[]
+    judgmentProvenanceKind: string | null
     modelDescriptors: Array<{
       displayName: string | null
       modelName: string | null
@@ -112,6 +126,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
     settingsArchived: boolean
     summaryReviewIds: string[]
     warnings: unknown[]
+    warningCodes: string[]
   }>(`
     await database.run(\`
       INSERT INTO app.provider_connection (
@@ -295,6 +310,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       )
       VALUES
         ('prompt-enabled', 'Include?', NULL, 'Eligibility', 'string', 'hash-enabled', FALSE, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
+        ('prompt-chunked', 'Chunked include?', NULL, 'Chunked', 'string', 'hash-chunked', FALSE, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('prompt-disabled', 'Disabled?', NULL, 'Disabled', 'string', 'hash-disabled', FALSE, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
     \`)
     await database.run(\`
@@ -313,6 +329,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       )
       VALUES
         ('pp-enabled', 'project-archived-export', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
+        ('pp-chunked', 'project-archived-export', 'prompt-chunked', 2, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-disabled', 'project-archived-export', 'prompt-disabled', 2, FALSE, FALSE, 'exclude', 'exclusion', 'Exclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-summary', 'project-summary-export', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-missing-provider', 'project-missing-provider', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
@@ -596,9 +613,10 @@ test('project-transfer export reads archived app-table scope and serializes lock
         updated_at
       )
       VALUES
-        ('judgment-export', 'article-route-in', 'prompt-enabled', 'model-null-remote', 'project-other', TRUE, TRUE, FALSE, FALSE, 'markdown', TRUE, 'yes', ['yes'], 92, 'export explanation', CAST('[{"quote":"export quote"}]' AS JSON), 0, 'project-other', 'Snapshot Model', TIMESTAMPTZ '2026-04-01T00:00:00Z', TIMESTAMPTZ '2026-04-02T00:00:00Z'),
-        ('judgment-duplicate-answered', 'article-curated-in', 'prompt-enabled', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, 'markdown', TRUE, 'maybe', ['maybe'], 50, 'duplicate answered', CAST('[{"quote":"duplicate"}]' AS JSON), 0, NULL, NULL, TIMESTAMPTZ '2026-04-03T00:00:00Z', TIMESTAMPTZ '2026-04-04T00:00:00Z'),
-        ('judgment-duplicate-unanswered', 'article-curated-in', 'prompt-enabled', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, 'markdown', FALSE, NULL, NULL, 50, NULL, CAST('[]' AS JSON), 1, NULL, NULL, TIMESTAMPTZ '2026-04-05T00:00:00Z', TIMESTAMPTZ '2026-04-06T00:00:00Z')
+        ('judgment-export', 'article-route-in', 'prompt-enabled', 'model-null-remote', 'project-other', TRUE, TRUE, FALSE, FALSE, NULL, TRUE, 'yes', ['yes'], 92, 'export explanation', CAST('[{"quote":"export quote"}]' AS JSON), 0, 'project-other', 'Snapshot Model', TIMESTAMPTZ '2026-04-01T00:00:00Z', TIMESTAMPTZ '2026-04-02T00:00:00Z'),
+        ('judgment-chunked-no-proof', 'article-route-in', 'prompt-chunked', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, 'article_paragraph_greedy', TRUE, 'yes', ['yes'], 88, 'chunked explanation', CAST('[{"quote":"chunked"}]' AS JSON), 0, NULL, NULL, TIMESTAMPTZ '2026-04-02T00:00:00Z', TIMESTAMPTZ '2026-04-03T00:00:00Z'),
+        ('judgment-duplicate-answered', 'article-curated-in', 'prompt-enabled', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, NULL, TRUE, 'maybe', ['maybe'], 50, 'duplicate answered', CAST('[{"quote":"duplicate"}]' AS JSON), 0, NULL, NULL, TIMESTAMPTZ '2026-04-03T00:00:00Z', TIMESTAMPTZ '2026-04-04T00:00:00Z'),
+        ('judgment-duplicate-unanswered', 'article-curated-in', 'prompt-enabled', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, NULL, FALSE, NULL, NULL, 50, NULL, CAST('[]' AS JSON), 1, NULL, NULL, TIMESTAMPTZ '2026-04-05T00:00:00Z', TIMESTAMPTZ '2026-04-06T00:00:00Z')
     \`)
     await database.run(\`
       INSERT INTO app.judgment_assessment (
@@ -611,6 +629,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       )
       VALUES
         ('assessment-export', 'judgment-export', TRUE, 'correct', TIMESTAMPTZ '2026-04-03T00:00:00Z', TIMESTAMPTZ '2026-04-04T00:00:00Z'),
+        ('assessment-chunked', 'judgment-chunked-no-proof', TRUE, 'chunked omitted', TIMESTAMPTZ '2026-04-04T00:00:00Z', TIMESTAMPTZ '2026-04-05T00:00:00Z'),
         ('assessment-duplicate', 'judgment-duplicate-answered', FALSE, 'ambiguous', TIMESTAMPTZ '2026-04-05T00:00:00Z', TIMESTAMPTZ '2026-04-06T00:00:00Z')
     \`)
     await database.run(\`
@@ -672,15 +691,28 @@ test('project-transfer export reads archived app-table scope and serializes lock
       articleIds: archived.payloads.articles.map((article) => article.sourceArticleId),
       articleImportRouteIds: archived.payloads.articleImportRoutes.map((link) => link.sourceArticleImportRouteId),
       articleKeys: Object.keys(archived.payloads.articles[0]).sort(),
+      chunkedWarning: archived.warnings.find((warning) => warning.code === 'chunkedJudgmentInputProofMissing') ?? null,
       duplicateWarning: archived.warnings[0] ?? null,
       humanJudgmentIds: archived.payloads.humanJudgments.map((judgment) => judgment.sourceHumanJudgmentId),
+      humanReviewProvenanceKinds: [
+        ...archived.payloads.humanJudgments.map((judgment) => judgment.humanReviewInputSignatureProvenance.kind),
+        ...summary.payloads.humanJudgmentSummaries.map((judgment) => judgment.humanReviewInputSignatureProvenance.kind),
+        ...archived.payloads.reviews.map((review) => review.humanReviewInputSignatureProvenance.kind),
+      ],
+      humanReviewSignatureModes: [
+        ...archived.payloads.humanJudgments.map((judgment) => judgment.humanReviewInputSignature.mode),
+        ...summary.payloads.humanJudgmentSummaries.map((judgment) => judgment.humanReviewInputSignature.mode),
+        ...archived.payloads.reviews.map((review) => review.humanReviewInputSignature.mode),
+      ],
       humanSummaryIds: summary.payloads.humanJudgmentSummaries.map((judgment) => judgment.sourceHumanJudgmentSummaryId),
       importRouteActiveValues: archived.payloads.importRoutes.records.map((route) => route.active),
       invalidDateMessage,
       invalidFulltextMessage,
       judgmentAssessmentIds: archived.payloads.judgmentAssessments.map((assessment) => assessment.sourceJudgmentAssessmentId),
+      judgmentInputSignature: archived.payloads.judgments[0].judgmentInputSignature,
       judgmentIds: archived.payloads.judgments.map((judgment) => judgment.sourceJudgmentId),
       judgmentKeys: Object.keys(archived.payloads.judgments[0]).sort(),
+      judgmentProvenanceKind: archived.payloads.judgments[0].judgmentInputSignatureProvenance.kind,
       missingProviderMessage,
       modelDescriptors: archived.payloads.models.records.map((model) => {
         return {
@@ -702,6 +734,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       settingsArchived: settings.archived,
       summaryReviewIds: summary.payloads.reviews.map((review) => review.sourceReviewId),
       warnings: archived.warnings,
+      warningCodes: archived.warnings.map((warning) => warning.code).sort(),
     }))
   `)
 
@@ -718,6 +751,15 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.humanSummaryIds).toEqual(['summary-human'])
   expect(result.reviewIds).toEqual(['review-archived'])
   expect(result.summaryReviewIds).toEqual(['review-summary'])
+  expect(result.judgmentProvenanceKind).toBe('currentReviewRows')
+  expect(result.judgmentInputSignature).toMatchObject({
+    model: {modelOptions: {thinking: 'medium'}, promptTokenLimit: 28768},
+    provider: {transportFamily: 'codex-app'},
+    request: {invocationTemperature: 0.2, reservedCompletionTokens: 4000},
+    version: 1,
+  })
+  expect(result.humanReviewProvenanceKinds).toEqual(['currentReviewRows', 'currentReviewRows', 'currentReviewRows'])
+  expect(result.humanReviewSignatureModes).toEqual(['promptHumanJudgment', 'summaryHumanJudgment', 'reviewRow'])
   expect(result.providerConnectionIds).toEqual(['provider-null-remote'])
   expect(result.modelDescriptors).toEqual([
     {
@@ -743,10 +785,196 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.judgmentKeys).toContain('snapshotProjectModelName')
   expect(result.serializedArticleHasFullTextPdf).toBe(true)
   expect(result.serializedJudgmentHasDeleteGeneration).toBe(true)
-  expect(result.warnings).toHaveLength(1)
+  expect(result.warningCodes).toEqual([
+    'ambiguousJudgmentVisibleKey',
+    'chunkedJudgmentInputProofMissing',
+    'currentReviewRowsHumanReviewInputSignature',
+    'currentReviewRowsJudgmentInputSignature',
+  ])
   expect(result.duplicateWarning).toMatchObject({code: 'ambiguousJudgmentVisibleKey', payloadKey: 'judgments'})
+  expect(result.chunkedWarning).toMatchObject({
+    code: 'chunkedJudgmentInputProofMissing',
+    details: {omittedJudgmentCount: 1, sourceJudgmentIds: ['judgment-chunked-no-proof']},
+  })
   expect(result.invalidDateMessage).toContain('date_from must be before or equal to date_to')
   expect(result.invalidFulltextMessage).toContain('use_fulltext and use_fulltext_no_images cannot both be enabled')
+})
+
+test('project-transfer judgment input signatures are stable across database id remapping and sensitive to critical settings', () => {
+  type JudgmentSignatureInput = Parameters<typeof getProjectTransferExportJudgmentInputSignature>[0]
+  const contentSettings = {useAbstract: true, useFulltext: false, useFulltextNoImages: true, useTitle: true}
+  const article = {
+    articleCreatedAt: '2026-01-01T00:00:00.000Z',
+    articleId: 'external-article',
+    articleSummary: 'Signature abstract',
+    articleTitle: 'Signature title',
+    articleUpdatedAt: '2026-01-02T00:00:00.000Z',
+    articleVersion: 1,
+    arxivId: null,
+    biorxivId: null,
+    contentHash: 'article-content-hash',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    doi: '10.1000/signature',
+    fullText: 'Visible text ![image](data:image/png;base64,AAA)',
+    fullTextAssets: {figures: ['figure-1']},
+    fullTextCharCount: 42,
+    fullTextConversionAttempts: 1,
+    fullTextConversionError: null,
+    fullTextConversionMetadata: {pages: 2},
+    fullTextConversionModelId: 'conversion-model',
+    fullTextConversionStatus: 'completed',
+    fullTextFetchedAt: '2026-01-03T00:00:00.000Z',
+    fullTextHtml: '<p>Visible text</p>',
+    fullTextOriginalFormat: 'pdf',
+    fullTextPdf: 'assets/source.pdf',
+    fullTextSource: 'pdf',
+    identifierInputs: [],
+    importRoute: 'covidence',
+    medrxivId: null,
+    originalData: null,
+    provenance: {sourceArticleId: 'source-article-a'},
+    publicationStatus: 'published',
+    pubmedId: null,
+    signature: {identifierKeys: ['doi:10.1000/signature'], title: 'Signature title'},
+    sourceArticleId: 'source-article-a',
+    sourceMetadata: null,
+    updatedAt: '2026-01-02T00:00:00.000Z',
+    url: 'https://example.test/signature',
+  } as JudgmentSignatureInput['article']
+  const prompt = {
+    archived: false,
+    contentHash: 'prompt-hash',
+    criteriaDisposition: 'include',
+    criteriaSectionKey: 'inclusion',
+    criteriaSectionLabel: 'Inclusion',
+    enabled: true,
+    order: 1,
+    originProjectId: null,
+    originalText: 'Include this study?',
+    projectPromptCreatedAt: '2026-01-01T00:00:00.000Z',
+    projectPromptId: 'source-project-prompt-a',
+    projectPromptUpdatedAt: '2026-01-02T00:00:00.000Z',
+    promptArchived: false,
+    promptCreatedAt: '2026-01-01T00:00:00.000Z',
+    promptHeading: 'Eligibility',
+    promptId: 'source-prompt-a',
+    promptUpdatedAt: '2026-01-02T00:00:00.000Z',
+    sourceProjectId: 'source-project-a',
+    transformedText: null,
+    type: 'string',
+  } as JudgmentSignatureInput['prompt']
+  const providerConnection = {
+    authMode: 'apiKey',
+    baseURL: null,
+    configJson: {runtime: 'local'},
+    createdAt: '2026-01-01T00:00:00.000Z',
+    enabled: true,
+    label: 'Codex',
+    lastCheckedAt: null,
+    lastError: null,
+    maxInflightRequests: 2,
+    providerConnectionId: 'source-provider-a',
+    providerKind: 'codex',
+    secretRef: null,
+    updatedAt: '2026-01-02T00:00:00.000Z',
+  } as JudgmentSignatureInput['providerConnection']
+  const model = {
+    createdAt: '2026-01-01T00:00:00.000Z',
+    displayName: 'Codex Thinking',
+    enabled: true,
+    metadataJson: {discovery: {contextWindow: {totalTokens: 200000}}, options: {thinking: 'medium'}},
+    modelId: 'source-model-a',
+    name: 'Codex Thinking',
+    providerConnectionId: 'source-provider-a',
+    remoteModelId: 'codex-thinking',
+    source: 'manual',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+    variant: 'medium',
+  } as JudgmentSignatureInput['model']
+  const signature = getProjectTransferExportJudgmentInputSignature({
+    article,
+    chunkingStrategy: null,
+    contentSettings,
+    model,
+    prompt,
+    providerConnection,
+  })
+  const remappedSignature = getProjectTransferExportJudgmentInputSignature({
+    article: {...article, provenance: {sourceArticleId: 'target-article-b'}, sourceArticleId: 'target-article-b'},
+    chunkingStrategy: null,
+    contentSettings,
+    model: {...model, modelId: 'target-model-b', providerConnectionId: 'target-provider-b'},
+    prompt: {...prompt, promptId: 'target-prompt-b', projectPromptId: 'target-project-prompt-b'},
+    providerConnection: {...providerConnection, providerConnectionId: 'target-provider-b'},
+  })
+  const thinkingChangedSignature = getProjectTransferExportJudgmentInputSignature({
+    article,
+    chunkingStrategy: null,
+    contentSettings,
+    model: {...model, metadataJson: {discovery: {contextWindow: {totalTokens: 200000}}, options: {thinking: 'high'}}},
+    prompt,
+    providerConnection,
+  })
+  const providerChangedSignature = getProjectTransferExportJudgmentInputSignature({
+    article,
+    chunkingStrategy: null,
+    contentSettings,
+    model,
+    prompt,
+    providerConnection: {...providerConnection, providerKind: 'openai'},
+  })
+
+  expect(signature).toEqual(remappedSignature)
+  expect(signature).not.toEqual(thinkingChangedSignature)
+  expect(signature).not.toEqual(providerChangedSignature)
+  expect(JSON.stringify(signature)).not.toContain('source-model-a')
+  expect(JSON.stringify(signature)).not.toContain('source-prompt-a')
+  expect(signature.fullTextProcessing.processedTextDigest).not.toBeNull()
+  expect(signature.provider.transportFamily).toBe('codex-app')
+})
+
+test('project-transfer human review input signatures omit database ids and detect content mismatches', () => {
+  type HumanReviewSignatureInput = Parameters<typeof getProjectTransferExportHumanReviewInputSignature>[0]
+  const article = {
+    articleSummary: 'Human summary',
+    articleTitle: 'Human title',
+    contentHash: 'human-article-hash',
+    doi: '10.1000/human',
+    fullText: 'Human full text',
+    fullTextAssets: {pdf: 'asset-ref'},
+    fullTextHtml: '<p>Human full text</p>',
+    fullTextPdf: 'assets/human.pdf',
+    identifierInputs: [],
+    provenance: {sourceArticleId: 'source-human-article'},
+    signature: {identifierKeys: ['doi:10.1000/human'], title: 'Human title'},
+    sourceArticleId: 'source-human-article',
+  } as HumanReviewSignatureInput['article']
+  const signature = getProjectTransferExportHumanReviewInputSignature({
+    article,
+    mode: 'reviewRow',
+    sections: {abstract: true, title: true},
+  })
+  const remappedSignature = getProjectTransferExportHumanReviewInputSignature({
+    article: {
+      ...article,
+      provenance: {sourceArticleId: 'target-human-article'},
+      sourceArticleId: 'target-human-article',
+    },
+    mode: 'reviewRow',
+    sections: {abstract: true, title: true},
+  })
+  const mismatchedSignature = getProjectTransferExportHumanReviewInputSignature({
+    article: {...article, fullTextHtml: '<p>Changed full text</p>'},
+    mode: 'reviewRow',
+    sections: {abstract: true, title: true},
+  })
+
+  expect(signature).toEqual(remappedSignature)
+  expect(signature).not.toEqual(mismatchedSignature)
+  expect(JSON.stringify(signature)).not.toContain('source-human-article')
+  expect(signature.article.fullTextHtmlDigest).not.toBeNull()
+  expect(signature.article.fullTextPdfReferenceDigest).not.toBeNull()
+  expect(signature.article.fullTextAssetsDigest).not.toBeNull()
 })
 
 test('project-transfer export dependency checks fail instead of silently dropping missing models', () => {

@@ -1,12 +1,27 @@
+import {MAX_COMPLETION_TOKENS} from '../../../agent/judge.ts'
+import {
+  getSinglePromptEvidenceSystemPromptForArticle,
+  getSinglePromptSystemPromptForArticle,
+} from '../../../agent/judge/judgePromptSelection.ts'
+import {type ArticleRecord} from '../../../db/schemaTypes.ts'
 import type {ArticleIdentifierInput, ArticleIdentifierInputKind} from '../../../utils/articleIdentifierNormalization.ts'
+import {
+  getProviderModelMetadataContextLength,
+  getProviderModelMetadataOptions,
+  getProviderModelMetadataPromptTokenLimit,
+} from '../../providers/providerModelMetadata.ts'
+import {getProviderRegistryEntry} from '../../providers/providerRegistry.ts'
+import {processFulltextForLLM} from '../../utils/fulltextProcessing.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getDateValue, getJsonValue, getSqlLiteral} from '../appQueryHelpers.ts'
 import type {AppQueryDatabaseService} from '../appQueryServiceCore.ts'
+import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import type {ProjectTransferArticleIdentifierSource} from './projectTransferIdentifierNormalization.ts'
 import {getProjectTransferStrongIdentifierComparisonKeys} from './projectTransferIdentifierNormalization.ts'
 import {
   assertProjectTransferPayload,
   normalizeProjectTransferModelVariant,
+  type ProjectTransferContentSettings,
   type ProjectTransferPayloadByKey,
   type ProjectTransferPayloadRecord,
   serializeProjectTransferPayload,
@@ -280,7 +295,6 @@ type ProjectTransferExportModelRow = {
 }
 
 type ProjectTransferExportContext = {
-  ambiguousJudgmentWarnings: ProjectTransferManifestWarning[]
   articleImportRouteRows: ProjectTransferExportArticleImportRouteRow[]
   articleRows: ProjectTransferExportArticlePayloadRecord[]
   humanJudgmentRows: ProjectTransferExportHumanJudgmentRow[]
@@ -295,6 +309,7 @@ type ProjectTransferExportContext = {
   projectPromptRows: ProjectTransferExportProjectPromptRow[]
   providerConnectionRows: ProjectTransferExportProviderConnectionRow[]
   reviewRows: ProjectTransferExportReviewRow[]
+  warnings: ProjectTransferManifestWarning[]
 }
 
 type ProjectTransferExportArticlePayloadRecord = ProjectTransferPayloadRecord
@@ -316,6 +331,30 @@ const providerSecretRedaction = {
   field: 'secretRef',
   reason: 'Provider authentication secrets are machine-local and are never exported.',
 }
+
+const currentReviewRowsInputSignatureProvenance = {kind: 'currentReviewRows' as const, version: 1 as const}
+const projectTransferInputSignatureVersion = 1 as const
+const defaultJudgmentModelContext = 32768
+const defaultJudgmentPromptTokenLimit = Math.max(0, defaultJudgmentModelContext - MAX_COMPLETION_TOKENS)
+const judgmentInvocationTemperature = 0.2
+const judgmentMaxRetries = 2
+const singlePromptOutputSchema = {
+  additionalProperties: false,
+  properties: {
+    answer: {anyOf: [{type: 'string'}, {items: {type: 'string'}, type: 'array'}]},
+    explanation: {type: 'string'},
+    quotes: {anyOf: [{items: {type: 'string'}, type: 'array'}, {type: 'null'}]},
+  },
+  required: ['answer', 'explanation', 'quotes'],
+  type: 'object',
+}
+const singlePromptEvidenceOutputSchema = {
+  additionalProperties: false,
+  properties: {facts: {items: {type: 'string'}, type: 'array'}, quotes: {items: {type: 'string'}, type: 'array'}},
+  required: ['facts', 'quotes'],
+  type: 'object',
+}
+const reviewedSectionContractVersion = 1 as const
 
 const getDatabase = (options: ProjectTransferExportQueryOptions = {}) => {
   return options.database ?? getAppDatabaseService()
@@ -341,6 +380,28 @@ const getStringArrayValue = (value: unknown) => {
   return getJsonArrayValue(value).filter((entry): entry is string => {
     return typeof entry === 'string'
   })
+}
+
+const getStringValue = (value: unknown) => {
+  return typeof value === 'string' ? value : null
+}
+
+const getNumberValue = (value: unknown) => {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const getDigestValue = (value: unknown) => {
+  return getProjectTransferSha256Checksum(typeof value === 'string' ? value : getProjectTransferCanonicalJson(value))
+}
+
+const getNullableDigestValue = (value: unknown) => {
+  return value === null || value === undefined ? null : getDigestValue(value)
+}
+
+const getSignatureTextDigest = (value: unknown) => {
+  const text = getStringValue(value)
+
+  return text === null ? null : getDigestValue(text)
 }
 
 const getUniqueValues = (values: Array<string | null | undefined>) => {
@@ -846,6 +907,30 @@ const getProjectTransferExportAmbiguousJudgmentWarnings = async (
   })
 }
 
+const getProjectTransferExportChunkedJudgmentWarnings = (rows: ProjectTransferExportJudgmentRow[]) => {
+  const chunkedRows = rows.filter((row) => {
+    return row.chunkingStrategy !== null
+  })
+
+  return chunkedRows.length === 0
+    ? []
+    : [
+        {
+          code: 'chunkedJudgmentInputProofMissing',
+          details: {
+            omittedJudgmentCount: chunkedRows.length,
+            sourceJudgmentIds: chunkedRows.map((row) => {
+              return row.judgmentId
+            }),
+          },
+          message: 'Omitted chunked source judgments without durable final-prompt and evidence proof.',
+          path: projectTransferPayloadPathByKey.judgments,
+          payloadKey: 'judgments' as const,
+          severity: 'warning' as const,
+        },
+      ]
+}
+
 const getProjectTransferExportJudgmentRows = async (projectId: string, database: AppQueryDatabaseService) => {
   return database.queryJson<ProjectTransferExportJudgmentRow>(`
     WITH
@@ -1130,6 +1215,258 @@ const getProjectTransferExportContentSettings = (
 
 const getProjectTransferExportProjectSettingsPayload = (project: ProjectTransferExportSourceProjectSettings) => {
   return {humanJudgmentMode: project.humanJudgmentMode, ...getProjectTransferExportContentSettings(project)}
+}
+
+const getProjectTransferExportArticleRecordForSignature = (
+  article: ProjectTransferExportArticlePayloadRecord,
+  fullText: string | null,
+): ArticleRecord => {
+  return {
+    articleAuthors: null,
+    articleCreatedAt: getDateValue(article.articleCreatedAt),
+    articleId: getStringValue(article.articleId),
+    articleSummary: getStringValue(article.articleSummary),
+    articleTitle: getStringValue(article.articleTitle) ?? '',
+    articleUpdatedAt: getDateValue(article.articleUpdatedAt),
+    articleVersion: getNumberValue(article.articleVersion),
+    arxivId: getStringValue(article.arxivId),
+    biorxivId: getStringValue(article.biorxivId),
+    contentHash: getStringValue(article.contentHash),
+    createdAt: getDateValue(article.createdAt) ?? new Date(0),
+    doi: getStringValue(article.doi),
+    fullText,
+    fullTextAssets: article.fullTextAssets ?? null,
+    fullTextCharCount: getNumberValue(article.fullTextCharCount),
+    fullTextConversionAttempts: getNumberValue(article.fullTextConversionAttempts),
+    fullTextConversionError: getStringValue(article.fullTextConversionError),
+    fullTextConversionMetadata: article.fullTextConversionMetadata ?? null,
+    fullTextConversionModelId: getStringValue(article.fullTextConversionModelId),
+    fullTextConversionStatus: getStringValue(article.fullTextConversionStatus),
+    fullTextFetchedAt: getDateValue(article.fullTextFetchedAt),
+    fullTextHtml: getStringValue(article.fullTextHtml),
+    fullTextOriginalFormat: getStringValue(article.fullTextOriginalFormat),
+    fullTextPDF: getStringValue(article.fullTextPdf),
+    fullTextSource: getStringValue(article.fullTextSource),
+    id: 'project-transfer-signature-article',
+    importRoute: getStringValue(article.importRoute),
+    medrxivId: getStringValue(article.medrxivId),
+    originalData: article.originalData ?? null,
+    publicationStatus: getStringValue(article.publicationStatus) as ArticleRecord['publicationStatus'],
+    pubmedId: getStringValue(article.pubmedId),
+    sourceMetadata: article.sourceMetadata ?? null,
+    updatedAt: getDateValue(article.updatedAt) ?? new Date(0),
+    url: getStringValue(article.url),
+  }
+}
+
+const getProjectTransferExportFullTextProcessingSignature = ({
+  article,
+  contentSettings,
+  promptTokenLimit,
+}: {
+  article: ProjectTransferExportArticlePayloadRecord
+  contentSettings: ProjectTransferContentSettings
+  promptTokenLimit: number
+}) => {
+  const includeFullText = contentSettings.useFulltext || contentSettings.useFulltextNoImages
+  const fullText = includeFullText ? getStringValue(article.fullText) : null
+  const result = fullText
+    ? processFulltextForLLM(fullText, {promptTokenLimit, stripImages: contentSettings.useFulltextNoImages})
+    : null
+
+  return {
+    fullText,
+    signature: {
+      maxTokens: result?.maxTokens ?? null,
+      processedTextDigest: getSignatureTextDigest(result?.processedText ?? null),
+      stripImages: contentSettings.useFulltextNoImages,
+      tokenCount: result?.tokenCount ?? null,
+      withinBudget: result?.withinBudget ?? null,
+    },
+  }
+}
+
+const getProjectTransferExportPromptInputSignature = (
+  prompt: Pick<
+    ProjectTransferExportProjectPromptRow,
+    'contentHash' | 'originalText' | 'promptHeading' | 'order' | 'transformedText' | 'type'
+  >,
+) => {
+  return {
+    contentHash: prompt.contentHash,
+    originalTextDigest: getDigestValue(prompt.originalText),
+    promptHeading: prompt.promptHeading,
+    serializedPromptIdentifier: null,
+    transformedTextDigest: getSignatureTextDigest(prompt.transformedText),
+    type: prompt.type,
+  }
+}
+
+const getProjectTransferExportHumanPromptInputSignature = (
+  prompt: Pick<
+    ProjectTransferExportProjectPromptRow,
+    'contentHash' | 'originalText' | 'order' | 'promptHeading' | 'transformedText' | 'type'
+  >,
+) => {
+  return {...getProjectTransferExportPromptInputSignature(prompt), order: prompt.order}
+}
+
+const getProjectTransferExportArticleDisplaySignature = (article: ProjectTransferExportArticlePayloadRecord) => {
+  return {
+    articleSummaryDigest: getSignatureTextDigest(article.articleSummary),
+    articleTitleDigest: getDigestValue(article.articleTitle),
+    contentHash: getStringValue(article.contentHash),
+    fullTextAssetsDigest: getNullableDigestValue(article.fullTextAssets),
+    fullTextDigest: getSignatureTextDigest(article.fullText),
+    fullTextHtmlDigest: getSignatureTextDigest(article.fullTextHtml),
+    fullTextPdfReferenceDigest: getSignatureTextDigest(article.fullTextPdf),
+    identifierKeys: getProjectTransferStrongIdentifierComparisonKeys(article),
+  }
+}
+
+const getProjectTransferExportModelRequestSignature = ({
+  model,
+  providerConnection,
+}: {
+  model: ProjectTransferExportModelRow
+  providerConnection: ProjectTransferExportProviderConnectionRow
+}) => {
+  const promptTokenLimit =
+    getProviderModelMetadataPromptTokenLimit(getJsonValue(model.metadataJson), MAX_COMPLETION_TOKENS)
+    ?? defaultJudgmentPromptTokenLimit
+
+  return {
+    contextLimit:
+      getProviderModelMetadataContextLength(getJsonValue(model.metadataJson)) ?? defaultJudgmentModelContext,
+    modelOptions: getProviderModelMetadataOptions(getJsonValue(model.metadataJson)),
+    modelSignature: getProjectTransferExportModelSignature(model, providerConnection),
+    promptTokenLimit,
+  }
+}
+
+const getProjectTransferExportProviderRequestSignature = (
+  providerConnection: ProjectTransferExportProviderConnectionRow,
+) => {
+  const registryEntry = getProviderRegistryEntry(providerConnection.providerKind)
+
+  return {
+    providerConnectionSignature: getProjectTransferExportProviderConnectionSignature(providerConnection),
+    providerKind: providerConnection.providerKind,
+    transportFamily: registryEntry?.transportFamily ?? null,
+  }
+}
+
+const isAnthropicProviderKind = (providerKind: string | null | undefined) => {
+  return providerKind?.toLowerCase() === 'anthropic'
+}
+
+const getProjectTransferExportJudgmentPromptTemplateSignature = ({
+  article,
+  contentSettings,
+  prompt,
+  providerKind,
+}: {
+  article: ProjectTransferExportArticlePayloadRecord
+  contentSettings: ProjectTransferContentSettings
+  prompt: ProjectTransferExportProjectPromptRow
+  providerKind: string | null
+}) => {
+  return {
+    articleSummaryDigest: contentSettings.useAbstract ? getSignatureTextDigest(article.articleSummary) : null,
+    articleTitleDigest: contentSettings.useTitle ? getDigestValue(article.articleTitle) : null,
+    promptOriginalTextDigest: getDigestValue(prompt.originalText),
+    promptTemplateFamily: 'judgeGetSinglePrompt:v1',
+    promptType: prompt.type,
+    sourceTextWrapper: isAnthropicProviderKind(providerKind) ? 'providerRawSourceText' : 'sourceTextBoundaryWrapper:v1',
+  }
+}
+
+export const getProjectTransferExportJudgmentInputSignature = ({
+  article,
+  chunkEvidenceDigests = null,
+  chunkFinalPromptDigest = null,
+  chunkingStrategy,
+  contentSettings,
+  model,
+  prompt,
+  providerConnection,
+}: {
+  article: ProjectTransferExportArticlePayloadRecord
+  chunkEvidenceDigests?: string[] | null
+  chunkFinalPromptDigest?: string | null
+  chunkingStrategy: string | null
+  contentSettings: ProjectTransferContentSettings
+  model: ProjectTransferExportModelRow
+  prompt: ProjectTransferExportProjectPromptRow
+  providerConnection: ProjectTransferExportProviderConnectionRow
+}) => {
+  const modelRequestSignature = getProjectTransferExportModelRequestSignature({model, providerConnection})
+  const providerKind = providerConnection.providerKind
+  const fullTextProcessing = getProjectTransferExportFullTextProcessingSignature({
+    article,
+    contentSettings,
+    promptTokenLimit: modelRequestSignature.promptTokenLimit,
+  })
+  const articleRecord = getProjectTransferExportArticleRecordForSignature(article, fullTextProcessing.fullText)
+  const systemPrompt = getSinglePromptSystemPromptForArticle(articleRecord, providerKind)
+  const evidenceSystemPrompt = chunkingStrategy
+    ? getSinglePromptEvidenceSystemPromptForArticle(articleRecord, providerKind)
+    : null
+
+  return {
+    article: {
+      ...getProjectTransferExportArticleDisplaySignature(article),
+      promptInput: getProjectTransferExportJudgmentPromptTemplateSignature({
+        article,
+        contentSettings,
+        prompt,
+        providerKind,
+      }),
+    },
+    chunking: {chunkEvidenceDigests, finalPromptDigest: chunkFinalPromptDigest, strategy: chunkingStrategy},
+    contentSettings,
+    fullTextProcessing: fullTextProcessing.signature,
+    kind: 'judgmentInputSignature',
+    model: modelRequestSignature,
+    prompt: getProjectTransferExportPromptInputSignature(prompt),
+    provider: getProjectTransferExportProviderRequestSignature(providerConnection),
+    request: {
+      evidenceOutputSchemaDigest: getDigestValue(singlePromptEvidenceOutputSchema),
+      evidenceSystemPromptDigest: getSignatureTextDigest(evidenceSystemPrompt),
+      invocationTemperature: judgmentInvocationTemperature,
+      maxRetries: judgmentMaxRetries,
+      outputSchemaDigest: getDigestValue(singlePromptOutputSchema),
+      providerInvocationAdapter: 'invokeStoredProviderModel:v1',
+      quoteValidationContract: 'exact-source-substring:v1',
+      reservedCompletionTokens: MAX_COMPLETION_TOKENS,
+      retryContract: 'json-schema-and-quote-validation:v1',
+      systemPromptDigest: getDigestValue(systemPrompt),
+      systemPromptFamily: 'getSinglePromptSystemPromptForArticle:v1',
+    },
+    version: projectTransferInputSignatureVersion,
+  }
+}
+
+export const getProjectTransferExportHumanReviewInputSignature = ({
+  article,
+  mode,
+  prompt = null,
+  sections = null,
+}: {
+  article: ProjectTransferExportArticlePayloadRecord
+  mode: 'promptHumanJudgment' | 'reviewRow' | 'summaryHumanJudgment'
+  prompt?: ProjectTransferExportProjectPromptRow | null
+  sections?: Record<string, boolean> | null
+}) => {
+  return {
+    article: getProjectTransferExportArticleDisplaySignature(article),
+    kind: 'humanReviewInputSignature',
+    mode,
+    prompt: prompt ? getProjectTransferExportHumanPromptInputSignature(prompt) : null,
+    reviewedSectionContractVersion,
+    sections,
+    version: projectTransferInputSignatureVersion,
+  }
 }
 
 const getProjectTransferExportArticlePayloadRecord = (
@@ -1470,7 +1807,11 @@ const getProjectTransferExportProjectArticlesPayloadFromContext = (context: Proj
 
 const getProjectTransferExportJudgmentsPayloadFromContext = (context: ProjectTransferExportContext) => {
   const articleSignatureById = getProjectTransferExportArticleSignatureById(context.articleRows)
+  const articleById = getRowsById(context.articleRows, 'sourceArticleId')
+  const promptById = getRowsById(context.projectPromptRows, 'promptId')
   const promptSignatureById = getProjectTransferExportPromptSignatureById(context.projectPromptRows)
+  const modelById = getRowsById(context.modelRows, 'modelId')
+  const providerConnectionById = getRowsById(context.providerConnectionRows, 'providerConnectionId')
   const modelSignatureById = getProjectTransferExportModelSignatureById(
     context.modelRows,
     context.providerConnectionRows,
@@ -1480,6 +1821,21 @@ const getProjectTransferExportJudgmentsPayloadFromContext = (context: ProjectTra
     'judgments',
     context.judgmentRows.map((row) => {
       const contentSettings = getProjectTransferExportContentSettings(row)
+      const article = articleById[row.articleId]
+      const prompt = promptById[row.promptId]
+      const model = modelById[row.modelId]
+      const providerConnection = model ? providerConnectionById[model.providerConnectionId] : undefined
+      const judgmentInputSignature =
+        article && prompt && model && providerConnection
+          ? getProjectTransferExportJudgmentInputSignature({
+              article,
+              chunkingStrategy: row.chunkingStrategy,
+              contentSettings,
+              model,
+              prompt,
+              providerConnection,
+            })
+          : null
 
       return {
         answeredOriginal: row.answeredOriginal,
@@ -1492,6 +1848,8 @@ const getProjectTransferExportJudgmentsPayloadFromContext = (context: ProjectTra
         deletedAt: getIsoDateValue(row.deletedAt),
         explanation: row.explanation,
         isAnswered: row.isAnswered ?? false,
+        judgmentInputSignature,
+        judgmentInputSignatureProvenance: currentReviewRowsInputSignatureProvenance,
         provenance: {sourceArticleId: row.articleId, sourceModelId: row.modelId, sourcePromptId: row.promptId},
         quotes: getJsonArrayValue(row.quotes),
         signature: {
@@ -1552,16 +1910,27 @@ const getProjectTransferExportJudgmentAssessmentsPayloadFromContext = (context: 
 
 const getProjectTransferExportHumanJudgmentsPayloadFromContext = (context: ProjectTransferExportContext) => {
   const articleSignatureById = getProjectTransferExportArticleSignatureById(context.articleRows)
+  const articleById = getRowsById(context.articleRows, 'sourceArticleId')
+  const promptById = getRowsById(context.projectPromptRows, 'promptId')
   const promptSignatureById = getProjectTransferExportPromptSignatureById(context.projectPromptRows)
   const projectHumanMode = context.project.humanJudgmentMode ?? 'prompt'
 
   return assertProjectTransferPayload(
     'humanJudgments',
     context.humanJudgmentRows.map((row) => {
+      const article = articleById[row.articleId]
+      const prompt = promptById[row.promptId]
+      const humanReviewInputSignature =
+        article && prompt
+          ? getProjectTransferExportHumanReviewInputSignature({article, mode: 'promptHumanJudgment', prompt})
+          : null
+
       return {
         answer: row.answer,
         comment: row.comment,
         createdAt: getIsoDateValue(row.createdAt),
+        humanReviewInputSignature,
+        humanReviewInputSignatureProvenance: currentReviewRowsInputSignatureProvenance,
         isAnswered: row.isAnswered ?? false,
         provenance: {
           sourceArticleId: row.articleId,
@@ -1585,14 +1954,22 @@ const getProjectTransferExportHumanJudgmentsPayloadFromContext = (context: Proje
 
 const getProjectTransferExportHumanJudgmentSummariesPayloadFromContext = (context: ProjectTransferExportContext) => {
   const articleSignatureById = getProjectTransferExportArticleSignatureById(context.articleRows)
+  const articleById = getRowsById(context.articleRows, 'sourceArticleId')
   const projectHumanMode = context.project.humanJudgmentMode ?? 'prompt'
 
   return assertProjectTransferPayload(
     'humanJudgmentSummaries',
     context.humanJudgmentSummaryRows.map((row) => {
+      const article = articleById[row.articleId]
+      const humanReviewInputSignature = article
+        ? getProjectTransferExportHumanReviewInputSignature({article, mode: 'summaryHumanJudgment'})
+        : null
+
       return {
         answer: row.answer,
         createdAt: getIsoDateValue(row.createdAt),
+        humanReviewInputSignature,
+        humanReviewInputSignatureProvenance: currentReviewRowsInputSignatureProvenance,
         origin: row.origin,
         provenance: {sourceArticleId: row.articleId, sourceProjectId: row.sourceProjectId},
         signature: {articleSignature: articleSignatureById[row.articleId], projectHumanMode},
@@ -1631,21 +2008,26 @@ const getProjectTransferExportReviewSectionSignature = (
 
 const getProjectTransferExportReviewsPayloadFromContext = (context: ProjectTransferExportContext) => {
   const articleSignatureById = getProjectTransferExportArticleSignatureById(context.articleRows)
+  const articleById = getRowsById(context.articleRows, 'sourceArticleId')
 
   return assertProjectTransferPayload(
     'reviews',
     context.reviewRows.map((row) => {
       const sections = getProjectTransferExportReviewSections(row)
+      const sectionSignature = getProjectTransferExportReviewSectionSignature(sections)
+      const article = articleById[row.articleId]
+      const humanReviewInputSignature = article
+        ? getProjectTransferExportHumanReviewInputSignature({article, mode: 'reviewRow', sections: sectionSignature})
+        : null
 
       return {
         createdAt: getIsoDateValue(row.createdAt),
+        humanReviewInputSignature,
+        humanReviewInputSignatureProvenance: currentReviewRowsInputSignatureProvenance,
         opened: row.opened ?? false,
         provenance: {sourceArticleId: row.articleId, sourceProjectId: row.sourceProjectId},
         sections,
-        signature: {
-          articleSignature: articleSignatureById[row.articleId],
-          sections: getProjectTransferExportReviewSectionSignature(sections),
-        },
+        signature: {articleSignature: articleSignatureById[row.articleId], sections: sectionSignature},
         sourceArticleId: row.articleId,
         sourceProjectId: row.sourceProjectId,
         sourceReviewId: row.reviewId,
@@ -1742,6 +2124,38 @@ const getProjectTransferExportAssetManifestPayloadFromContext = (context: Projec
   })
 }
 
+const getProjectTransferExportCurrentReviewRowsSignatureWarnings = (context: ProjectTransferExportContext) => {
+  const humanReviewRowCount =
+    context.humanJudgmentRows.length + context.humanJudgmentSummaryRows.length + context.reviewRows.length
+  const judgmentWarning =
+    context.judgmentRows.length === 0
+      ? null
+      : {
+          code: 'currentReviewRowsJudgmentInputSignature',
+          details: {
+            provenance: currentReviewRowsInputSignatureProvenance.kind,
+            recordCount: context.judgmentRows.length,
+          },
+          message: 'Exported judgment input signatures are certified against current source review rows.',
+          path: projectTransferPayloadPathByKey.judgments,
+          payloadKey: 'judgments' as const,
+          severity: 'warning' as const,
+        }
+  const humanReviewWarning =
+    humanReviewRowCount === 0
+      ? null
+      : {
+          code: 'currentReviewRowsHumanReviewInputSignature',
+          details: {provenance: currentReviewRowsInputSignatureProvenance.kind, recordCount: humanReviewRowCount},
+          message: 'Exported human/review input signatures are certified against current source review rows.',
+          severity: 'warning' as const,
+        }
+
+  return [judgmentWarning, humanReviewWarning].filter((warning): warning is ProjectTransferManifestWarning => {
+    return warning !== null
+  })
+}
+
 export const assertProjectTransferExportModelDependencies = (params: {
   modelRows: Array<Pick<ProjectTransferExportModelRow, 'modelId'>>
   requiredModelIds: string[]
@@ -1813,9 +2227,21 @@ const getProjectTransferExportContext = async (
     getProjectTransferExportHumanJudgmentSummaryRows(projectId, database),
     getProjectTransferExportReviewRows(projectId, database),
   ])
+  const chunkedJudgmentWarnings = getProjectTransferExportChunkedJudgmentWarnings(judgmentRows)
+  const exportedJudgmentRows = judgmentRows.filter((row) => {
+    return row.chunkingStrategy === null
+  })
+  const exportedJudgmentIdSet = new Set(
+    exportedJudgmentRows.map((row) => {
+      return row.judgmentId
+    }),
+  )
+  const exportedJudgmentAssessmentRows = judgmentAssessmentRows.filter((row) => {
+    return exportedJudgmentIdSet.has(row.judgmentId)
+  })
   const requiredModelIds = getUniqueValues([
     project.modelId,
-    ...judgmentRows.map((row) => {
+    ...exportedJudgmentRows.map((row) => {
       return row.modelId
     }),
   ])
@@ -1836,14 +2262,13 @@ const getProjectTransferExportContext = async (
   assertProjectTransferExportProviderConnectionDependencies({providerConnectionRows, requiredProviderConnectionIds})
 
   return {
-    ambiguousJudgmentWarnings,
     articleImportRouteRows,
     articleRows,
     humanJudgmentRows,
     humanJudgmentSummaryRows,
     importRouteRows,
-    judgmentAssessmentRows,
-    judgmentRows,
+    judgmentAssessmentRows: exportedJudgmentAssessmentRows,
+    judgmentRows: exportedJudgmentRows,
     modelRows,
     project,
     projectArticleRows,
@@ -1851,6 +2276,7 @@ const getProjectTransferExportContext = async (
     projectPromptRows,
     providerConnectionRows,
     reviewRows,
+    warnings: [...ambiguousJudgmentWarnings, ...chunkedJudgmentWarnings],
   }
 }
 
@@ -2004,7 +2430,10 @@ export const getProjectTransferExportPayloads = async (
     reviews: getProjectTransferExportReviewsPayloadFromContext(context),
   } satisfies ProjectTransferPayloadByKey
 
-  return {payloads, warnings: context.ambiguousJudgmentWarnings}
+  return {
+    payloads,
+    warnings: [...context.warnings, ...getProjectTransferExportCurrentReviewRowsSignatureWarnings(context)],
+  }
 }
 
 export const serializeProjectTransferExportPayload = <TKey extends ProjectTransferPayloadKey>(

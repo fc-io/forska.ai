@@ -269,6 +269,15 @@ const assertSignatureHasNoSourceIds = (signature: JsonRecord, label: string) => 
     : failProjectTransferPayload(`${disallowedField} must not contain source or target ids`)
 }
 
+const assertInputSignatureHasNoSourceIds = (value: unknown, label: string) => {
+  const signature = assertRecord(value, label)
+  const disallowedField = getFirstDisallowedSignatureField(signature, label)
+
+  return disallowedField === null
+    ? signature
+    : failProjectTransferPayload(`${disallowedField} must not contain source or target ids`)
+}
+
 const assertPayloadBase = (
   record: JsonRecord,
   contract: Pick<ProjectTransferRecordContract, 'requiredProvenanceFields' | 'requiredSignatureFields'>,
@@ -528,6 +537,8 @@ const assertArticleImportRoutePayload = (record: JsonRecord, label: string) => {
 }
 
 const assertJudgmentPayload = (record: JsonRecord, label: string) => {
+  assertInputSignatureHasNoSourceIds(record.judgmentInputSignature, `${label}.judgmentInputSignature`)
+  assertRecord(record.judgmentInputSignatureProvenance, `${label}.judgmentInputSignatureProvenance`)
   assertNonEmptyString(record.sourceJudgmentId, `${label}.sourceJudgmentId`)
   assertNonEmptyString(record.sourceArticleId, `${label}.sourceArticleId`)
   assertNonEmptyString(record.sourcePromptId, `${label}.sourcePromptId`)
@@ -547,6 +558,8 @@ const assertJudgmentAssessmentPayload = (record: JsonRecord, label: string) => {
 }
 
 const assertHumanJudgmentPayload = (record: JsonRecord, label: string) => {
+  assertInputSignatureHasNoSourceIds(record.humanReviewInputSignature, `${label}.humanReviewInputSignature`)
+  assertRecord(record.humanReviewInputSignatureProvenance, `${label}.humanReviewInputSignatureProvenance`)
   assertNonEmptyString(record.sourceHumanJudgmentId, `${label}.sourceHumanJudgmentId`)
   assertNonEmptyString(record.sourceArticleId, `${label}.sourceArticleId`)
   assertNonEmptyString(record.sourcePromptId, `${label}.sourcePromptId`)
@@ -562,6 +575,8 @@ const assertHumanJudgmentSummaryPayload = (record: JsonRecord, label: string) =>
   const validAnswer = answer === null || answer === 'yes' || answer === 'no' || answer === 'maybe'
   const validOrigin = origin === 'covidence_import' || origin === 'manual_override'
 
+  assertInputSignatureHasNoSourceIds(record.humanReviewInputSignature, `${label}.humanReviewInputSignature`)
+  assertRecord(record.humanReviewInputSignatureProvenance, `${label}.humanReviewInputSignatureProvenance`)
   assertNonEmptyString(record.sourceHumanJudgmentSummaryId, `${label}.sourceHumanJudgmentSummaryId`)
   assertNonEmptyString(record.sourceArticleId, `${label}.sourceArticleId`)
   assertNonEmptyString(record.sourceProjectId, `${label}.sourceProjectId`)
@@ -574,6 +589,8 @@ const assertHumanJudgmentSummaryPayload = (record: JsonRecord, label: string) =>
 }
 
 const assertReviewPayload = (record: JsonRecord, label: string) => {
+  assertInputSignatureHasNoSourceIds(record.humanReviewInputSignature, `${label}.humanReviewInputSignature`)
+  assertRecord(record.humanReviewInputSignatureProvenance, `${label}.humanReviewInputSignatureProvenance`)
   assertNonEmptyString(record.sourceReviewId, `${label}.sourceReviewId`)
   assertNonEmptyString(record.sourceProjectId, `${label}.sourceProjectId`)
   assertNonEmptyString(record.sourceArticleId, `${label}.sourceArticleId`)
@@ -605,7 +622,15 @@ const projectTransferPayloadContracts = {
   humanJudgmentSummaries: {
     container: 'recordSet',
     record: {
-      requiredFields: ['sourceHumanJudgmentSummaryId', 'sourceArticleId', 'sourceProjectId', 'answer', 'origin'],
+      requiredFields: [
+        'sourceHumanJudgmentSummaryId',
+        'sourceArticleId',
+        'sourceProjectId',
+        'answer',
+        'origin',
+        'humanReviewInputSignature',
+        'humanReviewInputSignatureProvenance',
+      ],
       requiredProvenanceFields: ['sourceArticleId', 'sourceProjectId'],
       requiredSignatureFields: ['articleSignature', 'projectHumanMode'],
       validate: assertHumanJudgmentSummaryPayload,
@@ -614,7 +639,15 @@ const projectTransferPayloadContracts = {
   humanJudgments: {
     container: 'recordSet',
     record: {
-      requiredFields: ['sourceHumanJudgmentId', 'sourceArticleId', 'sourcePromptId', 'sourceProjectId', 'isAnswered'],
+      requiredFields: [
+        'sourceHumanJudgmentId',
+        'sourceArticleId',
+        'sourcePromptId',
+        'sourceProjectId',
+        'isAnswered',
+        'humanReviewInputSignature',
+        'humanReviewInputSignatureProvenance',
+      ],
       requiredProvenanceFields: ['sourceArticleId', 'sourcePromptId', 'sourceProjectId'],
       requiredSignatureFields: ['articleSignature', 'projectHumanMode', 'promptSignature'],
       validate: assertHumanJudgmentPayload,
@@ -650,6 +683,8 @@ const projectTransferPayloadContracts = {
         'isAnswered',
         'confidenceOriginal',
         'quotes',
+        'judgmentInputSignature',
+        'judgmentInputSignatureProvenance',
       ],
       requiredProvenanceFields: ['sourceArticleId', 'sourceModelId', 'sourcePromptId'],
       requiredSignatureFields: ['articleSignature', 'contentSettings', 'modelSignature', 'promptSignature'],
@@ -750,7 +785,15 @@ const projectTransferPayloadContracts = {
   reviews: {
     container: 'recordSet',
     record: {
-      requiredFields: ['sourceReviewId', 'sourceProjectId', 'sourceArticleId', 'opened', 'sections'],
+      requiredFields: [
+        'sourceReviewId',
+        'sourceProjectId',
+        'sourceArticleId',
+        'opened',
+        'sections',
+        'humanReviewInputSignature',
+        'humanReviewInputSignatureProvenance',
+      ],
       requiredProvenanceFields: ['sourceArticleId', 'sourceProjectId'],
       requiredSignatureFields: ['articleSignature', 'sections'],
       validate: assertReviewPayload,
@@ -960,6 +1003,89 @@ const articleSignature = {
   title: 'Fixture Article',
 }
 const judgmentSignature = {articleSignature, contentSettings: projectSettings, modelSignature, promptSignature}
+const inputSignatureProvenance = {kind: 'currentReviewRows', version: 1}
+const humanReviewArticleSignature = {
+  articleSummaryDigest: null,
+  articleTitleDigest: 'fixture-title-digest',
+  contentHash: null,
+  fullTextAssetsDigest: null,
+  fullTextDigest: null,
+  fullTextHtmlDigest: null,
+  fullTextPdfReferenceDigest: null,
+  identifierKeys: articleSignature.identifierKeys,
+}
+const humanReviewPromptSignature = {
+  contentHash: promptSignature.contentHash,
+  order: 1,
+  originalTextDigest: 'fixture-prompt-digest',
+  promptHeading: 'Eligibility',
+  serializedPromptIdentifier: null,
+  transformedTextDigest: null,
+  type: 'system',
+}
+const humanReviewInputSignature = {
+  article: humanReviewArticleSignature,
+  kind: 'humanReviewInputSignature',
+  mode: 'promptHumanJudgment',
+  prompt: humanReviewPromptSignature,
+  reviewedSectionContractVersion: 1,
+  sections: null,
+  version: 1,
+}
+const summaryHumanReviewInputSignature = {...humanReviewInputSignature, mode: 'summaryHumanJudgment', prompt: null}
+const reviewHumanReviewInputSignature = {
+  ...humanReviewInputSignature,
+  mode: 'reviewRow',
+  prompt: null,
+  sections: {abstract: true, title: true},
+}
+const judgmentInputSignature = {
+  article: {
+    ...humanReviewArticleSignature,
+    promptInput: {
+      articleSummaryDigest: null,
+      articleTitleDigest: 'fixture-title-digest',
+      promptOriginalTextDigest: 'fixture-prompt-digest',
+      promptTemplateFamily: 'judgeGetSinglePrompt:v1',
+      promptType: 'system',
+      sourceTextWrapper: 'sourceTextBoundaryWrapper:v1',
+    },
+  },
+  chunking: {chunkEvidenceDigests: null, finalPromptDigest: null, strategy: null},
+  contentSettings: projectSettings,
+  fullTextProcessing: {
+    maxTokens: null,
+    processedTextDigest: null,
+    stripImages: false,
+    tokenCount: null,
+    withinBudget: null,
+  },
+  kind: 'judgmentInputSignature',
+  model: {contextLimit: 32768, modelOptions: {thinking: 'medium'}, modelSignature, promptTokenLimit: 28768},
+  prompt: {
+    contentHash: promptSignature.contentHash,
+    originalTextDigest: 'fixture-prompt-digest',
+    promptHeading: 'Eligibility',
+    serializedPromptIdentifier: null,
+    transformedTextDigest: null,
+    type: 'system',
+  },
+  provider: {providerConnectionSignature, providerKind: 'openai', transportFamily: 'openai-responses'},
+  request: {
+    evidenceOutputSchemaDigest: 'fixture-evidence-schema-digest',
+    evidenceSystemPromptDigest: null,
+    invocationTemperature: 0.2,
+    maxRetries: 2,
+    outputSchemaDigest: 'fixture-output-schema-digest',
+    providerInvocationAdapter: 'invokeStoredProviderModel:v1',
+    quoteValidationContract: 'exact-source-substring:v1',
+    reservedCompletionTokens: 4000,
+    retryContract: 'json-schema-and-quote-validation:v1',
+    systemPromptDigest: 'fixture-system-prompt-digest',
+    systemPromptFamily: 'getSinglePromptSystemPromptForArticle:v1',
+  },
+  version: 1,
+}
 const baseProvenance = {sourceProjectId}
 const providerSecretRedaction = {
   code: 'providerSecretRedacted' as const,
@@ -1025,6 +1151,8 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
   humanJudgmentSummaries: [
     {
       answer: 'yes',
+      humanReviewInputSignature: summaryHumanReviewInputSignature,
+      humanReviewInputSignatureProvenance: inputSignatureProvenance,
       origin: 'manual_override',
       provenance: {sourceArticleId: 'article-1', sourceProjectId},
       signature: {articleSignature, projectHumanMode: 'prompt'},
@@ -1037,6 +1165,8 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
     {
       answer: 'include',
       comment: 'Human fixture judgment',
+      humanReviewInputSignature,
+      humanReviewInputSignatureProvenance: inputSignatureProvenance,
       isAnswered: true,
       provenance: {sourceArticleId: 'article-1', sourceProjectId, sourcePromptId: 'prompt-1'},
       signature: {articleSignature, projectHumanMode: 'prompt', promptSignature},
@@ -1079,6 +1209,8 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
       contentSettings: projectSettings,
       explanation: 'Fixture explanation',
       isAnswered: true,
+      judgmentInputSignature,
+      judgmentInputSignatureProvenance: inputSignatureProvenance,
       provenance: {sourceArticleId: 'article-1', sourceModelId: 'model-1', sourcePromptId: 'prompt-1'},
       quotes: [{quote: 'Fixture quote'}],
       signature: judgmentSignature,
@@ -1205,6 +1337,8 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
   },
   reviews: [
     {
+      humanReviewInputSignature: reviewHumanReviewInputSignature,
+      humanReviewInputSignatureProvenance: inputSignatureProvenance,
       opened: true,
       provenance: {sourceArticleId: 'article-1', sourceProjectId},
       sections: {abstract: {comment: null, reviewed: true}, title: {comment: 'Looks relevant', reviewed: true}},
