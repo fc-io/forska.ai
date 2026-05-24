@@ -105,15 +105,29 @@ test('locks project settings and warning, omission, and redaction code fixtures'
 test('rejects missing required signature fields and source ids outside provenance', () => {
   const project = getProjectTransferPayloadFixture('project')
   const article = getOnlyRecord(getProjectTransferPayloadFixture('articles'))
+  const judgment = getOnlyRecord(getProjectTransferPayloadFixture('judgments'))
+  const humanJudgment = getOnlyRecord(getProjectTransferPayloadFixture('humanJudgments'))
+  const judgmentInputSignature = judgment.judgmentInputSignature as Record<string, unknown>
+  const humanReviewInputSignature = humanJudgment.humanReviewInputSignature as Record<string, unknown>
   const {modelSignature: _modelSignature, ...signatureWithoutModel} = project.signature
+  const {judgmentInputSignature: _judgmentInputSignature, ...judgmentWithoutInputSignature} = judgment
   const missingSignatureResult = validateProjectTransferPayload('project', {
     ...project,
     signature: signatureWithoutModel,
   })
+  const missingJudgmentInputSignatureResult = validateProjectTransferPayload('judgments', [
+    judgmentWithoutInputSignature,
+  ])
   const sourceIdInSignatureResult = validateProjectTransferPayload('project', {
     ...project,
     signature: {...project.signature, sourceProjectId: 'source-project-1'},
   })
+  const sourceIdInJudgmentInputSignatureResult = validateProjectTransferPayload('judgments', [
+    {...judgment, judgmentInputSignature: {...judgmentInputSignature, sourceArticleId: 'article-1'}},
+  ])
+  const targetIdInHumanReviewInputSignatureResult = validateProjectTransferPayload('humanJudgments', [
+    {...humanJudgment, humanReviewInputSignature: {...humanReviewInputSignature, targetPromptId: 'prompt-1'}},
+  ])
   const genericSourceIdInSignatureResult = validateProjectTransferPayload('project', {
     ...project,
     signature: {...project.signature, sourceId: 'source-project-1'},
@@ -125,7 +139,14 @@ test('rejects missing required signature fields and source ids outside provenanc
   const targetIdResult = validateProjectTransferPayload('articles', [{...article, id: 'target-article-1'}])
 
   expect(getValidationError(missingSignatureResult)).toContain('missing required field modelSignature')
+  expect(getValidationError(missingJudgmentInputSignatureResult)).toContain(
+    'missing required field judgmentInputSignature',
+  )
   expect(getValidationError(sourceIdInSignatureResult)).toContain('must not contain source or target ids')
+  expect(getValidationError(sourceIdInJudgmentInputSignatureResult)).toContain('must not contain source or target ids')
+  expect(getValidationError(targetIdInHumanReviewInputSignatureResult)).toContain(
+    'must not contain source or target ids',
+  )
   expect(getValidationError(genericSourceIdInSignatureResult)).toContain('must not contain source or target ids')
   expect(getValidationError(genericTargetIdInSignatureResult)).toContain('must not contain source or target ids')
   expect(getValidationError(targetIdResult)).toContain('source ids must stay in provenance fields')
