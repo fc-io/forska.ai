@@ -15,7 +15,7 @@
 - Reuse the implemented Phase 1/2 contracts under `src/server/services/projectTransfer/`; do not add parallel manifest, payload, path, zip, fingerprint, session, or export-package contracts.
 - Validate the Phase 2 package shape during analyze: `exportedAt`, `sourceAppVersion`, manifest `project`, `assetSummary`, shared warning shape, top-level JSON array collection payloads, `assetManifest.entries[]` with `references[]`, explicit `judgmentInputSignature` / `judgmentInputSignatureProvenance`, and explicit `humanReviewInputSignature` / `humanReviewInputSignatureProvenance`.
 - Phase 1 `ProjectTransferPlanSummary` still has placeholder required overlap/conflict keys (`exactDuplicateImports`, `reusedArticles`, `articleIdentifier`, `dependency`, `humanReview`, `judgment`, `packageContract`, and `projectPrompt`); Phase 3 must either replace them with the final explicit plan-summary count keys or add a tested API mapping layer before exposing import plans.
-- Provider/model dependency work should reuse the current provider setup surfaces: `GET /api/provider-connections`, `POST /api/provider-connections`, `POST /api/provider-connections/:id/models`, `POST /api/provider-connections/:id/sync-models`, `GET /api/models/stored`, `GET /api/models`, and Codex status/login routes. Do not use `ensureSelectableModelId` or `POST /api/models/ensure` for import materialization except for Codex.
+- Provider/model dependency work should reuse the current provider setup surfaces: `GET /api/provider-connections`, `POST /api/provider-connections`, `POST /api/provider-auth/:providerKind/begin`, `POST /api/provider-auth/:providerKind/finish`, `POST /api/provider-connections/:id/test`, `GET /api/provider-connections/:id/discovered-models`, `POST /api/provider-connections/:id/models`, `POST /api/provider-connections/:id/sync-models`, `GET /api/models/stored`, `GET /api/models`, and Codex status/login routes. Do not use `ensureSelectableModelId` or `POST /api/models/ensure` for import materialization except for Codex.
 - Keep all mutating import session work on the active DuckDB writer through the existing owner-proxied `/api/*` path unless route classification is deliberately changed and tested.
 
 ## Ralph Conversion Metadata
@@ -71,7 +71,7 @@ Acceptance criteria:
 - Validate supported schema version, manifest fields, manifest project summary, payload file list, payload formats, row counts, payload checksums, package fingerprint, asset summary, and shared warning shape from the implemented Phase 2 contract.
 - Validate all Phase 2 payload shapes: `project.json`, `providerConnections.json`, `models.json`, `prompts.json`, `projectPrompts.json`, `importRoutes.json`, `projectImportRoutes.json`, `articles.ndjson`, `articleImportRoutes.ndjson`, `projectArticles.ndjson`, `judgments.ndjson`, `judgmentAssessments.ndjson`, `humanJudgments.ndjson`, `humanJudgmentSummaries.ndjson`, `reviews.ndjson`, and `assetManifest.json`.
 - Validate top-level JSON array collection payloads and `assetManifest.entries[]` with explicit `references[]`; final packages must not rely on a generic `{records, signature, provenance}` collection envelope.
-- Parse payloads through the implemented `parseProjectTransferPayload()` / `assertProjectTransferPayload()` contracts where practical, including Phase 2 serialization that collapses internal `omissions` and `redactions` annotations into shared `warnings` before package write.
+- Parse small payloads through the implemented `parseProjectTransferPayload()` / `assertProjectTransferPayload()` contracts where practical, including Phase 2 serialization that collapses internal `omissions` and `redactions` annotations into shared `warnings` before package write. For large NDJSON payloads, stream rows and validate against the same record contracts instead of materializing the whole file through `parseProjectTransferPayload()`.
 - Validate explicit durable-state fields `judgmentInputSignature`, `judgmentInputSignatureProvenance`, `humanReviewInputSignature`, and `humanReviewInputSignatureProvenance` where applicable.
 - Validate asset manifest references, archive path safety, persisted runtime asset path safety, payload row shapes, project settings, date bounds, mutually exclusive full-text toggles, nullable model `remoteModelId` fallback identity fields, and non-null/defaultable judgment confidence semantics.
 - Enforce resource gates before and during extraction: writable temp root, disk headroom, archive member and inode budgets, expanded-byte and decompression-ratio budgets, maximum path sizes, maximum file sizes, NDJSON line size, JSON depth/member count, and streaming parser use for large payloads.
@@ -128,13 +128,14 @@ dependsOn: ["US-002"]
 Acceptance criteria:
 
 - Implement `POST /api/projects/import/:sessionId/resolve-dependencies` behavior on top of the durable import plan, including `planRevision` checks, stale-plan responses, and refreshed session plan summaries.
-- Implement provider auto-match by safe fingerprint only when exactly one enabled target connection returned by the normal provider connection list/read flow matches and required imported models remain selectable on that connection. There is no current provider-connection archive flag; if visibility or archive fields are added, filter them explicitly and test that behavior.
+- Implement provider auto-match by safe fingerprint only when exactly one enabled target connection returned by the normal provider connection list flow matches and required imported models remain selectable on that connection. `listProviderConnections()` filters provider connections whose persisted config has `archived: true`; dependency resolution must also reject archived chosen connections and connections whose `disabledModelIds` hide required mapped models.
 - Define provider equivalence using provider kind, registry transport family, portable sanitized fingerprint/effective endpoint identity, runtime mode, and source-signature-relevant config; labels, local URLs, and worker URLs are review hints only.
-- Support choosing existing listed/enabled connections and creating new connections with sanitized prefill through normal provider endpoints; provider auth or API key setup remains unresolved until the normal setup flow completes.
-- Do not edit existing provider connections in the import wizard; if a future edit path is added, block it until by-id read/list/PATCH parity tests prove hidden persisted fields round-trip.
+- Support choosing existing listed/enabled connections and creating new connections with sanitized prefill through normal provider endpoints; provider auth, API key setup, connection test, and discovery remain unresolved until the normal setup flow completes.
+- Do not edit existing provider connections in the import wizard; if a future edit path is added, first patch and test by-id read/list/PATCH parity for hidden persisted fields such as `config.archived`, `config.disabledModelIds`, manual worker settings, `secretRef`, and `maxInflightRequests`.
 - Implement non-Codex model materialization through mapped provider-connection model routes such as `POST /api/provider-connections/:id/models` or `POST /api/provider-connections/:id/sync-models`, not generic `ensureSelectableModelId`.
 - For nullable `remoteModelId` model descriptors, only auto-match an existing enabled/selectable target model when fallback identity fields such as `modelName`, `name`, `displayName`, `variant`, and `version` converge on one row; otherwise leave the model unresolved.
 - After materialization, re-query the mapped provider connection and `GET /api/models/stored` or equivalent repository state, then verify returned database models are enabled, selectable, unique, connected to a live provider row, not hidden by provider disabled-model config, and identity-equivalent for imported judgments.
+- Before import depends on selectable-model validation, ensure shared selectable-model guards such as `assertSelectableProviderModelIds()` require a live provider connection row and respect provider `config.archived` plus `disabledModelIds`; do not let `LEFT JOIN` plus `COALESCE(pc.enabled, TRUE)` make orphaned models selectable.
 - If current provider model routes cannot persist prompt-affecting metadata needed by imported judgment signatures, including metadata beyond the current manual route's `options.thinking` support, keep the dependency unresolved until provider discovery or an import-safe writer can prove metadata equivalence.
 - Non-equivalent substitute models may be accepted only for the new project's future settings when no imported judgment references that source model.
 
@@ -142,6 +143,9 @@ Quality gates:
 
 - `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` passes.
 - `bun test src/server/providers/providerModelRepository.test.ts` passes.
+- `bun test src/server/providers/providerModelRepository.atomic.test.ts` passes if selectable-model guards or disabled-model behavior changes.
+- `bun test src/server/providers/providerConnectionRepository.atomic.test.ts` passes if provider connection archived/config round-trip behavior changes.
+- `bun test src/server/providers/providerDbUtils.test.ts` passes if provider config selectability helpers change.
 - `bun test src/server/routes/projectTransferRoutes.test.ts` passes if resolve-dependencies route behavior changes.
 - `bun test src/server/routes/ProviderConnectionsRoutes.test.ts` passes if provider list/create/setup behavior changes.
 - `bun test src/server/routes/ProviderModelsRoutes.test.ts` passes if provider model materialization behavior changes.
@@ -168,6 +172,7 @@ Acceptance criteria:
 Quality gates:
 
 - `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` passes.
+- `bun test src/server/routes/ProviderModelsRoutes.test.ts` passes if Codex ensure or provider model route behavior changes.
 - `bun test src/server/routes/providerProjectFlow.e2e.test.ts` passes if shared provider setup flow changes.
 - `bun run build` passes.
 - `bun run lint` passes for touched `src` files.
@@ -213,7 +218,7 @@ Acceptance criteria:
 - Wizard exposes the full overlap and conflict summary fields, reused-article update plan, route-link omissions, snapshot project-article links, final provider/model mappings, judgment signature provenance, human/review signature provenance, and resolution kinds for non-wizard-resolvable blockers.
 - Wizard uses Eden/TanStack Query for normal session reads and mutations and local `fetch` only for streaming upload or response handling that Eden cannot represent.
 - Manual upload calls use `getApiRequestUrl` so browser/dev and desktop resolve the same API origin.
-- Dependency setup may select an existing listed/enabled connection, create a new connection with sanitized prefill, complete managed auth, run Codex status/login, and materialize provider-mapped models without editing existing provider connections.
+- Dependency setup may select an existing listed/enabled connection, create a new connection with sanitized prefill, complete managed auth, test/discover provider models, run Codex status/login, and materialize provider-mapped models without editing existing provider connections.
 - If dependency setup leaves the wizard for standalone provider pages, add a `returnTo` or import-session handoff contract before relying on that flow.
 - Final commit UI is disabled or clearly marked unavailable in Phase 3; the route must not call a real commit mutation until Phase 4 implements final writes.
 
