@@ -360,7 +360,14 @@ test.serial('api proxy keeps project transfer export downloads streaming from th
       getTextStream('download-body', () => {
         downloadPullCount += 1
       }),
-      {headers: {'content-type': 'application/zip'}},
+      {
+        headers: {
+          'content-disposition': 'attachment; filename="project-transfer-export.zip"',
+          'content-type': 'application/zip',
+          'x-project-transfer-checksum-sha256': 'a'.repeat(64),
+          'x-project-transfer-package-fingerprint': 'fingerprint-1',
+        },
+      },
     )
 
     return ownerResponse
@@ -374,6 +381,9 @@ test.serial('api proxy keeps project transfer export downloads streaming from th
 
   expect(response.status).toBe(200)
   expect(response.headers.get('content-type')).toBe('application/zip')
+  expect(response.headers.get('content-disposition')).toBe('attachment; filename="project-transfer-export.zip"')
+  expect(response.headers.get('x-project-transfer-checksum-sha256')).toBe('a'.repeat(64))
+  expect(response.headers.get('x-project-transfer-package-fingerprint')).toBe('fingerprint-1')
   expect(ownerResponse?.bodyUsed ?? true).toBe(false)
   expect(await response.text()).toBe('download-body')
   expect(ownerResponse?.bodyUsed ?? false).toBe(true)

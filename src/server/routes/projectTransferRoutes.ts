@@ -1,12 +1,19 @@
 import {Elysia, t} from 'elysia'
 
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {
   getProjectTransferPlaceholderResponse,
   type ProjectTransferApiResponse,
+  type ProjectTransferExportReadyPayload,
+  type ProjectTransferProgressPayload,
   type ProjectTransferSessionResponse,
   type ProjectTransferUploadSession,
 } from '../services/projectTransfer/projectTransferContracts.ts'
-import {createProjectTransferExport} from '../services/projectTransfer/projectTransferExportPackage.ts'
+import {
+  createProjectTransferExport,
+  type ProjectTransferExportPackageMetadata,
+} from '../services/projectTransfer/projectTransferExportPackage.ts'
 import {resolveProjectTransferTempWritablePath} from '../services/projectTransfer/projectTransferPaths.ts'
 import {
   getProjectTransferExportTempLayout,
@@ -22,11 +29,32 @@ type ProjectTransferExportResponse = {
   filename: string
   status: 'queued'
 }
+type ProjectTransferExportNonReadyStatus = 'assembling' | 'packaging' | 'queued'
+type ProjectTransferExportSessionPendingResponse = {
+  exportId: string
+  expiresAt: string
+  progress: ProjectTransferProgressPayload | null
+  status: ProjectTransferExportNonReadyStatus
+}
+type ProjectTransferExportSessionReadyResponse = ProjectTransferExportPackageMetadata & {
+  exportId: string
+  progress: ProjectTransferProgressPayload | null
+  status: 'ready'
+}
+type ProjectTransferExportSessionData =
+  | ProjectTransferExportSessionPendingResponse
+  | ProjectTransferExportSessionReadyResponse
 type ProjectTransferPlaceholderData =
   | ProjectTransferExportResponse
+  | ProjectTransferExportSessionData
   | ProjectTransferSessionResponse
   | ProjectTransferUploadSession
+type ProjectTransferSourceProjectRow = {deletePendingAt: unknown; id: string}
 type RouteSet = {status?: number | string}
+type ProjectTransferPackageHeaderMetadata = Pick<
+  ProjectTransferExportReadyPayload,
+  'byteLength' | 'checksumSha256' | 'expiresAt' | 'filename' | 'packageFingerprint'
+>
 
 export const projectTransferRouteSpecs = [
   {
@@ -135,28 +163,162 @@ const getPlaceholderResponse = (
   return getProjectTransferPlaceholderResponse<ProjectTransferPlaceholderData>(endpoint)
 }
 
-const getSessionResponse = async (
-  sessionId: string,
-): Promise<ProjectTransferApiResponse<ProjectTransferSessionResponse>> => {
-  const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId})
+const getProjectTransferExportSourceProject = async (projectId: string) => {
+  const [project] = await getAppDatabaseService().queryJson<ProjectTransferSourceProjectRow>(`
+    SELECT id, delete_pending_at AS deletePendingAt
+    FROM app.project
+    WHERE id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
 
-  return record === null
-    ? {data: null, error: 'Project transfer export session not found'}
-    : {data: toProjectTransferSessionResponse(record), error: null}
+  return project ?? null
+}
+
+const getProjectTransferApiError = <TData>(
+  set: RouteSet,
+  status: number,
+  error: string,
+): ProjectTransferApiResponse<TData> => {
+  set.status = status
+  return {data: null, error}
+}
+
+const getExportSourceProjectError = async (
+  set: RouteSet,
+  projectId: string,
+): Promise<ProjectTransferApiResponse<ProjectTransferExportResponse> | null> => {
+  const project = await getProjectTransferExportSourceProject(projectId)
+
+  if (project === null) {
+    return getProjectTransferApiError(set, 404, 'Project not found')
+  }
+
+  if (project.deletePendingAt !== null && project.deletePendingAt !== undefined) {
+    return getProjectTransferApiError(set, 409, 'Project is pending permanent deletion')
+  }
+
+  return null
+}
+
+const getHeaderSafeFilename = (filename: string) => {
+  const safeFilename = filename.replace(/[\r\n"\\;/]/g, '_').trim()
+
+  return safeFilename === '' ? 'project-transfer-export.zip' : safeFilename
+}
+
+const getAttachmentContentDisposition = (filename: string) => {
+  return `attachment; filename="${getHeaderSafeFilename(filename)}"`
+}
+
+const getProjectTransferPackageHeaders = (metadata: ProjectTransferPackageHeaderMetadata) => {
+  return {
+    'content-disposition': getAttachmentContentDisposition(metadata.filename),
+    'content-length': String(metadata.byteLength),
+    'content-type': 'application/zip',
+    'x-project-transfer-checksum-sha256': metadata.checksumSha256,
+    'x-project-transfer-expires-at': metadata.expiresAt,
+    'x-project-transfer-package-fingerprint': metadata.packageFingerprint,
+  }
+}
+
+const hasSessionExpired = (response: ProjectTransferSessionResponse, now: Date) => {
+  return response.expiresAt.getTime() <= now.getTime()
+}
+
+const isProjectTransferExportNonReadyStatus = (
+  state: ProjectTransferSessionResponse['state'],
+): state is ProjectTransferExportNonReadyStatus => {
+  return state === 'queued' || state === 'assembling' || state === 'packaging'
+}
+
+const getReadyExportSessionData = (
+  response: ProjectTransferSessionResponse,
+  completion: ProjectTransferExportReadyPayload,
+): ProjectTransferExportSessionReadyResponse => {
+  return {
+    byteLength: completion.byteLength,
+    checksumSha256: completion.checksumSha256,
+    downloadUrl: completion.downloadUrl,
+    expiresAt: completion.expiresAt,
+    exportId: response.id,
+    filename: completion.filename,
+    packageFingerprint: completion.packageFingerprint,
+    progress: response.progress,
+    status: 'ready',
+  }
+}
+
+const getExportSessionData = (response: ProjectTransferSessionResponse): ProjectTransferExportSessionData | null => {
+  if (isProjectTransferExportNonReadyStatus(response.state)) {
+    return {
+      exportId: response.id,
+      expiresAt: response.expiresAt.toISOString(),
+      progress: response.progress,
+      status: response.state,
+    }
+  }
+
+  return response.state === 'ready' && response.completion?.status === 'ready'
+    ? getReadyExportSessionData(response, response.completion)
+    : null
+}
+
+const getExportSessionError = (
+  response: ProjectTransferSessionResponse,
+  now: Date,
+): {error: string; status: number} | null => {
+  if (response.direction !== 'export') {
+    return {error: 'Project transfer session is not an export session', status: 409}
+  }
+
+  if (response.state === 'failed') {
+    return {error: 'Project transfer export failed', status: 409}
+  }
+
+  if (response.state === 'expired' || hasSessionExpired(response, now)) {
+    return {error: 'Project transfer export session expired', status: 410}
+  }
+
+  if (response.state === 'ready' && response.completion?.status !== 'ready') {
+    return {error: 'Project transfer export metadata is unavailable', status: 409}
+  }
+
+  return null
+}
+
+const getExportSessionResponse = async (
+  set: RouteSet,
+  exportId: string,
+): Promise<ProjectTransferApiResponse<ProjectTransferExportSessionData>> => {
+  const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId: exportId})
+
+  if (record === null) {
+    return getProjectTransferApiError(set, 404, 'Project transfer export session not found')
+  }
+
+  const response = toProjectTransferSessionResponse(record)
+  const sessionError = getExportSessionError(response, new Date())
+
+  if (sessionError !== null) {
+    return getProjectTransferApiError(set, sessionError.status, sessionError.error)
+  }
+
+  const data = getExportSessionData(response)
+
+  return data === null
+    ? getProjectTransferApiError(set, 409, 'Project transfer export session state is unavailable')
+    : {data, error: null}
 }
 
 const getDownloadResponse = async (set: RouteSet, exportId: string) => {
-  const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId: exportId})
-  const response = record === null ? null : toProjectTransferSessionResponse(record)
+  const sessionResponse = await getExportSessionResponse(set, exportId)
 
-  if (response === null) {
-    set.status = 404
-    return {data: null, error: 'Project transfer export session not found'}
+  if (sessionResponse.error !== null) {
+    return sessionResponse
   }
 
-  if (response.direction !== 'export' || response.state !== 'ready' || response.completion?.status !== 'ready') {
-    set.status = 409
-    return {data: null, error: 'Project transfer export package is not ready'}
+  if (sessionResponse.data.status !== 'ready') {
+    return sessionResponse
   }
 
   const packagePath = resolveProjectTransferTempWritablePath({
@@ -165,17 +327,9 @@ const getDownloadResponse = async (set: RouteSet, exportId: string) => {
   const file = globalThis.Bun.file(packagePath)
   const exists = await file.exists()
 
-  if (!exists) {
-    set.status = 410
-    return {data: null, error: 'Project transfer export package artifact is unavailable'}
-  }
-
-  return new Response(file, {
-    headers: {
-      'content-disposition': `attachment; filename="${response.completion.filename}"`,
-      'content-type': 'application/zip',
-    },
-  })
+  return exists
+    ? new Response(file, {headers: getProjectTransferPackageHeaders(sessionResponse.data)})
+    : getProjectTransferApiError(set, 410, 'Project transfer export package artifact is unavailable')
 }
 
 export const projectTransferRoutes = new Elysia()
@@ -183,18 +337,16 @@ export const projectTransferRoutes = new Elysia()
   .post(
     '/api/projects/:id/export-project',
     async ({params, set}) => {
+      const sourceProjectError = await getExportSourceProjectError(set, params.id)
+
+      if (sourceProjectError !== null) {
+        return sourceProjectError
+      }
+
       const result = await createProjectTransferExport({projectId: params.id})
 
       if (result.executionMode === 'inline') {
-        return new Response(result.packageBytes, {
-          headers: {
-            'content-disposition': `attachment; filename="${result.metadata.filename}"`,
-            'content-type': 'application/zip',
-            'x-project-transfer-checksum-sha256': result.metadata.checksumSha256,
-            'x-project-transfer-expires-at': result.metadata.expiresAt,
-            'x-project-transfer-package-fingerprint': result.metadata.packageFingerprint,
-          },
-        })
+        return new Response(result.packageBytes, {headers: getProjectTransferPackageHeaders(result.metadata)})
       }
 
       set.status = 202
@@ -215,13 +367,7 @@ export const projectTransferRoutes = new Elysia()
   .get(
     '/api/projects/export/:exportId',
     async ({params, set}) => {
-      const response = await getSessionResponse(params.exportId)
-
-      if (response.error) {
-        set.status = 404
-      }
-
-      return response
+      return getExportSessionResponse(set, params.exportId)
     },
     {params: exportParamSchema},
   )
