@@ -344,6 +344,123 @@ test('project transfer session commit claims are single-flight and owner-token f
   expect(result.completionProjectId).toBe('target-project-claim')
 })
 
+test('project transfer export claims keep public expiry separate from owner heartbeat', () => {
+  const result = runSessionRepositoryScript<{
+    claimExpiresAt: string | null
+    claimHeartbeatAt: string | null
+    claimOwner: string | null
+    currentCompletionStatus: string | null
+    currentExpiresAt: string | null
+    currentOwner: string | null
+    currentState: string | null
+    heartbeatExpiresAt: string | null
+    failedErrorMessage: string | null
+    failedExpiresAt: string | null
+    failedOwner: string | null
+    failedState: string | null
+    packageFingerprint: string | null
+    readyOwner: string | null
+    readyState: string | null
+  }>(`
+    await sessionRepository.createProjectTransferSession({
+      direction: 'export',
+      expiresAt,
+      id: 'export-session-claim',
+      state: 'queued',
+    })
+
+    const claim = await sessionRepository.claimProjectTransferExportSessionOwner({
+      expectedState: 'queued',
+      nextState: 'assembling',
+      now: new Date('2026-05-21T12:30:00.000Z'),
+      ownerToken: 'export-owner-a',
+      progress: {phase: 'export_assembly', status: 'running'},
+      sessionId: 'export-session-claim',
+    })
+    const heartbeat = await sessionRepository.heartbeatProjectTransferExportSessionOwner({
+      now: new Date('2026-05-21T12:31:00.000Z'),
+      ownerToken: 'export-owner-a',
+      progress: {bytesProcessed: 1, bytesTotal: 2, phase: 'export_assembly', status: 'running'},
+      sessionId: 'export-session-claim',
+    })
+    await sessionRepository.claimProjectTransferExportSessionOwner({
+      expectedState: 'assembling',
+      nextState: 'packaging',
+      ownerToken: 'export-owner-a',
+      progress: {bytesProcessed: 2, bytesTotal: 2, phase: 'export_package', status: 'running'},
+      sessionId: 'export-session-claim',
+    })
+    const ready = await sessionRepository.persistProjectTransferSessionExportReady({
+      completionPayload: {
+        byteLength: 123,
+        checksumSha256: '${'a'.repeat(64)}',
+        downloadUrl: '/api/projects/export/export-session-claim/download',
+        expiresAt: expiresAt.toISOString(),
+        filename: 'project-transfer.zip',
+        packageFingerprint: 'fingerprint-export-ready',
+        status: 'ready',
+      },
+      ownerToken: 'export-owner-a',
+      progress: {bytesProcessed: 2, bytesTotal: 2, phase: 'export_package', status: 'completed'},
+      sessionId: 'export-session-claim',
+    })
+    const current = await sessionRepository.getProjectTransferSession({sessionId: 'export-session-claim'})
+    await sessionRepository.createProjectTransferSession({
+      direction: 'export',
+      expiresAt,
+      id: 'export-session-fail',
+      state: 'queued',
+    })
+    await sessionRepository.claimProjectTransferExportSessionOwner({
+      expectedState: 'queued',
+      nextState: 'assembling',
+      ownerToken: 'export-owner-fail',
+      sessionId: 'export-session-fail',
+    })
+    const failed = await sessionRepository.failProjectTransferSessionExport({
+      error: {message: 'package failed'},
+      now: new Date('2026-05-21T12:32:00.000Z'),
+      ownerToken: 'export-owner-fail',
+      progress: {phase: 'export_assembly', status: 'failed'},
+      sessionId: 'export-session-fail',
+    })
+
+    console.log(JSON.stringify({
+      claimExpiresAt: claim?.expiresAt ? new Date(claim.expiresAt).toISOString() : null,
+      claimHeartbeatAt: claim?.heartbeatAt ? new Date(claim.heartbeatAt).toISOString() : null,
+      claimOwner: claim?.ownerToken ?? null,
+      currentCompletionStatus: current?.completionPayloadJson?.status ?? null,
+      currentExpiresAt: current?.expiresAt ? new Date(current.expiresAt).toISOString() : null,
+      currentOwner: current?.ownerToken ?? null,
+      currentState: current?.state ?? null,
+      failedErrorMessage: failed?.errorJson?.message ?? null,
+      failedExpiresAt: failed?.expiresAt ? new Date(failed.expiresAt).toISOString() : null,
+      failedOwner: failed?.ownerToken ?? null,
+      failedState: failed?.state ?? null,
+      heartbeatExpiresAt: heartbeat?.expiresAt ? new Date(heartbeat.expiresAt).toISOString() : null,
+      packageFingerprint: current?.packageFingerprint ?? null,
+      readyOwner: ready?.ownerToken ?? null,
+      readyState: ready?.state ?? null,
+    }))
+  `)
+
+  expect(result.claimOwner).toBe('export-owner-a')
+  expect(result.claimHeartbeatAt).toBe('2026-05-21T12:30:00.000Z')
+  expect(result.claimExpiresAt).toBe('2026-05-21T12:00:00.000Z')
+  expect(result.heartbeatExpiresAt).toBe('2026-05-21T12:00:00.000Z')
+  expect(result.readyOwner).toBeNull()
+  expect(result.readyState).toBe('ready')
+  expect(result.currentState).toBe('ready')
+  expect(result.currentOwner).toBeNull()
+  expect(result.currentExpiresAt).toBe('2026-05-21T12:00:00.000Z')
+  expect(result.currentCompletionStatus).toBe('ready')
+  expect(result.packageFingerprint).toBe('fingerprint-export-ready')
+  expect(result.failedState).toBe('failed')
+  expect(result.failedOwner).toBeNull()
+  expect(result.failedExpiresAt).toBe('2026-05-21T12:00:00.000Z')
+  expect(result.failedErrorMessage).toBe('package failed')
+})
+
 test('project transfer session progress updates reject regressed totals and accept monotonic progress', () => {
   const result = runSessionRepositoryScript<{
     afterProgress: {completedBytes?: number | null; totalBytes?: number | null} | null

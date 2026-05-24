@@ -7,29 +7,60 @@ import {
   parseProjectTransferManifestJson,
   validateProjectTransferManifest,
 } from './projectTransferManifest.ts'
-import {projectTransferManifestSchemaVersion} from './projectTransferSchemas.ts'
+import {
+  projectTransferManifestSchemaVersion,
+  projectTransferPayloadFormatByKey,
+  type ProjectTransferPayloadKey,
+  projectTransferPayloadKeys,
+  projectTransferPayloadPathByKey,
+} from './projectTransferSchemas.ts'
 
 const validProjectBytes = '{"name":"Project transfer source"}'
 const validArticlesBytes = '{"articleTitle":"Alpha"}\n'
 
+const getPayloadBytes = (key: ProjectTransferPayloadKey) => {
+  return key === 'project' ? validProjectBytes : key === 'articles' ? validArticlesBytes : ''
+}
+
+const getPayloads = () => {
+  return projectTransferPayloadKeys.reduce(
+    (payloads, key) => {
+      return {
+        ...payloads,
+        [key]: getProjectTransferManifestPayloadEntry({
+          bytes: getPayloadBytes(key),
+          format: projectTransferPayloadFormatByKey[key],
+          path: projectTransferPayloadPathByKey[key],
+          recordCount: key === 'project' || key === 'articles' ? 1 : 0,
+        }),
+      }
+    },
+    {} as ReturnType<typeof buildProjectTransferManifest>['payloads'],
+  )
+}
+
+const getProjectSummary = () => {
+  return {
+    counts: projectTransferPayloadKeys.reduce(
+      (counts, key) => {
+        return {...counts, [key]: key === 'project' || key === 'articles' ? 1 : 0}
+      },
+      {} as Record<ProjectTransferPayloadKey, number>,
+    ),
+    currentModel: {modelName: 'GPT 5.4', remoteModelId: 'gpt-5.4', sourceModelId: 'model-1'},
+    humanJudgmentMode: 'prompt' as const,
+    name: 'Project transfer source',
+    sourceProjectId: 'source-project-id',
+  }
+}
+
 const getValidManifest = () => {
   return buildProjectTransferManifest({
-    generatedAt: '2026-05-21T07:00:00.000Z',
-    payloads: {
-      articles: getProjectTransferManifestPayloadEntry({
-        bytes: validArticlesBytes,
-        format: 'ndjson',
-        path: 'articles.ndjson',
-        recordCount: 1,
-      }),
-      project: getProjectTransferManifestPayloadEntry({
-        bytes: validProjectBytes,
-        format: 'json',
-        path: 'project.json',
-        recordCount: 1,
-      }),
-    },
-    source: {appVersion: '0.2.1', projectId: 'source-project-id', projectName: 'Project transfer source'},
+    assetSummary: {byteLength: 0, entryCount: 0},
+    exportedAt: '2026-05-21T07:00:00.000Z',
+    payloads: getPayloads(),
+    project: getProjectSummary(),
+    sourceAppVersion: '0.2.1',
     warnings: [
       {
         action: 'redacted',
@@ -47,6 +78,9 @@ test('validates project-transfer manifest payload contracts with camelCase packa
   const manifest = parseProjectTransferManifestJson(JSON.stringify(getValidManifest()))
 
   expect(manifest.schemaVersion).toBe(projectTransferManifestSchemaVersion)
+  expect(manifest.exportedAt).toBe('2026-05-21T07:00:00.000Z')
+  expect(manifest.sourceAppVersion).toBe('0.2.1')
+  expect(manifest.project.sourceProjectId).toBe('source-project-id')
   expect(manifest.payloads.project?.path).toBe('project.json')
   expect(manifest.payloads.articles?.path).toBe('articles.ndjson')
   expect(manifest.payloads.project?.checksumSha256).toMatch(/^[a-f0-9]{64}$/)
@@ -85,7 +119,7 @@ test('rejects non-camelCase or mismatched manifest payload references', () => {
   expect(() => {
     return assertProjectTransferManifest({
       ...manifest,
-      payloads: {project: {...manifest.payloads.project, path: 'projects.json'}},
+      payloads: {...manifest.payloads, project: {...manifest.payloads.project, path: 'projects.json'}},
     })
   }).toThrow('Payload project must reference project.json')
 })

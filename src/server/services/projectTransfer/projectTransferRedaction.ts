@@ -3,7 +3,6 @@ import {
   assertProjectTransferPayload,
   type ProjectTransferArticlePayloadRecord,
   type ProjectTransferPayloadByKey,
-  type ProjectTransferPayloadCollection,
   type ProjectTransferPayloadRecord,
 } from './projectTransferPayloadSchemas.ts'
 import {type ProjectTransferPackageWarning, type ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
@@ -311,22 +310,6 @@ const getRecordSourceRef = (record: JsonRecord) => {
   )
 }
 
-const getCollectionWithRecords = <TRecord extends ProjectTransferPayloadRecord>(
-  collection: ProjectTransferPayloadCollection<TRecord>,
-  records: TRecord[],
-): ProjectTransferPayloadCollection<TRecord> => {
-  return {
-    ...collection,
-    records,
-    signature: {
-      ...collection.signature,
-      records: records.map((record) => {
-        return record.signature
-      }),
-    },
-  }
-}
-
 const omitRecordWarning = ({
   code,
   jsonPointer,
@@ -395,10 +378,10 @@ const redactProjectRecord = (
 
 const redactPromptRecords = (
   prompts: ProjectTransferPayloadByKey['prompts'],
-): RowRedactionResult<ProjectTransferPayloadByKey['prompts']['records'][number]> => {
-  return prompts.records.reduce<RowRedactionResult<ProjectTransferPayloadByKey['prompts']['records'][number]>>(
+): RowRedactionResult<ProjectTransferPayloadByKey['prompts'][number]> => {
+  return prompts.reduce<RowRedactionResult<ProjectTransferPayloadByKey['prompts'][number]>>(
     (result, record, index) => {
-      const jsonPointer = `/records/${index}`
+      const jsonPointer = `/${index}`
       const sourceRef = getRecordSourceRef(record)
       const unsafeField = getUnsafeField(record, promptDecisionFields)
 
@@ -573,7 +556,7 @@ const redactRecordSet = <TRecord extends ProjectTransferPayloadRecord>(
 const redactImportRoutes = (
   importRoutes: ProjectTransferPayloadByKey['importRoutes'],
 ): RedactedValue<ProjectTransferPayloadByKey['importRoutes']> => {
-  const records = redactRecordSet('importRoutes', importRoutes.records, (record, context) => {
+  const records = redactRecordSet('importRoutes', importRoutes, (record, context) => {
     return applyFieldRedactions(record, [
       (recordValue) => {
         return redactStringField(recordValue, 'description', context)
@@ -587,11 +570,7 @@ const redactImportRoutes = (
     ])
   })
 
-  return {
-    changed: records.warnings.length > 0,
-    value: getCollectionWithRecords(importRoutes, records.records),
-    warnings: records.warnings,
-  }
+  return {changed: records.warnings.length > 0, value: records.records, warnings: records.warnings}
 }
 
 const redactArticleImportRoutes = (
@@ -777,7 +756,7 @@ const redactReviews = (
 }
 
 const ensureProviderSecretWarning = (
-  record: ProjectTransferPayloadByKey['providerConnections']['records'][number],
+  record: ProjectTransferPayloadByKey['providerConnections'][number],
   context: RedactionContext,
 ) => {
   const warnings = Array.isArray(record.warnings) ? record.warnings : []
@@ -800,7 +779,7 @@ const ensureProviderSecretWarning = (
 const redactProviderConnections = (
   providerConnections: ProjectTransferPayloadByKey['providerConnections'],
 ): RedactedValue<ProjectTransferPayloadByKey['providerConnections']> => {
-  const result = redactRecordSet('providerConnections', providerConnections.records, (record, context) => {
+  const result = redactRecordSet('providerConnections', providerConnections, (record, context) => {
     const withSecretWarning = ensureProviderSecretWarning({...record, secretRef: null}, context)
 
     return applyFieldRedactions(withSecretWarning, [
@@ -819,17 +798,13 @@ const redactProviderConnections = (
     ])
   })
 
-  return {
-    changed: result.warnings.length > 0,
-    value: getCollectionWithRecords(providerConnections, result.records),
-    warnings: result.warnings,
-  }
+  return {changed: result.warnings.length > 0, value: result.records, warnings: result.warnings}
 }
 
 const redactModels = (
   models: ProjectTransferPayloadByKey['models'],
 ): RedactedValue<ProjectTransferPayloadByKey['models']> => {
-  const result = redactRecordSet('models', models.records, (record, context) => {
+  const result = redactRecordSet('models', models, (record, context) => {
     return applyFieldRedactions(record, [
       (recordValue) => {
         return redactStringField(recordValue, 'displayName', context, true)
@@ -855,11 +830,7 @@ const redactModels = (
     ])
   })
 
-  return {
-    changed: result.warnings.length > 0,
-    value: getCollectionWithRecords(models, result.records),
-    warnings: result.warnings,
-  }
+  return {changed: result.warnings.length > 0, value: result.records, warnings: result.warnings}
 }
 
 const omitDependentRecords = <TRecord extends ProjectTransferPayloadRecord>({
@@ -897,13 +868,6 @@ const omitDependentRecords = <TRecord extends ProjectTransferPayloadRecord>({
     },
     {omittedSourceIds: [], records: [], warnings: []},
   )
-}
-
-const filterCollectionDependencies = <TRecord extends ProjectTransferPayloadRecord>(
-  collection: ProjectTransferPayloadCollection<TRecord>,
-  dependencyResult: RowRedactionResult<TRecord>,
-) => {
-  return getCollectionWithRecords(collection, dependencyResult.records)
 }
 
 const getOmittedJudgmentIds = (
@@ -961,7 +925,7 @@ export const redactProjectTransferPayloads = (
     omittedIds: omittedPromptIds,
     payloadKey: 'projectPrompts',
     reason: 'sourcePrompt',
-    records: payloads.projectPrompts.records,
+    records: payloads.projectPrompts,
   })
   const articleImportRouteDependencies = omitDependentRecords({
     getDependencyId: (record) => {
@@ -1051,13 +1015,9 @@ export const redactProjectTransferPayloads = (
     models: models.value,
     project: project.value,
     projectArticles: projectArticleDependencies.records,
-    projectImportRoutes: filterCollectionDependencies(payloads.projectImportRoutes, {
-      omittedSourceIds: [],
-      records: payloads.projectImportRoutes.records,
-      warnings: [],
-    }),
-    projectPrompts: filterCollectionDependencies(payloads.projectPrompts, projectPromptDependencies),
-    prompts: getCollectionWithRecords(payloads.prompts, promptResult.records),
+    projectImportRoutes: payloads.projectImportRoutes,
+    projectPrompts: projectPromptDependencies.records,
+    prompts: promptResult.records,
     providerConnections: providerConnections.value,
     reviews: reviews.records,
   })

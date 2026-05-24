@@ -196,6 +196,9 @@ export const getProjectTransferLogicalPackageFingerprintPayload = ({
       .map((key) => {
         const manifestPayload = manifest.payloads[key]
         const payloadInputValue = getPayloadInputValue(payloads[key])
+        const orderInsensitiveRecords =
+          payloadInputValue.orderInsensitiveRecords
+          || (manifestPayload?.format === 'json' && Array.isArray(payloadInputValue.value))
 
         return {
           format: manifestPayload?.format ?? 'json',
@@ -203,7 +206,7 @@ export const getProjectTransferLogicalPackageFingerprintPayload = ({
           value: getCanonicalPayloadValue({
             excludedKeys: excludedKeySet,
             format: manifestPayload?.format ?? 'json',
-            orderInsensitiveRecords: payloadInputValue.orderInsensitiveRecords,
+            orderInsensitiveRecords,
             value: payloadInputValue.value,
           }),
         }

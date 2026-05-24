@@ -43,7 +43,7 @@ export type ProjectTransferExportSourceProjectSettings = {
   dateFrom: Date | null
   dateTo: Date | null
   description: string | null
-  humanJudgmentMode: 'prompt' | 'summary' | null
+  humanJudgmentMode: 'prompt' | 'summary'
   modelId: string | null
   name: string
   sourceProjectId: string
@@ -564,7 +564,7 @@ const getProjectTransferExportSettingsValue = (
   return {
     dateFrom,
     dateTo,
-    humanJudgmentMode: row.humanJudgmentMode,
+    humanJudgmentMode: row.humanJudgmentMode ?? 'prompt',
     useAbstract: row.useAbstract ?? true,
     useFulltext,
     useFulltextNoImages,
@@ -1226,7 +1226,7 @@ const getProjectTransferExportContentSettings = (
 }
 
 const getProjectTransferExportProjectSettingsPayload = (project: ProjectTransferExportSourceProjectSettings) => {
-  return {humanJudgmentMode: project.humanJudgmentMode, ...getProjectTransferExportContentSettings(project)}
+  return {humanJudgmentMode: project.humanJudgmentMode ?? 'prompt', ...getProjectTransferExportContentSettings(project)}
 }
 
 const getProjectTransferExportArticleRecordForSignature = (
@@ -1589,18 +1589,6 @@ const getProjectTransferExportModelSignatureById = (
   )
 }
 
-const getProjectTransferExportCollectionPayload = <TRecord extends ProjectTransferPayloadRecord>(params: {
-  records: TRecord[]
-  signatures: unknown[]
-  sourceProjectId: string
-}) => {
-  return {
-    provenance: {sourceProjectId: params.sourceProjectId},
-    records: params.records,
-    signature: {records: params.signatures},
-  }
-}
-
 const getProjectTransferExportProjectPayloadFromContext = (context: ProjectTransferExportContext) => {
   const modelById = getRowsById(context.modelRows, 'modelId')
   const providerConnectionById = getRowsById(context.providerConnectionRows, 'providerConnectionId')
@@ -1652,16 +1640,7 @@ const getProjectTransferExportPromptsPayloadFromContext = (context: ProjectTrans
     }
   })
 
-  return assertProjectTransferPayload(
-    'prompts',
-    getProjectTransferExportCollectionPayload({
-      records,
-      signatures: records.map((record) => {
-        return record.signature
-      }),
-      sourceProjectId: context.project.sourceProjectId,
-    }),
-  )
+  return assertProjectTransferPayload('prompts', records)
 }
 
 const getProjectTransferExportProjectPromptsPayloadFromContext = (context: ProjectTransferExportContext) => {
@@ -1696,16 +1675,7 @@ const getProjectTransferExportProjectPromptsPayloadFromContext = (context: Proje
     }
   })
 
-  return assertProjectTransferPayload(
-    'projectPrompts',
-    getProjectTransferExportCollectionPayload({
-      records,
-      signatures: records.map((record) => {
-        return record.signature
-      }),
-      sourceProjectId: context.project.sourceProjectId,
-    }),
-  )
+  return assertProjectTransferPayload('projectPrompts', records)
 }
 
 const getProjectTransferExportImportRoutesPayloadFromContext = (context: ProjectTransferExportContext) => {
@@ -1725,16 +1695,7 @@ const getProjectTransferExportImportRoutesPayloadFromContext = (context: Project
     }
   })
 
-  return assertProjectTransferPayload(
-    'importRoutes',
-    getProjectTransferExportCollectionPayload({
-      records,
-      signatures: records.map((record) => {
-        return record.signature
-      }),
-      sourceProjectId: context.project.sourceProjectId,
-    }),
-  )
+  return assertProjectTransferPayload('importRoutes', records)
 }
 
 const getProjectTransferExportProjectImportRoutesPayloadFromContext = (context: ProjectTransferExportContext) => {
@@ -1753,16 +1714,7 @@ const getProjectTransferExportProjectImportRoutesPayloadFromContext = (context: 
     }
   })
 
-  return assertProjectTransferPayload(
-    'projectImportRoutes',
-    getProjectTransferExportCollectionPayload({
-      records,
-      signatures: records.map((record) => {
-        return record.signature
-      }),
-      sourceProjectId: context.project.sourceProjectId,
-    }),
-  )
+  return assertProjectTransferPayload('projectImportRoutes', records)
 }
 
 const getProjectTransferExportArticleImportRoutesPayloadFromContext = (context: ProjectTransferExportContext) => {
@@ -2073,16 +2025,7 @@ const getProjectTransferExportProviderConnectionsPayloadFromContext = (context: 
     }
   })
 
-  return assertProjectTransferPayload(
-    'providerConnections',
-    getProjectTransferExportCollectionPayload({
-      records,
-      signatures: records.map((record) => {
-        return record.signature
-      }),
-      sourceProjectId: context.project.sourceProjectId,
-    }),
-  )
+  return assertProjectTransferPayload('providerConnections', records)
 }
 
 const getProjectTransferExportModelsPayloadFromContext = (context: ProjectTransferExportContext) => {
@@ -2113,16 +2056,7 @@ const getProjectTransferExportModelsPayloadFromContext = (context: ProjectTransf
     }
   })
 
-  return assertProjectTransferPayload(
-    'models',
-    getProjectTransferExportCollectionPayload({
-      records,
-      signatures: records.map((record) => {
-        return record.signature
-      }),
-      sourceProjectId: context.project.sourceProjectId,
-    }),
-  )
+  return assertProjectTransferPayload('models', records)
 }
 
 const getProjectTransferExportCurrentReviewRowsSignatureWarnings = (context: ProjectTransferExportContext) => {

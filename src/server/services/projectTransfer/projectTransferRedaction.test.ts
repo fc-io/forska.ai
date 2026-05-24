@@ -44,13 +44,13 @@ test('project-transfer redaction removes package-boundary secrets, local paths, 
     ...payloads.judgmentAssessments[0],
     assessmentComment: 'Assessment note file:///Users/fredrik/assessment.txt',
   }
-  payloads.providerConnections.records[0] = {
-    ...payloads.providerConnections.records[0],
+  payloads.providerConnections[0] = {
+    ...payloads.providerConnections[0],
     baseURL: 'http://127.0.0.1:11434/v1?token=secret-value',
     configJson: {cachePath: '/Users/fredrik/.cache/provider', token: 'api_key=secret-value'},
   }
-  payloads.models.records[0] = {
-    ...payloads.models.records[0],
+  payloads.models[0] = {
+    ...payloads.models[0],
     metadataJson: {localPath: '/Users/fredrik/model.json', options: {thinking: 'medium'}},
   }
 
@@ -59,8 +59,8 @@ test('project-transfer redaction removes package-boundary secrets, local paths, 
   const humanJudgment = redacted.payloads.humanJudgments[0]
   const review = redacted.payloads.reviews[0]
   const assessment = redacted.payloads.judgmentAssessments[0]
-  const providerConnection = redacted.payloads.providerConnections.records[0]
-  const model = redacted.payloads.models.records[0]
+  const providerConnection = redacted.payloads.providerConnections[0]
+  const model = redacted.payloads.models[0]
 
   expect(redacted.payloads.project.description).toBeNull()
   expect(article?.fullText).toBeNull()
@@ -150,17 +150,14 @@ test('project-transfer redaction omits unsafe parent rows and dependent review p
   const payloads = getPayloads()
 
   payloads.articles[0] = {...payloads.articles[0], articleTitle: '/Users/fredrik/private-title.txt'}
-  payloads.prompts.records[0] = {
-    ...payloads.prompts.records[0],
-    originalText: 'Prompt includes sk-secret-value-for-redaction',
-  }
+  payloads.prompts[0] = {...payloads.prompts[0], originalText: 'Prompt includes sk-secret-value-for-redaction'}
 
   const redacted = redactProjectTransferPayloads(payloads)
 
   expect(redacted.payloads.articles).toEqual([])
-  expect(redacted.payloads.prompts.records).toEqual([])
+  expect(redacted.payloads.prompts).toEqual([])
   expect(redacted.payloads.projectArticles).toEqual([])
-  expect(redacted.payloads.projectPrompts.records).toEqual([])
+  expect(redacted.payloads.projectPrompts).toEqual([])
   expect(redacted.payloads.articleImportRoutes).toEqual([])
   expect(redacted.payloads.judgments).toEqual([])
   expect(redacted.payloads.judgmentAssessments).toEqual([])

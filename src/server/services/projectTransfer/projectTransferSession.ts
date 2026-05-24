@@ -8,6 +8,8 @@ import type {
 export type {
   ProjectTransferCompletionPayload,
   ProjectTransferDependencyStatus,
+  ProjectTransferExportReadyPayload,
+  ProjectTransferImportCompletionPayload,
   ProjectTransferPlanSummary,
   ProjectTransferProgressPayload,
   ProjectTransferProgressPhase,

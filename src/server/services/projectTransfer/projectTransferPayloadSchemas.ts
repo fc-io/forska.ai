@@ -1,4 +1,5 @@
 import type {ArticleIdentifierInput, ArticleIdentifierInputKind} from '../../../utils/articleIdentifierNormalization.ts'
+import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {
   getProjectTransferNormalizedArticleIdentifiers,
   getProjectTransferStrongIdentifierComparisonKeys,
@@ -19,7 +20,7 @@ import {
 
 type JsonRecord = Record<string, unknown>
 
-type ProjectTransferRecordContainer = 'collection' | 'record' | 'recordSet'
+type ProjectTransferRecordContainer = 'record' | 'recordSet'
 
 type ProjectTransferRecordContract = {
   requiredFields: readonly string[]
@@ -81,9 +82,7 @@ export type ProjectTransferContentSettings = {
   useTitle: boolean
 }
 
-export type ProjectTransferProjectSettings = ProjectTransferContentSettings & {
-  humanJudgmentMode: 'prompt' | 'summary' | null
-}
+export type ProjectTransferProjectSettings = ProjectTransferContentSettings & {humanJudgmentMode: 'prompt' | 'summary'}
 
 export type ProjectTransferPayloadRecord = JsonRecord & {
   omissions?: ProjectTransferPayloadOmission[]
@@ -92,10 +91,6 @@ export type ProjectTransferPayloadRecord = JsonRecord & {
   signature: ProjectTransferPayloadSignature
   warnings?: ProjectTransferPayloadWarning[]
 }
-
-export type ProjectTransferPayloadCollection<
-  TRecord extends ProjectTransferPayloadRecord = ProjectTransferPayloadRecord,
-> = ProjectTransferPayloadRecord & {records: TRecord[]}
 
 export type ProjectTransferProjectPayload = ProjectTransferPayloadRecord & {
   modelSignature: ProjectTransferPayloadSignature
@@ -139,16 +134,16 @@ export type ProjectTransferPayloadByKey = {
   assetManifest: ProjectTransferAssetManifestPayload
   humanJudgmentSummaries: ProjectTransferPayloadRecord[]
   humanJudgments: ProjectTransferPayloadRecord[]
-  importRoutes: ProjectTransferPayloadCollection
+  importRoutes: ProjectTransferPayloadRecord[]
   judgmentAssessments: ProjectTransferPayloadRecord[]
   judgments: ProjectTransferPayloadRecord[]
-  models: ProjectTransferPayloadCollection
+  models: ProjectTransferPayloadRecord[]
   project: ProjectTransferProjectPayload
   projectArticles: ProjectTransferPayloadRecord[]
-  projectImportRoutes: ProjectTransferPayloadCollection
-  projectPrompts: ProjectTransferPayloadCollection
-  prompts: ProjectTransferPayloadCollection
-  providerConnections: ProjectTransferPayloadCollection
+  projectImportRoutes: ProjectTransferPayloadRecord[]
+  projectPrompts: ProjectTransferPayloadRecord[]
+  prompts: ProjectTransferPayloadRecord[]
+  providerConnections: ProjectTransferPayloadRecord[]
   reviews: ProjectTransferPayloadRecord[]
 }
 
@@ -391,12 +386,11 @@ export const assertProjectTransferProjectSettings = (
   const settings = assertRecord(value, label)
   const contentSettings = assertProjectTransferContentSettings(settings, label)
   const humanJudgmentMode = settings.humanJudgmentMode
-  const isValidHumanJudgmentMode =
-    humanJudgmentMode === null || humanJudgmentMode === 'prompt' || humanJudgmentMode === 'summary'
+  const isValidHumanJudgmentMode = humanJudgmentMode === 'prompt' || humanJudgmentMode === 'summary'
 
   return isValidHumanJudgmentMode
     ? {...contentSettings, humanJudgmentMode}
-    : failProjectTransferPayload(`${label}.humanJudgmentMode must be prompt, summary, or null`)
+    : failProjectTransferPayload(`${label}.humanJudgmentMode must be prompt or summary`)
 }
 
 export const normalizeProjectTransferModelVariant = (variant: unknown): string | null => {
@@ -502,16 +496,20 @@ const assertProviderConnectionPayload = (record: JsonRecord, label: string) => {
 const assertModelPayload = (record: JsonRecord, label: string) => {
   const signature = assertRecord(record.signature, `${label}.signature`)
   const normalizedVariant = normalizeProjectTransferModelVariant(record.variant)
+  const remoteModelId = assertNullableNonEmptyString(record.remoteModelId, `${label}.remoteModelId`)
 
   assertNonEmptyString(record.sourceModelId, `${label}.sourceModelId`)
   assertNonEmptyString(record.sourceProviderConnectionId, `${label}.sourceProviderConnectionId`)
   assertNonEmptyString(record.name, `${label}.name`)
-  assertNullableNonEmptyString(record.remoteModelId, `${label}.remoteModelId`)
   assertNonEmptyString(record.modelName, `${label}.modelName`)
-  assertNullableString(record.displayName, `${label}.displayName`)
+  const displayName = assertNullableString(record.displayName, `${label}.displayName`)
   assertNullableString(record.variant, `${label}.variant`)
   assertNullableString(record.version, `${label}.version`)
   assertBoolean(record.enabled, `${label}.enabled`)
+
+  if (remoteModelId === null && (displayName === null || displayName.trim() === '')) {
+    return failProjectTransferPayload(`${label}.displayName is required when remoteModelId is null`)
+  }
 
   return signature.variant === normalizedVariant
     ? undefined
@@ -685,7 +683,7 @@ const projectTransferPayloadContracts = {
     },
   },
   importRoutes: {
-    container: 'collection',
+    container: 'recordSet',
     record: {
       requiredFields: ['sourceImportRouteId', 'route', 'active'],
       requiredProvenanceFields: ['sourceImportRouteId'],
@@ -723,7 +721,7 @@ const projectTransferPayloadContracts = {
     },
   },
   models: {
-    container: 'collection',
+    container: 'recordSet',
     record: {
       requiredFields: [
         'sourceModelId',
@@ -768,7 +766,7 @@ const projectTransferPayloadContracts = {
     },
   },
   projectImportRoutes: {
-    container: 'collection',
+    container: 'recordSet',
     record: {
       requiredFields: ['sourceProjectImportRouteId', 'sourceProjectId', 'sourceImportRouteId'],
       requiredProvenanceFields: ['sourceImportRouteId', 'sourceProjectId'],
@@ -777,7 +775,7 @@ const projectTransferPayloadContracts = {
     },
   },
   projectPrompts: {
-    container: 'collection',
+    container: 'recordSet',
     record: {
       requiredFields: ['sourceProjectPromptId', 'sourceProjectId', 'sourcePromptId', 'enabled', 'order'],
       requiredProvenanceFields: ['sourceProjectId', 'sourcePromptId'],
@@ -786,7 +784,7 @@ const projectTransferPayloadContracts = {
     },
   },
   prompts: {
-    container: 'collection',
+    container: 'recordSet',
     record: {
       requiredFields: ['sourcePromptId', 'originalText'],
       requiredProvenanceFields: ['sourcePromptId'],
@@ -795,7 +793,7 @@ const projectTransferPayloadContracts = {
     },
   },
   providerConnections: {
-    container: 'collection',
+    container: 'recordSet',
     record: {
       requiredFields: [
         'sourceProviderConnectionId',
@@ -856,20 +854,6 @@ const assertProjectTransferRecordSetPayload = (
   return assertArray(value, `${key} payload`).map((record, index) => {
     return assertProjectTransferPayloadRecord(record, contract, `${key}[${index}]`)
   })
-}
-
-const assertProjectTransferCollectionPayload = (
-  value: unknown,
-  contract: ProjectTransferRecordContract,
-  key: string,
-) => {
-  const payload = assertRecord(value, `${key} payload`)
-  const envelopeContract = {requiredProvenanceFields: ['sourceProjectId'], requiredSignatureFields: ['records']}
-
-  assertFieldPresent(payload, 'records', `${key} payload`)
-  assertPayloadBase(payload, envelopeContract, `${key} payload`)
-
-  return {...payload, records: assertProjectTransferRecordSetPayload(payload.records, contract, `${key}.records`)}
 }
 
 const assetReferenceKindSet = new Set<ProjectTransferAssetReferenceKind>([
@@ -972,9 +956,7 @@ const assertProjectTransferPayloadByContract = (key: ProjectTransferPayloadKey, 
     ? assertProjectTransferAssetManifestPayload(value)
     : contract.container === 'record'
       ? assertProjectTransferPayloadRecord(value, contract.record, key)
-      : contract.container === 'recordSet'
-        ? assertProjectTransferRecordSetPayload(value, contract.record, key)
-        : assertProjectTransferCollectionPayload(value, contract.record, key)
+      : assertProjectTransferRecordSetPayload(value, contract.record, key)
 }
 
 export const assertProjectTransferPayload = <TKey extends ProjectTransferPayloadKey>(
@@ -1072,7 +1054,7 @@ export const serializeProjectTransferPayload = <TKey extends ProjectTransferPayl
 
   return format === 'ndjson' && Array.isArray(packagePayload)
     ? serializeNdjsonPayload(packagePayload)
-    : (JSON.stringify(packagePayload) ?? 'null')
+    : getProjectTransferCanonicalJson(packagePayload)
 }
 
 const sourceProjectId = 'source-project-1'
@@ -1192,7 +1174,6 @@ const judgmentInputSignature = {
   },
   version: 1,
 }
-const baseProvenance = {sourceProjectId}
 const providerSecretRedaction = {
   action: 'redacted',
   code: 'providerSecretRedacted' as const,
@@ -1292,21 +1273,17 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
       sourcePromptId: 'prompt-1',
     },
   ],
-  importRoutes: {
-    provenance: baseProvenance,
-    records: [
-      {
-        active: true,
-        description: 'Covidence fixture import route',
-        name: 'Covidence',
-        provenance: {sourceImportRouteId: 'import-route-1'},
-        route: 'covidence',
-        signature: importRouteSignature,
-        sourceImportRouteId: 'import-route-1',
-      },
-    ],
-    signature: {records: [importRouteSignature]},
-  },
+  importRoutes: [
+    {
+      active: true,
+      description: 'Covidence fixture import route',
+      name: 'Covidence',
+      provenance: {sourceImportRouteId: 'import-route-1'},
+      route: 'covidence',
+      signature: importRouteSignature,
+      sourceImportRouteId: 'import-route-1',
+    },
+  ],
   judgmentAssessments: [
     {
       assessmentComment: 'Reviewed fixture answer',
@@ -1336,27 +1313,23 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
       sourcePromptId: 'prompt-1',
     },
   ],
-  models: {
-    provenance: baseProvenance,
-    records: [
-      {
-        displayName: 'GPT 5.4',
-        enabled: true,
-        metadataJson: {thinking: 'medium'},
-        modelName: 'gpt-5.4',
-        name: 'GPT 5.4',
-        provenance: {sourceModelId: 'model-1', sourceProviderConnectionId: 'provider-connection-1'},
-        remoteModelId: 'gpt-5.4',
-        signature: modelSignature,
-        source: 'manual',
-        sourceModelId: 'model-1',
-        sourceProviderConnectionId: 'provider-connection-1',
-        variant: null,
-        version: null,
-      },
-    ],
-    signature: {records: [modelSignature]},
-  },
+  models: [
+    {
+      displayName: 'GPT 5.4',
+      enabled: true,
+      metadataJson: {thinking: 'medium'},
+      modelName: 'gpt-5.4',
+      name: 'GPT 5.4',
+      provenance: {sourceModelId: 'model-1', sourceProviderConnectionId: 'provider-connection-1'},
+      remoteModelId: 'gpt-5.4',
+      signature: modelSignature,
+      source: 'manual',
+      sourceModelId: 'model-1',
+      sourceProviderConnectionId: 'provider-connection-1',
+      variant: null,
+      version: null,
+    },
+  ],
   project: {
     description: 'Fixture project package',
     modelSignature,
@@ -1375,81 +1348,65 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
       sourceProjectId,
     },
   ],
-  projectImportRoutes: {
-    provenance: baseProvenance,
-    records: [
-      {
-        provenance: {sourceImportRouteId: 'import-route-1', sourceProjectId},
-        signature: {importRouteSignature},
-        sourceImportRouteId: 'import-route-1',
-        sourceProjectId,
-        sourceProjectImportRouteId: 'project-import-route-1',
-      },
-    ],
-    signature: {records: [{importRouteSignature}]},
-  },
-  projectPrompts: {
-    provenance: baseProvenance,
-    records: [
-      {
-        archived: false,
-        criteriaDisposition: 'include',
-        criteriaSectionKey: 'inclusion',
-        criteriaSectionLabel: 'Inclusion',
+  projectImportRoutes: [
+    {
+      provenance: {sourceImportRouteId: 'import-route-1', sourceProjectId},
+      signature: {importRouteSignature},
+      sourceImportRouteId: 'import-route-1',
+      sourceProjectId,
+      sourceProjectImportRouteId: 'project-import-route-1',
+    },
+  ],
+  projectPrompts: [
+    {
+      archived: false,
+      criteriaDisposition: 'include',
+      criteriaSectionKey: 'inclusion',
+      criteriaSectionLabel: 'Inclusion',
+      enabled: true,
+      order: 1,
+      originSourceProjectId: null,
+      provenance: {sourceProjectId, sourcePromptId: 'prompt-1'},
+      signature: {
+        criteria: {disposition: 'include', sectionKey: 'inclusion'},
         enabled: true,
         order: 1,
-        originSourceProjectId: null,
-        provenance: {sourceProjectId, sourcePromptId: 'prompt-1'},
-        signature: {
-          criteria: {disposition: 'include', sectionKey: 'inclusion'},
-          enabled: true,
-          order: 1,
-          promptSignature,
-        },
-        sourceProjectId,
-        sourceProjectPromptId: 'project-prompt-1',
-        sourcePromptId: 'prompt-1',
+        promptSignature,
       },
-    ],
-    signature: {records: [{promptSignature}]},
-  },
-  prompts: {
-    provenance: baseProvenance,
-    records: [
-      {
-        archived: false,
-        contentHash: 'prompt-content-hash-1',
-        originalText: 'Include the study?',
-        promptHeading: 'Eligibility',
-        provenance: {sourcePromptId: 'prompt-1'},
-        signature: promptSignature,
-        sourcePromptId: 'prompt-1',
-        transformedText: null,
-        type: 'system',
-      },
-    ],
-    signature: {records: [promptSignature]},
-  },
-  providerConnections: {
-    provenance: baseProvenance,
-    records: [
-      {
-        authMode: 'apiKey',
-        baseURL: null,
-        configJson: {apiVersion: '2026-05-21'},
-        enabled: true,
-        label: 'OpenAI fixture',
-        maxInflightRequests: 4,
-        provenance: {sourceProviderConnectionId: 'provider-connection-1'},
-        providerKind: 'openai',
-        secretRef: null,
-        signature: providerConnectionSignature,
-        sourceProviderConnectionId: 'provider-connection-1',
-        warnings: [providerSecretRedaction],
-      },
-    ],
-    signature: {records: [providerConnectionSignature]},
-  },
+      sourceProjectId,
+      sourceProjectPromptId: 'project-prompt-1',
+      sourcePromptId: 'prompt-1',
+    },
+  ],
+  prompts: [
+    {
+      archived: false,
+      contentHash: 'prompt-content-hash-1',
+      originalText: 'Include the study?',
+      promptHeading: 'Eligibility',
+      provenance: {sourcePromptId: 'prompt-1'},
+      signature: promptSignature,
+      sourcePromptId: 'prompt-1',
+      transformedText: null,
+      type: 'system',
+    },
+  ],
+  providerConnections: [
+    {
+      authMode: 'apiKey',
+      baseURL: null,
+      configJson: {apiVersion: '2026-05-21'},
+      enabled: true,
+      label: 'OpenAI fixture',
+      maxInflightRequests: 4,
+      provenance: {sourceProviderConnectionId: 'provider-connection-1'},
+      providerKind: 'openai',
+      secretRef: null,
+      signature: providerConnectionSignature,
+      sourceProviderConnectionId: 'provider-connection-1',
+      warnings: [providerSecretRedaction],
+    },
+  ],
   reviews: [
     {
       humanReviewInputSignature: reviewHumanReviewInputSignature,
