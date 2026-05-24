@@ -29,7 +29,7 @@ Use special audit software. Manual search is not enough.
 | ---------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `gitleaks`                                                 | Yes      | Primary all-history and current-tree secret scan.                                                     | Run locally with redacted JSON reports outside the repo.                                                                            |
 | `trufflehog`                                               | Yes      | Independent all-history secret scan with verification where possible.                                 | Run locally; keep JSONL output outside the repo and treat it as raw sensitive evidence unless the installed version redacts output. |
-| `rg` and `git log -S`                                      | Yes      | Manual review for old APIs, private infra strings, logging paths, and project-specific terms.         | Required because generic secret scanners miss project-specific leakage.                                                             |
+| `rg` and `git log -S`/`-G`                                 | Yes      | Manual review for old APIs, private infra strings, logging paths, and project-specific terms.         | Required because generic secret scanners miss project-specific leakage.                                                             |
 | GitHub secret scanning or equivalent public-repo guardrail | Later    | Continuous public-repo protection after the clean mirror exists.                                      | Do not replace the pre-release local scan with this.                                                                                |
 | `detect-secrets`, `git-secrets`, or Semgrep custom rules   | Optional | Extra scan if `gitleaks` or `trufflehog` produce ambiguous coverage or if CI needs a baseline format. | Add only if it catches a known gap.                                                                                                 |
 
@@ -52,6 +52,12 @@ git fetch --all --tags --prune
 export AUDIT_DIR="${AUDIT_DIR:-../forska-security-audit}"
 export AUDIT_TREE="$AUDIT_DIR/current-tree"
 mkdir -p "$AUDIT_DIR/reports" "$AUDIT_DIR/findings"
+git status --short > "$AUDIT_DIR/reports/working-tree-status.txt"
+if test -s "$AUDIT_DIR/reports/working-tree-status.txt"; then
+  cat "$AUDIT_DIR/reports/working-tree-status.txt" >&2
+  echo "Stop: commit, remove, or explicitly exclude these changes before auditing HEAD." >&2
+  exit 1
+fi
 git --version > "$AUDIT_DIR/reports/git-version.txt"
 rg --version > "$AUDIT_DIR/reports/rg-version.txt"
 gitleaks version > "$AUDIT_DIR/reports/gitleaks-version.txt"
@@ -68,7 +74,8 @@ git ls-tree -r -z --name-only HEAD > "$AUDIT_DIR/reports/tracked-current-tree-fi
 
 - Do not commit raw scanner reports.
 - Do not paste unredacted secrets into markdown findings.
-- Run current-tree content scans against `$AUDIT_TREE`, not the live working directory, so ignored local data, uncommitted local edits, and audit reports do not get scanned as product content.
+- Stop if `working-tree-status.txt` is non-empty. The current-tree archive is `HEAD`, so uncommitted product edits must be committed, removed, or explicitly excluded from the release candidate before scanning.
+- Run current-tree content scans against `$AUDIT_TREE`, not the live working directory, so ignored local data and audit reports do not get scanned as product content.
 - Use `rg --hidden --no-ignore` for `$AUDIT_TREE` scans. The archived tree contains `.gitignore`, but tracked ignored files still need audit coverage.
 - If reports must be written inside the repo, add that folder to `.git/info/exclude` before any current-tree scanner runs and verify the scanner does not scan its own report output.
 - Treat raw `rg`, `git log`, `gitleaks`, and `trufflehog` report files as sensitive evidence. Keep them outside git and copy only redacted summaries into findings.
@@ -101,8 +108,8 @@ gitleaks dir "$AUDIT_TREE" --redact --report-format json --report-path "$AUDIT_D
 
 ```bash
 git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"/api/" > "$AUDIT_DIR/reports/history-api-paths.txt"
-git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"AdminInvestigate" > "$AUDIT_DIR/reports/history-admin-investigate.txt"
-git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"DuckdbStudio" > "$AUDIT_DIR/reports/history-duckdb-studio.txt"
+git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -G"AdminInvestigate|ArticleAdmin|DuckdbStudio|NvidiaSmi|LlmStatus|ApiProxy|TokensRoutes|UsersRoutes|RuntimeAssets|ProviderConnectionsRoutes|ProviderModelsRoutes" > "$AUDIT_DIR/reports/history-sensitive-route-names.txt"
+git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -G'https?://|\b10\.|\b192\.168\.|\b172\.(1[6-9]|2[0-9]|3[0-1])\.' > "$AUDIT_DIR/reports/history-url-private-ip.txt"
 git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"STACK_ROOT" > "$AUDIT_DIR/reports/history-stack-root.txt"
 git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"SSH_ALIAS" > "$AUDIT_DIR/reports/history-ssh-alias.txt"
 git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"LOG_DIR" > "$AUDIT_DIR/reports/history-log-dir.txt"
@@ -112,8 +119,8 @@ git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"FORSKA_RUNT
 5. Run current-tree manual scans for project-specific sensitive strings.
 
 ```bash
-rg -n --hidden --no-ignore "AKIA|AIza|sk-|xox[baprs]-|BEGIN (RSA|OPENSSH|EC|PRIVATE) KEY|Bearer [A-Za-z0-9._-]+|api[_-]?key|secret|token|password|private[_-]?key" "$AUDIT_TREE" > "$AUDIT_DIR/reports/current-tree-secret-string-hits.raw.txt" || true
-rg -n --hidden --no-ignore "ssh|hostname|STACK_ROOT|SSH_ALIAS|backup|cluster|internal|private|LOG_DIR|FORSKA_RUNTIME_PROFILE|logs/runtime" "$AUDIT_TREE" > "$AUDIT_DIR/reports/current-tree-infra-string-hits.raw.txt" || true
+rg -n --hidden --no-ignore "AKIA|AIza|sk-|gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|glpat-[A-Za-z0-9_-]+|hf_[A-Za-z0-9]+|xox[baprs]-|BEGIN (RSA|OPENSSH|EC|PRIVATE) KEY|Bearer [A-Za-z0-9._-]+|api[_-]?key|secret|token|password|private[_-]?key" "$AUDIT_TREE" > "$AUDIT_DIR/reports/current-tree-secret-string-hits.raw.txt" || true
+rg -n --hidden --no-ignore "ssh|hostname|STACK_ROOT|SSH_ALIAS|backup|cluster|internal|private|LOG_DIR|FORSKA_RUNTIME_PROFILE|logs/runtime|https?://|\\b10\\.|\\b192\\.168\\.|\\b172\\.(1[6-9]|2[0-9]|3[0-1])\\." "$AUDIT_TREE" > "$AUDIT_DIR/reports/current-tree-infra-string-hits.raw.txt" || true
 ```
 
 6. Triage every scanner and manual-search hit.
@@ -173,7 +180,7 @@ For each flow, record:
 ```bash
 git ls-tree -r --name-only HEAD | rg "fixture|fixtures|sample|example|snapshot|export|pdf|ndjson|jsonl|log|data|cache|tmp|artifact|backup|covidence|openalex|fhir|ehr|token|secret|credential|key|user_uploaded" > "$AUDIT_DIR/reports/tracked-artifact-paths.txt" || true
 git status --ignored --short > "$AUDIT_DIR/reports/git-status-ignored.txt"
-find data cache logs tmp .tmp .temp temp test-results coverage out dist desktopBuild desktopArtifacts .desktopBuild .desktopArtifacts .cache .secrets assets/article_pdfs assets/user_uploaded_article_pdfs assets/covidence_2 assets/covidence_imports assets/covidence_running assets/structured_file_imports backups openalex_snapshot models pgdata init-db -type f -print 2>/dev/null > "$AUDIT_DIR/reports/local-generated-files.txt" || true
+find data cache logs tmp .tmp .temp temp test-results coverage out dist desktopBuild desktopArtifacts .desktopBuild .desktopArtifacts .cache .secrets assets/article_pdfs assets/user_uploaded_article_pdfs assets/covidence_2 assets/covidence_imports assets/covidence_running assets/covidence_study assets/structured_file_imports backups openalex_snapshot models pgdata init-db -type f -print 2>/dev/null > "$AUDIT_DIR/reports/local-generated-files.txt" || true
 ```
 
 For each tracked or publishable artifact, decide:
@@ -201,7 +208,7 @@ Record:
 5. Confirm ignored-path protection.
 
 ```bash
-git check-ignore -vn data/.audit-sentinel cache/.audit-sentinel logs/.audit-sentinel tmp/.audit-sentinel .tmp/.audit-sentinel .temp/.audit-sentinel temp/.audit-sentinel test-results/.audit-sentinel coverage/.audit-sentinel out/.audit-sentinel dist/.audit-sentinel desktopBuild/.audit-sentinel desktopArtifacts/.audit-sentinel .desktopBuild/.audit-sentinel .desktopArtifacts/.audit-sentinel .cache/.audit-sentinel .secrets/.audit-sentinel assets/article_pdfs/.audit-sentinel assets/user_uploaded_article_pdfs/.audit-sentinel assets/covidence_2/.audit-sentinel assets/covidence_imports/.audit-sentinel assets/covidence_running/.audit-sentinel assets/structured_file_imports/.audit-sentinel backups/.audit-sentinel openalex_snapshot/.audit-sentinel models/.audit-sentinel pgdata/.audit-sentinel init-db/.audit-sentinel node_modules/.audit-sentinel > "$AUDIT_DIR/reports/ignored-path-check.txt"
+git check-ignore -vn data/.audit-sentinel cache/.audit-sentinel logs/.audit-sentinel tmp/.audit-sentinel .tmp/.audit-sentinel .temp/.audit-sentinel temp/.audit-sentinel test-results/.audit-sentinel coverage/.audit-sentinel out/.audit-sentinel dist/.audit-sentinel desktopBuild/.audit-sentinel desktopArtifacts/.audit-sentinel .desktopBuild/.audit-sentinel .desktopArtifacts/.audit-sentinel .cache/.audit-sentinel .secrets/.audit-sentinel assets/article_pdfs/.audit-sentinel assets/user_uploaded_article_pdfs/.audit-sentinel assets/covidence_2/.audit-sentinel assets/covidence_imports/.audit-sentinel assets/covidence_running/.audit-sentinel assets/covidence_study/.audit-sentinel assets/structured_file_imports/.audit-sentinel backups/.audit-sentinel openalex_snapshot/.audit-sentinel models/.audit-sentinel pgdata/.audit-sentinel init-db/.audit-sentinel node_modules/.audit-sentinel > "$AUDIT_DIR/reports/ignored-path-check.txt"
 rg -n "data/|cache|logs|tmp/|\\.tmp/|\\.temp/|temp/|test-results/|coverage|out|dist|desktopBuild|desktopArtifacts|\\.desktopBuild|\\.desktopArtifacts|\\.cache|\\.secrets|assets/article_pdfs|assets/user_uploaded_article_pdfs|assets/covidence_|assets/structured_file_imports|backups|openalex_snapshot|models|pgdata|init-db" .gitignore .prettierignore .eslintignore 2>/dev/null > "$AUDIT_DIR/reports/ignore-rule-source-hits.txt" || true
 ```
 
@@ -223,7 +230,7 @@ The `.audit-sentinel` paths do not need to exist. Treat any `ignored-path-check.
 
 ## Deliverables
 
-- `$AUDIT_DIR/reports/audit-head.txt`, `$AUDIT_DIR/reports/reachable-refs.txt`, `$AUDIT_DIR/reports/origin-refs.txt`, and `$AUDIT_DIR/reports/remotes.txt` kept locally, outside git.
+- `$AUDIT_DIR/reports/audit-head.txt`, `$AUDIT_DIR/reports/working-tree-status.txt`, `$AUDIT_DIR/reports/reachable-refs.txt`, `$AUDIT_DIR/reports/origin-refs.txt`, and `$AUDIT_DIR/reports/remotes.txt` kept locally, outside git.
 - Tool-version reports for `git`, `rg`, `gitleaks`, and `trufflehog`, kept locally, outside git.
 - Local redacted `gitleaks` reports and local raw-or-redacted `trufflehog` JSONL reports, kept outside git.
 - A security finding log with redacted evidence and closure status.
@@ -245,8 +252,9 @@ The `.audit-sentinel` paths do not need to exist. Treat any `ignored-path-check.
 
 - `gitleaks` all-history scan runs after `git fetch --all --tags --prune`, covers all reachable refs, and every hit is triaged.
 - `trufflehog` all-history scan runs after remote refs are refreshed, covers the local repo, and every hit is triaged.
+- `working-tree-status.txt` is recorded and empty before creating `$AUDIT_TREE`, so the current-tree scan matches the intended release commit.
 - Tool versions are recorded for `git`, `rg`, `gitleaks`, and `trufflehog`.
-- Manual `git log -S` searches cover old API paths, admin/debug route names, private infra strings, runtime log variables, and runtime profile variables across all tracked paths in the scanned refs.
+- Manual `git log -S` and `git log -G` searches cover old API paths, admin/debug route names, private URLs and IPs, private infra strings, runtime log variables, and runtime profile variables across all tracked paths in the scanned refs.
 - Manual `rg --hidden --no-ignore` searches cover current-tree secrets, private infra strings, env vars, provider credentials, token storage, runtime logs, fixtures, samples, generated artifacts, publication artifacts, and hidden config.
 - Every real secret is rotated or revoked before any public release decision.
 - Every current tracked fixture, sample, export, snapshot, PDF, NDJSON, JSONL, log-like artifact, and ignored/generated local data family has a keep/rewrite/remove/move decision or is explicitly excluded from the public snapshot.
