@@ -121,12 +121,14 @@ test('project-transfer export reads archived app-table scope and serializes lock
     projectArticleIds: string[]
     providerConnectionIds: string[]
     reviewIds: string[]
+    serializedArticleFullTextPdf: string | null
     serializedArticleHasFullTextPdf: boolean
     serializedJudgmentHasDeleteGeneration: boolean
     settingsArchived: boolean
     summaryReviewIds: string[]
     warnings: unknown[]
     warningCodes: string[]
+    warningsHaveSharedShape: boolean
   }>(`
     await database.run(\`
       INSERT INTO app.provider_connection (
@@ -729,12 +731,16 @@ test('project-transfer export reads archived app-table scope and serializes lock
       projectArticleIds: archived.payloads.projectArticles.map((link) => link.sourceArticleId),
       providerConnectionIds: archived.payloads.providerConnections.records.map((connection) => connection.sourceProviderConnectionId),
       reviewIds: archived.payloads.reviews.map((review) => review.sourceReviewId),
+      serializedArticleFullTextPdf: serializedArticle.fullTextPdf,
       serializedArticleHasFullTextPdf: Object.hasOwn(serializedArticle, 'fullTextPdf'),
       serializedJudgmentHasDeleteGeneration: Object.hasOwn(serializedJudgment, 'deleteGeneration'),
       settingsArchived: settings.archived,
       summaryReviewIds: summary.payloads.reviews.map((review) => review.sourceReviewId),
       warnings: archived.warnings,
       warningCodes: archived.warnings.map((warning) => warning.code).sort(),
+      warningsHaveSharedShape: archived.warnings.every((warning) => {
+        return warning.action && warning.code && warning.message && warning.scope && warning.severity
+      }),
     }))
   `)
 
@@ -784,17 +790,26 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.judgmentKeys).toContain('deleteGeneration')
   expect(result.judgmentKeys).toContain('snapshotProjectModelName')
   expect(result.serializedArticleHasFullTextPdf).toBe(true)
+  expect(result.serializedArticleFullTextPdf).toBeNull()
   expect(result.serializedJudgmentHasDeleteGeneration).toBe(true)
-  expect(result.warningCodes).toEqual([
-    'ambiguousJudgmentVisibleKey',
-    'chunkedJudgmentInputProofMissing',
-    'currentReviewRowsHumanReviewInputSignature',
-    'currentReviewRowsJudgmentInputSignature',
-  ])
-  expect(result.duplicateWarning).toMatchObject({code: 'ambiguousJudgmentVisibleKey', payloadKey: 'judgments'})
+  expect(result.warningCodes).toContain('ambiguousJudgmentVisibleKey')
+  expect(result.warningCodes).toContain('articleFullTextOmitted')
+  expect(result.warningCodes).toContain('chunkedJudgmentInputProofMissing')
+  expect(result.warningCodes).toContain('currentReviewRowsHumanReviewInputSignature')
+  expect(result.warningCodes).toContain('currentReviewRowsJudgmentInputSignature')
+  expect(result.warningsHaveSharedShape).toBe(true)
+  expect(result.duplicateWarning).toMatchObject({
+    action: 'omitted',
+    code: 'ambiguousJudgmentVisibleKey',
+    scope: 'judgments',
+    severity: 'fidelity',
+  })
   expect(result.chunkedWarning).toMatchObject({
+    action: 'omitted',
     code: 'chunkedJudgmentInputProofMissing',
     details: {omittedJudgmentCount: 1, sourceJudgmentIds: ['judgment-chunked-no-proof']},
+    scope: 'judgments',
+    severity: 'fidelity',
   })
   expect(result.invalidDateMessage).toContain('date_from must be before or equal to date_to')
   expect(result.invalidFulltextMessage).toContain('use_fulltext and use_fulltext_no_images cannot both be enabled')

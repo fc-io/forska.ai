@@ -32,9 +32,11 @@ const getValidManifest = () => {
     source: {appVersion: '0.2.1', projectId: 'source-project-id', projectName: 'Project transfer source'},
     warnings: [
       {
+        action: 'redacted',
         code: 'redacted_secret',
+        jsonPointer: '/records/0/secretRef',
         message: 'Provider connection secret was omitted',
-        payloadKey: 'providerConnections',
+        scope: 'providerConnections',
         severity: 'warning',
       },
     ],
@@ -48,7 +50,7 @@ test('validates project-transfer manifest payload contracts with camelCase packa
   expect(manifest.payloads.project?.path).toBe('project.json')
   expect(manifest.payloads.articles?.path).toBe('articles.ndjson')
   expect(manifest.payloads.project?.checksumSha256).toMatch(/^[a-f0-9]{64}$/)
-  expect(manifest.warnings?.[0]).toMatchObject({code: 'redacted_secret', payloadKey: 'providerConnections'})
+  expect(manifest.warnings?.[0]).toMatchObject({code: 'redacted_secret', scope: 'providerConnections'})
 })
 
 test('rejects unsupported project-transfer manifest schema versions', () => {

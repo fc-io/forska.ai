@@ -149,24 +149,10 @@ const assertManifestSource = (source: unknown): ProjectTransferManifestSource | 
 
 const assertManifestWarning = (warning: unknown): ProjectTransferManifestWarning => {
   const parsed = projectTransferManifestWarningShape.assert(warning) as ProjectTransferManifestWarning
-  const payloadKey = parsed.payloadKey
 
-  if (payloadKey !== undefined) {
-    assertPayloadKey(payloadKey)
-  }
-
-  if (parsed.path !== undefined) {
-    const pathValidation = validateProjectTransferArchiveMemberPath({pathValue: parsed.path})
-
-    if (!pathValidation.ok) {
-      return throwProjectTransferManifestError(
-        `warning_path_${pathValidation.error.code}`,
-        getPathErrorMessage(pathValidation.error),
-      )
-    }
-  }
-
-  return parsed
+  return parsed.scope.trim() !== ''
+    ? parsed
+    : throwProjectTransferManifestError('warning_scope', 'warning scope must not be empty')
 }
 
 const assertManifestWarnings = (warnings: unknown): ProjectTransferManifestWarning[] | undefined => {
