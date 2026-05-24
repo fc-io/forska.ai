@@ -231,17 +231,23 @@ test('rejects provider/model edge cases while normalizing empty model variants t
 
 test('rejects invalid asset package paths and checksum signatures', () => {
   const assetManifest = getProjectTransferPayloadFixture('assetManifest')
-  const asset = getOnlyRecord(assetManifest.assets)
+  const asset = getOnlyRecord(assetManifest.entries)
   const invalidPathResult = validateProjectTransferPayload('assetManifest', {
     ...assetManifest,
-    assets: [{...asset, packagePath: '../assets/file.pdf'}],
+    entries: [{...asset, packagePath: '../assets/file.pdf'}],
   })
   const invalidChecksumResult = validateProjectTransferPayload('assetManifest', {
     ...assetManifest,
-    assets: [{...asset, checksumSha256: 'not-a-sha'}],
+    entries: [{...asset, checksumSha256: 'not-a-sha'}],
+  })
+  const oldEnvelopeResult = validateProjectTransferPayload('assetManifest', {
+    assets: [{...asset, packagePath: 'assets/file.pdf'}],
+    provenance: {sourceProjectId: 'source-project-1'},
+    signature: {assets: []},
   })
 
-  expect(projectTransferPayloadFixtures.assetManifest.assets).toHaveLength(1)
+  expect(projectTransferPayloadFixtures.assetManifest.entries).toHaveLength(1)
   expect(getValidationError(invalidPathResult)).toContain('Project transfer path contains traversal')
   expect(getValidationError(invalidChecksumResult)).toContain('checksumSha256 must be lowercase SHA-256 hex')
+  expect(getValidationError(oldEnvelopeResult)).toContain('assetManifest payload must use top-level entries only')
 })

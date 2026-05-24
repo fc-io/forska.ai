@@ -19,7 +19,7 @@ const getSharedShapeResult = (
   })
 }
 
-test('project-transfer redaction removes package-boundary secrets, local paths, URLs, and full-text-derived fields', () => {
+test('project-transfer redaction removes package-boundary secrets, local paths, URLs, and non-asset full-text-derived fields', () => {
   const payloads = getPayloads()
 
   payloads.project.description = 'Local note at /Users/fredrik/secret-project.txt'
@@ -64,7 +64,7 @@ test('project-transfer redaction removes package-boundary secrets, local paths, 
 
   expect(redacted.payloads.project.description).toBeNull()
   expect(article?.fullText).toBeNull()
-  expect(article?.fullTextHtml).toBeNull()
+  expect(article?.fullTextHtml).toBe('<p>Full text</p>')
   expect(article?.fullTextPdf).toBeNull()
   expect(article?.url).toBeNull()
   expect(article?.originalData).toEqual({apiKey: '[redacted]', nested: {path: '[redacted-local-path]'}})

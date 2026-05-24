@@ -80,6 +80,7 @@ const runProjectTransferExportScript = <T>(body: string) => {
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
     removeFileIfExists(`${duckdbPath}.tmp`)
     removeFileIfExists(`${duckdbPath}.tmp/`)
+    removeFileIfExists('assets/project-transfer-export-test')
     removeFileIfExists('/tmp/duckdb-temp')
   }
 }
@@ -89,6 +90,22 @@ test('project-transfer export reads archived app-table scope and serializes lock
     articleIds: string[]
     articleImportRouteIds: string[]
     articleKeys: string[]
+    assetEntryPaths: string[]
+    assetManifestEntries: Array<{
+      byteLength: number
+      checksumSha256: string
+      packagePath: string
+      references: Array<{
+        fieldPath?: string
+        jsonPointer?: string
+        kind: string
+        payloadFile: string
+        sourceArticleId?: string
+        sourceRef: string
+      }>
+    }>
+    assetManifestHasAssets: boolean
+    assetManifestHasEnvelope: boolean
     duplicateWarning: unknown
     chunkedWarning: unknown
     humanJudgmentIds: string[]
@@ -121,6 +138,8 @@ test('project-transfer export reads archived app-table scope and serializes lock
     projectArticleIds: string[]
     providerConnectionIds: string[]
     reviewIds: string[]
+    serializedArticleFullTextAssets: unknown
+    serializedArticleFullTextHtml: string | null
     serializedArticleFullTextPdf: string | null
     serializedArticleHasFullTextPdf: boolean
     serializedJudgmentHasDeleteGeneration: boolean
@@ -130,6 +149,14 @@ test('project-transfer export reads archived app-table scope and serializes lock
     warningCodes: string[]
     warningsHaveSharedShape: boolean
   }>(`
+    const exportAssetRoot = 'assets/project-transfer-export-test'
+    const {mkdir} = await import('node:fs/promises')
+
+    await mkdir(exportAssetRoot, {recursive: true})
+    await Bun.write(exportAssetRoot + '/route.pdf', 'route-pdf-content')
+    await Bun.write(exportAssetRoot + '/figure.png', 'figure-content')
+    await Bun.write(exportAssetRoot + '/html-image.png', 'html-image-content')
+
     await database.run(\`
       INSERT INTO app.provider_connection (
         id,
@@ -413,12 +440,12 @@ test('project-transfer export reads archived app-table scope and serializes lock
           '12345',
           'https://example.test/route',
           'full text',
-          '<p>full text</p>',
-          'assets/route.pdf',
+          '<p>full text</p><img src="/api/runtime-asset?path=assets/project-transfer-export-test/html-image.png">',
+          'assets/project-transfer-export-test/route.pdf',
           'pdf',
           'pdf',
           TIMESTAMPTZ '2026-02-03T00:00:00Z',
-          CAST('{"files":["route.png"]}' AS JSON),
+          CAST('{"files":["assets/project-transfer-export-test/figure.png"],"label":"route.png"}' AS JSON),
           'completed',
           NULL,
           1,
@@ -693,6 +720,17 @@ test('project-transfer export reads archived app-table scope and serializes lock
       articleIds: archived.payloads.articles.map((article) => article.sourceArticleId),
       articleImportRouteIds: archived.payloads.articleImportRoutes.map((link) => link.sourceArticleImportRouteId),
       articleKeys: Object.keys(archived.payloads.articles[0]).sort(),
+      assetEntryPaths: archived.assetEntries.map((entry) => entry.path).sort(),
+      assetManifestEntries: archived.payloads.assetManifest.entries.map((entry) => {
+        return {
+          byteLength: entry.byteLength,
+          checksumSha256: entry.checksumSha256,
+          packagePath: entry.packagePath,
+          references: entry.references,
+        }
+      }).sort((left, right) => left.packagePath.localeCompare(right.packagePath)),
+      assetManifestHasAssets: Object.hasOwn(archived.payloads.assetManifest, 'assets'),
+      assetManifestHasEnvelope: Object.hasOwn(archived.payloads.assetManifest, 'signature') || Object.hasOwn(archived.payloads.assetManifest, 'provenance'),
       chunkedWarning: archived.warnings.find((warning) => warning.code === 'chunkedJudgmentInputProofMissing') ?? null,
       duplicateWarning: archived.warnings[0] ?? null,
       humanJudgmentIds: archived.payloads.humanJudgments.map((judgment) => judgment.sourceHumanJudgmentId),
@@ -731,6 +769,8 @@ test('project-transfer export reads archived app-table scope and serializes lock
       projectArticleIds: archived.payloads.projectArticles.map((link) => link.sourceArticleId),
       providerConnectionIds: archived.payloads.providerConnections.records.map((connection) => connection.sourceProviderConnectionId),
       reviewIds: archived.payloads.reviews.map((review) => review.sourceReviewId),
+      serializedArticleFullTextAssets: serializedArticle.fullTextAssets,
+      serializedArticleFullTextHtml: serializedArticle.fullTextHtml,
       serializedArticleFullTextPdf: serializedArticle.fullTextPdf,
       serializedArticleHasFullTextPdf: Object.hasOwn(serializedArticle, 'fullTextPdf'),
       serializedJudgmentHasDeleteGeneration: Object.hasOwn(serializedJudgment, 'deleteGeneration'),
@@ -777,6 +817,45 @@ test('project-transfer export reads archived app-table scope and serializes lock
       version: 'medium',
     },
   ])
+  expect(result.assetEntryPaths).toEqual([
+    'assets/project-transfer-export-test/figure.png',
+    'assets/project-transfer-export-test/html-image.png',
+    'assets/project-transfer-export-test/route.pdf',
+  ])
+  expect(result.assetManifestHasAssets).toBe(false)
+  expect(result.assetManifestHasEnvelope).toBe(false)
+  expect(
+    result.assetManifestEntries.map((entry) => {
+      return entry.packagePath
+    }),
+  ).toEqual(result.assetEntryPaths)
+  expect(
+    result.assetManifestEntries.every((entry) => {
+      return entry.byteLength > 0 && /^[a-f0-9]{64}$/.test(entry.checksumSha256)
+    }),
+  ).toBe(true)
+  expect(
+    result.assetManifestEntries.flatMap((entry) => {
+      return entry.references.map((reference) => {
+        return reference.kind
+      })
+    }),
+  ).toEqual(['fullTextAssets', 'fullTextHtml', 'fullTextPdf'])
+  expect(
+    result.assetManifestEntries.flatMap((entry) => {
+      return entry.references.map((reference) => {
+        return {
+          payloadFile: reference.payloadFile,
+          sourceArticleId: reference.sourceArticleId,
+          sourceRef: reference.sourceRef,
+        }
+      })
+    }),
+  ).toEqual([
+    {payloadFile: 'articles.ndjson', sourceArticleId: 'article-route-in', sourceRef: 'article:article-route-in'},
+    {payloadFile: 'articles.ndjson', sourceArticleId: 'article-route-in', sourceRef: 'article:article-route-in'},
+    {payloadFile: 'articles.ndjson', sourceArticleId: 'article-route-in', sourceRef: 'article:article-route-in'},
+  ])
   expect(result.articleKeys).toContain('originalData')
   expect(result.articleKeys).toContain('sourceMetadata')
   expect(result.articleKeys).toContain('fullTextPdf')
@@ -790,7 +869,15 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.judgmentKeys).toContain('deleteGeneration')
   expect(result.judgmentKeys).toContain('snapshotProjectModelName')
   expect(result.serializedArticleHasFullTextPdf).toBe(true)
-  expect(result.serializedArticleFullTextPdf).toBeNull()
+  expect(result.serializedArticleFullTextPdf).toBe('assets/project-transfer-export-test/route.pdf')
+  expect(result.serializedArticleFullTextAssets).toEqual({
+    files: ['assets/project-transfer-export-test/figure.png'],
+    label: 'route.png',
+  })
+  expect(result.serializedArticleFullTextHtml ?? '').toContain(
+    'src="assets/project-transfer-export-test/html-image.png"',
+  )
+  expect(result.serializedArticleFullTextHtml ?? '').not.toContain('/api/runtime-asset')
   expect(result.serializedJudgmentHasDeleteGeneration).toBe(true)
   expect(result.warningCodes).toContain('ambiguousJudgmentVisibleKey')
   expect(result.warningCodes).toContain('articleFullTextOmitted')

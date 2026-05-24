@@ -15,6 +15,11 @@ import {processFulltextForLLM} from '../../utils/fulltextProcessing.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getDateValue, getJsonValue, getSqlLiteral} from '../appQueryHelpers.ts'
 import type {AppQueryDatabaseService} from '../appQueryServiceCore.ts'
+import {
+  filterProjectTransferExportAssetCollectionByArticles,
+  getProjectTransferExportAssetCollectionForArticles,
+  type ProjectTransferExportAssetEntry,
+} from './projectTransferExportAssets.ts'
 import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import type {ProjectTransferArticleIdentifierSource} from './projectTransferIdentifierNormalization.ts'
 import {getProjectTransferStrongIdentifierComparisonKeys} from './projectTransferIdentifierNormalization.ts'
@@ -321,6 +326,7 @@ type ProjectTransferExportArticlePayloadRecord = ProjectTransferPayloadRecord
   }
 
 export type ProjectTransferExportPayloadAssembly = {
+  assetEntries: ProjectTransferExportAssetEntry[]
   payloads: ProjectTransferPayloadByKey
   warnings: ProjectTransferManifestWarning[]
 }
@@ -2119,14 +2125,6 @@ const getProjectTransferExportModelsPayloadFromContext = (context: ProjectTransf
   )
 }
 
-const getProjectTransferExportAssetManifestPayloadFromContext = (context: ProjectTransferExportContext) => {
-  return assertProjectTransferPayload('assetManifest', {
-    assets: [],
-    provenance: {sourceProjectId: context.project.sourceProjectId},
-    signature: {assets: []},
-  })
-}
-
 const getProjectTransferExportCurrentReviewRowsSignatureWarnings = (context: ProjectTransferExportContext) => {
   const humanReviewRowCount =
     context.humanJudgmentRows.length + context.humanJudgmentSummaryRows.length + context.reviewRows.length
@@ -2417,31 +2415,43 @@ export const getProjectTransferExportPayloads = async (
   options: ProjectTransferExportQueryOptions = {},
 ): Promise<ProjectTransferExportPayloadAssembly> => {
   const context = await getProjectTransferExportContext(projectId, options)
+  const assetCollection = await getProjectTransferExportAssetCollectionForArticles(context.articleRows)
+  const contextWithAssets = {...context, articleRows: assetCollection.articles}
   const payloads = {
-    articleImportRoutes: getProjectTransferExportArticleImportRoutesPayloadFromContext(context),
-    articles: assertProjectTransferPayload('articles', context.articleRows),
-    assetManifest: getProjectTransferExportAssetManifestPayloadFromContext(context),
-    humanJudgmentSummaries: getProjectTransferExportHumanJudgmentSummariesPayloadFromContext(context),
-    humanJudgments: getProjectTransferExportHumanJudgmentsPayloadFromContext(context),
-    importRoutes: getProjectTransferExportImportRoutesPayloadFromContext(context),
-    judgmentAssessments: getProjectTransferExportJudgmentAssessmentsPayloadFromContext(context),
-    judgments: getProjectTransferExportJudgmentsPayloadFromContext(context),
-    models: getProjectTransferExportModelsPayloadFromContext(context),
-    project: getProjectTransferExportProjectPayloadFromContext(context),
-    projectArticles: getProjectTransferExportProjectArticlesPayloadFromContext(context),
-    projectImportRoutes: getProjectTransferExportProjectImportRoutesPayloadFromContext(context),
-    projectPrompts: getProjectTransferExportProjectPromptsPayloadFromContext(context),
-    prompts: getProjectTransferExportPromptsPayloadFromContext(context),
-    providerConnections: getProjectTransferExportProviderConnectionsPayloadFromContext(context),
-    reviews: getProjectTransferExportReviewsPayloadFromContext(context),
+    articleImportRoutes: getProjectTransferExportArticleImportRoutesPayloadFromContext(contextWithAssets),
+    articles: assertProjectTransferPayload('articles', contextWithAssets.articleRows),
+    assetManifest: assertProjectTransferPayload('assetManifest', assetCollection.assetManifest),
+    humanJudgmentSummaries: getProjectTransferExportHumanJudgmentSummariesPayloadFromContext(contextWithAssets),
+    humanJudgments: getProjectTransferExportHumanJudgmentsPayloadFromContext(contextWithAssets),
+    importRoutes: getProjectTransferExportImportRoutesPayloadFromContext(contextWithAssets),
+    judgmentAssessments: getProjectTransferExportJudgmentAssessmentsPayloadFromContext(contextWithAssets),
+    judgments: getProjectTransferExportJudgmentsPayloadFromContext(contextWithAssets),
+    models: getProjectTransferExportModelsPayloadFromContext(contextWithAssets),
+    project: getProjectTransferExportProjectPayloadFromContext(contextWithAssets),
+    projectArticles: getProjectTransferExportProjectArticlesPayloadFromContext(contextWithAssets),
+    projectImportRoutes: getProjectTransferExportProjectImportRoutesPayloadFromContext(contextWithAssets),
+    projectPrompts: getProjectTransferExportProjectPromptsPayloadFromContext(contextWithAssets),
+    prompts: getProjectTransferExportPromptsPayloadFromContext(contextWithAssets),
+    providerConnections: getProjectTransferExportProviderConnectionsPayloadFromContext(contextWithAssets),
+    reviews: getProjectTransferExportReviewsPayloadFromContext(contextWithAssets),
   } satisfies ProjectTransferPayloadByKey
   const redacted = redactProjectTransferPayloads(payloads)
+  const filteredAssetCollection = filterProjectTransferExportAssetCollectionByArticles({
+    articles: redacted.payloads.articles,
+    assetEntries: assetCollection.assetEntries,
+    assetManifest: redacted.payloads.assetManifest,
+  })
+  const redactedPayloads = {
+    ...redacted.payloads,
+    assetManifest: assertProjectTransferPayload('assetManifest', filteredAssetCollection.assetManifest),
+  }
 
   return {
-    payloads: redacted.payloads,
+    assetEntries: filteredAssetCollection.assetEntries,
+    payloads: redactedPayloads,
     warnings: [
-      ...context.warnings,
-      ...getProjectTransferExportCurrentReviewRowsSignatureWarnings(context),
+      ...contextWithAssets.warnings,
+      ...getProjectTransferExportCurrentReviewRowsSignatureWarnings(contextWithAssets),
       ...redacted.warnings,
     ],
   }

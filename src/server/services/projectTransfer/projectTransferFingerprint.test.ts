@@ -218,13 +218,22 @@ const getProvenanceIdPayloads = (idSeed: string) => {
 
 const getAssetManifestPayload = (checksumSha256: string, byteLength = 11) => {
   return {
-    assets: [
+    entries: [
       {
         byteLength,
         checksumSha256,
         contentType: 'application/pdf',
         packagePath: 'assets/article-pdfs/article-1.pdf',
-        signature: {checksumSha256, packagePath: 'assets/article-pdfs/article-1.pdf'},
+        references: [
+          {
+            fieldPath: 'articles[0].fullTextPdf',
+            jsonPointer: '/0/fullTextPdf',
+            kind: 'fullTextPdf',
+            payloadFile: 'articles.ndjson',
+            sourceArticleId: 'article-1',
+            sourceRef: 'article:article-1',
+          },
+        ],
       },
     ],
   }
