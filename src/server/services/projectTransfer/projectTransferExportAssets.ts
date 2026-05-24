@@ -18,7 +18,7 @@ import {projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 
 type JsonRecord = Record<string, unknown>
 
-type ProjectTransferExportAssetArticle = ProjectTransferArticlePayloadRecord & {
+export type ProjectTransferExportAssetArticle = ProjectTransferArticlePayloadRecord & {
   fullTextAssets?: unknown
   fullTextHtml?: unknown
   fullTextPdf?: unknown
@@ -328,7 +328,14 @@ const rewriteHtmlAttributeValue = ({
   sourceArticleId: string
   value: string
 }) => {
-  const assetPath = getCanonicalAssetPath(value)
+  const trimmed = value.trim()
+  const runtimeAssetPath = getRuntimeAssetPathFromUrl(trimmed)
+  const assetPath =
+    runtimeAssetPath.kind !== 'none'
+      ? runtimeAssetPath
+      : trimmed.startsWith('assets/')
+        ? {kind: 'asset' as const, path: assertRuntimeAssetPath(trimmed)}
+        : {kind: 'none' as const}
 
   if (assetPath.kind === 'unsafe') {
     return getProjectTransferExportAssetError(`articles[${articleIndex}].fullTextHtml ${assetPath.message}`)
@@ -418,6 +425,37 @@ const getArticleAssetReferences = (article: ProjectTransferExportAssetArticle, a
     },
     references,
   }
+}
+
+export const getProjectTransferExportAssetByteEstimateForArticles = async (
+  articles: ProjectTransferExportAssetArticle[],
+) => {
+  const articleReferences = articles.map((article, articleIndex) => {
+    return getArticleAssetReferences(article, articleIndex)
+  })
+  const packagePaths = [
+    ...new Set(
+      articleReferences.flatMap((entry) => {
+        return entry.references.map((reference) => {
+          return reference.assetPath
+        })
+      }),
+    ),
+  ].sort()
+  const sizes = await Promise.all(
+    packagePaths.map(async (packagePath) => {
+      const absolutePath = resolveProjectTransferPersistedRuntimeAssetPath({pathValue: packagePath})
+      const stats = await lstat(absolutePath)
+
+      return stats.isFile()
+        ? stats.size
+        : getProjectTransferExportAssetError(`runtime asset is not a file ${packagePath}`)
+    }),
+  )
+
+  return sizes.reduce((total, size) => {
+    return total + size
+  }, 0)
 }
 
 const readAssetFile = async (pathValue: string) => {

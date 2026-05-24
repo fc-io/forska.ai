@@ -17,6 +17,7 @@ import {
 } from './projectTransferContracts.ts'
 import {
   getProjectTransferExportPayloads,
+  getProjectTransferExportPreflightEstimate,
   type ProjectTransferExportPayloadAssembly,
   type ProjectTransferExportSerializedPayloads,
   serializeProjectTransferExportPayloads,
@@ -46,6 +47,7 @@ type ProjectTransferExportPackageBuildInput = ProjectTransferExportRuntimeOption
   database?: ReturnType<typeof getAppDatabaseService>
   expiresAt?: Date
   exportedAt?: Date
+  heartbeat?: () => Promise<unknown>
   layout: ProjectTransferExportTempLayout
   projectId: string
   sessionId: string
@@ -53,6 +55,7 @@ type ProjectTransferExportPackageBuildInput = ProjectTransferExportRuntimeOption
 }
 
 type CreateProjectTransferExportInput = ProjectTransferExportRuntimeOptions & {
+  database?: ReturnType<typeof getAppDatabaseService>
   expiresAt?: Date
   exportedAt?: Date
   projectId: string
@@ -60,6 +63,7 @@ type CreateProjectTransferExportInput = ProjectTransferExportRuntimeOptions & {
 }
 
 type RunProjectTransferExportSessionInput = ProjectTransferExportRuntimeOptions & {
+  database?: ReturnType<typeof getAppDatabaseService>
   expiresAt?: Date
   exportedAt?: Date
   ownerToken?: string
@@ -76,6 +80,11 @@ export type ProjectTransferExportPackageMetadata = {
   packageFingerprint: string
 }
 
+export type ProjectTransferExportQueuedMetadata = Pick<
+  ProjectTransferExportPackageMetadata,
+  'downloadUrl' | 'expiresAt' | 'filename'
+>
+
 export type ProjectTransferExportPackageBuild = {
   assetBytes: number
   executionMode: ProjectTransferExecutionMode
@@ -89,7 +98,7 @@ export type ProjectTransferExportPackageBuild = {
 export type ProjectTransferExportCreationResult =
   | {
       executionMode: 'background'
-      metadata: ProjectTransferExportPackageMetadata
+      metadata: ProjectTransferExportQueuedMetadata
       sessionId: string
       session: ProjectTransferSessionRecord | null
     }
@@ -102,6 +111,7 @@ export type ProjectTransferExportCreationResult =
 
 const manifestPath = 'manifest.json'
 const defaultExportSessionTtlMs = 24 * 60 * 60 * 1000
+const exportWorkerHeartbeatIntervalMs = 60_000
 
 const getNow = (now?: Date) => {
   return now ?? new Date()
@@ -121,6 +131,10 @@ const getExportOwnerToken = (ownerToken?: string) => {
 
 const getExportFilename = (projectId: string, packageFingerprint: string) => {
   return `project-transfer-${projectId}-${packageFingerprint.slice(0, 12)}.zip`
+}
+
+const getQueuedExportFilename = (projectId: string, sessionId: string) => {
+  return `project-transfer-${projectId}-${sessionId.slice(0, 18)}.zip`
 }
 
 const getDownloadUrl = (sessionId: string) => {
@@ -254,6 +268,56 @@ const getPackageEntries = ({
   ]
 }
 
+const getErrorLogAttrs = (error: unknown) => {
+  return error instanceof Error
+    ? {errorMessage: error.message, errorName: error.name}
+    : {errorMessage: String(error), errorName: 'Error'}
+}
+
+const logProjectTransferExportDetachedWorkerError = (sessionId: string, error: unknown) => {
+  writeRuntimeLogEvent({
+    attrs: {sessionId, ...getErrorLogAttrs(error)},
+    event: 'project_transfer.export_worker.detached_error',
+    message: 'Detached project transfer export worker failed',
+    severity: 'ERROR',
+  })
+}
+
+const logProjectTransferExportHeartbeatError = (sessionId: string, error: unknown) => {
+  writeRuntimeLogEvent({
+    attrs: {sessionId, ...getErrorLogAttrs(error)},
+    event: 'project_transfer.export_worker.heartbeat_error',
+    message: 'Project transfer export heartbeat failed',
+    severity: 'WARN',
+  })
+}
+
+const runProjectTransferExportHeartbeatOperation = async <TValue>({
+  heartbeat,
+  operation,
+  sessionId,
+}: {
+  heartbeat: (() => Promise<unknown>) | undefined
+  operation: () => Promise<TValue>
+  sessionId: string
+}) => {
+  if (!heartbeat) {
+    return operation()
+  }
+
+  await heartbeat()
+
+  const interval = setInterval(() => {
+    void heartbeat().catch((error) => {
+      logProjectTransferExportHeartbeatError(sessionId, error)
+    })
+  }, exportWorkerHeartbeatIntervalMs)
+
+  return operation().finally(() => {
+    clearInterval(interval)
+  })
+}
+
 const writeBuildEntry = async (rootPath: string, pathValue: string, bytes: string | Uint8Array) => {
   const filePath = join(rootPath, pathValue)
   await mkdir(dirname(filePath), {recursive: true})
@@ -327,6 +391,28 @@ const writePackageArtifact = async ({
   const packagePath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: layout.packagePath})
   await mkdir(dirname(packagePath), {recursive: true})
   await globalThis.Bun.write(packagePath, packageBytes)
+}
+
+const getQueuedExportMetadata = ({
+  expiresAt,
+  projectId,
+  sessionId,
+}: {
+  expiresAt: Date
+  projectId: string
+  sessionId: string
+}): ProjectTransferExportQueuedMetadata => {
+  return {
+    downloadUrl: getDownloadUrl(sessionId),
+    expiresAt: expiresAt.toISOString(),
+    filename: getQueuedExportFilename(projectId, sessionId),
+  }
+}
+
+const startDetachedProjectTransferExportSession = (input: RunProjectTransferExportSessionInput) => {
+  void runProjectTransferExportSession(input).catch((error) => {
+    logProjectTransferExportDetachedWorkerError(input.sessionId, error)
+  })
 }
 
 const getProgress = ({
@@ -439,11 +525,17 @@ export const buildProjectTransferExportPackage = async (
           },
         )
         const assembly = yield* Effect.promise(async () => {
-          const database = input.database ?? getAppDatabaseService()
+          return runProjectTransferExportHeartbeatOperation({
+            heartbeat: input.heartbeat,
+            operation: async () => {
+              const database = input.database ?? getAppDatabaseService()
 
-          return database.transaction((runner) => {
-            return getProjectTransferExportPayloads(input.projectId, {database: runner})
-          }) as Promise<ProjectTransferExportPayloadAssembly>
+              return database.transaction((runner) => {
+                return getProjectTransferExportPayloads(input.projectId, {database: runner})
+              }) as Promise<ProjectTransferExportPayloadAssembly>
+            },
+            sessionId: input.sessionId,
+          })
         })
         const serializedPayloads = serializeProjectTransferExportPayloads(assembly.payloads)
         const assetBytes = assembly.assetEntries.reduce((total, entry) => {
@@ -452,11 +544,23 @@ export const buildProjectTransferExportPackage = async (
         const manifest = getManifestWithFingerprint({assetBytes, assembly, exportedAt, serializedPayloads})
         const entries = getPackageEntries({assembly, manifest, serializedPayloads})
         yield* Effect.promise(() => {
-          return writeBuildEntries({entries, rootPath: buildPath})
+          return runProjectTransferExportHeartbeatOperation({
+            heartbeat: input.heartbeat,
+            operation: () => {
+              return writeBuildEntries({entries, rootPath: buildPath})
+            },
+            sessionId: input.sessionId,
+          })
         })
 
         const packageArchive = yield* Effect.promise(() => {
-          return writeProjectTransferZipPackage({entries, zipModule: input.zipModule})
+          return runProjectTransferExportHeartbeatOperation({
+            heartbeat: input.heartbeat,
+            operation: () => {
+              return writeProjectTransferZipPackage({entries, zipModule: input.zipModule})
+            },
+            sessionId: input.sessionId,
+          })
         })
         const packageFingerprint = manifest.packageFingerprint ?? ''
         const metadata = {
@@ -518,7 +622,25 @@ export const runProjectTransferExportSession = async (input: RunProjectTransferE
   writeProjectTransferExportRuntimeEvent({progress: pendingProgress, sessionId: input.sessionId, state: 'assembling'})
 
   try {
-    const build = await buildProjectTransferExportPackage({...input, expiresAt, layout, sessionId: input.sessionId})
+    const heartbeat = async () => {
+      const session = await repository.heartbeatProjectTransferExportSessionOwner({
+        ownerToken,
+        sessionId: input.sessionId,
+      })
+
+      if (session === null) {
+        throw new Error(`Project transfer export session ownership was lost: ${input.sessionId}`)
+      }
+
+      return session
+    }
+    const build = await buildProjectTransferExportPackage({
+      ...input,
+      expiresAt,
+      heartbeat,
+      layout,
+      sessionId: input.sessionId,
+    })
     const packagingProgress = getProgress({
       bytesProcessed: build.assetBytes,
       bytesTotal: build.metadata.byteLength + build.assetBytes,
@@ -602,25 +724,43 @@ export const createProjectTransferExport = async (
   const expiresAt = input.expiresAt ?? getDefaultExpiresAt(exportedAt)
   const sessionId = getExportSessionId(input.sessionId)
   const layout = getProjectTransferExportTempLayout(sessionId)
-  const build = await buildProjectTransferExportPackage({...input, expiresAt, exportedAt, layout, sessionId})
+  const repository = getProjectTransferSessionRepository()
+  const queueExport = async (metadata: ProjectTransferExportQueuedMetadata) => {
+    const session = await repository.createProjectTransferSession({
+      direction: 'export',
+      expiresAt,
+      id: sessionId,
+      state: 'queued',
+    })
 
-  if (build.executionMode === 'inline') {
+    startDetachedProjectTransferExportSession({...input, expiresAt, exportedAt, sessionId})
+
     return {
-      executionMode: 'inline',
-      manifest: build.manifest,
-      metadata: {...build.metadata, expiresAt: expiresAt.toISOString()},
-      packageBytes: build.packageBytes,
+      executionMode: 'background' as const,
+      metadata: {...metadata, expiresAt: expiresAt.toISOString()},
+      session,
+      sessionId,
     }
   }
+  const preflight = await getProjectTransferExportPreflightEstimate(input.projectId, {database: input.database})
+  const preflightExecutionMode = getProjectTransferExportExecutionMode(preflight)
 
-  const repository = getProjectTransferSessionRepository()
-  await repository.createProjectTransferSession({direction: 'export', expiresAt, id: sessionId, state: 'queued'})
-  void runProjectTransferExportSession({...input, expiresAt, exportedAt, sessionId})
-
-  return {
-    executionMode: 'background',
-    metadata: {...build.metadata, expiresAt: expiresAt.toISOString()},
-    session: await repository.getProjectTransferSession({sessionId}),
-    sessionId,
+  if (preflightExecutionMode === 'background') {
+    return queueExport(getQueuedExportMetadata({expiresAt, projectId: input.projectId, sessionId}))
   }
+
+  const build = await buildProjectTransferExportPackage({...input, expiresAt, exportedAt, layout, sessionId})
+
+  return build.executionMode === 'inline'
+    ? {
+        executionMode: 'inline',
+        manifest: build.manifest,
+        metadata: {...build.metadata, expiresAt: expiresAt.toISOString()},
+        packageBytes: build.packageBytes,
+      }
+    : queueExport({
+        downloadUrl: build.metadata.downloadUrl,
+        expiresAt: build.metadata.expiresAt,
+        filename: build.metadata.filename,
+      })
 }
