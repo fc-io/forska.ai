@@ -35,10 +35,53 @@ const getProjectTransferExportScript = (body: string) => {
       getProjectTransferExportSourceProjectSettings,
       serializeProjectTransferExportPayloads,
     } = await import('./src/server/services/projectTransfer/projectTransferExport.ts')
+    const {buildProjectTransferExportPackage: buildExportPackage} = await import('./src/server/services/projectTransfer/projectTransferExportPackage.ts')
+    const {getProjectTransferSha256Checksum} = await import('./src/server/services/projectTransfer/projectTransferFingerprint.ts')
+    const {projectTransferPayloadKeys} = await import('./src/server/services/projectTransfer/projectTransferSchemas.ts')
+    const {getProjectTransferExportTempLayout} = await import('./src/server/services/projectTransfer/projectTransferSession.ts')
 
     await migrateDuckdb()
 
     const database = getAppDatabaseService()
+    const textEncoder = new TextEncoder()
+    const getFakeZipModule = () => {
+      const state = {writtenEntries: []}
+
+      class FakeUint8ArrayReader {
+        constructor(bytes) {
+          this.bytes = bytes
+        }
+      }
+
+      class FakeUint8ArrayWriter {
+        getData = () => new Uint8Array()
+      }
+
+      class FakeZipReader {
+        close = async () => {}
+        getEntries = async () => []
+      }
+
+      class FakeZipWriter {
+        add = async (path, reader) => {
+          state.writtenEntries.push({bytes: reader.bytes, path})
+        }
+
+        close = async () => {
+          return textEncoder.encode(JSON.stringify(state.writtenEntries.map((entry) => entry.path)))
+        }
+      }
+
+      return {
+        state,
+        zipModule: {
+          Uint8ArrayReader: FakeUint8ArrayReader,
+          Uint8ArrayWriter: FakeUint8ArrayWriter,
+          ZipReader: FakeZipReader,
+          ZipWriter: FakeZipWriter,
+        },
+      }
+    }
     const catchMessage = async (operation) => {
       try {
         await operation()
@@ -106,6 +149,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
     }>
     assetManifestHasAssets: boolean
     assetManifestHasEnvelope: boolean
+    buildTempCleaned: boolean
     duplicateWarning: unknown
     chunkedWarning: unknown
     humanJudgmentIds: string[]
@@ -125,6 +169,25 @@ test('project-transfer export reads archived app-table scope and serializes lock
     judgmentIds: string[]
     judgmentKeys: string[]
     judgmentProvenanceKind: string | null
+    missingProviderMessage: string | null
+    packageChecksumMatches: boolean
+    packageExecutionMode: string
+    packageFingerprint: string | null
+    packageHasAllPayloadFiles: boolean
+    packageHasManifest: boolean
+    packageManifestAssetSummary: {byteLength: number; entryCount: number} | undefined
+    packageManifestExportedAt: string | undefined
+    packageManifestPayloadKeys: string[]
+    packageManifestProject: {
+      currentModel: {modelName: string | null; remoteModelId: string | null; sourceModelId: string | null}
+      humanJudgmentMode: string
+      name: string
+      sourceProjectId: string
+    }
+    packageManifestSourceAppVersion: string | undefined
+    packageMetadataHasTempPath: boolean
+    packagePayloadJsonCollectionIsArray: boolean
+    packageZipEntryPaths: string[]
     modelDescriptors: Array<{
       displayName: string | null
       modelName: string | null
@@ -715,6 +778,25 @@ test('project-transfer export reads archived app-table scope and serializes lock
     const invalidDateMessage = await catchMessage(() => getProjectTransferExportPayloads('project-invalid-date'))
     const invalidFulltextMessage = await catchMessage(() => getProjectTransferExportPayloads('project-invalid-fulltext'))
     const missingProviderMessage = await catchMessage(() => getProjectTransferExportPayloads('project-missing-provider'))
+    const packageLayout = getProjectTransferExportTempLayout('export-package-test')
+    const fakeZip = getFakeZipModule()
+    const packageBuild = await buildExportPackage({
+      exportedAt: new Date('2026-05-24T08:00:00.000Z'),
+      expiresAt: new Date('2026-05-25T08:00:00.000Z'),
+      layout: packageLayout,
+      projectId: 'project-archived-export',
+      sessionId: 'export-package-test',
+      zipModule: fakeZip.zipModule,
+    })
+    const decoder = new TextDecoder()
+    const packageZipEntryPaths = fakeZip.state.writtenEntries.map((entry) => entry.path).sort()
+    const packageManifestEntry = fakeZip.state.writtenEntries.find((entry) => entry.path === 'manifest.json')
+    const packageManifest = packageManifestEntry ? JSON.parse(decoder.decode(packageManifestEntry.bytes)) : {}
+    const payloadFilePathSet = new Set(packageZipEntryPaths)
+    const providerConnectionsEntry = fakeZip.state.writtenEntries.find((entry) => entry.path === 'providerConnections.json')
+    const packagePayloadJsonCollection = providerConnectionsEntry
+      ? JSON.parse(decoder.decode(providerConnectionsEntry.bytes))
+      : null
 
     console.log(JSON.stringify({
       articleIds: archived.payloads.articles.map((article) => article.sourceArticleId),
@@ -731,6 +813,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       }).sort((left, right) => left.packagePath.localeCompare(right.packagePath)),
       assetManifestHasAssets: Object.hasOwn(archived.payloads.assetManifest, 'assets'),
       assetManifestHasEnvelope: Object.hasOwn(archived.payloads.assetManifest, 'signature') || Object.hasOwn(archived.payloads.assetManifest, 'provenance'),
+      buildTempCleaned: !(await Bun.file(packageLayout.buildPath).exists()),
       chunkedWarning: archived.warnings.find((warning) => warning.code === 'chunkedJudgmentInputProofMissing') ?? null,
       duplicateWarning: archived.warnings[0] ?? null,
       humanJudgmentIds: archived.payloads.humanJudgments.map((judgment) => judgment.sourceHumanJudgmentId),
@@ -745,7 +828,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
         ...archived.payloads.reviews.map((review) => review.humanReviewInputSignature.mode),
       ],
       humanSummaryIds: summary.payloads.humanJudgmentSummaries.map((judgment) => judgment.sourceHumanJudgmentSummaryId),
-      importRouteActiveValues: archived.payloads.importRoutes.records.map((route) => route.active),
+      importRouteActiveValues: archived.payloads.importRoutes.map((route) => route.active),
       invalidDateMessage,
       invalidFulltextMessage,
       judgmentAssessmentIds: archived.payloads.judgmentAssessments.map((assessment) => assessment.sourceJudgmentAssessmentId),
@@ -754,7 +837,27 @@ test('project-transfer export reads archived app-table scope and serializes lock
       judgmentKeys: Object.keys(archived.payloads.judgments[0]).sort(),
       judgmentProvenanceKind: archived.payloads.judgments[0].judgmentInputSignatureProvenance.kind,
       missingProviderMessage,
-      modelDescriptors: archived.payloads.models.records.map((model) => {
+      packageChecksumMatches: packageBuild.metadata.checksumSha256 === getProjectTransferSha256Checksum(packageBuild.packageBytes),
+      packageExecutionMode: packageBuild.executionMode,
+      packageFingerprint: packageBuild.manifest.packageFingerprint ?? null,
+      packageHasAllPayloadFiles: projectTransferPayloadKeys.every((key) => {
+        return payloadFilePathSet.has(packageBuild.manifest.payloads[key].path)
+      }),
+      packageHasManifest: packageZipEntryPaths.includes('manifest.json'),
+      packageManifestAssetSummary: packageBuild.manifest.assetSummary,
+      packageManifestExportedAt: packageManifest.exportedAt,
+      packageManifestPayloadKeys: Object.keys(packageManifest.payloads).sort(),
+      packageManifestProject: {
+        currentModel: packageManifest.project.currentModel,
+        humanJudgmentMode: packageManifest.project.humanJudgmentMode,
+        name: packageManifest.project.name,
+        sourceProjectId: packageManifest.project.sourceProjectId,
+      },
+      packageManifestSourceAppVersion: packageManifest.sourceAppVersion,
+      packageMetadataHasTempPath: JSON.stringify(packageBuild.metadata).includes('tmp/project-transfer'),
+      packagePayloadJsonCollectionIsArray: Array.isArray(packagePayloadJsonCollection),
+      packageZipEntryPaths,
+      modelDescriptors: archived.payloads.models.map((model) => {
         return {
           displayName: model.displayName,
           modelName: model.modelName,
@@ -767,7 +870,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       payloadKeys: Object.keys(archived.payloads).sort(),
       projectArchived: archived.payloads.project.archived,
       projectArticleIds: archived.payloads.projectArticles.map((link) => link.sourceArticleId),
-      providerConnectionIds: archived.payloads.providerConnections.records.map((connection) => connection.sourceProviderConnectionId),
+      providerConnectionIds: archived.payloads.providerConnections.map((connection) => connection.sourceProviderConnectionId),
       reviewIds: archived.payloads.reviews.map((review) => review.sourceReviewId),
       serializedArticleFullTextAssets: serializedArticle.fullTextAssets,
       serializedArticleFullTextHtml: serializedArticle.fullTextHtml,
@@ -824,6 +927,26 @@ test('project-transfer export reads archived app-table scope and serializes lock
   ])
   expect(result.assetManifestHasAssets).toBe(false)
   expect(result.assetManifestHasEnvelope).toBe(false)
+  expect(result.buildTempCleaned).toBe(true)
+  expect(result.packageExecutionMode).toBe('inline')
+  expect(result.packageHasManifest).toBe(true)
+  expect(result.packageHasAllPayloadFiles).toBe(true)
+  expect(result.packageManifestPayloadKeys).toEqual([...projectTransferPayloadKeys].sort())
+  expect(result.packageManifestExportedAt).toBe('2026-05-24T08:00:00.000Z')
+  expect(result.packageManifestSourceAppVersion).toMatch(/^\d+\.\d+\.\d+/)
+  expect(result.packageManifestProject).toEqual({
+    currentModel: {modelName: 'Local fallback model', remoteModelId: null, sourceModelId: 'model-null-remote'},
+    humanJudgmentMode: 'prompt',
+    name: 'Archived Export',
+    sourceProjectId: 'project-archived-export',
+  })
+  expect(result.packageManifestAssetSummary).toEqual({byteLength: 49, entryCount: 3})
+  expect(result.packageFingerprint).toMatch(/^[a-f0-9]{64}$/)
+  expect(result.packageChecksumMatches).toBe(true)
+  expect(result.packageMetadataHasTempPath).toBe(false)
+  expect(result.packagePayloadJsonCollectionIsArray).toBe(true)
+  expect(result.packageZipEntryPaths).toContain('manifest.json')
+  expect(result.packageZipEntryPaths).toContain('providerConnections.json')
   expect(
     result.assetManifestEntries.map((entry) => {
       return entry.packagePath

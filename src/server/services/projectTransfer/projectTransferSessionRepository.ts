@@ -12,6 +12,7 @@ import {
   parseProjectTransferPlanSummary,
   parseProjectTransferProgressPayload,
   type ProjectTransferCompletionPayload,
+  type ProjectTransferExportReadyPayload,
   type ProjectTransferPlanSummary,
   type ProjectTransferProgressPayload,
   validateProjectTransferPlanReadyToCommit,
@@ -73,6 +74,33 @@ type HeartbeatProjectTransferSessionOwnerParams = {
   sessionId: string
 }
 
+type ClaimProjectTransferExportSessionOwnerParams = {
+  expectedState: 'queued' | 'assembling' | 'packaging'
+  nextState: 'assembling' | 'packaging'
+  now?: Date
+  ownerToken: string
+  progress?: ProjectTransferProgressPayload | null
+  runner?: ProjectTransferSessionRunner
+  sessionId: string
+}
+
+type HeartbeatProjectTransferExportSessionOwnerParams = {
+  now?: Date
+  ownerToken: string
+  progress?: ProjectTransferProgressPayload | null
+  runner?: ProjectTransferSessionRunner
+  sessionId: string
+}
+
+type FailProjectTransferSessionExportParams = {
+  error: unknown
+  now?: Date
+  ownerToken: string
+  progress?: ProjectTransferProgressPayload | null
+  runner?: ProjectTransferSessionRunner
+  sessionId: string
+}
+
 type UpdateProjectTransferSessionProgressParams = ProjectTransferOwnerTokenCondition & {
   now?: Date
   progress: ProjectTransferProgressPayload
@@ -85,6 +113,15 @@ type PersistProjectTransferSessionCompletionParams = {
   expectedPlanRevision?: number
   now?: Date
   ownerToken: string
+  runner?: ProjectTransferSessionRunner
+  sessionId: string
+}
+
+type PersistProjectTransferSessionExportReadyParams = {
+  completionPayload: ProjectTransferExportReadyPayload
+  now?: Date
+  ownerToken: string
+  progress?: ProjectTransferProgressPayload | null
   runner?: ProjectTransferSessionRunner
   sessionId: string
 }
@@ -432,6 +469,88 @@ const heartbeatProjectTransferSessionOwner = async (params: HeartbeatProjectTran
   return row ? mapProjectTransferSessionRecord(row) : null
 }
 
+const claimProjectTransferExportSessionOwner = async (params: ClaimProjectTransferExportSessionOwnerParams) => {
+  const currentNow = getNow(params.now)
+  const ownerCondition =
+    params.expectedState === 'queued' ? 'owner_token IS NULL' : `owner_token = ${getSqlLiteral(params.ownerToken)}`
+  const [row] = await getRunner(params.runner).queryJson<
+    Omit<ProjectTransferSessionRecord, 'completionPayloadJson' | 'errorJson' | 'planSummaryJson' | 'progressJson'> & {
+      completionPayloadJson: unknown
+      errorJson: unknown
+      planSummaryJson: unknown
+      progressJson: unknown
+    }
+  >(`
+    UPDATE app.project_transfer_session
+    SET
+      state = ${getSqlLiteral(params.nextState)},
+      owner_token = ${getSqlLiteral(params.ownerToken)},
+      heartbeat_at = ${getTimestampLiteral(currentNow)},
+      progress_json = ${getJsonLiteral(params.progress ?? null)},
+      error_json = NULL,
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE id = ${getSqlLiteral(params.sessionId)}
+      AND direction = 'export'
+      AND state = ${getSqlLiteral(params.expectedState)}
+      AND ${ownerCondition}
+    RETURNING ${getProjectTransferSessionSelectSql()}
+  `)
+
+  return row ? mapProjectTransferSessionRecord(row) : null
+}
+
+const heartbeatProjectTransferExportSessionOwner = async (params: HeartbeatProjectTransferExportSessionOwnerParams) => {
+  const currentNow = getNow(params.now)
+  const [row] = await getRunner(params.runner).queryJson<
+    Omit<ProjectTransferSessionRecord, 'completionPayloadJson' | 'errorJson' | 'planSummaryJson' | 'progressJson'> & {
+      completionPayloadJson: unknown
+      errorJson: unknown
+      planSummaryJson: unknown
+      progressJson: unknown
+    }
+  >(`
+    UPDATE app.project_transfer_session
+    SET
+      heartbeat_at = ${getTimestampLiteral(currentNow)},
+      ${Object.hasOwn(params, 'progress') ? `progress_json = ${getJsonLiteral(params.progress ?? null)},` : ''}
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE id = ${getSqlLiteral(params.sessionId)}
+      AND direction = 'export'
+      AND owner_token = ${getSqlLiteral(params.ownerToken)}
+      AND state IN ('assembling', 'packaging')
+    RETURNING ${getProjectTransferSessionSelectSql()}
+  `)
+
+  return row ? mapProjectTransferSessionRecord(row) : null
+}
+
+const failProjectTransferSessionExport = async (params: FailProjectTransferSessionExportParams) => {
+  const currentNow = getNow(params.now)
+  const [row] = await getRunner(params.runner).queryJson<
+    Omit<ProjectTransferSessionRecord, 'completionPayloadJson' | 'errorJson' | 'planSummaryJson' | 'progressJson'> & {
+      completionPayloadJson: unknown
+      errorJson: unknown
+      planSummaryJson: unknown
+      progressJson: unknown
+    }
+  >(`
+    UPDATE app.project_transfer_session
+    SET
+      state = 'failed',
+      owner_token = NULL,
+      progress_json = ${getJsonLiteral(params.progress ?? null)},
+      error_json = ${getJsonLiteral(params.error)},
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE id = ${getSqlLiteral(params.sessionId)}
+      AND direction = 'export'
+      AND state IN ('assembling', 'packaging')
+      AND owner_token = ${getSqlLiteral(params.ownerToken)}
+    RETURNING ${getProjectTransferSessionSelectSql()}
+  `)
+
+  return row ? mapProjectTransferSessionRecord(row) : null
+}
+
 const updateProjectTransferSessionProgress = async (params: UpdateProjectTransferSessionProgressParams) => {
   const work = async (runner: ProjectTransferSessionRunner) => {
     const current = await getProjectTransferSessionRecord(runner, params.sessionId)
@@ -487,10 +606,47 @@ const persistProjectTransferSessionCompletion = async (params: PersistProjectTra
   })
 }
 
+const persistProjectTransferSessionExportReady = async (params: PersistProjectTransferSessionExportReadyParams) => {
+  if (params.completionPayload.status !== 'ready') {
+    throw new Error('Project transfer export readiness payload status must be ready')
+  }
+
+  const currentNow = getNow(params.now)
+  const [row] = await getRunner(params.runner).queryJson<
+    Omit<ProjectTransferSessionRecord, 'completionPayloadJson' | 'errorJson' | 'planSummaryJson' | 'progressJson'> & {
+      completionPayloadJson: unknown
+      errorJson: unknown
+      planSummaryJson: unknown
+      progressJson: unknown
+    }
+  >(`
+    UPDATE app.project_transfer_session
+    SET
+      state = 'ready',
+      owner_token = NULL,
+      package_fingerprint = ${getSqlLiteral(params.completionPayload.packageFingerprint)},
+      completion_payload_json = ${getJsonLiteral(params.completionPayload)},
+      progress_json = ${getJsonLiteral(params.progress ?? null)},
+      error_json = NULL,
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE id = ${getSqlLiteral(params.sessionId)}
+      AND direction = 'export'
+      AND state = 'packaging'
+      AND owner_token = ${getSqlLiteral(params.ownerToken)}
+    RETURNING ${getProjectTransferSessionSelectSql()}
+  `)
+
+  return row ? mapProjectTransferSessionRecord(row) : null
+}
+
 const projectTransferSessionRepository = {
+  claimProjectTransferExportSessionOwner,
   createProjectTransferSession,
+  failProjectTransferSessionExport,
   getProjectTransferSession,
+  heartbeatProjectTransferExportSessionOwner,
   heartbeatProjectTransferSessionOwner,
+  persistProjectTransferSessionExportReady,
   persistProjectTransferSessionCompletion,
   transitionProjectTransferSessionState,
   updateProjectTransferSessionPlanRevision,
@@ -502,10 +658,14 @@ export const getProjectTransferSessionRepository = () => {
 }
 
 export type {
+  ClaimProjectTransferExportSessionOwnerParams,
   CreateProjectTransferSessionParams,
+  FailProjectTransferSessionExportParams,
   GetProjectTransferSessionParams,
+  HeartbeatProjectTransferExportSessionOwnerParams,
   HeartbeatProjectTransferSessionOwnerParams,
   PersistProjectTransferSessionCompletionParams,
+  PersistProjectTransferSessionExportReadyParams,
   ProjectTransferSessionRunner,
   TransitionProjectTransferSessionStateParams,
   UpdateProjectTransferSessionPlanParams,

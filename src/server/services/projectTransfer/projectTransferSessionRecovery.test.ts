@@ -28,7 +28,10 @@ const getRecoveryScript = (body: string) => {
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
     const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
     const {getProjectTransferHistoryRepository} = await import('./src/server/services/projectTransfer/projectTransferHistoryRepository.ts')
-    const {getProjectTransferImportTempLayout} = await import('./src/server/services/projectTransfer/projectTransferSession.ts')
+    const {
+      getProjectTransferExportTempLayout,
+      getProjectTransferImportTempLayout,
+    } = await import('./src/server/services/projectTransfer/projectTransferSession.ts')
     const {getProjectTransferSessionRecoveryService} = await import('./src/server/services/projectTransfer/projectTransferSessionRecovery.ts')
     const {getProjectTransferSessionRepository} = await import('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
 
@@ -285,6 +288,102 @@ test('project transfer recovery marks terminal cleanup and prioritizes stale act
   expect(result.thirdResult.scannedSessionCount).toBe(0)
   expect(result.thirdResult.expiredSessionCount).toBe(0)
   expect(result.afterThirdStates).toEqual(result.afterFirstStates)
+})
+
+test('project transfer recovery fails stale export workers but keeps ready artifacts until public expiry', () => {
+  const result = runRecoveryScript<{
+    futureReadyPackageExists: boolean
+    recoveryResult: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}
+    stalePackageExists: boolean
+    states: Record<string, string>
+  }>(`
+    const staleWorkerLayout = getProjectTransferExportTempLayout('export-stale-worker')
+    const readyFutureLayout = getProjectTransferExportTempLayout('export-ready-future')
+
+    await sessionRepository.createProjectTransferSession({
+      direction: 'export',
+      expiresAt: futureAt,
+      id: 'export-stale-worker',
+      state: 'queued',
+    })
+    await sessionRepository.claimProjectTransferExportSessionOwner({
+      expectedState: 'queued',
+      nextState: 'assembling',
+      now: new Date('2026-05-21T11:00:00.000Z'),
+      ownerToken: 'export-owner-stale',
+      sessionId: 'export-stale-worker',
+    })
+    await sessionRepository.createProjectTransferSession({
+      direction: 'export',
+      expiresAt: futureAt,
+      id: 'export-ready-future',
+      state: 'ready',
+    })
+    await writeRuntimeFile(staleWorkerLayout.packagePath)
+    await writeRuntimeFile(readyFutureLayout.packagePath)
+
+    const recoveryResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: runtimeRoot,
+      exportOwnerHeartbeatStaleMs: 60_000,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const states = await getStates()
+
+    console.log(JSON.stringify({
+      futureReadyPackageExists: await fileExists(readyFutureLayout.packagePath),
+      recoveryResult,
+      stalePackageExists: await fileExists(staleWorkerLayout.packagePath),
+      states,
+    }))
+  `)
+
+  expect(result.recoveryResult.scannedSessionCount).toBe(1)
+  expect(result.recoveryResult.expiredSessionCount).toBe(0)
+  expect(result.recoveryResult.cleanupTempArtifactCount).toBe(1)
+  expect(result.stalePackageExists).toBe(false)
+  expect(result.futureReadyPackageExists).toBe(true)
+  expect(result.states).toMatchObject({'export-ready-future': 'ready', 'export-stale-worker': 'failed'})
+})
+
+test('project transfer recovery expires ready export artifacts only after public expiry', () => {
+  const result = runRecoveryScript<{
+    packageExists: boolean
+    recoveryResult: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}
+    state: string
+  }>(`
+    const layout = getProjectTransferExportTempLayout('export-ready-expired')
+    await sessionRepository.createProjectTransferSession({
+      direction: 'export',
+      expiresAt: expiredAt,
+      id: 'export-ready-expired',
+      state: 'ready',
+    })
+    await writeRuntimeFile(layout.packagePath)
+
+    const recoveryResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: runtimeRoot,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const states = await getStates()
+
+    console.log(JSON.stringify({
+      packageExists: await fileExists(layout.packagePath),
+      recoveryResult,
+      state: states['export-ready-expired'],
+    }))
+  `)
+
+  expect(result.recoveryResult.scannedSessionCount).toBe(1)
+  expect(result.recoveryResult.expiredSessionCount).toBe(1)
+  expect(result.recoveryResult.cleanupTempArtifactCount).toBe(1)
+  expect(result.packageExists).toBe(false)
+  expect(result.state).toBe('expired')
 })
 
 test('project transfer recovery uses import session history and completed sessions only clean temp files', () => {

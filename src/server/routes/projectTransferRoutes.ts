@@ -6,9 +6,26 @@ import {
   type ProjectTransferSessionResponse,
   type ProjectTransferUploadSession,
 } from '../services/projectTransfer/projectTransferContracts.ts'
+import {createProjectTransferExport} from '../services/projectTransfer/projectTransferExportPackage.ts'
+import {resolveProjectTransferTempWritablePath} from '../services/projectTransfer/projectTransferPaths.ts'
+import {
+  getProjectTransferExportTempLayout,
+  toProjectTransferSessionResponse,
+} from '../services/projectTransfer/projectTransferSession.ts'
+import {getProjectTransferSessionRepository} from '../services/projectTransfer/projectTransferSessionRepository.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
-type ProjectTransferPlaceholderData = ProjectTransferSessionResponse | ProjectTransferUploadSession | {exportId: string}
+type ProjectTransferExportResponse = {
+  downloadUrl: string
+  expiresAt: string
+  exportId: string
+  filename: string
+  status: 'queued'
+}
+type ProjectTransferPlaceholderData =
+  | ProjectTransferExportResponse
+  | ProjectTransferSessionResponse
+  | ProjectTransferUploadSession
 type RouteSet = {status?: number | string}
 
 export const projectTransferRouteSpecs = [
@@ -118,26 +135,100 @@ const getPlaceholderResponse = (
   return getProjectTransferPlaceholderResponse<ProjectTransferPlaceholderData>(endpoint)
 }
 
+const getSessionResponse = async (
+  sessionId: string,
+): Promise<ProjectTransferApiResponse<ProjectTransferSessionResponse>> => {
+  const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId})
+
+  return record === null
+    ? {data: null, error: 'Project transfer export session not found'}
+    : {data: toProjectTransferSessionResponse(record), error: null}
+}
+
+const getDownloadResponse = async (set: RouteSet, exportId: string) => {
+  const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId: exportId})
+  const response = record === null ? null : toProjectTransferSessionResponse(record)
+
+  if (response === null) {
+    set.status = 404
+    return {data: null, error: 'Project transfer export session not found'}
+  }
+
+  if (response.direction !== 'export' || response.state !== 'ready' || response.completion?.status !== 'ready') {
+    set.status = 409
+    return {data: null, error: 'Project transfer export package is not ready'}
+  }
+
+  const packagePath = resolveProjectTransferTempWritablePath({
+    pathValue: getProjectTransferExportTempLayout(exportId).packagePath,
+  })
+  const file = globalThis.Bun.file(packagePath)
+  const exists = await file.exists()
+
+  if (!exists) {
+    set.status = 410
+    return {data: null, error: 'Project transfer export package artifact is unavailable'}
+  }
+
+  return new Response(file, {
+    headers: {
+      'content-disposition': `attachment; filename="${response.completion.filename}"`,
+      'content-type': 'application/zip',
+    },
+  })
+}
+
 export const projectTransferRoutes = new Elysia()
   .use(withErrorHandler())
   .post(
     '/api/projects/:id/export-project',
-    ({set}) => {
-      return getPlaceholderResponse(set, 'export-project')
+    async ({params, set}) => {
+      const result = await createProjectTransferExport({projectId: params.id})
+
+      if (result.executionMode === 'inline') {
+        return new Response(result.packageBytes, {
+          headers: {
+            'content-disposition': `attachment; filename="${result.metadata.filename}"`,
+            'content-type': 'application/zip',
+            'x-project-transfer-checksum-sha256': result.metadata.checksumSha256,
+            'x-project-transfer-expires-at': result.metadata.expiresAt,
+            'x-project-transfer-package-fingerprint': result.metadata.packageFingerprint,
+          },
+        })
+      }
+
+      set.status = 202
+
+      return {
+        data: {
+          downloadUrl: result.metadata.downloadUrl,
+          expiresAt: result.metadata.expiresAt,
+          exportId: result.sessionId,
+          filename: result.metadata.filename,
+          status: 'queued',
+        },
+        error: null,
+      }
     },
     {body: exportProjectBodySchema, params: routeParamSchema},
   )
   .get(
     '/api/projects/export/:exportId',
-    ({set}) => {
-      return getPlaceholderResponse(set, 'get-export')
+    async ({params, set}) => {
+      const response = await getSessionResponse(params.exportId)
+
+      if (response.error) {
+        set.status = 404
+      }
+
+      return response
     },
     {params: exportParamSchema},
   )
   .get(
     '/api/projects/export/:exportId/download',
-    ({set}) => {
-      return getPlaceholderResponse(set, 'download-export')
+    ({params, set}) => {
+      return getDownloadResponse(set, params.exportId)
     },
     {params: exportParamSchema},
   )

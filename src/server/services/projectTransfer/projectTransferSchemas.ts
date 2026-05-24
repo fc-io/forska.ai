@@ -54,10 +54,14 @@ export type ProjectTransferManifestPayload = {
   recordCount: number
 }
 
-export type ProjectTransferManifestSource = {
-  appVersion?: string | null
-  projectId?: string | null
-  projectName?: string | null
+export type ProjectTransferManifestAssetSummary = {byteLength: number; entryCount: number}
+
+export type ProjectTransferManifestProjectSummary = {
+  counts: Record<ProjectTransferPayloadKey, number>
+  currentModel: {modelName: string | null; remoteModelId: string | null; sourceModelId: string | null}
+  humanJudgmentMode: 'prompt' | 'summary'
+  name: string
+  sourceProjectId: string
 }
 
 export type ProjectTransferWarningSeverity = 'blocking' | 'fidelity' | 'info' | 'warning'
@@ -77,11 +81,13 @@ export type ProjectTransferPackageWarning = {
 export type ProjectTransferManifestWarning = ProjectTransferPackageWarning
 
 export type ProjectTransferManifest = {
-  generatedAt?: string
+  assetSummary?: ProjectTransferManifestAssetSummary
+  exportedAt: string
   packageFingerprint?: string | null
-  payloads: Partial<Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload>>
+  payloads: Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload>
+  project: ProjectTransferManifestProjectSummary
   schemaVersion: typeof projectTransferManifestSchemaVersion
-  source?: ProjectTransferManifestSource
+  sourceAppVersion: string
   warnings?: ProjectTransferManifestWarning[]
 }
 
@@ -93,12 +99,6 @@ export const projectTransferManifestPayloadShape = arktype({
   format: projectTransferPayloadFormatShape,
   path: 'string',
   recordCount: 'number.integer >= 0',
-})
-
-export const projectTransferManifestSourceShape = arktype({
-  'appVersion?': 'string | null | undefined',
-  'projectId?': 'string | null | undefined',
-  'projectName?': 'string | null | undefined',
 })
 
 export const projectTransferManifestWarningShape = arktype({
@@ -114,11 +114,13 @@ export const projectTransferManifestWarningShape = arktype({
 })
 
 export const projectTransferManifestShape = arktype({
-  'generatedAt?': 'string | undefined',
+  'assetSummary?': 'object | undefined',
+  exportedAt: 'string',
   'packageFingerprint?': 'string | null | undefined',
   payloads: 'object',
+  project: 'object',
   schemaVersion: 'number.integer',
-  'source?': 'object | undefined',
+  sourceAppVersion: 'string',
   'warnings?': 'unknown[] | undefined',
 })
 

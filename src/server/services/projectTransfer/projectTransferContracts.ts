@@ -76,16 +76,25 @@ export type ProjectTransferProgressPhase =
 export type ProjectTransferProgressStatus = 'completed' | 'failed' | 'pending' | 'running'
 
 export type ProjectTransferProgressPayload = {
+  bytesProcessed?: number | null
+  bytesTotal?: number | null
   completedBytes?: number | null
   completedItems?: number | null
   completedRows?: number | null
+  expiresAt?: string | null
   message?: string | null
+  percent?: number | null
   phase: ProjectTransferProgressPhase
+  planRevision?: number | null
+  rowCountProcessed?: number | null
+  rowCountTotal?: number | null
+  startedAt?: string | null
   status: ProjectTransferProgressStatus
   totalBytes?: number | null
   totalItems?: number | null
   totalRows?: number | null
   updatedAt?: string | null
+  warningCount?: number | null
 }
 
 export type ProjectTransferDependencyStatus = (typeof projectTransferDependencyStatuses)[number]
@@ -106,13 +115,27 @@ export type ProjectTransferPlanSummary = {
   warningCount: number
 }
 
-export type ProjectTransferCompletionPayload = {
+export type ProjectTransferImportCompletionPayload = {
   importWarnings?: unknown[]
   packageFingerprint?: string | null
   projectId?: string | null
   projectName?: string | null
   status: 'completed'
 }
+
+export type ProjectTransferExportReadyPayload = {
+  byteLength: number
+  checksumSha256: string
+  downloadUrl: string
+  expiresAt: string
+  filename: string
+  packageFingerprint: string
+  status: 'ready'
+}
+
+export type ProjectTransferCompletionPayload =
+  | ProjectTransferExportReadyPayload
+  | ProjectTransferImportCompletionPayload
 
 export type ProjectTransferSessionResponse = {
   commitId: string | null
@@ -182,12 +205,15 @@ export type ProjectTransferAssetPromotionMetadata = {
 export type ProjectTransferRuntimeEventType =
   | 'cleanup_progress'
   | 'commit_progress'
+  | 'export_progress'
   | 'plan_updated'
   | 'session_created'
   | 'state_transition'
   | 'upload_progress'
 
 export type ProjectTransferRuntimeEvent = {
+  bytesProcessed?: number | null
+  bytesTotal?: number | null
   direction: ProjectTransferDirection
   eventId: string
   eventType: ProjectTransferRuntimeEventType
@@ -195,10 +221,14 @@ export type ProjectTransferRuntimeEvent = {
   ownerToken?: string | null
   phase?: ProjectTransferProgressPhase | null
   planRevision: number
+  percent?: number | null
+  rowCountProcessed?: number | null
+  rowCountTotal?: number | null
   sessionId: string
   state: ProjectTransferSessionState
   status?: ProjectTransferProgressStatus | null
   timestamp: string
+  warningCount?: number | null
 }
 
 export type ProjectTransferExecutionMode = 'background' | 'inline'
@@ -232,26 +262,38 @@ export type ProjectTransferResourceGateInput = {
 }
 
 type ProjectTransferProgressCountField =
+  | 'bytesProcessed'
+  | 'bytesTotal'
   | 'completedBytes'
   | 'completedItems'
   | 'completedRows'
+  | 'rowCountProcessed'
+  | 'rowCountTotal'
   | 'totalBytes'
   | 'totalItems'
   | 'totalRows'
+  | 'warningCount'
 
 const projectTransferProgressCountFields = [
+  'bytesProcessed',
+  'bytesTotal',
   'completedBytes',
   'completedItems',
   'completedRows',
+  'rowCountProcessed',
+  'rowCountTotal',
   'totalBytes',
   'totalItems',
   'totalRows',
+  'warningCount',
 ] as const satisfies readonly ProjectTransferProgressCountField[]
 
 const projectTransferProgressPairs = [
+  ['bytesProcessed', 'bytesTotal'],
   ['completedBytes', 'totalBytes'],
   ['completedItems', 'totalItems'],
   ['completedRows', 'totalRows'],
+  ['rowCountProcessed', 'rowCountTotal'],
 ] as const
 
 const projectTransferDependencyStatusSet = new Set<string>(projectTransferDependencyStatuses)
@@ -294,7 +336,11 @@ const validateProgressCounts = (payload: ProjectTransferProgressPayload): Projec
 
   return invalidPair
     ? {error: `Project transfer progress field ${invalidPair[0]} cannot exceed ${invalidPair[1]}`, ok: false}
-    : {ok: true}
+    : payload.percent !== null
+        && payload.percent !== undefined
+        && (!Number.isFinite(payload.percent) || payload.percent < 0 || payload.percent > 100)
+      ? {error: 'Project transfer progress field percent must be between 0 and 100', ok: false}
+      : {ok: true}
 }
 
 const validateMonotonicProgressCounts = ({
@@ -680,10 +726,78 @@ export const parseProjectTransferPlanSummary = (value: unknown): ProjectTransfer
   return isRecord(parsed) ? (parsed as ProjectTransferPlanSummary) : null
 }
 
-export const parseProjectTransferCompletionPayload = (value: unknown): ProjectTransferCompletionPayload | null => {
+const isProjectTransferImportCompletionPayload = (
+  value: Record<string, unknown>,
+): value is ProjectTransferImportCompletionPayload => {
+  return value.status === 'completed'
+}
+
+const isProjectTransferExportReadyPayload = (
+  value: Record<string, unknown>,
+): value is ProjectTransferExportReadyPayload => {
+  return (
+    value.status === 'ready'
+    && typeof value.filename === 'string'
+    && typeof value.byteLength === 'number'
+    && typeof value.checksumSha256 === 'string'
+    && typeof value.packageFingerprint === 'string'
+    && typeof value.downloadUrl === 'string'
+    && typeof value.expiresAt === 'string'
+  )
+}
+
+export const parseProjectTransferCompletionPayload = (
+  value: unknown,
+  direction?: ProjectTransferDirection,
+): ProjectTransferCompletionPayload | null => {
   const parsed = getJsonValue(value)
 
-  return isRecord(parsed) ? (parsed as ProjectTransferCompletionPayload) : null
+  if (!isRecord(parsed)) {
+    return null
+  }
+
+  if (direction === 'import') {
+    return isProjectTransferImportCompletionPayload(parsed) ? parsed : null
+  }
+
+  if (direction === 'export') {
+    return isProjectTransferExportReadyPayload(parsed) ? parsed : null
+  }
+
+  return isProjectTransferImportCompletionPayload(parsed) || isProjectTransferExportReadyPayload(parsed) ? parsed : null
+}
+
+const getProgressPercent = (progress: ProjectTransferProgressPayload) => {
+  const explicitPercent = progress.percent
+  const processedBytes = progress.bytesProcessed ?? progress.completedBytes ?? null
+  const totalBytes = progress.bytesTotal ?? progress.totalBytes ?? null
+
+  return explicitPercent !== null && explicitPercent !== undefined
+    ? explicitPercent
+    : processedBytes !== null && totalBytes !== null && totalBytes > 0
+      ? Math.min(100, Math.floor((processedBytes / totalBytes) * 100))
+      : null
+}
+
+const getProjectTransferSessionResponseProgress = (
+  record: ProjectTransferSessionRecord,
+): ProjectTransferProgressPayload | null => {
+  const progress = parseProjectTransferProgressPayload(record.progressJson)
+
+  return progress === null
+    ? null
+    : {
+        ...progress,
+        bytesProcessed: progress.bytesProcessed ?? progress.completedBytes ?? null,
+        bytesTotal: progress.bytesTotal ?? progress.totalBytes ?? null,
+        expiresAt: progress.expiresAt ?? record.expiresAt.toISOString(),
+        percent: getProgressPercent(progress),
+        planRevision: progress.planRevision ?? record.planRevision,
+        rowCountProcessed: progress.rowCountProcessed ?? progress.completedRows ?? null,
+        rowCountTotal: progress.rowCountTotal ?? progress.totalRows ?? null,
+        updatedAt: progress.updatedAt ?? record.updatedAt.toISOString(),
+        warningCount: progress.warningCount ?? null,
+      }
 }
 
 export const toProjectTransferSessionResponse = (
@@ -691,7 +805,7 @@ export const toProjectTransferSessionResponse = (
 ): ProjectTransferSessionResponse => {
   return {
     commitId: record.commitId,
-    completion: parseProjectTransferCompletionPayload(record.completionPayloadJson),
+    completion: parseProjectTransferCompletionPayload(record.completionPayloadJson, record.direction),
     createdAt: record.createdAt,
     direction: record.direction,
     error: getJsonValue(record.errorJson),
@@ -702,7 +816,7 @@ export const toProjectTransferSessionResponse = (
     packageFingerprint: record.packageFingerprint,
     planRevision: record.planRevision,
     planSummary: parseProjectTransferPlanSummary(record.planSummaryJson),
-    progress: parseProjectTransferProgressPayload(record.progressJson),
+    progress: getProjectTransferSessionResponseProgress(record),
     state: record.state,
     updatedAt: record.updatedAt,
   }

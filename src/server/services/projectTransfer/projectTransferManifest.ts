@@ -6,17 +6,18 @@ import {
 import {
   isProjectTransferPayloadKey,
   type ProjectTransferManifest,
+  type ProjectTransferManifestAssetSummary,
   type ProjectTransferManifestPayload,
   projectTransferManifestPayloadShape,
+  type ProjectTransferManifestProjectSummary,
   projectTransferManifestSchemaVersion,
   projectTransferManifestShape,
-  type ProjectTransferManifestSource,
-  projectTransferManifestSourceShape,
   type ProjectTransferManifestWarning,
   projectTransferManifestWarningShape,
   type ProjectTransferPayloadFormat,
   projectTransferPayloadFormatByKey,
   type ProjectTransferPayloadKey,
+  projectTransferPayloadKeys,
   projectTransferPayloadPathByKey,
 } from './projectTransferSchemas.ts'
 
@@ -30,10 +31,12 @@ type ProjectTransferManifestPayloadEntryInput = {
 }
 
 type BuildProjectTransferManifestInput = {
-  generatedAt?: string
+  assetSummary?: ProjectTransferManifestAssetSummary
+  exportedAt: string
   packageFingerprint?: string | null
-  payloads: Partial<Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload>>
-  source?: ProjectTransferManifestSource
+  payloads: Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload>
+  project: ProjectTransferManifestProjectSummary
+  sourceAppVersion: string
   warnings?: readonly ProjectTransferManifestWarning[]
 }
 
@@ -124,27 +127,110 @@ const assertManifestPayload = (key: ProjectTransferPayloadKey, value: unknown): 
   return payload
 }
 
-const assertManifestPayloads = (
-  value: unknown,
-): Partial<Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload>> => {
+const assertManifestPayloads = (value: unknown): Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload> => {
   if (!isObjectRecord(value)) {
     return throwProjectTransferManifestError('payloads_shape', 'payloads must be an object keyed by payload name')
   }
 
-  return Object.entries(value).reduce<Partial<Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload>>>(
-    (payloads, [keyValue, payloadValue]) => {
-      const key = assertPayloadKey(keyValue)
+  const payloads = Object.entries(value).reduce<
+    Partial<Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload>>
+  >((payloads, [keyValue, payloadValue]) => {
+    const key = assertPayloadKey(keyValue)
 
-      return {...payloads, [key]: assertManifestPayload(key, payloadValue)}
-    },
-    {},
-  )
+    return {...payloads, [key]: assertManifestPayload(key, payloadValue)}
+  }, {})
+  const missingKey = projectTransferPayloadKeys.find((key) => {
+    return payloads[key] === undefined
+  })
+
+  return missingKey
+    ? throwProjectTransferManifestError('missing_payload', `Manifest payloads must include ${missingKey}`)
+    : (payloads as Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload>)
 }
 
-const assertManifestSource = (source: unknown): ProjectTransferManifestSource | undefined => {
-  return source === undefined
-    ? undefined
-    : (projectTransferManifestSourceShape.assert(source) as ProjectTransferManifestSource)
+const assertManifestAssetSummary = (value: unknown): ProjectTransferManifestAssetSummary | undefined => {
+  if (value === undefined) {
+    return undefined
+  }
+
+  if (!isObjectRecord(value)) {
+    return throwProjectTransferManifestError('asset_summary_shape', 'assetSummary must be an object')
+  }
+
+  const byteLength = value.byteLength
+  const entryCount = value.entryCount
+
+  return typeof byteLength === 'number'
+    && Number.isInteger(byteLength)
+    && byteLength >= 0
+    && typeof entryCount === 'number'
+    && Number.isInteger(entryCount)
+    && entryCount >= 0
+    ? {byteLength, entryCount}
+    : throwProjectTransferManifestError(
+        'asset_summary_counts',
+        'assetSummary byteLength and entryCount must be non-negative integers',
+      )
+}
+
+const assertManifestProjectSummary = (value: unknown): ProjectTransferManifestProjectSummary => {
+  if (!isObjectRecord(value)) {
+    return throwProjectTransferManifestError('project_shape', 'project summary must be an object')
+  }
+
+  const counts = value.counts
+  const currentModel = value.currentModel
+  const humanJudgmentMode = value.humanJudgmentMode
+  const name = value.name
+  const sourceProjectId = value.sourceProjectId
+
+  if (!isObjectRecord(counts)) {
+    return throwProjectTransferManifestError('project_counts_shape', 'project counts must be an object')
+  }
+
+  if (!isObjectRecord(currentModel)) {
+    return throwProjectTransferManifestError('project_current_model_shape', 'project currentModel must be an object')
+  }
+
+  const invalidCountKey = projectTransferPayloadKeys.find((key) => {
+    const count = counts[key]
+
+    return typeof count !== 'number' || !Number.isInteger(count) || count < 0
+  })
+
+  if (invalidCountKey) {
+    return throwProjectTransferManifestError(
+      'project_counts',
+      `project counts must include non-negative integer ${invalidCountKey}`,
+    )
+  }
+
+  if (humanJudgmentMode !== 'prompt' && humanJudgmentMode !== 'summary') {
+    return throwProjectTransferManifestError(
+      'project_human_mode',
+      'project humanJudgmentMode must be prompt or summary',
+    )
+  }
+
+  if (typeof name !== 'string' || name.trim() === '') {
+    return throwProjectTransferManifestError('project_name', 'project name must not be empty')
+  }
+
+  if (typeof sourceProjectId !== 'string' || sourceProjectId.trim() === '') {
+    return throwProjectTransferManifestError('project_source_id', 'project sourceProjectId must not be empty')
+  }
+
+  return {
+    counts: counts as Record<ProjectTransferPayloadKey, number>,
+    currentModel: {
+      modelName: typeof currentModel.modelName === 'string' ? currentModel.modelName : null,
+      remoteModelId: typeof currentModel.remoteModelId === 'string' ? currentModel.remoteModelId : null,
+      sourceModelId: typeof currentModel.sourceModelId === 'string' ? currentModel.sourceModelId : null,
+    },
+    humanJudgmentMode,
+    name,
+    sourceProjectId,
+  }
 }
 
 const assertManifestWarning = (warning: unknown): ProjectTransferManifestWarning => {
@@ -182,22 +268,26 @@ export const getProjectTransferManifestPayloadEntry = ({
 
 export const assertProjectTransferManifest = (value: unknown): ProjectTransferManifest => {
   const manifest = projectTransferManifestShape.assert(value) as {
-    generatedAt?: string
+    assetSummary?: unknown
+    exportedAt: string
     packageFingerprint?: string | null
     payloads: unknown
+    project: unknown
     schemaVersion: number
-    source?: unknown
+    sourceAppVersion: string
     warnings?: unknown[]
   }
 
   assertSchemaVersion(manifest.schemaVersion)
 
   return {
-    generatedAt: manifest.generatedAt,
+    assetSummary: assertManifestAssetSummary(manifest.assetSummary),
+    exportedAt: manifest.exportedAt,
     packageFingerprint: manifest.packageFingerprint,
     payloads: assertManifestPayloads(manifest.payloads),
+    project: assertManifestProjectSummary(manifest.project),
     schemaVersion: projectTransferManifestSchemaVersion,
-    source: assertManifestSource(manifest.source),
+    sourceAppVersion: manifest.sourceAppVersion,
     warnings: assertManifestWarnings(manifest.warnings),
   }
 }

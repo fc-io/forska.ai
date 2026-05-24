@@ -32,10 +32,6 @@ const getOnlyRecord = <TRecord>(records: TRecord[]) => {
   return record
 }
 
-const getCollectionRecord = <TRecord>(collection: {records: TRecord[]}) => {
-  return getOnlyRecord(collection.records)
-}
-
 test('validates and round-trips every manifest-declared payload fixture', () => {
   const validatorKeys = Object.keys(projectTransferPayloadValidatorsByKey).sort()
   const expectedValidatorKeys = [...projectTransferPayloadKeys].sort()
@@ -59,7 +55,7 @@ test('validates and round-trips every manifest-declared payload fixture', () => 
 test('locks project settings and warning, omission, and redaction code fixtures', () => {
   const project = getProjectTransferPayloadFixture('project')
   const article = getOnlyRecord(getProjectTransferPayloadFixture('articles'))
-  const providerConnection = getCollectionRecord(getProjectTransferPayloadFixture('providerConnections'))
+  const providerConnection = getOnlyRecord(getProjectTransferPayloadFixture('providerConnections'))
   const invalidSettingsResult = validateProjectTransferPayload('project', {
     ...project,
     settings: {
@@ -189,40 +185,44 @@ test('locks article identifier signature boundaries with shared DOI, PMID, arXiv
 test('rejects provider/model edge cases while normalizing empty model variants to null', () => {
   const providerConnections = getProjectTransferPayloadFixture('providerConnections')
   const models = getProjectTransferPayloadFixture('models')
-  const providerConnection = getCollectionRecord(providerConnections)
-  const model = getCollectionRecord(models)
-  const secretResult = validateProjectTransferPayload('providerConnections', {
-    ...providerConnections,
-    records: [{...providerConnection, secretRef: 'secret://local/provider'}],
-  })
-  const blankRemoteModelResult = validateProjectTransferPayload('models', {
-    ...models,
-    records: [{...model, remoteModelId: ''}],
-  })
-  const nullableRemoteModelResult = validateProjectTransferPayload('models', {
-    ...models,
-    records: [
-      {
-        ...model,
-        modelName: model.name,
-        remoteModelId: null,
-        signature: {...model.signature, modelName: model.name, remoteModelId: null},
-      },
-    ],
-  })
-  const emptyVariantResult = validateProjectTransferPayload('models', {
-    ...models,
-    records: [{...model, signature: {...model.signature, variant: null}, variant: ''}],
-  })
-  const mismatchedVariantResult = validateProjectTransferPayload('models', {
-    ...models,
-    records: [{...model, signature: {...model.signature, variant: ''}, variant: ''}],
-  })
+  const providerConnection = getOnlyRecord(providerConnections)
+  const model = getOnlyRecord(models)
+  const secretResult = validateProjectTransferPayload('providerConnections', [
+    {...providerConnection, secretRef: 'secret://local/provider'},
+  ])
+  const blankRemoteModelResult = validateProjectTransferPayload('models', [{...model, remoteModelId: ''}])
+  const nullableRemoteModelResult = validateProjectTransferPayload('models', [
+    {
+      ...model,
+      displayName: model.name,
+      modelName: model.name,
+      remoteModelId: null,
+      signature: {...model.signature, displayName: model.name, modelName: model.name, remoteModelId: null},
+    },
+  ])
+  const nullableRemoteWithoutDisplayNameResult = validateProjectTransferPayload('models', [
+    {
+      ...model,
+      displayName: null,
+      modelName: model.name,
+      remoteModelId: null,
+      signature: {...model.signature, displayName: null, modelName: model.name, remoteModelId: null},
+    },
+  ])
+  const emptyVariantResult = validateProjectTransferPayload('models', [
+    {...model, signature: {...model.signature, variant: null}, variant: ''},
+  ])
+  const mismatchedVariantResult = validateProjectTransferPayload('models', [
+    {...model, signature: {...model.signature, variant: ''}, variant: ''},
+  ])
 
   expect(normalizeProjectTransferModelVariant('')).toBe(null)
   expect(getValidationError(secretResult)).toContain('secretRef must be null')
   expect(getValidationError(blankRemoteModelResult)).toContain('remoteModelId must not be empty')
   expect(nullableRemoteModelResult.ok).toBe(true)
+  expect(getValidationError(nullableRemoteWithoutDisplayNameResult)).toContain(
+    'displayName is required when remoteModelId is null',
+  )
   expect(emptyVariantResult.ok).toBe(true)
   expect(getValidationError(mismatchedVariantResult)).toContain(
     'signature.variant must normalize null and empty variants',

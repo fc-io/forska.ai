@@ -33,6 +33,8 @@ type ProjectTransferSessionRecoveryRuntimeOptions = {cwd?: string; envValues?: R
 
 type ProjectTransferSessionRecoveryParams = ProjectTransferSessionRecoveryRuntimeOptions & {
   batchSize?: number
+  exportOwnerHeartbeatStaleMs?: number
+  exportQueuedSessionStaleMs?: number
   isActiveWriter?: () => boolean
   now?: Date
   ownerToken?: string
@@ -75,6 +77,8 @@ type ProjectTransferCleanupResult = ProjectTransferCleanupCounts & {
 }
 
 const defaultRecoveryBatchSize = 50
+const defaultExportOwnerHeartbeatStaleMs = 5 * 60 * 1000
+const defaultExportQueuedSessionStaleMs = 10 * 60 * 1000
 const maxRecoveryBatchSize = 500
 const terminalStateListSql = getQuotedStringList([...projectTransferTerminalStates]).join(', ')
 
@@ -110,26 +114,54 @@ const getRecoveryOwnerToken = (ownerToken: string | undefined) => {
     : `project-transfer-recovery-${process.pid}`
 }
 
+const getDateBefore = ({ms, now}: {ms: number; now: Date}) => {
+  return new Date(now.getTime() - ms)
+}
+
 const getStaleProjectTransferSessions = async ({
   batchSize,
+  exportOwnerHeartbeatStaleMs,
+  exportQueuedSessionStaleMs,
   now,
   runner,
 }: {
   batchSize: number
+  exportOwnerHeartbeatStaleMs: number
+  exportQueuedSessionStaleMs: number
   now: Date
   runner: ProjectTransferSessionRecoveryRunner
 }) => {
+  const staleExportQueuedBefore = getDateBefore({ms: exportQueuedSessionStaleMs, now})
+  const staleExportHeartbeatBefore = getDateBefore({ms: exportOwnerHeartbeatStaleMs, now})
+
   return runner.queryJson<ProjectTransferRecoveryCandidate>(`
     SELECT
       direction,
       id,
       state
     FROM app.project_transfer_session
-    WHERE expires_at <= ${getTimestampLiteral(now)}
-      AND (state NOT IN (${terminalStateListSql}) OR terminal_cleanup_at IS NULL)
+    WHERE (
+        direction = 'import'
+        AND expires_at <= ${getTimestampLiteral(now)}
+        AND (state NOT IN (${terminalStateListSql}) OR terminal_cleanup_at IS NULL)
+      )
+      OR (
+        direction = 'export'
+        AND (
+          (state = 'ready' AND expires_at <= ${getTimestampLiteral(now)})
+          OR (state = 'queued' AND owner_token IS NULL AND updated_at <= ${getTimestampLiteral(staleExportQueuedBefore)})
+          OR (
+            state IN ('assembling', 'packaging')
+            AND owner_token IS NOT NULL
+            AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleExportHeartbeatBefore)}
+          )
+          OR (state IN ('failed', 'expired') AND terminal_cleanup_at IS NULL)
+        )
+      )
     ORDER BY
       CASE WHEN state IN (${terminalStateListSql}) THEN 1 ELSE 0 END ASC,
-      expires_at ASC,
+      CASE WHEN direction = 'export' AND state IN ('assembling', 'packaging') THEN 0 ELSE 1 END ASC,
+      COALESCE(heartbeat_at, expires_at) ASC,
       updated_at ASC,
       id ASC
     LIMIT ${batchSize}
@@ -200,6 +232,33 @@ const transitionSessionToExpired = async ({
   return row ?? null
 }
 
+const transitionExportSessionToFailed = async ({
+  now,
+  ownerToken,
+  runner,
+  session,
+}: {
+  now: Date
+  ownerToken: string
+  runner: ProjectTransferSessionRecoveryRunner
+  session: ProjectTransferRecoveryCandidate
+}) => {
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+    UPDATE app.project_transfer_session
+    SET
+      state = 'failed',
+      owner_token = ${getSqlLiteral(ownerToken)},
+      error_json = ${getJsonLiteral({reason: 'project_transfer_export_worker_stale'})},
+      updated_at = ${getTimestampLiteral(now)}
+    WHERE id = ${getSqlLiteral(session.id)}
+      AND direction = 'export'
+      AND state = ${getSqlLiteral(session.state)}
+    RETURNING direction, id, state
+  `)
+
+  return row ?? null
+}
+
 const getCompletedImportHistory = async ({
   runner,
   session,
@@ -250,7 +309,10 @@ const getCleanupPlanForSession = async ({
     }
   }
 
-  const expiredSession = await transitionSessionToExpired({now, ownerToken, runner, session})
+  const expiredSession =
+    session.direction === 'export' && session.state !== 'ready'
+      ? await transitionExportSessionToFailed({now, ownerToken, runner, session})
+      : await transitionSessionToExpired({now, ownerToken, runner, session})
 
   return expiredSession === null
     ? null
@@ -259,7 +321,7 @@ const getCleanupPlanForSession = async ({
         deletePromotedAssets: session.direction === 'import' && history === null,
         deleteTempArtifacts: true,
         recoveredFromHistory: false,
-        transitionedToExpired: true,
+        transitionedToExpired: expiredSession.state === 'expired',
       }
 }
 
@@ -576,7 +638,15 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
   const ownerToken = getRecoveryOwnerToken(params.ownerToken)
   const runner = getRunner(params.runner)
   const batchSize = getRecoveryBatchSize(params.batchSize)
-  const sessions = await getStaleProjectTransferSessions({batchSize, now, runner})
+  const exportOwnerHeartbeatStaleMs = params.exportOwnerHeartbeatStaleMs ?? defaultExportOwnerHeartbeatStaleMs
+  const exportQueuedSessionStaleMs = params.exportQueuedSessionStaleMs ?? defaultExportQueuedSessionStaleMs
+  const sessions = await getStaleProjectTransferSessions({
+    batchSize,
+    exportOwnerHeartbeatStaleMs,
+    exportQueuedSessionStaleMs,
+    now,
+    runner,
+  })
   const plans = runner.transaction
     ? await runner.transaction((tx) => {
         return getCleanupPlans({now, ownerToken, runner: tx, sessions})

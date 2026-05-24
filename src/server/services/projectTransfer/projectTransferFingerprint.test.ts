@@ -7,79 +7,80 @@ import {
   getProjectTransferSha256Checksum,
 } from './projectTransferFingerprint.ts'
 import {buildProjectTransferManifest, getProjectTransferManifestPayloadEntry} from './projectTransferManifest.ts'
+import {
+  projectTransferPayloadFormatByKey,
+  type ProjectTransferPayloadKey,
+  projectTransferPayloadKeys,
+  projectTransferPayloadPathByKey,
+} from './projectTransferSchemas.ts'
+
+const getPayloadManifestEntries = (entries: Partial<Record<ProjectTransferPayloadKey, string>>) => {
+  return projectTransferPayloadKeys.reduce(
+    (payloads, key) => {
+      const bytes = entries[key] ?? ''
+
+      return {
+        ...payloads,
+        [key]: getProjectTransferManifestPayloadEntry({
+          bytes,
+          format: projectTransferPayloadFormatByKey[key],
+          path: projectTransferPayloadPathByKey[key],
+          recordCount: bytes === '' ? 0 : 1,
+        }),
+      }
+    },
+    {} as ReturnType<typeof buildProjectTransferManifest>['payloads'],
+  )
+}
+
+const getProjectSummary = (checksumSeed: string) => {
+  return {
+    counts: projectTransferPayloadKeys.reduce(
+      (counts, key) => {
+        return {...counts, [key]: 0}
+      },
+      {} as Record<ProjectTransferPayloadKey, number>,
+    ),
+    currentModel: {modelName: 'GPT 5.4', remoteModelId: 'gpt-5.4', sourceModelId: `model-${checksumSeed}`},
+    humanJudgmentMode: 'prompt' as const,
+    name: 'Source Project',
+    sourceProjectId: `source-project-${checksumSeed}`,
+  }
+}
 
 const getManifest = (checksumSeed: string) => {
   return buildProjectTransferManifest({
-    generatedAt: `2026-05-21T07:00:0${checksumSeed}.000Z`,
-    payloads: {
-      articles: getProjectTransferManifestPayloadEntry({
-        bytes: `articles-${checksumSeed}`,
-        format: 'ndjson',
-        path: 'articles.ndjson',
-        recordCount: 2,
-      }),
-      project: getProjectTransferManifestPayloadEntry({
-        bytes: `project-${checksumSeed}`,
-        format: 'json',
-        path: 'project.json',
-        recordCount: 1,
-      }),
-      providerConnections: getProjectTransferManifestPayloadEntry({
-        bytes: `provider-connections-${checksumSeed}`,
-        format: 'json',
-        path: 'providerConnections.json',
-        recordCount: 2,
-      }),
-    },
-    source: {projectId: `source-project-${checksumSeed}`, projectName: 'Source Project'},
+    exportedAt: `2026-05-21T07:00:0${checksumSeed}.000Z`,
+    payloads: getPayloadManifestEntries({
+      articles: `articles-${checksumSeed}`,
+      project: `project-${checksumSeed}`,
+      providerConnections: `provider-connections-${checksumSeed}`,
+    }),
+    project: getProjectSummary(checksumSeed),
+    sourceAppVersion: '0.2.1',
   })
 }
 
 const getAssetManifest = (checksumSeed: string) => {
   return buildProjectTransferManifest({
-    generatedAt: `2026-05-21T07:00:0${checksumSeed}.000Z`,
-    payloads: {
-      assetManifest: getProjectTransferManifestPayloadEntry({
-        bytes: `asset-manifest-${checksumSeed}`,
-        format: 'json',
-        path: 'assetManifest.json',
-        recordCount: 1,
-      }),
-    },
-    source: {projectId: `source-project-${checksumSeed}`, projectName: 'Source Project'},
+    exportedAt: `2026-05-21T07:00:0${checksumSeed}.000Z`,
+    payloads: getPayloadManifestEntries({assetManifest: `asset-manifest-${checksumSeed}`}),
+    project: getProjectSummary(checksumSeed),
+    sourceAppVersion: '0.2.1',
   })
 }
 
 const getProvenanceIdManifest = (checksumSeed: string) => {
   return buildProjectTransferManifest({
-    generatedAt: `2026-05-21T07:00:0${checksumSeed}.000Z`,
-    payloads: {
-      humanJudgments: getProjectTransferManifestPayloadEntry({
-        bytes: `human-judgments-${checksumSeed}`,
-        format: 'ndjson',
-        path: 'humanJudgments.ndjson',
-        recordCount: 1,
-      }),
-      judgments: getProjectTransferManifestPayloadEntry({
-        bytes: `judgments-${checksumSeed}`,
-        format: 'ndjson',
-        path: 'judgments.ndjson',
-        recordCount: 1,
-      }),
-      projectPrompts: getProjectTransferManifestPayloadEntry({
-        bytes: `project-prompts-${checksumSeed}`,
-        format: 'json',
-        path: 'projectPrompts.json',
-        recordCount: 1,
-      }),
-      reviews: getProjectTransferManifestPayloadEntry({
-        bytes: `reviews-${checksumSeed}`,
-        format: 'ndjson',
-        path: 'reviews.ndjson',
-        recordCount: 1,
-      }),
-    },
-    source: {projectId: `source-project-${checksumSeed}`, projectName: 'Source Project'},
+    exportedAt: `2026-05-21T07:00:0${checksumSeed}.000Z`,
+    payloads: getPayloadManifestEntries({
+      humanJudgments: `human-judgments-${checksumSeed}`,
+      judgments: `judgments-${checksumSeed}`,
+      projectPrompts: `project-prompts-${checksumSeed}`,
+      reviews: `reviews-${checksumSeed}`,
+    }),
+    project: getProjectSummary(checksumSeed),
+    sourceAppVersion: '0.2.1',
   })
 }
 

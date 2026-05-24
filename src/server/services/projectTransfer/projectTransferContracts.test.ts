@@ -4,6 +4,7 @@ import {
   getProjectTransferCommitExecutionMode,
   getProjectTransferExportExecutionMode,
   getProjectTransferImportAnalyzeExecutionMode,
+  parseProjectTransferCompletionPayload,
   projectTransferCancellationRules,
   projectTransferConflictCountKeys,
   type ProjectTransferDependencyStatus,
@@ -13,6 +14,7 @@ import {
   type ProjectTransferPlanSummary,
   type ProjectTransferResourceGateInput,
   projectTransferResourceGateLimits,
+  type ProjectTransferRuntimeEvent,
   validateProjectTransferDependencyStatuses,
   validateProjectTransferPlanReadyToCommit,
   validateProjectTransferProgressUpdate,
@@ -219,4 +221,60 @@ test('keeps progress monotonic and cancellation cleanup writer-only', () => {
     requiresWriterOwnerToken: true,
     state: 'expired',
   })
+})
+
+test('locks export progress and direction-aware completion contracts', () => {
+  const exportCompletion = {
+    byteLength: 12,
+    checksumSha256: 'a'.repeat(64),
+    downloadUrl: '/api/projects/export/export-1/download',
+    expiresAt: '2026-05-22T12:00:00.000Z',
+    filename: 'project-transfer-source.zip',
+    packageFingerprint: 'fingerprint-export',
+    status: 'ready' as const,
+  }
+  const importCompletion = {
+    packageFingerprint: 'fingerprint-import',
+    projectId: 'target-project',
+    projectName: 'Target Project',
+    status: 'completed' as const,
+  }
+  const event = {
+    bytesProcessed: 4,
+    bytesTotal: 8,
+    direction: 'export',
+    eventId: 'event-1',
+    eventType: 'export_progress',
+    phase: 'export_package',
+    planRevision: 0,
+    percent: 50,
+    rowCountProcessed: 2,
+    rowCountTotal: 4,
+    sessionId: 'export-1',
+    state: 'packaging',
+    status: 'running',
+    timestamp: '2026-05-21T12:00:00.000Z',
+    warningCount: 1,
+  } satisfies ProjectTransferRuntimeEvent
+
+  expect(parseProjectTransferCompletionPayload(exportCompletion, 'export')).toEqual(exportCompletion)
+  expect(parseProjectTransferCompletionPayload(exportCompletion, 'import')).toBeNull()
+  expect(parseProjectTransferCompletionPayload(importCompletion, 'import')).toEqual(importCompletion)
+  expect(parseProjectTransferCompletionPayload(importCompletion, 'export')).toBeNull()
+  expect(event.eventType).toBe('export_progress')
+  expect(
+    validateProjectTransferProgressUpdate({
+      next: {
+        bytesProcessed: 4,
+        bytesTotal: 8,
+        percent: 50,
+        phase: 'export_package',
+        rowCountProcessed: 2,
+        rowCountTotal: 4,
+        status: 'running',
+        warningCount: 1,
+      },
+      previous: null,
+    }),
+  ).toEqual({ok: true})
 })
