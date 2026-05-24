@@ -15,9 +15,12 @@ import {processFulltextForLLM} from '../../utils/fulltextProcessing.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getDateValue, getJsonValue, getSqlLiteral} from '../appQueryHelpers.ts'
 import type {AppQueryDatabaseService} from '../appQueryServiceCore.ts'
+import {projectTransferExecutionThresholds} from './projectTransferContracts.ts'
 import {
   filterProjectTransferExportAssetCollectionByArticles,
+  getProjectTransferExportAssetByteEstimateForArticles,
   getProjectTransferExportAssetCollectionForArticles,
+  type ProjectTransferExportAssetArticle,
   type ProjectTransferExportAssetEntry,
 } from './projectTransferExportAssets.ts'
 import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
@@ -333,6 +336,8 @@ export type ProjectTransferExportPayloadAssembly = {
 
 export type ProjectTransferExportSerializedPayloads = Record<ProjectTransferPayloadKey, string>
 
+export type ProjectTransferExportPreflightEstimate = {assetBytes: number; packageBytes: number}
+
 const providerSecretRedaction = {
   action: 'redacted',
   code: 'providerSecretRedacted' as const,
@@ -439,6 +444,23 @@ const getRowsByMany = <TRow>(rows: TRow[], getKey: (row: TRow) => string) => {
 
     return {...rowMap, [key]: [...existingRows, row]}
   }, {})
+}
+
+const getProjectTransferExportEstimateTextLengthSql = (expression: string) => {
+  return `LENGTH(COALESCE(CAST(${expression} AS VARCHAR), ''))`
+}
+
+const getProjectTransferExportEstimateTextLengthSumSql = (expressions: string[]) => {
+  return expressions.map(getProjectTransferExportEstimateTextLengthSql).join(' + ')
+}
+
+const getProjectTransferExportEstimateQuerySql = (fromSql: string, expressions: string[]) => {
+  return `
+    SELECT
+      COUNT(*) AS rowCount,
+      COALESCE(SUM(${getProjectTransferExportEstimateTextLengthSumSql(expressions)}), 0) AS textChars
+    ${fromSql}
+  `
 }
 
 const getProjectTransferExportScopedArticleCteSql = (projectId: string) => {
@@ -2216,6 +2238,368 @@ const getProjectTransferExportContext = async (
     reviewRows,
     warnings: [...ambiguousJudgmentWarnings, ...chunkedJudgmentWarnings],
   }
+}
+
+type ProjectTransferExportPreflightEstimateRow = {
+  articleCount: number | null
+  estimatedPayloadChars: number | null
+  rowCount: number | null
+}
+
+type ProjectTransferExportPreflightAssetArticleRow = {
+  fullTextAssets: unknown
+  fullTextHtml: string | null
+  fullTextPdf: string | null
+  sourceArticleId: string
+}
+
+const getProjectTransferExportPreflightPackageEstimate = async (
+  projectId: string,
+  database: AppQueryDatabaseService,
+) => {
+  const [row] = await database.queryJson<ProjectTransferExportPreflightEstimateRow>(`
+    WITH
+    ${getProjectTransferExportScopedArticleCteSql(projectId)},
+    project_transfer_export_judgment AS (
+      SELECT j.*
+      FROM app.judgment j
+      INNER JOIN project_transfer_scope_article scope ON scope.article_id = j.article_id
+      INNER JOIN project_transfer_source_project project ON TRUE
+      INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
+      WHERE ${getProjectTransferExportJudgmentCandidateWhereSql()}
+        AND j.chunking_strategy IS NULL
+    ),
+    project_transfer_required_model AS (
+      SELECT project.model_id
+      FROM project_transfer_source_project project
+      WHERE project.model_id IS NOT NULL
+      UNION
+      SELECT judgment.model_id
+      FROM project_transfer_export_judgment judgment
+    ),
+    project_transfer_required_provider_connection AS (
+      SELECT DISTINCT model.provider_connection_id
+      FROM app.model model
+      INNER JOIN project_transfer_required_model required_model ON required_model.model_id = model.id
+    ),
+    article_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM app.article article
+        INNER JOIN project_transfer_scope_article scope ON scope.article_id = article.id
+      `,
+        [
+          'article.id',
+          'article.article_id',
+          'article.article_title',
+          'article.article_summary',
+          'article.article_authors',
+          'article.arxiv_id',
+          'article.biorxiv_id',
+          'article.medrxiv_id',
+          'article.doi',
+          'article.pubmed_id',
+          'article.url',
+          'article.full_text',
+          'article.full_text_html',
+          'article.full_text_pdf',
+          'article.full_text_source',
+          'article.full_text_original_format',
+          'article.full_text_assets',
+          'article.full_text_conversion_status',
+          'article.full_text_conversion_error',
+          'article.full_text_conversion_model_id',
+          'article.full_text_conversion_metadata',
+          'article.content_hash',
+          'article.import_route',
+          'article.original_data',
+          'article.source_metadata',
+          'article.publication_status',
+        ],
+      )}
+    ),
+    article_import_route_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM app.article_import_route article_import_route
+        INNER JOIN project_transfer_scope_article scope ON scope.article_id = article_import_route.article_id
+      `,
+        [
+          'article_import_route.id',
+          'article_import_route.external_article_id',
+          'article_import_route.import_metadata',
+          'article_import_route.match_metadata',
+          'article_import_route.raw_payload',
+          'article_import_route.source_kind',
+          'article_import_route.source_record_hash',
+          'article_import_route.source_record_key',
+        ],
+      )}
+    ),
+    project_article_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM app.project_article project_article
+        INNER JOIN project_transfer_scope_article scope ON scope.article_id = project_article.article_id
+        WHERE project_article.project_id = ${getSqlLiteral(projectId)}
+      `,
+        ['project_article.id', 'project_article.imported_from_project_id'],
+      )}
+    ),
+    project_prompt_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM app.project_prompt project_prompt
+        INNER JOIN app.prompt prompt ON prompt.id = project_prompt.prompt_id
+        WHERE project_prompt.project_id = ${getSqlLiteral(projectId)}
+      `,
+        [
+          'project_prompt.id',
+          'project_prompt.origin_project_id',
+          'prompt.id',
+          'prompt.original_text',
+          'prompt.transformed_text',
+          'prompt.prompt_heading',
+          'prompt.type',
+          'prompt.content_hash',
+        ],
+      )}
+    ),
+    import_route_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM app.project_import_route project_import_route
+        INNER JOIN app.import_route import_route ON import_route.id = project_import_route.import_route_id
+        WHERE project_import_route.project_id = ${getSqlLiteral(projectId)}
+      `,
+        [
+          'project_import_route.id',
+          'import_route.id',
+          'import_route.route',
+          'import_route.name',
+          'import_route.description',
+        ],
+      )}
+    ),
+    judgment_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM project_transfer_export_judgment judgment
+      `,
+        [
+          'judgment.id',
+          'judgment.answered_original',
+          'judgment.answered_original_as_array',
+          'judgment.explanation',
+          'judgment.quotes',
+          'judgment.snapshot_project_id',
+          'judgment.snapshot_project_model_name',
+        ],
+      )}
+    ),
+    judgment_assessment_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM app.judgment_assessment judgment_assessment
+        INNER JOIN project_transfer_export_judgment judgment ON judgment.id = judgment_assessment.judgment_id
+      `,
+        ['judgment_assessment.id', 'judgment_assessment.assessment_comment'],
+      )}
+    ),
+    human_judgment_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM app.judgment_human human_judgment
+        INNER JOIN project_transfer_scope_article scope ON scope.article_id = human_judgment.article_id
+        WHERE human_judgment.project_id = ${getSqlLiteral(projectId)}
+      `,
+        ['human_judgment.id', 'human_judgment.answer', 'human_judgment.comment'],
+      )}
+    ),
+    human_judgment_summary_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM app.judgment_human_summary human_judgment_summary
+        INNER JOIN project_transfer_scope_article scope ON scope.article_id = human_judgment_summary.article_id
+        WHERE human_judgment_summary.project_id = ${getSqlLiteral(projectId)}
+      `,
+        ['human_judgment_summary.id', 'human_judgment_summary.answer', 'human_judgment_summary.origin'],
+      )}
+    ),
+    review_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM app.review review
+        INNER JOIN project_transfer_scope_article scope ON scope.article_id = review.article_id
+        WHERE review.project_id = ${getSqlLiteral(projectId)}
+      `,
+        [
+          'review.id',
+          'review.reviewed_title_comment',
+          'review.reviewed_abstract_comment',
+          'review.reviewed_intro_comment',
+          'review.reviewed_method_comment',
+          'review.reviewed_results_comment',
+          'review.reviewed_discussion_comment',
+          'review.reviewed_conclusion_comment',
+          'review.reviewed_appendix_comment',
+          'review.reviewed_other_comment',
+        ],
+      )}
+    ),
+    model_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM app.model model
+        INNER JOIN project_transfer_required_model required_model ON required_model.model_id = model.id
+      `,
+        [
+          'model.id',
+          'model.display_name',
+          'model.metadata_json',
+          'model.name',
+          'model.provider_connection_id',
+          'model.remote_model_id',
+          'model.source',
+          'model.variant',
+        ],
+      )}
+    ),
+    provider_connection_estimate AS (
+      ${getProjectTransferExportEstimateQuerySql(
+        `
+        FROM app.provider_connection provider_connection
+        INNER JOIN project_transfer_required_provider_connection required_provider_connection
+          ON required_provider_connection.provider_connection_id = provider_connection.id
+      `,
+        [
+          'provider_connection.id',
+          'provider_connection.auth_mode',
+          'provider_connection.base_url',
+          'provider_connection.config_json',
+          'provider_connection.label',
+          'provider_connection.last_error',
+          'provider_connection.provider_kind',
+          'provider_connection.secret_ref',
+        ],
+      )}
+    )
+    SELECT
+      CAST(article_estimate.rowCount AS DOUBLE) AS articleCount,
+      CAST(
+        article_estimate.rowCount
+        + article_import_route_estimate.rowCount
+        + project_article_estimate.rowCount
+        + project_prompt_estimate.rowCount
+        + import_route_estimate.rowCount
+        + judgment_estimate.rowCount
+        + judgment_assessment_estimate.rowCount
+        + human_judgment_estimate.rowCount
+        + human_judgment_summary_estimate.rowCount
+        + review_estimate.rowCount
+        + model_estimate.rowCount
+        + provider_connection_estimate.rowCount
+        AS DOUBLE
+      ) AS rowCount,
+      CAST(
+        article_estimate.textChars
+        + article_import_route_estimate.textChars
+        + project_article_estimate.textChars
+        + project_prompt_estimate.textChars
+        + import_route_estimate.textChars
+        + judgment_estimate.textChars
+        + judgment_assessment_estimate.textChars
+        + human_judgment_estimate.textChars
+        + human_judgment_summary_estimate.textChars
+        + review_estimate.textChars
+        + model_estimate.textChars
+        + provider_connection_estimate.textChars
+        AS DOUBLE
+      ) AS estimatedPayloadChars
+    FROM article_estimate,
+      article_import_route_estimate,
+      project_article_estimate,
+      project_prompt_estimate,
+      import_route_estimate,
+      judgment_estimate,
+      judgment_assessment_estimate,
+      human_judgment_estimate,
+      human_judgment_summary_estimate,
+      review_estimate,
+      model_estimate,
+      provider_connection_estimate
+  `)
+
+  return row ?? {articleCount: 0, estimatedPayloadChars: 0, rowCount: 0}
+}
+
+const getProjectTransferExportPreflightAssetArticles = async (
+  projectId: string,
+  database: AppQueryDatabaseService,
+): Promise<ProjectTransferExportAssetArticle[]> => {
+  const rows = await database.queryJson<ProjectTransferExportPreflightAssetArticleRow>(`
+    WITH
+    ${getProjectTransferExportScopedArticleCteSql(projectId)}
+    SELECT
+      article.id AS sourceArticleId,
+      TO_JSON(article.full_text_assets) AS fullTextAssets,
+      article.full_text_html AS fullTextHtml,
+      article.full_text_pdf AS fullTextPdf
+    FROM app.article article
+    INNER JOIN project_transfer_scope_article scope ON scope.article_id = article.id
+    WHERE article.full_text_assets IS NOT NULL
+      OR article.full_text_html IS NOT NULL
+      OR article.full_text_pdf IS NOT NULL
+    ORDER BY article.id ASC
+  `)
+
+  return rows.map((row) => {
+    return {
+      fullTextAssets: getJsonValue(row.fullTextAssets),
+      fullTextHtml: row.fullTextHtml,
+      fullTextPdf: row.fullTextPdf,
+      sourceArticleId: row.sourceArticleId,
+    } as ProjectTransferExportAssetArticle
+  })
+}
+
+const getProjectTransferExportEstimatedPackageBytes = ({
+  estimatedPayloadChars,
+  rowCount,
+}: {
+  estimatedPayloadChars: number
+  rowCount: number
+}) => {
+  const manifestAndZipOverheadBytes = 1024 * 1024
+  const rowOverheadBytes = rowCount * 1024
+
+  return Math.ceil((estimatedPayloadChars + rowOverheadBytes + manifestAndZipOverheadBytes) * 4)
+}
+
+const getProjectTransferExportEstimateNumber = (value: number | null | undefined) => {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+export const getProjectTransferExportPreflightEstimate = async (
+  projectId: string,
+  options: ProjectTransferExportQueryOptions = {},
+): Promise<ProjectTransferExportPreflightEstimate> => {
+  const database = getDatabase(options)
+  await getProjectTransferExportSourceProjectSettings(projectId, {database})
+
+  const packageEstimate = await getProjectTransferExportPreflightPackageEstimate(projectId, database)
+  const packageBytes = getProjectTransferExportEstimatedPackageBytes({
+    estimatedPayloadChars: getProjectTransferExportEstimateNumber(packageEstimate.estimatedPayloadChars),
+    rowCount: getProjectTransferExportEstimateNumber(packageEstimate.rowCount),
+  })
+  const assetBytes =
+    packageBytes > projectTransferExecutionThresholds.exportInlinePackageBytes
+      ? 0
+      : await getProjectTransferExportAssetByteEstimateForArticles(
+          await getProjectTransferExportPreflightAssetArticles(projectId, database),
+        )
+
+  return {assetBytes, packageBytes}
 }
 
 export const getProjectTransferExportProjectPayload = async (

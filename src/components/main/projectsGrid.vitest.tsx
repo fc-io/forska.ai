@@ -6,7 +6,7 @@ import {render} from 'solid-js/web'
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 
 import type {ProjectListItem} from '../../services/projectsService.ts'
-import {ProjectsGrid} from './projectsGrid.tsx'
+import {ProjectsGrid} from './ProjectsGrid.tsx'
 import {
   getProjectTransferDownloadRequestUrl,
   getProjectTransferExportRequestUrl,

@@ -31,6 +31,7 @@ const getProjectTransferExportScript = (body: string) => {
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
     const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
     const {
+      getProjectTransferExportPreflightEstimate,
       getProjectTransferExportPayloads,
       getProjectTransferExportSourceProjectSettings,
       serializeProjectTransferExportPayloads,
@@ -188,6 +189,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
     packageMetadataHasTempPath: boolean
     packagePayloadJsonCollectionIsArray: boolean
     packageZipEntryPaths: string[]
+    preflightEstimate: {assetBytes: number; packageBytes: number}
     modelDescriptors: Array<{
       displayName: string | null
       modelName: string | null
@@ -778,6 +780,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
     const invalidDateMessage = await catchMessage(() => getProjectTransferExportPayloads('project-invalid-date'))
     const invalidFulltextMessage = await catchMessage(() => getProjectTransferExportPayloads('project-invalid-fulltext'))
     const missingProviderMessage = await catchMessage(() => getProjectTransferExportPayloads('project-missing-provider'))
+    const preflightEstimate = await getProjectTransferExportPreflightEstimate('project-archived-export')
     const packageLayout = getProjectTransferExportTempLayout('export-package-test')
     const fakeZip = getFakeZipModule()
     const packageBuild = await buildExportPackage({
@@ -857,6 +860,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       packageMetadataHasTempPath: JSON.stringify(packageBuild.metadata).includes('tmp/project-transfer'),
       packagePayloadJsonCollectionIsArray: Array.isArray(packagePayloadJsonCollection),
       packageZipEntryPaths,
+      preflightEstimate,
       modelDescriptors: archived.payloads.models.map((model) => {
         return {
           displayName: model.displayName,
@@ -945,6 +949,8 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.packageChecksumMatches).toBe(true)
   expect(result.packageMetadataHasTempPath).toBe(false)
   expect(result.packagePayloadJsonCollectionIsArray).toBe(true)
+  expect(result.preflightEstimate.assetBytes).toBe(49)
+  expect(result.preflightEstimate.packageBytes).toBeGreaterThan(result.preflightEstimate.assetBytes)
   expect(result.packageZipEntryPaths).toContain('manifest.json')
   expect(result.packageZipEntryPaths).toContain('providerConnections.json')
   expect(

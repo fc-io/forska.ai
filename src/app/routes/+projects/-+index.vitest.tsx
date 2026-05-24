@@ -57,7 +57,7 @@ vi.mock('@tanstack/solid-router', () => {
   }
 })
 
-vi.mock('../../../components/main/projectsGrid', () => {
+vi.mock('../../../components/main/ProjectsGrid', () => {
   return {
     ProjectsGrid: (props: {projects: unknown[]}) => {
       return <div data-testid="projects-grid">{props.projects.length}</div>
