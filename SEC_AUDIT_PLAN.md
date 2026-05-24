@@ -1,0 +1,233 @@
+# Security Audit Plan
+
+This plan expands the security-focused open-source blockers from `OS_IT_PLAN.md`: git-history and sensitive-material audit, plus configuration, secrets, local data, and runtime logging audit.
+
+## Release Principle
+
+- Treat any unreviewed secret, credential-like value, private hostname, private path, runtime payload, dataset, log, or sample artifact as blocked for public release.
+- Prefer publishing from a clean audited snapshot. Do not rely on history scanning as the only safety control.
+- Audit reports can contain sensitive evidence. Keep generated reports out of git and redact report output by default.
+
+## Scope
+
+- All reachable git refs that could become public: local branches, remote-tracking branches, tags, and release branches.
+- Current tracked files under product code, docs, scripts, migrations, tests, fixtures, config, package metadata, and publication artifacts.
+- Ignored and generated local paths that could accidentally be copied into tracked files: `data/`, `cache/`, `logs/`, `tmp/`, `test-results/`, `dist/`, `desktopBuild/`, and runtime JSONL output.
+- Config and secret flows: `process.env`, UI-stored provider settings, provider API keys, token storage, local binary paths, runtime profiles, logging paths, and sample commands.
+
+## Out Of Scope
+
+- Route cleanup implementation. Route decisions feed into this audit, but route gating/removal belongs in the route-surface workstream.
+- History rewrite implementation. This plan produces findings and remediation requirements; rewrite or clean-mirror publishing is decided after findings are reviewed.
+- Publishing the public repo. The output here is evidence for the final go/no-go packet.
+
+## Special Audit Software
+
+Use special audit software. Manual search is not enough.
+
+| Tool                                                       | Required | Purpose                                                                                               | Notes                                                                   |
+| ---------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `gitleaks`                                                 | Yes      | Primary all-history and current-tree secret scan.                                                     | Run locally with redacted JSON reports.                                 |
+| `trufflehog`                                               | Yes      | Independent all-history secret scan with verification where possible.                                 | Run locally; write JSONL output to ignored audit reports.               |
+| `rg` and `git log -S`                                      | Yes      | Manual review for old APIs, private infra strings, logging paths, and project-specific terms.         | Required because generic secret scanners miss project-specific leakage. |
+| GitHub secret scanning or equivalent public-repo guardrail | Later    | Continuous public-repo protection after the clean mirror exists.                                      | Do not replace the pre-release local scan with this.                    |
+| `detect-secrets`, `git-secrets`, or Semgrep custom rules   | Optional | Extra scan if `gitleaks` or `trufflehog` produce ambiguous coverage or if CI needs a baseline format. | Add only if it catches a known gap.                                     |
+
+Install tools outside the repo, for example with Homebrew:
+
+```bash
+brew install gitleaks trufflehog
+gitleaks version
+trufflehog --version
+```
+
+Before running tools, confirm current CLI flags with `gitleaks --help` and `trufflehog git --help`.
+
+## Audit Workspace
+
+- Create an ignored local report folder:
+
+```bash
+mkdir -p security-audit/reports security-audit/findings
+printf "security-audit/\n" >> .git/info/exclude
+git rev-parse HEAD > security-audit/reports/audit-head.txt
+git for-each-ref --format="%(refname)" refs/heads refs/remotes refs/tags > security-audit/reports/reachable-refs.txt
+```
+
+- Do not commit raw scanner reports.
+- Do not paste unredacted secrets into markdown findings.
+- Record tool versions, command lines, scan date, scanned commit, and scanned refs.
+
+## Workstream A: Git History And Sensitive Material
+
+1. Inventory reachable refs.
+   - Confirm which refs would be included in a public release.
+   - Record all branches and tags scanned.
+   - Mark refs that will stay private separately from refs that could become public.
+
+2. Run all-history secret scanners.
+
+```bash
+gitleaks git --source . --log-opts="--all" --redact --report-format json --report-path security-audit/reports/gitleaks-history.json
+trufflehog git "file://$PWD" --json --no-update > security-audit/reports/trufflehog-history.jsonl
+```
+
+3. Run a current-tree scan.
+
+```bash
+gitleaks dir . --redact --report-format json --report-path security-audit/reports/gitleaks-current-tree.json
+```
+
+4. Run manual history searches for API and infra leakage.
+
+```bash
+git log --all -S"/api/" -- src/server src/appServer.ts src/appServerMain.ts docs scripts
+git log --all -S"AdminInvestigate" -- src docs scripts
+git log --all -S"DuckdbStudio" -- src docs scripts
+git log --all -S"STACK_ROOT" -- docs scripts package.json
+git log --all -S"SSH_ALIAS" -- docs scripts package.json
+git log --all -S"LOG_DIR" -- src docs scripts package.json
+git log --all -S"FORSKA_RUNTIME_PROFILE" -- src docs scripts package.json
+```
+
+5. Run current-tree manual scans for project-specific sensitive strings.
+
+```bash
+rg -n --hidden --glob '!node_modules/**' --glob '!security-audit/**' "AKIA|AIza|sk-|xox[baprs]-|BEGIN (RSA|OPENSSH|EC|PRIVATE) KEY|Bearer [A-Za-z0-9._-]+|api[_-]?key|secret|token|password|private[_-]?key"
+rg -n --hidden --glob '!node_modules/**' --glob '!security-audit/**' "ssh|hostname|STACK_ROOT|SSH_ALIAS|backup|cluster|internal|private|LOG_DIR|FORSKA_RUNTIME_PROFILE|logs/runtime"
+```
+
+6. Triage every scanner and manual-search hit.
+   - Classify each hit as real secret, credential reference, private infra detail, old internal route, public-safe placeholder, false positive, or already-removed private-only history.
+   - For real secrets, rotate or revoke before any history rewrite or clean export.
+   - For private infra details, rewrite/remove current files and avoid publishing old history.
+   - For old API/internal route history, decide whether clean-mirror publishing is enough or whether the old surface creates disclosure risk requiring extra remediation.
+
+7. Produce a finding log with one row per finding.
+
+| Field                        | Required                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------- |
+| Finding ID                   | Yes                                                                           |
+| Risk type                    | Yes                                                                           |
+| Severity                     | Yes                                                                           |
+| Source tool or manual search | Yes                                                                           |
+| Commit hash                  | Yes, when from history                                                        |
+| File path                    | Yes                                                                           |
+| Evidence summary             | Redacted only                                                                 |
+| Owner                        | Yes                                                                           |
+| Still active?                | Yes                                                                           |
+| Public-release disposition   | Keep, rewrite, remove, move, rotate, revoke, or publish only via clean mirror |
+| Closure evidence             | Yes                                                                           |
+
+## Workstream B: Configuration, Secrets, Local Data, And Logging
+
+1. Inventory environment variables and runtime profiles.
+
+```bash
+rg -n "process\\.env|Bun\\.env|LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|FORSKA_RUNTIME_PROFILE|runtimeLogger|logs/runtime" src docs scripts package.json README.md
+```
+
+For each variable, record:
+
+- Purpose.
+- Whether it is required for normal local development.
+- Whether it can contain secrets, private paths, or private hostnames.
+- Public default or placeholder wording.
+- Whether docs/scripts expose a private value.
+
+2. Inventory provider credentials and token storage.
+
+```bash
+rg -n "provider|apiKey|api_key|secret|token|credential|auth|encrypt|keychain|localStorage|sessionStorage|indexedDB" src docs scripts package.json
+```
+
+For each flow, record:
+
+- Storage location.
+- Whether raw secrets are persisted.
+- Whether responses can return secret values.
+- Whether logs can include secret values.
+- Whether public docs explain safe local setup without committed `.env` files.
+
+3. Inventory local data, fixtures, exports, and generated artifacts.
+
+```bash
+git ls-files | rg "fixture|fixtures|sample|example|snapshot|export|pdf|jsonl|log|data|cache|tmp"
+git status --ignored --short
+find data cache logs tmp test-results dist desktopBuild -maxdepth 3 -type f 2>/dev/null
+```
+
+For each tracked or publishable artifact, decide:
+
+- Keep as-is, rewrite, remove, or move.
+- Whether it contains article content, PHI, PDFs, API responses, provider metadata, prompt text, model output, local paths, or machine identifiers.
+- Whether redistribution rights are clear.
+- Whether the artifact belongs in Forska or another repo.
+
+4. Audit structured runtime logging.
+
+```bash
+rg -n "runtimeLogger|LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|logs/runtime|jsonl|retention|7-day|seven" src docs scripts README.md
+```
+
+Record:
+
+- Runtime JSONL payload shape.
+- Filename pattern.
+- Retention behavior.
+- Default location.
+- Whether payloads can include prompts, article text, provider responses, API keys, tokens, local usernames, hostnames, stack paths, or machine identifiers.
+- Whether public docs mention runtime logs safely and avoid sample payloads with private data.
+
+5. Confirm ignored-path protection.
+
+```bash
+git check-ignore -v data cache logs tmp test-results dist desktopBuild node_modules
+rg -n "data/|cache/|logs/|tmp/|test-results/|dist/|desktopBuild/" .gitignore .prettierignore .eslintignore 2>/dev/null
+```
+
+6. Rewrite unsafe examples.
+   - Replace private paths, hostnames, stack roots, cluster names, backup paths, emails, tokens, or dataset names with placeholders.
+   - Keep public docs limited to loopback/local defaults and public commands.
+   - Do not add `.env` requirements for normal development unless explicitly necessary.
+
+## Remediation Rules
+
+- Real secret in current tree: block release, remove from current tree, rotate/revoke, and rescan.
+- Real secret only in private history: rotate/revoke first, then publish from clean mirror or cleaned refs only.
+- Private hostname/path in current docs/scripts: rewrite before release.
+- Private hostname/path only in unpublished private history: prefer clean mirror with no inherited history.
+- Runtime log or fixture with article text, PHI, PDF content, provider payloads, or prompts: remove unless explicitly licensed, scrubbed, and approved.
+- Unknown artifact rights: block release until keep/rewrite/remove/move is decided.
+
+## Deliverables
+
+- `security-audit/reports/audit-head.txt` and `security-audit/reports/reachable-refs.txt` kept locally, not committed.
+- Local redacted scanner reports from `gitleaks` and `trufflehog`, not committed.
+- A security finding log with redacted evidence and closure status.
+- A secret rotation/revocation log for any real credential.
+- A config and local-data inventory with keep/rewrite/remove/move decisions.
+- A logging-surface note covering runtime JSONL env vars, ignored paths, payload shape, filename pattern, and retention behavior.
+- Final recommendation for clean mirror, history rewrite, or keeping the current repo private.
+
+## Touched Layers
+
+- docs
+- scripts
+- git history and release ops
+- runtime logging
+- local data and generated artifacts
+- provider/config storage
+
+## Quality Gates
+
+- `gitleaks` all-history scan runs against all reachable refs and every hit is triaged.
+- `trufflehog` all-history scan runs against the local repo and every hit is triaged.
+- Manual `git log -S` searches cover old API paths, admin/debug route names, private infra strings, runtime log variables, and runtime profile variables.
+- Manual `rg` searches cover current-tree secrets, private infra strings, env vars, provider credentials, token storage, runtime logs, fixtures, samples, and generated artifacts.
+- Every real secret is rotated or revoked before any public release decision.
+- Every current tracked fixture, sample, export, snapshot, PDF, JSONL, or log-like artifact has a keep/rewrite/remove/move decision.
+- Runtime JSONL payload shape, retention behavior, and ignored paths are documented and public-safe.
+- `.gitignore` or `.git/info/exclude` keeps audit reports and local runtime data out of git.
+- Final public release uses a clean audited snapshot or an explicitly justified, re-scanned history exception.
+- For markdown-only changes to this plan, run `bunx prettier --check SEC_AUDIT_PLAN.md`.
