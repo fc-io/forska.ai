@@ -9,6 +9,7 @@ init-db/
 
 assets/article_pdfs/
 assets/article_pdfs
+assets/user_uploaded_article_pdfs/
 assets/covidence_2/
 assets/covidence_imports/
 assets/covidence_running/
