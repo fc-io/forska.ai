@@ -9,6 +9,7 @@ import type {fetchProjects} from '../../services/projectsService'
 import {cloneProject, unarchiveProject} from '../../services/projectsService'
 import {getSglangRuntimeModelNotice} from '../../utils/getSglangRuntimeModelNotice.ts'
 import {Button} from '../ui/button'
+import {ProjectTransferExportAction} from './projectsGrid/projectTransferExportAction.tsx'
 import {RuntimeModelNotice} from './runtimeModelNotice.tsx'
 
 type Project = Awaited<ReturnType<typeof fetchProjects>>[number]
@@ -256,6 +257,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                       >
                         Export data
                       </Button>
+                      <ProjectTransferExportAction projectId={project.id} class="px-3 py-1 text-sm" />
                       <Button
                         size="sm"
                         variant="outline"

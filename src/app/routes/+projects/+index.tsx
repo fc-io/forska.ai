@@ -2,7 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {Match, Show, Switch} from 'solid-js'
 
-import {ProjectsGrid} from '../../../components/main/ProjectsGrid'
+import {ProjectsGrid} from '../../../components/main/projectsGrid'
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
 import {fetchProjects} from '../../../services/projectsService'
