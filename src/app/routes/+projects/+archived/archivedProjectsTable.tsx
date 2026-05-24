@@ -3,6 +3,7 @@ import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@ta
 import {format} from 'date-fns'
 import {type Accessor, createEffect, createMemo, createSignal, For, type Setter, Show} from 'solid-js'
 
+import {ProjectTransferExportAction} from '../../../../components/main/projectsGrid/projectTransferExportAction.tsx'
 import {Button} from '../../../../components/ui/button'
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '../../../../components/ui/table'
 import {
@@ -250,8 +251,8 @@ const getArchivedProjectsColumns = (
     {
       id: 'actions',
       header: 'Actions',
-      size: 180,
-      minSize: 180,
+      size: 320,
+      minSize: 320,
       cell: (info) => {
         const project = info.row.original
         const isUnarchiving = params.unarchivingProjectIds().has(project.id)
@@ -261,6 +262,7 @@ const getArchivedProjectsColumns = (
             <span class="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
               Archived
             </span>
+            <ProjectTransferExportAction align="end" projectId={project.id} />
             <Button
               size="sm"
               disabled={isUnarchiving}
