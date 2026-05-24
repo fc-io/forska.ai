@@ -11,8 +11,8 @@ This plan expands the security-focused open-source blockers from `OS_IT_PLAN.md`
 ## Scope
 
 - All reachable git refs that could become public: local branches, remote-tracking branches, tags, and release branches.
-- Current tracked files under product code, docs, scripts, migrations, tests, fixtures, config, package metadata, and publication artifacts.
-- Ignored and generated local paths that could accidentally be copied into tracked files: `data/`, `cache/`, `logs/`, `tmp/`, `test-results/`, `dist/`, `desktopBuild/`, and runtime JSONL output.
+- Current tracked files under product code, docs, root plans, tasks, scripts, migrations, tests, fixtures, config, hidden tool config, package metadata, CI/workflow files, Docker/compose files, and publication artifacts.
+- Ignored and generated local paths likely to hold sensitive or publishable material that could accidentally be copied into tracked files: `data/`, `cache/`, `logs/`, `tmp/`, `.tmp/`, `.temp/`, `temp/`, `test-results/`, `coverage/`, `out/`, `dist/`, `desktopBuild/`, `desktopArtifacts/`, `.desktopBuild/`, `.desktopArtifacts/`, `.cache/`, `.secrets/`, `assets/article_pdfs/`, `assets/covidence_*`, `assets/structured_file_imports/`, `backups/`, `openalex_snapshot/`, `models/`, `pgdata/`, `init-db/`, and runtime JSONL output.
 - Config and secret flows: `process.env`, UI-stored provider settings, provider API keys, token storage, local binary paths, runtime profiles, logging paths, and sample commands.
 
 ## Out Of Scope
@@ -25,13 +25,13 @@ This plan expands the security-focused open-source blockers from `OS_IT_PLAN.md`
 
 Use special audit software. Manual search is not enough.
 
-| Tool                                                       | Required | Purpose                                                                                               | Notes                                                                   |
-| ---------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `gitleaks`                                                 | Yes      | Primary all-history and current-tree secret scan.                                                     | Run locally with redacted JSON reports.                                 |
-| `trufflehog`                                               | Yes      | Independent all-history secret scan with verification where possible.                                 | Run locally; write JSONL output to ignored audit reports.               |
-| `rg` and `git log -S`                                      | Yes      | Manual review for old APIs, private infra strings, logging paths, and project-specific terms.         | Required because generic secret scanners miss project-specific leakage. |
-| GitHub secret scanning or equivalent public-repo guardrail | Later    | Continuous public-repo protection after the clean mirror exists.                                      | Do not replace the pre-release local scan with this.                    |
-| `detect-secrets`, `git-secrets`, or Semgrep custom rules   | Optional | Extra scan if `gitleaks` or `trufflehog` produce ambiguous coverage or if CI needs a baseline format. | Add only if it catches a known gap.                                     |
+| Tool                                                       | Required | Purpose                                                                                               | Notes                                                                                                                               |
+| ---------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `gitleaks`                                                 | Yes      | Primary all-history and current-tree secret scan.                                                     | Run locally with redacted JSON reports outside the repo.                                                                            |
+| `trufflehog`                                               | Yes      | Independent all-history secret scan with verification where possible.                                 | Run locally; keep JSONL output outside the repo and treat it as raw sensitive evidence unless the installed version redacts output. |
+| `rg` and `git log -S`                                      | Yes      | Manual review for old APIs, private infra strings, logging paths, and project-specific terms.         | Required because generic secret scanners miss project-specific leakage.                                                             |
+| GitHub secret scanning or equivalent public-repo guardrail | Later    | Continuous public-repo protection after the clean mirror exists.                                      | Do not replace the pre-release local scan with this.                                                                                |
+| `detect-secrets`, `git-secrets`, or Semgrep custom rules   | Optional | Extra scan if `gitleaks` or `trufflehog` produce ambiguous coverage or if CI needs a baseline format. | Add only if it catches a known gap.                                                                                                 |
 
 Install tools outside the repo, for example with Homebrew:
 
@@ -41,21 +41,25 @@ gitleaks version
 trufflehog --version
 ```
 
-Before running tools, confirm current CLI flags with `gitleaks --help` and `trufflehog git --help`.
+Before running tools, confirm current CLI flags with `gitleaks --help` and `trufflehog git --help`. If the installed `trufflehog` cannot redact JSONL output, keep the raw JSONL local only and copy only redacted summaries into findings.
 
 ## Audit Workspace
 
-- Create an ignored local report folder:
+- Refresh remote refs, then create an out-of-tree local report folder. The commands below assume `AUDIT_DIR` remains exported:
 
 ```bash
-mkdir -p security-audit/reports security-audit/findings
-printf "security-audit/\n" >> .git/info/exclude
-git rev-parse HEAD > security-audit/reports/audit-head.txt
-git for-each-ref --format="%(refname)" refs/heads refs/remotes refs/tags > security-audit/reports/reachable-refs.txt
+git fetch --all --tags --prune
+export AUDIT_DIR="${AUDIT_DIR:-../forska-security-audit}"
+mkdir -p "$AUDIT_DIR/reports" "$AUDIT_DIR/findings"
+git remote -v > "$AUDIT_DIR/reports/remotes.txt"
+git rev-parse HEAD > "$AUDIT_DIR/reports/audit-head.txt"
+git for-each-ref --format="%(refname)" refs/heads refs/remotes refs/tags > "$AUDIT_DIR/reports/reachable-refs.txt"
+git ls-remote --heads --tags origin > "$AUDIT_DIR/reports/origin-refs.txt"
 ```
 
 - Do not commit raw scanner reports.
 - Do not paste unredacted secrets into markdown findings.
+- If reports must be written inside the repo, add that folder to `.git/info/exclude` before any current-tree scanner runs and verify the scanner does not scan its own report output.
 - Record tool versions, command lines, scan date, scanned commit, and scanned refs.
 
 ## Workstream A: Git History And Sensitive Material
@@ -63,38 +67,39 @@ git for-each-ref --format="%(refname)" refs/heads refs/remotes refs/tags > secur
 1. Inventory reachable refs.
    - Confirm which refs would be included in a public release.
    - Record all branches and tags scanned.
+   - Compare fetched local refs against `origin-refs.txt`; if remote fetch or listing fails, record the reason and treat ref coverage as unresolved.
    - Mark refs that will stay private separately from refs that could become public.
 
 2. Run all-history secret scanners.
 
 ```bash
-gitleaks git --source . --log-opts="--all" --redact --report-format json --report-path security-audit/reports/gitleaks-history.json
-trufflehog git "file://$PWD" --json --no-update > security-audit/reports/trufflehog-history.jsonl
+gitleaks git --source . --log-opts="--all" --redact --report-format json --report-path "$AUDIT_DIR/reports/gitleaks-history.json"
+trufflehog git "file://$PWD" --json --no-update > "$AUDIT_DIR/reports/trufflehog-history.raw.jsonl"
 ```
 
 3. Run a current-tree scan.
 
 ```bash
-gitleaks dir . --redact --report-format json --report-path security-audit/reports/gitleaks-current-tree.json
+gitleaks dir . --redact --report-format json --report-path "$AUDIT_DIR/reports/gitleaks-current-tree.json"
 ```
 
 4. Run manual history searches for API and infra leakage.
 
 ```bash
-git log --all -S"/api/" -- src/server src/appServer.ts src/appServerMain.ts docs scripts
-git log --all -S"AdminInvestigate" -- src docs scripts
-git log --all -S"DuckdbStudio" -- src docs scripts
-git log --all -S"STACK_ROOT" -- docs scripts package.json
-git log --all -S"SSH_ALIAS" -- docs scripts package.json
-git log --all -S"LOG_DIR" -- src docs scripts package.json
-git log --all -S"FORSKA_RUNTIME_PROFILE" -- src docs scripts package.json
+git log --all -S"/api/" -- src/server src/appServer.ts src/appServerMain.ts docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
+git log --all -S"AdminInvestigate" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
+git log --all -S"DuckdbStudio" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
+git log --all -S"STACK_ROOT" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
+git log --all -S"SSH_ALIAS" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
+git log --all -S"LOG_DIR" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
+git log --all -S"FORSKA_RUNTIME_PROFILE" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
 ```
 
 5. Run current-tree manual scans for project-specific sensitive strings.
 
 ```bash
-rg -n --hidden --glob '!node_modules/**' --glob '!security-audit/**' "AKIA|AIza|sk-|xox[baprs]-|BEGIN (RSA|OPENSSH|EC|PRIVATE) KEY|Bearer [A-Za-z0-9._-]+|api[_-]?key|secret|token|password|private[_-]?key"
-rg -n --hidden --glob '!node_modules/**' --glob '!security-audit/**' "ssh|hostname|STACK_ROOT|SSH_ALIAS|backup|cluster|internal|private|LOG_DIR|FORSKA_RUNTIME_PROFILE|logs/runtime"
+rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' --glob '!security-audit/**' "AKIA|AIza|sk-|xox[baprs]-|BEGIN (RSA|OPENSSH|EC|PRIVATE) KEY|Bearer [A-Za-z0-9._-]+|api[_-]?key|secret|token|password|private[_-]?key"
+rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' --glob '!security-audit/**' "ssh|hostname|STACK_ROOT|SSH_ALIAS|backup|cluster|internal|private|LOG_DIR|FORSKA_RUNTIME_PROFILE|logs/runtime"
 ```
 
 6. Triage every scanner and manual-search hit.
@@ -124,7 +129,7 @@ rg -n --hidden --glob '!node_modules/**' --glob '!security-audit/**' "ssh|hostna
 1. Inventory environment variables and runtime profiles.
 
 ```bash
-rg -n "process\\.env|Bun\\.env|LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|FORSKA_RUNTIME_PROFILE|runtimeLogger|logs/runtime" src docs scripts package.json README.md
+rg -n "process\\.env|Bun\\.env|LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|FORSKA_RUNTIME_PROFILE|runtimeLogger|logs/runtime" src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md
 ```
 
 For each variable, record:
@@ -138,7 +143,7 @@ For each variable, record:
 2. Inventory provider credentials and token storage.
 
 ```bash
-rg -n "provider|apiKey|api_key|secret|token|credential|auth|encrypt|keychain|localStorage|sessionStorage|indexedDB" src docs scripts package.json
+rg -n "provider|apiKey|api_key|secret|token|credential|auth|encrypt|keychain|localStorage|sessionStorage|indexedDB" src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md
 ```
 
 For each flow, record:
@@ -152,9 +157,9 @@ For each flow, record:
 3. Inventory local data, fixtures, exports, and generated artifacts.
 
 ```bash
-git ls-files | rg "fixture|fixtures|sample|example|snapshot|export|pdf|jsonl|log|data|cache|tmp"
+git ls-files | rg "fixture|fixtures|sample|example|snapshot|export|pdf|ndjson|jsonl|log|data|cache|tmp|artifact|backup|covidence|openalex|fhir|ehr"
 git status --ignored --short
-find data cache logs tmp test-results dist desktopBuild -maxdepth 3 -type f 2>/dev/null
+find data cache logs tmp .tmp .temp temp test-results coverage out dist desktopBuild desktopArtifacts .desktopBuild .desktopArtifacts .cache .secrets assets/article_pdfs assets/covidence_2 assets/covidence_imports assets/covidence_running assets/structured_file_imports backups openalex_snapshot models pgdata init-db -maxdepth 3 -type f 2>/dev/null
 ```
 
 For each tracked or publishable artifact, decide:
@@ -167,7 +172,7 @@ For each tracked or publishable artifact, decide:
 4. Audit structured runtime logging.
 
 ```bash
-rg -n "runtimeLogger|LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|logs/runtime|jsonl|retention|7-day|seven" src docs scripts README.md
+rg -n "runtimeLogger|LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|logs/runtime|jsonl|retention|7-day|seven" src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md
 ```
 
 Record:
@@ -182,8 +187,8 @@ Record:
 5. Confirm ignored-path protection.
 
 ```bash
-git check-ignore -v data cache logs tmp test-results dist desktopBuild node_modules
-rg -n "data/|cache/|logs/|tmp/|test-results/|dist/|desktopBuild/" .gitignore .prettierignore .eslintignore 2>/dev/null
+git check-ignore -v data/ cache/ logs/ tmp/ .tmp/ .temp/ temp/ test-results/ coverage/ out/ dist/ desktopBuild/ desktopArtifacts/ .desktopBuild/ .desktopArtifacts/ .cache/ .secrets/ assets/article_pdfs/ assets/covidence_2/ assets/covidence_imports/ assets/covidence_running/ assets/structured_file_imports/ backups/ openalex_snapshot/ models/ pgdata/ init-db/ node_modules/
+rg -n "data/|cache|logs|tmp/|\\.tmp/|\\.temp/|temp/|test-results/|coverage|out|dist|desktopBuild|desktopArtifacts|\\.desktopBuild|\\.desktopArtifacts|\\.cache|\\.secrets|assets/article_pdfs|assets/covidence_|assets/structured_file_imports|backups|openalex_snapshot|models|pgdata|init-db" .gitignore .prettierignore .eslintignore 2>/dev/null
 ```
 
 6. Rewrite unsafe examples.
@@ -202,8 +207,8 @@ rg -n "data/|cache/|logs/|tmp/|test-results/|dist/|desktopBuild/" .gitignore .pr
 
 ## Deliverables
 
-- `security-audit/reports/audit-head.txt` and `security-audit/reports/reachable-refs.txt` kept locally, not committed.
-- Local redacted scanner reports from `gitleaks` and `trufflehog`, not committed.
+- `$AUDIT_DIR/reports/audit-head.txt`, `$AUDIT_DIR/reports/reachable-refs.txt`, `$AUDIT_DIR/reports/origin-refs.txt`, and `$AUDIT_DIR/reports/remotes.txt` kept locally, outside git.
+- Local redacted `gitleaks` reports and local raw-or-redacted `trufflehog` JSONL reports, kept outside git.
 - A security finding log with redacted evidence and closure status.
 - A secret rotation/revocation log for any real credential.
 - A config and local-data inventory with keep/rewrite/remove/move decisions.
@@ -221,13 +226,13 @@ rg -n "data/|cache/|logs/|tmp/|test-results/|dist/|desktopBuild/" .gitignore .pr
 
 ## Quality Gates
 
-- `gitleaks` all-history scan runs against all reachable refs and every hit is triaged.
-- `trufflehog` all-history scan runs against the local repo and every hit is triaged.
-- Manual `git log -S` searches cover old API paths, admin/debug route names, private infra strings, runtime log variables, and runtime profile variables.
-- Manual `rg` searches cover current-tree secrets, private infra strings, env vars, provider credentials, token storage, runtime logs, fixtures, samples, and generated artifacts.
+- `gitleaks` all-history scan runs after `git fetch --all --tags --prune`, covers all reachable refs, and every hit is triaged.
+- `trufflehog` all-history scan runs after remote refs are refreshed, covers the local repo, and every hit is triaged.
+- Manual `git log -S` searches cover old API paths, admin/debug route names, private infra strings, runtime log variables, and runtime profile variables across `src`, docs, scripts, plans, tasks, config, hidden tool config, CI/workflow files, Docker/compose files, and package metadata.
+- Manual `rg` searches cover current-tree secrets, private infra strings, env vars, provider credentials, token storage, runtime logs, fixtures, samples, generated artifacts, publication artifacts, and hidden config.
 - Every real secret is rotated or revoked before any public release decision.
-- Every current tracked fixture, sample, export, snapshot, PDF, JSONL, or log-like artifact has a keep/rewrite/remove/move decision.
+- Every current tracked fixture, sample, export, snapshot, PDF, NDJSON, JSONL, log-like artifact, and ignored/generated local data family has a keep/rewrite/remove/move decision or is explicitly excluded from the public snapshot.
 - Runtime JSONL payload shape, retention behavior, and ignored paths are documented and public-safe.
-- `.gitignore` or `.git/info/exclude` keeps audit reports and local runtime data out of git.
+- Audit reports are written outside the repo or ignored before scanners run, current-tree scanners do not scan their own report output, and `.gitignore` or `.git/info/exclude` keeps local runtime data out of git.
 - Final public release uses a clean audited snapshot or an explicitly justified, re-scanned history exception.
 - For markdown-only changes to this plan, run `bunx prettier --check SEC_AUDIT_PLAN.md`.
