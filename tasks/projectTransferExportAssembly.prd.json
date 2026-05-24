@@ -93,12 +93,13 @@
         "`bun run lint` passes for touched `src` files."
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-001",
         "US-003"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-005",
@@ -215,6 +216,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-05-24T08:47:02.298Z"
+    "updatedAt": "2026-05-24T11:23:38.195Z"
   }
 }

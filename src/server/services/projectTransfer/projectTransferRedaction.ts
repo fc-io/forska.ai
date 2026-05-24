@@ -39,7 +39,6 @@ const urlProtocolPattern = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
 const privateHostnamePattern = /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/
 const fullTextDerivedArticleFields = [
   'fullText',
-  'fullTextAssets',
   'fullTextCharCount',
   'fullTextConversionAttempts',
   'fullTextConversionError',
@@ -47,9 +46,7 @@ const fullTextDerivedArticleFields = [
   'fullTextConversionModelId',
   'fullTextConversionStatus',
   'fullTextFetchedAt',
-  'fullTextHtml',
   'fullTextOriginalFormat',
-  'fullTextPdf',
   'fullTextSource',
 ] as const
 const articleJsonFields = [
@@ -484,6 +481,15 @@ const redactArticleRecord = (
   const redacted = applyFieldRedactions(record, [
     (recordValue) => {
       return omitFullTextDerivedFields(recordValue, context) as RedactedValue<ProjectTransferArticlePayloadRecord>
+    },
+    (recordValue) => {
+      return redactJsonField(recordValue, 'fullTextAssets', context)
+    },
+    (recordValue) => {
+      return redactStringField(recordValue, 'fullTextHtml', context)
+    },
+    (recordValue) => {
+      return redactStringField(recordValue, 'fullTextPdf', context)
     },
     ...articleJsonFields.map((field) => {
       return (recordValue: ProjectTransferArticlePayloadRecord) => {

@@ -112,16 +112,26 @@ export type ProjectTransferArticlePayloadRecord = ProjectTransferPayloadRecord
     sourceArticleId: string
   }
 
-export type ProjectTransferAssetManifestPayload = ProjectTransferPayloadRecord & {
-  assets: ProjectTransferAssetPayloadRecord[]
+export type ProjectTransferAssetReferenceKind = 'fullTextAssets' | 'fullTextHtml' | 'fullTextPdf'
+
+export type ProjectTransferAssetReference = JsonRecord & {
+  fieldPath?: string
+  jsonPointer?: string
+  kind: ProjectTransferAssetReferenceKind
+  payloadFile: string
+  sourceArticleId?: string
+  sourceRef: string
 }
 
-export type ProjectTransferAssetPayloadRecord = ProjectTransferPayloadRecord & {
+export type ProjectTransferAssetManifestEntry = JsonRecord & {
   byteLength: number
   checksumSha256: string
   contentType?: string | null
   packagePath: string
+  references: ProjectTransferAssetReference[]
 }
+
+export type ProjectTransferAssetManifestPayload = JsonRecord & {entries: ProjectTransferAssetManifestEntry[]}
 
 export type ProjectTransferPayloadByKey = {
   articleImportRoutes: ProjectTransferPayloadRecord[]
@@ -862,17 +872,54 @@ const assertProjectTransferCollectionPayload = (
   return {...payload, records: assertProjectTransferRecordSetPayload(payload.records, contract, `${key}.records`)}
 }
 
-const assertAssetRecord = (value: unknown, index: number) => {
-  const label = `assetManifest.assets[${index}]`
-  const asset = assertProjectTransferPayloadRecord(
-    value,
-    {
-      requiredFields: ['packagePath', 'byteLength', 'checksumSha256'],
-      requiredProvenanceFields: ['sourceProjectId'],
-      requiredSignatureFields: ['checksumSha256', 'packagePath'],
-    },
-    label,
-  )
+const assetReferenceKindSet = new Set<ProjectTransferAssetReferenceKind>([
+  'fullTextAssets',
+  'fullTextHtml',
+  'fullTextPdf',
+])
+
+const assertAssetReference = (value: unknown, index: number, referenceIndex: number) => {
+  const label = `assetManifest.entries[${index}].references[${referenceIndex}]`
+  const reference = assertRecord(value, label)
+  const kind = assertString(reference.kind, `${label}.kind`)
+  const payloadFile = assertNonEmptyString(reference.payloadFile, `${label}.payloadFile`)
+  const payloadPathValidation = validateProjectTransferArchiveMemberPath({pathValue: payloadFile})
+
+  if (!assetReferenceKindSet.has(kind as ProjectTransferAssetReferenceKind)) {
+    return failProjectTransferPayload(`${label}.kind must be a supported asset reference kind`)
+  }
+
+  if (!payloadPathValidation.ok) {
+    return failProjectTransferPayload(`${label}.payloadFile ${payloadPathValidation.error.message}`)
+  }
+
+  if (!hasOwn(reference, 'jsonPointer') && !hasOwn(reference, 'fieldPath')) {
+    return failProjectTransferPayload(`${label} must include jsonPointer or fieldPath`)
+  }
+
+  if (hasOwn(reference, 'jsonPointer')) {
+    assertNonEmptyString(reference.jsonPointer, `${label}.jsonPointer`)
+  }
+
+  if (hasOwn(reference, 'fieldPath')) {
+    assertNonEmptyString(reference.fieldPath, `${label}.fieldPath`)
+  }
+
+  if (hasOwn(reference, 'sourceArticleId')) {
+    assertNonEmptyString(reference.sourceArticleId, `${label}.sourceArticleId`)
+  }
+
+  assertNonEmptyString(reference.sourceRef, `${label}.sourceRef`)
+
+  return reference as ProjectTransferAssetReference
+}
+
+const assertAssetEntry = (value: unknown, index: number) => {
+  const label = `assetManifest.entries[${index}]`
+  const asset = assertRecord(value, label)
+
+  assertFieldsPresent(asset, ['packagePath', 'byteLength', 'checksumSha256', 'references'], label)
+
   const packagePath = assertNonEmptyString(asset.packagePath, `${label}.packagePath`)
   const archivePathValidation = validateProjectTransferArchiveMemberPath({pathValue: packagePath})
   const runtimePathValidation = validateProjectTransferRuntimeAssetPath(packagePath)
@@ -886,25 +933,35 @@ const assertAssetRecord = (value: unknown, index: number) => {
   }
 
   assertNonNegativeInteger(asset.byteLength, `${label}.byteLength`)
+  const checksumSha256 = assertString(asset.checksumSha256, `${label}.checksumSha256`)
+  const contentType = hasOwn(asset, 'contentType')
+    ? assertNullableString(asset.contentType, `${label}.contentType`)
+    : undefined
+  const references = assertArray(asset.references, `${label}.references`).map((reference, referenceIndex) => {
+    return assertAssetReference(reference, index, referenceIndex)
+  })
 
-  return projectTransferSha256Pattern.test(assertString(asset.checksumSha256, `${label}.checksumSha256`))
-    ? asset
+  return projectTransferSha256Pattern.test(checksumSha256)
+    ? ({
+        ...asset,
+        ...(hasOwn(asset, 'contentType') ? {contentType} : {}),
+        references,
+      } as ProjectTransferAssetManifestEntry)
     : failProjectTransferPayload(`${label}.checksumSha256 must be lowercase SHA-256 hex`)
 }
 
 const assertProjectTransferAssetManifestPayload = (value: unknown): ProjectTransferAssetManifestPayload => {
   const payload = assertRecord(value, 'assetManifest payload')
 
-  assertFieldPresent(payload, 'assets', 'assetManifest payload')
-  assertPayloadBase(
-    payload,
-    {requiredProvenanceFields: ['sourceProjectId'], requiredSignatureFields: ['assets']},
-    'assetManifest payload',
-  )
+  if (hasOwn(payload, 'assets') || hasOwn(payload, 'signature') || hasOwn(payload, 'provenance')) {
+    return failProjectTransferPayload('assetManifest payload must use top-level entries only')
+  }
+
+  assertFieldPresent(payload, 'entries', 'assetManifest payload')
 
   return {
     ...payload,
-    assets: assertArray(payload.assets, 'assetManifest.assets').map(assertAssetRecord),
+    entries: assertArray(payload.entries, 'assetManifest.entries').map(assertAssetEntry),
   } as ProjectTransferAssetManifestPayload
 }
 
@@ -1188,20 +1245,24 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
     },
   ],
   assetManifest: {
-    assets: [
+    entries: [
       {
         byteLength: 11,
         checksumSha256: 'a'.repeat(64),
         contentType: 'application/pdf',
         packagePath: 'assets/project-transfer/session-1/article-1.pdf',
-        provenance: baseProvenance,
-        signature: {checksumSha256: 'a'.repeat(64), packagePath: 'assets/project-transfer/session-1/article-1.pdf'},
+        references: [
+          {
+            fieldPath: 'articles[0].fullTextPdf',
+            jsonPointer: '/0/fullTextPdf',
+            kind: 'fullTextPdf',
+            payloadFile: 'articles.ndjson',
+            sourceArticleId: 'article-1',
+            sourceRef: 'article:article-1',
+          },
+        ],
       },
     ],
-    provenance: baseProvenance,
-    signature: {
-      assets: [{checksumSha256: 'a'.repeat(64), packagePath: 'assets/project-transfer/session-1/article-1.pdf'}],
-    },
   },
   humanJudgmentSummaries: [
     {
