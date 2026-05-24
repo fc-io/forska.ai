@@ -26,8 +26,9 @@ import {
   type ProjectTransferPayloadRecord,
   serializeProjectTransferPayload,
 } from './projectTransferPayloadSchemas.ts'
+import {redactProjectTransferPayloads} from './projectTransferRedaction.ts'
 import type {ProjectTransferManifestWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
-import {projectTransferPayloadKeys, projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
+import {projectTransferPayloadKeys} from './projectTransferSchemas.ts'
 
 type ProjectTransferExportQueryOptions = {database?: AppQueryDatabaseService}
 
@@ -327,9 +328,12 @@ export type ProjectTransferExportPayloadAssembly = {
 export type ProjectTransferExportSerializedPayloads = Record<ProjectTransferPayloadKey, string>
 
 const providerSecretRedaction = {
+  action: 'redacted',
   code: 'providerSecretRedacted' as const,
-  field: 'secretRef',
-  reason: 'Provider authentication secrets are machine-local and are never exported.',
+  jsonPointer: '/secretRef',
+  message: 'Provider authentication secret reference was redacted from the package payload.',
+  scope: 'providerConnections',
+  severity: 'warning' as const,
 }
 
 const currentReviewRowsInputSignatureProvenance = {kind: 'currentReviewRows' as const, version: 1 as const}
@@ -891,6 +895,7 @@ const getProjectTransferExportAmbiguousJudgmentWarnings = async (
 
   return rows.map<ProjectTransferManifestWarning>((row) => {
     return {
+      action: 'omitted',
       code: 'ambiguousJudgmentVisibleKey',
       details: {
         sourceArticleId: row.articleId,
@@ -899,10 +904,10 @@ const getProjectTransferExportAmbiguousJudgmentWarnings = async (
         sourcePromptId: row.promptId,
         visibleRowCount: Number(row.visibleRowCount ?? 0),
       },
+      jsonPointer: '/judgments',
       message: 'Omitted active source judgments with an ambiguous review-visible natural key.',
-      path: projectTransferPayloadPathByKey.judgments,
-      payloadKey: 'judgments',
-      severity: 'warning',
+      scope: 'judgments',
+      severity: 'fidelity',
     }
   })
 }
@@ -916,6 +921,7 @@ const getProjectTransferExportChunkedJudgmentWarnings = (rows: ProjectTransferEx
     ? []
     : [
         {
+          action: 'omitted',
           code: 'chunkedJudgmentInputProofMissing',
           details: {
             omittedJudgmentCount: chunkedRows.length,
@@ -923,10 +929,10 @@ const getProjectTransferExportChunkedJudgmentWarnings = (rows: ProjectTransferEx
               return row.judgmentId
             }),
           },
+          jsonPointer: '/judgments',
           message: 'Omitted chunked source judgments without durable final-prompt and evidence proof.',
-          path: projectTransferPayloadPathByKey.judgments,
-          payloadKey: 'judgments' as const,
-          severity: 'warning' as const,
+          scope: 'judgments',
+          severity: 'fidelity' as const,
         },
       ]
 }
@@ -2053,14 +2059,11 @@ const getProjectTransferExportProviderConnectionsPayloadFromContext = (context: 
       maxInflightRequests: row.maxInflightRequests,
       provenance: {sourceProviderConnectionId: row.providerConnectionId},
       providerKind: row.providerKind,
-      redactions: [providerSecretRedaction],
       secretRef: null,
       signature,
       sourceProviderConnectionId: row.providerConnectionId,
       updatedAt: getIsoDateValue(row.updatedAt),
-      warnings: row.secretRef
-        ? [{code: 'providerSecretRedacted' as const, field: 'secretRef', message: 'Provider secret was redacted.'}]
-        : [{code: 'providerSecretRedacted' as const, field: 'secretRef', message: 'Provider secret was redacted.'}],
+      warnings: [providerSecretRedaction],
     }
   })
 
@@ -2131,23 +2134,26 @@ const getProjectTransferExportCurrentReviewRowsSignatureWarnings = (context: Pro
     context.judgmentRows.length === 0
       ? null
       : {
+          action: 'used_current_review_rows',
           code: 'currentReviewRowsJudgmentInputSignature',
           details: {
             provenance: currentReviewRowsInputSignatureProvenance.kind,
             recordCount: context.judgmentRows.length,
           },
+          jsonPointer: '/judgments',
           message: 'Exported judgment input signatures are certified against current source review rows.',
-          path: projectTransferPayloadPathByKey.judgments,
-          payloadKey: 'judgments' as const,
+          scope: 'judgments',
           severity: 'warning' as const,
         }
   const humanReviewWarning =
     humanReviewRowCount === 0
       ? null
       : {
+          action: 'used_current_review_rows',
           code: 'currentReviewRowsHumanReviewInputSignature',
           details: {provenance: currentReviewRowsInputSignatureProvenance.kind, recordCount: humanReviewRowCount},
           message: 'Exported human/review input signatures are certified against current source review rows.',
+          scope: 'humanReviewRows',
           severity: 'warning' as const,
         }
 
@@ -2429,10 +2435,15 @@ export const getProjectTransferExportPayloads = async (
     providerConnections: getProjectTransferExportProviderConnectionsPayloadFromContext(context),
     reviews: getProjectTransferExportReviewsPayloadFromContext(context),
   } satisfies ProjectTransferPayloadByKey
+  const redacted = redactProjectTransferPayloads(payloads)
 
   return {
-    payloads,
-    warnings: [...context.warnings, ...getProjectTransferExportCurrentReviewRowsSignatureWarnings(context)],
+    payloads: redacted.payloads,
+    warnings: [
+      ...context.warnings,
+      ...getProjectTransferExportCurrentReviewRowsSignatureWarnings(context),
+      ...redacted.warnings,
+    ],
   }
 }
 

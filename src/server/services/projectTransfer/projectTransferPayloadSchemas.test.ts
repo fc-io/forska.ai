@@ -70,36 +70,52 @@ test('locks project settings and warning, omission, and redaction code fixtures'
       useTitle: false,
     },
   })
-  const invalidOmissionResult = validateProjectTransferPayload('articles', [
-    {...article, omissions: [{code: 'secretOmitted', field: 'fullText', reason: 'fixture'}]},
+  const invalidWarningResult = validateProjectTransferPayload('articles', [
+    {
+      ...article,
+      warnings: [
+        {action: 'redacted', code: 'secretOmitted', message: 'fixture', scope: 'articles', severity: 'warning'},
+      ],
+    },
   ])
 
   expect(projectTransferPayloadWarningCodes).toEqual([
+    'articleFullTextOmitted',
+    'freeFormValueRedacted',
     'identifierConflict',
     'identifierRejected',
     'payloadOmitted',
     'projectSettingUnsupported',
+    'providerConfigValueRedacted',
     'providerSecretRedacted',
+    'runtimePathRedacted',
+    'urlRedacted',
   ])
   expect(projectTransferPayloadOmissionCodes).toContain('articleFullTextOmitted')
   expect(projectTransferPayloadOmissionCodes).toContain('providerSecretRedacted')
   expect(projectTransferPayloadRedactionCodes).toContain('providerSecretRedacted')
-  expect(article.omissions).toEqual([
+  expect(article.warnings).toEqual([
     {
+      action: 'omitted',
       code: 'articleFullTextOmitted',
-      field: 'fullText',
-      reason: 'The package contract stores article metadata and asset references separately from full text blobs.',
+      jsonPointer: '/fullText',
+      message: 'Article full text was omitted from the package payload.',
+      scope: 'articles',
+      severity: 'info',
     },
   ])
-  expect(providerConnection.redactions).toEqual([
+  expect(providerConnection.warnings).toEqual([
     {
+      action: 'redacted',
       code: 'providerSecretRedacted',
-      field: 'secretRef',
-      reason: 'Provider authentication secrets are machine-local and are never exported.',
+      jsonPointer: '/secretRef',
+      message: 'Provider authentication secret was redacted.',
+      scope: 'providerConnections',
+      severity: 'warning',
     },
   ])
   expect(getValidationError(invalidSettingsResult)).toContain('must enable at least one article content field')
-  expect(getValidationError(invalidOmissionResult)).toContain('unknown code secretOmitted')
+  expect(getValidationError(invalidWarningResult)).toContain('unknown code secretOmitted')
 })
 
 test('rejects missing required signature fields and source ids outside provenance', () => {

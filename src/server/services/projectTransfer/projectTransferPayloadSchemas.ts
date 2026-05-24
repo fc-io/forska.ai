@@ -10,6 +10,7 @@ import {
   validateProjectTransferRuntimeAssetPath,
 } from './projectTransferPaths.ts'
 import {
+  type ProjectTransferPackageWarning,
   type ProjectTransferPayloadFormat,
   projectTransferPayloadFormatByKey,
   type ProjectTransferPayloadKey,
@@ -46,27 +47,29 @@ export const projectTransferPayloadRedactionCodes = [
 ] as const
 
 export const projectTransferPayloadWarningCodes = [
+  'articleFullTextOmitted',
+  'freeFormValueRedacted',
   'identifierConflict',
   'identifierRejected',
   'payloadOmitted',
   'projectSettingUnsupported',
+  'providerConfigValueRedacted',
   'providerSecretRedacted',
+  'runtimePathRedacted',
+  'urlRedacted',
 ] as const
 
 export type ProjectTransferPayloadOmissionCode = (typeof projectTransferPayloadOmissionCodes)[number]
 export type ProjectTransferPayloadRedactionCode = (typeof projectTransferPayloadRedactionCodes)[number]
 export type ProjectTransferPayloadWarningCode = (typeof projectTransferPayloadWarningCodes)[number]
 
-export type ProjectTransferPayloadOmission = {code: ProjectTransferPayloadOmissionCode; field: string; reason: string}
+export type ProjectTransferPayloadOmission = ProjectTransferPackageWarning & {code: ProjectTransferPayloadOmissionCode}
 
-export type ProjectTransferPayloadRedaction = {code: ProjectTransferPayloadRedactionCode; field: string; reason: string}
-
-export type ProjectTransferPayloadWarning = {
-  code: ProjectTransferPayloadWarningCode
-  details?: unknown
-  field?: string
-  message: string
+export type ProjectTransferPayloadRedaction = ProjectTransferPackageWarning & {
+  code: ProjectTransferPayloadRedactionCode
 }
+
+export type ProjectTransferPayloadWarning = ProjectTransferPackageWarning & {code: ProjectTransferPayloadWarningCode}
 
 export type ProjectTransferPayloadSignature = JsonRecord
 export type ProjectTransferPayloadProvenance = JsonRecord
@@ -307,20 +310,32 @@ const getPayloadCodeEntryError = (
 ): string | null => {
   const record = isRecord(entry) ? entry : null
   const code = record?.code
-  const field = record?.field
-  const reason = record?.reason
+  const action = record?.action
+  const jsonPointer = record?.jsonPointer
   const message = record?.message
-  const hasExplanation = typeof reason === 'string' || typeof message === 'string'
+  const scope = record?.scope
+  const severity = record?.severity
+  const sourceRef = record?.sourceRef
+  const validSeverity =
+    severity === 'blocking' || severity === 'fidelity' || severity === 'info' || severity === 'warning'
 
   return record === null
     ? `${label}[${index}] must be an object`
     : typeof code !== 'string' || !codeSet.has(code)
       ? `${label}[${index}] has unknown code ${String(code)}`
-      : typeof field !== 'string' && field !== undefined
-        ? `${label}[${index}].field must be a string when present`
-        : !hasExplanation
-          ? `${label}[${index}] must include reason or message`
-          : null
+      : typeof action !== 'string' || action.trim() === ''
+        ? `${label}[${index}].action must not be empty`
+        : typeof scope !== 'string' || scope.trim() === ''
+          ? `${label}[${index}].scope must not be empty`
+          : !validSeverity
+            ? `${label}[${index}].severity must be info, warning, fidelity, or blocking`
+            : typeof message !== 'string' || message.trim() === ''
+              ? `${label}[${index}].message must not be empty`
+              : typeof jsonPointer !== 'string' && jsonPointer !== undefined
+                ? `${label}[${index}].jsonPointer must be a string when present`
+                : typeof sourceRef !== 'string' && sourceRef !== undefined
+                  ? `${label}[${index}].sourceRef must be a string when present`
+                  : null
 }
 
 const assertPayloadCodeEntries = (value: unknown, codeSet: Set<string>, label: string) => {
@@ -458,14 +473,20 @@ const assertProviderConnectionPayload = (record: JsonRecord, label: string) => {
     return failProjectTransferPayload(`${label}.secretRef must be null and represented by providerSecretRedacted`)
   }
 
-  const redactions = assertArray(record.redactions, `${label}.redactions`)
-  const hasProviderSecretRedaction = redactions.some((entry) => {
-    return isRecord(entry) && entry.code === 'providerSecretRedacted' && entry.field === 'secretRef'
+  const warnings = record.warnings === undefined ? [] : assertArray(record.warnings, `${label}.warnings`)
+  const redactions = record.redactions === undefined ? [] : assertArray(record.redactions, `${label}.redactions`)
+  const hasProviderSecretRedaction = [...warnings, ...redactions].some((entry) => {
+    return (
+      isRecord(entry)
+      && entry.code === 'providerSecretRedacted'
+      && entry.action === 'redacted'
+      && entry.jsonPointer === '/secretRef'
+    )
   })
 
   return hasProviderSecretRedaction
     ? undefined
-    : failProjectTransferPayload(`${label}.redactions must include providerSecretRedacted for secretRef`)
+    : failProjectTransferPayload(`${label}.warnings must include providerSecretRedacted for secretRef`)
 }
 
 const assertModelPayload = (record: JsonRecord, label: string) => {
@@ -957,16 +978,44 @@ const serializeNdjsonPayload = (records: unknown[]) => {
         .join('\n')}\n`
 }
 
+const getPackageAnnotationWarnings = (value: unknown): unknown[] => {
+  return Array.isArray(value) ? value : []
+}
+
+const getPackageRecordWithoutInternalAnnotations = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(getPackageRecordWithoutInternalAnnotations)
+  }
+
+  if (!isRecord(value)) {
+    return value
+  }
+
+  const entries = Object.entries(value).reduce<JsonRecord>((record, [key, entry]) => {
+    return key === 'omissions' || key === 'redactions'
+      ? record
+      : {...record, [key]: getPackageRecordWithoutInternalAnnotations(entry)}
+  }, {})
+  const annotationWarnings = [
+    ...getPackageAnnotationWarnings(value.warnings),
+    ...getPackageAnnotationWarnings(value.omissions),
+    ...getPackageAnnotationWarnings(value.redactions),
+  ]
+
+  return annotationWarnings.length === 0 ? entries : {...entries, warnings: annotationWarnings}
+}
+
 export const serializeProjectTransferPayload = <TKey extends ProjectTransferPayloadKey>(
   key: TKey,
   value: unknown,
 ): string => {
   const payload = assertProjectTransferPayload(key, value)
+  const packagePayload = getPackageRecordWithoutInternalAnnotations(payload)
   const format: ProjectTransferPayloadFormat = projectTransferPayloadFormatByKey[key]
 
-  return format === 'ndjson' && Array.isArray(payload)
-    ? serializeNdjsonPayload(payload)
-    : (JSON.stringify(payload) ?? 'null')
+  return format === 'ndjson' && Array.isArray(packagePayload)
+    ? serializeNdjsonPayload(packagePayload)
+    : (JSON.stringify(packagePayload) ?? 'null')
 }
 
 const sourceProjectId = 'source-project-1'
@@ -1088,14 +1137,20 @@ const judgmentInputSignature = {
 }
 const baseProvenance = {sourceProjectId}
 const providerSecretRedaction = {
+  action: 'redacted',
   code: 'providerSecretRedacted' as const,
-  field: 'secretRef',
-  reason: 'Provider authentication secrets are machine-local and are never exported.',
+  jsonPointer: '/secretRef',
+  message: 'Provider authentication secret was redacted.',
+  scope: 'providerConnections',
+  severity: 'warning' as const,
 }
 const articleFullTextOmission = {
+  action: 'omitted',
   code: 'articleFullTextOmitted' as const,
-  field: 'fullText',
-  reason: 'The package contract stores article metadata and asset references separately from full text blobs.',
+  jsonPointer: '/fullText',
+  message: 'Article full text was omitted from the package payload.',
+  scope: 'articles',
+  severity: 'info' as const,
 }
 
 export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
@@ -1124,12 +1179,12 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
         {inputKind: 'medrxiv', source: 'article_identifier', value: '10.1101/2024.01.01.123456'},
       ],
       medrxivId: 'https://www.medrxiv.org/content/10.1101/2024.01.01.123456v3.full',
-      omissions: [articleFullTextOmission],
       provenance: {sourceArticleId: 'article-1'},
       pubmedId: 'PMID:12345',
       signature: articleSignature,
       sourceArticleId: 'article-1',
       url: 'https://doi.org/10.1101/2024.01.01.123456',
+      warnings: [articleFullTextOmission],
     },
   ],
   assetManifest: {
@@ -1326,11 +1381,10 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
         maxInflightRequests: 4,
         provenance: {sourceProviderConnectionId: 'provider-connection-1'},
         providerKind: 'openai',
-        redactions: [providerSecretRedaction],
         secretRef: null,
         signature: providerConnectionSignature,
         sourceProviderConnectionId: 'provider-connection-1',
-        warnings: [{code: 'providerSecretRedacted', field: 'secretRef', message: 'Provider secret was redacted.'}],
+        warnings: [providerSecretRedaction],
       },
     ],
     signature: {records: [providerConnectionSignature]},

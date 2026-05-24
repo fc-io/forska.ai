@@ -60,16 +60,21 @@ export type ProjectTransferManifestSource = {
   projectName?: string | null
 }
 
-export type ProjectTransferWarningSeverity = 'info' | 'warning'
+export type ProjectTransferWarningSeverity = 'blocking' | 'fidelity' | 'info' | 'warning'
 
-export type ProjectTransferManifestWarning = {
+export type ProjectTransferPackageWarning = {
+  action: string
   code: string
   details?: unknown
+  jsonPointer?: string
   message: string
-  path?: string
-  payloadKey?: ProjectTransferPayloadKey
-  severity?: ProjectTransferWarningSeverity
+  payload?: unknown
+  scope: string
+  severity: ProjectTransferWarningSeverity
+  sourceRef?: string
 }
+
+export type ProjectTransferManifestWarning = ProjectTransferPackageWarning
 
 export type ProjectTransferManifest = {
   generatedAt?: string
@@ -97,12 +102,15 @@ export const projectTransferManifestSourceShape = arktype({
 })
 
 export const projectTransferManifestWarningShape = arktype({
+  action: 'string',
   code: 'string',
   'details?': 'unknown',
+  'jsonPointer?': 'string | undefined',
   message: 'string',
-  'path?': 'string | undefined',
-  'payloadKey?': 'string | undefined',
-  'severity?': '"info" | "warning" | undefined',
+  'payload?': 'unknown',
+  scope: 'string',
+  severity: '"blocking" | "fidelity" | "info" | "warning"',
+  'sourceRef?': 'string | undefined',
 })
 
 export const projectTransferManifestShape = arktype({
