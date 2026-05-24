@@ -291,6 +291,45 @@ describe('ProjectsGrid export project action', () => {
     }
   })
 
+  test('does not immediately retry a failed ready-session download', async () => {
+    const fetchMock = vi.mocked(fetch)
+    const readyDeferred = createDeferred<{data: {data: ReadyExportData; error: null}; error: null}>()
+    fetchMock.mockResolvedValueOnce(getQueuedExportResponse())
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({data: null, error: 'Project transfer export package artifact is unavailable'}), {
+        headers: {'content-type': 'application/json'},
+        status: 410,
+      }),
+    )
+    mockApiState.getExportSession.mockReturnValue(readyDeferred.promise)
+    const {container, dispose, queryClient} = await renderProjectsGrid()
+
+    try {
+      const exportProjectButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.trim() === 'Export Project'
+      })
+
+      exportProjectButton?.click()
+
+      await waitForCondition(() => {
+        expect(mockApiState.getExportSession).toHaveBeenCalledWith('export-1')
+      })
+
+      readyDeferred.resolve({data: {data: getReadyExportData(), error: null}, error: null})
+
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('Project transfer export package artifact is unavailable')
+      })
+      await tick()
+
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    } finally {
+      dispose()
+      queryClient.clear()
+      container.remove()
+    }
+  })
+
   test('resolves export and download paths for browser and desktop runtimes', () => {
     expect(getProjectTransferExportRequestUrl('project 1', 'views://mainview', 'http://127.0.0.1:32101')).toBe(
       'http://127.0.0.1:32101/api/projects/project%201/export-project',

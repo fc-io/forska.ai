@@ -286,6 +286,7 @@ const removeExportId = (ids: Set<string>, exportId: string) => {
 export const ProjectTransferExportAction = (props: ProjectTransferExportActionProps) => {
   const [session, setSession] = createSignal<ProjectTransferExportSession | null>(null)
   const [downloadInFlightIds, setDownloadInFlightIds] = createSignal<Set<string>>(new Set())
+  const [downloadFailedIds, setDownloadFailedIds] = createSignal<Set<string>>(new Set())
   const [downloadedIds, setDownloadedIds] = createSignal<Set<string>>(new Set())
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
   const sessionId = createMemo(() => {
@@ -364,6 +365,9 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
         }
       })
       .catch((error) => {
+        setDownloadFailedIds((ids) => {
+          return addExportId(ids, readySession.exportId)
+        })
         setErrorMessage(getErrorMessage(error, 'Failed to download project transfer export'))
       })
       .finally(() => {
@@ -374,6 +378,7 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
   }
   const handleExportProject = () => {
     setErrorMessage(null)
+    setDownloadFailedIds(new Set())
     setDownloadedIds(new Set())
     setSession(null)
     startExportMutation.mutate(props.projectId)
@@ -383,8 +388,12 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
     const data = sessionQuery.data
     const readySession = data?.status === 'ready' ? data : null
     const alreadyDownloaded = readySession !== null && downloadedIds().has(readySession.exportId)
+    const downloadFailed = readySession !== null && downloadFailedIds().has(readySession.exportId)
     const shouldDownload =
-      readySession !== null && !downloadInFlightIds().has(readySession.exportId) && !alreadyDownloaded
+      readySession !== null
+      && !downloadInFlightIds().has(readySession.exportId)
+      && !alreadyDownloaded
+      && !downloadFailed
 
     if (readySession !== null && !alreadyDownloaded) {
       setSession(readySession)

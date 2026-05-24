@@ -44,6 +44,7 @@ type ProjectTransferSessionRecoveryParams = ProjectTransferSessionRecoveryRuntim
 type ProjectTransferRecoveryCandidate = {
   direction: ProjectTransferDirection
   id: string
+  ownerToken: string | null
   state: ProjectTransferSessionState
 }
 
@@ -138,6 +139,7 @@ const getStaleProjectTransferSessions = async ({
     SELECT
       direction,
       id,
+      owner_token AS ownerToken,
       state
     FROM app.project_transfer_session
     WHERE (
@@ -237,12 +239,20 @@ const transitionExportSessionToFailed = async ({
   ownerToken,
   runner,
   session,
+  staleExportHeartbeatBefore,
 }: {
   now: Date
   ownerToken: string
   runner: ProjectTransferSessionRecoveryRunner
   session: ProjectTransferRecoveryCandidate
+  staleExportHeartbeatBefore: Date
 }) => {
+  const activeWorkerCondition =
+    session.state === 'assembling' || session.state === 'packaging'
+      ? `
+       AND owner_token = ${getSqlLiteral(session.ownerToken)}
+       AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleExportHeartbeatBefore)}`
+      : ''
   const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
     UPDATE app.project_transfer_session
     SET
@@ -253,6 +263,7 @@ const transitionExportSessionToFailed = async ({
     WHERE id = ${getSqlLiteral(session.id)}
       AND direction = 'export'
       AND state = ${getSqlLiteral(session.state)}
+      ${activeWorkerCondition}
     RETURNING direction, id, state
   `)
 
@@ -276,11 +287,13 @@ const getCleanupPlanForSession = async ({
   ownerToken,
   runner,
   session,
+  staleExportHeartbeatBefore,
 }: {
   now: Date
   ownerToken: string
   runner: ProjectTransferSessionRecoveryRunner
   session: ProjectTransferRecoveryCandidate
+  staleExportHeartbeatBefore: Date
 }): Promise<ProjectTransferRecoveryCleanupPlan | null> => {
   const history = await getCompletedImportHistory({runner, session})
   const shouldRecoverFromHistory = history !== null && session.state !== 'completed'
@@ -311,7 +324,7 @@ const getCleanupPlanForSession = async ({
 
   const expiredSession =
     session.direction === 'export' && session.state !== 'ready'
-      ? await transitionExportSessionToFailed({now, ownerToken, runner, session})
+      ? await transitionExportSessionToFailed({now, ownerToken, runner, session, staleExportHeartbeatBefore})
       : await transitionSessionToExpired({now, ownerToken, runner, session})
 
   return expiredSession === null
@@ -330,15 +343,17 @@ const getCleanupPlans = async ({
   ownerToken,
   runner,
   sessions,
+  staleExportHeartbeatBefore,
 }: {
   now: Date
   ownerToken: string
   runner: ProjectTransferSessionRecoveryRunner
   sessions: ProjectTransferRecoveryCandidate[]
+  staleExportHeartbeatBefore: Date
 }) => {
   return sessions.reduce<Promise<ProjectTransferRecoveryCleanupPlan[]>>(async (promise, session) => {
     const plans = await promise
-    const plan = await getCleanupPlanForSession({now, ownerToken, runner, session})
+    const plan = await getCleanupPlanForSession({now, ownerToken, runner, session, staleExportHeartbeatBefore})
 
     return plan === null ? plans : [...plans, plan]
   }, Promise.resolve([]))
@@ -640,6 +655,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
   const batchSize = getRecoveryBatchSize(params.batchSize)
   const exportOwnerHeartbeatStaleMs = params.exportOwnerHeartbeatStaleMs ?? defaultExportOwnerHeartbeatStaleMs
   const exportQueuedSessionStaleMs = params.exportQueuedSessionStaleMs ?? defaultExportQueuedSessionStaleMs
+  const staleExportHeartbeatBefore = getDateBefore({ms: exportOwnerHeartbeatStaleMs, now})
   const sessions = await getStaleProjectTransferSessions({
     batchSize,
     exportOwnerHeartbeatStaleMs,
@@ -649,9 +665,9 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
   })
   const plans = runner.transaction
     ? await runner.transaction((tx) => {
-        return getCleanupPlans({now, ownerToken, runner: tx, sessions})
+        return getCleanupPlans({now, ownerToken, runner: tx, sessions, staleExportHeartbeatBefore})
       })
-    : await getCleanupPlans({now, ownerToken, runner, sessions})
+    : await getCleanupPlans({now, ownerToken, runner, sessions, staleExportHeartbeatBefore})
   const recoveryCounts = getRecoveryCounts(plans)
   const cleanupCounts = await getCleanupCounts({plans, runtimeOptions: {cwd: params.cwd, envValues: params.envValues}})
   const {failedPlans, successfulPlans, ...cleanupResultCounts} = cleanupCounts
