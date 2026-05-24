@@ -162,6 +162,17 @@ test('rejects provider/model edge cases while normalizing empty model variants t
     ...models,
     records: [{...model, remoteModelId: ''}],
   })
+  const nullableRemoteModelResult = validateProjectTransferPayload('models', {
+    ...models,
+    records: [
+      {
+        ...model,
+        modelName: model.name,
+        remoteModelId: null,
+        signature: {...model.signature, modelName: model.name, remoteModelId: null},
+      },
+    ],
+  })
   const emptyVariantResult = validateProjectTransferPayload('models', {
     ...models,
     records: [{...model, signature: {...model.signature, variant: null}, variant: ''}],
@@ -174,6 +185,7 @@ test('rejects provider/model edge cases while normalizing empty model variants t
   expect(normalizeProjectTransferModelVariant('')).toBe(null)
   expect(getValidationError(secretResult)).toContain('secretRef must be null')
   expect(getValidationError(blankRemoteModelResult)).toContain('remoteModelId must not be empty')
+  expect(nullableRemoteModelResult.ok).toBe(true)
   expect(emptyVariantResult.ok).toBe(true)
   expect(getValidationError(mismatchedVariantResult)).toContain(
     'signature.variant must normalize null and empty variants',
