@@ -199,6 +199,10 @@ const assertNullableString = (value: unknown, label: string): string | null => {
   return value === null ? null : assertString(value, label)
 }
 
+const assertNullableNonEmptyString = (value: unknown, label: string): string | null => {
+  return value === null ? null : assertNonEmptyString(value, label)
+}
+
 const assertBoolean = (value: unknown, label: string): boolean => {
   return typeof value === 'boolean' ? value : failProjectTransferPayload(`${label} must be a boolean`)
 }
@@ -462,8 +466,11 @@ const assertModelPayload = (record: JsonRecord, label: string) => {
   assertNonEmptyString(record.sourceModelId, `${label}.sourceModelId`)
   assertNonEmptyString(record.sourceProviderConnectionId, `${label}.sourceProviderConnectionId`)
   assertNonEmptyString(record.name, `${label}.name`)
-  assertNonEmptyString(record.remoteModelId, `${label}.remoteModelId`)
+  assertNullableNonEmptyString(record.remoteModelId, `${label}.remoteModelId`)
+  assertNonEmptyString(record.modelName, `${label}.modelName`)
+  assertNullableString(record.displayName, `${label}.displayName`)
   assertNullableString(record.variant, `${label}.variant`)
+  assertNullableString(record.version, `${label}.version`)
   assertBoolean(record.enabled, `${label}.enabled`)
 
   return signature.variant === normalizedVariant
@@ -652,9 +659,27 @@ const projectTransferPayloadContracts = {
   models: {
     container: 'collection',
     record: {
-      requiredFields: ['sourceModelId', 'sourceProviderConnectionId', 'name', 'remoteModelId', 'variant', 'enabled'],
+      requiredFields: [
+        'sourceModelId',
+        'sourceProviderConnectionId',
+        'modelName',
+        'name',
+        'displayName',
+        'remoteModelId',
+        'variant',
+        'version',
+        'enabled',
+      ],
       requiredProvenanceFields: ['sourceModelId', 'sourceProviderConnectionId'],
-      requiredSignatureFields: ['providerConnectionSignature', 'remoteModelId', 'variant'],
+      requiredSignatureFields: [
+        'displayName',
+        'modelName',
+        'name',
+        'providerConnectionSignature',
+        'remoteModelId',
+        'variant',
+        'version',
+      ],
       validate: assertModelPayload,
     },
   },
@@ -908,7 +933,15 @@ const providerConnectionSignature = {
   configSignature: {apiVersion: '2026-05-21'},
   providerKind: 'openai',
 }
-const modelSignature = {providerConnectionSignature, remoteModelId: 'gpt-5.4', variant: null}
+const modelSignature = {
+  displayName: 'GPT 5.4',
+  modelName: 'gpt-5.4',
+  name: 'GPT 5.4',
+  providerConnectionSignature,
+  remoteModelId: 'gpt-5.4',
+  variant: null,
+  version: null,
+}
 const projectSettings = {
   humanJudgmentMode: 'prompt' as const,
   useAbstract: true,
@@ -1062,6 +1095,7 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
         displayName: 'GPT 5.4',
         enabled: true,
         metadataJson: {thinking: 'medium'},
+        modelName: 'gpt-5.4',
         name: 'GPT 5.4',
         provenance: {sourceModelId: 'model-1', sourceProviderConnectionId: 'provider-connection-1'},
         remoteModelId: 'gpt-5.4',
@@ -1070,6 +1104,7 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
         sourceModelId: 'model-1',
         sourceProviderConnectionId: 'provider-connection-1',
         variant: null,
+        version: null,
       },
     ],
     signature: {records: [modelSignature]},
