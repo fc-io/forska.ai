@@ -56,6 +56,7 @@ junit.xml
 # temporary files
 .temp/
 .tmp/
+tmp/
 temp/
 .secrets/
 

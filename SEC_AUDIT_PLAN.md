@@ -50,17 +50,24 @@ Before running tools, confirm current CLI flags with `gitleaks --help` and `truf
 ```bash
 git fetch --all --tags --prune
 export AUDIT_DIR="${AUDIT_DIR:-../forska-security-audit}"
+export AUDIT_TREE="$AUDIT_DIR/current-tree"
 mkdir -p "$AUDIT_DIR/reports" "$AUDIT_DIR/findings"
+rm -rf "$AUDIT_TREE"
+mkdir -p "$AUDIT_TREE"
+git archive --format=tar HEAD | tar -xf - -C "$AUDIT_TREE"
 git remote -v > "$AUDIT_DIR/reports/remotes.txt"
 git rev-parse HEAD > "$AUDIT_DIR/reports/audit-head.txt"
 git for-each-ref --format="%(refname)" refs/heads refs/remotes refs/tags > "$AUDIT_DIR/reports/reachable-refs.txt"
 git ls-remote --heads --tags origin > "$AUDIT_DIR/reports/origin-refs.txt"
+git ls-files -z -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml' > "$AUDIT_DIR/reports/tracked-scope-files.zlist"
 ```
 
 - Do not commit raw scanner reports.
 - Do not paste unredacted secrets into markdown findings.
+- Run current-tree content scans against `$AUDIT_TREE`, not the live working directory, so ignored local data, uncommitted local edits, and audit reports do not get scanned as product content.
 - If reports must be written inside the repo, add that folder to `.git/info/exclude` before any current-tree scanner runs and verify the scanner does not scan its own report output.
-- Record tool versions, command lines, scan date, scanned commit, and scanned refs.
+- Treat raw `rg`, `git log`, `gitleaks`, and `trufflehog` report files as sensitive evidence. Keep them outside git and copy only redacted summaries into findings.
+- Record tool versions, command lines, scan date, scanned commit, scanned refs, and the `$AUDIT_TREE` path.
 
 ## Workstream A: Git History And Sensitive Material
 
@@ -77,29 +84,31 @@ gitleaks git --source . --log-opts="--all" --redact --report-format json --repor
 trufflehog git "file://$PWD" --json --no-update > "$AUDIT_DIR/reports/trufflehog-history.raw.jsonl"
 ```
 
+If the installed `trufflehog git --help` shows that local git scans do not cover all refs by default, rerun `trufflehog` per public-candidate ref from `reachable-refs.txt` and write one report per ref.
+
 3. Run a current-tree scan.
 
 ```bash
-gitleaks dir . --redact --report-format json --report-path "$AUDIT_DIR/reports/gitleaks-current-tree.json"
+gitleaks dir "$AUDIT_TREE" --redact --report-format json --report-path "$AUDIT_DIR/reports/gitleaks-current-tree.json"
 ```
 
 4. Run manual history searches for API and infra leakage.
 
 ```bash
-git log --all -S"/api/" -- src/server src/appServer.ts src/appServerMain.ts docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
-git log --all -S"AdminInvestigate" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
-git log --all -S"DuckdbStudio" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
-git log --all -S"STACK_ROOT" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
-git log --all -S"SSH_ALIAS" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
-git log --all -S"LOG_DIR" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
-git log --all -S"FORSKA_RUNTIME_PROFILE" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml'
+git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"/api/" -- src/server src/appServer.ts src/appServerMain.ts docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml' > "$AUDIT_DIR/reports/history-api-paths.txt"
+git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"AdminInvestigate" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml' > "$AUDIT_DIR/reports/history-admin-investigate.txt"
+git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"DuckdbStudio" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml' > "$AUDIT_DIR/reports/history-duckdb-studio.txt"
+git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"STACK_ROOT" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml' > "$AUDIT_DIR/reports/history-stack-root.txt"
+git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"SSH_ALIAS" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml' > "$AUDIT_DIR/reports/history-ssh-alias.txt"
+git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"LOG_DIR" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml' > "$AUDIT_DIR/reports/history-log-dir.txt"
+git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"FORSKA_RUNTIME_PROFILE" -- src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md 'Dockerfile*' '*compose*' '*.yml' '*.yaml' > "$AUDIT_DIR/reports/history-runtime-profile.txt"
 ```
 
 5. Run current-tree manual scans for project-specific sensitive strings.
 
 ```bash
-rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' --glob '!security-audit/**' "AKIA|AIza|sk-|xox[baprs]-|BEGIN (RSA|OPENSSH|EC|PRIVATE) KEY|Bearer [A-Za-z0-9._-]+|api[_-]?key|secret|token|password|private[_-]?key"
-rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' --glob '!security-audit/**' "ssh|hostname|STACK_ROOT|SSH_ALIAS|backup|cluster|internal|private|LOG_DIR|FORSKA_RUNTIME_PROFILE|logs/runtime"
+rg -n --hidden "AKIA|AIza|sk-|xox[baprs]-|BEGIN (RSA|OPENSSH|EC|PRIVATE) KEY|Bearer [A-Za-z0-9._-]+|api[_-]?key|secret|token|password|private[_-]?key" "$AUDIT_TREE" > "$AUDIT_DIR/reports/current-tree-secret-string-hits.raw.txt" || true
+rg -n --hidden "ssh|hostname|STACK_ROOT|SSH_ALIAS|backup|cluster|internal|private|LOG_DIR|FORSKA_RUNTIME_PROFILE|logs/runtime" "$AUDIT_TREE" > "$AUDIT_DIR/reports/current-tree-infra-string-hits.raw.txt" || true
 ```
 
 6. Triage every scanner and manual-search hit.
@@ -129,7 +138,7 @@ rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' --glob '!security-aud
 1. Inventory environment variables and runtime profiles.
 
 ```bash
-rg -n "process\\.env|Bun\\.env|LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|FORSKA_RUNTIME_PROFILE|runtimeLogger|logs/runtime" src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md
+rg -n --hidden "process\\.env|Bun\\.env|LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|FORSKA_RUNTIME_PROFILE|runtimeLogger|logs/runtime" "$AUDIT_TREE" > "$AUDIT_DIR/reports/env-runtime-hits.raw.txt" || true
 ```
 
 For each variable, record:
@@ -143,7 +152,7 @@ For each variable, record:
 2. Inventory provider credentials and token storage.
 
 ```bash
-rg -n "provider|apiKey|api_key|secret|token|credential|auth|encrypt|keychain|localStorage|sessionStorage|indexedDB" src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md
+rg -n --hidden "provider|apiKey|api_key|secret|token|credential|auth|encrypt|keychain|localStorage|sessionStorage|indexedDB" "$AUDIT_TREE" > "$AUDIT_DIR/reports/provider-token-storage-hits.raw.txt" || true
 ```
 
 For each flow, record:
@@ -157,9 +166,9 @@ For each flow, record:
 3. Inventory local data, fixtures, exports, and generated artifacts.
 
 ```bash
-git ls-files | rg "fixture|fixtures|sample|example|snapshot|export|pdf|ndjson|jsonl|log|data|cache|tmp|artifact|backup|covidence|openalex|fhir|ehr"
-git status --ignored --short
-find data cache logs tmp .tmp .temp temp test-results coverage out dist desktopBuild desktopArtifacts .desktopBuild .desktopArtifacts .cache .secrets assets/article_pdfs assets/covidence_2 assets/covidence_imports assets/covidence_running assets/structured_file_imports backups openalex_snapshot models pgdata init-db -maxdepth 3 -type f 2>/dev/null
+git ls-files | rg "fixture|fixtures|sample|example|snapshot|export|pdf|ndjson|jsonl|log|data|cache|tmp|artifact|backup|covidence|openalex|fhir|ehr" > "$AUDIT_DIR/reports/tracked-artifact-paths.txt" || true
+git status --ignored --short > "$AUDIT_DIR/reports/git-status-ignored.txt"
+find data cache logs tmp .tmp .temp temp test-results coverage out dist desktopBuild desktopArtifacts .desktopBuild .desktopArtifacts .cache .secrets assets/article_pdfs assets/covidence_2 assets/covidence_imports assets/covidence_running assets/structured_file_imports backups openalex_snapshot models pgdata init-db -type f -print 2>/dev/null > "$AUDIT_DIR/reports/local-generated-files.txt" || true
 ```
 
 For each tracked or publishable artifact, decide:
@@ -172,7 +181,7 @@ For each tracked or publishable artifact, decide:
 4. Audit structured runtime logging.
 
 ```bash
-rg -n "runtimeLogger|LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|logs/runtime|jsonl|retention|7-day|seven" src docs scripts plans tasks config .github .claude .brv package.json README.md SECURITY.md CONTRIBUTING.md AGENTS.md
+rg -n --hidden "runtimeLogger|LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|logs/runtime|jsonl|retention|7-day|seven" "$AUDIT_TREE" > "$AUDIT_DIR/reports/runtime-logging-hits.raw.txt" || true
 ```
 
 Record:
@@ -187,9 +196,11 @@ Record:
 5. Confirm ignored-path protection.
 
 ```bash
-git check-ignore -v data/ cache/ logs/ tmp/ .tmp/ .temp/ temp/ test-results/ coverage/ out/ dist/ desktopBuild/ desktopArtifacts/ .desktopBuild/ .desktopArtifacts/ .cache/ .secrets/ assets/article_pdfs/ assets/covidence_2/ assets/covidence_imports/ assets/covidence_running/ assets/structured_file_imports/ backups/ openalex_snapshot/ models/ pgdata/ init-db/ node_modules/
-rg -n "data/|cache|logs|tmp/|\\.tmp/|\\.temp/|temp/|test-results/|coverage|out|dist|desktopBuild|desktopArtifacts|\\.desktopBuild|\\.desktopArtifacts|\\.cache|\\.secrets|assets/article_pdfs|assets/covidence_|assets/structured_file_imports|backups|openalex_snapshot|models|pgdata|init-db" .gitignore .prettierignore .eslintignore 2>/dev/null
+git check-ignore -vn data/.audit-sentinel cache/.audit-sentinel logs/.audit-sentinel tmp/.audit-sentinel .tmp/.audit-sentinel .temp/.audit-sentinel temp/.audit-sentinel test-results/.audit-sentinel coverage/.audit-sentinel out/.audit-sentinel dist/.audit-sentinel desktopBuild/.audit-sentinel desktopArtifacts/.audit-sentinel .desktopBuild/.audit-sentinel .desktopArtifacts/.audit-sentinel .cache/.audit-sentinel .secrets/.audit-sentinel assets/article_pdfs/.audit-sentinel assets/covidence_2/.audit-sentinel assets/covidence_imports/.audit-sentinel assets/covidence_running/.audit-sentinel assets/structured_file_imports/.audit-sentinel backups/.audit-sentinel openalex_snapshot/.audit-sentinel models/.audit-sentinel pgdata/.audit-sentinel init-db/.audit-sentinel node_modules/.audit-sentinel > "$AUDIT_DIR/reports/ignored-path-check.txt"
+rg -n "data/|cache|logs|tmp/|\\.tmp/|\\.temp/|temp/|test-results/|coverage|out|dist|desktopBuild|desktopArtifacts|\\.desktopBuild|\\.desktopArtifacts|\\.cache|\\.secrets|assets/article_pdfs|assets/covidence_|assets/structured_file_imports|backups|openalex_snapshot|models|pgdata|init-db" .gitignore .prettierignore .eslintignore 2>/dev/null > "$AUDIT_DIR/reports/ignore-rule-source-hits.txt" || true
 ```
+
+The `.audit-sentinel` paths do not need to exist. Treat any `ignored-path-check.txt` line that starts with `::` as a missing ignore rule that blocks release until the ignore rule or the plan scope is corrected.
 
 6. Rewrite unsafe examples.
    - Replace private paths, hostnames, stack roots, cluster names, backup paths, emails, tokens, or dataset names with placeholders.
@@ -234,5 +245,6 @@ rg -n "data/|cache|logs|tmp/|\\.tmp/|\\.temp/|temp/|test-results/|coverage|out|d
 - Every current tracked fixture, sample, export, snapshot, PDF, NDJSON, JSONL, log-like artifact, and ignored/generated local data family has a keep/rewrite/remove/move decision or is explicitly excluded from the public snapshot.
 - Runtime JSONL payload shape, retention behavior, and ignored paths are documented and public-safe.
 - Audit reports are written outside the repo or ignored before scanners run, current-tree scanners do not scan their own report output, and `.gitignore` or `.git/info/exclude` keeps local runtime data out of git.
+- `git check-ignore -vn` shows a real ignore source for every protected local-data path and no `::` non-match lines.
 - Final public release uses a clean audited snapshot or an explicitly justified, re-scanned history exception.
 - For markdown-only changes to this plan, run `bunx prettier --check SEC_AUDIT_PLAN.md`.
