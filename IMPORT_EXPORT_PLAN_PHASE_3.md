@@ -15,7 +15,7 @@
 - Reuse the implemented Phase 1/2 contracts under `src/server/services/projectTransfer/`; do not add parallel manifest, payload, path, zip, fingerprint, session, or export-package contracts.
 - Validate the Phase 2 package shape during analyze: `exportedAt`, `sourceAppVersion`, manifest `project`, `assetSummary`, shared warning shape, top-level JSON array collection payloads, `assetManifest.entries[]` with `references[]`, explicit `judgmentInputSignature` / `judgmentInputSignatureProvenance`, and explicit `humanReviewInputSignature` / `humanReviewInputSignatureProvenance`.
 - Phase 1 `ProjectTransferPlanSummary` still has placeholder required overlap/conflict keys (`exactDuplicateImports`, `reusedArticles`, `articleIdentifier`, `dependency`, `humanReview`, `judgment`, `packageContract`, and `projectPrompt`); Phase 3 must either replace them with the final explicit plan-summary count keys or add a tested API mapping layer before exposing import plans.
-- Provider/model dependency work should reuse the current provider setup surfaces: `GET /api/provider-connections`, `POST /api/provider-connections`, `POST /api/provider-auth/:providerKind/begin`, `POST /api/provider-auth/:providerKind/finish`, `POST /api/provider-connections/:id/test`, `GET /api/provider-connections/:id/discovered-models`, `POST /api/provider-connections/:id/models`, `POST /api/provider-connections/:id/sync-models`, `GET /api/models/stored`, `GET /api/models`, `GET /api/models/codex/status`, `POST /api/models/codex/login`, and `GET /api/models/codex/login/:jobId`. Do not use `ensureSelectableModelId` or `POST /api/models/ensure` for import materialization except for Codex.
+- Provider/model dependency work should reuse only the provider/model setup surfaces allowed for import: `GET /api/provider-connections`, `POST /api/provider-connections`, `POST /api/provider-auth/:providerKind/begin`, `POST /api/provider-auth/:providerKind/finish`, `POST /api/provider-connections/:id/test`, `GET /api/provider-connections/:id/discovered-models`, `POST /api/provider-connections/:id/models`, `POST /api/provider-connections/:id/sync-models`, `GET /api/models/stored`, `GET /api/models`, `GET /api/models/codex/status`, `POST /api/models/codex/login`, and `GET /api/models/codex/login/:jobId`. Existing provider connection edit/delete routes such as `PATCH /api/provider-connections/:id` and `DELETE /api/provider-connections/:id` are not import-wizard setup surfaces; do not use them unless an explicit edit/delete path is designed and parity-tested. Do not use `ensureSelectableModelId` or `POST /api/models/ensure` for import materialization except for Codex.
 - Keep all mutating import session work on the active DuckDB writer through the existing owner-proxied `/api/*` path unless route classification is deliberately changed and tested.
 
 ## Ralph Conversion Metadata
@@ -44,7 +44,7 @@ Acceptance criteria:
 - Replace or narrow the current public `ProjectTransferUploadSession` placeholder shape before implementing session/upload responses: `uploadPath` and any temp layout fields are server-only metadata and must not be present in `ProjectTransferApiResponse.data` payloads.
 - Upload uses the Phase 1 streaming owner-proxy path, atomically claims `awaiting_upload -> uploading`, writes only `upload.zip`, persists upload byte/checksum metadata, transitions `uploading -> queued` after a durable write, rejects duplicate bodies for the same session, and does not parse zip, manifest, or payload data.
 - Analyze claims queued sessions and owns session state, owner-token, progress, and `planRevision` orchestration; package parsing/validation is owned by US-002, overlap/remap analysis by US-003, provider/model resolution state by US-004/US-005, and fidelity checks by US-006.
-- Run small analyze work inline and large analyze work as a background session job using `getProjectTransferImportAnalyzeExecutionMode()` thresholds, durable owner tokens, heartbeats, progress, and runtime events.
+- Run small analyze work inline and large analyze work as a background session job using `getProjectTransferImportAnalyzeExecutionMode()` thresholds, durable owner tokens, heartbeats, and persisted progress. If analyze/extract progress is emitted through runtime events, first add and test explicit `extract_progress` and `analyze_progress` `ProjectTransferRuntimeEventType` values; otherwise use the existing `state_transition` and `plan_updated` events plus persisted progress.
 - Cancellation handles `awaiting_upload`, `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, and `ready_to_commit` with writer-owned state transitions and temp cleanup; `committing`, `completed`, and `failed` are rejected. Repeated `cancelled` or `expired` calls are idempotent only when they match the existing terminal cleanup result, such as the same reason/cleanup intent or an empty repeat request, and must not reacquire ownership or rerun cleanup from stale owner tokens.
 - Replace permissive Phase 1/2 placeholder request bodies with ArkType-validated contracts before processing create-session, analyze, resolve-dependencies, and cancel payloads. Keep `commit` validation contract-safe while the handler remains a Phase 4 placeholder.
 - Session reads use `ProjectTransferApiResponse` only as the `{data, error}` envelope; the `data` payload exposes progress, plan summary, blockers, warnings, `canCommit`, duplicate-package warnings, and overlap counts through `ProjectTransferSessionResponse.planSummary` and/or an explicit import-plan payload.
@@ -52,16 +52,15 @@ Acceptance criteria:
 Quality gates:
 
 - `bun test src/server/routes/projectTransferRoutes.test.ts` passes.
-- `bun test src/server/routes/ApiProxyRoutes.test.ts` passes.
-- `bun test src/server/routes/ApiProxyRoutes.test.ts` includes project-transfer upload coverage proving no-owner failures do not consume the request body and large uploads do not fall through to the generic buffered `ArrayBuffer` proxy path.
+- `bun test src/server/routes/ApiProxyRoutes.test.ts` passes for route-classification and composition coverage.
 - `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` passes.
-- `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` includes coverage that non-replayable project-transfer upload streams are not retried after partial forwarding to the owner.
+- `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` includes project-transfer upload coverage proving no-owner failures do not consume the request body, upload streams do not fall through to the generic buffered `ArrayBuffer` proxy path, and non-replayable upload streams are not retried after partial forwarding to the owner.
 - `bun test src/server/routes/apiRouteClassification.test.ts` passes if transfer upload, polling, or import route classification changes.
 - `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` passes if session mutations change.
 - `bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts` passes if cancellation or cleanup behavior changes.
 - `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes if session response, progress, overlap, conflict, or runtime event contracts change.
 - `bun run build` passes.
-- `bun run lint` passes for touched `src` files.
+- `bun run lint` passes when `src` files are touched.
 
 ### US-002: Add package analyze parser and validation plan
 
@@ -90,7 +89,7 @@ Quality gates:
 - `bun test src/server/services/projectTransfer/projectTransferPaths.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferZip.test.ts` passes if zip extraction helpers change.
 - `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes if package contract blockers or overlap/conflict counts change.
-- `bun run lint` passes for touched `src` files.
+- `bun run lint` passes when `src` files are touched.
 
 ### US-003: Add conservative article, prompt, route, asset-plan, and overlap analysis
 
@@ -120,7 +119,7 @@ Quality gates:
 - Add or extend `src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts`; `bun test src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferIdentifierNormalization.test.ts` passes if identifier comparison helpers change.
 - `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes if overlap or conflict contract keys change.
-- `bun run lint` passes for touched `src` files.
+- `bun run lint` passes when `src` files are touched.
 
 ### US-004: Add provider and model dependency resolution service
 
@@ -159,7 +158,7 @@ Quality gates:
 - `bun test src/server/routes/ProviderModelsRoutes.test.ts` passes if provider model materialization behavior changes.
 - `bun test src/server/routes/providerProjectFlow.e2e.test.ts` passes if shared provider setup flow changes.
 - `bun run build` passes.
-- `bun run lint` passes for touched `src` files.
+- `bun run lint` passes when `src` files are touched.
 
 ### US-005: Add Codex, Anthropic virtual id, and virtual model resolution handling
 
@@ -184,7 +183,7 @@ Quality gates:
 - `bun test src/server/routes/ProviderModelsRoutes.test.ts` passes if provider-connection model materialization behavior changes.
 - `bun test src/server/routes/providerProjectFlow.e2e.test.ts` passes if shared provider setup flow changes.
 - `bun run build` passes.
-- `bun run lint` passes for touched `src` files.
+- `bun run lint` passes when `src` files are touched.
 
 ### US-006: Add judgment and human/review fidelity validation during analyze
 
@@ -211,7 +210,7 @@ Quality gates:
 - Add or extend `src/server/services/projectTransfer/projectTransferAnalyze.test.ts`; `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts` passes.
 - Add or extend `src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`; `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes if conflict counts or plan-summary contracts change.
-- `bun run lint` passes for touched `src` files.
+- `bun run lint` passes when `src` files are touched.
 
 ### US-007: Add import wizard through plan review
 
@@ -221,7 +220,7 @@ dependsOn: ["US-001", "US-003", "US-005", "US-006"]
 
 Acceptance criteria:
 
-- Add `/projects/import` route and regenerate route tree through the app build pipeline.
+- Add `src/app/routes/+projects/+import.tsx` for `/projects/import` and regenerate `src/app/routeTree.gen.ts` through the app build pipeline.
 - Add `Import Project` on `/projects` immediately left of `Create Covidence Project`.
 - Keep the projects shell layout intact; do not suspend the root `<Outlet />` or the entire projects route.
 - Wizard supports upload progress, extraction/analyze progress, package review, duplicate warnings, dependency resolution, plan review, stale `planRevision` handling, cancellation, blockers, and `canCommit` state.
@@ -235,10 +234,10 @@ Acceptance criteria:
 Quality gates:
 
 - Add `src/app/routes/+projects/-+import.vitest.tsx`; `bunx vitest run src/app/routes/+projects/-+import.vitest.tsx` passes.
-- `bunx vitest run src/app/routes/+projects/-+index.vitest.tsx` passes.
+- Extend `src/app/routes/+projects/-+index.vitest.tsx` to assert `Import Project` is immediately left of `Create Covidence Project`; `bunx vitest run src/app/routes/+projects/-+index.vitest.tsx` passes.
 - `bun test src/app/utils/getApiRequestUrl.test.ts` passes if upload/download URL helpers change.
 - `bun run build` passes.
 - `bun run desktop:build` passes.
-- `bun run lint` passes for touched `src` files.
-- Browser smoke verification passes: `/projects` opens `/projects/import`, the wizard shell remains rendered during session/upload/analyze progress, and a small package reaches plan review without final writes.
-- Desktop smoke verification passes: the import wizard uses the desktop-safe API origin for file upload/session polling and reaches plan review, with final commit still disabled until Phase 4.
+- `bun run lint` passes when `src` files are touched.
+- Browser smoke verification passes: `/projects` shows an `Import Project` action immediately left of `Create Covidence Project`; clicking it opens `/projects/import`; the wizard shell remains rendered during session/upload/analyze progress; and a small package reaches plan review without final writes.
+- Desktop smoke verification passes: streaming upload uses the desktop-safe API origin through `getApiRequestUrl`, Eden/TanStack session polling uses the resolved desktop API origin, and the wizard reaches plan review with final commit still disabled until Phase 4.
