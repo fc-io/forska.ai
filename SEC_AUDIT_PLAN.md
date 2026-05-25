@@ -12,7 +12,7 @@ This plan expands the security-focused open-source blockers from `OS_IT_PLAN.md`
 
 - All reachable git refs that could become public: local branches, remote-tracking branches, tags, and release branches.
 - Current tracked files under product code, docs, root plans, tasks, scripts, migrations, tests, fixtures, config, hidden tool config, package metadata, CI/workflow files, Docker/compose files, and publication artifacts.
-- Ignored and generated local paths likely to hold sensitive or publishable material that could accidentally be copied into tracked files: `data/`, `cache/`, `logs/`, `tmp/`, `.tmp/`, `.temp/`, `temp/`, `test-results/`, `coverage/`, `out/`, `dist/`, `desktopBuild/`, `desktopArtifacts/`, `.desktopBuild/`, `.desktopArtifacts/`, `.cache/`, `.secrets/`, `assets/article_pdfs/`, `assets/user_uploaded_article_pdfs/`, `assets/covidence_2/`, `assets/covidence_imports/`, `assets/covidence_running/`, `assets/structured_file_imports/`, `backups/`, `openalex_snapshot/`, `models/`, `pgdata/`, `init-db/`, and runtime JSONL output.
+- Ignored and generated local paths likely to hold sensitive or publishable material that could accidentally be copied into tracked files: `.env*`, `data/`, `cache/`, `logs/`, `tmp/`, `.tmp/`, `.temp/`, `temp/`, `test-results/`, `coverage/`, `out/`, `dist/`, `desktopBuild/`, `desktopArtifacts/`, `.desktopBuild/`, `.desktopArtifacts/`, `.cache/`, `.secrets/`, `.tanstack/`, `.ralph-tui/`, `.hermes/`, `.vite/`, `.eslintcache`, `*.tsbuildinfo`, `*.lcov`, `junit.xml`, `report.*.*.*.*.json`, `drizzle/`, `assets/article_pdfs/`, `assets/user_uploaded_article_pdfs/`, `assets/covidence_2/`, `assets/covidence_imports/`, `assets/covidence_running/`, `assets/structured_file_imports/`, `backups/`, `openalex_snapshot/`, `models/`, `pgdata/`, `init-db/`, and runtime JSONL output.
 - Tracked Covidence, FHIR, PDF, CSV, NDJSON, fixture, and sample assets are current-tree artifacts, not ignored-path assumptions. They must be inventoried and inspected before release.
 - Config and secret flows: `process.env`, UI-stored provider settings, provider API keys, token storage, local binary paths, runtime profiles, logging paths, and sample commands.
 
@@ -52,6 +52,7 @@ Before running tools, confirm current CLI flags with `gitleaks --help` and `truf
 set -euo pipefail
 
 export REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
+cd "$REPO_ROOT"
 export AUDIT_DIR="${AUDIT_DIR:-../forska-security-audit}"
 AUDIT_DIR_ABS=""
 if test -e "$AUDIT_DIR"; then
@@ -228,10 +229,13 @@ For each flow, record:
 3. Inventory local data, fixtures, exports, and generated artifacts.
 
 ```bash
-git ls-tree -r --name-only HEAD | rg "fixture|fixtures|sample|example|snapshot|export|pdf|ndjson|jsonl|log|data|cache|tmp|artifact|backup|covidence|openalex|fhir|ehr|token|secret|credential|key|user_uploaded" > "$AUDIT_DIR/reports/tracked-artifact-paths.txt" || true
+git ls-tree -r --name-only HEAD | rg "fixture|fixtures|sample|example|snapshot|export|pdf|ndjson|jsonl|log|data|cache|tmp|artifact|backup|covidence|openalex|fhir|ehr|token|secret|credential|key|user_uploaded|tanstack|ralph|hermes|drizzle" > "$AUDIT_DIR/reports/tracked-artifact-paths.txt" || true
 git ls-tree -r --name-only HEAD | rg -i "\.(zip|tar|tgz|gz|bz2|xz|7z|rar|pdf|docx|xlsx|pptx|sqlite|duckdb|db|parquet|arrow|png|jpe?g|webp|wasm|bin)$" > "$AUDIT_DIR/reports/tracked-binary-artifact-paths.txt" || true
 git status --ignored --short > "$AUDIT_DIR/reports/git-status-ignored.txt"
-find data cache logs tmp .tmp .temp temp test-results coverage out dist desktopBuild desktopArtifacts .desktopBuild .desktopArtifacts .cache .secrets assets/article_pdfs assets/user_uploaded_article_pdfs assets/covidence_2 assets/covidence_imports assets/covidence_running assets/structured_file_imports backups openalex_snapshot models pgdata init-db -type f -print 2>/dev/null > "$AUDIT_DIR/reports/local-generated-files.txt" || true
+{
+  find .env .env.development.local .env.test.local .env.production.local .env.local data cache logs tmp .tmp .temp temp test-results coverage out dist desktopBuild desktopArtifacts .desktopBuild .desktopArtifacts .cache .secrets .tanstack .ralph-tui .hermes .vite .eslintcache junit.xml drizzle assets/article_pdfs assets/user_uploaded_article_pdfs assets/covidence_2 assets/covidence_imports assets/covidence_running assets/structured_file_imports backups openalex_snapshot models pgdata init-db -type f -print 2>/dev/null
+  find . -maxdepth 2 \( -name "*.tsbuildinfo" -o -name "*.lcov" -o -name "report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json" \) -type f -print 2>/dev/null
+} > "$AUDIT_DIR/reports/local-generated-files.txt" || true
 ```
 
 For each tracked or publishable artifact, decide:
@@ -260,8 +264,8 @@ Record:
 5. Confirm ignored-path protection.
 
 ```bash
-git check-ignore -vn data/.audit-sentinel cache/.audit-sentinel logs/.audit-sentinel tmp/.audit-sentinel .tmp/.audit-sentinel .temp/.audit-sentinel temp/.audit-sentinel test-results/.audit-sentinel coverage/.audit-sentinel out/.audit-sentinel dist/.audit-sentinel desktopBuild/.audit-sentinel desktopArtifacts/.audit-sentinel .desktopBuild/.audit-sentinel .desktopArtifacts/.audit-sentinel .cache/.audit-sentinel .secrets/.audit-sentinel assets/article_pdfs/.audit-sentinel assets/user_uploaded_article_pdfs/.audit-sentinel assets/covidence_2/.audit-sentinel assets/covidence_imports/.audit-sentinel assets/covidence_running/.audit-sentinel assets/structured_file_imports/.audit-sentinel backups/.audit-sentinel openalex_snapshot/.audit-sentinel models/.audit-sentinel pgdata/.audit-sentinel init-db/.audit-sentinel node_modules/.audit-sentinel > "$AUDIT_DIR/reports/ignored-path-check.txt" || true
-rg -n "data/|cache|logs|tmp/|\\.tmp/|\\.temp/|temp/|test-results/|coverage|out|dist|desktopBuild|desktopArtifacts|\\.desktopBuild|\\.desktopArtifacts|\\.cache|\\.secrets|assets/article_pdfs|assets/user_uploaded_article_pdfs|assets/covidence_|assets/structured_file_imports|backups|openalex_snapshot|models|pgdata|init-db" .gitignore .prettierignore .eslintignore 2>/dev/null > "$AUDIT_DIR/reports/ignore-rule-source-hits.txt" || true
+git check-ignore -vn .env .env.development.local .env.test.local .env.production.local .env.local data/.audit-sentinel cache/.audit-sentinel logs/.audit-sentinel tmp/.audit-sentinel .tmp/.audit-sentinel .temp/.audit-sentinel temp/.audit-sentinel test-results/.audit-sentinel coverage/.audit-sentinel out/.audit-sentinel dist/.audit-sentinel desktopBuild/.audit-sentinel desktopArtifacts/.audit-sentinel .desktopBuild/.audit-sentinel .desktopArtifacts/.audit-sentinel .cache/.audit-sentinel .secrets/.audit-sentinel .tanstack/.audit-sentinel .ralph-tui/.audit-sentinel .hermes/.audit-sentinel .vite/.audit-sentinel .eslintcache app.tsbuildinfo audit.lcov junit.xml report.1.2.3.4.json drizzle/.audit-sentinel assets/article_pdfs/.audit-sentinel assets/user_uploaded_article_pdfs/.audit-sentinel assets/covidence_2/.audit-sentinel assets/covidence_imports/.audit-sentinel assets/covidence_running/.audit-sentinel assets/structured_file_imports/.audit-sentinel backups/.audit-sentinel openalex_snapshot/.audit-sentinel models/.audit-sentinel pgdata/.audit-sentinel init-db/.audit-sentinel node_modules/.audit-sentinel > "$AUDIT_DIR/reports/ignored-path-check.txt" || true
+rg -n "\\.env|data/|cache|logs|tmp/|\\.tmp/|\\.temp/|temp/|test-results/|coverage|out|dist|desktopBuild|desktopArtifacts|\\.desktopBuild|\\.desktopArtifacts|\\.cache|\\.secrets|\\.tanstack|\\.ralph-tui|\\.hermes|\\.vite|\\.eslintcache|tsbuildinfo|lcov|junit\\.xml|report\\.\\[0-9\\]|drizzle|assets/article_pdfs|assets/user_uploaded_article_pdfs|assets/covidence_|assets/structured_file_imports|backups|openalex_snapshot|models|pgdata|init-db" .gitignore .prettierignore .eslintignore 2>/dev/null > "$AUDIT_DIR/reports/ignore-rule-source-hits.txt" || true
 ```
 
 The `.audit-sentinel` paths do not need to exist. Treat any `ignored-path-check.txt` line that starts with `::` as a missing ignore rule that blocks release until the ignore rule or the plan scope is corrected.
