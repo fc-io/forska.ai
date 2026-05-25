@@ -80,7 +80,7 @@ Acceptance criteria:
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts` passes.
+- Add or extend `src/server/services/projectTransfer/projectTransferAnalyze.test.ts`; `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferPayloadSchemas.test.ts` passes if payload validation contracts change.
 - `bun test src/server/services/projectTransfer/projectTransferPaths.test.ts` passes.
@@ -96,7 +96,7 @@ dependsOn: ["US-002"]
 
 Acceptance criteria:
 
-- Implement exact stable-identifier article matching for package `articleId` (source app `article_id`), DOI, PubMed id, arXiv id, medRxiv id, and bioRxiv id using the shared project-transfer normalization helpers.
+- Implement exact stable-identifier article matching for package `articleId` (source app `article_id`), DOI, PubMed id, arXiv id, medRxiv input, and bioRxiv input using the shared project-transfer normalization helpers; bioRxiv and medRxiv remain DOI-backed strong identifiers under the current contract, not separate comparison-key families.
 - Return all exact candidates, matched identifier types, and blocking conflicts when secondary identifiers are ambiguous, identifiers point to different target rows, or distinct exported article rows collapse to the same target article.
 - Build a non-destructive reused-article update plan that fills only missing target fields and lists field fills, asset-driven fills, active existing projects that would be dirtied, archived referencing project counts, and date-expansion blockers.
 - Validate reused article date-scope for the imported project's copied date bounds and validate reused-article `articleCreatedAt` fills against existing active or archived target projects that already reference the article.
@@ -112,8 +112,8 @@ Acceptance criteria:
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts` passes.
-- `bun test src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts` passes.
+- Add or extend `src/server/services/projectTransfer/projectTransferAnalyze.test.ts`; `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts` passes.
+- Add or extend `src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts`; `bun test src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferIdentifierNormalization.test.ts` passes if identifier comparison helpers change.
 - `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes if overlap or conflict contract keys change.
 - `bun run lint` passes for touched `src` files.
@@ -143,7 +143,7 @@ Acceptance criteria:
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` passes.
+- Add or extend `src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`; `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` passes.
 - `bun test src/server/providers/providerModelRepository.test.ts` passes.
 - `bun test src/server/providers/providerModelRepository.atomic.test.ts` passes if selectable-model guards or disabled-model behavior changes.
 - `bun test src/server/services/userConfigQueryService.test.ts` passes if shared selectable-model guard behavior changes.
@@ -174,7 +174,7 @@ Acceptance criteria:
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` passes.
+- Add or extend `src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`; `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` passes.
 - `bun test src/server/routes/ModelsRoutes.test.ts` passes if Codex status/login routes or `POST /api/models/ensure` behavior changes; add this test file if it does not exist.
 - `bun test src/server/routes/ProviderModelsRoutes.test.ts` passes if provider-connection model materialization behavior changes.
 - `bun test src/server/routes/providerProjectFlow.e2e.test.ts` passes if shared provider setup flow changes.
@@ -203,8 +203,8 @@ Acceptance criteria:
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts` passes.
-- `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` passes.
+- Add or extend `src/server/services/projectTransfer/projectTransferAnalyze.test.ts`; `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts` passes.
+- Add or extend `src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`; `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes if conflict counts or plan-summary contracts change.
 - `bun run lint` passes for touched `src` files.
 
@@ -229,7 +229,7 @@ Acceptance criteria:
 
 Quality gates:
 
-- `bunx vitest run src/app/routes/+projects/-+import.vitest.tsx` passes.
+- Add `src/app/routes/+projects/-+import.vitest.tsx`; `bunx vitest run src/app/routes/+projects/-+import.vitest.tsx` passes.
 - `bunx vitest run src/app/routes/+projects/-+index.vitest.tsx` passes.
 - `bun test src/app/utils/getApiRequestUrl.test.ts` passes if upload/download URL helpers change.
 - `bun run build` passes.
