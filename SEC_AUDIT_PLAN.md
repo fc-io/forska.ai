@@ -12,7 +12,8 @@ This plan expands the security-focused open-source blockers from `OS_IT_PLAN.md`
 
 - All reachable git refs that could become public: local branches, remote-tracking branches, tags, and release branches.
 - Current tracked files under product code, docs, root plans, tasks, scripts, migrations, tests, fixtures, config, hidden tool config, package metadata, CI/workflow files, Docker/compose files, and publication artifacts.
-- Ignored and generated local paths likely to hold sensitive or publishable material that could accidentally be copied into tracked files: `data/`, `cache/`, `logs/`, `tmp/`, `.tmp/`, `.temp/`, `temp/`, `test-results/`, `coverage/`, `out/`, `dist/`, `desktopBuild/`, `desktopArtifacts/`, `.desktopBuild/`, `.desktopArtifacts/`, `.cache/`, `.secrets/`, `assets/article_pdfs/`, `assets/user_uploaded_article_pdfs/`, `assets/covidence_*`, `assets/structured_file_imports/`, `backups/`, `openalex_snapshot/`, `models/`, `pgdata/`, `init-db/`, and runtime JSONL output.
+- Ignored and generated local paths likely to hold sensitive or publishable material that could accidentally be copied into tracked files: `data/`, `cache/`, `logs/`, `tmp/`, `.tmp/`, `.temp/`, `temp/`, `test-results/`, `coverage/`, `out/`, `dist/`, `desktopBuild/`, `desktopArtifacts/`, `.desktopBuild/`, `.desktopArtifacts/`, `.cache/`, `.secrets/`, `assets/article_pdfs/`, `assets/user_uploaded_article_pdfs/`, `assets/covidence_2/`, `assets/covidence_imports/`, `assets/covidence_running/`, `assets/structured_file_imports/`, `backups/`, `openalex_snapshot/`, `models/`, `pgdata/`, `init-db/`, and runtime JSONL output.
+- Tracked Covidence, FHIR, PDF, CSV, NDJSON, fixture, and sample assets are current-tree artifacts, not ignored-path assumptions. They must be inventoried and inspected before release.
 - Config and secret flows: `process.env`, UI-stored provider settings, provider API keys, token storage, local binary paths, runtime profiles, logging paths, and sample commands.
 
 ## Out Of Scope
@@ -45,12 +46,11 @@ Before running tools, confirm current CLI flags with `gitleaks --help` and `truf
 
 ## Audit Workspace
 
-- Refresh remote refs, then create an out-of-tree local report folder. The commands below assume `AUDIT_DIR` remains exported:
+- Resolve an out-of-tree local report folder, then refresh remote refs. The commands below assume `AUDIT_DIR` remains exported:
 
 ```bash
 set -euo pipefail
 
-git fetch --all --tags --prune
 export REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
 export AUDIT_DIR="${AUDIT_DIR:-../forska-security-audit}"
 AUDIT_DIR_ABS=""
@@ -74,7 +74,19 @@ case "$AUDIT_DIR/" in
     ;;
 esac
 export AUDIT_TREE="$AUDIT_DIR/current-tree"
+export AUDIT_COMMAND_LOG="$AUDIT_DIR/reports/audit-command-log.md"
 mkdir -p "$AUDIT_DIR/reports" "$AUDIT_DIR/findings"
+date -u +"%Y-%m-%dT%H:%M:%SZ" > "$AUDIT_DIR/reports/scan-started-at.txt"
+cat > "$AUDIT_COMMAND_LOG" <<'EOF'
+# Security Audit Command Log
+
+Append each audit command exactly as run before copying redacted conclusions into findings.
+EOF
+if ! git fetch --all --tags --prune > "$AUDIT_DIR/reports/git-fetch.txt" 2>&1; then
+  cat "$AUDIT_DIR/reports/git-fetch.txt" >&2
+  echo "Stop: remote refs could not be refreshed; ref coverage is unresolved." >&2
+  exit 1
+fi
 git status --short > "$AUDIT_DIR/reports/working-tree-status.txt"
 if test -s "$AUDIT_DIR/reports/working-tree-status.txt"; then
   cat "$AUDIT_DIR/reports/working-tree-status.txt" >&2
@@ -91,7 +103,11 @@ git archive --format=tar HEAD | tar -xf - -C "$AUDIT_TREE"
 git remote -v > "$AUDIT_DIR/reports/remotes.txt"
 git rev-parse HEAD > "$AUDIT_DIR/reports/audit-head.txt"
 git for-each-ref --format="%(refname)" refs/heads refs/remotes refs/tags > "$AUDIT_DIR/reports/reachable-refs.txt"
-git ls-remote --heads --tags origin > "$AUDIT_DIR/reports/origin-refs.txt"
+if ! git ls-remote --heads --tags origin > "$AUDIT_DIR/reports/origin-refs.txt" 2> "$AUDIT_DIR/reports/origin-refs.err.txt"; then
+  cat "$AUDIT_DIR/reports/origin-refs.err.txt" >&2
+  echo "Stop: origin refs could not be listed; ref coverage is unresolved." >&2
+  exit 1
+fi
 git ls-tree -r -z --name-only HEAD > "$AUDIT_DIR/reports/tracked-current-tree-files.zlist"
 ```
 
@@ -102,6 +118,7 @@ git ls-tree -r -z --name-only HEAD > "$AUDIT_DIR/reports/tracked-current-tree-fi
 - Run current-tree content scans against `$AUDIT_TREE`, not the live working directory, so ignored local data and audit reports do not get scanned as product content.
 - Use `rg --hidden --no-ignore` for `$AUDIT_TREE` scans. The archived tree contains `.gitignore`, but tracked ignored files still need audit coverage.
 - Treat raw `rg`, `git log`, `gitleaks`, and `trufflehog` report files as sensitive evidence. Keep them outside git and copy only redacted summaries into findings.
+- Append every audit command to `$AUDIT_COMMAND_LOG` before summarizing findings.
 - Record tool versions, command lines, scan date, scanned commit, scanned refs, and the `$AUDIT_TREE` path.
 
 ## Workstream A: Git History And Sensitive Material
@@ -117,7 +134,7 @@ git ls-tree -r -z --name-only HEAD > "$AUDIT_DIR/reports/tracked-current-tree-fi
 ```bash
 set -euo pipefail
 
-gitleaks git --source . --log-opts="--all" --redact --report-format json --report-path "$AUDIT_DIR/reports/gitleaks-history.json"
+gitleaks git --source . --log-opts="--all" --redact --exit-code 0 --report-format json --report-path "$AUDIT_DIR/reports/gitleaks-history.json"
 
 while IFS= read -r ref; do
   report_name="$(printf '%s' "$ref" | tr '/:' '__')"
@@ -132,8 +149,10 @@ If the installed `trufflehog git --help` shows that full ref names are not accep
 ```bash
 set -euo pipefail
 
-gitleaks dir "$AUDIT_TREE" --redact --report-format json --report-path "$AUDIT_DIR/reports/gitleaks-current-tree.json"
+gitleaks dir "$AUDIT_TREE" --redact --exit-code 0 --report-format json --report-path "$AUDIT_DIR/reports/gitleaks-current-tree.json"
 ```
+
+`--exit-code 0` is intentional: findings should write reports for triage instead of aborting the audit script. Tool execution failures still fail.
 
 4. Run manual history searches for API and infra leakage.
 
@@ -212,7 +231,7 @@ For each flow, record:
 git ls-tree -r --name-only HEAD | rg "fixture|fixtures|sample|example|snapshot|export|pdf|ndjson|jsonl|log|data|cache|tmp|artifact|backup|covidence|openalex|fhir|ehr|token|secret|credential|key|user_uploaded" > "$AUDIT_DIR/reports/tracked-artifact-paths.txt" || true
 git ls-tree -r --name-only HEAD | rg -i "\.(zip|tar|tgz|gz|bz2|xz|7z|rar|pdf|docx|xlsx|pptx|sqlite|duckdb|db|parquet|arrow|png|jpe?g|webp|wasm|bin)$" > "$AUDIT_DIR/reports/tracked-binary-artifact-paths.txt" || true
 git status --ignored --short > "$AUDIT_DIR/reports/git-status-ignored.txt"
-find data cache logs tmp .tmp .temp temp test-results coverage out dist desktopBuild desktopArtifacts .desktopBuild .desktopArtifacts .cache .secrets assets/article_pdfs assets/user_uploaded_article_pdfs assets/covidence_2 assets/covidence_imports assets/covidence_running assets/covidence_study assets/structured_file_imports backups openalex_snapshot models pgdata init-db -type f -print 2>/dev/null > "$AUDIT_DIR/reports/local-generated-files.txt" || true
+find data cache logs tmp .tmp .temp temp test-results coverage out dist desktopBuild desktopArtifacts .desktopBuild .desktopArtifacts .cache .secrets assets/article_pdfs assets/user_uploaded_article_pdfs assets/covidence_2 assets/covidence_imports assets/covidence_running assets/structured_file_imports backups openalex_snapshot models pgdata init-db -type f -print 2>/dev/null > "$AUDIT_DIR/reports/local-generated-files.txt" || true
 ```
 
 For each tracked or publishable artifact, decide:
@@ -241,7 +260,7 @@ Record:
 5. Confirm ignored-path protection.
 
 ```bash
-git check-ignore -vn data/.audit-sentinel cache/.audit-sentinel logs/.audit-sentinel tmp/.audit-sentinel .tmp/.audit-sentinel .temp/.audit-sentinel temp/.audit-sentinel test-results/.audit-sentinel coverage/.audit-sentinel out/.audit-sentinel dist/.audit-sentinel desktopBuild/.audit-sentinel desktopArtifacts/.audit-sentinel .desktopBuild/.audit-sentinel .desktopArtifacts/.audit-sentinel .cache/.audit-sentinel .secrets/.audit-sentinel assets/article_pdfs/.audit-sentinel assets/user_uploaded_article_pdfs/.audit-sentinel assets/covidence_2/.audit-sentinel assets/covidence_imports/.audit-sentinel assets/covidence_running/.audit-sentinel assets/covidence_study/.audit-sentinel assets/structured_file_imports/.audit-sentinel backups/.audit-sentinel openalex_snapshot/.audit-sentinel models/.audit-sentinel pgdata/.audit-sentinel init-db/.audit-sentinel node_modules/.audit-sentinel > "$AUDIT_DIR/reports/ignored-path-check.txt" || true
+git check-ignore -vn data/.audit-sentinel cache/.audit-sentinel logs/.audit-sentinel tmp/.audit-sentinel .tmp/.audit-sentinel .temp/.audit-sentinel temp/.audit-sentinel test-results/.audit-sentinel coverage/.audit-sentinel out/.audit-sentinel dist/.audit-sentinel desktopBuild/.audit-sentinel desktopArtifacts/.audit-sentinel .desktopBuild/.audit-sentinel .desktopArtifacts/.audit-sentinel .cache/.audit-sentinel .secrets/.audit-sentinel assets/article_pdfs/.audit-sentinel assets/user_uploaded_article_pdfs/.audit-sentinel assets/covidence_2/.audit-sentinel assets/covidence_imports/.audit-sentinel assets/covidence_running/.audit-sentinel assets/structured_file_imports/.audit-sentinel backups/.audit-sentinel openalex_snapshot/.audit-sentinel models/.audit-sentinel pgdata/.audit-sentinel init-db/.audit-sentinel node_modules/.audit-sentinel > "$AUDIT_DIR/reports/ignored-path-check.txt" || true
 rg -n "data/|cache|logs|tmp/|\\.tmp/|\\.temp/|temp/|test-results/|coverage|out|dist|desktopBuild|desktopArtifacts|\\.desktopBuild|\\.desktopArtifacts|\\.cache|\\.secrets|assets/article_pdfs|assets/user_uploaded_article_pdfs|assets/covidence_|assets/structured_file_imports|backups|openalex_snapshot|models|pgdata|init-db" .gitignore .prettierignore .eslintignore 2>/dev/null > "$AUDIT_DIR/reports/ignore-rule-source-hits.txt" || true
 ```
 
@@ -263,7 +282,8 @@ The `.audit-sentinel` paths do not need to exist. Treat any `ignored-path-check.
 
 ## Deliverables
 
-- `$AUDIT_DIR/reports/audit-head.txt`, `$AUDIT_DIR/reports/working-tree-status.txt`, `$AUDIT_DIR/reports/reachable-refs.txt`, `$AUDIT_DIR/reports/origin-refs.txt`, and `$AUDIT_DIR/reports/remotes.txt` kept locally, outside git.
+- `$AUDIT_DIR/reports/audit-head.txt`, `$AUDIT_DIR/reports/working-tree-status.txt`, `$AUDIT_DIR/reports/reachable-refs.txt`, `$AUDIT_DIR/reports/origin-refs.txt`, `$AUDIT_DIR/reports/origin-refs.err.txt` when listing fails, and `$AUDIT_DIR/reports/remotes.txt` kept locally, outside git.
+- `$AUDIT_DIR/reports/scan-started-at.txt`, `$AUDIT_DIR/reports/git-fetch.txt`, and `$AUDIT_DIR/reports/audit-command-log.md` kept locally, outside git.
 - Tool-version reports for `git`, `rg`, `gitleaks`, and `trufflehog`, kept locally, outside git.
 - Local redacted `gitleaks` reports and local raw-or-redacted `trufflehog` JSONL reports, kept outside git.
 - A security finding log with redacted evidence and closure status.
@@ -288,6 +308,7 @@ The `.audit-sentinel` paths do not need to exist. Treat any `ignored-path-check.
 - `trufflehog` all-history scans run after remote refs are refreshed, cover every ref in `reachable-refs.txt` with per-ref reports, and every hit is triaged.
 - `working-tree-status.txt` is recorded and empty before creating `$AUDIT_TREE`, so the current-tree scan matches the intended release commit.
 - Tool versions are recorded for `git`, `rg`, `gitleaks`, and `trufflehog`.
+- Scan date and exact command lines are recorded in `scan-started-at.txt` and `audit-command-log.md`.
 - Manual `git log -S` and `git log -G` searches cover old API paths, admin/debug route names, private URLs and IPs, private infra strings, runtime log variables, and runtime profile variables across all tracked paths in the scanned refs.
 - Manual `rg --hidden --no-ignore` searches cover current-tree secrets, private infra strings, env vars, provider credentials, token storage, runtime logs, fixtures, samples, generated artifacts, publication artifacts, and hidden config.
 - Every real secret is rotated or revoked before any public release decision.
