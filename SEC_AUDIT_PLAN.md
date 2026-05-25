@@ -48,8 +48,10 @@ Before running tools, confirm current CLI flags with `gitleaks --help` and `truf
 - Refresh remote refs, then create an out-of-tree local report folder. The commands below assume `AUDIT_DIR` remains exported:
 
 ```bash
+set -euo pipefail
+
 git fetch --all --tags --prune
-export REPO_ROOT="$(git rev-parse --show-toplevel)"
+export REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
 export AUDIT_DIR="${AUDIT_DIR:-../forska-security-audit}"
 AUDIT_DIR_ABS=""
 if test -e "$AUDIT_DIR"; then
@@ -113,15 +115,23 @@ git ls-tree -r -z --name-only HEAD > "$AUDIT_DIR/reports/tracked-current-tree-fi
 2. Run all-history secret scanners.
 
 ```bash
+set -euo pipefail
+
 gitleaks git --source . --log-opts="--all" --redact --report-format json --report-path "$AUDIT_DIR/reports/gitleaks-history.json"
-trufflehog git "file://$PWD" --json --no-update > "$AUDIT_DIR/reports/trufflehog-history.raw.jsonl"
+
+while IFS= read -r ref; do
+  report_name="$(printf '%s' "$ref" | tr '/:' '__')"
+  trufflehog git "file://$PWD" --branch "$ref" --json --no-update > "$AUDIT_DIR/reports/trufflehog-history-$report_name.raw.jsonl"
+done < "$AUDIT_DIR/reports/reachable-refs.txt"
 ```
 
-If the installed `trufflehog git --help` shows that local git scans do not cover all refs by default, rerun `trufflehog` per public-candidate ref from `reachable-refs.txt` and write one report per ref.
+If the installed `trufflehog git --help` shows that full ref names are not accepted by `--branch`, rerun `trufflehog` with the installed version's equivalent per-ref option. Do not replace the per-ref run with a single default-branch local scan.
 
 3. Run a current-tree scan.
 
 ```bash
+set -euo pipefail
+
 gitleaks dir "$AUDIT_TREE" --redact --report-format json --report-path "$AUDIT_DIR/reports/gitleaks-current-tree.json"
 ```
 
@@ -129,8 +139,8 @@ gitleaks dir "$AUDIT_TREE" --redact --report-format json --report-path "$AUDIT_D
 
 ```bash
 git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"/api/" > "$AUDIT_DIR/reports/history-api-paths.txt"
-git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -G"AdminInvestigate|ArticleAdmin|DuckdbStudio|NvidiaSmi|LlmStatus|ApiProxy|TokensRoutes|UsersRoutes|RuntimeAssets|ProviderConnectionsRoutes|ProviderModelsRoutes" > "$AUDIT_DIR/reports/history-sensitive-route-names.txt"
-git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -G'https?://|\b10\.|\b192\.168\.|\b172\.(1[6-9]|2[0-9]|3[0-1])\.' > "$AUDIT_DIR/reports/history-url-private-ip.txt"
+git log --all --extended-regexp --date=short --name-only --format='%H%x09%ad%x09%s' -G"AdminInvestigate|ArticleAdmin|DuckdbStudio|NvidiaSmi|LlmStatus|ApiProxy|TokensRoutes|UsersRoutes|RuntimeAssets|ProviderConnectionsRoutes|ProviderModelsRoutes" > "$AUDIT_DIR/reports/history-sensitive-route-names.txt"
+git log --all --extended-regexp --date=short --name-only --format='%H%x09%ad%x09%s' -G'https?://|(^|[^0-9])10\.|(^|[^0-9])192\.168\.|(^|[^0-9])172\.(1[6-9]|2[0-9]|3[0-1])\.' > "$AUDIT_DIR/reports/history-url-private-ip.txt"
 git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"STACK_ROOT" > "$AUDIT_DIR/reports/history-stack-root.txt"
 git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"SSH_ALIAS" > "$AUDIT_DIR/reports/history-ssh-alias.txt"
 git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"LOG_DIR" > "$AUDIT_DIR/reports/history-log-dir.txt"
@@ -141,7 +151,7 @@ git log --all --date=short --name-only --format='%H%x09%ad%x09%s' -S"FORSKA_RUNT
 
 ```bash
 rg -n --hidden --no-ignore "AKIA|AIza|sk-|gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|glpat-[A-Za-z0-9_-]+|hf_[A-Za-z0-9]+|xox[baprs]-|BEGIN (RSA|OPENSSH|EC|PRIVATE) KEY|Bearer [A-Za-z0-9._-]+|api[_-]?key|secret|token|password|private[_-]?key" "$AUDIT_TREE" > "$AUDIT_DIR/reports/current-tree-secret-string-hits.raw.txt" || true
-rg -n --hidden --no-ignore "ssh|hostname|STACK_ROOT|SSH_ALIAS|backup|cluster|internal|private|LOG_DIR|FORSKA_RUNTIME_PROFILE|logs/runtime|https?://|\\b10\\.|\\b192\\.168\\.|\\b172\\.(1[6-9]|2[0-9]|3[0-1])\\." "$AUDIT_TREE" > "$AUDIT_DIR/reports/current-tree-infra-string-hits.raw.txt" || true
+rg -n --hidden --no-ignore "ssh|hostname|STACK_ROOT|SSH_ALIAS|backup|cluster|internal|private|LOG_DIR|FORSKA_RUNTIME_PROFILE|logs/runtime|https?://|(^|[^0-9])10\\.|(^|[^0-9])192\\.168\\.|(^|[^0-9])172\\.(1[6-9]|2[0-9]|3[0-1])\\." "$AUDIT_TREE" > "$AUDIT_DIR/reports/current-tree-infra-string-hits.raw.txt" || true
 ```
 
 6. Triage every scanner and manual-search hit.
@@ -231,7 +241,7 @@ Record:
 5. Confirm ignored-path protection.
 
 ```bash
-git check-ignore -vn data/.audit-sentinel cache/.audit-sentinel logs/.audit-sentinel tmp/.audit-sentinel .tmp/.audit-sentinel .temp/.audit-sentinel temp/.audit-sentinel test-results/.audit-sentinel coverage/.audit-sentinel out/.audit-sentinel dist/.audit-sentinel desktopBuild/.audit-sentinel desktopArtifacts/.audit-sentinel .desktopBuild/.audit-sentinel .desktopArtifacts/.audit-sentinel .cache/.audit-sentinel .secrets/.audit-sentinel assets/article_pdfs/.audit-sentinel assets/user_uploaded_article_pdfs/.audit-sentinel assets/covidence_2/.audit-sentinel assets/covidence_imports/.audit-sentinel assets/covidence_running/.audit-sentinel assets/covidence_study/.audit-sentinel assets/structured_file_imports/.audit-sentinel backups/.audit-sentinel openalex_snapshot/.audit-sentinel models/.audit-sentinel pgdata/.audit-sentinel init-db/.audit-sentinel node_modules/.audit-sentinel > "$AUDIT_DIR/reports/ignored-path-check.txt"
+git check-ignore -vn data/.audit-sentinel cache/.audit-sentinel logs/.audit-sentinel tmp/.audit-sentinel .tmp/.audit-sentinel .temp/.audit-sentinel temp/.audit-sentinel test-results/.audit-sentinel coverage/.audit-sentinel out/.audit-sentinel dist/.audit-sentinel desktopBuild/.audit-sentinel desktopArtifacts/.audit-sentinel .desktopBuild/.audit-sentinel .desktopArtifacts/.audit-sentinel .cache/.audit-sentinel .secrets/.audit-sentinel assets/article_pdfs/.audit-sentinel assets/user_uploaded_article_pdfs/.audit-sentinel assets/covidence_2/.audit-sentinel assets/covidence_imports/.audit-sentinel assets/covidence_running/.audit-sentinel assets/covidence_study/.audit-sentinel assets/structured_file_imports/.audit-sentinel backups/.audit-sentinel openalex_snapshot/.audit-sentinel models/.audit-sentinel pgdata/.audit-sentinel init-db/.audit-sentinel node_modules/.audit-sentinel > "$AUDIT_DIR/reports/ignored-path-check.txt" || true
 rg -n "data/|cache|logs|tmp/|\\.tmp/|\\.temp/|temp/|test-results/|coverage|out|dist|desktopBuild|desktopArtifacts|\\.desktopBuild|\\.desktopArtifacts|\\.cache|\\.secrets|assets/article_pdfs|assets/user_uploaded_article_pdfs|assets/covidence_|assets/structured_file_imports|backups|openalex_snapshot|models|pgdata|init-db" .gitignore .prettierignore .eslintignore 2>/dev/null > "$AUDIT_DIR/reports/ignore-rule-source-hits.txt" || true
 ```
 
@@ -275,7 +285,7 @@ The `.audit-sentinel` paths do not need to exist. Treat any `ignored-path-check.
 ## Quality Gates
 
 - `gitleaks` all-history scan runs after `git fetch --all --tags --prune`, covers all reachable refs, and every hit is triaged.
-- `trufflehog` all-history scan runs after remote refs are refreshed, covers the local repo, and every hit is triaged.
+- `trufflehog` all-history scans run after remote refs are refreshed, cover every ref in `reachable-refs.txt` with per-ref reports, and every hit is triaged.
 - `working-tree-status.txt` is recorded and empty before creating `$AUDIT_TREE`, so the current-tree scan matches the intended release commit.
 - Tool versions are recorded for `git`, `rg`, `gitleaks`, and `trufflehog`.
 - Manual `git log -S` and `git log -G` searches cover old API paths, admin/debug route names, private URLs and IPs, private infra strings, runtime log variables, and runtime profile variables across all tracked paths in the scanned refs.
