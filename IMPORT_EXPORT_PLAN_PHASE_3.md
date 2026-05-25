@@ -41,17 +41,21 @@ Acceptance criteria:
 - Keep `POST /api/projects/import/:sessionId/resolve-dependencies` as a validated contract shell until US-004 owns provider/model dependency-resolution behavior.
 - Keep `POST /api/projects/import/:sessionId/commit` as a contract-safe placeholder until Phase 4; no final app-table writes happen in Phase 3.
 - Create import sessions in `awaiting_upload` with public upload/analyze/session URLs and `expiresAt` in the API response, plus server-only temp layout metadata and durable session rows from the Phase 1 repository. Never return server-local temp artifact paths.
+- Replace or narrow the current public `ProjectTransferUploadSession` placeholder shape before implementing session/upload responses: `uploadPath` and any temp layout fields are server-only metadata and must not be present in `ProjectTransferApiResponse.data` payloads.
 - Upload uses the Phase 1 streaming owner-proxy path, atomically claims `awaiting_upload -> uploading`, writes only `upload.zip`, persists upload byte/checksum metadata, transitions `uploading -> queued` after a durable write, rejects duplicate bodies for the same session, and does not parse zip, manifest, or payload data.
 - Analyze claims queued sessions and owns session state, owner-token, progress, and `planRevision` orchestration; package parsing/validation is owned by US-002, overlap/remap analysis by US-003, provider/model resolution state by US-004/US-005, and fidelity checks by US-006.
 - Run small analyze work inline and large analyze work as a background session job using `getProjectTransferImportAnalyzeExecutionMode()` thresholds, durable owner tokens, heartbeats, progress, and runtime events.
 - Cancellation handles `awaiting_upload`, `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, and `ready_to_commit` with writer-owned state transitions and temp cleanup; `committing`, `completed`, and `failed` are rejected. Repeated `cancelled` or `expired` calls are idempotent only when they match the existing terminal cleanup result, such as the same reason/cleanup intent or an empty repeat request, and must not reacquire ownership or rerun cleanup from stale owner tokens.
+- Replace permissive Phase 1/2 placeholder request bodies with ArkType-validated contracts before processing create-session, analyze, resolve-dependencies, and cancel payloads. Keep `commit` validation contract-safe while the handler remains a Phase 4 placeholder.
 - Session reads use `ProjectTransferApiResponse` only as the `{data, error}` envelope; the `data` payload exposes progress, plan summary, blockers, warnings, `canCommit`, duplicate-package warnings, and overlap counts through `ProjectTransferSessionResponse.planSummary` and/or an explicit import-plan payload.
 
 Quality gates:
 
 - `bun test src/server/routes/projectTransferRoutes.test.ts` passes.
 - `bun test src/server/routes/ApiProxyRoutes.test.ts` passes.
+- `bun test src/server/routes/ApiProxyRoutes.test.ts` includes project-transfer upload coverage proving no-owner failures do not consume the request body and large uploads do not fall through to the generic buffered `ArrayBuffer` proxy path.
 - `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` passes.
+- `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` includes coverage that non-replayable project-transfer upload streams are not retried after partial forwarding to the owner.
 - `bun test src/server/routes/apiRouteClassification.test.ts` passes if transfer upload, polling, or import route classification changes.
 - `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` passes if session mutations change.
 - `bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts` passes if cancellation or cleanup behavior changes.
@@ -128,6 +132,7 @@ Acceptance criteria:
 
 - Implement `POST /api/projects/import/:sessionId/resolve-dependencies` behavior on top of the durable import plan, including `planRevision` checks, stale-plan responses, and refreshed session plan summaries.
 - Resolve-dependencies requests include the caller's current `planRevision`; stale revisions return the latest session/plan without mutating it.
+- Validate resolve-dependencies bodies with ArkType before mutation, including `planRevision`, selected connection ids, created-connection handoffs, model materialization requests, Codex setup state, and any explicit unresolved-state choices. Reject unknown or shape-invalid mutations before reading or updating the plan.
 - Dependency-resolution mutations that change a `ready_to_commit` plan must first reopen the session to `awaiting_resolution`, increment `planRevision`, and recompute stale-sensitive blockers.
 - Implement provider auto-match by safe fingerprint only when exactly one enabled target connection returned by the normal provider connection list flow matches and required imported models remain selectable on that connection. `listProviderConnections()` filters provider connections whose persisted config has `archived: true`; dependency resolution must also reject archived chosen connections and connections whose `disabledModelIds` hide required mapped models.
 - Define provider equivalence using provider kind, registry transport family, portable sanitized fingerprint/effective endpoint identity, runtime mode, and source-signature-relevant config; labels, local URLs, and worker URLs are review hints only.
@@ -235,3 +240,5 @@ Quality gates:
 - `bun run build` passes.
 - `bun run desktop:build` passes.
 - `bun run lint` passes for touched `src` files.
+- Browser smoke verification passes: `/projects` opens `/projects/import`, the wizard shell remains rendered during session/upload/analyze progress, and a small package reaches plan review without final writes.
+- Desktop smoke verification passes: the import wizard uses the desktop-safe API origin for file upload/session polling and reaches plan review, with final commit still disabled until Phase 4.
