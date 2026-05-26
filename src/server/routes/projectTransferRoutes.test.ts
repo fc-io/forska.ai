@@ -15,6 +15,10 @@ const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts'
 const analyzeModulePath = new URL('../services/projectTransfer/projectTransferAnalyze.ts', import.meta.url).pathname
 const exportPackageModulePath = new URL('../services/projectTransfer/projectTransferExportPackage.ts', import.meta.url)
   .pathname
+const dependencyResolutionModulePath = new URL(
+  '../services/projectTransfer/projectTransferDependencyResolution.ts',
+  import.meta.url,
+).pathname
 const sessionRepositoryModulePath = new URL(
   '../services/projectTransfer/projectTransferSessionRepository.ts',
   import.meta.url,
@@ -104,11 +108,24 @@ const routeState: {
   exportResult: unknown
   projectRows: SourceProjectRow[]
   queryStatements: string[]
+  resolveResult: unknown
   sessions: Record<string, ProjectTransferSessionRecord | null>
 } = {
   exportResult: getInlineExportResult(),
   projectRows: [{deletePendingAt: null, id: 'project-1'}],
   queryStatements: [],
+  resolveResult: {
+    changed: true,
+    plan: {},
+    planSummary: {
+      blockerCount: 0,
+      conflictCounts: getFinalConflictCounts(),
+      dependencyStatuses: {'model:model-1': 'resolved', 'provider:provider-connection-1': 'resolved'},
+      overlapCounts: getFinalOverlapCounts(),
+      warningCount: 0,
+    },
+    status: 'ok',
+  },
   sessions: {},
 }
 
@@ -165,6 +182,10 @@ const analyzeProjectTransferImportPackageMock = mock(async (input: {planRevision
     plan: {canCommit: false, planRevision: input.planRevision},
     planSummary,
   }
+})
+
+const resolveProjectTransferDependenciesMock = mock(async (_input: unknown) => {
+  return routeState.resolveResult
 })
 
 const getProjectTransferSessionMock = mock(async ({sessionId}: {sessionId: string}) => {
@@ -379,6 +400,10 @@ void mock.module(analyzeModulePath, () => {
   return {analyzeProjectTransferImportPackage: analyzeProjectTransferImportPackageMock}
 })
 
+void mock.module(dependencyResolutionModulePath, () => {
+  return {resolveProjectTransferDependencies: resolveProjectTransferDependenciesMock}
+})
+
 void mock.module(sessionRepositoryModulePath, () => {
   return {
     getProjectTransferSessionRepository: () => {
@@ -495,11 +520,24 @@ afterEach(() => {
   heartbeatProjectTransferSessionOwnerMock.mockClear()
   markProjectTransferSessionTerminalCleanupCompleteMock.mockClear()
   queryJsonMock.mockClear()
+  resolveProjectTransferDependenciesMock.mockClear()
   transitionProjectTransferSessionStateMock.mockClear()
   updateProjectTransferSessionPlanRevisionMock.mockClear()
   routeState.exportResult = getInlineExportResult()
   routeState.projectRows = [{deletePendingAt: null, id: 'project-1'}]
   routeState.queryStatements.length = 0
+  routeState.resolveResult = {
+    changed: true,
+    plan: {},
+    planSummary: {
+      blockerCount: 0,
+      conflictCounts: getFinalConflictCounts(),
+      dependencyStatuses: {'model:model-1': 'resolved', 'provider:provider-connection-1': 'resolved'},
+      overlapCounts: getFinalOverlapCounts(),
+      warningCount: 0,
+    },
+    status: 'ok',
+  }
   routeState.sessions = {}
   rmSync(`tmp/project-transfer/export/${readySessionId}`, {force: true, recursive: true})
   rmSync('tmp/project-transfer/import', {force: true, recursive: true})
@@ -813,7 +851,7 @@ test('project transfer import analyze returns accepted for background-sized work
   expect(body).toMatchObject({data: {executionMode: 'background', state: 'extracting'}, error: null})
 })
 
-test('project transfer import resolve remains a validated no-write shell and commit remains a placeholder', async () => {
+test('project transfer import resolve updates the durable dependency plan and commit remains a placeholder', async () => {
   routeState.sessions['import-resolve'] = getImportSessionRecord({
     id: 'import-resolve',
     planRevision: 1,
@@ -830,12 +868,20 @@ test('project transfer import resolve remains a validated no-write shell and com
 
   const resolveResponse = await app.handle(
     new Request('http://localhost/api/projects/import/import-resolve/resolve-dependencies', {
-      body: JSON.stringify({expectedPlanRevision: 1}),
+      body: JSON.stringify({
+        planRevision: 1,
+        selectedProviderConnections: [
+          {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: 'target-provider-1'},
+        ],
+      }),
       headers: {'content-type': 'application/json'},
       method: 'POST',
     }),
   )
-  const resolveBody = (await resolveResponse.json()) as {data: {state: string}; error: string | null}
+  const resolveBody = (await resolveResponse.json()) as {
+    data: {planRevision: number; planSummary: {dependencyStatuses: Record<string, string>}; state: string}
+    error: string | null
+  }
   const commitResponse = await app.handle(
     new Request('http://localhost/api/projects/import/import-resolve/commit', {
       body: JSON.stringify({expectedPlanRevision: 1}),
@@ -846,9 +892,88 @@ test('project transfer import resolve remains a validated no-write shell and com
   const commitBody = await getPlaceholderBody(commitResponse)
 
   expect(resolveResponse.status).toBe(200)
-  expect(resolveBody).toMatchObject({data: {state: 'awaiting_resolution'}, error: null})
+  expect(resolveBody).toMatchObject({
+    data: {
+      planRevision: 2,
+      planSummary: {dependencyStatuses: {'model:model-1': 'resolved', 'provider:provider-connection-1': 'resolved'}},
+      state: 'ready_to_commit',
+    },
+    error: null,
+  })
+  expect(resolveProjectTransferDependenciesMock).toHaveBeenCalledTimes(1)
   expect(commitResponse.status).toBe(501)
   expect(commitBody.error).toBe('Project transfer commit-import-session endpoint is not implemented yet')
+})
+
+test('project transfer import resolve returns the latest plan for stale revisions without mutating', async () => {
+  routeState.sessions['import-stale-resolve'] = getImportSessionRecord({
+    id: 'import-stale-resolve',
+    planRevision: 2,
+    planSummaryJson: {
+      blockerCount: 1,
+      conflictCounts: getFinalConflictCounts(),
+      dependencyStatuses: {'model:model-1': 'missing'},
+      overlapCounts: getFinalOverlapCounts(),
+      warningCount: 0,
+    },
+    state: 'awaiting_resolution',
+  })
+  const app = await getProjectTransferApp()
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/import-stale-resolve/resolve-dependencies', {
+      body: JSON.stringify({
+        planRevision: 1,
+        selectedModels: [{sourceModelId: 'model-1', targetModelId: 'target-model-1'}],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {planRevision: number; planSummary: {dependencyStatuses: Record<string, string>}; stalePlan: boolean}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {planRevision: 2, planSummary: {dependencyStatuses: {'model:model-1': 'missing'}}, stalePlan: true},
+    error: null,
+  })
+  expect(resolveProjectTransferDependenciesMock).not.toHaveBeenCalled()
+  expect(routeState.sessions['import-stale-resolve']?.planRevision).toBe(2)
+})
+
+test('project transfer import resolve rejects shape-invalid dependency mutations before service reads', async () => {
+  routeState.sessions['import-invalid-resolve'] = getImportSessionRecord({
+    id: 'import-invalid-resolve',
+    planRevision: 1,
+    state: 'awaiting_resolution',
+  })
+  const app = await getProjectTransferApp()
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/import-invalid-resolve/resolve-dependencies', {
+      body: JSON.stringify({
+        planRevision: 1,
+        selectedProviderConnections: [
+          {
+            extra: true,
+            sourceProviderConnectionId: 'provider-connection-1',
+            targetProviderConnectionId: 'target-provider-1',
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: null; error: string}
+
+  expect(response.status).toBe(400)
+  expect(body.error).toContain('selectedProviderConnections[0].extra')
+  expect(resolveProjectTransferDependenciesMock).not.toHaveBeenCalled()
+  expect(getProjectTransferSessionMock).not.toHaveBeenCalled()
 })
 
 test('project transfer import cancellation cleans temp artifacts and repeats idempotently', async () => {

@@ -11,6 +11,7 @@ process.env.API_SERVER_PORT = process.env.API_SERVER_PORT ?? '3001'
 process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 let closeDatabase: (() => Promise<void>) | null = null
+let assertSelectableProviderModelIds: typeof import('./providerModelRepository.ts').assertSelectableProviderModelIds
 let createProviderModel: typeof import('./providerModelRepository.ts').createProviderModel
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
@@ -47,6 +48,7 @@ beforeAll(async () => {
   runDatabase = (statement: string) => {
     return database.run(statement)
   }
+  assertSelectableProviderModelIds = repository.assertSelectableProviderModelIds
   createProviderModel = repository.createProviderModel
   upsertDiscoveredModels = repository.upsertDiscoveredModels
 })
@@ -272,6 +274,55 @@ test('createProviderModel reuses an existing empty variant model for null varian
 
   expect(model.id).toBe('empty-variant-model')
   expect(Number(row?.rowCount ?? 0)).toBe(1)
+})
+
+test('assertSelectableProviderModelIds requires a live enabled provider connection row', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, config_json)
+    VALUES (
+      'selectable-disabled-connection',
+      'openrouter',
+      'OpenRouter Disabled',
+      FALSE,
+      'api-key',
+      CAST('{"archived":false,"disabledModelIds":[],"manualWorkerUrls":[],"workerUrlMode":"manual"}' AS JSON)
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, variant)
+    VALUES
+      ('selectable-disabled-model', 'selectable-disabled-connection', 'openrouter/disabled', 'openrouter/disabled', 'OpenRouter Disabled', 'manual', TRUE, NULL),
+      ('selectable-orphan-model', 'missing-provider-connection', 'openrouter/orphan', 'openrouter/orphan', 'OpenRouter Orphan', 'manual', TRUE, NULL)
+  `)
+  const disabledError = await assertSelectableProviderModelIds(
+    {queryJson: queryDatabase},
+    {errorMessage: 'not selectable', modelIds: ['selectable-disabled-model']},
+  )
+    .then(() => {
+      return null
+    })
+    .catch((error: unknown) => {
+      return error
+    })
+  const orphanError = await assertSelectableProviderModelIds(
+    {queryJson: queryDatabase},
+    {errorMessage: 'not selectable', modelIds: ['selectable-orphan-model']},
+  )
+    .then(() => {
+      return null
+    })
+    .catch((error: unknown) => {
+      return error
+    })
+
+  expect(disabledError).toBeInstanceOf(Error)
+  expect((disabledError as Error | null)?.message).toBe('not selectable')
+  expect(orphanError).toBeInstanceOf(Error)
+  expect((orphanError as Error | null)?.message).toBe('not selectable')
 })
 
 test('upsertDiscoveredModels preserves stored model options when refreshing discovery metadata', async () => {

@@ -78,6 +78,7 @@ export type ProjectTransferImportAnalysisArtifact = {
 export type ProjectTransferImportPlanArtifact = {
   blockers: ProjectTransferPlanBlocker[]
   canCommit: boolean
+  dependencyResolution?: unknown
   packageCounts: Record<ProjectTransferPayloadKey, number>
   packageFingerprint: string | null
   packageWarnings: ProjectTransferPackageWarning[]

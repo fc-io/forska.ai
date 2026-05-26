@@ -556,15 +556,17 @@ export const assertSelectableProviderModelIds = async (
     id: string
     provider: string | null
     providerConnectionEnabled: boolean | null
+    providerConnectionId: string | null
   }>(`
     SELECT
       m.id AS id,
+      m.provider_connection_id AS providerConnectionId,
       TO_JSON(pc.config_json) AS connectionConfigJson,
       COALESCE(m.enabled, TRUE) AS enabled,
       pc.provider_kind AS provider,
-      COALESCE(pc.enabled, TRUE) AS providerConnectionEnabled
+      pc.enabled AS providerConnectionEnabled
     FROM app.model m
-    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE m.id IN (${getQuotedStringList(modelIds).join(', ')})
       AND COALESCE(pc.enabled, TRUE) = TRUE
   `)
@@ -584,7 +586,7 @@ export const assertSelectableProviderModelIds = async (
         name: row.id,
         provider: row.provider,
         providerConnectionEnabled: row.providerConnectionEnabled,
-        providerConnectionId: null,
+        providerConnectionId: row.providerConnectionId,
         remoteModelId: null,
         source: null,
         updatedAt: null,
