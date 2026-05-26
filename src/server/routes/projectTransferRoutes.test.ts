@@ -1,4 +1,5 @@
-import {mkdirSync, rmSync} from 'node:fs'
+import {createHash} from 'node:crypto'
+import {existsSync, mkdirSync, readFileSync, rmSync} from 'node:fs'
 
 import {afterAll, afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
@@ -23,9 +24,10 @@ const futureDate = new Date('2035-01-01T00:00:00.000Z')
 const pastDate = new Date('2020-01-01T00:00:00.000Z')
 const bodyMethods = new Set(['PATCH', 'POST', 'PUT'])
 const csvExportRoute = {method: 'POST', samplePath: '/api/projects/project-1/export'} as const
-const implementedExportEndpoints = new Set(['download-export', 'export-project', 'get-export'])
 const readySessionId = 'export-ready'
 const readyPackagePath = `tmp/project-transfer/export/${readySessionId}/package.zip`
+const uploadSessionId = 'import-upload'
+const uploadPackagePath = `tmp/project-transfer/import/${uploadSessionId}/upload.zip`
 
 const getMetadata = (overrides: Record<string, unknown> = {}) => {
   return {
@@ -92,6 +94,198 @@ const getProjectTransferSessionMock = mock(async ({sessionId}: {sessionId: strin
   return routeState.sessions[sessionId] ?? null
 })
 
+const getNow = (now?: Date) => {
+  return now ?? new Date('2030-01-01T00:00:00.000Z')
+}
+
+const getStateMatches = (currentState: string, expectedState: string | string[]) => {
+  return Array.isArray(expectedState) ? expectedState.includes(currentState) : currentState === expectedState
+}
+
+const getOwnerMatches = (currentOwner: string | null, expectedOwnerToken?: string | null) => {
+  return expectedOwnerToken === undefined ? true : currentOwner === expectedOwnerToken
+}
+
+const getPlanRevisionMatches = (currentRevision: number, expectedPlanRevision?: number) => {
+  return expectedPlanRevision === undefined ? true : currentRevision === expectedPlanRevision
+}
+
+const createProjectTransferSessionMock = mock(
+  async (params: {
+    direction: ProjectTransferSessionRecord['direction']
+    expiresAt: Date
+    id: string
+    now?: Date
+    packageFingerprint?: string | null
+    state?: ProjectTransferSessionRecord['state']
+  }) => {
+    const record = getSessionRecord({
+      createdAt: getNow(params.now),
+      direction: params.direction,
+      expiresAt: params.expiresAt,
+      id: params.id,
+      packageFingerprint: params.packageFingerprint ?? null,
+      state: params.state ?? 'awaiting_upload',
+      updatedAt: getNow(params.now),
+    })
+    routeState.sessions[params.id] = record
+
+    return record
+  },
+)
+
+const transitionProjectTransferSessionStateMock = mock(
+  async (params: {
+    error?: unknown
+    expectedOwnerToken?: string | null
+    expectedPlanRevision?: number
+    expectedState: string | string[]
+    nextOwnerToken?: string | null
+    nextState: ProjectTransferSessionRecord['state']
+    now?: Date
+    packageFingerprint?: string | null
+    planSummary?: unknown
+    progress?: unknown
+    sessionId: string
+  }) => {
+    const current = routeState.sessions[params.sessionId] ?? null
+
+    if (
+      current === null
+      || !getStateMatches(current.state, params.expectedState)
+      || !getOwnerMatches(current.ownerToken, params.expectedOwnerToken)
+      || !getPlanRevisionMatches(current.planRevision, params.expectedPlanRevision)
+    ) {
+      return null
+    }
+
+    const now = getNow(params.now)
+    const next = {
+      ...current,
+      errorJson: Object.hasOwn(params, 'error') ? params.error : current.errorJson,
+      heartbeatAt: typeof params.nextOwnerToken === 'string' ? now : current.heartbeatAt,
+      ownerToken: Object.hasOwn(params, 'nextOwnerToken') ? (params.nextOwnerToken ?? null) : current.ownerToken,
+      packageFingerprint: Object.hasOwn(params, 'packageFingerprint')
+        ? (params.packageFingerprint ?? null)
+        : current.packageFingerprint,
+      planSummaryJson: Object.hasOwn(params, 'planSummary') ? (params.planSummary ?? null) : current.planSummaryJson,
+      progressJson: Object.hasOwn(params, 'progress') ? (params.progress ?? null) : current.progressJson,
+      state: params.nextState,
+      updatedAt: now,
+    }
+    routeState.sessions[params.sessionId] = next
+
+    return next
+  },
+)
+
+const updateProjectTransferSessionPlanRevisionMock = mock(
+  async (params: {
+    expectedOwnerToken?: string | null
+    expectedPlanRevision: number
+    nextState?: ProjectTransferSessionRecord['state']
+    now?: Date
+    planSummary: unknown
+    sessionId: string
+  }) => {
+    const current = routeState.sessions[params.sessionId] ?? null
+
+    if (
+      current === null
+      || !getOwnerMatches(current.ownerToken, params.expectedOwnerToken)
+      || current.planRevision !== params.expectedPlanRevision
+    ) {
+      return null
+    }
+
+    const next = {
+      ...current,
+      planRevision: current.planRevision + 1,
+      planSummaryJson: params.planSummary,
+      state: params.nextState ?? current.state,
+      updatedAt: getNow(params.now),
+    }
+    routeState.sessions[params.sessionId] = next
+
+    return next
+  },
+)
+
+const heartbeatProjectTransferSessionOwnerMock = mock(
+  async (params: {leaseMs: number; now?: Date; ownerToken: string; sessionId: string}) => {
+    const current = routeState.sessions[params.sessionId] ?? null
+
+    if (current === null || current.ownerToken !== params.ownerToken) {
+      return null
+    }
+
+    const next = {...current, heartbeatAt: getNow(params.now)}
+    routeState.sessions[params.sessionId] = next
+
+    return next
+  },
+)
+
+const cancelProjectTransferImportSessionMock = mock(
+  async (params: {
+    error: unknown
+    expectedOwnerToken?: string | null
+    expectedState: ProjectTransferSessionRecord['state'][]
+    nextState: 'cancelled' | 'expired'
+    now?: Date
+    ownerToken: string
+    progress?: unknown
+    sessionId: string
+  }) => {
+    const current = routeState.sessions[params.sessionId] ?? null
+
+    if (
+      current === null
+      || !params.expectedState.includes(current.state)
+      || !getOwnerMatches(current.ownerToken, params.expectedOwnerToken)
+    ) {
+      return null
+    }
+
+    const next = {
+      ...current,
+      errorJson: params.error,
+      heartbeatAt: getNow(params.now),
+      ownerToken: params.ownerToken,
+      progressJson: params.progress ?? null,
+      state: params.nextState,
+      updatedAt: getNow(params.now),
+    }
+    routeState.sessions[params.sessionId] = next
+
+    return next
+  },
+)
+
+const markProjectTransferSessionTerminalCleanupCompleteMock = mock(
+  async (params: {
+    expectedOwnerToken?: string | null
+    expectedState?: string | string[]
+    now?: Date
+    sessionId: string
+  }) => {
+    const current = routeState.sessions[params.sessionId] ?? null
+
+    if (
+      current === null
+      || !getOwnerMatches(current.ownerToken, params.expectedOwnerToken)
+      || (params.expectedState !== undefined && !getStateMatches(current.state, params.expectedState))
+    ) {
+      return null
+    }
+
+    const next = {...current, terminalCleanupAt: getNow(params.now)}
+    routeState.sessions[params.sessionId] = next
+
+    return next
+  },
+)
+
 void mock.module(appDatabaseServiceModulePath, () => {
   return {
     getAppDatabaseService: () => {
@@ -107,7 +301,15 @@ void mock.module(exportPackageModulePath, () => {
 void mock.module(sessionRepositoryModulePath, () => {
   return {
     getProjectTransferSessionRepository: () => {
-      return {getProjectTransferSession: getProjectTransferSessionMock}
+      return {
+        cancelProjectTransferImportSession: cancelProjectTransferImportSessionMock,
+        createProjectTransferSession: createProjectTransferSessionMock,
+        getProjectTransferSession: getProjectTransferSessionMock,
+        heartbeatProjectTransferSessionOwner: heartbeatProjectTransferSessionOwnerMock,
+        markProjectTransferSessionTerminalCleanupComplete: markProjectTransferSessionTerminalCleanupCompleteMock,
+        transitionProjectTransferSessionState: transitionProjectTransferSessionStateMock,
+        updateProjectTransferSessionPlanRevision: updateProjectTransferSessionPlanRevisionMock,
+      }
     },
   }
 })
@@ -183,6 +385,18 @@ const getReadySessionRecord = (overrides: Partial<ProjectTransferSessionRecord> 
   })
 }
 
+const getUploadMetadata = (text: string) => {
+  return {
+    byteLength: textEncoder.encode(text).byteLength,
+    checksumSha256: createHash('sha256').update(text).digest('hex'),
+    fileName: 'upload.zip',
+  }
+}
+
+const getImportSessionRecord = (overrides: Partial<ProjectTransferSessionRecord> = {}) => {
+  return getSessionRecord({direction: 'import', id: 'import-session-1', state: 'awaiting_upload', ...overrides})
+}
+
 const expectCsvExportRouteValidationResponse = async (app: RouteTestApp, prefix = '') => {
   const response = await getRouteResponse(app, `${prefix}${csvExportRoute.samplePath}`, csvExportRoute.method)
   const body = (await response.json()) as {message: string; property: string; type: string}
@@ -192,14 +406,21 @@ const expectCsvExportRouteValidationResponse = async (app: RouteTestApp, prefix 
 }
 
 afterEach(() => {
+  cancelProjectTransferImportSessionMock.mockClear()
+  createProjectTransferSessionMock.mockClear()
   createProjectTransferExportMock.mockClear()
   getProjectTransferSessionMock.mockClear()
+  heartbeatProjectTransferSessionOwnerMock.mockClear()
+  markProjectTransferSessionTerminalCleanupCompleteMock.mockClear()
   queryJsonMock.mockClear()
+  transitionProjectTransferSessionStateMock.mockClear()
+  updateProjectTransferSessionPlanRevisionMock.mockClear()
   routeState.exportResult = getInlineExportResult()
   routeState.projectRows = [{deletePendingAt: null, id: 'project-1'}]
   routeState.queryStatements.length = 0
   routeState.sessions = {}
   rmSync(`tmp/project-transfer/export/${readySessionId}`, {force: true, recursive: true})
+  rmSync('tmp/project-transfer/import', {force: true, recursive: true})
 })
 
 afterAll(() => {
@@ -389,30 +610,206 @@ test('project transfer export download rejects expired ready sessions before tou
   expect(body.error).toBe('Project transfer export session expired')
 })
 
-test('project transfer import endpoints continue returning contract-safe placeholders', async () => {
-  const {projectTransferRouteSpecs} = await loadProjectTransferRoutes()
+test('project transfer import session creation returns public URLs without temp paths', async () => {
   const app = await getProjectTransferApp()
-  const importRoutes = projectTransferRouteSpecs.filter((route) => {
-    return !implementedExportEndpoints.has(route.endpoint)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/sessions', {
+      body: JSON.stringify({sessionId: 'import-create'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const text = await response.text()
+  const body = JSON.parse(text) as {
+    data: {
+      analyzeUrl: string
+      expiresAt: string
+      sessionUrl: string
+      state: string
+      uploadPath?: string
+      uploadUrl: string
+    }
+    error: string | null
+  }
+
+  expect(response.status).toBe(201)
+  expect(body.error).toBe(null)
+  expect(body.data).toMatchObject({
+    analyzeUrl: '/api/projects/import/import-create/analyze',
+    sessionUrl: '/api/projects/import/import-create',
+    state: 'awaiting_upload',
+    uploadUrl: '/api/projects/import/import-create/upload',
   })
-  const responses = await Promise.all(
-    importRoutes.map(async (route) => {
-      const response = await getRouteResponse(app, route.samplePath, route.method)
-      const body = await getPlaceholderBody(response)
+  expect(body.data.expiresAt).toContain('T')
+  expect(text).not.toContain('uploadPath')
+  expect(text).not.toContain('tmp/project-transfer')
+  expect(createProjectTransferSessionMock).toHaveBeenCalled()
+})
 
-      return {body, endpoint: route.endpoint, status: response.status}
+test('project transfer import upload streams to upload.zip and persists public metadata', async () => {
+  routeState.sessions[uploadSessionId] = getImportSessionRecord({id: uploadSessionId})
+  const app = await getProjectTransferApp()
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/import/${uploadSessionId}/upload`, {
+      body: textEncoder.encode('zip-body'),
+      headers: {'content-type': 'application/zip'},
+      method: 'PUT',
     }),
   )
+  const text = await response.text()
+  const body = JSON.parse(text) as {
+    data: {state: string; upload: {byteLength: number; checksumSha256: string; fileName: string}; uploadPath?: string}
+    error: string | null
+  }
 
-  expect(responses).toEqual(
-    importRoutes.map((route) => {
-      return {
-        body: {data: null, error: `Project transfer ${route.endpoint} endpoint is not implemented yet`},
-        endpoint: route.endpoint,
-        status: 501,
-      }
+  expect(response.status).toBe(200)
+  expect(body.error).toBe(null)
+  expect(body.data.state).toBe('queued')
+  expect(body.data.upload).toEqual(getUploadMetadata('zip-body'))
+  expect(readFileSync(uploadPackagePath, 'utf8')).toBe('zip-body')
+  expect(text).not.toContain('uploadPath')
+  expect(text).not.toContain('tmp/project-transfer')
+})
+
+test('project transfer import analyze claims queued uploads and writes an inline contract plan', async () => {
+  routeState.sessions['import-analyze'] = getImportSessionRecord({
+    id: 'import-analyze',
+    progressJson: {phase: 'upload', status: 'completed', uploadMetadata: getUploadMetadata('zip-body')},
+    state: 'queued',
+  })
+  const app = await getProjectTransferApp()
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/import-analyze/analyze', {
+      body: JSON.stringify({}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
     }),
   )
+  const body = (await response.json()) as {
+    data: {
+      blockers: string[]
+      canCommit: boolean
+      executionMode: string
+      planRevision: number
+      planSummary: {blockerCount: number}
+      state: string
+    }
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.error).toBe(null)
+  expect(body.data.state).toBe('awaiting_resolution')
+  expect(body.data.executionMode).toBe('inline')
+  expect(body.data.planRevision).toBe(1)
+  expect(body.data.planSummary.blockerCount).toBe(1)
+  expect(body.data.blockers).toHaveLength(1)
+  expect(body.data.canCommit).toBe(false)
+})
+
+test('project transfer import analyze returns accepted for background-sized work', async () => {
+  routeState.sessions['import-background-analyze'] = getImportSessionRecord({
+    id: 'import-background-analyze',
+    progressJson: {phase: 'upload', status: 'completed', uploadMetadata: getUploadMetadata('zip-body')},
+    state: 'queued',
+  })
+  const app = await getProjectTransferApp()
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/import-background-analyze/analyze', {
+      body: JSON.stringify({expandedBytes: 1024 * 1024 * 1024}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {executionMode: string; state: string}; error: string | null}
+
+  expect(response.status).toBe(202)
+  expect(body).toMatchObject({data: {executionMode: 'background', state: 'extracting'}, error: null})
+})
+
+test('project transfer import resolve remains a validated no-write shell and commit remains a placeholder', async () => {
+  routeState.sessions['import-resolve'] = getImportSessionRecord({
+    id: 'import-resolve',
+    planRevision: 1,
+    planSummaryJson: {
+      blockerCount: 1,
+      conflictCounts: {
+        articleIdentifier: 0,
+        dependency: 0,
+        humanReview: 0,
+        judgment: 0,
+        packageContract: 0,
+        projectPrompt: 0,
+      },
+      dependencyStatuses: {},
+      overlapCounts: {exactDuplicateImports: 0, reusedArticles: 0},
+      warningCount: 0,
+    },
+    state: 'awaiting_resolution',
+  })
+  const app = await getProjectTransferApp()
+
+  const resolveResponse = await app.handle(
+    new Request('http://localhost/api/projects/import/import-resolve/resolve-dependencies', {
+      body: JSON.stringify({expectedPlanRevision: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const resolveBody = (await resolveResponse.json()) as {data: {state: string}; error: string | null}
+  const commitResponse = await app.handle(
+    new Request('http://localhost/api/projects/import/import-resolve/commit', {
+      body: JSON.stringify({expectedPlanRevision: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const commitBody = await getPlaceholderBody(commitResponse)
+
+  expect(resolveResponse.status).toBe(200)
+  expect(resolveBody).toMatchObject({data: {state: 'awaiting_resolution'}, error: null})
+  expect(commitResponse.status).toBe(501)
+  expect(commitBody.error).toBe('Project transfer commit-import-session endpoint is not implemented yet')
+})
+
+test('project transfer import cancellation cleans temp artifacts and repeats idempotently', async () => {
+  routeState.sessions[uploadSessionId] = getImportSessionRecord({
+    errorJson: null,
+    id: uploadSessionId,
+    progressJson: {phase: 'upload', status: 'completed', uploadMetadata: getUploadMetadata('zip-body')},
+    state: 'queued',
+  })
+  mkdirSync(`tmp/project-transfer/import/${uploadSessionId}`, {recursive: true})
+  await globalThis.Bun.write(uploadPackagePath, 'zip-body')
+  const app = await getProjectTransferApp()
+
+  const cancelResponse = await app.handle(
+    new Request(`http://localhost/api/projects/import/${uploadSessionId}`, {
+      body: JSON.stringify({reason: 'user_cancelled'}),
+      headers: {'content-type': 'application/json'},
+      method: 'DELETE',
+    }),
+  )
+  const cancelBody = (await cancelResponse.json()) as {data: {state: string}; error: string | null}
+  const repeatResponse = await app.handle(
+    new Request(`http://localhost/api/projects/import/${uploadSessionId}`, {
+      body: JSON.stringify({}),
+      headers: {'content-type': 'application/json'},
+      method: 'DELETE',
+    }),
+  )
+  const repeatBody = (await repeatResponse.json()) as {data: {state: string}; error: string | null}
+
+  expect(cancelResponse.status).toBe(200)
+  expect(cancelBody).toMatchObject({data: {state: 'cancelled'}, error: null})
+  expect(existsSync(uploadPackagePath)).toBe(false)
+  expect(repeatResponse.status).toBe(200)
+  expect(repeatBody).toMatchObject({data: {state: 'cancelled'}, error: null})
+  expect(cancelProjectTransferImportSessionMock).toHaveBeenCalledTimes(1)
 })
 
 test('product route composition keeps project transfer export before project id routes', async () => {
