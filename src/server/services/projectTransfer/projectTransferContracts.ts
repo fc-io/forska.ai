@@ -10,6 +10,7 @@ import {
   validateProjectTransferRuntimeAssetPath,
   validateProjectTransferTempWritablePath,
 } from './projectTransferPaths.ts'
+import type {ProjectTransferPackageWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
 
 const projectTransferMiB = 1024 * 1024
 const projectTransferGiB = 1024 * projectTransferMiB
@@ -108,11 +109,24 @@ export type ProjectTransferOverlapCounts = Record<ProjectTransferOverlapSummaryK
 
 export type ProjectTransferConflictCounts = Record<ProjectTransferConflictCountKey, number> & Record<string, number>
 
+export type ProjectTransferPlanBlockerResolutionKind = 'requires_new_package_or_target_changes' | 'wizard_resolvable'
+
+export type ProjectTransferPlanBlocker = {
+  code: string
+  message: string
+  resolutionKind: ProjectTransferPlanBlockerResolutionKind
+  scope: string
+}
+
 export type ProjectTransferPlanSummary = {
   blockerCount: number
+  blockers?: ProjectTransferPlanBlocker[]
   conflictCounts: ProjectTransferConflictCounts
   dependencyStatuses: Record<string, ProjectTransferDependencyStatus>
   overlapCounts: ProjectTransferOverlapCounts
+  packageCounts?: Record<ProjectTransferPayloadKey, number>
+  packageFingerprint?: string | null
+  packageWarnings?: ProjectTransferPackageWarning[]
   warningCount: number
 }
 

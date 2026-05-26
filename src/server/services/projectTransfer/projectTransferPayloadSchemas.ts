@@ -375,7 +375,9 @@ export const assertProjectTransferContentSettings = (
   })
 
   return hasSelectedContent
-    ? contentSettings
+    ? contentSettings.useFulltext && contentSettings.useFulltextNoImages
+      ? failProjectTransferPayload(`${label}.useFulltext and ${label}.useFulltextNoImages cannot both be enabled`)
+      : contentSettings
     : failProjectTransferPayload(`${label} must enable at least one article content field`)
 }
 
@@ -448,6 +450,26 @@ const assertProjectPayload = (record: JsonRecord, label: string) => {
   assertNonEmptyString(record.sourceProjectId, `${label}.sourceProjectId`)
   assertNonEmptyString(record.name, `${label}.name`)
   assertProjectTransferProjectSettings(record.settings, `${label}.settings`)
+  const dateFrom =
+    record.dateFrom === undefined || record.dateFrom === null
+      ? null
+      : new Date(assertString(record.dateFrom, `${label}.dateFrom`))
+  const dateTo =
+    record.dateTo === undefined || record.dateTo === null
+      ? null
+      : new Date(assertString(record.dateTo, `${label}.dateTo`))
+
+  if (dateFrom !== null && Number.isNaN(dateFrom.getTime())) {
+    return failProjectTransferPayload(`${label}.dateFrom must be a valid date-time`)
+  }
+
+  if (dateTo !== null && Number.isNaN(dateTo.getTime())) {
+    return failProjectTransferPayload(`${label}.dateTo must be a valid date-time`)
+  }
+
+  if (dateFrom !== null && dateTo !== null && dateFrom > dateTo) {
+    return failProjectTransferPayload(`${label}.dateFrom must be before or equal to ${label}.dateTo`)
+  }
 
   return assertRecord(record.modelSignature, `${label}.modelSignature`)
 }

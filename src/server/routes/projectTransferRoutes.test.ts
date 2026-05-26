@@ -12,6 +12,7 @@ type PlaceholderResponseBody = {data: null; error: string}
 type SourceProjectRow = {deletePendingAt: unknown; id: string}
 
 const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
+const analyzeModulePath = new URL('../services/projectTransfer/projectTransferAnalyze.ts', import.meta.url).pathname
 const exportPackageModulePath = new URL('../services/projectTransfer/projectTransferExportPackage.ts', import.meta.url)
   .pathname
 const sessionRepositoryModulePath = new URL(
@@ -88,6 +89,58 @@ const queryJsonMock = mock(async (statement: string) => {
 
 const createProjectTransferExportMock = mock(async (_input: {projectId: string}) => {
   return routeState.exportResult
+})
+
+const analyzeProjectTransferImportPackageMock = mock(async (input: {planRevision: number}) => {
+  const planSummary = {
+    blockerCount: 1,
+    blockers: [
+      {
+        code: 'package_contract_blocker',
+        message: 'Package contract requires a new package or target changes',
+        resolutionKind: 'requires_new_package_or_target_changes',
+        scope: 'manifest',
+      },
+    ],
+    conflictCounts: {
+      articleIdentifier: 0,
+      dependency: 0,
+      humanReview: 0,
+      judgment: 0,
+      packageContract: 1,
+      projectPrompt: 0,
+    },
+    dependencyStatuses: {},
+    overlapCounts: {exactDuplicateImports: 0, reusedArticles: 0},
+    packageCounts: {
+      articleImportRoutes: 0,
+      articles: 1,
+      assetManifest: 0,
+      humanJudgmentSummaries: 0,
+      humanJudgments: 0,
+      importRoutes: 0,
+      judgmentAssessments: 0,
+      judgments: 0,
+      models: 1,
+      project: 1,
+      projectArticles: 0,
+      projectImportRoutes: 0,
+      projectPrompts: 0,
+      prompts: 0,
+      providerConnections: 0,
+      reviews: 0,
+    },
+    packageFingerprint: 'analyzed-fingerprint',
+    packageWarnings: [],
+    warningCount: 0,
+  }
+
+  return {
+    analysis: {},
+    packageFingerprint: 'analyzed-fingerprint',
+    plan: {canCommit: false, planRevision: input.planRevision},
+    planSummary,
+  }
 })
 
 const getProjectTransferSessionMock = mock(async ({sessionId}: {sessionId: string}) => {
@@ -298,6 +351,10 @@ void mock.module(exportPackageModulePath, () => {
   return {createProjectTransferExport: createProjectTransferExportMock}
 })
 
+void mock.module(analyzeModulePath, () => {
+  return {analyzeProjectTransferImportPackage: analyzeProjectTransferImportPackageMock}
+})
+
 void mock.module(sessionRepositoryModulePath, () => {
   return {
     getProjectTransferSessionRepository: () => {
@@ -406,6 +463,7 @@ const expectCsvExportRouteValidationResponse = async (app: RouteTestApp, prefix 
 }
 
 afterEach(() => {
+  analyzeProjectTransferImportPackageMock.mockClear()
   cancelProjectTransferImportSessionMock.mockClear()
   createProjectTransferSessionMock.mockClear()
   createProjectTransferExportMock.mockClear()
