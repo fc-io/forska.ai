@@ -30,6 +30,37 @@ const readyPackagePath = `tmp/project-transfer/export/${readySessionId}/package.
 const uploadSessionId = 'import-upload'
 const uploadPackagePath = `tmp/project-transfer/import/${uploadSessionId}/upload.zip`
 
+const getFinalConflictCounts = (packageContractConflictCount = 0) => {
+  return {
+    articleConflictCount: 0,
+    humanReviewFidelityConflictCount: 0,
+    judgmentConflictCount: 0,
+    packageContractConflictCount,
+    projectPromptConflictCount: 0,
+  }
+}
+
+const getFinalOverlapCounts = () => {
+  return {
+    currentReviewRowsSignatureHumanReviewCount: 0,
+    currentReviewRowsSignatureJudgmentCount: 0,
+    dirtiedExistingProjectCount: 0,
+    duplicateImportMatchCount: 0,
+    newArticleCount: 0,
+    omittedArticleRouteLinkCount: 0,
+    omittedRouteLinkCount: 0,
+    reusedArticleAssetPromotionCount: 0,
+    reusedArticleCount: 0,
+    reusedArticleFieldFillCount: 0,
+    reusedArticleUpdateCount: 0,
+    reusedJudgmentCount: 0,
+    routeArticleSnapshotLinkCount: 0,
+    snapshotVerifiedJudgmentCount: 0,
+    storedSignatureHumanReviewCount: 0,
+    storedSignatureJudgmentCount: 0,
+  }
+}
+
 const getMetadata = (overrides: Record<string, unknown> = {}) => {
   return {
     byteLength: 8,
@@ -102,16 +133,9 @@ const analyzeProjectTransferImportPackageMock = mock(async (input: {planRevision
         scope: 'manifest',
       },
     ],
-    conflictCounts: {
-      articleIdentifier: 0,
-      dependency: 0,
-      humanReview: 0,
-      judgment: 0,
-      packageContract: 1,
-      projectPrompt: 0,
-    },
+    conflictCounts: getFinalConflictCounts(1),
     dependencyStatuses: {},
-    overlapCounts: {exactDuplicateImports: 0, reusedArticles: 0},
+    overlapCounts: getFinalOverlapCounts(),
     packageCounts: {
       articleImportRoutes: 0,
       articles: 1,
@@ -795,16 +819,9 @@ test('project transfer import resolve remains a validated no-write shell and com
     planRevision: 1,
     planSummaryJson: {
       blockerCount: 1,
-      conflictCounts: {
-        articleIdentifier: 0,
-        dependency: 0,
-        humanReview: 0,
-        judgment: 0,
-        packageContract: 0,
-        projectPrompt: 0,
-      },
+      conflictCounts: getFinalConflictCounts(),
       dependencyStatuses: {},
-      overlapCounts: {exactDuplicateImports: 0, reusedArticles: 0},
+      overlapCounts: getFinalOverlapCounts(),
       warningCount: 0,
     },
     state: 'awaiting_resolution',

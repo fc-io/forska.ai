@@ -31,24 +31,43 @@ const getSessionRepositoryScript = (body: string) => {
     const database = getAppDatabaseService()
     const sessionRepository = getProjectTransferSessionRepository()
     const expiresAt = new Date('2026-05-21T12:00:00.000Z')
+    const getFinalConflictCounts = (packageContractConflictCount = 0) => {
+      return {
+        articleConflictCount: 0,
+        humanReviewFidelityConflictCount: 0,
+        judgmentConflictCount: 0,
+        packageContractConflictCount,
+        projectPromptConflictCount: 0,
+      }
+    }
+    const getFinalOverlapCounts = () => {
+      return {
+        currentReviewRowsSignatureHumanReviewCount: 0,
+        currentReviewRowsSignatureJudgmentCount: 0,
+        dirtiedExistingProjectCount: 0,
+        duplicateImportMatchCount: 0,
+        newArticleCount: 0,
+        omittedArticleRouteLinkCount: 0,
+        omittedRouteLinkCount: 0,
+        reusedArticleAssetPromotionCount: 0,
+        reusedArticleCount: 0,
+        reusedArticleFieldFillCount: 0,
+        reusedArticleUpdateCount: 0,
+        reusedJudgmentCount: 0,
+        routeArticleSnapshotLinkCount: 0,
+        snapshotVerifiedJudgmentCount: 0,
+        storedSignatureHumanReviewCount: 0,
+        storedSignatureJudgmentCount: 0,
+      }
+    }
     const readyPlan = {
       blockerCount: 0,
-      conflictCounts: {
-        articleIdentifier: 0,
-        dependency: 0,
-        humanReview: 0,
-        judgment: 0,
-        packageContract: 0,
-        projectPrompt: 0,
-      },
+      conflictCounts: getFinalConflictCounts(),
       dependencyStatuses: {
         model: 'resolved',
         providerConnection: 'resolved',
       },
-      overlapCounts: {
-        exactDuplicateImports: 0,
-        reusedArticles: 0,
-      },
+      overlapCounts: getFinalOverlapCounts(),
       warningCount: 0,
     }
     const catchMessage = async (operation) => {
@@ -229,15 +248,31 @@ test('project transfer ready transitions validate the explicitly persisted plan 
   expect(result.currentPlanSummary).toEqual({
     blockerCount: 0,
     conflictCounts: {
-      articleIdentifier: 0,
-      dependency: 0,
-      humanReview: 0,
-      judgment: 0,
-      packageContract: 0,
-      projectPrompt: 0,
+      articleConflictCount: 0,
+      humanReviewFidelityConflictCount: 0,
+      judgmentConflictCount: 0,
+      packageContractConflictCount: 0,
+      projectPromptConflictCount: 0,
     },
     dependencyStatuses: {model: 'resolved', providerConnection: 'resolved'},
-    overlapCounts: {exactDuplicateImports: 0, reusedArticles: 0},
+    overlapCounts: {
+      currentReviewRowsSignatureHumanReviewCount: 0,
+      currentReviewRowsSignatureJudgmentCount: 0,
+      dirtiedExistingProjectCount: 0,
+      duplicateImportMatchCount: 0,
+      newArticleCount: 0,
+      omittedArticleRouteLinkCount: 0,
+      omittedRouteLinkCount: 0,
+      reusedArticleAssetPromotionCount: 0,
+      reusedArticleCount: 0,
+      reusedArticleFieldFillCount: 0,
+      reusedArticleUpdateCount: 0,
+      reusedJudgmentCount: 0,
+      routeArticleSnapshotLinkCount: 0,
+      snapshotVerifiedJudgmentCount: 0,
+      storedSignatureHumanReviewCount: 0,
+      storedSignatureJudgmentCount: 0,
+    },
     warningCount: 0,
   })
 })
