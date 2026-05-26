@@ -94,6 +94,7 @@ export type ProjectTransferProgressPayload = {
   totalItems?: number | null
   totalRows?: number | null
   updatedAt?: string | null
+  uploadMetadata?: ProjectTransferUploadMetadataPayload | null
   warningCount?: number | null
 }
 
@@ -157,11 +158,15 @@ export type ProjectTransferSessionResponse = {
 
 export type ProjectTransferUploadSession = {
   byteLength: number
-  checksumSha256?: string | null
+  checksumSha256: string
+  expiresAt: string
   fileName: string
+  sessionUrl: string
   sessionId: string
-  uploadPath: string
+  state: ProjectTransferSessionState
 }
+
+export type ProjectTransferUploadMetadataPayload = {byteLength: number; checksumSha256: string; fileName: string}
 
 export type ProjectTransferSessionCreationRequest = {
   direction: ProjectTransferDirection
@@ -525,8 +530,8 @@ const getDecompressionRatio = ({
   expandedBytes,
   zipBytes,
 }: {
-  expandedBytes: number | null | undefined
-  zipBytes: number | null | undefined
+  expandedBytes?: number | null
+  zipBytes?: number | null
 }) => {
   const expandedByteCount = expandedBytes ?? 0
 
@@ -545,8 +550,8 @@ const validateDecompressionRatio = ({
   expandedBytes,
   zipBytes,
 }: {
-  expandedBytes: number | null | undefined
-  zipBytes: number | null | undefined
+  expandedBytes?: number | null
+  zipBytes?: number | null
 }) => {
   const ratio = getDecompressionRatio({expandedBytes, zipBytes})
 
@@ -579,7 +584,9 @@ export const validateProjectTransferDependencyStatuses = (
   statuses: Record<string, ProjectTransferDependencyStatus>,
 ): ProjectTransferValidationResult => {
   const invalidKey = Object.keys(statuses).find((key) => {
-    return !projectTransferDependencyStatusSet.has(statuses[key])
+    const status = statuses[key]
+
+    return status === undefined || !projectTransferDependencyStatusSet.has(status)
   })
 
   return invalidKey
@@ -597,7 +604,9 @@ export const validateProjectTransferReadyDependencyStatuses = (
   }
 
   const blockedKey = Object.keys(statuses).find((key) => {
-    return !projectTransferReadyDependencyStatusSet.has(statuses[key])
+    const status = statuses[key]
+
+    return status === undefined || !projectTransferReadyDependencyStatusSet.has(status)
   })
 
   return blockedKey

@@ -463,8 +463,8 @@ test('project transfer export claims keep public expiry separate from owner hear
 
 test('project transfer session progress updates reject regressed totals and accept monotonic progress', () => {
   const result = runSessionRepositoryScript<{
-    afterProgress: {completedBytes?: number | null; totalBytes?: number | null} | null
-    firstProgress: {completedBytes?: number | null; totalBytes?: number | null} | null
+    afterProgress: {completedBytes?: number | null; phase: string; status: string; totalBytes?: number | null} | null
+    firstProgress: {completedBytes?: number | null; phase: string; status: string; totalBytes?: number | null} | null
     regressionError: string | null
   }>(`
     await sessionRepository.createProjectTransferSession({
@@ -514,4 +514,67 @@ test('project transfer session progress updates reject regressed totals and acce
   expect(result.firstProgress).toEqual({completedBytes: 2, phase: 'upload', status: 'running', totalBytes: 10})
   expect(result.regressionError).toContain('totalBytes must be monotonic')
   expect(result.afterProgress).toEqual({completedBytes: 3, phase: 'upload', status: 'running', totalBytes: 12})
+})
+
+test('project transfer import cancellation is owner-fenced and marks terminal cleanup once', () => {
+  const result = runSessionRepositoryScript<{
+    cancelledOwner: string | null
+    cancelledReason: string | null
+    cancelledState: string | null
+    cleanupAt: string | null
+    staleCleanup: unknown
+    staleOwnerCancel: unknown
+  }>(`
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt,
+      id: 'session-cancel',
+      state: 'analyzing',
+    })
+
+    const staleOwnerCancel = await sessionRepository.cancelProjectTransferImportSession({
+      error: {cleanupTempArtifacts: true, reason: 'user_cancelled'},
+      expectedOwnerToken: 'stale-owner',
+      expectedState: ['analyzing'],
+      nextState: 'cancelled',
+      ownerToken: 'cancel-owner',
+      sessionId: 'session-cancel',
+    })
+    const cancelled = await sessionRepository.cancelProjectTransferImportSession({
+      error: {cleanupTempArtifacts: true, reason: 'user_cancelled'},
+      expectedState: ['analyzing'],
+      nextState: 'cancelled',
+      now: new Date('2026-05-21T12:30:00.000Z'),
+      ownerToken: 'cancel-owner',
+      progress: {phase: 'cleanup', status: 'completed'},
+      sessionId: 'session-cancel',
+    })
+    const staleCleanup = await sessionRepository.markProjectTransferSessionTerminalCleanupComplete({
+      expectedOwnerToken: 'stale-owner',
+      expectedState: 'cancelled',
+      sessionId: 'session-cancel',
+    })
+    const cleanup = await sessionRepository.markProjectTransferSessionTerminalCleanupComplete({
+      expectedOwnerToken: 'cancel-owner',
+      expectedState: 'cancelled',
+      now: new Date('2026-05-21T12:31:00.000Z'),
+      sessionId: 'session-cancel',
+    })
+
+    console.log(JSON.stringify({
+      cancelledOwner: cancelled?.ownerToken ?? null,
+      cancelledReason: cancelled?.errorJson?.reason ?? null,
+      cancelledState: cancelled?.state ?? null,
+      cleanupAt: cleanup?.terminalCleanupAt ? new Date(cleanup.terminalCleanupAt).toISOString() : null,
+      staleCleanup,
+      staleOwnerCancel,
+    }))
+  `)
+
+  expect(result.staleOwnerCancel).toBeNull()
+  expect(result.cancelledState).toBe('cancelled')
+  expect(result.cancelledOwner).toBe('cancel-owner')
+  expect(result.cancelledReason).toBe('user_cancelled')
+  expect(result.staleCleanup).toBeNull()
+  expect(result.cleanupAt).toBe('2026-05-21T12:31:00.000Z')
 })
