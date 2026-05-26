@@ -8,6 +8,13 @@ import type {
 } from './projectTransferContracts.ts'
 import {getProjectTransferDuplicateImportDetection} from './projectTransferDuplicateDetection.ts'
 import {
+  getProjectTransferFidelityValidation,
+  type ProjectTransferHumanReviewPlanEntry,
+  type ProjectTransferJudgmentAssessmentPlanEntry,
+  type ProjectTransferJudgmentConflictStatus,
+  type ProjectTransferJudgmentPlanEntry,
+} from './projectTransferFidelityValidation.ts'
+import {
   getProjectTransferStrongIdentifierComparisonKeys,
   type ProjectTransferStrongIdentifierComparisonKey,
 } from './projectTransferIdentifierNormalization.ts'
@@ -172,6 +179,9 @@ export type ProjectTransferTargetPlan = {
   articleUpdatePlan: ArticleUpdatePlan[]
   assetPromotionPlan: AssetPromotionPlanEntry[]
   duplicateImportMatches: Awaited<ReturnType<typeof getProjectTransferDuplicateImportDetection>>['matches']
+  humanReviewPlan?: ProjectTransferHumanReviewPlanEntry[]
+  judgmentAssessmentPlan?: ProjectTransferJudgmentAssessmentPlanEntry[]
+  judgmentPlan?: ProjectTransferJudgmentPlanEntry[]
   projectPromptPlan: ProjectPromptPlanEntry[]
   projectRoutePlan: ProjectRoutePlanEntry[]
   promptPlan: PromptPlanEntry[]
@@ -180,6 +190,7 @@ export type ProjectTransferTargetPlan = {
 type ProjectTransferAnalyzeTargetResult = {
   blockers: ProjectTransferPlanBlocker[]
   conflictCounts: Omit<ProjectTransferConflictCounts, 'packageContractConflictCount'>
+  judgmentConflictStatus: ProjectTransferJudgmentConflictStatus
   overlapCounts: ProjectTransferOverlapCounts
   packageWarnings: ProjectTransferPackageWarning[]
   targetPlan: ProjectTransferTargetPlan
@@ -1753,34 +1764,41 @@ export const getProjectTransferAnalyzeTargetPlan = async ({
     articles,
     assetManifestEntries,
   })
-  const overlapCounts = getTargetOverlapCounts({
+  const baseTargetPlan = {
     articleMatches: articleMatchAnalysis.plans,
     articleRoutePlan: routePlan.articleRoutePlan,
     articleUpdatePlan: articleUpdateAnalysis.updatePlan,
     assetPromotionPlan,
-    duplicateImportMatchCount: duplicateDetection.matches.length,
+    duplicateImportMatches: duplicateDetection.matches,
+    projectPromptPlan: promptAnalysis.projectPromptPlan,
     projectRoutePlan: routePlan.projectRoutePlan,
-  })
-
-  return {
-    blockers: [...articleBlockers, ...promptAnalysis.blockers],
-    conflictCounts: {
-      articleConflictCount: articleBlockers.length,
-      humanReviewFidelityConflictCount: 0,
-      judgmentConflictCount: 0,
-      projectPromptConflictCount: promptAnalysis.blockers.length,
-    },
-    overlapCounts,
-    packageWarnings: [...duplicateDetection.warnings, ...promptAnalysis.warnings, ...routePlan.warnings],
-    targetPlan: {
+    promptPlan: promptAnalysis.promptPlan,
+  }
+  const fidelityValidation = await getProjectTransferFidelityValidation({payloads, runner, targetPlan: baseTargetPlan})
+  const overlapCounts = {
+    ...getTargetOverlapCounts({
       articleMatches: articleMatchAnalysis.plans,
       articleRoutePlan: routePlan.articleRoutePlan,
       articleUpdatePlan: articleUpdateAnalysis.updatePlan,
       assetPromotionPlan,
-      duplicateImportMatches: duplicateDetection.matches,
-      projectPromptPlan: promptAnalysis.projectPromptPlan,
+      duplicateImportMatchCount: duplicateDetection.matches.length,
       projectRoutePlan: routePlan.projectRoutePlan,
-      promptPlan: promptAnalysis.promptPlan,
+    }),
+    ...fidelityValidation.overlapCounts,
+  }
+  const blockers = [...articleBlockers, ...promptAnalysis.blockers, ...fidelityValidation.blockers]
+
+  return {
+    blockers,
+    conflictCounts: {
+      articleConflictCount: articleBlockers.length,
+      humanReviewFidelityConflictCount: fidelityValidation.conflictCounts.humanReviewFidelityConflictCount,
+      judgmentConflictCount: fidelityValidation.conflictCounts.judgmentConflictCount,
+      projectPromptConflictCount: promptAnalysis.blockers.length,
     },
+    judgmentConflictStatus: fidelityValidation.judgmentConflictStatus,
+    overlapCounts,
+    packageWarnings: [...duplicateDetection.warnings, ...promptAnalysis.warnings, ...routePlan.warnings],
+    targetPlan: {...baseTargetPlan, ...fidelityValidation.targetPlan},
   }
 }

@@ -673,7 +673,7 @@ const getCompletedAnalyzeProgress = ({
 }
 
 const getImportAnalyzeNextState = (planSummary: ProjectTransferPlanSummary) => {
-  return planSummary.blockerCount === 0 ? 'ready_to_commit' : 'awaiting_resolution'
+  return validateProjectTransferPlanReadyToCommit(planSummary).ok ? 'ready_to_commit' : 'awaiting_resolution'
 }
 
 const runProjectTransferImportAnalyzeJob = async ({ownerToken, sessionId}: {ownerToken: string; sessionId: string}) => {

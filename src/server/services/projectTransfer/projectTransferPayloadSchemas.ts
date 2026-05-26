@@ -1102,7 +1102,7 @@ const projectSettings = {
   useFulltextNoImages: false,
   useTitle: true,
 }
-const promptSignature = {contentHash: 'prompt-content-hash-1', originalText: 'Include the study?'}
+const promptSignature = {contentHash: 'c4f659c8baf0066f65ecb7006731b24d', originalText: 'Include the study?'}
 const importRouteSignature = {route: 'covidence'}
 const articleSignature = {
   identifierKeys: [
@@ -1116,7 +1116,7 @@ const judgmentSignature = {articleSignature, contentSettings: projectSettings, m
 const inputSignatureProvenance = {kind: 'currentReviewRows', version: 1}
 const humanReviewArticleSignature = {
   articleSummaryDigest: null,
-  articleTitleDigest: 'fixture-title-digest',
+  articleTitleDigest: '36d65cf053f87083c5e58147b84331742d20bec64e37e3e77831482122c57fa6',
   contentHash: null,
   fullTextAssetsDigest: null,
   fullTextDigest: null,
@@ -1127,7 +1127,7 @@ const humanReviewArticleSignature = {
 const humanReviewPromptSignature = {
   contentHash: promptSignature.contentHash,
   order: 1,
-  originalTextDigest: 'fixture-prompt-digest',
+  originalTextDigest: '57fff23fa1930f01b7c37bb4f83ac0adbf1620b1d5d08852ac677780ffa2e338',
   promptHeading: 'Eligibility',
   serializedPromptIdentifier: null,
   transformedTextDigest: null,
@@ -1154,8 +1154,8 @@ const judgmentInputSignature = {
     ...humanReviewArticleSignature,
     promptInput: {
       articleSummaryDigest: null,
-      articleTitleDigest: 'fixture-title-digest',
-      promptOriginalTextDigest: 'fixture-prompt-digest',
+      articleTitleDigest: '36d65cf053f87083c5e58147b84331742d20bec64e37e3e77831482122c57fa6',
+      promptOriginalTextDigest: '57fff23fa1930f01b7c37bb4f83ac0adbf1620b1d5d08852ac677780ffa2e338',
       promptTemplateFamily: 'judgeGetSinglePrompt:v1',
       promptType: 'system',
       sourceTextWrapper: 'sourceTextBoundaryWrapper:v1',
@@ -1174,7 +1174,7 @@ const judgmentInputSignature = {
   model: {contextLimit: 32768, modelOptions: {thinking: 'medium'}, modelSignature, promptTokenLimit: 28768},
   prompt: {
     contentHash: promptSignature.contentHash,
-    originalTextDigest: 'fixture-prompt-digest',
+    originalTextDigest: '57fff23fa1930f01b7c37bb4f83ac0adbf1620b1d5d08852ac677780ffa2e338',
     promptHeading: 'Eligibility',
     serializedPromptIdentifier: null,
     transformedTextDigest: null,
@@ -1403,7 +1403,7 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
   prompts: [
     {
       archived: false,
-      contentHash: 'prompt-content-hash-1',
+      contentHash: 'c4f659c8baf0066f65ecb7006731b24d',
       originalText: 'Include the study?',
       promptHeading: 'Eligibility',
       provenance: {sourcePromptId: 'prompt-1'},

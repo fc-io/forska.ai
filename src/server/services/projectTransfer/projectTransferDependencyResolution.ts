@@ -15,13 +15,19 @@ import type {
   ProviderTransportFamily,
 } from '../../providers/providerTypes.ts'
 import {getDefaultWorkerUrlMode} from '../../providers/providerWorkerUtils.ts'
+import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getJsonValue} from '../appQueryHelpers.ts'
 import type {ProjectTransferImportPlanArtifact} from './projectTransferAnalyze.ts'
+import type {ProjectTransferAnalyzeTargetRunner} from './projectTransferAnalyzeTarget.ts'
 import type {
   ProjectTransferDependencyStatus,
   ProjectTransferPlanBlocker,
   ProjectTransferPlanSummary,
 } from './projectTransferContracts.ts'
+import {
+  getProjectTransferFidelityValidation,
+  isProjectTransferFidelityBlocker,
+} from './projectTransferFidelityValidation.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import {
@@ -30,7 +36,7 @@ import {
   type ProjectTransferPayloadByKey,
   type ProjectTransferPayloadRecord,
 } from './projectTransferPayloadSchemas.ts'
-import {projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
+import {projectTransferPayloadKeys, projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 import type {ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 
 type RuntimePathOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
@@ -104,6 +110,7 @@ type ProjectTransferResolvedDependencyPlanArtifact = ProjectTransferImportPlanAr
 }
 
 export type ProjectTransferDependencyResolutionRepositories = {
+  analyzeTargetRunner?: ProjectTransferAnalyzeTargetRunner | null
   getProviderConnectionById?: (id: string) => Promise<ProviderConnectionRecord | null>
   getProviderModelsByIds?: (modelIds: string[]) => Promise<Map<string, ProviderModelRecord>>
   listProviderConnections?: () => Promise<ProviderConnectionForAdmin[]>
@@ -166,6 +173,8 @@ const dependencyScopePrefix = 'dependencies.'
 
 const getRepositories = (repositories?: ProjectTransferDependencyResolutionRepositories) => {
   return {
+    analyzeTargetRunner:
+      repositories === undefined ? getAppDatabaseService() : (repositories.analyzeTargetRunner ?? null),
     getProviderConnectionById: repositories?.getProviderConnectionById ?? getProviderConnection,
     getProviderModelsByIds: repositories?.getProviderModelsByIds ?? getProviderModels,
     listProviderConnections: repositories?.listProviderConnections ?? listProviderConnections,
@@ -325,6 +334,23 @@ const readExtractedPayload = async <TKey extends keyof ProjectTransferPayloadByK
   const text = await readTextArtifact({...input, pathValue: getPayloadPath(input.layout, input.key)})
 
   return text === null ? null : parseProjectTransferPayload(input.key, text)
+}
+
+const readExtractedPayloads = async (input: RuntimePathOptions & {layout: ProjectTransferImportTempLayout}) => {
+  const entries = await Promise.all(
+    projectTransferPayloadKeys.map(async (key) => {
+      return [key, await readExtractedPayload({...input, key})] as const
+    }),
+  )
+  const missingPayload = entries.some(([_key, payload]) => {
+    return payload === null
+  })
+
+  return missingPayload
+    ? null
+    : entries.reduce<Partial<ProjectTransferPayloadByKey>>((payloads, [key, payload]) => {
+        return {...payloads, [key]: payload}
+      }, {})
 }
 
 const writeJsonArtifact = async (input: RuntimePathOptions & {pathValue: string; value: unknown}) => {
@@ -501,7 +527,7 @@ const isDependencyBlocker = (blocker: ProjectTransferPlanBlocker) => {
 
 const getBasePlanBlockers = (plan: ProjectTransferResolvedDependencyPlanArtifact) => {
   return (plan.blockers ?? []).filter((blocker) => {
-    return !isDependencyBlocker(blocker)
+    return !isDependencyBlocker(blocker) && !isProjectTransferFidelityBlocker(blocker)
   })
 }
 
@@ -980,12 +1006,17 @@ const getResolvedPlanSummary = ({
   return {...plan.summary, blockerCount: blockers.length, blockers, dependencyStatuses}
 }
 
+const getReadyDependencyStatuses = (dependencyStatuses: Record<string, ProjectTransferDependencyStatus>) => {
+  return Object.values(dependencyStatuses).every((status) => {
+    return status === 'resolved' || status === 'not_required'
+  })
+}
+
 const getCanCommit = (summary: ProjectTransferPlanSummary) => {
   return (
     summary.blockerCount === 0
-    && Object.values(summary.dependencyStatuses).every((status) => {
-      return status === 'resolved' || status === 'not_required'
-    })
+    && getReadyDependencyStatuses(summary.dependencyStatuses)
+    && (summary.judgmentConflictStatus ?? 'clear') === 'clear'
   )
 }
 
@@ -1001,12 +1032,14 @@ const getResultChanged = ({
     canCommit: previousPlan.canCommit,
     dependencyResolution: previousPlan.dependencyResolution ?? null,
     summary: previousPlan.summary,
+    targetPlan: previousPlan.targetPlan,
   }
   const nextComparable = {
     blockers: nextPlan.blockers,
     canCommit: nextPlan.canCommit,
     dependencyResolution: nextPlan.dependencyResolution ?? null,
     summary: nextPlan.summary,
+    targetPlan: nextPlan.targetPlan,
   }
 
   return getProjectTransferCanonicalJson(previousComparable) !== getProjectTransferCanonicalJson(nextComparable)
@@ -1015,11 +1048,13 @@ const getResultChanged = ({
 const getResolvedPlan = ({
   dependencyResolution,
   dependencySummary,
+  fidelityTargetPlan,
   nextPlanRevision,
   previousPlan,
 }: {
   dependencyResolution: ProjectTransferDependencyResolutionState
   dependencySummary: ProjectTransferPlanSummary
+  fidelityTargetPlan?: Partial<ProjectTransferResolvedDependencyPlanArtifact['targetPlan']>
   nextPlanRevision: number
   previousPlan: ProjectTransferResolvedDependencyPlanArtifact
 }): ProjectTransferResolvedDependencyPlanArtifact => {
@@ -1035,6 +1070,7 @@ const getResolvedPlan = ({
       return {...mapped, [blocker.code]: blocker.resolutionKind}
     }, {}),
     summary: dependencySummary,
+    targetPlan: {...previousPlan.targetPlan, ...(fidelityTargetPlan ?? {})},
   }
 }
 
@@ -1051,14 +1087,12 @@ export const resolveProjectTransferDependencies = async (
     return {error: 'Project transfer import plan artifact is unavailable', status: 'error', statusCode: 409}
   }
 
-  const [providerPayload, modelPayload, judgmentPayload, connections] = await Promise.all([
-    readExtractedPayload({...input, key: 'providerConnections'}),
-    readExtractedPayload({...input, key: 'models'}),
-    readExtractedPayload({...input, key: 'judgments'}),
+  const [payloads, connections] = await Promise.all([
+    readExtractedPayloads(input),
     repositories.listProviderConnections(),
   ])
 
-  if (providerPayload === null || modelPayload === null || judgmentPayload === null) {
+  if (payloads === null) {
     return {error: 'Project transfer dependency payloads are unavailable', status: 'error', statusCode: 409}
   }
 
@@ -1084,9 +1118,9 @@ export const resolveProjectTransferDependencies = async (
     return {error: explicitModelError, status: 'error', statusCode: 400}
   }
 
-  const importedProviders = providerPayload.map(getImportedProviderConnection)
-  const importedModels = modelPayload.map(getImportedModel)
-  const importedJudgments = judgmentPayload.map(getImportedJudgment)
+  const importedProviders = (payloads.providerConnections ?? []).map(getImportedProviderConnection)
+  const importedModels = (payloads.models ?? []).map(getImportedModel)
+  const importedJudgments = (payloads.judgments ?? []).map(getImportedJudgment)
   const modelsBySourceProviderId = getModelsBySourceProviderId(importedModels)
   const judgmentModelSourceIds = getJudgmentModelSourceIds(importedJudgments)
   const judgmentModelSignaturesBySourceId = getJudgmentModelSignaturesBySourceId(importedJudgments)
@@ -1125,14 +1159,35 @@ export const resolveProjectTransferDependencies = async (
     resolutionState: dependencyResolution,
     targetModelById: getTargetModelById(connections),
   })
-  const planSummary = getResolvedPlanSummary({
+  const dependencyPlanSummary = getResolvedPlanSummary({
     dependencyBlockers: [...providerResolution.blockers, ...modelResolution.blockers],
     dependencyStatuses: {...providerResolution.statuses, ...modelResolution.statuses},
     plan,
   })
+  const fidelityValidation = await getProjectTransferFidelityValidation({
+    dependencyResolution,
+    payloads,
+    runner: repositories.analyzeTargetRunner,
+    targetConnections: connections,
+    targetPlan: plan.targetPlan,
+  })
+  const fidelityBlockers = getReadyDependencyStatuses(dependencyPlanSummary.dependencyStatuses)
+    ? fidelityValidation.blockers
+    : []
+  const planSummary = {
+    ...dependencyPlanSummary,
+    blockerCount: (dependencyPlanSummary.blockers ?? []).length + fidelityBlockers.length,
+    blockers: [...(dependencyPlanSummary.blockers ?? []), ...fidelityBlockers],
+    conflictCounts: {...dependencyPlanSummary.conflictCounts, ...fidelityValidation.conflictCounts},
+    judgmentConflictStatus: getReadyDependencyStatuses(dependencyPlanSummary.dependencyStatuses)
+      ? fidelityValidation.judgmentConflictStatus
+      : 'unknown',
+    overlapCounts: {...dependencyPlanSummary.overlapCounts, ...fidelityValidation.overlapCounts},
+  } satisfies ProjectTransferPlanSummary
   const nextPlan = getResolvedPlan({
     dependencyResolution,
     dependencySummary: planSummary,
+    fidelityTargetPlan: fidelityValidation.targetPlan,
     nextPlanRevision: input.nextPlanRevision,
     previousPlan: plan,
   })

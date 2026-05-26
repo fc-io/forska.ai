@@ -50,6 +50,8 @@ export const projectTransferDependencyStatuses = [
 
 export const projectTransferReadyDependencyStatuses = ['not_required', 'resolved'] as const
 
+export const projectTransferJudgmentConflictStatuses = ['blocked', 'clear', 'unknown'] as const
+
 export const projectTransferOverlapSummaryKeys = [
   'reusedArticleCount',
   'newArticleCount',
@@ -120,6 +122,7 @@ export type ProjectTransferDependencyStatus = (typeof projectTransferDependencyS
 export type ProjectTransferOverlapSummaryKey = (typeof projectTransferOverlapSummaryKeys)[number]
 
 export type ProjectTransferConflictCountKey = (typeof projectTransferConflictCountKeys)[number]
+export type ProjectTransferJudgmentConflictStatus = (typeof projectTransferJudgmentConflictStatuses)[number]
 
 export type ProjectTransferOverlapCounts = Record<ProjectTransferOverlapSummaryKey, number> & Record<string, number>
 
@@ -139,6 +142,7 @@ export type ProjectTransferPlanSummary = {
   blockers?: ProjectTransferPlanBlocker[]
   conflictCounts: ProjectTransferConflictCounts
   dependencyStatuses: Record<string, ProjectTransferDependencyStatus>
+  judgmentConflictStatus?: ProjectTransferJudgmentConflictStatus
   overlapCounts: ProjectTransferOverlapCounts
   packageCounts?: Record<ProjectTransferPayloadKey, number>
   packageFingerprint?: string | null
@@ -662,18 +666,25 @@ export const validateProjectTransferPlanReadyToCommit = (
     requiredKeys: projectTransferConflictCountKeys,
   })
   const dependencyValidation = validateProjectTransferReadyDependencyStatuses(planSummary.dependencyStatuses)
+  const judgmentConflictStatus = planSummary.judgmentConflictStatus ?? 'clear'
 
   return !isNonNegativeInteger(planSummary.blockerCount)
     ? {error: 'Project transfer blockerCount must be a non-negative integer', ok: false}
     : !isNonNegativeInteger(planSummary.warningCount)
       ? {error: 'Project transfer warningCount must be a non-negative integer', ok: false}
-      : planSummary.blockerCount > 0
-        ? {error: 'Project transfer blockers must be resolved before ready_to_commit', ok: false}
-        : !overlapCountsValidation.ok
-          ? overlapCountsValidation
-          : !conflictCountsValidation.ok
-            ? conflictCountsValidation
-            : dependencyValidation
+      : !projectTransferJudgmentConflictStatuses.includes(judgmentConflictStatus)
+        ? {error: `Project transfer judgmentConflictStatus is unknown value ${judgmentConflictStatus}`, ok: false}
+        : planSummary.blockerCount > 0
+          ? {error: 'Project transfer blockers must be resolved before ready_to_commit', ok: false}
+          : judgmentConflictStatus === 'unknown'
+            ? {error: 'Project transfer judgment conflicts must be known before ready_to_commit', ok: false}
+            : judgmentConflictStatus === 'blocked'
+              ? {error: 'Project transfer judgment conflicts must be resolved before ready_to_commit', ok: false}
+              : !overlapCountsValidation.ok
+                ? overlapCountsValidation
+                : !conflictCountsValidation.ok
+                  ? conflictCountsValidation
+                  : dependencyValidation
 }
 
 export const getProjectTransferExportExecutionMode = (
