@@ -487,6 +487,10 @@ const getModelDependencyKey = (sourceModelId: string) => {
   return `model:${sourceModelId}`
 }
 
+const isVirtualSelectableModelId = (modelId: string) => {
+  return modelId.startsWith('codex:') || modelId.startsWith('anthropic:')
+}
+
 const getDependencyBlocker = ({code, message, scope}: DependencyBlockerInput): ProjectTransferPlanBlocker => {
   return {code, message, resolutionKind: 'wizard_resolvable', scope}
 }
@@ -731,6 +735,15 @@ const validateExplicitModelSelections = async ({
   resolutionState: ProjectTransferDependencyResolutionState
 }) => {
   const targetModelIds = Array.from(new Set(Object.values(resolutionState.modelTargetBySourceId)))
+  const virtualTargetModelId =
+    targetModelIds.find((targetModelId) => {
+      return isVirtualSelectableModelId(targetModelId)
+    }) ?? null
+
+  if (virtualTargetModelId !== null) {
+    return `Target model ${virtualTargetModelId} is a virtual selectable model id and must be materialized first`
+  }
+
   const targetModels = await getProviderModelsByIds(targetModelIds)
   const invalidTargetModelId = targetModelIds.find((targetModelId) => {
     const targetModel = targetModels.get(targetModelId)

@@ -1312,6 +1312,7 @@ const ProviderDetailPage = () => {
                 modelName: getTrimmedModelValue(draft.remoteModelId ?? draft.modelName),
                 name: draft.displayNameValue,
                 provider: draft.provider,
+                providerConnectionId: draft.providerConnectionId,
                 version: getTrimmedModelValue(draft.variant ?? draft.version),
               })
             : draft.isThinkingOptionRow
