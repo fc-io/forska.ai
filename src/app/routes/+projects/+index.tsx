@@ -67,6 +67,9 @@ export const ProjectsPage = () => {
           <Button as={Link} to="/projects/create-subproject" variant="outline">
             Create Subproject
           </Button>
+          <Button as={Link} to="/projects/import" variant="outline">
+            Import Project
+          </Button>
           <Button
             as={Link}
             to="/admin/datasources/covidence-import"

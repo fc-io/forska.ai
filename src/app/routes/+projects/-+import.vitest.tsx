@@ -1,0 +1,401 @@
+// @vitest-environment happy-dom
+
+import type {Component, JSX, ParentProps} from 'solid-js'
+import {splitProps} from 'solid-js'
+import {Dynamic} from 'solid-js/web'
+import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
+
+type MockLinkProps = ParentProps<{class?: string; to: string}>
+type MockButtonProps = ParentProps<
+  {as?: keyof JSX.IntrinsicElements | Component<Record<string, unknown>>; disabled?: boolean} & Record<string, unknown>
+>
+
+const getSession = (overrides: Record<string, unknown> = {}) => {
+  return {
+    analyzeUrl: '/api/projects/import/session-1/analyze',
+    blockers: [],
+    canCommit: false,
+    cancelUrl: '/api/projects/import/session-1',
+    commitId: null,
+    commitUrl: '/api/projects/import/session-1/commit',
+    completion: null,
+    createdAt: '2030-01-01T00:00:00.000Z',
+    direction: 'import',
+    duplicatePackageWarnings: [],
+    error: null,
+    expiresAt: '2030-01-02T00:00:00.000Z',
+    heartbeatAt: null,
+    id: 'session-1',
+    overlapCounts: null,
+    ownerToken: null,
+    packageFingerprint: 'fingerprint-1',
+    plan: {
+      blockers: [
+        {
+          code: 'article_conflict',
+          message: 'Article conflict requires target changes',
+          resolutionKind: 'requires_new_package_or_target_changes',
+          scope: 'articles.source-1',
+        },
+      ],
+      canCommit: false,
+      dependencyResolution: {
+        modelTargetBySourceId: {'model-source-1': 'model-target-1'},
+        providerTargetBySourceId: {'provider-source-1': 'provider-target-1'},
+      },
+      packageCounts: {articles: 1, models: 1, providerConnections: 1},
+      packageFingerprint: 'fingerprint-1',
+      packageWarnings: [
+        {code: 'duplicate_import', message: 'Duplicate import package fingerprint matched another project.'},
+      ],
+      planRevision: 2,
+      resolutionKinds: {article_conflict: 'requires_new_package_or_target_changes'},
+      summary: null,
+      targetPlan: {
+        articleRoutePlan: [
+          {
+            action: 'omit',
+            snapshotProjectArticleLink: true,
+            sourceArticleId: 'article-source-1',
+            sourceImportRouteId: 'route-source-1',
+            targetArticleId: 'article-target-1',
+          },
+        ],
+        articleUpdatePlan: [
+          {
+            fieldFills: [{field: 'fullText', value: 'text'}],
+            sourceArticleId: 'article-source-1',
+            targetArticleId: 'article-target-1',
+          },
+        ],
+        humanReviewPlan: [
+          {
+            action: 'insert',
+            inputSignatureMatches: true,
+            kind: 'review',
+            provenanceKind: 'storedSignature',
+            sourceId: 'review-source-1',
+          },
+        ],
+        judgmentPlan: [
+          {
+            action: 'reuse',
+            inputSignatureMatches: true,
+            provenanceKind: 'snapshotVerified',
+            sourceJudgmentId: 'judgment-source-1',
+          },
+        ],
+        projectRoutePlan: [
+          {action: 'omit', sourceImportRouteId: 'route-source-1', sourceProjectImportRouteId: 'project-route-source-1'},
+        ],
+      },
+    },
+    planRevision: 2,
+    planSummary: {
+      blockerCount: 1,
+      blockers: [
+        {
+          code: 'article_conflict',
+          message: 'Article conflict requires target changes',
+          resolutionKind: 'requires_new_package_or_target_changes',
+          scope: 'articles.source-1',
+        },
+      ],
+      conflictCounts: {
+        articleConflictCount: 1,
+        humanReviewFidelityConflictCount: 0,
+        judgmentConflictCount: 0,
+        packageContractConflictCount: 0,
+        projectPromptConflictCount: 0,
+      },
+      dependencyStatuses: {'model:model-source-1': 'resolved', 'provider:provider-source-1': 'resolved'},
+      judgmentConflictStatus: 'clear',
+      overlapCounts: {
+        currentReviewRowsSignatureHumanReviewCount: 0,
+        currentReviewRowsSignatureJudgmentCount: 0,
+        dirtiedExistingProjectCount: 1,
+        duplicateImportMatchCount: 1,
+        newArticleCount: 0,
+        omittedArticleRouteLinkCount: 1,
+        omittedRouteLinkCount: 1,
+        reusedArticleAssetPromotionCount: 0,
+        reusedArticleCount: 1,
+        reusedArticleFieldFillCount: 1,
+        reusedArticleUpdateCount: 1,
+        reusedJudgmentCount: 1,
+        routeArticleSnapshotLinkCount: 1,
+        snapshotVerifiedJudgmentCount: 1,
+        storedSignatureHumanReviewCount: 1,
+        storedSignatureJudgmentCount: 0,
+      },
+      packageCounts: {articles: 1, models: 1, providerConnections: 1},
+      packageFingerprint: 'fingerprint-1',
+      packageWarnings: [
+        {code: 'duplicate_import', message: 'Duplicate import package fingerprint matched another project.'},
+      ],
+      warningCount: 1,
+    },
+    progress: {percent: 100, phase: 'analyze', status: 'completed'},
+    resolveDependenciesUrl: '/api/projects/import/session-1/resolve-dependencies',
+    sessionUrl: '/api/projects/import/session-1',
+    state: 'awaiting_resolution',
+    updatedAt: '2030-01-01T00:00:00.000Z',
+    upload: {byteLength: 1024, checksumSha256: 'a'.repeat(64), fileName: 'package.zip'},
+    uploadUrl: '/api/projects/import/session-1/upload',
+    warnings: ['Duplicate import package fingerprint matched another project.'],
+    ...overrides,
+  }
+}
+
+const mockState = vi.hoisted(() => {
+  return {
+    codexStatusQueryResult: {
+      data: {
+        appServerReady: false,
+        cli: {loggedIn: false, method: null, ok: true, raw: ''},
+        codexBin: 'codex',
+        message: 'Login required',
+      },
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+      refetch: vi.fn(),
+    },
+    providerConnectionsQueryResult: {
+      data: {
+        catalog: [
+          {
+            defaultBaseURL: null,
+            description: '',
+            kind: 'openai-compatible',
+            label: 'OpenAI Compatible',
+            requiresApiKey: true,
+            supportsDiscovery: true,
+            supportsWorkerUrls: false,
+          },
+        ],
+        connections: [
+          {
+            authMode: 'api-key',
+            baseURL: 'https://example.com',
+            config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
+            createdAt: null,
+            effectiveMaxInflightRequests: 1,
+            enabled: true,
+            hasSecret: true,
+            id: 'provider-target-1',
+            label: 'Target Provider',
+            lastCheckedAt: null,
+            lastError: null,
+            maxInflightRequests: null,
+            models: [
+              {
+                baseURL: null,
+                createdAt: null,
+                displayName: 'Target Model',
+                enabled: true,
+                id: 'model-target-1',
+                metadataJson: {},
+                modelName: 'target-model',
+                name: 'Target Model',
+                provider: 'openai-compatible',
+                providerConnectionId: 'provider-target-1',
+                remoteModelId: 'target-model',
+                source: 'manual',
+                updatedAt: null,
+                variant: null,
+                version: null,
+              },
+            ],
+            providerKind: 'openai-compatible',
+            updatedAt: null,
+            workerState: {
+              effectiveWorkerUrls: [],
+              match: {},
+              resolutionMode: 'manual',
+              runtimeWorkerUrls: [],
+              workerSource: 'none',
+            },
+          },
+        ],
+        runtime: {activeModelNames: [], providerKind: null, sourceMetadata: null, workerUrls: []},
+      },
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+      refetch: vi.fn(),
+    },
+    sessionQueryResult: {
+      data: null,
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+      refetch: vi.fn(),
+    },
+  }
+})
+
+vi.mock('@tanstack/solid-query', () => {
+  return {
+    createMutation: (
+      factory: () => {mutationFn?: (input?: unknown) => unknown; onSuccess?: (value: unknown) => void},
+    ) => {
+      const options = factory()
+
+      return {
+        error: null,
+        isError: false,
+        isPending: false,
+        mutate: vi.fn((input?: unknown) => {
+          const result = options.mutationFn?.(input)
+          options.onSuccess?.(result)
+        }),
+        mutateAsync: vi.fn(async (input?: unknown) => {
+          return options.mutationFn?.(input)
+        }),
+      }
+    },
+    useQuery: (options: () => {queryKey: readonly unknown[]}) => {
+      const key = options().queryKey[0]
+
+      if (key === 'provider-connections') {
+        return mockState.providerConnectionsQueryResult
+      }
+      if (key === 'codex-status') {
+        return mockState.codexStatusQueryResult
+      }
+      return mockState.sessionQueryResult
+    },
+  }
+})
+
+vi.mock('@tanstack/solid-router', () => {
+  return {
+    Link: (props: MockLinkProps) => {
+      return (
+        <a class={props.class} href={props.to}>
+          {props.children}
+        </a>
+      )
+    },
+    createFileRoute: () => {
+      return () => {
+        return {}
+      }
+    },
+  }
+})
+
+vi.mock('../../../components/ui/button', () => {
+  return {
+    Button: (props: MockButtonProps) => {
+      const [local, otherProps] = splitProps(props, ['as', 'children'])
+
+      return (
+        <Dynamic component={local.as ?? 'button'} {...otherProps}>
+          {local.children}
+        </Dynamic>
+      )
+    },
+  }
+})
+
+const renderImportWizard = async () => {
+  const {render} = await import('solid-js/web')
+  const {ImportProjectWizard} = await import('./importWizard/importProjectWizard.tsx')
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const dispose = render(() => {
+    return <ImportProjectWizard />
+  }, container)
+
+  await Promise.resolve()
+
+  return {container, dispose}
+}
+
+describe('project import route', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    document.body.innerHTML = ''
+    window.history.replaceState(null, '', '/projects/import?sessionId=session-1')
+    mockState.sessionQueryResult = {
+      data: getSession(),
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+      refetch: vi.fn(),
+    }
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  test('renders the wizard shell and full plan review surfaces', async () => {
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      expect(container.textContent).toContain('Import Project')
+      expect(container.textContent).toContain('Upload a transfer package')
+      expect(container.textContent).toContain('Reused-article update plan')
+      expect(container.textContent).toContain('Route-link omissions')
+      expect(container.textContent).toContain('Snapshot project-article links')
+      expect(container.textContent).toContain('Final provider mappings')
+      expect(container.textContent).toContain('Final model mappings')
+      expect(container.textContent).toContain('Judgment signature provenance')
+      expect(container.textContent).toContain('Human/review signature provenance')
+      expect(container.textContent).toContain('requires new package or target changes')
+      expect(container.textContent).toContain('Commit unavailable until Phase 4')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('keeps the wizard shell rendered during extract and analyze progress', async () => {
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({progress: {percent: 35, phase: 'extract', status: 'running'}, state: 'extracting'}),
+    }
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      expect(container.textContent).toContain('Import Project')
+      expect(container.textContent).toContain('Import progress')
+      expect(container.textContent).toContain('Extract')
+      expect(container.textContent).toContain('Package review')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('shows stale plan handling and keeps final commit disabled', async () => {
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({canCommit: true, stalePlan: true, state: 'ready_to_commit'}),
+    }
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      const commitButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.includes('Commit unavailable until Phase 4')
+      })
+
+      expect(container.textContent).toContain('Plan revision changed before dependency resolution')
+      expect(container.textContent).toContain('Plan is ready, but final commit writes are unavailable until Phase 4.')
+      expect(commitButton?.hasAttribute('disabled')).toBe(true)
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+})

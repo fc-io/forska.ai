@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/+__root'
 import { Route as IndexRouteImport } from './routes/+index'
 import { Route as ProvidersAddProviderRouteImport } from './routes/+providers/+add-provider'
+import { Route as ProjectsImportRouteImport } from './routes/+projects/+import'
 import { Route as ProjectsCreateSubprojectRouteImport } from './routes/+projects/+create-subproject'
 import { Route as ProjectsCreateRouteImport } from './routes/+projects/+create'
 import { Route as CompareJudgmentsCreateFromProjectRouteImport } from './routes/+compare-judgments/+create-from-project'
@@ -79,6 +80,11 @@ const IndexRoute = IndexRouteImport.update({
 const ProvidersAddProviderRoute = ProvidersAddProviderRouteImport.update({
   id: '/providers/add-provider',
   path: '/providers/add-provider',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsImportRoute = ProjectsImportRouteImport.update({
+  id: '/projects/import',
+  path: '/projects/import',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsCreateSubprojectRoute =
@@ -416,6 +422,7 @@ export interface FileRoutesByFullPath {
   '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
+  '/projects/import': typeof ProjectsImportRoute
   '/providers/add-provider': typeof ProvidersAddProviderRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
@@ -479,6 +486,7 @@ export interface FileRoutesByTo {
   '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
+  '/projects/import': typeof ProjectsImportRoute
   '/providers/add-provider': typeof ProvidersAddProviderRoute
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
@@ -543,6 +551,7 @@ export interface FileRoutesById {
   '/compare-judgments/create-from-project': typeof CompareJudgmentsCreateFromProjectRoute
   '/projects/create': typeof ProjectsCreateRoute
   '/projects/create-subproject': typeof ProjectsCreateSubprojectRoute
+  '/projects/import': typeof ProjectsImportRoute
   '/providers/add-provider': typeof ProvidersAddProviderRoute
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
@@ -608,6 +617,7 @@ export interface FileRouteTypes {
     | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
+    | '/projects/import'
     | '/providers/add-provider'
     | '/admin/assessments/'
     | '/admin/datasources/'
@@ -671,6 +681,7 @@ export interface FileRouteTypes {
     | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
+    | '/projects/import'
     | '/providers/add-provider'
     | '/admin/assessments'
     | '/admin/datasources'
@@ -734,6 +745,7 @@ export interface FileRouteTypes {
     | '/compare-judgments/create-from-project'
     | '/projects/create'
     | '/projects/create-subproject'
+    | '/projects/import'
     | '/providers/add-provider'
     | '/admin/assessments/'
     | '/admin/datasources/'
@@ -798,6 +810,7 @@ export interface RootRouteChildren {
   CompareJudgmentsCreateFromProjectRoute: typeof CompareJudgmentsCreateFromProjectRoute
   ProjectsCreateRoute: typeof ProjectsCreateRoute
   ProjectsCreateSubprojectRoute: typeof ProjectsCreateSubprojectRoute
+  ProjectsImportRoute: typeof ProjectsImportRoute
   ProvidersAddProviderRoute: typeof ProvidersAddProviderRoute
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
@@ -863,6 +876,13 @@ declare module '@tanstack/solid-router' {
       path: '/providers/add-provider'
       fullPath: '/providers/add-provider'
       preLoaderRoute: typeof ProvidersAddProviderRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/import': {
+      id: '/projects/import'
+      path: '/projects/import'
+      fullPath: '/projects/import'
+      preLoaderRoute: typeof ProjectsImportRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/create-subproject': {
@@ -1295,6 +1315,7 @@ const rootRouteChildren: RootRouteChildren = {
     CompareJudgmentsCreateFromProjectRoute,
   ProjectsCreateRoute: ProjectsCreateRoute,
   ProjectsCreateSubprojectRoute: ProjectsCreateSubprojectRoute,
+  ProjectsImportRoute: ProjectsImportRoute,
   ProvidersAddProviderRoute: ProvidersAddProviderRoute,
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,

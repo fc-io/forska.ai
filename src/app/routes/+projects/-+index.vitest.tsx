@@ -123,9 +123,19 @@ describe('projects index route', () => {
       expect(links).toEqual([
         {href: '/projects/archived', label: 'Show Archived'},
         {href: '/projects/create-subproject', label: 'Create Subproject'},
+        {href: '/projects/import', label: 'Import Project'},
         {href: '/admin/datasources/covidence-import', label: 'Create Covidence Project'},
         {href: '/projects/create', label: 'Create New Project'},
       ])
+      expect(
+        links.findIndex((link) => {
+          return link.label === 'Import Project'
+        }),
+      ).toBe(
+        links.findIndex((link) => {
+          return link.label === 'Create Covidence Project'
+        }) - 1,
+      )
       expect(container.querySelector('[data-testid="projects-grid"]')?.textContent).toBe('1')
     } finally {
       dispose()

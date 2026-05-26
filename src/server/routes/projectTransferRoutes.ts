@@ -8,7 +8,10 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {analyzeProjectTransferImportPackage} from '../services/projectTransfer/projectTransferAnalyze.ts'
+import {
+  analyzeProjectTransferImportPackage,
+  type ProjectTransferImportPlanArtifact,
+} from '../services/projectTransfer/projectTransferAnalyze.ts'
 import {
   getProjectTransferImportAnalyzeExecutionMode,
   getProjectTransferPlaceholderResponse,
@@ -72,6 +75,7 @@ type ProjectTransferImportSessionData = ProjectTransferSessionResponse & {
   duplicatePackageWarnings: string[]
   executionMode?: ProjectTransferExecutionMode
   overlapCounts: ProjectTransferPlanSummary['overlapCounts'] | null
+  plan: ProjectTransferImportPlanArtifact | null
   resolveDependenciesUrl: string
   sessionUrl: string
   stalePlan?: boolean
@@ -471,8 +475,18 @@ const canCommitImportSession = (response: ProjectTransferSessionResponse) => {
   return response.state === 'ready_to_commit' && validateProjectTransferPlanReadyToCommit(response.planSummary).ok
 }
 
+const readImportPlanArtifact = async (sessionId: string): Promise<ProjectTransferImportPlanArtifact | null> => {
+  const planPath = resolveProjectTransferTempWritablePath({
+    pathValue: getProjectTransferImportTempLayout(sessionId).planPath,
+  })
+  const planFile = globalThis.Bun.file(planPath)
+
+  return (await planFile.exists()) ? (JSON.parse(await planFile.text()) as ProjectTransferImportPlanArtifact) : null
+}
+
 const getImportSessionData = (
   response: ProjectTransferSessionResponse,
+  plan: ProjectTransferImportPlanArtifact | null,
   executionMode?: ProjectTransferExecutionMode,
 ): ProjectTransferImportSessionData => {
   return {
@@ -483,24 +497,29 @@ const getImportSessionData = (
     duplicatePackageWarnings: [],
     executionMode,
     overlapCounts: response.planSummary?.overlapCounts ?? null,
+    plan,
     upload: getUploadMetadataFromProgress(response.progress),
     warnings: getImportSessionWarnings(response.planSummary),
   }
 }
 
-const getImportSessionResponseFromRecord = (
+const getImportSessionResponseFromRecord = async (
   record: Awaited<ReturnType<ReturnType<typeof getProjectTransferSessionRepository>['getProjectTransferSession']>>,
   executionMode?: ProjectTransferExecutionMode,
-): ProjectTransferApiResponse<ProjectTransferImportSessionData> | null => {
+): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData> | null> => {
   if (record === null) {
     return null
   }
 
   const response = toProjectTransferSessionResponse(record)
 
-  return response.direction === 'import'
-    ? {data: getImportSessionData(response, executionMode), error: null}
-    : {data: null, error: 'Project transfer session is not an import session'}
+  if (response.direction !== 'import') {
+    return {data: null, error: 'Project transfer session is not an import session'}
+  }
+
+  const plan = await readImportPlanArtifact(response.id)
+
+  return {data: getImportSessionData(response, plan, executionMode), error: null}
 }
 
 const getUploadFileName = (request: Request) => {
@@ -974,7 +993,8 @@ const createImportSession = async (
   set.status = 201
 
   return (
-    getImportSessionResponseFromRecord(record) ?? getProjectTransferApiError(set, 500, 'Import session unavailable')
+    (await getImportSessionResponseFromRecord(record))
+    ?? getProjectTransferApiError(set, 500, 'Import session unavailable')
   )
 }
 
@@ -983,7 +1003,7 @@ const getImportSession = async (
   sessionId: string,
 ): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData>> => {
   const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId})
-  const response = getImportSessionResponseFromRecord(record)
+  const response = await getImportSessionResponseFromRecord(record)
 
   return response === null
     ? getProjectTransferApiError(set, 404, 'Project transfer import session not found')
@@ -1007,7 +1027,7 @@ const uploadImportPackage = async ({
 
   const repository = getProjectTransferSessionRepository()
   const current = await repository.getProjectTransferSession({sessionId: params.sessionId})
-  const currentResponse = getImportSessionResponseFromRecord(current)
+  const currentResponse = await getImportSessionResponseFromRecord(current)
 
   if (currentResponse === null) {
     return getProjectTransferApiError(set, 404, 'Project transfer import session not found')
@@ -1079,7 +1099,8 @@ const uploadImportPackage = async ({
 
   return queued === null
     ? getProjectTransferApiError(set, 409, 'Project transfer import session upload ownership was lost')
-    : (getImportSessionResponseFromRecord(queued) ?? getProjectTransferApiError(set, 500, 'Import session unavailable'))
+    : ((await getImportSessionResponseFromRecord(queued))
+        ?? getProjectTransferApiError(set, 500, 'Import session unavailable'))
 }
 
 const analyzeImportSession = async (
@@ -1099,7 +1120,7 @@ const analyzeImportSession = async (
 
   const repository = getProjectTransferSessionRepository()
   const current = await repository.getProjectTransferSession({sessionId})
-  const currentResponse = getImportSessionResponseFromRecord(current)
+  const currentResponse = await getImportSessionResponseFromRecord(current)
 
   if (currentResponse === null) {
     return getProjectTransferApiError(set, 404, 'Project transfer import session not found')
@@ -1145,7 +1166,7 @@ const analyzeImportSession = async (
     set.status = 202
     startBackgroundAnalyzeJob({ownerToken, sessionId})
     return (
-      getImportSessionResponseFromRecord(claimed, executionMode)
+      (await getImportSessionResponseFromRecord(claimed, executionMode))
       ?? getProjectTransferApiError(set, 500, 'Import session unavailable')
     )
   }
@@ -1154,7 +1175,7 @@ const analyzeImportSession = async (
 
   return analyzed === null
     ? getProjectTransferApiError(set, 409, 'Project transfer import analysis ownership was lost')
-    : (getImportSessionResponseFromRecord(analyzed, executionMode)
+    : ((await getImportSessionResponseFromRecord(analyzed, executionMode))
         ?? getProjectTransferApiError(set, 500, 'Import session unavailable'))
 }
 
@@ -1207,7 +1228,7 @@ const resolveImportDependencies = async (
 
   return updated === null
     ? getProjectTransferApiError(set, 409, 'Project transfer import dependency resolution could not update the plan')
-    : (getImportSessionResponseFromRecord(updated)
+    : ((await getImportSessionResponseFromRecord(updated))
         ?? getProjectTransferApiError(set, 500, 'Import session unavailable'))
 }
 
@@ -1379,7 +1400,7 @@ const cancelImportSession = async (
   })
 
   return (
-    getImportSessionResponseFromRecord(cleaned ?? cancelled)
+    (await getImportSessionResponseFromRecord(cleaned ?? cancelled))
     ?? getProjectTransferApiError(set, 500, 'Import session unavailable')
   )
 }
