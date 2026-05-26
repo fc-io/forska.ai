@@ -5,6 +5,7 @@ import {
   appendProviderModelThinkingBadgeLabel,
   getProviderModelThinkingBadgeValue,
 } from '../../utils/providerModelLabel.ts'
+import {getProviderModelThinkingOption} from '../../utils/providerModelOptions.ts'
 import {resolveProviderRuntimeCredentials} from '../providers/providerAuthService.ts'
 import {
   createProviderConnection,
@@ -63,12 +64,14 @@ const getSelectableCodexModel = ({
   createdAt,
   displayName,
   modelName,
+  providerConnectionId,
   updatedAt,
   version,
 }: {
   createdAt: Date | null
   displayName: string
   modelName: string
+  providerConnectionId: string | null
   updatedAt: Date | null
   version: string | null
 }) => {
@@ -81,6 +84,7 @@ const getSelectableCodexModel = ({
     modelName,
     name: displayName,
     provider: 'codex',
+    providerConnectionId,
     updatedAt,
     version,
     workerUrls: null,
@@ -125,6 +129,7 @@ const getSelectableStoredModel = (model: ProviderModelRecord) => {
     modelName: model.modelName,
     name: model.displayName ?? model.name,
     provider: model.provider,
+    providerConnectionId: model.providerConnectionId,
     updatedAt: model.updatedAt,
     version: model.variant ?? model.version,
     workerUrls: null,
@@ -149,6 +154,7 @@ const getSelectableAnthropicVirtualModel = ({
   displayName,
   id,
   modelName,
+  providerConnectionId,
   updatedAt,
   version,
 }: {
@@ -157,6 +163,7 @@ const getSelectableAnthropicVirtualModel = ({
   displayName: string
   id: string
   modelName: string
+  providerConnectionId: string | null
   updatedAt: Date | null
   version: string | null
 }) => {
@@ -169,6 +176,7 @@ const getSelectableAnthropicVirtualModel = ({
     modelName,
     name: displayName,
     provider: 'anthropic',
+    providerConnectionId,
     updatedAt,
     version,
     workerUrls: null,
@@ -193,6 +201,7 @@ const getCodexVirtualModelsFromStoredModels = async (storedModels: ProviderModel
         createdAt: model.createdAt,
         displayName: model.displayName ?? model.name,
         modelName,
+        providerConnectionId: model.providerConnectionId,
         updatedAt: model.updatedAt,
         version: effort,
       })
@@ -230,6 +239,7 @@ const getCodexVirtualModelsFromServer = async (storedModels: ProviderModelRecord
           createdAt: null,
           displayName: model.displayName,
           modelName: model.modelName,
+          providerConnectionId: connection.id,
           updatedAt: null,
           version: model.variant ?? model.version,
         })
@@ -243,6 +253,7 @@ const getCodexVirtualModelsFromServer = async (storedModels: ProviderModelRecord
           createdAt: model.createdAt,
           displayName: model.displayName ?? model.name,
           modelName: String(model.modelName ?? model.remoteModelId ?? model.name).trim(),
+          providerConnectionId: model.providerConnectionId,
           updatedAt: model.updatedAt,
           version: getTrimmedValue(model.variant ?? model.version),
         })
@@ -297,6 +308,7 @@ const getAnthropicSelectableModels = (storedModels: ProviderModelRecord[]) => {
           displayName: appendProviderModelThinkingBadgeLabel({label: baseDisplayName, thinking: effort}),
           id: toAnthropicVirtualId(modelName, effort),
           modelName,
+          providerConnectionId: model.providerConnectionId,
           updatedAt: model.updatedAt,
           version: effort,
         })
@@ -342,16 +354,6 @@ const getCodexConnectionForEnsure = async () => {
         providerKind: 'codex',
         secretRef: null,
       })
-}
-
-const getAnthropicConnectionForEnsure = async () => {
-  const existing = await getFirstEnabledProviderConnection('anthropic')
-
-  if (!existing) {
-    throw new Error('No enabled Anthropic provider connection found')
-  }
-
-  return existing
 }
 
 export const modelsRoutes = new Elysia()
@@ -412,7 +414,7 @@ export const modelsRoutes = new Elysia()
     async ({body, set}) => {
       const provider = normalizeProviderKind(body.provider)
 
-      if (provider !== 'anthropic' && provider !== 'codex') {
+      if (provider !== 'codex') {
         set.status = 400
         return {data: null, error: 'Unsupported provider'}
       }
@@ -426,22 +428,9 @@ export const modelsRoutes = new Elysia()
 
       const version = getTrimmedValue(body.version)
 
-      if (provider === 'anthropic' && version) {
-        const supportedEfforts = getAnthropicSupportedThinkingEfforts(modelName)
-
-        if (
-          !supportedEfforts.some((effort) => {
-            return effort === version
-          })
-        ) {
-          set.status = 400
-          return {data: null, error: 'Unsupported Anthropic thinking level'}
-        }
-      }
-
       const displayName = normalizeDisplayName(body.name)
-      const connection =
-        provider === 'codex' ? await getCodexConnectionForEnsure() : await getAnthropicConnectionForEnsure()
+      const connection = await getCodexConnectionForEnsure()
+      const thinking = version ? getProviderModelThinkingOption(version) : null
       const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
         FROM app.model
@@ -461,6 +450,7 @@ export const modelsRoutes = new Elysia()
         metadataJson: getManualProviderModelMetadata({
           displayName,
           modelName,
+          options: thinking ? {thinking} : undefined,
           providerKind: connection.providerKind,
           remoteModelId: modelName,
           variant: version,

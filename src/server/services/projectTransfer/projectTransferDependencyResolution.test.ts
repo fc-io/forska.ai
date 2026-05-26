@@ -146,6 +146,74 @@ const getArchivedConnectionRecord = (): ProviderConnectionRecord => {
   return {...connection}
 }
 
+const getCodexPayloads = (): ProjectTransferPayloadByKey => {
+  const payloads = getProjectTransferPayloadFixtureMap()
+  const [sourceProvider] = payloads.providerConnections
+  const [sourceModel] = payloads.models
+  const codexProviderSignature = {
+    authMode: 'codex-cli',
+    baseURL: null,
+    configSignature: {workerUrlMode: 'manual'},
+    providerKind: 'codex',
+  }
+  const codexModelSignature = {
+    displayName: 'Codex Thinking',
+    modelName: 'codex-thinking',
+    name: 'Codex Thinking',
+    providerConnectionSignature: codexProviderSignature,
+    remoteModelId: 'codex-thinking',
+    variant: 'medium',
+    version: 'medium',
+  }
+
+  if (!sourceProvider || !sourceModel) {
+    throw new Error('Expected provider and model fixtures')
+  }
+
+  return {
+    ...payloads,
+    judgments: payloads.judgments.map((judgment) => {
+      const judgmentInputSignature = judgment.judgmentInputSignature as Record<string, unknown>
+
+      return {
+        ...judgment,
+        judgmentInputSignature: {
+          ...judgmentInputSignature,
+          model: {...(judgmentInputSignature.model as Record<string, unknown>), modelOptions: {thinking: 'medium'}},
+          provider: {
+            providerConnectionSignature: codexProviderSignature,
+            providerKind: 'codex',
+            transportFamily: 'codex-app',
+          },
+        },
+      }
+    }),
+    models: [
+      {
+        ...sourceModel,
+        displayName: 'Codex Thinking',
+        metadataJson: {options: {thinking: 'medium'}},
+        modelName: 'codex-thinking',
+        name: 'Codex Thinking',
+        remoteModelId: 'codex-thinking',
+        signature: codexModelSignature,
+        variant: 'medium',
+        version: 'medium',
+      },
+    ],
+    providerConnections: [
+      {
+        ...sourceProvider,
+        authMode: 'codex-cli',
+        configJson: {workerUrlMode: 'manual'},
+        label: 'Codex source',
+        providerKind: 'codex',
+        signature: codexProviderSignature,
+      },
+    ],
+  }
+}
+
 test('project transfer dependency resolution auto-matches one safe enabled provider and equivalent selectable model', async () => {
   const cwd = getRuntimeRoot()
 
@@ -184,6 +252,42 @@ test('project transfer dependency resolution auto-matches one safe enabled provi
       'provider-connection-1': 'target-provider-1',
     })
     expect(persistedPlan.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': 'target-model-1'})
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer dependency resolution rejects virtual selectable target model ids', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getProjectTransferPayloadFixtureMap()
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        listProviderConnections: async () => {
+          return [getTargetConnection()]
+        },
+      },
+      request: {
+        planRevision: 1,
+        selectedModels: [{sourceModelId: 'model-1', targetModelId: 'anthropic:claude-sonnet-4-6:high'}],
+        selectedProviderConnections: [
+          {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: 'target-provider-1'},
+        ],
+      },
+    })
+
+    expect(result).toMatchObject({
+      error:
+        'Target model anthropic:claude-sonnet-4-6:high is a virtual selectable model id and must be materialized first',
+      status: 'error',
+      statusCode: 400,
+    })
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
@@ -259,6 +363,167 @@ test('project transfer dependency resolution rejects materialized model handoffs
       error: 'Target model target-model-1 is not selectable',
       status: 'error',
       statusCode: 400,
+    })
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer dependency resolution keeps Codex materialization unresolved until the model is visible on a live connection', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getCodexPayloads()
+    const codexModel = getTargetModel({
+      displayName: 'Codex Thinking',
+      id: 'target-codex-model-1',
+      metadataJson: {options: {thinking: 'medium'}},
+      modelName: 'codex-thinking',
+      name: 'Codex Thinking',
+      provider: 'codex',
+      providerConnectionId: 'target-codex-provider-1',
+      remoteModelId: 'codex-thinking',
+      variant: 'medium',
+      version: 'medium',
+    })
+    const codexConnection = getTargetConnection(
+      {authMode: 'codex-cli', id: 'target-codex-provider-1', label: 'Codex target', providerKind: 'codex'},
+      [],
+    )
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        getProviderModelsByIds: async () => {
+          return new Map([['target-codex-model-1', codexModel]])
+        },
+        listProviderConnections: async () => {
+          return [codexConnection]
+        },
+      },
+      request: {
+        materializedModels: [{sourceModelId: 'model-1', targetModelId: 'target-codex-model-1'}],
+        planRevision: 1,
+        selectedProviderConnections: [
+          {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: 'target-codex-provider-1'},
+        ],
+      },
+    })
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'missing',
+      'provider:provider-connection-1': 'resolved',
+    })
+    expect(result.status === 'ok' ? result.plan.canCommit : true).toBe(false)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer dependency resolution resolves Codex after materialized model and provider connection re-read match', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getCodexPayloads()
+    const codexModel = getTargetModel({
+      displayName: 'Codex Thinking',
+      id: 'target-codex-model-1',
+      metadataJson: {options: {thinking: 'medium'}},
+      modelName: 'codex-thinking',
+      name: 'Codex Thinking',
+      provider: 'codex',
+      providerConnectionId: 'target-codex-provider-1',
+      remoteModelId: 'codex-thinking',
+      variant: 'medium',
+      version: 'medium',
+    })
+    const codexConnection = getTargetConnection(
+      {authMode: 'codex-cli', id: 'target-codex-provider-1', label: 'Codex target', providerKind: 'codex'},
+      [codexModel],
+    )
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        getProviderModelsByIds: async () => {
+          return new Map([['target-codex-model-1', codexModel]])
+        },
+        listProviderConnections: async () => {
+          return [codexConnection]
+        },
+      },
+      request: {
+        materializedModels: [
+          {
+            sourceModelId: 'model-1',
+            targetModelId: 'target-codex-model-1',
+            targetProviderConnectionId: 'target-codex-provider-1',
+          },
+        ],
+        planRevision: 1,
+        selectedProviderConnections: [
+          {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: 'target-codex-provider-1'},
+        ],
+      },
+    })
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
+    })
+    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer dependency resolution only accepts non-equivalent substitutes without imported judgment references', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = {...getProjectTransferPayloadFixtureMap(), judgments: []}
+    const substituteModel = getTargetModel({
+      displayName: 'Future settings model',
+      id: 'substitute-model-1',
+      modelName: 'future-settings-model',
+      name: 'Future settings model',
+      remoteModelId: 'future-settings-model',
+    })
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        getProviderModelsByIds: async () => {
+          return new Map([['substitute-model-1', substituteModel]])
+        },
+        listProviderConnections: async () => {
+          return [getTargetConnection({}, [substituteModel])]
+        },
+      },
+      request: {
+        planRevision: 1,
+        selectedModels: [{acceptSubstitute: true, sourceModelId: 'model-1', targetModelId: 'substitute-model-1'}],
+        selectedProviderConnections: [
+          {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: 'target-provider-1'},
+        ],
+      },
+    })
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
     })
   } finally {
     rmSync(cwd, {force: true, recursive: true})
