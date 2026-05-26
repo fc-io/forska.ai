@@ -235,10 +235,15 @@ const assertManifestProjectSummary = (value: unknown): ProjectTransferManifestPr
 
 const assertManifestWarning = (warning: unknown): ProjectTransferManifestWarning => {
   const parsed = projectTransferManifestWarningShape.assert(warning) as ProjectTransferManifestWarning
+  const invalidTextField = ['action', 'code', 'message', 'scope'].find((field) => {
+    return (
+      parsed[field as keyof Pick<ProjectTransferManifestWarning, 'action' | 'code' | 'message' | 'scope'>].trim() === ''
+    )
+  })
 
-  return parsed.scope.trim() !== ''
+  return invalidTextField === undefined
     ? parsed
-    : throwProjectTransferManifestError('warning_scope', 'warning scope must not be empty')
+    : throwProjectTransferManifestError('warning_shape', `warning ${invalidTextField} must not be empty`)
 }
 
 const assertManifestWarnings = (warnings: unknown): ProjectTransferManifestWarning[] | undefined => {
@@ -279,6 +284,17 @@ export const assertProjectTransferManifest = (value: unknown): ProjectTransferMa
   }
 
   assertSchemaVersion(manifest.schemaVersion)
+
+  if (
+    manifest.packageFingerprint !== undefined
+    && manifest.packageFingerprint !== null
+    && !projectTransferSha256Pattern.test(manifest.packageFingerprint)
+  ) {
+    return throwProjectTransferManifestError(
+      'package_fingerprint',
+      'packageFingerprint must be lowercase SHA-256 hex when present',
+    )
+  }
 
   return {
     assetSummary: assertManifestAssetSummary(manifest.assetSummary),

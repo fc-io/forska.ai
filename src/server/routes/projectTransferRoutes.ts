@@ -8,6 +8,7 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {analyzeProjectTransferImportPackage} from '../services/projectTransfer/projectTransferAnalyze.ts'
 import {
   getProjectTransferImportAnalyzeExecutionMode,
   getProjectTransferPlaceholderResponse,
@@ -300,33 +301,32 @@ const getUploadMetadataFromProgress = (
   return isUploadMetadataPayload(progress?.uploadMetadata) ? progress.uploadMetadata : null
 }
 
-const getImportPlanSummary = (): ProjectTransferPlanSummary => {
-  return {
-    blockerCount: 1,
-    conflictCounts: {
-      articleIdentifier: 0,
-      dependency: 0,
-      humanReview: 0,
-      judgment: 0,
-      packageContract: 0,
-      projectPrompt: 0,
-    },
-    dependencyStatuses: {},
-    overlapCounts: {exactDuplicateImports: 0, reusedArticles: 0},
-    warningCount: 0,
-  }
-}
-
 const getImportSessionBlockers = (planSummary: ProjectTransferPlanSummary | null) => {
-  return planSummary === null || planSummary.blockerCount === 0
-    ? []
-    : [`${planSummary.blockerCount} import plan blocker(s) require resolution`]
+  return planSummary?.blockers && planSummary.blockers.length > 0
+    ? planSummary.blockers.map((blocker) => {
+        return blocker.message
+      })
+    : planSummary === null || planSummary.blockerCount === 0
+      ? []
+      : [`${planSummary.blockerCount} import plan blocker(s) require resolution`]
 }
 
 const getImportSessionWarnings = (planSummary: ProjectTransferPlanSummary | null) => {
-  return planSummary === null || planSummary.warningCount === 0
-    ? []
-    : [`${planSummary.warningCount} import plan warning(s) require review`]
+  return planSummary?.packageWarnings && planSummary.packageWarnings.length > 0
+    ? planSummary.packageWarnings.map((warning) => {
+        return warning.message
+      })
+    : planSummary === null || planSummary.warningCount === 0
+      ? []
+      : [`${planSummary.warningCount} import plan warning(s) require review`]
+}
+
+const getImportPlanRowCount = (planSummary: ProjectTransferPlanSummary) => {
+  return planSummary.packageCounts
+    ? Object.values(planSummary.packageCounts).reduce((total, count) => {
+        return total + count
+      }, 0)
+    : 0
 }
 
 const canCommitImportSession = (response: ProjectTransferSessionResponse) => {
@@ -513,13 +513,32 @@ const getErrorPayload = (error: unknown) => {
   return error instanceof Error ? {message: error.message, name: error.name} : {message: String(error)}
 }
 
-const runProjectTransferImportAnalyzePlaceholderJob = async ({
-  ownerToken,
-  sessionId,
+const getCompletedAnalyzeProgress = ({
+  now,
+  planSummary,
+  upload,
 }: {
-  ownerToken: string
-  sessionId: string
+  now: Date
+  planSummary: ProjectTransferPlanSummary
+  upload: ProjectTransferUploadMetadataPayload | null
 }) => {
+  const rowCount = getImportPlanRowCount(planSummary)
+
+  return {
+    ...getAnalyzeProgress({now, phase: 'analyze', status: 'completed', upload}),
+    completedRows: rowCount,
+    rowCountProcessed: rowCount,
+    rowCountTotal: rowCount,
+    totalRows: rowCount,
+    warningCount: planSummary.warningCount,
+  }
+}
+
+const getImportAnalyzeNextState = (planSummary: ProjectTransferPlanSummary) => {
+  return planSummary.blockerCount === 0 ? 'ready_to_commit' : 'awaiting_resolution'
+}
+
+const runProjectTransferImportAnalyzeJob = async ({ownerToken, sessionId}: {ownerToken: string; sessionId: string}) => {
   const repository = getProjectTransferSessionRepository()
   const current = await repository.getProjectTransferSession({sessionId})
   const upload =
@@ -543,14 +562,20 @@ const runProjectTransferImportAnalyzePlaceholderJob = async ({
 
   await repository.heartbeatProjectTransferSessionOwner({leaseMs: 60_000, ownerToken, sessionId})
 
+  const analysis = await analyzeProjectTransferImportPackage({
+    layout: getProjectTransferImportTempLayout(sessionId),
+    planRevision: analyzing.planRevision + 1,
+    uploadMetadata: upload,
+  })
   const completedAt = new Date()
-  const completedProgress = getAnalyzeProgress({now: completedAt, phase: 'analyze', status: 'completed', upload})
+  const completedProgress = getCompletedAnalyzeProgress({now: completedAt, planSummary: analysis.planSummary, upload})
+  const nextState = getImportAnalyzeNextState(analysis.planSummary)
   const planned = await repository.updateProjectTransferSessionPlanRevision({
     expectedOwnerToken: ownerToken,
     expectedPlanRevision: analyzing.planRevision,
-    nextState: 'awaiting_resolution',
+    nextState,
     now: completedAt,
-    planSummary: getImportPlanSummary(),
+    planSummary: analysis.planSummary,
     sessionId,
   })
 
@@ -558,10 +583,11 @@ const runProjectTransferImportAnalyzePlaceholderJob = async ({
     ? null
     : repository.transitionProjectTransferSessionState({
         expectedOwnerToken: ownerToken,
-        expectedState: 'awaiting_resolution',
+        expectedState: nextState,
         nextOwnerToken: null,
-        nextState: 'awaiting_resolution',
+        nextState,
         now: completedAt,
+        packageFingerprint: analysis.packageFingerprint,
         progress: completedProgress,
         sessionId,
       })
@@ -594,7 +620,7 @@ const failProjectTransferImportAnalyzeSession = async ({
 
 const getAnalyzeJobAttempt = async (params: {ownerToken: string; sessionId: string}) => {
   try {
-    return await runProjectTransferImportAnalyzePlaceholderJob(params)
+    return await runProjectTransferImportAnalyzeJob(params)
   } catch (error) {
     await failProjectTransferImportAnalyzeSession({...params, error})
     throw error
