@@ -9,9 +9,11 @@ import {
   type ProjectTransferTargetPlan,
 } from './projectTransferAnalyzeTarget.ts'
 import {
+  type ProjectTransferDependencyStatus,
   type ProjectTransferPlanBlocker,
   type ProjectTransferPlanSummary,
   type ProjectTransferUploadMetadataPayload,
+  validateProjectTransferPlanReadyToCommit,
   validateProjectTransferResourceGates,
 } from './projectTransferContracts.ts'
 import {
@@ -829,9 +831,33 @@ const getSemanticBlockers = ({
   ]
 }
 
+const getInitialDependencyStatuses = (
+  payloads: Partial<ProjectTransferPayloadByKey>,
+): Record<string, ProjectTransferDependencyStatus> => {
+  const providerStatuses = (payloads.providerConnections ?? []).reduce<Record<string, ProjectTransferDependencyStatus>>(
+    (statuses, provider) => {
+      const sourceProviderConnectionId =
+        typeof provider.sourceProviderConnectionId === 'string' ? provider.sourceProviderConnectionId : ''
+
+      return sourceProviderConnectionId
+        ? {...statuses, [`provider:${sourceProviderConnectionId}`]: 'missing'}
+        : statuses
+    },
+    {},
+  )
+
+  return (payloads.models ?? []).reduce<Record<string, ProjectTransferDependencyStatus>>((statuses, model) => {
+    const sourceModelId = typeof model.sourceModelId === 'string' ? model.sourceModelId : ''
+
+    return sourceModelId ? {...statuses, [`model:${sourceModelId}`]: 'missing'} : statuses
+  }, providerStatuses)
+}
+
 const getPlanSummary = ({
   blockers,
   conflictCounts,
+  dependencyStatuses,
+  judgmentConflictStatus,
   overlapCounts,
   packageCounts,
   packageFingerprint,
@@ -839,6 +865,8 @@ const getPlanSummary = ({
 }: {
   blockers: ProjectTransferPlanBlocker[]
   conflictCounts: ProjectTransferPlanSummary['conflictCounts']
+  dependencyStatuses: Record<string, ProjectTransferDependencyStatus>
+  judgmentConflictStatus: ProjectTransferPlanSummary['judgmentConflictStatus']
   overlapCounts: ProjectTransferPlanSummary['overlapCounts']
   packageCounts: Record<ProjectTransferPayloadKey, number>
   packageFingerprint: string | null
@@ -848,7 +876,8 @@ const getPlanSummary = ({
     blockerCount: blockers.length,
     blockers,
     conflictCounts,
-    dependencyStatuses: {},
+    dependencyStatuses,
+    judgmentConflictStatus,
     overlapCounts,
     packageCounts,
     packageFingerprint,
@@ -876,7 +905,7 @@ const getPlanArtifact = ({
 }): ProjectTransferImportPlanArtifact => {
   return {
     blockers,
-    canCommit: blockers.length === 0,
+    canCommit: validateProjectTransferPlanReadyToCommit(planSummary).ok,
     packageCounts,
     packageFingerprint,
     packageWarnings,
@@ -1083,6 +1112,8 @@ export const analyzeProjectTransferImportPackage = async (
       ...getProjectTransferInitialConflictCounts(packageContractBlockers.length),
       ...targetAnalysis.conflictCounts,
     },
+    dependencyStatuses: getInitialDependencyStatuses(parsed.payloads),
+    judgmentConflictStatus: targetAnalysis.judgmentConflictStatus,
     overlapCounts: {...getProjectTransferInitialOverlapCounts(), ...targetAnalysis.overlapCounts},
     packageCounts,
     packageFingerprint,

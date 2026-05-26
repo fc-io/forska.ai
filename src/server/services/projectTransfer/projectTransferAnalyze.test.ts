@@ -446,9 +446,14 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
     expect(result.planSummary.overlapCounts.newArticleCount).toBe(1)
     expect(result.planSummary.packageCounts?.articles).toBe(1)
     expect(result.packageFingerprint).toBe(manifest.packageFingerprint)
-    expect(result.plan.canCommit).toBe(true)
+    expect(result.plan.canCommit).toBe(false)
+    expect(result.planSummary.dependencyStatuses).toEqual({
+      'model:model-1': 'missing',
+      'provider:provider-connection-1': 'missing',
+    })
+    expect(result.planSummary.judgmentConflictStatus).toBe('unknown')
     expect(result.analysis.payloads.articles.actualRecordCount).toBe(1)
-    expect(planArtifact).toMatchObject({canCommit: true, planRevision: 1})
+    expect(planArtifact).toMatchObject({canCommit: false, planRevision: 1})
     expect(existsSync(analysisPath)).toBe(true)
     expect(existsSync(extractedAssetPath)).toBe(true)
   } finally {
@@ -487,7 +492,9 @@ test('plans reused article fills, asset promotion, route omissions, and duplicat
     const [articleMatch] = result.plan.targetPlan.articleMatches
     const [articleUpdate] = result.plan.targetPlan.articleUpdatePlan
 
-    expect(result.planSummary.blockerCount).toBe(0)
+    expect(result.planSummary.blockerCount).toBe(5)
+    expect(result.planSummary.conflictCounts.judgmentConflictCount).toBe(2)
+    expect(result.planSummary.conflictCounts.humanReviewFidelityConflictCount).toBe(3)
     expect(result.planSummary.warningCount).toBeGreaterThanOrEqual(1)
     expect(result.planSummary.overlapCounts.reusedArticleCount).toBe(1)
     expect(result.planSummary.overlapCounts.newArticleCount).toBe(0)

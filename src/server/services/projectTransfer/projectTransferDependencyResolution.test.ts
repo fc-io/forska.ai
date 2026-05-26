@@ -100,14 +100,46 @@ const getBasePlan = (): ProjectTransferImportPlanArtifact => {
     resolutionKinds: {},
     summary,
     targetPlan: {
-      articleMatches: [],
+      articleMatches: [
+        {
+          action: 'create',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: ['arxiv:2401.12345', 'doi:10.1101/2024.01.01.123456', 'pmid:12345'],
+          packageArticleId: null,
+          selectedTargetArticleId: null,
+          sourceArticleId: 'article-1',
+        },
+      ],
       articleRoutePlan: [],
       articleUpdatePlan: [],
       assetPromotionPlan: [],
       duplicateImportMatches: [],
-      projectPromptPlan: [],
+      projectPromptPlan: [
+        {
+          enabled: true,
+          metadata: {
+            archived: false,
+            criteriaDisposition: 'include',
+            criteriaSectionKey: 'inclusion',
+            criteriaSectionLabel: 'Inclusion',
+          },
+          order: 1,
+          sourceProjectPromptId: 'project-prompt-1',
+          sourcePromptId: 'prompt-1',
+          targetPromptId: 'new:prompt:c4f659c8baf0066f65ecb7006731b24d',
+        },
+      ],
       projectRoutePlan: [],
-      promptPlan: [],
+      promptPlan: [
+        {
+          action: 'create',
+          computedContentHash: 'c4f659c8baf0066f65ecb7006731b24d',
+          packageContentHash: 'c4f659c8baf0066f65ecb7006731b24d',
+          sourcePromptId: 'prompt-1',
+          targetPromptId: null,
+        },
+      ],
     },
   }
 }
@@ -179,7 +211,11 @@ const getCodexPayloads = (): ProjectTransferPayloadByKey => {
         ...judgment,
         judgmentInputSignature: {
           ...judgmentInputSignature,
-          model: {...(judgmentInputSignature.model as Record<string, unknown>), modelOptions: {thinking: 'medium'}},
+          model: {
+            ...(judgmentInputSignature.model as Record<string, unknown>),
+            modelOptions: {thinking: 'medium'},
+            modelSignature: codexModelSignature,
+          },
           provider: {
             providerConnectionSignature: codexProviderSignature,
             providerKind: 'codex',
@@ -252,6 +288,97 @@ test('project transfer dependency resolution auto-matches one safe enabled provi
       'provider-connection-1': 'target-provider-1',
     })
     expect(persistedPlan.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': 'target-model-1'})
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer dependency resolution reuses equivalent target judgments after dependency remap', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getProjectTransferPayloadFixtureMap()
+    const [article] = payloads.articles
+
+    if (!article) {
+      throw new Error('Expected article fixture')
+    }
+
+    const plan = {
+      ...getBasePlan(),
+      targetPlan: {
+        ...getBasePlan().targetPlan,
+        articleMatches: [
+          {
+            action: 'reuse' as const,
+            candidates: [
+              {
+                matchedIdentifiers: [],
+                targetArticle: {...article, targetArticleId: 'target-article-1'},
+                targetArticleId: 'target-article-1',
+              },
+            ],
+            conflicts: [],
+            identifierKeys: ['doi:10.1101/2024.01.01.123456'],
+            packageArticleId: null,
+            selectedTargetArticleId: 'target-article-1',
+            sourceArticleId: 'article-1',
+          },
+        ],
+        projectPromptPlan: getBasePlan().targetPlan.projectPromptPlan.map((projectPrompt) => {
+          return {...projectPrompt, targetPromptId: 'target-prompt-1'}
+        }),
+        promptPlan: getBasePlan().targetPlan.promptPlan.map((prompt) => {
+          return {...prompt, action: 'reuse' as const, targetPromptId: 'target-prompt-1'}
+        }),
+      },
+    }
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        analyzeTargetRunner: {
+          queryJson: async <T>(statement: string): Promise<T[]> => {
+            const rows = statement.includes('FROM app.judgment_assessment')
+              ? []
+              : statement.includes('FROM app.judgment')
+                ? [
+                    {
+                      answeredOriginal: 'include',
+                      answeredOriginalAsArray: ['include'],
+                      confidenceOriginal: 90,
+                      explanation: 'Fixture explanation',
+                      isAnswered: true,
+                      quotes: [{quote: 'Fixture quote'}],
+                      targetArticleId: 'target-article-1',
+                      targetJudgmentId: 'target-judgment-1',
+                      targetModelId: 'target-model-1',
+                      targetPromptId: 'target-prompt-1',
+                      useAbstract: true,
+                      useFulltext: false,
+                      useFulltextNoImages: false,
+                      useTitle: true,
+                    },
+                  ]
+                : []
+
+            return rows as T[]
+          },
+        },
+        listProviderConnections: async () => {
+          return [getTargetConnection()]
+        },
+      },
+      request: {planRevision: 1},
+    })
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+    expect(result.status === 'ok' ? result.planSummary.overlapCounts.reusedJudgmentCount : 0).toBe(1)
+    expect(result.status === 'ok' ? result.plan.targetPlan.judgmentPlan?.[0]?.action : null).toBe('reuse')
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

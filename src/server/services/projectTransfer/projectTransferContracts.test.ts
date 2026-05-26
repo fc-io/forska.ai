@@ -36,6 +36,7 @@ const getReadyPlanSummary = (): ProjectTransferPlanSummary => {
       projectPromptConflictCount: 0,
     },
     dependencyStatuses: {model: 'resolved', providerConnection: 'not_required'},
+    judgmentConflictStatus: 'clear',
     overlapCounts: {
       currentReviewRowsSignatureHumanReviewCount: 0,
       currentReviewRowsSignatureJudgmentCount: 0,
@@ -234,6 +235,10 @@ test('requires concrete overlap and conflict counts before ready_to_commit', () 
       conflictCounts: {...readyPlan.conflictCounts, judgmentConflictCount: -1},
     }),
   ).toEqual({error: 'Project transfer conflict count judgmentConflictCount must be a non-negative integer', ok: false})
+  expect(validateProjectTransferPlanReadyToCommit({...readyPlan, judgmentConflictStatus: 'unknown'})).toEqual({
+    error: 'Project transfer judgment conflicts must be known before ready_to_commit',
+    ok: false,
+  })
 })
 
 test('keeps progress monotonic and cancellation cleanup writer-only', () => {
