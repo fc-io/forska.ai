@@ -24,6 +24,10 @@ import {
   validateProjectTransferPlanReadyToCommit,
 } from '../services/projectTransfer/projectTransferContracts.ts'
 import {
+  type ProjectTransferDependencyResolutionRequest,
+  resolveProjectTransferDependencies,
+} from '../services/projectTransfer/projectTransferDependencyResolution.ts'
+import {
   createProjectTransferExport,
   type ProjectTransferExportPackageMetadata,
 } from '../services/projectTransfer/projectTransferExportPackage.ts'
@@ -70,6 +74,7 @@ type ProjectTransferImportSessionData = ProjectTransferSessionResponse & {
   overlapCounts: ProjectTransferPlanSummary['overlapCounts'] | null
   resolveDependenciesUrl: string
   sessionUrl: string
+  stalePlan?: boolean
   upload: ProjectTransferUploadMetadataPayload | null
   uploadUrl: string
   warnings: string[]
@@ -164,9 +169,54 @@ const analyzeImportSessionRequestShape = arktype({
   'expandedBytes?': 'number.integer >= 0',
   'zipBytes?': 'number.integer >= 0',
 })
+const dependencyProviderSelectionShape = arktype({
+  sourceProviderConnectionId: 'string',
+  targetProviderConnectionId: 'string',
+})
+const dependencyCreatedProviderHandoffShape = arktype({
+  'setupState?': '"auth_pending" | "complete" | "connection_test_pending" | "discovery_pending"',
+  sourceProviderConnectionId: 'string',
+  targetProviderConnectionId: 'string',
+})
+const dependencyModelSelectionShape = arktype({
+  'acceptSubstitute?': 'boolean',
+  sourceModelId: 'string',
+  targetModelId: 'string',
+})
+const dependencyMaterializedModelHandoffShape = arktype({
+  'acceptSubstitute?': 'boolean',
+  sourceModelId: 'string',
+  targetModelId: 'string',
+  'targetProviderConnectionId?': 'string',
+})
+const dependencyModelMaterializationRequestShape = arktype({
+  'displayName?': 'string',
+  remoteModelId: 'string',
+  sourceModelId: 'string',
+  targetProviderConnectionId: 'string',
+  'variant?': 'string | null',
+})
+const dependencyUnresolvedProviderShape = arktype({
+  'reason?': 'string',
+  sourceProviderConnectionId: 'string',
+  'status?': '"ambiguous" | "blocked" | "missing"',
+})
+const dependencyUnresolvedModelShape = arktype({
+  'reason?': 'string',
+  sourceModelId: 'string',
+  'status?': '"ambiguous" | "blocked" | "missing"',
+})
 const resolveImportDependenciesRequestShape = arktype({
-  'expectedPlanRevision?': 'number.integer >= 0',
-  'resolutions?': 'unknown',
+  'autoResolve?': 'boolean',
+  'codexSetupState?': '"complete" | "login_pending" | "not_ready" | "setup_pending"',
+  'createdProviderConnections?': dependencyCreatedProviderHandoffShape.array(),
+  'materializedModels?': dependencyMaterializedModelHandoffShape.array(),
+  'modelMaterializationRequests?': dependencyModelMaterializationRequestShape.array(),
+  planRevision: 'number.integer >= 0',
+  'selectedModels?': dependencyModelSelectionShape.array(),
+  'selectedProviderConnections?': dependencyProviderSelectionShape.array(),
+  'unresolvedModels?': dependencyUnresolvedModelShape.array(),
+  'unresolvedProviders?': dependencyUnresolvedProviderShape.array(),
 })
 const commitImportSessionRequestShape = arktype({
   'expectedOwnerToken?': 'string',
@@ -179,7 +229,7 @@ const cancelImportSessionRequestShape = arktype({
 })
 type CreateImportSessionRequest = typeof createImportSessionRequestShape.infer
 type AnalyzeImportSessionRequest = typeof analyzeImportSessionRequestShape.infer
-type ResolveImportDependenciesRequest = typeof resolveImportDependenciesRequestShape.infer
+type ResolveImportDependenciesRequest = ProjectTransferDependencyResolutionRequest
 type CommitImportSessionRequest = typeof commitImportSessionRequestShape.infer
 type CancelImportSessionRequest = typeof cancelImportSessionRequestShape.infer
 
@@ -243,6 +293,94 @@ const parseRequestBody = <TValue>(
   return Array.isArray(parsed)
     ? {error: `Invalid project transfer request body: ${String(parsed)}`, ok: false}
     : {ok: true, value: parsed as TValue}
+}
+
+const getUnexpectedNestedArrayKey = ({allowedKeys, value}: {allowedKeys: readonly string[]; value: unknown}) => {
+  if (!Array.isArray(value)) {
+    return null
+  }
+
+  return (
+    value
+      .map((entry, index) => {
+        return isRecord(entry) ? {index, key: getUnexpectedBodyKey(entry, allowedKeys) ?? null} : {index, key: null}
+      })
+      .find((entry) => {
+        return entry.key !== null
+      }) ?? null
+  )
+}
+
+const validateResolveDependenciesNestedKeys = (
+  body: Record<string, unknown>,
+): {error: string; ok: false} | {ok: true} => {
+  const nestedChecks = [
+    {allowedKeys: ['sourceProviderConnectionId', 'targetProviderConnectionId'], field: 'selectedProviderConnections'},
+    {
+      allowedKeys: ['setupState', 'sourceProviderConnectionId', 'targetProviderConnectionId'],
+      field: 'createdProviderConnections',
+    },
+    {allowedKeys: ['acceptSubstitute', 'sourceModelId', 'targetModelId'], field: 'selectedModels'},
+    {
+      allowedKeys: ['acceptSubstitute', 'sourceModelId', 'targetModelId', 'targetProviderConnectionId'],
+      field: 'materializedModels',
+    },
+    {
+      allowedKeys: ['displayName', 'remoteModelId', 'sourceModelId', 'targetProviderConnectionId', 'variant'],
+      field: 'modelMaterializationRequests',
+    },
+    {allowedKeys: ['reason', 'sourceProviderConnectionId', 'status'], field: 'unresolvedProviders'},
+    {allowedKeys: ['reason', 'sourceModelId', 'status'], field: 'unresolvedModels'},
+  ] as const
+  const invalidNestedKey =
+    nestedChecks
+      .map((check) => {
+        const invalid = getUnexpectedNestedArrayKey({...check, value: body[check.field]})
+
+        return invalid ? {...invalid, field: check.field} : null
+      })
+      .find((entry) => {
+        return entry !== null
+      }) ?? null
+
+  return invalidNestedKey === null
+    ? {ok: true}
+    : {
+        error:
+          `Project transfer request body contains unsupported field ${invalidNestedKey.field}`
+          + `[${invalidNestedKey.index}].${invalidNestedKey.key}`,
+        ok: false,
+      }
+}
+
+const parseResolveDependenciesRequest = (
+  body: unknown,
+): {error: string; ok: false} | {ok: true; value: ResolveImportDependenciesRequest} => {
+  const allowedKeys = [
+    'autoResolve',
+    'codexSetupState',
+    'createdProviderConnections',
+    'materializedModels',
+    'modelMaterializationRequests',
+    'planRevision',
+    'selectedModels',
+    'selectedProviderConnections',
+    'unresolvedModels',
+    'unresolvedProviders',
+  ]
+  const request = parseRequestBody<ResolveImportDependenciesRequest>(
+    body,
+    resolveImportDependenciesRequestShape,
+    allowedKeys,
+  )
+
+  if (!request.ok) {
+    return request
+  }
+
+  const nestedValidation = validateResolveDependenciesNestedKeys((body ?? {}) as Record<string, unknown>)
+
+  return nestedValidation.ok ? request : nestedValidation
 }
 
 const getImportSessionUrls = (sessionId: string) => {
@@ -1025,10 +1163,7 @@ const resolveImportDependencies = async (
   sessionId: string,
   body: unknown,
 ): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData>> => {
-  const request = parseRequestBody<ResolveImportDependenciesRequest>(body, resolveImportDependenciesRequestShape, [
-    'expectedPlanRevision',
-    'resolutions',
-  ])
+  const request = parseResolveDependenciesRequest(body)
 
   if (!request.ok) {
     return getProjectTransferApiError(set, 400, request.error)
@@ -1040,16 +1175,40 @@ const resolveImportDependencies = async (
     return response
   }
 
-  if (
-    request.value.expectedPlanRevision !== undefined
-    && response.data.planRevision !== request.value.expectedPlanRevision
-  ) {
-    return getProjectTransferApiError(set, 409, 'Project transfer import plan revision is stale')
+  if (response.data.planRevision !== request.value.planRevision) {
+    return {data: {...response.data, stalePlan: true}, error: null}
   }
 
-  return response.data.state === 'awaiting_resolution' || response.data.state === 'ready_to_commit'
-    ? response
-    : getProjectTransferApiError(set, 409, 'Project transfer import session is not awaiting dependency resolution')
+  if (response.data.state !== 'awaiting_resolution' && response.data.state !== 'ready_to_commit') {
+    return getProjectTransferApiError(set, 409, 'Project transfer import session is not awaiting dependency resolution')
+  }
+
+  const result = await resolveProjectTransferDependencies({
+    layout: getProjectTransferImportTempLayout(sessionId),
+    nextPlanRevision: response.data.planRevision + 1,
+    request: request.value,
+  })
+
+  if (result.status === 'error') {
+    return getProjectTransferApiError(set, result.statusCode, result.error)
+  }
+
+  if (!result.changed) {
+    return response
+  }
+
+  const updated = await getProjectTransferSessionRepository().updateProjectTransferSessionPlanRevision({
+    expectedPlanRevision: response.data.planRevision,
+    nextState: getImportAnalyzeNextState(result.planSummary),
+    now: new Date(),
+    planSummary: result.planSummary,
+    sessionId,
+  })
+
+  return updated === null
+    ? getProjectTransferApiError(set, 409, 'Project transfer import dependency resolution could not update the plan')
+    : (getImportSessionResponseFromRecord(updated)
+        ?? getProjectTransferApiError(set, 500, 'Import session unavailable'))
 }
 
 const commitImportSession = (
