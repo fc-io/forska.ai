@@ -2,6 +2,13 @@ import {mkdir, readFile, rm, statfs} from 'node:fs/promises'
 import {dirname} from 'node:path'
 
 import {
+  getProjectTransferAnalyzeTargetPlan,
+  getProjectTransferInitialConflictCounts,
+  getProjectTransferInitialOverlapCounts,
+  type ProjectTransferAnalyzeTargetRunner,
+  type ProjectTransferTargetPlan,
+} from './projectTransferAnalyzeTarget.ts'
+import {
   type ProjectTransferPlanBlocker,
   type ProjectTransferPlanSummary,
   type ProjectTransferUploadMetadataPayload,
@@ -77,6 +84,7 @@ export type ProjectTransferImportPlanArtifact = {
   planRevision: number
   resolutionKinds: Record<string, ProjectTransferPlanBlocker['resolutionKind']>
   summary: ProjectTransferPlanSummary
+  targetPlan: ProjectTransferTargetPlan
 }
 
 export type ProjectTransferImportAnalyzeResult = {
@@ -90,6 +98,7 @@ type ProjectTransferImportAnalyzeInput = ProjectTransferAnalyzeRuntimeOptions & 
   availableDiskBytes?: number
   layout: ProjectTransferImportTempLayout
   planRevision: number
+  runner?: ProjectTransferAnalyzeTargetRunner
   uploadMetadata?: ProjectTransferUploadMetadataPayload | null
   zipModule?: ProjectTransferZipJsModule
 }
@@ -821,11 +830,15 @@ const getSemanticBlockers = ({
 
 const getPlanSummary = ({
   blockers,
+  conflictCounts,
+  overlapCounts,
   packageCounts,
   packageFingerprint,
   packageWarnings,
 }: {
   blockers: ProjectTransferPlanBlocker[]
+  conflictCounts: ProjectTransferPlanSummary['conflictCounts']
+  overlapCounts: ProjectTransferPlanSummary['overlapCounts']
   packageCounts: Record<ProjectTransferPayloadKey, number>
   packageFingerprint: string | null
   packageWarnings: ProjectTransferPackageWarning[]
@@ -833,16 +846,9 @@ const getPlanSummary = ({
   return {
     blockerCount: blockers.length,
     blockers,
-    conflictCounts: {
-      articleIdentifier: 0,
-      dependency: 0,
-      humanReview: 0,
-      judgment: 0,
-      packageContract: blockers.length,
-      projectPrompt: 0,
-    },
+    conflictCounts,
     dependencyStatuses: {},
-    overlapCounts: {exactDuplicateImports: 0, reusedArticles: 0},
+    overlapCounts,
     packageCounts,
     packageFingerprint,
     packageWarnings,
@@ -857,6 +863,7 @@ const getPlanArtifact = ({
   packageWarnings,
   planRevision,
   planSummary,
+  targetPlan,
 }: {
   blockers: ProjectTransferPlanBlocker[]
   packageCounts: Record<ProjectTransferPayloadKey, number>
@@ -864,6 +871,7 @@ const getPlanArtifact = ({
   packageWarnings: ProjectTransferPackageWarning[]
   planRevision: number
   planSummary: ProjectTransferPlanSummary
+  targetPlan: ProjectTransferTargetPlan
 }): ProjectTransferImportPlanArtifact => {
   return {
     blockers,
@@ -876,6 +884,7 @@ const getPlanArtifact = ({
       return {...kinds, [blocker.code]: blocker.resolutionKind}
     }, {}),
     summary: planSummary,
+    targetPlan,
   }
 }
 
@@ -1044,8 +1053,14 @@ export const analyzeProjectTransferImportPackage = async (
     manifest,
     payloads: parsed.payloads,
   })
-  const blockers = [...parsed.blockers, ...semanticBlockers]
-  const packageWarnings = parsed.warnings
+  const packageContractBlockers = [...parsed.blockers, ...semanticBlockers]
+  const targetAnalysis = await getProjectTransferAnalyzeTargetPlan({
+    packageFingerprint,
+    payloads: parsed.payloads,
+    runner: input.runner,
+  })
+  const blockers = [...packageContractBlockers, ...targetAnalysis.blockers]
+  const packageWarnings = [...parsed.warnings, ...targetAnalysis.packageWarnings]
   const payloadValues = Object.values(parsed.payloads)
   const jsonMetrics = getJsonMetrics([manifest, ...payloadValues])
 
@@ -1061,7 +1076,17 @@ export const analyzeProjectTransferImportPackage = async (
     zipBytes: packageBytes.byteLength,
   })
 
-  const planSummary = getPlanSummary({blockers, packageCounts, packageFingerprint, packageWarnings})
+  const planSummary = getPlanSummary({
+    blockers,
+    conflictCounts: {
+      ...getProjectTransferInitialConflictCounts(packageContractBlockers.length),
+      ...targetAnalysis.conflictCounts,
+    },
+    overlapCounts: {...getProjectTransferInitialOverlapCounts(), ...targetAnalysis.overlapCounts},
+    packageCounts,
+    packageFingerprint,
+    packageWarnings,
+  })
   const plan = getPlanArtifact({
     blockers,
     packageCounts,
@@ -1069,6 +1094,7 @@ export const analyzeProjectTransferImportPackage = async (
     packageWarnings,
     planRevision: input.planRevision,
     planSummary,
+    targetPlan: targetAnalysis.targetPlan,
   })
   const assetManifest = getAssetManifest(parsed.payloads)
   const assetSummaryBytes = sumNumbers(

@@ -29,15 +29,31 @@ const getReadyPlanSummary = (): ProjectTransferPlanSummary => {
   return {
     blockerCount: 0,
     conflictCounts: {
-      articleIdentifier: 0,
-      dependency: 0,
-      humanReview: 0,
-      judgment: 0,
-      packageContract: 0,
-      projectPrompt: 0,
+      articleConflictCount: 0,
+      humanReviewFidelityConflictCount: 0,
+      judgmentConflictCount: 0,
+      packageContractConflictCount: 0,
+      projectPromptConflictCount: 0,
     },
     dependencyStatuses: {model: 'resolved', providerConnection: 'not_required'},
-    overlapCounts: {exactDuplicateImports: 0, reusedArticles: 0},
+    overlapCounts: {
+      currentReviewRowsSignatureHumanReviewCount: 0,
+      currentReviewRowsSignatureJudgmentCount: 0,
+      dirtiedExistingProjectCount: 0,
+      duplicateImportMatchCount: 0,
+      newArticleCount: 0,
+      omittedArticleRouteLinkCount: 0,
+      omittedRouteLinkCount: 0,
+      reusedArticleAssetPromotionCount: 0,
+      reusedArticleCount: 0,
+      reusedArticleFieldFillCount: 0,
+      reusedArticleUpdateCount: 0,
+      reusedJudgmentCount: 0,
+      routeArticleSnapshotLinkCount: 0,
+      snapshotVerifiedJudgmentCount: 0,
+      storedSignatureHumanReviewCount: 0,
+      storedSignatureJudgmentCount: 0,
+    },
     warningCount: 0,
   }
 }
@@ -178,16 +194,32 @@ test('validates dependency statuses and ready dependency statuses separately', (
 
 test('requires concrete overlap and conflict counts before ready_to_commit', () => {
   const readyPlan = getReadyPlanSummary()
-  const {judgment: _judgment, ...conflictCountsWithoutJudgment} = readyPlan.conflictCounts
+  const {judgmentConflictCount: _judgmentConflictCount, ...conflictCountsWithoutJudgment} = readyPlan.conflictCounts
 
-  expect(projectTransferOverlapSummaryKeys).toEqual(['exactDuplicateImports', 'reusedArticles'])
+  expect(projectTransferOverlapSummaryKeys).toEqual([
+    'reusedArticleCount',
+    'newArticleCount',
+    'reusedArticleUpdateCount',
+    'reusedArticleFieldFillCount',
+    'reusedArticleAssetPromotionCount',
+    'reusedJudgmentCount',
+    'dirtiedExistingProjectCount',
+    'omittedRouteLinkCount',
+    'omittedArticleRouteLinkCount',
+    'routeArticleSnapshotLinkCount',
+    'duplicateImportMatchCount',
+    'storedSignatureJudgmentCount',
+    'snapshotVerifiedJudgmentCount',
+    'currentReviewRowsSignatureJudgmentCount',
+    'storedSignatureHumanReviewCount',
+    'currentReviewRowsSignatureHumanReviewCount',
+  ])
   expect(projectTransferConflictCountKeys).toEqual([
-    'articleIdentifier',
-    'dependency',
-    'humanReview',
-    'judgment',
-    'packageContract',
-    'projectPrompt',
+    'packageContractConflictCount',
+    'articleConflictCount',
+    'projectPromptConflictCount',
+    'judgmentConflictCount',
+    'humanReviewFidelityConflictCount',
   ])
   expect(validateProjectTransferPlanReadyToCommit(readyPlan)).toEqual({ok: true})
   expect(
@@ -195,13 +227,13 @@ test('requires concrete overlap and conflict counts before ready_to_commit', () 
       ...readyPlan,
       conflictCounts: conflictCountsWithoutJudgment as ProjectTransferPlanSummary['conflictCounts'],
     }),
-  ).toEqual({error: 'Project transfer missing required conflict count judgment', ok: false})
+  ).toEqual({error: 'Project transfer missing required conflict count judgmentConflictCount', ok: false})
   expect(
     validateProjectTransferPlanReadyToCommit({
       ...readyPlan,
-      conflictCounts: {...readyPlan.conflictCounts, judgment: -1},
+      conflictCounts: {...readyPlan.conflictCounts, judgmentConflictCount: -1},
     }),
-  ).toEqual({error: 'Project transfer conflict count judgment must be a non-negative integer', ok: false})
+  ).toEqual({error: 'Project transfer conflict count judgmentConflictCount must be a non-negative integer', ok: false})
 })
 
 test('keeps progress monotonic and cancellation cleanup writer-only', () => {

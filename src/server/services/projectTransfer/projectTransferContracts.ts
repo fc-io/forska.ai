@@ -50,15 +50,31 @@ export const projectTransferDependencyStatuses = [
 
 export const projectTransferReadyDependencyStatuses = ['not_required', 'resolved'] as const
 
-export const projectTransferOverlapSummaryKeys = ['exactDuplicateImports', 'reusedArticles'] as const
+export const projectTransferOverlapSummaryKeys = [
+  'reusedArticleCount',
+  'newArticleCount',
+  'reusedArticleUpdateCount',
+  'reusedArticleFieldFillCount',
+  'reusedArticleAssetPromotionCount',
+  'reusedJudgmentCount',
+  'dirtiedExistingProjectCount',
+  'omittedRouteLinkCount',
+  'omittedArticleRouteLinkCount',
+  'routeArticleSnapshotLinkCount',
+  'duplicateImportMatchCount',
+  'storedSignatureJudgmentCount',
+  'snapshotVerifiedJudgmentCount',
+  'currentReviewRowsSignatureJudgmentCount',
+  'storedSignatureHumanReviewCount',
+  'currentReviewRowsSignatureHumanReviewCount',
+] as const
 
 export const projectTransferConflictCountKeys = [
-  'articleIdentifier',
-  'dependency',
-  'humanReview',
-  'judgment',
-  'packageContract',
-  'projectPrompt',
+  'packageContractConflictCount',
+  'articleConflictCount',
+  'projectPromptConflictCount',
+  'judgmentConflictCount',
+  'humanReviewFidelityConflictCount',
 ] as const
 
 export const projectTransferWriterOnlyCleanupStates = ['cancelled', 'expired'] as const
