@@ -101,6 +101,22 @@ const setSessionSearchParam = (sessionId: string | null) => {
   window.history.replaceState(null, '', url.pathname + url.search)
 }
 
+const getSessionUpdatedAtTime = (session: ProjectImportSession) => {
+  const time = new Date(session.updatedAt).getTime()
+
+  return Number.isNaN(time) ? 0 : time
+}
+
+const shouldReplaceSessionOverride = ({
+  current,
+  next,
+}: {
+  current: ProjectImportSession | null
+  next: ProjectImportSession
+}) => {
+  return current === null || current.id !== next.id || getSessionUpdatedAtTime(next) >= getSessionUpdatedAtTime(current)
+}
+
 const formatCount = (value: number | null | undefined) => {
   return Number.isFinite(value) ? Number(value).toLocaleString() : '0'
 }
@@ -683,7 +699,10 @@ export const ImportProjectWizard = () => {
     }
   })
   const currentSession = createMemo(() => {
-    return sessionQuery.data ?? sessionOverride()
+    const override = sessionOverride()
+    const id = sessionId()
+
+    return id === null ? null : override?.id === id ? override : (sessionQuery.data ?? null)
   })
   const planSummary = createMemo(() => {
     return currentSession()?.planSummary ?? null
@@ -932,7 +951,11 @@ export const ImportProjectWizard = () => {
   createEffect(() => {
     const session = sessionQuery.data
 
-    if (session) {
+    if (
+      session
+      && session.id === sessionId()
+      && shouldReplaceSessionOverride({current: sessionOverride(), next: session})
+    ) {
       setSessionOverride(session)
     }
   })

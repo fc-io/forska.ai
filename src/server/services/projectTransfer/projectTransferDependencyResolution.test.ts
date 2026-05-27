@@ -657,6 +657,63 @@ test('project transfer dependency resolution only accepts non-equivalent substit
   }
 })
 
+test('project transfer dependency resolution revokes stale substitute approvals', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = {...getProjectTransferPayloadFixtureMap(), judgments: []}
+    const substituteModel = getTargetModel({
+      displayName: 'Future settings model',
+      id: 'substitute-model-1',
+      modelName: 'future-settings-model',
+      name: 'Future settings model',
+      remoteModelId: 'future-settings-model',
+    })
+    const layout = await writeProjectTransferArtifacts({
+      cwd,
+      payloads,
+      plan: {
+        ...getBasePlan(),
+        dependencyResolution: {
+          acceptedSubstituteModelSourceIds: ['model-1'],
+          modelTargetBySourceId: {'model-1': 'substitute-model-1'},
+          providerTargetBySourceId: {'provider-connection-1': 'target-provider-1'},
+        },
+      },
+    })
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        getProviderModelsByIds: async () => {
+          return new Map([['substitute-model-1', substituteModel]])
+        },
+        listProviderConnections: async () => {
+          return [getTargetConnection({}, [substituteModel])]
+        },
+      },
+      request: {
+        planRevision: 1,
+        selectedModels: [{acceptSubstitute: false, sourceModelId: 'model-1', targetModelId: 'substitute-model-1'}],
+      },
+    })
+    const persistedPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as {
+      dependencyResolution: {acceptedSubstituteModelSourceIds: string[]}
+    }
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'blocked',
+      'provider:provider-connection-1': 'resolved',
+    })
+    expect(persistedPlan.dependencyResolution.acceptedSubstituteModelSourceIds).toEqual([])
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('project transfer dependency resolution leaves nullable remote model descriptors unresolved when fallback identity is ambiguous', async () => {
   const cwd = getRuntimeRoot()
 

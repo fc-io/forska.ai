@@ -767,6 +767,51 @@ test('project transfer import session creation returns public URLs without temp 
   expect(createProjectTransferSessionMock).toHaveBeenCalled()
 })
 
+test('project transfer import endpoints reject expired sessions before mutation', async () => {
+  routeState.sessions['import-expired-get'] = getImportSessionRecord({expiresAt: pastDate, id: 'import-expired-get'})
+  routeState.sessions['import-expired-upload'] = getImportSessionRecord({
+    expiresAt: pastDate,
+    id: 'import-expired-upload',
+  })
+  routeState.sessions['import-expired-analyze'] = getImportSessionRecord({
+    expiresAt: pastDate,
+    id: 'import-expired-analyze',
+    progressJson: {phase: 'upload', status: 'completed', uploadMetadata: getUploadMetadata('zip-body')},
+    state: 'queued',
+  })
+  const app = await getProjectTransferApp()
+
+  const getResponse = await getRouteResponse(app, '/api/projects/import/import-expired-get', 'GET')
+  const uploadResponse = await app.handle(
+    new Request('http://localhost/api/projects/import/import-expired-upload/upload', {
+      body: textEncoder.encode('zip-body'),
+      headers: {'content-type': 'application/zip'},
+      method: 'PUT',
+    }),
+  )
+  const analyzeResponse = await app.handle(
+    new Request('http://localhost/api/projects/import/import-expired-analyze/analyze', {
+      body: JSON.stringify({expandedBytes: 0}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodies = await Promise.all([
+    getResponse.json() as Promise<{data: null; error: string}>,
+    uploadResponse.json() as Promise<{data: null; error: string}>,
+    analyzeResponse.json() as Promise<{data: null; error: string}>,
+  ])
+
+  expect([getResponse.status, uploadResponse.status, analyzeResponse.status]).toEqual([410, 410, 410])
+  expect(bodies).toEqual(
+    [0, 1, 2].map(() => {
+      return {data: null, error: 'Project transfer import session expired'}
+    }),
+  )
+  expect(transitionProjectTransferSessionStateMock).not.toHaveBeenCalled()
+  expect(analyzeProjectTransferImportPackageMock).not.toHaveBeenCalled()
+})
+
 test('project transfer import upload streams to upload.zip and persists public metadata', async () => {
   routeState.sessions[uploadSessionId] = getImportSessionRecord({id: uploadSessionId})
   const app = await getProjectTransferApp()
@@ -803,7 +848,7 @@ test('project transfer import analyze claims queued uploads and writes an inline
 
   const response = await app.handle(
     new Request('http://localhost/api/projects/import/import-analyze/analyze', {
-      body: JSON.stringify({}),
+      body: JSON.stringify({expandedBytes: 0}),
       headers: {'content-type': 'application/json'},
       method: 'POST',
     }),
@@ -830,7 +875,7 @@ test('project transfer import analyze claims queued uploads and writes an inline
   expect(body.data.canCommit).toBe(false)
 })
 
-test('project transfer import analyze returns accepted for background-sized work', async () => {
+test('project transfer import analyze returns accepted when expanded size is unknown', async () => {
   routeState.sessions['import-background-analyze'] = getImportSessionRecord({
     id: 'import-background-analyze',
     progressJson: {phase: 'upload', status: 'completed', uploadMetadata: getUploadMetadata('zip-body')},
@@ -840,7 +885,7 @@ test('project transfer import analyze returns accepted for background-sized work
 
   const response = await app.handle(
     new Request('http://localhost/api/projects/import/import-background-analyze/analyze', {
-      body: JSON.stringify({expandedBytes: 1024 * 1024 * 1024}),
+      body: JSON.stringify({}),
       headers: {'content-type': 'application/json'},
       method: 'POST',
     }),

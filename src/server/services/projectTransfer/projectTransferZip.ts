@@ -62,7 +62,11 @@ export type ProjectTransferZipWrittenPackage = {
   uncompressedSize: number
 }
 
-type ProjectTransferZipReadOptions = {bytes: Uint8Array; zipModule?: ProjectTransferZipJsModule}
+type ProjectTransferZipReadOptions = {
+  beforeReadEntries?: (entries: readonly ProjectTransferZipJsEntry[]) => void
+  bytes: Uint8Array
+  zipModule?: ProjectTransferZipJsModule
+}
 
 type ProjectTransferZipWriteOptions = {
   entries: readonly ProjectTransferZipEntryInput[]
@@ -238,6 +242,7 @@ const writeProjectTransferZipEntries = async (
 }
 
 export const readProjectTransferZipPackage = async ({
+  beforeReadEntries,
   bytes,
   zipModule,
 }: ProjectTransferZipReadOptions): Promise<ProjectTransferZipReadPackage> => {
@@ -260,6 +265,7 @@ export const readProjectTransferZipPackage = async ({
         return {path: entry.filename}
       }),
     )
+    beforeReadEntries?.(zipEntries)
 
     const entries = await Promise.all(
       zipEntries.map((entry) => {

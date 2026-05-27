@@ -45,6 +45,7 @@ import {
 } from './projectTransferSchemas.ts'
 import type {ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 import {
+  type ProjectTransferZipJsEntry,
   type ProjectTransferZipJsModule,
   type ProjectTransferZipReadEntry,
   readProjectTransferZipPackage,
@@ -212,6 +213,46 @@ const getArchiveNdjsonLineSize = (entries: readonly ProjectTransferZipReadEntry[
       .map((entry) => {
         return getNdjsonLineSize(entry.bytes)
       }),
+  )
+}
+
+const getZipEntryRequiredSize = (entry: ProjectTransferZipJsEntry) => {
+  const size = entry.uncompressedSize
+
+  return typeof size === 'number' && Number.isInteger(size) && size >= 0
+    ? size
+    : failProjectTransferAnalyze('zip_metadata', `${entry.filename} is missing required uncompressed size metadata`)
+}
+
+const assertArchiveMetadataResourceGate = ({
+  availableDiskBytes,
+  entries,
+  tempRootPath,
+  zipBytes,
+}: {
+  availableDiskBytes: number
+  entries: readonly ProjectTransferZipJsEntry[]
+  tempRootPath: string
+  zipBytes: number
+}) => {
+  const uncompressedSizes = entries.map(getZipEntryRequiredSize)
+
+  return assertResourceGate(
+    {
+      archiveInodeCount: entries.length,
+      archiveMemberCount: entries.length,
+      availableDiskBytes,
+      expandedBytes: sumNumbers(uncompressedSizes),
+      fileBytes: getMaximumNumber(uncompressedSizes),
+      resourcePaths: entries.map((entry) => {
+        return {kind: 'archive_member' as const, pathValue: entry.filename}
+      }),
+      targetWriteBytes: sumNumbers(uncompressedSizes),
+      tempRootPath,
+      usesStreamingParser: true,
+      zipBytes,
+    },
+    'archive_metadata',
   )
 }
 
@@ -1038,7 +1079,18 @@ export const analyzeProjectTransferImportPackage = async (
     'pre_extract',
   )
 
-  const zipPackage = await readProjectTransferZipPackage({bytes: packageBytes, zipModule: input.zipModule})
+  const zipPackage = await readProjectTransferZipPackage({
+    beforeReadEntries: (entries) => {
+      assertArchiveMetadataResourceGate({
+        availableDiskBytes,
+        entries,
+        tempRootPath: input.layout.rootPath,
+        zipBytes: packageBytes.byteLength,
+      })
+    },
+    bytes: packageBytes,
+    zipModule: input.zipModule,
+  })
   const expandedBytes = sumNumbers(
     zipPackage.entries.map((entry) => {
       return entry.uncompressedSize
