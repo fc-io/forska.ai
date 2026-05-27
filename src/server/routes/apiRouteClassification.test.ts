@@ -10,10 +10,15 @@ import {
 import {projectTransferRouteSpecs} from './projectTransferRoutes.ts'
 
 const csvExportRoute = {endpoint: 'csv-export', method: 'POST', samplePath: '/api/projects/project-1/export'} as const
+const runningJudgmentJobsRoute = {
+  endpoint: 'running-judgment-jobs',
+  method: 'GET',
+  samplePath: '/api/judgmentsjobs-running',
+} as const
 const runtimeAssetRoute = {endpoint: 'runtime-asset', method: 'GET', samplePath: '/api/runtime-asset'} as const
-const ownerRoutedRoutes = [...projectTransferRouteSpecs, csvExportRoute, runtimeAssetRoute]
+const ownerRoutedRoutes = [...projectTransferRouteSpecs, csvExportRoute, runningJudgmentJobsRoute, runtimeAssetRoute]
 
-test('project transfer, CSV export, and runtime asset routes proxy to the DuckDB owner and fail closed without one', () => {
+test('owner-backed routes proxy to the DuckDB owner and fail closed without one', () => {
   const results = ownerRoutedRoutes.map((route) => {
     const classification = classifyApiRoute(route.samplePath, route.method)
 
@@ -39,7 +44,7 @@ test('project transfer, CSV export, and runtime asset routes proxy to the DuckDB
   )
 })
 
-test('owner-private project transfer, CSV export, and runtime asset routes do not re-proxy', () => {
+test('owner-private owner-backed routes do not re-proxy', () => {
   const results = ownerRoutedRoutes.map((route) => {
     const pathname = `${duckdbOwnerPrivateApiPrefix}${route.samplePath}`
     const classification = classifyApiRoute(pathname, route.method)

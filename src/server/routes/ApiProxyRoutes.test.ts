@@ -569,7 +569,7 @@ apiProxyServerTest(
           apiServerPort: serverPort,
           databasePath: duckdbPath,
           heartbeatAt: '2026-03-01T00:00:00.000Z',
-          hostname: 'fredriks-mbp.ki.se',
+          hostname: 'legacy-owner.example.test',
           machineFingerprint: 'legacy-machine-fingerprint',
           leaseId: 'stale-legacy-lease-id',
           pid: 79362,
