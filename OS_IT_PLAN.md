@@ -76,6 +76,7 @@
 
 ### 4. Audit git history for old APIs and sensitive material
 
+- Findings report: [`plans/openSourceSecretsHistoryFindings.md`](plans/openSourceSecretsHistoryFindings.md).
 - Use history review to estimate risk and catch obvious leaks, not as the only safety control. Do not rely on proving that every old API use has been found.
 - Review all reachable refs, not just the current branch: branches, tags, and any release branches that will remain visible.
 - Search history for old route names, path patterns, internal admin/debug endpoints, and old client calls.
