@@ -1,8 +1,8 @@
 # Open Source Route Surface Audit
 
-Date: 2026-05-11
+Date: 2026-05-27
 
-Status: draft current-state baseline, updated after the initial legacy route cleanup. This document records the route and network surface that must be resolved before an open-source release.
+Status: code-backed current-state baseline. `src/server/routes/routeSurfaceInventory.ts` now records the mounted listener/proxy entrypoints and every currently mounted API route in `runtimeReadyRoutes`, `DuckdbOwnerConnectionsRoutes`, `JudgmentDispatchTelemetryRoutes`, and `getProductApiRoutes()`.
 
 ## Goal
 
@@ -26,8 +26,8 @@ Make the repo's exposed HTTP surface explicit so the open-source release can fai
 | `src/server/serverMain.ts` | API server on `127.0.0.1:${API_SERVER_PORT}` | Mounts proxy routes, runtime readiness, DuckDB owner registry, telemetry, crons, product API routes, and optional private DuckDB-owner mirrored API. CORS is limited to localhost app ports and desktop origins when desktop mode is enabled. | mixed: `public product`, `admin/debug`, `operator/infra` | Keep local-only by default. |
 | `src/appServerMain.ts` | Static app server on `127.0.0.1:${APP_SERVER_PORT}` | Serves `/assets`, returns `index.html` for non-API paths, and proxies all `/api` and `/api/*` requests to the API server. API proxy target falls back to `127.0.0.1`. | `public product`, `local-only` | Keep local-only by default. |
 | `src/desktop/index.ts` | Desktop wrapper and API bridge | Starts `src/server/index.ts` with `SERVER_ROLE=dev-single`, `FORSKA_DESKTOP_MODE=true`, and API origin `http://127.0.0.1:32101`. Desktop bridge only supports `/api/*`. | `local-only` | Keep. Desktop uses the same backend API surface, so backend route decisions apply to desktop too. |
-| `src/server/routes/ApiProxyRoutes.ts` | `onRequest` proxy middleware | Proxies classified API requests to the current DuckDB owner when the current role is an owner-proxy. `unclassified` routes are proxy/fail-closed candidates. | `operator/infra` | Keep internal/local-only. Blocker: product routes need explicit classification so `unclassified` does not remain the audit baseline. |
-| `src/server/routes/apiRouteClassification.ts` | Route classification helper | Classifies only runtime ready/state, DuckDB owner diagnostics, a subset of judgment-job diagnostics/control, and DuckDB studio snapshot. Most product routes are currently `unclassified`. | `operator/infra` | Keep, but expand or pair with a route manifest before public release. |
+| `src/server/routes/ApiProxyRoutes.ts` | `onRequest` proxy middleware | Proxies owner-dependent API requests to the current DuckDB owner when the current role is an owner-proxy. Unknown `/api/*` routes remain proxy/fail-closed candidates. | `operator/infra` | Keep internal/local-only. Current mounted routes are classified by `routeSurfaceInventory.ts`. |
+| `src/server/routes/apiRouteClassification.ts` | Route classification helper | Uses `routeSurfaceInventory.ts` to classify current mounted API routes for owner-proxy behavior, while leaving unknown `/api/*` paths as `unclassified` and fail-closed. | `operator/infra` | Keep. This is the owner/proxy classifier, not the final public supported-local-API contract. |
 | Cron plugins in `src/server/cron/*` | Scheduled background work mounted by server role | Full-text fetch, PDF conversion, NVIDIA SMI polling, judgment queue import/add/send/check/status/cleanup. These are scheduled Elysia plugins, not normal user HTTP paths. | `operator/infra` | Keep role-gated and local-only. Review defaults and docs because some jobs can call external APIs, provider runtimes, Docling, or SSH. |
 
 ## Mounted Route Matrix
@@ -72,20 +72,19 @@ Make the repo's exposed HTTP surface explicit so the open-source release can fai
 
 | Blocker | Why it matters | Suggested next action |
 | --- | --- | --- |
-| API and app server bind hosts are now explicit loopback defaults. | The release principle requires loopback-only defaults or a documented exception. | Keep this as a regression guardrail when listener/runtime wiring changes. |
-| Admin/debug/operator routes are mounted together with product routes. | This contradicts the README's no-admin product stance unless every route is intentionally local-only/debug. | Split route decisions into keep public product, keep local-only debug, or remove. |
-| `/api/*` app-server proxy forwards any API path. | A catch-all proxy makes the actual exposed surface broader than docs unless the API server itself is tightly classified. | Keep only with an explicit route manifest/baseline. |
-| `apiRouteClassification.ts` leaves most product routes as `unclassified`. | The owner proxy treats `unclassified` as proxy/fail-closed; this is safe-ish operationally but weak as an audit artifact. | Add an explicit supported-route manifest or extend classification for the release baseline. |
-| Several routes can expose sensitive local state or content. | Provider secrets, failed request details, runtime assets, uploaded PDFs, PDF fetches, Codex login, and token/request traces need public-release decisions. | Review and document each sensitive path before release. |
+| API and app server bind hosts are explicit loopback defaults. | The release principle requires loopback-only defaults or a documented exception. | Keep `routeSurfaceInventory.test.ts` as a regression guardrail when listener/runtime wiring changes. |
+| Admin/debug/operator routes are mounted together with product routes. | This contradicts the README's no-admin product stance unless every route is intentionally local-only/debug. | Split route decisions into keep product, keep local-only debug, gate, or remove. |
+| `/api/*` app-server proxy forwards any API path. | A catch-all proxy makes the actual exposed surface broader than docs unless the API server itself is tightly classified. | Keep with the current inventory and route tests; final public docs must list only supported local API routes. |
+| Several routes can expose sensitive local state or content. | Provider secrets, failed request details, runtime assets, uploaded PDFs, PDF fetches, Codex login, exports, imports, token/request traces, and settings need public-release decisions. | Review and document each sensitive path before release. |
 | Remaining aliases and questionable paths need decisions. | Aliases and debug/operator controls become public API once open-sourced. | Decide on provider-admission alias paths and the remaining admin/debug/operator route groups. |
-| FHIR/EHR patient import is present. | Patient-related import surface is high-risk for public release and docs. | Remove before release or explicitly justify and document safeguards. |
+| FHIR/EHR patient import is still mounted and marked `remove-before-release` in the inventory. | Patient-related import surface is high-risk for public release and docs. | Remove before release or explicitly justify and gate/document safeguards. |
 
 ## Suggested Remediation Order
 
 1. Decide the route groups that stay in the public product baseline.
 2. Gate, hide, or remove admin/debug/operator route groups that are not product requirements.
 3. Replace legacy or ambiguous routes with explicit product routes.
-4. Add a supported-route manifest or tests that fail on unexpected listener/route additions.
+4. Use `routeSurfaceInventory.ts` and `routeSurfaceInventory.test.ts` as the current route-review baseline until the final supported local API manifest is ready.
 5. Update public docs to describe only the supported local OSS flow.
 
 ## Touched Layers
@@ -101,7 +100,7 @@ Make the repo's exposed HTTP surface explicit so the open-source release can fai
 
 | Gate | Pass/fail expectation |
 | --- | --- |
-| Manual verify route coverage | Matrix covers `src/server/serverMain.ts`, `src/appServerMain.ts`, `src/desktop/index.ts`, `src/server/routes/*`, nested `src/server/routes/*Routes/*`, route classification, proxy entrypoints, and cron-mounted Elysia plugins. |
+| Manual verify route coverage | `routeSurfaceInventory.ts` covers `src/server/serverMain.ts`, `src/appServerMain.ts`, `src/desktop/index.ts`, `runtimeReadyRoutes`, `DuckdbOwnerConnectionsRoutes`, `JudgmentDispatchTelemetryRoutes`, `getProductApiRoutes()`, route classification, proxy entrypoints, owner-private RPC, and cron-mounted Elysia plugins. |
 | Manual verify bind posture | Browser and desktop flows bind supported OSS listeners to loopback by default, or every broader bind is explicitly documented and approved. |
 | Manual verify route decisions | Every row above has a final keep/remove/local-only decision before public release. |
 | `bun run lint` | Run after code/docs cleanup that changes route behavior or docs. |

@@ -1181,6 +1181,6 @@ test('reviews warnings production api path remains owner-routed unless an ownerl
   const {classifyApiRoute, shouldApiRouteProxyToDuckdbOwner} = await import('../apiRouteClassification.ts')
   const classification = classifyApiRoute('/api/projectsreviewswarnings', 'POST')
 
-  expect(classification).toBe('unclassified')
+  expect(classification).toBe('owner-dependent')
   expect(shouldApiRouteProxyToDuckdbOwner(classification)).toBe(true)
 })
