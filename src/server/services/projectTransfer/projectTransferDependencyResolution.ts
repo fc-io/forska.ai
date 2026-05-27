@@ -442,6 +442,32 @@ const getPlanDependencyResolution = (
   }
 }
 
+const getNextAcceptedSubstituteModelSourceIds = ({
+  modelSelections,
+  previous,
+  unresolvedModelIds,
+}: {
+  modelSelections: ProjectTransferDependencyModelSelection[]
+  previous: ProjectTransferDependencyResolutionState
+  unresolvedModelIds: Set<string>
+}) => {
+  const acceptedSourceIds = modelSelections.reduce<Set<string>>((sourceIds, selection) => {
+    const nextSourceIds = new Set(sourceIds)
+
+    if (selection.acceptSubstitute) {
+      nextSourceIds.add(selection.sourceModelId)
+      return nextSourceIds
+    }
+
+    nextSourceIds.delete(selection.sourceModelId)
+    return nextSourceIds
+  }, new Set(previous.acceptedSubstituteModelSourceIds))
+
+  return Array.from(acceptedSourceIds).filter((sourceId) => {
+    return !unresolvedModelIds.has(sourceId)
+  })
+}
+
 const getNextResolutionState = (
   previous: ProjectTransferDependencyResolutionState,
   request: ProjectTransferDependencyResolutionRequest,
@@ -485,14 +511,11 @@ const getNextResolutionState = (
     },
     {},
   )
-  const acceptedSubstituteModelSourceIds = Array.from(
-    new Set([
-      ...previous.acceptedSubstituteModelSourceIds,
-      ...modelSelections.flatMap((selection) => {
-        return selection.acceptSubstitute ? [selection.sourceModelId] : []
-      }),
-    ]),
-  )
+  const acceptedSubstituteModelSourceIds = getNextAcceptedSubstituteModelSourceIds({
+    modelSelections,
+    previous,
+    unresolvedModelIds,
+  })
 
   return {
     acceptedSubstituteModelSourceIds,

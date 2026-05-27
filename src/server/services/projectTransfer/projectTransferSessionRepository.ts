@@ -220,10 +220,6 @@ const getPlanRevisionCondition = (expectedPlanRevision: number | undefined) => {
   return expectedPlanRevision === undefined ? null : `plan_revision = ${expectedPlanRevision}`
 }
 
-const getLeaseExpiresAt = ({leaseMs, now}: {leaseMs: number; now: Date}) => {
-  return new Date(now.getTime() + leaseMs)
-}
-
 const getOwnerClaimLeaseMs = (leaseMs: number | undefined) => {
   if (leaseMs === undefined) {
     return defaultProjectTransferOwnerLeaseMs
@@ -305,11 +301,9 @@ const getOwnerTokenUpdateSets = (params: TransitionProjectTransferSessionStatePa
     return [`owner_token = ${getSqlLiteral(params.nextOwnerToken ?? null)}`]
   }
 
-  return [
-    `owner_token = ${getSqlLiteral(params.nextOwnerToken)}`,
-    `heartbeat_at = ${getTimestampLiteral(now)}`,
-    `expires_at = ${getTimestampLiteral(getLeaseExpiresAt({leaseMs: getOwnerClaimLeaseMs(params.nextOwnerLeaseMs), now}))}`,
-  ]
+  getOwnerClaimLeaseMs(params.nextOwnerLeaseMs)
+
+  return [`owner_token = ${getSqlLiteral(params.nextOwnerToken)}`, `heartbeat_at = ${getTimestampLiteral(now)}`]
 }
 
 const getTransitionUpdateSets = (params: TransitionProjectTransferSessionStateParams, now: Date) => {
@@ -469,7 +463,7 @@ const updateProjectTransferSessionPlanRevision = async (params: UpdateProjectTra
 
 const heartbeatProjectTransferSessionOwner = async (params: HeartbeatProjectTransferSessionOwnerParams) => {
   const currentNow = getNow(params.now)
-  const expiresAt = getLeaseExpiresAt({leaseMs: params.leaseMs, now: currentNow})
+  getOwnerClaimLeaseMs(params.leaseMs)
   const [row] = await getRunner(params.runner).queryJson<
     Omit<ProjectTransferSessionRecord, 'completionPayloadJson' | 'errorJson' | 'planSummaryJson' | 'progressJson'> & {
       completionPayloadJson: unknown
@@ -481,7 +475,6 @@ const heartbeatProjectTransferSessionOwner = async (params: HeartbeatProjectTran
     UPDATE app.project_transfer_session
     SET
       heartbeat_at = ${getTimestampLiteral(currentNow)},
-      expires_at = ${getTimestampLiteral(expiresAt)},
       updated_at = ${getTimestampLiteral(currentNow)}
     WHERE id = ${getSqlLiteral(params.sessionId)}
       AND owner_token = ${getSqlLiteral(params.ownerToken)}

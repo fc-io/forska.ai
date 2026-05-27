@@ -284,6 +284,7 @@ test('project transfer session commit claims are single-flight and owner-token f
     firstClaimExpiresAt: string | null
     firstClaimHeartbeatAt: string | null
     firstClaimOwner: string | null
+    heartbeatExpiresAt: string | null
     heartbeatOwner: string | null
     mismatchHeartbeat: unknown
     mismatchTransition: unknown
@@ -291,9 +292,10 @@ test('project transfer session commit claims are single-flight and owner-token f
     stateAfterClaim: string | null
     stateAfterCompletion: string | null
   }>(`
+    const commitExpiresAt = new Date('2026-05-21T13:00:00.000Z')
     await sessionRepository.createProjectTransferSession({
       direction: 'import',
-      expiresAt,
+      expiresAt: commitExpiresAt,
       id: 'session-commit-claim',
       planSummary: readyPlan,
       state: 'ready_to_commit',
@@ -357,6 +359,7 @@ test('project transfer session commit claims are single-flight and owner-token f
       firstClaimExpiresAt: firstClaim?.expiresAt ? new Date(firstClaim.expiresAt).toISOString() : null,
       firstClaimHeartbeatAt: firstClaim?.heartbeatAt ? new Date(firstClaim.heartbeatAt).toISOString() : null,
       firstClaimOwner: firstClaim?.ownerToken ?? null,
+      heartbeatExpiresAt: heartbeat?.expiresAt ? new Date(heartbeat.expiresAt).toISOString() : null,
       heartbeatOwner: heartbeat?.ownerToken ?? null,
       mismatchHeartbeat,
       mismatchTransition,
@@ -368,7 +371,8 @@ test('project transfer session commit claims are single-flight and owner-token f
 
   expect(result.firstClaimOwner).toBe('owner-a')
   expect(result.firstClaimHeartbeatAt).toBe('2026-05-21T12:30:00.000Z')
-  expect(result.firstClaimExpiresAt).toBe('2026-05-21T12:31:00.000Z')
+  expect(result.firstClaimExpiresAt).toBe('2026-05-21T13:00:00.000Z')
+  expect(result.heartbeatExpiresAt).toBe('2026-05-21T13:00:00.000Z')
   expect(result.secondClaim).toBeNull()
   expect(result.mismatchHeartbeat).toBeNull()
   expect(result.heartbeatOwner).toBe('owner-a')
