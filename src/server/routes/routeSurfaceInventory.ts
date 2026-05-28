@@ -261,6 +261,8 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
   ]),
   ...ownerDependentProduct('JudgmentsJobsRoutes.ts', [
     ['POST', '/api/judgmentsjobs'],
+    ['GET', '/api/judgmentsjobs'],
+    ['GET', '/api/judgmentsjobs/:id'],
     ['GET', '/api/judgmentsjobs-unassessed-count'],
     ['GET', '/api/judgmentsjobs-unassessed-articles'],
     ['GET', '/api/judgmentsjobs-total-token-usage'],
@@ -270,8 +272,6 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
   ...ownerlessDiagnostics('JudgmentsJobsRoutes.ts', 'Judgment job status, health, and provider telemetry.', [
     ['GET', '/api/judgmentsjobs/:id/health'],
     ['GET', '/api/judgmentsjobs-provider-telemetry-history'],
-    ['GET', '/api/judgmentsjobs/:id'],
-    ['GET', '/api/judgmentsjobs'],
     ['GET', '/api/judgmentsjobs-health'],
   ]),
   ...internalRuntime('JudgmentsJobsRoutes.ts', [
@@ -410,6 +410,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     ['GET', '/api/articlesreviewsfilters'],
     ['GET', '/api/articlesreviewshumanfilters'],
     ['POST', '/api/projectsreview'],
+    ['POST', '/api/projectsreviewswarnings'],
     ['GET', '/api/projects-without-jobs'],
     ['GET', '/api/projects'],
     ['GET', '/api/projects/archived'],
@@ -421,9 +422,6 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     ['DELETE', '/api/projects/:id'],
     ['POST', '/api/projects/:id/unarchive'],
     ['POST', '/api/projects/:id/clone'],
-  ]),
-  ...ownerDependentDiagnostics('ProjectsRoutes.ts', 'Project review warning and maintenance status.', [
-    ['POST', '/api/projectsreviewswarnings'],
   ]),
   ...ownerDependentMaintenance('ProjectsRoutes.ts', 'Archived project deletion and cleanup.', [
     ['POST', '/api/projects/delete-archived'],
@@ -529,9 +527,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
       ['PATCH', '/api/users'],
     ],
   ),
-  ...ownerDependentDiagnostics('LlmStatusRoutes.ts', 'Local LLM runtime status and request telemetry.', [
-    ['GET', '/api/llmstatus'],
-  ]),
+  ...ownerDependentProduct('LlmStatusRoutes.ts', [['GET', '/api/llmstatus']]),
   ...ownerDependentDiagnostics('NvidiaSmiRoutes.ts', 'Local GPU telemetry.', [['GET', '/api/nvidiasmi']]),
   ...ownerDependentProduct('SubprojectsRoutes.ts', [
     ['GET', '/api/subprojects/sources'],
