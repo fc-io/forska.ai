@@ -950,6 +950,41 @@ test('project transfer import resolve updates the durable dependency plan and co
   expect(commitBody.error).toBe('Project transfer commit-import-session endpoint is not implemented yet')
 })
 
+test('project transfer commit placeholder uses reviewed revision contract without owner tokens', async () => {
+  const app = await getProjectTransferApp()
+  const missingRevisionResponse = await app.handle(
+    new Request('http://localhost/api/projects/import/import-contract/commit', {
+      body: JSON.stringify({}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const ownerTokenResponse = await app.handle(
+    new Request('http://localhost/api/projects/import/import-contract/commit', {
+      body: JSON.stringify({expectedOwnerToken: 'owner-token', planRevision: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const conflictingRevisionResponse = await app.handle(
+    new Request('http://localhost/api/projects/import/import-contract/commit', {
+      body: JSON.stringify({expectedPlanRevision: 1, planRevision: 2}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const ownerTokenBody = (await ownerTokenResponse.json()) as {error: string}
+  const conflictingRevisionBody = (await conflictingRevisionResponse.json()) as {error: string}
+  const missingRevisionBody = (await missingRevisionResponse.json()) as {error: string}
+
+  expect(missingRevisionResponse.status).toBe(400)
+  expect(missingRevisionBody.error).toBe('Project transfer commit requires planRevision')
+  expect(ownerTokenResponse.status).toBe(400)
+  expect(ownerTokenBody.error).toBe('Project transfer request body contains unsupported field expectedOwnerToken')
+  expect(conflictingRevisionResponse.status).toBe(400)
+  expect(conflictingRevisionBody.error).toBe('Project transfer commit planRevision and expectedPlanRevision conflict')
+})
+
 test('project transfer import resolve returns the latest plan for stale revisions without mutating', async () => {
   routeState.sessions['import-stale-resolve'] = getImportSessionRecord({
     id: 'import-stale-resolve',

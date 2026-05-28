@@ -137,6 +137,16 @@ type PersistProjectTransferSessionCompletionParams = {
   sessionId: string
 }
 
+type ReopenProjectTransferCommitSessionParams = {
+  commitId: string
+  expectedPlanRevision: number
+  now?: Date
+  ownerToken: string
+  planSummary: ProjectTransferPlanSummary
+  runner?: ProjectTransferSessionRunner
+  sessionId: string
+}
+
 type PersistProjectTransferSessionExportReadyParams = {
   completionPayload: ProjectTransferExportReadyPayload
   now?: Date
@@ -679,6 +689,36 @@ const persistProjectTransferSessionCompletion = async (params: PersistProjectTra
   })
 }
 
+const reopenProjectTransferCommitSession = async (params: ReopenProjectTransferCommitSessionParams) => {
+  const currentNow = getNow(params.now)
+  const [row] = await getRunner(params.runner).queryJson<
+    Omit<ProjectTransferSessionRecord, 'completionPayloadJson' | 'errorJson' | 'planSummaryJson' | 'progressJson'> & {
+      completionPayloadJson: unknown
+      errorJson: unknown
+      planSummaryJson: unknown
+      progressJson: unknown
+    }
+  >(`
+    UPDATE app.project_transfer_session
+    SET
+      state = 'awaiting_resolution',
+      plan_revision = plan_revision + 1,
+      plan_summary_json = ${getJsonLiteral(params.planSummary)},
+      owner_token = NULL,
+      commit_id = NULL,
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE id = ${getSqlLiteral(params.sessionId)}
+      AND direction = 'import'
+      AND state = 'committing'
+      AND plan_revision = ${params.expectedPlanRevision}
+      AND owner_token = ${getSqlLiteral(params.ownerToken)}
+      AND commit_id = ${getSqlLiteral(params.commitId)}
+    RETURNING ${getProjectTransferSessionSelectSql()}
+  `)
+
+  return row ? mapProjectTransferSessionRecord(row) : null
+}
+
 const persistProjectTransferSessionExportReady = async (params: PersistProjectTransferSessionExportReadyParams) => {
   if (params.completionPayload.status !== 'ready') {
     throw new Error('Project transfer export readiness payload status must be ready')
@@ -723,6 +763,7 @@ const projectTransferSessionRepository = {
   markProjectTransferSessionTerminalCleanupComplete,
   persistProjectTransferSessionExportReady,
   persistProjectTransferSessionCompletion,
+  reopenProjectTransferCommitSession,
   transitionProjectTransferSessionState,
   updateProjectTransferSessionPlanRevision,
   updateProjectTransferSessionProgress,
@@ -744,6 +785,7 @@ export type {
   PersistProjectTransferSessionCompletionParams,
   PersistProjectTransferSessionExportReadyParams,
   ProjectTransferSessionRunner,
+  ReopenProjectTransferCommitSessionParams,
   TransitionProjectTransferSessionStateParams,
   UpdateProjectTransferSessionPlanParams,
   UpdateProjectTransferSessionProgressParams,
