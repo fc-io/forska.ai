@@ -59,11 +59,106 @@ type DependencyResolutionState = {
 type ArticleField = keyof typeof articleColumnByPayloadField
 type ArticleMatchPlan = ProjectTransferTargetPlan['articleMatches'][number]
 type ArticleRoutePlanEntry = ProjectTransferTargetPlan['articleRoutePlan'][number]
+type HumanReviewPlanEntry = NonNullable<ProjectTransferTargetPlan['humanReviewPlan']>[number]
+type JudgmentAssessmentPlanEntry = NonNullable<ProjectTransferTargetPlan['judgmentAssessmentPlan']>[number]
+type JudgmentPlanEntry = NonNullable<ProjectTransferTargetPlan['judgmentPlan']>[number]
 type ProjectRoutePlanEntry = ProjectTransferTargetPlan['projectRoutePlan'][number]
 type PromptPlanEntry = ProjectTransferTargetPlan['promptPlan'][number]
 type ProjectPromptPlanEntry = ProjectTransferTargetPlan['projectPromptPlan'][number]
 
 type TargetArticleFieldRow = Record<ArticleField, unknown> & {id: string}
+type TargetJudgmentRow = {
+  answeredOriginal: string | null
+  answeredOriginalAsArray: unknown
+  confidenceOriginal: number | null
+  deleteGeneration: number | null
+  explanation: string | null
+  id: string
+  isAnswered: boolean | null
+  quotes: unknown
+  articleId: string
+  modelId: string
+  promptId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+type TargetJudgmentAssessmentRow = {
+  assessmentComment: string | null
+  assessmentIsCorrect: boolean | null
+  id: string
+  judgmentId: string
+}
+
+type JudgmentCommitRow = {
+  action: 'insert' | 'reuse'
+  answeredOriginal: string | null
+  answeredOriginalAsArray: string[]
+  articleId: string
+  chunkingStrategy: string | null
+  confidenceOriginal: number
+  createdAt: Date
+  deleteGeneration: number
+  explanation: string | null
+  id: string
+  modelId: string
+  promptId: string
+  quotes: unknown[]
+  snapshotProjectModelName: string | null
+  sourceJudgmentId: string
+  updatedAt: Date
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
+type JudgmentAssessmentCommitRow = {
+  action: 'insert' | 'reuse'
+  assessmentComment: string | null
+  assessmentIsCorrect: boolean
+  createdAt: Date
+  id: string
+  judgmentId: string
+  sourceJudgmentAssessmentId: string
+  updatedAt: Date
+}
+
+type HumanJudgmentCommitRow = {
+  answer: string | null
+  articleId: string
+  comment: string | null
+  createdAt: Date
+  id: string
+  isAnswered: boolean
+  projectId: string
+  promptId: string
+  sourceHumanJudgmentId: string
+  updatedAt: Date
+}
+
+type HumanJudgmentSummaryCommitRow = {
+  answer: string | null
+  articleId: string
+  createdAt: Date
+  id: string
+  origin: string
+  projectId: string
+  sourceHumanJudgmentSummaryId: string
+  updatedAt: Date
+}
+
+type ReviewCommitRow = {
+  articleId: string
+  createdAt: Date
+  id: string
+  opened: boolean
+  projectId: string
+  sections: Record<string, {comment: string | null; reviewed: boolean}>
+  sourceReviewId: string
+  updatedAt: Date
+}
 
 const articleColumnByPayloadField = {
   articleAuthors: 'article_authors',
@@ -150,6 +245,10 @@ const getNullableNumber = (value: unknown) => {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+const getNonNegativeInteger = (value: unknown, defaultValue: number) => {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : defaultValue
+}
+
 const getBoolean = (value: unknown, defaultValue: boolean) => {
   return typeof value === 'boolean' ? value : defaultValue
 }
@@ -162,6 +261,20 @@ const getStringArray = (value: unknown) => {
     : null
 }
 
+const getArrayValue = (value: unknown) => {
+  const parsed = getJsonValue(value)
+
+  return Array.isArray(parsed)
+    ? (parsed as readonly unknown[]).map((entry) => {
+        return entry
+      })
+    : []
+}
+
+const valuesEquivalent = (left: unknown, right: unknown) => {
+  return getProjectTransferCanonicalJson(left ?? null) === getProjectTransferCanonicalJson(right ?? null)
+}
+
 const getJsonLiteral = (value: unknown) => {
   return value === null || value === undefined ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(value))} AS JSON)`
 }
@@ -170,6 +283,10 @@ const getNullableDateLiteral = (value: unknown) => {
   const date = getDateValue(value)
 
   return date === null ? 'NULL' : getTimestampLiteral(date)
+}
+
+const getDateOrDefault = (value: unknown, defaultValue: Date) => {
+  return getDateValue(value) ?? defaultValue
 }
 
 const getArticleFieldSqlLiteral = (field: ArticleField, value: unknown) => {
@@ -1043,6 +1160,1208 @@ const getOmittedRouteWarnings = ({
   return [...projectWarnings, ...articleWarnings]
 }
 
+const getDedupedWarnings = (warnings: readonly ProjectTransferPackageWarning[]) => {
+  const result = warnings.reduce<{seen: Set<string>; warnings: ProjectTransferPackageWarning[]}>(
+    (current, warning) => {
+      const key = getProjectTransferCanonicalJson(warning)
+
+      return current.seen.has(key)
+        ? current
+        : {seen: new Set([...current.seen, key]), warnings: [...current.warnings, warning]}
+    },
+    {seen: new Set(), warnings: []},
+  )
+
+  return result.warnings
+}
+
+const getPlanWarnings = (plan: ProjectTransferImportPlanArtifact) => {
+  return getDedupedWarnings([...(plan.packageWarnings ?? []), ...(plan.summary.packageWarnings ?? [])])
+}
+
+const getEquivalentReusedJudgmentWarnings = (
+  judgmentPlan: readonly JudgmentPlanEntry[],
+): ProjectTransferPackageWarning[] => {
+  return judgmentPlan
+    .filter((entry) => {
+      return entry.action === 'reuse' && entry.targetJudgmentId !== null
+    })
+    .map((entry): ProjectTransferPackageWarning => {
+      return {
+        action: 'reused',
+        code: 'equivalentTargetJudgmentReused',
+        details: {
+          inputSignatureProvenance: entry.provenanceKind,
+          physicalKey: entry.physicalKey,
+          reviewVisibleKey: entry.reviewVisibleKey,
+          sourceJudgmentId: entry.sourceJudgmentId,
+          targetJudgmentId: entry.targetJudgmentId,
+        },
+        message: `${entry.sourceJudgmentId} reused equivalent target judgment ${entry.targetJudgmentId}`,
+        scope: `judgments.${entry.sourceJudgmentId}`,
+        severity: 'info',
+      }
+    })
+}
+
+const getCommitImportWarnings = ({
+  articleRoutePlan,
+  judgmentPlan,
+  plan,
+  projectRoutePlan,
+}: {
+  articleRoutePlan: readonly ArticleRoutePlanEntry[]
+  judgmentPlan: readonly JudgmentPlanEntry[]
+  plan: ProjectTransferImportPlanArtifact
+  projectRoutePlan: readonly ProjectRoutePlanEntry[]
+}) => {
+  return getDedupedWarnings([
+    ...getPlanWarnings(plan),
+    ...getOmittedRouteWarnings({articleRoutePlan, projectRoutePlan}),
+    ...getEquivalentReusedJudgmentWarnings(judgmentPlan),
+  ])
+}
+
+const getRequiredPlanEntries = <TEntry>(
+  entries: readonly TEntry[] | undefined,
+  label: string,
+  payloadCount: number,
+) => {
+  return payloadCount === 0 ? (entries ?? []) : (entries ?? failCommitWriter(`${label} is required`))
+}
+
+const getContentSettings = (record: ProjectTransferPayloadRecord) => {
+  const settings = isRecord(record.contentSettings) ? record.contentSettings : {}
+
+  return {
+    useAbstract: getBoolean(settings.useAbstract, true),
+    useFulltext: getBoolean(settings.useFulltext, false),
+    useFulltextNoImages: getBoolean(settings.useFulltextNoImages, false),
+    useTitle: getBoolean(settings.useTitle, true),
+  }
+}
+
+const getMappedTargetId = ({
+  label,
+  mapped,
+  sourceId,
+}: {
+  label: string
+  mapped: Record<string, string>
+  sourceId: string
+}) => {
+  return mapped[sourceId] ?? failCommitWriter(`missing target ${label} for ${sourceId}`)
+}
+
+const getTargetModelIdForSource = ({
+  plan,
+  sourceModelId,
+}: {
+  plan: ProjectTransferImportPlanArtifact
+  sourceModelId: string
+}) => {
+  return (
+    getDependencyResolutionState(plan).modelTargetBySourceId?.[sourceModelId]
+    ?? failCommitWriter(`missing target model for ${sourceModelId}`)
+  )
+}
+
+const assertPlanTargetMatches = ({actual, label, planned}: {actual: string; label: string; planned: string | null}) => {
+  return planned === null || planned.startsWith('new:') || planned === actual
+    ? undefined
+    : failCommitWriter(`${label} plan target ${planned} does not match final target ${actual}`)
+}
+
+const getJudgmentPhysicalKey = (row: {
+  articleId: string
+  deleteGeneration: number
+  modelId: string
+  promptId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}) => {
+  return [
+    row.articleId,
+    row.promptId,
+    row.modelId,
+    String(row.useTitle),
+    String(row.useAbstract),
+    String(row.useFulltext),
+    String(row.useFulltextNoImages),
+    String(row.deleteGeneration),
+  ].join('\u0000')
+}
+
+const getJudgmentReviewVisibleKey = (row: {
+  articleId: string
+  modelId: string
+  promptId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}) => {
+  return [
+    row.articleId,
+    row.promptId,
+    row.modelId,
+    String(row.useTitle),
+    String(row.useAbstract),
+    String(row.useFulltext),
+    String(row.useFulltextNoImages),
+  ].join('\u0000')
+}
+
+const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
+  return getJudgmentPhysicalKey({
+    articleId: row.articleId,
+    deleteGeneration: row.deleteGeneration ?? 0,
+    modelId: row.modelId,
+    promptId: row.promptId,
+    useAbstract: row.useAbstract,
+    useFulltext: row.useFulltext,
+    useFulltextNoImages: row.useFulltextNoImages,
+    useTitle: row.useTitle,
+  })
+}
+
+const getTargetJudgmentReviewVisibleKey = (row: TargetJudgmentRow) => {
+  return getJudgmentReviewVisibleKey(row)
+}
+
+const getJudgmentFieldSignature = (row: JudgmentCommitRow) => {
+  return {
+    answeredOriginal: row.answeredOriginal,
+    answeredOriginalAsArray: row.answeredOriginalAsArray,
+    confidenceOriginal: row.confidenceOriginal,
+    explanation: row.explanation,
+    isAnswered: true,
+    quotes: row.quotes,
+  }
+}
+
+const getTargetJudgmentFieldSignature = (row: TargetJudgmentRow) => {
+  return {
+    answeredOriginal: row.answeredOriginal,
+    answeredOriginalAsArray: getArrayValue(row.answeredOriginalAsArray),
+    confidenceOriginal: row.confidenceOriginal ?? 50,
+    explanation: row.explanation,
+    isAnswered: row.isAnswered ?? false,
+    quotes: getArrayValue(row.quotes),
+  }
+}
+
+const getJudgmentRows = ({
+  articleIdBySourceId,
+  judgmentPlan,
+  judgments,
+  now,
+  plan,
+  promptIdBySourceId,
+}: {
+  articleIdBySourceId: Record<string, string>
+  judgmentPlan: readonly JudgmentPlanEntry[]
+  judgments: readonly ProjectTransferPayloadRecord[]
+  now: Date
+  plan: ProjectTransferImportPlanArtifact
+  promptIdBySourceId: Record<string, string>
+}) => {
+  const planBySourceId = judgmentPlan.reduce<Record<string, JudgmentPlanEntry>>((mapped, entry) => {
+    return {...mapped, [entry.sourceJudgmentId]: entry}
+  }, {})
+  const judgmentBySourceId = getPayloadArrayBySourceId(judgments, 'sourceJudgmentId')
+  const extraPlanEntry = judgmentPlan.find((entry) => {
+    return judgmentBySourceId[entry.sourceJudgmentId] === undefined
+  })
+
+  if (extraPlanEntry) {
+    return failCommitWriter(`judgment plan references missing payload ${extraPlanEntry.sourceJudgmentId}`)
+  }
+
+  return judgments.map((judgment): JudgmentCommitRow => {
+    const sourceJudgmentId = getRequiredString(
+      getRecordField(judgment, 'sourceJudgmentId'),
+      'judgment.sourceJudgmentId',
+    )
+    const sourceArticleId = getRequiredString(
+      getRecordField(judgment, 'sourceArticleId'),
+      `judgments.${sourceJudgmentId}.sourceArticleId`,
+    )
+    const sourcePromptId = getRequiredString(
+      getRecordField(judgment, 'sourcePromptId'),
+      `judgments.${sourceJudgmentId}.sourcePromptId`,
+    )
+    const sourceModelId = getRequiredString(
+      getRecordField(judgment, 'sourceModelId'),
+      `judgments.${sourceJudgmentId}.sourceModelId`,
+    )
+    const entry = planBySourceId[sourceJudgmentId] ?? failCommitWriter(`missing judgment plan for ${sourceJudgmentId}`)
+    const action =
+      entry.action === 'insert' || entry.action === 'reuse'
+        ? entry.action
+        : failCommitWriter(`judgment ${sourceJudgmentId} is not commit-safe`)
+    const articleId = getMappedTargetId({label: 'article', mapped: articleIdBySourceId, sourceId: sourceArticleId})
+    const promptId = getMappedTargetId({label: 'prompt', mapped: promptIdBySourceId, sourceId: sourcePromptId})
+    const modelId = getTargetModelIdForSource({plan, sourceModelId})
+    const settings = getContentSettings(judgment)
+
+    assertPlanTargetMatches({
+      actual: articleId,
+      label: `judgment ${sourceJudgmentId} article`,
+      planned: entry.targetArticleId,
+    })
+    assertPlanTargetMatches({
+      actual: promptId,
+      label: `judgment ${sourceJudgmentId} prompt`,
+      planned: entry.targetPromptId,
+    })
+    assertPlanTargetMatches({
+      actual: modelId,
+      label: `judgment ${sourceJudgmentId} model`,
+      planned: entry.targetModelId,
+    })
+
+    if (getRecordField(judgment, 'isAnswered') !== true) {
+      return failCommitWriter(`judgment ${sourceJudgmentId} is not answered`)
+    }
+
+    return {
+      action,
+      answeredOriginal: getNullableString(getRecordField(judgment, 'answeredOriginal')),
+      answeredOriginalAsArray: getStringArray(getRecordField(judgment, 'answeredOriginalAsArray')) ?? [],
+      articleId,
+      chunkingStrategy: getNullableString(getRecordField(judgment, 'chunkingStrategy')),
+      confidenceOriginal: getNonNegativeInteger(getRecordField(judgment, 'confidenceOriginal'), 50),
+      createdAt: getDateOrDefault(getRecordField(judgment, 'createdAt'), now),
+      deleteGeneration: getNonNegativeInteger(getRecordField(judgment, 'deleteGeneration'), 0),
+      explanation: getNullableString(getRecordField(judgment, 'explanation')),
+      id:
+        action === 'insert'
+          ? randomUUID()
+          : (entry.targetJudgmentId ?? failCommitWriter(`reused judgment ${sourceJudgmentId} has no target id`)),
+      modelId,
+      promptId,
+      quotes: getArrayValue(getRecordField(judgment, 'quotes')),
+      snapshotProjectModelName: getNullableString(getRecordField(judgment, 'snapshotProjectModelName')),
+      sourceJudgmentId,
+      updatedAt: getDateOrDefault(getRecordField(judgment, 'updatedAt'), now),
+      ...settings,
+    }
+  })
+}
+
+const getTargetJudgmentRows = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly JudgmentCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const articleIds = [
+    ...new Set(
+      rows.map((row) => {
+        return row.articleId
+      }),
+    ),
+  ]
+  const promptIds = [
+    ...new Set(
+      rows.map((row) => {
+        return row.promptId
+      }),
+    ),
+  ]
+  const modelIds = [
+    ...new Set(
+      rows.map((row) => {
+        return row.modelId
+      }),
+    ),
+  ]
+
+  return rows.length === 0
+    ? []
+    : tx.queryJson<TargetJudgmentRow>(`
+        SELECT
+          id,
+          article_id AS articleId,
+          prompt_id AS promptId,
+          model_id AS modelId,
+          use_title AS useTitle,
+          use_abstract AS useAbstract,
+          use_fulltext AS useFulltext,
+          use_fulltext_no_images AS useFulltextNoImages,
+          is_answered AS isAnswered,
+          answered_original AS answeredOriginal,
+          TO_JSON(answered_original_as_array) AS answeredOriginalAsArray,
+          confidence_original AS confidenceOriginal,
+          explanation,
+          TO_JSON(quotes) AS quotes,
+          delete_generation AS deleteGeneration
+        FROM app.judgment
+        WHERE deleted_at IS NULL
+          AND article_id IN (${getQuotedStringList(articleIds).join(', ')})
+          AND prompt_id IN (${getQuotedStringList(promptIds).join(', ')})
+          AND model_id IN (${getQuotedStringList(modelIds).join(', ')})
+        ORDER BY article_id ASC, prompt_id ASC, model_id ASC, id ASC
+      `)
+}
+
+const assertNoDuplicateJudgmentRows = (rows: readonly JudgmentCommitRow[]) => {
+  assertNoDuplicateRows(
+    'judgment physical key',
+    rows.map((row) => {
+      return getJudgmentPhysicalKey(row)
+    }),
+  )
+
+  return assertNoDuplicateRows(
+    'judgment active review-visible key',
+    rows.map((row) => {
+      return getJudgmentReviewVisibleKey(row)
+    }),
+  )
+}
+
+const assertJudgmentTargetsCommitSafe = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly JudgmentCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  assertNoDuplicateJudgmentRows(rows)
+
+  const targets = await getTargetJudgmentRows({rows, tx})
+  const targetsByPhysicalKey = targets.reduce<Record<string, TargetJudgmentRow[]>>((mapped, target) => {
+    const key = getTargetJudgmentPhysicalKey(target)
+
+    return {...mapped, [key]: [...(mapped[key] ?? []), target]}
+  }, {})
+  const targetsByVisibleKey = targets.reduce<Record<string, TargetJudgmentRow[]>>((mapped, target) => {
+    const key = getTargetJudgmentReviewVisibleKey(target)
+
+    return {...mapped, [key]: [...(mapped[key] ?? []), target]}
+  }, {})
+
+  return rows.map((row) => {
+    const physicalKey = getJudgmentPhysicalKey(row)
+    const visibleKey = getJudgmentReviewVisibleKey(row)
+    const physicalTargets = targetsByPhysicalKey[physicalKey] ?? []
+    const visibleTargets = targetsByVisibleKey[visibleKey] ?? []
+    const target = physicalTargets.find((targetRow) => {
+      return targetRow.id === row.id
+    })
+    const extraVisibleTarget = visibleTargets.find((targetRow) => {
+      return targetRow.id !== row.id
+    })
+
+    if (row.action === 'insert' && physicalTargets.length > 0) {
+      return failCommitWriter(`target judgment physical key already exists for ${row.sourceJudgmentId}`)
+    }
+
+    if (row.action === 'insert' && visibleTargets.length > 0) {
+      return failCommitWriter(`target judgment review-visible key already exists for ${row.sourceJudgmentId}`)
+    }
+
+    if (row.action === 'reuse' && target === undefined) {
+      return failCommitWriter(
+        `reused target judgment ${row.id} is missing or no longer matches ${row.sourceJudgmentId}`,
+      )
+    }
+
+    if (row.action === 'reuse' && extraVisibleTarget !== undefined) {
+      return failCommitWriter(`reused judgment ${row.sourceJudgmentId} has an active review-visible conflict`)
+    }
+
+    return row.action === 'reuse'
+      && target !== undefined
+      && !valuesEquivalent(getJudgmentFieldSignature(row), getTargetJudgmentFieldSignature(target))
+      ? failCommitWriter(`reused target judgment ${row.id} is not equivalent to ${row.sourceJudgmentId}`)
+      : undefined
+  })
+}
+
+const insertJudgmentRows = async ({
+  projectId,
+  rows,
+  tx,
+}: {
+  projectId: string
+  rows: readonly JudgmentCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await assertJudgmentTargetsCommitSafe({rows, tx})
+
+  const insertRows = rows.filter((row) => {
+    return row.action === 'insert'
+  })
+
+  return insertRows.length === 0
+    ? undefined
+    : tx.run(`
+        INSERT INTO app.judgment (
+          id,
+          article_id,
+          prompt_id,
+          model_id,
+          project_id,
+          snapshot_project_id,
+          snapshot_project_model_name,
+          use_title,
+          use_abstract,
+          use_fulltext,
+          use_fulltext_no_images,
+          chunking_strategy,
+          is_answered,
+          answered_original,
+          answered_original_as_array,
+          confidence_original,
+          explanation,
+          quotes,
+          delete_generation,
+          deleted_at,
+          created_at,
+          updated_at
+        ) VALUES ${insertRows
+          .map((row) => {
+            return `(
+              ${getSqlLiteral(row.id)},
+              ${getSqlLiteral(row.articleId)},
+              ${getSqlLiteral(row.promptId)},
+              ${getSqlLiteral(row.modelId)},
+              ${getSqlLiteral(projectId)},
+              ${getSqlLiteral(projectId)},
+              ${getSqlLiteral(row.snapshotProjectModelName)},
+              ${getSqlLiteral(row.useTitle)},
+              ${getSqlLiteral(row.useAbstract)},
+              ${getSqlLiteral(row.useFulltext)},
+              ${getSqlLiteral(row.useFulltextNoImages)},
+              ${getSqlLiteral(row.chunkingStrategy)},
+              TRUE,
+              ${getSqlLiteral(row.answeredOriginal)},
+              ${getSqlLiteral(row.answeredOriginalAsArray)},
+              ${getSqlLiteral(row.confidenceOriginal)},
+              ${getSqlLiteral(row.explanation)},
+              ${getJsonLiteral(row.quotes)},
+              ${getSqlLiteral(row.deleteGeneration)},
+              NULL,
+              ${getTimestampLiteral(row.createdAt)},
+              ${getTimestampLiteral(row.updatedAt)}
+            )`
+          })
+          .join(', ')}
+      `)
+}
+
+const getJudgmentIdBySourceId = (rows: readonly JudgmentCommitRow[]) => {
+  return rows.reduce<Record<string, string>>((mapped, row) => {
+    return {...mapped, [row.sourceJudgmentId]: row.id}
+  }, {})
+}
+
+const getAssessmentSignature = (
+  row: Pick<JudgmentAssessmentCommitRow, 'assessmentComment' | 'assessmentIsCorrect'>,
+) => {
+  return {assessmentComment: row.assessmentComment, assessmentIsCorrect: row.assessmentIsCorrect}
+}
+
+const getTargetAssessmentSignature = (row: TargetJudgmentAssessmentRow) => {
+  return {assessmentComment: row.assessmentComment, assessmentIsCorrect: row.assessmentIsCorrect ?? false}
+}
+
+const getJudgmentAssessmentRows = ({
+  assessmentPlan,
+  assessments,
+  judgmentIdBySourceId,
+  now,
+}: {
+  assessmentPlan: readonly JudgmentAssessmentPlanEntry[]
+  assessments: readonly ProjectTransferPayloadRecord[]
+  judgmentIdBySourceId: Record<string, string>
+  now: Date
+}) => {
+  const planBySourceId = assessmentPlan.reduce<Record<string, JudgmentAssessmentPlanEntry>>((mapped, entry) => {
+    return {...mapped, [entry.sourceJudgmentAssessmentId]: entry}
+  }, {})
+  const assessmentBySourceId = getPayloadArrayBySourceId(assessments, 'sourceJudgmentAssessmentId')
+  const extraPlanEntry = assessmentPlan.find((entry) => {
+    return assessmentBySourceId[entry.sourceJudgmentAssessmentId] === undefined
+  })
+
+  if (extraPlanEntry) {
+    return failCommitWriter(
+      `judgment assessment plan references missing payload ${extraPlanEntry.sourceJudgmentAssessmentId}`,
+    )
+  }
+
+  return assessments.map((assessment): JudgmentAssessmentCommitRow => {
+    const sourceJudgmentAssessmentId = getRequiredString(
+      getRecordField(assessment, 'sourceJudgmentAssessmentId'),
+      'judgmentAssessment.sourceJudgmentAssessmentId',
+    )
+    const sourceJudgmentId = getRequiredString(
+      getRecordField(assessment, 'sourceJudgmentId'),
+      `judgmentAssessments.${sourceJudgmentAssessmentId}.sourceJudgmentId`,
+    )
+    const entry =
+      planBySourceId[sourceJudgmentAssessmentId]
+      ?? failCommitWriter(`missing judgment assessment plan for ${sourceJudgmentAssessmentId}`)
+    const action =
+      entry.action === 'insert' || entry.action === 'reuse'
+        ? entry.action
+        : failCommitWriter(`judgment assessment ${sourceJudgmentAssessmentId} is not commit-safe`)
+    const judgmentId =
+      judgmentIdBySourceId[sourceJudgmentId]
+      ?? failCommitWriter(`missing target judgment for assessment ${sourceJudgmentAssessmentId}`)
+
+    assertPlanTargetMatches({
+      actual: judgmentId,
+      label: `judgment assessment ${sourceJudgmentAssessmentId}`,
+      planned: entry.targetJudgmentId,
+    })
+
+    return {
+      action,
+      assessmentComment: getNullableString(getRecordField(assessment, 'assessmentComment')),
+      assessmentIsCorrect: getBoolean(getRecordField(assessment, 'assessmentIsCorrect'), false),
+      createdAt: getDateOrDefault(getRecordField(assessment, 'createdAt'), now),
+      id:
+        action === 'insert'
+          ? randomUUID()
+          : (entry.targetAssessmentId
+            ?? failCommitWriter(`reused assessment ${sourceJudgmentAssessmentId} has no target id`)),
+      judgmentId,
+      sourceJudgmentAssessmentId,
+      updatedAt: getDateOrDefault(getRecordField(assessment, 'updatedAt'), now),
+    }
+  })
+}
+
+const getTargetAssessmentRows = async ({
+  judgmentIds,
+  tx,
+}: {
+  judgmentIds: readonly string[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const uniqueJudgmentIds = [...new Set(judgmentIds)]
+
+  return uniqueJudgmentIds.length === 0
+    ? []
+    : tx.queryJson<TargetJudgmentAssessmentRow>(`
+        SELECT
+          id,
+          judgment_id AS judgmentId,
+          assessment_is_correct AS assessmentIsCorrect,
+          assessment_comment AS assessmentComment
+        FROM app.judgment_assessment
+        WHERE judgment_id IN (${getQuotedStringList(uniqueJudgmentIds).join(', ')})
+        ORDER BY judgment_id ASC, id ASC
+      `)
+}
+
+const assertJudgmentAssessmentTargetsCommitSafe = async ({
+  allJudgmentIds,
+  rows,
+  tx,
+}: {
+  allJudgmentIds: readonly string[]
+  rows: readonly JudgmentAssessmentCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  assertNoDuplicateRows(
+    'judgment_assessment',
+    rows.map((row) => {
+      return row.judgmentId
+    }),
+  )
+
+  const targets = await getTargetAssessmentRows({judgmentIds: allJudgmentIds, tx})
+  const targetByJudgmentId = targets.reduce<Record<string, TargetJudgmentAssessmentRow>>((mapped, target) => {
+    return {...mapped, [target.judgmentId]: target}
+  }, {})
+  const packageJudgmentIds = new Set(
+    rows.map((row) => {
+      return row.judgmentId
+    }),
+  )
+  const extraTarget = targets.find((target) => {
+    return !packageJudgmentIds.has(target.judgmentId)
+  })
+
+  if (extraTarget) {
+    return failCommitWriter(`target judgment ${extraTarget.judgmentId} has assessment state missing from package`)
+  }
+
+  return rows.map((row) => {
+    const target = targetByJudgmentId[row.judgmentId] ?? null
+
+    if (row.action === 'insert' && target !== null) {
+      return failCommitWriter(`target judgment ${row.judgmentId} already has assessment state`)
+    }
+
+    if (row.action === 'reuse' && target === null) {
+      return failCommitWriter(`reused assessment ${row.id} is missing for ${row.sourceJudgmentAssessmentId}`)
+    }
+
+    if (row.action === 'reuse' && target !== null && target.id !== row.id) {
+      return failCommitWriter(`reused assessment ${row.id} no longer points at ${row.judgmentId}`)
+    }
+
+    return row.action === 'reuse'
+      && target !== null
+      && !valuesEquivalent(getAssessmentSignature(row), getTargetAssessmentSignature(target))
+      ? failCommitWriter(`reused assessment ${row.id} is not equivalent to ${row.sourceJudgmentAssessmentId}`)
+      : undefined
+  })
+}
+
+const insertJudgmentAssessmentRows = async ({
+  allJudgmentIds,
+  rows,
+  tx,
+}: {
+  allJudgmentIds: readonly string[]
+  rows: readonly JudgmentAssessmentCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await assertJudgmentAssessmentTargetsCommitSafe({allJudgmentIds, rows, tx})
+
+  const insertRows = rows.filter((row) => {
+    return row.action === 'insert'
+  })
+
+  return insertRows.length === 0
+    ? undefined
+    : tx.run(`
+        INSERT INTO app.judgment_assessment (
+          id,
+          judgment_id,
+          assessment_is_correct,
+          assessment_comment,
+          created_at,
+          updated_at
+        ) VALUES ${insertRows
+          .map((row) => {
+            return `(
+              ${getSqlLiteral(row.id)},
+              ${getSqlLiteral(row.judgmentId)},
+              ${getSqlLiteral(row.assessmentIsCorrect)},
+              ${getSqlLiteral(row.assessmentComment)},
+              ${getTimestampLiteral(row.createdAt)},
+              ${getTimestampLiteral(row.updatedAt)}
+            )`
+          })
+          .join(', ')}
+      `)
+}
+
+const getHumanReviewPlanByKey = (humanReviewPlan: readonly HumanReviewPlanEntry[]) => {
+  return humanReviewPlan.reduce<Record<string, HumanReviewPlanEntry>>((mapped, entry) => {
+    return {...mapped, [`${entry.kind}\u0000${entry.sourceId}`]: entry}
+  }, {})
+}
+
+const assertHumanReviewPlanEntry = ({
+  entry,
+  kind,
+  sourceId,
+}: {
+  entry: HumanReviewPlanEntry | undefined
+  kind: HumanReviewPlanEntry['kind']
+  sourceId: string
+}) => {
+  return entry === undefined
+    ? failCommitWriter(`missing ${kind} plan for ${sourceId}`)
+    : entry.action === 'insert'
+      ? entry
+      : failCommitWriter(`${kind} ${sourceId} is not commit-safe`)
+}
+
+const getHumanJudgmentRows = ({
+  articleIdBySourceId,
+  humanJudgments,
+  humanReviewPlan,
+  now,
+  projectId,
+  promptIdBySourceId,
+}: {
+  articleIdBySourceId: Record<string, string>
+  humanJudgments: readonly ProjectTransferPayloadRecord[]
+  humanReviewPlan: readonly HumanReviewPlanEntry[]
+  now: Date
+  projectId: string
+  promptIdBySourceId: Record<string, string>
+}) => {
+  const planByKey = getHumanReviewPlanByKey(humanReviewPlan)
+
+  return humanJudgments.map((judgment): HumanJudgmentCommitRow => {
+    const sourceHumanJudgmentId = getRequiredString(
+      getRecordField(judgment, 'sourceHumanJudgmentId'),
+      'humanJudgment.sourceHumanJudgmentId',
+    )
+    const sourceArticleId = getRequiredString(
+      getRecordField(judgment, 'sourceArticleId'),
+      `humanJudgments.${sourceHumanJudgmentId}.sourceArticleId`,
+    )
+    const sourcePromptId = getRequiredString(
+      getRecordField(judgment, 'sourcePromptId'),
+      `humanJudgments.${sourceHumanJudgmentId}.sourcePromptId`,
+    )
+    const entry = assertHumanReviewPlanEntry({
+      entry: planByKey[`humanJudgment\u0000${sourceHumanJudgmentId}`],
+      kind: 'humanJudgment',
+      sourceId: sourceHumanJudgmentId,
+    })
+    const articleId = getMappedTargetId({label: 'article', mapped: articleIdBySourceId, sourceId: sourceArticleId})
+    const promptId = getMappedTargetId({label: 'prompt', mapped: promptIdBySourceId, sourceId: sourcePromptId})
+
+    assertPlanTargetMatches({
+      actual: articleId,
+      label: `human judgment ${sourceHumanJudgmentId} article`,
+      planned: entry.targetArticleId,
+    })
+    assertPlanTargetMatches({
+      actual: promptId,
+      label: `human judgment ${sourceHumanJudgmentId} prompt`,
+      planned: entry.targetPromptId,
+    })
+
+    return {
+      answer: getNullableString(getRecordField(judgment, 'answer')),
+      articleId,
+      comment: getNullableString(getRecordField(judgment, 'comment')),
+      createdAt: getDateOrDefault(getRecordField(judgment, 'createdAt'), now),
+      id: randomUUID(),
+      isAnswered: getBoolean(getRecordField(judgment, 'isAnswered'), false),
+      projectId,
+      promptId,
+      sourceHumanJudgmentId,
+      updatedAt: getDateOrDefault(getRecordField(judgment, 'updatedAt'), now),
+    }
+  })
+}
+
+const getHumanJudgmentSummaryRows = ({
+  articleIdBySourceId,
+  humanReviewPlan,
+  humanSummaries,
+  now,
+  projectId,
+}: {
+  articleIdBySourceId: Record<string, string>
+  humanReviewPlan: readonly HumanReviewPlanEntry[]
+  humanSummaries: readonly ProjectTransferPayloadRecord[]
+  now: Date
+  projectId: string
+}) => {
+  const planByKey = getHumanReviewPlanByKey(humanReviewPlan)
+
+  return humanSummaries.map((summary): HumanJudgmentSummaryCommitRow => {
+    const sourceHumanJudgmentSummaryId = getRequiredString(
+      getRecordField(summary, 'sourceHumanJudgmentSummaryId'),
+      'humanJudgmentSummary.sourceHumanJudgmentSummaryId',
+    )
+    const sourceArticleId = getRequiredString(
+      getRecordField(summary, 'sourceArticleId'),
+      `humanJudgmentSummaries.${sourceHumanJudgmentSummaryId}.sourceArticleId`,
+    )
+    const entry = assertHumanReviewPlanEntry({
+      entry: planByKey[`humanJudgmentSummary\u0000${sourceHumanJudgmentSummaryId}`],
+      kind: 'humanJudgmentSummary',
+      sourceId: sourceHumanJudgmentSummaryId,
+    })
+    const articleId = getMappedTargetId({label: 'article', mapped: articleIdBySourceId, sourceId: sourceArticleId})
+
+    assertPlanTargetMatches({
+      actual: articleId,
+      label: `human summary ${sourceHumanJudgmentSummaryId} article`,
+      planned: entry.targetArticleId,
+    })
+
+    return {
+      answer: getNullableString(getRecordField(summary, 'answer')),
+      articleId,
+      createdAt: getDateOrDefault(getRecordField(summary, 'createdAt'), now),
+      id: randomUUID(),
+      origin: getRequiredString(
+        getRecordField(summary, 'origin'),
+        `humanJudgmentSummaries.${sourceHumanJudgmentSummaryId}.origin`,
+      ),
+      projectId,
+      sourceHumanJudgmentSummaryId,
+      updatedAt: getDateOrDefault(getRecordField(summary, 'updatedAt'), now),
+    }
+  })
+}
+
+const reviewSectionNames = [
+  'title',
+  'abstract',
+  'intro',
+  'method',
+  'results',
+  'discussion',
+  'conclusion',
+  'appendix',
+  'other',
+] as const
+
+const getReviewSections = (value: unknown) => {
+  const sections = isRecord(value) ? value : {}
+
+  return reviewSectionNames.reduce<Record<string, {comment: string | null; reviewed: boolean}>>((mapped, section) => {
+    const sectionValue = getRecordField(sections, section)
+    const sectionRecord = isRecord(sectionValue) ? sectionValue : {}
+
+    return {
+      ...mapped,
+      [section]: {
+        comment: getNullableString(getRecordField(sectionRecord, 'comment')),
+        reviewed: getBoolean(getRecordField(sectionRecord, 'reviewed'), false),
+      },
+    }
+  }, {})
+}
+
+const getReviewRows = ({
+  articleIdBySourceId,
+  humanReviewPlan,
+  now,
+  projectId,
+  reviews,
+}: {
+  articleIdBySourceId: Record<string, string>
+  humanReviewPlan: readonly HumanReviewPlanEntry[]
+  now: Date
+  projectId: string
+  reviews: readonly ProjectTransferPayloadRecord[]
+}) => {
+  const planByKey = getHumanReviewPlanByKey(humanReviewPlan)
+
+  return reviews.map((review): ReviewCommitRow => {
+    const sourceReviewId = getRequiredString(getRecordField(review, 'sourceReviewId'), 'review.sourceReviewId')
+    const sourceArticleId = getRequiredString(
+      getRecordField(review, 'sourceArticleId'),
+      `reviews.${sourceReviewId}.sourceArticleId`,
+    )
+    const entry = assertHumanReviewPlanEntry({
+      entry: planByKey[`review\u0000${sourceReviewId}`],
+      kind: 'review',
+      sourceId: sourceReviewId,
+    })
+    const articleId = getMappedTargetId({label: 'article', mapped: articleIdBySourceId, sourceId: sourceArticleId})
+
+    assertPlanTargetMatches({
+      actual: articleId,
+      label: `review ${sourceReviewId} article`,
+      planned: entry.targetArticleId,
+    })
+
+    return {
+      articleId,
+      createdAt: getDateOrDefault(getRecordField(review, 'createdAt'), now),
+      id: randomUUID(),
+      opened: getBoolean(getRecordField(review, 'opened'), false),
+      projectId,
+      sections: getReviewSections(getRecordField(review, 'sections')),
+      sourceReviewId,
+      updatedAt: getDateOrDefault(getRecordField(review, 'updatedAt'), now),
+    }
+  })
+}
+
+const assertNoHumanReviewPlanExtras = ({
+  humanReviewPlan,
+  humanJudgments,
+  humanSummaries,
+  reviews,
+}: {
+  humanJudgments: readonly ProjectTransferPayloadRecord[]
+  humanReviewPlan: readonly HumanReviewPlanEntry[]
+  humanSummaries: readonly ProjectTransferPayloadRecord[]
+  reviews: readonly ProjectTransferPayloadRecord[]
+}) => {
+  const payloadKeys = new Set([
+    ...humanJudgments.map((record) => {
+      return `humanJudgment\u0000${getRequiredString(getRecordField(record, 'sourceHumanJudgmentId'), 'humanJudgment.sourceHumanJudgmentId')}`
+    }),
+    ...humanSummaries.map((record) => {
+      return `humanJudgmentSummary\u0000${getRequiredString(getRecordField(record, 'sourceHumanJudgmentSummaryId'), 'humanJudgmentSummary.sourceHumanJudgmentSummaryId')}`
+    }),
+    ...reviews.map((record) => {
+      return `review\u0000${getRequiredString(getRecordField(record, 'sourceReviewId'), 'review.sourceReviewId')}`
+    }),
+  ])
+  const extraEntry = humanReviewPlan.find((entry) => {
+    return !payloadKeys.has(`${entry.kind}\u0000${entry.sourceId}`)
+  })
+
+  return extraEntry
+    ? failCommitWriter(`${extraEntry.kind} plan references missing payload ${extraEntry.sourceId}`)
+    : undefined
+}
+
+const assertNoExistingHumanJudgments = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly HumanJudgmentCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const keys = rows.map((row) => {
+    return `${row.projectId}\u0000${row.articleId}\u0000${row.promptId}`
+  })
+
+  assertNoDuplicateRows('judgment_human', keys)
+
+  const existing =
+    rows.length === 0
+      ? []
+      : await tx.queryJson<{articleId: string; projectId: string; promptId: string}>(`
+          SELECT project_id AS projectId, article_id AS articleId, prompt_id AS promptId
+          FROM app.judgment_human
+          WHERE ${rows
+            .map((row) => {
+              return `(project_id = ${getSqlLiteral(row.projectId)} AND article_id = ${getSqlLiteral(row.articleId)} AND prompt_id = ${getSqlLiteral(row.promptId)})`
+            })
+            .join(' OR ')}
+          ORDER BY project_id ASC, article_id ASC, prompt_id ASC
+        `)
+  const conflict = existing[0]
+
+  return conflict
+    ? failCommitWriter(
+        `target judgment_human already has remapped key ${conflict.projectId}:${conflict.articleId}:${conflict.promptId}`,
+      )
+    : undefined
+}
+
+const assertNoExistingHumanSummaries = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly HumanJudgmentSummaryCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const keys = rows.map((row) => {
+    return `${row.projectId}\u0000${row.articleId}`
+  })
+
+  assertNoDuplicateRows('judgment_human_summary', keys)
+
+  const existing =
+    rows.length === 0
+      ? []
+      : await tx.queryJson<{articleId: string; projectId: string}>(`
+          SELECT project_id AS projectId, article_id AS articleId
+          FROM app.judgment_human_summary
+          WHERE ${rows
+            .map((row) => {
+              return `(project_id = ${getSqlLiteral(row.projectId)} AND article_id = ${getSqlLiteral(row.articleId)})`
+            })
+            .join(' OR ')}
+          ORDER BY project_id ASC, article_id ASC
+        `)
+  const conflict = existing[0]
+
+  return conflict
+    ? failCommitWriter(
+        `target judgment_human_summary already has remapped key ${conflict.projectId}:${conflict.articleId}`,
+      )
+    : undefined
+}
+
+const assertNoExistingReviews = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly ReviewCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const keys = rows.map((row) => {
+    return `${row.projectId}\u0000${row.articleId}`
+  })
+
+  assertNoDuplicateRows('review', keys)
+
+  const existing =
+    rows.length === 0
+      ? []
+      : await tx.queryJson<{articleId: string; projectId: string}>(`
+          SELECT project_id AS projectId, article_id AS articleId
+          FROM app.review
+          WHERE ${rows
+            .map((row) => {
+              return `(project_id = ${getSqlLiteral(row.projectId)} AND article_id = ${getSqlLiteral(row.articleId)})`
+            })
+            .join(' OR ')}
+          ORDER BY project_id ASC, article_id ASC
+        `)
+  const conflict = existing[0]
+
+  return conflict
+    ? failCommitWriter(`target review already has remapped key ${conflict.projectId}:${conflict.articleId}`)
+    : undefined
+}
+
+const insertHumanJudgmentRows = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly HumanJudgmentCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await assertNoExistingHumanJudgments({rows, tx})
+
+  return rows.length === 0
+    ? undefined
+    : tx.run(`
+        INSERT INTO app.judgment_human (
+          id,
+          project_id,
+          article_id,
+          prompt_id,
+          is_answered,
+          answer,
+          "comment",
+          created_at,
+          updated_at
+        ) VALUES ${rows
+          .map((row) => {
+            return `(
+              ${getSqlLiteral(row.id)},
+              ${getSqlLiteral(row.projectId)},
+              ${getSqlLiteral(row.articleId)},
+              ${getSqlLiteral(row.promptId)},
+              ${getSqlLiteral(row.isAnswered)},
+              ${getSqlLiteral(row.answer)},
+              ${getSqlLiteral(row.comment)},
+              ${getTimestampLiteral(row.createdAt)},
+              ${getTimestampLiteral(row.updatedAt)}
+            )`
+          })
+          .join(', ')}
+      `)
+}
+
+const insertHumanJudgmentSummaryRows = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly HumanJudgmentSummaryCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await assertNoExistingHumanSummaries({rows, tx})
+
+  return rows.length === 0
+    ? undefined
+    : tx.run(`
+        INSERT INTO app.judgment_human_summary (
+          id,
+          project_id,
+          article_id,
+          answer,
+          origin,
+          created_at,
+          updated_at
+        ) VALUES ${rows
+          .map((row) => {
+            return `(
+              ${getSqlLiteral(row.id)},
+              ${getSqlLiteral(row.projectId)},
+              ${getSqlLiteral(row.articleId)},
+              ${getSqlLiteral(row.answer)},
+              ${getSqlLiteral(row.origin)},
+              ${getTimestampLiteral(row.createdAt)},
+              ${getTimestampLiteral(row.updatedAt)}
+            )`
+          })
+          .join(', ')}
+      `)
+}
+
+const getReviewSection = (row: ReviewCommitRow, section: (typeof reviewSectionNames)[number]) => {
+  return row.sections[section] ?? {comment: null, reviewed: false}
+}
+
+const insertReviewRows = async ({rows, tx}: {rows: readonly ReviewCommitRow[]; tx: ProjectTransferCommitWriterTx}) => {
+  await assertNoExistingReviews({rows, tx})
+
+  return rows.length === 0
+    ? undefined
+    : tx.run(`
+        INSERT INTO app.review (
+          id,
+          project_id,
+          article_id,
+          opened,
+          reviewed_title,
+          reviewed_title_comment,
+          reviewed_abstract,
+          reviewed_abstract_comment,
+          reviewed_intro,
+          reviewed_intro_comment,
+          reviewed_method,
+          reviewed_method_comment,
+          reviewed_results,
+          reviewed_results_comment,
+          reviewed_discussion,
+          reviewed_discussion_comment,
+          reviewed_conclusion,
+          reviewed_conclusion_comment,
+          reviewed_appendix,
+          reviewed_appendix_comment,
+          reviewed_other,
+          reviewed_other_comment,
+          created_at,
+          updated_at
+        ) VALUES ${rows
+          .map((row) => {
+            const title = getReviewSection(row, 'title')
+            const abstract = getReviewSection(row, 'abstract')
+            const intro = getReviewSection(row, 'intro')
+            const method = getReviewSection(row, 'method')
+            const results = getReviewSection(row, 'results')
+            const discussion = getReviewSection(row, 'discussion')
+            const conclusion = getReviewSection(row, 'conclusion')
+            const appendix = getReviewSection(row, 'appendix')
+            const other = getReviewSection(row, 'other')
+
+            return `(
+              ${getSqlLiteral(row.id)},
+              ${getSqlLiteral(row.projectId)},
+              ${getSqlLiteral(row.articleId)},
+              ${getSqlLiteral(row.opened)},
+              ${getSqlLiteral(title.reviewed)},
+              ${getSqlLiteral(title.comment)},
+              ${getSqlLiteral(abstract.reviewed)},
+              ${getSqlLiteral(abstract.comment)},
+              ${getSqlLiteral(intro.reviewed)},
+              ${getSqlLiteral(intro.comment)},
+              ${getSqlLiteral(method.reviewed)},
+              ${getSqlLiteral(method.comment)},
+              ${getSqlLiteral(results.reviewed)},
+              ${getSqlLiteral(results.comment)},
+              ${getSqlLiteral(discussion.reviewed)},
+              ${getSqlLiteral(discussion.comment)},
+              ${getSqlLiteral(conclusion.reviewed)},
+              ${getSqlLiteral(conclusion.comment)},
+              ${getSqlLiteral(appendix.reviewed)},
+              ${getSqlLiteral(appendix.comment)},
+              ${getSqlLiteral(other.reviewed)},
+              ${getSqlLiteral(other.comment)},
+              ${getTimestampLiteral(row.createdAt)},
+              ${getTimestampLiteral(row.updatedAt)}
+            )`
+          })
+          .join(', ')}
+      `)
+}
+
 const writeProjectTransferCommitAppTablesTx = async ({
   now,
   payloads,
@@ -1058,7 +2377,23 @@ const writeProjectTransferCommitAppTablesTx = async ({
   const articles = payloads.articles ?? []
   const projectArticles = payloads.projectArticles ?? []
   const articleImportRoutes = payloads.articleImportRoutes ?? []
+  const judgments = payloads.judgments ?? []
+  const judgmentAssessments = payloads.judgmentAssessments ?? []
+  const humanJudgments = payloads.humanJudgments ?? []
+  const humanJudgmentSummaries = payloads.humanJudgmentSummaries ?? []
+  const reviews = payloads.reviews ?? []
   const importedAt = now ?? new Date()
+  const judgmentPlan = getRequiredPlanEntries(plan.targetPlan.judgmentPlan, 'judgment plan', judgments.length)
+  const judgmentAssessmentPlan = getRequiredPlanEntries(
+    plan.targetPlan.judgmentAssessmentPlan,
+    'judgment assessment plan',
+    judgmentAssessments.length,
+  )
+  const humanReviewPlan = getRequiredPlanEntries(
+    plan.targetPlan.humanReviewPlan,
+    'human review plan',
+    humanJudgments.length + humanJudgmentSummaries.length + reviews.length,
+  )
   const createdProject = await insertImportedProject({
     models: payloads.models ?? [],
     now: importedAt,
@@ -1108,11 +2443,60 @@ const writeProjectTransferCommitAppTablesTx = async ({
     projectId: createdProject.id,
     tx,
   })
+  const judgmentRows = getJudgmentRows({
+    articleIdBySourceId,
+    judgmentPlan,
+    judgments,
+    now: importedAt,
+    plan,
+    promptIdBySourceId,
+  })
+  await insertJudgmentRows({projectId: createdProject.id, rows: judgmentRows, tx})
+  const judgmentIdBySourceId = getJudgmentIdBySourceId(judgmentRows)
+  const judgmentAssessmentRows = getJudgmentAssessmentRows({
+    assessmentPlan: judgmentAssessmentPlan,
+    assessments: judgmentAssessments,
+    judgmentIdBySourceId,
+    now: importedAt,
+  })
+  await insertJudgmentAssessmentRows({
+    allJudgmentIds: Object.values(judgmentIdBySourceId),
+    rows: judgmentAssessmentRows,
+    tx,
+  })
+  assertNoHumanReviewPlanExtras({humanJudgments, humanReviewPlan, humanSummaries: humanJudgmentSummaries, reviews})
+  const humanJudgmentRows = getHumanJudgmentRows({
+    articleIdBySourceId,
+    humanJudgments,
+    humanReviewPlan,
+    now: importedAt,
+    projectId: createdProject.id,
+    promptIdBySourceId,
+  })
+  const humanSummaryRows = getHumanJudgmentSummaryRows({
+    articleIdBySourceId,
+    humanReviewPlan,
+    humanSummaries: humanJudgmentSummaries,
+    now: importedAt,
+    projectId: createdProject.id,
+  })
+  const reviewRows = getReviewRows({
+    articleIdBySourceId,
+    humanReviewPlan,
+    now: importedAt,
+    projectId: createdProject.id,
+    reviews,
+  })
+  await insertHumanJudgmentRows({rows: humanJudgmentRows, tx})
+  await insertHumanJudgmentSummaryRows({rows: humanSummaryRows, tx})
+  await insertReviewRows({rows: reviewRows, tx})
 
   return {
     articleIdBySourceId,
-    importWarnings: getOmittedRouteWarnings({
+    importWarnings: getCommitImportWarnings({
       articleRoutePlan: plan.targetPlan.articleRoutePlan,
+      judgmentPlan,
+      plan,
       projectRoutePlan: plan.targetPlan.projectRoutePlan,
     }),
     projectId: createdProject.id,

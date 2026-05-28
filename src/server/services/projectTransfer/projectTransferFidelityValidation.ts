@@ -98,6 +98,7 @@ type TargetJudgmentRow = {
   answeredOriginal: string | null
   answeredOriginalAsArray: unknown
   confidenceOriginal: number | null
+  deleteGeneration: number | null
   explanation: string | null
   isAnswered: boolean | null
   quotes: unknown
@@ -556,6 +557,7 @@ const getJudgmentPhysicalKey = ({
         String(settings.useAbstract),
         String(settings.useFulltext),
         String(settings.useFulltextNoImages),
+        String(getNumberField(judgment, 'deleteGeneration', 0) ?? 0),
       ].join(':')
 }
 
@@ -582,6 +584,7 @@ const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
     String(row.useAbstract),
     String(row.useFulltext),
     String(row.useFulltextNoImages),
+    String(row.deleteGeneration ?? 0),
   ].join(':')
 }
 
@@ -633,7 +636,8 @@ const getTargetJudgmentRows = async ({
         TO_JSON(answered_original_as_array) AS answeredOriginalAsArray,
         confidence_original AS confidenceOriginal,
         explanation,
-        TO_JSON(quotes) AS quotes
+        TO_JSON(quotes) AS quotes,
+        delete_generation AS deleteGeneration
       FROM app.judgment
       WHERE deleted_at IS NULL
         AND article_id IN (${getSqlValueList(targetArticleIds)})

@@ -1155,3 +1155,678 @@ test('project transfer commit writer blocks duplicate project prompt remaps befo
   expect(result.projectCount).toBe(0)
   expect(result.promptCount).toBe(0)
 })
+
+test('project transfer commit writer writes judgment assessment and human review decision rows', () => {
+  const result = runCommitWriterScript<{
+    humanJudgmentRow: {answer: string | null; articleId: string; projectId: string; promptId: string}
+    humanSummaryRow: {answer: string | null; articleId: string; origin: string; projectId: string}
+    newAssessmentRow: {assessmentIsCorrect: boolean; judgmentId: string}
+    newJudgmentRow: {
+      articleId: string
+      answeredOriginal: string | null
+      confidenceOriginal: number
+      deleteGeneration: number
+      deletedAt: string | null
+      id: string
+      isAnswered: boolean
+      projectId: string
+      snapshotProjectId: string | null
+      snapshotProjectModelName: string | null
+    }
+    reusedAssessmentCount: number
+    reusedJudgmentRow: {snapshotProjectModelName: string | null}
+    reviewRow: {
+      articleId: string
+      opened: boolean
+      projectId: string
+      reviewedTitle: boolean
+      reviewedTitleComment: string | null
+    }
+    targetNewArticleId: string
+    targetProjectId: string
+    warningCodes: string[]
+  }>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const promptHash = computePromptContentHash('Decision prompt?', null, 'Decision', 'system')
+    await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('target-prompt', 'Decision prompt?', NULL, 'Decision', 'system', '" + promptHash + "', FALSE)")
+    await database.run("INSERT INTO app.article (id, article_title) VALUES ('reuse-decision-article', 'Reusable Decision Article')")
+    await database.run("INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, snapshot_project_id, snapshot_project_model_name, use_title, use_abstract, use_fulltext, use_fulltext_no_images, is_answered, answered_original, answered_original_as_array, confidence_original, explanation, quotes, delete_generation, deleted_at, created_at, updated_at) VALUES ('target-judgment-reuse', 'reuse-decision-article', 'target-prompt', 'target-model', 'existing-project', 'existing-snapshot-project', 'target-existing-label', TRUE, TRUE, FALSE, FALSE, TRUE, 'reuse-answer', ['reuse-answer'], 77, 'reuse-answer explanation', CAST('[{\\"quote\\":\\"reuse-answer quote\\"}]' AS JSON), 0, NULL, TIMESTAMPTZ '2026-05-01T00:00:00.000Z', TIMESTAMPTZ '2026-05-01T00:00:00.000Z')")
+    await database.run("INSERT INTO app.judgment_assessment (id, judgment_id, assessment_is_correct, assessment_comment, created_at, updated_at) VALUES ('target-assessment-reuse', 'target-judgment-reuse', TRUE, 'Reused assessment', TIMESTAMPTZ '2026-05-01T00:00:00.000Z', TIMESTAMPTZ '2026-05-01T00:00:00.000Z')")
+
+    const settings = {
+      humanJudgmentMode: 'prompt',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
+    const newArticle = {
+      articleId: 'legacy-decision-new',
+      articleTitle: 'New Decision Article',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-decision-new'},
+      signature: {identifierKeys: [], title: 'New Decision Article'},
+      sourceArticleId: 'source-decision-new',
+    }
+    const reusedArticle = {
+      articleTitle: 'Reusable Decision Article',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-decision-reuse'},
+      signature: {identifierKeys: [], title: 'Reusable Decision Article'},
+      sourceArticleId: 'source-decision-reuse',
+    }
+    const promptPayload = {
+      archived: false,
+      contentHash: promptHash,
+      originalText: 'Decision prompt?',
+      promptHeading: 'Decision',
+      provenance: {sourcePromptId: 'source-prompt-decision'},
+      signature: {contentHash: promptHash, originalText: 'Decision prompt?'},
+      sourcePromptId: 'source-prompt-decision',
+      transformedText: null,
+      type: 'system',
+    }
+    const projectPromptPayload = {
+      archived: false,
+      enabled: true,
+      order: 0,
+      provenance: {sourceProjectId: 'source-project', sourcePromptId: 'source-prompt-decision'},
+      signature: {},
+      sourceProjectId: 'source-project',
+      sourceProjectPromptId: 'source-project-prompt-decision',
+      sourcePromptId: 'source-prompt-decision',
+    }
+    const getJudgmentPayload = (sourceJudgmentId, sourceArticleId, answer, confidenceOriginal, snapshotProjectModelName) => ({
+      answeredOriginal: answer,
+      answeredOriginalAsArray: [answer],
+      chunkingStrategy: null,
+      confidenceOriginal,
+      contentSettings: settings,
+      createdAt: '2026-05-02T00:00:00.000Z',
+      deleteGeneration: 0,
+      deletedAt: null,
+      explanation: answer + ' explanation',
+      isAnswered: true,
+      judgmentInputSignature: {article: sourceArticleId, prompt: 'decision'},
+      judgmentInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+      provenance: {sourceArticleId, sourceModelId: 'source-model', sourcePromptId: 'source-prompt-decision'},
+      quotes: [{quote: answer + ' quote'}],
+      signature: {},
+      snapshotProjectId: 'source-project',
+      snapshotProjectModelName,
+      sourceArticleId,
+      sourceJudgmentId,
+      sourceModelId: 'source-model',
+      sourceProjectId: 'source-project',
+      sourcePromptId: 'source-prompt-decision',
+      updatedAt: '2026-05-03T00:00:00.000Z',
+    })
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'create',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: [],
+          packageArticleId: 'legacy-decision-new',
+          selectedTargetArticleId: null,
+          sourceArticleId: 'source-decision-new',
+        },
+        {
+          action: 'reuse',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: [],
+          packageArticleId: null,
+          selectedTargetArticleId: 'reuse-decision-article',
+          sourceArticleId: 'source-decision-reuse',
+        },
+      ],
+      judgmentAssessmentPlan: [
+        {
+          action: 'insert',
+          conflictCodes: [],
+          sourceJudgmentAssessmentId: 'source-assessment-new',
+          sourceJudgmentId: 'source-judgment-new',
+          targetAssessmentId: null,
+          targetJudgmentId: 'new:judgment:source-judgment-new',
+        },
+        {
+          action: 'reuse',
+          conflictCodes: [],
+          sourceJudgmentAssessmentId: 'source-assessment-reuse',
+          sourceJudgmentId: 'source-judgment-reuse',
+          targetAssessmentId: 'target-assessment-reuse',
+          targetJudgmentId: 'target-judgment-reuse',
+        },
+      ],
+      judgmentPlan: [
+        {
+          action: 'insert',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          physicalKey: 'new-physical',
+          provenanceKind: 'currentReviewRows',
+          reviewVisibleKey: 'new-visible',
+          sourceJudgmentId: 'source-judgment-new',
+          targetArticleId: 'new:article:source-decision-new',
+          targetJudgmentId: 'new:judgment:source-judgment-new',
+          targetModelId: 'target-model',
+          targetPromptId: 'target-prompt',
+        },
+        {
+          action: 'reuse',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          physicalKey: 'reuse-physical',
+          provenanceKind: 'currentReviewRows',
+          reviewVisibleKey: 'reuse-visible',
+          sourceJudgmentId: 'source-judgment-reuse',
+          targetArticleId: 'reuse-decision-article',
+          targetJudgmentId: 'target-judgment-reuse',
+          targetModelId: 'target-model',
+          targetPromptId: 'target-prompt',
+        },
+      ],
+      humanReviewPlan: [
+        {
+          action: 'insert',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          kind: 'humanJudgment',
+          provenanceKind: 'currentReviewRows',
+          sourceId: 'source-human-judgment',
+          targetArticleId: 'new:article:source-decision-new',
+          targetPromptId: 'target-prompt',
+          uniqueKey: 'human-judgment-key',
+        },
+        {
+          action: 'insert',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          kind: 'humanJudgmentSummary',
+          provenanceKind: 'currentReviewRows',
+          sourceId: 'source-human-summary',
+          targetArticleId: 'new:article:source-decision-new',
+          targetPromptId: null,
+          uniqueKey: 'human-summary-key',
+        },
+        {
+          action: 'insert',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          kind: 'review',
+          provenanceKind: 'currentReviewRows',
+          sourceId: 'source-review',
+          targetArticleId: 'new:article:source-decision-new',
+          targetPromptId: null,
+          uniqueKey: 'review-key',
+        },
+      ],
+      projectPromptPlan: [
+        {
+          enabled: true,
+          metadata: {archived: false},
+          order: 0,
+          sourceProjectPromptId: 'source-project-prompt-decision',
+          sourcePromptId: 'source-prompt-decision',
+          targetPromptId: 'target-prompt',
+        },
+      ],
+      promptPlan: [
+        {
+          action: 'reuse',
+          computedContentHash: promptHash,
+          packageContentHash: promptHash,
+          sourcePromptId: 'source-prompt-decision',
+          targetPromptId: 'target-prompt',
+        },
+      ],
+    }
+    const packageWarnings = [
+      {
+        action: 'used_current_review_rows',
+        code: 'currentReviewRowsJudgmentInputSignature',
+        details: {provenance: 'currentReviewRows', recordCount: 2},
+        message: 'Current review rows were used',
+        scope: 'judgments',
+        severity: 'warning',
+      },
+      {
+        action: 'noted',
+        code: 'providerModelDependencyNote',
+        details: {sourceModelId: 'source-model', targetModelId: 'target-model'},
+        message: 'Provider/model dependency note',
+        scope: 'models.source-model',
+        severity: 'info',
+      },
+    ]
+    const plan = getBasePlan(targetPlan, dependencyResolution)
+    plan.packageWarnings = packageWarnings
+    plan.summary = {...plan.summary, packageWarnings, warningCount: packageWarnings.length}
+    const writeResult = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-decision-writer',
+      now,
+      payloads: {
+        articles: [newArticle, reusedArticle],
+        humanJudgmentSummaries: [
+          {
+            answer: 'yes',
+            humanReviewInputSignature: {article: 'source-decision-new'},
+            humanReviewInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+            origin: 'manual_override',
+            provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: null},
+            signature: {},
+            sourceArticleId: 'source-decision-new',
+            sourceHumanJudgmentSummaryId: 'source-human-summary',
+            sourceProjectId: 'source-project',
+          },
+        ],
+        humanJudgments: [
+          {
+            answer: 'include',
+            comment: 'Human comment',
+            humanReviewInputSignature: {article: 'source-decision-new', prompt: 'decision'},
+            humanReviewInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+            isAnswered: true,
+            provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: null, sourcePromptId: 'source-prompt-decision'},
+            signature: {},
+            sourceArticleId: 'source-decision-new',
+            sourceHumanJudgmentId: 'source-human-judgment',
+            sourceProjectId: 'source-project',
+            sourcePromptId: 'source-prompt-decision',
+          },
+        ],
+        judgmentAssessments: [
+          {
+            assessmentComment: 'New assessment',
+            assessmentIsCorrect: false,
+            provenance: {sourceJudgmentId: 'source-judgment-new'},
+            signature: {},
+            sourceJudgmentAssessmentId: 'source-assessment-new',
+            sourceJudgmentId: 'source-judgment-new',
+          },
+          {
+            assessmentComment: 'Reused assessment',
+            assessmentIsCorrect: true,
+            provenance: {sourceJudgmentId: 'source-judgment-reuse'},
+            signature: {},
+            sourceJudgmentAssessmentId: 'source-assessment-reuse',
+            sourceJudgmentId: 'source-judgment-reuse',
+          },
+        ],
+        judgments: [
+          getJudgmentPayload('source-judgment-new', 'source-decision-new', 'new-answer', null, 'exported-new-label'),
+          getJudgmentPayload('source-judgment-reuse', 'source-decision-reuse', 'reuse-answer', 77, 'exported-reuse-label'),
+        ],
+        models: [getModelPayload()],
+        project: getProjectPayload(settings),
+        projectArticles: [
+          {
+            provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: 'source-project'},
+            signature: {},
+            sourceArticleId: 'source-decision-new',
+            sourceProjectArticleId: 'source-project-article-decision',
+            sourceProjectId: 'source-project',
+          },
+        ],
+        projectPrompts: [projectPromptPayload],
+        prompts: [promptPayload],
+        reviews: [
+          {
+            humanReviewInputSignature: {article: 'source-decision-new', sections: {title: true}},
+            humanReviewInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+            opened: true,
+            provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: null},
+            sections: {title: {comment: 'Reviewed title', reviewed: true}},
+            signature: {},
+            sourceArticleId: 'source-decision-new',
+            sourceProjectId: 'source-project',
+            sourceReviewId: 'source-review',
+          },
+        ],
+      },
+      plan,
+      promotion: {
+        articleCreates: [{article: newArticle, sourceArticleId: 'source-decision-new'}],
+        articleFieldFills: [],
+        manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-decision-writer', updatedAt: now.toISOString()},
+        promotionPathByPackagePath: {},
+      },
+      sessionId: 'session-decision-writer',
+    })
+    const targetNewArticleId = writeResult.articleIdBySourceId['source-decision-new']
+    const [newJudgmentRow] = await database.queryJson("SELECT id, article_id AS articleId, project_id AS projectId, snapshot_project_id AS snapshotProjectId, snapshot_project_model_name AS snapshotProjectModelName, is_answered AS isAnswered, answered_original AS answeredOriginal, confidence_original AS confidenceOriginal, delete_generation::INTEGER AS deleteGeneration, deleted_at AS deletedAt FROM app.judgment WHERE article_id = '" + targetNewArticleId + "'")
+    const [reusedJudgmentRow] = await database.queryJson("SELECT snapshot_project_model_name AS snapshotProjectModelName FROM app.judgment WHERE id = 'target-judgment-reuse'")
+    const [newAssessmentRow] = await database.queryJson("SELECT judgment_id AS judgmentId, assessment_is_correct AS assessmentIsCorrect FROM app.judgment_assessment WHERE judgment_id = '" + newJudgmentRow.id + "'")
+    const [reusedAssessmentCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.judgment_assessment WHERE judgment_id = 'target-judgment-reuse'")
+    const [humanJudgmentRow] = await database.queryJson("SELECT project_id AS projectId, article_id AS articleId, prompt_id AS promptId, answer FROM app.judgment_human WHERE project_id = '" + writeResult.projectId + "'")
+    const [humanSummaryRow] = await database.queryJson("SELECT project_id AS projectId, article_id AS articleId, answer, origin FROM app.judgment_human_summary WHERE project_id = '" + writeResult.projectId + "'")
+    const [reviewRow] = await database.queryJson("SELECT project_id AS projectId, article_id AS articleId, opened, reviewed_title AS reviewedTitle, reviewed_title_comment AS reviewedTitleComment FROM app.review WHERE project_id = '" + writeResult.projectId + "'")
+
+    console.log(JSON.stringify({
+      humanJudgmentRow,
+      humanSummaryRow,
+      newAssessmentRow,
+      newJudgmentRow,
+      reusedAssessmentCount: reusedAssessmentCount.count,
+      reusedJudgmentRow,
+      reviewRow,
+      targetNewArticleId,
+      targetProjectId: writeResult.projectId,
+      warningCodes: writeResult.importWarnings.map((warning) => warning.code),
+    }))
+  `)
+
+  expect(result.newJudgmentRow).toMatchObject({
+    answeredOriginal: 'new-answer',
+    confidenceOriginal: 50,
+    deleteGeneration: 0,
+    deletedAt: null,
+    isAnswered: true,
+    projectId: result.targetProjectId,
+    snapshotProjectId: result.targetProjectId,
+    snapshotProjectModelName: 'exported-new-label',
+  })
+  expect(result.reusedJudgmentRow.snapshotProjectModelName).toBe('target-existing-label')
+  expect(result.newAssessmentRow).toMatchObject({assessmentIsCorrect: false, judgmentId: result.newJudgmentRow.id})
+  expect(result.reusedAssessmentCount).toBe(1)
+  expect(result.humanJudgmentRow).toMatchObject({
+    answer: 'include',
+    articleId: result.targetNewArticleId,
+    projectId: result.targetProjectId,
+    promptId: 'target-prompt',
+  })
+  expect(result.humanSummaryRow).toMatchObject({
+    answer: 'yes',
+    articleId: result.targetNewArticleId,
+    origin: 'manual_override',
+    projectId: result.targetProjectId,
+  })
+  expect(result.reviewRow).toMatchObject({
+    articleId: result.targetNewArticleId,
+    opened: true,
+    projectId: result.targetProjectId,
+    reviewedTitle: true,
+    reviewedTitleComment: 'Reviewed title',
+  })
+  expect(result.warningCodes).toContain('currentReviewRowsJudgmentInputSignature')
+  expect(result.warningCodes).toContain('providerModelDependencyNote')
+  expect(result.warningCodes).toContain('equivalentTargetJudgmentReused')
+})
+
+test('project transfer commit writer blocks active judgment review-visible conflicts before insert', () => {
+  const result = runCommitWriterScript<{errorMessage: string | null; judgmentCount: number; projectCount: number}>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const promptHash = computePromptContentHash('Conflict prompt?', null, 'Conflict', 'system')
+    await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('target-prompt-conflict', 'Conflict prompt?', NULL, 'Conflict', 'system', '" + promptHash + "', FALSE)")
+    await database.run("INSERT INTO app.article (id, article_title) VALUES ('target-conflict-article', 'Conflict Article')")
+    await database.run("INSERT INTO app.judgment (id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, is_answered, answered_original, answered_original_as_array, confidence_original, explanation, quotes, delete_generation, deleted_at) VALUES ('target-visible-conflict', 'target-conflict-article', 'target-prompt-conflict', 'target-model', TRUE, TRUE, FALSE, FALSE, TRUE, 'existing', ['existing'], 50, 'Existing', CAST('[]' AS JSON), 1, NULL)")
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const article = {
+      articleTitle: 'Conflict Article',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-conflict-article'},
+      signature: {identifierKeys: [], title: 'Conflict Article'},
+      sourceArticleId: 'source-conflict-article',
+    }
+    const promptPayload = {
+      archived: false,
+      contentHash: promptHash,
+      originalText: 'Conflict prompt?',
+      promptHeading: 'Conflict',
+      provenance: {sourcePromptId: 'source-conflict-prompt'},
+      signature: {},
+      sourcePromptId: 'source-conflict-prompt',
+      transformedText: null,
+      type: 'system',
+    }
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'reuse',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: [],
+          packageArticleId: null,
+          selectedTargetArticleId: 'target-conflict-article',
+          sourceArticleId: 'source-conflict-article',
+        },
+      ],
+      judgmentPlan: [
+        {
+          action: 'insert',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          physicalKey: 'conflict-physical',
+          provenanceKind: 'currentReviewRows',
+          reviewVisibleKey: 'conflict-visible',
+          sourceJudgmentId: 'source-conflict-judgment',
+          targetArticleId: 'target-conflict-article',
+          targetJudgmentId: 'new:judgment:source-conflict-judgment',
+          targetModelId: 'target-model',
+          targetPromptId: 'target-prompt-conflict',
+        },
+      ],
+      projectPromptPlan: [
+        {
+          enabled: true,
+          metadata: {archived: false},
+          order: 0,
+          sourceProjectPromptId: 'source-conflict-project-prompt',
+          sourcePromptId: 'source-conflict-prompt',
+          targetPromptId: 'target-prompt-conflict',
+        },
+      ],
+      promptPlan: [
+        {
+          action: 'reuse',
+          computedContentHash: promptHash,
+          packageContentHash: promptHash,
+          sourcePromptId: 'source-conflict-prompt',
+          targetPromptId: 'target-prompt-conflict',
+        },
+      ],
+    }
+    const errorMessage = await catchMessage(() => {
+      return writeProjectTransferCommitAppTables({
+        commitId: 'commit-visible-conflict',
+        now,
+        payloads: {
+          articles: [article],
+          judgments: [
+            {
+              answeredOriginal: 'new',
+              answeredOriginalAsArray: ['new'],
+              confidenceOriginal: null,
+              contentSettings: settings,
+              deleteGeneration: 0,
+              explanation: 'New',
+              isAnswered: true,
+              judgmentInputSignature: {},
+              judgmentInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+              provenance: {sourceArticleId: 'source-conflict-article', sourceModelId: 'source-model', sourcePromptId: 'source-conflict-prompt'},
+              quotes: [],
+              signature: {},
+              sourceArticleId: 'source-conflict-article',
+              sourceJudgmentId: 'source-conflict-judgment',
+              sourceModelId: 'source-model',
+              sourcePromptId: 'source-conflict-prompt',
+            },
+          ],
+          models: [getModelPayload()],
+          project: getProjectPayload(settings),
+          projectPrompts: [
+            {
+              archived: false,
+              enabled: true,
+              order: 0,
+              provenance: {sourceProjectId: 'source-project', sourcePromptId: 'source-conflict-prompt'},
+              signature: {},
+              sourceProjectId: 'source-project',
+              sourceProjectPromptId: 'source-conflict-project-prompt',
+              sourcePromptId: 'source-conflict-prompt',
+            },
+          ],
+          prompts: [promptPayload],
+        },
+        plan: getBasePlan(targetPlan, dependencyResolution),
+        promotion: {
+          articleCreates: [],
+          articleFieldFills: [],
+          manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-visible-conflict', updatedAt: now.toISOString()},
+          promotionPathByPackagePath: {},
+        },
+        sessionId: 'session-visible-conflict',
+      })
+    })
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+    const [judgmentCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.judgment WHERE article_id = 'target-conflict-article'")
+
+    console.log(JSON.stringify({errorMessage, judgmentCount: judgmentCount.count, projectCount: projectCount.count}))
+  `)
+
+  expect(result.errorMessage).toContain('target judgment review-visible key already exists')
+  expect(result.projectCount).toBe(0)
+  expect(result.judgmentCount).toBe(1)
+})
+
+test('project transfer commit writer blocks extra target assessment state on reused judgments', () => {
+  const result = runCommitWriterScript<{assessmentCount: number; errorMessage: string | null; projectCount: number}>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const promptHash = computePromptContentHash('Extra assessment prompt?', null, 'Extra', 'system')
+    await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('target-prompt-extra', 'Extra assessment prompt?', NULL, 'Extra', 'system', '" + promptHash + "', FALSE)")
+    await database.run("INSERT INTO app.article (id, article_title) VALUES ('target-extra-article', 'Extra Assessment Article')")
+    await database.run("INSERT INTO app.judgment (id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, is_answered, answered_original, answered_original_as_array, confidence_original, explanation, quotes, delete_generation, deleted_at) VALUES ('target-judgment-extra', 'target-extra-article', 'target-prompt-extra', 'target-model', TRUE, TRUE, FALSE, FALSE, TRUE, 'include', ['include'], 50, 'Equivalent', CAST('[]' AS JSON), 0, NULL)")
+    await database.run("INSERT INTO app.judgment_assessment (id, judgment_id, assessment_is_correct, assessment_comment) VALUES ('target-assessment-extra', 'target-judgment-extra', TRUE, 'Extra state')")
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const article = {
+      articleTitle: 'Extra Assessment Article',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-extra-article'},
+      signature: {identifierKeys: [], title: 'Extra Assessment Article'},
+      sourceArticleId: 'source-extra-article',
+    }
+    const promptPayload = {
+      archived: false,
+      contentHash: promptHash,
+      originalText: 'Extra assessment prompt?',
+      promptHeading: 'Extra',
+      provenance: {sourcePromptId: 'source-extra-prompt'},
+      signature: {},
+      sourcePromptId: 'source-extra-prompt',
+      transformedText: null,
+      type: 'system',
+    }
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'reuse',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: [],
+          packageArticleId: null,
+          selectedTargetArticleId: 'target-extra-article',
+          sourceArticleId: 'source-extra-article',
+        },
+      ],
+      judgmentPlan: [
+        {
+          action: 'reuse',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          physicalKey: 'extra-physical',
+          provenanceKind: 'currentReviewRows',
+          reviewVisibleKey: 'extra-visible',
+          sourceJudgmentId: 'source-extra-judgment',
+          targetArticleId: 'target-extra-article',
+          targetJudgmentId: 'target-judgment-extra',
+          targetModelId: 'target-model',
+          targetPromptId: 'target-prompt-extra',
+        },
+      ],
+      projectPromptPlan: [
+        {
+          enabled: true,
+          metadata: {archived: false},
+          order: 0,
+          sourceProjectPromptId: 'source-extra-project-prompt',
+          sourcePromptId: 'source-extra-prompt',
+          targetPromptId: 'target-prompt-extra',
+        },
+      ],
+      promptPlan: [
+        {
+          action: 'reuse',
+          computedContentHash: promptHash,
+          packageContentHash: promptHash,
+          sourcePromptId: 'source-extra-prompt',
+          targetPromptId: 'target-prompt-extra',
+        },
+      ],
+    }
+    const errorMessage = await catchMessage(() => {
+      return writeProjectTransferCommitAppTables({
+        commitId: 'commit-extra-assessment',
+        now,
+        payloads: {
+          articles: [article],
+          judgments: [
+            {
+              answeredOriginal: 'include',
+              answeredOriginalAsArray: ['include'],
+              confidenceOriginal: 50,
+              contentSettings: settings,
+              deleteGeneration: 0,
+              explanation: 'Equivalent',
+              isAnswered: true,
+              judgmentInputSignature: {},
+              judgmentInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+              provenance: {sourceArticleId: 'source-extra-article', sourceModelId: 'source-model', sourcePromptId: 'source-extra-prompt'},
+              quotes: [],
+              signature: {},
+              sourceArticleId: 'source-extra-article',
+              sourceJudgmentId: 'source-extra-judgment',
+              sourceModelId: 'source-model',
+              sourcePromptId: 'source-extra-prompt',
+            },
+          ],
+          models: [getModelPayload()],
+          project: getProjectPayload(settings),
+          projectPrompts: [
+            {
+              archived: false,
+              enabled: true,
+              order: 0,
+              provenance: {sourceProjectId: 'source-project', sourcePromptId: 'source-extra-prompt'},
+              signature: {},
+              sourceProjectId: 'source-project',
+              sourceProjectPromptId: 'source-extra-project-prompt',
+              sourcePromptId: 'source-extra-prompt',
+            },
+          ],
+          prompts: [promptPayload],
+        },
+        plan: getBasePlan(targetPlan, dependencyResolution),
+        promotion: {
+          articleCreates: [],
+          articleFieldFills: [],
+          manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-extra-assessment', updatedAt: now.toISOString()},
+          promotionPathByPackagePath: {},
+        },
+        sessionId: 'session-extra-assessment',
+      })
+    })
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+    const [assessmentCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.judgment_assessment WHERE judgment_id = 'target-judgment-extra'")
+
+    console.log(JSON.stringify({assessmentCount: assessmentCount.count, errorMessage, projectCount: projectCount.count}))
+  `)
+
+  expect(result.errorMessage).toContain('has assessment state missing from package')
+  expect(result.projectCount).toBe(0)
+  expect(result.assessmentCount).toBe(1)
+})
