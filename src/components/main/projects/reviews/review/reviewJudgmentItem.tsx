@@ -245,7 +245,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
           >
             {props.judgment.prompt.originalText}
           </p>
-          <div class="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-[calc(100vw-2rem)] max-w-xl rounded-md bg-gray-950/90 px-3 py-2 text-xs text-white shadow-xl ring-1 ring-black/10 backdrop-blur-sm group-hover:block group-focus-within:block">
+          <div class="pointer-events-auto absolute right-0 top-full z-20 mt-2 hidden w-[calc(100vw-2rem)] max-w-xl rounded-md bg-gray-950/90 px-3 py-2 text-xs text-white shadow-xl ring-1 ring-black/10 backdrop-blur-sm group-hover:block group-focus-within:block">
             <div class="whitespace-pre-wrap break-words leading-relaxed text-gray-100">
               {props.judgment.prompt.originalText}
             </div>
