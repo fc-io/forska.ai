@@ -16,6 +16,7 @@ import {duckdbOwnerPrivateApiPrefix} from './routes/apiRouteClassification.ts'
 import {duckdbOwnerConnectionsRoutes} from './routes/DuckdbOwnerConnectionsRoutes.ts'
 import {judgmentDispatchTelemetryRoutes} from './routes/JudgmentDispatchTelemetryRoutes.ts'
 import {getProductApiRoutes} from './routes/productApiRoutes.ts'
+import {publicRouteSurfaceGate} from './routes/publicRouteSurfaceGate.ts'
 import {runtimeReadyRoutes} from './routes/runtimeReadyRoutes.ts'
 import {
   type ProjectTransferSessionRecoveryResult,
@@ -278,6 +279,7 @@ export const app = new Elysia()
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
   )
+  .use(publicRouteSurfaceGate)
   .use(apiProxyRoutes)
   .use(runtimeReadyRoutes)
   .use(duckdbOwnerConnectionsRoutes)

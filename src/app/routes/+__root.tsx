@@ -3,9 +3,22 @@ import {createRootRoute, Outlet} from '@tanstack/solid-router'
 import {Match, Switch} from 'solid-js'
 
 import {Navigation} from '../../components/Navigation'
-import {duckdbOwnerConnectionsQueryKey, fetchDuckdbOwnerConnections} from '../../utils/duckdbOwnerConnectionsQuery'
+import {apiClient} from '../../services/apiClient.ts'
 import {RouterErrorSurface} from '../routerErrorSurface'
 import {env} from '../utils/client-env.ts'
+
+const backendAvailabilityQueryKey = ['backend-availability'] as const
+
+const fetchBackendAvailability = async () => {
+  const response = await apiClient.api.runtime.ready.get()
+  const responseData = response.data as {data?: {ready?: boolean}} | undefined
+
+  if (response.error || responseData?.data?.ready !== true) {
+    throw new Error('Failed to reach backend runtime')
+  }
+
+  return responseData.data
+}
 
 const getBackendUnavailableMessage = (error: unknown) => {
   return error instanceof Error ? error.message : 'Forska could not reach the local backend.'
@@ -50,8 +63,8 @@ const BackendUnavailableSurface = (props: {error: unknown; onRetry: () => void; 
 const RootComponent = () => {
   const backendAvailabilityQuery = useQuery(() => {
     return {
-      queryKey: duckdbOwnerConnectionsQueryKey,
-      queryFn: fetchDuckdbOwnerConnections,
+      queryKey: backendAvailabilityQueryKey,
+      queryFn: fetchBackendAvailability,
       refetchInterval: 15_000,
       refetchOnReconnect: true,
       refetchOnWindowFocus: true,
