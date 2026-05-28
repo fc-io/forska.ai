@@ -711,6 +711,7 @@ test('api readiness stays usable while ownerless registry reports missing mainte
   const server = startServer({
     API_SERVER_PORT: String(apiPort),
     DUCKDB_PATH: duckdbPath,
+    FORSKA_EXPOSE_LOCAL_OPERATOR_API: 'true',
     FORSKA_OWNERLESS_READ_ONLY_DUCKDB: 'disabled',
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
@@ -769,6 +770,7 @@ test('api judgment health falls back to owner proxy when live read-only DuckDB i
   const apiServer = startServer({
     API_SERVER_PORT: String(apiPort),
     DUCKDB_PATH: duckdbPath,
+    FORSKA_EXPOSE_LOCAL_OPERATOR_API: 'true',
     FORSKA_DISABLE_LIVE_READ_ONLY_DUCKDB: 'true',
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',

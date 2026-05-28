@@ -11,12 +11,14 @@ import {
   shouldApiRouteProxyToDuckdbOwner,
 } from './apiRouteClassification.ts'
 import {projectTransferRouteSpecs} from './projectTransferRoutes.ts'
+import {exposeLocalOperatorApiEnvVar} from './publicRouteSurfaceGate.ts'
 
 type SpawnedServer = ReturnType<typeof globalThis.Bun.spawn>
 
 const csvExportRoute = {endpoint: 'csv-export', method: 'POST', samplePath: '/api/projects/project-1/export'} as const
 const ownerRoutedProjectRoutes = [...projectTransferRouteSpecs, csvExportRoute]
 const apiProxyIntegrationTestTimeoutMs = 45_000
+const exposeLocalOperatorApiEnv = {[exposeLocalOperatorApiEnvVar]: 'true'}
 
 const canStartLocalServer = () => {
   try {
@@ -140,7 +142,7 @@ test('project transfer and CSV export routes are owner-proxied from public API p
 })
 
 apiProxyServerTest(
-  'api role proxies API requests to DuckDB owner server',
+  'api role proxies supported API requests to DuckDB owner server',
   async () => {
     const ownerPort = 34991
     const apiPort = 34992
@@ -167,16 +169,12 @@ apiProxyServerTest(
       await waitForServer(ownerPort, 10_000)
       await waitForServer(apiPort, 10_000)
 
-      const response = await fetch(`http://127.0.0.1:${apiPort}/api/duckdbStudioSnapshots`, {method: 'POST'})
-      const body = (await response.json()) as {data: {snapshotPath: string; createdAt: string}; error?: string}
+      const response = await fetch(`http://127.0.0.1:${apiPort}/api/users`)
+      const body = (await response.json()) as {data: unknown; error?: string}
 
       expect(response.ok).toBe(true)
       expect(body.error ?? null).toBe(null)
-      expect(body.data.createdAt).toContain('T')
-      expect(existsSync(body.data.snapshotPath)).toBe(true)
-
-      removeFileIfExists(body.data.snapshotPath)
-      removeFileIfExists(`${body.data.snapshotPath}.wal`)
+      expect(body.data).not.toBe(null)
     } finally {
       await stopServer(apiServer)
       await stopServer(ownerServer)
@@ -205,9 +203,7 @@ apiProxyServerTest(
     try {
       await waitForServer(apiPort, 10_000)
 
-      const response = await fetch(`http://127.0.0.1:${apiPort}/api/duckdb_owner_connections`, {
-        signal: AbortSignal.timeout(5_000),
-      })
+      const response = await fetch(`http://127.0.0.1:${apiPort}/api/users`, {signal: AbortSignal.timeout(5_000)})
       const body = (await response.json()) as {error?: string}
 
       expect(response.ok).toBe(false)
@@ -246,9 +242,7 @@ apiProxyServerTest(
     try {
       await waitForServer(apiPort, 10_000)
 
-      const response = await fetch(`http://127.0.0.1:${apiPort}/api/duckdb_owner_connections`, {
-        signal: AbortSignal.timeout(5_000),
-      })
+      const response = await fetch(`http://127.0.0.1:${apiPort}/api/users`, {signal: AbortSignal.timeout(5_000)})
       const body = (await response.json()) as {error?: string}
 
       expect(response.ok).toBe(false)
@@ -270,6 +264,7 @@ apiProxyServerTest(
     const apiPort = 34994
     const duckdbPath = `/tmp/f1-duckdb-owner-connections-${Date.now()}.duckdb`
     const ownerServer = startServer({
+      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(ownerPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -278,6 +273,7 @@ apiProxyServerTest(
       VITE_PORT: '4313',
     })
     const apiServer = startServer({
+      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(apiPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -328,6 +324,7 @@ apiProxyServerTest(
     const apiPort = 34999
     const duckdbPath = `/tmp/f1-owner-proxy-disabled-${Date.now()}.duckdb`
     const apiServer = startServer({
+      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(apiPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -365,7 +362,7 @@ apiProxyServerTest(
 )
 
 apiProxyServerTest(
-  'api server without DuckDB owner fails closed for unclassified product routes',
+  'api server without DuckDB owner fails closed for owner-dependent product routes',
   async () => {
     const apiPort = 34998
     const duckdbPath = `/tmp/f1-owner-proxy-fail-closed-${Date.now()}.duckdb`
@@ -404,6 +401,7 @@ apiProxyServerTest(
     const secondPort = 34996
     const duckdbPath = `/tmp/f1-auto-owner-${Date.now()}.duckdb`
     const firstServer = startServer({
+      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(firstPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -416,6 +414,7 @@ apiProxyServerTest(
       await waitForServer(firstPort, 10_000)
 
       const secondServer = startServer({
+        ...exposeLocalOperatorApiEnv,
         API_SERVER_PORT: String(secondPort),
         DUCKDB_PATH: duckdbPath,
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -484,6 +483,7 @@ apiProxyServerTest(
     const duckdbPath = `/tmp/f1-auto-stale-heartbeat-${Date.now()}.duckdb`
     const leasePath = `${duckdbPath}.duckdb-owner.lock`
     const ownerServer = startServer({
+      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(ownerPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -506,6 +506,7 @@ apiProxyServerTest(
       removeFileIfExists(`${snapshotBody.data.snapshotPath}.wal`)
 
       const followerServer = startServer({
+        ...exposeLocalOperatorApiEnv,
         API_SERVER_PORT: String(followerPort),
         DUCKDB_PATH: duckdbPath,
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
@@ -581,6 +582,7 @@ apiProxyServerTest(
     )
 
     const server = startServer({
+      ...exposeLocalOperatorApiEnv,
       API_SERVER_PORT: String(serverPort),
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',

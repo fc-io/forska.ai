@@ -35,10 +35,13 @@ type RoutePair = readonly [RouteSurfaceRoute['method'], string]
 
 const supportedProductDecision = 'Keep as supported local product API on loopback.'
 const sensitiveProductDecision = 'Keep local-only after public-release sensitivity review.'
-const diagnosticsDecision = 'Keep local-only as diagnostics, not stable third-party browser API.'
-const internalDecision = 'Keep internal/local-only and omit from public local API docs.'
-const maintenanceDecision = 'Keep developer/operator-only or gate before public release.'
-const removeBeforeReleaseDecision = 'Remove or explicitly gate before public release.'
+const diagnosticsDecision =
+  'Gated on the public API by default. Expose only with FORSKA_EXPOSE_LOCAL_OPERATOR_API=true for local diagnostics.'
+const internalDecision = 'Gated on the public API by default. Keep internal/local-only and omit from public docs.'
+const maintenanceDecision =
+  'Gated on the public API by default. Keep developer/operator-only or remove before public release.'
+const removeBeforeReleaseDecision =
+  'Gated on the public API by default. Remove before release unless explicitly justified.'
 
 const routeGroup = (defaults: RouteSurfaceRouteDefaults, routes: readonly RoutePair[]): RouteSurfaceRoute[] => {
   return routes.map(([method, path]) => {
@@ -152,6 +155,14 @@ export const routeSurfaceEntrypoints: RouteSurfaceEntrypoint[] = [
     releaseDecision: 'Keep as split-runtime implementation detail. Unknown /api/* remains fail-closed.',
     source: 'src/server/routes/ApiProxyRoutes.ts',
     surface: 'DuckDB-owner proxy middleware for owner-dependent API routes',
+  },
+  {
+    category: 'internal-runtime-api',
+    defaultBind: 'loopback',
+    releaseDecision:
+      'Keep before the owner proxy. Blocks public admin, debug, database, status, internal runtime, and remove-before-release routes by default.',
+    source: 'src/server/routes/publicRouteSurfaceGate.ts',
+    surface: 'Public local API route-surface gate',
   },
   {
     category: 'internal-runtime-api',

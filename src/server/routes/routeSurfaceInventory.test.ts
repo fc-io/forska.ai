@@ -4,6 +4,7 @@ import {classifyApiRoute} from './apiRouteClassification.ts'
 import {duckdbOwnerConnectionsRoutes} from './DuckdbOwnerConnectionsRoutes.ts'
 import {judgmentDispatchTelemetryRoutes} from './JudgmentDispatchTelemetryRoutes.ts'
 import {getProductApiRoutes} from './productApiRoutes.ts'
+import {publicRouteSurfaceGatedCategories} from './publicRouteSurfaceGate.ts'
 import {
   getRouteSurfaceRouteKey,
   routeSurfaceEntrypoints,
@@ -103,6 +104,15 @@ test('release-blocked current routes are explicit', () => {
     .map(getRouteSurfaceRouteKey)
 
   expect(blockedRouteKeys).toEqual(['POST /api/datasources/import/fhir-ehr-patients'])
+})
+
+test('public route surface gate covers internal, diagnostics, debug, and remove-before-release categories', () => {
+  expect([...publicRouteSurfaceGatedCategories].sort()).toEqual([
+    'internal-runtime-api',
+    'local-diagnostics-api',
+    'maintenance-debug-api',
+    'remove-before-release',
+  ])
 })
 
 test('listener and proxy entrypoints are local by default', () => {
