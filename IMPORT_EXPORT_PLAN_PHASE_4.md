@@ -2,17 +2,36 @@
 
 ## Scope
 
-- Build final import commit behavior after analyze and dependency resolution are complete.
+- Build final import commit behavior on top of the implemented Phase 1 through Phase 3 project-transfer foundation.
 - Source orchestrator: [IMPORT_EXPORT_PLAN.md](./IMPORT_EXPORT_PLAN.md).
-- External prerequisites: Phases 1 through 3 are complete and analyze can produce a frozen, commit-ready plan.
+- External prerequisites: Phases 1 through 3 are implemented, and import analyze/dependency resolution can produce a frozen `ready_to_commit` plan.
 - Do not add new package export behavior in this phase except commit-time revalidation needed to consume exported packages safely.
+- Do not change provider/model setup semantics from Phase 3; commit only revalidates resolved dependencies and never rolls back provider/model changes made during dependency setup.
+
+## Implementation Context
+
+- Status: Ready for implementation. Phases 1, 2, and 3 are implemented.
+- Export package creation is implemented in `src/server/services/projectTransfer/projectTransferExportPackage.ts`, `src/server/services/projectTransfer/projectTransferExport.ts`, `src/server/services/projectTransfer/projectTransferExportAssets.ts`, and `src/server/services/projectTransfer/projectTransferRedaction.ts`.
+- Import upload, analyze, dependency resolution, cancellation, and plan review are implemented in `src/server/routes/projectTransferRoutes.ts`, `src/server/services/projectTransfer/projectTransferAnalyze.ts`, `src/server/services/projectTransfer/projectTransferAnalyzeTarget.ts`, `src/server/services/projectTransfer/projectTransferFidelityValidation.ts`, `src/server/services/projectTransfer/projectTransferDependencyResolution.ts`, and `src/server/services/projectTransfer/projectTransferDuplicateDetection.ts`.
+- The only remaining import route placeholder is `POST /api/projects/import/:sessionId/commit`; it currently ArkType-validates optional `expectedPlanRevision` and `expectedOwnerToken` and then returns the contract-safe `501` placeholder. Phase 4 must replace that placeholder with a required reviewed revision contract before any write path can run, and client-supplied owner tokens must not be part of the final public commit body.
+- The import wizard at `src/app/routes/+projects/importWizard/importProjectWizard.tsx` reaches plan review, shows `canCommit`, and intentionally disables final commit with Phase 4 copy.
+- Phase 3 writes `analysis.json` and `plan.json` under `getProjectTransferImportTempLayout(sessionId)`. Commit must consume the frozen `ProjectTransferImportPlanArtifact` instead of recomputing a parallel plan format.
+- The frozen plan already exposes `targetPlan.articleMatches`, `targetPlan.articleUpdatePlan`, `targetPlan.assetPromotionPlan`, `targetPlan.promptPlan`, `targetPlan.projectPromptPlan`, `targetPlan.projectRoutePlan`, `targetPlan.articleRoutePlan`, `targetPlan.judgmentPlan`, `targetPlan.judgmentAssessmentPlan`, `targetPlan.humanReviewPlan`, `dependencyResolution`, `summary`, `packageWarnings`, `resolutionKinds`, and `canCommit`.
+- `src/server/services/projectTransfer/projectTransferContracts.ts` already defines final overlap/conflict count keys, `validateProjectTransferPlanReadyToCommit()`, `getProjectTransferCommitExecutionMode()`, `commit` progress, and the `commit_progress` runtime event type.
+- `src/server/services/projectTransfer/projectTransferSessionRepository.ts` already supports owner-token fenced state transitions, single-flight `ready_to_commit -> committing` claims through `transitionProjectTransferSessionState()`, import completion persistence through `persistProjectTransferSessionCompletion()`, and export-specific readiness persistence. Phase 4 should add commit orchestration on top of those helpers, not a second session store.
+- `src/server/services/projectTransfer/projectTransferHistoryRepository.ts` already enforces completed-import history invariants for `sessionId`, `commitId`, target project snapshot, and `status: 'completed'` completion payloads.
+- `src/server/services/projectTransfer/projectTransferSessionRecovery.ts` already checks completed import history by session id, reads `promotionManifest.json`, skips promoted asset deletion for completed imports, and can transition expired import sessions. Phase 4 must extend stale `committing` recovery only where final commit behavior creates new states or artifacts.
+- `ProjectTransferImportCompletionPayload` is intentionally minimal today. If commit completion needs final counts, transfer-history id, source snapshot, post-import warnings, or target navigation metadata, widen that import completion payload and update parsing/session-response tests in the same story.
+- Commit work must run on the active DuckDB writer through the existing owner-proxied `/api/*` path. Browser and desktop flows use the same route and session polling contract.
 
 ## Ralph Conversion Metadata
 
 - `name`: `Project Transfer Commit`
 - `branchName`: `ralph/project-transfer-commit`
-- `description`: `Implement final-path asset promotion, transactional import commit, remapped writes, judgment and review fidelity preservation, mart refresh dirtying, rollback, and commit recovery.`
+- `description`: `Implement final-path asset promotion, transactional import commit, remapped writes, judgment and review fidelity preservation, mart refresh dirtying, rollback, and commit recovery on top of the implemented project-transfer analyze plan.`
 - Convert only `Ralph User Stories` into `userStories[]`.
+- Use `dependsOn` as the implementation order; heading order is not guaranteed to be topological.
+- For each story, combine `Acceptance criteria` with that story's `Quality gates`.
 
 ## Ralph User Stories
 
@@ -24,110 +43,156 @@ dependsOn: []
 
 Acceptance criteria:
 
-- Promote only assets referenced by the frozen import plan into session-owned final `assets/...` paths.
-- Persist and update `promotionManifest.json` before and after each copy/checksum step.
-- Fail before database writes on copy, checksum, destination collision, or rewrite failures.
-- Best-effort delete only files created for the failed import session when later database work fails.
+- Add project-transfer commit/promotion code under `src/server/services/projectTransfer/`; do not put final package import writes in `articleImportStoreService.ts`.
+- Promote only assets referenced by the frozen `targetPlan.assetPromotionPlan` in `plan.json`.
+- Read package asset bytes from the import session extraction layout returned by `getProjectTransferImportTempLayout(sessionId)` and validate paths through the existing project-transfer path helpers before copying.
+- Write final destinations under a session-owned runtime path such as `assets/project-transfer/<sessionId>/...`; never overwrite an existing runtime asset and never derive final filenames directly from untrusted package filenames.
+- Persist `promotionManifest.json` before database writes. Append the intended final path before each copy, then mark the entry copied and checksummed after the copy succeeds.
+- Rewrite committed article fields to final runtime-relative `assets/...` paths for `fullTextPdf`, `fullTextAssets`, and embedded `fullTextHtml` asset references. No committed article field may contain a temp path, absolute path, source-machine path, source `/api/runtime-asset` URL, or undeclared asset reference.
+- Preserve one promoted destination for multiple references to the same declared package asset. If distinct declared assets share a checksum, either deliberately deduplicate them to one session-owned destination or allocate distinct safe destinations; do not treat same-checksum names as pre-existing target files.
+- Fail before database writes on copy, checksum, destination collision, missing extracted asset, or rewrite failure.
+- If later database work fails after promotion succeeds, best-effort delete only promoted files created for the failed import session, leaving temp artifact cleanup to failed-session TTL/recovery.
+- Keep successful committed assets out of terminal temp cleanup; after completion they are project runtime assets.
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferCommitRollback.test.ts` passes.
+- Add `src/server/services/projectTransfer/projectTransferCommitRollback.test.ts`; `bun test src/server/services/projectTransfer/projectTransferCommitRollback.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferPaths.test.ts` passes.
+- `bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts` passes if promotion cleanup behavior changes.
 - `bun run lint` passes for touched `src` files.
 
-### US-002: Add project, prompt, article, route, and link commit writer
+### US-002: Add commit plan loading, claim, and revalidation
 
-Description: As an implementer, I need a dedicated project-transfer commit writer so imported projects preserve package semantics without reusing clone or generic article import behavior.
+Description: As an implementer, I need final commit requests to load the frozen plan, claim the session once, reject stale revisions, and revalidate assumptions that may have changed since analyze.
 
 dependsOn: ["US-001"]
 
 Acceptance criteria:
 
-- Create the new active project with target timestamps and normalized `humanJudgmentMode`.
-- Remap immutable prompts through canonical prompt content hashes, preserve project-prompt link metadata, and block post-remap duplicate project-prompt links.
-- Create or non-destructively merge article rows according to analyzed identifier and missing-field plans.
-- Create project article links, safe route links, safe article-route links, and snapshot fallback links with source provenance outside clone-specific columns.
+- Add a commit service that reads `analysis.json` and `plan.json` from `getProjectTransferImportTempLayout(sessionId)` and validates the artifact shapes before any promotion or database writes.
+- Treat the durable session row as the source of truth for state and revision. Commit must verify that the request revision, session `planRevision`, plan artifact `planRevision`, and plan artifact `summary` are consistent before using artifact details for promotion or writes.
+- For a new commit attempt, reject sessions that are missing, wrong direction, expired, failed, cancelled, not `ready_to_commit`, or whose `planSummary` fails `validateProjectTransferPlanReadyToCommit()`. Handle `completed` as an idempotent retry and `committing` as an in-flight commit before applying the new-attempt `ready_to_commit` gate.
+- Require exactly one reviewed plan revision in every commit request before asset promotion or database writes. Prefer `planRevision` for the final public contract; if `expectedPlanRevision` is retained, treat it as the same required field and reject requests that omit both or provide conflicting values.
+- Remove `expectedOwnerToken` from the public commit request contract. Commit owner tokens are generated and held server-side for writer fencing; browser or desktop clients must not provide, replay, or influence them.
+- Use a server-generated `commitId` and an owner-token fenced compare-and-set transition from `ready_to_commit` to `committing` before asset promotion starts.
+- Treat commit as single-flight. A second request while the session is `committing` returns the current session/progress with `202`; it must not run a second promotion, background worker, or database transaction.
+- Completed-session commit retries return the recorded completion for the same session from durable session state or transfer history without replaying writes.
+- Revalidate provider/model dependencies immediately before promotion by re-reading target provider connections and models and proving resolved dependencies are still enabled, selectable, not archived or disabled, and identity-equivalent for imported judgments.
+- Revalidate article matches, project prompt remaps, route safety, article-route side effects, judgment conflicts, `judgmentInputSignature`, and `humanReviewInputSignature` against fresh target rows before promotion.
+- If revalidation fails before the commit claim, reopen the session to `awaiting_resolution`, increment `planRevision`, persist updated blockers/summary/plan artifacts, and return a stale or unresolved-plan response without writing final app tables.
+- If revalidation fails after `ready_to_commit -> committing` but before promotion or database writes, atomically transition `committing -> awaiting_resolution` with the server-generated owner token and commit id, increment `planRevision`, persist updated blockers/summary/plan artifacts, clear `owner_token`, clear `commit_id`, and leave any stale `heartbeat_at` as informational only. The current repository helpers do not combine plan-revision incrementing with owner/commit-id clearing, so add a tested commit-safe helper or single transaction for this path instead of composing non-atomic updates. The failed pre-write attempt is not a completed commit id and must not drive idempotent retry or recovery.
+- Reuse existing Phase 3 analyzers and dependency-resolution helpers where possible; do not invent a parallel remapping contract.
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes.
-- `bun run db:mig` passes if typed DB records or schema changed in this phase.
+- Add or update `src/server/services/projectTransfer/projectTransferCommit.test.ts`; `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes.
+- Add `src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts`; `bun test src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts` passes.
+- `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts` passes if revalidation shares analyze logic.
+- `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` passes if dependency revalidation changes.
+- `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes if commit request, progress, or completion contracts change.
+- `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` passes if session claim behavior changes.
 - `bun run lint` passes for touched `src` files.
 
-### US-003: Add judgment, assessment, human judgment, summary, and review commit writer
+### US-003: Add project, prompt, article, route, and link commit writer
 
-Description: As an implementer, I need dedicated import writers for durable decision state so imported rows point at remapped ids and global judgment/assessment conflicts are never hidden.
+Description: As an implementer, I need a dedicated project-transfer commit writer so imported projects preserve package semantics without reusing clone or generic article import behavior.
 
 dependsOn: ["US-002"]
 
 Acceptance criteria:
 
-- Insert only new judgments preclassified as safe; reuse only equivalent existing judgments without mutating snapshot labels.
-- Write `is_answered = TRUE`, `delete_generation`, `deleted_at = NULL`, `snapshot_project_id`, `snapshot_project_model_name`, answer fields, timestamps, and non-null `confidence_original` for new imported judgments.
-- Re-link assessments, human judgments, human summaries, and review rows through new project/article/prompt/judgment ids.
-- Block missing, extra, or different global judgment assessments instead of mutating unrelated global rows.
+- Write final app-table rows inside one DuckDB transaction after revalidation and asset promotion succeed.
+- Create a new active `app.project` with target timestamps, imported settings, resolved target model id, copied date bounds/content toggles, and normalized `humanJudgmentMode` (`NULL -> prompt`). Source archived state remains provenance only.
+- Recompute canonical prompt hashes from package prompt fields, reuse or create immutable prompts through existing prompt semantics, reactivate an archived canonical prompt when current app semantics require it, and preserve `project_prompt` link metadata including nullable order, enabled/archived state, and criteria fields.
+- Block post-remap duplicate `app.project_prompt(project_id, prompt_id)` links before insert instead of relying on database errors.
+- Leave `project_prompt.origin_project_id` null and keep source-package provenance in completion/history/post-import warnings.
+- Create new articles or non-destructively merge reused article rows according to the Phase 3 article match and update plan.
+- Define a missing target article field as `NULL`, trimmed empty string for nullable strings, empty nullable array, or `NULL` JSON only. Never overwrite non-empty target scalars, non-empty target arrays, non-null JSON, or existing final runtime asset paths.
+- Persist the locked package article field set, including `originalData`, `sourceMetadata`, full-text fields, portable content timestamps, legacy route fields where safe, and final runtime-relative asset fields.
+- Create `app.project_article` links for the imported project for exported project-article links and route-scope fallback snapshot links. Leave `project_article.imported_from_project_id` null by design.
+- Create safe `app.project_import_route` and `app.article_import_route` links only for plans classified safe by Phase 3. Omit missing, inactive, ambiguous, or unsafe target routes with post-import warnings and snapshot project-article coverage.
+- Do not auto-create `app.import_route` rows, do not reactivate target import routes, and do not let reused target routes pull unrelated articles into the imported project or existing projects.
+- Validate package-internal and target unique keys for `app.article(article_id)`, `app.project_import_route(project_id, import_route_id)`, `app.article_import_route(article_id, import_route_id)`, and `app.project_article(project_id, article_id)` after remapping and before writes.
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes.
+- Add or update `src/server/services/projectTransfer/projectTransferCommit.test.ts`; `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes.
+- `bun run db:mig` passes if typed DB records or schema changed in this phase.
+- `bun run lint` passes for touched `src` files.
+
+### US-004: Add judgment, assessment, human judgment, summary, and review commit writer
+
+Description: As an implementer, I need dedicated import writers for durable decision state so imported rows point at remapped ids and global judgment/assessment conflicts are never hidden.
+
+dependsOn: ["US-003"]
+
+Acceptance criteria:
+
+- Insert only judgments classified by the frozen/revalidated plan as safe new inserts; reuse only target judgments classified as equivalent reusable rows.
+- New imported judgments write remapped `article_id`, `prompt_id`, `model_id`, `project_id`, `snapshot_project_id`, content toggles, `delete_generation`, `deleted_at = NULL`, `is_answered = TRUE`, answer fields, explanation, quotes, chunking strategy, timestamps, and non-null `confidence_original`.
+- Preserve exported `snapshotProjectModelName` for newly inserted judgments. Equivalent reused target judgments keep their existing target snapshot labels; exported-versus-target labels are provenance only.
+- Normalize missing or null package confidence to the DB-equivalent default instead of inserting `NULL`.
+- Revalidate the physical DuckDB judgment key including `deleteGeneration` and the active review-visible natural key excluding `deleteGeneration` after final remapping. Non-equivalent conflicts block commit instead of using `ON CONFLICT DO NOTHING`.
+- Re-link judgment assessments through inserted or equivalent reused target judgment ids, and block missing, extra, or different global assessment state instead of mutating unrelated global rows.
+- Insert `app.judgment_human` rows through new project/article/prompt ids and always write the new target project id, even when the source row carried nullable project provenance.
+- Insert `app.judgment_human_summary` and `app.review` rows through new project/article ids.
+- Validate package-internal and target unique keys for `app.judgment_assessment(judgment_id)`, `app.judgment_human(project_id, article_id, prompt_id)`, `app.judgment_human_summary(project_id, article_id)`, and `app.review(project_id, article_id)` after remapping and before writes.
+- Preserve post-import warnings and provenance for current-review-row signatures, omitted route links, omitted article-route links, provider/model notes, and equivalent reused judgments.
+
+Quality gates:
+
+- Add or update `src/server/services/projectTransfer/projectTransferCommit.test.ts`; `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes.
 - `bun test src/server/routes/providerProjectFlow.e2e.test.ts` passes if provider/model commit paths are touched.
 - `bun run lint` passes for touched `src` files.
 
-### US-004: Add commit-time revalidation and idempotent retry behavior
-
-Description: As an implementer, I need final commit requests to revalidate stale-sensitive plan assumptions and be idempotent per session.
-
-dependsOn: ["US-002", "US-003"]
-
-Acceptance criteria:
-
-- Reject stale `planRevision` before asset promotion or database writes.
-- Revalidate provider/model selectability, article matches, route safety, judgment conflicts, `judgmentInputSignature`, and `humanReviewInputSignature` immediately before commit.
-- Use a server-generated `commitId` and compare-and-set transition to `committing` before promotion.
-- Completed-session commit retries return recorded completion for the same session without replaying writes.
-
-Quality gates:
-
-- `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes.
-- `bun test src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts` passes.
-- `bun run lint` passes for touched `src` files.
-
-### US-005: Add transfer history, crash recovery, and completion persistence
+### US-005: Add transfer history, completion persistence, and crash recovery
 
 Description: As an implementer, I need commit completion and crash recovery to rely on transfer history rather than filesystem artifacts alone.
 
-dependsOn: ["US-004"]
+dependsOn: ["US-003", "US-004"]
 
 Acceptance criteria:
 
-- Write completed transfer-history row with import session id, commit id, target project snapshot, counts, and completion payload inside the successful transaction.
-- Persist `completion.json` after transaction success.
-- Recover completion from transfer history if the transaction committed before `completion.json` was written.
-- Do not delete promoted assets for sessions with completed import history.
+- Write the completed `app.project_transfer_history` import row inside the successful import transaction with import session id, commit id, package fingerprint, schema version, source project snapshot, target project snapshot, payload counts, and the exact completion payload.
+- If the completion payload includes a transfer-history id, generate the history id before constructing the completion payload and insert the row with that id inside the same transaction. Do not write a history row whose stored completion payload later has to be patched only to learn its own history id.
+- Persist the session completion through `persistProjectTransferSessionCompletion()` only after the transaction succeeds.
+- Write `completion.json` after transaction success as a cached artifact containing the same completion response needed by retry and UI navigation.
+- If the transaction commits and `completion.json` or session completion persistence fails, startup/TTL recovery reconstructs completion from transfer history by import session id and never creates a second project.
+- Commit retry and crash recovery look up completion by `direction = 'import'` plus session id, not by package fingerprint.
+- Commit retry checks for completed session state or completed import history before applying public import-session expiry handling. A completed import may return its recorded completion for the same session even when temp artifacts have already been cleaned up; non-completed expired sessions still return expiry errors.
+- Exact duplicate package history remains warning-only for future imports; it is not an idempotency key.
+- Do not delete promoted assets for sessions with completed import history. Recovery may only delete session-owned promoted assets listed in `promotionManifest.json` for non-completed imports.
+- Extend `ProjectTransferImportCompletionPayload` if needed so it includes target navigation data, transfer-history id, final counts, package fingerprint, and post-import warnings. Update `parseProjectTransferCompletionPayload()` and session response tests if widened.
+- Add stale `committing` recovery behavior if the existing expiration/recovery path cannot safely distinguish active workers, recover committed sessions, and fail or expire orphaned sessions.
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts` passes.
+- Add or update `src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts`; `bun test src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts` passes.
 - `bun test src/server/services/projectTransfer/projectTransferHistoryRepository.test.ts` passes.
+- `bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts` passes.
+- `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` passes if completion persistence changes.
 - `bun run lint` passes for touched `src` files.
 
 ### US-006: Add mart refresh dirtying and unarchive rebuild safety
 
 Description: As an implementer, I need imported and shared article changes to dirty the correct active projects without depending on archived dirty rows.
 
-dependsOn: ["US-002", "US-003"]
+dependsOn: ["US-003", "US-004"]
 
 Acceptance criteria:
 
-- Mark the new project dirty with the date-bounded imported article ids or deliberate project-scope dirty materialization, never explicit empty article ids.
-- Mark active existing projects dirty when reused article rows are updated by non-destructive merge.
-- Patch and test the unarchive path so archived projects derive dirty article ids from current app tables after archived-project route or article side effects.
-- Chunk large import row inserts and dirty-state writes or extend refresh-state service chunking.
+- Mark the new imported project dirty inside the import transaction after project article and route links are written.
+- Use `getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({projects: [{projectId: newProjectId, articleIds: importedDirtyArticleIds}], runner: tx})` with the date-bounded imported article id set, or deliberately omit `articleIds` to use project-scope dirty materialization.
+- Never pass `articleIds: []` for a project that needs review-serving rows.
+- Mark active existing projects dirty inside the same transaction when reused article rows are updated by non-destructive merge, using `markArticleProjectsDirtyAtomically({articleIds: updatedReusedArticleIds, runner: tx})` or an equivalent tested helper.
+- Do not write archived dirty rows during import. Patch and test the unarchive path so archived projects derive date-bounded dirty article ids from current app tables after imported article or route side effects.
+- Chunk large import inserts and dirty-state writes, or extend refresh-state services to chunk internally, so large packages do not construct unbounded `VALUES` or `IN` statements.
+- Keep mart tables and derived review-serving support tables out of the package; rebuild them through normal mart refresh after import.
 
 Quality gates:
 
-- `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes.
-- `bun test src/server/routes/ProjectsRoutes.test.ts` passes.
+- Add or update `src/server/services/projectTransfer/projectTransferCommit.test.ts`; `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes.
+- `bun test src/server/routes/ProjectsRoutes.test.ts` passes with unarchive dirty-article coverage.
 - `bun run build` passes.
 - `bun run lint` passes for touched `src` files.
 
@@ -135,19 +200,61 @@ Quality gates:
 
 Description: As a user, I need commit to expose progress, return completion consistently, navigate to the imported project, and show post-import warnings.
 
-dependsOn: ["US-004", "US-005", "US-006"]
+dependsOn: ["US-002", "US-005", "US-006"]
 
 Acceptance criteria:
 
-- Add final `POST /api/projects/import/:sessionId/commit` behavior for inline and large background commit execution.
-- Expose commit progress and terminal session states through session polling.
-- Import wizard handles stale-plan responses, in-flight commit, completed retry, navigation to imported project, and post-import warnings.
-- Runtime events cover commit progress, promotion, transactional success, rollback cleanup, and recovery decisions.
+- Replace the `POST /api/projects/import/:sessionId/commit` placeholder in `src/server/routes/projectTransferRoutes.ts` with final behavior.
+- Commit route requires exactly one reviewed plan revision, rejects client-supplied owner-token fields, claims the session with a server-generated owner token, runs inline for small plans, and starts a background commit job for plans meeting `getProjectTransferCommitExecutionMode()` thresholds.
+- Background commit is used when the analyzed plan contains `>= 25,000` articles, `>= 250,000` judgments, or `>= 2 GB` of extracted assets.
+- Route responses use the existing `ProjectTransferApiResponse<ProjectTransferImportSessionData>` envelope: inline success returns `200` with `state: 'completed'` and a completion payload; background start returns `202` with `state: 'committing'` and progress; completed retry returns `200` with the recorded completed session; already-committing requests return `202` with the current committing session and no new worker; stale revision or revalidation-failed reviewable sessions return `200` with refreshed session data marked `stalePlan: true`; invalid state, missing, non-completed expired, failed, cancelled, or wrong-direction sessions return non-2xx errors with `data: null` and no promotion or writes.
+- Persist commit progress with `phase: 'commit'`, monotonic counts, `planRevision`, `percent`, row counts, byte counts where applicable, warnings, and updated timestamps.
+- Runtime events cover commit progress, asset promotion, transactional success, rollback cleanup, and recovery decisions using the existing `commit_progress` event type unless a more specific tested event type is deliberately added.
+- Session polling exposes `committing`, `completed`, `failed`, stale-plan, and completed-retry states through the existing `ProjectTransferApiResponse` envelope.
+- Import wizard replaces the disabled Phase 4 commit button with a real mutation, handles stale-plan responses, handles in-flight background commit polling, handles completed retry, navigates to the imported project, and shows post-import warnings.
+- Browser and desktop flows use the same Eden/TanStack session reads and the same API route for commit. No browser-only or desktop-only commit path is added.
+- Commit success leaves the imported project active regardless of source archived provenance.
 
 Quality gates:
 
-- `bun test src/server/routes/projectTransferRoutes.test.ts` passes.
-- `bunx vitest run src/app/routes/+projects/-+import.vitest.tsx` passes.
+- Update `src/server/routes/projectTransferRoutes.test.ts`; `bun test src/server/routes/projectTransferRoutes.test.ts` passes.
+- Update `src/app/routes/+projects/-+import.vitest.tsx`; `bunx vitest run src/app/routes/+projects/-+import.vitest.tsx` passes.
 - `bun run build` passes.
 - `bun run desktop:build` passes.
 - `bun run lint` passes for touched `src` files.
+
+## Phase 4 Checklist
+
+- Phases 1, 2, and 3 are implemented. Reuse their existing project-transfer services and contracts instead of creating parallel commit-only schemas or session stores.
+- `POST /api/projects/import/:sessionId/commit` is the remaining route placeholder and is the only import endpoint expected to change from placeholder to real behavior in this phase.
+- Commit consumes `analysis.json`, `plan.json`, extracted payloads, and `targetPlan` from the implemented Phase 3 temp layout only after artifact revisions are proven consistent with the durable session row.
+- Commit may mutate final app tables only after exactly-one reviewed `planRevision` checks, plan artifact/session revision consistency checks, single-flight session claim, dependency revalidation, article/prompt/route revalidation, judgment/human-review signature revalidation, and asset promotion checks pass.
+- Failed post-claim pre-write revalidation must leave the session reviewable by clearing owner and commit id state while persisting a new plan revision in one commit-safe repository operation or transaction; it must not leave the session stuck in `committing`.
+- Provider/model setup changes made during Phase 3 are durable target app settings and are not rolled back by import cancellation, failure, or commit rollback. Commit only revalidates them.
+- Asset promotion is final-path, session-owned, manifest-tracked, and rollback-safe. Committed rows reference only runtime-relative `assets/...` paths.
+- The final database transaction writes the new project, prompts and project-prompt links, article rows and links, safe route links, judgments, assessments, human judgments, human summaries, reviews, mart dirty state, and completed transfer history.
+- Equivalent reused judgments are not inserted again and do not have snapshot labels rewritten.
+- Source-package provenance stays in manifest, plan, completion, transfer history, and post-import warnings; it is not encoded in clone/Covidence provenance columns such as `project_prompt.origin_project_id` or `project_article.imported_from_project_id`.
+- Commit idempotency is per session id/commit id, never package fingerprint. Completed retry/history lookup happens before treating a completed import session as expired.
+- Completed import history is written inside the final transaction and is the source of truth for crash recovery if session completion artifacts are missing. Any transfer-history id included in completion is generated before the history row insert.
+- Mart refresh dirtying must include the imported project and active projects affected by reused-article field fills; archived projects are handled through unarchive rebuild safety rather than import-time archived dirty rows.
+- Large commit work uses background session progress instead of request-local unbounded work.
+- Browser and desktop commit flows share one API/session contract.
+- Add or update `src/server/services/projectTransfer/projectTransferCommit.test.ts`, then run `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`.
+- Add `src/server/services/projectTransfer/projectTransferCommitRollback.test.ts`, then run `bun test src/server/services/projectTransfer/projectTransferCommitRollback.test.ts`.
+- Add `src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts`, then run `bun test src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts`.
+- `bun test src/server/services/projectTransfer/projectTransferHistoryRepository.test.ts`.
+- `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` if session claim or completion persistence behavior changes.
+- `bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts` if stale `committing`, completed-history recovery, or promoted-asset cleanup changes.
+- `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts` if commit revalidation shares or changes analyze logic.
+- `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` if dependency revalidation changes.
+- `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` if completion payload, progress, runtime event, or threshold contracts change.
+- `bun test src/server/services/projectTransfer/projectTransferPaths.test.ts`.
+- `bun run db:mig` if schema or typed DB records change in this phase.
+- Update `src/server/routes/projectTransferRoutes.test.ts`, then run `bun test src/server/routes/projectTransferRoutes.test.ts`.
+- `bun test src/server/routes/ProjectsRoutes.test.ts` for unarchive dirty-article behavior.
+- `bun test src/server/routes/providerProjectFlow.e2e.test.ts` if provider/model commit paths are touched.
+- Update `src/app/routes/+projects/-+import.vitest.tsx`, then run `bunx vitest run src/app/routes/+projects/-+import.vitest.tsx`.
+- `bun run lint`.
+- `bun run build`.
+- `bun run desktop:build`.
