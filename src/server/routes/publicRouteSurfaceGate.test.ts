@@ -80,6 +80,21 @@ test('public gate leaves supported and sensitive product routes available', asyn
   expect(projectResponse.status).toBe(200)
 })
 
+test('public gate leaves UI-required status routes available', async () => {
+  const responses = await Promise.all([
+    getResponse('/api/projectsreviewswarnings', 'POST'),
+    getResponse('/api/judgmentsjobs'),
+    getResponse('/api/judgmentsjobs/job-1'),
+    getResponse('/api/llmstatus'),
+  ])
+
+  expect(
+    responses.map((response) => {
+      return response.status
+    }),
+  ).toEqual([200, 200, 200, 200])
+})
+
 test('public gate leaves owner-private RPC available for split-runtime internals', async () => {
   const response = await getResponse(`${duckdbOwnerPrivateApiPrefix}/api/duckdbStudioSnapshots`, 'POST')
   const body = (await response.json()) as {data: string}
