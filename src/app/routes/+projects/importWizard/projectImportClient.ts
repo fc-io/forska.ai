@@ -64,6 +64,18 @@ export type ProjectImportPackageWarning = {
   scope?: string
 }
 
+export type ProjectImportCompletion = {
+  finalCounts?: Record<string, number>
+  importWarnings?: ProjectImportPackageWarning[]
+  packageFingerprint?: string | null
+  projectId?: string | null
+  projectName?: string | null
+  status: 'completed'
+  targetProjectId?: string | null
+  targetProjectName?: string | null
+  transferHistoryId?: string
+}
+
 export type ProjectImportDependencyResolution = {
   acceptedSubstituteModelSourceIds?: string[]
   codexSetupState?: 'complete' | 'login_pending' | 'not_ready' | 'setup_pending' | null
@@ -108,7 +120,7 @@ export type ProjectImportSession = {
   cancelUrl: string
   commitId: string | null
   commitUrl: string
-  completion: unknown
+  completion: ProjectImportCompletion | null
   createdAt: string | Date
   direction: 'import'
   duplicatePackageWarnings: string[]
@@ -280,6 +292,18 @@ export const resolveProjectImportDependencies = async (
   const envelope = handleApiResponse<ProjectImportApiResponse<ProjectImportSession>>(
     response as unknown as {data?: ProjectImportApiResponse<ProjectImportSession>; error?: unknown; status?: number},
     'Failed to resolve project import dependencies',
+  )
+
+  return unwrapProjectImportResponse(envelope, 'Project import session was not returned')
+}
+
+export const commitProjectImportSession = async (input: {planRevision: number; sessionId: string}) => {
+  const response = await apiClient.api.projects
+    .import({sessionId: input.sessionId})
+    .commit.post({planRevision: input.planRevision})
+  const envelope = handleApiResponse<ProjectImportApiResponse<ProjectImportSession>>(
+    response as unknown as {data?: ProjectImportApiResponse<ProjectImportSession>; error?: unknown; status?: number},
+    'Failed to commit project import',
   )
 
   return unwrapProjectImportResponse(envelope, 'Project import session was not returned')

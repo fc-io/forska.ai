@@ -12,9 +12,9 @@ import {
   analyzeProjectTransferImportPackage,
   type ProjectTransferImportPlanArtifact,
 } from '../services/projectTransfer/projectTransferAnalyze.ts'
+import {commitProjectTransferImportSession} from '../services/projectTransfer/projectTransferCommit.ts'
 import {
   getProjectTransferImportAnalyzeExecutionMode,
-  getProjectTransferPlaceholderResponse,
   type ProjectTransferApiResponse,
   type ProjectTransferCancellationReason,
   type ProjectTransferExecutionMode,
@@ -23,7 +23,6 @@ import {
   type ProjectTransferProgressPayload,
   type ProjectTransferSessionResponse,
   type ProjectTransferUploadMetadataPayload,
-  type ProjectTransferUploadSession,
   validateProjectTransferPlanReadyToCommit,
   validateProjectTransferResourceGates,
 } from '../services/projectTransfer/projectTransferContracts.ts'
@@ -84,12 +83,6 @@ type ProjectTransferImportSessionData = ProjectTransferSessionResponse & {
   uploadUrl: string
   warnings: string[]
 }
-type ProjectTransferPlaceholderData =
-  | ProjectTransferExportResponse
-  | ProjectTransferExportSessionData
-  | ProjectTransferImportSessionData
-  | ProjectTransferSessionResponse
-  | ProjectTransferUploadSession
 type ProjectTransferSourceProjectRow = {deletePendingAt: unknown; id: string}
 type RouteSet = {status?: number | string}
 type ProjectTransferPackageHeaderMetadata = Pick<
@@ -237,14 +230,6 @@ type AnalyzeImportSessionRequest = typeof analyzeImportSessionRequestShape.infer
 type ResolveImportDependenciesRequest = ProjectTransferDependencyResolutionRequest
 type CommitImportSessionRequest = typeof commitImportSessionRequestShape.infer
 type CancelImportSessionRequest = typeof cancelImportSessionRequestShape.infer
-
-const getPlaceholderResponse = (
-  set: RouteSet,
-  endpoint: (typeof projectTransferRouteSpecs)[number]['endpoint'],
-): ProjectTransferApiResponse<ProjectTransferPlaceholderData> => {
-  set.status = 501
-  return getProjectTransferPlaceholderResponse<ProjectTransferPlaceholderData>(endpoint)
-}
 
 const getProjectTransferExportSourceProject = async (projectId: string) => {
   const [project] = await getAppDatabaseService().queryJson<ProjectTransferSourceProjectRow>(`
@@ -508,7 +493,7 @@ const getImportSessionError = (
   response: ProjectTransferSessionResponse,
   now: Date,
 ): {error: string; status: number} | null => {
-  return response.state === 'expired' || hasSessionExpired(response, now)
+  return response.state !== 'completed' && (response.state === 'expired' || hasSessionExpired(response, now))
     ? {error: 'Project transfer import session expired', status: 410}
     : null
 }
@@ -1312,10 +1297,53 @@ const resolveImportDependencies = async (
         ?? getProjectTransferApiError(set, 500, 'Import session unavailable'))
 }
 
-const commitImportSession = (
+const getCommitRequestRevision = (
+  request: CommitImportSessionRequest,
+): {error: string; ok: false} | {ok: true; request: CommitImportSessionRequest} => {
+  const hasPlanRevision = request.planRevision !== undefined
+  const hasExpectedPlanRevision = request.expectedPlanRevision !== undefined
+
+  if (!hasPlanRevision && !hasExpectedPlanRevision) {
+    return {error: 'Project transfer commit requires planRevision', ok: false}
+  }
+
+  if (hasPlanRevision && hasExpectedPlanRevision && request.planRevision !== request.expectedPlanRevision) {
+    return {error: 'Project transfer commit planRevision and expectedPlanRevision conflict', ok: false}
+  }
+
+  if (hasPlanRevision && hasExpectedPlanRevision) {
+    return {error: 'Project transfer commit requires exactly one reviewed plan revision', ok: false}
+  }
+
+  return {ok: true, request}
+}
+
+const getCommitSessionResponse = async ({
+  executionMode,
+  result,
+  set,
+  stalePlan,
+}: {
+  executionMode?: ProjectTransferExecutionMode
+  result: Exclude<Awaited<ReturnType<typeof commitProjectTransferImportSession>>, {status: 'error'}>
+  set: RouteSet
+  stalePlan?: boolean
+}): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData>> => {
+  set.status = result.statusCode
+  const response = await getImportSessionResponseFromRecord(set, result.session, executionMode)
+
+  return response === null
+    ? getProjectTransferApiError(set, 500, 'Import session unavailable')
+    : stalePlan
+      ? {data: {...response.data, stalePlan: true}, error: null}
+      : response
+}
+
+const commitImportSession = async (
   set: RouteSet,
+  sessionId: string,
   body: unknown,
-): ProjectTransferApiResponse<ProjectTransferPlaceholderData> => {
+): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData>> => {
   const request = parseRequestBody<CommitImportSessionRequest>(body, commitImportSessionRequestShape, [
     'expectedPlanRevision',
     'planRevision',
@@ -1325,23 +1353,27 @@ const commitImportSession = (
     return getProjectTransferApiError(set, 400, request.error)
   }
 
-  if (request.value.planRevision === undefined && request.value.expectedPlanRevision === undefined) {
-    return getProjectTransferApiError(set, 400, 'Project transfer commit requires planRevision')
+  const revision = getCommitRequestRevision(request.value)
+
+  if (!revision.ok) {
+    return getProjectTransferApiError(set, 400, revision.error)
   }
 
-  if (
-    request.value.planRevision !== undefined
-    && request.value.expectedPlanRevision !== undefined
-    && request.value.planRevision !== request.value.expectedPlanRevision
-  ) {
-    return getProjectTransferApiError(
-      set,
-      400,
-      'Project transfer commit planRevision and expectedPlanRevision conflict',
-    )
+  const result = await commitProjectTransferImportSession({request: revision.request, sessionId})
+
+  if (result.status === 'error') {
+    return getProjectTransferApiError(set, result.statusCode, result.error)
   }
 
-  return getPlaceholderResponse(set, 'commit-import-session')
+  if (result.status === 'stale') {
+    return getCommitSessionResponse({result, set, stalePlan: true})
+  }
+
+  if (result.status === 'claimed') {
+    return getCommitSessionResponse({executionMode: result.executionMode, result, set})
+  }
+
+  return getCommitSessionResponse({result, set})
 }
 
 const getCancelRequestDefaults = (request: CancelImportSessionRequest) => {
@@ -1584,8 +1616,8 @@ export const projectTransferRoutes = new Elysia()
   )
   .post(
     '/api/projects/import/:sessionId/commit',
-    ({body, set}) => {
-      return commitImportSession(set, body)
+    ({body, params, set}) => {
+      return commitImportSession(set, params.sessionId, body)
     },
     {params: importSessionParamSchema},
   )

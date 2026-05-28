@@ -417,15 +417,22 @@ const getFakeSessionRepository = (initialSession: ProjectTransferSessionRecord) 
     },
     transitionProjectTransferSessionState: async (params) => {
       calls.transition = [...calls.transition, params]
+      const stateMatches = Array.isArray(params.expectedState)
+        ? params.expectedState.includes(session.state)
+        : session.state === params.expectedState
+      const ownerMatches =
+        params.expectedOwnerToken === undefined ? true : session.ownerToken === params.expectedOwnerToken
+      const planRevisionMatches =
+        params.expectedPlanRevision === undefined ? true : session.planRevision === params.expectedPlanRevision
       session =
-        session.state === params.expectedState
-        && session.ownerToken === null
-        && session.planRevision === params.expectedPlanRevision
+        stateMatches && ownerMatches && planRevisionMatches
           ? {
               ...session,
-              commitId: params.commitId ?? null,
+              commitId: Object.hasOwn(params, 'commitId') ? (params.commitId ?? null) : session.commitId,
               heartbeatAt: params.now ?? null,
-              ownerToken: params.nextOwnerToken ?? null,
+              ownerToken: Object.hasOwn(params, 'nextOwnerToken')
+                ? (params.nextOwnerToken ?? null)
+                : session.ownerToken,
               planRevision: params.expectedPlanRevision ?? session.planRevision,
               progressJson: params.progress ?? null,
               state: params.nextState,
@@ -565,7 +572,23 @@ test('project transfer commit loads frozen artifacts and claims with server gene
       ownerToken: null,
       state: 'completed',
     })
-    expect(fake.calls.transition).toHaveLength(1)
+    expect(fake.calls.transition).toHaveLength(3)
+    expect(fake.calls.transition[0]).toMatchObject({
+      commitId: 'commit-generated',
+      nextOwnerToken: 'owner-generated',
+      nextState: 'committing',
+      progress: {percent: 0, phase: 'commit', planRevision: 1, status: 'running'},
+    })
+    expect(fake.calls.transition[1]).toMatchObject({
+      expectedOwnerToken: 'owner-generated',
+      nextState: 'committing',
+      progress: {phase: 'commit', status: 'running'},
+    })
+    expect(fake.calls.transition[2]).toMatchObject({
+      expectedOwnerToken: 'owner-generated',
+      nextState: 'committing',
+      progress: {percent: 100, phase: 'commit', status: 'completed'},
+    })
     expect(fake.calls.persist).toHaveLength(1)
     expect(fake.calls.updatePlan).toHaveLength(0)
     expect(revalidationInputs).toHaveLength(2)
