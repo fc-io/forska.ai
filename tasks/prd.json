@@ -1,7 +1,7 @@
 {
   "name": "Project Transfer Commit",
-  "branchName": "ralph/project-transfer-commit",
   "description": "Implement final-path asset promotion, transactional import commit, remapped writes, judgment and review fidelity preservation, mart refresh dirtying, rollback, and commit recovery on top of the implemented project-transfer analyze plan.",
+  "branchName": "ralph/project-transfer-commit",
   "userStories": [
     {
       "id": "US-001",
@@ -24,9 +24,10 @@
         "`bun run lint` passes for touched `src` files."
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -200,5 +201,8 @@
         "US-006"
       ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-05-28T20:03:38.793Z"
+  }
 }
