@@ -26,6 +26,185 @@ const getRuntimeRoot = () => {
   return mkdtempSync(join(tmpdir(), `f2-project-transfer-commit-${process.pid}-`))
 }
 
+const removePathIfExists = (pathValue: string) => {
+  rmSync(pathValue, {force: true, recursive: true})
+}
+
+const getLastJsonLine = (stdout: string) => {
+  return (
+    stdout
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line !== ''
+      })
+      .at(-1) ?? ''
+  )
+}
+
+const runCommitWriterScript = <TResult>(body: string) => {
+  const duckdbPath = `/tmp/f2-project-transfer-commit-writer-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {computePromptContentHash}, {writeProjectTransferCommitAppTables}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/utils/computePromptContentHash.ts'),
+          import('./src/server/services/projectTransfer/projectTransferCommitWriter.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const now = new Date('2026-05-28T13:00:00.000Z')
+        const catchMessage = async (operation) => {
+          try {
+            await operation()
+            return null
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error)
+          }
+        }
+        const getPlanSummary = () => ({
+          blockerCount: 0,
+          conflictCounts: {
+            articleConflictCount: 0,
+            humanReviewFidelityConflictCount: 0,
+            judgmentConflictCount: 0,
+            packageContractConflictCount: 0,
+            projectPromptConflictCount: 0,
+          },
+          dependencyStatuses: {},
+          judgmentConflictStatus: 'clear',
+          overlapCounts: {
+            currentReviewRowsSignatureHumanReviewCount: 0,
+            currentReviewRowsSignatureJudgmentCount: 0,
+            dirtiedExistingProjectCount: 0,
+            duplicateImportMatchCount: 0,
+            newArticleCount: 0,
+            omittedArticleRouteLinkCount: 0,
+            omittedRouteLinkCount: 0,
+            reusedArticleAssetPromotionCount: 0,
+            reusedArticleCount: 0,
+            reusedArticleFieldFillCount: 0,
+            reusedArticleUpdateCount: 0,
+            reusedJudgmentCount: 0,
+            routeArticleSnapshotLinkCount: 0,
+            snapshotVerifiedJudgmentCount: 0,
+            storedSignatureHumanReviewCount: 0,
+            storedSignatureJudgmentCount: 0,
+          },
+          warningCount: 0,
+        })
+        const getPackageCounts = () => ({
+          articleImportRoutes: 0,
+          assetManifest: 0,
+          articles: 0,
+          humanJudgmentSummaries: 0,
+          humanJudgments: 0,
+          importRoutes: 0,
+          judgmentAssessments: 0,
+          judgments: 0,
+          models: 0,
+          project: 1,
+          projectArticles: 0,
+          projectImportRoutes: 0,
+          projectPrompts: 0,
+          prompts: 0,
+          providerConnections: 0,
+          reviews: 0,
+        })
+        const getBasePlan = (targetPlan, dependencyResolution) => ({
+          blockers: [],
+          canCommit: true,
+          dependencyResolution,
+          packageCounts: getPackageCounts(),
+          packageFingerprint: 'fingerprint-writer',
+          packageWarnings: [],
+          planRevision: 1,
+          resolutionKinds: {},
+          summary: getPlanSummary(),
+          targetPlan: {
+            articleMatches: [],
+            articleRoutePlan: [],
+            articleUpdatePlan: [],
+            assetPromotionPlan: [],
+            duplicateImportMatches: [],
+            projectPromptPlan: [],
+            projectRoutePlan: [],
+            promptPlan: [],
+            ...targetPlan,
+          },
+        })
+        const getProjectPayload = (settings) => ({
+          dateFrom: '2025-01-01T00:00:00.000Z',
+          dateTo: '2025-12-31T00:00:00.000Z',
+          description: 'Imported package description',
+          modelSignature: {name: 'Model Signature'},
+          name: 'Imported Writer Project',
+          provenance: {sourceProjectId: 'source-project'},
+          settings,
+          signature: {modelSignature: {name: 'Model Signature'}, name: 'Imported Writer Project', settings},
+          sourceProjectId: 'source-project',
+        })
+        const getModelPayload = () => ({
+          modelName: 'target-model-name',
+          name: 'target-model-name',
+          provenance: {sourceModelId: 'source-model', sourceProviderConnectionId: 'source-provider'},
+          remoteModelId: 'target-remote',
+          signature: {name: 'Model Signature'},
+          sourceModelId: 'source-model',
+          sourceProviderConnectionId: 'source-provider',
+          variant: null,
+          version: null,
+        })
+        const dependencyResolution = {
+          modelTargetBySourceId: {'source-model': 'target-model'},
+          providerTargetBySourceId: {'source-provider': 'target-provider'},
+        }
+
+        ${body}
+
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Project transfer commit writer failed')
+    }
+
+    return JSON.parse(getLastJsonLine(result.stdout.toString())) as TResult
+  } finally {
+    removePathIfExists(duckdbPath)
+    removePathIfExists(`${duckdbPath}.wal`)
+    removePathIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removePathIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removePathIfExists(`${duckdbPath}.tmp`)
+    removePathIfExists('/tmp/duckdb-temp')
+  }
+}
+
 const getFinalConflictCounts = () => {
   return {
     articleConflictCount: 0,
@@ -128,11 +307,11 @@ const getAnalysis = (planRevision: number): ProjectTransferImportAnalysisArtifac
       payloads: getPlan({planRevision}).packageCounts,
       schemaVersion: 1,
       source: {app: 'forska', exportedAt: '2026-05-28T10:00:00.000Z'},
-    } as ProjectTransferImportAnalysisArtifact['manifest'],
+    } as unknown as ProjectTransferImportAnalysisArtifact['manifest'],
     packageCounts: getPlan({planRevision}).packageCounts,
     packageFingerprint: 'fingerprint-commit',
     packageWarnings: [],
-    payloads: {},
+    payloads: {} as ProjectTransferImportAnalysisArtifact['payloads'],
     planRevision,
   }
 }
@@ -291,6 +470,16 @@ const runCommit = async ({
       },
       historyRepository: getNoopHistoryRepository(),
       revalidate,
+      runAppTableWrites: async () => {
+        return {
+          articleIdBySourceId: {},
+          importWarnings: [],
+          projectId: 'target-project',
+          projectName: 'Target Project',
+          promptIdBySourceId: {},
+          routeIdBySourceId: {},
+        }
+      },
       sessionRepository: repository,
     },
     request: {planRevision: 1},
@@ -495,4 +684,474 @@ test('project transfer commit returns completed session history without replayin
     statusCode: 200,
   })
   expect(fake.calls.transition).toHaveLength(0)
+})
+
+test('project transfer commit writer creates project rows and preserves safe package semantics', () => {
+  const result = runCommitWriterScript<{
+    articleImportRouteCount: number
+    articleRows: Array<{
+      articleId: string | null
+      articleSummary: string | null
+      articleTitle: string
+      fullTextPdf: string | null
+      id: string
+      sourceMetadata: unknown
+    }>
+    identifierCount: number
+    importRouteCount: number
+    projectArticleCount: number
+    projectImportRouteCount: number
+    projectRow: {
+      archived: boolean
+      dateFrom: string | null
+      dateTo: string | null
+      humanJudgmentMode: string | null
+      modelId: string
+      name: string
+    }
+    promptRow: {
+      archived: boolean
+      criteriaDisposition: string | null
+      criteriaSectionKey: string | null
+      enabled: boolean
+      originProjectId: string | null
+      promptArchived: boolean
+      promptId: string
+      promptOrder: number | null
+    }
+    warningCodes: string[]
+  }>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    await database.run("INSERT INTO app.import_route (id, route, name, active) VALUES ('target-route', 'covidence:safe', 'Safe Route', TRUE)")
+    const promptHash = computePromptContentHash('Include the study?', null, 'Eligibility', 'system')
+    await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('archived-prompt', 'Include the study?', NULL, 'Eligibility', 'system', '" + promptHash + "', TRUE)")
+    await database.run("INSERT INTO app.article (id, article_title, article_summary, full_text_pdf, source_metadata) VALUES ('reuse-article', 'Existing Reuse Title', NULL, NULL, NULL)")
+
+    const settings = {
+      humanJudgmentMode: 'prompt',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: true,
+      useTitle: true,
+    }
+    const newArticle = {
+      articleId: 'legacy-new-article',
+      articleTitle: 'New Package Article',
+      doi: '10.1000/new-package-article',
+      fullTextAssets: {figures: ['assets/project-transfer/session-writer/new-figure.png']},
+      fullTextFetchedAt: '2025-02-03T00:00:00.000Z',
+      fullTextPdf: 'assets/project-transfer/session-writer/new.pdf',
+      identifierInputs: [],
+      originalData: {package: 'new'},
+      provenance: {sourceArticleId: 'source-new'},
+      signature: {identifierKeys: ['doi:10.1000/new-package-article'], title: 'New Package Article'},
+      sourceArticleId: 'source-new',
+      sourceMetadata: {journalTitle: 'Package Journal'},
+    }
+    const reusedArticle = {
+      articleTitle: 'Existing Reuse Title',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-reuse'},
+      signature: {identifierKeys: [], title: 'Existing Reuse Title'},
+      sourceArticleId: 'source-reuse',
+    }
+    const promptPayload = {
+      archived: false,
+      contentHash: 'package-old-hash',
+      originalText: 'Include the study?',
+      promptHeading: 'Eligibility',
+      provenance: {sourcePromptId: 'source-prompt'},
+      signature: {contentHash: promptHash, originalText: 'Include the study?'},
+      sourcePromptId: 'source-prompt',
+      transformedText: null,
+      type: 'system',
+    }
+    const projectPromptPayload = {
+      archived: false,
+      criteriaDisposition: 'combined',
+      criteriaSectionKey: 'screen',
+      criteriaSectionLabel: 'Screening',
+      enabled: true,
+      order: null,
+      provenance: {sourceProjectId: 'source-project', sourcePromptId: 'source-prompt'},
+      signature: {criteria: {disposition: 'combined'}, enabled: true, order: null, promptSignature: promptPayload.signature},
+      sourceProjectId: 'source-project',
+      sourceProjectPromptId: 'source-project-prompt',
+      sourcePromptId: 'source-prompt',
+    }
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'create',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: ['doi:10.1000/new-package-article'],
+          packageArticleId: 'legacy-new-article',
+          selectedTargetArticleId: null,
+          sourceArticleId: 'source-new',
+        },
+        {
+          action: 'reuse',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: [],
+          packageArticleId: null,
+          selectedTargetArticleId: 'reuse-article',
+          sourceArticleId: 'source-reuse',
+        },
+      ],
+      articleRoutePlan: [
+        {
+          action: 'write',
+          sourceArticleId: 'source-new',
+          sourceArticleImportRouteId: 'source-air-new',
+          sourceImportRouteId: 'source-route',
+          snapshotProjectArticleLink: false,
+          targetArticleId: null,
+          targetImportRouteId: 'target-route',
+          unsafeProjectIds: [],
+        },
+        {
+          action: 'omit',
+          sourceArticleId: 'source-reuse',
+          sourceArticleImportRouteId: 'source-air-reuse',
+          sourceImportRouteId: 'source-route',
+          snapshotProjectArticleLink: true,
+          targetArticleId: 'reuse-article',
+          targetImportRouteId: 'target-route',
+          unsafeProjectIds: ['other-project'],
+        },
+      ],
+      articleUpdatePlan: [
+        {
+          activeDirtiedProjectIds: [],
+          archivedReferencingProjectCount: 0,
+          dateExpansionBlockers: [],
+          fieldFills: [
+            {assetDriven: false, assetPaths: [], field: 'articleSummary', value: 'Filled reuse summary'},
+            {assetDriven: true, assetPaths: ['assets/source/reuse.pdf'], field: 'fullTextPdf', value: 'assets/source/reuse.pdf'},
+            {assetDriven: false, assetPaths: [], field: 'sourceMetadata', value: {package: 'reuse'}},
+          ],
+          sourceArticleId: 'source-reuse',
+          targetArticleId: 'reuse-article',
+        },
+      ],
+      projectPromptPlan: [
+        {
+          enabled: true,
+          metadata: {
+            archived: false,
+            criteriaDisposition: 'combined',
+            criteriaSectionKey: 'screen',
+            criteriaSectionLabel: 'Screening',
+          },
+          order: null,
+          sourceProjectPromptId: 'source-project-prompt',
+          sourcePromptId: 'source-prompt',
+          targetPromptId: 'archived-prompt',
+        },
+      ],
+      projectRoutePlan: [
+        {
+          action: 'link',
+          dateBoundedOutsideExportedArticleCount: 0,
+          dateBoundedRouteArticleCount: 1,
+          outsideExportedArticleCount: 0,
+          sourceImportRouteId: 'source-route',
+          sourceProjectImportRouteId: 'source-project-route',
+          targetImportRouteId: 'target-route',
+        },
+      ],
+      promptPlan: [
+        {
+          action: 'reuse',
+          computedContentHash: promptHash,
+          packageContentHash: 'package-old-hash',
+          sourcePromptId: 'source-prompt',
+          targetPromptId: 'archived-prompt',
+        },
+      ],
+    }
+    const writeResult = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-writer',
+      now,
+      payloads: {
+        articleImportRoutes: [
+          {
+            externalArticleId: 'EXT-new',
+            importMetadata: {route: true},
+            matchMetadata: null,
+            provenance: {sourceArticleId: 'source-new', sourceImportRouteId: 'source-route'},
+            rawPayload: {raw: true},
+            signature: {},
+            sourceArticleId: 'source-new',
+            sourceArticleImportRouteId: 'source-air-new',
+            sourceImportRouteId: 'source-route',
+            sourceRecordHash: 'source-record-hash-new',
+            sourceRecordKey: 'source-record-key-new',
+          },
+        ],
+        articles: [newArticle, reusedArticle],
+        models: [getModelPayload()],
+        project: getProjectPayload(settings),
+        projectArticles: [
+          {
+            provenance: {sourceArticleId: 'source-new', sourceProjectId: 'source-project'},
+            signature: {},
+            sourceArticleId: 'source-new',
+            sourceProjectArticleId: 'source-project-article-new',
+            sourceProjectId: 'source-project',
+          },
+        ],
+        projectPrompts: [projectPromptPayload],
+        prompts: [promptPayload],
+      },
+      plan: getBasePlan(targetPlan, dependencyResolution),
+      promotion: {
+        articleCreates: [{article: newArticle, sourceArticleId: 'source-new'}],
+        articleFieldFills: [
+          {
+            field: 'articleSummary',
+            sourceArticleId: 'source-reuse',
+            targetArticleId: 'reuse-article',
+            value: 'Filled reuse summary',
+          },
+          {
+            field: 'fullTextPdf',
+            sourceArticleId: 'source-reuse',
+            targetArticleId: 'reuse-article',
+            value: 'assets/project-transfer/session-writer/reuse.pdf',
+          },
+          {
+            field: 'sourceMetadata',
+            sourceArticleId: 'source-reuse',
+            targetArticleId: 'reuse-article',
+            value: {package: 'reuse'},
+          },
+        ],
+        manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-writer', updatedAt: now.toISOString()},
+        promotionPathByPackagePath: {},
+      },
+      sessionId: 'session-writer',
+    })
+
+    const [projectRow] = await database.queryJson("SELECT name, model_id AS modelId, human_judgment_mode AS humanJudgmentMode, use_fulltext_no_images AS useFulltextNoImages, archived, date_from AS dateFrom, date_to AS dateTo FROM app.project WHERE id = '" + writeResult.projectId + "'")
+    const [promptRow] = await database.queryJson("SELECT pp.prompt_id AS promptId, pp.prompt_order AS promptOrder, pp.enabled, pp.archived, pp.origin_project_id AS originProjectId, pp.criteria_disposition AS criteriaDisposition, pp.criteria_section_key AS criteriaSectionKey, p.archived AS promptArchived FROM app.project_prompt pp INNER JOIN app.prompt p ON p.id = pp.prompt_id WHERE pp.project_id = '" + writeResult.projectId + "'")
+    const articleRows = await database.queryJson("SELECT id, article_id AS articleId, article_title AS articleTitle, article_summary AS articleSummary, full_text_pdf AS fullTextPdf, TO_JSON(source_metadata) AS sourceMetadata FROM app.article WHERE id IN ('" + writeResult.articleIdBySourceId['source-new'] + "', 'reuse-article') ORDER BY id ASC")
+    const [projectArticleCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project_article WHERE project_id = '" + writeResult.projectId + "' AND imported_from_project_id IS NULL")
+    const [projectImportRouteCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project_import_route WHERE project_id = '" + writeResult.projectId + "'")
+    const [articleImportRouteCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route WHERE import_route_id = 'target-route'")
+    const [importRouteCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.import_route")
+    const [identifierCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.article_identifier")
+
+    console.log(JSON.stringify({
+      articleImportRouteCount: articleImportRouteCount.count,
+      articleRows: articleRows.map((row) => ({...row, sourceMetadata: row.sourceMetadata === null ? null : JSON.parse(row.sourceMetadata)})),
+      identifierCount: identifierCount.count,
+      importRouteCount: importRouteCount.count,
+      projectArticleCount: projectArticleCount.count,
+      projectImportRouteCount: projectImportRouteCount.count,
+      projectRow,
+      promptRow,
+      warningCodes: writeResult.importWarnings.map((warning) => warning.code),
+    }))
+  `)
+
+  expect(result.projectRow).toMatchObject({
+    archived: false,
+    humanJudgmentMode: 'prompt',
+    modelId: 'target-model',
+    name: 'Imported Writer Project',
+  })
+  expect(result.promptRow).toMatchObject({
+    archived: false,
+    criteriaDisposition: 'combined',
+    criteriaSectionKey: 'screen',
+    enabled: true,
+    originProjectId: null,
+    promptArchived: false,
+    promptId: 'archived-prompt',
+    promptOrder: null,
+  })
+  const newArticleRow = result.articleRows.find((row) => {
+    return row.articleId === 'legacy-new-article'
+  })
+  const reusedArticleRow = result.articleRows.find((row) => {
+    return row.id === 'reuse-article'
+  })
+
+  expect(newArticleRow).toMatchObject({
+    articleId: 'legacy-new-article',
+    articleTitle: 'New Package Article',
+    fullTextPdf: 'assets/project-transfer/session-writer/new.pdf',
+    sourceMetadata: {journalTitle: 'Package Journal'},
+  })
+  expect(reusedArticleRow).toMatchObject({
+    articleSummary: 'Filled reuse summary',
+    articleTitle: 'Existing Reuse Title',
+    fullTextPdf: 'assets/project-transfer/session-writer/reuse.pdf',
+    id: 'reuse-article',
+    sourceMetadata: {package: 'reuse'},
+  })
+  expect(result.projectArticleCount).toBe(2)
+  expect(result.projectImportRouteCount).toBe(1)
+  expect(result.articleImportRouteCount).toBe(1)
+  expect(result.importRouteCount).toBe(1)
+  expect(result.identifierCount).toBe(1)
+  expect(result.warningCodes).toContain('targetArticleImportRouteOmitted')
+})
+
+test('project transfer commit writer blocks target article_id conflicts before insert', () => {
+  const result = runCommitWriterScript<{articleCount: number; errorMessage: string | null; projectCount: number}>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    await database.run("INSERT INTO app.article (id, article_id, article_title) VALUES ('existing-conflict', 'legacy-conflict', 'Existing Conflict')")
+    const settings = {humanJudgmentMode: null, useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const article = {
+      articleId: 'legacy-conflict',
+      articleTitle: 'Package Conflict',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-conflict'},
+      signature: {identifierKeys: [], title: 'Package Conflict'},
+      sourceArticleId: 'source-conflict',
+    }
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'create',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: [],
+          packageArticleId: 'legacy-conflict',
+          selectedTargetArticleId: null,
+          sourceArticleId: 'source-conflict',
+        },
+      ],
+    }
+    const errorMessage = await catchMessage(() => {
+      return writeProjectTransferCommitAppTables({
+        commitId: 'commit-article-id-conflict',
+        now,
+        payloads: {
+          articles: [article],
+          models: [getModelPayload()],
+          project: getProjectPayload(settings),
+        },
+        plan: getBasePlan(targetPlan, dependencyResolution),
+        promotion: {
+          articleCreates: [{article, sourceArticleId: 'source-conflict'}],
+          articleFieldFills: [],
+          manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-article-id-conflict', updatedAt: now.toISOString()},
+          promotionPathByPackagePath: {},
+        },
+        sessionId: 'session-article-id-conflict',
+      })
+    })
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+    const [articleCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.article WHERE article_id = 'legacy-conflict'")
+
+    console.log(JSON.stringify({articleCount: articleCount.count, errorMessage, projectCount: projectCount.count}))
+  `)
+
+  expect(result.errorMessage).toContain('target article_id already exists: legacy-conflict')
+  expect(result.projectCount).toBe(0)
+  expect(result.articleCount).toBe(1)
+})
+
+test('project transfer commit writer blocks duplicate project prompt remaps before insert', () => {
+  const result = runCommitWriterScript<{errorMessage: string | null; projectCount: number; promptCount: number}>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const promptHash = computePromptContentHash('Duplicate prompt text', null, 'Duplicate', 'system')
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const promptPayload = (sourcePromptId) => ({
+      archived: false,
+      contentHash: promptHash,
+      originalText: 'Duplicate prompt text',
+      promptHeading: 'Duplicate',
+      provenance: {sourcePromptId},
+      signature: {contentHash: promptHash, originalText: 'Duplicate prompt text'},
+      sourcePromptId,
+      transformedText: null,
+      type: 'system',
+    })
+    const projectPromptPayload = (sourceProjectPromptId, sourcePromptId, order) => ({
+      archived: false,
+      enabled: true,
+      order,
+      provenance: {sourceProjectId: 'source-project', sourcePromptId},
+      signature: {},
+      sourceProjectId: 'source-project',
+      sourceProjectPromptId,
+      sourcePromptId,
+    })
+    const targetPlan = {
+      projectPromptPlan: [
+        {
+          enabled: true,
+          metadata: {archived: false},
+          order: 0,
+          sourceProjectPromptId: 'source-project-prompt-a',
+          sourcePromptId: 'source-prompt-a',
+          targetPromptId: 'new:' + promptHash,
+        },
+        {
+          enabled: true,
+          metadata: {archived: false},
+          order: 1,
+          sourceProjectPromptId: 'source-project-prompt-b',
+          sourcePromptId: 'source-prompt-b',
+          targetPromptId: 'new:' + promptHash,
+        },
+      ],
+      promptPlan: [
+        {
+          action: 'create',
+          computedContentHash: promptHash,
+          packageContentHash: promptHash,
+          sourcePromptId: 'source-prompt-a',
+          targetPromptId: null,
+        },
+        {
+          action: 'create',
+          computedContentHash: promptHash,
+          packageContentHash: promptHash,
+          sourcePromptId: 'source-prompt-b',
+          targetPromptId: null,
+        },
+      ],
+    }
+    const errorMessage = await catchMessage(() => {
+      return writeProjectTransferCommitAppTables({
+        commitId: 'commit-duplicate-prompt',
+        now,
+        payloads: {
+          models: [getModelPayload()],
+          project: getProjectPayload(settings),
+          projectPrompts: [
+            projectPromptPayload('source-project-prompt-a', 'source-prompt-a', 0),
+            projectPromptPayload('source-project-prompt-b', 'source-prompt-b', 1),
+          ],
+          prompts: [promptPayload('source-prompt-a'), promptPayload('source-prompt-b')],
+        },
+        plan: getBasePlan(targetPlan, dependencyResolution),
+        promotion: {
+          articleCreates: [],
+          articleFieldFills: [],
+          manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-duplicate-prompt', updatedAt: now.toISOString()},
+          promotionPathByPackagePath: {},
+        },
+        sessionId: 'session-duplicate-prompt',
+      })
+    })
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+    const [promptCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.prompt WHERE original_text = 'Duplicate prompt text'")
+
+    console.log(JSON.stringify({errorMessage, projectCount: projectCount.count, promptCount: promptCount.count}))
+  `)
+
+  expect(result.errorMessage).toContain('duplicate project_prompt link after remap')
+  expect(result.projectCount).toBe(0)
+  expect(result.promptCount).toBe(0)
 })

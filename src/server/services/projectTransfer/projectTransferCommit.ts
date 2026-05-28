@@ -12,6 +12,11 @@ import {
   type ProjectTransferAnalyzeTargetRunner,
   type ProjectTransferTargetPlan,
 } from './projectTransferAnalyzeTarget.ts'
+import {runProjectTransferCommitWithPromotionRollback} from './projectTransferCommitRollback.ts'
+import {
+  type ProjectTransferCommitAppWriteResult,
+  writeProjectTransferCommitAppTables,
+} from './projectTransferCommitWriter.ts'
 import {
   parseProjectTransferCompletionPayload,
   parseProjectTransferPlanSummary,
@@ -25,6 +30,7 @@ import {
 import {
   type ProjectTransferDependencyResolutionRepositories,
   type ProjectTransferDependencyResolutionRequest,
+  type ProjectTransferDependencyResolutionState,
   revalidateProjectTransferResolvedDependencies,
 } from './projectTransferDependencyResolution.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
@@ -53,6 +59,7 @@ type ProjectTransferCommitRepositories = {
     'getCompletedImportHistoryBySessionId'
   >
   revalidate?: (input: ProjectTransferCommitRevalidationInput) => Promise<ProjectTransferCommitRevalidationResult>
+  runAppTableWrites?: (input: ProjectTransferCommitAppTableWriteInput) => Promise<ProjectTransferCommitAppWriteResult>
   sessionRepository?: Pick<
     ReturnType<typeof getProjectTransferSessionRepository>,
     | 'getProjectTransferSession'
@@ -87,6 +94,17 @@ type ProjectTransferCommitRevalidationResult = {
   changed: boolean
   plan: ProjectTransferImportPlanArtifact
   ready: boolean
+}
+
+type ProjectTransferCommitResolvedDependencyPlanArtifact = ProjectTransferImportPlanArtifact & {
+  dependencyResolution?: ProjectTransferDependencyResolutionState
+}
+
+type ProjectTransferCommitAppTableWriteInput = RuntimePathOptions & {
+  artifacts: ProjectTransferCommitArtifacts
+  commitId: string
+  now: Date
+  sessionId: string
 }
 
 export type ProjectTransferCommitResult =
@@ -502,6 +520,12 @@ const getCommitRevalidationResult = (plan: ProjectTransferImportPlanArtifact, ch
   return {changed, plan, ready: validateProjectTransferPlanReadyToCommit(plan.summary).ok}
 }
 
+const getResolvedDependencyPlanArtifact = (
+  plan: ProjectTransferImportPlanArtifact,
+): ProjectTransferCommitResolvedDependencyPlanArtifact => {
+  return plan as ProjectTransferCommitResolvedDependencyPlanArtifact
+}
+
 export const revalidateProjectTransferCommitPlan = async ({
   analysis,
   layout,
@@ -527,7 +551,7 @@ export const revalidateProjectTransferCommitPlan = async ({
   const dependencyResult = await revalidateProjectTransferResolvedDependencies({
     nextPlanRevision,
     payloads,
-    plan,
+    plan: getResolvedDependencyPlanArtifact(plan),
     repositories: repositories?.dependencyRepositories,
     request: getDependencyResolutionRequestFromPlan(plan),
   })
@@ -632,8 +656,33 @@ const getRepositorySet = (repositories?: ProjectTransferCommitRepositories) => {
     getOwnerToken: repositories?.getOwnerToken ?? randomUUID,
     historyRepository: repositories?.historyRepository ?? getProjectTransferHistoryRepository(),
     revalidate: repositories?.revalidate ?? revalidateProjectTransferCommitPlan,
+    runAppTableWrites: repositories?.runAppTableWrites ?? runProjectTransferCommitAppTableWrites,
     sessionRepository: repositories?.sessionRepository ?? getProjectTransferSessionRepository(),
   }
+}
+
+const runProjectTransferCommitAppTableWrites = async ({
+  artifacts,
+  commitId,
+  now,
+  sessionId,
+  ...runtimeOptions
+}: RuntimePathOptions & {
+  artifacts: ProjectTransferCommitArtifacts
+  commitId: string
+  now: Date
+  sessionId: string
+}) => {
+  const payloads = await readExtractedPayloads({...runtimeOptions, layout: artifacts.layout})
+
+  return runProjectTransferCommitWithPromotionRollback({
+    ...runtimeOptions,
+    now,
+    sessionId,
+    work: (promotion) => {
+      return writeProjectTransferCommitAppTables({commitId, now, payloads, plan: artifacts.plan, promotion, sessionId})
+    },
+  })
 }
 
 export const commitProjectTransferImportSession = async ({
@@ -755,6 +804,14 @@ export const commitProjectTransferImportSession = async ({
       ? {error: 'Project transfer commit could not reopen claimed stale plan', status: 'error', statusCode: 409}
       : {plan: postClaimRevalidation.plan, session: reopened, status: 'stale', statusCode: 200}
   }
+
+  await repositories.runAppTableWrites({
+    artifacts: {...artifacts, plan: postClaimRevalidation.plan},
+    commitId,
+    now,
+    ...runtimeOptions,
+    sessionId,
+  })
 
   return {commitId, session: claimed, status: 'claimed', statusCode: 202}
 }
