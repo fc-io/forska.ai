@@ -149,6 +149,8 @@ const getSession = (overrides: Record<string, unknown> = {}) => {
 
 const mockState = vi.hoisted(() => {
   return {
+    commitInputs: [] as unknown[],
+    commitResult: null as Record<string, unknown> | null,
     codexStatusQueryResult: {
       data: {
         appServerReady: false,
@@ -235,6 +237,7 @@ const mockState = vi.hoisted(() => {
       isLoading: false,
       refetch: vi.fn(),
     },
+    navigate: vi.fn(),
   }
 })
 
@@ -272,6 +275,36 @@ vi.mock('@tanstack/solid-query', () => {
   }
 })
 
+vi.mock('./importWizard/projectImportClient.ts', () => {
+  return {
+    analyzeProjectImportSession: vi.fn((input: unknown) => {
+      return {...getSession({state: 'awaiting_resolution'}), ...(input as Record<string, unknown>)}
+    }),
+    cancelProjectImportSession: vi.fn(() => {
+      return getSession({state: 'cancelled'})
+    }),
+    commitProjectImportSession: vi.fn((input: unknown) => {
+      mockState.commitInputs.push(input)
+      return mockState.commitResult ?? getSession({canCommit: false, state: 'committing'})
+    }),
+    createProjectImportSession: vi.fn(() => {
+      return getSession({state: 'awaiting_upload'})
+    }),
+    fetchProjectImportSession: vi.fn(() => {
+      return getSession()
+    }),
+    projectImportSessionQueryKey: (sessionId: string | null) => {
+      return ['project-import-session', sessionId ?? 'none'] as const
+    },
+    resolveProjectImportDependencies: vi.fn(() => {
+      return getSession({stalePlan: false})
+    }),
+    uploadProjectImportPackage: vi.fn(() => {
+      return getSession({state: 'queued'})
+    }),
+  }
+})
+
 vi.mock('@tanstack/solid-router', () => {
   return {
     Link: (props: MockLinkProps) => {
@@ -285,6 +318,9 @@ vi.mock('@tanstack/solid-router', () => {
       return () => {
         return {}
       }
+    },
+    useNavigate: () => {
+      return mockState.navigate
     },
   }
 })
@@ -323,6 +359,9 @@ describe('project import route', () => {
     vi.resetModules()
     document.body.innerHTML = ''
     window.history.replaceState(null, '', '/projects/import?sessionId=session-1')
+    mockState.commitInputs = []
+    mockState.commitResult = null
+    mockState.navigate.mockClear()
     mockState.sessionQueryResult = {
       data: getSession(),
       error: null,
@@ -351,7 +390,7 @@ describe('project import route', () => {
       expect(container.textContent).toContain('Judgment signature provenance')
       expect(container.textContent).toContain('Human/review signature provenance')
       expect(container.textContent).toContain('requires new package or target changes')
-      expect(container.textContent).toContain('Commit unavailable until Phase 4')
+      expect(container.textContent).toContain('Commit import')
     } finally {
       dispose()
       container.remove()
@@ -377,6 +416,48 @@ describe('project import route', () => {
     }
   })
 
+  test('commits a ready plan, shows post-import warnings, and navigates to imported project', async () => {
+    const completion = {
+      importWarnings: [{code: 'route_omitted', message: 'One route link was omitted.'}],
+      packageFingerprint: 'fingerprint-1',
+      projectId: 'target-project-1',
+      projectName: 'Imported Project',
+      status: 'completed',
+      targetProjectId: 'target-project-1',
+      targetProjectName: 'Imported Project',
+      transferHistoryId: 'history-1',
+    }
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({canCommit: true, state: 'ready_to_commit'}),
+    }
+    mockState.commitResult = getSession({
+      canCommit: false,
+      completion,
+      state: 'completed',
+      updatedAt: '2030-01-01T00:00:01.000Z',
+    })
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      const commitButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.includes('Commit import')
+      })
+
+      commitButton?.click()
+      await Promise.resolve()
+
+      expect(mockState.commitInputs).toEqual([{planRevision: 2, sessionId: 'session-1'}])
+      expect(container.textContent).toContain('Post-import warnings')
+      expect(container.textContent).toContain('One route link was omitted.')
+      expect(mockState.navigate).toHaveBeenCalledWith({params: {id: 'target-project-1'}, to: '/projects/$id'})
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('shows stale plan handling and keeps final commit disabled', async () => {
     mockState.sessionQueryResult = {
       ...mockState.sessionQueryResult,
@@ -387,11 +468,11 @@ describe('project import route', () => {
 
     try {
       const commitButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.includes('Commit unavailable until Phase 4')
+        return button.textContent?.includes('Commit import')
       })
 
-      expect(container.textContent).toContain('Plan revision changed before dependency resolution')
-      expect(container.textContent).toContain('Plan is ready, but final commit writes are unavailable until Phase 4.')
+      expect(container.textContent).toContain('Plan revision changed')
+      expect(container.textContent).toContain('Review the refreshed plan before committing.')
       expect(commitButton?.hasAttribute('disabled')).toBe(true)
     } finally {
       dispose()

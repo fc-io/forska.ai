@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto'
 import {readFile, rm} from 'node:fs/promises'
 
 import type {
@@ -5,10 +6,11 @@ import type {
   ProjectTransferHistoryRecord,
   ProjectTransferSessionState,
 } from '../../../db/schemaTypes.ts'
+import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
 import {canCurrentServerOwnDuckdb} from '../../utils/serverRuntimeRole.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
-import type {ProjectTransferAssetPromotionMetadata} from './projectTransferContracts.ts'
+import type {ProjectTransferAssetPromotionMetadata, ProjectTransferRuntimeEvent} from './projectTransferContracts.ts'
 import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
 import {
   resolveProjectTransferPromotionWritablePath,
@@ -535,6 +537,63 @@ const getRecoveryCounts = (
   )
 }
 
+const getRecoveryCommitEventState = (plan: ProjectTransferRecoveryCleanupPlan) => {
+  return plan.recoveredFromHistory ? 'completed' : plan.transitionedToExpired ? 'expired' : plan.state
+}
+
+const getRecoveryCommitEventStatus = (plan: ProjectTransferRecoveryCleanupPlan) => {
+  return plan.recoveredFromHistory ? 'completed' : plan.deletePromotedAssets ? 'failed' : 'running'
+}
+
+const getRecoveryCommitEventMessage = (plan: ProjectTransferRecoveryCleanupPlan) => {
+  return plan.recoveredFromHistory
+    ? 'Recovered completed import commit from transfer history'
+    : plan.deletePromotedAssets
+      ? 'Recovered failed import commit and selected promoted asset cleanup'
+      : 'Recovered import commit session without promoted asset cleanup'
+}
+
+const writeProjectTransferRecoveryRuntimeEvents = ({
+  now,
+  ownerToken,
+  plans,
+}: {
+  now: Date
+  ownerToken: string
+  plans: ProjectTransferRecoveryCleanupPlan[]
+}) => {
+  return plans
+    .filter((plan) => {
+      return plan.direction === 'import'
+    })
+    .map((plan) => {
+      const timestamp = now.toISOString()
+      const event: ProjectTransferRuntimeEvent = {
+        direction: 'import',
+        eventId: randomUUID(),
+        eventType: 'commit_progress',
+        message: getRecoveryCommitEventMessage(plan),
+        ownerToken,
+        phase: 'commit',
+        planRevision: 0,
+        sessionId: plan.id,
+        state: getRecoveryCommitEventState(plan),
+        status: getRecoveryCommitEventStatus(plan),
+        timestamp,
+      }
+
+      writeRuntimeLogEvent({
+        attrs: event,
+        event: 'project_transfer.commit_progress',
+        message: event.message ?? 'Project transfer commit recovery decision',
+        severity: event.status === 'failed' ? 'WARN' : 'INFO',
+        timestamp,
+      })
+
+      return event
+    })
+}
+
 const emptyCleanupResult = (): ProjectTransferCleanupResult => {
   return {
     cleanupTempArtifactCount: 0,
@@ -668,6 +727,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
         return getCleanupPlans({now, ownerToken, runner: tx, sessions, staleExportHeartbeatBefore})
       })
     : await getCleanupPlans({now, ownerToken, runner, sessions, staleExportHeartbeatBefore})
+  writeProjectTransferRecoveryRuntimeEvents({now, ownerToken, plans})
   const recoveryCounts = getRecoveryCounts(plans)
   const cleanupCounts = await getCleanupCounts({plans, runtimeOptions: {cwd: params.cwd, envValues: params.envValues}})
   const {failedPlans, successfulPlans, ...cleanupResultCounts} = cleanupCounts

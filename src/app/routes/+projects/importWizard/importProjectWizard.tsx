@@ -1,5 +1,5 @@
 import {createMutation, useQuery} from '@tanstack/solid-query'
-import {Link} from '@tanstack/solid-router'
+import {Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Match, Show, Switch} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
@@ -22,8 +22,11 @@ import {
 import {
   analyzeProjectImportSession,
   cancelProjectImportSession,
+  commitProjectImportSession,
   createProjectImportSession,
   fetchProjectImportSession,
+  type ProjectImportCompletion,
+  type ProjectImportPackageWarning,
   type ProjectImportPlanArtifact,
   type ProjectImportPlanSummary,
   type ProjectImportResolveDependenciesRequest,
@@ -72,7 +75,13 @@ const conflictSummaryFields: SummaryField[] = [
   {key: 'humanReviewFidelityConflictCount', label: 'Human/review fidelity conflicts'},
 ]
 
-const activeSessionStates = new Set<ProjectImportSessionState>(['uploading', 'queued', 'extracting', 'analyzing'])
+const activeSessionStates = new Set<ProjectImportSessionState>([
+  'uploading',
+  'queued',
+  'extracting',
+  'analyzing',
+  'committing',
+])
 const terminalSessionStates = new Set<ProjectImportSessionState>(['cancelled', 'completed', 'expired', 'failed'])
 
 const getInitialSessionId = () => {
@@ -275,6 +284,14 @@ const getDuplicateWarnings = (session: ProjectImportSession | null) => {
   })
 }
 
+const getPostImportWarnings = (completion: ProjectImportCompletion | null): ProjectImportPackageWarning[] => {
+  return completion?.importWarnings ?? []
+}
+
+const getCompletedProjectId = (completion: ProjectImportCompletion | null) => {
+  return completion?.targetProjectId ?? completion?.projectId ?? null
+}
+
 const getProgressPercent = (session: ProjectImportSession | null, uploadPercent: number | null) => {
   const progressPercent = session?.progress?.percent
 
@@ -293,9 +310,15 @@ const getSessionPhaseLabel = (session: ProjectImportSession | null) => {
 }
 
 const getCommitUnavailableReason = (session: ProjectImportSession | null) => {
-  return session?.canCommit
-    ? 'Plan is ready, but final commit writes are unavailable until Phase 4.'
-    : 'Resolve blockers and dependencies before Phase 4 commit writes can use this plan.'
+  return session?.state === 'completed'
+    ? 'Import completed.'
+    : session?.state === 'committing'
+      ? 'Commit is writing the imported project.'
+      : session?.stalePlan
+        ? 'Review the refreshed plan before committing.'
+        : session?.canCommit
+          ? 'Plan is ready to commit.'
+          : 'Resolve blockers and dependencies before committing this plan.'
 }
 
 const getCreateConnectionInput = (draft: ConnectionDraft) => {
@@ -465,6 +488,27 @@ const PackageReviewPanel = (props: {session: ProjectImportSession | null}) => {
         </div>
       </div>
     </section>
+  )
+}
+
+const PostImportWarningsPanel = (props: {session: ProjectImportSession | null}) => {
+  const warnings = createMemo(() => {
+    return getPostImportWarnings(props.session?.completion ?? null)
+  })
+
+  return (
+    <Show when={props.session?.state === 'completed' && warnings().length > 0}>
+      <section class="rounded-lg border border-amber-200 bg-amber-50 p-4">
+        <h2 class="text-base font-semibold text-amber-950">Post-import warnings</h2>
+        <ul class="mt-3 space-y-2 text-sm text-amber-900">
+          <For each={warnings()}>
+            {(warning) => {
+              return <li>{warning.message}</li>
+            }}
+          </For>
+        </ul>
+      </section>
+    </Show>
   )
 }
 
@@ -639,8 +683,10 @@ const DependencyStatusTable = (props: {session: ProjectImportSession | null}) =>
 }
 
 export const ImportProjectWizard = () => {
+  const navigate = useNavigate()
   const [sessionId, setSessionId] = createSignal<string | null>(getInitialSessionId())
   const [sessionOverride, setSessionOverride] = createSignal<ProjectImportSession | null>(null)
+  const [navigatedProjectId, setNavigatedProjectId] = createSignal<string | null>(null)
   const [selectedFile, setSelectedFile] = createSignal<File | null>(null)
   const [uploadPercent, setUploadPercent] = createSignal<number | null>(null)
   const [pageError, setPageError] = createSignal('')
@@ -737,6 +783,38 @@ export const ImportProjectWizard = () => {
     setActiveSession(session)
     setPageMessage(session.stalePlan ? 'Plan revision was stale; refreshed latest plan.' : 'Dependency plan updated.')
   }
+  const navigateToCompletedProject = (session: ProjectImportSession) => {
+    const projectId = getCompletedProjectId(session.completion)
+
+    if (projectId !== null && navigatedProjectId() !== projectId) {
+      setNavigatedProjectId(projectId)
+      void navigate({params: {id: projectId} as never, to: '/projects/$id'})
+    }
+  }
+  const setCommitResult = (session: ProjectImportSession) => {
+    setActiveSession(session)
+
+    if (session.stalePlan) {
+      setPageMessage('Plan revision was stale; review the refreshed plan before committing.')
+      return
+    }
+
+    if (session.state === 'committing') {
+      setPageMessage('Commit started. Progress will update here.')
+      return
+    }
+
+    if (session.state === 'completed') {
+      const warningCount = getPostImportWarnings(session.completion).length
+
+      setPageMessage(
+        warningCount > 0
+          ? `Import committed with ${formatCount(warningCount)} post-import warning(s).`
+          : 'Import committed.',
+      )
+      navigateToCompletedProject(session)
+    }
+  }
   const getCurrentSessionOrError = () => {
     const session = currentSession()
 
@@ -776,6 +854,15 @@ export const ImportProjectWizard = () => {
         setPageError(error instanceof Error ? error.message : 'Failed to resolve dependencies')
       },
       onSuccess: setResolveResult,
+    }
+  })
+  const commitMutation = createMutation(() => {
+    return {
+      mutationFn: commitProjectImportSession,
+      onError: (error: unknown) => {
+        setPageError(error instanceof Error ? error.message : 'Failed to commit import')
+      },
+      onSuccess: setCommitResult,
     }
   })
   const cancelMutation = createMutation(() => {
@@ -928,6 +1015,7 @@ export const ImportProjectWizard = () => {
       || uploadMutation.isPending
       || analyzeMutation.isPending
       || resolveMutation.isPending
+      || commitMutation.isPending
       || cancelMutation.isPending
     )
   })
@@ -944,8 +1032,26 @@ export const ImportProjectWizard = () => {
       state !== undefined && !terminalSessionStates.has(state) && state !== 'committing' && !cancelMutation.isPending
     )
   })
+  const canCommit = createMemo(() => {
+    const session = currentSession()
+
+    return (
+      session?.canCommit === true
+      && session.state === 'ready_to_commit'
+      && session.stalePlan !== true
+      && !commitMutation.isPending
+    )
+  })
   const commitmentState = createMemo(() => {
-    return currentSession()?.canCommit ? 'Plan ready' : 'Not ready'
+    const session = currentSession()
+
+    return session?.state === 'completed'
+      ? 'Completed'
+      : session?.state === 'committing'
+        ? 'Committing'
+        : session?.canCommit
+          ? 'Plan ready'
+          : 'Not ready'
   })
 
   createEffect(() => {
@@ -957,6 +1063,14 @@ export const ImportProjectWizard = () => {
       && shouldReplaceSessionOverride({current: sessionOverride(), next: session})
     ) {
       setSessionOverride(session)
+    }
+  })
+
+  createEffect(() => {
+    const session = currentSession()
+
+    if (session?.state === 'completed') {
+      navigateToCompletedProject(session)
     }
   })
 
@@ -1047,6 +1161,15 @@ export const ImportProjectWizard = () => {
   }
   const handleAutoResolve = () => {
     resolveWithCurrentRevision({autoResolve: true})
+  }
+  const handleCommit = () => {
+    const session = getCurrentSessionOrError()
+
+    if (session !== null) {
+      setPageError('')
+      setPageMessage('')
+      commitMutation.mutate({planRevision: session.planRevision, sessionId: session.id})
+    }
   }
   const handleUseSelectedProvider = () => {
     const sourceProviderConnectionId = selectedProviderSourceId()
@@ -1153,7 +1276,7 @@ export const ImportProjectWizard = () => {
           <div>
             <h1 class="text-2xl font-bold text-gray-900">Import Project</h1>
             <p class="mt-1 text-sm text-gray-600">
-              Upload a transfer package, resolve target dependencies, and review the plan before final writes exist.
+              Upload a transfer package, resolve target dependencies, review the plan, and commit the imported project.
             </p>
           </div>
           <Button as={Link} to="/projects" variant="outline">
@@ -1173,7 +1296,7 @@ export const ImportProjectWizard = () => {
         </Show>
         <Show when={currentSession()?.stalePlan}>
           <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            Plan revision changed before dependency resolution. Review the refreshed plan before applying more changes.
+            Plan revision changed. Review the refreshed plan before applying more changes.
           </div>
         </Show>
 
@@ -1218,6 +1341,7 @@ export const ImportProjectWizard = () => {
 
             <ProgressPanel session={currentSession()} uploadPercent={uploadPercent()} />
             <PackageReviewPanel session={currentSession()} />
+            <PostImportWarningsPanel session={currentSession()} />
             <SummaryTable fields={overlapSummaryFields} title="Overlap summary" values={planSummary()?.overlapCounts} />
             <SummaryTable
               fields={conflictSummaryFields}
@@ -1687,8 +1811,13 @@ export const ImportProjectWizard = () => {
                 </div>
                 <div class="flex items-center gap-3">
                   <StatusBadge status={commitmentState()} />
-                  <Button disabled type="button">
-                    Commit unavailable until Phase 4
+                  <Button disabled={!canCommit()} onClick={handleCommit} type="button">
+                    <Switch>
+                      <Match when={commitMutation.isPending}>Committing...</Match>
+                      <Match when={currentSession()?.state === 'committing'}>Commit running</Match>
+                      <Match when={currentSession()?.state === 'completed'}>Committed</Match>
+                      <Match when={true}>Commit import</Match>
+                    </Switch>
                   </Button>
                 </div>
               </div>
