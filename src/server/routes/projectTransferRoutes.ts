@@ -224,8 +224,8 @@ const resolveImportDependenciesRequestShape = arktype({
   'unresolvedProviders?': dependencyUnresolvedProviderShape.array(),
 })
 const commitImportSessionRequestShape = arktype({
-  'expectedOwnerToken?': 'string',
   'expectedPlanRevision?': 'number.integer >= 0',
+  'planRevision?': 'number.integer >= 0',
 })
 const cancelImportSessionRequestShape = arktype({
   'cleanupTempArtifacts?': 'boolean',
@@ -1317,13 +1317,31 @@ const commitImportSession = (
   body: unknown,
 ): ProjectTransferApiResponse<ProjectTransferPlaceholderData> => {
   const request = parseRequestBody<CommitImportSessionRequest>(body, commitImportSessionRequestShape, [
-    'expectedOwnerToken',
     'expectedPlanRevision',
+    'planRevision',
   ])
 
-  return request.ok
-    ? getPlaceholderResponse(set, 'commit-import-session')
-    : getProjectTransferApiError(set, 400, request.error)
+  if (!request.ok) {
+    return getProjectTransferApiError(set, 400, request.error)
+  }
+
+  if (request.value.planRevision === undefined && request.value.expectedPlanRevision === undefined) {
+    return getProjectTransferApiError(set, 400, 'Project transfer commit requires planRevision')
+  }
+
+  if (
+    request.value.planRevision !== undefined
+    && request.value.expectedPlanRevision !== undefined
+    && request.value.planRevision !== request.value.expectedPlanRevision
+  ) {
+    return getProjectTransferApiError(
+      set,
+      400,
+      'Project transfer commit planRevision and expectedPlanRevision conflict',
+    )
+  }
+
+  return getPlaceholderResponse(set, 'commit-import-session')
 }
 
 const getCancelRequestDefaults = (request: CancelImportSessionRequest) => {

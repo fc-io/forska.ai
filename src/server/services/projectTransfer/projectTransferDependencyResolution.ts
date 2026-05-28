@@ -123,6 +123,14 @@ type ProjectTransferDependencyResolutionInput = RuntimePathOptions & {
   repositories?: ProjectTransferDependencyResolutionRepositories
 }
 
+type ProjectTransferDependencyRevalidationInput = RuntimePathOptions & {
+  nextPlanRevision: number
+  payloads: Partial<ProjectTransferPayloadByKey>
+  plan: ProjectTransferResolvedDependencyPlanArtifact
+  request: ProjectTransferDependencyResolutionRequest
+  repositories?: ProjectTransferDependencyResolutionRepositories
+}
+
 export type ProjectTransferDependencyResolutionResult =
   | {
       changed: boolean
@@ -1097,30 +1105,13 @@ const getResolvedPlan = ({
   }
 }
 
-export const resolveProjectTransferDependencies = async (
-  input: ProjectTransferDependencyResolutionInput,
+export const revalidateProjectTransferResolvedDependencies = async (
+  input: ProjectTransferDependencyRevalidationInput,
 ): Promise<ProjectTransferDependencyResolutionResult> => {
   const repositories = getRepositories(input.repositories)
-  const plan = await readJsonArtifact<ProjectTransferResolvedDependencyPlanArtifact>({
-    ...input,
-    pathValue: input.layout.planPath,
-  })
-
-  if (plan === null) {
-    return {error: 'Project transfer import plan artifact is unavailable', status: 'error', statusCode: 409}
-  }
-
-  const [payloads, connections] = await Promise.all([
-    readExtractedPayloads(input),
-    repositories.listProviderConnections(),
-  ])
-
-  if (payloads === null) {
-    return {error: 'Project transfer dependency payloads are unavailable', status: 'error', statusCode: 409}
-  }
-
+  const connections = await repositories.listProviderConnections()
   const connectionById = getConnectionById(connections)
-  const previousResolutionState = getPlanDependencyResolution(plan)
+  const previousResolutionState = getPlanDependencyResolution(input.plan)
   const requestedResolutionState = getNextResolutionState(previousResolutionState, input.request)
   const explicitProviderError = await validateExplicitProviderSelections({
     connectionById,
@@ -1141,9 +1132,9 @@ export const resolveProjectTransferDependencies = async (
     return {error: explicitModelError, status: 'error', statusCode: 400}
   }
 
-  const importedProviders = (payloads.providerConnections ?? []).map(getImportedProviderConnection)
-  const importedModels = (payloads.models ?? []).map(getImportedModel)
-  const importedJudgments = (payloads.judgments ?? []).map(getImportedJudgment)
+  const importedProviders = (input.payloads.providerConnections ?? []).map(getImportedProviderConnection)
+  const importedModels = (input.payloads.models ?? []).map(getImportedModel)
+  const importedJudgments = (input.payloads.judgments ?? []).map(getImportedJudgment)
   const modelsBySourceProviderId = getModelsBySourceProviderId(importedModels)
   const judgmentModelSourceIds = getJudgmentModelSourceIds(importedJudgments)
   const judgmentModelSignaturesBySourceId = getJudgmentModelSignaturesBySourceId(importedJudgments)
@@ -1185,14 +1176,14 @@ export const resolveProjectTransferDependencies = async (
   const dependencyPlanSummary = getResolvedPlanSummary({
     dependencyBlockers: [...providerResolution.blockers, ...modelResolution.blockers],
     dependencyStatuses: {...providerResolution.statuses, ...modelResolution.statuses},
-    plan,
+    plan: input.plan,
   })
   const fidelityValidation = await getProjectTransferFidelityValidation({
     dependencyResolution,
-    payloads,
+    payloads: input.payloads,
     runner: repositories.analyzeTargetRunner,
     targetConnections: connections,
-    targetPlan: plan.targetPlan,
+    targetPlan: input.plan.targetPlan,
   })
   const fidelityBlockers = getReadyDependencyStatuses(dependencyPlanSummary.dependencyStatuses)
     ? fidelityValidation.blockers
@@ -1212,14 +1203,43 @@ export const resolveProjectTransferDependencies = async (
     dependencySummary: planSummary,
     fidelityTargetPlan: fidelityValidation.targetPlan,
     nextPlanRevision: input.nextPlanRevision,
-    previousPlan: plan,
+    previousPlan: input.plan,
   })
-  const changed = getResultChanged({nextPlan, previousPlan: plan})
-  const finalPlan = changed ? nextPlan : plan
-
-  if (changed) {
-    await writeJsonArtifact({...input, pathValue: input.layout.planPath, value: nextPlan})
-  }
+  const changed = getResultChanged({nextPlan, previousPlan: input.plan})
+  const finalPlan = changed ? nextPlan : input.plan
 
   return {changed, plan: finalPlan, planSummary: finalPlan.summary, status: 'ok'}
+}
+
+export const resolveProjectTransferDependencies = async (
+  input: ProjectTransferDependencyResolutionInput,
+): Promise<ProjectTransferDependencyResolutionResult> => {
+  const plan = await readJsonArtifact<ProjectTransferResolvedDependencyPlanArtifact>({
+    ...input,
+    pathValue: input.layout.planPath,
+  })
+
+  if (plan === null) {
+    return {error: 'Project transfer import plan artifact is unavailable', status: 'error', statusCode: 409}
+  }
+
+  const payloads = await readExtractedPayloads(input)
+
+  if (payloads === null) {
+    return {error: 'Project transfer dependency payloads are unavailable', status: 'error', statusCode: 409}
+  }
+
+  const result = await revalidateProjectTransferResolvedDependencies({
+    nextPlanRevision: input.nextPlanRevision,
+    payloads,
+    plan,
+    repositories: input.repositories,
+    request: input.request,
+  })
+
+  if (result.status === 'ok' && result.changed) {
+    await writeJsonArtifact({...input, pathValue: input.layout.planPath, value: result.plan})
+  }
+
+  return result
 }
