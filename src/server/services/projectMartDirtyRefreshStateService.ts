@@ -4,7 +4,7 @@ import type {
   ProjectMartRefreshStatus,
 } from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {getQuotedStringList, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
+import {getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 import {getMaintenanceWorkLeaseService} from './maintenanceWorkLeaseService.ts'
 import {
   getProjectMartDirtyMaterializationService,
@@ -121,6 +121,7 @@ type DirtyTokenCompletionBarrier = {barrierKind: DirtyTokenBarrierKind; barrierT
 type CompletedThroughDirtyTokenParams = {completedToken: number; projectId: string; tx: RefreshStateRunner}
 
 const dirtyRefreshArticleInputTableName = 'temp_project_mart_dirty_refresh_article_input'
+const dirtyRefreshProjectInputTableName = 'temp_project_mart_dirty_refresh_project_input'
 const dirtyRefreshArticleInputBatchSize = 1_000
 
 const getNow = (value?: Date) => {
@@ -167,6 +168,30 @@ const dropDirtyRefreshArticleInputTable = async (runner: RefreshStateRunner) => 
   `)
 }
 
+const createDirtyRefreshProjectInputTable = async (runner: RefreshStateRunner, projectIds: string[]) => {
+  await runner.run(`
+    DROP TABLE IF EXISTS ${dirtyRefreshProjectInputTableName};
+    CREATE TEMP TABLE ${dirtyRefreshProjectInputTableName} (project_id VARCHAR);
+  `)
+
+  await getValueChunks(projectIds).reduce<Promise<void>>((previousRun, projectIdChunk) => {
+    return previousRun.then(() => {
+      return runner.run(`
+        INSERT INTO ${dirtyRefreshProjectInputTableName} (project_id)
+        SELECT DISTINCT project_id
+        FROM UNNEST(${getSqlLiteral(projectIdChunk)}) AS project_input(project_id)
+        WHERE project_id IS NOT NULL;
+      `)
+    })
+  }, Promise.resolve())
+}
+
+const dropDirtyRefreshProjectInputTable = async (runner: RefreshStateRunner) => {
+  await runner.run(`
+    DROP TABLE IF EXISTS ${dirtyRefreshProjectInputTableName}
+  `)
+}
+
 const getDirtyRefreshArticleInputExistsSql = (articleIdColumn: string) => {
   return `EXISTS (
         SELECT 1
@@ -184,7 +209,9 @@ const normalizeDirtyProjects = (projects: DirtyProjectInput[]) => {
     const existing = acc.get(project.projectId)
     const articleIds = project.articleIds === undefined ? undefined : getUniqueValues(project.articleIds)
     const normalizedArticleIds =
-      articleIds === undefined || (existing !== undefined && existing.articleIds === undefined)
+      articleIds === undefined
+      || articleIds.length === 0
+      || (existing !== undefined && existing.articleIds === undefined)
         ? undefined
         : getUniqueValues([...(existing?.articleIds ?? []), ...articleIds])
 
@@ -359,8 +386,11 @@ const getDirtyProjectsForArticleIds = async (runner: RefreshStateRunner, article
         project_article.article_id AS articleId
       FROM app.project_article project_article
       INNER JOIN app.project project ON project.id = project_article.project_id
+      INNER JOIN app.article article ON article.id = project_article.article_id
       WHERE ${getDirtyRefreshArticleInputExistsSql('project_article.article_id')}
         AND project.archived = FALSE
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
       UNION
       SELECT
         project_import_route.project_id AS projectId,
@@ -369,8 +399,11 @@ const getDirtyProjectsForArticleIds = async (runner: RefreshStateRunner, article
       INNER JOIN app.project_import_route project_import_route
         ON project_import_route.import_route_id = article_import_route.import_route_id
       INNER JOIN app.project project ON project.id = project_import_route.project_id
+      INNER JOIN app.article article ON article.id = article_import_route.article_id
       WHERE ${getDirtyRefreshArticleInputExistsSql('article_import_route.article_id')}
         AND project.archived = FALSE
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
     ) resolved_projects
     ORDER BY projectId ASC, articleId ASC
   `)
@@ -399,13 +432,74 @@ const getDirtyProjectsForProjectIds = async (runner: RefreshStateRunner, project
     return []
   }
 
-  return runner.queryJson<DirtyProjectIdRow>(`
+  await createDirtyRefreshProjectInputTable(runner, uniqueProjectIds)
+  const rows = await runner.queryJson<DirtyProjectIdRow>(`
     SELECT id AS projectId
     FROM app.project
-    WHERE id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
-      AND archived = FALSE
+    INNER JOIN ${dirtyRefreshProjectInputTableName} project_input ON project_input.project_id = id
+    WHERE archived = FALSE
     ORDER BY id ASC
   `)
+  await dropDirtyRefreshProjectInputTable(runner)
+
+  return rows
+}
+
+const getDirtyProjectsForProjectScopeArticleIds = async (runner: RefreshStateRunner, projectIds: string[]) => {
+  const uniqueProjectIds = getUniqueValues(projectIds)
+
+  if (uniqueProjectIds.length === 0) {
+    return []
+  }
+
+  await createDirtyRefreshProjectInputTable(runner, uniqueProjectIds)
+  const rows = await runner.queryJson<DirtyProjectArticleRow>(`
+    SELECT projectId, articleId
+    FROM (
+      SELECT
+        project_article.project_id AS projectId,
+        project_article.article_id AS articleId
+      FROM app.project_article project_article
+      INNER JOIN ${dirtyRefreshProjectInputTableName} project_input
+        ON project_input.project_id = project_article.project_id
+      INNER JOIN app.project project ON project.id = project_article.project_id
+      INNER JOIN app.article article ON article.id = project_article.article_id
+      WHERE project.archived = FALSE
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+      UNION
+      SELECT
+        project_import_route.project_id AS projectId,
+        article_import_route.article_id AS articleId
+      FROM app.project_import_route project_import_route
+      INNER JOIN ${dirtyRefreshProjectInputTableName} project_input
+        ON project_input.project_id = project_import_route.project_id
+      INNER JOIN app.article_import_route article_import_route
+        ON article_import_route.import_route_id = project_import_route.import_route_id
+      INNER JOIN app.project project ON project.id = project_import_route.project_id
+      INNER JOIN app.article article ON article.id = article_import_route.article_id
+      WHERE project.archived = FALSE
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+    ) resolved_projects
+    ORDER BY projectId ASC, articleId ASC
+  `)
+  await dropDirtyRefreshProjectInputTable(runner)
+
+  return Array.from(
+    rows
+      .reduce((acc, row) => {
+        const existing = acc.get(row.projectId)
+
+        acc.set(row.projectId, {
+          articleIds: getUniqueValues([...(existing?.articleIds ?? []), row.articleId]),
+          projectId: row.projectId,
+        })
+
+        return acc
+      }, new Map<string, {articleIds: string[]; projectId: string}>())
+      .values(),
+  )
 }
 
 const markProjectsDirtyAtomically = async ({
@@ -1367,6 +1461,7 @@ const projectMartDirtyRefreshStateService = {
   finalizeProjectRefreshAfterLargeRebuild,
   getDirtyArticleBatchForClaim,
   getDirtyProjectsForProjectIds,
+  getDirtyProjectsForProjectScopeArticleIds,
   getDirtyArticlesForClaim,
   getQuarantinedArticlesForProject,
   heartbeatClaim,
@@ -1391,6 +1486,7 @@ export {
   getDirtyArticleBatchForClaim,
   getDirtyArticlesForClaim,
   getDirtyProjectsForProjectIds,
+  getDirtyProjectsForProjectScopeArticleIds,
   heartbeatClaim,
   markArticleProjectsDirtyAtomically,
   markProjectsDirtyAtomically,

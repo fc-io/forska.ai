@@ -803,8 +803,16 @@ test('project transfer commit writer creates project rows and preserves safe pac
       id: string
       sourceMetadata: unknown
     }>
+    dirtyArticleRows: Array<{articleId: string; firstDirtyToken: number; lastDirtyToken: number; projectId: string}>
     identifierCount: number
     importRouteCount: number
+    martCounts: {projectScopeArticleCount: number; reviewServingCount: number}
+    materializationRows: Array<{
+      expectedRowCount: number
+      materializationStatus: string
+      projectId: string
+      targetDirtyToken: number
+    }>
     projectArticleCount: number
     projectImportRouteCount: number
     projectRow: {
@@ -825,6 +833,8 @@ test('project transfer commit writer creates project rows and preserves safe pac
       promptId: string
       promptOrder: number | null
     }
+    refreshRows: Array<{dirtyToken: number; projectId: string; reason: string | null}>
+    targetProjectId: string
     warningCodes: string[]
   }>(`
     await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
@@ -832,7 +842,11 @@ test('project transfer commit writer creates project rows and preserves safe pac
     await database.run("INSERT INTO app.import_route (id, route, name, active) VALUES ('target-route', 'covidence:safe', 'Safe Route', TRUE)")
     const promptHash = computePromptContentHash('Include the study?', null, 'Eligibility', 'system')
     await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('archived-prompt', 'Include the study?', NULL, 'Eligibility', 'system', '" + promptHash + "', TRUE)")
-    await database.run("INSERT INTO app.article (id, article_title, article_summary, full_text_pdf, source_metadata) VALUES ('reuse-article', 'Existing Reuse Title', NULL, NULL, NULL)")
+    await database.run("INSERT INTO app.article (id, article_title, article_summary, full_text_pdf, source_metadata, article_created_at) VALUES ('reuse-article', 'Existing Reuse Title', NULL, NULL, NULL, TIMESTAMPTZ '2025-06-01T00:00:00.000Z')")
+    await database.run("INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, archived) VALUES ('reuse-active-project', 'Reuse Active Project', 'target-model', TRUE, TRUE, FALSE, FALSE, FALSE)")
+    await database.run("INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, archived) VALUES ('reuse-archived-project', 'Reuse Archived Project', 'target-model', TRUE, TRUE, FALSE, FALSE, TRUE)")
+    await database.run("INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, archived, date_from) VALUES ('reuse-outside-date-project', 'Reuse Outside Date Project', 'target-model', TRUE, TRUE, FALSE, FALSE, FALSE, TIMESTAMPTZ '2026-01-01T00:00:00.000Z')")
+    await database.run("INSERT INTO app.project_article (id, project_id, article_id) VALUES ('reuse-active-project-article', 'reuse-active-project', 'reuse-article'), ('reuse-archived-project-article', 'reuse-archived-project', 'reuse-article'), ('reuse-outside-date-project-article', 'reuse-outside-date-project', 'reuse-article')")
 
     const settings = {
       humanJudgmentMode: 'prompt',
@@ -842,6 +856,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
       useTitle: true,
     }
     const newArticle = {
+      articleCreatedAt: '2025-02-03T00:00:00.000Z',
       articleId: 'legacy-new-article',
       articleTitle: 'New Package Article',
       doi: '10.1000/new-package-article',
@@ -1051,16 +1066,25 @@ test('project transfer commit writer creates project rows and preserves safe pac
     const [articleImportRouteCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route WHERE import_route_id = 'target-route'")
     const [importRouteCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.import_route")
     const [identifierCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.article_identifier")
+    const refreshRows = await database.queryJson("SELECT project_id AS projectId, CAST(dirty_token AS INTEGER) AS dirtyToken, last_request_reason AS reason FROM app.project_mart_refresh_state ORDER BY project_id ASC")
+    const dirtyArticleRows = await database.queryJson("SELECT project_id AS projectId, article_id AS articleId, CAST(first_dirty_token AS INTEGER) AS firstDirtyToken, CAST(last_dirty_token AS INTEGER) AS lastDirtyToken FROM app.project_mart_refresh_article_state ORDER BY project_id ASC, article_id ASC")
+    const materializationRows = await database.queryJson("SELECT project_id AS projectId, CAST(target_dirty_token AS INTEGER) AS targetDirtyToken, materialization_status AS materializationStatus, CAST(source_scope_expected_row_count AS INTEGER) AS expectedRowCount FROM app.project_mart_dirty_materialization_state ORDER BY project_id ASC, target_dirty_token ASC")
+    const [martCounts] = await database.queryJson("SELECT (SELECT COUNT(*)::INTEGER FROM mart.project_scope_article) AS projectScopeArticleCount, (SELECT COUNT(*)::INTEGER FROM mart.review_article_serving) AS reviewServingCount")
 
     console.log(JSON.stringify({
       articleImportRouteCount: articleImportRouteCount.count,
       articleRows: articleRows.map((row) => ({...row, sourceMetadata: row.sourceMetadata === null ? null : JSON.parse(row.sourceMetadata)})),
+      dirtyArticleRows,
       identifierCount: identifierCount.count,
       importRouteCount: importRouteCount.count,
+      martCounts,
+      materializationRows,
       projectArticleCount: projectArticleCount.count,
       projectImportRouteCount: projectImportRouteCount.count,
       projectRow,
       promptRow,
+      refreshRows,
+      targetProjectId: writeResult.projectId,
       warningCodes: writeResult.importWarnings.map((warning) => warning.code),
     }))
   `)
@@ -1106,6 +1130,31 @@ test('project transfer commit writer creates project rows and preserves safe pac
   expect(result.articleImportRouteCount).toBe(1)
   expect(result.importRouteCount).toBe(1)
   expect(result.identifierCount).toBe(1)
+  const reusedRefreshRow = result.refreshRows.find((row) => {
+    return row.projectId === 'reuse-active-project'
+  })
+  const importedRefreshRow = result.refreshRows.find((row) => {
+    return row.projectId === result.targetProjectId
+  })
+
+  expect(result.refreshRows).toHaveLength(2)
+  expect(reusedRefreshRow).toEqual({
+    dirtyToken: 1,
+    projectId: 'reuse-active-project',
+    reason: 'projectTransferCommit.reusedArticleUpdate',
+  })
+  expect(importedRefreshRow).toEqual({
+    dirtyToken: 1,
+    projectId: result.targetProjectId,
+    reason: 'projectTransferCommit.import',
+  })
+  expect(result.dirtyArticleRows).toEqual([
+    {articleId: 'reuse-article', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'reuse-active-project'},
+  ])
+  expect(result.materializationRows).toEqual([
+    {expectedRowCount: 2, materializationStatus: 'pending', projectId: result.targetProjectId, targetDirtyToken: 1},
+  ])
+  expect(result.martCounts).toEqual({projectScopeArticleCount: 0, reviewServingCount: 0})
   expect(result.warningCodes).toContain('targetArticleImportRouteOmitted')
 })
 

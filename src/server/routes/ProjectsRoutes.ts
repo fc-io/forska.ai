@@ -1303,8 +1303,11 @@ export const projectsRoutes = new Elysia()
       })
 
       if (updatedProject) {
-        await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-          projects: [{projectId: params.id}],
+        const refreshStateService = getProjectMartDirtyRefreshStateService()
+        const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectScopeArticleIds(tx, [params.id])
+
+        await refreshStateService.markProjectsDirtyAtomically({
+          projects: dirtyProjects.length === 0 ? [{projectId: params.id}] : dirtyProjects,
           reason: 'ProjectsRoutes.unarchive',
           runner: tx,
         })

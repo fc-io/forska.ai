@@ -11,6 +11,7 @@ import {
   getTimestampLiteral,
 } from '../appQueryHelpers.ts'
 import {getOrCreateImmutablePromptTx} from '../immutablePromptService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../projectMartDirtyRefreshStateService.ts'
 import type {ProjectTransferImportPlanArtifact} from './projectTransferAnalyze.ts'
 import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
 import type {ProjectTransferCommitPromotionResult} from './projectTransferCommitRollback.ts'
@@ -226,9 +227,40 @@ const articleFieldSelectSql = Object.entries(articleColumnByPayloadField)
       : `${column} AS ${field}`
   })
   .join(',\n')
+const commitWriterInsertBatchSize = 500
 
 const failCommitWriter = (message: string): never => {
   throw new Error(`Project transfer commit writer: ${message}`)
+}
+
+const getValueChunks = <TValue>(values: readonly TValue[], chunkSize = commitWriterInsertBatchSize): TValue[][] => {
+  return values.length === 0
+    ? []
+    : values.length <= chunkSize
+      ? [[...values]]
+      : [[...values.slice(0, chunkSize)], ...getValueChunks(values.slice(chunkSize), chunkSize)]
+}
+
+const runChunks = async <TValue>(
+  values: readonly TValue[],
+  work: (chunk: readonly TValue[]) => Promise<void>,
+): Promise<void> => {
+  await getValueChunks(values).reduce<Promise<void>>(async (previous, chunk) => {
+    await previous
+    return work(chunk)
+  }, Promise.resolve())
+}
+
+const queryChunks = async <TValue, TRow>(
+  values: readonly TValue[],
+  work: (chunk: readonly TValue[]) => Promise<TRow[]>,
+): Promise<TRow[]> => {
+  return getValueChunks(values).reduce<Promise<TRow[]>>(async (previous, chunk) => {
+    const rows = await previous
+    const chunkRows = await work(chunk)
+
+    return [...rows, ...chunkRows]
+  }, Promise.resolve([]))
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -609,7 +641,8 @@ const insertProjectPromptRows = async (
 
   return rows.length === 0
     ? undefined
-    : tx.run(`
+    : runChunks(rows, (rowChunk) => {
+        return tx.run(`
         INSERT INTO app.project_prompt (
           id,
           project_id,
@@ -621,7 +654,7 @@ const insertProjectPromptRows = async (
           criteria_disposition,
           criteria_section_key,
           criteria_section_label
-        ) VALUES ${rows
+        ) VALUES ${rowChunk
           .map((row) => {
             return `(
               ${getSqlLiteral(randomUUID())},
@@ -638,6 +671,7 @@ const insertProjectPromptRows = async (
           })
           .join(', ')}
       `)
+      })
 }
 
 const getResolvedArticleIdBySourceId = ({
@@ -691,12 +725,14 @@ const assertNoArticleIdConflicts = async ({
   const existingRows =
     newLegacyIds.length === 0
       ? []
-      : await tx.queryJson<{articleId: string; id: string}>(`
+      : await queryChunks<string, {articleId: string; id: string}>(newLegacyIds, (legacyIdChunk) => {
+          return tx.queryJson<{articleId: string; id: string}>(`
           SELECT id, article_id AS articleId
           FROM app.article
-          WHERE article_id IN (${getQuotedStringList(newLegacyIds).join(', ')})
+          WHERE article_id IN (${getQuotedStringList([...legacyIdChunk]).join(', ')})
           ORDER BY article_id ASC, id ASC
         `)
+        })
   const conflict = existingRows[0]
 
   return conflict ? failCommitWriter(`target article_id already exists: ${conflict.articleId}`) : undefined
@@ -715,13 +751,14 @@ const insertCreatedArticles = async ({
 }) => {
   return promotion.articleCreates.length === 0
     ? undefined
-    : tx.run(`
+    : runChunks(promotion.articleCreates, (articleChunk) => {
+        return tx.run(`
         INSERT INTO app.article (
           id,
           ${Object.values(articleColumnByPayloadField).join(',\n')},
           created_at,
           updated_at
-        ) VALUES ${promotion.articleCreates
+        ) VALUES ${articleChunk
           .map((entry) => {
             const articleId = articleIdBySourceId[entry.sourceArticleId]
 
@@ -731,6 +768,7 @@ const insertCreatedArticles = async ({
           })
           .join(', ')}
       `)
+      })
 }
 
 const getFillTargetArticleRows = async ({
@@ -750,14 +788,16 @@ const getFillTargetArticleRows = async ({
   const rows =
     targetArticleIds.length === 0
       ? []
-      : await tx.queryJson<TargetArticleFieldRow>(`
+      : await queryChunks<string, TargetArticleFieldRow>(targetArticleIds, (articleIdChunk) => {
+          return tx.queryJson<TargetArticleFieldRow>(`
           SELECT
             id,
             ${articleFieldSelectSql}
           FROM app.article
-          WHERE id IN (${getQuotedStringList(targetArticleIds).join(', ')})
+          WHERE id IN (${getQuotedStringList([...articleIdChunk]).join(', ')})
           ORDER BY id ASC
         `)
+        })
 
   return rows.reduce<Record<string, TargetArticleFieldRow>>((mapped, row) => {
     return {...mapped, [row.id]: row}
@@ -864,7 +904,8 @@ const insertArticleIdentifiers = async ({
 
   return rows.length === 0
     ? undefined
-    : tx.run(`
+    : runChunks(rows, (rowChunk) => {
+        return tx.run(`
         INSERT INTO app.article_identifier (
           id,
           article_id,
@@ -875,7 +916,7 @@ const insertArticleIdentifiers = async ({
           is_primary,
           created_at,
           updated_at
-        ) VALUES ${rows
+        ) VALUES ${rowChunk
           .map((row) => {
             return `(
               ${getSqlLiteral(randomUUID())},
@@ -892,6 +933,7 @@ const insertArticleIdentifiers = async ({
           .join(', ')}
         ON CONFLICT(kind, normalized_value) DO NOTHING
       `)
+      })
 }
 
 const getRouteIdBySourceId = (projectRoutePlan: readonly ProjectRoutePlanEntry[]) => {
@@ -988,7 +1030,8 @@ const insertArticleImportRoutes = async ({
 
   return rows.length === 0
     ? undefined
-    : tx.run(`
+    : runChunks(rows, (rowChunk) => {
+        return tx.run(`
         INSERT INTO app.article_import_route (
           id,
           article_id,
@@ -1001,7 +1044,7 @@ const insertArticleImportRoutes = async ({
           source_record_key,
           source_record_hash,
           raw_payload
-        ) VALUES ${rows
+        ) VALUES ${rowChunk
           .map((row) => {
             return `(
               ${getSqlLiteral(randomUUID())},
@@ -1019,6 +1062,7 @@ const insertArticleImportRoutes = async ({
           })
           .join(', ')}
       `)
+      })
 }
 
 const insertProjectImportRoutes = async ({
@@ -1045,14 +1089,16 @@ const insertProjectImportRoutes = async ({
 
   return rows.length === 0
     ? undefined
-    : tx.run(`
+    : runChunks(rows, (rowChunk) => {
+        return tx.run(`
         INSERT INTO app.project_import_route (id, project_id, import_route_id)
-        VALUES ${rows
+        VALUES ${rowChunk
           .map((row) => {
             return `(${getSqlLiteral(randomUUID())}, ${getSqlLiteral(row.projectId)}, ${getSqlLiteral(row.importRouteId)})`
           })
           .join(', ')}
       `)
+      })
 }
 
 const getProjectArticleSourceIds = ({
@@ -1104,14 +1150,48 @@ const insertProjectArticles = async ({
 
   return rows.length === 0
     ? undefined
-    : tx.run(`
+    : runChunks(rows, (rowChunk) => {
+        return tx.run(`
         INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
-        VALUES ${rows
+        VALUES ${rowChunk
           .map((row) => {
             return `(${getSqlLiteral(randomUUID())}, ${getSqlLiteral(row.projectId)}, ${getSqlLiteral(row.articleId)}, NULL)`
           })
           .join(', ')}
       `)
+      })
+}
+
+const markUpdatedReusedArticlesDirty = async ({
+  promotion,
+  tx,
+}: {
+  promotion: ProjectTransferCommitPromotionResult
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const updatedReusedArticleIds = [
+    ...new Set(
+      promotion.articleFieldFills.map((fill) => {
+        return fill.targetArticleId
+      }),
+    ),
+  ]
+
+  return updatedReusedArticleIds.length === 0
+    ? undefined
+    : getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
+        articleIds: updatedReusedArticleIds,
+        reason: 'projectTransferCommit.reusedArticleUpdate',
+        runner: tx,
+      })
+}
+
+const markImportedProjectDirty = async ({projectId, tx}: {projectId: string; tx: ProjectTransferCommitWriterTx}) => {
+  await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
+    projects: [{projectId}],
+    reason: 'projectTransferCommit.import',
+    runner: tx,
+  })
 }
 
 const getOmittedRouteWarnings = ({
@@ -1558,30 +1638,45 @@ const getTargetJudgmentRows = async ({
 
   return rows.length === 0
     ? []
-    : tx.queryJson<TargetJudgmentRow>(`
-        SELECT
-          id,
-          article_id AS articleId,
-          prompt_id AS promptId,
-          model_id AS modelId,
-          use_title AS useTitle,
-          use_abstract AS useAbstract,
-          use_fulltext AS useFulltext,
-          use_fulltext_no_images AS useFulltextNoImages,
-          is_answered AS isAnswered,
-          answered_original AS answeredOriginal,
-          TO_JSON(answered_original_as_array) AS answeredOriginalAsArray,
-          confidence_original AS confidenceOriginal,
-          explanation,
-          TO_JSON(quotes) AS quotes,
-          delete_generation AS deleteGeneration
-        FROM app.judgment
-        WHERE deleted_at IS NULL
-          AND article_id IN (${getQuotedStringList(articleIds).join(', ')})
-          AND prompt_id IN (${getQuotedStringList(promptIds).join(', ')})
-          AND model_id IN (${getQuotedStringList(modelIds).join(', ')})
-        ORDER BY article_id ASC, prompt_id ASC, model_id ASC, id ASC
-      `)
+    : getValueChunks(articleIds).reduce<Promise<TargetJudgmentRow[]>>(async (articleRowsPromise, articleIdChunk) => {
+        const articleRows = await articleRowsPromise
+        const promptRows = await getValueChunks(promptIds).reduce<Promise<TargetJudgmentRow[]>>(
+          async (promptRowsPromise, promptIdChunk) => {
+            const currentPromptRows = await promptRowsPromise
+            const modelRows = await queryChunks<string, TargetJudgmentRow>(modelIds, (modelIdChunk) => {
+              return tx.queryJson<TargetJudgmentRow>(`
+                SELECT
+                  id,
+                  article_id AS articleId,
+                  prompt_id AS promptId,
+                  model_id AS modelId,
+                  use_title AS useTitle,
+                  use_abstract AS useAbstract,
+                  use_fulltext AS useFulltext,
+                  use_fulltext_no_images AS useFulltextNoImages,
+                  is_answered AS isAnswered,
+                  answered_original AS answeredOriginal,
+                  TO_JSON(answered_original_as_array) AS answeredOriginalAsArray,
+                  confidence_original AS confidenceOriginal,
+                  explanation,
+                  TO_JSON(quotes) AS quotes,
+                  delete_generation AS deleteGeneration
+                FROM app.judgment
+                WHERE deleted_at IS NULL
+                  AND article_id IN (${getQuotedStringList([...articleIdChunk]).join(', ')})
+                  AND prompt_id IN (${getQuotedStringList([...promptIdChunk]).join(', ')})
+                  AND model_id IN (${getQuotedStringList([...modelIdChunk]).join(', ')})
+                ORDER BY article_id ASC, prompt_id ASC, model_id ASC, id ASC
+              `)
+            })
+
+            return [...currentPromptRows, ...modelRows]
+          },
+          Promise.resolve([]),
+        )
+
+        return [...articleRows, ...promptRows]
+      }, Promise.resolve([]))
 }
 
 const assertNoDuplicateJudgmentRows = (rows: readonly JudgmentCommitRow[]) => {
@@ -1676,7 +1771,8 @@ const insertJudgmentRows = async ({
 
   return insertRows.length === 0
     ? undefined
-    : tx.run(`
+    : runChunks(insertRows, (rowChunk) => {
+        return tx.run(`
         INSERT INTO app.judgment (
           id,
           article_id,
@@ -1700,7 +1796,7 @@ const insertJudgmentRows = async ({
           deleted_at,
           created_at,
           updated_at
-        ) VALUES ${insertRows
+        ) VALUES ${rowChunk
           .map((row) => {
             return `(
               ${getSqlLiteral(row.id)},
@@ -1729,6 +1825,7 @@ const insertJudgmentRows = async ({
           })
           .join(', ')}
       `)
+      })
 }
 
 const getJudgmentIdBySourceId = (rows: readonly JudgmentCommitRow[]) => {
@@ -1826,16 +1923,18 @@ const getTargetAssessmentRows = async ({
 
   return uniqueJudgmentIds.length === 0
     ? []
-    : tx.queryJson<TargetJudgmentAssessmentRow>(`
+    : queryChunks<string, TargetJudgmentAssessmentRow>(uniqueJudgmentIds, (judgmentIdChunk) => {
+        return tx.queryJson<TargetJudgmentAssessmentRow>(`
         SELECT
           id,
           judgment_id AS judgmentId,
           assessment_is_correct AS assessmentIsCorrect,
           assessment_comment AS assessmentComment
         FROM app.judgment_assessment
-        WHERE judgment_id IN (${getQuotedStringList(uniqueJudgmentIds).join(', ')})
+        WHERE judgment_id IN (${getQuotedStringList([...judgmentIdChunk]).join(', ')})
         ORDER BY judgment_id ASC, id ASC
       `)
+      })
 }
 
 const assertJudgmentAssessmentTargetsCommitSafe = async ({
@@ -1911,7 +2010,8 @@ const insertJudgmentAssessmentRows = async ({
 
   return insertRows.length === 0
     ? undefined
-    : tx.run(`
+    : runChunks(insertRows, (rowChunk) => {
+        return tx.run(`
         INSERT INTO app.judgment_assessment (
           id,
           judgment_id,
@@ -1919,7 +2019,7 @@ const insertJudgmentAssessmentRows = async ({
           assessment_comment,
           created_at,
           updated_at
-        ) VALUES ${insertRows
+        ) VALUES ${rowChunk
           .map((row) => {
             return `(
               ${getSqlLiteral(row.id)},
@@ -1932,6 +2032,7 @@ const insertJudgmentAssessmentRows = async ({
           })
           .join(', ')}
       `)
+      })
 }
 
 const getHumanReviewPlanByKey = (humanReviewPlan: readonly HumanReviewPlanEntry[]) => {
@@ -2294,7 +2395,8 @@ const insertHumanJudgmentRows = async ({
 
   return rows.length === 0
     ? undefined
-    : tx.run(`
+    : runChunks(rows, (rowChunk) => {
+        return tx.run(`
         INSERT INTO app.judgment_human (
           id,
           project_id,
@@ -2305,7 +2407,7 @@ const insertHumanJudgmentRows = async ({
           "comment",
           created_at,
           updated_at
-        ) VALUES ${rows
+        ) VALUES ${rowChunk
           .map((row) => {
             return `(
               ${getSqlLiteral(row.id)},
@@ -2321,6 +2423,7 @@ const insertHumanJudgmentRows = async ({
           })
           .join(', ')}
       `)
+      })
 }
 
 const insertHumanJudgmentSummaryRows = async ({
@@ -2334,7 +2437,8 @@ const insertHumanJudgmentSummaryRows = async ({
 
   return rows.length === 0
     ? undefined
-    : tx.run(`
+    : runChunks(rows, (rowChunk) => {
+        return tx.run(`
         INSERT INTO app.judgment_human_summary (
           id,
           project_id,
@@ -2343,7 +2447,7 @@ const insertHumanJudgmentSummaryRows = async ({
           origin,
           created_at,
           updated_at
-        ) VALUES ${rows
+        ) VALUES ${rowChunk
           .map((row) => {
             return `(
               ${getSqlLiteral(row.id)},
@@ -2357,6 +2461,7 @@ const insertHumanJudgmentSummaryRows = async ({
           })
           .join(', ')}
       `)
+      })
 }
 
 const getReviewSection = (row: ReviewCommitRow, section: (typeof reviewSectionNames)[number]) => {
@@ -2368,7 +2473,8 @@ const insertReviewRows = async ({rows, tx}: {rows: readonly ReviewCommitRow[]; t
 
   return rows.length === 0
     ? undefined
-    : tx.run(`
+    : runChunks(rows, (rowChunk) => {
+        return tx.run(`
         INSERT INTO app.review (
           id,
           project_id,
@@ -2394,7 +2500,7 @@ const insertReviewRows = async ({rows, tx}: {rows: readonly ReviewCommitRow[]; t
           reviewed_other_comment,
           created_at,
           updated_at
-        ) VALUES ${rows
+        ) VALUES ${rowChunk
           .map((row) => {
             const title = getReviewSection(row, 'title')
             const abstract = getReviewSection(row, 'abstract')
@@ -2435,6 +2541,7 @@ const insertReviewRows = async ({rows, tx}: {rows: readonly ReviewCommitRow[]; t
           })
           .join(', ')}
       `)
+      })
 }
 
 const writeProjectTransferCommitAppTablesTx = async ({
@@ -2498,6 +2605,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
   await insertCreatedArticles({articleIdBySourceId, now: importedAt, promotion, tx})
   const targetArticleById = await getFillTargetArticleRows({promotion, tx})
   await updateReusedArticles({now: importedAt, promotion, targetArticleById, tx})
+  await markUpdatedReusedArticlesDirty({promotion, tx})
   await insertArticleIdentifiers({articleIdBySourceId, articles, now: importedAt, tx})
   await insertProjectImportRoutes({
     projectId: createdProject.id,
@@ -2519,6 +2627,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
     projectId: createdProject.id,
     tx,
   })
+  await markImportedProjectDirty({projectId: createdProject.id, tx})
   const judgmentRows = getJudgmentRows({
     articleIdBySourceId,
     judgmentPlan,

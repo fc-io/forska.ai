@@ -523,6 +523,103 @@ test('archive route leaves archived mart cleanup to bounded maintenance batches 
   await flushMartRefreshes()
 })
 
+test('unarchive route rebuilds dirty articles from current date-bounded app scope', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = 'unarchive-current-scope-project'
+  const routeId = 'unarchive-current-scope-route'
+
+  await insertProjectFixture({
+    archived: true,
+    connectionId: 'unarchive-current-scope-connection',
+    modelId: 'unarchive-current-scope-model',
+    projectId,
+  })
+  await runDatabase(`
+    UPDATE app.project
+    SET
+      date_from = TIMESTAMPTZ '2025-01-01T00:00:00.000Z',
+      date_to = TIMESTAMPTZ '2025-12-31T23:59:59.000Z'
+    WHERE id = '${projectId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name)
+    VALUES ('${routeId}', '/unarchive-current-scope-route', 'manual')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES ('unarchive-current-scope-project-route', '${projectId}', '${routeId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title, article_created_at)
+    VALUES
+      ('unarchive-direct-in-range', 'Unarchive direct in range', TIMESTAMPTZ '2025-04-01T00:00:00.000Z'),
+      ('unarchive-route-in-range', 'Unarchive route in range', TIMESTAMPTZ '2025-05-01T00:00:00.000Z'),
+      ('unarchive-direct-out-of-range', 'Unarchive direct out of range', TIMESTAMPTZ '2026-01-01T00:00:00.000Z'),
+      ('unarchive-route-out-of-range', 'Unarchive route out of range', TIMESTAMPTZ '2026-02-01T00:00:00.000Z')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('unarchive-direct-in-range-link', '${projectId}', 'unarchive-direct-in-range'),
+      ('unarchive-direct-out-of-range-link', '${projectId}', 'unarchive-direct-out-of-range')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article_import_route (id, article_id, import_route_id)
+    VALUES
+      ('unarchive-route-in-range-link', 'unarchive-route-in-range', '${routeId}'),
+      ('unarchive-route-out-of-range-link', 'unarchive-route-out-of-range', '${routeId}')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/unarchive`, {method: 'POST'}),
+  )
+
+  expect(response.status).toBe(200)
+
+  const [storedProject] = await queryDatabase<{archived: boolean}>(`
+    SELECT archived
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string; reason: string | null}>(`
+    SELECT
+      project_id AS projectId,
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      last_request_reason AS reason
+    FROM app.project_mart_refresh_state
+    WHERE project_id = '${projectId}'
+    LIMIT 1
+  `)
+  const dirtyArticleRows = await queryDatabase<{articleId: string; firstDirtyToken: number; lastDirtyToken: number}>(`
+    SELECT
+      article_id AS articleId,
+      CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+    FROM app.project_mart_refresh_article_state
+    WHERE project_id = '${projectId}'
+    ORDER BY article_id ASC
+  `)
+  const [materializationCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*)::INTEGER AS count
+    FROM app.project_mart_dirty_materialization_state
+    WHERE project_id = '${projectId}'
+  `)
+
+  expect(storedProject?.archived).toBe(false)
+  expect(refreshState).toEqual({dirtyToken: 1, projectId, reason: 'ProjectsRoutes.unarchive'})
+  expect(dirtyArticleRows).toEqual([
+    {articleId: 'unarchive-direct-in-range', firstDirtyToken: 1, lastDirtyToken: 1},
+    {articleId: 'unarchive-route-in-range', firstDirtyToken: 1, lastDirtyToken: 1},
+  ])
+  expect(Number(materializationCount?.count ?? 0)).toBe(0)
+
+  await flushMartRefreshes()
+})
+
 test('delete archived route rejects active projects', async () => {
   if (!app || !queryDatabase || !runDatabase) {
     throw new Error('Test app not initialized')
