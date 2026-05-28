@@ -684,6 +684,9 @@ const persistProjectTransferSessionCompletion = async (params: PersistProjectTra
     nextOwnerToken: null,
     nextState: 'completed',
     now: params.now,
+    packageFingerprint: params.completionPayload.packageFingerprint ?? null,
+    progress: null,
+    error: null,
     runner: params.runner,
     sessionId: params.sessionId,
   })

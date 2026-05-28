@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto'
 
+import type {ProjectTransferHistoryRecord} from '../../../db/schemaTypes.ts'
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {
@@ -13,7 +14,9 @@ import {getOrCreateImmutablePromptTx} from '../immutablePromptService.ts'
 import type {ProjectTransferImportPlanArtifact} from './projectTransferAnalyze.ts'
 import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
 import type {ProjectTransferCommitPromotionResult} from './projectTransferCommitRollback.ts'
+import type {ProjectTransferImportCompletionPayload} from './projectTransferContracts.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
+import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
 import {getProjectTransferNormalizedArticleIdentifiers} from './projectTransferIdentifierNormalization.ts'
 import type {
   ProjectTransferArticlePayloadRecord,
@@ -21,7 +24,7 @@ import type {
   ProjectTransferPayloadRecord,
   ProjectTransferProjectPayload,
 } from './projectTransferPayloadSchemas.ts'
-import type {ProjectTransferPackageWarning} from './projectTransferSchemas.ts'
+import type {ProjectTransferPackageWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
 
 type ProjectTransferCommitWriterTx = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -39,11 +42,14 @@ export type ProjectTransferCommitWriterInput = {
   payloads: Partial<ProjectTransferPayloadByKey>
   plan: ProjectTransferImportPlanArtifact
   promotion: ProjectTransferCommitPromotionResult
+  schemaVersion: number
   sessionId: string
 }
 
 export type ProjectTransferCommitAppWriteResult = {
   articleIdBySourceId: Record<string, string>
+  completion: ProjectTransferImportCompletionPayload
+  history: ProjectTransferHistoryRecord
   importWarnings: ProjectTransferPackageWarning[]
   projectId: string
   projectName: string
@@ -1222,6 +1228,75 @@ const getCommitImportWarnings = ({
   ])
 }
 
+const getPayloadCounts = (plan: ProjectTransferImportPlanArtifact): Record<ProjectTransferPayloadKey, number> => {
+  return plan.packageCounts
+}
+
+const getFinalCounts = ({
+  articleIdBySourceId,
+  humanJudgmentRows,
+  humanSummaryRows,
+  importWarnings,
+  judgmentAssessmentRows,
+  judgmentIdBySourceId,
+  promptIdBySourceId,
+  reviewRows,
+  routeIdBySourceId,
+}: {
+  articleIdBySourceId: Record<string, string>
+  humanJudgmentRows: readonly HumanJudgmentCommitRow[]
+  humanSummaryRows: readonly HumanJudgmentSummaryCommitRow[]
+  importWarnings: readonly ProjectTransferPackageWarning[]
+  judgmentAssessmentRows: readonly JudgmentAssessmentCommitRow[]
+  judgmentIdBySourceId: Record<string, string>
+  promptIdBySourceId: Record<string, string>
+  reviewRows: readonly ReviewCommitRow[]
+  routeIdBySourceId: Record<string, string>
+}) => {
+  return {
+    articles: Object.keys(articleIdBySourceId).length,
+    humanJudgmentSummaries: humanSummaryRows.length,
+    humanJudgments: humanJudgmentRows.length,
+    judgmentAssessments: judgmentAssessmentRows.length,
+    judgments: Object.keys(judgmentIdBySourceId).length,
+    prompts: Object.keys(promptIdBySourceId).length,
+    reviews: reviewRows.length,
+    routes: Object.keys(routeIdBySourceId).length,
+    warnings: importWarnings.length,
+  }
+}
+
+const getCompletionPayload = ({
+  finalCounts,
+  importWarnings,
+  packageFingerprint,
+  payloadCounts,
+  projectId,
+  projectName,
+  transferHistoryId,
+}: {
+  finalCounts: Record<string, number>
+  importWarnings: ProjectTransferPackageWarning[]
+  packageFingerprint: string
+  payloadCounts: Record<string, number>
+  projectId: string
+  projectName: string
+  transferHistoryId: string
+}): ProjectTransferImportCompletionPayload => {
+  return {
+    finalCounts,
+    importWarnings,
+    packageFingerprint,
+    payloadCounts,
+    projectId,
+    projectName,
+    status: 'completed',
+    targetProjectId: projectId,
+    targetProjectName: projectName,
+    transferHistoryId,
+  }
+}
+
 const getRequiredPlanEntries = <TEntry>(
   entries: readonly TEntry[] | undefined,
   label: string,
@@ -2363,14 +2438,15 @@ const insertReviewRows = async ({rows, tx}: {rows: readonly ReviewCommitRow[]; t
 }
 
 const writeProjectTransferCommitAppTablesTx = async ({
+  commitId,
   now,
   payloads,
   plan,
   promotion,
+  schemaVersion,
+  sessionId,
   tx,
-}: Omit<ProjectTransferCommitWriterInput, 'commitId' | 'database' | 'sessionId'> & {
-  tx: ProjectTransferCommitWriterTx
-}) => {
+}: Omit<ProjectTransferCommitWriterInput, 'database'> & {tx: ProjectTransferCommitWriterTx}) => {
   const project = payloads.project ?? failCommitWriter('project payload is required')
   const prompts = payloads.prompts ?? []
   const projectPrompts = payloads.projectPrompts ?? []
@@ -2490,15 +2566,54 @@ const writeProjectTransferCommitAppTablesTx = async ({
   await insertHumanJudgmentRows({rows: humanJudgmentRows, tx})
   await insertHumanJudgmentSummaryRows({rows: humanSummaryRows, tx})
   await insertReviewRows({rows: reviewRows, tx})
+  const importWarnings = getCommitImportWarnings({
+    articleRoutePlan: plan.targetPlan.articleRoutePlan,
+    judgmentPlan,
+    plan,
+    projectRoutePlan: plan.targetPlan.projectRoutePlan,
+  })
+  const payloadCounts = getPayloadCounts(plan)
+  const transferHistoryId = randomUUID()
+  const completion = getCompletionPayload({
+    finalCounts: getFinalCounts({
+      articleIdBySourceId,
+      humanJudgmentRows,
+      humanSummaryRows,
+      importWarnings,
+      judgmentAssessmentRows,
+      judgmentIdBySourceId,
+      promptIdBySourceId,
+      reviewRows,
+      routeIdBySourceId,
+    }),
+    importWarnings,
+    packageFingerprint: getRequiredString(plan.packageFingerprint, 'plan.packageFingerprint'),
+    payloadCounts,
+    projectId: createdProject.id,
+    projectName: createdProject.name,
+    transferHistoryId,
+  })
+  const history = await getProjectTransferHistoryRepository().createProjectTransferHistory({
+    commitId,
+    completionPayload: completion,
+    direction: 'import',
+    id: transferHistoryId,
+    packageFingerprint: completion.packageFingerprint ?? failCommitWriter('completion package fingerprint is required'),
+    payloadCounts,
+    runner: tx,
+    schemaVersion,
+    sessionId,
+    sourceProjectId: project.sourceProjectId,
+    sourceProjectName: project.name,
+    targetProjectId: createdProject.id,
+    targetProjectName: createdProject.name,
+  })
 
   return {
     articleIdBySourceId,
-    importWarnings: getCommitImportWarnings({
-      articleRoutePlan: plan.targetPlan.articleRoutePlan,
-      judgmentPlan,
-      plan,
-      projectRoutePlan: plan.targetPlan.projectRoutePlan,
-    }),
+    completion,
+    history,
+    importWarnings,
     projectId: createdProject.id,
     projectName: createdProject.name,
     promptIdBySourceId,

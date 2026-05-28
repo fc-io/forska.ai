@@ -112,6 +112,13 @@ const assertImportHistoryInvariants = (params: CreateProjectTransferHistoryParam
   if (params.completionPayload?.status !== 'completed') {
     throw new Error('Project transfer import history completion payload is required')
   }
+
+  if (
+    typeof params.completionPayload.transferHistoryId === 'string'
+    && params.completionPayload.transferHistoryId !== params.id
+  ) {
+    throw new Error('Project transfer import history id must match completion payload transferHistoryId')
+  }
 }
 
 const assertProjectTransferHistoryParams = (params: CreateProjectTransferHistoryParams) => {

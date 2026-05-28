@@ -37,12 +37,13 @@ const getHistoryRepositoryScript = (body: string) => {
         return error instanceof Error ? error.message : String(error)
       }
     }
-    const completedPayload = (projectId, projectName, packageFingerprint) => {
+    const completedPayload = (projectId, projectName, packageFingerprint, transferHistoryId = undefined) => {
       return {
         packageFingerprint,
         projectId,
         projectName,
         status: 'completed',
+        ...(transferHistoryId ? {transferHistoryId} : {}),
       }
     }
 
@@ -105,7 +106,12 @@ test('project transfer history enforces completed import invariants and session-
     })
     const validHistory = await historyRepository.createProjectTransferHistory({
       commitId: 'commit-valid',
-      completionPayload: completedPayload('target-project-valid', 'Target Project Valid', 'fingerprint-valid'),
+      completionPayload: completedPayload(
+        'target-project-valid',
+        'Target Project Valid',
+        'fingerprint-valid',
+        'valid-import-history',
+      ),
       direction: 'import',
       id: 'valid-import-history',
       packageFingerprint: 'fingerprint-valid',

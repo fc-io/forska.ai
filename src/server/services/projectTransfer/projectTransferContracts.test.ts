@@ -271,10 +271,16 @@ test('locks export progress and direction-aware completion contracts', () => {
     status: 'ready' as const,
   }
   const importCompletion = {
+    finalCounts: {articles: 1, prompts: 1, warnings: 0},
+    importWarnings: [],
     packageFingerprint: 'fingerprint-import',
+    payloadCounts: {articles: 1, prompts: 1},
     projectId: 'target-project',
     projectName: 'Target Project',
     status: 'completed' as const,
+    targetProjectId: 'target-project',
+    targetProjectName: 'Target Project',
+    transferHistoryId: 'transfer-history-import',
   }
   const event = {
     bytesProcessed: 4,
