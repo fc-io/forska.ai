@@ -151,11 +151,16 @@ export type ProjectTransferPlanSummary = {
 }
 
 export type ProjectTransferImportCompletionPayload = {
+  finalCounts?: Record<string, number>
   importWarnings?: unknown[]
   packageFingerprint?: string | null
+  payloadCounts?: Record<string, number>
   projectId?: string | null
   projectName?: string | null
   status: 'completed'
+  targetProjectId?: string | null
+  targetProjectName?: string | null
+  transferHistoryId?: string
 }
 
 export type ProjectTransferExportReadyPayload = {
@@ -776,10 +781,39 @@ export const parseProjectTransferPlanSummary = (value: unknown): ProjectTransfer
   return isRecord(parsed) ? (parsed as ProjectTransferPlanSummary) : null
 }
 
+const isOptionalString = (value: unknown) => {
+  return value === undefined || typeof value === 'string'
+}
+
+const isOptionalNullableString = (value: unknown) => {
+  return value === undefined || value === null || typeof value === 'string'
+}
+
+const isOptionalNumberRecord = (value: unknown) => {
+  return (
+    value === undefined
+    || (isRecord(value)
+      && Object.values(value).every((entry) => {
+        return typeof entry === 'number' && Number.isFinite(entry)
+      }))
+  )
+}
+
 const isProjectTransferImportCompletionPayload = (
   value: Record<string, unknown>,
 ): value is ProjectTransferImportCompletionPayload => {
-  return value.status === 'completed'
+  return (
+    value.status === 'completed'
+    && isOptionalNullableString(value.packageFingerprint)
+    && isOptionalNullableString(value.projectId)
+    && isOptionalNullableString(value.projectName)
+    && isOptionalNullableString(value.targetProjectId)
+    && isOptionalNullableString(value.targetProjectName)
+    && isOptionalString(value.transferHistoryId)
+    && isOptionalNumberRecord(value.finalCounts)
+    && isOptionalNumberRecord(value.payloadCounts)
+    && (value.importWarnings === undefined || Array.isArray(value.importWarnings))
+  )
 }
 
 const isProjectTransferExportReadyPayload = (

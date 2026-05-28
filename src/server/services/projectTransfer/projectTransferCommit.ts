@@ -21,6 +21,7 @@ import {
   parseProjectTransferCompletionPayload,
   parseProjectTransferPlanSummary,
   type ProjectTransferCompletionPayload,
+  type ProjectTransferImportCompletionPayload,
   type ProjectTransferPlanBlocker,
   type ProjectTransferPlanSummary,
   type ProjectTransferProgressPayload,
@@ -63,6 +64,7 @@ type ProjectTransferCommitRepositories = {
   sessionRepository?: Pick<
     ReturnType<typeof getProjectTransferSessionRepository>,
     | 'getProjectTransferSession'
+    | 'persistProjectTransferSessionCompletion'
     | 'reopenProjectTransferCommitSession'
     | 'transitionProjectTransferSessionState'
     | 'updateProjectTransferSessionPlanRevision'
@@ -104,6 +106,7 @@ type ProjectTransferCommitAppTableWriteInput = RuntimePathOptions & {
   artifacts: ProjectTransferCommitArtifacts
   commitId: string
   now: Date
+  schemaVersion: number
   sessionId: string
 }
 
@@ -176,6 +179,14 @@ const assertAnalysisArtifact = (value: unknown): ProjectTransferImportAnalysisAr
   return analysis as ProjectTransferImportAnalysisArtifact
 }
 
+const getAnalysisSchemaVersion = (analysis: ProjectTransferImportAnalysisArtifact) => {
+  const schemaVersion = analysis.manifest.schemaVersion
+
+  return typeof schemaVersion === 'number' && Number.isInteger(schemaVersion) && schemaVersion > 0
+    ? schemaVersion
+    : getCommitError('analysis manifest schemaVersion must be a positive integer')
+}
+
 const assertTargetPlanArtifact = (value: unknown): ProjectTransferTargetPlan => {
   const targetPlan = assertRecord(value, 'plan.targetPlan')
   assertArray(targetPlan.articleMatches, 'plan.targetPlan.articleMatches')
@@ -240,6 +251,20 @@ const writePlanArtifact = async ({
   await globalThis.Bun.write(resolvedPath, getProjectTransferCanonicalJson(plan))
 }
 
+const writeCompletionArtifact = async ({
+  completion,
+  layout,
+  runtimeOptions,
+}: {
+  completion: ProjectTransferImportCompletionPayload
+  layout: ProjectTransferImportTempLayout
+  runtimeOptions: RuntimePathOptions
+}) => {
+  const resolvedPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: layout.completionPath})
+  await mkdir(dirname(resolvedPath), {recursive: true})
+  await globalThis.Bun.write(resolvedPath, getProjectTransferCanonicalJson(completion))
+}
+
 const getPayloadPath = (layout: ProjectTransferImportTempLayout, key: keyof ProjectTransferPayloadByKey) => {
   return `${layout.extractedPath}/${projectTransferPayloadPathByKey[key]}`
 }
@@ -296,6 +321,20 @@ const getSessionCompletion = (session: ProjectTransferSessionRecord) => {
   return parseProjectTransferCompletionPayload(session.completionPayloadJson, session.direction)
 }
 
+const getHistoryCompletionResult = ({
+  history,
+  session,
+}: {
+  history: ProjectTransferHistoryRecord | null
+  session: ProjectTransferSessionRecord
+}): ProjectTransferCommitResult | null => {
+  const historyCompletion = getCompletedImportHistoryCompletion(history)
+
+  return historyCompletion === null
+    ? null
+    : {completion: historyCompletion, history, session, status: 'completed', statusCode: 200}
+}
+
 const getCompletedRetryResult = async ({
   historyRepository,
   session,
@@ -317,6 +356,25 @@ const getCompletedRetryResult = async ({
   return completion === null
     ? {error: 'Project transfer completed import session is missing completion', status: 'error', statusCode: 409}
     : {completion, history, session, status: 'completed', statusCode: 200}
+}
+
+const getExistingCompletionResult = async ({
+  historyRepository,
+  session,
+}: {
+  historyRepository: Pick<
+    ReturnType<typeof getProjectTransferHistoryRepository>,
+    'getCompletedImportHistoryBySessionId'
+  >
+  session: ProjectTransferSessionRecord
+}): Promise<ProjectTransferCommitResult | null> => {
+  if (session.state === 'completed') {
+    return getCompletedRetryResult({historyRepository, session})
+  }
+
+  const history = await historyRepository.getCompletedImportHistoryBySessionId({sessionId: session.id})
+
+  return getHistoryCompletionResult({history, session})
 }
 
 const getInvalidSessionResult = ({
@@ -665,12 +723,14 @@ const runProjectTransferCommitAppTableWrites = async ({
   artifacts,
   commitId,
   now,
+  schemaVersion,
   sessionId,
   ...runtimeOptions
 }: RuntimePathOptions & {
   artifacts: ProjectTransferCommitArtifacts
   commitId: string
   now: Date
+  schemaVersion: number
   sessionId: string
 }) => {
   const payloads = await readExtractedPayloads({...runtimeOptions, layout: artifacts.layout})
@@ -680,9 +740,28 @@ const runProjectTransferCommitAppTableWrites = async ({
     now,
     sessionId,
     work: (promotion) => {
-      return writeProjectTransferCommitAppTables({commitId, now, payloads, plan: artifacts.plan, promotion, sessionId})
+      return writeProjectTransferCommitAppTables({
+        commitId,
+        now,
+        payloads,
+        plan: artifacts.plan,
+        promotion,
+        schemaVersion,
+        sessionId,
+      })
     },
   })
+}
+
+const settleCompletionSideEffect = async <TValue>(operation: Promise<TValue>) => {
+  return operation.then(
+    (value) => {
+      return value
+    },
+    () => {
+      return null
+    },
+  )
 }
 
 export const commitProjectTransferImportSession = async ({
@@ -706,8 +785,13 @@ export const commitProjectTransferImportSession = async ({
     return {error: 'Project transfer import session not found', status: 'error', statusCode: 404}
   }
 
-  if (current.state === 'completed') {
-    return getCompletedRetryResult({historyRepository: repositories.historyRepository, session: current})
+  const existingCompletion = await getExistingCompletionResult({
+    historyRepository: repositories.historyRepository,
+    session: current,
+  })
+
+  if (existingCompletion !== null) {
+    return existingCompletion
   }
 
   if (current.state === 'committing') {
@@ -805,13 +889,33 @@ export const commitProjectTransferImportSession = async ({
       : {plan: postClaimRevalidation.plan, session: reopened, status: 'stale', statusCode: 200}
   }
 
-  await repositories.runAppTableWrites({
+  const writeResult = await repositories.runAppTableWrites({
     artifacts: {...artifacts, plan: postClaimRevalidation.plan},
     commitId,
     now,
+    schemaVersion: getAnalysisSchemaVersion(artifacts.analysis),
     ...runtimeOptions,
     sessionId,
   })
 
-  return {commitId, session: claimed, status: 'claimed', statusCode: 202}
+  const completedSession = await settleCompletionSideEffect(
+    repositories.sessionRepository.persistProjectTransferSessionCompletion({
+      completionPayload: writeResult.completion,
+      expectedPlanRevision: claimed.planRevision,
+      now,
+      ownerToken,
+      sessionId,
+    }),
+  )
+  await settleCompletionSideEffect(
+    writeCompletionArtifact({completion: writeResult.completion, layout: artifacts.layout, runtimeOptions}),
+  )
+
+  return {
+    completion: writeResult.completion,
+    history: writeResult.history,
+    session: completedSession ?? claimed,
+    status: 'completed',
+    statusCode: 200,
+  }
 }

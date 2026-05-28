@@ -366,7 +366,8 @@ const getSession = (overrides?: Partial<ProjectTransferSessionRecord>): ProjectT
 }
 
 const getFakeSessionRepository = (initialSession: ProjectTransferSessionRecord) => {
-  const calls: {reopen: unknown[]; transition: unknown[]; updatePlan: unknown[]} = {
+  const calls: {persist: unknown[]; reopen: unknown[]; transition: unknown[]; updatePlan: unknown[]} = {
+    persist: [],
     reopen: [],
     transition: [],
     updatePlan: [],
@@ -394,6 +395,25 @@ const getFakeSessionRepository = (initialSession: ProjectTransferSessionRecord) 
           : session
 
       return session.state === 'awaiting_resolution' ? session : null
+    },
+    persistProjectTransferSessionCompletion: async (params) => {
+      calls.persist = [...calls.persist, params]
+      session =
+        session.state === 'committing'
+        && session.ownerToken === params.ownerToken
+        && (params.expectedPlanRevision === undefined || session.planRevision === params.expectedPlanRevision)
+          ? {
+              ...session,
+              completionPayloadJson: params.completionPayload,
+              errorJson: null,
+              ownerToken: null,
+              packageFingerprint: params.completionPayload.packageFingerprint ?? null,
+              progressJson: null,
+              state: 'completed',
+            }
+          : session
+
+      return session.state === 'completed' ? session : null
     },
     transitionProjectTransferSessionState: async (params) => {
       calls.transition = [...calls.transition, params]
@@ -471,8 +491,37 @@ const runCommit = async ({
       historyRepository: getNoopHistoryRepository(),
       revalidate,
       runAppTableWrites: async () => {
+        const completion = {
+          finalCounts: {articles: 0, judgments: 0, prompts: 0, reviews: 0, routes: 0, warnings: 0},
+          importWarnings: [],
+          packageFingerprint: 'fingerprint-commit',
+          payloadCounts: getPlan({planRevision: 1}).packageCounts,
+          projectId: 'target-project',
+          projectName: 'Target Project',
+          status: 'completed' as const,
+          targetProjectId: 'target-project',
+          targetProjectName: 'Target Project',
+          transferHistoryId: 'history-generated',
+        }
+
         return {
           articleIdBySourceId: {},
+          completion,
+          history: {
+            commitId: 'commit-generated',
+            completionPayloadJson: completion,
+            createdAt: new Date('2026-05-28T10:30:00.000Z'),
+            direction: 'import' as const,
+            id: 'history-generated',
+            packageFingerprint: 'fingerprint-commit',
+            payloadCountsJson: getPlan({planRevision: 1}).packageCounts,
+            schemaVersion: 1,
+            sessionId: 'commit-session',
+            sourceProjectId: 'source-project',
+            sourceProjectName: 'Source Project',
+            targetProjectId: 'target-project',
+            targetProjectName: 'Target Project',
+          },
           importWarnings: [],
           projectId: 'target-project',
           projectName: 'Target Project',
@@ -493,7 +542,7 @@ test('project transfer commit loads frozen artifacts and claims with server gene
   try {
     const summary = getReadySummary()
     const plan = getPlan({planRevision: 1, summary})
-    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const layout = await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
     const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
     const revalidationInputs: RevalidateInput[] = []
     const result = await runCommit({
@@ -504,17 +553,23 @@ test('project transfer commit loads frozen artifacts and claims with server gene
         return {changed: false, plan, ready: true}
       },
     })
+    const completionArtifact = JSON.parse(await readFile(join(cwd, layout.completionPath), 'utf8')) as {
+      transferHistoryId: string
+    }
 
-    expect(result.status).toBe('claimed')
-    expect(result.statusCode).toBe(202)
+    expect(result.status).toBe('completed')
+    expect(result.statusCode).toBe(200)
     expect(fake.getSession()).toMatchObject({
       commitId: 'commit-generated',
-      ownerToken: 'owner-generated',
-      state: 'committing',
+      completionPayloadJson: {projectId: 'target-project', transferHistoryId: 'history-generated'},
+      ownerToken: null,
+      state: 'completed',
     })
     expect(fake.calls.transition).toHaveLength(1)
+    expect(fake.calls.persist).toHaveLength(1)
     expect(fake.calls.updatePlan).toHaveLength(0)
     expect(revalidationInputs).toHaveLength(2)
+    expect(completionArtifact.transferHistoryId).toBe('history-generated')
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
@@ -680,6 +735,57 @@ test('project transfer commit returns completed session history without replayin
 
   expect(result).toMatchObject({
     completion: {projectId: 'target-project-1', status: 'completed'},
+    status: 'completed',
+    statusCode: 200,
+  })
+  expect(fake.calls.transition).toHaveLength(0)
+})
+
+test('project transfer commit returns completed import history before expiry handling', async () => {
+  const cwd = getRuntimeRoot()
+  const fake = getFakeSessionRepository(
+    getSession({expiresAt: new Date('2026-05-28T10:00:00.000Z'), state: 'ready_to_commit'}),
+  )
+  const result = await commitProjectTransferImportSession({
+    cwd,
+    repositories: {
+      historyRepository: {
+        getCompletedImportHistoryBySessionId: async () => {
+          return {
+            commitId: 'commit-history-expired',
+            completionPayloadJson: {
+              packageFingerprint: 'fingerprint-commit',
+              projectId: 'target-project-history',
+              projectName: 'Target Project History',
+              status: 'completed',
+              transferHistoryId: 'history-expired',
+            },
+            createdAt: new Date('2026-05-28T10:00:00.000Z'),
+            direction: 'import',
+            id: 'history-expired',
+            packageFingerprint: 'fingerprint-commit',
+            payloadCountsJson: {project: 1},
+            schemaVersion: 1,
+            sessionId: 'commit-session',
+            sourceProjectId: 'source-project-1',
+            sourceProjectName: 'Source Project',
+            targetProjectId: 'target-project-history',
+            targetProjectName: 'Target Project History',
+          }
+        },
+      },
+      revalidate: async () => {
+        throw new Error('unexpected revalidation')
+      },
+      sessionRepository: fake.repository,
+    },
+    now: new Date('2026-05-28T10:30:00.000Z'),
+    request: {planRevision: 1},
+    sessionId: 'commit-session',
+  })
+
+  expect(result).toMatchObject({
+    completion: {projectId: 'target-project-history', transferHistoryId: 'history-expired'},
     status: 'completed',
     statusCode: 200,
   })
@@ -933,6 +1039,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
         manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-writer', updatedAt: now.toISOString()},
         promotionPathByPackagePath: {},
       },
+      schemaVersion: 1,
       sessionId: 'session-writer',
     })
 
@@ -1045,6 +1152,7 @@ test('project transfer commit writer blocks target article_id conflicts before i
           manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-article-id-conflict', updatedAt: now.toISOString()},
           promotionPathByPackagePath: {},
         },
+        schemaVersion: 1,
         sessionId: 'session-article-id-conflict',
       })
     })
@@ -1142,6 +1250,7 @@ test('project transfer commit writer blocks duplicate project prompt remaps befo
           manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-duplicate-prompt', updatedAt: now.toISOString()},
           promotionPathByPackagePath: {},
         },
+        schemaVersion: 1,
         sessionId: 'session-duplicate-prompt',
       })
     })
@@ -1494,6 +1603,7 @@ test('project transfer commit writer writes judgment assessment and human review
         manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-decision-writer', updatedAt: now.toISOString()},
         promotionPathByPackagePath: {},
       },
+      schemaVersion: 1,
       sessionId: 'session-decision-writer',
     })
     const targetNewArticleId = writeResult.articleIdBySourceId['source-decision-new']
@@ -1679,6 +1789,7 @@ test('project transfer commit writer blocks active judgment review-visible confl
           manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-visible-conflict', updatedAt: now.toISOString()},
           promotionPathByPackagePath: {},
         },
+        schemaVersion: 1,
         sessionId: 'session-visible-conflict',
       })
     })
@@ -1817,6 +1928,7 @@ test('project transfer commit writer blocks extra target assessment state on reu
           manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-extra-assessment', updatedAt: now.toISOString()},
           promotionPathByPackagePath: {},
         },
+        schemaVersion: 1,
         sessionId: 'session-extra-assessment',
       })
     })

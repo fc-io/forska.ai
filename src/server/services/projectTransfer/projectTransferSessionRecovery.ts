@@ -181,7 +181,7 @@ const transitionImportSessionToCompletedFromHistory = async ({
   runner: ProjectTransferSessionRecoveryRunner
   session: ProjectTransferRecoveryCandidate
 }) => {
-  const completionPayload = parseProjectTransferCompletionPayload(history.completionPayloadJson)
+  const completionPayload = parseProjectTransferCompletionPayload(history.completionPayloadJson, 'import')
 
   if (completionPayload?.status !== 'completed') {
     return null

@@ -23,11 +23,16 @@ const getCommitRecoveryScript = (body: string) => {
   return `
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
     const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {commitProjectTransferImportSession} = await import('./src/server/services/projectTransfer/projectTransferCommit.ts')
+    const {getProjectTransferHistoryRepository} = await import('./src/server/services/projectTransfer/projectTransferHistoryRepository.ts')
+    const {getProjectTransferSessionRecoveryService} = await import('./src/server/services/projectTransfer/projectTransferSessionRecovery.ts')
     const {getProjectTransferSessionRepository} = await import('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
 
     await migrateDuckdb()
 
     const database = getAppDatabaseService()
+    const historyRepository = getProjectTransferHistoryRepository()
+    const recovery = getProjectTransferSessionRecoveryService()
     const sessionRepository = getProjectTransferSessionRepository()
     const expiresAt = new Date('2026-05-28T11:00:00.000Z')
     const readyPlan = {
@@ -159,4 +164,164 @@ test('project transfer commit recovery reopens post-claim stale plans and clears
   expect(result.reopenedOwnerToken).toBeNull()
   expect(result.reopenedCommitId).toBeNull()
   expect(result.heartbeatAfterReopen).toBe('2026-05-28T10:00:00.000Z')
+})
+
+test('project transfer commit retry reads completed import history before expired-session handling', () => {
+  const result = runCommitRecoveryScript<{
+    completionProjectId: string | null
+    projectCount: number
+    status: string
+    statusCode: number
+  }>(`
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt: new Date('2026-05-28T10:00:00.000Z'),
+      id: 'commit-history-retry-session',
+      packageFingerprint: 'fingerprint-before-history',
+      planSummary: readyPlan,
+      state: 'ready_to_commit',
+    })
+    await historyRepository.createProjectTransferHistory({
+      commitId: 'commit-history-retry',
+      completionPayload: {
+        packageFingerprint: 'fingerprint-history',
+        projectId: 'target-project-history',
+        projectName: 'Target Project History',
+        status: 'completed',
+        transferHistoryId: 'history-commit-retry',
+      },
+      direction: 'import',
+      id: 'history-commit-retry',
+      packageFingerprint: 'fingerprint-history',
+      payloadCounts: {project: 1},
+      schemaVersion: 1,
+      sessionId: 'commit-history-retry-session',
+      sourceProjectName: 'Source Project History',
+      targetProjectId: 'target-project-history',
+      targetProjectName: 'Target Project History',
+    })
+
+    const commitResult = await commitProjectTransferImportSession({
+      now: new Date('2026-05-28T12:00:00.000Z'),
+      repositories: {
+        historyRepository,
+        revalidate: async () => {
+          throw new Error('unexpected revalidation')
+        },
+        runAppTableWrites: async () => {
+          throw new Error('unexpected project creation')
+        },
+        sessionRepository,
+      },
+      request: {planRevision: 0},
+      sessionId: 'commit-history-retry-session',
+    })
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project")
+
+    console.log(JSON.stringify({
+      completionProjectId: commitResult.status === 'completed' ? commitResult.completion.projectId ?? null : null,
+      projectCount: projectCount.count,
+      status: commitResult.status,
+      statusCode: commitResult.statusCode,
+    }))
+  `)
+
+  expect(result.status).toBe('completed')
+  expect(result.statusCode).toBe(200)
+  expect(result.completionProjectId).toBe('target-project-history')
+  expect(result.projectCount).toBe(0)
+})
+
+test('project transfer stale committing recovery restores history-backed imports and expires orphans', () => {
+  const result = runCommitRecoveryScript<{
+    historyBackedCompletionProjectId: string | null
+    historyBackedState: string | null
+    orphanErrorReason: string | null
+    orphanState: string | null
+    recoveryResult: {expiredSessionCount: number; recoveredCompletionCount: number; scannedSessionCount: number}
+  }>(`
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt,
+      id: 'committing-history-backed',
+      packageFingerprint: 'fingerprint-before-history',
+      planSummary: readyPlan,
+      state: 'ready_to_commit',
+    })
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt,
+      id: 'committing-orphan',
+      packageFingerprint: 'fingerprint-orphan',
+      planSummary: readyPlan,
+      state: 'ready_to_commit',
+    })
+    await sessionRepository.transitionProjectTransferSessionState({
+      commitId: 'commit-history-backed',
+      expectedOwnerToken: null,
+      expectedPlanRevision: 0,
+      expectedState: 'ready_to_commit',
+      nextOwnerLeaseMs: 60_000,
+      nextOwnerToken: 'owner-history-backed',
+      nextState: 'committing',
+      now: new Date('2026-05-28T10:30:00.000Z'),
+      sessionId: 'committing-history-backed',
+    })
+    await sessionRepository.transitionProjectTransferSessionState({
+      commitId: 'commit-orphan',
+      expectedOwnerToken: null,
+      expectedPlanRevision: 0,
+      expectedState: 'ready_to_commit',
+      nextOwnerLeaseMs: 60_000,
+      nextOwnerToken: 'owner-orphan',
+      nextState: 'committing',
+      now: new Date('2026-05-28T10:30:00.000Z'),
+      sessionId: 'committing-orphan',
+    })
+    await historyRepository.createProjectTransferHistory({
+      commitId: 'commit-history-backed',
+      completionPayload: {
+        packageFingerprint: 'fingerprint-history-backed',
+        projectId: 'target-project-history-backed',
+        projectName: 'Target Project History Backed',
+        status: 'completed',
+        transferHistoryId: 'history-backed',
+      },
+      direction: 'import',
+      id: 'history-backed',
+      packageFingerprint: 'fingerprint-history-backed',
+      payloadCounts: {project: 1},
+      schemaVersion: 1,
+      sessionId: 'committing-history-backed',
+      sourceProjectName: 'Source Project History Backed',
+      targetProjectId: 'target-project-history-backed',
+      targetProjectName: 'Target Project History Backed',
+    })
+
+    const recoveryResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: '/tmp/f2-project-transfer-commit-recovery-artifacts',
+      isActiveWriter: () => true,
+      now: new Date('2026-05-28T12:00:00.000Z'),
+      ownerToken: 'recovery-owner',
+    })
+    const historyBacked = await sessionRepository.getProjectTransferSession({sessionId: 'committing-history-backed'})
+    const orphan = await sessionRepository.getProjectTransferSession({sessionId: 'committing-orphan'})
+
+    console.log(JSON.stringify({
+      historyBackedCompletionProjectId: historyBacked?.completionPayloadJson?.projectId ?? null,
+      historyBackedState: historyBacked?.state ?? null,
+      orphanErrorReason: orphan?.errorJson?.reason ?? null,
+      orphanState: orphan?.state ?? null,
+      recoveryResult,
+    }))
+  `)
+
+  expect(result.recoveryResult.scannedSessionCount).toBe(2)
+  expect(result.recoveryResult.recoveredCompletionCount).toBe(1)
+  expect(result.recoveryResult.expiredSessionCount).toBe(1)
+  expect(result.historyBackedState).toBe('completed')
+  expect(result.historyBackedCompletionProjectId).toBe('target-project-history-backed')
+  expect(result.orphanState).toBe('expired')
+  expect(result.orphanErrorReason).toBe('project_transfer_session_recovery_expired')
 })
