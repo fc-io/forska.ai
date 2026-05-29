@@ -3,6 +3,7 @@ import {Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Match, Show, Switch} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
+import {getProviderModelThinkingOption, type ProviderModelOptions} from '../../../../utils/providerModelOptions.ts'
 import {
   addManualProviderModel,
   beginProviderAuthLifecycle,
@@ -328,6 +329,12 @@ const getCreateConnectionInput = (draft: ConnectionDraft) => {
     label: draft.label.trim() || undefined,
     providerKind: draft.providerKind,
   }
+}
+
+const getMaterializationModelOptions = (variant: string): ProviderModelOptions | undefined => {
+  const thinking = getProviderModelThinkingOption(variant)
+
+  return thinking ? {thinking} : undefined
 }
 
 const getProviderConnectionForId = (connections: readonly ProviderConnection[], connectionId: string) => {
@@ -974,9 +981,11 @@ export const ImportProjectWizard = () => {
   const materializeModelMutation = createMutation(() => {
     return {
       mutationFn: async (draft: ModelMaterializationDraft) => {
+        const options = getMaterializationModelOptions(draft.variant)
         const result = await addManualProviderModel({
           displayName: draft.displayName.trim() || undefined,
           id: draft.targetProviderConnectionId,
+          options,
           remoteModelId: draft.remoteModelId.trim(),
           variant: draft.variant.trim() || undefined,
         })
@@ -987,6 +996,8 @@ export const ImportProjectWizard = () => {
         setPageError(error instanceof Error ? error.message : 'Failed to materialize model')
       },
       onSuccess: ({draft, modelId}: {draft: ModelMaterializationDraft; modelId: string}) => {
+        const options = getMaterializationModelOptions(draft.variant)
+
         void providerConnectionsQuery.refetch()
         resolveWithCurrentRevision({
           materializedModels: [
@@ -999,6 +1010,7 @@ export const ImportProjectWizard = () => {
           modelMaterializationRequests: [
             {
               displayName: draft.displayName.trim() || undefined,
+              options,
               remoteModelId: draft.remoteModelId.trim(),
               sourceModelId: draft.sourceModelId,
               targetProviderConnectionId: draft.targetProviderConnectionId,

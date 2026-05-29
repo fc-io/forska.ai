@@ -65,6 +65,14 @@ type DependencyResolutionState = {
 
 type ArticleField = keyof typeof articleColumnByPayloadField
 type ArticleMatchPlan = ProjectTransferTargetPlan['articleMatches'][number]
+type ArticleIdentifierCommitRow = {
+  action: ArticleMatchPlan['action']
+  articleId: string
+  identifier: ReturnType<typeof getProjectTransferNormalizedArticleIdentifiers>['strongIdentifiers'][number]
+  isPrimary: boolean
+  sourceArticleId: string
+}
+type ArticleIdentifierTargetRow = {articleId: string; kind: string; normalizedValue: string}
 type ArticleRoutePlanEntry = ProjectTransferTargetPlan['articleRoutePlan'][number]
 type HumanReviewPlanEntry = NonNullable<ProjectTransferTargetPlan['humanReviewPlan']>[number]
 type JudgmentAssessmentPlanEntry = NonNullable<ProjectTransferTargetPlan['judgmentAssessmentPlan']>[number]
@@ -880,32 +888,121 @@ const updateReusedArticles = async ({
   }, Promise.resolve())
 }
 
-const insertArticleIdentifiers = async ({
+const getArticleActionBySourceId = (articleMatches: readonly ArticleMatchPlan[]) => {
+  return articleMatches.reduce<Record<string, ArticleMatchPlan['action']>>((mapped, match) => {
+    return {...mapped, [match.sourceArticleId]: match.action}
+  }, {})
+}
+
+const getArticleIdentifierCommitRows = ({
   articleIdBySourceId,
+  articleMatches,
   articles,
-  now,
-  tx,
 }: {
   articleIdBySourceId: Record<string, string>
+  articleMatches: readonly ArticleMatchPlan[]
   articles: readonly ProjectTransferArticlePayloadRecord[]
-  now: Date
-  tx: ProjectTransferCommitWriterTx
 }) => {
-  const rows = articles.flatMap((article) => {
+  const articleActionBySourceId = getArticleActionBySourceId(articleMatches)
+
+  return articles.flatMap((article) => {
     const articleId = articleIdBySourceId[article.sourceArticleId]
+    const action = articleActionBySourceId[article.sourceArticleId]
     const normalized = getProjectTransferNormalizedArticleIdentifiers(article)
 
     return articleId === undefined
       ? []
       : normalized.strongIdentifiers.map((identifier, index) => {
-          return {articleId, identifier, isPrimary: index === 0, sourceArticleId: article.sourceArticleId}
+          return action === undefined
+            ? failCommitWriter(`article identifier source ${article.sourceArticleId} has no article match plan`)
+            : {action, articleId, identifier, isPrimary: index === 0, sourceArticleId: article.sourceArticleId}
         })
   })
+}
 
-  return rows.length === 0
-    ? undefined
-    : runChunks(rows, (rowChunk) => {
-        return tx.run(`
+const getArticleIdentifierKey = (row: Pick<ArticleIdentifierCommitRow, 'identifier'>) => {
+  return `${row.identifier.kind}\0${row.identifier.normalizedValue}`
+}
+
+const getArticleIdentifierTargetKey = (row: Pick<ArticleIdentifierTargetRow, 'kind' | 'normalizedValue'>) => {
+  return `${row.kind}\0${row.normalizedValue}`
+}
+
+const getArticleIdentifierWhereCondition = (row: ArticleIdentifierCommitRow) => {
+  return `(kind = ${getSqlLiteral(row.identifier.kind)} AND normalized_value = ${getSqlLiteral(row.identifier.normalizedValue)})`
+}
+
+const getArticleIdentifierTargetRowsByKey = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly ArticleIdentifierCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const targetRows = await queryChunks<ArticleIdentifierCommitRow, ArticleIdentifierTargetRow>(rows, (rowChunk) => {
+    return tx.queryJson<ArticleIdentifierTargetRow>(`
+      SELECT article_id AS articleId, kind, normalized_value AS normalizedValue
+      FROM app.article_identifier
+      WHERE ${rowChunk.map(getArticleIdentifierWhereCondition).join(' OR ')}
+      ORDER BY kind ASC, normalized_value ASC
+    `)
+  })
+
+  return targetRows.reduce<Record<string, ArticleIdentifierTargetRow>>((mapped, row) => {
+    return {...mapped, [getArticleIdentifierTargetKey(row)]: row}
+  }, {})
+}
+
+const assertArticleIdentifierRowsCommitted = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly ArticleIdentifierCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const targetRowsByKey = await getArticleIdentifierTargetRowsByKey({rows, tx})
+  const missing = rows.find((row) => {
+    return targetRowsByKey[getArticleIdentifierKey(row)] === undefined
+  })
+
+  if (missing) {
+    return failCommitWriter(
+      `article identifier ${missing.identifier.kind}:${missing.identifier.normalizedValue} for ${missing.sourceArticleId} was not committed`,
+    )
+  }
+
+  const conflict = rows.find((row) => {
+    return targetRowsByKey[getArticleIdentifierKey(row)]?.articleId !== row.articleId
+  })
+
+  return conflict
+    ? failCommitWriter(
+        `article identifier ${conflict.identifier.kind}:${conflict.identifier.normalizedValue} for ${conflict.sourceArticleId} is no longer available`,
+      )
+    : undefined
+}
+
+const insertArticleIdentifiers = async ({
+  articleIdBySourceId,
+  articleMatches,
+  articles,
+  now,
+  tx,
+}: {
+  articleIdBySourceId: Record<string, string>
+  articleMatches: readonly ArticleMatchPlan[]
+  articles: readonly ProjectTransferArticlePayloadRecord[]
+  now: Date
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rows = getArticleIdentifierCommitRows({articleIdBySourceId, articleMatches, articles})
+
+  if (rows.length === 0) {
+    return undefined
+  }
+
+  await runChunks(rows, (rowChunk) => {
+    return tx.run(`
         INSERT INTO app.article_identifier (
           id,
           article_id,
@@ -933,7 +1030,9 @@ const insertArticleIdentifiers = async ({
           .join(', ')}
         ON CONFLICT(kind, normalized_value) DO NOTHING
       `)
-      })
+  })
+
+  return assertArticleIdentifierRowsCommitted({rows, tx})
 }
 
 const getRouteIdBySourceId = (projectRoutePlan: readonly ProjectRoutePlanEntry[]) => {
@@ -2606,7 +2705,13 @@ const writeProjectTransferCommitAppTablesTx = async ({
   const targetArticleById = await getFillTargetArticleRows({promotion, tx})
   await updateReusedArticles({now: importedAt, promotion, targetArticleById, tx})
   await markUpdatedReusedArticlesDirty({promotion, tx})
-  await insertArticleIdentifiers({articleIdBySourceId, articles, now: importedAt, tx})
+  await insertArticleIdentifiers({
+    articleIdBySourceId,
+    articleMatches: plan.targetPlan.articleMatches,
+    articles,
+    now: importedAt,
+    tx,
+  })
   await insertProjectImportRoutes({
     projectId: createdProject.id,
     projectRoutePlan: plan.targetPlan.projectRoutePlan,

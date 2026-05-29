@@ -1,5 +1,6 @@
 import {apiClient} from '../../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
+import type {ProviderModelOptions} from '../../../../utils/providerModelOptions.ts'
 import {getApiRequestUrl} from '../../../utils/getApiRequestUrl.ts'
 
 export type ProjectImportSessionState =
@@ -160,6 +161,7 @@ export type ProjectImportMaterializedModelSelection = ProjectImportModelSelectio
 
 export type ProjectImportModelMaterializationRequest = {
   displayName?: string
+  options?: ProviderModelOptions
   remoteModelId: string
   sourceModelId: string
   targetProviderConnectionId: string

@@ -445,12 +445,10 @@ const getInvalidSessionResult = ({
 }
 
 const assertArtifactConsistency = ({
-  analysis,
   plan,
   requestPlanRevision,
   session,
 }: {
-  analysis: ProjectTransferImportAnalysisArtifact
   plan: ProjectTransferImportPlanArtifact
   requestPlanRevision: number
   session: ProjectTransferSessionRecord
@@ -463,10 +461,6 @@ const assertArtifactConsistency = ({
 
   if (plan.planRevision !== session.planRevision) {
     return {error: 'Project transfer commit plan artifact revision is stale', ok: false as const}
-  }
-
-  if (analysis.planRevision !== plan.planRevision) {
-    return {error: 'Project transfer commit analysis artifact revision is stale', ok: false as const}
   }
 
   if (getProjectTransferCanonicalJson(sessionPlanSummary) !== getProjectTransferCanonicalJson(plan.summary)) {
@@ -1168,7 +1162,6 @@ export const commitProjectTransferImportSession = async ({
   const artifacts = await loadProjectTransferCommitArtifacts({...runtimeOptions, sessionId})
   const executionMode = getCommitExecutionMode(artifacts)
   const artifactConsistency = assertArtifactConsistency({
-    analysis: artifacts.analysis,
     plan: artifacts.plan,
     requestPlanRevision: revision.planRevision,
     session: current,

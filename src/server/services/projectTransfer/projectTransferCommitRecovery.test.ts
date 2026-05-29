@@ -232,6 +232,58 @@ test('project transfer commit retry reads completed import history before expire
   expect(result.projectCount).toBe(0)
 })
 
+test('project transfer stale committing recovery fails orphaned imports before expiry', () => {
+  const result = runCommitRecoveryScript<{
+    errorReason: string | null
+    recoveryResult: {expiredSessionCount: number; recoveredCompletionCount: number; scannedSessionCount: number}
+    state: string | null
+    terminalCleanupAt: string | null
+  }>(`
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt: new Date('2026-05-28T12:00:00.000Z'),
+      id: 'committing-stale-before-expiry',
+      packageFingerprint: 'fingerprint-stale-before-expiry',
+      planSummary: readyPlan,
+      state: 'ready_to_commit',
+    })
+    await sessionRepository.transitionProjectTransferSessionState({
+      commitId: 'commit-stale-before-expiry',
+      expectedOwnerToken: null,
+      expectedPlanRevision: 0,
+      expectedState: 'ready_to_commit',
+      nextOwnerLeaseMs: 60_000,
+      nextOwnerToken: 'owner-stale-before-expiry',
+      nextState: 'committing',
+      now: new Date('2026-05-28T10:00:00.000Z'),
+      sessionId: 'committing-stale-before-expiry',
+    })
+
+    const recoveryResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: '/tmp/f2-project-transfer-commit-recovery-artifacts',
+      isActiveWriter: () => true,
+      now: new Date('2026-05-28T10:10:00.000Z'),
+      ownerToken: 'recovery-owner',
+    })
+    const session = await sessionRepository.getProjectTransferSession({sessionId: 'committing-stale-before-expiry'})
+
+    console.log(JSON.stringify({
+      errorReason: session?.errorJson?.reason ?? null,
+      recoveryResult,
+      state: session?.state ?? null,
+      terminalCleanupAt: session?.terminalCleanupAt ? new Date(session.terminalCleanupAt).toISOString() : null,
+    }))
+  `)
+
+  expect(result.recoveryResult.scannedSessionCount).toBe(1)
+  expect(result.recoveryResult.recoveredCompletionCount).toBe(0)
+  expect(result.recoveryResult.expiredSessionCount).toBe(0)
+  expect(result.state).toBe('failed')
+  expect(result.errorReason).toBe('project_transfer_import_commit_worker_stale')
+  expect(result.terminalCleanupAt).toBe('2026-05-28T10:10:00.000Z')
+})
+
 test('project transfer stale committing recovery restores history-backed imports and expires orphans', () => {
   const result = runCommitRecoveryScript<{
     historyBackedCompletionProjectId: string | null

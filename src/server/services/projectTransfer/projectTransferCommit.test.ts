@@ -477,11 +477,13 @@ const getNoopHistoryRepository = () => {
 const runCommit = async ({
   cwd,
   repository,
+  request = {planRevision: 1},
   revalidate,
   sessionId = 'commit-session',
 }: {
   cwd: string
   repository: MutableSessionRepository
+  request?: ProjectTransferCommitInput['request']
   revalidate: NonNullable<ProjectTransferCommitInput['repositories']>['revalidate']
   sessionId?: string
 }): Promise<ProjectTransferCommitResult> => {
@@ -538,7 +540,7 @@ const runCommit = async ({
       },
       sessionRepository: repository,
     },
-    request: {planRevision: 1},
+    request,
     sessionId,
   })
 }
@@ -621,6 +623,30 @@ test('project transfer commit rejects stale artifact summaries before claiming',
       statusCode: 409,
     })
     expect(fake.calls.transition).toHaveLength(0)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit allows older analysis snapshots for resolved plan revisions', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = getPlan({planRevision: 2, summary})
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planRevision: 2, planSummaryJson: summary}))
+    const result = await runCommit({
+      cwd,
+      repository: fake.repository,
+      request: {planRevision: 2},
+      revalidate: async () => {
+        return {changed: false, plan, ready: true}
+      },
+    })
+
+    expect(result.status).toBe('completed')
+    expect(fake.calls.transition[0]).toMatchObject({expectedPlanRevision: 2, nextState: 'committing'})
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
@@ -1237,6 +1263,68 @@ test('project transfer commit writer blocks target article_id conflicts before i
   expect(result.errorMessage).toContain('target article_id already exists: legacy-conflict')
   expect(result.projectCount).toBe(0)
   expect(result.articleCount).toBe(1)
+})
+
+test('project transfer commit writer aborts article identifier races after insert conflicts', () => {
+  const result = runCommitWriterScript<{errorMessage: string | null; newArticleCount: number; projectCount: number}>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    await database.run("INSERT INTO app.article (id, article_id, article_title) VALUES ('existing-identifier-article', 'legacy-existing-identifier', 'Existing Identifier')")
+    await database.run("INSERT INTO app.article_identifier (id, article_id, kind, normalized_value, source, is_primary, created_at, updated_at) VALUES ('existing-identifier', 'existing-identifier-article', 'doi', '10.1000/identifier-race', 'article_identifier', TRUE, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')")
+    const settings = {humanJudgmentMode: null, useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const article = {
+      articleId: 'legacy-new-identifier-race',
+      articleTitle: 'Package Identifier Race',
+      doi: '10.1000/identifier-race',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-identifier-race'},
+      signature: {identifierKeys: ['doi:10.1000/identifier-race'], title: 'Package Identifier Race'},
+      sourceArticleId: 'source-identifier-race',
+    }
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'create',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: ['doi:10.1000/identifier-race'],
+          packageArticleId: 'legacy-new-identifier-race',
+          selectedTargetArticleId: null,
+          sourceArticleId: 'source-identifier-race',
+        },
+      ],
+    }
+    const errorMessage = await catchMessage(() => {
+      return writeProjectTransferCommitAppTables({
+        commitId: 'commit-identifier-race',
+        now,
+        payloads: {
+          articles: [article],
+          models: [getModelPayload()],
+          project: getProjectPayload(settings),
+        },
+        plan: getBasePlan(targetPlan, dependencyResolution),
+        promotion: {
+          articleCreates: [{article, sourceArticleId: 'source-identifier-race'}],
+          articleFieldFills: [],
+          manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-identifier-race', updatedAt: now.toISOString()},
+          promotionPathByPackagePath: {},
+        },
+        schemaVersion: 1,
+        sessionId: 'session-identifier-race',
+      })
+    })
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+    const [newArticleCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.article WHERE article_id = 'legacy-new-identifier-race'")
+
+    console.log(JSON.stringify({errorMessage, newArticleCount: newArticleCount.count, projectCount: projectCount.count}))
+  `)
+
+  expect(result.errorMessage).toContain(
+    'article identifier doi:10.1000/identifier-race for source-identifier-race is no longer available',
+  )
+  expect(result.projectCount).toBe(0)
+  expect(result.newArticleCount).toBe(0)
 })
 
 test('project transfer commit writer blocks duplicate project prompt remaps before insert', () => {

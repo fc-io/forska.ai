@@ -37,16 +37,20 @@ type ProjectTransferSessionRecoveryParams = ProjectTransferSessionRecoveryRuntim
   batchSize?: number
   exportOwnerHeartbeatStaleMs?: number
   exportQueuedSessionStaleMs?: number
+  importCommitHeartbeatStaleMs?: number
   isActiveWriter?: () => boolean
   now?: Date
   ownerToken?: string
   runner?: ProjectTransferSessionRecoveryRunner
 }
 
+type ProjectTransferRecoveryKind = 'expired_or_terminal' | 'stale_import_commit'
+
 type ProjectTransferRecoveryCandidate = {
   direction: ProjectTransferDirection
   id: string
   ownerToken: string | null
+  recoveryKind: ProjectTransferRecoveryKind
   state: ProjectTransferSessionState
 }
 
@@ -54,6 +58,7 @@ type ProjectTransferRecoveryCleanupPlan = ProjectTransferRecoveryCandidate & {
   deletePromotedAssets: boolean
   deleteTempArtifacts: boolean
   recoveredFromHistory: boolean
+  transitionedToFailed: boolean
   transitionedToExpired: boolean
 }
 
@@ -82,6 +87,7 @@ type ProjectTransferCleanupResult = ProjectTransferCleanupCounts & {
 const defaultRecoveryBatchSize = 50
 const defaultExportOwnerHeartbeatStaleMs = 5 * 60 * 1000
 const defaultExportQueuedSessionStaleMs = 10 * 60 * 1000
+const defaultImportCommitHeartbeatStaleMs = 5 * 60 * 1000
 const maxRecoveryBatchSize = 500
 const terminalStateListSql = getQuotedStringList([...projectTransferTerminalStates]).join(', ')
 
@@ -125,29 +131,48 @@ const getStaleProjectTransferSessions = async ({
   batchSize,
   exportOwnerHeartbeatStaleMs,
   exportQueuedSessionStaleMs,
+  importCommitHeartbeatStaleMs,
   now,
   runner,
 }: {
   batchSize: number
   exportOwnerHeartbeatStaleMs: number
   exportQueuedSessionStaleMs: number
+  importCommitHeartbeatStaleMs: number
   now: Date
   runner: ProjectTransferSessionRecoveryRunner
 }) => {
   const staleExportQueuedBefore = getDateBefore({ms: exportQueuedSessionStaleMs, now})
   const staleExportHeartbeatBefore = getDateBefore({ms: exportOwnerHeartbeatStaleMs, now})
+  const staleImportCommitHeartbeatBefore = getDateBefore({ms: importCommitHeartbeatStaleMs, now})
 
   return runner.queryJson<ProjectTransferRecoveryCandidate>(`
     SELECT
       direction,
       id,
       owner_token AS ownerToken,
+      CASE
+        WHEN direction = 'import'
+          AND state = 'committing'
+          AND owner_token IS NOT NULL
+          AND expires_at > ${getTimestampLiteral(now)}
+          AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportCommitHeartbeatBefore)}
+          THEN 'stale_import_commit'
+        ELSE 'expired_or_terminal'
+      END AS recoveryKind,
       state
     FROM app.project_transfer_session
     WHERE (
         direction = 'import'
         AND expires_at <= ${getTimestampLiteral(now)}
         AND (state NOT IN (${terminalStateListSql}) OR terminal_cleanup_at IS NULL)
+      )
+      OR (
+        direction = 'import'
+        AND state = 'committing'
+        AND owner_token IS NOT NULL
+        AND expires_at > ${getTimestampLiteral(now)}
+        AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportCommitHeartbeatBefore)}
       )
       OR (
         direction = 'export'
@@ -172,16 +197,33 @@ const getStaleProjectTransferSessions = async ({
   `)
 }
 
+const getImportRecoveryCondition = ({
+  now,
+  session,
+  staleImportCommitHeartbeatBefore,
+}: {
+  now: Date
+  session: ProjectTransferRecoveryCandidate
+  staleImportCommitHeartbeatBefore: Date
+}) => {
+  return session.recoveryKind === 'stale_import_commit'
+    ? `AND owner_token = ${getSqlLiteral(session.ownerToken)}
+       AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportCommitHeartbeatBefore)}`
+    : `AND expires_at <= ${getTimestampLiteral(now)}`
+}
+
 const transitionImportSessionToCompletedFromHistory = async ({
   history,
   now,
   runner,
   session,
+  staleImportCommitHeartbeatBefore,
 }: {
   history: ProjectTransferHistoryRecord
   now: Date
   runner: ProjectTransferSessionRecoveryRunner
   session: ProjectTransferRecoveryCandidate
+  staleImportCommitHeartbeatBefore: Date
 }) => {
   const completionPayload = parseProjectTransferCompletionPayload(history.completionPayloadJson, 'import')
 
@@ -202,7 +244,37 @@ const transitionImportSessionToCompletedFromHistory = async ({
     WHERE id = ${getSqlLiteral(session.id)}
       AND direction = 'import'
       AND state = ${getSqlLiteral(session.state)}
-      AND expires_at <= ${getTimestampLiteral(now)}
+      ${getImportRecoveryCondition({now, session, staleImportCommitHeartbeatBefore})}
+    RETURNING direction, id, state
+  `)
+
+  return row ?? null
+}
+
+const transitionImportCommitSessionToFailed = async ({
+  now,
+  ownerToken,
+  runner,
+  session,
+  staleImportCommitHeartbeatBefore,
+}: {
+  now: Date
+  ownerToken: string
+  runner: ProjectTransferSessionRecoveryRunner
+  session: ProjectTransferRecoveryCandidate
+  staleImportCommitHeartbeatBefore: Date
+}) => {
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+    UPDATE app.project_transfer_session
+    SET
+      state = 'failed',
+      owner_token = ${getSqlLiteral(ownerToken)},
+      error_json = ${getJsonLiteral({reason: 'project_transfer_import_commit_worker_stale'})},
+      updated_at = ${getTimestampLiteral(now)}
+    WHERE id = ${getSqlLiteral(session.id)}
+      AND direction = 'import'
+      AND state = 'committing'
+      ${getImportRecoveryCondition({now, session, staleImportCommitHeartbeatBefore})}
     RETURNING direction, id, state
   `)
 
@@ -289,19 +361,27 @@ const getCleanupPlanForSession = async ({
   ownerToken,
   runner,
   session,
+  staleImportCommitHeartbeatBefore,
   staleExportHeartbeatBefore,
 }: {
   now: Date
   ownerToken: string
   runner: ProjectTransferSessionRecoveryRunner
   session: ProjectTransferRecoveryCandidate
+  staleImportCommitHeartbeatBefore: Date
   staleExportHeartbeatBefore: Date
 }): Promise<ProjectTransferRecoveryCleanupPlan | null> => {
   const history = await getCompletedImportHistory({runner, session})
   const shouldRecoverFromHistory = history !== null && session.state !== 'completed'
 
   if (shouldRecoverFromHistory) {
-    const completedSession = await transitionImportSessionToCompletedFromHistory({history, now, runner, session})
+    const completedSession = await transitionImportSessionToCompletedFromHistory({
+      history,
+      now,
+      runner,
+      session,
+      staleImportCommitHeartbeatBefore,
+    })
 
     return completedSession === null
       ? null
@@ -310,6 +390,7 @@ const getCleanupPlanForSession = async ({
           deletePromotedAssets: false,
           deleteTempArtifacts: true,
           recoveredFromHistory: true,
+          transitionedToFailed: false,
           transitionedToExpired: false,
         }
   }
@@ -320,8 +401,30 @@ const getCleanupPlanForSession = async ({
       deletePromotedAssets: session.direction === 'import' && session.state !== 'completed' && history === null,
       deleteTempArtifacts: true,
       recoveredFromHistory: false,
+      transitionedToFailed: false,
       transitionedToExpired: false,
     }
+  }
+
+  if (session.recoveryKind === 'stale_import_commit') {
+    const failedSession = await transitionImportCommitSessionToFailed({
+      now,
+      ownerToken,
+      runner,
+      session,
+      staleImportCommitHeartbeatBefore,
+    })
+
+    return failedSession === null
+      ? null
+      : {
+          ...session,
+          deletePromotedAssets: true,
+          deleteTempArtifacts: true,
+          recoveredFromHistory: false,
+          transitionedToFailed: true,
+          transitionedToExpired: false,
+        }
   }
 
   const expiredSession =
@@ -336,6 +439,7 @@ const getCleanupPlanForSession = async ({
         deletePromotedAssets: session.direction === 'import' && history === null,
         deleteTempArtifacts: true,
         recoveredFromHistory: false,
+        transitionedToFailed: false,
         transitionedToExpired: expiredSession.state === 'expired',
       }
 }
@@ -345,17 +449,26 @@ const getCleanupPlans = async ({
   ownerToken,
   runner,
   sessions,
+  staleImportCommitHeartbeatBefore,
   staleExportHeartbeatBefore,
 }: {
   now: Date
   ownerToken: string
   runner: ProjectTransferSessionRecoveryRunner
   sessions: ProjectTransferRecoveryCandidate[]
+  staleImportCommitHeartbeatBefore: Date
   staleExportHeartbeatBefore: Date
 }) => {
   return sessions.reduce<Promise<ProjectTransferRecoveryCleanupPlan[]>>(async (promise, session) => {
     const plans = await promise
-    const plan = await getCleanupPlanForSession({now, ownerToken, runner, session, staleExportHeartbeatBefore})
+    const plan = await getCleanupPlanForSession({
+      now,
+      ownerToken,
+      runner,
+      session,
+      staleExportHeartbeatBefore,
+      staleImportCommitHeartbeatBefore,
+    })
 
     return plan === null ? plans : [...plans, plan]
   }, Promise.resolve([]))
@@ -538,7 +651,13 @@ const getRecoveryCounts = (
 }
 
 const getRecoveryCommitEventState = (plan: ProjectTransferRecoveryCleanupPlan) => {
-  return plan.recoveredFromHistory ? 'completed' : plan.transitionedToExpired ? 'expired' : plan.state
+  return plan.recoveredFromHistory
+    ? 'completed'
+    : plan.transitionedToExpired
+      ? 'expired'
+      : plan.transitionedToFailed
+        ? 'failed'
+        : plan.state
 }
 
 const getRecoveryCommitEventStatus = (plan: ProjectTransferRecoveryCleanupPlan) => {
@@ -714,19 +833,36 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
   const batchSize = getRecoveryBatchSize(params.batchSize)
   const exportOwnerHeartbeatStaleMs = params.exportOwnerHeartbeatStaleMs ?? defaultExportOwnerHeartbeatStaleMs
   const exportQueuedSessionStaleMs = params.exportQueuedSessionStaleMs ?? defaultExportQueuedSessionStaleMs
+  const importCommitHeartbeatStaleMs = params.importCommitHeartbeatStaleMs ?? defaultImportCommitHeartbeatStaleMs
   const staleExportHeartbeatBefore = getDateBefore({ms: exportOwnerHeartbeatStaleMs, now})
+  const staleImportCommitHeartbeatBefore = getDateBefore({ms: importCommitHeartbeatStaleMs, now})
   const sessions = await getStaleProjectTransferSessions({
     batchSize,
     exportOwnerHeartbeatStaleMs,
     exportQueuedSessionStaleMs,
+    importCommitHeartbeatStaleMs,
     now,
     runner,
   })
   const plans = runner.transaction
     ? await runner.transaction((tx) => {
-        return getCleanupPlans({now, ownerToken, runner: tx, sessions, staleExportHeartbeatBefore})
+        return getCleanupPlans({
+          now,
+          ownerToken,
+          runner: tx,
+          sessions,
+          staleExportHeartbeatBefore,
+          staleImportCommitHeartbeatBefore,
+        })
       })
-    : await getCleanupPlans({now, ownerToken, runner, sessions, staleExportHeartbeatBefore})
+    : await getCleanupPlans({
+        now,
+        ownerToken,
+        runner,
+        sessions,
+        staleExportHeartbeatBefore,
+        staleImportCommitHeartbeatBefore,
+      })
   writeProjectTransferRecoveryRuntimeEvents({now, ownerToken, plans})
   const recoveryCounts = getRecoveryCounts(plans)
   const cleanupCounts = await getCleanupCounts({plans, runtimeOptions: {cwd: params.cwd, envValues: params.envValues}})
