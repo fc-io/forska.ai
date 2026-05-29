@@ -592,6 +592,9 @@ test('project transfer commit loads frozen artifacts and claims with server gene
       progress: {percent: 100, phase: 'commit', status: 'completed'},
     })
     expect(fake.calls.persist).toHaveLength(1)
+    expect((fake.calls.persist[0] as {now: Date}).now.toISOString()).toBe(
+      (fake.calls.transition[2] as {progress: {updatedAt: string}}).progress.updatedAt,
+    )
     expect(fake.calls.updatePlan).toHaveLength(0)
     expect(revalidationInputs).toHaveLength(2)
     expect(completionArtifact.transferHistoryId).toBe('history-generated')
@@ -1182,14 +1185,22 @@ test('project transfer commit writer creates project rows and preserves safe pac
   const reusedRefreshRow = result.refreshRows.find((row) => {
     return row.projectId === 'reuse-active-project'
   })
+  const outsideDateRefreshRow = result.refreshRows.find((row) => {
+    return row.projectId === 'reuse-outside-date-project'
+  })
   const importedRefreshRow = result.refreshRows.find((row) => {
     return row.projectId === result.targetProjectId
   })
 
-  expect(result.refreshRows).toHaveLength(2)
+  expect(result.refreshRows).toHaveLength(3)
   expect(reusedRefreshRow).toEqual({
     dirtyToken: 1,
     projectId: 'reuse-active-project',
+    reason: 'projectTransferCommit.reusedArticleUpdate',
+  })
+  expect(outsideDateRefreshRow).toEqual({
+    dirtyToken: 1,
+    projectId: 'reuse-outside-date-project',
     reason: 'projectTransferCommit.reusedArticleUpdate',
   })
   expect(importedRefreshRow).toEqual({
@@ -1199,6 +1210,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
   })
   expect(result.dirtyArticleRows).toEqual([
     {articleId: 'reuse-article', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'reuse-active-project'},
+    {articleId: 'reuse-article', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'reuse-outside-date-project'},
   ])
   expect(result.materializationRows).toEqual([
     {expectedRowCount: 2, materializationStatus: 'pending', projectId: result.targetProjectId, targetDirtyToken: 1},

@@ -398,6 +398,10 @@ const validateMonotonicProgressCounts = ({
     return {ok: true}
   }
 
+  if (previous.phase !== next.phase) {
+    return {ok: true}
+  }
+
   const regressedField = projectTransferProgressCountFields.find((field) => {
     const previousValue = getCountValue(previous, field)
     const nextValue = getCountValue(next, field)

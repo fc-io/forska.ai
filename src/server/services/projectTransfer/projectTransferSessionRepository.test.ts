@@ -504,6 +504,12 @@ test('project transfer session progress updates reject regressed totals and acce
   const result = runSessionRepositoryScript<{
     afterProgress: {completedBytes?: number | null; phase: string; status: string; totalBytes?: number | null} | null
     firstProgress: {completedBytes?: number | null; phase: string; status: string; totalBytes?: number | null} | null
+    phaseResetProgress: {
+      completedBytes?: number | null
+      phase: string
+      status: string
+      totalBytes?: number | null
+    } | null
     regressionError: string | null
   }>(`
     await sessionRepository.createProjectTransferSession({
@@ -542,10 +548,20 @@ test('project transfer session progress updates reject regressed totals and acce
       },
       sessionId: 'session-progress',
     })
+    const phaseResetProgress = await sessionRepository.updateProjectTransferSessionProgress({
+      progress: {
+        completedBytes: 0,
+        phase: 'commit',
+        status: 'running',
+        totalBytes: 5,
+      },
+      sessionId: 'session-progress',
+    })
 
     console.log(JSON.stringify({
       afterProgress: afterProgress?.progressJson ?? null,
       firstProgress: firstProgress?.progressJson ?? null,
+      phaseResetProgress: phaseResetProgress?.progressJson ?? null,
       regressionError,
     }))
   `)
@@ -553,6 +569,7 @@ test('project transfer session progress updates reject regressed totals and acce
   expect(result.firstProgress).toEqual({completedBytes: 2, phase: 'upload', status: 'running', totalBytes: 10})
   expect(result.regressionError).toContain('totalBytes must be monotonic')
   expect(result.afterProgress).toEqual({completedBytes: 3, phase: 'upload', status: 'running', totalBytes: 12})
+  expect(result.phaseResetProgress).toEqual({completedBytes: 0, phase: 'commit', status: 'running', totalBytes: 5})
 })
 
 test('project transfer import cancellation is owner-fenced and marks terminal cleanup once', () => {

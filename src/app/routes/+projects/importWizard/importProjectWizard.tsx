@@ -1110,10 +1110,7 @@ export const ImportProjectWizard = () => {
     const nextMaterializationDraft = {
       ...currentMaterializationDraft,
       sourceModelId: getExistingSelectionOrFirst(currentMaterializationDraft.sourceModelId, modelSources),
-      targetProviderConnectionId: getExistingSelectionOrFirst(
-        currentMaterializationDraft.targetProviderConnectionId,
-        enabledConnectionIds,
-      ),
+      targetProviderConnectionId: nextConnectionId,
     }
 
     if (
@@ -1257,7 +1254,7 @@ export const ImportProjectWizard = () => {
     })
   }
   const handleMaterializeModel = () => {
-    const draft = materializationDraft()
+    const draft = {...materializationDraft(), targetProviderConnectionId: selectedTargetProviderConnectionId()}
 
     if (!draft.sourceModelId || !draft.targetProviderConnectionId || !draft.remoteModelId.trim()) {
       setPageError('Select a source model, provider connection, and remote model id first.')

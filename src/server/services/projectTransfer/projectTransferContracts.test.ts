@@ -258,6 +258,12 @@ test('keeps progress monotonic and cancellation cleanup writer-only', () => {
       previous: {completedBytes: 2, phase: 'upload', status: 'running', totalBytes: 10},
     }),
   ).toEqual({error: 'Project transfer progress field totalBytes must be monotonic', ok: false})
+  expect(
+    validateProjectTransferProgressUpdate({
+      next: {completedBytes: 0, phase: 'commit', status: 'running', totalBytes: 5},
+      previous: {completedBytes: 10, phase: 'upload', status: 'completed', totalBytes: 10},
+    }),
+  ).toEqual({ok: true})
   expect(projectTransferCancellationRules.cancelled).toEqual({
     cleanupTempArtifacts: true,
     requiresWriterOwnerToken: true,
