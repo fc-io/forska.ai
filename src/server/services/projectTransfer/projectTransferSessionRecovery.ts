@@ -37,6 +37,7 @@ type ProjectTransferSessionRecoveryParams = ProjectTransferSessionRecoveryRuntim
   batchSize?: number
   exportOwnerHeartbeatStaleMs?: number
   exportQueuedSessionStaleMs?: number
+  importAnalyzeHeartbeatStaleMs?: number
   importCommitHeartbeatStaleMs?: number
   isActiveWriter?: () => boolean
   now?: Date
@@ -44,7 +45,7 @@ type ProjectTransferSessionRecoveryParams = ProjectTransferSessionRecoveryRuntim
   runner?: ProjectTransferSessionRecoveryRunner
 }
 
-type ProjectTransferRecoveryKind = 'expired_or_terminal' | 'stale_import_commit'
+type ProjectTransferRecoveryKind = 'expired_or_terminal' | 'stale_import_analysis' | 'stale_import_commit'
 
 type ProjectTransferRecoveryCandidate = {
   direction: ProjectTransferDirection
@@ -87,6 +88,7 @@ type ProjectTransferCleanupResult = ProjectTransferCleanupCounts & {
 const defaultRecoveryBatchSize = 50
 const defaultExportOwnerHeartbeatStaleMs = 5 * 60 * 1000
 const defaultExportQueuedSessionStaleMs = 10 * 60 * 1000
+const defaultImportAnalyzeHeartbeatStaleMs = 5 * 60 * 1000
 const defaultImportCommitHeartbeatStaleMs = 5 * 60 * 1000
 const maxRecoveryBatchSize = 500
 const terminalStateListSql = getQuotedStringList([...projectTransferTerminalStates]).join(', ')
@@ -131,6 +133,7 @@ const getStaleProjectTransferSessions = async ({
   batchSize,
   exportOwnerHeartbeatStaleMs,
   exportQueuedSessionStaleMs,
+  importAnalyzeHeartbeatStaleMs,
   importCommitHeartbeatStaleMs,
   now,
   runner,
@@ -138,12 +141,14 @@ const getStaleProjectTransferSessions = async ({
   batchSize: number
   exportOwnerHeartbeatStaleMs: number
   exportQueuedSessionStaleMs: number
+  importAnalyzeHeartbeatStaleMs: number
   importCommitHeartbeatStaleMs: number
   now: Date
   runner: ProjectTransferSessionRecoveryRunner
 }) => {
   const staleExportQueuedBefore = getDateBefore({ms: exportQueuedSessionStaleMs, now})
   const staleExportHeartbeatBefore = getDateBefore({ms: exportOwnerHeartbeatStaleMs, now})
+  const staleImportAnalyzeHeartbeatBefore = getDateBefore({ms: importAnalyzeHeartbeatStaleMs, now})
   const staleImportCommitHeartbeatBefore = getDateBefore({ms: importCommitHeartbeatStaleMs, now})
 
   return runner.queryJson<ProjectTransferRecoveryCandidate>(`
@@ -152,6 +157,12 @@ const getStaleProjectTransferSessions = async ({
       id,
       owner_token AS ownerToken,
       CASE
+        WHEN direction = 'import'
+          AND state IN ('extracting', 'analyzing')
+          AND owner_token IS NOT NULL
+          AND expires_at > ${getTimestampLiteral(now)}
+          AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}
+          THEN 'stale_import_analysis'
         WHEN direction = 'import'
           AND state = 'committing'
           AND owner_token IS NOT NULL
@@ -166,6 +177,13 @@ const getStaleProjectTransferSessions = async ({
         direction = 'import'
         AND expires_at <= ${getTimestampLiteral(now)}
         AND (state NOT IN (${terminalStateListSql}) OR terminal_cleanup_at IS NULL)
+      )
+      OR (
+        direction = 'import'
+        AND state IN ('extracting', 'analyzing')
+        AND owner_token IS NOT NULL
+        AND expires_at > ${getTimestampLiteral(now)}
+        AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}
       )
       OR (
         direction = 'import'
@@ -200,16 +218,21 @@ const getStaleProjectTransferSessions = async ({
 const getImportRecoveryCondition = ({
   now,
   session,
+  staleImportAnalyzeHeartbeatBefore,
   staleImportCommitHeartbeatBefore,
 }: {
   now: Date
   session: ProjectTransferRecoveryCandidate
+  staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
 }) => {
-  return session.recoveryKind === 'stale_import_commit'
+  return session.recoveryKind === 'stale_import_analysis'
     ? `AND owner_token = ${getSqlLiteral(session.ownerToken)}
+       AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}`
+    : session.recoveryKind === 'stale_import_commit'
+      ? `AND owner_token = ${getSqlLiteral(session.ownerToken)}
        AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportCommitHeartbeatBefore)}`
-    : `AND expires_at <= ${getTimestampLiteral(now)}`
+      : `AND expires_at <= ${getTimestampLiteral(now)}`
 }
 
 const transitionImportSessionToCompletedFromHistory = async ({
@@ -217,12 +240,14 @@ const transitionImportSessionToCompletedFromHistory = async ({
   now,
   runner,
   session,
+  staleImportAnalyzeHeartbeatBefore,
   staleImportCommitHeartbeatBefore,
 }: {
   history: ProjectTransferHistoryRecord
   now: Date
   runner: ProjectTransferSessionRecoveryRunner
   session: ProjectTransferRecoveryCandidate
+  staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
 }) => {
   const completionPayload = parseProjectTransferCompletionPayload(history.completionPayloadJson, 'import')
@@ -244,7 +269,39 @@ const transitionImportSessionToCompletedFromHistory = async ({
     WHERE id = ${getSqlLiteral(session.id)}
       AND direction = 'import'
       AND state = ${getSqlLiteral(session.state)}
-      ${getImportRecoveryCondition({now, session, staleImportCommitHeartbeatBefore})}
+      ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
+    RETURNING direction, id, state
+  `)
+
+  return row ?? null
+}
+
+const transitionImportAnalyzeSessionToFailed = async ({
+  now,
+  ownerToken,
+  runner,
+  session,
+  staleImportAnalyzeHeartbeatBefore,
+  staleImportCommitHeartbeatBefore,
+}: {
+  now: Date
+  ownerToken: string
+  runner: ProjectTransferSessionRecoveryRunner
+  session: ProjectTransferRecoveryCandidate
+  staleImportAnalyzeHeartbeatBefore: Date
+  staleImportCommitHeartbeatBefore: Date
+}) => {
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+    UPDATE app.project_transfer_session
+    SET
+      state = 'failed',
+      owner_token = ${getSqlLiteral(ownerToken)},
+      error_json = ${getJsonLiteral({reason: 'project_transfer_import_analysis_worker_stale'})},
+      updated_at = ${getTimestampLiteral(now)}
+    WHERE id = ${getSqlLiteral(session.id)}
+      AND direction = 'import'
+      AND state IN ('extracting', 'analyzing')
+      ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
     RETURNING direction, id, state
   `)
 
@@ -256,12 +313,14 @@ const transitionImportCommitSessionToFailed = async ({
   ownerToken,
   runner,
   session,
+  staleImportAnalyzeHeartbeatBefore,
   staleImportCommitHeartbeatBefore,
 }: {
   now: Date
   ownerToken: string
   runner: ProjectTransferSessionRecoveryRunner
   session: ProjectTransferRecoveryCandidate
+  staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
 }) => {
   const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
@@ -274,7 +333,7 @@ const transitionImportCommitSessionToFailed = async ({
     WHERE id = ${getSqlLiteral(session.id)}
       AND direction = 'import'
       AND state = 'committing'
-      ${getImportRecoveryCondition({now, session, staleImportCommitHeartbeatBefore})}
+      ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
     RETURNING direction, id, state
   `)
 
@@ -361,6 +420,7 @@ const getCleanupPlanForSession = async ({
   ownerToken,
   runner,
   session,
+  staleImportAnalyzeHeartbeatBefore,
   staleImportCommitHeartbeatBefore,
   staleExportHeartbeatBefore,
 }: {
@@ -368,6 +428,7 @@ const getCleanupPlanForSession = async ({
   ownerToken: string
   runner: ProjectTransferSessionRecoveryRunner
   session: ProjectTransferRecoveryCandidate
+  staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
   staleExportHeartbeatBefore: Date
 }): Promise<ProjectTransferRecoveryCleanupPlan | null> => {
@@ -380,6 +441,7 @@ const getCleanupPlanForSession = async ({
       now,
       runner,
       session,
+      staleImportAnalyzeHeartbeatBefore,
       staleImportCommitHeartbeatBefore,
     })
 
@@ -406,12 +468,35 @@ const getCleanupPlanForSession = async ({
     }
   }
 
+  if (session.recoveryKind === 'stale_import_analysis') {
+    const failedSession = await transitionImportAnalyzeSessionToFailed({
+      now,
+      ownerToken,
+      runner,
+      session,
+      staleImportAnalyzeHeartbeatBefore,
+      staleImportCommitHeartbeatBefore,
+    })
+
+    return failedSession === null
+      ? null
+      : {
+          ...session,
+          deletePromotedAssets: true,
+          deleteTempArtifacts: true,
+          recoveredFromHistory: false,
+          transitionedToFailed: true,
+          transitionedToExpired: false,
+        }
+  }
+
   if (session.recoveryKind === 'stale_import_commit') {
     const failedSession = await transitionImportCommitSessionToFailed({
       now,
       ownerToken,
       runner,
       session,
+      staleImportAnalyzeHeartbeatBefore,
       staleImportCommitHeartbeatBefore,
     })
 
@@ -449,6 +534,7 @@ const getCleanupPlans = async ({
   ownerToken,
   runner,
   sessions,
+  staleImportAnalyzeHeartbeatBefore,
   staleImportCommitHeartbeatBefore,
   staleExportHeartbeatBefore,
 }: {
@@ -456,6 +542,7 @@ const getCleanupPlans = async ({
   ownerToken: string
   runner: ProjectTransferSessionRecoveryRunner
   sessions: ProjectTransferRecoveryCandidate[]
+  staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
   staleExportHeartbeatBefore: Date
 }) => {
@@ -467,6 +554,7 @@ const getCleanupPlans = async ({
       runner,
       session,
       staleExportHeartbeatBefore,
+      staleImportAnalyzeHeartbeatBefore,
       staleImportCommitHeartbeatBefore,
     })
 
@@ -661,7 +749,11 @@ const getRecoveryCommitEventState = (plan: ProjectTransferRecoveryCleanupPlan) =
 }
 
 const getRecoveryCommitEventStatus = (plan: ProjectTransferRecoveryCleanupPlan) => {
-  return plan.recoveredFromHistory ? 'completed' : plan.deletePromotedAssets ? 'failed' : 'running'
+  return plan.recoveredFromHistory
+    ? 'completed'
+    : plan.transitionedToFailed || plan.deletePromotedAssets
+      ? 'failed'
+      : 'running'
 }
 
 const getRecoveryCommitEventMessage = (plan: ProjectTransferRecoveryCleanupPlan) => {
@@ -833,13 +925,16 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
   const batchSize = getRecoveryBatchSize(params.batchSize)
   const exportOwnerHeartbeatStaleMs = params.exportOwnerHeartbeatStaleMs ?? defaultExportOwnerHeartbeatStaleMs
   const exportQueuedSessionStaleMs = params.exportQueuedSessionStaleMs ?? defaultExportQueuedSessionStaleMs
+  const importAnalyzeHeartbeatStaleMs = params.importAnalyzeHeartbeatStaleMs ?? defaultImportAnalyzeHeartbeatStaleMs
   const importCommitHeartbeatStaleMs = params.importCommitHeartbeatStaleMs ?? defaultImportCommitHeartbeatStaleMs
   const staleExportHeartbeatBefore = getDateBefore({ms: exportOwnerHeartbeatStaleMs, now})
+  const staleImportAnalyzeHeartbeatBefore = getDateBefore({ms: importAnalyzeHeartbeatStaleMs, now})
   const staleImportCommitHeartbeatBefore = getDateBefore({ms: importCommitHeartbeatStaleMs, now})
   const sessions = await getStaleProjectTransferSessions({
     batchSize,
     exportOwnerHeartbeatStaleMs,
     exportQueuedSessionStaleMs,
+    importAnalyzeHeartbeatStaleMs,
     importCommitHeartbeatStaleMs,
     now,
     runner,
@@ -852,6 +947,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
           runner: tx,
           sessions,
           staleExportHeartbeatBefore,
+          staleImportAnalyzeHeartbeatBefore,
           staleImportCommitHeartbeatBefore,
         })
       })
@@ -861,6 +957,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
         runner,
         sessions,
         staleExportHeartbeatBefore,
+        staleImportAnalyzeHeartbeatBefore,
         staleImportCommitHeartbeatBefore,
       })
   writeProjectTransferRecoveryRuntimeEvents({now, ownerToken, plans})

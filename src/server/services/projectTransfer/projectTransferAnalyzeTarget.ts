@@ -1259,7 +1259,7 @@ const getProjectRoutePlan = ({
     }).length
 
     return {
-      action: targetRoute !== null && outsideExportedArticleCount === 0 ? 'link' : 'omit',
+      action: targetRoute !== null && dateBoundedOutsideExportedArticleCount === 0 ? 'link' : 'omit',
       dateBoundedOutsideExportedArticleCount,
       dateBoundedRouteArticleCount: dateBoundedRouteArticles.length,
       outsideExportedArticleCount,

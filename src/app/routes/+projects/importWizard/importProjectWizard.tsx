@@ -1,4 +1,4 @@
-import {createMutation, useQuery} from '@tanstack/solid-query'
+import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Match, Show, Switch} from 'solid-js'
 
@@ -691,6 +691,7 @@ const DependencyStatusTable = (props: {session: ProjectImportSession | null}) =>
 
 export const ImportProjectWizard = () => {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [sessionId, setSessionId] = createSignal<string | null>(getInitialSessionId())
   const [sessionOverride, setSessionOverride] = createSignal<ProjectImportSession | null>(null)
   const [navigatedProjectId, setNavigatedProjectId] = createSignal<string | null>(null)
@@ -784,6 +785,7 @@ export const ImportProjectWizard = () => {
   const setActiveSession = (session: ProjectImportSession) => {
     setSessionId(session.id)
     setSessionSearchParam(session.id)
+    queryClient.setQueryData(projectImportSessionQueryKey(session.id), session)
     setSessionOverride(session)
   }
   const setResolveResult = (session: ProjectImportSession) => {
