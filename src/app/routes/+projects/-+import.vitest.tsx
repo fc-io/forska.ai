@@ -229,6 +229,7 @@ const mockState = vi.hoisted(() => {
       isLoading: false,
       refetch: vi.fn(),
     },
+    queryClient: {setQueryData: vi.fn()},
     sessionQueryResult: {
       data: null,
       error: null,
@@ -271,6 +272,9 @@ vi.mock('@tanstack/solid-query', () => {
         return mockState.codexStatusQueryResult
       }
       return mockState.sessionQueryResult
+    },
+    useQueryClient: () => {
+      return mockState.queryClient
     },
   }
 })
@@ -362,6 +366,7 @@ describe('project import route', () => {
     mockState.commitInputs = []
     mockState.commitResult = null
     mockState.navigate.mockClear()
+    mockState.queryClient.setQueryData.mockClear()
     mockState.sessionQueryResult = {
       data: getSession(),
       error: null,
@@ -452,6 +457,35 @@ describe('project import route', () => {
       expect(container.textContent).toContain('Post-import warnings')
       expect(container.textContent).toContain('One route link was omitted.')
       expect(mockState.navigate).toHaveBeenCalledWith({params: {id: 'target-project-1'}, to: '/projects/$id'})
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('updates the session query cache when a background commit starts', async () => {
+    const committingSession = getSession({canCommit: false, state: 'committing'})
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({canCommit: true, state: 'ready_to_commit'}),
+    }
+    mockState.commitResult = committingSession
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      const commitButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.includes('Commit import')
+      })
+
+      commitButton?.click()
+      await Promise.resolve()
+
+      expect(mockState.queryClient.setQueryData).toHaveBeenCalledWith(
+        ['project-import-session', 'session-1'],
+        committingSession,
+      )
+      expect(container.textContent).toContain('Commit started. Progress will update here.')
     } finally {
       dispose()
       container.remove()

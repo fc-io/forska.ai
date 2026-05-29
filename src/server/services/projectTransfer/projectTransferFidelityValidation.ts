@@ -562,17 +562,29 @@ const getJudgmentPhysicalKey = ({
 }
 
 const getJudgmentReviewVisibleKey = ({
+  judgment,
   targetArticleId,
   targetModelId,
   targetPromptId,
 }: {
+  judgment: ProjectTransferPayloadRecord
   targetArticleId: string | null
   targetModelId: string | null
   targetPromptId: string | null
 }) => {
+  const settings = getContentSettings(judgment)
+
   return targetArticleId === null || targetPromptId === null || targetModelId === null
     ? null
-    : [targetArticleId, targetPromptId, targetModelId].join(':')
+    : [
+        targetArticleId,
+        targetPromptId,
+        targetModelId,
+        String(settings.useTitle),
+        String(settings.useAbstract),
+        String(settings.useFulltext),
+        String(settings.useFulltextNoImages),
+      ].join(':')
 }
 
 const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
@@ -589,7 +601,15 @@ const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
 }
 
 const getTargetJudgmentReviewVisibleKey = (row: TargetJudgmentRow) => {
-  return [row.targetArticleId, row.targetPromptId, row.targetModelId].join(':')
+  return [
+    row.targetArticleId,
+    row.targetPromptId,
+    row.targetModelId,
+    String(row.useTitle),
+    String(row.useAbstract),
+    String(row.useFulltext),
+    String(row.useFulltextNoImages),
+  ].join(':')
 }
 
 const getTargetJudgmentRows = async ({
@@ -943,7 +963,7 @@ const getJudgmentPlan = async ({
     const targetPromptId = promptTargetIdBySource[sourcePromptId] ?? null
     const targetModelId = modelTargetIdBySource[sourceModelId] ?? null
     const physicalKey = getJudgmentPhysicalKey({judgment, targetArticleId, targetModelId, targetPromptId})
-    const reviewVisibleKey = getJudgmentReviewVisibleKey({targetArticleId, targetModelId, targetPromptId})
+    const reviewVisibleKey = getJudgmentReviewVisibleKey({judgment, targetArticleId, targetModelId, targetPromptId})
     const targetJudgment = physicalKey ? (targetJudgmentByPhysicalKey[physicalKey] ?? null) : null
     const visibleConflicts =
       reviewVisibleKey === null

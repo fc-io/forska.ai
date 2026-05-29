@@ -165,6 +165,16 @@ test('locks project-transfer resource gates for temp roots, disk headroom, budge
   expect(getResourceGateError({jsonMemberCount: projectTransferResourceGateLimits.maxJsonMemberCount + 1})).toContain(
     'JSON member-count',
   )
+  expect(
+    validateProjectTransferResourceGates(
+      getValidResourceGateInput({
+        expandedBytes: 50 * projectTransferMiB,
+        fileBytes: 1 * projectTransferMiB,
+        usesStreamingParser: false,
+        zipBytes: 1 * projectTransferMiB,
+      }),
+    ),
+  ).toEqual({ok: true})
   expect(getResourceGateError({usesStreamingParser: false})).toContain('streaming parsers')
   expect(getResourceGateError({expandedBytes: 101 * projectTransferMiB, zipBytes: 1 * projectTransferMiB})).toContain(
     'decompression ratio',

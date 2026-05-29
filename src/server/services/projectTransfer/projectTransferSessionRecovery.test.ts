@@ -348,6 +348,93 @@ test('project transfer recovery fails stale export workers but keeps ready artif
   expect(result.states).toMatchObject({'export-ready-future': 'ready', 'export-stale-worker': 'failed'})
 })
 
+test('project transfer recovery fails stale import analysis workers before expiry', () => {
+  const result = runRecoveryScript<{
+    recoveryResult: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}
+    rows: Array<{errorReason: string | null; id: string; state: string; terminalCleanupAt: string | null}>
+    tempAfterRecovery: Record<string, boolean>
+  }>(`
+    const sessionIds = ['import-extracting-stale', 'import-analyzing-stale']
+    await Promise.all(sessionIds.map(async (sessionId) => {
+      const layout = getProjectTransferImportTempLayout(sessionId)
+      await sessionRepository.createProjectTransferSession({
+        direction: 'import',
+        expiresAt: futureAt,
+        id: sessionId,
+        state: 'queued',
+      })
+      await sessionRepository.transitionProjectTransferSessionState({
+        expectedOwnerToken: null,
+        expectedState: 'queued',
+        nextOwnerLeaseMs: 60_000,
+        nextOwnerToken: 'analysis-owner-' + sessionId,
+        nextState: 'extracting',
+        now: new Date('2026-05-21T11:00:00.000Z'),
+        sessionId,
+      })
+      await writeRuntimeFile(layout.uploadPath)
+    }))
+    await sessionRepository.transitionProjectTransferSessionState({
+      expectedOwnerToken: 'analysis-owner-import-analyzing-stale',
+      expectedState: 'extracting',
+      nextOwnerLeaseMs: 60_000,
+      nextOwnerToken: 'analysis-owner-import-analyzing-stale',
+      nextState: 'analyzing',
+      now: new Date('2026-05-21T11:00:01.000Z'),
+      sessionId: 'import-analyzing-stale',
+    })
+
+    const recoveryResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: runtimeRoot,
+      importAnalyzeHeartbeatStaleMs: 60_000,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const rows = await database.queryJson(\`
+      SELECT
+        id,
+        state,
+        error_json->>'reason' AS errorReason,
+        terminal_cleanup_at AS terminalCleanupAt
+      FROM app.project_transfer_session
+      WHERE id IN ('import-extracting-stale', 'import-analyzing-stale')
+      ORDER BY id ASC
+    \`)
+    const tempAfterRecovery = Object.fromEntries(await Promise.all(sessionIds.map(async (sessionId) => {
+      const layout = getProjectTransferImportTempLayout(sessionId)
+      return [sessionId, await fileExists(layout.uploadPath)]
+    })))
+
+    console.log(JSON.stringify({recoveryResult, rows: rows.map((row) => {
+      return {
+        ...row,
+        terminalCleanupAt: row.terminalCleanupAt === null ? null : new Date(row.terminalCleanupAt).toISOString(),
+      }
+    }), tempAfterRecovery}))
+  `)
+
+  expect(result.recoveryResult.scannedSessionCount).toBe(2)
+  expect(result.recoveryResult.expiredSessionCount).toBe(0)
+  expect(result.recoveryResult.cleanupTempArtifactCount).toBe(2)
+  expect(result.tempAfterRecovery).toEqual({'import-analyzing-stale': false, 'import-extracting-stale': false})
+  expect(result.rows).toEqual([
+    {
+      errorReason: 'project_transfer_import_analysis_worker_stale',
+      id: 'import-analyzing-stale',
+      state: 'failed',
+      terminalCleanupAt: '2026-05-21T12:00:00.000Z',
+    },
+    {
+      errorReason: 'project_transfer_import_analysis_worker_stale',
+      id: 'import-extracting-stale',
+      state: 'failed',
+      terminalCleanupAt: '2026-05-21T12:00:00.000Z',
+    },
+  ])
+})
+
 test('project transfer recovery re-checks export worker staleness before failing active sessions', () => {
   const result = runRecoveryScript<{
     packageExists: boolean

@@ -411,19 +411,61 @@ test('markArticleProjectsDirtyAtomically resolves active affected projects befor
       VALUES ('refresh-project-archived', 'Archived Project', 'refresh-state-model', TRUE, TRUE, TRUE, FALSE, FALSE)
     \`)
     await database.run(\`
+      INSERT INTO app.project (
+        id,
+        name,
+        model_id,
+        date_from,
+        date_to,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      ) VALUES
+        (
+          'refresh-project-date-bounded',
+          'Date Bounded Project',
+          'refresh-state-model',
+          TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+          TIMESTAMPTZ '2026-04-30T23:59:59.999Z',
+          TRUE,
+          TRUE,
+          FALSE,
+          FALSE
+        ),
+        (
+          'refresh-project-route-date-bounded',
+          'Route Date Bounded Project',
+          'refresh-state-model',
+          TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+          TIMESTAMPTZ '2026-04-30T23:59:59.999Z',
+          TRUE,
+          TRUE,
+          FALSE,
+          FALSE
+        )
+    \`)
+    await database.run(\`
       INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
       VALUES ('refresh-project-3', 'Unused Project', 'refresh-state-model', TRUE, TRUE, FALSE, FALSE)
+    \`)
+    await database.run(\`
+      UPDATE app.article
+      SET article_created_at = TIMESTAMPTZ '2026-05-01T00:00:00.000Z'
+      WHERE id = 'refresh-article-1'
     \`)
     await database.run(\`
       INSERT INTO app.project_article (id, project_id, article_id)
       VALUES
         ('refresh-project-1-article-1', 'refresh-project-1', 'refresh-article-1'),
+        ('refresh-project-date-bounded-article-1', 'refresh-project-date-bounded', 'refresh-article-1'),
         ('refresh-project-archived-article-1', 'refresh-project-archived', 'refresh-article-1')
     \`)
     await database.run(\`
       INSERT INTO app.project_import_route (id, project_id, import_route_id)
       VALUES
         ('refresh-project-2-route', 'refresh-project-2', 'refresh-route-1'),
+        ('refresh-project-route-date-bounded-route', 'refresh-project-route-date-bounded', 'refresh-route-1'),
         ('refresh-project-archived-route', 'refresh-project-archived', 'refresh-route-1')
     \`)
     await database.run(\`
@@ -477,6 +519,8 @@ test('markArticleProjectsDirtyAtomically resolves active affected projects befor
   expect(result.marks).toEqual([
     {dirtyToken: 1, projectId: 'refresh-project-1'},
     {dirtyToken: 1, projectId: 'refresh-project-2'},
+    {dirtyToken: 1, projectId: 'refresh-project-date-bounded'},
+    {dirtyToken: 1, projectId: 'refresh-project-route-date-bounded'},
   ])
   expect(
     result.stateRows.map((row) => {
@@ -485,6 +529,8 @@ test('markArticleProjectsDirtyAtomically resolves active affected projects befor
   ).toEqual([
     {dirtyToken: 1, projectId: 'refresh-project-1'},
     {dirtyToken: 1, projectId: 'refresh-project-2'},
+    {dirtyToken: 1, projectId: 'refresh-project-date-bounded'},
+    {dirtyToken: 1, projectId: 'refresh-project-route-date-bounded'},
   ])
   expect(
     result.articleRows.map((row) => {
@@ -498,6 +544,13 @@ test('markArticleProjectsDirtyAtomically resolves active affected projects befor
   ).toEqual([
     {articleId: 'refresh-article-1', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'refresh-project-1'},
     {articleId: 'refresh-article-1', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'refresh-project-2'},
+    {articleId: 'refresh-article-1', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'refresh-project-date-bounded'},
+    {
+      articleId: 'refresh-article-1',
+      firstDirtyToken: 1,
+      lastDirtyToken: 1,
+      projectId: 'refresh-project-route-date-bounded',
+    },
   ])
 })
 

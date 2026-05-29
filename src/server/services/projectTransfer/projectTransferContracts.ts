@@ -551,10 +551,22 @@ const validateJsonMemberLimit = (jsonMemberCount: number | null | undefined) => 
     : {error: 'Project transfer JSON member-count limit exceeded', ok: false as const}
 }
 
-const validateStreamingParser = (usesStreamingParser: boolean) => {
-  return usesStreamingParser
+const usesLargePayloadParserBudget = (input: ProjectTransferResourceGateInput) => {
+  const zipBytes = input.zipBytes ?? 0
+  const expandedBytes = input.expandedBytes ?? 0
+  const fileBytes = input.fileBytes ?? 0
+
+  return (
+    zipBytes > projectTransferExecutionThresholds.importAnalyzeInlineZipBytes
+    || expandedBytes > projectTransferExecutionThresholds.importAnalyzeInlineExpandedBytes
+    || fileBytes > projectTransferExecutionThresholds.importAnalyzeInlineZipBytes
+  )
+}
+
+const validateStreamingParser = (input: ProjectTransferResourceGateInput) => {
+  return input.usesStreamingParser || !usesLargePayloadParserBudget(input)
     ? {ok: true as const}
-    : {error: 'Project transfer payload parsing must use streaming parsers', ok: false as const}
+    : {error: 'Project transfer large payload parsing must use streaming parsers', ok: false as const}
 }
 
 const validateExpandedArchiveBudget = (expandedBytes: number | null | undefined) => {
@@ -761,7 +773,7 @@ export const validateProjectTransferResourceGates = (
     validateNdjsonLineLimit(input.ndjsonLineBytes),
     validateJsonDepthLimit(input.jsonDepth),
     validateJsonMemberLimit(input.jsonMemberCount),
-    validateStreamingParser(input.usesStreamingParser),
+    validateStreamingParser(input),
     validateExpandedArchiveBudget(input.expandedBytes),
     validateDecompressionRatio(input),
   ]

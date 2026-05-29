@@ -404,6 +404,28 @@ const getOverlapAnalyzeTargetRunner = (packageFingerprint: string): ProjectTrans
   }
 }
 
+const getDateBoundedRouteAnalyzeTargetRunner = (): ProjectTransferAnalyzeTargetRunner => {
+  return {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      const rows = statement.includes('FROM app.article_identifier')
+        ? [{...getTargetArticleRow(), matchedKey: 'doi:10.1101/2024.01.01.123456'}]
+        : statement.includes('FROM app.import_route')
+          ? [{active: true, route: 'covidence', targetImportRouteId: 'target-route-1'}]
+          : statement.includes('FROM app.article_import_route air')
+            ? [
+                {
+                  articleCreatedAt: '2025-01-01T00:00:00.000Z',
+                  targetArticleId: 'legacy-out-of-window-article',
+                  targetImportRouteId: 'target-route-1',
+                },
+              ]
+            : []
+
+      return rows as T[]
+    },
+  }
+}
+
 const getConflictAnalyzeTargetRunner = (): ProjectTransferAnalyzeTargetRunner => {
   return {
     queryJson: async <T>(statement: string): Promise<T[]> => {
@@ -518,6 +540,42 @@ test('plans reused article fills, asset promotion, route omissions, and duplicat
       'assets/project-transfer/session-1/article-1.pdf',
     )
     expect(result.plan.targetPlan.duplicateImportMatches).toHaveLength(1)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('links date-bounded routes when only extra target-route articles are outside scope', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({
+      cwd,
+      payloadOverride: (payloads) => {
+        return {
+          ...payloads,
+          project: {...payloads.project, dateFrom: '2026-01-01T00:00:00.000Z', dateTo: '2026-01-31T23:59:59.999Z'},
+        }
+      },
+    })
+    const result = await analyzeProjectTransferImportPackage({
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      layout,
+      planRevision: 6,
+      runner: getDateBoundedRouteAnalyzeTargetRunner(),
+      uploadMetadata,
+      zipModule,
+    })
+    const [projectRoute] = result.plan.targetPlan.projectRoutePlan
+
+    expect(projectRoute).toMatchObject({
+      action: 'link',
+      dateBoundedOutsideExportedArticleCount: 0,
+      outsideExportedArticleCount: 1,
+      targetImportRouteId: 'target-route-1',
+    })
+    expect(result.planSummary.overlapCounts.omittedRouteLinkCount).toBe(0)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
