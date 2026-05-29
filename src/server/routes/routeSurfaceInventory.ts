@@ -197,9 +197,9 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
   ]),
   ...routeGroup(
     {
-      category: 'local-diagnostics-api',
+      category: 'sensitive-local-api',
       proxyClassification: 'duckdb-owner-diagnostics',
-      releaseDecision: diagnosticsDecision,
+      releaseDecision: sensitiveProductDecision,
       routeModule: 'DuckdbOwnerConnectionsRoutes.ts',
       sensitivity: 'DuckDB owner, follower, host, process, and mart throughput metadata.',
     },
@@ -271,9 +271,18 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
   ]),
   ...ownerlessDiagnostics('JudgmentsJobsRoutes.ts', 'Judgment job status, health, and provider telemetry.', [
     ['GET', '/api/judgmentsjobs/:id/health'],
-    ['GET', '/api/judgmentsjobs-provider-telemetry-history'],
     ['GET', '/api/judgmentsjobs-health'],
   ]),
+  ...routeGroup(
+    {
+      category: 'sensitive-local-api',
+      proxyClassification: 'ownerless-readable-diagnostics',
+      releaseDecision: sensitiveProductDecision,
+      routeModule: 'JudgmentsJobsRoutes.ts',
+      sensitivity: 'Judgment job provider telemetry history and runtime utilization metadata.',
+    },
+    [['GET', '/api/judgmentsjobs-provider-telemetry-history']],
+  ),
   ...internalRuntime('JudgmentsJobsRoutes.ts', [
     ['POST', '/api/judgmentsjobs/:id/claims'],
     ['POST', '/api/judgmentsjobs/:id/claim'],
@@ -501,8 +510,10 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
   ...ownerDependentMaintenance('DuckdbStudioRoutes.ts', 'DuckDB snapshot creation and local database file paths.', [
     ['POST', '/api/duckdbStudioSnapshots'],
   ]),
-  ...ownerDependentDiagnostics('TokensRoutes.ts', 'Token usage aggregates and provider request metadata.', [
+  ...ownerDependentDiagnostics('TokensRoutes.ts', 'Token usage ingestion includes provider request metadata.', [
     ['POST', '/api/tokens/usage'],
+  ]),
+  ...ownerDependentSensitive('TokensRoutes.ts', 'Token usage aggregates and provider request metadata.', [
     ['GET', '/api/tokens/largest-per-request'],
     ['GET', '/api/tokens/largest-completion-per-request'],
     ['GET', '/api/tokens'],
