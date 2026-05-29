@@ -1,4 +1,5 @@
 import {MAX_COMPLETION_TOKENS} from '../../../agent/judge.ts'
+import type {ProviderModelOptions} from '../../../utils/providerModelOptions.ts'
 import {getResolvedProviderBaseURL} from '../../providers/providerConnectionHelpers.ts'
 import {getProviderConnection, listProviderConnections} from '../../providers/providerConnectionRepository.ts'
 import {
@@ -62,6 +63,7 @@ export type ProjectTransferDependencyMaterializedModelHandoff = ProjectTransferD
 
 export type ProjectTransferDependencyModelMaterializationRequest = {
   displayName?: string
+  options?: ProviderModelOptions
   remoteModelId: string
   sourceModelId: string
   targetProviderConnectionId: string

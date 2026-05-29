@@ -187,8 +187,10 @@ const dependencyMaterializedModelHandoffShape = arktype({
   targetModelId: 'string',
   'targetProviderConnectionId?': 'string',
 })
+const dependencyModelOptionsShape = arktype({'thinking?': 'string | null'})
 const dependencyModelMaterializationRequestShape = arktype({
   'displayName?': 'string',
+  'options?': dependencyModelOptionsShape,
   remoteModelId: 'string',
   sourceModelId: 'string',
   targetProviderConnectionId: 'string',
@@ -316,7 +318,14 @@ const validateResolveDependenciesNestedKeys = (
       field: 'materializedModels',
     },
     {
-      allowedKeys: ['displayName', 'remoteModelId', 'sourceModelId', 'targetProviderConnectionId', 'variant'],
+      allowedKeys: [
+        'displayName',
+        'options',
+        'remoteModelId',
+        'sourceModelId',
+        'targetProviderConnectionId',
+        'variant',
+      ],
       field: 'modelMaterializationRequests',
     },
     {allowedKeys: ['reason', 'sourceProviderConnectionId', 'status'], field: 'unresolvedProviders'},
