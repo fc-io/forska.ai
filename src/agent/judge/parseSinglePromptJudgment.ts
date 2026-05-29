@@ -17,6 +17,49 @@ const buildSinglePromptResponseSchema = (promptType: string | null) => {
   return arktype(typeDefs)
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+const isEmptyOuterExplanation = (value: unknown): boolean => {
+  return value === undefined || (typeof value === 'string' && value.trim().length === 0)
+}
+
+const isEmptyOuterQuotes = (value: unknown): boolean => {
+  return value === undefined || value === null || (Array.isArray(value) && value.length === 0)
+}
+
+const parseNestedAnswerObject = (answer: string): Record<string, unknown> | null => {
+  try {
+    const parsed: unknown = JSON.parse(answer)
+
+    return isRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+const hasSinglePromptJudgmentKeys = (value: Record<string, unknown>): boolean => {
+  return 'answer' in value && 'explanation' in value && 'quotes' in value
+}
+
+const getRecoveredNestedAnswerData = (
+  data: unknown,
+  schema: ReturnType<typeof buildSinglePromptResponseSchema>,
+): unknown => {
+  if (!isRecord(data) || typeof data.answer !== 'string') {
+    return data
+  }
+
+  if (!isEmptyOuterExplanation(data.explanation) || !isEmptyOuterQuotes(data.quotes)) {
+    return data
+  }
+
+  const nestedAnswer = parseNestedAnswerObject(data.answer)
+
+  return nestedAnswer && hasSinglePromptJudgmentKeys(nestedAnswer) && schema.allows(nestedAnswer) ? nestedAnswer : data
+}
+
 /**
  * Sanitizes a JSON string by escaping invalid escape sequences.
  * In JSON, only these escape sequences are valid: \" \\ \/ \b \f \n \r \t \uXXXX
@@ -170,8 +213,8 @@ export const parseSinglePromptJudgment = (response: string, promptType: string |
     throw new Error(parseResult.originalError)
   }
 
-  // Build schema dynamically based on prompt type
   const schema = buildSinglePromptResponseSchema(promptType)
-  schema.assert(parseResult.data)
-  return parseResult.data as SinglePromptJudgmentResult
+  const data = getRecoveredNestedAnswerData(parseResult.data, schema)
+  schema.assert(data)
+  return data as SinglePromptJudgmentResult
 }
