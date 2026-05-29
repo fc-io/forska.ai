@@ -90,6 +90,9 @@ type ProjectTransferPackageHeaderMetadata = Pick<
   'byteLength' | 'checksumSha256' | 'expiresAt' | 'filename' | 'packageFingerprint'
 >
 
+const importWorkerHeartbeatIntervalMs = 15_000
+const importWorkerHeartbeatLeaseMs = 60_000
+
 export const projectTransferRouteSpecs = [
   {
     endpoint: 'export-project',
@@ -730,6 +733,46 @@ const getErrorPayload = (error: unknown) => {
   return error instanceof Error ? {message: error.message, name: error.name} : {message: String(error)}
 }
 
+const refreshProjectTransferImportWorkerHeartbeat = async ({
+  ownerToken,
+  sessionId,
+}: {
+  ownerToken: string
+  sessionId: string
+}) => {
+  const heartbeat = await getProjectTransferSessionRepository().heartbeatProjectTransferSessionOwner({
+    leaseMs: importWorkerHeartbeatLeaseMs,
+    ownerToken,
+    sessionId,
+  })
+
+  if (heartbeat === null) {
+    throw new Error(`Project transfer import session ownership was lost: ${sessionId}`)
+  }
+
+  return heartbeat
+}
+
+const runProjectTransferImportWorkerHeartbeat = async <TValue>({
+  operation,
+  ownerToken,
+  sessionId,
+}: {
+  operation: () => Promise<TValue>
+  ownerToken: string
+  sessionId: string
+}) => {
+  const interval = setInterval(() => {
+    void refreshProjectTransferImportWorkerHeartbeat({ownerToken, sessionId}).catch((error) => {
+      console.error('Project transfer import worker heartbeat failed', error)
+    })
+  }, importWorkerHeartbeatIntervalMs)
+
+  return operation().finally(() => {
+    clearInterval(interval)
+  })
+}
+
 const getCompletedAnalyzeProgress = ({
   now,
   planSummary,
@@ -789,12 +832,16 @@ const runProjectTransferImportAnalyzeJob = async ({ownerToken, sessionId}: {owne
     return null
   }
 
-  await repository.heartbeatProjectTransferSessionOwner({leaseMs: 60_000, ownerToken, sessionId})
-
-  const analysis = await analyzeProjectTransferImportPackage({
-    layout: getProjectTransferImportTempLayout(sessionId),
-    planRevision: analyzing.planRevision + 1,
-    uploadMetadata: upload,
+  const analysis = await runProjectTransferImportWorkerHeartbeat({
+    operation: () => {
+      return analyzeProjectTransferImportPackage({
+        layout: getProjectTransferImportTempLayout(sessionId),
+        planRevision: analyzing.planRevision + 1,
+        uploadMetadata: upload,
+      })
+    },
+    ownerToken,
+    sessionId,
   })
   const completedAt = new Date()
   const completedProgress = getCompletedAnalyzeProgress({now: completedAt, planSummary: analysis.planSummary, upload})
@@ -1136,9 +1183,11 @@ const uploadImportPackage = async ({
     return getProjectTransferApiError(set, 409, 'Project transfer import session upload could not be claimed')
   }
 
-  const upload = await getUploadWriteAttempt({
-    fileName: getUploadFileName(request),
-    request,
+  const upload = await runProjectTransferImportWorkerHeartbeat({
+    operation: () => {
+      return getUploadWriteAttempt({fileName: getUploadFileName(request), request, sessionId: params.sessionId})
+    },
+    ownerToken,
     sessionId: params.sessionId,
   })
 

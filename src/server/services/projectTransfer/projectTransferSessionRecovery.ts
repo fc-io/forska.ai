@@ -45,7 +45,11 @@ type ProjectTransferSessionRecoveryParams = ProjectTransferSessionRecoveryRuntim
   runner?: ProjectTransferSessionRecoveryRunner
 }
 
-type ProjectTransferRecoveryKind = 'expired_or_terminal' | 'stale_import_analysis' | 'stale_import_commit'
+type ProjectTransferRecoveryKind =
+  | 'expired_or_terminal'
+  | 'stale_import_analysis'
+  | 'stale_import_commit'
+  | 'stale_import_upload'
 
 type ProjectTransferRecoveryCandidate = {
   direction: ProjectTransferDirection
@@ -158,6 +162,12 @@ const getStaleProjectTransferSessions = async ({
       owner_token AS ownerToken,
       CASE
         WHEN direction = 'import'
+          AND state = 'uploading'
+          AND owner_token IS NOT NULL
+          AND expires_at > ${getTimestampLiteral(now)}
+          AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}
+          THEN 'stale_import_upload'
+        WHEN direction = 'import'
           AND state IN ('extracting', 'analyzing')
           AND owner_token IS NOT NULL
           AND expires_at > ${getTimestampLiteral(now)}
@@ -177,6 +187,13 @@ const getStaleProjectTransferSessions = async ({
         direction = 'import'
         AND expires_at <= ${getTimestampLiteral(now)}
         AND (state NOT IN (${terminalStateListSql}) OR terminal_cleanup_at IS NULL)
+      )
+      OR (
+        direction = 'import'
+        AND state = 'uploading'
+        AND owner_token IS NOT NULL
+        AND expires_at > ${getTimestampLiteral(now)}
+        AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}
       )
       OR (
         direction = 'import'
@@ -226,13 +243,15 @@ const getImportRecoveryCondition = ({
   staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
 }) => {
-  return session.recoveryKind === 'stale_import_analysis'
-    ? `AND owner_token = ${getSqlLiteral(session.ownerToken)}
-       AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportAnalyzeHeartbeatBefore)}`
-    : session.recoveryKind === 'stale_import_commit'
-      ? `AND owner_token = ${getSqlLiteral(session.ownerToken)}
-       AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleImportCommitHeartbeatBefore)}`
-      : `AND expires_at <= ${getTimestampLiteral(now)}`
+  const staleHeartbeatBefore =
+    session.recoveryKind === 'stale_import_commit'
+      ? staleImportCommitHeartbeatBefore
+      : staleImportAnalyzeHeartbeatBefore
+
+  return session.recoveryKind === 'expired_or_terminal'
+    ? `AND expires_at <= ${getTimestampLiteral(now)}`
+    : `AND owner_token = ${getSqlLiteral(session.ownerToken)}
+       AND COALESCE(heartbeat_at, updated_at) <= ${getTimestampLiteral(staleHeartbeatBefore)}`
 }
 
 const transitionImportSessionToCompletedFromHistory = async ({
@@ -269,6 +288,38 @@ const transitionImportSessionToCompletedFromHistory = async ({
     WHERE id = ${getSqlLiteral(session.id)}
       AND direction = 'import'
       AND state = ${getSqlLiteral(session.state)}
+      ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
+    RETURNING direction, id, state
+  `)
+
+  return row ?? null
+}
+
+const transitionImportUploadSessionToFailed = async ({
+  now,
+  ownerToken,
+  runner,
+  session,
+  staleImportAnalyzeHeartbeatBefore,
+  staleImportCommitHeartbeatBefore,
+}: {
+  now: Date
+  ownerToken: string
+  runner: ProjectTransferSessionRecoveryRunner
+  session: ProjectTransferRecoveryCandidate
+  staleImportAnalyzeHeartbeatBefore: Date
+  staleImportCommitHeartbeatBefore: Date
+}) => {
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+    UPDATE app.project_transfer_session
+    SET
+      state = 'failed',
+      owner_token = ${getSqlLiteral(ownerToken)},
+      error_json = ${getJsonLiteral({reason: 'project_transfer_import_upload_worker_stale'})},
+      updated_at = ${getTimestampLiteral(now)}
+    WHERE id = ${getSqlLiteral(session.id)}
+      AND direction = 'import'
+      AND state = 'uploading'
       ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
     RETURNING direction, id, state
   `)
@@ -466,6 +517,28 @@ const getCleanupPlanForSession = async ({
       transitionedToFailed: false,
       transitionedToExpired: false,
     }
+  }
+
+  if (session.recoveryKind === 'stale_import_upload') {
+    const failedSession = await transitionImportUploadSessionToFailed({
+      now,
+      ownerToken,
+      runner,
+      session,
+      staleImportAnalyzeHeartbeatBefore,
+      staleImportCommitHeartbeatBefore,
+    })
+
+    return failedSession === null
+      ? null
+      : {
+          ...session,
+          deletePromotedAssets: false,
+          deleteTempArtifacts: true,
+          recoveredFromHistory: false,
+          transitionedToFailed: true,
+          transitionedToExpired: false,
+        }
   }
 
   if (session.recoveryKind === 'stale_import_analysis') {

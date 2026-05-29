@@ -435,6 +435,83 @@ test('project transfer recovery fails stale import analysis workers before expir
   ])
 })
 
+test('project transfer recovery fails abandoned import upload claims before expiry', () => {
+  const result = runRecoveryScript<{
+    recoveryResult: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}
+    rows: Array<{errorReason: string | null; id: string; state: string; terminalCleanupAt: string | null}>
+    tempAfterRecovery: Record<string, boolean>
+  }>(`
+    const sessionIds = ['import-upload-stale', 'import-upload-fresh']
+    await Promise.all(sessionIds.map(async (sessionId) => {
+      const layout = getProjectTransferImportTempLayout(sessionId)
+      await sessionRepository.createProjectTransferSession({
+        direction: 'import',
+        expiresAt: futureAt,
+        id: sessionId,
+        state: 'awaiting_upload',
+      })
+      await sessionRepository.transitionProjectTransferSessionState({
+        expectedOwnerToken: null,
+        expectedState: 'awaiting_upload',
+        nextOwnerLeaseMs: 60_000,
+        nextOwnerToken: 'upload-owner-' + sessionId,
+        nextState: 'uploading',
+        now: sessionId === 'import-upload-stale'
+          ? new Date('2026-05-21T11:00:00.000Z')
+          : new Date('2026-05-21T11:59:30.000Z'),
+        sessionId,
+      })
+      await writeRuntimeFile(layout.uploadPath)
+    }))
+
+    const recoveryResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: runtimeRoot,
+      importAnalyzeHeartbeatStaleMs: 60_000,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const rows = await database.queryJson(
+      \`
+        SELECT
+          id,
+          state,
+          error_json->>'reason' AS errorReason,
+          terminal_cleanup_at AS terminalCleanupAt
+        FROM app.project_transfer_session
+        WHERE id IN ('import-upload-stale', 'import-upload-fresh')
+        ORDER BY id ASC
+      \`,
+    )
+    const tempAfterRecovery = Object.fromEntries(await Promise.all(sessionIds.map(async (sessionId) => {
+      const layout = getProjectTransferImportTempLayout(sessionId)
+      return [sessionId, await fileExists(layout.uploadPath)]
+    })))
+
+    console.log(JSON.stringify({recoveryResult, rows: rows.map((row) => {
+      return {
+        ...row,
+        terminalCleanupAt: row.terminalCleanupAt === null ? null : new Date(row.terminalCleanupAt).toISOString(),
+      }
+    }), tempAfterRecovery}))
+  `)
+
+  expect(result.recoveryResult.scannedSessionCount).toBe(1)
+  expect(result.recoveryResult.expiredSessionCount).toBe(0)
+  expect(result.recoveryResult.cleanupTempArtifactCount).toBe(1)
+  expect(result.tempAfterRecovery).toEqual({'import-upload-fresh': true, 'import-upload-stale': false})
+  expect(result.rows).toEqual([
+    {errorReason: null, id: 'import-upload-fresh', state: 'uploading', terminalCleanupAt: null},
+    {
+      errorReason: 'project_transfer_import_upload_worker_stale',
+      id: 'import-upload-stale',
+      state: 'failed',
+      terminalCleanupAt: '2026-05-21T12:00:00.000Z',
+    },
+  ])
+})
+
 test('project transfer recovery re-checks export worker staleness before failing active sessions', () => {
   const result = runRecoveryScript<{
     packageExists: boolean
