@@ -164,6 +164,7 @@ const mockState = vi.hoisted(() => {
       isLoading: false,
       refetch: vi.fn(),
     },
+    manualProviderModelInputs: [] as unknown[],
     providerConnectionsQueryResult: {
       data: {
         catalog: [
@@ -230,6 +231,7 @@ const mockState = vi.hoisted(() => {
       refetch: vi.fn(),
     },
     queryClient: {setQueryData: vi.fn()},
+    resolveInputs: [] as unknown[],
     sessionQueryResult: {
       data: null,
       error: null,
@@ -255,7 +257,10 @@ vi.mock('@tanstack/solid-query', () => {
         isPending: false,
         mutate: vi.fn((input?: unknown) => {
           const result = options.mutationFn?.(input)
-          options.onSuccess?.(result)
+          void Promise.resolve(result).then((value) => {
+            options.onSuccess?.(value)
+          })
+          return result
         }),
         mutateAsync: vi.fn(async (input?: unknown) => {
           return options.mutationFn?.(input)
@@ -276,6 +281,39 @@ vi.mock('@tanstack/solid-query', () => {
     useQueryClient: () => {
       return mockState.queryClient
     },
+  }
+})
+
+vi.mock('../+admin/+models/providerConnectionsClient.ts', () => {
+  return {
+    addManualProviderModel: vi.fn((input: unknown) => {
+      mockState.manualProviderModelInputs.push(input)
+
+      return Promise.resolve({modelId: 'materialized-model-1'})
+    }),
+    beginProviderAuthLifecycle: vi.fn(() => {
+      return {message: 'auth started', status: 'started'}
+    }),
+    createProviderConnection: vi.fn(() => {
+      return mockState.providerConnectionsQueryResult.data.connections[0]
+    }),
+    fetchCodexStatus: vi.fn(),
+    fetchProviderConnectionDiscoveredModels: vi.fn(() => {
+      return []
+    }),
+    fetchProviderConnections: vi.fn(),
+    finishProviderAuthLifecycle: vi.fn(() => {
+      return {message: 'auth finished', status: 'finished'}
+    }),
+    startCodexLogin: vi.fn(() => {
+      return {message: 'login started'}
+    }),
+    syncProviderConnectionModels: vi.fn(() => {
+      return {count: 0}
+    }),
+    testProviderConnectionApi: vi.fn(() => {
+      return {message: 'connection ok', status: 'ok'}
+    }),
   }
 })
 
@@ -300,7 +338,9 @@ vi.mock('./importWizard/projectImportClient.ts', () => {
     projectImportSessionQueryKey: (sessionId: string | null) => {
       return ['project-import-session', sessionId ?? 'none'] as const
     },
-    resolveProjectImportDependencies: vi.fn(() => {
+    resolveProjectImportDependencies: vi.fn((input: unknown) => {
+      mockState.resolveInputs.push(input)
+
       return getSession({stalePlan: false})
     }),
     uploadProjectImportPackage: vi.fn(() => {
@@ -365,6 +405,8 @@ describe('project import route', () => {
     window.history.replaceState(null, '', '/projects/import?sessionId=session-1')
     mockState.commitInputs = []
     mockState.commitResult = null
+    mockState.manualProviderModelInputs = []
+    mockState.resolveInputs = []
     mockState.navigate.mockClear()
     mockState.queryClient.setQueryData.mockClear()
     mockState.sessionQueryResult = {
@@ -487,6 +529,71 @@ describe('project import route', () => {
       )
       expect(container.textContent).toContain('Commit started. Progress will update here.')
     } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('materializes models with the selected provider connection', async () => {
+    const secondConnection = {
+      ...mockState.providerConnectionsQueryResult.data.connections[0],
+      id: 'provider-target-2',
+      label: 'Second Target Provider',
+      models: [],
+    }
+    const originalConnections = mockState.providerConnectionsQueryResult.data.connections
+    mockState.providerConnectionsQueryResult.data.connections = [...originalConnections, secondConnection]
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      const providerSelect = Array.from(container.querySelectorAll('label'))
+        .find((label) => {
+          return label.textContent?.includes('Existing enabled target connection')
+        })
+        ?.querySelector('select')
+      const remoteModelInput = container.querySelector('input[placeholder="Remote model id"]')
+      const materializeButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.includes('Materialize model')
+      })
+
+      if (providerSelect instanceof HTMLSelectElement) {
+        providerSelect.value = 'provider-target-2'
+        providerSelect.dispatchEvent(new Event('change', {bubbles: true}))
+      }
+      if (remoteModelInput instanceof HTMLInputElement) {
+        remoteModelInput.value = 'remote-model-2'
+        remoteModelInput.dispatchEvent(new Event('input', {bubbles: true}))
+      }
+
+      materializeButton?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(mockState.manualProviderModelInputs[0]).toMatchObject({
+        id: 'provider-target-2',
+        remoteModelId: 'remote-model-2',
+      })
+      expect(mockState.resolveInputs[0]).toMatchObject({
+        materializedModels: [
+          {
+            sourceModelId: 'model-source-1',
+            targetModelId: 'materialized-model-1',
+            targetProviderConnectionId: 'provider-target-2',
+          },
+        ],
+        modelMaterializationRequests: [
+          {
+            remoteModelId: 'remote-model-2',
+            sourceModelId: 'model-source-1',
+            targetProviderConnectionId: 'provider-target-2',
+          },
+        ],
+        planRevision: 2,
+        sessionId: 'session-1',
+      })
+    } finally {
+      mockState.providerConnectionsQueryResult.data.connections = originalConnections
       dispose()
       container.remove()
     }

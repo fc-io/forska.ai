@@ -1078,12 +1078,13 @@ const runClaimedProjectTransferImportCommit = async ({
       repositories,
       sessionId,
     })
+    const completionNow = new Date()
     const completedProgress = getCommitProgress({
       artifacts,
       completedBytes: getExtractedAssetBytes(artifacts.analysis),
       completedRows: getCommitRowCount(artifacts.plan),
       message: 'Commit transaction completed',
-      now: new Date(),
+      now: completionNow,
       percent: 100,
       planRevision: claimed.planRevision,
       status: 'completed',
@@ -1097,7 +1098,7 @@ const runClaimedProjectTransferImportCommit = async ({
       repositories.sessionRepository.persistProjectTransferSessionCompletion({
         completionPayload: writeResult.completion,
         expectedPlanRevision: claimed.planRevision,
-        now,
+        now: completionNow,
         ownerToken,
         sessionId,
       }),
