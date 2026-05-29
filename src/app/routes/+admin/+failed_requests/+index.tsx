@@ -150,7 +150,8 @@ const AdminFailedRequests = () => {
                         <Link
                           to="/admin/failed_requests/$id"
                           params={{id: row.id}}
-                          class="text-blue-600 hover:text-blue-900 underline"
+                          class="block truncate text-blue-600 hover:text-blue-900 underline"
+                          title={row.id}
                         >
                           {row.id}
                         </Link>
