@@ -231,20 +231,8 @@ const getFirstProviderKind = (catalog: readonly ProviderCatalogEntry[]) => {
   return catalog[0]?.kind ?? 'openai-compatible'
 }
 
-const getFirstEnabledConnectionId = (connections: readonly ProviderConnection[]) => {
-  return getEnabledConnections(connections)[0]?.id ?? ''
-}
-
-const getFirstProviderModelId = (connections: readonly ProviderConnection[]) => {
-  return getProviderModels(connections)[0]?.id ?? ''
-}
-
-const getFirstProviderSourceId = (summary: ProjectImportPlanSummary | null) => {
-  return getDependencySourceIds(summary, 'provider:')[0] ?? ''
-}
-
-const getFirstModelSourceId = (summary: ProjectImportPlanSummary | null) => {
-  return getDependencySourceIds(summary, 'model:')[0] ?? ''
+const getExistingSelectionOrFirst = (selectedId: string, availableIds: readonly string[]) => {
+  return selectedId && availableIds.includes(selectedId) ? selectedId : (availableIds[0] ?? '')
 }
 
 const getJsonPreview = (value: unknown) => {
@@ -1089,11 +1077,18 @@ export const ImportProjectWizard = () => {
   })
 
   createEffect(() => {
-    const summary = planSummary()
-    const nextProviderSourceId = selectedProviderSourceId() || getFirstProviderSourceId(summary)
-    const nextModelSourceId = selectedModelSourceId() || getFirstModelSourceId(summary)
-    const nextConnectionId = selectedTargetProviderConnectionId() || getFirstEnabledConnectionId(connections())
-    const nextModelId = selectedTargetModelId() || getFirstProviderModelId(connections())
+    const providerSources = providerSourceIds()
+    const modelSources = modelSourceIds()
+    const enabledConnectionIds = enabledConnections().map((connection) => {
+      return connection.id
+    })
+    const selectableModelIds = selectableModels().map((model) => {
+      return model.id
+    })
+    const nextProviderSourceId = getExistingSelectionOrFirst(selectedProviderSourceId(), providerSources)
+    const nextModelSourceId = getExistingSelectionOrFirst(selectedModelSourceId(), modelSources)
+    const nextConnectionId = getExistingSelectionOrFirst(selectedTargetProviderConnectionId(), enabledConnectionIds)
+    const nextModelId = getExistingSelectionOrFirst(selectedTargetModelId(), selectableModelIds)
     const nextProviderKind = connectionDraft().providerKind || getFirstProviderKind(catalog())
     const currentConnectionDraft = connectionDraft()
     const currentMaterializationDraft = materializationDraft()
@@ -1114,8 +1109,11 @@ export const ImportProjectWizard = () => {
 
     const nextMaterializationDraft = {
       ...currentMaterializationDraft,
-      sourceModelId: currentMaterializationDraft.sourceModelId || nextModelSourceId,
-      targetProviderConnectionId: currentMaterializationDraft.targetProviderConnectionId || nextConnectionId,
+      sourceModelId: getExistingSelectionOrFirst(currentMaterializationDraft.sourceModelId, modelSources),
+      targetProviderConnectionId: getExistingSelectionOrFirst(
+        currentMaterializationDraft.targetProviderConnectionId,
+        enabledConnectionIds,
+      ),
     }
 
     if (
@@ -1222,28 +1220,40 @@ export const ImportProjectWizard = () => {
     setPageError('')
     createConnectionMutation.mutate(getCreateConnectionInput(draft))
   }
-  const handleBeginAuth = () => {
+  const selectedAuthConnectionId = createMemo(() => {
+    return authDraft().connectionId || selectedTargetProviderConnectionId()
+  })
+  const selectedAuthProviderKind = createMemo(() => {
     const draft = authDraft()
+    const connection = getProviderConnectionForId(connections(), selectedAuthConnectionId())
 
-    if (!draft.providerKind) {
+    return draft.providerKind || connection?.providerKind || ''
+  })
+  const handleBeginAuth = () => {
+    const connectionId = selectedAuthConnectionId()
+    const providerKind = selectedAuthProviderKind()
+
+    if (!providerKind) {
       setPageError('Select a provider kind before starting auth.')
       return
     }
 
-    beginAuthMutation.mutate({connectionId: draft.connectionId || undefined, providerKind: draft.providerKind})
+    beginAuthMutation.mutate({connectionId: connectionId || undefined, providerKind})
   }
   const handleFinishAuth = () => {
     const draft = authDraft()
+    const connectionId = selectedAuthConnectionId()
+    const providerKind = selectedAuthProviderKind()
 
-    if (!draft.providerKind) {
+    if (!providerKind) {
       setPageError('Select a provider kind before finishing auth.')
       return
     }
 
     finishAuthMutation.mutate({
-      connectionId: draft.connectionId || undefined,
+      connectionId: connectionId || undefined,
       payload: {authMode: null, secretValue: draft.secretValue || null},
-      providerKind: draft.providerKind,
+      providerKind,
     })
   }
   const handleMaterializeModel = () => {
@@ -1534,7 +1544,7 @@ export const ImportProjectWizard = () => {
                             secretValue: '',
                           })
                         }}
-                        value={authDraft().connectionId || selectedTargetProviderConnectionId()}
+                        value={selectedAuthConnectionId()}
                       >
                         <For each={enabledConnections()}>
                           {(connection) => {
@@ -1572,9 +1582,9 @@ export const ImportProjectWizard = () => {
                         Finish auth
                       </Button>
                       <Button
-                        disabled={!selectedTargetProviderConnectionId() || testConnectionMutation.isPending}
+                        disabled={!selectedAuthConnectionId() || testConnectionMutation.isPending}
                         onClick={() => {
-                          testConnectionMutation.mutate(selectedTargetProviderConnectionId())
+                          testConnectionMutation.mutate(selectedAuthConnectionId())
                         }}
                         type="button"
                         variant="outline"
@@ -1582,9 +1592,9 @@ export const ImportProjectWizard = () => {
                         Test
                       </Button>
                       <Button
-                        disabled={!selectedTargetProviderConnectionId() || discoverModelsMutation.isPending}
+                        disabled={!selectedAuthConnectionId() || discoverModelsMutation.isPending}
                         onClick={() => {
-                          discoverModelsMutation.mutate(selectedTargetProviderConnectionId())
+                          discoverModelsMutation.mutate(selectedAuthConnectionId())
                         }}
                         type="button"
                         variant="outline"
@@ -1592,9 +1602,9 @@ export const ImportProjectWizard = () => {
                         Discover
                       </Button>
                       <Button
-                        disabled={!selectedTargetProviderConnectionId() || syncModelsMutation.isPending}
+                        disabled={!selectedAuthConnectionId() || syncModelsMutation.isPending}
                         onClick={() => {
-                          syncModelsMutation.mutate(selectedTargetProviderConnectionId())
+                          syncModelsMutation.mutate(selectedAuthConnectionId())
                         }}
                         type="button"
                         variant="outline"
