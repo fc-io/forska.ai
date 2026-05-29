@@ -1,5 +1,7 @@
 # Open Source Investigation Plan
 
+Last status refresh: 2026-05-29.
+
 ## Core Release Principle
 
 - Default to a fail-closed release: if a route, script, doc, asset, or historical secret is not clearly safe for public distribution, treat it as blocked until reviewed.
@@ -20,6 +22,39 @@
    - Rewrite files that belong in Forska but currently contain private, obsolete, or unsupported assumptions.
    - Remove files that are generated, obsolete, sensitive, or have no public project value.
    - Move files that are real workflows for another project, such as remote/HPC helpers that belong in `../hpc-manager`.
+
+## Current Implementation Status
+
+### Done In Current Tree
+
+- Workstream 1 docs and publication-artifact cleanup is implemented and tracked in [`plans/openSourceDocsDockerPlan.md`](plans/openSourceDocsDockerPlan.md).
+- Public docs now exist or have been rewritten for the supported local flow: `README.md`, `docs/README_RUN_LOCAL.md`, `SECURITY.md`, and `CONTRIBUTING.md`.
+- No `Dockerfile*`, compose files, or `.github/workflows/*` currently remain in this repo.
+- Stale public docs/artifacts called out by Workstream 1 have been removed or moved: `docs/README_SPLIT_RUNTIME_VERIFICATION.md`, `scripts/createUnexpectedAnswersAdminPage.md`, `scripts/monitorSyncProgress.sh`, `scripts/dbRepairJudgmentsIndex.sh`, and `future/**/*.md`.
+- Route surface inventory is now code-backed in `src/server/routes/routeSurfaceInventory.ts` and covers the mounted API routes from `runtimeReadyRoutes`, `DuckdbOwnerConnectionsRoutes`, `JudgmentDispatchTelemetryRoutes`, and `getProductApiRoutes()`.
+- API route classification now uses `routeSurfaceInventory.ts`; `src/server/routes/routeSurfaceInventory.test.ts` verifies mounted-route coverage, no duplicate route keys, owner-proxy classification coverage, explicit sensitive-route notes, the one current `remove-before-release` route, gated categories, and local listener/proxy defaults.
+- Public local API gating is implemented in `src/server/routes/publicRouteSurfaceGate.ts`, mounted before the owner proxy in `src/server/serverMain.ts`, and tested in `src/server/routes/publicRouteSurfaceGate.test.ts`.
+- Admin/debug/operator, local diagnostics, internal runtime, and remove-before-release public `/api/*` routes are blocked by default unless `FORSKA_EXPOSE_LOCAL_OPERATOR_API=true` is set; DuckDB owner heartbeats and owner-private RPC remain available for split-runtime internals.
+- API and app server listeners bind to `127.0.0.1` by default in `src/server/serverMain.ts` and `src/appServerMain.ts`.
+- Legacy route cleanup already landed for `JudgmentsRoutes.ts` / `GET /api/judgments/model`, the legacy `/api/importroutes` alias, and the typo `add_articles_by_fiter` path.
+- Manual current-tree and all-local-ref history findings are recorded in [`plans/openSourceSecretsHistoryFindings.md`](plans/openSourceSecretsHistoryFindings.md).
+
+### Remaining To Do Before Public Release
+
+- Keep the current private repo and all existing refs private; publish only from a clean audited snapshot unless there is a separately justified, re-scanned history-preservation exception.
+- Run dedicated secret scanners (`gitleaks` and `trufflehog`) against all reachable refs and the current tree, then triage every hit.
+- Remediate current-tree blockers from `plans/openSourceSecretsHistoryFindings.md`: `.claude/settings.json`, tracked `assets/**` datasets/PDFs/FHIR samples, private-path examples, private-IP examples, and SSH/GPU telemetry wording or exposure.
+- Finish the route-release decisions for all gated admin/debug/operator groups: remove them before release, keep them behind `FORSKA_EXPOSE_LOCAL_OPERATOR_API=true`, or move them out of the public Forska repo.
+- Remove or explicitly justify and document `POST /api/datasources/import/fhir-ehr-patients`, which is still mounted and classified as `remove-before-release`.
+- Complete sensitivity reviews for routes that can expose provider secrets, failed request details, runtime assets, exports, imports, PDFs/uploads/fetches, token/request traces, Codex login state, and user settings.
+- Decide remaining alias/questionable paths, including the provider-admission lease alias paths.
+- Complete the broader script inventory for all remaining `scripts/` files and package commands.
+- Complete configuration, secrets, local-data, and logging audit work from `SEC_AUDIT_PLAN.md`, including runtime JSONL payload/retention review and ignored/generated path checks.
+- Complete licensing/data-rights review for bundled assets, fixtures, prompts, model integrations, generated data, PDFs, and medical/research disclaimers.
+- Build the final release-scope file-action table: keep as-is, rewrite, remove, or move, including destination repo/path for moved material.
+- Implement the late-stage supported local API manifest and public local API docs from `plans/supportedLocalApi.md` after route cleanup and sensitive-route decisions are final.
+- Add public-repo guardrails: secret scanning, removed/moved-path checks, route/listener/CORS regression checks, and a fresh-clone smoke test based only on public docs.
+- Assemble the final release packet and make the go/no-go decision.
 
 ## Public Repo File Decision Rules
 
@@ -45,46 +80,54 @@
 
 ### 1. Prepare public docs and Docker/publication artifacts
 
+Status: done in current tree. Keep final release-scope handling of active plan/internal planning files for Workstream 11.
+
 - Active implementation plan: [`plans/openSourceDocsDockerPlan.md`](plans/openSourceDocsDockerPlan.md).
-- Inventory tracked docs: `README.md`, local-run docs, architecture notes, setup docs, and any docs referenced by those files.
-- Mark each doc as keep as-is, rewrite, remove, or move to another repo.
-- Rewrite kept public docs so examples use placeholders, public paths, loopback/local defaults, and no private hostnames, credentials, datasets, stack roots, backup paths, or remote-run assumptions.
-- Inventory Docker and publication artifacts separately: `Dockerfile*`, compose files, CI/workflow config, release helpers, and remote-run docs.
-- For each Docker or compose artifact, mark keep as-is, rewrite, remove, or move to another repo, and require safe local defaults with no private registry, private runner, SSH alias, stack root, remote host, or broad bind assumption for anything kept here.
-- Keep Docker or compose files in Forska only if they support a real public Forska workflow; otherwise remove them or move them to their owning repo.
-- Record unresolved scope questions as blockers for the final public release-scope workstream, not as assumptions in public docs or Docker files.
+- Completed: docs were inventoried, marked keep/rewrite/remove/move, scanned, and rewritten where kept.
+- Completed: `README.md`, `docs/README_RUN_LOCAL.md`, `SECURITY.md`, and `CONTRIBUTING.md` now describe the local-first public workflow with loopback defaults and no private run assumptions.
+- Completed: Docker/publication artifacts were inventoried; no Docker, compose, or GitHub workflow artifacts currently remain.
+- Completed: stale or non-Forska docs/scripts identified in `plans/openSourceDocsDockerPlan.md` were removed or moved.
+- Remaining: decide final handling for active internal plan files and other cleanup-branch planning material in Workstream 11.
 
 ### 2. Inventory the current server and API surface
 
+Status: substantially implemented as a current-state baseline; final supported-local-API contract is still deferred.
+
 - Use `plans/supportedLocalApi.md` as the companion decision framework for deciding which localhost routes are stable local integration APIs versus internal/debug implementation details. Do not implement the manifest/docs/regression checks from that plan until late-stage cleanup.
-- Build a network surface inventory from `src/server/index.ts`, `src/server/serverMain.ts`, `src/appServer.ts`, `src/appServerMain.ts`, every file under `src/server/routes/`, and any nested or transitively mounted routes.
-- For each listener, proxy entrypoint, or route, record: bind host, path, methods, mounted role, proxy behavior, client caller, local integration caller, data touched, whether it is required for the product, and whether it should keep shipping, be rewritten/gated, removed, or moved out of this repo.
-- Classify each route into one of: supported local API, local diagnostics API, sensitive local API, internal runtime API, maintenance/debug API, or remove before release.
+- Completed: `src/server/routes/routeSurfaceInventory.ts` records listener/proxy entrypoints and every mounted API route exposed through the current server route composition.
+- Completed: routes are classified as supported local API, local diagnostics API, sensitive local API, internal runtime API, maintenance/debug API, or remove before release.
+- Completed: `src/server/routes/routeSurfaceInventory.test.ts` verifies mounted-route coverage and local/default entrypoint posture.
 - Pay special attention to current hotspots: `AdminInvestigateRoutes`, `ArticleAdminRoutes`, `DuckdbStudioRoutes`, `NvidiaSmiRoutes`, `LlmStatusRoutes`, `ApiProxyRoutes`, `TokensRoutes`, `UsersRoutes`, `RuntimeAssetsRoutes`, the provider routes mounted under `ModelsRoutes`, and the `/api/*` proxy path in `src/appServer.ts`.
 - Compare the route inventory against the README claim that the app is single-user with no admin role, while preserving the intended local integration API for same-machine tools. Any mismatch becomes a release blocker or an explicit product decision.
+- Remaining: review route-level decisions for sensitive routes and decide which gated admin/debug/operator routes are removed versus kept as explicit local operator APIs.
 
 ### 3. Prove that old APIs are gone from the current tree
 
+Status: partially implemented. Legacy cleanup and gate tests exist; final supported API docs/manifest still remain.
+
 - Search current code, tests, docs, and scripts for old route names, old `/api/` paths, and stale client calls.
-- Create one explicit list of supported local API routes and other network entrypoints and use it as the release baseline.
-- Verify that nested route mounts, proxy paths, and app-server forwarding do not expose endpoints missing from the release baseline.
-- Remove dead routes, or gate local-only routes so they are not exposed by default in normal open-source usage.
+- Completed: `routeSurfaceInventory.ts` is the explicit current baseline for mounted routes and entrypoints.
+- Completed: route inventory tests verify nested route mounts against the inventory.
+- Completed: `publicRouteSurfaceGate.ts` blocks diagnostics, internal runtime, maintenance/debug, and remove-before-release routes by default on the public `/api/*` surface.
+- Completed: `JudgmentsRoutes.ts` / `GET /api/judgments/model`, the legacy `/api/importroutes` alias, and the typo `add_articles_by_fiter` path are no longer present.
 - Keep documented supported local API routes available on loopback for local LLM apps, agents, scripts, the browser UI, and the desktop app.
 - Update docs so only supported public or local-only routes remain documented.
 - Add focused tests where useful so removed routes do not silently come back later.
 - Defer the final supported-local-API manifest, public local API docs, and manifest regression tests until after the current route surface has been cleaned and reviewed.
+- Remaining: finish current-tree stale API searches across docs/scripts, finalize public local API documentation, and add late-stage manifest regression checks.
 
 ### 4. Audit git history for old APIs and sensitive material
 
+Status: manual audit done; dedicated scanner gate still open.
+
 - Findings report: [`plans/openSourceSecretsHistoryFindings.md`](plans/openSourceSecretsHistoryFindings.md).
-- Use history review to estimate risk and catch obvious leaks, not as the only safety control. Do not rely on proving that every old API use has been found.
-- Review all reachable refs, not just the current branch: branches, tags, and any release branches that will remain visible.
-- Search history for old route names, path patterns, internal admin/debug endpoints, and old client calls.
-- Scan history for secrets and sensitive infra details: API keys, bearer tokens, SSH material, private URLs, internal IPs, hostnames, stack roots, cluster aliases, and backup paths.
-- Include docs, scripts, Dockerfiles, compose files, CI config, and release helpers in the history audit, not just `src/`, because operational leakage often sits outside product code.
-- Produce a finding log with: risk type, commit hash, file path, owner, severity, disposition, whether the secret or route is still active, the required remediation, and the evidence that closes the finding.
+- Completed: manual current-tree and all-local-ref scans covered known-format token patterns, private key headers, bearer tokens, credential literals, private infra strings, old routes, docs, scripts, Docker/compose paths, CI/workflow paths, release/helper paths, and `src/`.
+- Completed: findings are logged in `plans/openSourceSecretsHistoryFindings.md` with severity, owner, disposition, remediation, and closure evidence.
+- Remaining: install and run dedicated `gitleaks` and `trufflehog` scans across all reachable refs and the current tree, then update findings with triage results.
 
 ### 5. Decide how to handle history findings
+
+Status: preferred decision remains clean public mirror; final go/no-go pending scanner and blocker remediation.
 
 - Preferred path: do not publish the existing history at all. Publish a new public repo or orphaned clean-history branch from the audited snapshot.
 - If a real secret ever existed in git history, rotate or revoke it first. History rewrite comes after rotation, not before.
@@ -92,8 +135,11 @@
 - Rewrite history only if there is a strong need to preserve some portion of the old history in the public repo.
 - If history cleanup becomes too risky or too invasive, keep the original repo private and publish only the clean public mirror.
 - After any rewrite or clean export, re-run the full history scan before publishing.
+- Remaining: resolve scanner results, rotate/revoke any real non-local credentials if found, and document the final clean-mirror or history-preservation decision.
 
 ### 6. Audit configuration, secrets, and local data flows
+
+Status: planned in `SEC_AUDIT_PLAN.md`; current findings already identify blockers, but this workstream is not complete.
 
 - Inventory `process.env` usage, UI-stored provider settings, token storage, and any config that could capture real credentials.
 - Inventory `LOG_DIR`, `LOG_LEVEL`, `LOG_STDERR_LEVEL`, and `FORSKA_RUNTIME_PROFILE` usage so public docs and sample commands do not expose machine-local paths or private runtime-profile conventions.
@@ -102,25 +148,34 @@
 - Check whether exported sample data, logs, fixtures, snapshots, or generated artifacts contain real article content, PHI, API responses, or private metadata.
 - Review whether runtime data under ignored paths has ever been copied into tracked files, tests, or docs.
 - Audit the structured runtime JSONL payload shape, filename pattern, and 7-day retention behavior to confirm no secrets, article payloads, or private machine metadata are intended for redistribution or sample docs.
+- Remaining: remediate or exclude tracked assets/PDFs/FHIR samples, `.claude/settings.json`, private-path examples, private-IP examples, and any secret/config issues found by scanner triage.
 
 ### 7. Audit operational and debug surfaces
 
+Status: partially implemented through route inventory, loopback binds, and public route gating; final remove/keep decisions remain.
+
 - Review all admin, debug, status, proxy, database snapshot, and machine-observability routes.
 - Decide which of these should be removed entirely, which should remain local-only, and which need stronger gating.
-- Review every listener and proxy entrypoint, including `src/server/serverMain.ts` and `src/appServerMain.ts`, and record the default bind interfaces.
-- Review bootstrap entrypoints that install runtime logging and process identity, including `src/server/index.ts`, `src/server/serverMain.ts`, `src/appServer.ts`, `src/appServerMain.ts`, and any dedicated bootstrap modules, so the release inventory covers startup-time logging behavior as well as HTTP routes.
-- Confirm the supported OSS flow binds only to loopback by default, or document and explicitly justify any broader bind. Any wider default exposure is a release blocker.
+- Completed: listener/proxy entrypoints are recorded in `routeSurfaceInventory.ts`.
+- Completed: `src/server/serverMain.ts` and `src/appServerMain.ts` bind to `127.0.0.1` by default.
+- Completed: `publicRouteSurfaceGate.ts` blocks local diagnostics, internal runtime, maintenance/debug, and remove-before-release public routes by default.
+- Remaining: review bootstrap/runtime logging entrypoints and make final remove/keep/operator-only decisions for all gated route groups.
 - Review CORS, desktop-mode exceptions, and writer-proxy behavior to ensure the default network posture stays narrow.
 - Remove or move operational scripts that are useful only inside non-public environments.
 
 ### 8. Audit licensing, data rights, and publishing obligations
 
+Status: partially implemented. License, security policy, and contributor guide exist; data-rights review remains.
+
 - Pick an explicit project license and verify that dependencies, bundled assets, model integrations, and docs are compatible with that choice.
 - Confirm that no private data, licensed PDFs, restricted datasets, or unpublished prompts are included in tracked files.
 - Decide whether any medical, research, or model-use disclaimers should be part of the public release.
-- Confirm the existing `LICENSE`, then add `SECURITY.md` and contributor guidance before opening the repo broadly.
+- Completed: existing Apache 2.0 `LICENSE` remains, and `SECURITY.md` plus `CONTRIBUTING.md` have been added.
+- Remaining: finish dependency/license compatibility, bundled asset/data rights, prompt/publication rights, and medical/research/model-use disclaimer decisions.
 
 ### 9. Produce the release packet and go/no-go review
+
+Status: not started.
 
 - Assemble the final evidence set: route inventory, history finding log, secret rotation log, kept-versus-removed script list, and public-repo scope decision.
 - Make one explicit go/no-go decision with blockers sorted into must-fix-before-open and can-fix-after-open.
@@ -129,13 +184,18 @@
 
 ### 10. Establish public-repo guardrails
 
+Status: partially implemented for route inventory tests only; public-repo CI/scanning guardrails remain.
+
 - Add a fresh public CI/workflow set rather than copying private automation blindly.
 - Run secret scanning on pull requests and on the default branch, and add checks that removed or moved docs, remote helpers, and restricted sample data do not re-enter the Forska repo.
-- As one of the last cleanup steps, implement the supported local API manifest from `plans/supportedLocalApi.md` and treat unexpected endpoint, listener, owner/proxy, or CORS changes as review failures.
+- Completed: `routeSurfaceInventory.test.ts` currently catches mounted-route inventory drift and unsafe entrypoint defaults.
+- Remaining: as one of the last cleanup steps, implement the supported local API manifest from `plans/supportedLocalApi.md` and treat unexpected endpoint, listener, owner/proxy, or CORS changes as review failures.
 - Add a fresh-clone smoke test based only on public docs so new contributors can validate the supported OSS flow without private infra access.
 - Require explicit review before adding new Dockerfiles, remote-run docs, infra scripts, or release helpers to the public repo.
 
 ### 11. Finalize the public release scope
+
+Status: not started; this is the main remaining file-action and clean-mirror packaging workstream.
 
 - Default to a fresh public mirror exported from an audited snapshot, with no inherited private commit history.
 - Treat preserving the existing git history as an exception that requires a strong reason and a separate cleanup plan.
@@ -158,16 +218,18 @@
 
 ## Deliverables
 
-- A current API and network-surface matrix with supported-local/diagnostic/sensitive/internal/debug/remove decisions, bind notes, and transitive mount coverage
-- A late-stage supported local API manifest and documentation, based on `plans/supportedLocalApi.md`, covering local LLM apps, agents, scripts, browser UI, and desktop app callers
-- A git-history findings report covering secrets, old endpoints, and sensitive infra details, with owner, severity, disposition, and closure evidence
-- A release-scope file-action table covering keep as-is, rewrite, remove, and move decisions
-- A decision memo that defaults to publishing from a fresh clean mirror and explains any exception
-- A public-repo file decision checklist for files, scripts, docs, and moved material
-- A kept-versus-removed publication artifact list covering scripts, Dockerfiles, remote docs, CI, and release helpers
-- A public-repo guardrail plan for secret scanning, moved/removed-path checks, and unexpected route or listener changes
-- A logging-surface note covering runtime JSONL env vars, ignored paths, payload shape, bootstrap entrypoints, and retention behavior in the published repo
-- Public-release docs: existing `LICENSE`, new `SECURITY.md`, contributor guidance, and rewritten README updates
+- [x] A current API and network-surface matrix with supported-local/diagnostic/sensitive/internal/debug/remove decisions, bind notes, and transitive mount coverage: `src/server/routes/routeSurfaceInventory.ts` and `plans/openSourceRouteSurface.md`
+- [ ] A late-stage supported local API manifest and documentation, based on `plans/supportedLocalApi.md`, covering local LLM apps, agents, scripts, browser UI, and desktop app callers
+- [x] A manual git-history findings report covering secrets, old endpoints, and sensitive infra details, with owner, severity, disposition, and closure evidence: `plans/openSourceSecretsHistoryFindings.md`
+- [ ] Dedicated `gitleaks` and `trufflehog` scanner reports and triage summaries
+- [ ] A release-scope file-action table covering keep as-is, rewrite, remove, and move decisions
+- [ ] A decision memo that defaults to publishing from a fresh clean mirror and explains any exception
+- [ ] A public-repo file decision checklist for files, scripts, docs, and moved material
+- [x] A kept-versus-removed docs and publication-artifact list for Workstream 1: `plans/openSourceDocsDockerPlan.md`
+- [ ] A full kept-versus-removed script list covering remaining `scripts/` files and package commands
+- [ ] A public-repo guardrail plan for secret scanning, moved/removed-path checks, and unexpected route or listener changes
+- [ ] A logging-surface note covering runtime JSONL env vars, ignored paths, payload shape, bootstrap entrypoints, and retention behavior in the published repo
+- [x] Public-release docs baseline: existing `LICENSE`, new `SECURITY.md`, contributor guidance, and rewritten README updates
 
 ## Exit Criteria
 
