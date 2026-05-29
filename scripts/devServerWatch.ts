@@ -22,6 +22,7 @@ import {
   readDuckdbOwnerLease,
 } from '../src/server/utils/duckdbOwnerLease.ts'
 import {loadEnv} from '../src/server/utils/env.ts'
+import {runtimeReadyPath} from '../src/server/utils/runtimeReadyContract.ts'
 
 const watchedPaths = ['src', 'package.json', 'tsconfig.json']
 const restartDelayMs = 150
@@ -193,14 +194,16 @@ const readJudgmentJobLeaseFiles = async (): Promise<JudgmentJobLeaseMetadata[]> 
 
 const getExistingStackState = async (stackLock: ServerStackLockMetadata): Promise<ExistingStackState> => {
   const judgePort = stackLock.judgePort ?? stackConfig.judgePort
-  const [apiHealthResponse, maintenanceHealthResponse, duckdbLease, sqliteLeases] = await Promise.all([
-    fetchJson<{data?: Record<string, number>}>(`http://127.0.0.1:${stackLock.apiPort}/api/judgmentsjobs-health`),
-    fetchJson<{
-      data?: {martRefresh?: {progress?: {queuedArticleRefreshCount?: number; queuedProjectRefreshCount?: number}}}
-    }>(`http://127.0.0.1:${stackLock.maintenancePort}/api/duckdb_owner_connections`),
-    Effect.runPromise(readDuckdbOwnerLease(loadEnv().DUCKDB_PATH)),
-    readJudgmentJobLeaseFiles(),
-  ])
+  const [apiHealthResponse, maintenanceReadyResponse, maintenanceHealthResponse, duckdbLease, sqliteLeases] =
+    await Promise.all([
+      fetchJson<{data?: Record<string, number>}>(`http://127.0.0.1:${stackLock.apiPort}/api/judgmentsjobs-health`),
+      fetchJson<{data?: {ready?: boolean}}>(`http://127.0.0.1:${stackLock.maintenancePort}${runtimeReadyPath}`),
+      fetchJson<{
+        data?: {martRefresh?: {progress?: {queuedArticleRefreshCount?: number; queuedProjectRefreshCount?: number}}}
+      }>(`http://127.0.0.1:${stackLock.maintenancePort}/api/duckdb_owner_connections`),
+      Effect.runPromise(readDuckdbOwnerLease(loadEnv().DUCKDB_PATH)),
+      readJudgmentJobLeaseFiles(),
+    ])
   const judgeHealthResponse = await fetchJson<{data?: {ready?: boolean}}>(
     `http://127.0.0.1:${judgePort}/api/runtime/ready`,
   )
@@ -233,7 +236,7 @@ const getExistingStackState = async (stackLock: ServerStackLockMetadata): Promis
             projectQueued: Number(maintenanceHealthResponse.data.martRefresh.progress.queuedProjectRefreshCount ?? 0),
           }
         : null,
-      reachable: maintenanceHealthResponse !== null,
+      reachable: maintenanceReadyResponse !== null,
     },
   }
 }

@@ -6,6 +6,7 @@ import {spawn, type Subprocess} from 'bun'
 
 import {getBackgroundServerEnv, getBackgroundServerStackConfig} from '../src/server/utils/backgroundServerStack.ts'
 import {readJudgeWorkerJournalLock} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
+import {runtimeReadyPath} from '../src/server/utils/runtimeReadyContract.ts'
 
 type ManagedRole = 'api' | 'judge' | 'maintenance'
 type ServerProcess = Subprocess<'ignore', 'inherit', 'inherit'>
@@ -176,8 +177,14 @@ const waitForProcessExit = async (pid: number, deadlineMs = Date.now() + shutdow
 
 const isDuckdbOwnerReady = async (duckdbOwnerUrl: string) => {
   try {
-    const response = await fetch(`${duckdbOwnerUrl}/api/duckdb_owner_connections`, {signal: AbortSignal.timeout(1_000)})
-    return response.ok
+    const response = await fetch(`${duckdbOwnerUrl}${runtimeReadyPath}`, {signal: AbortSignal.timeout(1_000)})
+    const body = response.ok
+      ? ((await response.json().catch(() => {
+          return null
+        })) as {data?: {duckdbOwner?: unknown; ready?: unknown}} | null)
+      : null
+
+    return body?.data?.ready === true && body?.data?.duckdbOwner === true
   } catch {
     return false
   }
