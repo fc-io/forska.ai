@@ -62,6 +62,15 @@ export type ComparisonProjectSource = {
   importRoutes: Array<{route: string; name: string | null}>
 }
 
+export type ComparisonProjectConflictResolutionImportSource = {
+  id: string
+  name: string
+  description: string | null
+  createdAt: Date | string
+  humanJudgmentMode: HumanJudgmentMode
+  resolutionCount: number
+}
+
 export type ComparisonProjectEditFormData = {
   id: string
   name: string
@@ -356,6 +365,15 @@ export const fetchComparisonProjectSources = async () => {
   const response = await apiClient.api['comparison-projects'].sources.get()
 
   return getResponseData<ComparisonProjectSource[]>(response, 'Failed to fetch comparison project sources')
+}
+
+export const fetchComparisonProjectConflictResolutionImportSources = async () => {
+  const response = await apiClient.api['comparison-projects']['conflict-resolution-import-sources'].get()
+
+  return getResponseData<ComparisonProjectConflictResolutionImportSource[]>(
+    response,
+    'Failed to fetch comparison project conflict resolution import sources',
+  )
 }
 
 export const createComparisonProjectFromProject = async (input: CreateComparisonProjectFromProjectInput) => {

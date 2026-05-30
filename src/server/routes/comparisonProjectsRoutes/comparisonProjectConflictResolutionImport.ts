@@ -1,3 +1,24 @@
+import type {HumanJudgmentMode} from '../../../db/schemaTypes.ts'
+import {getDateValue} from '../../services/appQueryHelpers.ts'
+
+export type ComparisonProjectConflictResolutionImportSource = {
+  id: string
+  name: string
+  description: string | null
+  createdAt: Date
+  humanJudgmentMode: HumanJudgmentMode
+  resolutionCount: number
+}
+
+export type ComparisonProjectConflictResolutionImportSourceQueryRow = {
+  id: string
+  name: string
+  description: string | null
+  createdAt: unknown
+  humanJudgmentMode: HumanJudgmentMode | null
+  resolutionCount: unknown
+}
+
 export type ComparisonProjectConflictResolutionImportMatchKind = 'doi' | 'id-title'
 
 export type ComparisonProjectConflictResolutionImportSourceRow = {
@@ -104,6 +125,46 @@ type DuplicateKeyErrorParams = {
 
 const doiPrefixPattern = /^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)/i
 const idTitleKeySeparator = '\u001F'
+
+export const getComparisonProjectConflictResolutionImportSourcesSql = (params: {
+  comparisonProjectConflictResolutionTable: string
+  comparisonProjectTable: string
+}) => {
+  return `
+    SELECT
+      cp.id AS id,
+      cp.name AS name,
+      cp.description AS description,
+      cp.created_at AS createdAt,
+      cp.human_judgment_mode AS humanJudgmentMode,
+      COUNT(cr.article_id) AS resolutionCount
+    FROM ${params.comparisonProjectTable} cp
+    INNER JOIN ${params.comparisonProjectConflictResolutionTable} cr
+      ON cr.comparison_project_id = cp.id
+    WHERE cp.archived = FALSE
+      AND cp.allow_conflict_resolution = TRUE
+    GROUP BY
+      cp.id,
+      cp.name,
+      cp.description,
+      cp.created_at,
+      cp.human_judgment_mode
+    ORDER BY cp.created_at DESC, cp.name ASC, cp.id ASC
+  `
+}
+
+export const getComparisonProjectConflictResolutionImportSourceValue = (
+  row: ComparisonProjectConflictResolutionImportSourceQueryRow,
+): ComparisonProjectConflictResolutionImportSource => {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    createdAt: getDateValue(row.createdAt) ?? new Date(0),
+    humanJudgmentMode: row.humanJudgmentMode ?? 'prompt',
+    resolutionCount: Number(row.resolutionCount ?? 0),
+  }
+}
 
 const getTrimmedText = (value: string | null | undefined) => {
   const trimmedValue = value?.trim() ?? ''
