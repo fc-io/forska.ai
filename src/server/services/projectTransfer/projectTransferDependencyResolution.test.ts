@@ -496,6 +496,55 @@ test('project transfer dependency resolution rejects materialized model handoffs
   }
 })
 
+test('project transfer dependency resolution maps materialized models to provider connections', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getProjectTransferPayloadFixtureMap()
+    const targetModel = getTargetModel()
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        getProviderModelsByIds: async () => {
+          return new Map([['target-model-1', targetModel]])
+        },
+        listProviderConnections: async () => {
+          return [getTargetConnection({}, [targetModel])]
+        },
+      },
+      request: {
+        materializedModels: [
+          {sourceModelId: 'model-1', targetModelId: 'target-model-1', targetProviderConnectionId: 'target-provider-1'},
+        ],
+        planRevision: 1,
+      },
+    })
+    const persistedPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as {
+      dependencyResolution: {
+        modelTargetBySourceId: Record<string, string>
+        providerTargetBySourceId: Record<string, string>
+      }
+      summary: {dependencyStatuses: Record<string, string>}
+    }
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
+    })
+    expect(persistedPlan.dependencyResolution.providerTargetBySourceId).toEqual({
+      'provider-connection-1': 'target-provider-1',
+    })
+    expect(persistedPlan.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': 'target-model-1'})
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('project transfer dependency resolution keeps Codex materialization unresolved until the model is visible on a live connection', async () => {
   const cwd = getRuntimeRoot()
 

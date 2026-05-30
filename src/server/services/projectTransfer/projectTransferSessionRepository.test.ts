@@ -212,6 +212,57 @@ test('project transfer session transitions reject stale plan revisions', () => {
   expect(result.currentRevision).toBe(1)
 })
 
+test('project transfer session plan revision update can publish final analyze state atomically', () => {
+  const result = runSessionRepositoryScript<{
+    ownerToken: string | null
+    packageFingerprint: string | null
+    planRevision: number | null
+    progress: {phase: string; status: string; warningCount?: number | null} | null
+    state: string | null
+  }>(`
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt,
+      id: 'session-analyze-publish',
+      state: 'extracting',
+    })
+    await sessionRepository.transitionProjectTransferSessionState({
+      expectedState: 'extracting',
+      nextOwnerToken: 'analyze-owner',
+      nextState: 'analyzing',
+      progress: {completedBytes: 4, phase: 'analyze', status: 'running', totalBytes: 4},
+      sessionId: 'session-analyze-publish',
+    })
+
+    const updated = await sessionRepository.updateProjectTransferSessionPlanRevision({
+      expectedOwnerToken: 'analyze-owner',
+      expectedPlanRevision: 0,
+      nextOwnerToken: null,
+      nextState: 'ready_to_commit',
+      packageFingerprint: 'package-fingerprint-analyze',
+      planSummary: readyPlan,
+      progress: {completedBytes: 4, phase: 'analyze', status: 'completed', totalBytes: 4, warningCount: 0},
+      sessionId: 'session-analyze-publish',
+    })
+
+    console.log(JSON.stringify({
+      ownerToken: updated?.ownerToken ?? null,
+      packageFingerprint: updated?.packageFingerprint ?? null,
+      planRevision: updated?.planRevision ?? null,
+      progress: updated?.progressJson ?? null,
+      state: updated?.state ?? null,
+    }))
+  `)
+
+  expect(result).toEqual({
+    ownerToken: null,
+    packageFingerprint: 'package-fingerprint-analyze',
+    planRevision: 1,
+    progress: {completedBytes: 4, phase: 'analyze', status: 'completed', totalBytes: 4, warningCount: 0},
+    state: 'ready_to_commit',
+  })
+})
+
 test('project transfer ready transitions validate the explicitly persisted plan summary', () => {
   const result = runSessionRepositoryScript<{
     currentPlanSummary: unknown

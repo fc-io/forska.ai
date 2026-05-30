@@ -300,9 +300,12 @@ const updateProjectTransferSessionPlanRevisionMock = mock(
   async (params: {
     expectedOwnerToken?: string | null
     expectedPlanRevision: number
+    nextOwnerToken?: string | null
     nextState?: ProjectTransferSessionRecord['state']
     now?: Date
+    packageFingerprint?: string | null
     planSummary: unknown
+    progress?: unknown
     sessionId: string
   }) => {
     const current = routeState.sessions[params.sessionId] ?? null
@@ -317,8 +320,13 @@ const updateProjectTransferSessionPlanRevisionMock = mock(
 
     const next = {
       ...current,
+      ownerToken: Object.hasOwn(params, 'nextOwnerToken') ? (params.nextOwnerToken ?? null) : current.ownerToken,
+      packageFingerprint: Object.hasOwn(params, 'packageFingerprint')
+        ? (params.packageFingerprint ?? null)
+        : current.packageFingerprint,
       planRevision: current.planRevision + 1,
       planSummaryJson: params.planSummary,
+      progressJson: Object.hasOwn(params, 'progress') ? (params.progress ?? null) : current.progressJson,
       state: params.nextState ?? current.state,
       updatedAt: getNow(params.now),
     }
@@ -894,6 +902,13 @@ test('project transfer import analyze claims queued uploads and writes an inline
   expect(body.data.planSummary.blockerCount).toBe(1)
   expect(body.data.blockers).toHaveLength(1)
   expect(body.data.canCommit).toBe(false)
+  expect(routeState.sessions['import-analyze']?.ownerToken).toBeNull()
+  expect(routeState.sessions['import-analyze']?.packageFingerprint).toBe('analyzed-fingerprint')
+  expect(routeState.sessions['import-analyze']?.progressJson).toMatchObject({phase: 'analyze', status: 'completed'})
+  expect(transitionProjectTransferSessionStateMock).toHaveBeenCalledTimes(2)
+  expect(updateProjectTransferSessionPlanRevisionMock).toHaveBeenCalledWith(
+    expect.objectContaining({nextOwnerToken: null, packageFingerprint: 'analyzed-fingerprint'}),
+  )
 })
 
 test('project transfer import analyze returns accepted when expanded size is unknown', async () => {

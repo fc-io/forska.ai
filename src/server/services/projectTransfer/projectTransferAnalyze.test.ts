@@ -419,7 +419,24 @@ const getDateBoundedRouteAnalyzeTargetRunner = (): ProjectTransferAnalyzeTargetR
                   targetImportRouteId: 'target-route-1',
                 },
               ]
-            : []
+            : statement.includes('FROM app.project_import_route pir')
+              ? [
+                  {
+                    archived: false,
+                    dateFrom: '2027-01-01T00:00:00.000Z',
+                    dateTo: null,
+                    projectId: 'future-route-project',
+                    targetImportRouteId: 'target-route-1',
+                  },
+                  {
+                    archived: true,
+                    dateFrom: null,
+                    dateTo: null,
+                    projectId: 'archived-route-project',
+                    targetImportRouteId: 'target-route-1',
+                  },
+                ]
+              : []
 
       return rows as T[]
     },
@@ -525,8 +542,8 @@ test('plans reused article fills, asset promotion, route omissions, and duplicat
     expect(result.planSummary.overlapCounts.reusedArticleAssetPromotionCount).toBe(1)
     expect(result.planSummary.overlapCounts.dirtiedExistingProjectCount).toBe(1)
     expect(result.planSummary.overlapCounts.omittedRouteLinkCount).toBe(1)
-    expect(result.planSummary.overlapCounts.omittedArticleRouteLinkCount).toBe(1)
-    expect(result.planSummary.overlapCounts.routeArticleSnapshotLinkCount).toBe(1)
+    expect(result.planSummary.overlapCounts.omittedArticleRouteLinkCount).toBe(0)
+    expect(result.planSummary.overlapCounts.routeArticleSnapshotLinkCount).toBe(0)
     expect(result.planSummary.overlapCounts.duplicateImportMatchCount).toBe(1)
     expect(articleMatch?.candidates[0]?.matchedIdentifiers).toEqual([
       {identifierType: 'doi', key: 'doi:10.1101/2024.01.01.123456', value: '10.1101/2024.01.01.123456'},
@@ -568,12 +585,19 @@ test('links date-bounded routes when only extra target-route articles are outsid
       zipModule,
     })
     const [projectRoute] = result.plan.targetPlan.projectRoutePlan
+    const [articleRoute] = result.plan.targetPlan.articleRoutePlan
 
     expect(projectRoute).toMatchObject({
       action: 'link',
       dateBoundedOutsideExportedArticleCount: 0,
       outsideExportedArticleCount: 1,
       targetImportRouteId: 'target-route-1',
+    })
+    expect(articleRoute).toMatchObject({
+      action: 'write',
+      targetArticleId: 'target-article-1',
+      targetImportRouteId: 'target-route-1',
+      unsafeProjectIds: [],
     })
     expect(result.planSummary.overlapCounts.omittedRouteLinkCount).toBe(0)
   } finally {

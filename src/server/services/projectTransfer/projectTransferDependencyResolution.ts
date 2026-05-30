@@ -478,11 +478,42 @@ const getNextAcceptedSubstituteModelSourceIds = ({
   })
 }
 
-const getNextResolutionState = (
-  previous: ProjectTransferDependencyResolutionState,
-  request: ProjectTransferDependencyResolutionRequest,
-): ProjectTransferDependencyResolutionState => {
+const getMaterializedProviderSelections = ({
+  importedModels,
+  request,
+}: {
+  importedModels: ImportedModel[]
+  request: ProjectTransferDependencyResolutionRequest
+}) => {
+  const importedModelBySourceId = importedModels.reduce<Record<string, ImportedModel>>((mapped, model) => {
+    return {...mapped, [model.sourceModelId]: model}
+  }, {})
+
+  return (request.materializedModels ?? []).flatMap((model): ProjectTransferDependencyProviderSelection[] => {
+    const importedModel = importedModelBySourceId[model.sourceModelId] ?? null
+
+    return importedModel === null || model.targetProviderConnectionId === undefined
+      ? []
+      : [
+          {
+            sourceProviderConnectionId: importedModel.sourceProviderConnectionId,
+            targetProviderConnectionId: model.targetProviderConnectionId,
+          },
+        ]
+  })
+}
+
+const getNextResolutionState = ({
+  importedModels,
+  previous,
+  request,
+}: {
+  importedModels: ImportedModel[]
+  previous: ProjectTransferDependencyResolutionState
+  request: ProjectTransferDependencyResolutionRequest
+}): ProjectTransferDependencyResolutionState => {
   const providerSelections = [
+    ...getMaterializedProviderSelections({importedModels, request}),
     ...(request.selectedProviderConnections ?? []),
     ...(request.createdProviderConnections ?? []),
   ]
@@ -1114,7 +1145,12 @@ export const revalidateProjectTransferResolvedDependencies = async (
   const connections = await repositories.listProviderConnections()
   const connectionById = getConnectionById(connections)
   const previousResolutionState = getPlanDependencyResolution(input.plan)
-  const requestedResolutionState = getNextResolutionState(previousResolutionState, input.request)
+  const importedModels = (input.payloads.models ?? []).map(getImportedModel)
+  const requestedResolutionState = getNextResolutionState({
+    importedModels,
+    previous: previousResolutionState,
+    request: input.request,
+  })
   const explicitProviderError = await validateExplicitProviderSelections({
     connectionById,
     getProviderConnectionById: repositories.getProviderConnectionById,
@@ -1135,7 +1171,6 @@ export const revalidateProjectTransferResolvedDependencies = async (
   }
 
   const importedProviders = (input.payloads.providerConnections ?? []).map(getImportedProviderConnection)
-  const importedModels = (input.payloads.models ?? []).map(getImportedModel)
   const importedJudgments = (input.payloads.judgments ?? []).map(getImportedJudgment)
   const modelsBySourceProviderId = getModelsBySourceProviderId(importedModels)
   const judgmentModelSourceIds = getJudgmentModelSourceIds(importedJudgments)

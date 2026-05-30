@@ -849,24 +849,16 @@ const runProjectTransferImportAnalyzeJob = async ({ownerToken, sessionId}: {owne
   const planned = await repository.updateProjectTransferSessionPlanRevision({
     expectedOwnerToken: ownerToken,
     expectedPlanRevision: analyzing.planRevision,
+    nextOwnerToken: null,
     nextState,
     now: completedAt,
+    packageFingerprint: analysis.packageFingerprint,
     planSummary: analysis.planSummary,
+    progress: completedProgress,
     sessionId,
   })
 
-  return planned === null
-    ? null
-    : repository.transitionProjectTransferSessionState({
-        expectedOwnerToken: ownerToken,
-        expectedState: nextState,
-        nextOwnerToken: null,
-        nextState,
-        now: completedAt,
-        packageFingerprint: analysis.packageFingerprint,
-        progress: completedProgress,
-        sessionId,
-      })
+  return planned
 }
 
 const failProjectTransferImportAnalyzeSession = async ({
