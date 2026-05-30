@@ -119,6 +119,7 @@ export type ProjectTransferDependencyResolutionRepositories = {
 }
 
 type ProjectTransferDependencyResolutionInput = RuntimePathOptions & {
+  deferPlanWrite?: boolean
   layout: ProjectTransferImportTempLayout
   nextPlanRevision: number
   request: ProjectTransferDependencyResolutionRequest
@@ -366,6 +367,12 @@ const readExtractedPayloads = async (input: RuntimePathOptions & {layout: Projec
 const writeJsonArtifact = async (input: RuntimePathOptions & {pathValue: string; value: unknown}) => {
   const resolvedPath = resolveProjectTransferTempWritablePath(input)
   await globalThis.Bun.write(resolvedPath, getProjectTransferCanonicalJson(input.value))
+}
+
+export const writeProjectTransferDependencyPlan = async (
+  input: RuntimePathOptions & {layout: ProjectTransferImportTempLayout; plan: ProjectTransferImportPlanArtifact},
+) => {
+  await writeJsonArtifact({...input, pathValue: input.layout.planPath, value: input.plan})
 }
 
 const getImportedProviderConnection = (record: ProjectTransferPayloadRecord): ImportedProviderConnection => {
@@ -1274,8 +1281,8 @@ export const resolveProjectTransferDependencies = async (
     request: input.request,
   })
 
-  if (result.status === 'ok' && result.changed) {
-    await writeJsonArtifact({...input, pathValue: input.layout.planPath, value: result.plan})
+  if (result.status === 'ok' && result.changed && input.deferPlanWrite !== true) {
+    await writeProjectTransferDependencyPlan({...input, plan: result.plan})
   }
 
   return result

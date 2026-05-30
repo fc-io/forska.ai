@@ -443,6 +443,18 @@ const getDateBoundedRouteAnalyzeTargetRunner = (): ProjectTransferAnalyzeTargetR
   }
 }
 
+const getNewArticleRouteAnalyzeTargetRunner = (): ProjectTransferAnalyzeTargetRunner => {
+  return {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      const rows = statement.includes('FROM app.import_route')
+        ? [{active: true, route: 'covidence', targetImportRouteId: 'target-route-1'}]
+        : []
+
+      return rows as T[]
+    },
+  }
+}
+
 const getConflictAnalyzeTargetRunner = (): ProjectTransferAnalyzeTargetRunner => {
   return {
     queryJson: async <T>(statement: string): Promise<T[]> => {
@@ -600,6 +612,36 @@ test('links date-bounded routes when only extra target-route articles are outsid
       unsafeProjectIds: [],
     })
     expect(result.planSummary.overlapCounts.omittedRouteLinkCount).toBe(0)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('writes route memberships for newly created articles when the target route is safe', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({cwd})
+    const result = await analyzeProjectTransferImportPackage({
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      layout,
+      planRevision: 7,
+      runner: getNewArticleRouteAnalyzeTargetRunner(),
+      uploadMetadata,
+      zipModule,
+    })
+    const [articleMatch] = result.plan.targetPlan.articleMatches
+    const [articleRoute] = result.plan.targetPlan.articleRoutePlan
+
+    expect(articleMatch).toMatchObject({action: 'create', selectedTargetArticleId: null})
+    expect(articleRoute).toMatchObject({
+      action: 'write',
+      targetArticleId: null,
+      targetImportRouteId: 'target-route-1',
+      unsafeProjectIds: [],
+    })
+    expect(result.planSummary.overlapCounts.omittedArticleRouteLinkCount).toBe(0)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

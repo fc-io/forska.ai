@@ -1294,6 +1294,7 @@ const getProjectArticleSourceSet = (projectArticles: readonly ProjectTransferPay
 const getArticleRoutePlan = ({
   activeRouteBySource,
   articleImportRoutes,
+  articles,
   articleMatches,
   projectArticleReferences,
   projectArticles,
@@ -1302,6 +1303,7 @@ const getArticleRoutePlan = ({
 }: {
   activeRouteBySource: Record<string, TargetImportRouteRow | null>
   articleImportRoutes: readonly ProjectTransferPayloadRecord[]
+  articles: readonly ProjectTransferArticlePayloadRecord[]
   articleMatches: readonly ArticleMatchPlan[]
   projectArticleReferences: readonly ProjectArticleReferenceRow[]
   projectArticles: readonly ProjectTransferPayloadRecord[]
@@ -1310,6 +1312,7 @@ const getArticleRoutePlan = ({
 }) => {
   const targetArticleBySource = getResolvedArticleIdBySource(articleMatches)
   const targetArticleRecordBySource = getSelectedTargetArticleBySource(articleMatches)
+  const importedArticleBySource = getImportedArticleBySource(articles)
   const projectArticleSourceSet = getProjectArticleSourceSet(projectArticles)
   const routeArticleSet = new Set(
     routeArticles.map((routeArticle) => {
@@ -1328,6 +1331,9 @@ const getArticleRoutePlan = ({
     const sourceArticleImportRouteId = getStringField(articleRoute, 'sourceArticleImportRouteId')
     const targetArticleId = targetArticleBySource[sourceArticleId] ?? null
     const targetArticle = targetArticleRecordBySource[sourceArticleId] ?? null
+    const importedArticle = importedArticleBySource[sourceArticleId] ?? null
+    const articleCreatedAt =
+      targetArticle?.articleCreatedAt ?? getRecordField(importedArticle ?? {}, 'articleCreatedAt')
     const targetRoute = activeRouteBySource[sourceImportRouteId] ?? null
     const existingRouteArticle =
       targetArticleId !== null && targetRoute !== null
@@ -1337,12 +1343,7 @@ const getArticleRoutePlan = ({
       return (
         projectRoute.targetImportRouteId === targetRoute?.targetImportRouteId
         && !projectRoute.archived
-        && (targetArticle === null
-          || isDateWithinProjectBounds({
-            articleCreatedAt: targetArticle.articleCreatedAt,
-            dateFrom: projectRoute.dateFrom,
-            dateTo: projectRoute.dateTo,
-          }))
+        && isDateWithinProjectBounds({articleCreatedAt, dateFrom: projectRoute.dateFrom, dateTo: projectRoute.dateTo})
       )
     })
     const unsafeProjectIds =
@@ -1356,11 +1357,7 @@ const getArticleRoutePlan = ({
               return projectRoute.projectId
             })
     const action =
-      targetRoute === null || unsafeProjectIds.length > 0 || targetArticleId === null
-        ? 'omit'
-        : existingRouteArticle
-          ? 'exists'
-          : 'write'
+      targetRoute === null || unsafeProjectIds.length > 0 ? 'omit' : existingRouteArticle ? 'exists' : 'write'
 
     return {
       action,
@@ -1378,6 +1375,7 @@ const getArticleRoutePlan = ({
 const getRoutePlan = async ({
   articleImportRoutes,
   articleMatches,
+  articles,
   importRoutes,
   importedProject,
   projectArticles,
@@ -1386,6 +1384,7 @@ const getRoutePlan = async ({
 }: {
   articleImportRoutes: readonly ProjectTransferPayloadRecord[]
   articleMatches: readonly ArticleMatchPlan[]
+  articles: readonly ProjectTransferArticlePayloadRecord[]
   importRoutes: readonly ProjectTransferPayloadRecord[]
   importedProject: ProjectTransferPayloadByKey['project'] | null
   projectArticles: readonly ProjectTransferPayloadRecord[]
@@ -1446,6 +1445,7 @@ const getRoutePlan = async ({
   const articleRoutePlan = getArticleRoutePlan({
     activeRouteBySource,
     articleImportRoutes,
+    articles,
     articleMatches,
     projectArticleReferences,
     projectArticles,
@@ -1771,6 +1771,7 @@ export const getProjectTransferAnalyzeTargetPlan = async ({
   const routePlan = await getRoutePlan({
     articleImportRoutes: payloads.articleImportRoutes ?? [],
     articleMatches: articleMatchAnalysis.plans,
+    articles,
     importRoutes: payloads.importRoutes ?? [],
     importedProject,
     projectArticles: payloads.projectArticles ?? [],

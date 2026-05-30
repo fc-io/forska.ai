@@ -125,6 +125,7 @@ test('provider models route syncs models for a connection', async () => {
 
 test('provider models route adds a manual model', async () => {
   state.createProviderModel.mockClear()
+  state.updateProviderModel.mockClear()
   const app = await loadRoutes()
   const response = await app.handle(
     new Request('http://localhost/api/provider-connections/connection-1/models', {
@@ -138,6 +139,40 @@ test('provider models route adds a manual model', async () => {
   expect(response.status).toBe(200)
   expect(body.data.modelId).toBe('model-1')
   expect(state.createProviderModel).toHaveBeenCalledTimes(1)
+  expect(state.updateProviderModel).not.toHaveBeenCalled()
+})
+
+test('provider models route reconciles an existing manual model', async () => {
+  state.createProviderModel.mockClear()
+  state.queryJson.mockImplementationOnce(async () => {
+    return [{id: 'model-1'}]
+  })
+  state.updateProviderModel.mockClear()
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/provider-connections/connection-1/models', {
+      body: JSON.stringify({
+        displayName: 'Manual Model',
+        options: {thinking: 'high'},
+        remoteModelId: 'manual-model',
+        variant: 'high',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {modelId: string}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.modelId).toBe('model-1')
+  expect(state.createProviderModel).not.toHaveBeenCalled()
+  expect(state.updateProviderModel).toHaveBeenCalledWith({
+    displayName: 'Manual Model',
+    enabled: true,
+    id: 'model-1',
+    options: {thinking: 'high'},
+    variant: 'high',
+  })
 })
 
 test('provider models route updates model enabled state and label', async () => {

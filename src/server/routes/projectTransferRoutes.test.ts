@@ -190,6 +190,8 @@ const resolveProjectTransferDependenciesMock = mock(async (_input: unknown) => {
   return routeState.resolveResult
 })
 
+const writeProjectTransferDependencyPlanMock = mock(async (_input: unknown) => {})
+
 const commitProjectTransferImportSessionMock = mock(async (input: {request: unknown; sessionId: string}) => {
   const current = routeState.sessions[input.sessionId] ?? null
 
@@ -432,7 +434,10 @@ void mock.module(commitModulePath, () => {
 })
 
 void mock.module(dependencyResolutionModulePath, () => {
-  return {resolveProjectTransferDependencies: resolveProjectTransferDependenciesMock}
+  return {
+    resolveProjectTransferDependencies: resolveProjectTransferDependenciesMock,
+    writeProjectTransferDependencyPlan: writeProjectTransferDependencyPlanMock,
+  }
 })
 
 void mock.module(sessionRepositoryModulePath, () => {
@@ -551,6 +556,7 @@ afterEach(() => {
   resolveProjectTransferDependenciesMock.mockClear()
   transitionProjectTransferSessionStateMock.mockClear()
   updateProjectTransferSessionPlanRevisionMock.mockClear()
+  writeProjectTransferDependencyPlanMock.mockClear()
   routeState.exportResult = getInlineExportResult()
   routeState.commitResult = null
   routeState.projectRows = [{deletePendingAt: null, id: 'project-1'}]
@@ -1002,12 +1008,40 @@ test('project transfer import resolve updates the durable dependency plan and co
     error: null,
   })
   expect(resolveProjectTransferDependenciesMock).toHaveBeenCalledTimes(1)
+  expect(resolveProjectTransferDependenciesMock).toHaveBeenCalledWith(expect.objectContaining({deferPlanWrite: true}))
+  expect(writeProjectTransferDependencyPlanMock).toHaveBeenCalledWith(expect.objectContaining({plan: {}}))
   expect(commitResponse.status).toBe(200)
   expect(commitBody).toMatchObject({data: {completion, state: 'completed'}, error: null})
   expect(commitProjectTransferImportSessionMock).toHaveBeenCalledWith({
     request: {expectedPlanRevision: 1},
     sessionId: 'import-resolve',
   })
+})
+
+test('project transfer import resolve does not publish a plan when the session revision update loses', async () => {
+  routeState.sessions['import-resolve-race'] = getImportSessionRecord({
+    id: 'import-resolve-race',
+    planRevision: 1,
+    state: 'awaiting_resolution',
+  })
+  updateProjectTransferSessionPlanRevisionMock.mockImplementationOnce(async () => {
+    return null
+  })
+  const app = await getProjectTransferApp()
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/import-resolve-race/resolve-dependencies', {
+      body: JSON.stringify({planRevision: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: null; error: string}
+
+  expect(response.status).toBe(409)
+  expect(body.error).toBe('Project transfer import dependency resolution could not update the plan')
+  expect(resolveProjectTransferDependenciesMock).toHaveBeenCalledWith(expect.objectContaining({deferPlanWrite: true}))
+  expect(writeProjectTransferDependencyPlanMock).not.toHaveBeenCalled()
 })
 
 test('project transfer commit uses reviewed revision contract without owner tokens', async () => {

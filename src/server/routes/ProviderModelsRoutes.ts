@@ -61,28 +61,26 @@ export const providerModelsRoutes = new Elysia()
         LIMIT 1
       `)
 
-      if (existing) {
-        return {data: {model: null, modelId: existing.id}, error: null}
-      }
-
-      const model = await createProviderModel({
-        connection,
-        displayName,
-        metadataJson: getManualProviderModelMetadata({
-          displayName,
-          modelName: remoteModelId,
-          options: body.options,
-          providerKind: connection.providerKind,
-          remoteModelId,
-          variant,
-          version: variant,
-        }),
-        modelName: remoteModelId,
-        remoteModelId,
-        source: 'manual',
-        variant,
-        version: variant,
-      })
+      const model = existing
+        ? await updateProviderModel({displayName, enabled: true, id: existing.id, options: body.options, variant})
+        : await createProviderModel({
+            connection,
+            displayName,
+            metadataJson: getManualProviderModelMetadata({
+              displayName,
+              modelName: remoteModelId,
+              options: body.options,
+              providerKind: connection.providerKind,
+              remoteModelId,
+              variant,
+              version: variant,
+            }),
+            modelName: remoteModelId,
+            remoteModelId,
+            source: 'manual',
+            variant,
+            version: variant,
+          })
 
       return {data: {model, modelId: model.id}, error: null}
     },

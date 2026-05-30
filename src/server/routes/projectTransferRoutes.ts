@@ -29,6 +29,7 @@ import {
 import {
   type ProjectTransferDependencyResolutionRequest,
   resolveProjectTransferDependencies,
+  writeProjectTransferDependencyPlan,
 } from '../services/projectTransfer/projectTransferDependencyResolution.ts'
 import {
   createProjectTransferExport,
@@ -1319,8 +1320,10 @@ const resolveImportDependencies = async (
     return getProjectTransferApiError(set, 409, 'Project transfer import session is not awaiting dependency resolution')
   }
 
+  const layout = getProjectTransferImportTempLayout(sessionId)
   const result = await resolveProjectTransferDependencies({
-    layout: getProjectTransferImportTempLayout(sessionId),
+    deferPlanWrite: true,
+    layout,
     nextPlanRevision: response.data.planRevision + 1,
     request: request.value,
   })
@@ -1341,10 +1344,20 @@ const resolveImportDependencies = async (
     sessionId,
   })
 
-  return updated === null
-    ? getProjectTransferApiError(set, 409, 'Project transfer import dependency resolution could not update the plan')
-    : ((await getImportSessionResponseFromRecord(set, updated))
-        ?? getProjectTransferApiError(set, 500, 'Import session unavailable'))
+  if (updated === null) {
+    return getProjectTransferApiError(
+      set,
+      409,
+      'Project transfer import dependency resolution could not update the plan',
+    )
+  }
+
+  await writeProjectTransferDependencyPlan({layout, plan: result.plan})
+
+  return (
+    (await getImportSessionResponseFromRecord(set, updated))
+    ?? getProjectTransferApiError(set, 500, 'Import session unavailable')
+  )
 }
 
 const getCommitRequestRevision = (
