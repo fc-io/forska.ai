@@ -61,9 +61,12 @@ type TransitionProjectTransferSessionStateParams = ProjectTransferOwnerTokenCond
 
 type UpdateProjectTransferSessionPlanParams = ProjectTransferOwnerTokenCondition & {
   expectedPlanRevision: number
+  nextOwnerToken?: null
   nextState?: ProjectTransferSessionState
   now?: Date
+  packageFingerprint?: string | null
   planSummary: ProjectTransferPlanSummary
+  progress?: ProjectTransferProgressPayload | null
   runner?: ProjectTransferSessionRunner
   sessionId: string
 }
@@ -445,6 +448,7 @@ const updateProjectTransferSessionPlanRevision = async (params: UpdateProjectTra
   const nextState = params.nextState ?? current.state
   assertSessionStateForDirection(current.direction, nextState)
   assertReadyToCommitPlan(nextState, params.planSummary)
+  assertProgressUpdate({next: params.progress, previous: parseProjectTransferProgressPayload(current.progressJson)})
 
   const currentNow = getNow(params.now)
   const ownerCondition = getOwnerTokenCondition(params.expectedOwnerToken)
@@ -461,6 +465,9 @@ const updateProjectTransferSessionPlanRevision = async (params: UpdateProjectTra
       state = ${getSqlLiteral(nextState)},
       plan_revision = plan_revision + 1,
       plan_summary_json = ${getJsonLiteral(params.planSummary)},
+      ${Object.hasOwn(params, 'nextOwnerToken') ? `owner_token = ${getSqlLiteral(params.nextOwnerToken ?? null)},` : ''}
+      ${Object.hasOwn(params, 'packageFingerprint') ? `package_fingerprint = ${getSqlLiteral(params.packageFingerprint ?? null)},` : ''}
+      ${Object.hasOwn(params, 'progress') ? `progress_json = ${getJsonLiteral(params.progress ?? null)},` : ''}
       updated_at = ${getTimestampLiteral(currentNow)}
     WHERE id = ${getSqlLiteral(params.sessionId)}
       AND plan_revision = ${params.expectedPlanRevision}

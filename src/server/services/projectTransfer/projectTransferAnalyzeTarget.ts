@@ -653,6 +653,19 @@ const getResolvedArticleIdBySource = (plans: readonly ArticleMatchPlan[]) => {
   }, {})
 }
 
+const getSelectedTargetArticleBySource = (plans: readonly ArticleMatchPlan[]) => {
+  return plans.reduce<Record<string, TargetArticleRow | null>>((articleMap, plan) => {
+    const targetArticle =
+      plan.selectedTargetArticleId === null
+        ? null
+        : (plan.candidates.find((candidate) => {
+            return candidate.targetArticleId === plan.selectedTargetArticleId
+          })?.targetArticle ?? null)
+
+    return {...articleMap, [plan.sourceArticleId]: targetArticle}
+  }, {})
+}
+
 const getImportedArticleBySource = (articles: readonly ProjectTransferArticlePayloadRecord[]) => {
   return articles.reduce<Record<string, ProjectTransferArticlePayloadRecord>>((articleMap, article) => {
     return {...articleMap, [article.sourceArticleId]: article}
@@ -1296,6 +1309,7 @@ const getArticleRoutePlan = ({
   routeArticles: readonly RouteArticleRow[]
 }) => {
   const targetArticleBySource = getResolvedArticleIdBySource(articleMatches)
+  const targetArticleRecordBySource = getSelectedTargetArticleBySource(articleMatches)
   const projectArticleSourceSet = getProjectArticleSourceSet(projectArticles)
   const routeArticleSet = new Set(
     routeArticles.map((routeArticle) => {
@@ -1313,13 +1327,23 @@ const getArticleRoutePlan = ({
     const sourceImportRouteId = getStringField(articleRoute, 'sourceImportRouteId')
     const sourceArticleImportRouteId = getStringField(articleRoute, 'sourceArticleImportRouteId')
     const targetArticleId = targetArticleBySource[sourceArticleId] ?? null
+    const targetArticle = targetArticleRecordBySource[sourceArticleId] ?? null
     const targetRoute = activeRouteBySource[sourceImportRouteId] ?? null
     const existingRouteArticle =
       targetArticleId !== null && targetRoute !== null
         ? routeArticleSet.has(`${targetRoute.targetImportRouteId}:${targetArticleId}`)
         : false
     const linkedProjects = projectRouteReferences.filter((projectRoute) => {
-      return projectRoute.targetImportRouteId === targetRoute?.targetImportRouteId
+      return (
+        projectRoute.targetImportRouteId === targetRoute?.targetImportRouteId
+        && !projectRoute.archived
+        && (targetArticle === null
+          || isDateWithinProjectBounds({
+            articleCreatedAt: targetArticle.articleCreatedAt,
+            dateFrom: projectRoute.dateFrom,
+            dateTo: projectRoute.dateTo,
+          }))
+      )
     })
     const unsafeProjectIds =
       existingRouteArticle || targetRoute === null
