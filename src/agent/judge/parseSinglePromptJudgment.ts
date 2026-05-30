@@ -51,13 +51,17 @@ const getRecoveredNestedAnswerData = (
     return data
   }
 
-  if (!isEmptyOuterExplanation(data.explanation) || !isEmptyOuterQuotes(data.quotes)) {
+  const nestedAnswer = parseNestedAnswerObject(data.answer)
+
+  if (!nestedAnswer || !hasSinglePromptJudgmentKeys(nestedAnswer) || !schema.allows(nestedAnswer)) {
     return data
   }
 
-  const nestedAnswer = parseNestedAnswerObject(data.answer)
+  const outerWithNestedAnswer = {...data, answer: nestedAnswer.answer}
+  const canRecoverInvalidOuterAnswer = !schema.allows(data) && schema.allows(outerWithNestedAnswer)
+  const canRecoverEmptyOuterShell = isEmptyOuterExplanation(data.explanation) && isEmptyOuterQuotes(data.quotes)
 
-  return nestedAnswer && hasSinglePromptJudgmentKeys(nestedAnswer) && schema.allows(nestedAnswer) ? nestedAnswer : data
+  return canRecoverInvalidOuterAnswer || canRecoverEmptyOuterShell ? nestedAnswer : data
 }
 
 /**

@@ -32,13 +32,30 @@ test('keeps normal enum answers unchanged', () => {
   })
 })
 
-test('does not recover nested answer when outer explanation is populated', () => {
-  const inner = {answer: 'yes', explanation: 'inner explanation', quotes: []}
-  const response = JSON.stringify({answer: JSON.stringify(inner), explanation: 'outer explanation', quotes: null})
+test('recovers nested answer for enum prompts when outer explanation is populated', () => {
+  const inner = {answer: 'yes', explanation: 'inner explanation', quotes: ['inner quote']}
+  const response = JSON.stringify({
+    answer: JSON.stringify(inner),
+    explanation: 'outer explanation',
+    quotes: ['outer quote'],
+  })
 
-  expect(() => {
-    parseSinglePromptJudgment(response, enumPromptType)
-  }).toThrow('answer must be')
+  expect(parseSinglePromptJudgment(response, enumPromptType)).toEqual(inner)
+})
+
+test('does not recover nested answer for open prompts when outer response already validates', () => {
+  const inner = {answer: 'custom answer', explanation: 'inner explanation', quotes: ['inner quote']}
+  const response = JSON.stringify({
+    answer: JSON.stringify(inner),
+    explanation: 'outer explanation',
+    quotes: ['outer quote'],
+  })
+
+  expect(parseSinglePromptJudgment(response, null)).toEqual({
+    answer: JSON.stringify(inner),
+    explanation: 'outer explanation',
+    quotes: ['outer quote'],
+  })
 })
 
 test('does not recover nested answer when inner object does not validate prompt type', () => {
