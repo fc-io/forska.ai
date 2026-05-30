@@ -23,6 +23,7 @@ export type ComparisonProjectConflictResolutionImportMatchKind = 'doi' | 'id-tit
 
 export type ComparisonProjectConflictResolutionImportSourceRow = {
   doi?: string | null
+  doiKeys?: readonly (string | null | undefined)[] | null
   externalArticleId?: string | null
   resolutionValue: string
   sourceRowId: string
@@ -104,8 +105,8 @@ export type ComparisonProjectConflictResolutionImportSummary = {
   skipped: number
 }
 
-type NormalizedSourceRow = ComparisonProjectConflictResolutionImportSourceRow & {
-  doiKey: string | null
+type NormalizedSourceRow = Omit<ComparisonProjectConflictResolutionImportSourceRow, 'doiKeys'> & {
+  doiKeys: string[]
   idTitleKey: string | null
   resolutionValue: string
 }
@@ -201,7 +202,7 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
     doi_identifier AS (
       SELECT
         article_id AS articleId,
-        MIN(normalized_value) AS doi
+        LIST(DISTINCT normalized_value ORDER BY normalized_value) AS doiKeys
       FROM ${params.articleIdentifierTable}
       WHERE kind = 'doi'
       GROUP BY article_id
@@ -209,7 +210,7 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
     SELECT
       source_resolution.sourceRowId AS sourceRowId,
       source_resolution.resolutionValue AS resolutionValue,
-      doi_identifier.doi AS doi,
+      doi_identifier.doiKeys AS doiKeys,
       article.article_id AS externalArticleId,
       article.article_title AS title
     FROM source_resolution
@@ -307,6 +308,22 @@ export const normalizeComparisonProjectConflictResolutionImportDoi = (value: str
   return normalizedValue.length > 0 ? normalizedValue : null
 }
 
+export const getComparisonProjectConflictResolutionImportDoiKeys = (
+  row: Pick<ComparisonProjectConflictResolutionImportSourceRow, 'doi' | 'doiKeys'>,
+) => {
+  return Array.from(
+    new Set(
+      [...(row.doiKeys ?? []), row.doi]
+        .map((value) => {
+          return normalizeComparisonProjectConflictResolutionImportDoi(value)
+        })
+        .filter((value): value is string => {
+          return value !== null
+        }),
+    ),
+  )
+}
+
 export const normalizeComparisonProjectConflictResolutionImportExternalArticleId = (
   value: string | null | undefined,
 ) => {
@@ -339,7 +356,7 @@ const getNormalizedSourceRows = (
   return sourceRows.map((row) => {
     return {
       ...row,
-      doiKey: normalizeComparisonProjectConflictResolutionImportDoi(row.doi),
+      doiKeys: getComparisonProjectConflictResolutionImportDoiKeys(row),
       idTitleKey: getComparisonProjectConflictResolutionImportIdTitleKey(row),
       resolutionValue: getNormalizedResolutionValue(row.resolutionValue),
     }
@@ -390,13 +407,13 @@ const getDuplicateKeyErrors = (
     })
 }
 
-const getSourceDuplicateErrors = (sourceRows: readonly NormalizedSourceRow[]) => {
+const getSourceDuplicateErrors = (candidateRows: readonly ImportCandidateRow[]) => {
   return [
     ...getDuplicateKeyErrors(
       getKeyGroups(
-        sourceRows,
+        candidateRows,
         (row) => {
-          return row.doiKey
+          return row.matchKind === 'doi' ? row.matchKey : null
         },
         (row) => {
           return row.sourceRowId
@@ -406,9 +423,9 @@ const getSourceDuplicateErrors = (sourceRows: readonly NormalizedSourceRow[]) =>
     ),
     ...getDuplicateKeyErrors(
       getKeyGroups(
-        sourceRows,
+        candidateRows,
         (row) => {
-          return row.doiKey ? null : row.idTitleKey
+          return row.matchKind === 'id-title' ? row.matchKey : null
         },
         (row) => {
           return row.sourceRowId
@@ -424,7 +441,27 @@ const getSourceDuplicateErrors = (sourceRows: readonly NormalizedSourceRow[]) =>
   ]
 }
 
-const getTargetDuplicateErrors = (targetArticles: readonly NormalizedTargetArticle[]) => {
+const getCandidateMatchKeys = (
+  candidateRows: readonly ImportCandidateRow[],
+  matchKind: ComparisonProjectConflictResolutionImportMatchKind,
+) => {
+  return new Set(
+    candidateRows
+      .filter((row) => {
+        return row.matchKind === matchKind
+      })
+      .map((row) => {
+        return row.matchKey
+      }),
+  )
+}
+
+const getTargetDuplicateErrors = (
+  targetArticles: readonly NormalizedTargetArticle[],
+  candidateRows: readonly ImportCandidateRow[],
+) => {
+  const idTitleCandidateKeys = getCandidateMatchKeys(candidateRows, 'id-title')
+
   return [
     ...getDuplicateKeyErrors(
       getKeyGroups(
@@ -442,7 +479,7 @@ const getTargetDuplicateErrors = (targetArticles: readonly NormalizedTargetArtic
       getKeyGroups(
         targetArticles,
         (article) => {
-          return article.idTitleKey
+          return article.idTitleKey && idTitleCandidateKeys.has(article.idTitleKey) ? article.idTitleKey : null
         },
         (article) => {
           return article.articleId
@@ -499,6 +536,19 @@ const getTargetArticleMaps = (targetArticles: readonly NormalizedTargetArticle[]
   }
 }
 
+const getDoiMatchedTargetArticle = (
+  row: NormalizedSourceRow,
+  targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
+) => {
+  return row.doiKeys
+    .map((doiKey) => {
+      return {doiKey, targetArticle: targetArticleMaps.byDoiKey.get(doiKey) ?? null}
+    })
+    .find((match): match is {doiKey: string; targetArticle: NormalizedTargetArticle} => {
+      return match.targetArticle !== null
+    })
+}
+
 const getMatchedTargetArticle = (
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
@@ -507,12 +557,14 @@ const getMatchedTargetArticle = (
   matchKind: ComparisonProjectConflictResolutionImportMatchKind
   targetArticle: NormalizedTargetArticle
 } | null => {
-  const doiTargetArticle = row.doiKey ? targetArticleMaps.byDoiKey.get(row.doiKey) : null
+  const doiMatch = getDoiMatchedTargetArticle(row, targetArticleMaps)
   const idTitleTargetArticle = row.idTitleKey ? targetArticleMaps.byIdTitleKey.get(row.idTitleKey) : null
-  const canUseIdTitleTargetArticle = Boolean(idTitleTargetArticle && (!row.doiKey || !idTitleTargetArticle.doiKey))
+  const canUseIdTitleTargetArticle = Boolean(
+    idTitleTargetArticle && (row.doiKeys.length === 0 || !idTitleTargetArticle.doiKey),
+  )
 
-  return doiTargetArticle && row.doiKey
-    ? {matchKey: row.doiKey, matchKind: 'doi', targetArticle: doiTargetArticle}
+  return doiMatch
+    ? {matchKey: doiMatch.doiKey, matchKind: 'doi', targetArticle: doiMatch.targetArticle}
     : canUseIdTitleTargetArticle && idTitleTargetArticle && row.idTitleKey
       ? {matchKey: row.idTitleKey, matchKind: 'id-title', targetArticle: idTitleTargetArticle}
       : null
@@ -529,7 +581,7 @@ const getImportCandidateRow = (
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): {candidate: ImportCandidateRow | null; skippedRow: ComparisonProjectConflictResolutionImportSkippedRow | null} => {
-  const hasUsableKey = Boolean(row.doiKey || row.idTitleKey)
+  const hasUsableKey = row.doiKeys.length > 0 || Boolean(row.idTitleKey)
   const matchedTarget = hasUsableKey ? getMatchedTargetArticle(row, targetArticleMaps) : null
   const skipReason = !hasUsableKey
     ? 'no-usable-key'
@@ -646,10 +698,6 @@ export const getComparisonProjectConflictResolutionImportPlan = ({
 }: ComparisonProjectConflictResolutionImportPlanParams): ComparisonProjectConflictResolutionImportPlan => {
   const normalizedSourceRows = getNormalizedSourceRows(sourceRows)
   const normalizedTargetArticles = getNormalizedTargetArticles(targetArticles)
-  const duplicateErrors = [
-    ...getSourceDuplicateErrors(normalizedSourceRows),
-    ...getTargetDuplicateErrors(normalizedTargetArticles),
-  ]
   const candidateRowResults = getCandidateRows(normalizedSourceRows, normalizedTargetArticles)
   const candidateRows = candidateRowResults
     .map((result) => {
@@ -665,6 +713,10 @@ export const getComparisonProjectConflictResolutionImportPlan = ({
     .filter((skippedRow): skippedRow is ComparisonProjectConflictResolutionImportSkippedRow => {
       return skippedRow !== null
     })
+  const duplicateErrors = [
+    ...getSourceDuplicateErrors(candidateRows),
+    ...getTargetDuplicateErrors(normalizedTargetArticles, candidateRows),
+  ]
   const invalidValueErrors = getInvalidResolutionValueErrors(candidateRows, targetSummaryOptionValues)
   const conflictErrors = getConflictingResolutionValueErrors(candidateRows)
   const errors = [...duplicateErrors, ...invalidValueErrors, ...conflictErrors]
