@@ -200,26 +200,39 @@ const updateProviderConnectionDisabledModelIds = async ({
 const updateProviderModelRow = async ({
   databaseRunner,
   displayName,
+  displayNameChanged,
   enabled,
+  enabledChanged,
   id,
   metadataJson,
+  optionsChanged,
   variant,
+  variantChanged,
 }: {
   databaseRunner: DatabaseRunner
   displayName: string
+  displayNameChanged: boolean
   enabled: boolean
+  enabledChanged: boolean
   id: string
   metadataJson: unknown
+  optionsChanged: boolean
   variant: string | null
+  variantChanged: boolean
 }): Promise<void> => {
+  const setClauses = [
+    ...(displayNameChanged
+      ? [`name = ${getSqlLiteral(displayName)}`, `display_name = ${getSqlLiteral(displayName)}`]
+      : []),
+    ...(enabledChanged ? [`enabled = ${getSqlLiteral(enabled)}`] : []),
+    ...(optionsChanged ? [`metadata_json = ${getJsonSqlLiteral(metadataJson)}`] : []),
+    ...(variantChanged ? [`variant = ${getSqlLiteral(variant)}`] : []),
+    'updated_at = current_timestamp',
+  ]
+
   await databaseRunner.run(`
     UPDATE app.model
-    SET name = ${getSqlLiteral(displayName)},
-        display_name = ${getSqlLiteral(displayName)},
-        enabled = ${getSqlLiteral(enabled)},
-        metadata_json = ${getJsonSqlLiteral(metadataJson)},
-        variant = ${getSqlLiteral(variant)},
-        updated_at = current_timestamp
+    SET ${setClauses.join(',\n        ')}
     WHERE id = ${getSqlLiteral(id)}
   `)
 }
@@ -465,7 +478,18 @@ export const updateProviderModel = async (
   }
 
   const refreshedRow = (await getAppDatabaseService().transaction(async (databaseRunner) => {
-    await updateProviderModelRow({databaseRunner, displayName, enabled, id, metadataJson: nextMetadataJson, variant})
+    await updateProviderModelRow({
+      databaseRunner,
+      displayName,
+      displayNameChanged,
+      enabled,
+      enabledChanged,
+      id,
+      metadataJson: nextMetadataJson,
+      optionsChanged,
+      variant,
+      variantChanged,
+    })
 
     if (enabledChanged && currentRow.providerConnectionId) {
       await afterModelWrite?.()
