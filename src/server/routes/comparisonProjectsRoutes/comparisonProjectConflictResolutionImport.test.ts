@@ -391,6 +391,54 @@ test('import plan ignores duplicate target ID and title keys when source rows im
   ])
 })
 
+test('import plan ignores duplicate target DOI keys when no target can import', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: '10.1000/duplicate', externalArticleId: 'source-ext-does-not-match'})],
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'target-a',
+        doi: '10.1000/duplicate',
+        externalArticleId: 'target-a-ext',
+        isConflictResolutionEligible: false,
+      }),
+      getTargetArticle({
+        articleId: 'target-b',
+        doi: 'doi:10.1000/duplicate',
+        externalArticleId: 'target-b-ext',
+        isConflictResolutionEligible: false,
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([])
+  expect(plan.skipCounts).toEqual({noTargetMatch: 0, noUsableKey: 0, notConflicting: 1})
+})
+
+test('import plan ignores target DOI duplicates unused by fallback imports', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({doi: null, externalArticleId: 'source-a', sourceRowId: 'source-a', title: 'Title A'}),
+      getSourceRow({doi: null, externalArticleId: 'source-b', sourceRowId: 'source-b', title: 'Title B'}),
+    ],
+    targetArticles: [
+      getTargetArticle({articleId: 'target-a', doi: '10.1000/shared', externalArticleId: 'source-a', title: 'Title A'}),
+      getTargetArticle({
+        articleId: 'target-b',
+        doi: 'doi:10.1000/shared',
+        externalArticleId: 'source-b',
+        title: 'Title B',
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toMatchObject([
+    {sourceRows: [{matchKind: 'id-title', sourceRowId: 'source-a'}], targetArticleId: 'target-a'},
+    {sourceRows: [{matchKind: 'id-title', sourceRowId: 'source-b'}], targetArticleId: 'target-b'},
+  ])
+})
+
 test('import plan reports duplicate target ID and title keys used by fallback matching', () => {
   const plan = getPlan({
     sourceRows: [getSourceRow({doi: null, externalArticleId: 'shared-ext', title: 'Shared'})],
@@ -439,6 +487,31 @@ test('import plan reports fallback target ID and title duplicates before eligibi
     {code: 'duplicate-target-id-title-key', targetArticleIds: ['target-non-conflicting', 'target-conflicting']},
   ])
   expect(plan.candidates).toEqual([])
+})
+
+test('import plan searches all fallback targets before skipping', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: '10.1000/source-only', externalArticleId: 'shared-ext', title: 'Shared'})],
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'target-with-doi',
+        doi: '10.1000/other-target',
+        externalArticleId: 'shared-ext',
+        title: 'Shared',
+      }),
+      getTargetArticle({
+        articleId: 'target-without-doi',
+        doi: null,
+        externalArticleId: 'SHARED-EXT',
+        title: ' Shared ',
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toMatchObject([
+    {sourceRows: [{matchKind: 'id-title', sourceRowId: 'source-row-1'}], targetArticleId: 'target-without-doi'},
+  ])
 })
 
 test('import plan allows the same target article from DOI and ID/title lookups', () => {

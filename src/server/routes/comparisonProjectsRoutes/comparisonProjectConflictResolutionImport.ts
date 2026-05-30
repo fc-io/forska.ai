@@ -550,6 +550,36 @@ const getFallbackTargetIdTitleKeyGroups = (params: {
   }, new Map<string, string[]>())
 }
 
+const getSourceDoiKeys = (sourceRows: readonly NormalizedSourceRow[]) => {
+  return getUniqueStringValues(
+    sourceRows.flatMap((row) => {
+      return row.doiKeys
+    }),
+  )
+}
+
+const getTargetDoiKeyGroups = (params: {
+  sourceRows: readonly NormalizedSourceRow[]
+  targetArticlesByDoiKey: Map<string, NormalizedTargetArticle[]>
+}) => {
+  const sourceDoiKeys = new Set(getSourceDoiKeys(params.sourceRows))
+
+  return Array.from(params.targetArticlesByDoiKey.entries()).reduce<Map<string, string[]>>(
+    (groupMap, [doiKey, targetArticles]) => {
+      const hasImportableTarget =
+        sourceDoiKeys.has(doiKey)
+        && targetArticles.some((article) => {
+          return article.isConflictResolutionEligible
+        })
+      const targetArticleIds = hasImportableTarget ? getTargetArticleIds(targetArticles) : []
+
+      groupMap.set(doiKey, targetArticleIds)
+      return groupMap
+    },
+    new Map<string, string[]>(),
+  )
+}
+
 const getSourceDoiTargetAmbiguityErrors = (
   sourceRows: readonly NormalizedSourceRow[],
   targetArticlesByDoiKey: Map<string, NormalizedTargetArticle[]>,
@@ -584,18 +614,12 @@ const getTargetDuplicateErrors = (
   const targetArticlesByIdTitleKey = getTargetArticlesByIdTitleKey(targetArticles)
 
   return [
-    ...getDuplicateKeyErrors(
-      getKeyGroups(
-        targetArticles,
-        (article) => {
-          return article.doiKey
-        },
-        (article) => {
-          return article.articleId
-        },
-      ),
-      {code: 'duplicate-target-doi-key', entityLabel: 'target', idKey: 'targetArticleIds', keyLabel: 'DOI'},
-    ),
+    ...getDuplicateKeyErrors(getTargetDoiKeyGroups({sourceRows, targetArticlesByDoiKey}), {
+      code: 'duplicate-target-doi-key',
+      entityLabel: 'target',
+      idKey: 'targetArticleIds',
+      keyLabel: 'DOI',
+    }),
     ...getDuplicateKeyErrors(
       getFallbackTargetIdTitleKeyGroups({sourceRows, targetArticlesByDoiKey, targetArticlesByIdTitleKey}),
       {
@@ -641,11 +665,7 @@ const getTargetArticleMaps = (targetArticles: readonly NormalizedTargetArticle[]
     byDoiKey: targetArticles.reduce<Map<string, NormalizedTargetArticle>>((articleMap, article) => {
       return article.doiKey && !articleMap.has(article.doiKey) ? articleMap.set(article.doiKey, article) : articleMap
     }, new Map<string, NormalizedTargetArticle>()),
-    byIdTitleKey: targetArticles.reduce<Map<string, NormalizedTargetArticle>>((articleMap, article) => {
-      return article.idTitleKey && !articleMap.has(article.idTitleKey)
-        ? articleMap.set(article.idTitleKey, article)
-        : articleMap
-    }, new Map<string, NormalizedTargetArticle>()),
+    byIdTitleKey: getTargetArticlesByIdTitleKey(targetArticles),
   }
 }
 
@@ -671,14 +691,15 @@ const getMatchedTargetArticle = (
   targetArticle: NormalizedTargetArticle
 } | null => {
   const doiMatch = getDoiMatchedTargetArticle(row, targetArticleMaps)
-  const idTitleTargetArticle = row.idTitleKey ? targetArticleMaps.byIdTitleKey.get(row.idTitleKey) : null
-  const canUseIdTitleTargetArticle = Boolean(
-    idTitleTargetArticle && (row.doiKeys.length === 0 || !idTitleTargetArticle.doiKey),
+  const idTitleTargetArticle = (row.idTitleKey ? (targetArticleMaps.byIdTitleKey.get(row.idTitleKey) ?? []) : []).find(
+    (targetArticle) => {
+      return getCanUseIdTitleFallbackTargetArticle(row, targetArticle)
+    },
   )
 
   return doiMatch
     ? {matchKey: doiMatch.doiKey, matchKind: 'doi', targetArticle: doiMatch.targetArticle}
-    : canUseIdTitleTargetArticle && idTitleTargetArticle && row.idTitleKey
+    : idTitleTargetArticle && row.idTitleKey
       ? {matchKey: row.idTitleKey, matchKind: 'id-title', targetArticle: idTitleTargetArticle}
       : null
 }
