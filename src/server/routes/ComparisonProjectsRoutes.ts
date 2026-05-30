@@ -1370,7 +1370,7 @@ const getConflictResolutionImportTargetArticles = async (params: {
       return row.articleId
     }),
   )
-  const conflictingArticleRows = await getComparisonProjectRowsForArticles(params.scope, articleIds)
+  const conflictingArticleRows = await getComparisonProjectRowsForArticles(params.scope, articleIds, params.tx)
   const conflictingArticleIds = new Set(
     conflictingArticleRows
       .filter((row) => {
@@ -2206,7 +2206,11 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
   }
 }
 
-const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
+const getComparisonProjectLlmRows = async (
+  scope: ComparisonProjectScope,
+  articleIds: string[],
+  queryRunner: AppQueryRunner = appDatabaseService,
+) => {
   const summarySourcePromptIds =
     getIsSummaryMode(scope) && !scope.useImportRoutesForScope
       ? scope.sourceProjectSummaryPrompts.map((prompt) => {
@@ -2233,7 +2237,7 @@ const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articl
     return []
   }
 
-  const rows = await appDatabaseService.queryJson<{
+  const rows = await queryRunner.queryJson<{
     createdAt: unknown
     articleId: string
     promptId: string
@@ -2395,7 +2399,11 @@ const getComparisonProjectLlmSummaryRows = (scope: ComparisonProjectScope, rows:
     .filter(isDefined)
 }
 
-const getComparisonProjectPromptHumanRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
+const getComparisonProjectPromptHumanRows = async (
+  scope: ComparisonProjectScope,
+  articleIds: string[],
+  queryRunner: AppQueryRunner = appDatabaseService,
+) => {
   const promptIds = scope.prompts.map((prompt) => {
     return prompt.id
   })
@@ -2404,7 +2412,7 @@ const getComparisonProjectPromptHumanRows = async (scope: ComparisonProjectScope
     return []
   }
 
-  const rows = await appDatabaseService.queryJson<{
+  const rows = await queryRunner.queryJson<{
     articleId: string
     promptId: string
     answer: string | null
@@ -2427,12 +2435,16 @@ const getComparisonProjectPromptHumanRows = async (scope: ComparisonProjectScope
   })
 }
 
-const getComparisonProjectSummaryHumanRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
+const getComparisonProjectSummaryHumanRows = async (
+  scope: ComparisonProjectScope,
+  articleIds: string[],
+  queryRunner: AppQueryRunner = appDatabaseService,
+) => {
   if (articleIds.length === 0 || !scope.compareWithHumans || !scope.summarySourceProjectId) {
     return []
   }
 
-  const rows = await appDatabaseService.queryJson<{articleId: string; answer: string | null; updatedAt: unknown}>(`
+  const rows = await queryRunner.queryJson<{articleId: string; answer: string | null; updatedAt: unknown}>(`
     SELECT
       article_id AS articleId,
       answer AS answer,
@@ -2459,10 +2471,14 @@ const getComparisonProjectSummaryHumanRows = async (scope: ComparisonProjectScop
     .filter(isDefined)
 }
 
-const getComparisonProjectHumanRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
+const getComparisonProjectHumanRows = async (
+  scope: ComparisonProjectScope,
+  articleIds: string[],
+  queryRunner: AppQueryRunner = appDatabaseService,
+) => {
   return getIsSummaryMode(scope)
-    ? getComparisonProjectSummaryHumanRows(scope, articleIds)
-    : getComparisonProjectPromptHumanRows(scope, articleIds)
+    ? getComparisonProjectSummaryHumanRows(scope, articleIds, queryRunner)
+    : getComparisonProjectPromptHumanRows(scope, articleIds, queryRunner)
 }
 
 const getComparisonProjectPromptTypeOptions = (type: string | null) => {
@@ -2520,7 +2536,11 @@ const getComparisonProjectConflictResolutionOptionByValue = (scope: ComparisonPr
   }, new Map<string, ComparisonProjectConflictResolutionOption>())
 }
 
-const getComparisonProjectRowsForArticles = async (scope: ComparisonProjectScope, articleIds: string[]) => {
+const getComparisonProjectRowsForArticles = async (
+  scope: ComparisonProjectScope,
+  articleIds: string[],
+  queryRunner: AppQueryRunner = appDatabaseService,
+) => {
   const uniqueArticleIds = getUniqueStringValues(articleIds)
 
   if (uniqueArticleIds.length === 0) {
@@ -2540,12 +2560,12 @@ const getComparisonProjectRowsForArticles = async (scope: ComparisonProjectScope
     articleTable,
     limit: uniqueArticleIds.length,
     offset: 0,
-    queryRunner: appDatabaseService,
+    queryRunner,
     whereClause: articleScopeWhereClause,
   })
   const [rawLlmRows, humanRows] = await Promise.all([
-    getComparisonProjectLlmRows(scope, uniqueArticleIds),
-    getComparisonProjectHumanRows(scope, uniqueArticleIds),
+    getComparisonProjectLlmRows(scope, uniqueArticleIds, queryRunner),
+    getComparisonProjectHumanRows(scope, uniqueArticleIds, queryRunner),
   ])
 
   return getComparisonProjectBatchRows({

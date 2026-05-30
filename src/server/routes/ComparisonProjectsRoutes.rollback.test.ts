@@ -67,6 +67,7 @@ type MockDatabaseState = {
   extraLlmRows: MockLlmJudgmentRow[]
   failPromptInsert: boolean
   includeSingleAnswerArticle: boolean
+  isInTransaction: boolean
   lastConflictResolutionInsertStatement: string | null
   lastPromptInsertStatement: string | null
   lastUpdateStatement: string | null
@@ -86,6 +87,7 @@ type MockDatabaseState = {
   sourceProjectLinks: Array<{id: string; sourceProjectId: string}>
   staleServingIds: string[]
   rootRunStatements: string[]
+  rootQueryStatementsDuringTransaction: string[]
   transactionCalls: number
 }
 
@@ -1537,8 +1539,15 @@ const registerModuleMocks = () => {
       getAppDatabaseService: () => {
         return {
           queryJson: async <T>(statement: string) => {
-            getMockDatabaseState().queryStatements.push(statement)
-            return (await queryJson(statement, getMockDatabaseState())) as T[]
+            const state = getMockDatabaseState()
+
+            state.queryStatements.push(statement)
+
+            if (state.isInTransaction) {
+              state.rootQueryStatementsDuringTransaction.push(statement)
+            }
+
+            return (await queryJson(statement, state)) as T[]
           },
           run: async (statement: string) => {
             const state = getMockDatabaseState()
@@ -1579,6 +1588,7 @@ const registerModuleMocks = () => {
             })
 
             state.transactionCalls += 1
+            state.isInTransaction = true
 
             const result = await work({
               queryJson: async <R>(statement: string) => {
@@ -1744,6 +1754,7 @@ const registerModuleMocks = () => {
             state.comparisonProject = pendingComparisonProject
             state.createdComparisonProjectIds = pendingCreatedComparisonProjectIds
             state.conflictResolutionRows = pendingConflictResolutionRows
+            state.isInTransaction = false
             state.promptLinks = pendingPromptLinks
             state.routeLinks = pendingRouteLinks
             state.sourceProjectLinks = pendingSourceProjectLinks
@@ -1771,6 +1782,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     extraLlmRows: [],
     failPromptInsert: true,
     includeSingleAnswerArticle: false,
+    isInTransaction: false,
     lastConflictResolutionInsertStatement: null,
     lastPromptInsertStatement: null,
     lastUpdateStatement: null,
@@ -1779,6 +1791,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     queryStatements: [],
     queuedServingRebuildIds: [],
     rootRunStatements: [],
+    rootQueryStatementsDuringTransaction: [],
     routeLinks: [{id: 'comparison-project-route-1', importRouteId: 'import-route-1'}],
     servingStatus: getMockServingStatus(),
     sourceProjectLinks: [],
@@ -2515,6 +2528,7 @@ test('comparison project create-from-project imports selected conflict resolutio
   })
   expect(state.createdComparisonProjectIds).toEqual(['comparison-project-created'])
   expect(state.staleServingIds).toEqual(['comparison-project-created'])
+  expect(state.rootQueryStatementsDuringTransaction).toEqual([])
   expect(sourceRowQuery ?? '').toContain("cr.comparison_project_id IN ('source-comparison-project-1')")
   expect(doiTargetQuery ?? '').toContain("doi_identifier.normalized_value IN ('10.1000/import-match')")
 })

@@ -181,6 +181,27 @@ test('import plan matches articles by any normalized source DOI key', () => {
   ])
 })
 
+test('import plan rejects source DOI keys that match multiple target articles', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({
+        doi: null,
+        doiKeys: ['10.1000/target-a', '10.1000/target-b'],
+        externalArticleId: 'source-ext-does-not-match',
+      }),
+    ],
+    targetArticles: [
+      getTargetArticle({articleId: 'target-a', doi: '10.1000/target-a', externalArticleId: 'target-a-ext'}),
+      getTargetArticle({articleId: 'target-b', doi: '10.1000/target-b', externalArticleId: 'target-b-ext'}),
+    ],
+  })
+
+  expect(plan.errors).toMatchObject([
+    {code: 'ambiguous-source-doi-targets', sourceRowIds: ['source-row-1'], targetArticleIds: ['target-a', 'target-b']},
+  ])
+  expect(plan.candidates).toEqual([])
+})
+
 test('import plan matches articles by normalized external ID and title', () => {
   expect(normalizeComparisonProjectConflictResolutionImportExternalArticleId(' External-1 ')).toBe('external-1')
   expect(normalizeComparisonProjectConflictResolutionImportTitle(' A   Multi\nLine   Title ')).toBe(
@@ -390,6 +411,33 @@ test('import plan reports duplicate target ID and title keys used by fallback ma
   })
 
   expect(getErrorCodes(plan)).toContain('duplicate-target-id-title-key')
+  expect(plan.candidates).toEqual([])
+})
+
+test('import plan reports fallback target ID and title duplicates before eligibility pruning', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: null, externalArticleId: 'shared-ext', title: 'Shared'})],
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'target-non-conflicting',
+        doi: null,
+        externalArticleId: 'shared-ext',
+        isConflictResolutionEligible: false,
+        title: 'Shared',
+      }),
+      getTargetArticle({
+        articleId: 'target-conflicting',
+        doi: null,
+        externalArticleId: 'SHARED-EXT',
+        isConflictResolutionEligible: true,
+        title: ' Shared ',
+      }),
+    ],
+  })
+
+  expect(plan.errors).toMatchObject([
+    {code: 'duplicate-target-id-title-key', targetArticleIds: ['target-non-conflicting', 'target-conflicting']},
+  ])
   expect(plan.candidates).toEqual([])
 })
 
