@@ -13,7 +13,11 @@ import {
   listProviderConnections,
 } from '../providers/providerConnectionRepository.ts'
 import {getManualProviderModelMetadata, getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
-import {createProviderModel, listSelectableProviderModels} from '../providers/providerModelRepository.ts'
+import {
+  createProviderModel,
+  listSelectableProviderModels,
+  updateProviderModel,
+} from '../providers/providerModelRepository.ts'
 import {requireProviderRegistryEntry} from '../providers/providerRegistry.ts'
 import {type ProviderModelRecord} from '../providers/providerTypes.ts'
 import {
@@ -44,7 +48,7 @@ const getCodexStoredModels = async (): Promise<ProviderModelRecord[]> => {
   const connections = await listProviderConnections()
 
   return connections.flatMap((connection) => {
-    return connection.providerKind === 'codex' ? connection.models : []
+    return connection.enabled && connection.providerKind === 'codex' ? connection.models : []
   })
 }
 
@@ -441,7 +445,15 @@ export const modelsRoutes = new Elysia()
       `)
 
       if (existing) {
-        return {data: {modelId: existing.id}, error: null}
+        const model = await updateProviderModel({
+          displayName,
+          enabled: true,
+          id: existing.id,
+          options: {thinking},
+          variant: version,
+        })
+
+        return {data: {modelId: model.id}, error: null}
       }
 
       const model = await createProviderModel({
@@ -450,7 +462,7 @@ export const modelsRoutes = new Elysia()
         metadataJson: getManualProviderModelMetadata({
           displayName,
           modelName,
-          options: thinking ? {thinking} : undefined,
+          options: {thinking},
           providerKind: connection.providerKind,
           remoteModelId: modelName,
           variant: version,

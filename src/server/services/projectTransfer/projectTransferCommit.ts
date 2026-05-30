@@ -799,9 +799,7 @@ const persistPreClaimStalePlan = async ({
   runtimeOptions: RuntimePathOptions
   sessionId: string
 }) => {
-  await writePlanArtifact({layout: artifacts.layout, plan: nextPlan, runtimeOptions})
-
-  return repositories.sessionRepository.updateProjectTransferSessionPlanRevision({
+  const updated = await repositories.sessionRepository.updateProjectTransferSessionPlanRevision({
     expectedOwnerToken: null,
     expectedPlanRevision: artifacts.plan.planRevision,
     nextState: 'awaiting_resolution',
@@ -809,6 +807,12 @@ const persistPreClaimStalePlan = async ({
     planSummary: nextPlan.summary,
     sessionId,
   })
+
+  if (updated !== null) {
+    await writePlanArtifact({layout: artifacts.layout, plan: nextPlan, runtimeOptions})
+  }
+
+  return updated
 }
 
 const persistPostClaimStalePlan = async ({
@@ -830,9 +834,7 @@ const persistPostClaimStalePlan = async ({
   runtimeOptions: RuntimePathOptions
   session: ProjectTransferSessionRecord
 }) => {
-  await writePlanArtifact({layout: artifacts.layout, plan: nextPlan, runtimeOptions})
-
-  return repositories.sessionRepository.reopenProjectTransferCommitSession({
+  const reopened = await repositories.sessionRepository.reopenProjectTransferCommitSession({
     commitId,
     expectedPlanRevision: session.planRevision,
     now,
@@ -840,6 +842,12 @@ const persistPostClaimStalePlan = async ({
     planSummary: nextPlan.summary,
     sessionId: session.id,
   })
+
+  if (reopened !== null) {
+    await writePlanArtifact({layout: artifacts.layout, plan: nextPlan, runtimeOptions})
+  }
+
+  return reopened
 }
 
 const getRepositorySet = (repositories?: ProjectTransferCommitRepositories) => {
