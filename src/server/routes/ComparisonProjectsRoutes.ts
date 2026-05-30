@@ -42,6 +42,7 @@ import {
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportSummary,
   type ComparisonProjectConflictResolutionImportTargetArticle,
+  getComparisonProjectConflictResolutionImportDoiKeys,
   getComparisonProjectConflictResolutionImportDoiTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdTitleKey,
   getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql,
@@ -49,7 +50,6 @@ import {
   getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
-  normalizeComparisonProjectConflictResolutionImportDoi,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts'
 import {
   type ComparisonProjectJudgmentHumanRow,
@@ -195,6 +195,7 @@ type ComparisonProjectSource = {
   importRoutes: ComparisonProjectSourceImportRoute[]
 }
 type ComparisonProjectConflictResolutionImportSourceValidationRow = {
+  allowConflictResolution: boolean | null
   archived: boolean
   humanJudgmentMode: HumanJudgmentMode | null
   id: string
@@ -1221,13 +1222,14 @@ const validateConflictResolutionImportSources = async (db: AppQueryRunner, sourc
   const rows = await db.queryJson<ComparisonProjectConflictResolutionImportSourceValidationRow>(`
     SELECT
       cp.id AS id,
+      COALESCE(cp.allow_conflict_resolution, FALSE) AS allowConflictResolution,
       cp.archived AS archived,
       cp.human_judgment_mode AS humanJudgmentMode,
       COUNT(cr.id) AS resolutionCount
     FROM ${comparisonProjectTable} cp
     LEFT JOIN ${comparisonProjectConflictResolutionTable} cr ON cr.comparison_project_id = cp.id
     WHERE cp.id IN (${getInClause(sourceComparisonProjectIds)})
-    GROUP BY cp.id, cp.archived, cp.human_judgment_mode
+    GROUP BY cp.id, cp.allow_conflict_resolution, cp.archived, cp.human_judgment_mode
   `)
   const rowsById = rows.reduce<Map<string, ComparisonProjectConflictResolutionImportSourceValidationRow>>(
     (rowMap, row) => {
@@ -1242,6 +1244,9 @@ const validateConflictResolutionImportSources = async (db: AppQueryRunner, sourc
   const archivedSource = rows.find((row) => {
     return row.archived
   })
+  const disabledSource = rows.find((row) => {
+    return !row.allowConflictResolution
+  })
   const nonSummarySource = rows.find((row) => {
     return row.humanJudgmentMode !== 'summary'
   })
@@ -1255,6 +1260,10 @@ const validateConflictResolutionImportSources = async (db: AppQueryRunner, sourc
 
   if (archivedSource) {
     throw getConflictResolutionImportRejectedError('Conflict resolution import sources must not be archived')
+  }
+
+  if (disabledSource) {
+    throw getConflictResolutionImportRejectedError('Conflict resolution import sources must allow conflict resolution')
   }
 
   if (nonSummarySource) {
@@ -1285,8 +1294,8 @@ const getConflictResolutionImportDoiKeys = (
 ) => {
   return getUniqueStringValues(
     sourceRows
-      .map((row) => {
-        return normalizeComparisonProjectConflictResolutionImportDoi(row.doi) ?? ''
+      .flatMap((row) => {
+        return getComparisonProjectConflictResolutionImportDoiKeys(row)
       })
       .filter(Boolean),
   )

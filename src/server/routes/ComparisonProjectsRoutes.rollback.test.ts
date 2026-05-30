@@ -1032,6 +1032,7 @@ const queryJson = async (
       })
       .map((row) => {
         return {
+          allowConflictResolution: row.allowConflictResolution,
           archived: row.archived,
           humanJudgmentMode: row.humanJudgmentMode,
           id: row.id,
@@ -2638,6 +2639,55 @@ test('comparison project create-from-project rejects conflict resolution import 
   )
   expect(state.transactionCalls).toBe(0)
   expect(state.createdComparisonProjectIds).toEqual([])
+})
+
+test('comparison project create-from-project rejects disabled conflict resolution import sources', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    conflictResolutionImportSourceRows: [
+      {
+        allowConflictResolution: false,
+        archived: false,
+        createdAt: new Date('2026-04-01T00:00:00.000Z'),
+        description: null,
+        humanJudgmentMode: 'summary',
+        id: 'source-comparison-project-disabled',
+        name: 'Disabled import source',
+        resolutionCount: 1,
+      },
+    ],
+    failPromptInsert: false,
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/from-project', {
+      body: JSON.stringify({
+        allowConflictResolution: true,
+        compareWithHumans: true,
+        conflictResolutionImportSourceComparisonProjectIds: ['source-comparison-project-disabled'],
+        description: 'From project comparison',
+        humanJudgmentMode: 'summary',
+        name: 'From project comparison',
+        sourceProjectId: 'source-project-1',
+        sourceProjectIds: ['source-project-1'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+  const validationQuery = state.queryStatements.find((statement) => {
+    return statement.includes('LEFT JOIN app.comparison_project_conflict_resolution cr')
+  })
+
+  expect(response.status).toBe(400)
+  expect(bodyText).toContain('Conflict resolution import sources must allow conflict resolution')
+  expect(validationQuery ?? '').toContain('COALESCE(cp.allow_conflict_resolution, FALSE) AS allowConflictResolution')
+  expect(state.createdComparisonProjectIds).toEqual([])
+  expect(state.staleServingIds).toEqual([])
 })
 
 test('comparison project metadata exposes serving readiness states', async () => {

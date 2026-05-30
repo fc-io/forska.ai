@@ -101,6 +101,8 @@ test('import source row query starts from selected conflict-resolution rows', ()
   expect(sql).toContain('FROM app.comparison_project_conflict_resolution cr')
   expect(sql).toContain("WHERE cr.comparison_project_id IN ('comparison-source-1', 'comparison-source-2')")
   expect(sql).toContain('INNER JOIN app.article article ON article.id = source_resolution.sourceArticleId')
+  expect(sql).toContain('LIST(DISTINCT normalized_value ORDER BY normalized_value) AS doiKeys')
+  expect(sql).toContain('doi_identifier.doiKeys AS doiKeys')
   expect(sql).toContain("WHERE kind = 'doi'")
 })
 
@@ -152,6 +154,28 @@ test('import plan matches articles by normalized DOI', () => {
     {
       resolutionValue: 'yes',
       sourceRows: [{matchKey: '10.1000/example', matchKind: 'doi', sourceRowId: 'source-row-1'}],
+      targetArticleId: 'target-article-1',
+    },
+  ])
+})
+
+test('import plan matches articles by any normalized source DOI key', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({
+        doi: null,
+        doiKeys: ['10.1000/non-match', ' DOI:10.1000/Match '],
+        externalArticleId: 'source-ext-does-not-match',
+      }),
+    ],
+    targetArticles: [getTargetArticle({doi: '10.1000/match', externalArticleId: 'target-ext-does-not-match'})],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [{matchKey: '10.1000/match', matchKind: 'doi', sourceRowId: 'source-row-1'}],
       targetArticleId: 'target-article-1',
     },
   ])
@@ -213,8 +237,22 @@ test('import plan reports duplicate source and target keys as hard errors', () =
         sourceRowId: 'source-id-title-b',
         title: ' Shared ',
       }),
+      getSourceRow({doi: '10.1000/target-duplicate', externalArticleId: 'source-c', sourceRowId: 'source-target-doi'}),
+      getSourceRow({
+        doi: null,
+        externalArticleId: 'target-shared',
+        sourceRowId: 'source-target-id-title',
+        title: 'Shared',
+      }),
     ],
     targetArticles: [
+      getTargetArticle({articleId: 'target-source-doi', doi: '10.1000/source-duplicate'}),
+      getTargetArticle({
+        articleId: 'target-source-id-title',
+        doi: null,
+        externalArticleId: 'source-shared',
+        title: 'Shared',
+      }),
       getTargetArticle({articleId: 'target-doi-a', doi: '10.1000/target-duplicate', externalArticleId: 'target-a'}),
       getTargetArticle({articleId: 'target-doi-b', doi: 'doi:10.1000/target-duplicate', externalArticleId: 'target-b'}),
       getTargetArticle({
@@ -238,6 +276,20 @@ test('import plan reports duplicate source and target keys as hard errors', () =
   expect(errorCodes).toContain('duplicate-source-id-title-key')
   expect(errorCodes).toContain('duplicate-target-id-title-key')
   expect(plan.candidates).toEqual([])
+})
+
+test('import plan ignores duplicate source keys on skipped source rows', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({doi: '10.1000/skipped', sourceRowId: 'source-skipped-a'}),
+      getSourceRow({doi: 'DOI:10.1000/skipped', sourceRowId: 'source-skipped-b'}),
+    ],
+    targetArticles: [],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([])
+  expect(plan.skipCounts).toEqual({noTargetMatch: 2, noUsableKey: 0, notConflicting: 0})
 })
 
 test('import plan ignores duplicate source ID and title keys when source DOI is usable', () => {
@@ -277,6 +329,68 @@ test('import plan ignores duplicate source ID and title keys when source DOI is 
     {sourceRows: [{matchKind: 'doi', sourceRowId: 'source-a'}], targetArticleId: 'target-a'},
     {sourceRows: [{matchKind: 'doi', sourceRowId: 'source-b'}], targetArticleId: 'target-b'},
   ])
+})
+
+test('import plan ignores duplicate target ID and title keys when source rows import by DOI', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({
+        doi: '10.1000/source-a',
+        externalArticleId: 'shared-ext',
+        sourceRowId: 'source-a',
+        title: 'Shared',
+      }),
+      getSourceRow({
+        doi: '10.1000/source-b',
+        externalArticleId: 'SHARED-EXT',
+        sourceRowId: 'source-b',
+        title: ' Shared ',
+      }),
+    ],
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'target-a',
+        doi: '10.1000/source-a',
+        externalArticleId: 'shared-ext',
+        title: 'Shared',
+      }),
+      getTargetArticle({
+        articleId: 'target-b',
+        doi: '10.1000/source-b',
+        externalArticleId: 'SHARED-EXT',
+        title: ' Shared ',
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toMatchObject([
+    {sourceRows: [{matchKind: 'doi', sourceRowId: 'source-a'}], targetArticleId: 'target-a'},
+    {sourceRows: [{matchKind: 'doi', sourceRowId: 'source-b'}], targetArticleId: 'target-b'},
+  ])
+})
+
+test('import plan reports duplicate target ID and title keys used by fallback matching', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: null, externalArticleId: 'shared-ext', title: 'Shared'})],
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'target-a',
+        doi: '10.1000/target-a',
+        externalArticleId: 'shared-ext',
+        title: 'Shared',
+      }),
+      getTargetArticle({
+        articleId: 'target-b',
+        doi: '10.1000/target-b',
+        externalArticleId: 'SHARED-EXT',
+        title: ' Shared ',
+      }),
+    ],
+  })
+
+  expect(getErrorCodes(plan)).toContain('duplicate-target-id-title-key')
+  expect(plan.candidates).toEqual([])
 })
 
 test('import plan allows the same target article from DOI and ID/title lookups', () => {
