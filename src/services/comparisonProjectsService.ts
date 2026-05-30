@@ -36,6 +36,7 @@ export type CreateComparisonProjectFromProjectInput = {
   summarySourceProjectId?: string | null
   sourceProjectId: string
   sourceProjectIds?: string[]
+  conflictResolutionImportSourceComparisonProjectIds?: string[]
 }
 
 export type ComparisonProjectSource = {

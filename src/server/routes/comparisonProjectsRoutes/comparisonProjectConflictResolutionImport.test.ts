@@ -3,7 +3,11 @@ import {expect, test} from 'bun:test'
 import {
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportTargetArticle,
+  getComparisonProjectConflictResolutionImportDoiTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportIdTitleKey,
+  getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql,
   getComparisonProjectConflictResolutionImportPlan,
+  getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
   normalizeComparisonProjectConflictResolutionImportDoi,
@@ -82,6 +86,47 @@ test('import source query selects only eligible comparison projects in newest or
     name: 'Eligible source',
     resolutionCount: 3,
   })
+})
+
+test('import source row query starts from selected conflict-resolution rows', () => {
+  const sql = getComparisonProjectConflictResolutionImportSourceRowsSql({
+    articleIdentifierTable: 'app.article_identifier',
+    articleTable: 'app.article',
+    comparisonProjectConflictResolutionTable: 'app.comparison_project_conflict_resolution',
+    sourceComparisonProjectIds: ['comparison-source-1', 'comparison-source-2'],
+  })
+
+  expect(sql).toContain('WITH source_resolution AS')
+  expect(sql).toContain('FROM app.comparison_project_conflict_resolution cr')
+  expect(sql).toContain("WHERE cr.comparison_project_id IN ('comparison-source-1', 'comparison-source-2')")
+  expect(sql).toContain('INNER JOIN app.article article ON article.id = source_resolution.sourceArticleId')
+  expect(sql).toContain("WHERE kind = 'doi'")
+})
+
+test('target article queries are constrained by selected normalized matching keys and scope', () => {
+  const idTitleKey = getComparisonProjectConflictResolutionImportIdTitleKey({
+    externalArticleId: ' External-1 ',
+    title: ' A   Multi\nLine   Title ',
+  })
+  const doiSql = getComparisonProjectConflictResolutionImportDoiTargetArticlesSql({
+    articleIdentifierTable: 'app.article_identifier',
+    articleScopeConditions: ['EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)'],
+    articleTable: 'app.article',
+    doiKeys: ['10.1000/example'],
+  })
+  const idTitleSql = getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql({
+    articleScopeConditions: ['EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)'],
+    articleTable: 'app.article',
+    idTitleKeys: [idTitleKey ?? ''],
+  })
+
+  expect(idTitleKey).toBe('external-1\u001Fa multi line title')
+  expect(doiSql).toContain('doi_identifier.normalized_value IN (')
+  expect(doiSql).toContain('10.1000/example')
+  expect(doiSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
+  expect(idTitleSql).toContain('regexp_replace(LOWER(TRIM(COALESCE(a.article_title')
+  expect(idTitleSql).toContain(idTitleKey ?? '')
+  expect(idTitleSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
 })
 
 test('import plan matches articles by normalized DOI', () => {

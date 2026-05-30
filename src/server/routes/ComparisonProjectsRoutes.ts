@@ -39,8 +39,17 @@ import {
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {
   type ComparisonProjectConflictResolutionImportSourceQueryRow,
+  type ComparisonProjectConflictResolutionImportSourceRow,
+  type ComparisonProjectConflictResolutionImportSummary,
+  type ComparisonProjectConflictResolutionImportTargetArticle,
+  getComparisonProjectConflictResolutionImportDoiTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportIdTitleKey,
+  getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportPlan,
+  getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
+  normalizeComparisonProjectConflictResolutionImportDoi,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts'
 import {
   type ComparisonProjectJudgmentHumanRow,
@@ -185,6 +194,11 @@ type ComparisonProjectSource = {
   prompts: ComparisonProjectSourcePrompt[]
   importRoutes: ComparisonProjectSourceImportRoute[]
 }
+type ComparisonProjectConflictResolutionImportSourceValidationRow = {
+  archived: boolean
+  id: string
+  resolutionCount: unknown
+}
 type ComparisonProjectSummarySourceProject = {
   id: string
   name: string
@@ -256,6 +270,7 @@ const projectImportRouteTable = 'app.project_import_route'
 const projectArticleTable = 'app.project_article'
 const modelTable = 'app.model'
 const articleTable = 'app.article'
+const articleIdentifierTable = 'app.article_identifier'
 const articleImportRouteTable = 'app.article_import_route'
 const judgmentTable = 'app.judgment'
 const judgmentHumanTable = 'app.judgment_human'
@@ -989,6 +1004,462 @@ const getComparisonProjectConflictResolutionImportSources = async () => {
   )
 
   return rows.map(getComparisonProjectConflictResolutionImportSourceValue)
+}
+
+const getConflictResolutionImportRejectedError = (message: string) => {
+  return new HttpError(400, message)
+}
+
+const getComparisonProjectPromptConfigsForSelections = async (
+  db: AppQueryRunner,
+  promptSelections: PromptSelection[],
+) => {
+  const uniquePromptSelections = getUniquePromptSelections(promptSelections)
+
+  if (uniquePromptSelections.length === 0) {
+    return []
+  }
+
+  const rows = await db.queryJson<{id: string; promptHeading: string | null; type: string | null}>(`
+    SELECT
+      id,
+      prompt_heading AS promptHeading,
+      type
+    FROM ${promptTable}
+    WHERE id IN (${getInClause(
+      uniquePromptSelections.map((promptSelection) => {
+        return promptSelection.promptId
+      }),
+    )})
+  `)
+  const rowsById = rows.reduce<Map<string, (typeof rows)[number]>>((rowMap, row) => {
+    rowMap.set(row.id, row)
+    return rowMap
+  }, new Map<string, (typeof rows)[number]>())
+
+  if (rowsById.size !== uniquePromptSelections.length) {
+    throw new Error('One or more selected prompts are invalid')
+  }
+
+  return uniquePromptSelections.map<ComparisonProjectPromptConfig>((promptSelection, index) => {
+    const row = rowsById.get(promptSelection.promptId)
+    const order = promptSelection.order ?? index
+
+    if (!row) {
+      throw new Error('One or more selected prompts are invalid')
+    }
+
+    return {
+      id: row.id,
+      promptHeading: row.promptHeading,
+      promptLabel: getPromptLabel(row.promptHeading, order),
+      type: row.type,
+      order,
+      criteriaDisposition: promptSelection.criteriaDisposition ?? null,
+      criteriaSectionKey: promptSelection.criteriaSectionKey ?? null,
+      criteriaSectionLabel: promptSelection.criteriaSectionLabel ?? null,
+    }
+  })
+}
+
+const getComparisonProjectSourceProjectFromSource = (
+  sourceProject: ComparisonProjectSource,
+): ComparisonProjectLinkedSourceProject => {
+  return {
+    id: sourceProject.id,
+    name: sourceProject.name,
+    description: sourceProject.description,
+    modelId: sourceProject.modelId,
+    modelName: sourceProject.modelName,
+    humanJudgmentMode: sourceProject.humanJudgmentMode,
+  }
+}
+
+const getComparisonProjectSummarySourceProjectFromSource = (
+  sourceProject: ComparisonProjectSource | undefined,
+): ComparisonProjectSummarySourceProject | null => {
+  return sourceProject
+    ? {
+        id: sourceProject.id,
+        name: sourceProject.name,
+        description: sourceProject.description,
+        modelId: sourceProject.modelId,
+        modelName: sourceProject.modelName,
+        humanJudgmentMode: sourceProject.humanJudgmentMode,
+        useTitle: sourceProject.useTitle,
+        useAbstract: sourceProject.useAbstract,
+        useFulltext: sourceProject.useFulltext,
+        useFulltextNoImages: sourceProject.useFulltextNoImages,
+      }
+    : null
+}
+
+const getComparisonProjectModelConfigsFromSources = (
+  selectedSourceProjects: ComparisonProjectSource[],
+): ComparisonProjectModelConfig[] => {
+  return Array.from(
+    selectedSourceProjects
+      .reduce<Map<string, ComparisonProjectModelConfig>>((modelMap, sourceProject) => {
+        if (!modelMap.has(sourceProject.modelId)) {
+          modelMap.set(sourceProject.modelId, {
+            id: sourceProject.modelId,
+            metadataJson: sourceProject.modelMetadataJson ?? {},
+            name: sourceProject.modelName,
+            provider: sourceProject.modelProvider ?? null,
+            version: sourceProject.modelVersion ?? null,
+          })
+        }
+
+        return modelMap
+      }, new Map<string, ComparisonProjectModelConfig>())
+      .values(),
+  )
+}
+
+const getComparisonProjectSourceSummaryPromptConfigsFromSources = (
+  selectedSourceProjects: ComparisonProjectSource[],
+) => {
+  return selectedSourceProjects.flatMap<ComparisonProjectSourceSummaryPromptConfig>((sourceProject) => {
+    return getSourceProjectSummaryPromptSelections(sourceProject).map((promptSelection) => {
+      const sourcePrompt = sourceProject.prompts.find((prompt) => {
+        return prompt.id === promptSelection.promptId
+      })
+      const order = promptSelection.order
+
+      return {
+        id: promptSelection.promptId,
+        sourceProjectId: sourceProject.id,
+        promptHeading: sourcePrompt?.promptHeading ?? null,
+        promptLabel: getPromptLabel(sourcePrompt?.promptHeading ?? null, order),
+        type: null,
+        order,
+        criteriaDisposition: promptSelection.criteriaDisposition ?? null,
+        criteriaSectionKey: promptSelection.criteriaSectionKey ?? null,
+        criteriaSectionLabel: promptSelection.criteriaSectionLabel ?? null,
+      }
+    })
+  })
+}
+
+const getEmptyComparisonProjectServingProgress = (): ComparisonProjectServingProgress => {
+  return {
+    completedAt: null,
+    failedAt: null,
+    generation: null,
+    lastError: null,
+    lastProgressedAt: null,
+    phase: null,
+    phaseStartedAt: null,
+    stagedArticleCount: 0,
+    stagedCellCount: 0,
+    stagedFilterMemberCount: 0,
+    stagedFilterStatsCount: 0,
+    startedAt: null,
+  }
+}
+
+const getCreateFromProjectImportScope = async (params: {
+  createdComparisonProject: ReturnType<typeof getComparisonProjectRecordValue>
+  promptSelections: PromptSelection[]
+  selectedImportRoutes: string[]
+  selectedSourceProjectIds: string[]
+  selectedSourceProjects: ComparisonProjectSource[]
+  summarySourceProjectId: string | null
+  tx: AppQueryRunner
+}): Promise<ComparisonProjectScope> => {
+  const promptConfigs = await getComparisonProjectPromptConfigsForSelections(params.tx, params.promptSelections)
+  const sourceProjects = params.selectedSourceProjects.map(getComparisonProjectSourceProjectFromSource)
+  const summarySourceProject = getComparisonProjectSummarySourceProjectFromSource(
+    params.selectedSourceProjects.find((sourceProject) => {
+      return sourceProject.id === params.summarySourceProjectId
+    }),
+  )
+  const contentVariants = getComparisonProjectContentVariants(params.createdComparisonProject)
+  const sourceProjectSummaryPrompts = getComparisonProjectSourceSummaryPromptConfigsFromSources(
+    params.selectedSourceProjects,
+  )
+  const modelRows = getComparisonProjectModelConfigsFromSources(params.selectedSourceProjects)
+  const columns = getComparisonProjectColumns(
+    promptConfigs,
+    modelRows,
+    contentVariants,
+    params.createdComparisonProject.compareWithHumans,
+    params.createdComparisonProject.humanJudgmentMode,
+    params.summarySourceProjectId,
+    summarySourceProject,
+    sourceProjects,
+    true,
+  )
+
+  return {
+    ...params.createdComparisonProject,
+    activeGeneration: null,
+    isServingReady: false,
+    servingStatus: 'missing',
+    servingProgress: getEmptyComparisonProjectServingProgress(),
+    servingUpdatedAt: null,
+    summarySourceProjectId: params.summarySourceProjectId,
+    sourceProjectIds: params.selectedSourceProjectIds,
+    useImportRoutesForScope: false,
+    summarySourceProject,
+    sourceProjects,
+    contentVariants,
+    prompts: promptConfigs,
+    sourceProjectSummaryPrompts,
+    models: modelRows,
+    importRouteIds: params.selectedImportRoutes,
+    columns,
+  }
+}
+
+const validateConflictResolutionImportSources = async (db: AppQueryRunner, sourceComparisonProjectIds: string[]) => {
+  if (sourceComparisonProjectIds.length === 0) {
+    return
+  }
+
+  const rows = await db.queryJson<ComparisonProjectConflictResolutionImportSourceValidationRow>(`
+    SELECT
+      cp.id AS id,
+      cp.archived AS archived,
+      COUNT(cr.id) AS resolutionCount
+    FROM ${comparisonProjectTable} cp
+    LEFT JOIN ${comparisonProjectConflictResolutionTable} cr ON cr.comparison_project_id = cp.id
+    WHERE cp.id IN (${getInClause(sourceComparisonProjectIds)})
+    GROUP BY cp.id, cp.archived
+  `)
+  const rowsById = rows.reduce<Map<string, ComparisonProjectConflictResolutionImportSourceValidationRow>>(
+    (rowMap, row) => {
+      rowMap.set(row.id, row)
+      return rowMap
+    },
+    new Map<string, ComparisonProjectConflictResolutionImportSourceValidationRow>(),
+  )
+  const missingSourceId = sourceComparisonProjectIds.find((sourceComparisonProjectId) => {
+    return !rowsById.has(sourceComparisonProjectId)
+  })
+  const archivedSource = rows.find((row) => {
+    return row.archived
+  })
+  const emptySource = rows.find((row) => {
+    return Number(row.resolutionCount ?? 0) <= 0
+  })
+
+  if (missingSourceId) {
+    throw getConflictResolutionImportRejectedError('One or more conflict resolution import sources were not found')
+  }
+
+  if (archivedSource) {
+    throw getConflictResolutionImportRejectedError('Conflict resolution import sources must not be archived')
+  }
+
+  if (emptySource) {
+    throw getConflictResolutionImportRejectedError('Conflict resolution import sources must contain resolutions')
+  }
+}
+
+const getConflictResolutionImportSourceRows = async (
+  db: AppQueryRunner,
+  sourceComparisonProjectIds: string[],
+): Promise<ComparisonProjectConflictResolutionImportSourceRow[]> => {
+  return db.queryJson<ComparisonProjectConflictResolutionImportSourceRow>(
+    getComparisonProjectConflictResolutionImportSourceRowsSql({
+      articleIdentifierTable,
+      articleTable,
+      comparisonProjectConflictResolutionTable,
+      sourceComparisonProjectIds,
+    }),
+  )
+}
+
+const getConflictResolutionImportDoiKeys = (
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[],
+) => {
+  return getUniqueStringValues(
+    sourceRows
+      .map((row) => {
+        return normalizeComparisonProjectConflictResolutionImportDoi(row.doi) ?? ''
+      })
+      .filter(Boolean),
+  )
+}
+
+const getConflictResolutionImportIdTitleKeys = (
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[],
+) => {
+  return getUniqueStringValues(
+    sourceRows
+      .map((row) => {
+        return getComparisonProjectConflictResolutionImportIdTitleKey(row) ?? ''
+      })
+      .filter(Boolean),
+  )
+}
+
+const getConflictResolutionImportCandidateTargetRows = async (params: {
+  doiKeys: string[]
+  idTitleKeys: string[]
+  scope: ComparisonProjectScope
+  tx: AppQueryRunner
+}) => {
+  const articleScopeConditions = getArticleScopeConditions(
+    params.scope.importRouteIds,
+    params.scope.sourceProjectIds,
+    params.scope.useImportRoutesForScope,
+  )
+  const doiTargetRows =
+    params.doiKeys.length > 0
+      ? await params.tx.queryJson<
+          Omit<ComparisonProjectConflictResolutionImportTargetArticle, 'isConflictResolutionEligible'>
+        >(
+          getComparisonProjectConflictResolutionImportDoiTargetArticlesSql({
+            articleIdentifierTable,
+            articleScopeConditions,
+            articleTable,
+            doiKeys: params.doiKeys,
+          }),
+        )
+      : []
+  const idTitleTargetRows =
+    params.idTitleKeys.length > 0
+      ? await params.tx.queryJson<
+          Omit<ComparisonProjectConflictResolutionImportTargetArticle, 'isConflictResolutionEligible'>
+        >(
+          getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql({
+            articleScopeConditions,
+            articleTable,
+            idTitleKeys: params.idTitleKeys,
+          }),
+        )
+      : []
+
+  return [...doiTargetRows, ...idTitleTargetRows]
+}
+
+const getConflictResolutionImportTargetArticles = async (params: {
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
+  scope: ComparisonProjectScope
+  tx: AppQueryRunner
+}): Promise<ComparisonProjectConflictResolutionImportTargetArticle[]> => {
+  const candidateRows = await getConflictResolutionImportCandidateTargetRows({
+    doiKeys: getConflictResolutionImportDoiKeys(params.sourceRows),
+    idTitleKeys: getConflictResolutionImportIdTitleKeys(params.sourceRows),
+    scope: params.scope,
+    tx: params.tx,
+  })
+  const articleIds = getUniqueStringValues(
+    candidateRows.map((row) => {
+      return row.articleId
+    }),
+  )
+  const conflictingArticleRows = await getComparisonProjectRowsForArticles(params.scope, articleIds)
+  const conflictingArticleIds = new Set(
+    conflictingArticleRows
+      .filter((row) => {
+        return row.hasConflict
+      })
+      .map((row) => {
+        return row.canonicalArticleId
+      }),
+  )
+
+  return candidateRows.map((row) => {
+    return {...row, isConflictResolutionEligible: conflictingArticleIds.has(row.articleId)}
+  })
+}
+
+const getComparisonProjectSummaryOptionValues = async (db: AppQueryRunner, promptSelections: PromptSelection[]) => {
+  const promptConfigs = await getComparisonProjectPromptConfigsForSelections(db, promptSelections)
+
+  return getUniqueStringValues(
+    promptConfigs.flatMap((promptConfig) => {
+      return getComparisonProjectPromptTypeOptions(promptConfig.type)
+    }),
+  )
+}
+
+const getConflictResolutionImportSummary = (params: {
+  importedCount: number
+  plan: ReturnType<typeof getComparisonProjectConflictResolutionImportPlan>
+  scannedCount: number
+}): ComparisonProjectConflictResolutionImportSummary => {
+  return {
+    scanned: params.scannedCount,
+    matched: params.plan.candidates.reduce((count, candidate) => {
+      return count + candidate.sourceRows.length
+    }, 0),
+    imported: params.importedCount,
+    skipped: params.plan.skippedRows.length,
+  }
+}
+
+const insertComparisonProjectConflictResolutionImportCandidates = async (params: {
+  candidates: ReturnType<typeof getComparisonProjectConflictResolutionImportPlan>['candidates']
+  comparisonProjectId: string
+  tx: AppTx
+}) => {
+  if (params.candidates.length === 0) {
+    return
+  }
+
+  await params.tx.run(`
+    INSERT INTO ${comparisonProjectConflictResolutionTable} (
+      id,
+      comparison_project_id,
+      article_id,
+      prompt_id,
+      answer_value
+    )
+    VALUES ${params.candidates
+      .map((candidate) => {
+        return `(
+          ${getSqlLiteral(crypto.randomUUID())},
+          ${getSqlLiteral(params.comparisonProjectId)},
+          ${getSqlLiteral(candidate.targetArticleId)},
+          NULL,
+          ${getSqlLiteral(candidate.resolutionValue)}
+        )`
+      })
+      .join(',\n')}
+  `)
+}
+
+const importComparisonProjectConflictResolutions = async (params: {
+  comparisonProjectId: string
+  promptSelections: PromptSelection[]
+  scope: ComparisonProjectScope
+  sourceComparisonProjectIds: string[]
+  tx: AppTx
+}) => {
+  const sourceRows = await getConflictResolutionImportSourceRows(params.tx, params.sourceComparisonProjectIds)
+  const targetArticles = await getConflictResolutionImportTargetArticles({
+    sourceRows,
+    scope: params.scope,
+    tx: params.tx,
+  })
+  const targetSummaryOptionValues = await getComparisonProjectSummaryOptionValues(params.tx, params.promptSelections)
+  const plan = getComparisonProjectConflictResolutionImportPlan({sourceRows, targetArticles, targetSummaryOptionValues})
+
+  if (plan.errors.length > 0) {
+    throw getConflictResolutionImportRejectedError(
+      plan.errors
+        .map((error) => {
+          return error.message
+        })
+        .join('; '),
+    )
+  }
+
+  await insertComparisonProjectConflictResolutionImportCandidates({
+    candidates: plan.candidates,
+    comparisonProjectId: params.comparisonProjectId,
+    tx: params.tx,
+  })
+
+  return getConflictResolutionImportSummary({
+    importedCount: plan.candidates.length,
+    plan,
+    scannedCount: sourceRows.length,
+  })
 }
 
 const getValidatedComparisonSourceProjectIds = async (db: AppQueryRunner, sourceProjectIds: string[]) => {
@@ -2977,6 +3448,10 @@ export const comparisonProjectsRoutes = new Elysia()
         body.humanJudgmentMode ?? (sourceProject.isSummaryCapable && body.compareWithHumans ? 'summary' : 'prompt')
       const summarySourceProjectId =
         humanJudgmentMode === 'summary' ? (body.summarySourceProjectId ?? sourceProject.id) : null
+      const conflictResolutionImportSourceComparisonProjectIds = getUniqueStringValues(
+        body.conflictResolutionImportSourceComparisonProjectIds ?? [],
+      )
+      const hasConflictResolutionImportSources = conflictResolutionImportSourceComparisonProjectIds.length > 0
       const sourcePromptSelections =
         humanJudgmentMode === 'summary' && summarySourceProjectId
           ? getValidatedCreateFromProjectSummarySelections({selectedSourceProjects, summarySourceProjectId})
@@ -2994,6 +3469,15 @@ export const comparisonProjectsRoutes = new Elysia()
         throw new Error('Additional source projects require summary mode')
       }
 
+      if (
+        hasConflictResolutionImportSources
+        && (humanJudgmentMode !== 'summary' || !body.compareWithHumans || !body.allowConflictResolution)
+      ) {
+        throw getConflictResolutionImportRejectedError(
+          'Conflict resolution imports require summary mode and allow conflict resolution to be enabled',
+        )
+      }
+
       const selectedModelIds = getUniqueStringValues(
         (humanJudgmentMode === 'summary' ? selectedSourceProjects : [sourceProject]).map((selectedSourceProject) => {
           return selectedSourceProject.modelId
@@ -3008,8 +3492,10 @@ export const comparisonProjectsRoutes = new Elysia()
           },
         ),
       )
-      const createdComparisonProject = (await appDatabaseService.transaction(async (tx) => {
-        return createComparisonProjectRecord(tx, {
+      const createResult = (await appDatabaseService.transaction(async (tx) => {
+        await validateConflictResolutionImportSources(tx, conflictResolutionImportSourceComparisonProjectIds)
+
+        const createdComparisonProject = await createComparisonProjectRecord(tx, {
           name: body.name,
           description: body.description,
           modelIds: selectedModelIds,
@@ -3025,10 +3511,38 @@ export const comparisonProjectsRoutes = new Elysia()
           sourceProjectIds: humanJudgmentMode === 'summary' ? selectedSourceProjectIds : [sourceProject.id],
           promptSelections: sourcePromptSelections,
         })
-      })) as Awaited<ReturnType<typeof createComparisonProjectRecord>>
+        const conflictResolutionImportSummary = hasConflictResolutionImportSources
+          ? await importComparisonProjectConflictResolutions({
+              comparisonProjectId: createdComparisonProject.id,
+              promptSelections: sourcePromptSelections,
+              scope: await getCreateFromProjectImportScope({
+                createdComparisonProject,
+                promptSelections: sourcePromptSelections,
+                selectedImportRoutes,
+                selectedSourceProjectIds,
+                selectedSourceProjects,
+                summarySourceProjectId,
+                tx,
+              }),
+              sourceComparisonProjectIds: conflictResolutionImportSourceComparisonProjectIds,
+              tx,
+            })
+          : null
+
+        return {createdComparisonProject, conflictResolutionImportSummary}
+      })) as {
+        createdComparisonProject: Awaited<ReturnType<typeof createComparisonProjectRecord>>
+        conflictResolutionImportSummary: ComparisonProjectConflictResolutionImportSummary | null
+      }
+      const createdComparisonProject = createResult.createdComparisonProject
       await markComparisonProjectServingStaleAndQueueRebuild(createdComparisonProject.id)
 
-      return {data: createdComparisonProject}
+      return createResult.conflictResolutionImportSummary
+        ? {
+            data: createdComparisonProject,
+            conflictResolutionImportSummary: createResult.conflictResolutionImportSummary,
+          }
+        : {data: createdComparisonProject}
     },
     {
       body: t.Object({
@@ -3040,6 +3554,7 @@ export const comparisonProjectsRoutes = new Elysia()
         summarySourceProjectId: t.Optional(t.Union([t.String(), t.Null()])),
         sourceProjectId: t.String(),
         sourceProjectIds: t.Optional(t.Array(t.String())),
+        conflictResolutionImportSourceComparisonProjectIds: t.Optional(t.Array(t.String())),
       }),
     },
   )
