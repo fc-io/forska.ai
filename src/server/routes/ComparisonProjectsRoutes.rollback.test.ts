@@ -1003,7 +1003,9 @@ const queryJson = async (
   ) {
     return getMockDatabaseState()
       .conflictResolutionImportSourceRows.filter((row) => {
-        return row.allowConflictResolution && !row.archived && row.resolutionCount > 0
+        return (
+          row.allowConflictResolution && !row.archived && row.humanJudgmentMode === 'summary' && row.resolutionCount > 0
+        )
       })
       .sort((left, right) => {
         return right.createdAt.getTime() - left.createdAt.getTime() || left.name.localeCompare(right.name)
@@ -1029,7 +1031,12 @@ const queryJson = async (
         return statement.includes(`'${row.id}'`)
       })
       .map((row) => {
-        return {archived: row.archived, id: row.id, resolutionCount: row.resolutionCount}
+        return {
+          archived: row.archived,
+          humanJudgmentMode: row.humanJudgmentMode,
+          id: row.id,
+          resolutionCount: row.resolutionCount,
+        }
       })
   }
 
@@ -2421,17 +2428,10 @@ test('comparison conflict resolution import sources expose only eligible compari
       name: 'New Eligible Source',
       resolutionCount: 5,
     },
-    {
-      createdAt: '2026-04-01T00:00:00.000Z',
-      description: null,
-      humanJudgmentMode: 'prompt',
-      id: 'source-old',
-      name: 'Old Eligible Source',
-      resolutionCount: 2,
-    },
   ])
   expect(queryStatement ?? '').toContain('cp.archived = FALSE')
   expect(queryStatement ?? '').toContain('cp.allow_conflict_resolution = TRUE')
+  expect(queryStatement ?? '').toContain("cp.human_judgment_mode = 'summary'")
 })
 
 test('comparison project create-from-project imports selected conflict resolutions', async () => {

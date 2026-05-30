@@ -172,6 +172,7 @@ export const getComparisonProjectConflictResolutionImportSourcesSql = (params: {
       ON cr.comparison_project_id = cp.id
     WHERE cp.archived = FALSE
       AND cp.allow_conflict_resolution = TRUE
+      AND cp.human_judgment_mode = 'summary'
     GROUP BY
       cp.id,
       cp.name,
@@ -243,6 +244,7 @@ export const getComparisonProjectConflictResolutionImportDoiTargetArticlesSql = 
 }
 
 export const getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql = (params: {
+  articleIdentifierTable: string
   articleScopeConditions: readonly string[]
   articleTable: string
   idTitleKeys: string[]
@@ -253,12 +255,21 @@ export const getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSq
   })
 
   return `
+    WITH doi_identifier AS (
+      SELECT
+        article_id AS articleId,
+        MIN(normalized_value) AS doi
+      FROM ${params.articleIdentifierTable}
+      WHERE kind = 'doi'
+      GROUP BY article_id
+    )
     SELECT
       a.id AS articleId,
-      NULL AS doi,
+      doi_identifier.doi AS doi,
       a.article_id AS externalArticleId,
       a.article_title AS title
     FROM ${params.articleTable} a
+    LEFT JOIN doi_identifier ON doi_identifier.articleId = a.id
     ${getWhereClause([
       ...params.articleScopeConditions,
       params.idTitleKeys.length > 0 ? `${idTitleKeySql} IN (${getInClause(params.idTitleKeys)})` : 'FALSE',
@@ -353,7 +364,8 @@ const getKeyGroups = <T>(items: readonly T[], getKey: (item: T) => string | null
     const currentIds = key ? (groupMap.get(key) ?? []) : []
 
     if (key) {
-      groupMap.set(key, [...currentIds, getId(item)])
+      const itemId = getId(item)
+      groupMap.set(key, currentIds.includes(itemId) ? currentIds : [...currentIds, itemId])
     }
 
     return groupMap
@@ -396,7 +408,7 @@ const getSourceDuplicateErrors = (sourceRows: readonly NormalizedSourceRow[]) =>
       getKeyGroups(
         sourceRows,
         (row) => {
-          return row.idTitleKey
+          return row.doiKey ? null : row.idTitleKey
         },
         (row) => {
           return row.sourceRowId
@@ -455,12 +467,12 @@ const getValidResolutionValueSet = (targetSummaryOptionValues: readonly string[]
 }
 
 const getInvalidResolutionValueErrors = (
-  sourceRows: readonly NormalizedSourceRow[],
+  candidateRows: readonly ImportCandidateRow[],
   targetSummaryOptionValues: readonly string[],
 ) => {
   const validResolutionValues = getValidResolutionValueSet(targetSummaryOptionValues)
 
-  return sourceRows
+  return candidateRows
     .filter((row) => {
       return !validResolutionValues.has(row.resolutionValue)
     })
@@ -638,7 +650,6 @@ export const getComparisonProjectConflictResolutionImportPlan = ({
     ...getSourceDuplicateErrors(normalizedSourceRows),
     ...getTargetDuplicateErrors(normalizedTargetArticles),
   ]
-  const invalidValueErrors = getInvalidResolutionValueErrors(normalizedSourceRows, targetSummaryOptionValues)
   const candidateRowResults = getCandidateRows(normalizedSourceRows, normalizedTargetArticles)
   const candidateRows = candidateRowResults
     .map((result) => {
@@ -654,6 +665,7 @@ export const getComparisonProjectConflictResolutionImportPlan = ({
     .filter((skippedRow): skippedRow is ComparisonProjectConflictResolutionImportSkippedRow => {
       return skippedRow !== null
     })
+  const invalidValueErrors = getInvalidResolutionValueErrors(candidateRows, targetSummaryOptionValues)
   const conflictErrors = getConflictingResolutionValueErrors(candidateRows)
   const errors = [...duplicateErrors, ...invalidValueErrors, ...conflictErrors]
 
