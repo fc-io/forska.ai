@@ -6,6 +6,7 @@ import {
   judgmentBottleneckSubreasonValues,
   judgmentBottleneckValues,
   type JudgmentDispatchTelemetryInput,
+  judgmentDispatchTelemetryInternalPath,
   type JudgmentDispatchTelemetrySnapshot,
 } from './judgmentDispatchTelemetry.ts'
 import {getJudgmentLifecycleTelemetry, type JudgmentLifecycleTelemetryRecord} from './judgmentLifecycleTelemetry.ts'
@@ -252,6 +253,48 @@ test('aggregates fresh judge-worker telemetry when this process does not judge',
     },
   })
   expect(fetchWorkerTelemetry).toHaveBeenCalledTimes(2)
+})
+
+test('fetches judge-worker telemetry through the runtime-private route', async () => {
+  const originalFetch = globalThis.fetch
+  const requestedUrls: string[] = []
+  const fetchMock = mock(async (request: RequestInfo | URL) => {
+    requestedUrls.push(request instanceof Request ? request.url : request.toString())
+
+    return Response.json({
+      data: createSnapshot({
+        provider: {localProviderLiveRequests: 12, providerLeasedLiveRequests: 12, providerLeasedPhysicalCalls: 12},
+        request: {inFlight: 12},
+      }),
+      error: null,
+    })
+  })
+
+  globalThis.fetch = fetchMock as typeof fetch
+
+  try {
+    const telemetry = await getAggregatedJudgmentDispatchTelemetry(input, {
+      getJudgingWorkerRecords: async () => {
+        return [createJudgingRecord()]
+      },
+      getLocalTelemetry: async () => {
+        return createSnapshot({request: {inFlight: 0, pendingPersistedAttempts: 0}})
+      },
+      shouldUseLocalTelemetryOnly: () => {
+        return false
+      },
+    })
+
+    expect(requestedUrls[0]).toStartWith(`http://127.0.0.1:3003${judgmentDispatchTelemetryInternalPath}/job-a`)
+    expect(telemetry.provider).toMatchObject({
+      providerLeasedLiveRequests: 12,
+      providerLeasedPhysicalCalls: 12,
+      providerRequestFillPct: 60,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('uses fresh worker local lease telemetry when owner authority reports no live leases', async () => {

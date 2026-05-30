@@ -205,15 +205,21 @@ const getTelemetryHistoryTooltipPosition = (params: {container: HTMLDivElement |
     : null
 }
 
-const getAveragePolylinePoints = (points: TelemetryHistoryChartPoint[]): string => {
-  return points
-    .filter((point) => {
-      return point.avgY !== null
-    })
-    .map((point) => {
-      return `${point.x},${point.avgY}`
-    })
-    .join(' ')
+const getAveragePolylinePointSegments = (points: TelemetryHistoryChartPoint[]): string[] => {
+  const reduced = points.reduce<{current: string[]; segments: string[]}>(
+    (state, point) => {
+      if (point.avgY === null) {
+        return state.current.length === 0
+          ? state
+          : {current: [], segments: [...state.segments, state.current.join(' ')]}
+      }
+
+      return {...state, current: [...state.current, `${point.x},${point.avgY}`]}
+    },
+    {current: [], segments: []},
+  )
+
+  return reduced.current.length === 0 ? reduced.segments : [...reduced.segments, reduced.current.join(' ')]
 }
 
 const getLatestSampledTelemetryBucket = (
@@ -392,8 +398,8 @@ const TelemetryHistoryChart = (props: TelemetryHistoryChartProps): JSX.Element =
   const chartPoints = createMemo(() => {
     return getChartPoints(props.buckets, scaleMax())
   })
-  const averagePolylinePoints = createMemo(() => {
-    return getAveragePolylinePoints(chartPoints())
+  const averagePolylinePointSegments = createMemo(() => {
+    return getAveragePolylinePointSegments(chartPoints())
   })
 
   const showPointTooltip = (point: TelemetryHistoryChartPoint, event: PointerEvent) => {
@@ -461,17 +467,21 @@ const TelemetryHistoryChart = (props: TelemetryHistoryChartProps): JSX.Element =
           y1={getChartY(100, scaleMax()) ?? chartDimensions.top}
           y2={getChartY(100, scaleMax()) ?? chartDimensions.top}
         />
-        <Show when={averagePolylinePoints().length > 0}>
-          <polyline
-            fill="none"
-            points={averagePolylinePoints()}
-            stroke="rgb(37, 99, 235)"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            vector-effect="non-scaling-stroke"
-          />
-        </Show>
+        <For each={averagePolylinePointSegments()}>
+          {(points) => {
+            return (
+              <polyline
+                fill="none"
+                points={points}
+                stroke="rgb(37, 99, 235)"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                vector-effect="non-scaling-stroke"
+              />
+            )
+          }}
+        </For>
         <For each={chartPoints()}>
           {(point) => {
             const hitbox = getChartPointHitbox({count: chartPoints().length, point})

@@ -1,5 +1,6 @@
 import {Elysia} from 'elysia'
 
+import {runtimePrivateApiPrefix} from '../utils/runtimePrivateApi.ts'
 import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 import {findRouteSurfaceRoute, type RouteSurfaceCategory} from './routeSurfaceInventory.ts'
 
@@ -39,6 +40,8 @@ export const getPublicRouteSurfaceGateDecision = ({
     || isDuckdbOwnerConnectionHeartbeat
     || pathname === duckdbOwnerPrivateApiPrefix
     || pathname.startsWith(`${duckdbOwnerPrivateApiPrefix}/`)
+    || pathname === runtimePrivateApiPrefix
+    || pathname.startsWith(`${runtimePrivateApiPrefix}/`)
   const shouldGate = route !== null && publicRouteSurfaceGatedCategories.includes(route.category) && !shouldSkipGate
 
   return {route, shouldGate}

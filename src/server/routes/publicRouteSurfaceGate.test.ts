@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
+import {runtimePrivateApiPrefix} from '../utils/runtimePrivateApi.ts'
 import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 import {
   exposeLocalOperatorApiEnvVar,
@@ -17,6 +18,9 @@ const getResponse = (path: string, method = 'GET', headers?: HeadersInit) => {
     .all(`${duckdbOwnerPrivateApiPrefix}/api/*`, () => {
       return {data: 'owner-private-route'}
     })
+    .all(`${runtimePrivateApiPrefix}/api/*`, () => {
+      return {data: 'runtime-private-route'}
+    })
 
   return app.handle(new Request(`http://localhost${path}`, {headers, method}))
 }
@@ -27,6 +31,12 @@ test('public gate blocks admin debug routes by default', async () => {
 
   expect(response.status).toBe(404)
   expect(body.error).toBe('Route is not available on the public local API surface')
+})
+
+test('public gate blocks public judgment dispatch telemetry by default', async () => {
+  const response = await getResponse('/api/admin/judgment-dispatch-runtime/job-a')
+
+  expect(response.status).toBe(404)
 })
 
 test('public gate blocks database snapshot routes by default', async () => {
@@ -106,6 +116,14 @@ test('public gate leaves owner-private RPC available for split-runtime internals
 
   expect(response.status).toBe(200)
   expect(body.data).toBe('owner-private-route')
+})
+
+test('public gate leaves runtime-private RPC available for split-runtime internals', async () => {
+  const response = await getResponse(`${runtimePrivateApiPrefix}/api/admin/judgment-dispatch-runtime/job-a`)
+  const body = (await response.json()) as {data: string}
+
+  expect(response.status).toBe(200)
+  expect(body.data).toBe('runtime-private-route')
 })
 
 test('public gate can expose local operator routes when explicitly enabled', () => {

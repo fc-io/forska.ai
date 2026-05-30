@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {
   getLocalJudgmentDispatchTelemetry,
+  judgmentDispatchTelemetryInternalPath,
   judgmentDispatchTelemetryPath,
 } from '../cron/judgmentsJobs/judgmentDispatchTelemetry.ts'
 
@@ -31,28 +32,52 @@ const getBooleanQueryValue = (value: string | undefined): boolean => {
   return value === 'true'
 }
 
-export const judgmentDispatchTelemetryRoutes = new Elysia().get(
-  `${judgmentDispatchTelemetryPath}/:jobId`,
-  async ({params, query}) => {
-    return {
-      data: await getLocalJudgmentDispatchTelemetry({
-        jobId: params.jobId,
-        modelId: query.modelId ?? null,
-        modelProvider: query.modelProvider ?? null,
-        providerFamily: query.providerFamily ?? null,
-        providerConnectionId: query.providerConnectionId ?? null,
-        providerId: query.providerId ?? null,
-        providerKey: query.providerKey ?? null,
-        providerLimit: getNullableNumberQueryValue(query.providerLimit),
-        providerLimitVersion: query.providerLimitVersion ?? null,
-        providerMaxInflightRequests: getNullableNumberQueryValue(query.providerMaxInflightRequests),
-        providerName: query.providerName ?? null,
-        providerUsesFamilyDefault: getBooleanQueryValue(query.providerUsesFamilyDefault),
-        readyCount: getNullableNumberQueryValue(query.readyCount),
-        resolvedDefaultCapacity: getNullableNumberQueryValue(query.resolvedDefaultCapacity),
-      }),
-      error: null,
-    }
-  },
-  {params: t.Object({jobId: t.String()}), query: judgmentDispatchTelemetryQuerySchema},
-)
+type JudgmentDispatchTelemetryRouteQuery = typeof judgmentDispatchTelemetryQuerySchema.static
+
+const getJudgmentDispatchTelemetryRouteResponse = async ({
+  jobId,
+  query,
+}: {
+  jobId: string
+  query: JudgmentDispatchTelemetryRouteQuery
+}) => {
+  return {
+    data: await getLocalJudgmentDispatchTelemetry({
+      jobId,
+      modelId: query.modelId ?? null,
+      modelProvider: query.modelProvider ?? null,
+      providerFamily: query.providerFamily ?? null,
+      providerConnectionId: query.providerConnectionId ?? null,
+      providerId: query.providerId ?? null,
+      providerKey: query.providerKey ?? null,
+      providerLimit: getNullableNumberQueryValue(query.providerLimit),
+      providerLimitVersion: query.providerLimitVersion ?? null,
+      providerMaxInflightRequests: getNullableNumberQueryValue(query.providerMaxInflightRequests),
+      providerName: query.providerName ?? null,
+      providerUsesFamilyDefault: getBooleanQueryValue(query.providerUsesFamilyDefault),
+      readyCount: getNullableNumberQueryValue(query.readyCount),
+      resolvedDefaultCapacity: getNullableNumberQueryValue(query.resolvedDefaultCapacity),
+    }),
+    error: null,
+  }
+}
+
+const getJudgmentDispatchTelemetryHandler = async ({
+  params,
+  query,
+}: {
+  params: {jobId: string}
+  query: JudgmentDispatchTelemetryRouteQuery
+}) => {
+  return getJudgmentDispatchTelemetryRouteResponse({jobId: params.jobId, query})
+}
+
+export const judgmentDispatchTelemetryRoutes = new Elysia()
+  .get(`${judgmentDispatchTelemetryPath}/:jobId`, getJudgmentDispatchTelemetryHandler, {
+    params: t.Object({jobId: t.String()}),
+    query: judgmentDispatchTelemetryQuerySchema,
+  })
+  .get(`${judgmentDispatchTelemetryInternalPath}/:jobId`, getJudgmentDispatchTelemetryHandler, {
+    params: t.Object({jobId: t.String()}),
+    query: judgmentDispatchTelemetryQuerySchema,
+  })

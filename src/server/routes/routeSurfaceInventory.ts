@@ -1,3 +1,5 @@
+import {runtimePrivateApiPrefix} from '../utils/runtimePrivateApi.ts'
+
 export type RouteSurfaceCategory =
   | 'internal-runtime-api'
   | 'local-diagnostics-api'
@@ -218,7 +220,10 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
   ...ownerlessDiagnostics(
     'JudgmentDispatchTelemetryRoutes.ts',
     'Local judgment dispatch and provider capacity telemetry.',
-    [['GET', '/api/admin/judgment-dispatch-runtime/:jobId']],
+    [
+      ['GET', '/api/admin/judgment-dispatch-runtime/:jobId'],
+      ['GET', `${runtimePrivateApiPrefix}/api/admin/judgment-dispatch-runtime/:jobId`],
+    ],
   ),
   ...ownerDependentMaintenance(
     'AdminInvestigateRoutes.ts',

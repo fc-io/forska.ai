@@ -2,6 +2,7 @@ import {
   type DuckdbOwnerConnectionRecord,
   getDuckdbOwnerConnectionsOverview,
 } from '../../utils/duckdbOwnerConnections.ts'
+import {runtimePrivateApiPrefix} from '../../utils/runtimePrivateApi.ts'
 import {shouldCurrentServerRunJudgingLoops} from '../../utils/serverRuntimeRole.ts'
 import {
   getAcceptedJudgeWorkerClaimLifecycleRows,
@@ -53,6 +54,7 @@ import {
 } from './providerTargetAllocationSnapshot.ts'
 
 export const judgmentDispatchTelemetryPath = '/api/admin/judgment-dispatch-runtime'
+export const judgmentDispatchTelemetryInternalPath = `${runtimePrivateApiPrefix}${judgmentDispatchTelemetryPath}`
 
 export type JudgmentDispatchTelemetryInput = ProviderQueueInput & {
   jobId: string
@@ -967,7 +969,7 @@ const readResponseJson = (response: Response): Promise<unknown> => {
 
 const getWorkerTelemetryUrl = (record: DuckdbOwnerConnectionRecord, input: JudgmentDispatchTelemetryInput): string => {
   const url = new URL(
-    `${judgmentDispatchTelemetryPath}/${encodeURIComponent(input.jobId)}`,
+    `${judgmentDispatchTelemetryInternalPath}/${encodeURIComponent(input.jobId)}`,
     `http://127.0.0.1:${record.listenPort}`,
   )
 
