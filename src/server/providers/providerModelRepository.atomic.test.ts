@@ -117,6 +117,47 @@ test('updateProviderModel disables model row and provider config in one transact
   expect(JSON.parse(storedConnection?.configJson ?? '{}')).toMatchObject({disabledModelIds: ['atomic-toggle-model']})
 })
 
+test('updateProviderModel disables a referenced model without rewriting unchanged variant', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  await insertProviderModelFixture({
+    connectionId: 'atomic-referenced-toggle-connection',
+    modelId: 'atomic-referenced-toggle-model',
+  })
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id)
+    VALUES ('atomic-referenced-toggle-project', 'Referenced Toggle Project', 'atomic-referenced-toggle-model')
+  `)
+
+  const updated = await updateProviderModel({
+    displayName: 'OpenRouter Test Model',
+    enabled: false,
+    id: 'atomic-referenced-toggle-model',
+    variant: null,
+  })
+
+  const [storedModel] = await queryDatabase<{enabled: boolean}>(`
+    SELECT enabled
+    FROM app.model
+    WHERE id = 'atomic-referenced-toggle-model'
+    LIMIT 1
+  `)
+  const [storedConnection] = await queryDatabase<{configJson: string}>(`
+    SELECT TO_JSON(config_json) AS configJson
+    FROM app.provider_connection
+    WHERE id = 'atomic-referenced-toggle-connection'
+    LIMIT 1
+  `)
+
+  expect(updated.enabled).toBe(false)
+  expect(storedModel?.enabled).toBe(false)
+  expect(JSON.parse(storedConnection?.configJson ?? '{}')).toMatchObject({
+    disabledModelIds: ['atomic-referenced-toggle-model'],
+  })
+})
+
 test('updateProviderModel re-enables model row and removes provider config disabled id', async () => {
   if (!queryDatabase || !runDatabase) {
     throw new Error('Test database not initialized')
