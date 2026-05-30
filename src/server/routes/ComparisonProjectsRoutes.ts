@@ -196,6 +196,7 @@ type ComparisonProjectSource = {
 }
 type ComparisonProjectConflictResolutionImportSourceValidationRow = {
   archived: boolean
+  humanJudgmentMode: HumanJudgmentMode | null
   id: string
   resolutionCount: unknown
 }
@@ -1221,11 +1222,12 @@ const validateConflictResolutionImportSources = async (db: AppQueryRunner, sourc
     SELECT
       cp.id AS id,
       cp.archived AS archived,
+      cp.human_judgment_mode AS humanJudgmentMode,
       COUNT(cr.id) AS resolutionCount
     FROM ${comparisonProjectTable} cp
     LEFT JOIN ${comparisonProjectConflictResolutionTable} cr ON cr.comparison_project_id = cp.id
     WHERE cp.id IN (${getInClause(sourceComparisonProjectIds)})
-    GROUP BY cp.id, cp.archived
+    GROUP BY cp.id, cp.archived, cp.human_judgment_mode
   `)
   const rowsById = rows.reduce<Map<string, ComparisonProjectConflictResolutionImportSourceValidationRow>>(
     (rowMap, row) => {
@@ -1240,6 +1242,9 @@ const validateConflictResolutionImportSources = async (db: AppQueryRunner, sourc
   const archivedSource = rows.find((row) => {
     return row.archived
   })
+  const nonSummarySource = rows.find((row) => {
+    return row.humanJudgmentMode !== 'summary'
+  })
   const emptySource = rows.find((row) => {
     return Number(row.resolutionCount ?? 0) <= 0
   })
@@ -1250,6 +1255,10 @@ const validateConflictResolutionImportSources = async (db: AppQueryRunner, sourc
 
   if (archivedSource) {
     throw getConflictResolutionImportRejectedError('Conflict resolution import sources must not be archived')
+  }
+
+  if (nonSummarySource) {
+    throw getConflictResolutionImportRejectedError('Conflict resolution import sources must use summary mode')
   }
 
   if (emptySource) {
@@ -1325,6 +1334,7 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
           Omit<ComparisonProjectConflictResolutionImportTargetArticle, 'isConflictResolutionEligible'>
         >(
           getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql({
+            articleIdentifierTable,
             articleScopeConditions,
             articleTable,
             idTitleKeys: params.idTitleKeys,

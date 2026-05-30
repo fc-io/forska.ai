@@ -76,6 +76,7 @@ test('import source query selects only eligible comparison projects in newest or
   expect(sql).toContain('INNER JOIN app.comparison_project_conflict_resolution cr')
   expect(sql).toContain('WHERE cp.archived = FALSE')
   expect(sql).toContain('AND cp.allow_conflict_resolution = TRUE')
+  expect(sql).toContain("AND cp.human_judgment_mode = 'summary'")
   expect(sql).toContain('COUNT(cr.article_id) AS resolutionCount')
   expect(sql).toContain('ORDER BY cp.created_at DESC, cp.name ASC, cp.id ASC')
   expect(source).toEqual({
@@ -115,6 +116,7 @@ test('target article queries are constrained by selected normalized matching key
     doiKeys: ['10.1000/example'],
   })
   const idTitleSql = getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql({
+    articleIdentifierTable: 'app.article_identifier',
     articleScopeConditions: ['EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)'],
     articleTable: 'app.article',
     idTitleKeys: [idTitleKey ?? ''],
@@ -125,6 +127,8 @@ test('target article queries are constrained by selected normalized matching key
   expect(doiSql).toContain('10.1000/example')
   expect(doiSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
   expect(idTitleSql).toContain('regexp_replace(LOWER(TRIM(COALESCE(a.article_title')
+  expect(idTitleSql).toContain('doi_identifier.doi AS doi')
+  expect(idTitleSql).toContain('LEFT JOIN doi_identifier ON doi_identifier.articleId = a.id')
   expect(idTitleSql).toContain(idTitleKey ?? '')
   expect(idTitleSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
 })
@@ -236,6 +240,63 @@ test('import plan reports duplicate source and target keys as hard errors', () =
   expect(plan.candidates).toEqual([])
 })
 
+test('import plan ignores duplicate source ID and title keys when source DOI is usable', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({
+        doi: '10.1000/source-a',
+        externalArticleId: 'shared-ext',
+        sourceRowId: 'source-a',
+        title: 'Shared',
+      }),
+      getSourceRow({
+        doi: '10.1000/source-b',
+        externalArticleId: 'SHARED-EXT',
+        sourceRowId: 'source-b',
+        title: ' Shared ',
+      }),
+    ],
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'target-a',
+        doi: '10.1000/source-a',
+        externalArticleId: 'target-a-ext',
+        title: 'Target A',
+      }),
+      getTargetArticle({
+        articleId: 'target-b',
+        doi: '10.1000/source-b',
+        externalArticleId: 'target-b-ext',
+        title: 'Target B',
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toMatchObject([
+    {sourceRows: [{matchKind: 'doi', sourceRowId: 'source-a'}], targetArticleId: 'target-a'},
+    {sourceRows: [{matchKind: 'doi', sourceRowId: 'source-b'}], targetArticleId: 'target-b'},
+  ])
+})
+
+test('import plan allows the same target article from DOI and ID/title lookups', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: '10.1000/source', externalArticleId: 'shared-ext', title: 'Shared title'})],
+    targetArticles: [
+      getTargetArticle({articleId: 'target-article-1', doi: '10.1000/source', externalArticleId: null, title: null}),
+      getTargetArticle({
+        articleId: 'target-article-1',
+        doi: '10.1000/source',
+        externalArticleId: 'shared-ext',
+        title: 'Shared title',
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toMatchObject([{sourceRows: [{matchKind: 'doi'}], targetArticleId: 'target-article-1'}])
+})
+
 test('import plan reports conflicting source resolution values for the same target article', () => {
   const plan = getPlan({
     sourceRows: [
@@ -274,6 +335,19 @@ test('import plan reports resolution values missing from target summary options'
     {code: 'invalid-source-resolution-value', sourceRowIds: ['source-row-1'], value: 'unclear'},
   ])
   expect(plan.candidates).toEqual([])
+})
+
+test('import plan ignores invalid resolution values on skipped source rows', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: '10.1000/source-only', resolutionValue: 'unclear'})],
+    targetArticles: [],
+    targetSummaryOptionValues: ['yes', 'no'],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([])
+  expect(plan.skipCounts).toEqual({noTargetMatch: 1, noUsableKey: 0, notConflicting: 0})
+  expect(plan.skippedRows).toEqual([{reason: 'no-target-match', sourceRowId: 'source-row-1'}])
 })
 
 test('import plan skips source rows without a usable matching key', () => {
