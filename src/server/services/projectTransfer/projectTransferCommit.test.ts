@@ -717,6 +717,89 @@ test('project transfer commit reopens stale plans before claiming', async () => 
   }
 })
 
+test('project transfer commit does not publish pre-claim stale plans after a lost revision CAS', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const staleSummary = getReadySummary({blockerCount: 1})
+    const plan = getPlan({planRevision: 1, summary})
+    const stalePlan = getPlan({planRevision: 2, summary: staleSummary})
+    const layout = await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    const repository: MutableSessionRepository = {
+      ...fake.repository,
+      updateProjectTransferSessionPlanRevision: async (params) => {
+        fake.calls.updatePlan = [...fake.calls.updatePlan, params]
+
+        return null
+      },
+    }
+    const result = await runCommit({
+      cwd,
+      repository,
+      revalidate: async () => {
+        return {changed: true, plan: stalePlan, ready: false}
+      },
+    })
+    const writtenPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as {planRevision: number}
+
+    expect(result).toMatchObject({
+      error: 'Project transfer commit could not reopen stale plan',
+      status: 'error',
+      statusCode: 409,
+    })
+    expect(fake.calls.updatePlan).toHaveLength(1)
+    expect(writtenPlan.planRevision).toBe(1)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit does not publish post-claim stale plans after a lost reopen CAS', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const staleSummary = getReadySummary({blockerCount: 1})
+    const plan = getPlan({planRevision: 1, summary})
+    const stalePlan = getPlan({planRevision: 2, summary: staleSummary})
+    const layout = await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    const repository: MutableSessionRepository = {
+      ...fake.repository,
+      reopenProjectTransferCommitSession: async (params) => {
+        fake.calls.reopen = [...fake.calls.reopen, params]
+
+        return null
+      },
+    }
+    let revalidationCount = 0
+    const result = await runCommit({
+      cwd,
+      repository,
+      revalidate: async () => {
+        revalidationCount += 1
+
+        return revalidationCount === 1
+          ? {changed: false, plan, ready: true}
+          : {changed: true, plan: stalePlan, ready: false}
+      },
+    })
+    const writtenPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as {planRevision: number}
+
+    expect(result).toMatchObject({
+      error: 'Project transfer commit could not reopen claimed stale plan',
+      status: 'error',
+      statusCode: 409,
+    })
+    expect(fake.calls.reopen).toHaveLength(1)
+    expect(writtenPlan.planRevision).toBe(1)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('project transfer commit requires one reviewed plan revision alias without conflicts', async () => {
   const cwd = getRuntimeRoot()
   const fake = getFakeSessionRepository(getSession())

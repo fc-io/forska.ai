@@ -50,6 +50,26 @@ const getAnthropicBaseModel = (): ProviderModelRecord => {
   }
 }
 
+const getCodexVariantModel = (): ProviderModelRecord => {
+  return {
+    baseURL: null,
+    createdAt: null,
+    displayName: 'Codex Thinking High',
+    enabled: true,
+    id: 'codex-model-high',
+    metadataJson: {options: {thinking: 'high'}},
+    modelName: 'codex-thinking',
+    name: 'Codex Thinking High',
+    provider: 'codex',
+    providerConnectionId: 'codex-connection-1',
+    remoteModelId: 'codex-thinking',
+    source: 'manual',
+    updatedAt: null,
+    variant: 'high',
+    version: 'high',
+  }
+}
+
 const state = {
   createProviderConnection: mock(async () => {
     return getCodexConnection()
@@ -92,6 +112,9 @@ const state = {
   listSelectableProviderModels: mock(async () => {
     return [getAnthropicBaseModel()]
   }),
+  getProviderModels: mock(async () => {
+    return new Map<string, ProviderModelRecord>()
+  }),
   listCodexAppModels: mock(async () => {
     return []
   }),
@@ -101,9 +124,17 @@ const state = {
   startCodexAppDeviceLogin: mock(() => {
     return {id: 'codex-login-1', state: 'running'}
   }),
-  updateProviderModel: mock(async () => {
-    return getAnthropicBaseModel()
-  }),
+  updateProviderModel: mock(
+    async (input: {id: string; options?: {thinking?: string | null}; variant?: string | null}) => {
+      return {
+        ...getCodexVariantModel(),
+        id: input.id,
+        metadataJson: input.options ? {options: input.options} : null,
+        variant: input.variant ?? null,
+        version: input.variant ?? null,
+      }
+    },
+  ),
 }
 
 const registerModuleMocks = () => {
@@ -136,6 +167,7 @@ const registerModuleMocks = () => {
   void mock.module(providerModelRepositoryModulePath, () => {
     return {
       createProviderModel: state.createProviderModel,
+      getProviderModels: state.getProviderModels,
       listSelectableProviderModels: state.listSelectableProviderModels,
       updateProviderModel: state.updateProviderModel,
       upsertDiscoveredModels: mock(async () => {
@@ -221,6 +253,58 @@ test('models ensure materializes Codex variants with prompt-affecting thinking m
   expect(response.status).toBe(200)
   expect(body).toEqual({data: {modelId: 'codex-model-1'}, error: null})
   expect(metadataJson?.options?.thinking).toBe('high')
+})
+
+test('models ensure reconciles existing Codex variant thinking metadata', async () => {
+  state.createProviderModel.mockClear()
+  state.updateProviderModel.mockClear()
+  state.queryJson.mockImplementationOnce(async () => {
+    return [{id: 'codex-existing-high'}]
+  })
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/models/ensure', {
+      body: JSON.stringify({
+        modelName: 'codex-thinking',
+        name: 'Codex Thinking High',
+        provider: 'codex',
+        version: 'high',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {modelId: string}; error: null}
+
+  expect(response.status).toBe(200)
+  expect(body).toEqual({data: {modelId: 'codex-existing-high'}, error: null})
+  expect(state.createProviderModel).not.toHaveBeenCalled()
+  expect(state.updateProviderModel).toHaveBeenCalledWith({
+    displayName: 'Codex Thinking High',
+    enabled: true,
+    id: 'codex-existing-high',
+    options: {thinking: 'high'},
+    variant: 'high',
+  })
+})
+
+test('models list omits disabled Codex connection fallback models', async () => {
+  state.getFirstEnabledProviderConnection.mockImplementationOnce(async () => {
+    return null
+  })
+  state.listProviderConnections.mockImplementationOnce(async () => {
+    return [{...getCodexConnection(), enabled: false, models: [getCodexVariantModel()]}]
+  })
+  const app = await loadRoutes()
+  const response = await app.handle(new Request('http://localhost/api/models'))
+  const body = (await response.json()) as {data: Array<{provider: string}>}
+
+  expect(response.status).toBe(200)
+  expect(
+    body.data.some((model) => {
+      return model.provider === 'codex'
+    }),
+  ).toBe(false)
 })
 
 test('models list keeps Anthropic thinking variants as virtual ids with provider connection handoff data', async () => {

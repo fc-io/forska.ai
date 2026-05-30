@@ -2380,39 +2380,12 @@ const assertNoHumanReviewPlanExtras = ({
     : undefined
 }
 
-const assertNoExistingHumanJudgments = async ({
-  rows,
-  tx,
-}: {
-  rows: readonly HumanJudgmentCommitRow[]
-  tx: ProjectTransferCommitWriterTx
-}) => {
+const assertNoDuplicateHumanJudgmentRows = (rows: readonly HumanJudgmentCommitRow[]) => {
   const keys = rows.map((row) => {
     return `${row.projectId}\u0000${row.articleId}\u0000${row.promptId}`
   })
 
-  assertNoDuplicateRows('judgment_human', keys)
-
-  const existing =
-    rows.length === 0
-      ? []
-      : await tx.queryJson<{articleId: string; projectId: string; promptId: string}>(`
-          SELECT project_id AS projectId, article_id AS articleId, prompt_id AS promptId
-          FROM app.judgment_human
-          WHERE ${rows
-            .map((row) => {
-              return `(project_id = ${getSqlLiteral(row.projectId)} AND article_id = ${getSqlLiteral(row.articleId)} AND prompt_id = ${getSqlLiteral(row.promptId)})`
-            })
-            .join(' OR ')}
-          ORDER BY project_id ASC, article_id ASC, prompt_id ASC
-        `)
-  const conflict = existing[0]
-
-  return conflict
-    ? failCommitWriter(
-        `target judgment_human already has remapped key ${conflict.projectId}:${conflict.articleId}:${conflict.promptId}`,
-      )
-    : undefined
+  return assertNoDuplicateRows('judgment_human', keys)
 }
 
 const assertNoExistingHumanSummaries = async ({
@@ -2490,7 +2463,7 @@ const insertHumanJudgmentRows = async ({
   rows: readonly HumanJudgmentCommitRow[]
   tx: ProjectTransferCommitWriterTx
 }) => {
-  await assertNoExistingHumanJudgments({rows, tx})
+  assertNoDuplicateHumanJudgmentRows(rows)
 
   return rows.length === 0
     ? undefined
