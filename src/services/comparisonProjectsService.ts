@@ -9,6 +9,7 @@ import type {
 } from '../utils/comparisonProjectDifferenceFilter.ts'
 import type {ComparisonProjectRowFilter} from '../utils/comparisonProjectRowFilter.ts'
 import {apiClient} from './apiClient.ts'
+import {handleApiResponse} from './utils/handleApiResponse.ts'
 
 export type CreateComparisonProjectInput = {
   name: string
@@ -325,13 +326,17 @@ export type ComparisonProjectJudgmentsPageRequest = ComparisonProjectRowsRequest
 export type ComparisonProjectJudgmentsCountRequest = ComparisonProjectRowsRequestFilters & {limit: string}
 export type ComparisonProjectExportRequest = ComparisonProjectRowsRequestFilters
 
-const getResponseData = <T>(response: {data?: {data?: T | null} | null; error?: unknown}, errorMessage: string) => {
-  if (response.error || !response.data?.data) {
-    console.error(errorMessage, response.error)
+const getResponseData = <T>(
+  response: {data?: {data?: T | null; error?: unknown} | null; error?: unknown; status?: number},
+  errorMessage: string,
+): T => {
+  const result = handleApiResponse<{data?: T | null; error?: unknown}>(response, errorMessage)
+
+  if (result.data === undefined || result.data === null) {
     throw new Error(errorMessage)
   }
 
-  return response.data.data
+  return result.data
 }
 
 export const fetchComparisonProjects = async () => {

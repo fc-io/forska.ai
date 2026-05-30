@@ -4,9 +4,11 @@ import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../components/ui/button'
 import {
+  type ComparisonProjectConflictResolutionImportSource,
   type ComparisonProjectSource,
   createComparisonProjectFromProject,
   type CreateComparisonProjectFromProjectInput,
+  fetchComparisonProjectConflictResolutionImportSources,
   fetchComparisonProjectSources,
 } from '../../../services/comparisonProjectsService'
 
@@ -18,6 +20,14 @@ const formatContentSettings = (sourceProject: ComparisonProjectSource) => {
   ].filter(Boolean) as string[]
 
   return parts.length > 0 ? parts.join(' + ') : 'none'
+}
+
+const formatHumanJudgmentMode = (mode: ComparisonProjectConflictResolutionImportSource['humanJudgmentMode']) => {
+  return mode === 'summary' ? 'Summary' : 'Prompt'
+}
+
+const formatResolutionCount = (count: number) => {
+  return `${count} resolution${count === 1 ? '' : 's'}`
 }
 
 const toggleStringSelection = (currentValues: string[], nextValue: string) => {
@@ -57,7 +67,7 @@ const getAdditionalSummaryProjectReason = (
   return null
 }
 
-const CreateCompareJudgmentsFromProjectPage = () => {
+export const CreateCompareJudgmentsFromProjectPage = () => {
   const navigate = useNavigate()
   const sourcesQuery = useQuery(() => {
     return {
@@ -74,6 +84,10 @@ const CreateCompareJudgmentsFromProjectPage = () => {
   const [summaryModeEnabled, setSummaryModeEnabled] = createSignal(false)
   const [selectedSourceProjectId, setSelectedSourceProjectId] = createSignal('')
   const [selectedAdditionalSourceProjectIds, setSelectedAdditionalSourceProjectIds] = createSignal<string[]>([])
+  const [
+    selectedConflictResolutionImportSourceComparisonProjectIds,
+    setSelectedConflictResolutionImportSourceComparisonProjectIds,
+  ] = createSignal<string[]>([])
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
@@ -108,6 +122,18 @@ const CreateCompareJudgmentsFromProjectPage = () => {
   const isConflictResolutionAvailable = createMemo(() => {
     return summaryModeEnabled()
   })
+  const isConflictResolutionImportAvailable = createMemo(() => {
+    return Boolean(selectedSourceProjectId() && summaryModeEnabled() && allowConflictResolution())
+  })
+  const conflictResolutionImportSourcesQuery = useQuery(() => {
+    return {
+      queryKey: ['comparison-project-conflict-resolution-import-sources'],
+      queryFn: fetchComparisonProjectConflictResolutionImportSources,
+      enabled: isConflictResolutionImportAvailable(),
+      staleTime: 1000 * 60 * 5,
+      suspense: false,
+    }
+  })
   const summaryModeUnavailableReason = createMemo(() => {
     if (sourcesQuery.isLoading) {
       return 'Select a primary project after projects finish loading.'
@@ -128,6 +154,17 @@ const CreateCompareJudgmentsFromProjectPage = () => {
     return selectedSourceProjectSummaryPrompts().length === 0
       ? 'Selected primary project has no prompts with summary criteria metadata.'
       : null
+  })
+  const conflictResolutionImportUnavailableReason = createMemo(() => {
+    if (!selectedSourceProjectId()) {
+      return 'Select a primary project before importing conflict resolutions.'
+    }
+
+    if (!summaryModeEnabled()) {
+      return summaryModeUnavailableReason() ?? 'Turn on Summary mode before importing conflict resolutions.'
+    }
+
+    return allowConflictResolution() ? null : 'Enable Allow conflict resolution before importing prior decisions.'
   })
   const additionalProjectValidationError = createMemo(() => {
     if (!summaryModeEnabled()) {
@@ -161,6 +198,30 @@ const CreateCompareJudgmentsFromProjectPage = () => {
     }
   })
 
+  createEffect(() => {
+    if (!isConflictResolutionImportAvailable()) {
+      setSelectedConflictResolutionImportSourceComparisonProjectIds([])
+    }
+  })
+
+  createEffect(() => {
+    if (!conflictResolutionImportSourcesQuery.isSuccess) {
+      return
+    }
+
+    const availableSourceIds = new Set(
+      (conflictResolutionImportSourcesQuery.data ?? []).map((sourceProject) => {
+        return sourceProject.id
+      }),
+    )
+
+    setSelectedConflictResolutionImportSourceComparisonProjectIds((currentValues) => {
+      return currentValues.filter((sourceProjectId) => {
+        return availableSourceIds.has(sourceProjectId)
+      })
+    })
+  })
+
   const handleSubmit = async (event: Event) => {
     event.preventDefault()
     setError(null)
@@ -179,6 +240,9 @@ const CreateCompareJudgmentsFromProjectPage = () => {
       return
     }
 
+    const conflictResolutionImportSourceComparisonProjectIds = isConflictResolutionImportAvailable()
+      ? selectedConflictResolutionImportSourceComparisonProjectIds()
+      : []
     const createComparisonProjectInput: CreateComparisonProjectFromProjectInput = {
       name: comparisonProjectName().trim(),
       description: description().trim() || undefined,
@@ -190,6 +254,9 @@ const CreateCompareJudgmentsFromProjectPage = () => {
       sourceProjectIds: summaryModeEnabled()
         ? [selectedSourceProjectId(), ...selectedAdditionalSourceProjectIds()]
         : [selectedSourceProjectId()],
+      ...(conflictResolutionImportSourceComparisonProjectIds.length > 0
+        ? {conflictResolutionImportSourceComparisonProjectIds}
+        : {}),
     }
 
     setIsLoading(true)
@@ -511,6 +578,104 @@ const CreateCompareJudgmentsFromProjectPage = () => {
           <Show when={summaryModeEnabled() && additionalProjectValidationError()}>
             <p class="text-sm text-red-600">{additionalProjectValidationError()}</p>
           </Show>
+
+          <div
+            class="border border-input rounded-md p-4 bg-muted/10"
+            classList={{'opacity-60': !isConflictResolutionImportAvailable()}}
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-sm font-medium text-gray-900">Import Conflict Resolutions</p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Reuse saved conflict-resolution decisions from earlier compare projects.
+                </p>
+              </div>
+              <Show when={isConflictResolutionImportAvailable()}>
+                <span class="text-xs text-muted-foreground">
+                  {selectedConflictResolutionImportSourceComparisonProjectIds().length} selected
+                </span>
+              </Show>
+            </div>
+
+            <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-3 mt-3">
+              Duplicate source keys, ambiguous target matches, conflicting imported values, or values outside the target
+              summary options stop creation and no compare project is created.
+            </p>
+
+            <Show when={!isConflictResolutionImportAvailable()}>
+              <p class="text-sm text-muted-foreground mt-3">{conflictResolutionImportUnavailableReason()}</p>
+            </Show>
+
+            <Show when={isConflictResolutionImportAvailable()}>
+              <div class="mt-4 space-y-2">
+                <Show when={conflictResolutionImportSourcesQuery.isLoading}>
+                  <p class="text-sm text-muted-foreground">Loading conflict resolution import sources...</p>
+                </Show>
+                <Show when={conflictResolutionImportSourcesQuery.isError}>
+                  <p class="text-sm text-red-600">
+                    {conflictResolutionImportSourcesQuery.error instanceof Error
+                      ? conflictResolutionImportSourcesQuery.error.message
+                      : 'Failed to load conflict resolution import sources'}
+                  </p>
+                </Show>
+                <Show
+                  when={
+                    !conflictResolutionImportSourcesQuery.isLoading
+                    && !conflictResolutionImportSourcesQuery.isError
+                    && (conflictResolutionImportSourcesQuery.data?.length ?? 0) === 0
+                  }
+                >
+                  <p class="text-sm text-muted-foreground">
+                    No compare projects with saved conflict resolutions are available.
+                  </p>
+                </Show>
+                <Show
+                  when={
+                    !conflictResolutionImportSourcesQuery.isLoading
+                    && !conflictResolutionImportSourcesQuery.isError
+                    && (conflictResolutionImportSourcesQuery.data?.length ?? 0) > 0
+                  }
+                >
+                  <div class="space-y-2">
+                    <For each={conflictResolutionImportSourcesQuery.data ?? []}>
+                      {(sourceProject) => {
+                        return (
+                          <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/50">
+                            <input
+                              type="checkbox"
+                              class="mt-1"
+                              checked={selectedConflictResolutionImportSourceComparisonProjectIds().includes(
+                                sourceProject.id,
+                              )}
+                              onChange={() => {
+                                setSelectedConflictResolutionImportSourceComparisonProjectIds((currentValues) => {
+                                  return toggleStringSelection(currentValues, sourceProject.id)
+                                })
+                              }}
+                            />
+                            <div class="flex-1">
+                              <div class="flex items-center gap-2 flex-wrap">
+                                <p class="text-sm font-medium text-gray-900">{sourceProject.name}</p>
+                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                                  {formatHumanJudgmentMode(sourceProject.humanJudgmentMode)}
+                                </span>
+                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700">
+                                  {formatResolutionCount(sourceProject.resolutionCount)}
+                                </span>
+                              </div>
+                              <Show when={sourceProject.description}>
+                                <p class="text-xs text-muted-foreground mt-1">{sourceProject.description}</p>
+                              </Show>
+                            </div>
+                          </label>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </Show>
+              </div>
+            </Show>
+          </div>
 
           <div class="flex gap-3 pt-4">
             <Button type="submit" disabled={!canSubmit()}>
