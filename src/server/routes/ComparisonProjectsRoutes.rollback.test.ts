@@ -52,8 +52,18 @@ type MockDatabaseState = {
     modelIds: string[]
     summarySourceProjectId: string | null
   }
+  createdComparisonProjectIds: string[]
   conflictResolutionImportSourceRows: MockConflictResolutionImportSourceRow[]
-  conflictResolutionRows: Array<{answerValue: string | null; articleId: string; promptId: string | null}>
+  conflictResolutionRows: Array<{
+    answerValue: string | null
+    articleId: string
+    comparisonProjectId?: string
+    doi?: string | null
+    externalArticleId?: string | null
+    id?: string
+    promptId: string | null
+    title?: string | null
+  }>
   extraLlmRows: MockLlmJudgmentRow[]
   failPromptInsert: boolean
   includeSingleAnswerArticle: boolean
@@ -101,7 +111,7 @@ const promptRows = {
     id: 'prompt-1',
     originalText: 'Original prompt',
     promptHeading: 'Prompt 1',
-    type: 'string',
+    type: "'yes' | 'no' | 'maybe'",
   },
   'prompt-2': {
     archived: false,
@@ -109,7 +119,7 @@ const promptRows = {
     id: 'prompt-2',
     originalText: 'Replacement prompt',
     promptHeading: 'Prompt 2',
-    type: 'string',
+    type: "'yes' | 'no' | 'maybe'",
   },
 } as const
 
@@ -334,7 +344,9 @@ const getValidatedPromptRows = (statement: string) => {
       return statement.includes(`'${promptId}'`)
     })
     .map((promptId) => {
-      return {id: promptId}
+      const promptRow = promptRows[promptId as keyof typeof promptRows]
+
+      return {id: promptId, promptHeading: promptRow.promptHeading, type: promptRow.type}
     })
 }
 
@@ -975,6 +987,8 @@ const queryJson = async (
   statement: string,
   state: {
     comparisonProject: MockDatabaseState['comparisonProject']
+    createdComparisonProjectIds: MockDatabaseState['createdComparisonProjectIds']
+    conflictResolutionImportSourceRows: MockDatabaseState['conflictResolutionImportSourceRows']
     conflictResolutionRows: MockDatabaseState['conflictResolutionRows']
     extraLlmRows: MockDatabaseState['extraLlmRows']
     promptLinks: MockDatabaseState['promptLinks']
@@ -1006,6 +1020,19 @@ const queryJson = async (
       })
   }
 
+  if (
+    statement.includes('FROM app.comparison_project cp')
+    && statement.includes('LEFT JOIN app.comparison_project_conflict_resolution cr')
+  ) {
+    return state.conflictResolutionImportSourceRows
+      .filter((row) => {
+        return statement.includes(`'${row.id}'`)
+      })
+      .map((row) => {
+        return {archived: row.archived, id: row.id, resolutionCount: row.resolutionCount}
+      })
+  }
+
   if (statement.includes('FROM app.comparison_project') && statement.includes('updated_at AS updatedAt')) {
     return [getComparisonProjectRow(state.comparisonProject)]
   }
@@ -1026,6 +1053,7 @@ const queryJson = async (
 
   if (
     statement.includes('FROM app.comparison_project_conflict_resolution')
+    && !statement.includes('WITH source_resolution AS')
     && !statement.includes('FROM mart.comparison_cell_serving cell')
   ) {
     return state.conflictResolutionRows.filter((row) => {
@@ -1141,6 +1169,8 @@ const queryJson = async (
   }
 
   if (statement.includes('INSERT INTO app.comparison_project') && statement.includes('RETURNING')) {
+    state.createdComparisonProjectIds.push('comparison-project-created')
+
     return [
       {
         ...getComparisonProjectRow({
@@ -1252,6 +1282,45 @@ const queryJson = async (
   if (statement.includes('FROM app.project_import_route') && statement.includes('pir.project_id IN')) {
     return sourceProjectRouteRows.filter((routeRow) => {
       return statement.includes(`'${routeRow.projectId}'`)
+    })
+  }
+
+  if (statement.includes('WITH source_resolution AS')) {
+    return state.conflictResolutionRows
+      .filter((row) => {
+        const comparisonProjectId = row.comparisonProjectId ?? 'source-comparison-project-1'
+
+        return statement.includes(`'${comparisonProjectId}'`)
+      })
+      .map((row) => {
+        return {
+          doi: row.doi ?? null,
+          externalArticleId: row.externalArticleId ?? row.articleId,
+          resolutionValue: row.answerValue ?? row.promptId ?? '',
+          sourceRowId: row.id ?? `${row.comparisonProjectId ?? 'source-comparison-project-1'}:${row.articleId}`,
+          title: row.title ?? `Article ${row.articleId.slice(-1)}`,
+        }
+      })
+  }
+
+  if (
+    statement.includes('FROM app.article_identifier doi_identifier')
+    && statement.includes('doi_identifier.normalized_value AS doi')
+  ) {
+    return [
+      {articleId: 'article-1', doi: '10.1000/import-match', externalArticleId: null, title: null},
+      {articleId: 'article-2', doi: '10.1000/import-solo', externalArticleId: null, title: null},
+    ].filter((row) => {
+      return statement.includes(`'${row.doi}'`)
+    })
+  }
+
+  if (statement.includes('regexp_replace(LOWER(TRIM(COALESCE(a.article_title')) {
+    return [
+      {articleId: 'article-1', doi: null, externalArticleId: 'source-ext-1', title: 'Article 1'},
+      {articleId: 'article-2', doi: null, externalArticleId: 'source-ext-2', title: 'Article 2'},
+    ].filter((row) => {
+      return statement.includes(row.externalArticleId)
     })
   }
 
@@ -1487,6 +1556,10 @@ const registerModuleMocks = () => {
           ) => {
             const state = getMockDatabaseState()
             const pendingComparisonProject = {...state.comparisonProject}
+            const pendingCreatedComparisonProjectIds = [...state.createdComparisonProjectIds]
+            const pendingConflictResolutionRows = state.conflictResolutionRows.map((row) => {
+              return {...row}
+            })
             const pendingPromptLinks = state.promptLinks.map((link) => {
               return {...link}
             })
@@ -1504,7 +1577,9 @@ const registerModuleMocks = () => {
                 getMockDatabaseState().queryStatements.push(statement)
                 return (await queryJson(statement, {
                   comparisonProject: pendingComparisonProject,
-                  conflictResolutionRows: state.conflictResolutionRows,
+                  createdComparisonProjectIds: pendingCreatedComparisonProjectIds,
+                  conflictResolutionImportSourceRows: state.conflictResolutionImportSourceRows,
+                  conflictResolutionRows: pendingConflictResolutionRows,
                   extraLlmRows: state.extraLlmRows,
                   includeSingleAnswerArticle: state.includeSingleAnswerArticle,
                   promptLinks: pendingPromptLinks,
@@ -1631,6 +1706,26 @@ const registerModuleMocks = () => {
                 }
 
                 if (statement.includes('INSERT INTO app.comparison_project_conflict_resolution')) {
+                  const importedArticleIds = ['article-1', 'article-2']
+
+                  importedArticleIds.reduce((insertedRows, articleId) => {
+                    const answerValue = statement.includes("'no'")
+                      ? 'no'
+                      : statement.includes("'maybe'")
+                        ? 'maybe'
+                        : 'yes'
+
+                    if (statement.includes(`'${articleId}'`)) {
+                      insertedRows.push({
+                        answerValue,
+                        articleId,
+                        comparisonProjectId: 'comparison-project-created',
+                        promptId: null,
+                      })
+                    }
+
+                    return insertedRows
+                  }, pendingConflictResolutionRows)
                   return
                 }
 
@@ -1639,6 +1734,8 @@ const registerModuleMocks = () => {
             })
 
             state.comparisonProject = pendingComparisonProject
+            state.createdComparisonProjectIds = pendingCreatedComparisonProjectIds
+            state.conflictResolutionRows = pendingConflictResolutionRows
             state.promptLinks = pendingPromptLinks
             state.routeLinks = pendingRouteLinks
             state.sourceProjectLinks = pendingSourceProjectLinks
@@ -1660,6 +1757,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
       modelIds: ['model-1'],
       summarySourceProjectId: null,
     },
+    createdComparisonProjectIds: [],
     conflictResolutionRows: [],
     conflictResolutionImportSourceRows: [],
     extraLlmRows: [],
@@ -2334,6 +2432,212 @@ test('comparison conflict resolution import sources expose only eligible compari
   ])
   expect(queryStatement ?? '').toContain('cp.archived = FALSE')
   expect(queryStatement ?? '').toContain('cp.allow_conflict_resolution = TRUE')
+})
+
+test('comparison project create-from-project imports selected conflict resolutions', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    conflictResolutionImportSourceRows: [
+      {
+        allowConflictResolution: true,
+        archived: false,
+        createdAt: new Date('2026-04-01T00:00:00.000Z'),
+        description: null,
+        humanJudgmentMode: 'summary',
+        id: 'source-comparison-project-1',
+        name: 'Import source',
+        resolutionCount: 1,
+      },
+    ],
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'source-article-1',
+        comparisonProjectId: 'source-comparison-project-1',
+        doi: '10.1000/import-match',
+        externalArticleId: 'source-ext-1',
+        id: 'source-resolution-1',
+        promptId: null,
+        title: 'Article 1',
+      },
+    ],
+    failPromptInsert: false,
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/from-project', {
+      body: JSON.stringify({
+        allowConflictResolution: true,
+        compareWithHumans: true,
+        conflictResolutionImportSourceComparisonProjectIds: ['source-comparison-project-1'],
+        description: 'From project comparison',
+        humanJudgmentMode: 'summary',
+        name: 'From project comparison',
+        sourceProjectId: 'source-project-1',
+        sourceProjectIds: ['source-project-1'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodyText = await response.text()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  const body = JSON.parse(bodyText) as {
+    conflictResolutionImportSummary: {imported: number; matched: number; scanned: number; skipped: number}
+    data: {id: string}
+  }
+  const state = getMockDatabaseState()
+  const insertedResolution = state.conflictResolutionRows.find((row) => {
+    return row.comparisonProjectId === 'comparison-project-created'
+  })
+  const sourceRowQuery = state.queryStatements.find((statement) => {
+    return statement.includes('WITH source_resolution AS')
+  })
+  const doiTargetQuery = state.queryStatements.find((statement) => {
+    return statement.includes('doi_identifier.normalized_value IN')
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.id).toBe('comparison-project-created')
+  expect(body.conflictResolutionImportSummary).toEqual({imported: 1, matched: 1, scanned: 1, skipped: 0})
+  expect(insertedResolution).toMatchObject({
+    answerValue: 'yes',
+    articleId: 'article-1',
+    comparisonProjectId: 'comparison-project-created',
+    promptId: null,
+  })
+  expect(state.createdComparisonProjectIds).toEqual(['comparison-project-created'])
+  expect(state.staleServingIds).toEqual(['comparison-project-created'])
+  expect(sourceRowQuery ?? '').toContain("cr.comparison_project_id IN ('source-comparison-project-1')")
+  expect(doiTargetQuery ?? '').toContain("doi_identifier.normalized_value IN ('10.1000/import-match')")
+})
+
+test('comparison project create-from-project rolls back duplicate conflict resolution import', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    conflictResolutionImportSourceRows: [
+      {
+        allowConflictResolution: true,
+        archived: false,
+        createdAt: new Date('2026-04-01T00:00:00.000Z'),
+        description: null,
+        humanJudgmentMode: 'summary',
+        id: 'source-comparison-project-1',
+        name: 'Import source',
+        resolutionCount: 2,
+      },
+    ],
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'source-article-1',
+        comparisonProjectId: 'source-comparison-project-1',
+        doi: '10.1000/import-match',
+        externalArticleId: 'source-ext-1',
+        id: 'source-resolution-1',
+        promptId: null,
+        title: 'Article 1',
+      },
+      {
+        answerValue: 'yes',
+        articleId: 'source-article-2',
+        comparisonProjectId: 'source-comparison-project-1',
+        doi: 'doi:10.1000/import-match',
+        externalArticleId: 'source-ext-2',
+        id: 'source-resolution-2',
+        promptId: null,
+        title: 'Article 2',
+      },
+    ],
+    failPromptInsert: false,
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/from-project', {
+      body: JSON.stringify({
+        allowConflictResolution: true,
+        compareWithHumans: true,
+        conflictResolutionImportSourceComparisonProjectIds: ['source-comparison-project-1'],
+        description: 'From project comparison',
+        humanJudgmentMode: 'summary',
+        name: 'From project comparison',
+        sourceProjectId: 'source-project-1',
+        sourceProjectIds: ['source-project-1'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  if (response.status !== 400) {
+    throw new Error(bodyText)
+  }
+
+  expect(response.status).toBe(400)
+  expect(bodyText).toContain('Duplicate source DOI import key')
+  expect(state.createdComparisonProjectIds).toEqual([])
+  expect(
+    state.conflictResolutionRows.some((row) => {
+      return row.comparisonProjectId === 'comparison-project-created'
+    }),
+  ).toBe(false)
+  expect(state.staleServingIds).toEqual([])
+})
+
+test('comparison project create-from-project rejects conflict resolution import when disabled', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    conflictResolutionImportSourceRows: [
+      {
+        allowConflictResolution: true,
+        archived: false,
+        createdAt: new Date('2026-04-01T00:00:00.000Z'),
+        description: null,
+        humanJudgmentMode: 'summary',
+        id: 'source-comparison-project-1',
+        name: 'Import source',
+        resolutionCount: 1,
+      },
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/from-project', {
+      body: JSON.stringify({
+        allowConflictResolution: false,
+        compareWithHumans: true,
+        conflictResolutionImportSourceComparisonProjectIds: ['source-comparison-project-1'],
+        description: 'From project comparison',
+        humanJudgmentMode: 'summary',
+        name: 'From project comparison',
+        sourceProjectId: 'source-project-1',
+        sourceProjectIds: ['source-project-1'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(400)
+  expect(bodyText).toContain(
+    'Conflict resolution imports require summary mode and allow conflict resolution to be enabled',
+  )
+  expect(state.transactionCalls).toBe(0)
+  expect(state.createdComparisonProjectIds).toEqual([])
 })
 
 test('comparison project metadata exposes serving readiness states', async () => {

@@ -1,5 +1,5 @@
 import type {HumanJudgmentMode} from '../../../db/schemaTypes.ts'
-import {getDateValue} from '../../services/appQueryHelpers.ts'
+import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 
 export type ComparisonProjectConflictResolutionImportSource = {
   id: string
@@ -97,6 +97,13 @@ export type ComparisonProjectConflictResolutionImportPlanParams = {
   targetSummaryOptionValues: readonly string[]
 }
 
+export type ComparisonProjectConflictResolutionImportSummary = {
+  scanned: number
+  matched: number
+  imported: number
+  skipped: number
+}
+
 type NormalizedSourceRow = ComparisonProjectConflictResolutionImportSourceRow & {
   doiKey: string | null
   idTitleKey: string | null
@@ -126,6 +133,28 @@ type DuplicateKeyErrorParams = {
 const doiPrefixPattern = /^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)/i
 const idTitleKeySeparator = '\u001F'
 
+const getInClause = (values: string[]) => {
+  return getQuotedStringList(values).join(', ')
+}
+
+const getWhereClause = (conditions: Array<string | null | undefined>) => {
+  const filteredConditions = conditions.filter((condition): condition is string => {
+    return Boolean(condition)
+  })
+  return filteredConditions.length > 0 ? `WHERE ${filteredConditions.join('\n  AND ')}` : ''
+}
+
+const getComparisonProjectConflictResolutionImportTitleKeySql = (column: string) => {
+  return `regexp_replace(LOWER(TRIM(COALESCE(${column}, ''))), '\\s+', ' ', 'g')`
+}
+
+const getComparisonProjectConflictResolutionImportIdTitleKeySql = (params: {
+  externalArticleIdColumn: string
+  titleColumn: string
+}) => {
+  return `LOWER(TRIM(COALESCE(${params.externalArticleIdColumn}, ''))) || ${getSqlLiteral(idTitleKeySeparator)} || ${getComparisonProjectConflictResolutionImportTitleKeySql(params.titleColumn)}`
+}
+
 export const getComparisonProjectConflictResolutionImportSourcesSql = (params: {
   comparisonProjectConflictResolutionTable: string
   comparisonProjectTable: string
@@ -150,6 +179,91 @@ export const getComparisonProjectConflictResolutionImportSourcesSql = (params: {
       cp.created_at,
       cp.human_judgment_mode
     ORDER BY cp.created_at DESC, cp.name ASC, cp.id ASC
+  `
+}
+
+export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params: {
+  articleIdentifierTable: string
+  articleTable: string
+  comparisonProjectConflictResolutionTable: string
+  sourceComparisonProjectIds: string[]
+}) => {
+  return `
+    WITH source_resolution AS (
+      SELECT
+        cr.id AS sourceRowId,
+        cr.article_id AS sourceArticleId,
+        COALESCE(cr.answer_value, cr.prompt_id, '') AS resolutionValue
+      FROM ${params.comparisonProjectConflictResolutionTable} cr
+      ${params.sourceComparisonProjectIds.length > 0 ? `WHERE cr.comparison_project_id IN (${getInClause(params.sourceComparisonProjectIds)})` : 'WHERE FALSE'}
+    ),
+    doi_identifier AS (
+      SELECT
+        article_id AS articleId,
+        MIN(normalized_value) AS doi
+      FROM ${params.articleIdentifierTable}
+      WHERE kind = 'doi'
+      GROUP BY article_id
+    )
+    SELECT
+      source_resolution.sourceRowId AS sourceRowId,
+      source_resolution.resolutionValue AS resolutionValue,
+      doi_identifier.doi AS doi,
+      article.article_id AS externalArticleId,
+      article.article_title AS title
+    FROM source_resolution
+    INNER JOIN ${params.articleTable} article ON article.id = source_resolution.sourceArticleId
+    LEFT JOIN doi_identifier ON doi_identifier.articleId = article.id
+    ORDER BY source_resolution.sourceRowId ASC
+  `
+}
+
+export const getComparisonProjectConflictResolutionImportDoiTargetArticlesSql = (params: {
+  articleIdentifierTable: string
+  articleScopeConditions: readonly string[]
+  articleTable: string
+  doiKeys: string[]
+}) => {
+  return `
+    SELECT
+      a.id AS articleId,
+      doi_identifier.normalized_value AS doi,
+      NULL AS externalArticleId,
+      NULL AS title
+    FROM ${params.articleIdentifierTable} doi_identifier
+    INNER JOIN ${params.articleTable} a ON a.id = doi_identifier.article_id
+    ${getWhereClause([
+      ...params.articleScopeConditions,
+      "doi_identifier.kind = 'doi'",
+      params.doiKeys.length > 0 ? `doi_identifier.normalized_value IN (${getInClause(params.doiKeys)})` : 'FALSE',
+    ])}
+    GROUP BY a.id, doi_identifier.normalized_value
+    ORDER BY a.id ASC, doi_identifier.normalized_value ASC
+  `
+}
+
+export const getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql = (params: {
+  articleScopeConditions: readonly string[]
+  articleTable: string
+  idTitleKeys: string[]
+}) => {
+  const idTitleKeySql = getComparisonProjectConflictResolutionImportIdTitleKeySql({
+    externalArticleIdColumn: 'a.article_id',
+    titleColumn: 'a.article_title',
+  })
+
+  return `
+    SELECT
+      a.id AS articleId,
+      NULL AS doi,
+      a.article_id AS externalArticleId,
+      a.article_title AS title
+    FROM ${params.articleTable} a
+    ${getWhereClause([
+      ...params.articleScopeConditions,
+      params.idTitleKeys.length > 0 ? `${idTitleKeySql} IN (${getInClause(params.idTitleKeys)})` : 'FALSE',
+    ])}
+    ORDER BY a.id ASC
   `
 }
 
@@ -196,7 +310,7 @@ export const normalizeComparisonProjectConflictResolutionImportTitle = (value: s
   return normalizedValue.length > 0 ? normalizedValue : null
 }
 
-const getComparisonProjectConflictResolutionImportIdTitleKey = (params: {
+export const getComparisonProjectConflictResolutionImportIdTitleKey = (params: {
   externalArticleId?: string | null
   title?: string | null
 }) => {
