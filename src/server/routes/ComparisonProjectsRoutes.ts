@@ -38,6 +38,11 @@ import {
 } from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {
+  type ComparisonProjectConflictResolutionImportSourceQueryRow,
+  getComparisonProjectConflictResolutionImportSourcesSql,
+  getComparisonProjectConflictResolutionImportSourceValue,
+} from './comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts'
+import {
   type ComparisonProjectJudgmentHumanRow,
   type ComparisonProjectJudgmentLlmRow,
   type ComparisonProjectJudgmentRow,
@@ -973,6 +978,17 @@ const getComparisonProjectSourceSummaryPromptConfigs = async (sourceProjectIds: 
       criteriaSectionLabel: row.criteriaSectionLabel,
     }
   })
+}
+
+const getComparisonProjectConflictResolutionImportSources = async () => {
+  const rows = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionImportSourceQueryRow>(
+    getComparisonProjectConflictResolutionImportSourcesSql({
+      comparisonProjectConflictResolutionTable,
+      comparisonProjectTable,
+    }),
+  )
+
+  return rows.map(getComparisonProjectConflictResolutionImportSourceValue)
 }
 
 const getValidatedComparisonSourceProjectIds = async (db: AppQueryRunner, sourceProjectIds: string[]) => {
@@ -2934,6 +2950,11 @@ export const comparisonProjectsRoutes = new Elysia()
   })
   .get('/api/comparison-projects/sources', async () => {
     const data = await getComparisonProjectSources()
+
+    return {data}
+  })
+  .get('/api/comparison-projects/conflict-resolution-import-sources', async () => {
+    const data = await getComparisonProjectConflictResolutionImportSources()
 
     return {data}
   })

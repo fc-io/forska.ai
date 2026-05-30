@@ -1,0 +1,113 @@
+{
+  "name": "Import Conflict Resolutions",
+  "description": "Add conflict resolution import to Create Compare Project, matching existing resolutions by normalized DOI or article ID plus title and failing creation on duplicate or conflicting matches.",
+  "branchName": "ralph/import-conflict-resolutions",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Build conflict resolution import matching helper",
+      "description": "As a developer, I want a focused server helper for conflict resolution import matching so duplicate detection, DOI matching, and skip/error behavior can be tested independently from the route.",
+      "acceptanceCriteria": [
+        "Add `src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts` with reusable normalization and import-planning helpers.",
+        "Normalize DOI by trimming, lowercasing, and removing common DOI URL or `doi:` prefixes.",
+        "Normalize external article ID by trimming and lowercasing, and normalize title by trimming, lowercasing, and collapsing internal whitespace.",
+        "Prefer DOI matching when a usable DOI exists on both source and target articles; otherwise match by external article ID plus normalized title.",
+        "Detect duplicate source DOI keys, duplicate target DOI keys, duplicate source ID-title keys, and duplicate target ID-title keys as hard errors.",
+        "Detect conflicting source resolution values that map to the same target article as a hard error.",
+        "Detect resolution values that are not valid for the target compare project's summary options as hard errors.",
+        "Return import candidates and skip counts for source rows with no usable key, no target match, or target articles that are not conflict-resolution eligible.",
+        "Add adjacent tests covering DOI match, ID-title match, DOI preference, duplicate errors, conflicting values, invalid values, no-key skip, no-target skip, and not-conflicting skip.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Expose eligible conflict resolution import sources",
+      "description": "As a user creating a compare project, I want to see compare projects that have saved conflict resolutions so I can choose which ones to import from.",
+      "acceptanceCriteria": [
+        "Add `GET /api/comparison-projects/conflict-resolution-import-sources` to `src/server/routes/ComparisonProjectsRoutes.ts`.",
+        "Return only non-archived compare projects with `allow_conflict_resolution = TRUE` and at least one row in `app.comparison_project_conflict_resolution`.",
+        "Return `id`, `name`, `description`, `createdAt`, `humanJudgmentMode`, and `resolutionCount` for each source.",
+        "Order eligible sources predictably, with newest or most relevant projects first.",
+        "Add a typed client service function and response type in `src/services/comparisonProjectsService.ts`.",
+        "Update route surface inventory if this repo requires new API routes to be listed there.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.test.ts` passes.",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-003",
+      "title": "Import resolutions during compare project creation",
+      "description": "As a user, I want selected conflict resolutions imported only when validation is unambiguous so the new compare project is not created with duplicate or conflicting imported state.",
+      "acceptanceCriteria": [
+        "Extend `CreateComparisonProjectFromProjectInput` with `conflictResolutionImportSourceComparisonProjectIds?: string[]`.",
+        "Extend `/api/comparison-projects/from-project` request validation to accept selected import source compare project IDs.",
+        "Return `400` when import source IDs are provided but Summary mode or Allow conflict resolution is not enabled.",
+        "Validate selected import source compare projects exist, are not archived, and contain conflict resolutions before creating the new compare project.",
+        "Query import work from selected conflict-resolution rows first, not from all articles.",
+        "Use constrained target article candidate queries from the small DOI and ID-title key sets, restricted to the new compare project scope.",
+        "Run duplicate, ambiguous, invalid-value, and conflicting-value validation before any permanent compare project row survives.",
+        "Create the compare project and imported `app.comparison_project_conflict_resolution` rows in one DuckDB transaction.",
+        "Roll back the transaction so no new compare project exists if import validation fails after creation starts.",
+        "Return the created project plus import summary counts for scanned, matched, imported, and skipped rows.",
+        "Add route tests for valid import, duplicate validation failure leaving no compare project row, and rejection when conflict resolution is disabled.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.test.ts` passes.",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Add create-page import conflict resolutions UI",
+      "description": "As a user creating a compare project, I want a bottom-page section for selecting conflict resolution import sources so I can reuse prior decisions safely.",
+      "acceptanceCriteria": [
+        "Add an `Import Conflict Resolutions` section near the bottom of `src/app/routes/+compare-judgments/+create-from-project.tsx`, after Additional Projects to Compare With and before submit buttons.",
+        "Hide or disable the section with explanatory text unless a primary project is selected and Summary mode plus Allow conflict resolution are enabled.",
+        "Load eligible import sources through TanStack Query and the new service function.",
+        "Show loading, error, and empty states for the import source list.",
+        "Render a checkbox list of eligible compare projects with names, human judgment mode, and resolution counts.",
+        "Include warning copy that duplicate or conflicting matches stop creation and no compare project is created.",
+        "Submit selected `conflictResolutionImportSourceComparisonProjectIds` with the create-from-project request.",
+        "Show server validation errors on the form and keep the user on the create page when duplicates, ambiguous matches, or invalid imported values are reported.",
+        "Clear selected import sources when conflict resolution becomes unavailable.",
+        "Preserve the existing browser create flow when no import sources are selected.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.test.ts` passes.",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes.",
+        "`bun run lint` passes.",
+        "Web flow is verified with `bun run dev:server` and `bun run dev:app` by creating a compare project with and without selected import sources.",
+        "Desktop impact is considered and `bun run desktop:build` is run if UI or route wiring changes beyond server-only helpers."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-05-30T09:23:33.117Z"
+  }
+}

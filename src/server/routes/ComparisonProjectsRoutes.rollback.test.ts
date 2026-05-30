@@ -31,6 +31,17 @@ type MockServingStatus = {
   servingStatus: 'failed' | 'missing' | 'ready' | 'refreshing' | 'stale'
 }
 
+type MockConflictResolutionImportSourceRow = {
+  archived: boolean
+  allowConflictResolution: boolean
+  createdAt: Date
+  description: string | null
+  humanJudgmentMode: 'prompt' | 'summary' | null
+  id: string
+  name: string
+  resolutionCount: number
+}
+
 type MockDatabaseState = {
   comparisonProject: {
     archived?: boolean
@@ -41,6 +52,7 @@ type MockDatabaseState = {
     modelIds: string[]
     summarySourceProjectId: string | null
   }
+  conflictResolutionImportSourceRows: MockConflictResolutionImportSourceRow[]
   conflictResolutionRows: Array<{answerValue: string | null; articleId: string; promptId: string | null}>
   extraLlmRows: MockLlmJudgmentRow[]
   failPromptInsert: boolean
@@ -971,6 +983,29 @@ const queryJson = async (
     includeSingleAnswerArticle: boolean
   },
 ) => {
+  if (
+    statement.includes('FROM app.comparison_project cp')
+    && statement.includes('INNER JOIN app.comparison_project_conflict_resolution cr')
+  ) {
+    return getMockDatabaseState()
+      .conflictResolutionImportSourceRows.filter((row) => {
+        return row.allowConflictResolution && !row.archived && row.resolutionCount > 0
+      })
+      .sort((left, right) => {
+        return right.createdAt.getTime() - left.createdAt.getTime() || left.name.localeCompare(right.name)
+      })
+      .map((row) => {
+        return {
+          createdAt: row.createdAt,
+          description: row.description,
+          humanJudgmentMode: row.humanJudgmentMode,
+          id: row.id,
+          name: row.name,
+          resolutionCount: row.resolutionCount,
+        }
+      })
+  }
+
   if (statement.includes('FROM app.comparison_project') && statement.includes('updated_at AS updatedAt')) {
     return [getComparisonProjectRow(state.comparisonProject)]
   }
@@ -1626,6 +1661,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
       summarySourceProjectId: null,
     },
     conflictResolutionRows: [],
+    conflictResolutionImportSourceRows: [],
     extraLlmRows: [],
     failPromptInsert: true,
     includeSingleAnswerArticle: false,
@@ -2198,6 +2234,106 @@ test('comparison project sources expose summary capability metadata', async () =
   expect(sourceProject?.summarySourceProjectId).toBe('source-project-1')
   expect(sourceProject?.prompts[0]?.criteriaDisposition).toBe('include')
   expect(sourceProject?.prompts[0]?.criteriaSectionKey).toBe('population')
+})
+
+test('comparison conflict resolution import sources expose only eligible comparison projects', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    conflictResolutionImportSourceRows: [
+      {
+        allowConflictResolution: true,
+        archived: false,
+        createdAt: new Date('2026-04-01T00:00:00.000Z'),
+        description: null,
+        humanJudgmentMode: null,
+        id: 'source-old',
+        name: 'Old Eligible Source',
+        resolutionCount: 2,
+      },
+      {
+        allowConflictResolution: true,
+        archived: false,
+        createdAt: new Date('2026-04-03T00:00:00.000Z'),
+        description: 'New source',
+        humanJudgmentMode: 'summary',
+        id: 'source-new',
+        name: 'New Eligible Source',
+        resolutionCount: 5,
+      },
+      {
+        allowConflictResolution: false,
+        archived: false,
+        createdAt: new Date('2026-04-04T00:00:00.000Z'),
+        description: null,
+        humanJudgmentMode: 'prompt',
+        id: 'source-disabled',
+        name: 'Disabled Source',
+        resolutionCount: 7,
+      },
+      {
+        allowConflictResolution: true,
+        archived: true,
+        createdAt: new Date('2026-04-05T00:00:00.000Z'),
+        description: null,
+        humanJudgmentMode: 'prompt',
+        id: 'source-archived',
+        name: 'Archived Source',
+        resolutionCount: 8,
+      },
+      {
+        allowConflictResolution: true,
+        archived: false,
+        createdAt: new Date('2026-04-06T00:00:00.000Z'),
+        description: null,
+        humanJudgmentMode: 'prompt',
+        id: 'source-empty',
+        name: 'Empty Source',
+        resolutionCount: 0,
+      },
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/conflict-resolution-import-sources'),
+  )
+  const body = (await response.json()) as {
+    data: Array<{
+      createdAt: string
+      description: string | null
+      humanJudgmentMode: string
+      id: string
+      name: string
+      resolutionCount: number
+    }>
+  }
+  const state = getMockDatabaseState()
+  const queryStatement = state.queryStatements.find((statement) => {
+    return statement.includes('INNER JOIN app.comparison_project_conflict_resolution cr')
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data).toEqual([
+    {
+      createdAt: '2026-04-03T00:00:00.000Z',
+      description: 'New source',
+      humanJudgmentMode: 'summary',
+      id: 'source-new',
+      name: 'New Eligible Source',
+      resolutionCount: 5,
+    },
+    {
+      createdAt: '2026-04-01T00:00:00.000Z',
+      description: null,
+      humanJudgmentMode: 'prompt',
+      id: 'source-old',
+      name: 'Old Eligible Source',
+      resolutionCount: 2,
+    },
+  ])
+  expect(queryStatement ?? '').toContain('cp.archived = FALSE')
+  expect(queryStatement ?? '').toContain('cp.allow_conflict_resolution = TRUE')
 })
 
 test('comparison project metadata exposes serving readiness states', async () => {

@@ -250,6 +250,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     ['GET', '/api/comparison-projects'],
     ['GET', '/api/comparison-projects/archived'],
     ['GET', '/api/comparison-projects/sources'],
+    ['GET', '/api/comparison-projects/conflict-resolution-import-sources'],
     ['POST', '/api/comparison-projects/from-project'],
     ['GET', '/api/comparison-projects/:id/edit'],
     ['GET', '/api/comparison-projects/:id/stats'],

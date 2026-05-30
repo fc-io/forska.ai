@@ -4,6 +4,8 @@ import {
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportTargetArticle,
   getComparisonProjectConflictResolutionImportPlan,
+  getComparisonProjectConflictResolutionImportSourcesSql,
+  getComparisonProjectConflictResolutionImportSourceValue,
   normalizeComparisonProjectConflictResolutionImportDoi,
   normalizeComparisonProjectConflictResolutionImportExternalArticleId,
   normalizeComparisonProjectConflictResolutionImportTitle,
@@ -52,6 +54,35 @@ const getErrorCodes = (params: ReturnType<typeof getPlan>) => {
     return error.code
   })
 }
+
+test('import source query selects only eligible comparison projects in newest order', () => {
+  const sql = getComparisonProjectConflictResolutionImportSourcesSql({
+    comparisonProjectConflictResolutionTable: 'app.comparison_project_conflict_resolution',
+    comparisonProjectTable: 'app.comparison_project',
+  })
+  const source = getComparisonProjectConflictResolutionImportSourceValue({
+    createdAt: '2026-05-30T10:00:00.000Z',
+    description: null,
+    humanJudgmentMode: null,
+    id: 'comparison-project-1',
+    name: 'Eligible source',
+    resolutionCount: '3',
+  })
+
+  expect(sql).toContain('INNER JOIN app.comparison_project_conflict_resolution cr')
+  expect(sql).toContain('WHERE cp.archived = FALSE')
+  expect(sql).toContain('AND cp.allow_conflict_resolution = TRUE')
+  expect(sql).toContain('COUNT(cr.article_id) AS resolutionCount')
+  expect(sql).toContain('ORDER BY cp.created_at DESC, cp.name ASC, cp.id ASC')
+  expect(source).toEqual({
+    createdAt: new Date('2026-05-30T10:00:00.000Z'),
+    description: null,
+    humanJudgmentMode: 'prompt',
+    id: 'comparison-project-1',
+    name: 'Eligible source',
+    resolutionCount: 3,
+  })
+})
 
 test('import plan matches articles by normalized DOI', () => {
   expect(normalizeComparisonProjectConflictResolutionImportDoi(' DOI:10.1000/Example ')).toBe('10.1000/example')
