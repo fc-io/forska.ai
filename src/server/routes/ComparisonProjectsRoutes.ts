@@ -1422,6 +1422,7 @@ const getConflictResolutionImportSummary = (params: {
     skippedNoTargetMatch: params.plan.skipCounts.noTargetMatch,
     skippedNoUsableKey: params.plan.skipCounts.noUsableKey,
     skippedNotConflicting: params.plan.skipCounts.notConflicting,
+    warnings: params.plan.warnings,
   }
 }
 
@@ -1431,7 +1432,7 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
   tx: AppTx
 }) => {
   if (params.candidates.length === 0) {
-    return
+    return 0
   }
 
   await params.tx.run(`
@@ -1454,6 +1455,8 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
       })
       .join(',\n')}
   `)
+
+  return params.candidates.length
 }
 
 const importComparisonProjectConflictResolutions = async (params: {
@@ -1482,17 +1485,13 @@ const importComparisonProjectConflictResolutions = async (params: {
     )
   }
 
-  await insertComparisonProjectConflictResolutionImportCandidates({
+  const importedCount = await insertComparisonProjectConflictResolutionImportCandidates({
     candidates: plan.candidates,
     comparisonProjectId: params.comparisonProjectId,
     tx: params.tx,
   })
 
-  return getConflictResolutionImportSummary({
-    importedCount: plan.candidates.length,
-    plan,
-    scannedCount: sourceRows.length,
-  })
+  return getConflictResolutionImportSummary({importedCount, plan, scannedCount: sourceRows.length})
 }
 
 const getValidatedComparisonSourceProjectIds = async (db: AppQueryRunner, sourceProjectIds: string[]) => {

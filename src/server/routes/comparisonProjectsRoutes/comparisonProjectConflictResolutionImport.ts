@@ -164,6 +164,7 @@ export type ComparisonProjectConflictResolutionImportSummary = {
   skippedNoTargetMatch: number
   skippedNoUsableKey: number
   skippedNotConflicting: number
+  warnings: ComparisonProjectConflictResolutionImportWarning[]
 }
 
 type NormalizedSourceRow = Omit<ComparisonProjectConflictResolutionImportSourceRow, 'doiKeys'> & {
