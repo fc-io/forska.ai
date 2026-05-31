@@ -11,6 +11,68 @@ type MockButtonProps = ParentProps<
 >
 type CreateFromProjectInput = {conflictResolutionImportSourceComparisonProjectIds?: string[]}
 
+const importWarningCopy =
+  'Matching duplicate decisions are imported once. Conflicting or ambiguous decisions are skipped and reported after creation.'
+
+const conflictResolutionImportSummaryWithWarnings = {
+  deduped: 0,
+  imported: 1,
+  matched: 1,
+  scanned: 3,
+  skipped: 2,
+  skippedAmbiguousTarget: 0,
+  skippedConflicting: 2,
+  skippedInvalidValue: 0,
+  skippedNoTargetMatch: 0,
+  skippedNoUsableKey: 0,
+  skippedNotConflicting: 0,
+  warnings: [
+    {
+      code: 'conflicting-resolution-values',
+      matchKey: '10.1000/import-solo',
+      matchKeys: ['10.1000/import-solo'],
+      matchKind: 'doi',
+      matchKinds: ['doi'],
+      message: 'Conflicting source resolution values map to target article article-2: yes, no',
+      sourceRows: [
+        {
+          articleId: 'source-conflict-yes',
+          articleTitle: 'Conflicting yes title',
+          compareProjectId: 'source-comparison-project-1',
+          compareProjectName: 'Import warning source',
+          externalArticleId: 'source-ext-conflict-yes',
+          matchKey: '10.1000/import-solo',
+          matchKind: 'doi',
+          resolutionAnswer: 'yes',
+          sourceResolutionId: 'source-resolution-conflict-yes',
+          sourceRowId: 'source-row-conflict-yes',
+        },
+        {
+          articleId: 'source-conflict-no',
+          articleTitle: 'Conflicting no title',
+          compareProjectId: 'source-comparison-project-1',
+          compareProjectName: 'Import warning source',
+          externalArticleId: 'source-ext-conflict-no',
+          matchKey: '10.1000/import-solo',
+          matchKind: 'doi',
+          resolutionAnswer: 'no',
+          sourceResolutionId: 'source-resolution-conflict-no',
+          sourceRowId: 'source-row-conflict-no',
+        },
+      ],
+      targetArticles: [
+        {
+          articleId: 'article-2',
+          articleTitle: 'Article 2',
+          doiKeys: ['10.1000/import-solo'],
+          externalArticleId: 'target-ext-2',
+        },
+      ],
+      values: ['yes', 'no'],
+    },
+  ],
+}
+
 const mockState = vi.hoisted(() => {
   return {
     createComparisonProjectFromProject: vi.fn(),
@@ -214,7 +276,19 @@ describe('compare judgments create-from-project route', () => {
     document.body.innerHTML = ''
   })
 
-  test('submits the existing create-from-project payload when no import source is selected', async () => {
+  test('shows non-blocking import warning copy', async () => {
+    const {container, dispose} = await renderCreateFromProjectPage()
+
+    try {
+      expect(container.textContent).toContain(importWarningCopy)
+      expect(container.textContent).not.toContain('stop creation and no compare project is created')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('navigates after successful creation without import warnings', async () => {
     const {container, dispose} = await renderCreateFromProjectPage()
 
     try {
@@ -228,15 +302,14 @@ describe('compare judgments create-from-project route', () => {
       expect(mockState.createComparisonProjectFromProject).toHaveBeenCalledTimes(1)
       expect(getCreateFromProjectInput()).not.toHaveProperty('conflictResolutionImportSourceComparisonProjectIds')
       expect(mockState.navigate).toHaveBeenCalledWith({to: '/compare-judgments'})
+      expect(container.textContent).not.toContain('Compare project created with import warnings')
     } finally {
       dispose()
       container.remove()
     }
   })
 
-  test('submits selected conflict resolution import sources and keeps server validation errors on the page', async () => {
-    mockState.createComparisonProjectFromProject.mockRejectedValueOnce(new Error('Duplicate source DOI import key'))
-
+  test('submits selected conflict resolution import sources', async () => {
     const {container, dispose} = await renderCreateFromProjectPage()
 
     try {
@@ -248,7 +321,60 @@ describe('compare judgments create-from-project route', () => {
       expect(getCreateFromProjectInput().conflictResolutionImportSourceComparisonProjectIds).toEqual([
         'comparison-source-1',
       ])
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('renders import warnings and stays on the create page after successful creation', async () => {
+    mockState.createComparisonProjectFromProject.mockResolvedValueOnce({
+      conflictResolutionImportSummary: conflictResolutionImportSummaryWithWarnings,
+      data: {id: 'comparison-project-created', name: 'Created Compare Project'},
+    })
+
+    const {container, dispose} = await renderCreateFromProjectPage()
+
+    try {
+      await fillSummaryConflictResolutionForm(container)
+      setChecked(getInputFromLabel(container, 'Prior Compare Project'), true)
+      await submitForm(container)
+
+      expect(mockState.navigate).not.toHaveBeenCalled()
+      expect(container.textContent).toContain('Compare project created with import warnings')
+      expect(container.textContent).toContain('Created Compare Project')
+      expect(container.textContent).toContain('comparison-project-created')
+      expect(container.textContent).toContain('Skip reason: conflicting-resolution-values')
+      expect(container.textContent).toContain('Import warning source')
+      expect(container.textContent).toContain('source-comparison-project-1')
+      expect(container.textContent).toContain('Conflicting yes title')
+      expect(container.textContent).toContain('source-conflict-yes')
+      expect(container.textContent).toContain('Article 2')
+      expect(container.textContent).toContain('article-2')
+      expect(container.textContent).toContain('Resolution answer: yes')
+      expect(container.textContent).toContain('Resolution answer: no')
+      expect(container.textContent).toContain('Match key: 10.1000/import-solo')
+      expect(container.textContent).toContain('Match kind: doi')
+      expect(container.textContent).toContain('Open Compare Project')
+      expect(container.textContent).toContain('View Compare Projects')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('keeps blocking server validation errors on the form without post-create warnings', async () => {
+    mockState.createComparisonProjectFromProject.mockRejectedValueOnce(new Error('Duplicate source DOI import key'))
+
+    const {container, dispose} = await renderCreateFromProjectPage()
+
+    try {
+      await fillSummaryConflictResolutionForm(container)
+      setChecked(getInputFromLabel(container, 'Prior Compare Project'), true)
+      await submitForm(container)
+
       expect(container.textContent).toContain('Duplicate source DOI import key')
+      expect(container.textContent).not.toContain('Compare project created with import warnings')
       expect(mockState.navigate).not.toHaveBeenCalled()
     } finally {
       dispose()

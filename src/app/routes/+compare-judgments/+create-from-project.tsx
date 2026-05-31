@@ -6,11 +6,24 @@ import {Button} from '../../../components/ui/button'
 import {
   type ComparisonProjectConflictResolutionImportSource,
   type ComparisonProjectSource,
+  type ConflictResolutionImportSummary,
+  type ConflictResolutionImportWarning,
+  type ConflictResolutionImportWarningSourceRow,
+  type ConflictResolutionImportWarningTargetArticle,
   createComparisonProjectFromProject,
   type CreateComparisonProjectFromProjectInput,
+  type CreateComparisonProjectFromProjectResult,
   fetchComparisonProjectConflictResolutionImportSources,
   fetchComparisonProjectSources,
 } from '../../../services/comparisonProjectsService'
+
+type PostCreateConflictResolutionImportWarningResult = {
+  createdComparisonProject: CreateComparisonProjectFromProjectResult['data']
+  summary: ConflictResolutionImportSummary
+}
+
+const importWarningCopy =
+  'Matching duplicate decisions are imported once. Conflicting or ambiguous decisions are skipped and reported after creation.'
 
 const formatContentSettings = (sourceProject: ComparisonProjectSource) => {
   const parts = [
@@ -28,6 +41,22 @@ const formatHumanJudgmentMode = (mode: ComparisonProjectConflictResolutionImport
 
 const formatResolutionCount = (count: number) => {
   return `${count} resolution${count === 1 ? '' : 's'}`
+}
+
+const formatValue = (value: string | null | undefined) => {
+  return value && value.trim().length > 0 ? value : 'Unknown'
+}
+
+const getWarningMatchKeys = (warning: ConflictResolutionImportWarning) => {
+  return warning.matchKeys ?? (warning.matchKey ? [warning.matchKey] : [])
+}
+
+const getWarningMatchKinds = (warning: ConflictResolutionImportWarning) => {
+  return warning.matchKinds ?? (warning.matchKind ? [warning.matchKind] : [])
+}
+
+const formatValueList = (values: string[]) => {
+  return values.length > 0 ? values.join(', ') : null
 }
 
 const toggleStringSelection = (currentValues: string[], nextValue: string) => {
@@ -67,6 +96,147 @@ const getAdditionalSummaryProjectReason = (
   return null
 }
 
+const hasPostCreateImportWarnings = (result: CreateComparisonProjectFromProjectResult) => {
+  return (result.conflictResolutionImportSummary?.warnings.length ?? 0) > 0
+}
+
+const WarningSourceRowDetails = (props: {sourceRow: ConflictResolutionImportWarningSourceRow}) => {
+  return (
+    <div class="rounded-md border border-amber-200 bg-white/70 p-3">
+      <p class="text-sm font-medium text-amber-950">
+        Compare project: {props.sourceRow.compareProjectName} (ID: {props.sourceRow.compareProjectId})
+      </p>
+      <p class="mt-1 text-sm text-amber-900">
+        Source article: {formatValue(props.sourceRow.articleTitle)} (ID: {props.sourceRow.articleId})
+      </p>
+      <Show when={props.sourceRow.externalArticleId}>
+        <p class="mt-1 text-xs text-amber-800">Source external ID: {props.sourceRow.externalArticleId}</p>
+      </Show>
+      <p class="mt-1 text-sm text-amber-900">Resolution answer: {props.sourceRow.resolutionAnswer}</p>
+      <Show when={props.sourceRow.matchKey}>
+        <p class="mt-1 text-xs text-amber-800">Match key: {props.sourceRow.matchKey}</p>
+      </Show>
+      <Show when={props.sourceRow.matchKind}>
+        <p class="mt-1 text-xs text-amber-800">Match kind: {props.sourceRow.matchKind}</p>
+      </Show>
+    </div>
+  )
+}
+
+const WarningTargetArticleDetails = (props: {targetArticle: ConflictResolutionImportWarningTargetArticle}) => {
+  return (
+    <div class="rounded-md border border-amber-200 bg-white/70 p-3">
+      <p class="text-sm text-amber-900">
+        Target article: {formatValue(props.targetArticle.articleTitle)} (ID: {props.targetArticle.articleId})
+      </p>
+      <Show when={props.targetArticle.externalArticleId}>
+        <p class="mt-1 text-xs text-amber-800">Target external ID: {props.targetArticle.externalArticleId}</p>
+      </Show>
+      <Show when={props.targetArticle.doiKeys.length > 0}>
+        <p class="mt-1 text-xs text-amber-800">Target DOI keys: {props.targetArticle.doiKeys.join(', ')}</p>
+      </Show>
+    </div>
+  )
+}
+
+const PostCreateConflictResolutionImportWarningsPanel = (props: {
+  result: PostCreateConflictResolutionImportWarningResult
+}) => {
+  const warnings = () => {
+    return props.result.summary.warnings
+  }
+
+  return (
+    <section class="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4" role="status">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-base font-semibold text-amber-950">Compare project created with import warnings</h2>
+          <p class="mt-1 text-sm text-amber-900">
+            {props.result.createdComparisonProject.name} (ID: {props.result.createdComparisonProject.id}) was created.
+            Some prior conflict-resolution decisions were skipped.
+          </p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <Button
+            as={Link}
+            to="/compare-judgments/$id"
+            params={{id: props.result.createdComparisonProject.id} as never}
+            size="sm"
+          >
+            Open Compare Project
+          </Button>
+          <Button as={Link} to="/compare-judgments" variant="outline" size="sm">
+            View Compare Projects
+          </Button>
+        </div>
+      </div>
+
+      <div class="mt-4 space-y-3">
+        <For each={warnings()}>
+          {(warning) => {
+            const matchKeys = () => {
+              return formatValueList(getWarningMatchKeys(warning))
+            }
+            const matchKinds = () => {
+              return formatValueList(getWarningMatchKinds(warning))
+            }
+            const values = () => {
+              return formatValueList(warning.values ?? (warning.value ? [warning.value] : []))
+            }
+
+            return (
+              <article class="rounded-md border border-amber-200 bg-amber-100/40 p-3">
+                <div class="space-y-1">
+                  <p class="text-sm font-semibold text-amber-950">Skip reason: {warning.code}</p>
+                  <p class="text-sm text-amber-900">{warning.message}</p>
+                  <Show when={matchKeys()}>
+                    <p class="text-xs text-amber-800">Match key: {matchKeys()}</p>
+                  </Show>
+                  <Show when={matchKinds()}>
+                    <p class="text-xs text-amber-800">Match kind: {matchKinds()}</p>
+                  </Show>
+                  <Show when={values()}>
+                    <p class="text-xs text-amber-800">Resolution values: {values()}</p>
+                  </Show>
+                </div>
+
+                <div class="mt-3 grid gap-3 md:grid-cols-2">
+                  <div>
+                    <p class="mb-2 text-xs font-semibold uppercase text-amber-800">Skipped source decisions</p>
+                    <div class="space-y-2">
+                      <For each={warning.sourceRows}>
+                        {(sourceRow) => {
+                          return <WarningSourceRowDetails sourceRow={sourceRow} />
+                        }}
+                      </For>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p class="mb-2 text-xs font-semibold uppercase text-amber-800">Target articles</p>
+                    <Show
+                      when={warning.targetArticles.length > 0}
+                      fallback={<p class="text-sm text-amber-900">Target article: Unknown</p>}
+                    >
+                      <div class="space-y-2">
+                        <For each={warning.targetArticles}>
+                          {(targetArticle) => {
+                            return <WarningTargetArticleDetails targetArticle={targetArticle} />
+                          }}
+                        </For>
+                      </div>
+                    </Show>
+                  </div>
+                </div>
+              </article>
+            )
+          }}
+        </For>
+      </div>
+    </section>
+  )
+}
+
 export const CreateCompareJudgmentsFromProjectPage = () => {
   const navigate = useNavigate()
   const sourcesQuery = useQuery(() => {
@@ -90,6 +260,8 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
   ] = createSignal<string[]>([])
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
+  const [postCreateWarningResult, setPostCreateWarningResult] =
+    createSignal<PostCreateConflictResolutionImportWarningResult | null>(null)
 
   const selectedSourceProject = createMemo(() => {
     return (sourcesQuery.data ?? []).find((sourceProject) => {
@@ -225,6 +397,7 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
   const handleSubmit = async (event: Event) => {
     event.preventDefault()
     setError(null)
+    setPostCreateWarningResult(null)
 
     if (!selectedSourceProjectId().trim()) {
       setError('Select a primary project to compare from')
@@ -262,7 +435,16 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
     setIsLoading(true)
 
     try {
-      await createComparisonProjectFromProject(createComparisonProjectInput)
+      const result = await createComparisonProjectFromProject(createComparisonProjectInput)
+
+      if (hasPostCreateImportWarnings(result) && result.conflictResolutionImportSummary) {
+        setPostCreateWarningResult({
+          createdComparisonProject: result.data,
+          summary: result.conflictResolutionImportSummary,
+        })
+        return
+      }
+
       void navigate({to: '/compare-judgments'})
     } catch (submitError) {
       const message = submitError instanceof Error ? submitError.message : 'An unexpected error occurred'
@@ -280,6 +462,12 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
         </Button>
         <h1 class="text-3xl font-bold">Create Compare Project</h1>
       </div>
+
+      <Show when={postCreateWarningResult()}>
+        {(result) => {
+          return <PostCreateConflictResolutionImportWarningsPanel result={result()} />
+        }}
+      </Show>
 
       <div class="bg-card border rounded-lg p-6">
         <Show when={error()}>
@@ -598,8 +786,7 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
             </div>
 
             <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-3 mt-3">
-              Duplicate source keys, ambiguous target matches, conflicting imported values, or values outside the target
-              summary options stop creation and no compare project is created.
+              {importWarningCopy}
             </p>
 
             <Show when={!isConflictResolutionImportAvailable()}>

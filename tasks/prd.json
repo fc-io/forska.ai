@@ -149,14 +149,15 @@
         "`bun run desktop:build` passes because UI route behavior changed."
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-005"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     }
   ],
   "metadata": {
-    "updatedAt": "2026-05-31T11:31:59.381Z"
+    "updatedAt": "2026-05-31T11:41:24.020Z"
   }
 }
