@@ -60,12 +60,6 @@ const getPlan = (params: {
   })
 }
 
-const getErrorCodes = (params: ReturnType<typeof getPlan>) => {
-  return params.errors.map((error) => {
-    return error.code
-  })
-}
-
 const getWarningCodes = (params: ReturnType<typeof getPlan>) => {
   return params.warnings.map((warning) => {
     return warning.code
@@ -73,7 +67,15 @@ const getWarningCodes = (params: ReturnType<typeof getPlan>) => {
 }
 
 const getSkipCounts = (overrides: Partial<ReturnType<typeof getPlan>['skipCounts']> = {}) => {
-  return {ambiguousTargetMatch: 0, noTargetMatch: 0, noUsableKey: 0, notConflicting: 0, ...overrides}
+  return {
+    ambiguousTarget: 0,
+    conflicting: 0,
+    invalidValue: 0,
+    noTargetMatch: 0,
+    noUsableKey: 0,
+    notConflicting: 0,
+    ...overrides,
+  }
 }
 
 test('import source query selects only eligible comparison projects in newest order', () => {
@@ -274,7 +276,7 @@ test('import plan skips ambiguous DOI target matches without an ID/title tie-bre
 
   expect(plan.errors).toEqual([])
   expect(plan.candidates).toEqual([])
-  expect(plan.skipCounts).toEqual(getSkipCounts({ambiguousTargetMatch: 1}))
+  expect(plan.skipCounts).toEqual(getSkipCounts({ambiguousTarget: 1}))
   expect(plan.skippedRows).toEqual([{reason: 'ambiguous-target-match', sourceRowId: 'source-row-1'}])
   expect(getWarningCodes(plan)).toEqual(['ambiguous-target-match'])
   expect(plan.warnings).toMatchObject([
@@ -346,11 +348,34 @@ test('import plan prefers DOI over external ID and title when both match differe
   expect(plan.candidates).toMatchObject([{sourceRows: [{matchKind: 'doi'}], targetArticleId: 'target-doi'}])
 })
 
-test('import plan reports duplicate source keys as hard errors', () => {
+test('import plan dedupes duplicate source DOI keys with the same normalized value', () => {
   const plan = getPlan({
     sourceRows: [
       getSourceRow({doi: '10.1000/source-duplicate', externalArticleId: 'source-a', sourceRowId: 'source-doi-a'}),
       getSourceRow({doi: 'DOI:10.1000/source-duplicate', externalArticleId: 'source-b', sourceRowId: 'source-doi-b'}),
+    ],
+    targetArticles: [getTargetArticle({articleId: 'target-source-doi', doi: '10.1000/source-duplicate'})],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.warnings).toEqual([])
+  expect(plan.dedupedCount).toBe(1)
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [
+        {matchKey: '10.1000/source-duplicate', matchKind: 'doi', sourceRowId: 'source-doi-a'},
+        {matchKey: '10.1000/source-duplicate', matchKind: 'doi', sourceRowId: 'source-doi-b'},
+      ],
+      targetArticleId: 'target-source-doi',
+    },
+  ])
+})
+
+test('import plan dedupes duplicate source ID/title keys with the same normalized value', () => {
+  const plan = getPlan({
+    sourceRows: [
       getSourceRow({doi: null, externalArticleId: 'source-shared', sourceRowId: 'source-id-title-a', title: 'Shared'}),
       getSourceRow({
         doi: null,
@@ -360,7 +385,6 @@ test('import plan reports duplicate source keys as hard errors', () => {
       }),
     ],
     targetArticles: [
-      getTargetArticle({articleId: 'target-source-doi', doi: '10.1000/source-duplicate'}),
       getTargetArticle({
         articleId: 'target-source-id-title',
         doi: null,
@@ -369,11 +393,48 @@ test('import plan reports duplicate source keys as hard errors', () => {
       }),
     ],
   })
-  const errorCodes = getErrorCodes(plan)
 
-  expect(errorCodes).toContain('duplicate-source-doi-key')
-  expect(errorCodes).toContain('duplicate-source-id-title-key')
+  expect(plan.errors).toEqual([])
+  expect(plan.warnings).toEqual([])
+  expect(plan.dedupedCount).toBe(1)
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [
+        {matchKey: 'source-shared\u001Fshared', matchKind: 'id-title', sourceRowId: 'source-id-title-a'},
+        {matchKey: 'source-shared\u001Fshared', matchKind: 'id-title', sourceRowId: 'source-id-title-b'},
+      ],
+      targetArticleId: 'target-source-id-title',
+    },
+  ])
+})
+
+test('import plan warns and skips duplicate source keys with conflicting normalized values', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({doi: '10.1000/source-conflict', resolutionValue: 'yes', sourceRowId: 'source-doi-a'}),
+      getSourceRow({doi: 'DOI:10.1000/source-conflict', resolutionValue: 'no', sourceRowId: 'source-doi-b'}),
+    ],
+    targetArticles: [getTargetArticle({articleId: 'target-source-doi', doi: '10.1000/source-conflict'})],
+  })
+
+  expect(plan.errors).toEqual([])
   expect(plan.candidates).toEqual([])
+  expect(plan.dedupedCount).toBe(0)
+  expect(plan.skipCounts).toEqual(getSkipCounts({conflicting: 2}))
+  expect(plan.skippedRows).toEqual([
+    {reason: 'conflicting-resolution-values', sourceRowId: 'source-doi-a'},
+    {reason: 'conflicting-resolution-values', sourceRowId: 'source-doi-b'},
+  ])
+  expect(plan.warnings).toMatchObject([
+    {
+      code: 'conflicting-resolution-values',
+      matchKeys: ['10.1000/source-conflict'],
+      targetArticles: [{articleId: 'target-source-doi'}],
+      values: ['yes', 'no'],
+    },
+  ])
 })
 
 test('import plan ignores duplicate source keys on skipped source rows', () => {
@@ -537,7 +598,7 @@ test('import plan skips duplicate eligible target ID/title keys with warnings', 
 
   expect(plan.errors).toEqual([])
   expect(plan.candidates).toEqual([])
-  expect(plan.skipCounts).toEqual(getSkipCounts({ambiguousTargetMatch: 1}))
+  expect(plan.skipCounts).toEqual(getSkipCounts({ambiguousTarget: 1}))
   expect(plan.skippedRows).toEqual([{reason: 'ambiguous-target-match', sourceRowId: 'source-row-1'}])
   expect(getWarningCodes(plan)).toEqual(['ambiguous-target-match'])
   expect(plan.warnings).toMatchObject([
@@ -619,7 +680,51 @@ test('import plan allows the same target article from DOI and ID/title lookups',
   expect(plan.candidates).toMatchObject([{sourceRows: [{matchKind: 'doi'}], targetArticleId: 'target-article-1'}])
 })
 
-test('import plan reports conflicting source resolution values for the same target article', () => {
+test('import plan dedupes same-target source rows with the same canonical value', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({
+        doi: '10.1000/shared-target',
+        resolutionValue: ' yes ',
+        sourceComparisonProjectId: 'source-comparison-project-a',
+        sourceRowId: 'source-doi',
+      }),
+      getSourceRow({
+        doi: null,
+        externalArticleId: 'shared-ext',
+        resolutionValue: 'yes',
+        sourceComparisonProjectId: 'source-comparison-project-b',
+        sourceRowId: 'source-id-title',
+        title: 'Shared title',
+      }),
+    ],
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'target-shared',
+        doi: '10.1000/shared-target',
+        externalArticleId: 'shared-ext',
+        title: 'Shared title',
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.warnings).toEqual([])
+  expect(plan.dedupedCount).toBe(1)
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [
+        {matchKey: '10.1000/shared-target', matchKind: 'doi', sourceRowId: 'source-doi'},
+        {matchKey: 'shared-ext\u001Fshared title', matchKind: 'id-title', sourceRowId: 'source-id-title'},
+      ],
+      targetArticleId: 'target-shared',
+    },
+  ])
+})
+
+test('import plan warns and skips same-target source rows with conflicting canonical values', () => {
   const plan = getPlan({
     sourceRows: [
       getSourceRow({doi: '10.1000/shared-target', resolutionValue: 'yes', sourceRowId: 'source-doi'}),
@@ -641,22 +746,44 @@ test('import plan reports conflicting source resolution values for the same targ
     ],
   })
 
-  expect(getErrorCodes(plan)).toContain('conflicting-source-resolution-values')
-  expect(plan.errors[0]).toMatchObject({targetArticleId: 'target-shared', values: ['yes', 'no']})
+  expect(plan.errors).toEqual([])
   expect(plan.candidates).toEqual([])
+  expect(plan.dedupedCount).toBe(0)
+  expect(plan.skipCounts).toEqual(getSkipCounts({conflicting: 2}))
+  expect(plan.skippedRows).toEqual([
+    {reason: 'conflicting-resolution-values', sourceRowId: 'source-doi'},
+    {reason: 'conflicting-resolution-values', sourceRowId: 'source-id-title'},
+  ])
+  expect(plan.warnings).toMatchObject([
+    {
+      code: 'conflicting-resolution-values',
+      matchKeys: ['10.1000/shared-target', 'shared-ext\u001Fshared title'],
+      targetArticles: [{articleId: 'target-shared'}],
+      values: ['yes', 'no'],
+    },
+  ])
 })
 
-test('import plan reports resolution values missing from target summary options', () => {
+test('import plan warns and skips source values missing from target summary options', () => {
   const plan = getPlan({
     sourceRows: [getSourceRow({resolutionValue: 'unclear'})],
     targetArticles: [getTargetArticle()],
     targetSummaryOptionValues: ['yes', 'no'],
   })
 
-  expect(plan.errors).toMatchObject([
-    {code: 'invalid-source-resolution-value', sourceRowIds: ['source-row-1'], value: 'unclear'},
-  ])
+  expect(plan.errors).toEqual([])
   expect(plan.candidates).toEqual([])
+  expect(plan.dedupedCount).toBe(0)
+  expect(plan.skipCounts).toEqual(getSkipCounts({invalidValue: 1}))
+  expect(plan.skippedRows).toEqual([{reason: 'invalid-target-resolution-value', sourceRowId: 'source-row-1'}])
+  expect(plan.warnings).toMatchObject([
+    {
+      code: 'invalid-target-resolution-value',
+      sourceRows: [{sourceRowId: 'source-row-1'}],
+      targetArticles: [{articleId: 'target-article-1'}],
+      value: 'unclear',
+    },
+  ])
 })
 
 test('import plan ignores invalid resolution values on skipped source rows', () => {

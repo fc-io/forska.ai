@@ -2527,7 +2527,19 @@ test('comparison project create-from-project imports selected conflict resolutio
   }
 
   const body = JSON.parse(bodyText) as {
-    conflictResolutionImportSummary: {imported: number; matched: number; scanned: number; skipped: number}
+    conflictResolutionImportSummary: {
+      deduped: number
+      imported: number
+      matched: number
+      scanned: number
+      skipped: number
+      skippedAmbiguousTarget: number
+      skippedConflicting: number
+      skippedInvalidValue: number
+      skippedNoTargetMatch: number
+      skippedNoUsableKey: number
+      skippedNotConflicting: number
+    }
     data: {id: string}
   }
   const state = getMockDatabaseState()
@@ -2543,7 +2555,19 @@ test('comparison project create-from-project imports selected conflict resolutio
 
   expect(response.status).toBe(200)
   expect(body.data.id).toBe('comparison-project-created')
-  expect(body.conflictResolutionImportSummary).toEqual({imported: 1, matched: 1, scanned: 1, skipped: 0})
+  expect(body.conflictResolutionImportSummary).toEqual({
+    deduped: 0,
+    imported: 1,
+    matched: 1,
+    scanned: 1,
+    skipped: 0,
+    skippedAmbiguousTarget: 0,
+    skippedConflicting: 0,
+    skippedInvalidValue: 0,
+    skippedNoTargetMatch: 0,
+    skippedNoUsableKey: 0,
+    skippedNotConflicting: 0,
+  })
   expect(insertedResolution).toMatchObject({
     answerValue: 'yes',
     articleId: 'article-1',
@@ -2557,7 +2581,7 @@ test('comparison project create-from-project imports selected conflict resolutio
   expect(doiTargetQuery ?? '').toContain("doi_identifier.normalized_value IN ('10.1000/import-match')")
 })
 
-test('comparison project create-from-project rolls back duplicate conflict resolution import', async () => {
+test('comparison project create-from-project dedupes duplicate conflict resolution import', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseState(),
     conflictResolutionImportSourceRows: [
@@ -2618,19 +2642,52 @@ test('comparison project create-from-project rolls back duplicate conflict resol
   const bodyText = await response.text()
   const state = getMockDatabaseState()
 
-  if (response.status !== 400) {
+  if (response.status !== 200) {
     throw new Error(bodyText)
   }
 
-  expect(response.status).toBe(400)
-  expect(bodyText).toContain('Duplicate source DOI import key')
-  expect(state.createdComparisonProjectIds).toEqual([])
-  expect(
-    state.conflictResolutionRows.some((row) => {
-      return row.comparisonProjectId === 'comparison-project-created'
-    }),
-  ).toBe(false)
-  expect(state.staleServingIds).toEqual([])
+  const body = JSON.parse(bodyText) as {
+    conflictResolutionImportSummary: {
+      deduped: number
+      imported: number
+      matched: number
+      scanned: number
+      skipped: number
+      skippedAmbiguousTarget: number
+      skippedConflicting: number
+      skippedInvalidValue: number
+      skippedNoTargetMatch: number
+      skippedNoUsableKey: number
+      skippedNotConflicting: number
+    }
+  }
+  const insertedResolutions = state.conflictResolutionRows.filter((row) => {
+    return row.comparisonProjectId === 'comparison-project-created'
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.conflictResolutionImportSummary).toEqual({
+    deduped: 1,
+    imported: 1,
+    matched: 2,
+    scanned: 2,
+    skipped: 0,
+    skippedAmbiguousTarget: 0,
+    skippedConflicting: 0,
+    skippedInvalidValue: 0,
+    skippedNoTargetMatch: 0,
+    skippedNoUsableKey: 0,
+    skippedNotConflicting: 0,
+  })
+  expect(insertedResolutions).toHaveLength(1)
+  expect(insertedResolutions[0]).toMatchObject({
+    answerValue: 'yes',
+    articleId: 'article-1',
+    comparisonProjectId: 'comparison-project-created',
+    promptId: null,
+  })
+  expect(state.createdComparisonProjectIds).toEqual(['comparison-project-created'])
+  expect(state.staleServingIds).toEqual(['comparison-project-created'])
 })
 
 test('comparison project create-from-project rejects conflict resolution import when disabled', async () => {

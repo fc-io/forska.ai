@@ -1400,13 +1400,28 @@ const getConflictResolutionImportSummary = (params: {
   plan: ReturnType<typeof getComparisonProjectConflictResolutionImportPlan>
   scannedCount: number
 }): ComparisonProjectConflictResolutionImportSummary => {
+  const skippedCount =
+    params.plan.skipCounts.ambiguousTarget
+    + params.plan.skipCounts.conflicting
+    + params.plan.skipCounts.invalidValue
+    + params.plan.skipCounts.noTargetMatch
+    + params.plan.skipCounts.noUsableKey
+    + params.plan.skipCounts.notConflicting
+
   return {
+    deduped: params.plan.dedupedCount,
     scanned: params.scannedCount,
     matched: params.plan.candidates.reduce((count, candidate) => {
       return count + candidate.sourceRows.length
     }, 0),
     imported: params.importedCount,
-    skipped: params.plan.skippedRows.length,
+    skipped: skippedCount,
+    skippedAmbiguousTarget: params.plan.skipCounts.ambiguousTarget,
+    skippedConflicting: params.plan.skipCounts.conflicting,
+    skippedInvalidValue: params.plan.skipCounts.invalidValue,
+    skippedNoTargetMatch: params.plan.skipCounts.noTargetMatch,
+    skippedNoUsableKey: params.plan.skipCounts.noUsableKey,
+    skippedNotConflicting: params.plan.skipCounts.notConflicting,
   }
 }
 

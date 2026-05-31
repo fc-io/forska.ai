@@ -64,6 +64,8 @@ export type ComparisonProjectConflictResolutionImportCandidate = {
 
 export type ComparisonProjectConflictResolutionImportSkipReason =
   | 'ambiguous-target-match'
+  | 'conflicting-resolution-values'
+  | 'invalid-target-resolution-value'
   | 'no-usable-key'
   | 'no-target-match'
   | 'not-conflicting'
@@ -74,7 +76,9 @@ export type ComparisonProjectConflictResolutionImportSkippedRow = {
 }
 
 export type ComparisonProjectConflictResolutionImportSkipCounts = {
-  ambiguousTargetMatch: number
+  ambiguousTarget: number
+  conflicting: number
+  invalidValue: number
   noTargetMatch: number
   noUsableKey: number
   notConflicting: number
@@ -97,7 +101,10 @@ export type ComparisonProjectConflictResolutionImportError = {
   values?: string[]
 }
 
-export type ComparisonProjectConflictResolutionImportWarningCode = 'ambiguous-target-match'
+export type ComparisonProjectConflictResolutionImportWarningCode =
+  | 'ambiguous-target-match'
+  | 'conflicting-resolution-values'
+  | 'invalid-target-resolution-value'
 
 export type ComparisonProjectConflictResolutionImportWarningSourceRow = {
   articleId: string
@@ -119,15 +126,20 @@ export type ComparisonProjectConflictResolutionImportWarningTargetArticle = {
 
 export type ComparisonProjectConflictResolutionImportWarning = {
   code: ComparisonProjectConflictResolutionImportWarningCode
-  matchKey: string
-  matchKind: ComparisonProjectConflictResolutionImportMatchKind
+  matchKey?: string
+  matchKeys?: string[]
+  matchKind?: ComparisonProjectConflictResolutionImportMatchKind
+  matchKinds?: ComparisonProjectConflictResolutionImportMatchKind[]
   message: string
   sourceRows: ComparisonProjectConflictResolutionImportWarningSourceRow[]
   targetArticles: ComparisonProjectConflictResolutionImportWarningTargetArticle[]
+  value?: string
+  values?: string[]
 }
 
 export type ComparisonProjectConflictResolutionImportPlan = {
   candidates: ComparisonProjectConflictResolutionImportCandidate[]
+  dedupedCount: number
   errors: ComparisonProjectConflictResolutionImportError[]
   skipCounts: ComparisonProjectConflictResolutionImportSkipCounts
   skippedRows: ComparisonProjectConflictResolutionImportSkippedRow[]
@@ -141,10 +153,17 @@ export type ComparisonProjectConflictResolutionImportPlanParams = {
 }
 
 export type ComparisonProjectConflictResolutionImportSummary = {
+  deduped: number
   scanned: number
   matched: number
   imported: number
   skipped: number
+  skippedAmbiguousTarget: number
+  skippedConflicting: number
+  skippedInvalidValue: number
+  skippedNoTargetMatch: number
+  skippedNoUsableKey: number
+  skippedNotConflicting: number
 }
 
 type NormalizedSourceRow = Omit<ComparisonProjectConflictResolutionImportSourceRow, 'doiKeys'> & {
@@ -162,7 +181,9 @@ type ImportCandidateRow = {
   matchKey: string
   matchKind: ComparisonProjectConflictResolutionImportMatchKind
   resolutionValue: string
+  sourceRow: NormalizedSourceRow
   sourceRowId: string
+  targetArticle: NormalizedTargetArticle
   targetArticleId: string
 }
 
@@ -172,13 +193,6 @@ type ImportCandidateRowResult = {
   candidate: ImportCandidateRow | null
   skippedRow: ComparisonProjectConflictResolutionImportSkippedRow | null
   warnings: ComparisonProjectConflictResolutionImportWarning[]
-}
-
-type DuplicateKeyErrorParams = {
-  code: ComparisonProjectConflictResolutionImportErrorCode
-  entityLabel: string
-  idKey: 'sourceRowIds' | 'targetArticleIds'
-  keyLabel: string
 }
 
 const doiPrefixPattern = /^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)/i
@@ -469,20 +483,6 @@ const getNormalizedTargetArticles = (
   })
 }
 
-const getKeyGroups = <T>(items: readonly T[], getKey: (item: T) => string | null, getId: (item: T) => string) => {
-  return items.reduce<Map<string, string[]>>((groupMap, item) => {
-    const key = getKey(item)
-    const currentIds = key ? (groupMap.get(key) ?? []) : []
-
-    if (key) {
-      const itemId = getId(item)
-      groupMap.set(key, currentIds.includes(itemId) ? currentIds : [...currentIds, itemId])
-    }
-
-    return groupMap
-  }, new Map<string, string[]>())
-}
-
 const getUniqueStringValues = (values: readonly string[]) => {
   return values.reduce<string[]>((uniqueValues, value) => {
     return uniqueValues.includes(value) ? uniqueValues : [...uniqueValues, value]
@@ -524,58 +524,6 @@ const getTargetArticlesByIdTitleKey = (targetArticles: readonly NormalizedTarget
   return getTargetArticleGroupsByKey(targetArticles, (article) => {
     return article.idTitleKey
   })
-}
-
-const getDuplicateKeyErrors = (
-  keyGroups: Map<string, string[]>,
-  params: DuplicateKeyErrorParams,
-): ComparisonProjectConflictResolutionImportError[] => {
-  return Array.from(keyGroups.entries())
-    .filter(([, ids]) => {
-      return ids.length > 1
-    })
-    .map(([key, ids]) => {
-      return {
-        code: params.code,
-        key,
-        message: `Duplicate ${params.entityLabel} ${params.keyLabel} import key: ${key}`,
-        [params.idKey]: ids,
-      }
-    })
-}
-
-const getSourceDuplicateErrors = (candidateRows: readonly ImportCandidateRow[]) => {
-  return [
-    ...getDuplicateKeyErrors(
-      getKeyGroups(
-        candidateRows,
-        (row) => {
-          return row.matchKind === 'doi' ? row.matchKey : null
-        },
-        (row) => {
-          return row.sourceRowId
-        },
-      ),
-      {code: 'duplicate-source-doi-key', entityLabel: 'source', idKey: 'sourceRowIds', keyLabel: 'DOI'},
-    ),
-    ...getDuplicateKeyErrors(
-      getKeyGroups(
-        candidateRows,
-        (row) => {
-          return row.matchKind === 'id-title' ? row.matchKey : null
-        },
-        (row) => {
-          return row.sourceRowId
-        },
-      ),
-      {
-        code: 'duplicate-source-id-title-key',
-        entityLabel: 'source',
-        idKey: 'sourceRowIds',
-        keyLabel: 'external ID/title',
-      },
-    ),
-  ]
 }
 
 const getTargetArticlesForSourceDoiKeys = (
@@ -647,39 +595,46 @@ const getAmbiguousTargetMatchWarning = (params: {
   }
 }
 
-const getValidResolutionValueSet = (targetSummaryOptionValues: readonly string[]) => {
-  return new Set(
-    targetSummaryOptionValues.map(getNormalizedResolutionValue).filter((value) => {
-      return value.length > 0
-    }),
-  )
-}
-
-const getInvalidResolutionValueErrors = (
-  candidateRows: readonly ImportCandidateRow[],
-  targetSummaryOptionValues: readonly string[],
-) => {
-  const validResolutionValues = getValidResolutionValueSet(targetSummaryOptionValues)
-
-  return candidateRows
-    .filter((row) => {
-      return !validResolutionValues.has(row.resolutionValue)
-    })
-    .map<ComparisonProjectConflictResolutionImportError>((row) => {
-      return {
-        code: 'invalid-source-resolution-value',
-        message: `Source resolution value is not valid for the target comparison project: ${row.resolutionValue}`,
-        sourceRowIds: [row.sourceRowId],
-        value: row.resolutionValue,
-      }
-    })
-}
-
 const getSkippedRow = (
   sourceRowId: string,
   reason: ComparisonProjectConflictResolutionImportSkipReason,
 ): ComparisonProjectConflictResolutionImportSkippedRow => {
   return {reason, sourceRowId}
+}
+
+const getTargetSummaryOptionValueMap = (targetSummaryOptionValues: readonly string[]) => {
+  return targetSummaryOptionValues.reduce<Map<string, string[]>>((optionValueMap, optionValue) => {
+    const normalizedValue = getNormalizedResolutionValue(optionValue)
+    const currentValues = optionValueMap.get(normalizedValue) ?? []
+
+    return normalizedValue.length === 0
+      ? optionValueMap
+      : optionValueMap.set(normalizedValue, [...currentValues, normalizedValue])
+  }, new Map<string, string[]>())
+}
+
+const getCanonicalTargetSummaryOptionValue = (
+  row: ImportCandidateRow,
+  targetSummaryOptionValueMap: Map<string, string[]>,
+) => {
+  const normalizedValue = getNormalizedResolutionValue(row.resolutionValue)
+  const matchingOptionValues = targetSummaryOptionValueMap.get(normalizedValue) ?? []
+
+  return matchingOptionValues.length === 1 ? matchingOptionValues[0] : null
+}
+
+const getInvalidTargetResolutionValueWarning = (
+  row: ImportCandidateRow,
+): ComparisonProjectConflictResolutionImportWarning => {
+  return {
+    code: 'invalid-target-resolution-value',
+    matchKey: row.matchKey,
+    matchKind: row.matchKind,
+    message: `Source resolution value does not map to exactly one target summary option: ${row.resolutionValue}`,
+    sourceRows: [getWarningSourceRow(row.sourceRow)],
+    targetArticles: [getWarningTargetArticle(row.targetArticle)],
+    value: row.resolutionValue,
+  }
 }
 
 const getTargetArticleMaps = (targetArticles: readonly NormalizedTargetArticle[]) => {
@@ -719,7 +674,9 @@ const getCandidateRow = (params: {
     matchKey: params.matchKey,
     matchKind: params.matchKind,
     resolutionValue: params.row.resolutionValue,
+    sourceRow: params.row,
     sourceRowId: params.row.sourceRowId,
+    targetArticle: params.targetArticle,
     targetArticleId: params.targetArticle.articleId,
   }
 }
@@ -867,72 +824,161 @@ const getSkipCounts = (
   return skippedRows.reduce<ComparisonProjectConflictResolutionImportSkipCounts>(
     (counts, skippedRow) => {
       return {
-        ambiguousTargetMatch: counts.ambiguousTargetMatch + (skippedRow.reason === 'ambiguous-target-match' ? 1 : 0),
+        ambiguousTarget: counts.ambiguousTarget + (skippedRow.reason === 'ambiguous-target-match' ? 1 : 0),
+        conflicting: counts.conflicting + (skippedRow.reason === 'conflicting-resolution-values' ? 1 : 0),
+        invalidValue: counts.invalidValue + (skippedRow.reason === 'invalid-target-resolution-value' ? 1 : 0),
         noTargetMatch: counts.noTargetMatch + (skippedRow.reason === 'no-target-match' ? 1 : 0),
         noUsableKey: counts.noUsableKey + (skippedRow.reason === 'no-usable-key' ? 1 : 0),
         notConflicting: counts.notConflicting + (skippedRow.reason === 'not-conflicting' ? 1 : 0),
       }
     },
-    {ambiguousTargetMatch: 0, noTargetMatch: 0, noUsableKey: 0, notConflicting: 0},
+    {ambiguousTarget: 0, conflicting: 0, invalidValue: 0, noTargetMatch: 0, noUsableKey: 0, notConflicting: 0},
   )
 }
 
-const getConflictingResolutionValueErrors = (candidateRows: readonly ImportCandidateRow[]) => {
-  const candidateRowsByTargetArticleId = candidateRows.reduce<Map<string, ImportCandidateRow[]>>(
-    (candidateMap, row) => {
-      const currentRows = candidateMap.get(row.targetArticleId) ?? []
+const getTargetResolvedCandidateRows = (
+  candidateRows: readonly ImportCandidateRow[],
+  targetSummaryOptionValues: readonly string[],
+) => {
+  const targetSummaryOptionValueMap = getTargetSummaryOptionValueMap(targetSummaryOptionValues)
 
-      candidateMap.set(row.targetArticleId, [...currentRows, row])
-      return candidateMap
-    },
-    new Map<string, ImportCandidateRow[]>(),
-  )
+  return candidateRows.reduce<{
+    candidateRows: ImportCandidateRow[]
+    skippedRows: ComparisonProjectConflictResolutionImportSkippedRow[]
+    warnings: ComparisonProjectConflictResolutionImportWarning[]
+  }>(
+    (result, row) => {
+      const targetResolutionValue = getCanonicalTargetSummaryOptionValue(row, targetSummaryOptionValueMap)
 
-  return Array.from(candidateRowsByTargetArticleId.entries())
-    .map<ComparisonProjectConflictResolutionImportError | null>(([targetArticleId, rows]) => {
-      const values = Array.from(
-        new Set(
-          rows.map((row) => {
-            return row.resolutionValue
-          }),
-        ),
-      )
-      const sourceRowIds = rows.map((row) => {
-        return row.sourceRowId
-      })
-
-      return values.length > 1
-        ? {
-            code: 'conflicting-source-resolution-values',
-            message: `Conflicting source resolution values map to target article ${targetArticleId}: ${values.join(', ')}`,
-            sourceRowIds,
-            targetArticleId,
-            values,
+      return targetResolutionValue
+        ? {...result, candidateRows: [...result.candidateRows, {...row, resolutionValue: targetResolutionValue}]}
+        : {
+            candidateRows: result.candidateRows,
+            skippedRows: [...result.skippedRows, getSkippedRow(row.sourceRowId, 'invalid-target-resolution-value')],
+            warnings: [...result.warnings, getInvalidTargetResolutionValueWarning(row)],
           }
-        : null
-    })
-    .filter((error): error is ComparisonProjectConflictResolutionImportError => {
-      return error !== null
-    })
+    },
+    {candidateRows: [], skippedRows: [], warnings: []},
+  )
 }
 
-const getImportCandidates = (candidateRows: readonly ImportCandidateRow[]) => {
+const getCandidateRowsByTargetArticleId = (candidateRows: readonly ImportCandidateRow[]) => {
+  return candidateRows.reduce<Map<string, ImportCandidateRow[]>>((candidateMap, row) => {
+    const currentRows = candidateMap.get(row.targetArticleId) ?? []
+
+    candidateMap.set(row.targetArticleId, [...currentRows, row])
+    return candidateMap
+  }, new Map<string, ImportCandidateRow[]>())
+}
+
+const getCandidateRowResolutionValues = (candidateRows: readonly ImportCandidateRow[]) => {
+  return getUniqueStringValues(
+    candidateRows.map((row) => {
+      return row.resolutionValue
+    }),
+  )
+}
+
+const getCandidateRowMatchKinds = (candidateRows: readonly ImportCandidateRow[]) => {
+  return candidateRows.reduce<ComparisonProjectConflictResolutionImportMatchKind[]>((matchKinds, row) => {
+    return matchKinds.includes(row.matchKind) ? matchKinds : [...matchKinds, row.matchKind]
+  }, [])
+}
+
+const getWarningTargetArticles = (candidateRows: readonly ImportCandidateRow[]) => {
   return Array.from(
     candidateRows
-      .reduce<Map<string, ComparisonProjectConflictResolutionImportCandidate>>((candidateMap, row) => {
-        const existingCandidate = candidateMap.get(row.targetArticleId)
-        const sourceRow = {matchKey: row.matchKey, matchKind: row.matchKind, sourceRowId: row.sourceRowId}
-
-        candidateMap.set(
-          row.targetArticleId,
-          existingCandidate
-            ? {...existingCandidate, sourceRows: [...existingCandidate.sourceRows, sourceRow]}
-            : {resolutionValue: row.resolutionValue, sourceRows: [sourceRow], targetArticleId: row.targetArticleId},
-        )
-        return candidateMap
-      }, new Map<string, ComparisonProjectConflictResolutionImportCandidate>())
+      .reduce<Map<string, NormalizedTargetArticle>>((targetArticleMap, row) => {
+        return targetArticleMap.has(row.targetArticleId)
+          ? targetArticleMap
+          : targetArticleMap.set(row.targetArticleId, row.targetArticle)
+      }, new Map<string, NormalizedTargetArticle>())
       .values(),
+  ).map(getWarningTargetArticle)
+}
+
+const getConflictingResolutionValuesWarning = (
+  candidateRows: readonly ImportCandidateRow[],
+): ComparisonProjectConflictResolutionImportWarning => {
+  const values = getCandidateRowResolutionValues(candidateRows)
+  const matchKeys = getUniqueStringValues(
+    candidateRows.map((row) => {
+      return row.matchKey
+    }),
   )
+  const matchKinds = getCandidateRowMatchKinds(candidateRows)
+  const targetArticleIds = getTargetArticleIds(
+    candidateRows.map((row) => {
+      return row.targetArticle
+    }),
+  )
+
+  return {
+    code: 'conflicting-resolution-values',
+    matchKey: matchKeys.join(', '),
+    matchKeys,
+    matchKind: matchKinds[0],
+    matchKinds,
+    message: `Conflicting source resolution values map to target article ${targetArticleIds.join(', ')}: ${values.join(', ')}`,
+    sourceRows: candidateRows.map((row) => {
+      return getWarningSourceRow(row.sourceRow)
+    }),
+    targetArticles: getWarningTargetArticles(candidateRows),
+    values,
+  }
+}
+
+const getImportCandidateSourceRows = (candidateRows: readonly ImportCandidateRow[]) => {
+  return candidateRows.map((row) => {
+    return {matchKey: row.matchKey, matchKind: row.matchKind, sourceRowId: row.sourceRowId}
+  })
+}
+
+const getImportCandidateFromCandidateRows = (
+  candidateRows: readonly ImportCandidateRow[],
+): ComparisonProjectConflictResolutionImportCandidate | null => {
+  const firstRow = candidateRows[0]
+
+  return firstRow
+    ? {
+        resolutionValue: firstRow.resolutionValue,
+        sourceRows: getImportCandidateSourceRows(candidateRows),
+        targetArticleId: firstRow.targetArticleId,
+      }
+    : null
+}
+
+const getGroupedImportCandidates = (candidateRows: readonly ImportCandidateRow[]) => {
+  return Array.from(getCandidateRowsByTargetArticleId(candidateRows).values()).reduce<{
+    candidates: ComparisonProjectConflictResolutionImportCandidate[]
+    skippedRows: ComparisonProjectConflictResolutionImportSkippedRow[]
+    warnings: ComparisonProjectConflictResolutionImportWarning[]
+  }>(
+    (result, rows) => {
+      const values = getCandidateRowResolutionValues(rows)
+      const candidate = values.length === 1 ? getImportCandidateFromCandidateRows(rows) : null
+
+      return candidate
+        ? {...result, candidates: [...result.candidates, candidate]}
+        : {
+            candidates: result.candidates,
+            skippedRows: [
+              ...result.skippedRows,
+              ...rows.map((row) => {
+                return getSkippedRow(row.sourceRowId, 'conflicting-resolution-values')
+              }),
+            ],
+            warnings: [...result.warnings, getConflictingResolutionValuesWarning(rows)],
+          }
+    },
+    {candidates: [], skippedRows: [], warnings: []},
+  )
+}
+
+const getDedupedCount = (candidates: readonly ComparisonProjectConflictResolutionImportCandidate[]) => {
+  return candidates.reduce((count, candidate) => {
+    return count + Math.max(candidate.sourceRows.length - 1, 0)
+  }, 0)
 }
 
 export const getComparisonProjectConflictResolutionImportPlan = ({
@@ -960,16 +1006,25 @@ export const getComparisonProjectConflictResolutionImportPlan = ({
   const warnings = candidateRowResults.flatMap((result) => {
     return result.warnings
   })
-  const duplicateErrors = getSourceDuplicateErrors(candidateRows)
-  const invalidValueErrors = getInvalidResolutionValueErrors(candidateRows, targetSummaryOptionValues)
-  const conflictErrors = getConflictingResolutionValueErrors(candidateRows)
-  const errors = [...duplicateErrors, ...invalidValueErrors, ...conflictErrors]
+  const targetResolvedCandidateRowResults = getTargetResolvedCandidateRows(candidateRows, targetSummaryOptionValues)
+  const groupedImportCandidateResults = getGroupedImportCandidates(targetResolvedCandidateRowResults.candidateRows)
+  const allSkippedRows = [
+    ...skippedRows,
+    ...targetResolvedCandidateRowResults.skippedRows,
+    ...groupedImportCandidateResults.skippedRows,
+  ]
+  const allWarnings = [
+    ...warnings,
+    ...targetResolvedCandidateRowResults.warnings,
+    ...groupedImportCandidateResults.warnings,
+  ]
 
   return {
-    candidates: errors.length > 0 ? [] : getImportCandidates(candidateRows),
-    errors,
-    skipCounts: getSkipCounts(skippedRows),
-    skippedRows,
-    warnings,
+    candidates: groupedImportCandidateResults.candidates,
+    dedupedCount: getDedupedCount(groupedImportCandidateResults.candidates),
+    errors: [],
+    skipCounts: getSkipCounts(allSkippedRows),
+    skippedRows: allSkippedRows,
+    warnings: allWarnings,
   }
 }
