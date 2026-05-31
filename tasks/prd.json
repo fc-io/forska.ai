@@ -1,23 +1,20 @@
 {
-  "name": "Import Conflict Resolutions",
-  "description": "Add conflict resolution import to Create Compare Project, matching existing resolutions by normalized DOI or article ID plus title and failing creation on duplicate or conflicting matches.",
-  "branchName": "ralph/import-conflict-resolutions",
+  "name": "Deduplicate Compare Conflict Resolution Import",
+  "description": "Reuse saved conflict-resolution decisions when creating a new compare project, dedupe matching decisions, skip conflicting or ambiguous imports, and show structured warnings without failing project creation.",
+  "branchName": "ralph/dedupe-compare-conflict-resolution-import",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Build conflict resolution import matching helper",
-      "description": "As a developer, I want a focused server helper for conflict resolution import matching so duplicate detection, DOI matching, and skip/error behavior can be tested independently from the route.",
+      "title": "Enrich import source and target metadata",
+      "description": "As a developer, I want conflict-resolution import planning to receive source project, source article, and target article details so skipped imports can produce actionable warnings without extra queries.",
       "acceptanceCriteria": [
-        "Add `src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts` with reusable normalization and import-planning helpers.",
-        "Normalize DOI by trimming, lowercasing, and removing common DOI URL or `doi:` prefixes.",
-        "Normalize external article ID by trimming and lowercasing, and normalize title by trimming, lowercasing, and collapsing internal whitespace.",
-        "Prefer DOI matching when a usable DOI exists on both source and target articles; otherwise match by external article ID plus normalized title.",
-        "Detect duplicate source DOI keys, duplicate target DOI keys, duplicate source ID-title keys, and duplicate target ID-title keys as hard errors.",
-        "Detect conflicting source resolution values that map to the same target article as a hard error.",
-        "Detect resolution values that are not valid for the target compare project's summary options as hard errors.",
-        "Return import candidates and skip counts for source rows with no usable key, no target match, or target articles that are not conflict-resolution eligible.",
-        "Add adjacent tests covering DOI match, ID-title match, DOI preference, duplicate errors, conflicting values, invalid values, no-key skip, no-target skip, and not-conflicting skip.",
+        "Extend `ComparisonProjectConflictResolutionImportSourceRow` and its SQL to include `sourceComparisonProjectId`, `sourceComparisonProjectName`, `sourceResolutionId`, `sourceArticleId`, `sourceExternalArticleId`, `sourceArticleTitle`, `resolutionValue`, and DOI keys.",
+        "Join the selected source conflict-resolution rows to their comparison project and article metadata while still starting from selected rows in `app.comparison_project_conflict_resolution`.",
+        "Extend DOI target article query results to include target article title and external article ID instead of returning `NULL` for those fields.",
+        "Merge DOI and ID/title target rows by target article ID without losing DOI, title, external article ID, or conflict-resolution eligibility data.",
+        "Update helper tests to assert the source-row SQL includes project metadata and the DOI target SQL exposes target title and external article ID fields.",
         "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.test.ts` passes.",
+        "`bun run build` passes.",
         "`bun run lint` passes."
       ],
       "priority": 1,
@@ -28,88 +25,134 @@
     },
     {
       "id": "US-002",
-      "title": "Expose eligible conflict resolution import sources",
-      "description": "As a user creating a compare project, I want to see compare projects that have saved conflict resolutions so I can choose which ones to import from.",
+      "title": "Plan imports with warning-backed matching skips",
+      "description": "As a developer, I want ambiguous target matching and duplicate eligible target keys to become structured warnings so importable resolutions can continue while unsafe source rows are skipped.",
       "acceptanceCriteria": [
-        "Add `GET /api/comparison-projects/conflict-resolution-import-sources` to `src/server/routes/ComparisonProjectsRoutes.ts`.",
-        "Return only non-archived compare projects with `allow_conflict_resolution = TRUE` and at least one row in `app.comparison_project_conflict_resolution`.",
-        "Return `id`, `name`, `description`, `createdAt`, `humanJudgmentMode`, and `resolutionCount` for each source.",
-        "Order eligible sources predictably, with newest or most relevant projects first.",
-        "Add a typed client service function and response type in `src/services/comparisonProjectsService.ts`.",
-        "Update route surface inventory if this repo requires new API routes to be listed there.",
+        "Change the import planner output to include `candidates`, `warnings`, `skippedRows`, and `skipCounts` split by reason.",
+        "Represent `ambiguous-target-match` warnings with source rows, target articles, match kind, match key, compare project name, compare project ID, article IDs, article titles, and resolution answers.",
+        "Evaluate target ambiguity against conflict-resolution eligible target articles; ineligible target matches only contribute to `skippedNotConflicting` when no eligible target can be chosen.",
+        "Prefer a unique DOI match over ID/title and do not use ID/title to override a unique DOI match.",
+        "When DOI matches multiple eligible target articles, use ID/title only if it uniquely picks one of those DOI-matched articles.",
+        "When the source has DOI keys, do not use ID/title to match a target article with a different DOI unless ID/title is selecting within ambiguous DOI matches.",
+        "Duplicate eligible target DOI or ID/title keys that cannot resolve to one eligible article are skipped with `ambiguous-target-match` warnings instead of hard errors.",
+        "Source rows with no usable key, no target match, or a non-conflicting target still skip without warnings.",
+        "Add helper tests for ambiguous DOI resolved by ID/title, ambiguous DOI without tie-breaker, duplicate eligible target key warning, no usable key, no target match, and not-conflicting target skips.",
         "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.test.ts` passes.",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes.",
+        "`bun run build` passes.",
         "`bun run lint` passes."
       ],
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
         "US-001"
-      ],
-      "completionNotes": "Completed by agent"
+      ]
     },
     {
       "id": "US-003",
-      "title": "Import resolutions during compare project creation",
-      "description": "As a user, I want selected conflict resolutions imported only when validation is unambiguous so the new compare project is not created with duplicate or conflicting imported state.",
+      "title": "Dedupe agreed decisions and warn on conflicting values",
+      "description": "As a developer, I want matched import rows grouped by target article so identical decisions import once, conflicting decisions skip with warnings, and invalid answers do not block safe imports.",
       "acceptanceCriteria": [
-        "Extend `CreateComparisonProjectFromProjectInput` with `conflictResolutionImportSourceComparisonProjectIds?: string[]`.",
-        "Extend `/api/comparison-projects/from-project` request validation to accept selected import source compare project IDs.",
-        "Return `400` when import source IDs are provided but Summary mode or Allow conflict resolution is not enabled.",
-        "Validate selected import source compare projects exist, are not archived, and contain conflict resolutions before creating the new compare project.",
-        "Query import work from selected conflict-resolution rows first, not from all articles.",
-        "Use constrained target article candidate queries from the small DOI and ID-title key sets, restricted to the new compare project scope.",
-        "Run duplicate, ambiguous, invalid-value, and conflicting-value validation before any permanent compare project row survives.",
-        "Create the compare project and imported `app.comparison_project_conflict_resolution` rows in one DuckDB transaction.",
-        "Roll back the transaction so no new compare project exists if import validation fails after creation starts.",
-        "Return the created project plus import summary counts for scanned, matched, imported, and skipped rows.",
-        "Add route tests for valid import, duplicate validation failure leaving no compare project row, and rejection when conflict resolution is disabled.",
+        "Validate uniquely matched eligible source values before target conflict grouping.",
+        "If a source value maps to exactly one target summary option, use the canonical target option value for import and grouping.",
+        "If a source value is outside target summary options, skip that source row with an `invalid-target-resolution-value` warning.",
+        "Group remaining valid source rows by resolved target article.",
+        "Duplicate source DOI keys with the same normalized value dedupe and import once.",
+        "Duplicate source ID/title keys with the same normalized value dedupe and import once.",
+        "Multiple source compare projects resolving the same target article with the same value dedupe and import once.",
+        "Duplicate source keys or multiple source compare projects resolving the same target article with different values skip that target resolution with a `conflicting-resolution-values` warning.",
+        "Planner summary details count `deduped`, `skippedAmbiguousTarget`, `skippedConflicting`, `skippedInvalidValue`, `skippedNoUsableKey`, `skippedNoTargetMatch`, and `skippedNotConflicting` consistently.",
+        "The sum of `imported + deduped + skipped` equals `scanned`, and `skipped` equals the sum of all skipped detail fields.",
+        "Add helper tests for duplicate source DOI same-value dedupe, duplicate source ID/title same-value dedupe, duplicate source key conflicting-value warning, same-target same-value dedupe, same-target conflicting-value warning, and invalid source value warning.",
         "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.test.ts` passes.",
-        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes.",
+        "`bun run build` passes.",
         "`bun run lint` passes."
       ],
       "priority": 3,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
-        "US-001",
         "US-002"
-      ],
-      "completionNotes": "Completed by agent"
+      ]
     },
     {
       "id": "US-004",
-      "title": "Add create-page import conflict resolutions UI",
-      "description": "As a user creating a compare project, I want a bottom-page section for selecting conflict resolution import sources so I can reuse prior decisions safely.",
+      "title": "Return non-fatal import warnings from create route",
+      "description": "As a user creating a compare project, I want project creation to succeed when selected conflict-resolution imports include skipped warnings so safe imported rows are still saved.",
       "acceptanceCriteria": [
-        "Add an `Import Conflict Resolutions` section near the bottom of `src/app/routes/+compare-judgments/+create-from-project.tsx`, after Additional Projects to Compare With and before submit buttons.",
-        "Hide or disable the section with explanatory text unless a primary project is selected and Summary mode plus Allow conflict resolution are enabled.",
-        "Load eligible import sources through TanStack Query and the new service function.",
-        "Show loading, error, and empty states for the import source list.",
-        "Render a checkbox list of eligible compare projects with names, human judgment mode, and resolution counts.",
-        "Include warning copy that duplicate or conflicting matches stop creation and no compare project is created.",
-        "Submit selected `conflictResolutionImportSourceComparisonProjectIds` with the create-from-project request.",
-        "Show server validation errors on the form and keep the user on the create page when duplicates, ambiguous matches, or invalid imported values are reported.",
-        "Clear selected import sources when conflict resolution becomes unavailable.",
-        "Preserve the existing browser create flow when no import sources are selected.",
+        "Keep configuration errors as blocking `400` responses before import starts: Summary mode disabled, Compare with humans disabled, Allow conflict resolution disabled, missing source, archived source, source disallows conflict resolution, non-summary source, or source with no saved resolutions.",
+        "Do not throw for warning-only import conflicts from the planner.",
+        "Create the compare project and safe imported rows in one transaction.",
+        "Insert only safe candidates into `app.comparison_project_conflict_resolution` and count `imported` as inserted rows, not scanned source rows.",
+        "Return `{data, conflictResolutionImportSummary}` whenever import sources were selected, including warnings when zero rows were imported.",
+        "Response warnings include compare project names, compare project IDs, source article titles, source article IDs, target article titles when known, target article IDs when known, resolution answers, match keys, and match kinds.",
+        "Route tests cover successful creation when one imported resolution conflicts and is skipped.",
+        "Route tests cover safe resolutions still being inserted when other selected resolutions warn.",
+        "Route tests cover summary counts including `deduped`, `skippedAmbiguousTarget`, `skippedConflicting`, and `skippedInvalidValue`.",
+        "Route tests cover configuration errors returning `400` and leaving no compare project row.",
         "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.test.ts` passes.",
         "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes.",
-        "`bun run lint` passes.",
-        "Web flow is verified with `bun run dev:server` and `bun run dev:app` by creating a compare project with and without selected import sources.",
-        "Desktop impact is considered and `bun run desktop:build` is run if UI or route wiring changes beyond server-only helpers."
+        "`bun run build` passes.",
+        "`bun run lint` passes."
       ],
       "priority": 4,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
-        "US-002",
         "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Preserve create-from-project import summary in client service",
+      "description": "As a frontend developer, I want the create-from-project service to return the created compare project and optional import summary so the UI can display server warnings after a successful create.",
+      "acceptanceCriteria": [
+        "Add client-side types for `ConflictResolutionImportWarning` and `ConflictResolutionImportSummary` in `src/services/comparisonProjectsService.ts`.",
+        "Type warning source rows with compare project ID, compare project name, source resolution ID, source article ID, source external article ID, source article title, resolution value, match kind, and match key.",
+        "Type warning target articles with target article ID, target external article ID, and target article title.",
+        "Update `createComparisonProjectFromProject` so it does not discard top-level `conflictResolutionImportSummary` when unwrapping the API response.",
+        "Return a typed value that preserves both `data` and optional `conflictResolutionImportSummary` for create-from-project callers.",
+        "Adjust existing create-from-project callers and tests for the new service return shape.",
+        "`bun test src/app/routes/+compare-judgments/-+create-from-project.vitest.tsx` passes.",
+        "`bun run build` passes.",
+        "`bun run lint` passes.",
+        "`bun run desktop:build` passes because shared service types changed."
       ],
-      "completionNotes": "Completed by agent"
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Show post-create import warnings in the create UI",
+      "description": "As a user creating a compare project, I want skipped import warnings shown after successful creation so I know which prior decisions were not reused and why.",
+      "acceptanceCriteria": [
+        "Replace the hard-stop import warning copy with `Matching duplicate decisions are imported once. Conflicting or ambiguous decisions are skipped and reported after creation.`",
+        "When creation succeeds without import warnings, preserve the existing immediate navigation to `/compare-judgments`.",
+        "When creation succeeds with import warnings, keep the user on `src/app/routes/+compare-judgments/+create-from-project.tsx` and render a post-create confirmation/warning panel.",
+        "The post-create panel links to the created compare project and to the compare-project list.",
+        "The warning panel lists the skip reason, compare project name and ID, source article title and ID, target article title and ID when known, resolution answer, match key, and match kind when useful.",
+        "Blocking configuration failures still render as form errors and do not show the post-create warning panel.",
+        "The create page still sends selected `conflictResolutionImportSourceComparisonProjectIds`.",
+        "UI tests cover warning copy, selected import source submission, server import warning rendering with project/article/value details, successful creation with warnings staying on the create page, successful creation without warnings navigating to `/compare-judgments`, and blocking validation errors staying on the form.",
+        "`bun test src/app/routes/+compare-judgments/-+create-from-project.vitest.tsx` passes.",
+        "`bun run build` passes.",
+        "`bun run lint` passes.",
+        "Browser flow is verified with `bun run dev:server` and `bun run dev:app` by creating a compare project with selected import sources that include both deduped and conflicting resolutions.",
+        "`bun run desktop:build` passes because UI route behavior changed."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005"
+      ]
     }
   ],
   "metadata": {
-    "updatedAt": "2026-05-30T09:54:01.584Z"
+    "updatedAt": "2026-05-31T10:46:16.827Z"
   }
 }

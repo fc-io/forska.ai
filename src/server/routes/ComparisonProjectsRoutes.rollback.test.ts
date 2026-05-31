@@ -1303,23 +1303,47 @@ const queryJson = async (
         return statement.includes(`'${comparisonProjectId}'`)
       })
       .map((row) => {
+        const sourceArticleId = row.articleId
+        const sourceExternalArticleId = row.externalArticleId ?? row.articleId
+        const sourceArticleTitle = row.title ?? `Article ${row.articleId.slice(-1)}`
+        const sourceComparisonProjectId = row.comparisonProjectId ?? 'source-comparison-project-1'
+        const sourceResolutionId = row.id ?? `${sourceComparisonProjectId}:${row.articleId}`
+
         return {
           doi: row.doi ?? null,
-          externalArticleId: row.externalArticleId ?? row.articleId,
+          externalArticleId: sourceExternalArticleId,
           resolutionValue: row.answerValue ?? row.promptId ?? '',
-          sourceRowId: row.id ?? `${row.comparisonProjectId ?? 'source-comparison-project-1'}:${row.articleId}`,
-          title: row.title ?? `Article ${row.articleId.slice(-1)}`,
+          sourceArticleId,
+          sourceArticleTitle,
+          sourceComparisonProjectId,
+          sourceComparisonProjectName: 'Import source',
+          sourceExternalArticleId,
+          sourceResolutionId,
+          sourceRowId: sourceResolutionId,
+          title: sourceArticleTitle,
         }
       })
   }
 
   if (
     statement.includes('FROM app.article_identifier doi_identifier')
-    && statement.includes('doi_identifier.normalized_value AS doi')
+    && statement.includes('MIN(doi_identifier.normalized_value) AS doi')
   ) {
     return [
-      {articleId: 'article-1', doi: '10.1000/import-match', externalArticleId: null, title: null},
-      {articleId: 'article-2', doi: '10.1000/import-solo', externalArticleId: null, title: null},
+      {
+        articleId: 'article-1',
+        doi: '10.1000/import-match',
+        doiKeys: ['10.1000/import-match'],
+        externalArticleId: 'source-ext-1',
+        title: 'Article 1',
+      },
+      {
+        articleId: 'article-2',
+        doi: '10.1000/import-solo',
+        doiKeys: ['10.1000/import-solo'],
+        externalArticleId: 'source-ext-2',
+        title: 'Article 2',
+      },
     ].filter((row) => {
       return statement.includes(`'${row.doi}'`)
     })

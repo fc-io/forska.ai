@@ -26,6 +26,12 @@ export type ComparisonProjectConflictResolutionImportSourceRow = {
   doiKeys?: readonly (string | null | undefined)[] | null
   externalArticleId?: string | null
   resolutionValue: string
+  sourceArticleId: string
+  sourceArticleTitle?: string | null
+  sourceComparisonProjectId: string
+  sourceComparisonProjectName: string
+  sourceExternalArticleId?: string | null
+  sourceResolutionId: string
   sourceRowId: string
   title?: string | null
 }
@@ -33,10 +39,16 @@ export type ComparisonProjectConflictResolutionImportSourceRow = {
 export type ComparisonProjectConflictResolutionImportTargetArticle = {
   articleId: string
   doi?: string | null
+  doiKeys?: readonly (string | null | undefined)[] | null
   externalArticleId?: string | null
   isConflictResolutionEligible: boolean
   title?: string | null
 }
+
+export type ComparisonProjectConflictResolutionImportTargetArticleQueryRow = Omit<
+  ComparisonProjectConflictResolutionImportTargetArticle,
+  'isConflictResolutionEligible'
+>
 
 export type ComparisonProjectConflictResolutionImportCandidateSource = {
   matchKey: string
@@ -113,6 +125,7 @@ type NormalizedSourceRow = Omit<ComparisonProjectConflictResolutionImportSourceR
 }
 
 type NormalizedTargetArticle = ComparisonProjectConflictResolutionImportTargetArticle & {
+  doiKeys: string[]
   doiKey: string | null
   idTitleKey: string | null
 }
@@ -188,12 +201,15 @@ export const getComparisonProjectConflictResolutionImportSourcesSql = (params: {
 export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params: {
   articleIdentifierTable: string
   articleTable: string
+  comparisonProjectTable: string
   comparisonProjectConflictResolutionTable: string
   sourceComparisonProjectIds: string[]
 }) => {
   return `
     WITH source_resolution AS (
       SELECT
+        cr.comparison_project_id AS sourceComparisonProjectId,
+        cr.id AS sourceResolutionId,
         cr.id AS sourceRowId,
         cr.article_id AS sourceArticleId,
         COALESCE(cr.answer_value, cr.prompt_id, '') AS resolutionValue
@@ -209,14 +225,22 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
       GROUP BY article_id
     )
     SELECT
+      source_resolution.sourceComparisonProjectId AS sourceComparisonProjectId,
+      source_comparison_project.name AS sourceComparisonProjectName,
+      source_resolution.sourceResolutionId AS sourceResolutionId,
       source_resolution.sourceRowId AS sourceRowId,
+      source_resolution.sourceArticleId AS sourceArticleId,
+      source_article.article_id AS sourceExternalArticleId,
+      source_article.article_title AS sourceArticleTitle,
       source_resolution.resolutionValue AS resolutionValue,
       doi_identifier.doiKeys AS doiKeys,
-      article.article_id AS externalArticleId,
-      article.article_title AS title
+      source_article.article_id AS externalArticleId,
+      source_article.article_title AS title
     FROM source_resolution
-    INNER JOIN ${params.articleTable} article ON article.id = source_resolution.sourceArticleId
-    LEFT JOIN doi_identifier ON doi_identifier.articleId = article.id
+    INNER JOIN ${params.comparisonProjectTable} source_comparison_project
+      ON source_comparison_project.id = source_resolution.sourceComparisonProjectId
+    INNER JOIN ${params.articleTable} source_article ON source_article.id = source_resolution.sourceArticleId
+    LEFT JOIN doi_identifier ON doi_identifier.articleId = source_article.id
     ORDER BY source_resolution.sourceRowId ASC
   `
 }
@@ -230,9 +254,10 @@ export const getComparisonProjectConflictResolutionImportDoiTargetArticlesSql = 
   return `
     SELECT
       a.id AS articleId,
-      doi_identifier.normalized_value AS doi,
-      NULL AS externalArticleId,
-      NULL AS title
+      MIN(doi_identifier.normalized_value) AS doi,
+      LIST(DISTINCT doi_identifier.normalized_value ORDER BY doi_identifier.normalized_value) AS doiKeys,
+      a.article_id AS externalArticleId,
+      a.article_title AS title
     FROM ${params.articleIdentifierTable} doi_identifier
     INNER JOIN ${params.articleTable} a ON a.id = doi_identifier.article_id
     ${getWhereClause([
@@ -240,8 +265,8 @@ export const getComparisonProjectConflictResolutionImportDoiTargetArticlesSql = 
       "doi_identifier.kind = 'doi'",
       params.doiKeys.length > 0 ? `doi_identifier.normalized_value IN (${getInClause(params.doiKeys)})` : 'FALSE',
     ])}
-    GROUP BY a.id, doi_identifier.normalized_value
-    ORDER BY a.id ASC, doi_identifier.normalized_value ASC
+    GROUP BY a.id, a.article_id, a.article_title
+    ORDER BY a.id ASC
   `
 }
 
@@ -325,6 +350,40 @@ export const getComparisonProjectConflictResolutionImportDoiKeys = (
   )
 }
 
+const mergeComparisonProjectConflictResolutionImportTargetArticleRow = (
+  currentRow: ComparisonProjectConflictResolutionImportTargetArticleQueryRow,
+  nextRow: ComparisonProjectConflictResolutionImportTargetArticleQueryRow,
+): ComparisonProjectConflictResolutionImportTargetArticleQueryRow => {
+  return {
+    articleId: currentRow.articleId,
+    doi: currentRow.doi ?? nextRow.doi ?? null,
+    doiKeys: getUniqueStringValues([
+      ...getComparisonProjectConflictResolutionImportDoiKeys(currentRow),
+      ...getComparisonProjectConflictResolutionImportDoiKeys(nextRow),
+    ]),
+    externalArticleId: currentRow.externalArticleId ?? nextRow.externalArticleId ?? null,
+    title: currentRow.title ?? nextRow.title ?? null,
+  }
+}
+
+export const mergeComparisonProjectConflictResolutionImportTargetArticleRows = (
+  rows: readonly ComparisonProjectConflictResolutionImportTargetArticleQueryRow[],
+) => {
+  return Array.from(
+    rows
+      .reduce<Map<string, ComparisonProjectConflictResolutionImportTargetArticleQueryRow>>((rowMap, row) => {
+        const currentRow = rowMap.get(row.articleId)
+
+        rowMap.set(
+          row.articleId,
+          currentRow ? mergeComparisonProjectConflictResolutionImportTargetArticleRow(currentRow, row) : row,
+        )
+        return rowMap
+      }, new Map<string, ComparisonProjectConflictResolutionImportTargetArticleQueryRow>())
+      .values(),
+  )
+}
+
 export const normalizeComparisonProjectConflictResolutionImportExternalArticleId = (
   value: string | null | undefined,
 ) => {
@@ -368,9 +427,12 @@ const getNormalizedTargetArticles = (
   targetArticles: readonly ComparisonProjectConflictResolutionImportTargetArticle[],
 ): NormalizedTargetArticle[] => {
   return targetArticles.map((article) => {
+    const doiKeys = getComparisonProjectConflictResolutionImportDoiKeys(article)
+
     return {
       ...article,
-      doiKey: normalizeComparisonProjectConflictResolutionImportDoi(article.doi),
+      doiKeys,
+      doiKey: doiKeys[0] ?? null,
       idTitleKey: getComparisonProjectConflictResolutionImportIdTitleKey(article),
     }
   })
@@ -417,9 +479,14 @@ const getTargetArticleGroupsByKey = (
 }
 
 const getTargetArticlesByDoiKey = (targetArticles: readonly NormalizedTargetArticle[]) => {
-  return getTargetArticleGroupsByKey(targetArticles, (article) => {
-    return article.doiKey
-  })
+  return targetArticles.reduce<Map<string, NormalizedTargetArticle[]>>((articleMap, article) => {
+    return article.doiKeys.reduce<Map<string, NormalizedTargetArticle[]>>((doiMap, doiKey) => {
+      const currentArticles = doiMap.get(doiKey) ?? []
+
+      doiMap.set(doiKey, [...currentArticles, article])
+      return doiMap
+    }, articleMap)
+  }, new Map<string, NormalizedTargetArticle[]>())
 }
 
 const getTargetArticlesByIdTitleKey = (targetArticles: readonly NormalizedTargetArticle[]) => {
@@ -663,7 +730,9 @@ const getInvalidResolutionValueErrors = (
 const getTargetArticleMaps = (targetArticles: readonly NormalizedTargetArticle[]) => {
   return {
     byDoiKey: targetArticles.reduce<Map<string, NormalizedTargetArticle>>((articleMap, article) => {
-      return article.doiKey && !articleMap.has(article.doiKey) ? articleMap.set(article.doiKey, article) : articleMap
+      return article.doiKeys.reduce<Map<string, NormalizedTargetArticle>>((doiMap, doiKey) => {
+        return !doiMap.has(doiKey) ? doiMap.set(doiKey, article) : doiMap
+      }, articleMap)
     }, new Map<string, NormalizedTargetArticle>()),
     byIdTitleKey: getTargetArticlesByIdTitleKey(targetArticles),
   }

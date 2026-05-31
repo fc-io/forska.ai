@@ -10,6 +10,7 @@ import {
   getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
+  mergeComparisonProjectConflictResolutionImportTargetArticleRows,
   normalizeComparisonProjectConflictResolutionImportDoi,
   normalizeComparisonProjectConflictResolutionImportExternalArticleId,
   normalizeComparisonProjectConflictResolutionImportTitle,
@@ -22,6 +23,12 @@ const getSourceRow = (
     doi: null,
     externalArticleId: 'source-ext-1',
     resolutionValue: 'yes',
+    sourceArticleId: 'source-article-1',
+    sourceArticleTitle: 'Source title',
+    sourceComparisonProjectId: 'source-comparison-project-1',
+    sourceComparisonProjectName: 'Source comparison project',
+    sourceExternalArticleId: 'source-ext-1',
+    sourceResolutionId: 'source-resolution-1',
     sourceRowId: 'source-row-1',
     title: 'Source title',
     ...overrides,
@@ -93,14 +100,23 @@ test('import source row query starts from selected conflict-resolution rows', ()
   const sql = getComparisonProjectConflictResolutionImportSourceRowsSql({
     articleIdentifierTable: 'app.article_identifier',
     articleTable: 'app.article',
+    comparisonProjectTable: 'app.comparison_project',
     comparisonProjectConflictResolutionTable: 'app.comparison_project_conflict_resolution',
     sourceComparisonProjectIds: ['comparison-source-1', 'comparison-source-2'],
   })
 
   expect(sql).toContain('WITH source_resolution AS')
   expect(sql).toContain('FROM app.comparison_project_conflict_resolution cr')
+  expect(sql).toContain('cr.comparison_project_id AS sourceComparisonProjectId')
+  expect(sql).toContain('cr.id AS sourceResolutionId')
   expect(sql).toContain("WHERE cr.comparison_project_id IN ('comparison-source-1', 'comparison-source-2')")
-  expect(sql).toContain('INNER JOIN app.article article ON article.id = source_resolution.sourceArticleId')
+  expect(sql).toContain('INNER JOIN app.comparison_project source_comparison_project')
+  expect(sql).toContain('source_comparison_project.name AS sourceComparisonProjectName')
+  expect(sql).toContain(
+    'INNER JOIN app.article source_article ON source_article.id = source_resolution.sourceArticleId',
+  )
+  expect(sql).toContain('source_article.article_id AS sourceExternalArticleId')
+  expect(sql).toContain('source_article.article_title AS sourceArticleTitle')
   expect(sql).toContain('LIST(DISTINCT normalized_value ORDER BY normalized_value) AS doiKeys')
   expect(sql).toContain('doi_identifier.doiKeys AS doiKeys')
   expect(sql).toContain("WHERE kind = 'doi'")
@@ -128,11 +144,38 @@ test('target article queries are constrained by selected normalized matching key
   expect(doiSql).toContain('doi_identifier.normalized_value IN (')
   expect(doiSql).toContain('10.1000/example')
   expect(doiSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
+  expect(doiSql).toContain('a.article_id AS externalArticleId')
+  expect(doiSql).toContain('a.article_title AS title')
+  expect(doiSql).toContain(
+    'LIST(DISTINCT doi_identifier.normalized_value ORDER BY doi_identifier.normalized_value) AS doiKeys',
+  )
+  expect(doiSql).not.toContain('NULL AS externalArticleId')
+  expect(doiSql).not.toContain('NULL AS title')
   expect(idTitleSql).toContain('regexp_replace(LOWER(TRIM(COALESCE(a.article_title')
   expect(idTitleSql).toContain('doi_identifier.doi AS doi')
   expect(idTitleSql).toContain('LEFT JOIN doi_identifier ON doi_identifier.articleId = a.id')
   expect(idTitleSql).toContain(idTitleKey ?? '')
   expect(idTitleSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
+})
+
+test('target article query rows merge DOI and id-title metadata by article id', () => {
+  const rows = mergeComparisonProjectConflictResolutionImportTargetArticleRows([
+    {articleId: 'target-article-1', doi: '10.1000/primary', externalArticleId: null, title: null},
+    {articleId: 'target-article-1', doi: '10.1000/secondary', externalArticleId: null, title: null},
+    {articleId: 'target-article-1', doi: null, externalArticleId: 'target-ext-1', title: 'Target title'},
+    {articleId: 'target-article-2', doi: null, externalArticleId: 'target-ext-2', title: 'Second target title'},
+  ])
+
+  expect(rows).toEqual([
+    {
+      articleId: 'target-article-1',
+      doi: '10.1000/primary',
+      doiKeys: ['10.1000/primary', '10.1000/secondary'],
+      externalArticleId: 'target-ext-1',
+      title: 'Target title',
+    },
+    {articleId: 'target-article-2', doi: null, externalArticleId: 'target-ext-2', title: 'Second target title'},
+  ])
 })
 
 test('import plan matches articles by normalized DOI', () => {

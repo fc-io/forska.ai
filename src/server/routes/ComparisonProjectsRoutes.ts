@@ -42,6 +42,7 @@ import {
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportSummary,
   type ComparisonProjectConflictResolutionImportTargetArticle,
+  type ComparisonProjectConflictResolutionImportTargetArticleQueryRow,
   getComparisonProjectConflictResolutionImportDoiKeys,
   getComparisonProjectConflictResolutionImportDoiTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdTitleKey,
@@ -50,6 +51,7 @@ import {
   getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
+  mergeComparisonProjectConflictResolutionImportTargetArticleRows,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts'
 import {
   type ComparisonProjectJudgmentHumanRow,
@@ -1283,6 +1285,7 @@ const getConflictResolutionImportSourceRows = async (
     getComparisonProjectConflictResolutionImportSourceRowsSql({
       articleIdentifierTable,
       articleTable,
+      comparisonProjectTable,
       comparisonProjectConflictResolutionTable,
       sourceComparisonProjectIds,
     }),
@@ -1326,9 +1329,7 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
   )
   const doiTargetRows =
     params.doiKeys.length > 0
-      ? await params.tx.queryJson<
-          Omit<ComparisonProjectConflictResolutionImportTargetArticle, 'isConflictResolutionEligible'>
-        >(
+      ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
           getComparisonProjectConflictResolutionImportDoiTargetArticlesSql({
             articleIdentifierTable,
             articleScopeConditions,
@@ -1339,9 +1340,7 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
       : []
   const idTitleTargetRows =
     params.idTitleKeys.length > 0
-      ? await params.tx.queryJson<
-          Omit<ComparisonProjectConflictResolutionImportTargetArticle, 'isConflictResolutionEligible'>
-        >(
+      ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
           getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql({
             articleIdentifierTable,
             articleScopeConditions,
@@ -1351,7 +1350,7 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
         )
       : []
 
-  return [...doiTargetRows, ...idTitleTargetRows]
+  return mergeComparisonProjectConflictResolutionImportTargetArticleRows([...doiTargetRows, ...idTitleTargetRows])
 }
 
 const getConflictResolutionImportTargetArticles = async (params: {
