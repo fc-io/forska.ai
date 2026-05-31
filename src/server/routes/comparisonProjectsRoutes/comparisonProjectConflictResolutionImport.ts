@@ -63,6 +63,7 @@ export type ComparisonProjectConflictResolutionImportCandidate = {
 }
 
 export type ComparisonProjectConflictResolutionImportSkipReason =
+  | 'ambiguous-target-match'
   | 'no-usable-key'
   | 'no-target-match'
   | 'not-conflicting'
@@ -73,17 +74,15 @@ export type ComparisonProjectConflictResolutionImportSkippedRow = {
 }
 
 export type ComparisonProjectConflictResolutionImportSkipCounts = {
+  ambiguousTargetMatch: number
   noTargetMatch: number
   noUsableKey: number
   notConflicting: number
 }
 
 export type ComparisonProjectConflictResolutionImportErrorCode =
-  | 'ambiguous-source-doi-targets'
   | 'duplicate-source-doi-key'
-  | 'duplicate-target-doi-key'
   | 'duplicate-source-id-title-key'
-  | 'duplicate-target-id-title-key'
   | 'conflicting-source-resolution-values'
   | 'invalid-source-resolution-value'
 
@@ -98,11 +97,41 @@ export type ComparisonProjectConflictResolutionImportError = {
   values?: string[]
 }
 
+export type ComparisonProjectConflictResolutionImportWarningCode = 'ambiguous-target-match'
+
+export type ComparisonProjectConflictResolutionImportWarningSourceRow = {
+  articleId: string
+  articleTitle: string | null
+  compareProjectId: string
+  compareProjectName: string
+  externalArticleId: string | null
+  resolutionAnswer: string
+  sourceResolutionId: string
+  sourceRowId: string
+}
+
+export type ComparisonProjectConflictResolutionImportWarningTargetArticle = {
+  articleId: string
+  articleTitle: string | null
+  doiKeys: string[]
+  externalArticleId: string | null
+}
+
+export type ComparisonProjectConflictResolutionImportWarning = {
+  code: ComparisonProjectConflictResolutionImportWarningCode
+  matchKey: string
+  matchKind: ComparisonProjectConflictResolutionImportMatchKind
+  message: string
+  sourceRows: ComparisonProjectConflictResolutionImportWarningSourceRow[]
+  targetArticles: ComparisonProjectConflictResolutionImportWarningTargetArticle[]
+}
+
 export type ComparisonProjectConflictResolutionImportPlan = {
   candidates: ComparisonProjectConflictResolutionImportCandidate[]
   errors: ComparisonProjectConflictResolutionImportError[]
   skipCounts: ComparisonProjectConflictResolutionImportSkipCounts
   skippedRows: ComparisonProjectConflictResolutionImportSkippedRow[]
+  warnings: ComparisonProjectConflictResolutionImportWarning[]
 }
 
 export type ComparisonProjectConflictResolutionImportPlanParams = {
@@ -126,7 +155,6 @@ type NormalizedSourceRow = Omit<ComparisonProjectConflictResolutionImportSourceR
 
 type NormalizedTargetArticle = ComparisonProjectConflictResolutionImportTargetArticle & {
   doiKeys: string[]
-  doiKey: string | null
   idTitleKey: string | null
 }
 
@@ -136,6 +164,14 @@ type ImportCandidateRow = {
   resolutionValue: string
   sourceRowId: string
   targetArticleId: string
+}
+
+type ImportTargetArticleMatch = {matchKey: string; targetArticle: NormalizedTargetArticle}
+
+type ImportCandidateRowResult = {
+  candidate: ImportCandidateRow | null
+  skippedRow: ComparisonProjectConflictResolutionImportSkippedRow | null
+  warnings: ComparisonProjectConflictResolutionImportWarning[]
 }
 
 type DuplicateKeyErrorParams = {
@@ -429,12 +465,7 @@ const getNormalizedTargetArticles = (
   return targetArticles.map((article) => {
     const doiKeys = getComparisonProjectConflictResolutionImportDoiKeys(article)
 
-    return {
-      ...article,
-      doiKeys,
-      doiKey: doiKeys[0] ?? null,
-      idTitleKey: getComparisonProjectConflictResolutionImportIdTitleKey(article),
-    }
+    return {...article, doiKeys, idTitleKey: getComparisonProjectConflictResolutionImportIdTitleKey(article)}
   })
 }
 
@@ -552,151 +583,68 @@ const getTargetArticlesForSourceDoiKeys = (
   targetArticlesByDoiKey: Map<string, NormalizedTargetArticle[]>,
 ) => {
   return row.doiKeys.flatMap((doiKey) => {
-    return targetArticlesByDoiKey.get(doiKey) ?? []
+    return (targetArticlesByDoiKey.get(doiKey) ?? []).map((targetArticle) => {
+      return {matchKey: doiKey, targetArticle}
+    })
   })
 }
 
-const getHasDoiTargetMatch = (
-  row: NormalizedSourceRow,
-  targetArticlesByDoiKey: Map<string, NormalizedTargetArticle[]>,
-) => {
-  return getTargetArticlesForSourceDoiKeys(row, targetArticlesByDoiKey).length > 0
-}
-
-const getSourceFallbackIdTitleKey = (
-  row: NormalizedSourceRow,
-  targetArticlesByDoiKey: Map<string, NormalizedTargetArticle[]>,
-) => {
-  return row.idTitleKey && !getHasDoiTargetMatch(row, targetArticlesByDoiKey) ? row.idTitleKey : null
+const getUniqueTargetArticleMatches = (matches: readonly ImportTargetArticleMatch[]) => {
+  return Array.from(
+    matches
+      .reduce<Map<string, ImportTargetArticleMatch>>((matchMap, match) => {
+        return matchMap.has(match.targetArticle.articleId)
+          ? matchMap
+          : matchMap.set(match.targetArticle.articleId, match)
+      }, new Map<string, ImportTargetArticleMatch>())
+      .values(),
+  )
 }
 
 const getCanUseIdTitleFallbackTargetArticle = (row: NormalizedSourceRow, targetArticle: NormalizedTargetArticle) => {
-  return row.idTitleKey === targetArticle.idTitleKey && (row.doiKeys.length === 0 || !targetArticle.doiKey)
+  return row.idTitleKey === targetArticle.idTitleKey && (row.doiKeys.length === 0 || targetArticle.doiKeys.length === 0)
 }
 
-const getFallbackTargetArticles = (params: {
-  key: string
-  sourceRows: readonly NormalizedSourceRow[]
-  targetArticlesByDoiKey: Map<string, NormalizedTargetArticle[]>
-  targetArticlesByIdTitleKey: Map<string, NormalizedTargetArticle[]>
-}) => {
-  const sourceRowsForKey = params.sourceRows.filter((row) => {
-    return getSourceFallbackIdTitleKey(row, params.targetArticlesByDoiKey) === params.key
-  })
-
-  return (params.targetArticlesByIdTitleKey.get(params.key) ?? []).filter((targetArticle) => {
-    return sourceRowsForKey.some((sourceRow) => {
-      return getCanUseIdTitleFallbackTargetArticle(sourceRow, targetArticle)
-    })
-  })
+const getWarningSourceRow = (row: NormalizedSourceRow): ComparisonProjectConflictResolutionImportWarningSourceRow => {
+  return {
+    articleId: row.sourceArticleId,
+    articleTitle: row.sourceArticleTitle ?? row.title ?? null,
+    compareProjectId: row.sourceComparisonProjectId,
+    compareProjectName: row.sourceComparisonProjectName,
+    externalArticleId: row.sourceExternalArticleId ?? row.externalArticleId ?? null,
+    resolutionAnswer: row.resolutionValue,
+    sourceResolutionId: row.sourceResolutionId,
+    sourceRowId: row.sourceRowId,
+  }
 }
 
-const getFallbackTargetIdTitleKeyGroups = (params: {
-  sourceRows: readonly NormalizedSourceRow[]
-  targetArticlesByDoiKey: Map<string, NormalizedTargetArticle[]>
-  targetArticlesByIdTitleKey: Map<string, NormalizedTargetArticle[]>
-}) => {
-  const sourceFallbackKeys = getUniqueStringValues(
-    params.sourceRows
-      .map((row) => {
-        return getSourceFallbackIdTitleKey(row, params.targetArticlesByDoiKey) ?? ''
-      })
-      .filter(Boolean),
-  )
-
-  return sourceFallbackKeys.reduce<Map<string, string[]>>((groupMap, key) => {
-    const fallbackTargetArticles = getFallbackTargetArticles({...params, key})
-    const targetArticleIds = fallbackTargetArticles.some((article) => {
-      return article.isConflictResolutionEligible
-    })
-      ? getTargetArticleIds(fallbackTargetArticles)
-      : []
-
-    groupMap.set(key, targetArticleIds)
-    return groupMap
-  }, new Map<string, string[]>())
+const getWarningTargetArticle = (
+  targetArticle: NormalizedTargetArticle,
+): ComparisonProjectConflictResolutionImportWarningTargetArticle => {
+  return {
+    articleId: targetArticle.articleId,
+    articleTitle: targetArticle.title ?? null,
+    doiKeys: targetArticle.doiKeys,
+    externalArticleId: targetArticle.externalArticleId ?? null,
+  }
 }
 
-const getSourceDoiKeys = (sourceRows: readonly NormalizedSourceRow[]) => {
-  return getUniqueStringValues(
-    sourceRows.flatMap((row) => {
-      return row.doiKeys
-    }),
-  )
-}
+const getAmbiguousTargetMatchWarning = (params: {
+  matchKey: string
+  matchKind: ComparisonProjectConflictResolutionImportMatchKind
+  sourceRow: NormalizedSourceRow
+  targetArticles: readonly NormalizedTargetArticle[]
+}): ComparisonProjectConflictResolutionImportWarning => {
+  const targetArticleIds = getTargetArticleIds(params.targetArticles)
 
-const getTargetDoiKeyGroups = (params: {
-  sourceRows: readonly NormalizedSourceRow[]
-  targetArticlesByDoiKey: Map<string, NormalizedTargetArticle[]>
-}) => {
-  const sourceDoiKeys = new Set(getSourceDoiKeys(params.sourceRows))
-
-  return Array.from(params.targetArticlesByDoiKey.entries()).reduce<Map<string, string[]>>(
-    (groupMap, [doiKey, targetArticles]) => {
-      const hasImportableTarget =
-        sourceDoiKeys.has(doiKey)
-        && targetArticles.some((article) => {
-          return article.isConflictResolutionEligible
-        })
-      const targetArticleIds = hasImportableTarget ? getTargetArticleIds(targetArticles) : []
-
-      groupMap.set(doiKey, targetArticleIds)
-      return groupMap
-    },
-    new Map<string, string[]>(),
-  )
-}
-
-const getSourceDoiTargetAmbiguityErrors = (
-  sourceRows: readonly NormalizedSourceRow[],
-  targetArticlesByDoiKey: Map<string, NormalizedTargetArticle[]>,
-): ComparisonProjectConflictResolutionImportError[] => {
-  return sourceRows
-    .map<ComparisonProjectConflictResolutionImportError | null>((row) => {
-      const targetArticles = getTargetArticlesForSourceDoiKeys(row, targetArticlesByDoiKey)
-      const targetArticleIds = getTargetArticleIds(targetArticles)
-      const hasEligibleTarget = targetArticles.some((article) => {
-        return article.isConflictResolutionEligible
-      })
-
-      return targetArticleIds.length > 1 && hasEligibleTarget
-        ? {
-            code: 'ambiguous-source-doi-targets',
-            message: `Source DOI keys match multiple target articles: ${targetArticleIds.join(', ')}`,
-            sourceRowIds: [row.sourceRowId],
-            targetArticleIds,
-          }
-        : null
-    })
-    .filter((error): error is ComparisonProjectConflictResolutionImportError => {
-      return error !== null
-    })
-}
-
-const getTargetDuplicateErrors = (
-  targetArticles: readonly NormalizedTargetArticle[],
-  sourceRows: readonly NormalizedSourceRow[],
-  targetArticlesByDoiKey: Map<string, NormalizedTargetArticle[]>,
-) => {
-  const targetArticlesByIdTitleKey = getTargetArticlesByIdTitleKey(targetArticles)
-
-  return [
-    ...getDuplicateKeyErrors(getTargetDoiKeyGroups({sourceRows, targetArticlesByDoiKey}), {
-      code: 'duplicate-target-doi-key',
-      entityLabel: 'target',
-      idKey: 'targetArticleIds',
-      keyLabel: 'DOI',
-    }),
-    ...getDuplicateKeyErrors(
-      getFallbackTargetIdTitleKeyGroups({sourceRows, targetArticlesByDoiKey, targetArticlesByIdTitleKey}),
-      {
-        code: 'duplicate-target-id-title-key',
-        entityLabel: 'target',
-        idKey: 'targetArticleIds',
-        keyLabel: 'external ID/title',
-      },
-    ),
-  ]
+  return {
+    code: 'ambiguous-target-match',
+    matchKey: params.matchKey,
+    matchKind: params.matchKind,
+    message: `Source row ${params.sourceRow.sourceRowId} matched multiple eligible target articles: ${targetArticleIds.join(', ')}`,
+    sourceRows: [getWarningSourceRow(params.sourceRow)],
+    targetArticles: params.targetArticles.map(getWarningTargetArticle),
+  }
 }
 
 const getValidResolutionValueSet = (targetSummaryOptionValues: readonly string[]) => {
@@ -727,52 +675,6 @@ const getInvalidResolutionValueErrors = (
     })
 }
 
-const getTargetArticleMaps = (targetArticles: readonly NormalizedTargetArticle[]) => {
-  return {
-    byDoiKey: targetArticles.reduce<Map<string, NormalizedTargetArticle>>((articleMap, article) => {
-      return article.doiKeys.reduce<Map<string, NormalizedTargetArticle>>((doiMap, doiKey) => {
-        return !doiMap.has(doiKey) ? doiMap.set(doiKey, article) : doiMap
-      }, articleMap)
-    }, new Map<string, NormalizedTargetArticle>()),
-    byIdTitleKey: getTargetArticlesByIdTitleKey(targetArticles),
-  }
-}
-
-const getDoiMatchedTargetArticle = (
-  row: NormalizedSourceRow,
-  targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
-) => {
-  return row.doiKeys
-    .map((doiKey) => {
-      return {doiKey, targetArticle: targetArticleMaps.byDoiKey.get(doiKey) ?? null}
-    })
-    .find((match): match is {doiKey: string; targetArticle: NormalizedTargetArticle} => {
-      return match.targetArticle !== null
-    })
-}
-
-const getMatchedTargetArticle = (
-  row: NormalizedSourceRow,
-  targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
-): {
-  matchKey: string
-  matchKind: ComparisonProjectConflictResolutionImportMatchKind
-  targetArticle: NormalizedTargetArticle
-} | null => {
-  const doiMatch = getDoiMatchedTargetArticle(row, targetArticleMaps)
-  const idTitleTargetArticle = (row.idTitleKey ? (targetArticleMaps.byIdTitleKey.get(row.idTitleKey) ?? []) : []).find(
-    (targetArticle) => {
-      return getCanUseIdTitleFallbackTargetArticle(row, targetArticle)
-    },
-  )
-
-  return doiMatch
-    ? {matchKey: doiMatch.doiKey, matchKind: 'doi', targetArticle: doiMatch.targetArticle}
-    : idTitleTargetArticle && row.idTitleKey
-      ? {matchKey: row.idTitleKey, matchKind: 'id-title', targetArticle: idTitleTargetArticle}
-      : null
-}
-
 const getSkippedRow = (
   sourceRowId: string,
   reason: ComparisonProjectConflictResolutionImportSkipReason,
@@ -780,34 +682,172 @@ const getSkippedRow = (
   return {reason, sourceRowId}
 }
 
+const getTargetArticleMaps = (targetArticles: readonly NormalizedTargetArticle[]) => {
+  return {
+    byDoiKey: getTargetArticlesByDoiKey(targetArticles),
+    byIdTitleKey: getTargetArticlesByIdTitleKey(targetArticles),
+  }
+}
+
+const getEligibleTargetMatches = (matches: readonly ImportTargetArticleMatch[]) => {
+  return matches.filter((match) => {
+    return match.targetArticle.isConflictResolutionEligible
+  })
+}
+
+const getTargetArticlesFromMatches = (matches: readonly ImportTargetArticleMatch[]) => {
+  return matches.map((match) => {
+    return match.targetArticle
+  })
+}
+
+const getAmbiguousMatchKey = (matches: readonly ImportTargetArticleMatch[]) => {
+  return getUniqueStringValues(
+    matches.map((match) => {
+      return match.matchKey
+    }),
+  ).join(', ')
+}
+
+const getCandidateRow = (params: {
+  matchKey: string
+  matchKind: ComparisonProjectConflictResolutionImportMatchKind
+  row: NormalizedSourceRow
+  targetArticle: NormalizedTargetArticle
+}): ImportCandidateRow => {
+  return {
+    matchKey: params.matchKey,
+    matchKind: params.matchKind,
+    resolutionValue: params.row.resolutionValue,
+    sourceRowId: params.row.sourceRowId,
+    targetArticleId: params.targetArticle.articleId,
+  }
+}
+
+const getDoiTieBreakerMatches = (row: NormalizedSourceRow, matches: readonly ImportTargetArticleMatch[]) => {
+  return row.idTitleKey
+    ? matches.filter((match) => {
+        return match.targetArticle.idTitleKey === row.idTitleKey
+      })
+    : []
+}
+
+const getDoiImportCandidateRow = (
+  row: NormalizedSourceRow,
+  targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
+): ImportCandidateRowResult | null => {
+  const targetMatches = getUniqueTargetArticleMatches(
+    getTargetArticlesForSourceDoiKeys(row, targetArticleMaps.byDoiKey),
+  )
+  const eligibleMatches = getEligibleTargetMatches(targetMatches)
+  const tieBreakerMatches = getDoiTieBreakerMatches(row, eligibleMatches)
+  const selectedMatch =
+    eligibleMatches.length === 1 ? eligibleMatches[0] : tieBreakerMatches.length === 1 ? tieBreakerMatches[0] : null
+  const skipReason =
+    targetMatches.length === 0
+      ? null
+      : eligibleMatches.length === 0
+        ? 'not-conflicting'
+        : selectedMatch
+          ? null
+          : 'ambiguous-target-match'
+
+  return selectedMatch
+    ? {
+        candidate: getCandidateRow({
+          matchKey: selectedMatch.matchKey,
+          matchKind: 'doi',
+          row,
+          targetArticle: selectedMatch.targetArticle,
+        }),
+        skippedRow: null,
+        warnings: [],
+      }
+    : skipReason
+      ? {
+          candidate: null,
+          skippedRow: getSkippedRow(row.sourceRowId, skipReason),
+          warnings:
+            skipReason === 'ambiguous-target-match'
+              ? [
+                  getAmbiguousTargetMatchWarning({
+                    matchKey: getAmbiguousMatchKey(eligibleMatches),
+                    matchKind: 'doi',
+                    sourceRow: row,
+                    targetArticles: getTargetArticlesFromMatches(eligibleMatches),
+                  }),
+                ]
+              : [],
+        }
+      : null
+}
+
+const getIdTitleImportCandidateRow = (
+  row: NormalizedSourceRow,
+  targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
+): ImportCandidateRowResult => {
+  const targetMatches = getUniqueTargetArticleMatches(
+    row.idTitleKey
+      ? (targetArticleMaps.byIdTitleKey.get(row.idTitleKey) ?? [])
+          .filter((targetArticle) => {
+            return getCanUseIdTitleFallbackTargetArticle(row, targetArticle)
+          })
+          .map((targetArticle) => {
+            return {matchKey: row.idTitleKey ?? '', targetArticle}
+          })
+      : [],
+  )
+  const eligibleMatches = getEligibleTargetMatches(targetMatches)
+  const selectedMatch = eligibleMatches.length === 1 ? eligibleMatches[0] : null
+  const skipReason =
+    targetMatches.length === 0
+      ? 'no-target-match'
+      : eligibleMatches.length === 0
+        ? 'not-conflicting'
+        : selectedMatch
+          ? null
+          : 'ambiguous-target-match'
+
+  return selectedMatch
+    ? {
+        candidate: getCandidateRow({
+          matchKey: selectedMatch.matchKey,
+          matchKind: 'id-title',
+          row,
+          targetArticle: selectedMatch.targetArticle,
+        }),
+        skippedRow: null,
+        warnings: [],
+      }
+    : {
+        candidate: null,
+        skippedRow: getSkippedRow(row.sourceRowId, skipReason),
+        warnings:
+          skipReason === 'ambiguous-target-match'
+            ? [
+                getAmbiguousTargetMatchWarning({
+                  matchKey: getAmbiguousMatchKey(eligibleMatches),
+                  matchKind: 'id-title',
+                  sourceRow: row,
+                  targetArticles: getTargetArticlesFromMatches(eligibleMatches),
+                }),
+              ]
+            : [],
+      }
+}
+
 const getImportCandidateRow = (
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
-): {candidate: ImportCandidateRow | null; skippedRow: ComparisonProjectConflictResolutionImportSkippedRow | null} => {
+): ImportCandidateRowResult => {
   const hasUsableKey = row.doiKeys.length > 0 || Boolean(row.idTitleKey)
-  const matchedTarget = hasUsableKey ? getMatchedTargetArticle(row, targetArticleMaps) : null
-  const skipReason = !hasUsableKey
-    ? 'no-usable-key'
-    : !matchedTarget
-      ? 'no-target-match'
-      : !matchedTarget.targetArticle.isConflictResolutionEligible
-        ? 'not-conflicting'
-        : null
+  const doiResult = hasUsableKey && row.doiKeys.length > 0 ? getDoiImportCandidateRow(row, targetArticleMaps) : null
 
-  return skipReason
-    ? {candidate: null, skippedRow: getSkippedRow(row.sourceRowId, skipReason)}
-    : matchedTarget
-      ? {
-          candidate: {
-            matchKey: matchedTarget.matchKey,
-            matchKind: matchedTarget.matchKind,
-            resolutionValue: row.resolutionValue,
-            sourceRowId: row.sourceRowId,
-            targetArticleId: matchedTarget.targetArticle.articleId,
-          },
-          skippedRow: null,
-        }
-      : {candidate: null, skippedRow: null}
+  return !hasUsableKey
+    ? {candidate: null, skippedRow: getSkippedRow(row.sourceRowId, 'no-usable-key'), warnings: []}
+    : doiResult
+      ? doiResult
+      : getIdTitleImportCandidateRow(row, targetArticleMaps)
 }
 
 const getCandidateRows = (
@@ -827,12 +867,13 @@ const getSkipCounts = (
   return skippedRows.reduce<ComparisonProjectConflictResolutionImportSkipCounts>(
     (counts, skippedRow) => {
       return {
+        ambiguousTargetMatch: counts.ambiguousTargetMatch + (skippedRow.reason === 'ambiguous-target-match' ? 1 : 0),
         noTargetMatch: counts.noTargetMatch + (skippedRow.reason === 'no-target-match' ? 1 : 0),
         noUsableKey: counts.noUsableKey + (skippedRow.reason === 'no-usable-key' ? 1 : 0),
         notConflicting: counts.notConflicting + (skippedRow.reason === 'not-conflicting' ? 1 : 0),
       }
     },
-    {noTargetMatch: 0, noUsableKey: 0, notConflicting: 0},
+    {ambiguousTargetMatch: 0, noTargetMatch: 0, noUsableKey: 0, notConflicting: 0},
   )
 }
 
@@ -901,7 +942,6 @@ export const getComparisonProjectConflictResolutionImportPlan = ({
 }: ComparisonProjectConflictResolutionImportPlanParams): ComparisonProjectConflictResolutionImportPlan => {
   const normalizedSourceRows = getNormalizedSourceRows(sourceRows)
   const normalizedTargetArticles = getNormalizedTargetArticles(targetArticles)
-  const targetArticlesByDoiKey = getTargetArticlesByDoiKey(normalizedTargetArticles)
   const candidateRowResults = getCandidateRows(normalizedSourceRows, normalizedTargetArticles)
   const candidateRows = candidateRowResults
     .map((result) => {
@@ -917,11 +957,10 @@ export const getComparisonProjectConflictResolutionImportPlan = ({
     .filter((skippedRow): skippedRow is ComparisonProjectConflictResolutionImportSkippedRow => {
       return skippedRow !== null
     })
-  const duplicateErrors = [
-    ...getSourceDoiTargetAmbiguityErrors(normalizedSourceRows, targetArticlesByDoiKey),
-    ...getSourceDuplicateErrors(candidateRows),
-    ...getTargetDuplicateErrors(normalizedTargetArticles, normalizedSourceRows, targetArticlesByDoiKey),
-  ]
+  const warnings = candidateRowResults.flatMap((result) => {
+    return result.warnings
+  })
+  const duplicateErrors = getSourceDuplicateErrors(candidateRows)
   const invalidValueErrors = getInvalidResolutionValueErrors(candidateRows, targetSummaryOptionValues)
   const conflictErrors = getConflictingResolutionValueErrors(candidateRows)
   const errors = [...duplicateErrors, ...invalidValueErrors, ...conflictErrors]
@@ -931,5 +970,6 @@ export const getComparisonProjectConflictResolutionImportPlan = ({
     errors,
     skipCounts: getSkipCounts(skippedRows),
     skippedRows,
+    warnings,
   }
 }
