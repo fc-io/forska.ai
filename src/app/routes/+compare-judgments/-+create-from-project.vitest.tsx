@@ -206,7 +206,7 @@ describe('compare judgments create-from-project route', () => {
     vi.resetModules()
     document.body.innerHTML = ''
     mockState.createComparisonProjectFromProject.mockReset()
-    mockState.createComparisonProjectFromProject.mockResolvedValue({id: 'comparison-project-created'})
+    mockState.createComparisonProjectFromProject.mockResolvedValue({data: {id: 'comparison-project-created'}})
     mockState.navigate.mockReset()
   })
 

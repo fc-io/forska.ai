@@ -122,11 +122,12 @@
         "`bun run desktop:build` passes because shared service types changed."
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-004"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-006",
@@ -156,6 +157,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-05-31T11:24:42.014Z"
+    "updatedAt": "2026-05-31T11:31:59.381Z"
   }
 }

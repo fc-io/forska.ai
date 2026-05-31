@@ -1,4 +1,5 @@
 import type {
+  ComparisonProjectRecord,
   ComparisonProjectServingStatus,
   HumanJudgmentMode,
   ProjectPromptCriteriaDisposition,
@@ -71,6 +72,66 @@ export type ComparisonProjectConflictResolutionImportSource = {
   createdAt: Date | string
   humanJudgmentMode: HumanJudgmentMode
   resolutionCount: number
+}
+
+export type ConflictResolutionImportMatchKind = 'doi' | 'id-title'
+
+export type ConflictResolutionImportWarningCode =
+  | 'ambiguous-target-match'
+  | 'conflicting-resolution-values'
+  | 'invalid-target-resolution-value'
+
+export type ConflictResolutionImportWarningSourceRow = {
+  articleId: string
+  articleTitle: string | null
+  compareProjectId: string
+  compareProjectName: string
+  externalArticleId: string | null
+  matchKey: string | null
+  matchKind: ConflictResolutionImportMatchKind | null
+  resolutionAnswer: string
+  sourceResolutionId: string
+  sourceRowId: string
+}
+
+export type ConflictResolutionImportWarningTargetArticle = {
+  articleId: string
+  articleTitle: string | null
+  doiKeys: string[]
+  externalArticleId: string | null
+}
+
+export type ConflictResolutionImportWarning = {
+  code: ConflictResolutionImportWarningCode
+  matchKey?: string
+  matchKeys?: string[]
+  matchKind?: ConflictResolutionImportMatchKind
+  matchKinds?: ConflictResolutionImportMatchKind[]
+  message: string
+  sourceRows: ConflictResolutionImportWarningSourceRow[]
+  targetArticles: ConflictResolutionImportWarningTargetArticle[]
+  value?: string
+  values?: string[]
+}
+
+export type ConflictResolutionImportSummary = {
+  deduped: number
+  scanned: number
+  matched: number
+  imported: number
+  skipped: number
+  skippedAmbiguousTarget: number
+  skippedConflicting: number
+  skippedInvalidValue: number
+  skippedNoTargetMatch: number
+  skippedNoUsableKey: number
+  skippedNotConflicting: number
+  warnings: ConflictResolutionImportWarning[]
+}
+
+export type CreateComparisonProjectFromProjectResult = {
+  data: ComparisonProjectRecord
+  conflictResolutionImportSummary?: ConflictResolutionImportSummary
 }
 
 export type ComparisonProjectEditFormData = {
@@ -339,6 +400,66 @@ const getResponseData = <T>(
   return result.data
 }
 
+const getResponseEnvelopeData = <TData, TEnvelope extends {data?: TData | null; error?: unknown}>(
+  response: {data?: TEnvelope | null; error?: unknown; status?: number},
+  errorMessage: string,
+): Omit<TEnvelope, 'data'> & {data: TData} => {
+  const result = handleApiResponse<TEnvelope>(response, errorMessage)
+
+  if (result.data === undefined || result.data === null) {
+    throw new Error(errorMessage)
+  }
+
+  return {...result, data: result.data}
+}
+
+type ConflictResolutionImportWarningApiSourceRow = Omit<
+  ConflictResolutionImportWarningSourceRow,
+  'matchKey' | 'matchKind'
+>
+
+type ConflictResolutionImportWarningApiValue = Omit<ConflictResolutionImportWarning, 'sourceRows'> & {
+  sourceRows: ConflictResolutionImportWarningApiSourceRow[]
+}
+
+type ConflictResolutionImportSummaryApiValue = Omit<ConflictResolutionImportSummary, 'warnings'> & {
+  warnings: ConflictResolutionImportWarningApiValue[]
+}
+
+type CreateComparisonProjectFromProjectApiResponse = {
+  data?: ComparisonProjectRecord | null
+  error?: unknown
+  conflictResolutionImportSummary?: ConflictResolutionImportSummaryApiValue | null
+}
+
+const getConflictResolutionImportWarningMatchKey = (warning: ConflictResolutionImportWarningApiValue) => {
+  return warning.matchKey ?? warning.matchKeys?.[0] ?? null
+}
+
+const getConflictResolutionImportWarningMatchKind = (warning: ConflictResolutionImportWarningApiValue) => {
+  return warning.matchKind ?? warning.matchKinds?.[0] ?? null
+}
+
+const getConflictResolutionImportWarning = (
+  warning: ConflictResolutionImportWarningApiValue,
+): ConflictResolutionImportWarning => {
+  const matchKey = getConflictResolutionImportWarningMatchKey(warning)
+  const matchKind = getConflictResolutionImportWarningMatchKind(warning)
+
+  return {
+    ...warning,
+    sourceRows: warning.sourceRows.map((sourceRow) => {
+      return {...sourceRow, matchKey, matchKind}
+    }),
+  }
+}
+
+const getConflictResolutionImportSummary = (
+  summary: ConflictResolutionImportSummaryApiValue,
+): ConflictResolutionImportSummary => {
+  return {...summary, warnings: summary.warnings.map(getConflictResolutionImportWarning)}
+}
+
 export const fetchComparisonProjects = async () => {
   const response = await apiClient.api['comparison-projects'].get()
 
@@ -384,8 +505,17 @@ export const fetchComparisonProjectConflictResolutionImportSources = async () =>
 
 export const createComparisonProjectFromProject = async (input: CreateComparisonProjectFromProjectInput) => {
   const response = await apiClient.api['comparison-projects']['from-project'].post(input)
+  const result = getResponseEnvelopeData<ComparisonProjectRecord, CreateComparisonProjectFromProjectApiResponse>(
+    response,
+    'Failed to create comparison project from project',
+  )
 
-  return getResponseData(response, 'Failed to create comparison project from project')
+  return result.conflictResolutionImportSummary
+    ? {
+        data: result.data,
+        conflictResolutionImportSummary: getConflictResolutionImportSummary(result.conflictResolutionImportSummary),
+      }
+    : {data: result.data}
 }
 
 export const fetchComparisonProjectJudgmentsMetadata = async (comparisonProjectId: string) => {
