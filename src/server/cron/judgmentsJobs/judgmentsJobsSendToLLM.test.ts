@@ -7,13 +7,17 @@ import {
   getDispatchAvailability,
   getEffectiveDispatchProviderCap,
   getEffectiveProviderCap,
+  getJudgmentsJobsSendToLLMRunState,
   getPromptClaimChunkLimits,
   getPromptClaimDispatchChunkLimits,
   getPromptClaimDispatchRequestedCount,
   getRequestsToSendByProviderConnection,
+  judgmentsJobsSendToLLM,
   processClaimedPromptsByConnection,
   requeueAndFilterRunningJobs,
   resetDispatchProviderWarmupForTests,
+  resetJudgmentsJobsSendToLLMRunStateForTests,
+  setJudgmentsJobsSendToLLMRunTimeoutMsForTests,
   shouldWarnPromptClaimCountMismatch,
 } from './judgmentsJobsSendToLLM.ts'
 
@@ -53,6 +57,7 @@ const createPrompt = (overrides: Partial<PromptToProcess> = {}): PromptToProcess
 
 afterEach(() => {
   resetDispatchProviderWarmupForTests()
+  resetJudgmentsJobsSendToLLMRunStateForTests()
   resetJudgmentEndpointAvailabilityForTests()
   Date.now = realDateNow
 })
@@ -149,6 +154,30 @@ test('judge-worker owner-backed dispatch skips local requeue and runtime filteri
       process.env.SERVER_ROLE = previousServerRole
     }
   }
+})
+
+test('times out stuck dispatch runs and clears active state', async () => {
+  const stuckFilter = mock(async (_jobs: RunningJudgmentJob[]) => {
+    return new Promise<RunningJudgmentJob[]>(() => {
+      return undefined
+    })
+  })
+
+  setJudgmentsJobsSendToLLMRunTimeoutMsForTests(5)
+
+  const error = await judgmentsJobsSendToLLM([], 'server-job-current', {filterJobs: stuckFilter}).then(
+    () => {
+      return null
+    },
+    (dispatchError: unknown) => {
+      return dispatchError
+    },
+  )
+
+  expect(error).toBeInstanceOf(Error)
+  expect(error instanceof Error ? error.message : '').toContain('judgmentsJobsSendToLLM timed out')
+  expect(stuckFilter).toHaveBeenCalledWith([])
+  expect(getJudgmentsJobsSendToLLMRunState()).toBeNull()
 })
 
 test('groups jobs with saved provider inflight overrides by connection', () => {

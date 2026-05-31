@@ -176,6 +176,56 @@ test('claims and requeues prompts from the per-job SQLite queue', async () => {
   expect(await service.getInFlightCount(jobId)).toBe(0)
 })
 
+test('treats externally removed cached SQLite jobs as missing', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-externally-removed-${Date.now()}`
+  const modelId = `model-externally-removed-${Date.now()}`
+  const projectId = `project-externally-removed-${Date.now()}`
+  const jobId = `job-externally-removed-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Externally Removed SQLite Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'article-externally-removed', promptId: 'prompt-externally-removed'}],
+    'server-a',
+  )
+  await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  expect(await service.getQueuePromptLifecycleRows(jobId)).toHaveLength(1)
+
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  rmSync(sqlitePath, {force: true})
+  rmSync(`${sqlitePath}-wal`, {force: true})
+  rmSync(`${sqlitePath}-shm`, {force: true})
+
+  expect(await service.getQueuePromptLifecycleRows(jobId)).toEqual([])
+  expect(await service.getInFlightCount(jobId)).toBe(0)
+
+  await service.releaseOwnedLease(jobId)
+})
+
 test('requeues stale same-server prompts only when they are not protected by dispatch', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

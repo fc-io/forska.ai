@@ -747,12 +747,16 @@ const startOwnedJobLeaseHeartbeatMonitor = () => {
 
 const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | null => {
   const cached = openDatabases.get(jobId)
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
 
   if (cached) {
+    if (!existsSync(sqlitePath)) {
+      closeOpenDatabase(jobId)
+      return createIfMissing ? getOpenDatabase(jobId, createIfMissing) : null
+    }
+
     return cached
   }
-
-  const sqlitePath = getJudgmentJobSqlitePath(jobId)
 
   if (!createIfMissing && !existsSync(sqlitePath)) {
     return null

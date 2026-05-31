@@ -75,6 +75,8 @@ const ownerBackedPreDispatchLocalCompletionApplyLimit = 64
 const ownerBackedCompletionReplayIntervalMs = 5_000
 const ownerBackedAcceptedClaimRecoveryReplayLimit = 64
 const ownerBackedAcceptedClaimRecoveryIntervalMs = 10_000
+const sendToLLMRunTimeoutMs = 120_000
+const sendToLLMAlreadyRunningWarnAfterMs = 30_000
 const probePromptClaimLimit = initialPromptClaimDispatchChunkSize
 
 const anthropicConnectionWarmupStartedAt = new Map<string, number>()
@@ -83,6 +85,27 @@ let ownerBackedAcceptedClaimRecoveryStartedAt = 0
 let ownerBackedCompletionReplayPromise: Promise<void> | null = null
 let ownerBackedCompletionReplayStartedAt = 0
 let ownerBackedHeartbeatPromise: Promise<void> | null = null
+let activeSendToLLMRun: SendToLLMRunState | null = null
+let sendToLLMRunSequence = 0
+let configuredSendToLLMRunTimeoutMs = sendToLLMRunTimeoutMs
+
+export type SendToLLMRunStage =
+  | 'acceptedClaimRecovery'
+  | 'capacityDispatch'
+  | 'completionReplay'
+  | 'filterRunningJobs'
+  | 'localCompletionApply'
+  | 'starting'
+  | 'workerHeartbeat'
+
+export type SendToLLMRunState = {jobCount: number; runId: number; stage: SendToLLMRunStage; startedAtMs: number}
+
+class SendToLLMRunTimeoutError extends Error {
+  constructor({runningForMs, runId, stage}: {runningForMs: number; runId: number; stage: SendToLLMRunStage}) {
+    super(`judgmentsJobsSendToLLM timed out after ${runningForMs}ms at ${stage} (run ${runId})`)
+    this.name = 'SendToLLMRunTimeoutError'
+  }
+}
 
 const isAnthropicJob = (job: {modelProvider: string | null}) => {
   return normalizeProvider(job.modelProvider) === 'anthropic'
@@ -1024,8 +1047,6 @@ export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJ
   })
 }
 
-let isRunningJudgmentsJobsSendToLLM = false
-
 const getProtectedJudgeWorkerAcceptedClaimPrompts = async (
   jobs: RunningJudgmentJob[],
 ): Promise<Array<{jobId: string; queueRecordId: string}>> => {
@@ -1068,6 +1089,62 @@ const getBackgroundError = (error: unknown): {message: string; name?: string; st
   return error instanceof Error
     ? {message: error.message, name: error.name, stack: error.stack}
     : {message: String(error)}
+}
+
+const getActiveSendToLLMRunningForMs = (now = Date.now()): number | null => {
+  return activeSendToLLMRun ? now - activeSendToLLMRun.startedAtMs : null
+}
+
+const setActiveSendToLLMRunStage = (runId: number, stage: SendToLLMRunStage): void => {
+  if (activeSendToLLMRun?.runId !== runId) {
+    return
+  }
+
+  activeSendToLLMRun = {...activeSendToLLMRun, stage}
+}
+
+const clearActiveSendToLLMRun = (runId: number): void => {
+  if (activeSendToLLMRun?.runId === runId) {
+    activeSendToLLMRun = null
+  }
+}
+
+const logActiveSendToLLMRunSkipped = (): void => {
+  const runningForMs = getActiveSendToLLMRunningForMs()
+
+  if (!activeSendToLLMRun || runningForMs === null || runningForMs < sendToLLMAlreadyRunningWarnAfterMs) {
+    return
+  }
+
+  schedulerFailureLogger.warn('scheduler:send-to-llm:already-running', '[capacity] send-to-llm still running', {
+    component: sendToLLMComponent,
+    event: 'sendToLLMAlreadyRunning',
+    jobCount: activeSendToLLMRun.jobCount,
+    runId: activeSendToLLMRun.runId,
+    runningForMs,
+    stage: activeSendToLLMRun.stage,
+    warnAfterMs: sendToLLMAlreadyRunningWarnAfterMs,
+  })
+}
+
+const withSendToLLMRunTimeout = async <T>(runId: number, work: Promise<T>): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      const runningForMs = getActiveSendToLLMRunningForMs() ?? configuredSendToLLMRunTimeoutMs
+      const stage = activeSendToLLMRun?.stage ?? 'starting'
+
+      reject(new SendToLLMRunTimeoutError({runningForMs, runId, stage}))
+    }, configuredSendToLLMRunTimeoutMs)
+  })
+
+  try {
+    return await Promise.race([work, timeout])
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+    }
+  }
 }
 
 const logOwnerBackedBackgroundFailure = (event: string, message: string, error: unknown): void => {
@@ -1273,45 +1350,80 @@ const sendToLLMForJobs = async (
   }
 }
 
+const runJudgmentsJobsSendToLLM = async (
+  allJobs: RunningJudgmentJob[],
+  serverJobId: string,
+  runId: number,
+  {filterJobs}: {filterJobs?: (jobs: RunningJudgmentJob[]) => Promise<RunningJudgmentJob[]>} = {},
+): Promise<void> => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    setActiveSendToLLMRunStage(runId, 'workerHeartbeat')
+    startOwnerBackedWorkerHeartbeat(serverJobId, allJobs)
+    setActiveSendToLLMRunStage(runId, 'completionReplay')
+    startOwnerBackedCompletionReplay()
+    setActiveSendToLLMRunStage(runId, 'localCompletionApply')
+    const localApply = await applyJudgeWorkerCompletionOutboxLocally({
+      limit: ownerBackedPreDispatchLocalCompletionApplyLimit,
+    })
+
+    if (localApply.appliedCount > 0) {
+      schedulerLogger.log('scheduler:owner-backed-local-completion-apply', '[capacity] applied local completions', {
+        ...localApply,
+        component: sendToLLMComponent,
+        event: 'ownerBackedLocalCompletionApply',
+      })
+    }
+  }
+
+  setActiveSendToLLMRunStage(runId, 'filterRunningJobs')
+  const sendableJobs = await requeueAndFilterRunningJobs({allJobs, filterJobs, serverJobId})
+  setActiveSendToLLMRunStage(runId, 'acceptedClaimRecovery')
+  startOwnerBackedAcceptedClaimRecovery(sendableJobs)
+  setActiveSendToLLMRunStage(runId, 'capacityDispatch')
+  const capacityBuckets = getCapacityBuckets({jobs: sendableJobs})
+
+  await Promise.all(
+    capacityBuckets.map(({capacity, jobs, label}) => {
+      return sendToLLMForJobs(jobs, serverJobId, capacity, label)
+    }),
+  )
+}
+
 export const judgmentsJobsSendToLLM = async (
   allJobs: RunningJudgmentJob[],
   serverJobId: string,
   {filterJobs}: {filterJobs?: (jobs: RunningJudgmentJob[]) => Promise<RunningJudgmentJob[]>} = {},
 ): Promise<void> => {
-  if (isRunningJudgmentsJobsSendToLLM) return
-  isRunningJudgmentsJobsSendToLLM = true
+  if (activeSendToLLMRun) {
+    logActiveSendToLLMRunSkipped()
+    return
+  }
+
+  const runId = sendToLLMRunSequence + 1
+  sendToLLMRunSequence = runId
+  activeSendToLLMRun = {jobCount: allJobs.length, runId, stage: 'starting', startedAtMs: Date.now()}
 
   try {
-    if (shouldUseJudgeWorkerOwnerHandoff()) {
-      startOwnerBackedWorkerHeartbeat(serverJobId, allJobs)
-      startOwnerBackedCompletionReplay()
-      const localApply = await applyJudgeWorkerCompletionOutboxLocally({
-        limit: ownerBackedPreDispatchLocalCompletionApplyLimit,
-      })
-
-      if (localApply.appliedCount > 0) {
-        schedulerLogger.log('scheduler:owner-backed-local-completion-apply', '[capacity] applied local completions', {
-          ...localApply,
-          component: sendToLLMComponent,
-          event: 'ownerBackedLocalCompletionApply',
-        })
-      }
-    }
-
-    const sendableJobs = await requeueAndFilterRunningJobs({allJobs, filterJobs, serverJobId})
-    startOwnerBackedAcceptedClaimRecovery(sendableJobs)
-    const capacityBuckets = getCapacityBuckets({jobs: sendableJobs})
-
-    await Promise.all(
-      capacityBuckets.map(({capacity, jobs, label}) => {
-        return sendToLLMForJobs(jobs, serverJobId, capacity, label)
-      }),
-    )
+    await withSendToLLMRunTimeout(runId, runJudgmentsJobsSendToLLM(allJobs, serverJobId, runId, {filterJobs}))
   } finally {
-    isRunningJudgmentsJobsSendToLLM = false
+    clearActiveSendToLLMRun(runId)
   }
 }
 
 export const resetDispatchProviderWarmupForTests = (): void => {
   anthropicConnectionWarmupStartedAt.clear()
+}
+
+export const getJudgmentsJobsSendToLLMRunState = (): (SendToLLMRunState & {runningForMs: number}) | null => {
+  return activeSendToLLMRun ? {...activeSendToLLMRun, runningForMs: Date.now() - activeSendToLLMRun.startedAtMs} : null
+}
+
+export const resetJudgmentsJobsSendToLLMRunStateForTests = (): void => {
+  activeSendToLLMRun = null
+  sendToLLMRunSequence = 0
+  configuredSendToLLMRunTimeoutMs = sendToLLMRunTimeoutMs
+}
+
+export const setJudgmentsJobsSendToLLMRunTimeoutMsForTests = (timeoutMs: number): void => {
+  configuredSendToLLMRunTimeoutMs = timeoutMs
 }
