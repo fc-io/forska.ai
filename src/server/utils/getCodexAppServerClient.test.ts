@@ -477,6 +477,26 @@ test('rate-limits repeated transient Codex stderr warnings', async () => {
   expect(String(captured.warnings[0]?.[0])).toContain('HTTP 429')
 })
 
+test('downgrades delayed Codex upstream connection refused stderr to a warning', async () => {
+  resetCodexStderrLogRateLimitForTests()
+  const {client, stderr} = createMockModelListCodexClient()
+  const captured = await withCapturedConsole(async () => {
+    await client.modelList()
+    stderr.emit(
+      'data',
+      Buffer.from(
+        '2026-06-01T17:23:46.259410Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedContentType(Some("text/plain; body: upstream connect error or disconnect/reset before headers. retried and the latest reset reason: remote connection failure, transport failure reason: delayed connect error: Connection refused"))\n',
+      ),
+    )
+  })
+
+  expect(captured.errors).toEqual([])
+  expect(captured.warnings).toHaveLength(1)
+  expect(String(captured.warnings[0]?.[0])).toBe(
+    '[codex] Codex upstream connection reset while app-server worker initialized; treating as transient upstream availability.',
+  )
+})
+
 test('downgrades user-rejected Codex tool stderr to a warning', async () => {
   resetCodexStderrLogRateLimitForTests()
   const {client, stderr} = createMockModelListCodexClient()

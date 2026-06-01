@@ -296,12 +296,20 @@ const getCodexCacheTtlStderrEvent = (normalized: string): CodexStderrEvent | nul
 }
 
 const getCodexUpstreamResetStderrEvent = (normalized: string): CodexStderrEvent | null => {
+  const hasUnexpectedContentType =
+    normalized.includes('unexpected content type') || normalized.includes('unexpectedcontenttype')
+  const hasUpstreamConnectFailure =
+    normalized.includes('upstream connect error') || normalized.includes('transport channel closed')
+  const hasConnectionReset =
+    normalized.includes('disconnect/reset before headers')
+    || normalized.includes('reset reason: connection termination')
+    || normalized.includes('remote connection failure')
+    || normalized.includes('delayed connect error: connection refused')
   const isUpstreamReset =
     normalized.includes('rmcp::transport::worker')
-    && normalized.includes('unexpected content type')
-    && normalized.includes('upstream connect error')
-    && (normalized.includes('disconnect/reset before headers')
-      || normalized.includes('reset reason: connection termination'))
+    && hasUnexpectedContentType
+    && hasUpstreamConnectFailure
+    && hasConnectionReset
 
   return isUpstreamReset
     ? {
