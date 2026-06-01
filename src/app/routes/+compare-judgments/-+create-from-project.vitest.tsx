@@ -92,6 +92,26 @@ const mockState = vi.hoisted(() => {
       isLoading: false,
       isSuccess: true,
     },
+    importPreviewQueryResult: {
+      data: {
+        deduped: 1,
+        imported: 4,
+        matched: 6,
+        scanned: 7,
+        skipped: 2,
+        skippedAmbiguousTarget: 0,
+        skippedConflicting: 2,
+        skippedInvalidValue: 0,
+        skippedNoTargetMatch: 0,
+        skippedNoUsableKey: 0,
+        skippedNotConflicting: 0,
+        warnings: [],
+      },
+      error: null,
+      isError: false,
+      isLoading: false,
+      isSuccess: true,
+    },
     navigate: vi.fn(),
     sourcesQueryResult: {
       data: [
@@ -133,9 +153,15 @@ vi.mock('@tanstack/solid-query', () => {
     useQuery: (options: () => {queryKey: readonly unknown[]}) => {
       const queryKey = options().queryKey
 
-      return queryKey[0] === 'comparison-project-conflict-resolution-import-sources'
-        ? mockState.importSourcesQueryResult
-        : mockState.sourcesQueryResult
+      if (queryKey[0] === 'comparison-project-conflict-resolution-import-sources') {
+        return mockState.importSourcesQueryResult
+      }
+
+      if (queryKey[0] === 'comparison-project-conflict-resolution-import-preview') {
+        return mockState.importPreviewQueryResult
+      }
+
+      return mockState.sourcesQueryResult
     },
   }
 })
@@ -177,6 +203,7 @@ vi.mock('../../../components/ui/button', () => {
 vi.mock('../../../services/comparisonProjectsService', () => {
   return {
     createComparisonProjectFromProject: mockState.createComparisonProjectFromProject,
+    fetchComparisonProjectConflictResolutionImportPreview: vi.fn(),
     fetchComparisonProjectConflictResolutionImportSources: vi.fn(),
     fetchComparisonProjectSources: vi.fn(),
   }
@@ -321,6 +348,31 @@ describe('compare judgments create-from-project route', () => {
       expect(getCreateFromProjectInput().conflictResolutionImportSourceComparisonProjectIds).toEqual([
         'comparison-source-1',
       ])
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('previews selected conflict resolution import stats', async () => {
+    const {container, dispose} = await renderCreateFromProjectPage()
+
+    try {
+      await fillSummaryConflictResolutionForm(container)
+      expect(container.textContent).toContain('Select one or more compare projects to preview import stats.')
+
+      setChecked(getInputFromLabel(container, 'Prior Compare Project'), true)
+      await Promise.resolve()
+
+      expect(container.textContent).toContain('Import preview')
+      expect(container.textContent).toContain('Total selected resolutions')
+      expect(container.textContent).toContain('7 resolutions')
+      expect(container.textContent).toContain('Duplicate rows')
+      expect(container.textContent).toContain('3 resolutions')
+      expect(container.textContent).toContain('Conflicting duplicates')
+      expect(container.textContent).toContain('2 resolutions')
+      expect(container.textContent).toContain('Will import')
+      expect(container.textContent).toContain('4 resolutions')
     } finally {
       dispose()
       container.remove()

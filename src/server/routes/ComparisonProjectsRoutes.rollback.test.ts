@@ -2639,6 +2639,92 @@ test('comparison project create-from-project imports selected conflict resolutio
   expect(doiTargetQuery ?? '').toContain("doi_identifier.normalized_value IN ('10.1000/import-match')")
 })
 
+test('comparison project conflict resolution import preview returns counts without creating project', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    conflictResolutionImportSourceRows: [
+      {
+        allowConflictResolution: true,
+        archived: false,
+        createdAt: new Date('2026-04-01T00:00:00.000Z'),
+        description: null,
+        humanJudgmentMode: 'summary',
+        id: 'source-comparison-project-1',
+        name: 'Import source',
+        resolutionCount: 2,
+      },
+    ],
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'source-article-1',
+        comparisonProjectId: 'source-comparison-project-1',
+        doi: '10.1000/import-match',
+        externalArticleId: 'source-ext-1',
+        id: 'source-resolution-1',
+        promptId: null,
+        title: 'Article 1',
+      },
+      {
+        answerValue: 'yes',
+        articleId: 'source-article-2',
+        comparisonProjectId: 'source-comparison-project-1',
+        doi: 'doi:10.1000/import-match',
+        externalArticleId: 'source-ext-2',
+        id: 'source-resolution-2',
+        promptId: null,
+        title: 'Article 2',
+      },
+    ],
+    failPromptInsert: false,
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/conflict-resolution-import-preview', {
+      body: JSON.stringify({
+        allowConflictResolution: true,
+        compareWithHumans: true,
+        conflictResolutionImportSourceComparisonProjectIds: ['source-comparison-project-1'],
+        humanJudgmentMode: 'summary',
+        sourceProjectId: 'source-project-1',
+        sourceProjectIds: ['source-project-1'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodyText = await response.text()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  const body = JSON.parse(bodyText) as {data: ConflictResolutionImportSummaryResponse}
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.data).toEqual({
+    deduped: 1,
+    imported: 1,
+    matched: 2,
+    scanned: 2,
+    skipped: 0,
+    skippedAmbiguousTarget: 0,
+    skippedConflicting: 0,
+    skippedInvalidValue: 0,
+    skippedNoTargetMatch: 0,
+    skippedNoUsableKey: 0,
+    skippedNotConflicting: 0,
+    warnings: [],
+  })
+  expect(state.createdComparisonProjectIds).toEqual([])
+  expect(state.conflictResolutionRows).toHaveLength(2)
+  expect(state.staleServingIds).toEqual([])
+  expect(state.transactionCalls).toBe(0)
+})
+
 test('comparison project create-from-project dedupes duplicate conflict resolution import', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseState(),

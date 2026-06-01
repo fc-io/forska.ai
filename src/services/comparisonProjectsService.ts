@@ -41,6 +41,11 @@ export type CreateComparisonProjectFromProjectInput = {
   conflictResolutionImportSourceComparisonProjectIds?: string[]
 }
 
+export type ComparisonProjectConflictResolutionImportPreviewInput = Omit<
+  CreateComparisonProjectFromProjectInput,
+  'description' | 'name'
+>
+
 export type ComparisonProjectSource = {
   id: string
   name: string
@@ -500,6 +505,17 @@ export const fetchComparisonProjectConflictResolutionImportSources = async () =>
   return getResponseData<ComparisonProjectConflictResolutionImportSource[]>(
     response,
     'Failed to fetch comparison project conflict resolution import sources',
+  )
+}
+
+export const fetchComparisonProjectConflictResolutionImportPreview = async (
+  input: ComparisonProjectConflictResolutionImportPreviewInput,
+) => {
+  const response = await apiClient.api['comparison-projects']['conflict-resolution-import-preview'].post(input)
+
+  return getResponseData<ConflictResolutionImportSummary>(
+    response,
+    'Failed to fetch comparison project conflict resolution import preview',
   )
 }
 
