@@ -203,6 +203,24 @@ type ComparisonProjectConflictResolutionImportSourceValidationRow = {
   id: string
   resolutionCount: unknown
 }
+type CreateComparisonProjectFromProjectSelectionBody = {
+  allowConflictResolution?: boolean
+  compareWithHumans?: boolean
+  humanJudgmentMode?: HumanJudgmentMode
+  sourceProjectId: string
+  sourceProjectIds?: string[]
+  summarySourceProjectId?: string | null
+}
+type CreateComparisonProjectFromProjectContext = {
+  humanJudgmentMode: HumanJudgmentMode
+  selectedImportRoutes: string[]
+  selectedModelIds: string[]
+  selectedSourceProjectIds: string[]
+  selectedSourceProjects: ComparisonProjectSource[]
+  sourceProject: ComparisonProjectSource
+  sourcePromptSelections: PromptSelection[]
+  summarySourceProjectId: string | null
+}
 type ComparisonProjectSummarySourceProject = {
   id: string
   name: string
@@ -1426,6 +1444,23 @@ const getConflictResolutionImportSummary = (params: {
   }
 }
 
+const getEmptyConflictResolutionImportSummary = (): ComparisonProjectConflictResolutionImportSummary => {
+  return {
+    deduped: 0,
+    scanned: 0,
+    matched: 0,
+    imported: 0,
+    skipped: 0,
+    skippedAmbiguousTarget: 0,
+    skippedConflicting: 0,
+    skippedInvalidValue: 0,
+    skippedNoTargetMatch: 0,
+    skippedNoUsableKey: 0,
+    skippedNotConflicting: 0,
+    warnings: [],
+  }
+}
+
 const insertComparisonProjectConflictResolutionImportCandidates = async (params: {
   candidates: ReturnType<typeof getComparisonProjectConflictResolutionImportPlan>['candidates']
   comparisonProjectId: string
@@ -1459,12 +1494,11 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
   return params.candidates.length
 }
 
-const importComparisonProjectConflictResolutions = async (params: {
-  comparisonProjectId: string
+const getConflictResolutionImportPlanResult = async (params: {
   promptSelections: PromptSelection[]
   scope: ComparisonProjectScope
   sourceComparisonProjectIds: string[]
-  tx: AppTx
+  tx: AppQueryRunner
 }) => {
   const sourceRows = await getConflictResolutionImportSourceRows(params.tx, params.sourceComparisonProjectIds)
   const targetArticles = await getConflictResolutionImportTargetArticles({
@@ -1485,6 +1519,33 @@ const importComparisonProjectConflictResolutions = async (params: {
     )
   }
 
+  return {plan, sourceRows}
+}
+
+const previewComparisonProjectConflictResolutionImport = async (params: {
+  promptSelections: PromptSelection[]
+  scope: ComparisonProjectScope
+  sourceComparisonProjectIds: string[]
+  tx: AppQueryRunner
+}) => {
+  const {plan, sourceRows} = await getConflictResolutionImportPlanResult(params)
+
+  return getConflictResolutionImportSummary({
+    importedCount: plan.candidates.length,
+    plan,
+    scannedCount: sourceRows.length,
+  })
+}
+
+const importComparisonProjectConflictResolutions = async (params: {
+  comparisonProjectId: string
+  promptSelections: PromptSelection[]
+  scope: ComparisonProjectScope
+  sourceComparisonProjectIds: string[]
+  tx: AppTx
+}) => {
+  const {plan, sourceRows} = await getConflictResolutionImportPlanResult(params)
+
   const importedCount = await insertComparisonProjectConflictResolutionImportCandidates({
     candidates: plan.candidates,
     comparisonProjectId: params.comparisonProjectId,
@@ -1492,6 +1553,44 @@ const importComparisonProjectConflictResolutions = async (params: {
   })
 
   return getConflictResolutionImportSummary({importedCount, plan, scannedCount: sourceRows.length})
+}
+
+const getComparisonProjectConflictResolutionImportPreview = async (
+  body: CreateComparisonProjectFromProjectSelectionBody & {
+    conflictResolutionImportSourceComparisonProjectIds?: string[]
+  },
+) => {
+  const context = await getCreateComparisonProjectFromProjectContext(body)
+  const sourceComparisonProjectIds = getUniqueStringValues(
+    body.conflictResolutionImportSourceComparisonProjectIds ?? [],
+  )
+
+  if (sourceComparisonProjectIds.length === 0) {
+    return getEmptyConflictResolutionImportSummary()
+  }
+
+  if (context.humanJudgmentMode !== 'summary' || !body.compareWithHumans || !body.allowConflictResolution) {
+    throw getConflictResolutionImportRejectedError(
+      'Conflict resolution imports require summary mode and allow conflict resolution to be enabled',
+    )
+  }
+
+  await validateConflictResolutionImportSources(appDatabaseService, sourceComparisonProjectIds)
+
+  return previewComparisonProjectConflictResolutionImport({
+    promptSelections: context.sourcePromptSelections,
+    scope: await getCreateFromProjectImportScope({
+      createdComparisonProject: getCreateFromProjectPreviewComparisonProject({body, context}),
+      promptSelections: context.sourcePromptSelections,
+      selectedImportRoutes: context.selectedImportRoutes,
+      selectedSourceProjectIds: context.selectedSourceProjectIds,
+      selectedSourceProjects: context.selectedSourceProjects,
+      summarySourceProjectId: context.summarySourceProjectId,
+      tx: appDatabaseService,
+    }),
+    sourceComparisonProjectIds,
+    tx: appDatabaseService,
+  })
 }
 
 const getValidatedComparisonSourceProjectIds = async (db: AppQueryRunner, sourceProjectIds: string[]) => {
@@ -1569,6 +1668,91 @@ const getValidatedCreateFromProjectSummarySelections = (params: {
   }
 
   return summaryPromptSelections
+}
+
+const getCreateComparisonProjectFromProjectContext = async (
+  body: CreateComparisonProjectFromProjectSelectionBody,
+): Promise<CreateComparisonProjectFromProjectContext> => {
+  const sources = await getComparisonProjectSources()
+  const selectedSourceProjectIds = getUniqueStringValues([body.sourceProjectId, ...(body.sourceProjectIds ?? [])])
+  const selectedSourceProjects = getSelectedComparisonProjectSources(sources, selectedSourceProjectIds)
+  const sourceProject = selectedSourceProjects.find((source) => {
+    return source.id === body.sourceProjectId
+  })
+
+  if (!sourceProject) {
+    throw new Error('Source project not found')
+  }
+
+  const humanJudgmentMode =
+    body.humanJudgmentMode ?? (sourceProject.isSummaryCapable && body.compareWithHumans ? 'summary' : 'prompt')
+  const summarySourceProjectId =
+    humanJudgmentMode === 'summary' ? (body.summarySourceProjectId ?? sourceProject.id) : null
+  const sourcePromptSelections =
+    humanJudgmentMode === 'summary' && summarySourceProjectId
+      ? getValidatedCreateFromProjectSummarySelections({selectedSourceProjects, summarySourceProjectId})
+      : sourceProject.prompts.map<PromptSelection>((prompt) => {
+          return {
+            promptId: prompt.id,
+            order: prompt.order,
+            criteriaDisposition: prompt.criteriaDisposition,
+            criteriaSectionKey: prompt.criteriaSectionKey,
+            criteriaSectionLabel: prompt.criteriaSectionLabel,
+          }
+        })
+
+  if (humanJudgmentMode !== 'summary' && selectedSourceProjectIds.length > 1) {
+    throw new Error('Additional source projects require summary mode')
+  }
+
+  const selectedModelIds = getUniqueStringValues(
+    (humanJudgmentMode === 'summary' ? selectedSourceProjects : [sourceProject]).map((selectedSourceProject) => {
+      return selectedSourceProject.modelId
+    }),
+  )
+  const selectedImportRoutes = getUniqueStringValues(
+    (humanJudgmentMode === 'summary' ? selectedSourceProjects : [sourceProject]).flatMap((selectedSourceProject) => {
+      return selectedSourceProject.importRoutes.map((importRoute) => {
+        return importRoute.route
+      })
+    }),
+  )
+
+  return {
+    humanJudgmentMode,
+    selectedImportRoutes,
+    selectedModelIds,
+    selectedSourceProjectIds,
+    selectedSourceProjects,
+    sourceProject,
+    sourcePromptSelections,
+    summarySourceProjectId,
+  }
+}
+
+const getCreateFromProjectPreviewComparisonProject = (params: {
+  body: CreateComparisonProjectFromProjectSelectionBody
+  context: CreateComparisonProjectFromProjectContext
+}): ReturnType<typeof getComparisonProjectRecordValue> => {
+  const now = new Date(0)
+
+  return {
+    id: 'comparison-project-conflict-resolution-import-preview',
+    name: 'Conflict resolution import preview',
+    description: null,
+    modelIds: params.context.selectedModelIds,
+    compareWithHumans: params.body.compareWithHumans ?? false,
+    allowConflictResolution: params.body.allowConflictResolution ?? false,
+    humanJudgmentMode: params.context.humanJudgmentMode,
+    summarySourceProjectId: params.context.summarySourceProjectId,
+    useTitle: params.context.sourceProject.useTitle,
+    useAbstract: params.context.sourceProject.useAbstract,
+    useFulltext: params.context.sourceProject.useFulltext,
+    useFulltextNoImages: params.context.sourceProject.useFulltextNoImages,
+    archived: false,
+    createdAt: now,
+    updatedAt: now,
+  }
 }
 
 const getHasSameStringValues = (left: string[], right: string[]) => {
@@ -3482,98 +3666,78 @@ export const comparisonProjectsRoutes = new Elysia()
     return {data}
   })
   .post(
+    '/api/comparison-projects/conflict-resolution-import-preview',
+    async (context) => {
+      const {body} = context
+      const data = await getComparisonProjectConflictResolutionImportPreview(body)
+
+      return {data}
+    },
+    {
+      body: t.Object({
+        compareWithHumans: t.Optional(t.Boolean()),
+        allowConflictResolution: t.Optional(t.Boolean()),
+        humanJudgmentMode: t.Optional(t.Union([t.Literal('prompt'), t.Literal('summary')])),
+        summarySourceProjectId: t.Optional(t.Union([t.String(), t.Null()])),
+        sourceProjectId: t.String(),
+        sourceProjectIds: t.Optional(t.Array(t.String())),
+        conflictResolutionImportSourceComparisonProjectIds: t.Optional(t.Array(t.String())),
+      }),
+    },
+  )
+  .post(
     '/api/comparison-projects/from-project',
     async (context) => {
       const {body} = context
-      const sources = await getComparisonProjectSources()
-      const selectedSourceProjectIds = getUniqueStringValues([body.sourceProjectId, ...(body.sourceProjectIds ?? [])])
-      const selectedSourceProjects = getSelectedComparisonProjectSources(sources, selectedSourceProjectIds)
-      const sourceProject = selectedSourceProjects.find((source) => {
-        return source.id === body.sourceProjectId
-      })
-
-      if (!sourceProject) {
-        throw new Error('Source project not found')
-      }
-
-      const humanJudgmentMode =
-        body.humanJudgmentMode ?? (sourceProject.isSummaryCapable && body.compareWithHumans ? 'summary' : 'prompt')
-      const summarySourceProjectId =
-        humanJudgmentMode === 'summary' ? (body.summarySourceProjectId ?? sourceProject.id) : null
+      const fromProjectContext = await getCreateComparisonProjectFromProjectContext(body)
       const conflictResolutionImportSourceComparisonProjectIds = getUniqueStringValues(
         body.conflictResolutionImportSourceComparisonProjectIds ?? [],
       )
       const hasConflictResolutionImportSources = conflictResolutionImportSourceComparisonProjectIds.length > 0
-      const sourcePromptSelections =
-        humanJudgmentMode === 'summary' && summarySourceProjectId
-          ? getValidatedCreateFromProjectSummarySelections({selectedSourceProjects, summarySourceProjectId})
-          : sourceProject.prompts.map<PromptSelection>((prompt) => {
-              return {
-                promptId: prompt.id,
-                order: prompt.order,
-                criteriaDisposition: prompt.criteriaDisposition,
-                criteriaSectionKey: prompt.criteriaSectionKey,
-                criteriaSectionLabel: prompt.criteriaSectionLabel,
-              }
-            })
-
-      if (humanJudgmentMode !== 'summary' && selectedSourceProjectIds.length > 1) {
-        throw new Error('Additional source projects require summary mode')
-      }
 
       if (
         hasConflictResolutionImportSources
-        && (humanJudgmentMode !== 'summary' || !body.compareWithHumans || !body.allowConflictResolution)
+        && (fromProjectContext.humanJudgmentMode !== 'summary'
+          || !body.compareWithHumans
+          || !body.allowConflictResolution)
       ) {
         throw getConflictResolutionImportRejectedError(
           'Conflict resolution imports require summary mode and allow conflict resolution to be enabled',
         )
       }
-
-      const selectedModelIds = getUniqueStringValues(
-        (humanJudgmentMode === 'summary' ? selectedSourceProjects : [sourceProject]).map((selectedSourceProject) => {
-          return selectedSourceProject.modelId
-        }),
-      )
-      const selectedImportRoutes = getUniqueStringValues(
-        (humanJudgmentMode === 'summary' ? selectedSourceProjects : [sourceProject]).flatMap(
-          (selectedSourceProject) => {
-            return selectedSourceProject.importRoutes.map((importRoute) => {
-              return importRoute.route
-            })
-          },
-        ),
-      )
       const createResult = (await appDatabaseService.transaction(async (tx) => {
         await validateConflictResolutionImportSources(tx, conflictResolutionImportSourceComparisonProjectIds)
 
         const createdComparisonProject = await createComparisonProjectRecord(tx, {
           name: body.name,
           description: body.description,
-          modelIds: selectedModelIds,
+          modelIds: fromProjectContext.selectedModelIds,
           compareWithHumans: body.compareWithHumans,
           allowConflictResolution: body.allowConflictResolution,
-          humanJudgmentMode,
-          summarySourceProjectId,
-          useTitle: sourceProject.useTitle,
-          useAbstract: sourceProject.useAbstract,
-          useFulltext: sourceProject.useFulltext,
-          useFulltextNoImages: sourceProject.useFulltextNoImages,
-          importRoutes: selectedImportRoutes,
-          sourceProjectIds: humanJudgmentMode === 'summary' ? selectedSourceProjectIds : [sourceProject.id],
-          promptSelections: sourcePromptSelections,
+          humanJudgmentMode: fromProjectContext.humanJudgmentMode,
+          summarySourceProjectId: fromProjectContext.summarySourceProjectId,
+          useTitle: fromProjectContext.sourceProject.useTitle,
+          useAbstract: fromProjectContext.sourceProject.useAbstract,
+          useFulltext: fromProjectContext.sourceProject.useFulltext,
+          useFulltextNoImages: fromProjectContext.sourceProject.useFulltextNoImages,
+          importRoutes: fromProjectContext.selectedImportRoutes,
+          sourceProjectIds:
+            fromProjectContext.humanJudgmentMode === 'summary'
+              ? fromProjectContext.selectedSourceProjectIds
+              : [fromProjectContext.sourceProject.id],
+          promptSelections: fromProjectContext.sourcePromptSelections,
         })
         const conflictResolutionImportSummary = hasConflictResolutionImportSources
           ? await importComparisonProjectConflictResolutions({
               comparisonProjectId: createdComparisonProject.id,
-              promptSelections: sourcePromptSelections,
+              promptSelections: fromProjectContext.sourcePromptSelections,
               scope: await getCreateFromProjectImportScope({
                 createdComparisonProject,
-                promptSelections: sourcePromptSelections,
-                selectedImportRoutes,
-                selectedSourceProjectIds,
-                selectedSourceProjects,
-                summarySourceProjectId,
+                promptSelections: fromProjectContext.sourcePromptSelections,
+                selectedImportRoutes: fromProjectContext.selectedImportRoutes,
+                selectedSourceProjectIds: fromProjectContext.selectedSourceProjectIds,
+                selectedSourceProjects: fromProjectContext.selectedSourceProjects,
+                summarySourceProjectId: fromProjectContext.summarySourceProjectId,
                 tx,
               }),
               sourceComparisonProjectIds: conflictResolutionImportSourceComparisonProjectIds,

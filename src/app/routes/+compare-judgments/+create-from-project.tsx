@@ -4,6 +4,7 @@ import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../components/ui/button'
 import {
+  type ComparisonProjectConflictResolutionImportPreviewInput,
   type ComparisonProjectConflictResolutionImportSource,
   type ComparisonProjectSource,
   type ConflictResolutionImportSummary,
@@ -13,6 +14,7 @@ import {
   createComparisonProjectFromProject,
   type CreateComparisonProjectFromProjectInput,
   type CreateComparisonProjectFromProjectResult,
+  fetchComparisonProjectConflictResolutionImportPreview,
   fetchComparisonProjectConflictResolutionImportSources,
   fetchComparisonProjectSources,
 } from '../../../services/comparisonProjectsService'
@@ -41,6 +43,56 @@ const formatHumanJudgmentMode = (mode: ComparisonProjectConflictResolutionImport
 
 const formatResolutionCount = (count: number) => {
   return `${count} resolution${count === 1 ? '' : 's'}`
+}
+
+const getImportPreviewDuplicateCount = (summary: ConflictResolutionImportSummary) => {
+  return summary.deduped + summary.skippedConflicting
+}
+
+const ImportConflictResolutionPreviewStats = (props: {summary: ConflictResolutionImportSummary}) => {
+  const stats = () => {
+    return [
+      {
+        label: 'Total selected resolutions',
+        value: props.summary.scanned,
+        description: 'Across selected compare projects.',
+      },
+      {
+        label: 'Duplicate rows',
+        value: getImportPreviewDuplicateCount(props.summary),
+        description: 'Duplicate rows removed or skipped before import.',
+      },
+      {
+        label: 'Conflicting duplicates',
+        value: props.summary.skippedConflicting,
+        description: 'Duplicate rows with different answers; these are skipped.',
+      },
+      {
+        label: 'Will import',
+        value: props.summary.imported,
+        description: 'Total resolutions created in the new compare project.',
+      },
+    ]
+  }
+
+  return (
+    <div class="rounded-md border border-emerald-200 bg-emerald-50 p-3">
+      <p class="text-sm font-medium text-emerald-950">Import preview</p>
+      <div class="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <For each={stats()}>
+          {(stat) => {
+            return (
+              <div class="rounded-md border border-emerald-100 bg-white/80 p-3">
+                <p class="text-xs font-medium uppercase tracking-wide text-emerald-800">{stat.label}</p>
+                <p class="mt-1 text-lg font-semibold text-gray-900">{formatResolutionCount(stat.value)}</p>
+                <p class="mt-1 text-xs text-muted-foreground">{stat.description}</p>
+              </div>
+            )
+          }}
+        </For>
+      </div>
+    </div>
+  )
 }
 
 const formatValue = (value: string | null | undefined) => {
@@ -306,6 +358,35 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
       suspense: false,
     }
   })
+  const selectedConflictResolutionImportSourceIds = createMemo(() => {
+    return isConflictResolutionImportAvailable() ? selectedConflictResolutionImportSourceComparisonProjectIds() : []
+  })
+  const conflictResolutionImportPreviewInput = createMemo((): ComparisonProjectConflictResolutionImportPreviewInput => {
+    return {
+      compareWithHumans: compareWithHumans(),
+      allowConflictResolution: isConflictResolutionAvailable() && allowConflictResolution(),
+      humanJudgmentMode: summaryModeEnabled() ? 'summary' : 'prompt',
+      summarySourceProjectId: summaryModeEnabled() ? selectedSourceProjectId() : null,
+      sourceProjectId: selectedSourceProjectId(),
+      sourceProjectIds: summaryModeEnabled()
+        ? [selectedSourceProjectId(), ...selectedAdditionalSourceProjectIds()]
+        : [selectedSourceProjectId()],
+      conflictResolutionImportSourceComparisonProjectIds: selectedConflictResolutionImportSourceIds(),
+    }
+  })
+  const conflictResolutionImportPreviewQuery = useQuery(() => {
+    const input = conflictResolutionImportPreviewInput()
+
+    return {
+      queryKey: ['comparison-project-conflict-resolution-import-preview', input],
+      queryFn: () => {
+        return fetchComparisonProjectConflictResolutionImportPreview(input)
+      },
+      enabled: selectedConflictResolutionImportSourceIds().length > 0,
+      staleTime: 1000 * 30,
+      suspense: false,
+    }
+  })
   const summaryModeUnavailableReason = createMemo(() => {
     if (sourcesQuery.isLoading) {
       return 'Select a primary project after projects finish loading.'
@@ -413,9 +494,7 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
       return
     }
 
-    const conflictResolutionImportSourceComparisonProjectIds = isConflictResolutionImportAvailable()
-      ? selectedConflictResolutionImportSourceComparisonProjectIds()
-      : []
+    const conflictResolutionImportSourceComparisonProjectIds = selectedConflictResolutionImportSourceIds()
     const createComparisonProjectInput: CreateComparisonProjectFromProjectInput = {
       name: comparisonProjectName().trim(),
       description: description().trim() || undefined,
@@ -859,6 +938,36 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
                       }}
                     </For>
                   </div>
+
+                  <Show when={selectedConflictResolutionImportSourceIds().length === 0}>
+                    <p class="text-sm text-muted-foreground">
+                      Select one or more compare projects to preview import stats.
+                    </p>
+                  </Show>
+
+                  <Show when={selectedConflictResolutionImportSourceIds().length > 0}>
+                    <Show when={conflictResolutionImportPreviewQuery.isLoading}>
+                      <p class="text-sm text-muted-foreground">Calculating import preview...</p>
+                    </Show>
+                    <Show when={conflictResolutionImportPreviewQuery.isError}>
+                      <p class="text-sm text-red-600">
+                        {conflictResolutionImportPreviewQuery.error instanceof Error
+                          ? conflictResolutionImportPreviewQuery.error.message
+                          : 'Failed to calculate conflict resolution import preview'}
+                      </p>
+                    </Show>
+                    <Show
+                      when={
+                        conflictResolutionImportPreviewQuery.isSuccess
+                          ? conflictResolutionImportPreviewQuery.data
+                          : null
+                      }
+                    >
+                      {(summary) => {
+                        return <ImportConflictResolutionPreviewStats summary={summary()} />
+                      }}
+                    </Show>
+                  </Show>
                 </Show>
               </div>
             </Show>
