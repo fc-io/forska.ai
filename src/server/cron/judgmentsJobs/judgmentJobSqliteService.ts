@@ -2629,6 +2629,79 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
   }
 }
 
+const getImportedOutboxSeqFloor = async (jobId: string) => {
+  const [row] = await getAppDatabaseService().queryJson<{maxOutboxSeq: number | null}>(`
+    SELECT CAST(MAX(outbox_seq) AS INTEGER) AS maxOutboxSeq
+    FROM app.judgment_job_sqlite_outbox_import
+    WHERE job_id = '${escapeSqlString(jobId)}'
+  `)
+
+  return Math.max(0, Number(row?.maxOutboxSeq ?? 0))
+}
+
+const getLocalOutboxSeqFloorFromDatabase = (database: Database) => {
+  const row = database
+    .query(
+      `
+        SELECT CAST(COALESCE(MAX(outbox_seq), 0) AS INTEGER) AS maxOutboxSeq
+        FROM judgment_outbox
+      `,
+    )
+    .get() as {maxOutboxSeq: number | null} | null
+
+  return Math.max(0, Number(row?.maxOutboxSeq ?? 0))
+}
+
+const seedJudgmentOutboxSequenceFromDatabase = (database: Database, jobId: string, outboxSeqFloor: number) => {
+  const normalizedFloor = Math.max(0, Math.trunc(outboxSeqFloor))
+  const localFloor = getLocalOutboxSeqFloorFromDatabase(database)
+
+  if (normalizedFloor <= localFloor || normalizedFloor === 0) {
+    return
+  }
+
+  const seedId = `__sequence_seed_${jobId}`
+  const now = new Date().toISOString()
+
+  database
+    .query(
+      `
+        INSERT INTO judgment_outbox (
+          outbox_seq,
+          job_id,
+          queue_prompt_id,
+          judgment_id,
+          article_id,
+          prompt_id,
+          model_id,
+          project_id,
+          use_title,
+          use_abstract,
+          use_fulltext,
+          use_fulltext_no_images,
+          is_answered,
+          confidence_original,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, 0, 0, 1, 0, ?, ?)
+      `,
+    )
+    .run(
+      normalizedFloor,
+      jobId,
+      `${seedId}_queue`,
+      `${seedId}_judgment`,
+      `${seedId}_article`,
+      `${seedId}_prompt`,
+      `${seedId}_model`,
+      now,
+      now,
+    )
+  database
+    .query(`DELETE FROM judgment_outbox WHERE outbox_seq = ? AND queue_prompt_id = ?`)
+    .run(normalizedFloor, `${seedId}_queue`)
+}
+
 const getLatestRuntimeInfoForModel = async (
   modelId: string,
 ): Promise<Pick<
@@ -4693,7 +4766,10 @@ const sqliteService = {
     )
   },
   initializeJob: async (jobId: string) => {
-    const jobInfo = await getJobInfoForInitialization(jobId)
+    const [jobInfo, importedOutboxSeqFloor] = await Promise.all([
+      getJobInfoForInitialization(jobId),
+      getImportedOutboxSeqFloor(jobId),
+    ])
 
     return withOwnedJobDatabase(jobId, true, (database) => {
       const createdAt = jobInfo.createdAt.toISOString()
@@ -4737,6 +4813,7 @@ const sqliteService = {
             Number(jobInfo.useFulltextNoImages),
             createdAt,
           )
+        seedJudgmentOutboxSequenceFromDatabase(database, jobId, importedOutboxSeqFloor)
         database
           .query(
             `
