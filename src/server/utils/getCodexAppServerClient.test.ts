@@ -409,7 +409,7 @@ test('modelList stops the app-server process when initialize times out', async (
   expect(killed).toBe(true)
 })
 
-test('downgrades known transient Codex stderr to rate-limited warnings', async () => {
+test('keeps known transient Codex stderr out of terminal logs', async () => {
   resetCodexStderrLogRateLimitForTests()
   const {client, stderr} = createMockModelListCodexClient()
   const captured = await withCapturedConsole(async () => {
@@ -435,15 +435,7 @@ test('downgrades known transient Codex stderr to rate-limited warnings', async (
   })
 
   expect(captured.errors).toEqual([])
-  expect(
-    captured.warnings.map(([message]) => {
-      return String(message)
-    }),
-  ).toEqual([
-    '[codex] Codex model cache TTL renewal failed; treating as transient Codex cache state.',
-    '[codex] Codex responses websocket returned HTTP 503; treating as transient Codex backend availability.',
-    '[codex] Codex upstream connection reset while app-server worker initialized; treating as transient upstream availability.',
-  ])
+  expect(captured.warnings).toEqual([])
 })
 
 test('initialize enables Codex experimental API for turn environments', async () => {
@@ -460,7 +452,7 @@ test('initialize enables Codex experimental API for turn environments', async ()
   expect(initializeParams[0]).toMatchObject({capabilities: {experimentalApi: true}})
 })
 
-test('rate-limits repeated transient Codex stderr warnings', async () => {
+test('keeps repeated transient Codex stderr out of terminal logs', async () => {
   resetCodexStderrLogRateLimitForTests()
   const {client, stderr} = createMockModelListCodexClient()
   const captured = await withCapturedConsole(async () => {
@@ -473,11 +465,10 @@ test('rate-limits repeated transient Codex stderr warnings', async () => {
   })
 
   expect(captured.errors).toEqual([])
-  expect(captured.warnings).toHaveLength(1)
-  expect(String(captured.warnings[0]?.[0])).toContain('HTTP 429')
+  expect(captured.warnings).toEqual([])
 })
 
-test('downgrades delayed Codex upstream connection refused stderr to a warning', async () => {
+test('keeps delayed Codex upstream connection refused stderr out of terminal logs', async () => {
   resetCodexStderrLogRateLimitForTests()
   const {client, stderr} = createMockModelListCodexClient()
   const captured = await withCapturedConsole(async () => {
@@ -491,13 +482,10 @@ test('downgrades delayed Codex upstream connection refused stderr to a warning',
   })
 
   expect(captured.errors).toEqual([])
-  expect(captured.warnings).toHaveLength(1)
-  expect(String(captured.warnings[0]?.[0])).toBe(
-    '[codex] Codex upstream connection reset while app-server worker initialized; treating as transient upstream availability.',
-  )
+  expect(captured.warnings).toEqual([])
 })
 
-test('downgrades user-rejected Codex tool stderr to a warning', async () => {
+test('keeps user-rejected Codex tool stderr out of terminal logs', async () => {
   resetCodexStderrLogRateLimitForTests()
   const {client, stderr} = createMockModelListCodexClient()
   const captured = await withCapturedConsole(async () => {
@@ -511,11 +499,7 @@ test('downgrades user-rejected Codex tool stderr to a warning', async () => {
   })
 
   expect(captured.errors).toEqual([])
-  expect(
-    captured.warnings.map(([message]) => {
-      return String(message)
-    }),
-  ).toEqual(['[codex] Codex tool command was rejected by user; treating as intentional tool permission denial.'])
+  expect(captured.warnings).toEqual([])
 })
 
 test('keeps unknown Codex stderr at error level', async () => {

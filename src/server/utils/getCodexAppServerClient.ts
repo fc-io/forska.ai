@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {readLocalAppSettings} from './localAppSettings.ts'
+import {writeRuntimeLogEvent} from './runtimeLogger.ts'
 
 type JsonRpcId = number
 
@@ -355,6 +356,12 @@ const shouldLogCodexTransientStderr = (key: string): boolean => {
   return shouldLog
 }
 
+const logTransientCodexStderr = (event: CodexStderrEvent, stderr: string): void => {
+  if (!shouldLogCodexTransientStderr(event.key)) return
+
+  writeRuntimeLogEvent({attrs: {stderr}, event: event.key, message: event.message, severity: 'INFO'})
+}
+
 const logCodexStderr = (value: string): void => {
   const trimmed = value.trim()
   if (trimmed.length === 0) return
@@ -365,9 +372,7 @@ const logCodexStderr = (value: string): void => {
     return
   }
 
-  if (!shouldLogCodexTransientStderr(transientEvent.key)) return
-
-  console.warn(transientEvent.message)
+  logTransientCodexStderr(transientEvent, trimmed)
 }
 
 export const resetCodexStderrLogRateLimitForTests = (): void => {
