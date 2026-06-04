@@ -23,7 +23,10 @@ const getSessionRepositoryScript = (body: string) => {
   return `
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
     const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
-    const {getProjectTransferImportTempLayout} = await import('./src/server/services/projectTransfer/projectTransferSession.ts')
+    const {
+      getProjectTransferImportTempLayout,
+      toProjectTransferSessionResponse,
+    } = await import('./src/server/services/projectTransfer/projectTransferSession.ts')
     const {getProjectTransferSessionRepository} = await import('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
 
     await migrateDuckdb()
@@ -210,6 +213,39 @@ test('project transfer session transitions reject stale plan revisions', () => {
   expect(result.freshReadyState).toBe('ready_to_commit')
   expect(result.currentState).toBe('ready_to_commit')
   expect(result.currentRevision).toBe(1)
+})
+
+test('project transfer session repository normalizes DuckDB timestamps to Date objects', () => {
+  const expectedExpiresAt = new Date('2026-05-21T12:00:00.000Z')
+  const result = runSessionRepositoryScript<{
+    createdAtIsDate: boolean
+    expiresAtGetTime: number | null
+    progressExpiresAt: string | null
+    updatedAtIsDate: boolean
+  }>(`
+    await sessionRepository.createProjectTransferSession({
+      direction: 'export',
+      expiresAt,
+      id: 'session-date-normalization',
+      progress: {phase: 'export_assembly', status: 'pending'},
+      state: 'queued',
+    })
+
+    const current = await sessionRepository.getProjectTransferSession({sessionId: 'session-date-normalization'})
+    const response = current === null ? null : toProjectTransferSessionResponse(current)
+
+    console.log(JSON.stringify({
+      createdAtIsDate: current?.createdAt instanceof Date ?? false,
+      expiresAtGetTime: response?.expiresAt.getTime() ?? null,
+      progressExpiresAt: response?.progress?.expiresAt ?? null,
+      updatedAtIsDate: current?.updatedAt instanceof Date ?? false,
+    }))
+  `)
+
+  expect(result.createdAtIsDate).toBe(true)
+  expect(result.expiresAtGetTime).toBe(expectedExpiresAt.getTime())
+  expect(result.progressExpiresAt).toBe(expectedExpiresAt.toISOString())
+  expect(result.updatedAtIsDate).toBe(true)
 })
 
 test('project transfer session plan revision update can publish final analyze state atomically', () => {
