@@ -94,17 +94,17 @@ const mockState = vi.hoisted(() => {
     },
     importPreviewQueryResult: {
       data: {
-        deduped: 1,
-        imported: 4,
-        matched: 6,
-        scanned: 7,
-        skipped: 2,
+        deduped: 2,
+        imported: 7,
+        matched: 9,
+        scanned: 14,
+        skipped: 5,
         skippedAmbiguousTarget: 0,
-        skippedConflicting: 2,
+        skippedConflicting: 0,
         skippedInvalidValue: 0,
-        skippedNoTargetMatch: 0,
+        skippedNoTargetMatch: 2,
         skippedNoUsableKey: 0,
-        skippedNotConflicting: 0,
+        skippedNotConflicting: 3,
         warnings: [],
       },
       error: null,
@@ -366,13 +366,19 @@ describe('compare judgments create-from-project route', () => {
 
       expect(container.textContent).toContain('Import preview')
       expect(container.textContent).toContain('Total selected resolutions')
-      expect(container.textContent).toContain('7 resolutions')
+      expect(container.textContent).toContain('14 resolutions')
       expect(container.textContent).toContain('Duplicate rows')
-      expect(container.textContent).toContain('3 resolutions')
-      expect(container.textContent).toContain('Conflicting duplicates')
       expect(container.textContent).toContain('2 resolutions')
+      expect(container.textContent).toContain('Conflicting duplicates')
+      expect(container.textContent).toContain('0 resolutions')
+      expect(container.textContent).toContain('Other skipped')
+      expect(container.textContent).toContain('5 resolutions')
       expect(container.textContent).toContain('Will import')
-      expect(container.textContent).toContain('4 resolutions')
+      expect(container.textContent).toContain('7 resolutions')
+      expect(container.textContent).toContain('Other skipped reasons')
+      expect(container.textContent).toContain('Not currently conflicting')
+      expect(container.textContent).toContain('3 resolutions')
+      expect(container.textContent).toContain('No target match')
     } finally {
       dispose()
       container.remove()

@@ -49,6 +49,44 @@ const getImportPreviewDuplicateCount = (summary: ConflictResolutionImportSummary
   return summary.deduped + summary.skippedConflicting
 }
 
+const getOtherSkippedReasonStats = (summary: ConflictResolutionImportSummary) => {
+  return [
+    {
+      label: 'Not currently conflicting',
+      value: summary.skippedNotConflicting,
+      description: 'Matched an article that is not eligible for conflict resolution in the new project.',
+    },
+    {
+      label: 'No target match',
+      value: summary.skippedNoTargetMatch,
+      description: 'Could not match the saved decision to an article in the new project scope.',
+    },
+    {
+      label: 'Invalid resolution value',
+      value: summary.skippedInvalidValue,
+      description: 'Saved answer does not map to exactly one summary option in the new project.',
+    },
+    {
+      label: 'Ambiguous target match',
+      value: summary.skippedAmbiguousTarget,
+      description: 'Matched more than one eligible target article.',
+    },
+    {
+      label: 'No usable match key',
+      value: summary.skippedNoUsableKey,
+      description: 'No DOI or external ID/title key was available for matching.',
+    },
+  ].filter((stat) => {
+    return stat.value > 0
+  })
+}
+
+const getOtherSkippedReasonCount = (summary: ConflictResolutionImportSummary) => {
+  return getOtherSkippedReasonStats(summary).reduce((count, stat) => {
+    return count + stat.value
+  }, 0)
+}
+
 const ImportConflictResolutionPreviewStats = (props: {summary: ConflictResolutionImportSummary}) => {
   const stats = () => {
     return [
@@ -68,17 +106,25 @@ const ImportConflictResolutionPreviewStats = (props: {summary: ConflictResolutio
         description: 'Duplicate rows with different answers; these are skipped.',
       },
       {
+        label: 'Other skipped',
+        value: getOtherSkippedReasonCount(props.summary),
+        description: 'Skipped for match, eligibility, or value reasons.',
+      },
+      {
         label: 'Will import',
         value: props.summary.imported,
         description: 'Total resolutions created in the new compare project.',
       },
     ]
   }
+  const otherSkippedReasonStats = () => {
+    return getOtherSkippedReasonStats(props.summary)
+  }
 
   return (
     <div class="rounded-md border border-emerald-200 bg-emerald-50 p-3">
       <p class="text-sm font-medium text-emerald-950">Import preview</p>
-      <div class="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
         <For each={stats()}>
           {(stat) => {
             return (
@@ -91,6 +137,26 @@ const ImportConflictResolutionPreviewStats = (props: {summary: ConflictResolutio
           }}
         </For>
       </div>
+      <Show when={otherSkippedReasonStats().length > 0}>
+        <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+          <p class="text-sm font-medium text-amber-950">Other skipped reasons</p>
+          <div class="mt-2 space-y-2">
+            <For each={otherSkippedReasonStats()}>
+              {(stat) => {
+                return (
+                  <div class="rounded-md border border-amber-100 bg-white/80 p-3">
+                    <div class="flex items-start justify-between gap-3">
+                      <p class="text-sm font-medium text-gray-900">{stat.label}</p>
+                      <p class="text-sm font-semibold text-gray-900">{formatResolutionCount(stat.value)}</p>
+                    </div>
+                    <p class="mt-1 text-xs text-muted-foreground">{stat.description}</p>
+                  </div>
+                )
+              }}
+            </For>
+          </div>
+        </div>
+      </Show>
     </div>
   )
 }
