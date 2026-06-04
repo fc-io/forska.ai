@@ -504,10 +504,12 @@ const getComparisonProjectArticleServingInsertSql = ({
       passes_row_filter_multiple_answers,
       passes_row_filter_fully_answered,
       passes_row_filter_all,
+      has_human_vs_llm_overlap,
       has_human_vs_llm_difference,
       has_human_vs_llm_true_conflict,
       has_llm_vs_llm_difference,
       has_any_disagreement,
+      passes_difference_filter_human_vs_llm_overlap,
       passes_difference_filter_human_vs_llm,
       passes_difference_filter_human_vs_llm_true_conflict,
       passes_difference_filter_llm_vs_llm,
@@ -621,6 +623,8 @@ const getComparisonProjectArticleServingInsertSql = ({
         prompt_answer_count.article_id,
         prompt_answer_count.prompt_id,
         prompt_answer_count.human_answered_count > 0
+          AND prompt_answer_count.llm_answered_count > 0 AS has_human_vs_llm_overlap,
+        prompt_answer_count.human_answered_count > 0
           AND prompt_answer_count.llm_answered_count > 0
           AND COALESCE(prompt_answer_value_count.all_answer_count, 0) > 1 AS has_human_vs_llm_difference,
         COALESCE(prompt_answer_value_count.human_binary_decision_count, 0) > 0
@@ -638,6 +642,7 @@ const getComparisonProjectArticleServingInsertSql = ({
     article_difference_rollup AS (
       SELECT
         article_id,
+        COALESCE(BOOL_OR(has_human_vs_llm_overlap), FALSE) AS has_human_vs_llm_overlap,
         COALESCE(BOOL_OR(has_human_vs_llm_difference), FALSE) AS has_human_vs_llm_difference,
         COALESCE(BOOL_OR(has_human_vs_llm_true_conflict), FALSE) AS has_human_vs_llm_true_conflict,
         COALESCE(BOOL_OR(has_llm_vs_llm_difference), FALSE) AS has_llm_vs_llm_difference,
@@ -661,6 +666,7 @@ const getComparisonProjectArticleServingInsertSql = ({
           WHEN project_mode.is_summary_mode THEN article_cell_rollup.answered_column_count >= 2
           ELSE article_cell_rollup.answered_prompt_count >= 2
         END AS has_multiple_answers,
+        COALESCE(article_difference_rollup.has_human_vs_llm_overlap, FALSE) AS has_human_vs_llm_overlap,
         COALESCE(article_difference_rollup.has_human_vs_llm_difference, FALSE) AS has_human_vs_llm_difference,
         COALESCE(article_difference_rollup.has_human_vs_llm_true_conflict, FALSE) AS has_human_vs_llm_true_conflict,
         COALESCE(article_difference_rollup.has_llm_vs_llm_difference, FALSE) AS has_llm_vs_llm_difference,
@@ -707,10 +713,15 @@ const getComparisonProjectArticleServingInsertSql = ({
       article_rollup.has_multiple_answers AS passes_row_filter_multiple_answers,
       article_rollup.has_all_llm_columns AND article_rollup.has_all_human_columns AS passes_row_filter_fully_answered,
       TRUE AS passes_row_filter_all,
+      article_rollup.has_human_vs_llm_overlap,
       article_rollup.has_human_vs_llm_difference,
       article_rollup.has_human_vs_llm_true_conflict,
       article_rollup.has_llm_vs_llm_difference,
       article_rollup.has_any_disagreement,
+      CASE
+        WHEN article_rollup.has_human_vs_llm_filter THEN article_rollup.has_human_vs_llm_overlap
+        ELSE TRUE
+      END AS passes_difference_filter_human_vs_llm_overlap,
       CASE
         WHEN article_rollup.has_human_vs_llm_filter THEN article_rollup.has_human_vs_llm_difference
         ELSE TRUE
@@ -754,7 +765,7 @@ const getComparisonProjectFilterValuesCteSql = () => {
     difference_filter AS (
       SELECT difference_filter
       FROM (
-        VALUES ('all'), ('human-vs-llm'), ('human-vs-llm-true-conflict'), ('llm-vs-llm'), ('any-disagreement')
+        VALUES ('all'), ('human-vs-llm-overlap'), ('human-vs-llm'), ('human-vs-llm-true-conflict'), ('llm-vs-llm'), ('any-disagreement')
       ) AS difference_filter_value(difference_filter)
     ),
     filter_combination AS (
@@ -837,6 +848,7 @@ const getComparisonProjectFilterMemberInsertSql = ({
           ELSE article.passes_row_filter_all
         END
         AND CASE filter_combination.difference_filter
+          WHEN 'human-vs-llm-overlap' THEN article.passes_difference_filter_human_vs_llm_overlap
           WHEN 'human-vs-llm' THEN article.passes_difference_filter_human_vs_llm
           WHEN 'human-vs-llm-true-conflict' THEN article.passes_difference_filter_human_vs_llm_true_conflict
           WHEN 'llm-vs-llm' THEN article.passes_difference_filter_llm_vs_llm

@@ -1,5 +1,6 @@
 export const comparisonProjectDifferenceFilters = [
   'all',
+  'human-vs-llm-overlap',
   'human-vs-llm',
   'human-vs-llm-true-conflict',
   'llm-vs-llm',
@@ -136,6 +137,12 @@ const getHasHumanVsLlmDifference = (promptAnswerBuckets: Map<string, PromptAnswe
   })
 }
 
+const getHasHumanVsLlmOverlap = (promptAnswerBuckets: Map<string, PromptAnswerBuckets>) => {
+  return Array.from(promptAnswerBuckets.values()).some((answerBuckets) => {
+    return answerBuckets.humanAnsweredCount > 0 && answerBuckets.llmAnsweredCount > 0
+  })
+}
+
 const getHasHumanVsLlmTrueConflict = (promptAnswerBuckets: Map<string, PromptAnswerBuckets>) => {
   return Array.from(promptAnswerBuckets.values()).some((answerBuckets) => {
     return (
@@ -171,6 +178,7 @@ export const getAvailableComparisonProjectDifferenceFilters = (
 
   return [
     'all',
+    ...(hasHumanVsLlmComparison ? (['human-vs-llm-overlap'] as const) : []),
     ...(hasHumanVsLlmComparison ? (['human-vs-llm'] as const) : []),
     ...(hasHumanVsLlmComparison ? (['human-vs-llm-true-conflict'] as const) : []),
     ...(hasLlmVsLlmComparison ? (['llm-vs-llm'] as const) : []),
@@ -181,13 +189,15 @@ export const getAvailableComparisonProjectDifferenceFilters = (
 export const getComparisonProjectDifferenceFilterLabel = (differenceFilter: ComparisonProjectDifferenceFilter) => {
   return differenceFilter === 'all'
     ? 'All rows'
-    : differenceFilter === 'human-vs-llm'
-      ? 'Human vs LLM conflict'
-      : differenceFilter === 'human-vs-llm-true-conflict'
-        ? 'Human vs LLM true conflict'
-        : differenceFilter === 'llm-vs-llm'
-          ? 'LLM vs LLM differences'
-          : 'Any disagreement'
+    : differenceFilter === 'human-vs-llm-overlap'
+      ? 'Human and LLM judged'
+      : differenceFilter === 'human-vs-llm'
+        ? 'Human vs LLM conflict'
+        : differenceFilter === 'human-vs-llm-true-conflict'
+          ? 'Human vs LLM true conflict'
+          : differenceFilter === 'llm-vs-llm'
+            ? 'LLM vs LLM differences'
+            : 'Any disagreement'
 }
 
 export const getNormalizedComparisonProjectDifferenceFilter = (
@@ -214,11 +224,13 @@ export const getComparisonProjectHasDifferenceFilterMatch = (
 
   return normalizedDifferenceFilter === 'human-vs-llm'
     ? getHasHumanVsLlmDifference(promptAnswerBuckets)
-    : normalizedDifferenceFilter === 'human-vs-llm-true-conflict'
-      ? getHasHumanVsLlmTrueConflict(promptAnswerBuckets)
-      : normalizedDifferenceFilter === 'llm-vs-llm'
-        ? getHasLlmVsLlmDifference(promptAnswerBuckets)
-        : getHasAnyDisagreement(promptAnswerBuckets)
+    : normalizedDifferenceFilter === 'human-vs-llm-overlap'
+      ? getHasHumanVsLlmOverlap(promptAnswerBuckets)
+      : normalizedDifferenceFilter === 'human-vs-llm-true-conflict'
+        ? getHasHumanVsLlmTrueConflict(promptAnswerBuckets)
+        : normalizedDifferenceFilter === 'llm-vs-llm'
+          ? getHasLlmVsLlmDifference(promptAnswerBuckets)
+          : getHasAnyDisagreement(promptAnswerBuckets)
 }
 
 export const getComparisonProjectHasAnyConflict = (

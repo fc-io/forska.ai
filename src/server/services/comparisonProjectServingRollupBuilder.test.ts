@@ -130,6 +130,7 @@ const summaryProjectId = 'comparison-serving-rollup-summary'
 const trueConflictProjectId = 'comparison-serving-rollup-true-conflict'
 const differenceFilters = [
   'all',
+  'human-vs-llm-overlap',
   'human-vs-llm',
   'human-vs-llm-true-conflict',
   'llm-vs-llm',

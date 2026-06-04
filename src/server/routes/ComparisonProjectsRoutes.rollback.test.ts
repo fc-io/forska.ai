@@ -417,6 +417,7 @@ type MockServingRow = {
 
 const differenceFilters = [
   'all',
+  'human-vs-llm-overlap',
   'human-vs-llm',
   'human-vs-llm-true-conflict',
   'llm-vs-llm',
@@ -4143,11 +4144,45 @@ test('comparison judgments serving path supports every difference filter', async
 
   expect(responseBodies).toEqual([
     {filter: 'all', titles: ['Article 1']},
+    {filter: 'human-vs-llm-overlap', titles: ['Article 1']},
     {filter: 'human-vs-llm', titles: ['Article 1']},
     {filter: 'human-vs-llm-true-conflict', titles: ['Article 1']},
     {filter: 'llm-vs-llm', titles: ['Article 1']},
     {filter: 'any-disagreement', titles: ['Article 1']},
   ])
+})
+
+test('comparison judgments human llm overlap filter includes non-conflicting rows', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    promptLinks: [{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const overlapRowsResponse = await postComparisonProjectJudgments(app, {
+    differenceFilter: 'human-vs-llm-overlap',
+    limit: '50',
+    rowFilter: 'fully-answered',
+  })
+  const conflictRowsResponse = await postComparisonProjectJudgments(app, {
+    differenceFilter: 'human-vs-llm',
+    limit: '50',
+    rowFilter: 'fully-answered',
+  })
+
+  expect(overlapRowsResponse.status).toBe(200)
+  expect(conflictRowsResponse.status).toBe(200)
+  expect(await getComparisonProjectJudgmentRowTitles(overlapRowsResponse)).toEqual(['Article 1'])
+  expect(await getComparisonProjectJudgmentRowTitles(conflictRowsResponse)).toEqual([])
 })
 
 test('comparison judgments count endpoint supports every row and difference filter from serving stats', async () => {

@@ -3852,6 +3852,7 @@ export const comparisonProjectsRoutes = new Elysia()
         differenceFilter: t.Optional(
           t.Union([
             t.Literal('all'),
+            t.Literal('human-vs-llm-overlap'),
             t.Literal('human-vs-llm'),
             t.Literal('human-vs-llm-true-conflict'),
             t.Literal('llm-vs-llm'),
@@ -3888,6 +3889,7 @@ export const comparisonProjectsRoutes = new Elysia()
         differenceFilter: t.Optional(
           t.Union([
             t.Literal('all'),
+            t.Literal('human-vs-llm-overlap'),
             t.Literal('human-vs-llm'),
             t.Literal('human-vs-llm-true-conflict'),
             t.Literal('llm-vs-llm'),
@@ -3953,6 +3955,7 @@ export const comparisonProjectsRoutes = new Elysia()
         differenceFilter: t.Optional(
           t.Union([
             t.Literal('all'),
+            t.Literal('human-vs-llm-overlap'),
             t.Literal('human-vs-llm'),
             t.Literal('human-vs-llm-true-conflict'),
             t.Literal('llm-vs-llm'),
