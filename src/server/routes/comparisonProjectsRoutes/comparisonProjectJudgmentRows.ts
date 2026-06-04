@@ -605,6 +605,8 @@ export const getComparisonProjectBatchRows = (params: ComparisonProjectBatchRows
       const passesRowFilter = getComparisonProjectPassesRowFilter({
         answeredColumnCount,
         answeredPromptCount: answeredPromptIds.size,
+        cells: articleCells,
+        columns: params.columns,
         hasAllHumanColumns,
         hasAllLlmColumns,
         isSummaryMode: params.isSummaryMode,

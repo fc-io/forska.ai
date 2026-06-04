@@ -1,3 +1,4 @@
+import {comparisonProjectRowFilters} from '../../utils/comparisonProjectRowFilter.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
 import {
@@ -737,11 +738,17 @@ const getComparisonProjectArticleServingInsertSql = ({
 }
 
 const getComparisonProjectFilterValuesCteSql = () => {
+  const rowFilterValues = comparisonProjectRowFilters
+    .map((rowFilter) => {
+      return `(${getSqlLiteral(rowFilter)})`
+    })
+    .join(', ')
+
   return `
     row_filter AS (
       SELECT row_filter
       FROM (
-        VALUES ('multiple-answers'), ('fully-answered'), ('all')
+        VALUES ${rowFilterValues}
       ) AS row_filter_value(row_filter)
     ),
     difference_filter AS (
@@ -778,6 +785,26 @@ const getComparisonProjectFilterMemberInsertSql = ({
       member_updated_at
     )
     WITH ${getComparisonProjectFilterValuesCteSql()},
+    article_answer_rollup AS (
+      SELECT
+        cell.comparison_project_id,
+        cell.generation,
+        cell.article_id,
+        COALESCE(BOOL_OR(cell.kind = 'llm' AND LOWER(TRIM(answer.answer_value)) = 'yes'), FALSE) AS has_llm_yes,
+        COALESCE(BOOL_OR(cell.kind = 'llm' AND LOWER(TRIM(answer.answer_value)) = 'no'), FALSE) AS has_llm_no,
+        COALESCE(BOOL_OR(cell.kind = 'llm' AND LOWER(TRIM(answer.answer_value)) = 'maybe'), FALSE) AS has_llm_maybe,
+        COALESCE(BOOL_OR(cell.kind = 'human' AND LOWER(TRIM(answer.answer_value)) = 'yes'), FALSE) AS has_human_yes,
+        COALESCE(BOOL_OR(cell.kind = 'human' AND LOWER(TRIM(answer.answer_value)) = 'no'), FALSE) AS has_human_no,
+        COALESCE(BOOL_OR(cell.kind = 'human' AND LOWER(TRIM(answer.answer_value)) = 'maybe'), FALSE) AS has_human_maybe
+      FROM ${comparisonCellServingTable} cell,
+        UNNEST(cell.normalized_answers) AS answer(answer_value)
+      WHERE cell.comparison_project_id = ${comparisonProjectLiteral}
+        AND cell.generation = ${generationLiteral}
+        AND cell.normalized_answers IS NOT NULL
+        AND ARRAY_LENGTH(cell.normalized_answers) > 0
+        AND NULLIF(TRIM(answer.answer_value), '') IS NOT NULL
+      GROUP BY cell.comparison_project_id, cell.generation, cell.article_id
+    ),
     eligible_member AS (
       SELECT
         article.comparison_project_id,
@@ -792,11 +819,21 @@ const getComparisonProjectFilterMemberInsertSql = ({
         article.row_sort_article_id
       FROM ${comparisonArticleServingTable} article
       CROSS JOIN filter_combination
+      LEFT JOIN article_answer_rollup answer_rollup
+        ON answer_rollup.comparison_project_id = article.comparison_project_id
+       AND answer_rollup.generation = article.generation
+       AND answer_rollup.article_id = article.article_id
       WHERE article.comparison_project_id = ${comparisonProjectLiteral}
         AND article.generation = ${generationLiteral}
         AND CASE filter_combination.row_filter
           WHEN 'multiple-answers' THEN article.passes_row_filter_multiple_answers
           WHEN 'fully-answered' THEN article.passes_row_filter_fully_answered
+          WHEN 'llm-answered-yes' THEN COALESCE(answer_rollup.has_llm_yes, FALSE)
+          WHEN 'llm-answered-no' THEN COALESCE(answer_rollup.has_llm_no, FALSE)
+          WHEN 'llm-answered-maybe' THEN COALESCE(answer_rollup.has_llm_maybe, FALSE)
+          WHEN 'human-answered-yes' THEN COALESCE(answer_rollup.has_human_yes, FALSE)
+          WHEN 'human-answered-no' THEN COALESCE(answer_rollup.has_human_no, FALSE)
+          WHEN 'human-answered-maybe' THEN COALESCE(answer_rollup.has_human_maybe, FALSE)
           ELSE article.passes_row_filter_all
         END
         AND CASE filter_combination.difference_filter

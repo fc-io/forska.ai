@@ -562,6 +562,8 @@ const getMockServingRowFilterMatch = (
         return column.promptId
       }),
     ).size,
+    cells,
+    columns,
     hasAllHumanColumns: hasAllColumns('human'),
     hasAllLlmColumns: hasAllColumns('llm'),
     isSummaryMode,
