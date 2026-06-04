@@ -809,13 +809,13 @@ const getMockComparisonProjectStatsHasOneValidBinaryDecision = (answers: readonl
   )
 }
 
-const getMockComparisonProjectStatsResolvedHumanPair = (
-  humanAnswers: readonly string[],
+const getMockComparisonProjectStatsNoFallbackConflictResolutionPair = (
+  rightAnswers: readonly string[],
   conflictResolutionAnswers: readonly string[],
 ) => {
-  return getMockComparisonProjectStatsHasOneValidBinaryDecision(humanAnswers)
+  return getMockComparisonProjectStatsHasOneValidBinaryDecision(rightAnswers)
     && getMockComparisonProjectStatsHasOneValidBinaryDecision(conflictResolutionAnswers)
-    ? {leftAnswers: [...conflictResolutionAnswers], rightAnswers: [...humanAnswers]}
+    ? {leftAnswers: [...conflictResolutionAnswers], rightAnswers: [...rightAnswers]}
     : null
 }
 
@@ -823,20 +823,20 @@ const getMockComparisonProjectStatsPairs = (state: MockDatabaseState, group: Moc
   return getMockServingRows(state)
     .map<MockComparisonProjectStatsPair | null>((row) => {
       const fallbackLeftAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.leftColumnId])
+      const rightAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.rightColumnId])
       const conflictResolutionAnswers = getMockComparisonProjectStatsAnswers(
         state.conflictResolutionRows.find((resolutionRow) => {
           return resolutionRow.articleId === row.articleId
         })?.answerValue,
       )
-      if (group.kind === 'human-vs-conflict-resolution') {
-        return getMockComparisonProjectStatsResolvedHumanPair(fallbackLeftAnswers, conflictResolutionAnswers)
+      if (group.kind === 'human-vs-conflict-resolution' || group.kind === 'llm-vs-conflict-resolution-no-fallback') {
+        return getMockComparisonProjectStatsNoFallbackConflictResolutionPair(rightAnswers, conflictResolutionAnswers)
       }
 
       const leftAnswers =
         group.kind === 'llm-vs-conflict-resolution' && conflictResolutionAnswers.length > 0
           ? conflictResolutionAnswers
           : fallbackLeftAnswers
-      const rightAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.rightColumnId])
 
       return leftAnswers.length > 0 && rightAnswers.length > 0 ? {leftAnswers, rightAnswers} : null
     })
@@ -3851,6 +3851,9 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
   const conflictResolutionComparison = body.data.comparisons.find((candidate) => {
     return candidate.kind === 'llm-vs-conflict-resolution'
   })
+  const noFallbackLlmConflictResolutionComparison = body.data.comparisons.find((candidate) => {
+    return candidate.kind === 'llm-vs-conflict-resolution-no-fallback'
+  })
   const humanConflictResolutionComparison = body.data.comparisons.find((candidate) => {
     return candidate.kind === 'human-vs-conflict-resolution'
   })
@@ -3860,7 +3863,7 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
   })
 
   expect(response.status).toBe(200)
-  expect(body.data.comparisons).toHaveLength(3)
+  expect(body.data.comparisons).toHaveLength(4)
   expect(comparison).toMatchObject({
     cohensKappa: 0,
     conflictCount: 1,
@@ -3872,6 +3875,13 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
     cohensKappa: 1,
     conflictCount: 0,
     kind: 'llm-vs-conflict-resolution',
+    overlapCount: 1,
+    trueConflictCount: 0,
+  })
+  expect(noFallbackLlmConflictResolutionComparison).toMatchObject({
+    cohensKappa: 1,
+    conflictCount: 0,
+    kind: 'llm-vs-conflict-resolution-no-fallback',
     overlapCount: 1,
     trueConflictCount: 0,
   })

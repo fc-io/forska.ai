@@ -15,6 +15,7 @@ export type ComparisonProjectStatsComparisonKind =
   | 'human-vs-llm'
   | 'llm-vs-llm'
   | 'llm-vs-conflict-resolution'
+  | 'llm-vs-conflict-resolution-no-fallback'
   | 'human-vs-conflict-resolution'
 
 export type ComparisonProjectStatsComparisonGroup = {
@@ -356,12 +357,18 @@ const getComparisonProjectStatsColumnLabel = (
   return promptLabel ? `${raterLabel} - ${promptLabel}` : raterLabel
 }
 
+const getIsComparisonProjectStatsNoFallbackConflictResolutionComparison = (
+  kind: ComparisonProjectStatsComparisonKind,
+) => {
+  return kind === 'llm-vs-conflict-resolution-no-fallback' || kind === 'human-vs-conflict-resolution'
+}
+
 const getIsComparisonProjectStatsHumanComparison = (kind: ComparisonProjectStatsComparisonKind) => {
   return (
     kind === 'primary-vs-human'
     || kind === 'human-vs-llm'
     || kind === 'llm-vs-conflict-resolution'
-    || kind === 'human-vs-conflict-resolution'
+    || getIsComparisonProjectStatsNoFallbackConflictResolutionComparison(kind)
   )
 }
 
@@ -378,8 +385,8 @@ const getComparisonProjectStatsGroupLabel = (
     return `${rightColumnLabel} vs Conflict resolution (fallback to human answer if no resolution provided)`
   }
 
-  if (kind === 'human-vs-conflict-resolution') {
-    return `${leftColumnLabel} vs Conflict resolution (no fallback)`
+  if (getIsComparisonProjectStatsNoFallbackConflictResolutionComparison(kind)) {
+    return `${rightColumnLabel} vs Conflict resolution (no fallback)`
   }
 
   return getIsComparisonProjectStatsHumanComparison(kind)
@@ -553,6 +560,19 @@ const getHumanVsConflictResolutionComparisonProjectStatsGroups = (
     })
 }
 
+const getLlmVsConflictResolutionNoFallbackComparisonProjectStatsGroups = (
+  llmColumns: readonly ComparisonProjectStatsColumn[],
+  context: ComparisonProjectStatsLabelContext,
+) => {
+  return llmColumns
+    .filter((llmColumn) => {
+      return llmColumn.promptId === summaryPromptId
+    })
+    .map((llmColumn) => {
+      return getComparisonProjectStatsGroup('llm-vs-conflict-resolution-no-fallback', llmColumn, llmColumn, context)
+    })
+}
+
 const getComparisonProjectStatsResolvedTruthColumnInfo = (
   humanColumn: ComparisonProjectStatsColumn,
   llmColumn: ComparisonProjectStatsColumn,
@@ -622,6 +642,9 @@ export const getComparisonProjectStatsComparisonGroups = (params: {
       includeConflictResolutionGroups,
       labelContext,
     ),
+    ...(includeConflictResolutionGroups
+      ? getLlmVsConflictResolutionNoFallbackComparisonProjectStatsGroups(llmColumns, labelContext)
+      : []),
     ...(includeConflictResolutionGroups
       ? getHumanVsConflictResolutionComparisonProjectStatsGroups(humanColumns, labelContext)
       : []),
@@ -743,16 +766,16 @@ const getComparisonProjectStatsLeftAnswers = (
     : leftCell.normalizedAnswers
 }
 
-const getComparisonProjectStatsResolvedHumanPair = (
+const getComparisonProjectStatsNoFallbackConflictResolutionPair = (
   articleId: string,
-  humanCell: ComparisonProjectStatsNormalizedCell,
+  rightCell: ComparisonProjectStatsNormalizedCell,
   conflictResolutionAnswersByArticleId: Map<string, string[]>,
 ) => {
   const conflictResolutionAnswers = conflictResolutionAnswersByArticleId.get(articleId) ?? []
-  const humanAnswers = humanCell.normalizedAnswers
+  const rightAnswers = rightCell.normalizedAnswers
 
-  return getHasOneValidBinaryDecision(conflictResolutionAnswers) && getHasOneValidBinaryDecision(humanAnswers)
-    ? {leftAnswers: conflictResolutionAnswers, rightAnswers: humanAnswers}
+  return getHasOneValidBinaryDecision(conflictResolutionAnswers) && getHasOneValidBinaryDecision(rightAnswers)
+    ? {leftAnswers: conflictResolutionAnswers, rightAnswers}
     : null
 }
 
@@ -767,8 +790,8 @@ const getComparisonProjectStatsPair = (params: {
     return null
   }
 
-  return params.group.kind === 'human-vs-conflict-resolution'
-    ? getComparisonProjectStatsResolvedHumanPair(
+  return getIsComparisonProjectStatsNoFallbackConflictResolutionComparison(params.group.kind)
+    ? getComparisonProjectStatsNoFallbackConflictResolutionPair(
         params.articleId,
         params.rightCell,
         params.conflictResolutionAnswersByArticleId,
@@ -1145,7 +1168,11 @@ const getShouldComputeCohensKappa = (params: {
     return column.promptId === summaryPromptId
   }).length
 
-  return params.isSummaryMode && (summaryColumnCount === 2 || params.group.kind === 'human-vs-conflict-resolution')
+  return (
+    params.isSummaryMode
+    && (summaryColumnCount === 2
+      || getIsComparisonProjectStatsNoFallbackConflictResolutionComparison(params.group.kind))
+  )
 }
 
 const getComparisonProjectStatsComparison = (params: {
@@ -1430,12 +1457,12 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
         comparison_pair.article_id,
         'left' AS answer_side,
         CASE
-          WHEN comparison_pair.comparison_kind = 'human-vs-conflict-resolution' THEN conflict_resolution.answer_value
+          WHEN comparison_pair.comparison_kind IN ('human-vs-conflict-resolution', 'llm-vs-conflict-resolution-no-fallback') THEN conflict_resolution.answer_value
           WHEN comparison_pair.comparison_kind = 'llm-vs-conflict-resolution' THEN COALESCE(conflict_resolution.answer_value, normalized_cell_answer.answer_value)
           ELSE normalized_cell_answer.answer_value
         END AS answer_value,
         CASE
-          WHEN comparison_pair.comparison_kind = 'human-vs-conflict-resolution' THEN conflict_resolution.binary_decision
+          WHEN comparison_pair.comparison_kind IN ('human-vs-conflict-resolution', 'llm-vs-conflict-resolution-no-fallback') THEN conflict_resolution.binary_decision
           WHEN comparison_pair.comparison_kind = 'llm-vs-conflict-resolution' THEN
             CASE
               WHEN conflict_resolution.answer_value IS NOT NULL THEN conflict_resolution.binary_decision
@@ -1449,7 +1476,7 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
         AND normalized_cell_answer.column_id = comparison_pair.left_column_id
       LEFT JOIN normalized_conflict_resolution_answer conflict_resolution
         ON conflict_resolution.article_id = comparison_pair.article_id
-        AND comparison_pair.comparison_kind IN ('llm-vs-conflict-resolution', 'human-vs-conflict-resolution')
+        AND comparison_pair.comparison_kind IN ('llm-vs-conflict-resolution', 'llm-vs-conflict-resolution-no-fallback', 'human-vs-conflict-resolution')
       UNION ALL
       SELECT
         comparison_pair.comparison_id,
@@ -1503,7 +1530,7 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
       SELECT
         *,
         (
-          comparison_kind <> 'human-vs-conflict-resolution'
+          comparison_kind NOT IN ('human-vs-conflict-resolution', 'llm-vs-conflict-resolution-no-fallback')
           OR (
             left_answer_value_count > 0
             AND right_answer_value_count > 0
@@ -1517,7 +1544,7 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
           left_binary_decision_count = 1
           AND right_binary_decision_count = 1
           AND (
-            comparison_kind <> 'human-vs-conflict-resolution'
+            comparison_kind NOT IN ('human-vs-conflict-resolution', 'llm-vs-conflict-resolution-no-fallback')
             OR (
               left_non_binary_answer_value_count = 0
               AND right_non_binary_answer_value_count = 0

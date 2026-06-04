@@ -403,6 +403,16 @@ test('comparison stats SQL matches helper for no-fallback conflict resolution me
       'llm-vs-conflict-resolution',
       primarySummaryColumn.id,
     )
+    const noFallbackLlmConflictResolutionComparison = findComparison(
+      comparisons,
+      'llm-vs-conflict-resolution-no-fallback',
+      primarySummaryColumn.id,
+    )
+    const expectedNoFallbackLlmConflictResolutionComparison = findComparison(
+      expectedComparisons,
+      'llm-vs-conflict-resolution-no-fallback',
+      primarySummaryColumn.id,
+    )
     const humanConflictResolutionComparison = findComparison(
       comparisons,
       'human-vs-conflict-resolution',
@@ -435,6 +445,20 @@ test('comparison stats SQL matches helper for no-fallback conflict resolution me
       6,
     )
     expect(conflictResolutionComparison.overlapCount).toBe(6)
+    expect(noFallbackLlmConflictResolutionComparison).toMatchObject({
+      conflictCount: expectedNoFallbackLlmConflictResolutionComparison.conflictCount,
+      label: 'Model 1 vs Conflict resolution (no fallback)',
+      overlapCount: expectedNoFallbackLlmConflictResolutionComparison.overlapCount,
+      sensitivity: expectedNoFallbackLlmConflictResolutionComparison.sensitivity,
+      specificity: expectedNoFallbackLlmConflictResolutionComparison.specificity,
+      trueConflictCount: expectedNoFallbackLlmConflictResolutionComparison.trueConflictCount,
+    })
+    expect(noFallbackLlmConflictResolutionComparison.overlapCount).toBe(5)
+    expect(noFallbackLlmConflictResolutionComparison.conflictCount).toBe(2)
+    expect(noFallbackLlmConflictResolutionComparison.trueConflictCount).toBe(1)
+    expect(noFallbackLlmConflictResolutionComparison.sensitivity).toBeCloseTo(0.75, 6)
+    expect(noFallbackLlmConflictResolutionComparison.specificity).toBe(1)
+    expect(noFallbackLlmConflictResolutionComparison.cohensKappa).toBeCloseTo(6 / 11, 6)
     expect(humanConflictResolutionComparison).toMatchObject({
       conflictCount: expectedHumanConflictResolutionComparison.conflictCount,
       label: 'Human vs Conflict resolution (no fallback)',
@@ -793,6 +817,20 @@ test('comparison stats prefers primary source project over shared model id and d
     },
     {
       columnInfo: null,
+      kind: 'llm-vs-conflict-resolution-no-fallback',
+      label: 'Model 1 (Primary project) vs Conflict resolution (no fallback)',
+      leftColumnId: primarySummaryColumn.id,
+      rightColumnId: primarySummaryColumn.id,
+    },
+    {
+      columnInfo: null,
+      kind: 'llm-vs-conflict-resolution-no-fallback',
+      label: 'Model 1 (Peer project) vs Conflict resolution (no fallback)',
+      leftColumnId: peerSummarySharedModelColumn.id,
+      rightColumnId: peerSummarySharedModelColumn.id,
+    },
+    {
+      columnInfo: null,
       kind: 'human-vs-conflict-resolution',
       label: 'Human vs Conflict resolution (no fallback)',
       leftColumnId: humanSummaryColumn.id,
@@ -863,6 +901,11 @@ test('comparison stats adds conflict resolution comparison with resolved answers
     'llm-vs-conflict-resolution',
     primarySummaryColumn.id,
   )
+  const noFallbackLlmConflictResolutionComparison = findComparison(
+    comparisons,
+    'llm-vs-conflict-resolution-no-fallback',
+    primarySummaryColumn.id,
+  )
 
   expect(primaryComparison.trueConflictCount).toBe(2)
   expect(conflictResolutionComparison).toMatchObject({
@@ -874,6 +917,15 @@ test('comparison stats adds conflict resolution comparison with resolved answers
     trueConflictCount: 0,
   })
   expect(conflictResolutionComparison.cohensKappa).toBe(1)
+  expect(noFallbackLlmConflictResolutionComparison).toMatchObject({
+    conflictCount: 0,
+    label: 'Model 1 vs Conflict resolution (no fallback)',
+    overlapCount: 2,
+    sensitivity: 1,
+    specificity: 1,
+    trueConflictCount: 0,
+  })
+  expect(noFallbackLlmConflictResolutionComparison.cohensKappa).toBe(1)
 })
 
 test('comparison stats adds no-fallback human conflict resolution comparison', () => {
@@ -910,6 +962,11 @@ test('comparison stats adds no-fallback human conflict resolution comparison', (
     'llm-vs-conflict-resolution',
     primarySummaryColumn.id,
   )
+  const noFallbackLlmConflictResolutionComparison = findComparison(
+    comparisons,
+    'llm-vs-conflict-resolution-no-fallback',
+    primarySummaryColumn.id,
+  )
   const humanConflictResolutionComparison = findComparison(
     comparisons,
     'human-vs-conflict-resolution',
@@ -917,6 +974,15 @@ test('comparison stats adds no-fallback human conflict resolution comparison', (
   )
 
   expect(fallbackConflictResolutionComparison.overlapCount).toBe(6)
+  expect(noFallbackLlmConflictResolutionComparison).toMatchObject({
+    conflictCount: 2,
+    label: 'Model 1 vs Conflict resolution (no fallback)',
+    overlapCount: 4,
+    sensitivity: 2 / 3,
+    specificity: 1,
+    trueConflictCount: 1,
+  })
+  expect(noFallbackLlmConflictResolutionComparison.cohensKappa).toBeCloseTo(0.5, 6)
   expect(humanConflictResolutionComparison).toMatchObject({
     conflictCount: 1,
     label: 'Human vs Conflict resolution (no fallback)',

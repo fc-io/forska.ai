@@ -128,13 +128,17 @@ const getComparisonProjectStatsPromptLabel = (column: ComparisonProjectStatsLabe
 }
 
 const getComparisonProjectStatsConflictResolutionLabel = (comparison: ComparisonProjectStatsComparison) => {
-  return comparison.kind === 'human-vs-conflict-resolution'
-    ? 'Conflict resolution (no fallback)'
-    : 'Conflict resolution (fallback to human answer if no resolution provided)'
+  return comparison.kind === 'llm-vs-conflict-resolution'
+    ? 'Conflict resolution (fallback to human answer if no resolution provided)'
+    : 'Conflict resolution (no fallback)'
 }
 
 const getIsComparisonProjectStatsConflictResolutionComparison = (comparison: ComparisonProjectStatsComparison) => {
-  return comparison.kind === 'llm-vs-conflict-resolution' || comparison.kind === 'human-vs-conflict-resolution'
+  return (
+    comparison.kind === 'llm-vs-conflict-resolution'
+    || comparison.kind === 'llm-vs-conflict-resolution-no-fallback'
+    || comparison.kind === 'human-vs-conflict-resolution'
+  )
 }
 
 const ComparisonProjectStatsLabelSide = (props: {column: ComparisonProjectStatsLabelColumn}) => {
