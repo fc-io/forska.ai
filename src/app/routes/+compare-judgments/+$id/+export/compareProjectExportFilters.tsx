@@ -13,6 +13,7 @@ type CompareProjectExportDifferenceFilterOption = {label: string; value: Compari
 
 type CompareProjectExportFiltersProps = {
   differenceFilter: ComparisonProjectDifferenceFilter
+  differenceFilterDisabled: boolean
   differenceFilterOptions: CompareProjectExportDifferenceFilterOption[]
   isExporting: boolean
   isSummaryMode: boolean
@@ -40,7 +41,11 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
           >
             <For each={comparisonProjectRowFilters}>
               {(option) => {
-                return <option value={option}>{getComparisonProjectRowFilterLabel(option, props.isSummaryMode)}</option>
+                return (
+                  <option selected={option === props.rowFilter} value={option}>
+                    {getComparisonProjectRowFilterLabel(option, props.isSummaryMode)}
+                  </option>
+                )
               }}
             </For>
           </select>
@@ -50,14 +55,18 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
           <select
             value={props.differenceFilter}
             class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
-            disabled={props.differenceFilterOptions.length <= 1}
+            disabled={props.differenceFilterDisabled}
             onChange={(event) => {
               props.onDifferenceFilterChange(event.currentTarget.value as ComparisonProjectDifferenceFilter)
             }}
           >
             <For each={props.differenceFilterOptions}>
               {(option) => {
-                return <option value={option.value}>{option.label}</option>
+                return (
+                  <option selected={option.value === props.differenceFilter} value={option.value}>
+                    {option.label}
+                  </option>
+                )
               }}
             </For>
           </select>

@@ -186,6 +186,17 @@ export const getAvailableComparisonProjectDifferenceFilters = (
   ]
 }
 
+export const getSelectableComparisonProjectDifferenceFilters = (
+  availableFilters: readonly ComparisonProjectDifferenceFilter[],
+  selectedFilter: ComparisonProjectDifferenceFilter,
+) => {
+  const availableFilterSet = new Set(availableFilters)
+
+  return comparisonProjectDifferenceFilters.filter((differenceFilter) => {
+    return differenceFilter === selectedFilter || availableFilterSet.has(differenceFilter)
+  })
+}
+
 export const getComparisonProjectDifferenceFilterLabel = (differenceFilter: ComparisonProjectDifferenceFilter) => {
   return differenceFilter === 'all'
     ? 'All rows'

@@ -12,7 +12,7 @@ import {
   type ComparisonProjectDifferenceFilter,
   getAvailableComparisonProjectDifferenceFilters,
   getComparisonProjectDifferenceFilterLabel,
-  getNormalizedComparisonProjectDifferenceFilter,
+  getSelectableComparisonProjectDifferenceFilters,
 } from '../../../../utils/comparisonProjectDifferenceFilter.ts'
 import type {ComparisonProjectRowFilter} from '../../../../utils/comparisonProjectRowFilter.ts'
 import {downloadCsvFromPost} from '../../../utils/downloadCsv.ts'
@@ -76,24 +76,18 @@ const CompareProjectExportPage = () => {
 
     return Boolean(comparisonProject?.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary')
   })
+  const availableDifferenceFilters = createMemo(() => {
+    return getAvailableComparisonProjectDifferenceFilters(orderedColumns())
+  })
   const differenceFilterOptions = createMemo(() => {
-    return getAvailableComparisonProjectDifferenceFilters(orderedColumns()).map((value) => {
-      return {label: getComparisonProjectDifferenceFilterLabel(value), value}
-    })
+    return getSelectableComparisonProjectDifferenceFilters(availableDifferenceFilters(), differenceFilter()).map(
+      (value) => {
+        return {label: getComparisonProjectDifferenceFilterLabel(value), value}
+      },
+    )
   })
   const urlState = createMemo(() => {
     return {differenceFilter: differenceFilter(), pageLimit: pageLimit(), rowFilter: rowFilter()}
-  })
-
-  createEffect(() => {
-    const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(
-      differenceFilter(),
-      orderedColumns(),
-    )
-
-    if (normalizedDifferenceFilter !== differenceFilter()) {
-      setDifferenceFilter(normalizedDifferenceFilter)
-    }
   })
 
   createEffect(
@@ -183,6 +177,7 @@ const CompareProjectExportPage = () => {
               <CompareProjectExportMetadata comparisonProject={comparisonProject()} />
               <CompareProjectExportFilters
                 differenceFilter={differenceFilter()}
+                differenceFilterDisabled={availableDifferenceFilters().length <= 1 && differenceFilter() === 'all'}
                 differenceFilterOptions={differenceFilterOptions()}
                 isExporting={exportMutation.isPending}
                 isSummaryMode={isSummaryMode()}

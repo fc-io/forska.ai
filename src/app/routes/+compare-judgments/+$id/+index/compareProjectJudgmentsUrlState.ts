@@ -117,15 +117,9 @@ export const getCompareProjectJudgmentsSearchParams = (
 export const getCompareProjectJudgmentsConfirmedDifferenceFilter = (
   state: CompareProjectJudgmentsDifferenceFilterMetadataState,
 ): ComparisonProjectDifferenceFilter => {
-  return state.hasLoadedMetadata && !state.availableDifferenceFilters.includes(state.differenceFilter)
-    ? 'all'
-    : state.differenceFilter
+  return state.differenceFilter
 }
 
 export const getCanFetchCompareProjectJudgmentsPage = (state: CompareProjectJudgmentsPageQueryState) => {
-  return (
-    state.searchInitialized
-    && state.hasLoadedMetadata
-    && state.availableDifferenceFilters.includes(state.differenceFilter)
-  )
+  return state.searchInitialized && state.hasLoadedMetadata
 }

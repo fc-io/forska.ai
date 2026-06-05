@@ -90,13 +90,32 @@ test('compare judgments URL state preserves selected difference filter until met
   expect(getCanFetchCompareProjectJudgmentsPage({...loadedMetadataState, searchInitialized: true})).toBe(true)
 })
 
-test('compare judgments URL state resets selected difference filter after metadata rejects it', () => {
+test('compare judgments URL state preserves human and LLM judged filter until metadata confirms it', () => {
+  const initialState = getInitialCompareProjectJudgmentsUrlState({differenceFilter: 'human-vs-llm-overlap'})
+  const loadingMetadataState = {
+    availableDifferenceFilters: ['all'] as const,
+    differenceFilter: initialState.differenceFilter,
+    hasLoadedMetadata: false,
+  }
+  const loadedMetadataState = {
+    ...loadingMetadataState,
+    availableDifferenceFilters: ['all', 'human-vs-llm-overlap'] as const,
+    hasLoadedMetadata: true,
+  }
+
+  expect(getCompareProjectJudgmentsConfirmedDifferenceFilter(loadingMetadataState)).toBe('human-vs-llm-overlap')
+  expect(getCanFetchCompareProjectJudgmentsPage({...loadingMetadataState, searchInitialized: true})).toBe(false)
+  expect(getCompareProjectJudgmentsConfirmedDifferenceFilter(loadedMetadataState)).toBe('human-vs-llm-overlap')
+  expect(getCanFetchCompareProjectJudgmentsPage({...loadedMetadataState, searchInitialized: true})).toBe(true)
+})
+
+test('compare judgments URL state preserves selected difference filter after metadata rejects it', () => {
   const metadataState = {
     availableDifferenceFilters: ['all', 'llm-vs-llm'] as const,
     differenceFilter: 'human-vs-llm' as const,
     hasLoadedMetadata: true,
   }
 
-  expect(getCompareProjectJudgmentsConfirmedDifferenceFilter(metadataState)).toBe('all')
-  expect(getCanFetchCompareProjectJudgmentsPage({...metadataState, searchInitialized: true})).toBe(false)
+  expect(getCompareProjectJudgmentsConfirmedDifferenceFilter(metadataState)).toBe('human-vs-llm')
+  expect(getCanFetchCompareProjectJudgmentsPage({...metadataState, searchInitialized: true})).toBe(true)
 })

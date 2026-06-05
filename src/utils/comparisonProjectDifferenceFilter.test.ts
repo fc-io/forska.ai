@@ -5,6 +5,7 @@ import {
   getComparisonProjectDifferenceFilterLabel,
   getComparisonProjectHasDifferenceFilterMatch,
   getNormalizedComparisonProjectDifferenceFilter,
+  getSelectableComparisonProjectDifferenceFilters,
 } from './comparisonProjectDifferenceFilter.ts'
 
 test('available difference filters hide non-applicable options', () => {
@@ -45,6 +46,17 @@ test('difference filter labels stay user-facing', () => {
   expect(getComparisonProjectDifferenceFilterLabel('human-vs-llm-true-conflict')).toBe('Human vs LLM true conflict')
   expect(getComparisonProjectDifferenceFilterLabel('llm-vs-llm')).toBe('LLM vs LLM differences')
   expect(getComparisonProjectDifferenceFilterLabel('any-disagreement')).toBe('Any disagreement')
+})
+
+test('selectable difference filters keep the current selection renderable', () => {
+  expect(getSelectableComparisonProjectDifferenceFilters(['all'] as const, 'human-vs-llm-overlap')).toEqual([
+    'all',
+    'human-vs-llm-overlap',
+  ])
+  expect(getSelectableComparisonProjectDifferenceFilters(['all', 'llm-vs-llm'] as const, 'llm-vs-llm')).toEqual([
+    'all',
+    'llm-vs-llm',
+  ])
 })
 
 test('difference matching supports prompt and summary comparisons', () => {

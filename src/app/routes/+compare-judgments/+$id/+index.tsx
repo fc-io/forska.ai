@@ -22,6 +22,7 @@ import {
   type ComparisonProjectDifferenceFilter,
   getAvailableComparisonProjectDifferenceFilters,
   getComparisonProjectDifferenceFilterLabel,
+  getSelectableComparisonProjectDifferenceFilters,
 } from '../../../../utils/comparisonProjectDifferenceFilter.ts'
 import {
   type ComparisonProjectRowFilter,
@@ -32,7 +33,6 @@ import {
 import {
   compareProjectJudgmentsPageLimitOptions,
   getCanFetchCompareProjectJudgmentsPage,
-  getCompareProjectJudgmentsConfirmedDifferenceFilter,
   getCompareProjectJudgmentsSearchParams,
   getInitialCompareProjectJudgmentsUrlState,
 } from './+index/compareProjectJudgmentsUrlState.ts'
@@ -380,9 +380,11 @@ const CompareProjectJudgmentsPage = () => {
     return Boolean(comparisonProject?.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary')
   })
   const differenceFilterOptions = createMemo(() => {
-    return availableDifferenceFilters().map((value) => {
-      return {label: getComparisonProjectDifferenceFilterLabel(value), value}
-    })
+    return getSelectableComparisonProjectDifferenceFilters(availableDifferenceFilters(), differenceFilter()).map(
+      (value) => {
+        return {label: getComparisonProjectDifferenceFilterLabel(value), value}
+      },
+    )
   })
   const compareSearchParams = createMemo(() => {
     return getCompareProjectJudgmentsSearchParams({
@@ -390,18 +392,6 @@ const CompareProjectJudgmentsPage = () => {
       rowFilter: rowFilter(),
       differenceFilter: differenceFilter(),
     })
-  })
-
-  createEffect(() => {
-    const confirmedDifferenceFilter = getCompareProjectJudgmentsConfirmedDifferenceFilter({
-      availableDifferenceFilters: availableDifferenceFilters(),
-      differenceFilter: differenceFilter(),
-      hasLoadedMetadata: comparisonProjectQuery.isSuccess,
-    })
-
-    if (confirmedDifferenceFilter !== differenceFilter()) {
-      setDifferenceFilter(confirmedDifferenceFilter)
-    }
   })
 
   createEffect(
@@ -649,7 +639,7 @@ const CompareProjectJudgmentsPage = () => {
                         <For each={comparisonProjectRowFilters}>
                           {(option) => {
                             return (
-                              <option value={option}>
+                              <option selected={option === rowFilter()} value={option}>
                                 {getComparisonProjectRowFilterLabel(option, Boolean(isSummaryMode()))}
                               </option>
                             )
@@ -657,7 +647,7 @@ const CompareProjectJudgmentsPage = () => {
                         </For>
                       </select>
                     </label>
-                    <Show when={differenceFilterOptions().length > 1}>
+                    <Show when={availableDifferenceFilters().length > 1 || differenceFilter() !== 'all'}>
                       <label class="flex items-center gap-2 text-sm text-gray-600">
                         <span>Difference filter</span>
                         <select
@@ -669,7 +659,11 @@ const CompareProjectJudgmentsPage = () => {
                         >
                           <For each={differenceFilterOptions()}>
                             {(option) => {
-                              return <option value={option.value}>{option.label}</option>
+                              return (
+                                <option selected={option.value === differenceFilter()} value={option.value}>
+                                  {option.label}
+                                </option>
+                              )
                             }}
                           </For>
                         </select>
