@@ -70,6 +70,94 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
       <div class="mt-4 space-y-5">
         <section>
           <div>
+            <h4 class="text-sm font-semibold text-gray-900">Conflict resolution stats by answer</h4>
+            <p class="mt-1 text-sm text-gray-600">
+              No-fallback conflict-resolution comparisons recalculated on articles where the listed model or Human
+              answer is present.
+            </p>
+          </div>
+
+          <Show when={getConflictResolutionAnswerComparisons(props.additionalStats).length === 0}>
+            <div class="mt-3 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+              No answer-sliced conflict resolution stats are available yet.
+            </div>
+          </Show>
+
+          <Show when={getConflictResolutionAnswerComparisons(props.additionalStats).length > 0}>
+            <div class="mt-3 overflow-x-auto">
+              <table class="min-w-full divide-y divide-gray-200 text-sm">
+                <thead>
+                  <tr>
+                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Answer slice
+                    </th>
+                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Comparison
+                    </th>
+                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Column Info
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Overlap
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Conflicts
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      True Conflicts
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Cohen's Kappa
+                      <span class="block normal-case tracking-normal">Include vs Exclude</span>
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Sensitivity
+                      <span class="block normal-case tracking-normal">Reference Include</span>
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Specificity
+                      <span class="block normal-case tracking-normal">Reference Exclude</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                  <For each={getConflictResolutionAnswerComparisons(props.additionalStats)}>
+                    {(comparison) => {
+                      return (
+                        <tr>
+                          <td class="max-w-[18rem] px-3 py-3 text-gray-900">{comparison.answerFilterLabel}</td>
+                          <td class="max-w-[28rem] px-3 py-3 text-gray-900">{comparison.label}</td>
+                          <td class="max-w-[18rem] px-3 py-3 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getCountLabel(comparison.overlapCount)}
+                          </td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getCountLabel(comparison.conflictCount)}
+                          </td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getCountLabel(comparison.trueConflictCount)}
+                          </td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getScoreLabel(comparison.cohensKappa)}
+                          </td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getRateLabel(comparison.sensitivity)}
+                          </td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getRateLabel(comparison.specificity)}
+                          </td>
+                        </tr>
+                      )
+                    }}
+                  </For>
+                </tbody>
+              </table>
+            </div>
+          </Show>
+        </section>
+
+        <section>
+          <div>
             <h4 class="text-sm font-semibold text-gray-900">No-fallback truth comparison</h4>
             <p class="mt-1 text-sm text-gray-600">
               Rows include articles where Human, the LLM, and the saved conflict resolution all have one binary Include
@@ -173,94 +261,6 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
                           </td>
                           <td class="px-3 py-3 text-right tabular-nums text-gray-700">
                             {getScoreLabel(comparison.mcnemarChiSquare)}
-                          </td>
-                        </tr>
-                      )
-                    }}
-                  </For>
-                </tbody>
-              </table>
-            </div>
-          </Show>
-        </section>
-
-        <section>
-          <div>
-            <h4 class="text-sm font-semibold text-gray-900">Conflict resolution stats by answer</h4>
-            <p class="mt-1 text-sm text-gray-600">
-              No-fallback conflict-resolution comparisons recalculated on articles where the listed model or Human
-              answer is present.
-            </p>
-          </div>
-
-          <Show when={getConflictResolutionAnswerComparisons(props.additionalStats).length === 0}>
-            <div class="mt-3 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
-              No answer-sliced conflict resolution stats are available yet.
-            </div>
-          </Show>
-
-          <Show when={getConflictResolutionAnswerComparisons(props.additionalStats).length > 0}>
-            <div class="mt-3 overflow-x-auto">
-              <table class="min-w-full divide-y divide-gray-200 text-sm">
-                <thead>
-                  <tr>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      Answer slice
-                    </th>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      Comparison
-                    </th>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      Column Info
-                    </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      Overlap
-                    </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      Conflicts
-                    </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      True Conflicts
-                    </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      Cohen's Kappa
-                      <span class="block normal-case tracking-normal">Include vs Exclude</span>
-                    </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      Sensitivity
-                      <span class="block normal-case tracking-normal">Reference Include</span>
-                    </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      Specificity
-                      <span class="block normal-case tracking-normal">Reference Exclude</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
-                  <For each={getConflictResolutionAnswerComparisons(props.additionalStats)}>
-                    {(comparison) => {
-                      return (
-                        <tr>
-                          <td class="max-w-[18rem] px-3 py-3 text-gray-900">{comparison.answerFilterLabel}</td>
-                          <td class="max-w-[28rem] px-3 py-3 text-gray-900">{comparison.label}</td>
-                          <td class="max-w-[18rem] px-3 py-3 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
-                            {getCountLabel(comparison.overlapCount)}
-                          </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
-                            {getCountLabel(comparison.conflictCount)}
-                          </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
-                            {getCountLabel(comparison.trueConflictCount)}
-                          </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
-                            {getScoreLabel(comparison.cohensKappa)}
-                          </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
-                            {getRateLabel(comparison.sensitivity)}
-                          </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
-                            {getRateLabel(comparison.specificity)}
                           </td>
                         </tr>
                       )
