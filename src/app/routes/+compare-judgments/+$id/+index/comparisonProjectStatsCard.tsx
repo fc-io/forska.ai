@@ -148,7 +148,7 @@ const ComparisonProjectStatsLabelSide = (props: {column: ComparisonProjectStatsL
       <Show when={props.column.projectName}>
         {(projectName) => {
           return (
-            <span class="inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-sm font-bold text-violet-800 ring-1 ring-inset ring-violet-200">
+            <span class="inline-flex rounded-full bg-violet-100 px-2 py-0.5 text-xs font-bold text-violet-800 ring-1 ring-inset ring-violet-200">
               {projectName()}
             </span>
           )
@@ -226,33 +226,33 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
 
       <Show when={!props.isLoading && !props.isError && (props.stats?.comparisons.length ?? 0) > 0}>
         <div class="mt-4 overflow-x-auto">
-          <table class="min-w-full divide-y divide-gray-200 text-sm">
+          <table class="min-w-full divide-y divide-gray-200 text-xs">
             <thead>
               <tr>
-                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Comparison
                 </th>
-                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Column Info
                 </th>
-                <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Overlap
                 </th>
-                <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Conflicts
                 </th>
-                <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                   True Conflicts
                 </th>
-                <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Cohen's Kappa
                   <span class="block normal-case tracking-normal">Include vs Exclude</span>
                 </th>
-                <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Sensitivity
                   <span class="block normal-case tracking-normal">Reference Include</span>
                 </th>
-                <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Specificity
                   <span class="block normal-case tracking-normal">Reference Exclude</span>
                 </th>
@@ -263,26 +263,26 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
                 {(comparison) => {
                   return (
                     <tr>
-                      <td class="max-w-[32rem] px-3 py-3 text-gray-900">
+                      <td class="max-w-[32rem] px-2 py-1.5 text-gray-900">
                         <ComparisonProjectStatsComparisonLabel columns={props.columns} comparison={comparison} />
                       </td>
-                      <td class="max-w-[18rem] px-3 py-3 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
-                      <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                      <td class="max-w-[18rem] px-2 py-1.5 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
+                      <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                         {getCountLabel(comparison.overlapCount)}
                       </td>
-                      <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                      <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                         {getCountLabel(comparison.conflictCount)}
                       </td>
-                      <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                      <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                         {getCountLabel(comparison.trueConflictCount)}
                       </td>
-                      <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                      <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                         {getKappaLabel(comparison.cohensKappa)}
                       </td>
-                      <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                      <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                         {getRateLabel(comparison.sensitivity)}
                       </td>
-                      <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                      <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                         {getRateLabel(comparison.specificity)}
                       </td>
                     </tr>

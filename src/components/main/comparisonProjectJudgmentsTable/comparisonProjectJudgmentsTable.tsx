@@ -76,11 +76,11 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
       <table class="min-w-full table-fixed divide-y divide-gray-200">
         <thead class="bg-gray-50">
           <tr>
-            <th class="sticky left-0 z-20 w-[22rem] min-w-[22rem] max-w-[22rem] bg-gray-50 px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+            <th class="sticky left-0 z-20 w-[22rem] min-w-[22rem] max-w-[22rem] bg-gray-50 px-3 py-1.5 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
               Title
             </th>
             <Show when={props.conflictResolutionEnabled}>
-              <th class="w-[13rem] min-w-[13rem] max-w-[13rem] bg-gray-50 px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+              <th class="w-[13rem] min-w-[13rem] max-w-[13rem] bg-gray-50 px-2 py-1.5 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                 Conflict Handling
               </th>
             </Show>
@@ -90,20 +90,20 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
 
                 return (
                   <th
-                    class={`w-[18rem] min-w-[18rem] max-w-[18rem] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${column.kind === 'human' ? 'bg-amber-50 text-amber-800' : 'text-gray-500'}`}
+                    class={`w-[18rem] min-w-[18rem] max-w-[18rem] px-2 py-1.5 text-left text-xs font-medium uppercase tracking-wider ${column.kind === 'human' ? 'bg-amber-50 text-amber-800' : 'text-gray-500'}`}
                   >
                     <div class="space-y-1 normal-case tracking-normal">
                       <Show when={column.sourceProjectName}>
                         {(sourceProjectName) => {
                           return (
-                            <div class="truncate text-xs font-semibold text-gray-900" title={sourceProjectName()}>
+                            <div class="truncate text-[11px] font-semibold text-gray-900" title={sourceProjectName()}>
                               {sourceProjectName()}
                             </div>
                           )
                         }}
                       </Show>
-                      <div class="text-sm font-semibold">{column.promptLabel}</div>
-                      <div class="text-xs font-medium uppercase tracking-wide opacity-80">
+                      <div class="text-xs font-semibold">{column.promptLabel}</div>
+                      <div class="text-[11px] font-medium uppercase tracking-wide opacity-80">
                         <div>{modelLabelParts.name}</div>
                         <Show when={column.contentLabel}>
                           {(contentLabel) => {
@@ -133,17 +133,17 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
               return (
                 <tr class="align-top">
                   <td
-                    class={`sticky left-0 z-10 w-[22rem] min-w-[22rem] max-w-[22rem] px-6 py-4 ${rowHighlightClasses.stickyCell}`}
+                    class={`sticky left-0 z-10 w-[22rem] min-w-[22rem] max-w-[22rem] px-3 py-2 ${rowHighlightClasses.stickyCell}`}
                   >
-                    <div class="space-y-2">
-                      <p class="font-medium text-gray-900">{row.articleTitle?.trim() || 'Untitled'}</p>
+                    <div class="space-y-1">
+                      <p class="text-sm font-medium text-gray-900">{row.articleTitle?.trim() || 'Untitled'}</p>
                       <Show when={articleCreatedAt}>
-                        <p class="text-xs text-gray-500">Created: {articleCreatedAt}</p>
+                        <p class="text-[11px] text-gray-500">Created: {articleCreatedAt}</p>
                       </Show>
                     </div>
                   </td>
                   <Show when={props.conflictResolutionEnabled}>
-                    <td class={`w-[13rem] min-w-[13rem] max-w-[13rem] px-4 py-4 text-sm ${rowHighlightClasses.cell}`}>
+                    <td class={`w-[13rem] min-w-[13rem] max-w-[13rem] px-2 py-2 text-xs ${rowHighlightClasses.cell}`}>
                       <Show when={row.hasConflict} fallback={<span class="text-gray-400">No conflict</span>}>
                         <Show
                           when={row.conflictResolution}
@@ -155,7 +155,7 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                               <select
                                 value=""
                                 disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
-                                class="w-full max-w-[180px] rounded-md border border-gray-300 bg-white px-2 py-1 text-sm disabled:opacity-60"
+                                class="w-full max-w-[180px] rounded-md border border-gray-300 bg-white px-1.5 py-0.5 text-xs disabled:opacity-60"
                                 onChange={(event) => {
                                   const value = event.currentTarget.value
 
@@ -180,14 +180,14 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                             return (
                               <div class="flex items-start justify-between gap-2">
                                 <span
-                                  class="min-w-0 whitespace-pre-wrap break-words leading-6 text-gray-800"
+                                  class="min-w-0 whitespace-pre-wrap break-words leading-5 text-gray-800"
                                   title={resolution().label}
                                 >
                                   {resolution().label}
                                 </span>
                                 <button
                                   type="button"
-                                  class="inline-flex size-7 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
+                                  class="inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
                                   title="Reset conflict resolution"
                                   aria-label={`Reset conflict resolution for ${row.articleTitle?.trim() || 'article'}`}
                                   disabled={getIsConflictResolutionPending(row.canonicalArticleId)}
@@ -203,7 +203,7 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                     stroke-width="2.5"
                                     stroke-linecap="round"
                                     stroke-linejoin="round"
-                                    class="size-4"
+                                    class="size-3.5"
                                   >
                                     <path d="M18 6L6 18" />
                                     <path d="M6 6l12 12" />
@@ -222,19 +222,19 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
 
                       return (
                         <td
-                          class={`w-[18rem] min-w-[18rem] max-w-[18rem] px-4 py-4 text-sm text-gray-800 ${rowHighlightClasses.cell}`}
+                          class={`w-[18rem] min-w-[18rem] max-w-[18rem] px-2 py-2 text-xs text-gray-800 ${rowHighlightClasses.cell}`}
                         >
                           <Show when={cellValue} fallback={<span class="text-gray-300">-</span>}>
                             <Show
                               when={column.sourceProjectId}
-                              fallback={<div class="whitespace-pre-wrap break-words leading-6">{cellValue}</div>}
+                              fallback={<div class="whitespace-pre-wrap break-words leading-5">{cellValue}</div>}
                             >
                               {(sourceProjectId) => {
                                 return (
                                   <Link
                                     to="/projects/$id/reviews-llm/$articleId"
                                     params={{articleId: row.canonicalArticleId, id: sourceProjectId()} as never}
-                                    class="block whitespace-pre-wrap break-words leading-6 text-blue-600 hover:underline"
+                                    class="block whitespace-pre-wrap break-words leading-5 text-blue-600 hover:underline"
                                   >
                                     {cellValue}
                                   </Link>

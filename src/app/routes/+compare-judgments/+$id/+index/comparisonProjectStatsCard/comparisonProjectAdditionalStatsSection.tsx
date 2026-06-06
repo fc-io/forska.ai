@@ -85,36 +85,36 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
 
           <Show when={getConflictResolutionAnswerComparisons(props.additionalStats).length > 0}>
             <div class="mt-3 overflow-x-auto">
-              <table class="min-w-full divide-y divide-gray-200 text-sm">
+              <table class="min-w-full divide-y divide-gray-200 text-xs">
                 <thead>
                   <tr>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Answer slice
                     </th>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Comparison
                     </th>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Column Info
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Overlap
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Conflicts
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       True Conflicts
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Cohen's Kappa
                       <span class="block normal-case tracking-normal">Include vs Exclude</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Sensitivity
                       <span class="block normal-case tracking-normal">Reference Include</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Specificity
                       <span class="block normal-case tracking-normal">Reference Exclude</span>
                     </th>
@@ -125,25 +125,25 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
                     {(comparison) => {
                       return (
                         <tr>
-                          <td class="max-w-[18rem] px-3 py-3 text-gray-900">{comparison.answerFilterLabel}</td>
-                          <td class="max-w-[28rem] px-3 py-3 text-gray-900">{comparison.label}</td>
-                          <td class="max-w-[18rem] px-3 py-3 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="max-w-[18rem] px-2 py-1.5 text-gray-900">{comparison.answerFilterLabel}</td>
+                          <td class="max-w-[28rem] px-2 py-1.5 text-gray-900">{comparison.label}</td>
+                          <td class="max-w-[18rem] px-2 py-1.5 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.overlapCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.conflictCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.trueConflictCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getScoreLabel(comparison.cohensKappa)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getRateLabel(comparison.sensitivity)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getRateLabel(comparison.specificity)}
                           </td>
                         </tr>
@@ -173,49 +173,49 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
 
           <Show when={getResolvedTruthComparisons(props.additionalStats).length > 0}>
             <div class="mt-3 overflow-x-auto">
-              <table class="min-w-full divide-y divide-gray-200 text-sm">
+              <table class="min-w-full divide-y divide-gray-200 text-xs">
                 <thead>
                   <tr>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">LLM</th>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">LLM</th>
+                    <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Column Info
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Resolved count
                       <span class="block normal-case tracking-normal">Human, LLM, truth</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Human correct vs truth
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Human errors vs truth
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       LLM correct vs truth
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       LLM errors vs truth
                     </th>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Winner
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Both correct
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Both wrong
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Human only correct
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       LLM only correct
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       LLM advantage
                       <span class="block normal-case tracking-normal">LLM-only minus Human-only</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       McNemar chi-square
                       <span class="block normal-case tracking-normal">paired discordance</span>
                     </th>
@@ -226,40 +226,40 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
                     {(comparison) => {
                       return (
                         <tr>
-                          <td class="max-w-[28rem] px-3 py-3 text-gray-900">{comparison.label}</td>
-                          <td class="max-w-[18rem] px-3 py-3 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="max-w-[28rem] px-2 py-1.5 text-gray-900">{comparison.label}</td>
+                          <td class="max-w-[18rem] px-2 py-1.5 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.resolvedCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.humanCorrectVsTruthCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.humanErrorsVsTruthCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.llmCorrectVsTruthCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.llmErrorsVsTruthCount)}
                           </td>
-                          <td class="px-3 py-3 text-gray-700">{comparison.winner}</td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-gray-700">{comparison.winner}</td>
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.bothCorrectCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.bothWrongCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.humanOnlyCorrectCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(comparison.llmOnlyCorrectCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getSignedCountLabel(comparison.llmAdvantage)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getScoreLabel(comparison.mcnemarChiSquare)}
                           </td>
                         </tr>
@@ -283,49 +283,49 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
             </div>
 
             <div class="mt-3 overflow-x-auto">
-              <table class="min-w-full divide-y divide-gray-200 text-sm">
+              <table class="min-w-full divide-y divide-gray-200 text-xs">
                 <thead>
                   <tr>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">LLM</th>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">LLM</th>
+                    <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Rater
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Accuracy
                       <span class="block normal-case tracking-normal">correct over resolved</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Sensitivity
                       <span class="block normal-case tracking-normal">truth Include found</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Specificity
                       <span class="block normal-case tracking-normal">truth Exclude found</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Precision
                       <span class="block normal-case tracking-normal">predicted Include correct</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       NPV
                       <span class="block normal-case tracking-normal">predicted Exclude correct</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       F1
                       <span class="block normal-case tracking-normal">Include precision and sensitivity</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Balanced accuracy
                       <span class="block normal-case tracking-normal">sensitivity and specificity mean</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Truth prevalence
                       <span class="block normal-case tracking-normal">truth Include share</span>
                     </th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">TP</th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">FP</th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">TN</th>
-                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">FN</th>
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">TP</th>
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">FP</th>
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">TN</th>
+                    <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">FN</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
@@ -333,42 +333,42 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
                     {(row) => {
                       return (
                         <tr>
-                          <td class="max-w-[28rem] px-3 py-3 text-gray-900">{row.label}</td>
-                          <td class="px-3 py-3 text-gray-700">{row.rater}</td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="max-w-[28rem] px-2 py-1.5 text-gray-900">{row.label}</td>
+                          <td class="px-2 py-1.5 text-gray-700">{row.rater}</td>
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getRateLabel(row.metrics.accuracy)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getRateLabel(row.metrics.sensitivity)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getRateLabel(row.metrics.specificity)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getRateLabel(row.metrics.precision)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getRateLabel(row.metrics.negativePredictiveValue)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getRateLabel(row.metrics.f1)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getRateLabel(row.metrics.balancedAccuracy)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getRateLabel(row.metrics.truthPrevalence)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(row.metrics.truePositiveCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(row.metrics.falsePositiveCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(row.metrics.trueNegativeCount)}
                           </td>
-                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                          <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                             {getCountLabel(row.metrics.falseNegativeCount)}
                           </td>
                         </tr>
