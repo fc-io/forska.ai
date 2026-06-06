@@ -34,7 +34,7 @@ test('compare judgments URL state normalizes legacy all rows filter when fully a
   const state = getInitialCompareProjectJudgmentsUrlState({showAllRows: '1'})
 
   expect(state.rowFilter).toBe('all')
-  expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({rowFilter: 'all'})
+  expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({})
 })
 
 test('compare judgments URL state prefers fully answered when both legacy row filters are active', () => {
@@ -68,7 +68,7 @@ test('compare judgments URL state lets canonical params override legacy params',
 
   expect(state.rowFilter).toBe('multiple-answers')
   expect(state.differenceFilter).toBe('all')
-  expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({})
+  expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({rowFilter: 'multiple-answers'})
 })
 
 test('compare judgments URL state preserves selected difference filter until metadata confirms it', () => {

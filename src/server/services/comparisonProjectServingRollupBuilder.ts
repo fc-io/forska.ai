@@ -652,19 +652,19 @@ const getComparisonProjectArticleServingInsertSql = ({
     ),
     article_rollup AS (
       SELECT
-        article_cell_rollup.article_id,
-        article_cell_rollup.answered_prompt_count,
-        article_cell_rollup.answered_column_count,
-        article_cell_rollup.answered_llm_column_count,
-        article_cell_rollup.answered_human_column_count,
+        scoped_article.article_id,
+        COALESCE(article_cell_rollup.answered_prompt_count, 0) AS answered_prompt_count,
+        COALESCE(article_cell_rollup.answered_column_count, 0) AS answered_column_count,
+        COALESCE(article_cell_rollup.answered_llm_column_count, 0) AS answered_llm_column_count,
+        COALESCE(article_cell_rollup.answered_human_column_count, 0) AS answered_human_column_count,
         required_column_counts.required_column_count,
         required_column_counts.required_llm_column_count,
         required_column_counts.required_human_column_count,
-        article_cell_rollup.answered_llm_column_count = required_column_counts.required_llm_column_count AS has_all_llm_columns,
-        article_cell_rollup.answered_human_column_count = required_column_counts.required_human_column_count AS has_all_human_columns,
+        COALESCE(article_cell_rollup.answered_llm_column_count, 0) = required_column_counts.required_llm_column_count AS has_all_llm_columns,
+        COALESCE(article_cell_rollup.answered_human_column_count, 0) = required_column_counts.required_human_column_count AS has_all_human_columns,
         CASE
-          WHEN project_mode.is_summary_mode THEN article_cell_rollup.answered_column_count >= 2
-          ELSE article_cell_rollup.answered_prompt_count >= 2
+          WHEN project_mode.is_summary_mode THEN COALESCE(article_cell_rollup.answered_column_count, 0) >= 2
+          ELSE COALESCE(article_cell_rollup.answered_prompt_count, 0) >= 2
         END AS has_multiple_answers,
         COALESCE(article_difference_rollup.has_human_vs_llm_overlap, FALSE) AS has_human_vs_llm_overlap,
         COALESCE(article_difference_rollup.has_human_vs_llm_difference, FALSE) AS has_human_vs_llm_difference,
@@ -675,11 +675,16 @@ const getComparisonProjectArticleServingInsertSql = ({
         difference_filter_availability.has_llm_vs_llm_filter,
         difference_filter_availability.has_human_vs_llm_filter
           AND difference_filter_availability.has_llm_vs_llm_filter AS has_any_disagreement_filter
-      FROM article_cell_rollup
+      FROM scoped_article
+      CROSS JOIN scope_config
       CROSS JOIN required_column_counts
       CROSS JOIN project_mode
       CROSS JOIN difference_filter_availability
+      LEFT JOIN article_cell_rollup ON article_cell_rollup.article_id = scoped_article.article_id
       LEFT JOIN article_difference_rollup ON article_difference_rollup.article_id = article_cell_rollup.article_id
+      WHERE scope_config.source_project_link_count > 0
+        OR scope_config.import_route_link_count > 0
+        OR article_cell_rollup.article_id IS NOT NULL
     )
     SELECT
       ${comparisonProjectLiteral} AS comparison_project_id,

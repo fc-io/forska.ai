@@ -3918,7 +3918,7 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
   ).toBe(true)
 })
 
-test('comparison judgments normalize missing and invalid rowFilter to multiple answers', async () => {
+test('comparison judgments normalize missing and invalid rowFilter to all rows', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
@@ -3969,8 +3969,8 @@ test('comparison judgments normalize missing and invalid rowFilter to multiple a
   expect(missingBody.data.totalCount).toBeNull()
   expect(invalidBody.data.totalCount).toBeNull()
   expect(allBody.data.totalCount).toBeNull()
-  expect(missingBody.data.data).toHaveLength(1)
-  expect(invalidBody.data.data).toHaveLength(1)
+  expect(missingBody.data.data).toHaveLength(2)
+  expect(invalidBody.data.data).toHaveLength(2)
   expect(allBody.data.data).toHaveLength(2)
 })
 

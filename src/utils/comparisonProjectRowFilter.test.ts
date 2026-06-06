@@ -6,9 +6,9 @@ import {
   getNormalizedComparisonProjectRowFilter,
 } from './comparisonProjectRowFilter.ts'
 
-test('rowFilter normalization defaults missing and invalid values to multiple answers', () => {
-  expect(getNormalizedComparisonProjectRowFilter(undefined)).toBe('multiple-answers')
-  expect(getNormalizedComparisonProjectRowFilter('not-a-filter')).toBe('multiple-answers')
+test('rowFilter normalization defaults missing and invalid values to all rows', () => {
+  expect(getNormalizedComparisonProjectRowFilter(undefined)).toBe('all')
+  expect(getNormalizedComparisonProjectRowFilter('not-a-filter')).toBe('all')
   expect(getNormalizedComparisonProjectRowFilter('llm-answered-yes')).toBe('llm-answered-yes')
   expect(getNormalizedComparisonProjectRowFilter('human-answered-maybe')).toBe('human-answered-maybe')
   expect(getNormalizedComparisonProjectRowFilter('fully-answered')).toBe('fully-answered')

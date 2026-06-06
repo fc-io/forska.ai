@@ -31,7 +31,7 @@ export type ComparisonProjectRowFilterEvaluation = {
   rowFilter: ComparisonProjectRowFilter
 }
 
-export const defaultComparisonProjectRowFilter = 'multiple-answers' satisfies ComparisonProjectRowFilter
+export const defaultComparisonProjectRowFilter = 'all' satisfies ComparisonProjectRowFilter
 
 const answerRowFilterConfig = {
   'human-answered-maybe': {answer: 'maybe', kind: 'human'},

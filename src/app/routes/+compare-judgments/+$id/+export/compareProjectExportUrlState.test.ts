@@ -14,11 +14,10 @@ test('compare export URL state starts from active compare page search params', (
     rowFilter: 'fully-answered',
   })
 
-  expect(state).toEqual({currentPage: 4, differenceFilter: 'human-vs-llm', pageLimit: 100, rowFilter: 'fully-answered'})
+  expect(state).toEqual({differenceFilter: 'human-vs-llm', pageLimit: 100, rowFilter: 'fully-answered'})
   expect(getCompareProjectExportSearchParams(state)).toEqual({
     differenceFilter: 'human-vs-llm',
     limit: '100',
-    page: '4',
     rowFilter: 'fully-answered',
   })
 })

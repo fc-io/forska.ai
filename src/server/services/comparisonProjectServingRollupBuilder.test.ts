@@ -8,12 +8,13 @@ import {
   getComparisonProjectHasAnyConflict,
   getComparisonProjectHasDifferenceFilterMatch,
 } from '../../utils/comparisonProjectDifferenceFilter.ts'
-import {type ComparisonProjectRowFilter, comparisonProjectRowFilters} from '../../utils/comparisonProjectRowFilter.ts'
 import {
-  type ComparisonProjectJudgmentHumanRow,
-  type ComparisonProjectJudgmentLlmRow,
+  type ComparisonProjectRowFilter,
+  comparisonProjectRowFilters,
+  getComparisonProjectPassesRowFilter,
+} from '../../utils/comparisonProjectRowFilter.ts'
+import {
   type ComparisonProjectScopedArticle,
-  getComparisonProjectBatchRows,
   getComparisonProjectRequiredColumnIds,
 } from '../routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
 
@@ -122,7 +123,6 @@ type TrueConflictCase = {
   llmAnswer: string
 }
 
-const contentSettings = {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
 const contentKey = '1100'
 const generation = 1
 const promptProjectId = 'comparison-serving-rollup-prompt'
@@ -204,6 +204,13 @@ const summaryArticles = [
     articleSummary: 'Summary sparse summary',
     articleTitle: 'Summary Sparse',
     id: 'article-summary-sparse',
+  },
+  {
+    articleCreatedAt: '2026-05-01T00:00:00.000Z',
+    articleExternalId: 'external-summary-unjudged',
+    articleSummary: 'Summary unjudged summary',
+    articleTitle: 'Summary Unjudged',
+    id: 'article-summary-unjudged',
   },
 ] satisfies FixtureArticle[]
 
@@ -476,40 +483,6 @@ const getSortedFixtureArticles = (articles: FixtureArticle[]): ComparisonProject
     })
 }
 
-const getFixtureLlmRows = (cells: FixtureCell[]): ComparisonProjectJudgmentLlmRow[] => {
-  return cells
-    .filter((cell) => {
-      return cell.kind === 'llm'
-    })
-    .map((cell) => {
-      return {
-        ...contentSettings,
-        answeredOriginal: cell.displayAnswer,
-        answeredOriginalAsArray: null,
-        articleId: cell.articleId,
-        createdAt: new Date('2026-06-01T00:00:00.000Z'),
-        modelId: cell.modelId ?? '',
-        promptId: cell.promptId,
-        sourceProjectId: cell.sourceProjectId,
-      }
-    })
-}
-
-const getFixtureHumanRows = (cells: FixtureCell[]): ComparisonProjectJudgmentHumanRow[] => {
-  return cells
-    .filter((cell) => {
-      return cell.kind === 'human'
-    })
-    .map((cell) => {
-      return {
-        answer: cell.displayAnswer,
-        articleId: cell.articleId,
-        promptId: cell.promptId,
-        updatedAt: new Date('2026-06-02T00:00:00.000Z'),
-      }
-    })
-}
-
 const getFixtureCellsByArticle = (cells: FixtureCell[]) => {
   return cells.reduce<Record<string, Record<string, string | null>>>((articleMap, cell) => {
     const articleCells = articleMap[cell.articleId] ?? {}
@@ -523,19 +496,30 @@ const getExpectedArticleIds = (
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
 ) => {
-  return getComparisonProjectBatchRows({
-    articles: getSortedFixtureArticles(project.articles),
-    columns: project.columns,
-    differenceFilter,
-    humanRows: getFixtureHumanRows(project.cells),
-    isSummaryMode: project.isSummaryMode,
-    llmRows: getFixtureLlmRows(project.cells),
-    requiredHumanColumnIds: getComparisonProjectRequiredColumnIds(project.columns, 'human'),
-    requiredLlmColumnIds: getComparisonProjectRequiredColumnIds(project.columns, 'llm'),
-    rowFilter,
-  }).map((row) => {
-    return row.id
-  })
+  const cellsByArticle = getFixtureCellsByArticle(project.cells)
+  const expectedRollups = getExpectedArticleRollups(project)
+
+  return getSortedFixtureArticles(project.articles)
+    .filter((article) => {
+      const articleCells = cellsByArticle[article.id] ?? {}
+      const rollup = expectedRollups[article.id]
+
+      return rollup
+        ? getComparisonProjectPassesRowFilter({
+            answeredColumnCount: rollup.answeredColumnCount,
+            answeredPromptCount: rollup.answeredPromptCount,
+            cells: articleCells,
+            columns: project.columns,
+            hasAllHumanColumns: rollup.hasAllHumanColumns,
+            hasAllLlmColumns: rollup.hasAllLlmColumns,
+            isSummaryMode: project.isSummaryMode,
+            rowFilter,
+          }) && getComparisonProjectHasDifferenceFilterMatch(articleCells, project.columns, differenceFilter)
+        : false
+    })
+    .map((article) => {
+      return article.id
+    })
 }
 
 const getExpectedArticleRollups = (project: FixtureProject) => {
@@ -694,9 +678,11 @@ const getRollupScript = () => {
       {id: 'source-project-a-summary-conflict', project_id: 'source-project-a', article_id: 'article-summary-conflict'},
       {id: 'source-project-a-summary-full', project_id: 'source-project-a', article_id: 'article-summary-full-agreement'},
       {id: 'source-project-a-summary-sparse', project_id: 'source-project-a', article_id: 'article-summary-sparse'},
+      {id: 'source-project-a-summary-unjudged', project_id: 'source-project-a', article_id: 'article-summary-unjudged'},
       {id: 'source-project-b-summary-conflict', project_id: 'source-project-b', article_id: 'article-summary-conflict'},
       {id: 'source-project-b-summary-full', project_id: 'source-project-b', article_id: 'article-summary-full-agreement'},
-      {id: 'source-project-b-summary-sparse', project_id: 'source-project-b', article_id: 'article-summary-sparse'}
+      {id: 'source-project-b-summary-sparse', project_id: 'source-project-b', article_id: 'article-summary-sparse'},
+      {id: 'source-project-b-summary-unjudged', project_id: 'source-project-b', article_id: 'article-summary-unjudged'}
     ])
 
     await insertRows('app.comparison_project', ['id', 'name', 'description', 'model_ids', 'compare_with_humans', 'human_judgment_mode', 'summary_source_project_id', 'use_title', 'use_abstract', 'use_fulltext', 'use_fulltext_no_images'], [
