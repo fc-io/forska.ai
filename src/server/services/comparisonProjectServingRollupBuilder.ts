@@ -21,7 +21,7 @@ const summaryPromptId = 'summary'
 const chineseArticleCategory = 'chinese'
 const nonChineseArticleCategory = 'non_chinese'
 const cjkHanScriptPattern = '\\p{Han}'
-const chineseLanguagePattern = '^(zh(-.*)?|zho|chi|chinese|mandarin|cantonese|putonghua|guoyu|hanyu)$'
+const chineseLanguageValues = ['zh', 'zho', 'chi', 'chinese', 'mandarin', 'cantonese', 'putonghua', 'guoyu', 'hanyu']
 const articleLanguageMetadataPaths = [
   '$.language',
   '$.language.code',
@@ -63,15 +63,25 @@ const getNormalizedLanguageSql = (languageExpression: string) => {
   return `LOWER(REPLACE(REPLACE(TRIM(${languageExpression}), '_', '-'), ' ', '-'))`
 }
 
-const getChineseLanguageMetadataConditionSql = (metadataExpression: string) => {
-  return articleLanguageMetadataPaths
-    .map((path) => {
-      const languageExpression = `json_extract_string(${metadataExpression}, ${getSqlLiteral(path)})`
-      const normalizedLanguageExpression = getNormalizedLanguageSql(languageExpression)
+const getChineseLanguageConditionSql = (languageExpression: string) => {
+  const normalizedLanguageExpression = getNormalizedLanguageSql(languageExpression)
 
-      return `regexp_matches(${normalizedLanguageExpression}, ${getSqlLiteral(chineseLanguagePattern)})`
-    })
-    .join('\n        OR ')
+  return `(${normalizedLanguageExpression} IN (${chineseLanguageValues.map(getSqlLiteral).join(', ')})
+          OR ${normalizedLanguageExpression} LIKE 'zh-%')`
+}
+
+const getChineseLanguageMetadataConditionSql = (metadataExpression: string) => {
+  return `(${metadataExpression} IS NOT NULL
+        AND (${articleLanguageMetadataPaths
+          .map((path) => {
+            return getChineseLanguageConditionSql(`json_extract_string(${metadataExpression}, ${getSqlLiteral(path)})`)
+          })
+          .join('\n          OR ')}))`
+}
+
+const getChineseScriptConditionSql = (titleExpression: string, abstractExpression: string) => {
+  return `(regexp_matches(COALESCE(${titleExpression}, ''), ${getSqlLiteral(cjkHanScriptPattern)})
+          OR regexp_matches(COALESCE(${abstractExpression}, ''), ${getSqlLiteral(cjkHanScriptPattern)}))`
 }
 
 const getComparisonProjectArticleCategorySql = ({
@@ -85,10 +95,7 @@ const getComparisonProjectArticleCategorySql = ({
 }) => {
   return `CASE
         WHEN ${getChineseLanguageMetadataConditionSql(metadataExpression)}
-          OR regexp_matches(
-            COALESCE(${titleExpression}, '') || ' ' || COALESCE(${abstractExpression}, ''),
-            ${getSqlLiteral(cjkHanScriptPattern)}
-          )
+          OR ${getChineseScriptConditionSql(titleExpression, abstractExpression)}
           THEN ${getSqlLiteral(chineseArticleCategory)}
         ELSE ${getSqlLiteral(nonChineseArticleCategory)}
       END`
@@ -711,9 +718,31 @@ const getComparisonProjectArticleServingInsertSql = ({
       FROM prompt_difference
       GROUP BY article_id
     ),
+    rollup_scoped_article AS (
+      SELECT source_project_scope.article_id
+      FROM source_project_scope
+      CROSS JOIN scope_config
+      WHERE scope_config.source_project_link_count > 0
+
+      UNION
+
+      SELECT import_route_scope.article_id
+      FROM import_route_scope
+      CROSS JOIN scope_config
+      WHERE scope_config.source_project_link_count = 0
+        AND scope_config.import_route_link_count > 0
+
+      UNION
+
+      SELECT article_cell_rollup.article_id
+      FROM article_cell_rollup
+      CROSS JOIN scope_config
+      WHERE scope_config.source_project_link_count = 0
+        AND scope_config.import_route_link_count = 0
+    ),
     article_rollup AS (
       SELECT
-        scoped_article.article_id,
+        rollup_scoped_article.article_id,
         COALESCE(article_cell_rollup.answered_prompt_count, 0) AS answered_prompt_count,
         COALESCE(article_cell_rollup.answered_column_count, 0) AS answered_column_count,
         COALESCE(article_cell_rollup.answered_llm_column_count, 0) AS answered_llm_column_count,
@@ -736,16 +765,12 @@ const getComparisonProjectArticleServingInsertSql = ({
         difference_filter_availability.has_llm_vs_llm_filter,
         difference_filter_availability.has_human_vs_llm_filter
           AND difference_filter_availability.has_llm_vs_llm_filter AS has_any_disagreement_filter
-      FROM scoped_article
-      CROSS JOIN scope_config
+      FROM rollup_scoped_article
       CROSS JOIN required_column_counts
       CROSS JOIN project_mode
       CROSS JOIN difference_filter_availability
-      LEFT JOIN article_cell_rollup ON article_cell_rollup.article_id = scoped_article.article_id
+      LEFT JOIN article_cell_rollup ON article_cell_rollup.article_id = rollup_scoped_article.article_id
       LEFT JOIN article_difference_rollup ON article_difference_rollup.article_id = article_cell_rollup.article_id
-      WHERE scope_config.source_project_link_count > 0
-        OR scope_config.import_route_link_count > 0
-        OR article_cell_rollup.article_id IS NOT NULL
     ),
     serving_article AS (
       SELECT

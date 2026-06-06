@@ -5,24 +5,14 @@ import type {
   ComparisonProjectStatsArticleCategory,
   ComparisonProjectStatsCategoryBreakdown,
   ComparisonProjectStatsComparison,
-  ComparisonProjectStatsResolvedTruthComparison,
-  ComparisonProjectStatsTruthConfusionMetrics,
 } from '../../../../../../services/comparisonProjectsService.ts'
 
 type ComparisonProjectChineseStatsSectionProps = {stats: ComparisonProjectStats}
 
-type ComparisonProjectCategoryResolvedTruthMetricRow = {
-  articleCount: number
-  categoryLabel: string
-  comparison: ComparisonProjectStatsResolvedTruthComparison
-  metrics: ComparisonProjectStatsTruthConfusionMetrics
-  rater: 'Human' | 'LLM'
-}
-
-type ComparisonProjectCategoryAgreementMetricRow = {
-  articleCount: number
+type ComparisonProjectCategoryComparisonRow = {
   categoryLabel: string
   comparison: ComparisonProjectStatsComparison
+  isTotal: boolean
 }
 
 const comparisonProjectStatsArticleCategoryOrder = [
@@ -65,154 +55,54 @@ const getOrderedCategoryBreakdowns = (stats: ComparisonProjectStats) => {
     })
 }
 
-const getResolvedTruthMetricRows = (stats: ComparisonProjectStats) => {
-  return getOrderedCategoryBreakdowns(stats).flatMap((breakdown) => {
-    return breakdown.additionalProjectStats.resolvedTruthComparisons.flatMap((comparison) => {
-      return [
-        {
-          articleCount: breakdown.articleCount,
-          categoryLabel: breakdown.label,
-          comparison,
-          metrics: comparison.humanMetrics,
-          rater: 'Human',
-        },
-        {
-          articleCount: breakdown.articleCount,
-          categoryLabel: breakdown.label,
-          comparison,
-          metrics: comparison.llmMetrics,
-          rater: 'LLM',
-        },
-      ]
-    })
+const getComparisonProjectCategoryComparison = (
+  breakdown: ComparisonProjectStatsCategoryBreakdown,
+  comparisonId: string,
+) => {
+  return breakdown.comparisons.find((comparison) => {
+    return comparison.id === comparisonId
   })
 }
 
-const getAgreementMetricRows = (stats: ComparisonProjectStats) => {
-  return getOrderedCategoryBreakdowns(stats).flatMap((breakdown) => {
-    return breakdown.comparisons.map((comparison) => {
-      return {articleCount: breakdown.articleCount, categoryLabel: breakdown.label, comparison}
+const getComparisonProjectCategoryRows = (
+  breakdowns: readonly ComparisonProjectStatsCategoryBreakdown[],
+  totalComparison: ComparisonProjectStatsComparison,
+) => {
+  return breakdowns
+    .map((breakdown) => {
+      const comparison = getComparisonProjectCategoryComparison(breakdown, totalComparison.id)
+
+      return comparison ? {categoryLabel: breakdown.label, comparison, isTotal: false} : null
     })
+    .filter((row): row is ComparisonProjectCategoryComparisonRow => {
+      return row !== null
+    })
+}
+
+const getComparisonProjectCategoryComparisonRows = (stats: ComparisonProjectStats) => {
+  const breakdowns = getOrderedCategoryBreakdowns(stats)
+
+  return stats.comparisons.flatMap((totalComparison) => {
+    return [
+      ...getComparisonProjectCategoryRows(breakdowns, totalComparison),
+      {categoryLabel: 'Total', comparison: totalComparison, isTotal: true},
+    ]
   })
 }
 
-const ComparisonProjectCategorySummaryBadges = (props: {breakdowns: ComparisonProjectStatsCategoryBreakdown[]}) => {
-  return (
-    <div class="mt-3 flex flex-wrap gap-2">
-      <For each={props.breakdowns}>
-        {(breakdown) => {
-          return (
-            <span class="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700">
-              <span>{breakdown.label}</span>
-              <span class="tabular-nums text-gray-900">{getCountLabel(breakdown.articleCount)}</span>
-            </span>
-          )
-        }}
-      </For>
-    </div>
-  )
+const getComparisonProjectCategoryComparisonRowClass = (row: ComparisonProjectCategoryComparisonRow) => {
+  return row.isTotal ? 'bg-gray-50 font-semibold' : ''
 }
 
-const ComparisonProjectCategoryResolvedTruthTable = (props: {
-  rows: ComparisonProjectCategoryResolvedTruthMetricRow[]
-}) => {
+const ComparisonProjectCategoryComparisonTable = (props: {rows: ComparisonProjectCategoryComparisonRow[]}) => {
   return (
     <div class="mt-3 overflow-x-auto">
       <table class="min-w-full divide-y divide-gray-200 text-xs">
         <thead>
           <tr>
-            <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Category</th>
-            <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">LLM</th>
-            <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Rater</th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Articles</th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Resolved</th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Accuracy</th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-              Sensitivity
-            </th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-              Specificity
-            </th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Precision</th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">NPV</th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">F1</th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-              Balanced accuracy
-            </th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-              Truth prevalence
-            </th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">TP</th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">FP</th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">TN</th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">FN</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-100">
-          <For each={props.rows}>
-            {(row) => {
-              return (
-                <tr>
-                  <td class="px-2 py-1.5 text-gray-900">{row.categoryLabel}</td>
-                  <td class="max-w-[24rem] px-2 py-1.5 text-gray-900">{row.comparison.label}</td>
-                  <td class="px-2 py-1.5 text-gray-700">{row.rater}</td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">{getCountLabel(row.articleCount)}</td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getCountLabel(row.comparison.resolvedCount)}
-                  </td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getRateLabel(row.metrics.accuracy)}
-                  </td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getRateLabel(row.metrics.sensitivity)}
-                  </td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getRateLabel(row.metrics.specificity)}
-                  </td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getRateLabel(row.metrics.precision)}
-                  </td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getRateLabel(row.metrics.negativePredictiveValue)}
-                  </td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">{getRateLabel(row.metrics.f1)}</td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getRateLabel(row.metrics.balancedAccuracy)}
-                  </td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getRateLabel(row.metrics.truthPrevalence)}
-                  </td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getCountLabel(row.metrics.truePositiveCount)}
-                  </td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getCountLabel(row.metrics.falsePositiveCount)}
-                  </td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getCountLabel(row.metrics.trueNegativeCount)}
-                  </td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
-                    {getCountLabel(row.metrics.falseNegativeCount)}
-                  </td>
-                </tr>
-              )
-            }}
-          </For>
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-const ComparisonProjectCategoryAgreementTable = (props: {rows: ComparisonProjectCategoryAgreementMetricRow[]}) => {
-  return (
-    <div class="mt-3 overflow-x-auto">
-      <table class="min-w-full divide-y divide-gray-200 text-xs">
-        <thead>
-          <tr>
-            <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Category</th>
             <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Comparison</th>
-            <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Articles</th>
+            <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Category</th>
+            <th class="px-2 py-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Column Info</th>
             <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Overlap</th>
             <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Conflicts</th>
             <th class="px-2 py-1 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -233,10 +123,10 @@ const ComparisonProjectCategoryAgreementTable = (props: {rows: ComparisonProject
           <For each={props.rows}>
             {(row) => {
               return (
-                <tr>
-                  <td class="px-2 py-1.5 text-gray-900">{row.categoryLabel}</td>
+                <tr class={getComparisonProjectCategoryComparisonRowClass(row)}>
                   <td class="max-w-[28rem] px-2 py-1.5 text-gray-900">{row.comparison.label}</td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">{getCountLabel(row.articleCount)}</td>
+                  <td class="px-2 py-1.5 text-gray-900">{row.categoryLabel}</td>
+                  <td class="max-w-[18rem] px-2 py-1.5 text-gray-600">{row.comparison.columnInfo ?? 'N/A'}</td>
                   <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">
                     {getCountLabel(row.comparison.overlapCount)}
                   </td>
@@ -266,14 +156,8 @@ const ComparisonProjectCategoryAgreementTable = (props: {rows: ComparisonProject
 }
 
 export const ComparisonProjectChineseStatsSection = (props: ComparisonProjectChineseStatsSectionProps) => {
-  const resolvedTruthRows = () => {
-    return getResolvedTruthMetricRows(props.stats)
-  }
-  const agreementRows = () => {
-    return getAgreementMetricRows(props.stats)
-  }
-  const categoryBreakdowns = () => {
-    return getOrderedCategoryBreakdowns(props.stats)
+  const categoryComparisonRows = () => {
+    return getComparisonProjectCategoryComparisonRows(props.stats)
   }
 
   return (
@@ -282,17 +166,14 @@ export const ComparisonProjectChineseStatsSection = (props: ComparisonProjectChi
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 class="text-base font-semibold text-gray-900">Chinese vs Non-Chinese</h3>
+            <p class="mt-1 text-sm text-gray-600">
+              Same comparison pairs as Project Stats, with Chinese, Non-Chinese, and Total rows for each comparison.
+              Counts use each row's overlap, conflicts, and binary Include vs Exclude denominators.
+            </p>
           </div>
         </div>
 
-        <ComparisonProjectCategorySummaryBadges breakdowns={categoryBreakdowns()} />
-
-        <Show
-          when={resolvedTruthRows().length > 0}
-          fallback={<ComparisonProjectCategoryAgreementTable rows={agreementRows()} />}
-        >
-          <ComparisonProjectCategoryResolvedTruthTable rows={resolvedTruthRows()} />
-        </Show>
+        <ComparisonProjectCategoryComparisonTable rows={categoryComparisonRows()} />
       </section>
     </Show>
   )

@@ -3580,6 +3580,29 @@ test('comparison project metadata queues a rebuild when serving refresh was aban
   expect(state.staleServingIds).toEqual([])
 })
 
+test('comparison project metadata queues a rebuild when serving failed before route load', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    failPromptInsert: false,
+    servingStatus: getMockServingStatus({
+      activeGeneration: 1,
+      generationUpdatedAt: new Date('2026-04-04T00:00:00.000Z'),
+      servingFailedAt: new Date(0),
+      servingGeneration: 2,
+      servingStatus: 'failed',
+    }),
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(new Request('http://localhost/api/comparison-projects/comparison-project-1'))
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(state.queuedServingRebuildIds).toEqual(['comparison-project-1'])
+  expect(state.staleServingIds).toEqual([])
+})
+
 test('comparison project create and update mark serving stale and queue rebuilds', async () => {
   mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false, promptLinks: []}
 
@@ -3758,6 +3781,7 @@ test('comparison stats endpoint returns empty comparisons without active serving
   const body = (await response.json()) as {
     data: {
       activeGeneration: number | null
+      categoryBreakdowns: unknown[]
       comparisons: unknown[]
       isServingReady: boolean
       servingStatus: string
@@ -3770,6 +3794,7 @@ test('comparison stats endpoint returns empty comparisons without active serving
   expect(body.data).toEqual({
     activeGeneration: null,
     additionalProjectStats: {conflictResolutionAnswerComparisons: [], resolvedTruthComparisons: []},
+    categoryBreakdowns: [],
     comparisons: [],
     isServingReady: false,
     servingStatus: 'refreshing',

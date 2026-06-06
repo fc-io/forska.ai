@@ -404,8 +404,17 @@ const queueUnavailableComparisonProjectServingRebuild = (
     && comparisonProject.servingProgress.generation !== null
     && latestProgressedAt !== null
     && latestProgressedAt < comparisonProjectRoutesLoadedAt
+  const isFailedFromPreviousRouteLoad =
+    comparisonProject.servingStatus === 'failed'
+    && comparisonProject.servingProgress.failedAt !== null
+    && comparisonProject.servingProgress.failedAt < comparisonProjectRoutesLoadedAt
 
-  if (!isMissingWithoutStartedBuild && !isStaleWithoutStartedBuild && !isRefreshingFromPreviousRouteLoad) {
+  if (
+    !isMissingWithoutStartedBuild
+    && !isStaleWithoutStartedBuild
+    && !isRefreshingFromPreviousRouteLoad
+    && !isFailedFromPreviousRouteLoad
+  ) {
     return
   }
 

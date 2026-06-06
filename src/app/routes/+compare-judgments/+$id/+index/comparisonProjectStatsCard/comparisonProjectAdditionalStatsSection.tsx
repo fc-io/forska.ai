@@ -2,11 +2,13 @@ import {For, Show} from 'solid-js'
 
 import type {
   ComparisonProjectAdditionalStats,
+  ComparisonProjectStats,
   ComparisonProjectStatsResolvedTruthComparison,
   ComparisonProjectStatsTruthConfusionMetrics,
 } from '../../../../../../services/comparisonProjectsService.ts'
+import {ComparisonProjectChineseStatsSection} from './comparisonProjectChineseStatsSection.tsx'
 
-type ComparisonProjectAdditionalStatsSectionProps = {additionalStats: ComparisonProjectAdditionalStats}
+type ComparisonProjectAdditionalStatsSectionProps = {stats: ComparisonProjectStats}
 
 type ComparisonProjectStatsConfusionMetricRow = {
   comparisonId: string
@@ -51,6 +53,10 @@ const getConflictResolutionAnswerComparisons = (additionalStats: ComparisonProje
 }
 
 export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProjectAdditionalStatsSectionProps) => {
+  const additionalStats = () => {
+    return props.stats.additionalProjectStats
+  }
+
   return (
     <details class="group mt-6 border-t border-gray-200 pt-4">
       <summary class="flex cursor-pointer list-none items-start justify-between gap-3">
@@ -77,13 +83,13 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
             </p>
           </div>
 
-          <Show when={getConflictResolutionAnswerComparisons(props.additionalStats).length === 0}>
+          <Show when={getConflictResolutionAnswerComparisons(additionalStats()).length === 0}>
             <div class="mt-3 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
               No answer-sliced conflict resolution stats are available yet.
             </div>
           </Show>
 
-          <Show when={getConflictResolutionAnswerComparisons(props.additionalStats).length > 0}>
+          <Show when={getConflictResolutionAnswerComparisons(additionalStats()).length > 0}>
             <div class="mt-3 overflow-x-auto">
               <table class="min-w-full divide-y divide-gray-200 text-xs">
                 <thead>
@@ -121,7 +127,7 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
-                  <For each={getConflictResolutionAnswerComparisons(props.additionalStats)}>
+                  <For each={getConflictResolutionAnswerComparisons(additionalStats())}>
                     {(comparison) => {
                       return (
                         <tr>
@@ -165,13 +171,13 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
             </p>
           </div>
 
-          <Show when={getResolvedTruthComparisons(props.additionalStats).length === 0}>
+          <Show when={getResolvedTruthComparisons(additionalStats()).length === 0}>
             <div class="mt-3 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
               No truth comparison stats with no fallback are available yet.
             </div>
           </Show>
 
-          <Show when={getResolvedTruthComparisons(props.additionalStats).length > 0}>
+          <Show when={getResolvedTruthComparisons(additionalStats()).length > 0}>
             <div class="mt-3 overflow-x-auto">
               <table class="min-w-full divide-y divide-gray-200 text-xs">
                 <thead>
@@ -222,7 +228,7 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
-                  <For each={getResolvedTruthComparisons(props.additionalStats)}>
+                  <For each={getResolvedTruthComparisons(additionalStats())}>
                     {(comparison) => {
                       return (
                         <tr>
@@ -272,7 +278,7 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
           </Show>
         </section>
 
-        <Show when={getResolvedTruthComparisons(props.additionalStats).length > 0}>
+        <Show when={getResolvedTruthComparisons(additionalStats()).length > 0}>
           <section>
             <div>
               <h4 class="text-sm font-semibold text-gray-900">Confusion matrix metrics</h4>
@@ -329,7 +335,7 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
-                  <For each={getConfusionMetricRows(getResolvedTruthComparisons(props.additionalStats))}>
+                  <For each={getConfusionMetricRows(getResolvedTruthComparisons(additionalStats()))}>
                     {(row) => {
                       return (
                         <tr>
@@ -380,6 +386,8 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
             </div>
           </section>
         </Show>
+
+        <ComparisonProjectChineseStatsSection stats={props.stats} />
       </div>
     </details>
   )

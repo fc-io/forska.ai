@@ -8,8 +8,6 @@ import type {
   ComparisonProjectStats,
   ComparisonProjectStatsCategoryBreakdown,
   ComparisonProjectStatsComparison,
-  ComparisonProjectStatsResolvedTruthComparison,
-  ComparisonProjectStatsTruthConfusionMetrics,
 } from '../../../../../../services/comparisonProjectsService.ts'
 import {ComparisonProjectChineseStatsSection} from './comparisonProjectChineseStatsSection.tsx'
 
@@ -18,71 +16,22 @@ const emptyAdditionalStats: ComparisonProjectAdditionalStats = {
   resolvedTruthComparisons: [],
 }
 
-const createMetrics = (
-  overrides: Partial<ComparisonProjectStatsTruthConfusionMetrics> = {},
-): ComparisonProjectStatsTruthConfusionMetrics => {
-  return {
-    accuracy: 0.75,
-    balancedAccuracy: 0.7,
-    f1: 0.8,
-    falseNegativeCount: 1,
-    falsePositiveCount: 2,
-    negativePredictiveValue: 0.6,
-    precision: 0.8,
-    sensitivity: 0.9,
-    specificity: 0.5,
-    trueCorrectCount: 6,
-    trueErrorCount: 2,
-    trueNegativeCount: 3,
-    truePositiveCount: 4,
-    truthPrevalence: 0.625,
-    ...overrides,
-  }
-}
-
 const createAgreementComparison = (
   overrides: Partial<ComparisonProjectStatsComparison> = {},
 ): ComparisonProjectStatsComparison => {
   return {
     cohensKappa: 0.7,
-    columnInfo: null,
+    columnInfo: 'Title + abstract',
     conflictCount: 2,
     id: 'agreement-comparison',
     kind: 'human-vs-llm',
-    label: 'Agreement row',
+    label: 'GPT-5.5 (thinking: xhigh) vs Human',
     leftColumnId: 'human-column',
     overlapCount: 9,
     rightColumnId: 'llm-column',
     sensitivity: 0.8,
     specificity: 0.6,
     trueConflictCount: 1,
-    ...overrides,
-  }
-}
-
-const createResolvedTruthComparison = (
-  overrides: Partial<ComparisonProjectStatsResolvedTruthComparison> = {},
-): ComparisonProjectStatsResolvedTruthComparison => {
-  return {
-    bothCorrectCount: 3,
-    bothWrongCount: 1,
-    columnInfo: null,
-    humanColumnId: 'human-column',
-    humanCorrectVsTruthCount: 6,
-    humanErrorsVsTruthCount: 2,
-    humanMetrics: createMetrics(),
-    humanOnlyCorrectCount: 1,
-    id: 'resolved-truth-comparison',
-    label: 'Truth model',
-    llmAdvantage: 0,
-    llmColumnId: 'llm-column',
-    llmCorrectVsTruthCount: 6,
-    llmErrorsVsTruthCount: 2,
-    llmMetrics: createMetrics({accuracy: 0.875}),
-    llmOnlyCorrectCount: 1,
-    mcnemarChiSquare: null,
-    resolvedCount: 8,
-    winner: 'Tie',
     ...overrides,
   }
 }
@@ -102,12 +51,15 @@ const createCategoryBreakdown = (
   }
 }
 
-const createStats = (categoryBreakdowns: ComparisonProjectStatsCategoryBreakdown[]): ComparisonProjectStats => {
+const createStats = (
+  categoryBreakdowns: ComparisonProjectStatsCategoryBreakdown[],
+  comparisons: ComparisonProjectStatsComparison[] = [],
+): ComparisonProjectStats => {
   return {
     activeGeneration: 1,
     additionalProjectStats: emptyAdditionalStats,
     categoryBreakdowns,
-    comparisons: [],
+    comparisons,
     isServingReady: true,
     servingStatus: 'ready',
     servingUpdatedAt: null,
@@ -143,64 +95,116 @@ describe('ComparisonProjectChineseStatsSection', () => {
     }
   })
 
-  test('renders resolved truth metrics before agreement metrics', () => {
-    const stats = createStats([
-      createCategoryBreakdown({
-        additionalProjectStats: {...emptyAdditionalStats, resolvedTruthComparisons: [createResolvedTruthComparison()]},
-        articleCount: 3,
-        category: 'chinese',
-        comparisons: [createAgreementComparison()],
-        label: 'Chinese',
-      }),
-      createCategoryBreakdown({
-        additionalProjectStats: {
-          ...emptyAdditionalStats,
-          resolvedTruthComparisons: [createResolvedTruthComparison({id: 'non-chinese-truth'})],
-        },
-        articleCount: 5,
-        category: 'non_chinese',
-        label: 'Non-Chinese',
-      }),
-    ])
+  test('renders project stats comparison rows split by category', () => {
+    const conflictResolutionLabel =
+      'GPT-5.5 (thinking: xhigh) vs Conflict resolution (fallback to human answer if no resolution provided)'
+    const humanComparison = createAgreementComparison({overlapCount: 14})
+    const conflictResolutionComparison = createAgreementComparison({
+      id: 'conflict-resolution-comparison',
+      kind: 'llm-vs-conflict-resolution',
+      label: conflictResolutionLabel,
+      overlapCount: 12,
+    })
+    const stats = createStats(
+      [
+        createCategoryBreakdown({
+          articleCount: 3,
+          category: 'chinese',
+          comparisons: [
+            createAgreementComparison({overlapCount: 4}),
+            createAgreementComparison({
+              id: 'conflict-resolution-comparison',
+              kind: 'llm-vs-conflict-resolution',
+              label: conflictResolutionLabel,
+              overlapCount: 3,
+            }),
+          ],
+          label: 'Chinese',
+        }),
+        createCategoryBreakdown({
+          articleCount: 5,
+          category: 'non_chinese',
+          comparisons: [
+            createAgreementComparison({overlapCount: 10}),
+            createAgreementComparison({
+              id: 'conflict-resolution-comparison',
+              kind: 'llm-vs-conflict-resolution',
+              label: conflictResolutionLabel,
+              overlapCount: 9,
+            }),
+          ],
+          label: 'Non-Chinese',
+        }),
+      ],
+      [humanComparison, conflictResolutionComparison],
+    )
     const {container, dispose} = renderSection(stats)
 
     try {
+      const rows = Array.from(container.querySelectorAll('tbody tr')).map((row) => {
+        return row.textContent ?? ''
+      })
+
       expect(container.textContent).toContain('Chinese vs Non-Chinese')
-      expect(container.textContent).toContain('Resolved')
-      expect(container.textContent).toContain('Accuracy')
-      expect(container.textContent).toContain('Balanced accuracy')
-      expect(container.textContent).toContain('Truth prevalence')
-      expect(container.textContent).toContain('TP')
-      expect(container.textContent).toContain('FP')
-      expect(container.textContent).toContain('TN')
-      expect(container.textContent).toContain('FN')
-      expect(container.textContent).not.toContain('Agreement row')
-      expect(container.textContent).not.toContain("Cohen's Kappa")
+      expect(container.textContent).toContain('Same comparison pairs as Project Stats')
+      expect(container.textContent).toContain('Chinese, Non-Chinese, and Total rows')
+      expect(container.textContent).toContain('Counts use each row')
+      expect(container.textContent).toContain('GPT-5.5 (thinking: xhigh) vs Human')
+      expect(container.textContent).toContain(conflictResolutionLabel)
+      expect(container.querySelectorAll('table')).toHaveLength(1)
+      expect(rows).toHaveLength(6)
+      expect(rows[0]).toContain('GPT-5.5 (thinking: xhigh) vs Human')
+      expect(rows[0]).toContain('Chinese')
+      expect(rows[0]).toContain('4')
+      expect(rows[1]).toContain('GPT-5.5 (thinking: xhigh) vs Human')
+      expect(rows[1]).toContain('Non-Chinese')
+      expect(rows[1]).toContain('10')
+      expect(rows[2]).toContain('GPT-5.5 (thinking: xhigh) vs Human')
+      expect(rows[2]).toContain('Total')
+      expect(rows[2]).toContain('14')
+      expect(rows[3]).toContain(conflictResolutionLabel)
+      expect(rows[3]).toContain('Chinese')
+      expect(rows[4]).toContain(conflictResolutionLabel)
+      expect(rows[4]).toContain('Non-Chinese')
+      expect(rows[5]).toContain(conflictResolutionLabel)
+      expect(container.textContent).toContain('Total')
+      expect(container.textContent).toContain('Column Info')
+      expect(container.textContent).toContain('Title + abstract')
+      expect(container.textContent).toContain('Overlap')
+      expect(container.textContent).not.toContain('Articles')
+      expect(container.textContent).toContain('Conflicts')
+      expect(container.textContent).toContain('True Conflicts')
+      expect(container.textContent).toContain("Cohen's Kappa")
+      expect(container.textContent).not.toContain('Accuracy')
     } finally {
       dispose()
     }
   })
 
-  test('renders agreement metrics when no resolved truth exists', () => {
-    const stats = createStats([
-      createCategoryBreakdown({
-        articleCount: 3,
-        category: 'chinese',
-        comparisons: [createAgreementComparison()],
-        label: 'Chinese',
-      }),
-      createCategoryBreakdown({
-        articleCount: 5,
-        category: 'non_chinese',
-        comparisons: [createAgreementComparison({id: 'non-chinese-agreement'})],
-        label: 'Non-Chinese',
-      }),
-    ])
+  test('renders comparison metrics when no resolved truth exists', () => {
+    const stats = createStats(
+      [
+        createCategoryBreakdown({
+          articleCount: 3,
+          category: 'chinese',
+          comparisons: [createAgreementComparison()],
+          label: 'Chinese',
+        }),
+        createCategoryBreakdown({
+          articleCount: 5,
+          category: 'non_chinese',
+          comparisons: [createAgreementComparison()],
+          label: 'Non-Chinese',
+        }),
+      ],
+      [createAgreementComparison()],
+    )
     const {container, dispose} = renderSection(stats)
 
     try {
-      expect(container.textContent).toContain('Agreement row')
+      expect(container.textContent).toContain('GPT-5.5 (thinking: xhigh) vs Human')
       expect(container.textContent).toContain('Overlap')
+      expect(container.textContent).not.toContain('Articles')
       expect(container.textContent).toContain('Conflicts')
       expect(container.textContent).toContain('True Conflicts')
       expect(container.textContent).toContain("Cohen's Kappa")
