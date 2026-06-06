@@ -36,6 +36,7 @@ export type ComparisonProjectStatsComparison = ComparisonProjectStatsComparisonG
   trueConflictCount: number
 }
 
+export type ComparisonProjectStatsArticleCategory = 'chinese' | 'non_chinese'
 export type ComparisonProjectStatsAnswerFilterKind = 'human' | 'llm'
 export type ComparisonProjectStatsAnswerFilterValue = 'maybe' | 'no' | 'yes'
 
@@ -92,12 +93,21 @@ export type ComparisonProjectAdditionalStats = {
   resolvedTruthComparisons: ComparisonProjectStatsResolvedTruthComparison[]
 }
 
+export type ComparisonProjectStatsCategoryBreakdown = {
+  additionalProjectStats: ComparisonProjectAdditionalStats
+  articleCount: number
+  category: ComparisonProjectStatsArticleCategory
+  comparisons: ComparisonProjectStatsComparison[]
+  label: string
+}
+
 export type ComparisonProjectStatsCellRow = {articleId: string; columnId: string; normalizedAnswers: unknown}
 
 export type ComparisonProjectStatsConflictResolutionRow = {answerValue: unknown; articleId: string}
 
 export type ComparisonProjectStatsAggregateRow = {
   agreementCount: unknown
+  articleCategory?: unknown
   binaryPairCount: unknown
   comparisonId: string
   conflictCount: unknown
@@ -112,6 +122,7 @@ export type ComparisonProjectStatsAggregateRow = {
 }
 
 export type ComparisonProjectStatsResolvedTruthAggregateRow = {
+  articleCategory?: unknown
   bothCorrectCount: unknown
   bothWrongCount: unknown
   comparisonId: string
@@ -131,6 +142,8 @@ export type ComparisonProjectStatsResolvedTruthAggregateRow = {
   llmTruePositiveCount: unknown
   resolvedCount: unknown
 }
+
+export type ComparisonProjectStatsArticleCategoryCountRow = {articleCategory: unknown; articleCount: unknown}
 
 type ComparisonProjectStatsQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 
@@ -220,11 +233,20 @@ type ComparisonProjectStatsResolvedTruthCounts = {
 
 const summaryPromptId = 'summary'
 const comparisonProjectConflictResolutionTable = 'app.comparison_project_conflict_resolution'
+const comparisonProjectStatsArticleCategories = ['chinese', 'non_chinese'] as const
+const comparisonProjectStatsArticleCategoryLabels = {chinese: 'Chinese', non_chinese: 'Non-Chinese'} satisfies Record<
+  ComparisonProjectStatsArticleCategory,
+  string
+>
 const comparisonProjectStatsAnswerFilterValues = ['yes', 'no', 'maybe'] as const
 const emptyComparisonProjectAdditionalStats = {
   conflictResolutionAnswerComparisons: [],
   resolvedTruthComparisons: [],
 } satisfies ComparisonProjectAdditionalStats
+const emptyComparisonProjectStatsArticleCategoryCounts = {chinese: 0, non_chinese: 0} satisfies Record<
+  ComparisonProjectStatsArticleCategory,
+  number
+>
 
 const getInClause = (values: readonly string[]) => {
   return getQuotedStringList([...values]).join(', ')
@@ -240,6 +262,14 @@ const getComparisonProjectStatsCountValue = (value: unknown) => {
   const parsedValue = typeof value === 'bigint' ? Number(value) : Number(value)
 
   return Number.isSafeInteger(parsedValue) && parsedValue >= 0 ? parsedValue : 0
+}
+
+const getComparisonProjectStatsArticleCategory = (value: unknown): ComparisonProjectStatsArticleCategory | null => {
+  return value === 'chinese' || value === 'non_chinese' ? value : null
+}
+
+const getComparisonProjectStatsArticleCategorySql = (expression: string) => {
+  return `CASE WHEN ${expression} = 'chinese' THEN 'chinese' ELSE 'non_chinese' END`
 }
 
 const getTrimmedLowercaseValue = (value: string) => {
@@ -1522,6 +1552,15 @@ const getComparisonProjectStatsResolvedTruthAggregate = (
   }
 }
 
+const getComparisonProjectStatsAggregateRowsForArticleCategory = <T extends {articleCategory?: unknown}>(
+  rows: readonly T[],
+  articleCategory: ComparisonProjectStatsArticleCategory | null,
+) => {
+  return rows.filter((row) => {
+    return getComparisonProjectStatsArticleCategory(row.articleCategory) === articleCategory
+  })
+}
+
 const getComparisonProjectStatsAggregatesByComparisonId = (rows: readonly ComparisonProjectStatsAggregateRow[]) => {
   return rows.reduce<Map<string, ComparisonProjectStatsAggregate>>((aggregateMap, row) => {
     aggregateMap.set(row.comparisonId, getComparisonProjectStatsAggregate(row))
@@ -1542,11 +1581,16 @@ const getComparisonProjectStatsResolvedTruthAggregatesByComparisonId = (
 
 const getComparisonProjectStatsFromAggregates = (params: {
   aggregateRows: readonly ComparisonProjectStatsAggregateRow[]
+  articleCategory?: ComparisonProjectStatsArticleCategory | null
   columns: readonly ComparisonProjectStatsColumn[]
   groups: readonly ComparisonProjectStatsComparisonGroup[]
   isSummaryMode: boolean
 }) => {
-  const aggregatesByComparisonId = getComparisonProjectStatsAggregatesByComparisonId(params.aggregateRows)
+  const aggregateRows = getComparisonProjectStatsAggregateRowsForArticleCategory(
+    params.aggregateRows,
+    params.articleCategory ?? null,
+  )
+  const aggregatesByComparisonId = getComparisonProjectStatsAggregatesByComparisonId(aggregateRows)
 
   return params.groups.map((group) => {
     const aggregate = aggregatesByComparisonId.get(group.id) ?? emptyComparisonProjectStatsAggregate
@@ -1570,9 +1614,14 @@ const getComparisonProjectStatsFromAggregates = (params: {
 
 const getComparisonProjectAdditionalStatsFromAggregates = (params: {
   aggregateRows: readonly ComparisonProjectStatsResolvedTruthAggregateRow[]
+  articleCategory?: ComparisonProjectStatsArticleCategory | null
   groups: readonly ComparisonProjectStatsResolvedTruthComparisonGroup[]
 }): ComparisonProjectAdditionalStats => {
-  const aggregatesByComparisonId = getComparisonProjectStatsResolvedTruthAggregatesByComparisonId(params.aggregateRows)
+  const aggregateRows = getComparisonProjectStatsAggregateRowsForArticleCategory(
+    params.aggregateRows,
+    params.articleCategory ?? null,
+  )
+  const aggregatesByComparisonId = getComparisonProjectStatsResolvedTruthAggregatesByComparisonId(aggregateRows)
 
   return {
     conflictResolutionAnswerComparisons: [],
@@ -1587,9 +1636,14 @@ const getComparisonProjectAdditionalStatsFromAggregates = (params: {
 
 const getComparisonProjectConflictResolutionAnswerStatsFromAggregates = (params: {
   aggregateRows: readonly ComparisonProjectStatsAggregateRow[]
+  articleCategory?: ComparisonProjectStatsArticleCategory | null
   groups: readonly ComparisonProjectStatsConflictResolutionAnswerComparisonGroup[]
 }): ComparisonProjectStatsConflictResolutionAnswerComparison[] => {
-  const aggregatesByComparisonId = getComparisonProjectStatsAggregatesByComparisonId(params.aggregateRows)
+  const aggregateRows = getComparisonProjectStatsAggregateRowsForArticleCategory(
+    params.aggregateRows,
+    params.articleCategory ?? null,
+  )
+  const aggregatesByComparisonId = getComparisonProjectStatsAggregatesByComparisonId(aggregateRows)
 
   return params.groups.map((group) => {
     const aggregate = aggregatesByComparisonId.get(group.id) ?? emptyComparisonProjectStatsAggregate
@@ -1603,6 +1657,80 @@ const getComparisonProjectConflictResolutionAnswerStatsFromAggregates = (params:
       specificity: getSpecificityFromAggregate(group.kind, aggregate),
       trueConflictCount: aggregate.trueConflictCount,
     }
+  })
+}
+
+const getComparisonProjectStatsArticleCategoryCounts = (
+  rows: readonly ComparisonProjectStatsArticleCategoryCountRow[],
+) => {
+  return rows.reduce<Record<ComparisonProjectStatsArticleCategory, number>>((counts, row) => {
+    const articleCategory = getComparisonProjectStatsArticleCategory(row.articleCategory)
+
+    return articleCategory
+      ? {...counts, [articleCategory]: counts[articleCategory] + getComparisonProjectStatsCountValue(row.articleCount)}
+      : counts
+  }, emptyComparisonProjectStatsArticleCategoryCounts)
+}
+
+const getComparisonProjectStatsCategoryBreakdown = (params: {
+  aggregateRows: readonly ComparisonProjectStatsAggregateRow[]
+  articleCategory: ComparisonProjectStatsArticleCategory
+  articleCount: number
+  columns: readonly ComparisonProjectStatsColumn[]
+  conflictResolutionAnswerAggregateRows: readonly ComparisonProjectStatsAggregateRow[]
+  conflictResolutionAnswerGroups: readonly ComparisonProjectStatsConflictResolutionAnswerComparisonGroup[]
+  groups: readonly ComparisonProjectStatsComparisonGroup[]
+  isSummaryMode: boolean
+  resolvedTruthAggregateRows: readonly ComparisonProjectStatsResolvedTruthAggregateRow[]
+  resolvedTruthGroups: readonly ComparisonProjectStatsResolvedTruthComparisonGroup[]
+}): ComparisonProjectStatsCategoryBreakdown => {
+  const additionalProjectStats = getComparisonProjectAdditionalStatsFromAggregates({
+    aggregateRows: params.resolvedTruthAggregateRows,
+    articleCategory: params.articleCategory,
+    groups: params.resolvedTruthGroups,
+  })
+
+  return {
+    additionalProjectStats: {
+      ...additionalProjectStats,
+      conflictResolutionAnswerComparisons: getComparisonProjectConflictResolutionAnswerStatsFromAggregates({
+        aggregateRows: params.conflictResolutionAnswerAggregateRows,
+        articleCategory: params.articleCategory,
+        groups: params.conflictResolutionAnswerGroups,
+      }),
+    },
+    articleCount: params.articleCount,
+    category: params.articleCategory,
+    comparisons: getComparisonProjectStatsFromAggregates({
+      aggregateRows: params.aggregateRows,
+      articleCategory: params.articleCategory,
+      columns: params.columns,
+      groups: params.groups,
+      isSummaryMode: params.isSummaryMode,
+    }),
+    label: comparisonProjectStatsArticleCategoryLabels[params.articleCategory],
+  }
+}
+
+const getComparisonProjectStatsCategoryBreakdownsFromAggregates = (params: {
+  aggregateRows: readonly ComparisonProjectStatsAggregateRow[]
+  articleCategoryCountRows: readonly ComparisonProjectStatsArticleCategoryCountRow[]
+  columns: readonly ComparisonProjectStatsColumn[]
+  conflictResolutionAnswerAggregateRows: readonly ComparisonProjectStatsAggregateRow[]
+  conflictResolutionAnswerGroups: readonly ComparisonProjectStatsConflictResolutionAnswerComparisonGroup[]
+  groups: readonly ComparisonProjectStatsComparisonGroup[]
+  isSummaryMode: boolean
+  resolvedTruthAggregateRows: readonly ComparisonProjectStatsResolvedTruthAggregateRow[]
+  resolvedTruthGroups: readonly ComparisonProjectStatsResolvedTruthComparisonGroup[]
+}) => {
+  const articleCategoryCounts = getComparisonProjectStatsArticleCategoryCounts(params.articleCategoryCountRows)
+
+  return comparisonProjectStatsArticleCategories.map((articleCategory) => {
+    return getComparisonProjectStatsCategoryBreakdown({
+      ...params,
+      articleCategory,
+      articleCount: articleCategoryCounts[articleCategory],
+    })
   })
 }
 
@@ -1632,6 +1760,22 @@ const getComparisonProjectStatsActiveGeneration = async (params: {
   return getComparisonProjectStatsGenerationValue(generationRow?.generation)
 }
 
+export const getComparisonProjectStatsArticleCategoryCountsSql = (params: {
+  comparisonProjectId: string
+  generation: number
+}) => {
+  return `
+    SELECT
+      ${getComparisonProjectStatsArticleCategorySql('article.article_category')} AS articleCategory,
+      CAST(COUNT(*) AS INTEGER) AS articleCount
+    FROM mart.comparison_article_serving article
+    WHERE article.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+      AND article.generation = ${getSqlLiteral(params.generation)}
+    GROUP BY 1
+    ORDER BY articleCategory ASC
+  `
+}
+
 export const getComparisonProjectStatsAggregatesSql = (params: {
   columnIds: readonly string[]
   comparisonProjectId: string
@@ -1648,9 +1792,14 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
     scoped_cell AS (
       SELECT
         cell.article_id,
+        ${getComparisonProjectStatsArticleCategorySql('article.article_category')} AS article_category,
         cell.column_id,
         cell.normalized_answers
       FROM mart.comparison_cell_serving cell
+      INNER JOIN mart.comparison_article_serving article
+        ON article.comparison_project_id = cell.comparison_project_id
+        AND article.generation = cell.generation
+        AND article.article_id = cell.article_id
       WHERE cell.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
         AND cell.generation = ${getSqlLiteral(params.generation)}
         AND cell.column_id IN (${getInClause(params.columnIds)})
@@ -1660,6 +1809,7 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
     normalized_cell_answer AS (
       SELECT
         scoped_cell.article_id,
+        scoped_cell.article_category,
         scoped_cell.column_id,
         LOWER(TRIM(answer.answer_value)) AS answer_value,
         CASE
@@ -1672,9 +1822,9 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
       WHERE NULLIF(TRIM(answer.answer_value), '') IS NOT NULL
     ),
     normalized_cell AS (
-      SELECT article_id, column_id
+      SELECT article_id, article_category, column_id
       FROM normalized_cell_answer
-      GROUP BY article_id, column_id
+      GROUP BY article_id, article_category, column_id
     )${
       hasAnswerFilterGroups
         ? `,
@@ -1705,7 +1855,8 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
         comparison_group.comparison_kind,
         comparison_group.left_column_id,
         comparison_group.right_column_id,
-        left_cell.article_id
+        left_cell.article_id,
+        left_cell.article_category
       FROM comparison_group
       INNER JOIN normalized_cell left_cell ON left_cell.column_id = comparison_group.left_column_id
       INNER JOIN normalized_cell right_cell
@@ -1725,6 +1876,7 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
         comparison_pair.comparison_id,
         comparison_pair.comparison_kind,
         comparison_pair.article_id,
+        comparison_pair.article_category,
         'left' AS answer_side,
         CASE
           WHEN comparison_pair.comparison_kind IN ('human-vs-conflict-resolution', 'llm-vs-conflict-resolution-no-fallback') THEN conflict_resolution.answer_value
@@ -1752,6 +1904,7 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
         comparison_pair.comparison_id,
         comparison_pair.comparison_kind,
         comparison_pair.article_id,
+        comparison_pair.article_category,
         'right' AS answer_side,
         normalized_cell_answer.answer_value,
         normalized_cell_answer.binary_decision
@@ -1765,6 +1918,7 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
         comparison_id,
         comparison_kind,
         article_id,
+        article_category,
         COUNT(DISTINCT answer_value) AS answer_value_count,
         COUNT(DISTINCT answer_value) FILTER (
           WHERE answer_side = 'left' AND answer_value IS NOT NULL
@@ -1794,7 +1948,7 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
           WHERE answer_side = 'right' AND binary_decision IS NOT NULL
         ) AS right_binary_decision
       FROM pair_answer_value
-      GROUP BY comparison_id, comparison_kind, article_id
+      GROUP BY comparison_id, comparison_kind, article_id, article_category
     ),
     eligible_pair_stats AS (
       SELECT
@@ -1822,9 +1976,37 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
           )
         ) AS is_binary_pair
       FROM pair_stats
+    ),
+    aggregate_pair_stats AS (
+      SELECT
+        comparison_id,
+        article_category,
+        is_included_pair,
+        answer_value_count,
+        left_binary_decision_count,
+        right_binary_decision_count,
+        all_binary_decision_count,
+        is_binary_pair,
+        left_binary_decision,
+        right_binary_decision
+      FROM eligible_pair_stats
+      UNION ALL
+      SELECT
+        comparison_id,
+        NULL AS article_category,
+        is_included_pair,
+        answer_value_count,
+        left_binary_decision_count,
+        right_binary_decision_count,
+        all_binary_decision_count,
+        is_binary_pair,
+        left_binary_decision,
+        right_binary_decision
+      FROM eligible_pair_stats
     )
     SELECT
       comparison_id AS comparisonId,
+      article_category AS articleCategory,
       CAST(COUNT(*) FILTER (WHERE is_included_pair) AS INTEGER) AS overlapCount,
       CAST(SUM(CASE WHEN is_included_pair AND answer_value_count > 1 THEN 1 ELSE 0 END) AS INTEGER) AS conflictCount,
       CAST(SUM(CASE
@@ -1860,9 +2042,9 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
         WHEN is_binary_pair AND right_binary_decision = 'exclude' THEN 1
         ELSE 0
       END) AS INTEGER) AS rightExcludeCount
-    FROM eligible_pair_stats
-    GROUP BY comparison_id
-    ORDER BY comparison_id ASC
+    FROM aggregate_pair_stats
+    GROUP BY comparison_id, article_category
+    ORDER BY comparisonId ASC, articleCategory ASC
   `
 }
 
@@ -1880,9 +2062,14 @@ export const getComparisonProjectStatsResolvedTruthAggregatesSql = (params: {
     scoped_cell AS (
       SELECT
         cell.article_id,
+        ${getComparisonProjectStatsArticleCategorySql('article.article_category')} AS article_category,
         cell.column_id,
         cell.normalized_answers
       FROM mart.comparison_cell_serving cell
+      INNER JOIN mart.comparison_article_serving article
+        ON article.comparison_project_id = cell.comparison_project_id
+        AND article.generation = cell.generation
+        AND article.article_id = cell.article_id
       WHERE cell.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
         AND cell.generation = ${getSqlLiteral(params.generation)}
         AND cell.column_id IN (${getInClause(params.columnIds)})
@@ -1892,6 +2079,7 @@ export const getComparisonProjectStatsResolvedTruthAggregatesSql = (params: {
     normalized_cell_answer AS (
       SELECT
         scoped_cell.article_id,
+        scoped_cell.article_category,
         scoped_cell.column_id,
         LOWER(TRIM(answer.answer_value)) AS answer_value,
         CASE
@@ -1906,6 +2094,7 @@ export const getComparisonProjectStatsResolvedTruthAggregatesSql = (params: {
     normalized_cell_decision AS (
       SELECT
         article_id,
+        article_category,
         column_id,
         COUNT(DISTINCT binary_decision) FILTER (
           WHERE binary_decision IS NOT NULL
@@ -1917,10 +2106,10 @@ export const getComparisonProjectStatsResolvedTruthAggregatesSql = (params: {
           WHERE binary_decision IS NOT NULL
         ) AS binary_decision
       FROM normalized_cell_answer
-      GROUP BY article_id, column_id
+      GROUP BY article_id, article_category, column_id
     ),
     eligible_cell_decision AS (
-      SELECT article_id, column_id, binary_decision
+      SELECT article_id, article_category, column_id, binary_decision
       FROM normalized_cell_decision
       WHERE binary_decision_count = 1
         AND non_binary_answer_value_count = 0
@@ -1963,6 +2152,7 @@ export const getComparisonProjectStatsResolvedTruthAggregatesSql = (params: {
     comparison_decision AS (
       SELECT
         resolved_truth_group.comparison_id,
+        human_decision.article_category,
         truth_decision.binary_decision AS truth_decision,
         human_decision.binary_decision AS human_decision,
         llm_decision.binary_decision AS llm_decision
@@ -1974,9 +2164,27 @@ export const getComparisonProjectStatsResolvedTruthAggregatesSql = (params: {
         AND llm_decision.article_id = human_decision.article_id
       INNER JOIN eligible_conflict_resolution_decision truth_decision
         ON truth_decision.article_id = human_decision.article_id
+    ),
+    aggregate_comparison_decision AS (
+      SELECT
+        comparison_id,
+        article_category,
+        truth_decision,
+        human_decision,
+        llm_decision
+      FROM comparison_decision
+      UNION ALL
+      SELECT
+        comparison_id,
+        NULL AS article_category,
+        truth_decision,
+        human_decision,
+        llm_decision
+      FROM comparison_decision
     )
     SELECT
       comparison_id AS comparisonId,
+      article_category AS articleCategory,
       CAST(COUNT(*) AS INTEGER) AS resolvedCount,
       CAST(SUM(CASE WHEN human_decision = truth_decision THEN 1 ELSE 0 END) AS INTEGER) AS humanCorrectVsTruthCount,
       CAST(SUM(CASE WHEN human_decision <> truth_decision THEN 1 ELSE 0 END) AS INTEGER) AS humanErrorsVsTruthCount,
@@ -1994,9 +2202,9 @@ export const getComparisonProjectStatsResolvedTruthAggregatesSql = (params: {
       CAST(SUM(CASE WHEN truth_decision = 'include' AND llm_decision = 'exclude' THEN 1 ELSE 0 END) AS INTEGER) AS llmFalseNegativeCount,
       CAST(SUM(CASE WHEN truth_decision = 'exclude' AND llm_decision = 'exclude' THEN 1 ELSE 0 END) AS INTEGER) AS llmTrueNegativeCount,
       CAST(SUM(CASE WHEN truth_decision = 'exclude' AND llm_decision = 'include' THEN 1 ELSE 0 END) AS INTEGER) AS llmFalsePositiveCount
-    FROM comparison_decision
-    GROUP BY comparison_id
-    ORDER BY comparison_id ASC
+    FROM aggregate_comparison_decision
+    GROUP BY comparison_id, article_category
+    ORDER BY comparisonId ASC, articleCategory ASC
   `
 }
 
@@ -2080,6 +2288,94 @@ export const getComparisonProjectAdditionalStats = async (
     conflictResolutionAnswerComparisons: getComparisonProjectConflictResolutionAnswerStatsFromAggregates({
       aggregateRows: conflictResolutionAnswerAggregateRows,
       groups: conflictResolutionAnswerGroups,
+    }),
+  }
+}
+
+export const getComparisonProjectStatsWithCategoryBreakdowns = async (
+  params: ComparisonProjectStatsParams,
+): Promise<{
+  additionalProjectStats: ComparisonProjectAdditionalStats
+  categoryBreakdowns: ComparisonProjectStatsCategoryBreakdown[]
+  comparisons: ComparisonProjectStatsComparison[]
+}> => {
+  const groups = getComparisonProjectStatsComparisonGroups(params)
+  const resolvedTruthGroups = getComparisonProjectAdditionalStatsGroups(params)
+  const conflictResolutionAnswerGroups = getComparisonProjectConflictResolutionAnswerStatsGroups(params)
+  const columnIds = getComparisonProjectStatsColumnIds(groups)
+  const resolvedTruthColumnIds = getComparisonProjectStatsResolvedTruthColumnIds(resolvedTruthGroups)
+  const conflictResolutionAnswerColumnIds = getComparisonProjectStatsAggregateColumnIds(conflictResolutionAnswerGroups)
+  const generation = await getComparisonProjectStatsActiveGeneration(params)
+
+  if (generation === null) {
+    return {additionalProjectStats: emptyComparisonProjectAdditionalStats, categoryBreakdowns: [], comparisons: []}
+  }
+
+  const articleCategoryCountRows = await params.queryRunner.queryJson<ComparisonProjectStatsArticleCategoryCountRow>(
+    getComparisonProjectStatsArticleCategoryCountsSql({comparisonProjectId: params.comparisonProjectId, generation}),
+  )
+  const aggregateRows =
+    columnIds.length === 0
+      ? []
+      : await params.queryRunner.queryJson<ComparisonProjectStatsAggregateRow>(
+          getComparisonProjectStatsAggregatesSql({
+            columnIds,
+            comparisonProjectId: params.comparisonProjectId,
+            generation,
+            groups,
+          }),
+        )
+  const resolvedTruthAggregateRows =
+    resolvedTruthColumnIds.length === 0
+      ? []
+      : await params.queryRunner.queryJson<ComparisonProjectStatsResolvedTruthAggregateRow>(
+          getComparisonProjectStatsResolvedTruthAggregatesSql({
+            columnIds: resolvedTruthColumnIds,
+            comparisonProjectId: params.comparisonProjectId,
+            generation,
+            groups: resolvedTruthGroups,
+          }),
+        )
+  const conflictResolutionAnswerAggregateRows =
+    conflictResolutionAnswerColumnIds.length === 0
+      ? []
+      : await params.queryRunner.queryJson<ComparisonProjectStatsAggregateRow>(
+          getComparisonProjectStatsAggregatesSql({
+            columnIds: conflictResolutionAnswerColumnIds,
+            comparisonProjectId: params.comparisonProjectId,
+            generation,
+            groups: conflictResolutionAnswerGroups,
+          }),
+        )
+  const additionalProjectStats = getComparisonProjectAdditionalStatsFromAggregates({
+    aggregateRows: resolvedTruthAggregateRows,
+    groups: resolvedTruthGroups,
+  })
+
+  return {
+    additionalProjectStats: {
+      ...additionalProjectStats,
+      conflictResolutionAnswerComparisons: getComparisonProjectConflictResolutionAnswerStatsFromAggregates({
+        aggregateRows: conflictResolutionAnswerAggregateRows,
+        groups: conflictResolutionAnswerGroups,
+      }),
+    },
+    categoryBreakdowns: getComparisonProjectStatsCategoryBreakdownsFromAggregates({
+      aggregateRows,
+      articleCategoryCountRows,
+      columns: params.columns,
+      conflictResolutionAnswerAggregateRows,
+      conflictResolutionAnswerGroups,
+      groups,
+      isSummaryMode: params.isSummaryMode,
+      resolvedTruthAggregateRows,
+      resolvedTruthGroups,
+    }),
+    comparisons: getComparisonProjectStatsFromAggregates({
+      aggregateRows,
+      columns: params.columns,
+      groups,
+      isSummaryMode: params.isSummaryMode,
     }),
   }
 }

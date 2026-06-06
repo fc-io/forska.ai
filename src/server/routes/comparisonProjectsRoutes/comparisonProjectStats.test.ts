@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 
 import {
   type ComparisonProjectStatsAggregateRow,
+  type ComparisonProjectStatsCategoryBreakdown,
   type ComparisonProjectStatsCellRow,
   type ComparisonProjectStatsColumn,
   type ComparisonProjectStatsComparison,
@@ -11,6 +12,7 @@ import {
   getComparisonProjectAdditionalStatsFromCells,
   getComparisonProjectStats,
   getComparisonProjectStatsFromCells,
+  getComparisonProjectStatsWithCategoryBreakdowns,
 } from './comparisonProjectStats.ts'
 
 const humanPromptColumn = {
@@ -125,6 +127,21 @@ const findResolvedTruthComparison = (
   return comparison
 }
 
+const findCategoryBreakdown = (
+  breakdowns: readonly ComparisonProjectStatsCategoryBreakdown[],
+  category: ComparisonProjectStatsCategoryBreakdown['category'],
+) => {
+  const breakdown = breakdowns.find((candidate) => {
+    return candidate.category === category
+  })
+
+  if (!breakdown) {
+    throw new Error(`Missing category breakdown ${category}`)
+  }
+
+  return breakdown
+}
+
 const getComparisonId = (
   kind: ComparisonProjectStatsComparison['kind'],
   leftColumnId: string,
@@ -193,6 +210,12 @@ test('comparison stats reads compact aggregate rows from SQL', async () => {
 
   expect(primaryComparison).toMatchObject({conflictCount: 3, overlapCount: 4, trueConflictCount: 1})
   expect(aggregateStatement).toContain('FROM mart.comparison_cell_serving cell')
+  expect(aggregateStatement).toContain('INNER JOIN mart.comparison_article_serving article')
+  expect(aggregateStatement).toContain('article.comparison_project_id = cell.comparison_project_id')
+  expect(aggregateStatement).toContain('article.generation = cell.generation')
+  expect(aggregateStatement).toContain('article.article_id = cell.article_id')
+  expect(aggregateStatement).toContain('article_category AS articleCategory')
+  expect(aggregateStatement).toContain('GROUP BY comparison_id, article_category')
   expect(aggregateStatement).toContain('GROUP BY comparison_id')
   expect(aggregateStatement).not.toContain('TO_JSON(cell.normalized_answers)')
   expect(aggregateStatement).not.toContain('normalizedAnswers')
@@ -339,6 +362,14 @@ test('comparison stats SQL matches helper for no-fallback conflict resolution me
       )
     `)
     await connection.run(`
+      CREATE TABLE mart.comparison_article_serving (
+        comparison_project_id VARCHAR,
+        generation INTEGER,
+        article_id VARCHAR,
+        article_category VARCHAR
+      )
+    `)
+    await connection.run(`
       CREATE TABLE app.comparison_project_conflict_resolution (
         comparison_project_id VARCHAR,
         article_id VARCHAR,
@@ -348,6 +379,17 @@ test('comparison stats SQL matches helper for no-fallback conflict resolution me
     await connection.run(`
       INSERT INTO app.comparison_project_serving_generation
       VALUES ('comparison-project-1', 1)
+    `)
+    await connection.run(`
+      INSERT INTO mart.comparison_article_serving
+      VALUES
+        ('comparison-project-1', 1, 'article-1', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-2', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-3', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-4', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-5', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-6', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-7', 'non_chinese')
     `)
     await connection.run(`
       INSERT INTO mart.comparison_cell_serving
@@ -552,6 +594,14 @@ test('additional stats SQL matches helper for no-fallback head-to-head truth met
       )
     `)
     await connection.run(`
+      CREATE TABLE mart.comparison_article_serving (
+        comparison_project_id VARCHAR,
+        generation INTEGER,
+        article_id VARCHAR,
+        article_category VARCHAR
+      )
+    `)
+    await connection.run(`
       CREATE TABLE app.comparison_project_conflict_resolution (
         comparison_project_id VARCHAR,
         article_id VARCHAR,
@@ -561,6 +611,19 @@ test('additional stats SQL matches helper for no-fallback head-to-head truth met
     await connection.run(`
       INSERT INTO app.comparison_project_serving_generation
       VALUES ('comparison-project-1', 1)
+    `)
+    await connection.run(`
+      INSERT INTO mart.comparison_article_serving
+      VALUES
+        ('comparison-project-1', 1, 'article-1', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-2', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-3', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-4', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-5', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-6', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-7', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-8', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-9', 'non_chinese')
     `)
     await connection.run(`
       INSERT INTO mart.comparison_cell_serving
@@ -666,6 +729,153 @@ test('additional stats SQL matches helper for no-fallback head-to-head truth met
       mcnemarChiSquare: 0.25,
       resolvedCount: 6,
       winner: 'Tie',
+    })
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+})
+
+test('comparison stats category breakdowns use independent denominators and null rates', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`SET memory_limit = '1GB'`)
+    await connection.run(`CREATE SCHEMA app`)
+    await connection.run(`CREATE SCHEMA mart`)
+    await connection.run(`
+      CREATE TABLE mart.comparison_article_serving (
+        comparison_project_id VARCHAR,
+        generation INTEGER,
+        article_id VARCHAR,
+        article_category VARCHAR
+      )
+    `)
+    await connection.run(`
+      CREATE TABLE mart.comparison_cell_serving (
+        comparison_project_id VARCHAR,
+        generation INTEGER,
+        article_id VARCHAR,
+        column_id VARCHAR,
+        normalized_answers VARCHAR[]
+      )
+    `)
+    await connection.run(`
+      CREATE TABLE app.comparison_project_conflict_resolution (
+        comparison_project_id VARCHAR,
+        article_id VARCHAR,
+        answer_value VARCHAR
+      )
+    `)
+    await connection.run(`
+      INSERT INTO mart.comparison_article_serving
+      VALUES
+        ('comparison-project-1', 1, 'article-c1', 'chinese'),
+        ('comparison-project-1', 1, 'article-c2', 'chinese'),
+        ('comparison-project-1', 1, 'article-c3', 'chinese'),
+        ('comparison-project-1', 1, 'article-n1', 'non_chinese'),
+        ('comparison-project-1', 1, 'article-n2', 'non_chinese')
+    `)
+    await connection.run(`
+      INSERT INTO mart.comparison_cell_serving
+      VALUES
+        ('comparison-project-1', 1, 'article-c1', '${humanSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-c1', '${primarySummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-c2', '${humanSummaryColumn.id}', ['yes']),
+        ('comparison-project-1', 1, 'article-c2', '${primarySummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-n1', '${humanSummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-n1', '${primarySummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-n2', '${humanSummaryColumn.id}', ['no']),
+        ('comparison-project-1', 1, 'article-n2', '${primarySummaryColumn.id}', ['yes'])
+    `)
+    await connection.run(`
+      INSERT INTO app.comparison_project_conflict_resolution
+      VALUES
+        ('comparison-project-1', 'article-c1', 'yes'),
+        ('comparison-project-1', 'article-c2', 'yes'),
+        ('comparison-project-1', 'article-n1', 'no'),
+        ('comparison-project-1', 'article-n2', 'no')
+    `)
+
+    const stats = await getComparisonProjectStatsWithCategoryBreakdowns({
+      allowConflictResolution: true,
+      columns: [humanSummaryColumn, primarySummaryColumn],
+      comparisonProjectId: 'comparison-project-1',
+      generation: 1,
+      isSummaryMode: true,
+      primarySourceProjectId: 'source-project-1',
+      queryRunner: {
+        queryJson: async <T>(statement: string): Promise<T[]> => {
+          const reader = await connection.runAndReadAll(statement)
+
+          return reader.getRowObjectsJson() as T[]
+        },
+      },
+    })
+    const allComparison = findComparison(stats.comparisons, 'primary-vs-human', primarySummaryColumn.id)
+    const allResolvedTruthComparison = findResolvedTruthComparison(
+      stats.additionalProjectStats.resolvedTruthComparisons,
+      primarySummaryColumn.id,
+    )
+    const chineseBreakdown = findCategoryBreakdown(stats.categoryBreakdowns, 'chinese')
+    const nonChineseBreakdown = findCategoryBreakdown(stats.categoryBreakdowns, 'non_chinese')
+    const chineseComparison = findComparison(chineseBreakdown.comparisons, 'primary-vs-human', primarySummaryColumn.id)
+    const nonChineseComparison = findComparison(
+      nonChineseBreakdown.comparisons,
+      'primary-vs-human',
+      primarySummaryColumn.id,
+    )
+    const chineseResolvedTruthComparison = findResolvedTruthComparison(
+      chineseBreakdown.additionalProjectStats.resolvedTruthComparisons,
+      primarySummaryColumn.id,
+    )
+    const nonChineseResolvedTruthComparison = findResolvedTruthComparison(
+      nonChineseBreakdown.additionalProjectStats.resolvedTruthComparisons,
+      primarySummaryColumn.id,
+    )
+
+    expect(allComparison).toMatchObject({overlapCount: 4, sensitivity: 0.5, specificity: 0.5, trueConflictCount: 2})
+    expect(allResolvedTruthComparison.llmMetrics).toMatchObject({
+      sensitivity: 0.5,
+      specificity: 0.5,
+      truthPrevalence: 0.5,
+    })
+    expect(chineseBreakdown).toMatchObject({articleCount: 3, category: 'chinese', label: 'Chinese'})
+    expect(chineseComparison).toMatchObject({
+      overlapCount: 2,
+      sensitivity: 0.5,
+      specificity: null,
+      trueConflictCount: 1,
+    })
+    expect(chineseResolvedTruthComparison).toMatchObject({resolvedCount: 2})
+    expect(chineseResolvedTruthComparison.humanMetrics).toMatchObject({
+      sensitivity: 1,
+      specificity: null,
+      truthPrevalence: 1,
+    })
+    expect(chineseResolvedTruthComparison.llmMetrics).toMatchObject({
+      sensitivity: 0.5,
+      specificity: null,
+      truthPrevalence: 1,
+    })
+    expect(nonChineseBreakdown).toMatchObject({articleCount: 2, category: 'non_chinese', label: 'Non-Chinese'})
+    expect(nonChineseComparison).toMatchObject({
+      overlapCount: 2,
+      sensitivity: null,
+      specificity: 0.5,
+      trueConflictCount: 1,
+    })
+    expect(nonChineseResolvedTruthComparison).toMatchObject({resolvedCount: 2})
+    expect(nonChineseResolvedTruthComparison.humanMetrics).toMatchObject({
+      sensitivity: null,
+      specificity: 1,
+      truthPrevalence: 0,
+    })
+    expect(nonChineseResolvedTruthComparison.llmMetrics).toMatchObject({
+      sensitivity: null,
+      specificity: 0.5,
+      truthPrevalence: 0,
     })
   } finally {
     connection.closeSync()

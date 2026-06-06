@@ -332,6 +332,7 @@ export type ComparisonProjectStatsComparison = {
   specificity: number | null
   trueConflictCount: number
 }
+export type ComparisonProjectStatsArticleCategory = 'chinese' | 'non_chinese'
 export type ComparisonProjectStatsAnswerFilterKind = 'human' | 'llm'
 export type ComparisonProjectStatsAnswerFilterValue = 'maybe' | 'no' | 'yes'
 export type ComparisonProjectStatsConflictResolutionAnswerComparison = ComparisonProjectStatsComparison & {
@@ -382,9 +383,17 @@ export type ComparisonProjectAdditionalStats = {
   conflictResolutionAnswerComparisons: ComparisonProjectStatsConflictResolutionAnswerComparison[]
   resolvedTruthComparisons: ComparisonProjectStatsResolvedTruthComparison[]
 }
+export type ComparisonProjectStatsCategoryBreakdown = {
+  additionalProjectStats: ComparisonProjectAdditionalStats
+  articleCount: number
+  category: ComparisonProjectStatsArticleCategory
+  comparisons: ComparisonProjectStatsComparison[]
+  label: string
+}
 export type ComparisonProjectStats = {
   activeGeneration: number | null
   additionalProjectStats: ComparisonProjectAdditionalStats
+  categoryBreakdowns: ComparisonProjectStatsCategoryBreakdown[]
   comparisons: ComparisonProjectStatsComparison[]
   isServingReady: boolean
   servingStatus: ComparisonProjectServingStatus

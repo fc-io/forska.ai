@@ -68,9 +68,9 @@ import {
 } from './comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
 import {
   type ComparisonProjectAdditionalStats,
+  type ComparisonProjectStatsCategoryBreakdown,
   type ComparisonProjectStatsComparison,
-  getComparisonProjectAdditionalStats,
-  getComparisonProjectStats,
+  getComparisonProjectStatsWithCategoryBreakdowns,
 } from './comparisonProjectsRoutes/comparisonProjectStats.ts'
 
 type PromptSelection = {
@@ -156,6 +156,7 @@ type ComparisonProjectScope = {
 type ComparisonProjectStatsResponse = {
   activeGeneration: number | null
   additionalProjectStats: ComparisonProjectAdditionalStats
+  categoryBreakdowns: ComparisonProjectStatsCategoryBreakdown[]
   comparisons: ComparisonProjectStatsComparison[]
   isServingReady: boolean
   servingStatus: ComparisonProjectServingStatus
@@ -3161,13 +3162,13 @@ const getComparisonProjectStatsResponse = async (
     primarySourceProjectId: scope.summarySourceProjectId ?? scope.sourceProjectIds[0] ?? null,
     queryRunner: appDatabaseService,
   }
-  const comparisons = await getComparisonProjectStats(statsParams)
-  const additionalProjectStats = await getComparisonProjectAdditionalStats(statsParams)
+  const stats = await getComparisonProjectStatsWithCategoryBreakdowns(statsParams)
 
   return {
     activeGeneration: scope.activeGeneration,
-    additionalProjectStats,
-    comparisons,
+    additionalProjectStats: stats.additionalProjectStats,
+    categoryBreakdowns: stats.categoryBreakdowns,
+    comparisons: stats.comparisons,
     isServingReady: scope.isServingReady,
     servingStatus: scope.servingStatus,
     servingUpdatedAt: scope.servingUpdatedAt,
