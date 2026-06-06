@@ -19,6 +19,13 @@ export type ComparisonProjectAnswerRowFilter = (typeof comparisonProjectAnswerRo
 
 type ComparisonProjectAnswerFilterValue = 'yes' | 'no' | 'maybe'
 type ComparisonProjectRowFilterColumn = {id: string; kind: 'llm' | 'human'}
+type ComparisonProjectRowFilterLabelColumn = {
+  kind: 'llm' | 'human'
+  modelLabel?: string | null
+  sourceProjectId?: string | null
+  sourceProjectName?: string | null
+}
+type ComparisonProjectRowFilterLabelContext = {columns?: readonly ComparisonProjectRowFilterLabelColumn[]}
 
 export type ComparisonProjectRowFilterEvaluation = {
   answeredColumnCount: number
@@ -45,17 +52,61 @@ const answerRowFilterConfig = {
   {answer: ComparisonProjectAnswerFilterValue; kind: 'human' | 'llm'}
 >
 
-const answerRowFilterLabels = {
-  'human-answered-maybe': 'Human has answered maybe',
-  'human-answered-no': 'Human has answered no',
-  'human-answered-yes': 'Human has answered yes',
-  'llm-answered-maybe': 'LLM has answered maybe',
-  'llm-answered-no': 'LLM has answered no',
-  'llm-answered-yes': 'LLM has answered yes',
-} satisfies Record<ComparisonProjectAnswerRowFilter, string>
-
 const getIsAnswerRowFilter = (rowFilter: ComparisonProjectRowFilter): rowFilter is ComparisonProjectAnswerRowFilter => {
   return comparisonProjectAnswerRowFilters.includes(rowFilter as ComparisonProjectAnswerRowFilter)
+}
+
+const getColumnLabelPart = (value: string | null | undefined) => {
+  const trimmedValue = value?.trim() ?? ''
+
+  return trimmedValue.length > 0 ? trimmedValue : null
+}
+
+const getColumnSourceProjectKey = (column: ComparisonProjectRowFilterLabelColumn) => {
+  return getColumnLabelPart(column.sourceProjectId) ?? getColumnLabelPart(column.sourceProjectName)
+}
+
+const getUniqueLabelParts = (values: readonly (string | null | undefined)[]) => {
+  return Array.from(
+    new Set(
+      values.map(getColumnLabelPart).filter((value): value is string => {
+        return value !== null
+      }),
+    ),
+  )
+}
+
+const getLlmRowFilterSubjectLabel = (columns: readonly ComparisonProjectRowFilterLabelColumn[] | undefined) => {
+  if (!columns) {
+    return 'LLM'
+  }
+
+  const llmColumns = columns.filter((column) => {
+    return column.kind === 'llm'
+  })
+
+  if (llmColumns.length === 0) {
+    return 'LLM'
+  }
+
+  const modelLabels = getUniqueLabelParts(
+    llmColumns.map((column) => {
+      return column.modelLabel
+    }),
+  )
+  const sourceProjectKeys = getUniqueLabelParts(llmColumns.map(getColumnSourceProjectKey))
+
+  return modelLabels.length === 1 && sourceProjectKeys.length <= 1 ? (modelLabels[0] ?? 'LLM') : 'Any LLM'
+}
+
+const getAnswerRowFilterLabel = (
+  rowFilter: ComparisonProjectAnswerRowFilter,
+  context?: ComparisonProjectRowFilterLabelContext,
+) => {
+  const config = answerRowFilterConfig[rowFilter]
+  const subjectLabel = config.kind === 'human' ? 'Human' : getLlmRowFilterSubjectLabel(context?.columns)
+
+  return `${subjectLabel} has answered ${config.answer}`
 }
 
 const getNormalizedCellAnswers = (value: string | null | undefined) => {
@@ -92,7 +143,30 @@ export const getNormalizedComparisonProjectRowFilter = (value: unknown): Compari
     : defaultComparisonProjectRowFilter
 }
 
-export const getComparisonProjectRowFilterLabel = (rowFilter: ComparisonProjectRowFilter, isSummaryMode: boolean) => {
+export const getSelectableComparisonProjectRowFilters = (
+  columns: readonly ComparisonProjectRowFilterLabelColumn[],
+  currentRowFilter: ComparisonProjectRowFilter,
+) => {
+  const hasHumanColumns = columns.some((column) => {
+    return column.kind === 'human'
+  })
+  const hasLlmColumns = columns.some((column) => {
+    return column.kind === 'llm'
+  })
+
+  return comparisonProjectRowFilters.filter((rowFilter) => {
+    const config = getIsAnswerRowFilter(rowFilter) ? answerRowFilterConfig[rowFilter] : null
+    const isAvailable = !config || (config.kind === 'human' ? hasHumanColumns : hasLlmColumns)
+
+    return isAvailable || rowFilter === currentRowFilter
+  })
+}
+
+export const getComparisonProjectRowFilterLabel = (
+  rowFilter: ComparisonProjectRowFilter,
+  isSummaryMode: boolean,
+  context?: ComparisonProjectRowFilterLabelContext,
+) => {
   return rowFilter === 'multiple-answers'
     ? isSummaryMode
       ? 'Rows with more than 1 answer'
@@ -100,7 +174,7 @@ export const getComparisonProjectRowFilterLabel = (rowFilter: ComparisonProjectR
     : rowFilter === 'fully-answered'
       ? 'Rows where all shown columns are answered'
       : getIsAnswerRowFilter(rowFilter)
-        ? answerRowFilterLabels[rowFilter]
+        ? getAnswerRowFilterLabel(rowFilter, context)
         : 'All rows'
 }
 

@@ -332,6 +332,14 @@ export type ComparisonProjectStatsComparison = {
   specificity: number | null
   trueConflictCount: number
 }
+export type ComparisonProjectStatsAnswerFilterKind = 'human' | 'llm'
+export type ComparisonProjectStatsAnswerFilterValue = 'maybe' | 'no' | 'yes'
+export type ComparisonProjectStatsConflictResolutionAnswerComparison = ComparisonProjectStatsComparison & {
+  answerFilterKind: ComparisonProjectStatsAnswerFilterKind
+  answerFilterLabel: string
+  answerFilterValue: ComparisonProjectStatsAnswerFilterValue
+  filterColumnId: string
+}
 export type ComparisonProjectStatsTruthWinner = 'Human' | 'LLM' | 'Tie'
 export type ComparisonProjectStatsTruthConfusionMetrics = {
   accuracy: number | null
@@ -371,6 +379,7 @@ export type ComparisonProjectStatsResolvedTruthComparison = {
   winner: ComparisonProjectStatsTruthWinner
 }
 export type ComparisonProjectAdditionalStats = {
+  conflictResolutionAnswerComparisons: ComparisonProjectStatsConflictResolutionAnswerComparison[]
   resolvedTruthComparisons: ComparisonProjectStatsResolvedTruthComparison[]
 }
 export type ComparisonProjectStats = {

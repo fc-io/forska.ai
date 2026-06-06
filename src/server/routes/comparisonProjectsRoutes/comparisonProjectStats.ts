@@ -36,6 +36,16 @@ export type ComparisonProjectStatsComparison = ComparisonProjectStatsComparisonG
   trueConflictCount: number
 }
 
+export type ComparisonProjectStatsAnswerFilterKind = 'human' | 'llm'
+export type ComparisonProjectStatsAnswerFilterValue = 'maybe' | 'no' | 'yes'
+
+export type ComparisonProjectStatsConflictResolutionAnswerComparison = ComparisonProjectStatsComparison & {
+  answerFilterKind: ComparisonProjectStatsAnswerFilterKind
+  answerFilterLabel: string
+  answerFilterValue: ComparisonProjectStatsAnswerFilterValue
+  filterColumnId: string
+}
+
 export type ComparisonProjectStatsTruthWinner = 'Human' | 'LLM' | 'Tie'
 
 export type ComparisonProjectStatsTruthConfusionMetrics = {
@@ -78,6 +88,7 @@ export type ComparisonProjectStatsResolvedTruthComparison = {
 }
 
 export type ComparisonProjectAdditionalStats = {
+  conflictResolutionAnswerComparisons: ComparisonProjectStatsConflictResolutionAnswerComparison[]
   resolvedTruthComparisons: ComparisonProjectStatsResolvedTruthComparison[]
 }
 
@@ -147,7 +158,7 @@ type ComparisonProjectStatsFromCellsParams = {
 type BinaryDecision = 'exclude' | 'include'
 type BinaryDecisionPair = {leftDecision: BinaryDecision; rightDecision: BinaryDecision}
 type ComparisonProjectStatsNormalizedCell = {articleId: string; columnId: string; normalizedAnswers: string[]}
-type ComparisonProjectStatsPair = {leftAnswers: string[]; rightAnswers: string[]}
+type ComparisonProjectStatsPair = {articleId: string; leftAnswers: string[]; rightAnswers: string[]}
 type ComparisonProjectStatsLabelContext = {ambiguousLlmModelLabels: ReadonlySet<string>}
 type ComparisonProjectStatsResolvedTruthComparisonGroup = {
   columnInfo: string | null
@@ -155,6 +166,17 @@ type ComparisonProjectStatsResolvedTruthComparisonGroup = {
   id: string
   label: string
   llmColumnId: string
+}
+type ComparisonProjectStatsAggregateGroup = ComparisonProjectStatsComparisonGroup & {
+  answerFilterValue?: ComparisonProjectStatsAnswerFilterValue
+  filterAnswerValue?: ComparisonProjectStatsAnswerFilterValue
+  filterColumnId?: string
+}
+type ComparisonProjectStatsConflictResolutionAnswerComparisonGroup = ComparisonProjectStatsComparisonGroup & {
+  answerFilterKind: ComparisonProjectStatsAnswerFilterKind
+  answerFilterLabel: string
+  answerFilterValue: ComparisonProjectStatsAnswerFilterValue
+  filterColumnId: string
 }
 type ComparisonProjectStatsTruthDecision = {
   humanDecision: BinaryDecision
@@ -198,6 +220,11 @@ type ComparisonProjectStatsResolvedTruthCounts = {
 
 const summaryPromptId = 'summary'
 const comparisonProjectConflictResolutionTable = 'app.comparison_project_conflict_resolution'
+const comparisonProjectStatsAnswerFilterValues = ['yes', 'no', 'maybe'] as const
+const emptyComparisonProjectAdditionalStats = {
+  conflictResolutionAnswerComparisons: [],
+  resolvedTruthComparisons: [],
+} satisfies ComparisonProjectAdditionalStats
 
 const getInClause = (values: readonly string[]) => {
   return getQuotedStringList([...values]).join(', ')
@@ -617,6 +644,91 @@ const getComparisonProjectStatsResolvedTruthGroups = (
     })
 }
 
+const getComparisonProjectStatsAnswerFilterLabel = (
+  column: ComparisonProjectStatsColumn,
+  answerFilterValue: ComparisonProjectStatsAnswerFilterValue,
+  context: ComparisonProjectStatsLabelContext,
+) => {
+  return `${getComparisonProjectStatsColumnLabel(column, context)} has answered ${answerFilterValue}`
+}
+
+const getComparisonProjectStatsConflictResolutionAnswerGroup = (params: {
+  answerFilterKind: ComparisonProjectStatsAnswerFilterKind
+  answerFilterValue: ComparisonProjectStatsAnswerFilterValue
+  comparisonGroup: ComparisonProjectStatsComparisonGroup
+  context: ComparisonProjectStatsLabelContext
+  filterColumn: ComparisonProjectStatsColumn
+}): ComparisonProjectStatsConflictResolutionAnswerComparisonGroup => {
+  return {
+    ...params.comparisonGroup,
+    answerFilterKind: params.answerFilterKind,
+    answerFilterLabel: getComparisonProjectStatsAnswerFilterLabel(
+      params.filterColumn,
+      params.answerFilterValue,
+      params.context,
+    ),
+    answerFilterValue: params.answerFilterValue,
+    filterColumnId: params.filterColumn.id,
+    id: `conflict-resolution-answer:${params.comparisonGroup.id}:${params.filterColumn.id}:${params.answerFilterValue}`,
+  }
+}
+
+const getComparisonProjectStatsConflictResolutionAnswerGroupsForColumn = (params: {
+  context: ComparisonProjectStatsLabelContext
+  humanColumns: readonly ComparisonProjectStatsColumn[]
+  llmColumn: ComparisonProjectStatsColumn
+}) => {
+  const comparisonGroup = getComparisonProjectStatsGroup(
+    'llm-vs-conflict-resolution-no-fallback',
+    params.llmColumn,
+    params.llmColumn,
+    params.context,
+  )
+  const llmAnswerGroups = comparisonProjectStatsAnswerFilterValues.map((answerFilterValue) => {
+    return getComparisonProjectStatsConflictResolutionAnswerGroup({
+      answerFilterKind: 'llm',
+      answerFilterValue,
+      comparisonGroup,
+      context: params.context,
+      filterColumn: params.llmColumn,
+    })
+  })
+  const humanAnswerGroups = params.humanColumns.flatMap((humanColumn) => {
+    return comparisonProjectStatsAnswerFilterValues.map((answerFilterValue) => {
+      return getComparisonProjectStatsConflictResolutionAnswerGroup({
+        answerFilterKind: 'human',
+        answerFilterValue,
+        comparisonGroup,
+        context: params.context,
+        filterColumn: humanColumn,
+      })
+    })
+  })
+
+  return [...llmAnswerGroups, ...humanAnswerGroups]
+}
+
+const getComparisonProjectStatsConflictResolutionAnswerGroups = (
+  humanColumns: readonly ComparisonProjectStatsColumn[],
+  llmColumns: readonly ComparisonProjectStatsColumn[],
+  context: ComparisonProjectStatsLabelContext,
+) => {
+  const summaryHumanColumns = humanColumns.filter((humanColumn) => {
+    return humanColumn.promptId === summaryPromptId
+  })
+  const summaryLlmColumns = llmColumns.filter((llmColumn) => {
+    return llmColumn.promptId === summaryPromptId
+  })
+
+  return summaryLlmColumns.flatMap((llmColumn) => {
+    return getComparisonProjectStatsConflictResolutionAnswerGroupsForColumn({
+      context,
+      humanColumns: summaryHumanColumns,
+      llmColumn,
+    })
+  })
+}
+
 export const getComparisonProjectStatsComparisonGroups = (params: {
   allowConflictResolution?: boolean
   columns: readonly ComparisonProjectStatsColumn[]
@@ -672,6 +784,26 @@ export const getComparisonProjectAdditionalStatsGroups = (params: {
   return getComparisonProjectStatsResolvedTruthGroups(humanColumns, llmColumns, labelContext)
 }
 
+export const getComparisonProjectConflictResolutionAnswerStatsGroups = (params: {
+  allowConflictResolution?: boolean
+  columns: readonly ComparisonProjectStatsColumn[]
+  isSummaryMode?: boolean
+}) => {
+  if (!getShouldIncludeConflictResolutionStatsGroups(params)) {
+    return []
+  }
+
+  const humanColumns = params.columns.filter((column) => {
+    return column.kind === 'human'
+  })
+  const llmColumns = params.columns.filter((column) => {
+    return column.kind === 'llm'
+  })
+  const labelContext = getComparisonProjectStatsLabelContext(params.columns)
+
+  return getComparisonProjectStatsConflictResolutionAnswerGroups(humanColumns, llmColumns, labelContext)
+}
+
 const getComparisonProjectStatsColumnIds = (groups: readonly ComparisonProjectStatsComparisonGroup[]) => {
   return Array.from(
     new Set(
@@ -682,10 +814,49 @@ const getComparisonProjectStatsColumnIds = (groups: readonly ComparisonProjectSt
   )
 }
 
-const getComparisonProjectStatsGroupValuesSql = (groups: readonly ComparisonProjectStatsComparisonGroup[]) => {
+const getComparisonProjectStatsAggregateColumnIds = (groups: readonly ComparisonProjectStatsAggregateGroup[]) => {
+  return Array.from(
+    new Set(
+      groups.flatMap((group) => {
+        return [group.leftColumnId, group.rightColumnId, group.filterColumnId].filter(
+          (columnId): columnId is string => {
+            return typeof columnId === 'string'
+          },
+        )
+      }),
+    ),
+  )
+}
+
+const getHasComparisonProjectStatsAnswerFilterGroups = (groups: readonly ComparisonProjectStatsAggregateGroup[]) => {
+  return groups.some((group) => {
+    return Boolean(group.filterColumnId && (group.filterAnswerValue ?? group.answerFilterValue))
+  })
+}
+
+const getComparisonProjectStatsAggregateFilterAnswerValue = (group: ComparisonProjectStatsAggregateGroup) => {
+  return group.filterAnswerValue ?? group.answerFilterValue
+}
+
+const getComparisonProjectStatsGroupValuesSql = (groups: readonly ComparisonProjectStatsAggregateGroup[]) => {
+  const hasAnswerFilterGroups = getHasComparisonProjectStatsAnswerFilterGroups(groups)
+
   return groups
     .map((group) => {
-      return `(${getSqlLiteral(group.id)}, ${getSqlLiteral(group.kind)}, ${getSqlLiteral(group.leftColumnId)}, ${getSqlLiteral(group.rightColumnId)})`
+      const baseValues = [
+        getSqlLiteral(group.id),
+        getSqlLiteral(group.kind),
+        getSqlLiteral(group.leftColumnId),
+        getSqlLiteral(group.rightColumnId),
+      ]
+      const filterValues = hasAnswerFilterGroups
+        ? [
+            getSqlLiteral(group.filterColumnId ?? null),
+            getSqlLiteral(getComparisonProjectStatsAggregateFilterAnswerValue(group) ?? null),
+          ]
+        : []
+
+      return `(${[...baseValues, ...filterValues].join(', ')})`
     })
     .join(',\n      ')
 }
@@ -775,7 +946,7 @@ const getComparisonProjectStatsNoFallbackConflictResolutionPair = (
   const rightAnswers = rightCell.normalizedAnswers
 
   return getHasOneValidBinaryDecision(conflictResolutionAnswers) && getHasOneValidBinaryDecision(rightAnswers)
-    ? {leftAnswers: conflictResolutionAnswers, rightAnswers}
+    ? {articleId, leftAnswers: conflictResolutionAnswers, rightAnswers}
     : null
 }
 
@@ -797,6 +968,7 @@ const getComparisonProjectStatsPair = (params: {
         params.conflictResolutionAnswersByArticleId,
       )
     : {
+        articleId: params.articleId,
         leftAnswers: getComparisonProjectStatsLeftAnswers(
           params.group,
           params.articleId,
@@ -1175,28 +1347,77 @@ const getShouldComputeCohensKappa = (params: {
   )
 }
 
+const getComparisonProjectStatsComparisonFromPairs = (params: {
+  group: ComparisonProjectStatsComparisonGroup
+  pairs: readonly ComparisonProjectStatsPair[]
+  shouldComputeCohensKappa: boolean
+}) => {
+  const conflictCount = params.pairs.filter(getHasConflict).length
+  const trueConflictCount = params.pairs.filter(getHasTrueConflict).length
+
+  return {
+    ...params.group,
+    cohensKappa: params.shouldComputeCohensKappa ? getCohensKappa(params.pairs) : null,
+    conflictCount,
+    overlapCount: params.pairs.length,
+    sensitivity: getSensitivity(params.group.kind, params.pairs),
+    specificity: getSpecificity(params.group.kind, params.pairs),
+    trueConflictCount,
+  }
+}
+
 const getComparisonProjectStatsComparison = (params: {
   cellsByColumn: Map<string, Map<string, ComparisonProjectStatsNormalizedCell>>
   conflictResolutionAnswersByArticleId: Map<string, string[]>
   group: ComparisonProjectStatsComparisonGroup
   shouldComputeCohensKappa: boolean
 }) => {
+  return getComparisonProjectStatsComparisonFromPairs({
+    group: params.group,
+    pairs: getComparisonProjectStatsPairs(
+      params.group,
+      params.cellsByColumn,
+      params.conflictResolutionAnswersByArticleId,
+    ),
+    shouldComputeCohensKappa: params.shouldComputeCohensKappa,
+  })
+}
+
+const getComparisonProjectStatsHasFilterAnswer = (params: {
+  articleId: string
+  cellsByColumn: Map<string, Map<string, ComparisonProjectStatsNormalizedCell>>
+  filterAnswerValue: ComparisonProjectStatsAnswerFilterValue
+  filterColumnId: string
+}) => {
+  return Boolean(
+    params.cellsByColumn
+      .get(params.filterColumnId)
+      ?.get(params.articleId)
+      ?.normalizedAnswers.includes(params.filterAnswerValue),
+  )
+}
+
+const getComparisonProjectStatsConflictResolutionAnswerComparison = (params: {
+  cellsByColumn: Map<string, Map<string, ComparisonProjectStatsNormalizedCell>>
+  conflictResolutionAnswersByArticleId: Map<string, string[]>
+  group: ComparisonProjectStatsConflictResolutionAnswerComparisonGroup
+}): ComparisonProjectStatsConflictResolutionAnswerComparison => {
   const pairs = getComparisonProjectStatsPairs(
     params.group,
     params.cellsByColumn,
     params.conflictResolutionAnswersByArticleId,
-  )
-  const conflictCount = pairs.filter(getHasConflict).length
-  const trueConflictCount = pairs.filter(getHasTrueConflict).length
+  ).filter((pair) => {
+    return getComparisonProjectStatsHasFilterAnswer({
+      articleId: pair.articleId,
+      cellsByColumn: params.cellsByColumn,
+      filterAnswerValue: params.group.answerFilterValue,
+      filterColumnId: params.group.filterColumnId,
+    })
+  })
 
   return {
     ...params.group,
-    cohensKappa: params.shouldComputeCohensKappa ? getCohensKappa(pairs) : null,
-    conflictCount,
-    overlapCount: pairs.length,
-    sensitivity: getSensitivity(params.group.kind, pairs),
-    specificity: getSpecificity(params.group.kind, pairs),
-    trueConflictCount,
+    ...getComparisonProjectStatsComparisonFromPairs({group: params.group, pairs, shouldComputeCohensKappa: true}),
   }
 }
 
@@ -1221,12 +1442,20 @@ export const getComparisonProjectAdditionalStatsFromCells = (
   params: ComparisonProjectStatsFromCellsParams,
 ): ComparisonProjectAdditionalStats => {
   const groups = getComparisonProjectAdditionalStatsGroups(params)
+  const conflictResolutionAnswerGroups = getComparisonProjectConflictResolutionAnswerStatsGroups(params)
   const cellsByColumn = getComparisonProjectStatsCellsByColumn(params.cellRows)
   const conflictResolutionAnswersByArticleId = getComparisonProjectStatsConflictResolutionAnswersByArticleId(
     params.conflictResolutionRows ?? [],
   )
 
   return {
+    conflictResolutionAnswerComparisons: conflictResolutionAnswerGroups.map((group) => {
+      return getComparisonProjectStatsConflictResolutionAnswerComparison({
+        cellsByColumn,
+        conflictResolutionAnswersByArticleId,
+        group,
+      })
+    }),
     resolvedTruthComparisons: groups.map((group) => {
       return getComparisonProjectStatsResolvedTruthComparison({
         cellsByColumn,
@@ -1346,6 +1575,7 @@ const getComparisonProjectAdditionalStatsFromAggregates = (params: {
   const aggregatesByComparisonId = getComparisonProjectStatsResolvedTruthAggregatesByComparisonId(params.aggregateRows)
 
   return {
+    conflictResolutionAnswerComparisons: [],
     resolvedTruthComparisons: params.groups.map((group) => {
       return getComparisonProjectStatsResolvedTruthComparisonFromCounts(
         group,
@@ -1353,6 +1583,27 @@ const getComparisonProjectAdditionalStatsFromAggregates = (params: {
       )
     }),
   }
+}
+
+const getComparisonProjectConflictResolutionAnswerStatsFromAggregates = (params: {
+  aggregateRows: readonly ComparisonProjectStatsAggregateRow[]
+  groups: readonly ComparisonProjectStatsConflictResolutionAnswerComparisonGroup[]
+}): ComparisonProjectStatsConflictResolutionAnswerComparison[] => {
+  const aggregatesByComparisonId = getComparisonProjectStatsAggregatesByComparisonId(params.aggregateRows)
+
+  return params.groups.map((group) => {
+    const aggregate = aggregatesByComparisonId.get(group.id) ?? emptyComparisonProjectStatsAggregate
+
+    return {
+      ...group,
+      cohensKappa: getCohensKappaFromAggregate(aggregate),
+      conflictCount: aggregate.conflictCount,
+      overlapCount: aggregate.overlapCount,
+      sensitivity: getSensitivityFromAggregate(group.kind, aggregate),
+      specificity: getSpecificityFromAggregate(group.kind, aggregate),
+      trueConflictCount: aggregate.trueConflictCount,
+    }
+  })
 }
 
 export const getComparisonProjectStatsActiveGenerationSql = (comparisonProjectId: string) => {
@@ -1385,10 +1636,12 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
   columnIds: readonly string[]
   comparisonProjectId: string
   generation: number
-  groups: readonly ComparisonProjectStatsComparisonGroup[]
+  groups: readonly ComparisonProjectStatsAggregateGroup[]
 }) => {
+  const hasAnswerFilterGroups = getHasComparisonProjectStatsAnswerFilterGroups(params.groups)
+
   return `
-    WITH comparison_group(comparison_id, comparison_kind, left_column_id, right_column_id) AS (
+    WITH comparison_group(comparison_id, comparison_kind, left_column_id, right_column_id${hasAnswerFilterGroups ? ', filter_column_id, filter_answer_value' : ''}) AS (
       VALUES
       ${getComparisonProjectStatsGroupValuesSql(params.groups)}
     ),
@@ -1422,7 +1675,16 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
       SELECT article_id, column_id
       FROM normalized_cell_answer
       GROUP BY article_id, column_id
-    ),
+    )${
+      hasAnswerFilterGroups
+        ? `,
+    answer_filter_cell AS (
+      SELECT article_id, column_id, answer_value
+      FROM normalized_cell_answer
+      GROUP BY article_id, column_id, answer_value
+    )`
+        : ''
+    },
     normalized_conflict_resolution_answer AS (
       SELECT
         article_id,
@@ -1449,6 +1711,14 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
       INNER JOIN normalized_cell right_cell
         ON right_cell.column_id = comparison_group.right_column_id
         AND right_cell.article_id = left_cell.article_id
+      ${
+        hasAnswerFilterGroups
+          ? `INNER JOIN answer_filter_cell filter_cell
+        ON filter_cell.column_id = comparison_group.filter_column_id
+        AND filter_cell.article_id = left_cell.article_id
+        AND filter_cell.answer_value = comparison_group.filter_answer_value`
+          : ''
+      }
     ),
     pair_answer_value AS (
       SELECT
@@ -1763,27 +2033,53 @@ export const getComparisonProjectStats = async (params: ComparisonProjectStatsPa
 export const getComparisonProjectAdditionalStats = async (
   params: ComparisonProjectStatsParams,
 ): Promise<ComparisonProjectAdditionalStats> => {
-  const groups = getComparisonProjectAdditionalStatsGroups(params)
-  const columnIds = getComparisonProjectStatsResolvedTruthColumnIds(groups)
+  const resolvedTruthGroups = getComparisonProjectAdditionalStatsGroups(params)
+  const conflictResolutionAnswerGroups = getComparisonProjectConflictResolutionAnswerStatsGroups(params)
+  const resolvedTruthColumnIds = getComparisonProjectStatsResolvedTruthColumnIds(resolvedTruthGroups)
+  const conflictResolutionAnswerColumnIds = getComparisonProjectStatsAggregateColumnIds(conflictResolutionAnswerGroups)
 
-  if (columnIds.length === 0) {
-    return {resolvedTruthComparisons: []}
+  if (resolvedTruthColumnIds.length === 0 && conflictResolutionAnswerColumnIds.length === 0) {
+    return emptyComparisonProjectAdditionalStats
   }
 
   const generation = await getComparisonProjectStatsActiveGeneration(params)
 
   if (generation === null) {
-    return {resolvedTruthComparisons: []}
+    return emptyComparisonProjectAdditionalStats
   }
 
-  const aggregateRows = await params.queryRunner.queryJson<ComparisonProjectStatsResolvedTruthAggregateRow>(
-    getComparisonProjectStatsResolvedTruthAggregatesSql({
-      columnIds,
-      comparisonProjectId: params.comparisonProjectId,
-      generation,
-      groups,
-    }),
-  )
+  const resolvedTruthAggregateRows =
+    resolvedTruthColumnIds.length === 0
+      ? []
+      : await params.queryRunner.queryJson<ComparisonProjectStatsResolvedTruthAggregateRow>(
+          getComparisonProjectStatsResolvedTruthAggregatesSql({
+            columnIds: resolvedTruthColumnIds,
+            comparisonProjectId: params.comparisonProjectId,
+            generation,
+            groups: resolvedTruthGroups,
+          }),
+        )
+  const conflictResolutionAnswerAggregateRows =
+    conflictResolutionAnswerColumnIds.length === 0
+      ? []
+      : await params.queryRunner.queryJson<ComparisonProjectStatsAggregateRow>(
+          getComparisonProjectStatsAggregatesSql({
+            columnIds: conflictResolutionAnswerColumnIds,
+            comparisonProjectId: params.comparisonProjectId,
+            generation,
+            groups: conflictResolutionAnswerGroups,
+          }),
+        )
+  const additionalStats = getComparisonProjectAdditionalStatsFromAggregates({
+    aggregateRows: resolvedTruthAggregateRows,
+    groups: resolvedTruthGroups,
+  })
 
-  return getComparisonProjectAdditionalStatsFromAggregates({aggregateRows, groups})
+  return {
+    ...additionalStats,
+    conflictResolutionAnswerComparisons: getComparisonProjectConflictResolutionAnswerStatsFromAggregates({
+      aggregateRows: conflictResolutionAnswerAggregateRows,
+      groups: conflictResolutionAnswerGroups,
+    }),
+  }
 }

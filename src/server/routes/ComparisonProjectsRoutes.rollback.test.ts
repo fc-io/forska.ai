@@ -731,8 +731,15 @@ const getSqlCursorOrdinal = (statement: string) => {
   return Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : null
 }
 
-type MockComparisonProjectStatsGroup = {comparisonId: string; kind: string; leftColumnId: string; rightColumnId: string}
-type MockComparisonProjectStatsPair = {leftAnswers: string[]; rightAnswers: string[]}
+type MockComparisonProjectStatsGroup = {
+  comparisonId: string
+  filterAnswerValue: string | null
+  filterColumnId: string | null
+  kind: string
+  leftColumnId: string
+  rightColumnId: string
+}
+type MockComparisonProjectStatsPair = {articleId: string; leftAnswers: string[]; rightAnswers: string[]}
 type MockComparisonProjectStatsBinaryDecision = 'exclude' | 'include'
 type MockComparisonProjectStatsBinaryPair = {
   leftDecision: MockComparisonProjectStatsBinaryDecision
@@ -747,15 +754,19 @@ type MockComparisonProjectStatsResolvedTruthDecision = {
 
 const getMockComparisonProjectStatsGroups = (statement: string) => {
   return Array.from(
-    statement.matchAll(/\('([^']*)', '([^']*)', '([^']*)', '([^']*)'\)/g),
-  ).map<MockComparisonProjectStatsGroup>(([, comparisonId, kind, leftColumnId, rightColumnId]) => {
-    return {
-      comparisonId: comparisonId ?? '',
-      kind: kind ?? '',
-      leftColumnId: leftColumnId ?? '',
-      rightColumnId: rightColumnId ?? '',
-    }
-  })
+    statement.matchAll(/\('([^']*)', '([^']*)', '([^']*)', '([^']*)'(?:, '([^']*)', '([^']*)')?\)/g),
+  ).map<MockComparisonProjectStatsGroup>(
+    ([, comparisonId, kind, leftColumnId, rightColumnId, filterColumnId, filterAnswerValue]) => {
+      return {
+        comparisonId: comparisonId ?? '',
+        filterAnswerValue: filterAnswerValue ?? null,
+        filterColumnId: filterColumnId ?? null,
+        kind: kind ?? '',
+        leftColumnId: leftColumnId ?? '',
+        rightColumnId: rightColumnId ?? '',
+      }
+    },
+  )
 }
 
 const getMockComparisonProjectStatsResolvedTruthGroups = (statement: string) => {
@@ -824,6 +835,11 @@ const getMockComparisonProjectStatsNoFallbackConflictResolutionPair = (
 
 const getMockComparisonProjectStatsPairs = (state: MockDatabaseState, group: MockComparisonProjectStatsGroup) => {
   return getMockServingRows(state)
+    .filter((row) => {
+      return group.filterColumnId && group.filterAnswerValue
+        ? getMockComparisonProjectStatsAnswers(row.cells[group.filterColumnId]).includes(group.filterAnswerValue)
+        : true
+    })
     .map<MockComparisonProjectStatsPair | null>((row) => {
       const fallbackLeftAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.leftColumnId])
       const rightAnswers = getMockComparisonProjectStatsAnswers(row.cells[group.rightColumnId])
@@ -833,7 +849,12 @@ const getMockComparisonProjectStatsPairs = (state: MockDatabaseState, group: Moc
         })?.answerValue,
       )
       if (group.kind === 'human-vs-conflict-resolution' || group.kind === 'llm-vs-conflict-resolution-no-fallback') {
-        return getMockComparisonProjectStatsNoFallbackConflictResolutionPair(rightAnswers, conflictResolutionAnswers)
+        const pair = getMockComparisonProjectStatsNoFallbackConflictResolutionPair(
+          rightAnswers,
+          conflictResolutionAnswers,
+        )
+
+        return pair ? {...pair, articleId: row.articleId} : null
       }
 
       const leftAnswers =
@@ -841,7 +862,9 @@ const getMockComparisonProjectStatsPairs = (state: MockDatabaseState, group: Moc
           ? conflictResolutionAnswers
           : fallbackLeftAnswers
 
-      return leftAnswers.length > 0 && rightAnswers.length > 0 ? {leftAnswers, rightAnswers} : null
+      return leftAnswers.length > 0 && rightAnswers.length > 0
+        ? {articleId: row.articleId, leftAnswers, rightAnswers}
+        : null
     })
     .filter((pair): pair is MockComparisonProjectStatsPair => {
       return pair !== null
@@ -3746,7 +3769,7 @@ test('comparison stats endpoint returns empty comparisons without active serving
   expect(response.status).toBe(200)
   expect(body.data).toEqual({
     activeGeneration: null,
-    additionalProjectStats: {resolvedTruthComparisons: []},
+    additionalProjectStats: {conflictResolutionAnswerComparisons: [], resolvedTruthComparisons: []},
     comparisons: [],
     isServingReady: false,
     servingStatus: 'refreshing',
@@ -3910,7 +3933,7 @@ test('comparison stats endpoint returns summary-mode kappa values', async () => 
       return statement.includes('FROM app.comparison_project_serving_generation')
     }),
   ).toBe(false)
-  expect(comparisonCellStatements).toHaveLength(2)
+  expect(comparisonCellStatements).toHaveLength(3)
   expect(
     comparisonCellStatements.every((statement) => {
       return statement.includes('cell.generation = 1')

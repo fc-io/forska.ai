@@ -4,6 +4,7 @@ import {
   getComparisonProjectPassesRowFilter,
   getComparisonProjectRowFilterLabel,
   getNormalizedComparisonProjectRowFilter,
+  getSelectableComparisonProjectRowFilters,
 } from './comparisonProjectRowFilter.ts'
 
 test('rowFilter normalization defaults missing and invalid values to all rows', () => {
@@ -26,6 +27,25 @@ test('rowFilter labels cover prompt and summary mode language', () => {
   expect(getComparisonProjectRowFilterLabel('human-answered-no', false)).toBe('Human has answered no')
   expect(getComparisonProjectRowFilterLabel('human-answered-maybe', false)).toBe('Human has answered maybe')
   expect(getComparisonProjectRowFilterLabel('all', false)).toBe('All rows')
+})
+
+test('rowFilter labels use model name for one unambiguous LLM source', () => {
+  const columns = [
+    {kind: 'llm', modelLabel: 'GPT-5.5 (thinking: xhigh)', sourceProjectId: 'source-project-1'},
+    {kind: 'human'},
+  ] as const
+
+  expect(getComparisonProjectRowFilterLabel('llm-answered-yes', true, {columns})).toBe(
+    'GPT-5.5 (thinking: xhigh) has answered yes',
+  )
+  expect(getComparisonProjectRowFilterLabel('human-answered-no', true, {columns})).toBe('Human has answered no')
+})
+
+test('selectable rowFilters hide unavailable answer sources', () => {
+  const llmOnlyColumns = [{kind: 'llm', modelLabel: 'Model 1'}] as const
+
+  expect(getSelectableComparisonProjectRowFilters(llmOnlyColumns, 'all')).not.toContain('human-answered-yes')
+  expect(getSelectableComparisonProjectRowFilters(llmOnlyColumns, 'human-answered-yes')).toContain('human-answered-yes')
 })
 
 test('rowFilter evaluation keeps prompt and summary sparse row semantics separate', () => {

@@ -31,10 +31,6 @@ const getScoreLabel = (value: number | null) => {
   return value === null ? 'N/A' : value.toFixed(3)
 }
 
-const getResolvedTruthRowCountLabel = (count: number) => {
-  return count === 1 ? '1 LLM row' : `${getCountLabel(count)} LLM rows`
-}
-
 const getConfusionMetricRows = (
   comparisons: readonly ComparisonProjectStatsResolvedTruthComparison[],
 ): ComparisonProjectStatsConfusionMetricRow[] => {
@@ -50,9 +46,13 @@ const getResolvedTruthComparisons = (additionalStats: ComparisonProjectAdditiona
   return additionalStats.resolvedTruthComparisons
 }
 
+const getConflictResolutionAnswerComparisons = (additionalStats: ComparisonProjectAdditionalStats) => {
+  return additionalStats.conflictResolutionAnswerComparisons
+}
+
 export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProjectAdditionalStatsSectionProps) => {
   return (
-    <details class="mt-6 border-t border-gray-200 pt-4">
+    <details class="group mt-6 border-t border-gray-200 pt-4">
       <summary class="flex cursor-pointer list-none items-start justify-between gap-3">
         <div>
           <h3 class="text-base font-semibold text-gray-900">Additional Project Stats</h3>
@@ -61,8 +61,9 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
             Project Stats table.
           </p>
         </div>
-        <span class="shrink-0 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
-          {getResolvedTruthRowCountLabel(getResolvedTruthComparisons(props.additionalStats).length)}
+        <span class="inline-flex shrink-0 items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50">
+          <span class="group-open:hidden">Expand</span>
+          <span class="hidden group-open:inline">Collapse</span>
         </span>
       </summary>
 
@@ -172,6 +173,94 @@ export const ComparisonProjectAdditionalStatsSection = (props: ComparisonProject
                           </td>
                           <td class="px-3 py-3 text-right tabular-nums text-gray-700">
                             {getScoreLabel(comparison.mcnemarChiSquare)}
+                          </td>
+                        </tr>
+                      )
+                    }}
+                  </For>
+                </tbody>
+              </table>
+            </div>
+          </Show>
+        </section>
+
+        <section>
+          <div>
+            <h4 class="text-sm font-semibold text-gray-900">Conflict resolution stats by answer</h4>
+            <p class="mt-1 text-sm text-gray-600">
+              No-fallback conflict-resolution comparisons recalculated on articles where the listed model or Human
+              answer is present.
+            </p>
+          </div>
+
+          <Show when={getConflictResolutionAnswerComparisons(props.additionalStats).length === 0}>
+            <div class="mt-3 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+              No answer-sliced conflict resolution stats are available yet.
+            </div>
+          </Show>
+
+          <Show when={getConflictResolutionAnswerComparisons(props.additionalStats).length > 0}>
+            <div class="mt-3 overflow-x-auto">
+              <table class="min-w-full divide-y divide-gray-200 text-sm">
+                <thead>
+                  <tr>
+                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Answer slice
+                    </th>
+                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Comparison
+                    </th>
+                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Column Info
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Overlap
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Conflicts
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      True Conflicts
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Cohen's Kappa
+                      <span class="block normal-case tracking-normal">Include vs Exclude</span>
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Sensitivity
+                      <span class="block normal-case tracking-normal">Reference Include</span>
+                    </th>
+                    <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Specificity
+                      <span class="block normal-case tracking-normal">Reference Exclude</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                  <For each={getConflictResolutionAnswerComparisons(props.additionalStats)}>
+                    {(comparison) => {
+                      return (
+                        <tr>
+                          <td class="max-w-[18rem] px-3 py-3 text-gray-900">{comparison.answerFilterLabel}</td>
+                          <td class="max-w-[28rem] px-3 py-3 text-gray-900">{comparison.label}</td>
+                          <td class="max-w-[18rem] px-3 py-3 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getCountLabel(comparison.overlapCount)}
+                          </td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getCountLabel(comparison.conflictCount)}
+                          </td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getCountLabel(comparison.trueConflictCount)}
+                          </td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getScoreLabel(comparison.cohensKappa)}
+                          </td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getRateLabel(comparison.sensitivity)}
+                          </td>
+                          <td class="px-3 py-3 text-right tabular-nums text-gray-700">
+                            {getRateLabel(comparison.specificity)}
                           </td>
                         </tr>
                       )

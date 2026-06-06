@@ -26,9 +26,9 @@ import {
 } from '../../../../utils/comparisonProjectDifferenceFilter.ts'
 import {
   type ComparisonProjectRowFilter,
-  comparisonProjectRowFilters,
   getComparisonProjectRowFilterLabel,
   getNormalizedComparisonProjectRowFilter,
+  getSelectableComparisonProjectRowFilters,
 } from '../../../../utils/comparisonProjectRowFilter.ts'
 import {
   compareProjectJudgmentsPageLimitOptions,
@@ -386,6 +386,13 @@ const CompareProjectJudgmentsPage = () => {
       },
     )
   })
+  const rowFilterOptions = createMemo(() => {
+    const columns = orderedColumns()
+
+    return getSelectableComparisonProjectRowFilters(columns, rowFilter()).map((value) => {
+      return {label: getComparisonProjectRowFilterLabel(value, Boolean(isSummaryMode()), {columns}), value}
+    })
+  })
   const compareSearchParams = createMemo(() => {
     return getCompareProjectJudgmentsSearchParams({
       pageLimit: pageLimit(),
@@ -636,11 +643,11 @@ const CompareProjectJudgmentsPage = () => {
                           setRowFilter(getNormalizedComparisonProjectRowFilter(event.currentTarget.value))
                         }}
                       >
-                        <For each={comparisonProjectRowFilters}>
+                        <For each={rowFilterOptions()}>
                           {(option) => {
                             return (
-                              <option selected={option === rowFilter()} value={option}>
-                                {getComparisonProjectRowFilterLabel(option, Boolean(isSummaryMode()))}
+                              <option selected={option.value === rowFilter()} value={option.value}>
+                                {option.label}
                               </option>
                             )
                           }}
