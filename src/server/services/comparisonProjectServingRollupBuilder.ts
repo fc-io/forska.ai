@@ -18,6 +18,31 @@ const comparisonFilterMemberTable = 'mart.comparison_filter_member'
 const comparisonFilterStatsTable = 'mart.comparison_filter_stats'
 const comparisonScopedImportAlias = 'selected_import'
 const summaryPromptId = 'summary'
+const chineseArticleCategory = 'chinese'
+const nonChineseArticleCategory = 'non_chinese'
+const cjkHanScriptPattern = '\\p{Han}'
+const chineseLanguagePattern = '^(zh(-.*)?|zho|chi|chinese|mandarin|cantonese|putonghua|guoyu|hanyu)$'
+const articleLanguageMetadataPaths = [
+  '$.language',
+  '$.language.code',
+  '$.language.name',
+  '$.language.value',
+  '$.lang',
+  '$.languageCode',
+  '$.language_code',
+  '$.articleLanguage',
+  '$.article_language',
+  '$.locale',
+  '$.languages[0]',
+  '$.languageCodes[0]',
+  '$.language_codes[0]',
+  '$.metadata.language',
+  '$.metadata.languageCode',
+  '$.source.language',
+  '$.openalex.language',
+  '$.crossref.language',
+  '$.pubmed.language',
+] as const
 
 const getDefaultComparisonProjectServingRollupBuilderDependencies =
   (): ComparisonProjectServingRollupBuilderDependencies => {
@@ -32,6 +57,41 @@ const getComparisonProjectServingGenerationSql = (generation: number) => {
   }
 
   return getSqlLiteral(generation)
+}
+
+const getNormalizedLanguageSql = (languageExpression: string) => {
+  return `LOWER(REPLACE(REPLACE(TRIM(${languageExpression}), '_', '-'), ' ', '-'))`
+}
+
+const getChineseLanguageMetadataConditionSql = (metadataExpression: string) => {
+  return articleLanguageMetadataPaths
+    .map((path) => {
+      const languageExpression = `json_extract_string(${metadataExpression}, ${getSqlLiteral(path)})`
+      const normalizedLanguageExpression = getNormalizedLanguageSql(languageExpression)
+
+      return `regexp_matches(${normalizedLanguageExpression}, ${getSqlLiteral(chineseLanguagePattern)})`
+    })
+    .join('\n        OR ')
+}
+
+const getComparisonProjectArticleCategorySql = ({
+  abstractExpression,
+  metadataExpression,
+  titleExpression,
+}: {
+  abstractExpression: string
+  metadataExpression: string
+  titleExpression: string
+}) => {
+  return `CASE
+        WHEN ${getChineseLanguageMetadataConditionSql(metadataExpression)}
+          OR regexp_matches(
+            COALESCE(${titleExpression}, '') || ' ' || COALESCE(${abstractExpression}, ''),
+            ${getSqlLiteral(cjkHanScriptPattern)}
+          )
+          THEN ${getSqlLiteral(chineseArticleCategory)}
+        ELSE ${getSqlLiteral(nonChineseArticleCategory)}
+      END`
 }
 
 const getComparisonProjectContentVariantCteSql = () => {
@@ -487,6 +547,7 @@ const getComparisonProjectArticleServingInsertSql = ({
       full_text_fetched_at,
       full_text_conversion_status,
       source_metadata,
+      article_category,
       row_sort_created_at,
       row_sort_title,
       row_sort_article_id,
@@ -685,71 +746,91 @@ const getComparisonProjectArticleServingInsertSql = ({
       WHERE scope_config.source_project_link_count > 0
         OR scope_config.import_route_link_count > 0
         OR article_cell_rollup.article_id IS NOT NULL
+    ),
+    serving_article AS (
+      SELECT
+        article_rollup.*,
+        article.article_created_at,
+        article.article_updated_at,
+        COALESCE(article.article_title, '') AS article_title,
+        article.article_summary,
+        ${articleExternalIdExpression} AS article_external_id,
+        article.url,
+        article.full_text_pdf,
+        article.full_text_fetched_at,
+        article.full_text_conversion_status,
+        ${sourceMetadataExpression} AS source_metadata
+      FROM article_rollup
+      INNER JOIN app.article article ON article.id = article_rollup.article_id
+      LEFT JOIN selected_comparison_article_import ${comparisonScopedImportAlias}
+        ON ${comparisonScopedImportAlias}.article_id = article_rollup.article_id
     )
     SELECT
       ${comparisonProjectLiteral} AS comparison_project_id,
       ${generationLiteral} AS generation,
-      article_rollup.article_id,
-      article.article_created_at,
-      article.article_updated_at,
-      COALESCE(article.article_title, ''),
-      article.article_summary,
-      ${articleExternalIdExpression} AS article_external_id,
-      json_extract_string(${sourceMetadataExpression}, '$.journalTitle') AS journal_title,
-      article.url,
-      article.full_text_pdf,
-      article.full_text_fetched_at,
-      article.full_text_conversion_status,
-      ${sourceMetadataExpression},
-      article.article_created_at AS row_sort_created_at,
-      COALESCE(article.article_title, '') AS row_sort_title,
-      article_rollup.article_id AS row_sort_article_id,
-      article_rollup.answered_prompt_count,
-      article_rollup.answered_column_count,
-      article_rollup.answered_llm_column_count,
-      article_rollup.answered_human_column_count,
-      article_rollup.required_column_count,
-      article_rollup.required_llm_column_count,
-      article_rollup.required_human_column_count,
-      article_rollup.has_all_llm_columns,
-      article_rollup.has_all_human_columns,
-      article_rollup.has_multiple_answers,
-      article_rollup.has_all_llm_columns AND article_rollup.has_all_human_columns AS is_fully_answered,
-      article_rollup.has_multiple_answers AS passes_row_filter_multiple_answers,
-      article_rollup.has_all_llm_columns AND article_rollup.has_all_human_columns AS passes_row_filter_fully_answered,
+      serving_article.article_id,
+      serving_article.article_created_at,
+      serving_article.article_updated_at,
+      serving_article.article_title,
+      serving_article.article_summary,
+      serving_article.article_external_id,
+      json_extract_string(serving_article.source_metadata, '$.journalTitle') AS journal_title,
+      serving_article.url,
+      serving_article.full_text_pdf,
+      serving_article.full_text_fetched_at,
+      serving_article.full_text_conversion_status,
+      serving_article.source_metadata,
+      ${getComparisonProjectArticleCategorySql({
+        abstractExpression: 'serving_article.article_summary',
+        metadataExpression: 'serving_article.source_metadata',
+        titleExpression: 'serving_article.article_title',
+      })} AS article_category,
+      serving_article.article_created_at AS row_sort_created_at,
+      serving_article.article_title AS row_sort_title,
+      serving_article.article_id AS row_sort_article_id,
+      serving_article.answered_prompt_count,
+      serving_article.answered_column_count,
+      serving_article.answered_llm_column_count,
+      serving_article.answered_human_column_count,
+      serving_article.required_column_count,
+      serving_article.required_llm_column_count,
+      serving_article.required_human_column_count,
+      serving_article.has_all_llm_columns,
+      serving_article.has_all_human_columns,
+      serving_article.has_multiple_answers,
+      serving_article.has_all_llm_columns AND serving_article.has_all_human_columns AS is_fully_answered,
+      serving_article.has_multiple_answers AS passes_row_filter_multiple_answers,
+      serving_article.has_all_llm_columns AND serving_article.has_all_human_columns AS passes_row_filter_fully_answered,
       TRUE AS passes_row_filter_all,
-      article_rollup.has_human_vs_llm_overlap,
-      article_rollup.has_human_vs_llm_difference,
-      article_rollup.has_human_vs_llm_true_conflict,
-      article_rollup.has_llm_vs_llm_difference,
-      article_rollup.has_any_disagreement,
+      serving_article.has_human_vs_llm_overlap,
+      serving_article.has_human_vs_llm_difference,
+      serving_article.has_human_vs_llm_true_conflict,
+      serving_article.has_llm_vs_llm_difference,
+      serving_article.has_any_disagreement,
       CASE
-        WHEN article_rollup.has_human_vs_llm_filter THEN article_rollup.has_human_vs_llm_overlap
+        WHEN serving_article.has_human_vs_llm_filter THEN serving_article.has_human_vs_llm_overlap
         ELSE TRUE
       END AS passes_difference_filter_human_vs_llm_overlap,
       CASE
-        WHEN article_rollup.has_human_vs_llm_filter THEN article_rollup.has_human_vs_llm_difference
+        WHEN serving_article.has_human_vs_llm_filter THEN serving_article.has_human_vs_llm_difference
         ELSE TRUE
       END AS passes_difference_filter_human_vs_llm,
       CASE
-        WHEN article_rollup.has_human_vs_llm_filter THEN article_rollup.has_human_vs_llm_true_conflict
+        WHEN serving_article.has_human_vs_llm_filter THEN serving_article.has_human_vs_llm_true_conflict
         ELSE TRUE
       END AS passes_difference_filter_human_vs_llm_true_conflict,
       CASE
-        WHEN article_rollup.has_llm_vs_llm_filter THEN article_rollup.has_llm_vs_llm_difference
+        WHEN serving_article.has_llm_vs_llm_filter THEN serving_article.has_llm_vs_llm_difference
         ELSE TRUE
       END AS passes_difference_filter_llm_vs_llm,
       CASE
-        WHEN article_rollup.has_any_disagreement_filter THEN article_rollup.has_any_disagreement
+        WHEN serving_article.has_any_disagreement_filter THEN serving_article.has_any_disagreement
         ELSE TRUE
       END AS passes_difference_filter_any_disagreement,
       TRUE AS passes_difference_filter_all,
-      article_rollup.has_any_disagreement AS has_conflict,
+      serving_article.has_any_disagreement AS has_conflict,
       current_timestamp AS serving_updated_at
-    FROM article_rollup
-    INNER JOIN app.article article ON article.id = article_rollup.article_id
-    LEFT JOIN selected_comparison_article_import ${comparisonScopedImportAlias}
-      ON ${comparisonScopedImportAlias}.article_id = article_rollup.article_id
+    FROM serving_article
   `
 }
 

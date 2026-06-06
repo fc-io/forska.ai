@@ -114,6 +114,10 @@ type ScopedImportRollupRow = {
 
 type ScopedImportRollupResult = {articleRows: ScopedImportRollupRow[]}
 
+type ArticleCategory = 'chinese' | 'non_chinese'
+
+type ArticleCategoryRollupResult = {articleRows: Array<{articleCategory: ArticleCategory; articleId: string}>}
+
 type TrueConflictCase = {
   articleCreatedAt: string
   articleId: string
@@ -1126,6 +1130,139 @@ const getScopedImportRollupScript = () => {
   `
 }
 
+const getArticleCategoryRollupScript = () => {
+  return `
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {getSqlLiteral} = await import('./src/server/services/appQueryHelpers.ts')
+    const {getComparisonProjectServingRollupBuilder} = await import('./src/server/services/comparisonProjectServingRollupBuilder.ts')
+
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+    const builder = getComparisonProjectServingRollupBuilder()
+    const generation = ${generation}
+    const projectId = 'comparison-category'
+    const getValuesSql = (columns, rows) => {
+      return rows.map((row) => {
+        return '(' + columns.map((column) => getSqlLiteral(row[column])).join(', ') + ')'
+      }).join(',\\n')
+    }
+    const insertRows = async (tableName, columns, rows) => {
+      if (rows.length === 0) {
+        return
+      }
+
+      await database.run(\`
+        INSERT INTO \${tableName} (\${columns.join(', ')})
+        VALUES \${getValuesSql(columns, rows)}
+      \`)
+    }
+
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('provider-category', 'sglang', 'Provider Category', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.model (
+        id,
+        provider_connection_id,
+        name,
+        remote_model_id,
+        display_name,
+        variant,
+        source,
+        enabled,
+        metadata_json
+      ) VALUES ('model-category', 'provider-category', 'Model Category', 'model-category', 'Model Category', 'manual', 'manual', TRUE, '{}'::JSON)
+    \`)
+
+    await insertRows('app.prompt', ['id', 'original_text', 'prompt_heading', 'content_hash', 'created_at'], [
+      {id: 'prompt-category', original_text: 'Prompt Category', prompt_heading: 'Prompt Category', content_hash: 'prompt-category-hash', created_at: '2026-09-01T00:00:00.000Z'}
+    ])
+
+    await database.run(\`
+      INSERT INTO app.article (
+        id,
+        article_id,
+        article_title,
+        article_summary,
+        article_created_at,
+        article_updated_at,
+        source_metadata
+      ) VALUES
+        (
+          'category-metadata-language',
+          'category-metadata-language',
+          'Metadata Language Article',
+          'Metadata language summary',
+          TIMESTAMPTZ '2026-09-01T00:00:00.000Z',
+          TIMESTAMPTZ '2026-09-01T01:00:00.000Z',
+          CAST('{"language":"zh-CN"}' AS JSON)
+        ),
+        (
+          'category-cjk-title',
+          'category-cjk-title',
+          'Han Script \u7814\u7a76 Title',
+          'Plain abstract',
+          TIMESTAMPTZ '2026-09-02T00:00:00.000Z',
+          TIMESTAMPTZ '2026-09-02T01:00:00.000Z',
+          NULL
+        ),
+        (
+          'category-cjk-abstract',
+          'category-cjk-abstract',
+          'Plain title',
+          'Abstract with Han \u6458\u8981 text',
+          TIMESTAMPTZ '2026-09-03T00:00:00.000Z',
+          TIMESTAMPTZ '2026-09-03T01:00:00.000Z',
+          NULL
+        ),
+        (
+          'category-non-chinese',
+          'category-non-chinese',
+          'Plain English Title',
+          'Plain English abstract',
+          TIMESTAMPTZ '2026-09-04T00:00:00.000Z',
+          TIMESTAMPTZ '2026-09-04T01:00:00.000Z',
+          CAST('{"language":"en"}' AS JSON)
+        )
+    \`)
+
+    await insertRows('app.comparison_project', ['id', 'name', 'description', 'model_ids', 'compare_with_humans', 'human_judgment_mode', 'summary_source_project_id', 'use_title', 'use_abstract', 'use_fulltext', 'use_fulltext_no_images'], [
+      {id: projectId, name: 'Article Category Project', description: null, model_ids: ['model-category'], compare_with_humans: false, human_judgment_mode: 'prompt', summary_source_project_id: null, use_title: true, use_abstract: true, use_fulltext: false, use_fulltext_no_images: false}
+    ])
+
+    await insertRows('app.comparison_project_prompt', ['id', 'comparison_project_id', 'prompt_id', 'prompt_order', 'criteria_disposition', 'criteria_section_key', 'criteria_section_label'], [
+      {id: 'comparison-category-prompt', comparison_project_id: projectId, prompt_id: 'prompt-category', prompt_order: 0, criteria_disposition: null, criteria_section_key: null, criteria_section_label: null}
+    ])
+
+    await insertRows('mart.comparison_cell_serving', ['comparison_project_id', 'generation', 'article_id', 'column_id', 'column_order', 'kind', 'prompt_id', 'model_id', 'source_project_id', 'content_key', 'display_answer', 'normalized_answers', 'source_created_at', 'source_updated_at'], [
+      {comparison_project_id: projectId, generation, article_id: 'category-metadata-language', column_id: 'llm:model-category:1100:prompt-category', column_order: 0, kind: 'llm', prompt_id: 'prompt-category', model_id: 'model-category', source_project_id: null, content_key: '1100', display_answer: 'yes', normalized_answers: ['yes'], source_created_at: '2026-09-01T02:00:00.000Z', source_updated_at: '2026-09-01T03:00:00.000Z'},
+      {comparison_project_id: projectId, generation, article_id: 'category-cjk-title', column_id: 'llm:model-category:1100:prompt-category', column_order: 0, kind: 'llm', prompt_id: 'prompt-category', model_id: 'model-category', source_project_id: null, content_key: '1100', display_answer: 'yes', normalized_answers: ['yes'], source_created_at: '2026-09-02T02:00:00.000Z', source_updated_at: '2026-09-02T03:00:00.000Z'},
+      {comparison_project_id: projectId, generation, article_id: 'category-cjk-abstract', column_id: 'llm:model-category:1100:prompt-category', column_order: 0, kind: 'llm', prompt_id: 'prompt-category', model_id: 'model-category', source_project_id: null, content_key: '1100', display_answer: 'yes', normalized_answers: ['yes'], source_created_at: '2026-09-03T02:00:00.000Z', source_updated_at: '2026-09-03T03:00:00.000Z'},
+      {comparison_project_id: projectId, generation, article_id: 'category-non-chinese', column_id: 'llm:model-category:1100:prompt-category', column_order: 0, kind: 'llm', prompt_id: 'prompt-category', model_id: 'model-category', source_project_id: null, content_key: '1100', display_answer: 'yes', normalized_answers: ['yes'], source_created_at: '2026-09-04T02:00:00.000Z', source_updated_at: '2026-09-04T03:00:00.000Z'}
+    ])
+
+    await builder.insertComparisonProjectServingRollups(
+      {comparisonProjectId: projectId, generation},
+      {run: database.run}
+    )
+
+    const articleRows = await database.queryJson(\`
+      SELECT
+        article_id AS articleId,
+        article_category AS articleCategory
+      FROM mart.comparison_article_serving
+      WHERE comparison_project_id = '\${projectId}'
+      ORDER BY article_id ASC
+    \`)
+
+    console.log(JSON.stringify({articleRows}))
+  `
+}
+
 const runScript = <T>(body: string) => {
   const duckdbPath = `/tmp/f1-comparison-project-serving-rollups-${Date.now()}-${Math.random()
     .toString(16)
@@ -1235,6 +1372,17 @@ test('serving rollups materialize human vs llm true conflicts', () => {
   expect(result.articleRows).toEqual(expectedArticleRows)
   expect(result.memberRows).toEqual(expectedMemberRows)
   expect(result.statsRows).toEqual([{totalCount: expectedMemberRows.length}])
+})
+
+test('serving rollups materialize article language categories', () => {
+  const result = runScript<ArticleCategoryRollupResult>(getArticleCategoryRollupScript())
+
+  expect(result.articleRows).toEqual([
+    {articleCategory: 'chinese', articleId: 'category-cjk-abstract'},
+    {articleCategory: 'chinese', articleId: 'category-cjk-title'},
+    {articleCategory: 'chinese', articleId: 'category-metadata-language'},
+    {articleCategory: 'non_chinese', articleId: 'category-non-chinese'},
+  ])
 })
 
 test('serving rollups use selected scoped import external ids and merged metadata', () => {
