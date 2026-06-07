@@ -1002,6 +1002,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
             updated_at AS updatedAt
           FROM app.judgment_human
           WHERE article_id = '${escapeSqlString(articleId)}'
+            AND project_id = '${escapeSqlString(projectId)}'
+            AND prompt_id IN (${getQuotedStringList(promptIds).join(', ')})
             AND answer IS NOT NULL
         `)
         const normalizedRows: HumanRow[] = rows.map((row) => {

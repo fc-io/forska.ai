@@ -9,6 +9,7 @@ type ImmutablePromptInput = {
   promptHeading: string | null
   transformedText: string | null
   type: string | null
+  unarchiveExisting?: boolean
 }
 
 type ImmutablePromptRow = {archived: boolean; id: string}
@@ -54,7 +55,7 @@ export const getOrCreateImmutablePromptTx = async (queryRunner: PromptQueryRunne
     return null
   }
 
-  if (!params.archived && prompt.archived) {
+  if (!params.archived && prompt.archived && params.unarchiveExisting !== false) {
     const [unarchivedPrompt] = await queryRunner.queryJson<{id: string}>(`
       UPDATE app.prompt
       SET archived = FALSE,

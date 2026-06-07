@@ -652,7 +652,7 @@ test('countArticlesReviewsFromDuckdb falls back to raw judgments when serving ro
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('FROM mart.review_article_rollup r')
 })
 
-test('countArticlesReviewsFromDuckdb keeps active serving reads independent of refresh freshness', async () => {
+test('countArticlesReviewsFromDuckdb requires dirty refresh freshness for serving reads', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
     getProjectRows('model-1'),
@@ -665,7 +665,10 @@ test('countArticlesReviewsFromDuckdb keeps active serving reads independent of r
   const result = await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10})
 
   expect(result).toEqual({totalCount: 2, totalPages: 1})
-  expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('app.project_mart_refresh_state')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('app.project_mart_refresh_state')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain(
+    'COALESCE(dirty.dirtyToken, 0) = COALESCE(dirty.lastCompletedDirtyToken, 0)',
+  )
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
 })
 
@@ -817,6 +820,73 @@ test('getUnassessedPairsFromDuckdb falls back to raw judgments when serving rows
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
   expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('TO_JSON')
   expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('explanation')
+})
+
+test('getUnassessedPairsFromDuckdb queues only the replacement prompt after prompt edit', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    [
+      {
+        id: 'prompt-unchanged',
+        order: 0,
+        promptHeading: 'Prompt unchanged',
+        originalText: 'Prompt unchanged',
+        type: 'string',
+        criteriaDisposition: 'include',
+      },
+      {
+        id: 'prompt-replacement',
+        order: 1,
+        promptHeading: 'Prompt replacement',
+        originalText: 'Prompt replacement',
+        type: 'string',
+        criteriaDisposition: 'exclude',
+      },
+    ],
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1'})],
+    [
+      getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-unchanged'}),
+      getDuckdbJudgmentRow({id: 'judgment-old', articleId: 'article-1', promptId: 'prompt-old'}),
+    ],
+  ])
+
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+  const result = await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 10,
+    cursor: null,
+  })
+
+  expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-replacement'}])
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain("j.prompt_id IN ('prompt-unchanged', 'prompt-replacement')")
+  expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('prompt-old')
+})
+
+test('getUnassessedPairsFromDuckdb bypasses stale serving rows when dirty state is pending', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1'})],
+    [],
+  ])
+
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+  const result = await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 10,
+    cursor: null,
+  })
+
+  expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM app.project_mart_refresh_state state')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('COALESCE(dirty.dirtyToken, 0)')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
 })
 
 test('getUnassessedPairsFromDuckdb keeps date-filtered projects on serving rows when coverage matches scope', async () => {
@@ -1865,6 +1935,36 @@ test('selectArticleIdsByFilterDuckdb llmStatus modes stay aligned across serving
   expect(completeRawResult).toEqual(['article-complete'])
   expect(bothRawResult).toEqual(['article-complete', 'article-partial'])
   expect(partialRawResult).toEqual(['article-partial'])
+})
+
+test('selectArticleIdsByFilterDuckdb raw complete uses current prompts after prompt removal', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    [
+      {
+        id: 'prompt-kept',
+        order: 0,
+        promptHeading: 'Prompt kept',
+        originalText: 'Prompt kept',
+        type: 'string',
+        criteriaDisposition: 'include',
+      },
+    ],
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1'})],
+    [
+      getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-kept'}),
+      getDuckdbJudgmentRow({id: 'judgment-removed', articleId: 'article-1', promptId: 'prompt-removed'}),
+    ],
+  ])
+
+  const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
+  const result = await selectArticleIdsByFilterDuckdb('project-1', 'llm', 'complete')
+
+  expect(result).toEqual(['article-1'])
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain("j.prompt_id IN ('prompt-kept')")
+  expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('prompt-removed')
 })
 
 test('getUnassessedArticlesFromDuckdb keeps rows aligned across serving and raw paths', async () => {

@@ -16,9 +16,11 @@ import {
   getSqlLiteral,
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
+import {getComparisonProjectServingRebuildService} from '../services/comparisonProjectServingRebuildService.ts'
 import {getOrCreateImmutablePromptTx} from '../services/immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
+import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -75,6 +77,141 @@ const getProjectModelLabel = ({
 
 type AppQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 type AppTx = AppQueryRunner & {run: (statement: string) => Promise<void>}
+
+type ProjectEditPromptPayload = {
+  archived?: boolean
+  enabled?: boolean
+  order: number
+  originalId?: string
+  originalText: string
+  promptHeading?: string
+  type?: string
+}
+
+type ExistingProjectPromptAssociation = {
+  archived: boolean
+  criteriaDisposition: ProjectPromptCriteriaDisposition | null
+  criteriaSectionKey: string | null
+  criteriaSectionLabel: string | null
+  enabled: boolean
+  id: string
+  originProjectId: string | null
+  promptId: string
+}
+
+type ResolvedProjectPromptEdit = {
+  archived: boolean | undefined
+  currentAssociation: ExistingProjectPromptAssociation | undefined
+  enabled: boolean | undefined
+  order: number
+  originalId: string | undefined
+  shouldDeleteOriginalAssociation: boolean
+  targetPromptId: string
+}
+
+type ChangedProjectPromptLink = {
+  newPromptId: string | null
+  oldPromptId: string
+  projectPromptId: string
+  reason: 'removed' | 'replaced'
+}
+
+type ProjectPromptLlmCleanupSummary = {
+  keptSharedLlmJudgments: number
+  skippedComparisonPromptReferencedJudgments: number
+  softDeletedLlmJudgments: number
+}
+
+type ProjectPromptCleanupSummary = ProjectPromptLlmCleanupSummary & {
+  changedPromptLinks: ChangedProjectPromptLink[]
+  deletedHumanPromptAnswers: number
+}
+
+const logProjectPromptCleanupSummary = (params: {projectId: string; summary: ProjectPromptCleanupSummary}) => {
+  console.log(
+    JSON.stringify({
+      changedPromptLinks: params.summary.changedPromptLinks.map((link) => {
+        return {newPromptId: link.newPromptId, oldPromptId: link.oldPromptId, projectPromptId: link.projectPromptId}
+      }),
+      deletedHumanPromptAnswers: params.summary.deletedHumanPromptAnswers,
+      event: 'project_prompt_cleanup_summary',
+      keptSharedLlmJudgments: params.summary.keptSharedLlmJudgments,
+      projectId: params.projectId,
+      skippedComparisonPromptReferencedJudgments: params.summary.skippedComparisonPromptReferencedJudgments,
+      softDeletedLlmJudgments: params.summary.softDeletedLlmJudgments,
+    }),
+  )
+}
+
+const getComparisonProjectIdsAffectedByProjectPromptEdit = async (projectId: string) => {
+  return getAppDatabaseService().queryJson<{comparisonProjectId: string}>(`
+    SELECT DISTINCT comparison_project.id AS comparisonProjectId
+    FROM app.comparison_project comparison_project
+    LEFT JOIN app.comparison_project_source_project source_project
+      ON source_project.comparison_project_id = comparison_project.id
+     AND source_project.source_project_id = '${escapeSqlString(projectId)}'
+    WHERE comparison_project.archived = FALSE
+      AND (
+        source_project.id IS NOT NULL
+        OR comparison_project.summary_source_project_id = '${escapeSqlString(projectId)}'
+      )
+  `)
+}
+
+const markComparisonServingStaleForProjectPromptEdit = async (projectId: string) => {
+  const comparisonProjectRows = await getComparisonProjectIdsAffectedByProjectPromptEdit(projectId)
+  await getComparisonProjectServingRebuildService().markComparisonProjectsServingStale(
+    comparisonProjectRows.map((row) => {
+      return row.comparisonProjectId
+    }),
+  )
+}
+
+type ProjectEditJudgmentJob = {
+  id: string
+  lastImportCompletedAt: unknown
+  lastImportStartedAt: unknown
+  status: string
+  storageState: string
+}
+
+type ProjectEditJobSqliteHealthProjection = {
+  claimedOutboxCount: number | null
+  hasPendingCompletionAck: boolean | null
+  orphanedJudgedRowCount: number | null
+  outboxRowCount: number | null
+  pendingCompletionAckCount: number | null
+  promptClaimedCount: number | null
+  promptReadyCount: number | null
+  promptRunningCount: number | null
+}
+
+type ProjectPromptLlmCleanupCandidateRow = {
+  articleId: string
+  comparisonPromptReferenced: boolean
+  id: string
+  promptId: string
+  sharedProjectReferenced: boolean
+}
+
+type ProjectEditCurrentProject = {
+  dateFrom: unknown
+  dateTo: unknown
+  humanJudgmentMode: 'prompt' | 'summary' | null
+  id: string
+  modelId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
+type ExistingProjectPromptComparisonRow = ExistingProjectPromptAssociation & {
+  order: number | null
+  originalText: string
+  promptHeading: string | null
+  type: string | null
+}
 
 type ProjectRow = {
   humanJudgmentMode?: 'prompt' | 'summary' | null
@@ -153,6 +290,515 @@ const updateProjectTx = async (tx: AppTx, params: {projectId: string; updatePart
   `)
 
   return getProjectRow(tx, params.projectId)
+}
+
+const getDuplicateTargetPromptIds = (targetPromptIds: string[]) => {
+  const duplicateState = targetPromptIds.reduce(
+    (state, targetPromptId) => {
+      if (state.seenTargetPromptIds.has(targetPromptId)) {
+        state.duplicateTargetPromptIds.add(targetPromptId)
+      }
+      state.seenTargetPromptIds.add(targetPromptId)
+      return state
+    },
+    {duplicateTargetPromptIds: new Set<string>(), seenTargetPromptIds: new Set<string>()},
+  )
+
+  return Array.from(duplicateState.duplicateTargetPromptIds)
+}
+
+const getPromptMetadataValue = (value: string | null | undefined) => {
+  return value === undefined ? undefined : value === null || value.trim().length === 0 ? null : value
+}
+
+const getDateTime = (value: Date | null) => {
+  return value === null ? null : value.getTime()
+}
+
+const getNumberOrZero = (value: number | null | undefined) => {
+  return Number(value ?? 0)
+}
+
+const hasDateEditChanged = (value: Date | null | undefined, currentValue: unknown) => {
+  return value !== undefined && getDateTime(value) !== getDateTime(getDateValue(currentValue))
+}
+
+const getUniqueSortedStrings = (values: string[]) => {
+  return Array.from(
+    new Set(
+      values.filter((value) => {
+        return typeof value === 'string' && value.trim() !== ''
+      }),
+    ),
+  ).sort((a, b) => {
+    return a.localeCompare(b)
+  })
+}
+
+const hasSameStringSet = (left: string[], right: string[]) => {
+  const leftValues = getUniqueSortedStrings(left)
+  const rightValues = getUniqueSortedStrings(right)
+  return (
+    leftValues.length === rightValues.length
+    && leftValues.every((value, index) => {
+      return value === rightValues[index]
+    })
+  )
+}
+
+const getChangedProtectedProjectEditFields = ({
+  body,
+  currentImportRoutes,
+  currentProject,
+  parsedDateFrom,
+  parsedDateTo,
+}: {
+  body: {
+    dateFrom?: string | null
+    dateTo?: string | null
+    humanJudgmentMode?: 'prompt' | 'summary'
+    importRoutes?: string[]
+    modelId?: string
+    useAbstract?: boolean
+    useFulltext?: boolean
+    useFulltextNoImages?: boolean
+    useTitle?: boolean
+  }
+  currentImportRoutes: string[]
+  currentProject: ProjectEditCurrentProject
+  parsedDateFrom: Date | null | undefined
+  parsedDateTo: Date | null | undefined
+}) => {
+  return [
+    body.modelId !== undefined && body.modelId !== currentProject.modelId ? 'modelId' : null,
+    body.useTitle !== undefined && body.useTitle !== currentProject.useTitle ? 'useTitle' : null,
+    body.useAbstract !== undefined && body.useAbstract !== currentProject.useAbstract ? 'useAbstract' : null,
+    body.useFulltext !== undefined && body.useFulltext !== currentProject.useFulltext ? 'useFulltext' : null,
+    body.useFulltextNoImages !== undefined && body.useFulltextNoImages !== currentProject.useFulltextNoImages
+      ? 'useFulltextNoImages'
+      : null,
+    body.humanJudgmentMode !== undefined && body.humanJudgmentMode !== (currentProject.humanJudgmentMode ?? 'prompt')
+      ? 'humanJudgmentMode'
+      : null,
+    hasDateEditChanged(parsedDateFrom, currentProject.dateFrom) ? 'dateFrom' : null,
+    hasDateEditChanged(parsedDateTo, currentProject.dateTo) ? 'dateTo' : null,
+    body.importRoutes !== undefined && !hasSameStringSet(body.importRoutes, currentImportRoutes)
+      ? 'importRoutes'
+      : null,
+  ].filter((field): field is string => {
+    return field !== null
+  })
+}
+
+const getEffectiveSubmittedPromptEdits = (
+  submittedPrompts: ProjectEditPromptPayload[],
+  existingPromptIds: Set<string>,
+) => {
+  return submittedPrompts
+    .filter((prompt) => {
+      return (prompt.originalText ?? '').trim() !== ''
+    })
+    .filter((prompt) => {
+      return !prompt.originalId || existingPromptIds.has(prompt.originalId) || prompt.enabled === true
+    })
+}
+
+const getHasProjectPromptEditChanges = ({
+  existingPrompts,
+  submittedPrompts,
+}: {
+  existingPrompts: ExistingProjectPromptComparisonRow[]
+  submittedPrompts: ProjectEditPromptPayload[] | undefined
+}) => {
+  if (submittedPrompts === undefined) {
+    return false
+  }
+
+  const existingByPromptId = new Map(
+    existingPrompts.map((prompt) => {
+      return [prompt.promptId, prompt]
+    }),
+  )
+  const existingPromptIds = new Set(
+    existingPrompts.map((prompt) => {
+      return prompt.promptId
+    }),
+  )
+  const effectiveSubmittedPrompts = getEffectiveSubmittedPromptEdits(submittedPrompts, existingPromptIds)
+  const receivedOriginalIds = new Set(
+    effectiveSubmittedPrompts
+      .map((prompt) => {
+        return prompt.originalId
+      })
+      .filter((id): id is string => {
+        return typeof id === 'string'
+      }),
+  )
+  const hasRemovedPrompt = existingPrompts.some((prompt) => {
+    return !receivedOriginalIds.has(prompt.promptId)
+  })
+
+  return (
+    hasRemovedPrompt
+    || effectiveSubmittedPrompts.some((prompt) => {
+      if (!prompt.originalId) {
+        return true
+      }
+
+      const existingPrompt = existingByPromptId.get(prompt.originalId)
+      if (!existingPrompt) {
+        return true
+      }
+
+      const existingPromptHeading = getPromptMetadataValue(existingPrompt.promptHeading) ?? null
+      const existingPromptType = getPromptMetadataValue(existingPrompt.type) ?? null
+      const promptHeading = getPromptMetadataValue(prompt.promptHeading)
+      const promptType = getPromptMetadataValue(prompt.type)
+      const targetPromptHeading = promptHeading === undefined ? existingPromptHeading : promptHeading
+      const targetPromptType = promptType === undefined ? existingPromptType : promptType
+      const hasArchivedChange = typeof prompt.archived === 'boolean' && prompt.archived !== existingPrompt.archived
+      const hasEnabledChange = typeof prompt.enabled === 'boolean' && prompt.enabled !== existingPrompt.enabled
+
+      return (
+        prompt.originalText !== existingPrompt.originalText
+        || targetPromptHeading !== existingPromptHeading
+        || targetPromptType !== existingPromptType
+        || prompt.order !== existingPrompt.order
+        || hasArchivedChange
+        || hasEnabledChange
+      )
+    })
+  )
+}
+
+const getCurrentProjectImportRoutes = async (projectId: string) => {
+  const rows = await getAppDatabaseService().queryJson<{route: string}>(`
+    SELECT ir.route AS route
+    FROM app.project_import_route pir
+    INNER JOIN app.import_route ir ON ir.id = pir.import_route_id
+    WHERE pir.project_id = '${escapeSqlString(projectId)}'
+  `)
+
+  return rows.map((row) => {
+    return row.route
+  })
+}
+
+const promptEditSafeJobStatuses = new Set(['paused', 'completed'])
+
+const hasPromptEditJobImportInFlight = (job: ProjectEditJudgmentJob) => {
+  const startedAt = getDateValue(job.lastImportStartedAt)
+  const completedAt = getDateValue(job.lastImportCompletedAt)
+
+  return Boolean(startedAt && (!completedAt || completedAt < startedAt))
+}
+
+const hasUnsafePromptEditSqliteHealth = (projection: ProjectEditJobSqliteHealthProjection) => {
+  return (
+    getNumberOrZero(projection.outboxRowCount) > 0
+    || getNumberOrZero(projection.claimedOutboxCount) > 0
+    || getNumberOrZero(projection.orphanedJudgedRowCount) > 0
+    || getNumberOrZero(projection.pendingCompletionAckCount) > 0
+    || getNumberOrZero(projection.promptReadyCount) > 0
+    || getNumberOrZero(projection.promptClaimedCount) > 0
+    || getNumberOrZero(projection.promptRunningCount) > 0
+    || Boolean(projection.hasPendingCompletionAck)
+  )
+}
+
+const getFreshPromptEditSqliteHealthProjection = async (db: AppQueryRunner, jobId: string) => {
+  const [projection] = await db.queryJson<ProjectEditJobSqliteHealthProjection>(`
+    SELECT
+      outbox_row_count AS outboxRowCount,
+      claimed_outbox_count AS claimedOutboxCount,
+      orphaned_judged_row_count AS orphanedJudgedRowCount,
+      pending_completion_ack_count AS pendingCompletionAckCount,
+      has_pending_completion_ack AS hasPendingCompletionAck,
+      prompt_ready_count AS promptReadyCount,
+      prompt_claimed_count AS promptClaimedCount,
+      prompt_running_count AS promptRunningCount
+    FROM app.judgment_job_sqlite_health_projection
+    WHERE job_id = '${escapeSqlString(jobId)}'
+      AND fresh_until_at > current_timestamp
+    LIMIT 1
+  `)
+
+  return projection ?? null
+}
+
+const canEditPromptsWithJudgmentJob = async (db: AppQueryRunner, job: ProjectEditJudgmentJob) => {
+  if (!promptEditSafeJobStatuses.has(job.status) || job.storageState === 'quarantined') {
+    return false
+  }
+
+  if (hasPromptEditJobImportInFlight(job)) {
+    return false
+  }
+
+  if (job.storageState === 'drained') {
+    return true
+  }
+
+  const projection = await getFreshPromptEditSqliteHealthProjection(db, job.id)
+
+  return projection !== null && !hasUnsafePromptEditSqliteHealth(projection)
+}
+
+const getChangedProjectPromptLinks = ({
+  removedAssociations,
+  resolvedPromptEdits,
+}: {
+  removedAssociations: ExistingProjectPromptAssociation[]
+  resolvedPromptEdits: ResolvedProjectPromptEdit[]
+}) => {
+  const replacedLinks = resolvedPromptEdits.flatMap((promptEdit): ChangedProjectPromptLink[] => {
+    return promptEdit.shouldDeleteOriginalAssociation && promptEdit.originalId && promptEdit.currentAssociation
+      ? [
+          {
+            newPromptId: promptEdit.targetPromptId,
+            oldPromptId: promptEdit.originalId,
+            projectPromptId: promptEdit.currentAssociation.id,
+            reason: 'replaced',
+          },
+        ]
+      : []
+  })
+  const removedLinks = removedAssociations.map((entry): ChangedProjectPromptLink => {
+    return {newPromptId: null, oldPromptId: entry.promptId, projectPromptId: entry.id, reason: 'removed'}
+  })
+
+  return [...replacedLinks, ...removedLinks]
+}
+
+const deleteProjectHumanPromptAnswersForChangedPromptLinksTx = async (
+  tx: AppTx,
+  params: {changedPromptLinks: ChangedProjectPromptLink[]; projectId: string},
+) => {
+  const oldPromptIds = getUniqueSortedStrings(
+    params.changedPromptLinks.map((link) => {
+      return link.oldPromptId
+    }),
+  )
+
+  if (oldPromptIds.length === 0) {
+    return 0
+  }
+
+  const oldPromptIdList = getQuotedStringList(oldPromptIds).join(', ')
+  const [countRow] = await tx.queryJson<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_human
+    WHERE project_id = '${escapeSqlString(params.projectId)}'
+      AND prompt_id IN (${oldPromptIdList})
+  `)
+
+  await tx.run(`
+    DELETE FROM app.judgment_human
+    WHERE project_id = '${escapeSqlString(params.projectId)}'
+      AND prompt_id IN (${oldPromptIdList})
+  `)
+
+  return Number(countRow?.count ?? 0)
+}
+
+const getProjectPromptLlmCleanupEmptySummary = (): ProjectPromptLlmCleanupSummary => {
+  return {keptSharedLlmJudgments: 0, skippedComparisonPromptReferencedJudgments: 0, softDeletedLlmJudgments: 0}
+}
+
+const getProjectPromptLlmCleanupCandidateRowsTx = async (
+  tx: AppTx,
+  params: {oldPromptIds: string[]; projectId: string},
+) => {
+  return tx.queryJson<ProjectPromptLlmCleanupCandidateRow>(`
+    WITH old_prompt(prompt_id) AS (
+      VALUES ${params.oldPromptIds
+        .map((promptId) => {
+          return `('${escapeSqlString(promptId)}')`
+        })
+        .join(', ')}
+    ),
+    candidate AS (
+      SELECT
+        judgment.id,
+        judgment.article_id,
+        judgment.prompt_id
+      FROM app.judgment judgment
+      INNER JOIN old_prompt ON old_prompt.prompt_id = judgment.prompt_id
+      INNER JOIN app.project project ON project.id = '${escapeSqlString(params.projectId)}'
+      INNER JOIN app.article article ON article.id = judgment.article_id
+      WHERE judgment.deleted_at IS NULL
+        AND judgment.model_id = project.model_id
+        AND judgment.use_title = project.use_title
+        AND judgment.use_abstract = project.use_abstract
+        AND judgment.use_fulltext = project.use_fulltext
+        AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
+        AND project.archived = FALSE
+        AND project.delete_pending_at IS NULL
+        AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+        AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.archived_project_delete_tombstone tombstone
+          WHERE tombstone.project_id = project.id
+            AND tombstone.completed_at IS NULL
+        )
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM app.project_article project_article
+            WHERE project_article.project_id = project.id
+              AND project_article.article_id = judgment.article_id
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM app.project_import_route project_import_route
+            INNER JOIN app.article_import_route article_import_route
+              ON article_import_route.import_route_id = project_import_route.import_route_id
+            WHERE project_import_route.project_id = project.id
+              AND article_import_route.article_id = judgment.article_id
+          )
+        )
+    )
+    SELECT
+      candidate.id AS id,
+      candidate.article_id AS articleId,
+      candidate.prompt_id AS promptId,
+      EXISTS (
+        SELECT 1
+        FROM app.comparison_project_prompt comparison_prompt
+        INNER JOIN app.comparison_project comparison_project
+          ON comparison_project.id = comparison_prompt.comparison_project_id
+        WHERE comparison_prompt.prompt_id = candidate.prompt_id
+          AND comparison_project.archived = FALSE
+      ) AS comparisonPromptReferenced,
+      EXISTS (
+        SELECT 1
+        FROM app.project other_project
+        INNER JOIN app.project_prompt other_project_prompt
+          ON other_project_prompt.project_id = other_project.id
+        INNER JOIN app.article other_article ON other_article.id = candidate.article_id
+        WHERE other_project.id <> '${escapeSqlString(params.projectId)}'
+          AND other_project_prompt.prompt_id = candidate.prompt_id
+          AND other_project_prompt.enabled = TRUE
+          AND other_project.archived = FALSE
+          AND other_project.delete_pending_at IS NULL
+          AND other_project.model_id = (
+            SELECT project.model_id FROM app.project project WHERE project.id = '${escapeSqlString(params.projectId)}'
+          )
+          AND other_project.use_title = (
+            SELECT project.use_title FROM app.project project WHERE project.id = '${escapeSqlString(params.projectId)}'
+          )
+          AND other_project.use_abstract = (
+            SELECT project.use_abstract FROM app.project project WHERE project.id = '${escapeSqlString(params.projectId)}'
+          )
+          AND other_project.use_fulltext = (
+            SELECT project.use_fulltext FROM app.project project WHERE project.id = '${escapeSqlString(params.projectId)}'
+          )
+          AND other_project.use_fulltext_no_images = (
+            SELECT project.use_fulltext_no_images FROM app.project project WHERE project.id = '${escapeSqlString(params.projectId)}'
+          )
+          AND (other_project.date_from IS NULL OR other_article.article_created_at >= other_project.date_from)
+          AND (other_project.date_to IS NULL OR other_article.article_created_at <= other_project.date_to)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app.archived_project_delete_tombstone tombstone
+            WHERE tombstone.project_id = other_project.id
+              AND tombstone.completed_at IS NULL
+          )
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM app.project_article other_project_article
+              WHERE other_project_article.project_id = other_project.id
+                AND other_project_article.article_id = candidate.article_id
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM app.project_import_route other_project_import_route
+              INNER JOIN app.article_import_route other_article_import_route
+                ON other_article_import_route.import_route_id = other_project_import_route.import_route_id
+              WHERE other_project_import_route.project_id = other_project.id
+                AND other_article_import_route.article_id = candidate.article_id
+            )
+          )
+      ) AS sharedProjectReferenced
+    FROM candidate
+  `)
+}
+
+const softDeleteProjectPromptLlmJudgmentsTx = async (
+  tx: AppTx,
+  params: {changedPromptLinks: ChangedProjectPromptLink[]; projectId: string},
+) => {
+  const oldPromptIds = getUniqueSortedStrings(
+    params.changedPromptLinks.map((link) => {
+      return link.oldPromptId
+    }),
+  )
+
+  if (oldPromptIds.length === 0) {
+    return getProjectPromptLlmCleanupEmptySummary()
+  }
+
+  const candidateRows = await getProjectPromptLlmCleanupCandidateRowsTx(tx, {oldPromptIds, projectId: params.projectId})
+  const softDeleteIds = candidateRows
+    .filter((row) => {
+      return !row.comparisonPromptReferenced && !row.sharedProjectReferenced
+    })
+    .map((row) => {
+      return row.id
+    })
+
+  if (softDeleteIds.length > 0) {
+    await tx.run(`
+      UPDATE app.judgment AS judgment
+      SET deleted_at = current_timestamp,
+          updated_at = current_timestamp,
+          delete_generation = (
+            SELECT COALESCE(MAX(existing.delete_generation), judgment.delete_generation) + 1
+            FROM app.judgment existing
+            WHERE existing.article_id = judgment.article_id
+              AND existing.prompt_id = judgment.prompt_id
+              AND existing.model_id = judgment.model_id
+              AND existing.use_title = judgment.use_title
+              AND existing.use_abstract = judgment.use_abstract
+              AND existing.use_fulltext = judgment.use_fulltext
+              AND existing.use_fulltext_no_images = judgment.use_fulltext_no_images
+          )
+      WHERE judgment.id IN (${getQuotedStringList(softDeleteIds).join(', ')})
+    `)
+  }
+
+  return {
+    keptSharedLlmJudgments: candidateRows.filter((row) => {
+      return row.sharedProjectReferenced
+    }).length,
+    skippedComparisonPromptReferencedJudgments: candidateRows.filter((row) => {
+      return row.comparisonPromptReferenced
+    }).length,
+    softDeletedLlmJudgments: softDeleteIds.length,
+  }
+}
+
+const getExistingProjectPromptComparisonRows = async (projectId: string) => {
+  return getAppDatabaseService().queryJson<ExistingProjectPromptComparisonRow>(`
+    SELECT
+      pp.id AS id,
+      pp.prompt_id AS promptId,
+      pp.origin_project_id AS originProjectId,
+      pp.archived AS archived,
+      pp.enabled AS enabled,
+      pp.criteria_disposition AS criteriaDisposition,
+      pp.criteria_section_key AS criteriaSectionKey,
+      pp.criteria_section_label AS criteriaSectionLabel,
+      pp.prompt_order AS "order",
+      p.original_text AS originalText,
+      p.prompt_heading AS promptHeading,
+      p.type AS type
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${escapeSqlString(projectId)}'
+  `)
 }
 
 const upsertProjectPromptTx = async (
@@ -854,16 +1500,6 @@ export const projectsRoutes = new Elysia()
     async ({params, body}) => {
       await assertProjectIsActive(params.id)
 
-      const [job] = await getAppDatabaseService().queryJson<{id: string}>(`
-        SELECT id
-        FROM app.judgment_job
-        WHERE project_id = '${escapeSqlString(params.id)}'
-        LIMIT 1
-      `)
-      if (job?.id) {
-        throw new Error('Project is locked: a judgment job exists for this project')
-      }
-
       const updateParts = [
         `updated_at = current_timestamp`,
         body.name !== undefined ? `name = ${getSqlLiteral(body.name)}` : null,
@@ -889,15 +1525,18 @@ export const projectsRoutes = new Elysia()
     async ({params, body}) => {
       await assertProjectIsActive(params.id)
 
-      const [job] = await getAppDatabaseService().queryJson<{id: string}>(`
-        SELECT id
+      const [job] = await getAppDatabaseService().queryJson<ProjectEditJudgmentJob>(`
+        SELECT
+          id,
+          status,
+          storage_state AS storageState,
+          last_import_started_at AS lastImportStartedAt,
+          last_import_completed_at AS lastImportCompletedAt
         FROM app.judgment_job
         WHERE project_id = '${escapeSqlString(params.id)}'
         LIMIT 1
       `)
-      if (job?.id) {
-        throw new Error('Project is locked: a judgment job exists for this project')
-      }
+      const hasExistingJob = Boolean(job)
 
       const parsedDateFrom = body.dateFrom === undefined ? undefined : parseOptionalDate(body.dateFrom)
       const parsedDateTo = body.dateTo === undefined ? undefined : parseOptionalDate(body.dateTo)
@@ -905,15 +1544,7 @@ export const projectsRoutes = new Elysia()
         throw new Error('date_from must be on or before date_to')
       }
 
-      const [currentProject] = await getAppDatabaseService().queryJson<{
-        id: string
-        modelId: string
-        humanJudgmentMode: 'prompt' | 'summary' | null
-        useTitle: boolean
-        useAbstract: boolean
-        useFulltext: boolean
-        useFulltextNoImages: boolean
-      }>(`
+      const [currentProject] = await getAppDatabaseService().queryJson<ProjectEditCurrentProject>(`
         SELECT
           id,
           model_id AS modelId,
@@ -921,7 +1552,9 @@ export const projectsRoutes = new Elysia()
           use_title AS useTitle,
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
-          use_fulltext_no_images AS useFulltextNoImages
+          use_fulltext_no_images AS useFulltextNoImages,
+          date_from AS dateFrom,
+          date_to AS dateTo
         FROM app.project
         WHERE id = '${escapeSqlString(params.id)}'
           AND delete_pending_at IS NULL
@@ -938,11 +1571,49 @@ export const projectsRoutes = new Elysia()
         throw new Error('Project not found')
       }
 
+      const [currentImportRoutes, existingPromptComparisonRows] = await Promise.all([
+        hasExistingJob && body.importRoutes !== undefined
+          ? getCurrentProjectImportRoutes(params.id)
+          : Promise.resolve([]),
+        hasExistingJob && body.prompts !== undefined
+          ? getExistingProjectPromptComparisonRows(params.id)
+          : Promise.resolve([]),
+      ])
+      const changedProtectedFields = hasExistingJob
+        ? getChangedProtectedProjectEditFields({
+            body,
+            currentImportRoutes,
+            currentProject,
+            parsedDateFrom,
+            parsedDateTo,
+          })
+        : []
+
+      if (changedProtectedFields.length > 0) {
+        throw new HttpError(
+          409,
+          `Protected project fields cannot be changed after a judgment job exists: ${changedProtectedFields.join(', ')}`,
+        )
+      }
+
+      const hasPromptChanges = hasExistingJob
+        ? getHasProjectPromptEditChanges({
+            existingPrompts: existingPromptComparisonRows,
+            submittedPrompts: body.prompts as ProjectEditPromptPayload[] | undefined,
+          })
+        : body.prompts !== undefined
+
+      if (job && hasPromptChanges && !(await canEditPromptsWithJudgmentJob(getAppDatabaseService(), job))) {
+        throw new HttpError(409, 'Pause or drain the judgment job before editing prompts.')
+      }
+
       const hasModelIdUpdate = body.modelId !== undefined && body.modelId !== currentProject.modelId
 
       const runEditTransaction = () => {
         return getAppDatabaseService().transaction(async (tx) => {
-          if (body.modelId !== undefined) {
+          let promptCleanupSummary: ProjectPromptCleanupSummary | undefined
+
+          if (hasModelIdUpdate) {
             await assertSelectableProviderModelId(tx, {
               errorMessage: 'Selected model does not exist or is disabled',
               modelId: body.modelId,
@@ -959,16 +1630,20 @@ export const projectsRoutes = new Elysia()
             `updated_at = current_timestamp`,
             body.name !== undefined ? `name = ${getSqlLiteral(body.name)}` : null,
             body.description !== undefined ? `description = ${getSqlLiteral(body.description)}` : null,
-            parsedDateFrom !== undefined ? `date_from = ${getSqlLiteral(parsedDateFrom)}` : null,
-            parsedDateTo !== undefined ? `date_to = ${getSqlLiteral(parsedDateTo)}` : null,
-            hasModelIdUpdate ? `model_id = ${getSqlLiteral(body.modelId)}` : null,
-            body.humanJudgmentMode !== undefined
+            !hasExistingJob && parsedDateFrom !== undefined ? `date_from = ${getSqlLiteral(parsedDateFrom)}` : null,
+            !hasExistingJob && parsedDateTo !== undefined ? `date_to = ${getSqlLiteral(parsedDateTo)}` : null,
+            !hasExistingJob && hasModelIdUpdate ? `model_id = ${getSqlLiteral(body.modelId)}` : null,
+            !hasExistingJob && body.humanJudgmentMode !== undefined
               ? `human_judgment_mode = ${getSqlLiteral(body.humanJudgmentMode)}`
               : null,
-            body.useTitle !== undefined ? `use_title = ${body.useTitle ? 'TRUE' : 'FALSE'}` : null,
-            body.useAbstract !== undefined ? `use_abstract = ${body.useAbstract ? 'TRUE' : 'FALSE'}` : null,
-            body.useFulltext !== undefined ? `use_fulltext = ${body.useFulltext ? 'TRUE' : 'FALSE'}` : null,
-            body.useFulltextNoImages !== undefined
+            !hasExistingJob && body.useTitle !== undefined ? `use_title = ${body.useTitle ? 'TRUE' : 'FALSE'}` : null,
+            !hasExistingJob && body.useAbstract !== undefined
+              ? `use_abstract = ${body.useAbstract ? 'TRUE' : 'FALSE'}`
+              : null,
+            !hasExistingJob && body.useFulltext !== undefined
+              ? `use_fulltext = ${body.useFulltext ? 'TRUE' : 'FALSE'}`
+              : null,
+            !hasExistingJob && body.useFulltextNoImages !== undefined
               ? `use_fulltext_no_images = ${body.useFulltextNoImages ? 'TRUE' : 'FALSE'}`
               : null,
           ].filter((part): part is string => {
@@ -981,20 +1656,11 @@ export const projectsRoutes = new Elysia()
             throw new Error('Project not found')
           }
 
-          if (body.prompts !== undefined) {
+          if (body.prompts !== undefined && (!hasExistingJob || hasPromptChanges)) {
             const submitted = body.prompts.filter((prompt) => {
               return (prompt.originalText ?? '').trim() !== ''
             })
-            const existing = await tx.queryJson<{
-              id: string
-              promptId: string
-              originProjectId: string | null
-              archived: boolean
-              enabled: boolean
-              criteriaDisposition: ProjectPromptCriteriaDisposition | null
-              criteriaSectionKey: string | null
-              criteriaSectionLabel: string | null
-            }>(`
+            const existing = await tx.queryJson<ExistingProjectPromptAssociation>(`
             SELECT
               id,
               prompt_id AS promptId,
@@ -1013,32 +1679,9 @@ export const projectsRoutes = new Elysia()
                 return prompt.promptId
               }),
             )
-            const receivedOriginalIds = new Set(
-              submitted
-                .map((prompt) => {
-                  return prompt.originalId
-                })
-                .filter((id): id is string => {
-                  return typeof id === 'string'
-                }),
-            )
-            const toDeleteAssoc = existing.filter((entry) => {
-              return !receivedOriginalIds.has(entry.promptId)
-            })
+            const resolvedPromptEdits: ResolvedProjectPromptEdit[] = []
 
-            if (toDeleteAssoc.length > 0) {
-              await tx.run(`
-              DELETE FROM app.project_prompt
-              WHERE project_id = '${escapeSqlString(params.id)}'
-                AND prompt_id IN (${getQuotedStringList(
-                  toDeleteAssoc.map((entry) => {
-                    return entry.promptId
-                  }),
-                ).join(', ')})
-            `)
-            }
-
-            for (const prompt of submitted) {
+            for (const prompt of submitted as ProjectEditPromptPayload[]) {
               const order = prompt.order
               const archived = typeof prompt.archived === 'boolean' ? prompt.archived : undefined
               const enabled = typeof prompt.enabled === 'boolean' ? prompt.enabled : undefined
@@ -1071,20 +1714,25 @@ export const projectsRoutes = new Elysia()
                   throw new Error('Prompt not found')
                 }
 
+                const existingPromptHeading = getPromptMetadataValue(existingPrompt.promptHeading) ?? null
+                const existingPromptType = getPromptMetadataValue(existingPrompt.type) ?? null
+                const promptHeading = getPromptMetadataValue(prompt.promptHeading)
+                const promptType = getPromptMetadataValue(prompt.type)
+                const targetPromptHeading = promptHeading === undefined ? existingPromptHeading : promptHeading
+                const targetPromptType = promptType === undefined ? existingPromptType : promptType
                 const textChanged = existingPrompt.originalText !== prompt.originalText
                 const metaChanged =
-                  (prompt.promptHeading !== undefined
-                    && prompt.promptHeading !== (existingPrompt.promptHeading ?? null))
-                  || (prompt.type !== undefined && prompt.type !== (existingPrompt.type ?? null))
+                  targetPromptHeading !== existingPromptHeading || targetPromptType !== existingPromptType
 
                 const targetPromptId =
                   textChanged || metaChanged
                     ? await getOrCreateImmutablePromptTx(tx, {
                         originalText: prompt.originalText,
                         transformedText: null,
-                        promptHeading: prompt.promptHeading || null,
-                        type: prompt.type || null,
+                        promptHeading: targetPromptHeading,
+                        type: targetPromptType,
                         archived: existingPrompt.promptArchived,
+                        unarchiveExisting: false,
                       })
                     : prompt.originalId
 
@@ -1092,48 +1740,115 @@ export const projectsRoutes = new Elysia()
                   throw new Error('Prompt not found after insert')
                 }
 
-                if (textChanged || metaChanged) {
-                  await tx.run(`
-                  DELETE FROM app.project_prompt
-                  WHERE project_id = '${escapeSqlString(params.id)}'
-                    AND prompt_id = '${escapeSqlString(prompt.originalId)}'
-                `)
-                }
-
                 const currentAssociation = existing.find((entry) => {
                   return entry.promptId === prompt.originalId
                 })
 
-                await upsertProjectPromptTx(tx, {
-                  projectId: params.id,
-                  promptId: targetPromptId,
+                resolvedPromptEdits.push({
+                  archived,
+                  currentAssociation,
+                  enabled,
                   order,
-                  archived: archived ?? currentAssociation?.archived ?? false,
-                  enabled: enabled ?? currentAssociation?.enabled ?? true,
-                  originProjectId: null,
-                  criteriaDisposition: currentAssociation?.criteriaDisposition ?? null,
-                  criteriaSectionKey: currentAssociation?.criteriaSectionKey ?? null,
-                  criteriaSectionLabel: currentAssociation?.criteriaSectionLabel ?? null,
+                  originalId: prompt.originalId,
+                  shouldDeleteOriginalAssociation: textChanged || metaChanged,
+                  targetPromptId,
                 })
               } else {
                 const targetPromptId = await getOrCreateImmutablePromptTx(tx, {
                   originalText: prompt.originalText,
                   transformedText: null,
-                  promptHeading: prompt.promptHeading || null,
-                  type: prompt.type || null,
+                  promptHeading: getPromptMetadataValue(prompt.promptHeading) ?? null,
+                  type: getPromptMetadataValue(prompt.type) ?? null,
                   archived: false,
+                  unarchiveExisting: false,
                 })
 
                 if (!targetPromptId) {
                   throw new Error('Prompt not found after insert')
                 }
 
+                resolvedPromptEdits.push({
+                  archived,
+                  currentAssociation: undefined,
+                  enabled,
+                  order,
+                  originalId: undefined,
+                  shouldDeleteOriginalAssociation: false,
+                  targetPromptId,
+                })
+              }
+            }
+
+            const duplicateTargetPromptIds = getDuplicateTargetPromptIds(
+              resolvedPromptEdits.map((promptEdit) => {
+                return promptEdit.targetPromptId
+              }),
+            )
+
+            if (duplicateTargetPromptIds.length > 0) {
+              throw new HttpError(
+                400,
+                'Project prompts must resolve to unique prompt content. Remove duplicate prompt text, heading, and type before saving.',
+              )
+            }
+
+            const receivedOriginalIds = new Set(
+              resolvedPromptEdits
+                .map((promptEdit) => {
+                  return promptEdit.originalId
+                })
+                .filter((id): id is string => {
+                  return typeof id === 'string'
+                }),
+            )
+            const toDeleteAssoc = existing.filter((entry) => {
+              return !receivedOriginalIds.has(entry.promptId)
+            })
+            const changedPromptLinks = getChangedProjectPromptLinks({
+              removedAssociations: toDeleteAssoc,
+              resolvedPromptEdits,
+            })
+
+            if (toDeleteAssoc.length > 0) {
+              await tx.run(`
+              DELETE FROM app.project_prompt
+              WHERE project_id = '${escapeSqlString(params.id)}'
+                AND prompt_id IN (${getQuotedStringList(
+                  toDeleteAssoc.map((entry) => {
+                    return entry.promptId
+                  }),
+                ).join(', ')})
+            `)
+            }
+
+            for (const promptEdit of resolvedPromptEdits) {
+              if (promptEdit.shouldDeleteOriginalAssociation && promptEdit.originalId) {
+                await tx.run(`
+                  DELETE FROM app.project_prompt
+                  WHERE project_id = '${escapeSqlString(params.id)}'
+                    AND prompt_id = '${escapeSqlString(promptEdit.originalId)}'
+                `)
+              }
+
+              if (promptEdit.currentAssociation) {
                 await upsertProjectPromptTx(tx, {
                   projectId: params.id,
-                  promptId: targetPromptId,
-                  order,
-                  archived: archived ?? false,
-                  enabled: enabled ?? true,
+                  promptId: promptEdit.targetPromptId,
+                  order: promptEdit.order,
+                  archived: promptEdit.archived ?? promptEdit.currentAssociation.archived,
+                  enabled: promptEdit.enabled ?? promptEdit.currentAssociation.enabled,
+                  originProjectId: null,
+                  criteriaDisposition: promptEdit.currentAssociation.criteriaDisposition,
+                  criteriaSectionKey: promptEdit.currentAssociation.criteriaSectionKey,
+                  criteriaSectionLabel: promptEdit.currentAssociation.criteriaSectionLabel,
+                })
+              } else {
+                await upsertProjectPromptTx(tx, {
+                  projectId: params.id,
+                  promptId: promptEdit.targetPromptId,
+                  order: promptEdit.order,
+                  archived: promptEdit.archived ?? false,
+                  enabled: promptEdit.enabled ?? true,
                   originProjectId: null,
                   criteriaDisposition: null,
                   criteriaSectionKey: null,
@@ -1141,9 +1856,19 @@ export const projectsRoutes = new Elysia()
                 })
               }
             }
+
+            promptCleanupSummary = {
+              changedPromptLinks,
+              deletedHumanPromptAnswers: await deleteProjectHumanPromptAnswersForChangedPromptLinksTx(tx, {
+                changedPromptLinks,
+                projectId: params.id,
+              }),
+              ...(await softDeleteProjectPromptLlmJudgmentsTx(tx, {changedPromptLinks, projectId: params.id})),
+            }
+            logProjectPromptCleanupSummary({projectId: params.id, summary: promptCleanupSummary})
           }
 
-          if (body.importRoutes !== undefined) {
+          if (body.importRoutes !== undefined && !hasExistingJob) {
             const selectedRoutes = Array.from(
               new Set(
                 body.importRoutes.filter((route) => {
@@ -1221,11 +1946,17 @@ export const projectsRoutes = new Elysia()
             runner: tx,
           })
 
-          return {project: getProjectValue(updatedProject), prompts: updatedPrompts}
+          return promptCleanupSummary
+            ? {project: getProjectValue(updatedProject), promptCleanupSummary, prompts: updatedPrompts}
+            : {project: getProjectValue(updatedProject), prompts: updatedPrompts}
         })
       }
 
       const result = await runEditTransaction()
+
+      if (result.promptCleanupSummary) {
+        await markComparisonServingStaleForProjectPromptEdit(params.id)
+      }
 
       return {data: result}
     },

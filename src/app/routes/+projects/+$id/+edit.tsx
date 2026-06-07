@@ -85,7 +85,23 @@ type ProjectDetailsResponse = {
   importRouteNamesByRoute?: Record<string, string | null>
 }
 
-type ProjectUpdateResponse = {data: {project: ProjectSummary; prompts: ProjectPromptResponse[]}}
+type ChangedProjectPromptLink = {newPromptId: string | null; oldPromptId: string; projectPromptId: string}
+
+type ProjectPromptCleanupSummary = {
+  changedPromptLinks: ChangedProjectPromptLink[]
+  deletedHumanPromptAnswers: number
+  keptSharedLlmJudgments: number
+  skippedComparisonPromptReferencedJudgments: number
+  softDeletedLlmJudgments: number
+}
+
+type ProjectUpdateResult = {
+  project: ProjectSummary
+  promptCleanupSummary?: ProjectPromptCleanupSummary
+  prompts: ProjectPromptResponse[]
+}
+
+type ProjectUpdateResponse = {data: ProjectUpdateResult}
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
@@ -97,6 +113,20 @@ type PromptPayload = {
   order: number
   archived?: boolean
   enabled?: boolean
+}
+
+type ProjectUpdatePayload = {
+  name: string
+  description: string | null
+  prompts: PromptPayload[]
+  dateFrom?: string | null
+  dateTo?: string | null
+  modelId?: string
+  importRoutes?: string[]
+  useTitle?: boolean
+  useAbstract?: boolean
+  useFulltext?: boolean
+  useFulltextNoImages?: boolean
 }
 
 const isNullableString = (value: unknown): value is string | null => {
@@ -242,8 +272,8 @@ const buildPromptsPayload = (owned: PromptItem[], imported: PromptItem[]): Promp
       return {
         originalId: prompt.originalId,
         originalText: prompt.originalText,
-        promptHeading: prompt.promptHeading || undefined,
-        type: prompt.type || undefined,
+        promptHeading: prompt.promptHeading,
+        type: prompt.type,
         order: prompt.order,
         archived: prompt.archived,
         enabled: prompt.enabled,
@@ -254,9 +284,8 @@ const buildPromptsPayload = (owned: PromptItem[], imported: PromptItem[]): Promp
     return {
       originalId: prompt.originalId,
       originalText: prompt.originalText,
-      // Preserve metadata for imported prompts so server doesn't null them
-      promptHeading: prompt.promptHeading || undefined,
-      type: prompt.type || undefined,
+      promptHeading: prompt.promptHeading,
+      type: prompt.type,
       order: prompt.order,
       enabled: prompt.enabled,
     }
@@ -348,6 +377,7 @@ const EditProject = (): JSX.Element => {
   const [useAbstract, setUseAbstract] = createSignal(true)
   const [useFulltext, setUseFulltext] = createSignal(false)
   const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
+  const [promptCleanupSummary, setPromptCleanupSummary] = createSignal<ProjectPromptCleanupSummary | null>(null)
 
   // Track whether we've loaded initial data to avoid overwriting local changes on refetch
   let initialDataLoaded = false
@@ -466,16 +496,19 @@ const EditProject = (): JSX.Element => {
     return isProjectDetailsResponse(data) ? data : undefined
   })
 
-  const isLocked = createMemo(() => {
+  const isJudgmentConfigLocked = createMemo(() => {
     return Boolean(projectDetails()?.hasJudgedArticles)
   })
 
-  const fieldStateClass = createMemo(() => {
-    return isLocked() ? 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60' : 'border-input'
+  const canEditJudgmentConfig = createMemo(() => {
+    return !isJudgmentConfigLocked()
   })
 
-  const actionStateClass = createMemo(() => {
-    return isLocked() ? 'opacity-50 cursor-not-allowed' : ''
+  const editableFieldStateClass = 'border-input'
+  const lockedFieldStateClass = 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
+
+  const judgmentConfigFieldStateClass = createMemo(() => {
+    return canEditJudgmentConfig() ? editableFieldStateClass : lockedFieldStateClass
   })
 
   const sortedOwnedPrompts = createMemo(() => {
@@ -631,33 +664,21 @@ const EditProject = (): JSX.Element => {
     return ensureSelectableModelId(selected)
   }
 
-  const sendUpdateRequest = async (payload: {
-    name: string
-    description: string | null
-    prompts: PromptPayload[]
-    dateFrom: string | null
-    dateTo: string | null
-    modelId: string | undefined
-    importRoutes: string[]
-    useTitle: boolean
-    useAbstract: boolean
-    useFulltext: boolean
-    useFulltextNoImages: boolean
-  }): Promise<void> => {
+  const sendUpdateRequest = async (payload: ProjectUpdatePayload): Promise<ProjectUpdateResult> => {
     const response = await apiClient.api
       .projects({id: projectId})
       .edit.patch({
         name: payload.name,
         description: payload.description,
         prompts: payload.prompts,
-        dateFrom: payload.dateFrom,
-        dateTo: payload.dateTo,
-        modelId: payload.modelId,
-        importRoutes: payload.importRoutes,
-        useTitle: payload.useTitle,
-        useAbstract: payload.useAbstract,
-        useFulltext: payload.useFulltext,
-        useFulltextNoImages: payload.useFulltextNoImages,
+        ...(payload.dateFrom !== undefined ? {dateFrom: payload.dateFrom} : {}),
+        ...(payload.dateTo !== undefined ? {dateTo: payload.dateTo} : {}),
+        ...(payload.modelId !== undefined ? {modelId: payload.modelId} : {}),
+        ...(payload.importRoutes !== undefined ? {importRoutes: payload.importRoutes} : {}),
+        ...(payload.useTitle !== undefined ? {useTitle: payload.useTitle} : {}),
+        ...(payload.useAbstract !== undefined ? {useAbstract: payload.useAbstract} : {}),
+        ...(payload.useFulltext !== undefined ? {useFulltext: payload.useFulltext} : {}),
+        ...(payload.useFulltextNoImages !== undefined ? {useFulltextNoImages: payload.useFulltextNoImages} : {}),
       })
 
     const result = handleApiResponse<ProjectUpdateResponse>(
@@ -677,6 +698,7 @@ const EditProject = (): JSX.Element => {
     })
     setOwnedPrompts(owned.length > 0 ? owned : [buildEmptyPrompt(1)])
     setImportedPrompts(imported)
+    setPromptCleanupSummary(result.promptCleanupSummary ?? null)
 
     // Keep related caches in sync so subsequent views show fresh data immediately
     queryClient.setQueryData(['project', projectId, 'with-prompts'], (prev: unknown) => {
@@ -694,11 +716,13 @@ const EditProject = (): JSX.Element => {
     })
     void queryClient.invalidateQueries({queryKey: ['project', projectId]})
     void queryClient.invalidateQueries({queryKey: ['projects']})
+    return result
   }
 
   const handleSubmit = (event: SubmitEvent) => {
     event.preventDefault()
     setErrorMessage(null)
+    setPromptCleanupSummary(null)
 
     const startDateResult = parseDateInput(dateFrom())
     if (startDateResult.error) {
@@ -719,9 +743,11 @@ const EditProject = (): JSX.Element => {
 
     setIsLoading(true)
 
-    const onFulfilled = () => {
+    const onFulfilled = (result: ProjectUpdateResult) => {
       setIsLoading(false)
-      void navigate({to: '/projects'})
+      if (!result.promptCleanupSummary) {
+        void navigate({to: '/projects'})
+      }
     }
 
     const onRejected = (error: unknown) => {
@@ -731,25 +757,24 @@ const EditProject = (): JSX.Element => {
     }
 
     const promptsPayload = buildPromptsPayload(ownedPrompts, importedPrompts)
-    const updatePayload = {
-      name: projectName(),
-      description: description() || null,
-      prompts: promptsPayload,
+    const baseUpdatePayload = {name: projectName(), description: description() || null, prompts: promptsPayload}
+    const editableConfigPayload = {
+      ...baseUpdatePayload,
       dateFrom: startDateResult.normalized ?? null,
       dateTo: endDateResult.normalized ?? null,
-      modelId: undefined as string | undefined,
       importRoutes: selectedImportRoutes(),
-      useTitle: useTitle(),
       useAbstract: useAbstract(),
       useFulltext: useFulltext(),
       useFulltextNoImages: useFulltextNoImages(),
+      useTitle: useTitle(),
     }
+    const updatePromise = canEditJudgmentConfig()
+      ? getModelIdForUpdate().then((modelId) => {
+          return sendUpdateRequest({...editableConfigPayload, modelId})
+        })
+      : sendUpdateRequest(baseUpdatePayload)
 
-    void getModelIdForUpdate()
-      .then((modelId) => {
-        return sendUpdateRequest({...updatePayload, modelId})
-      })
-      .then(onFulfilled, onRejected)
+    void updatePromise.then(onFulfilled, onRejected)
   }
 
   return (
@@ -784,15 +809,15 @@ const EditProject = (): JSX.Element => {
 
           <Show when={projectDetails()}>
             <div class="bg-card border rounded-lg p-6">
-              <Show when={isLocked()}>
+              <Show when={isJudgmentConfigLocked()}>
                 <div class="mb-6 p-4 bg-amber-50 border-2 border-amber-300 rounded-lg">
                   <div class="flex items-start gap-3">
-                    <span class="text-amber-600 text-xl mt-0.5">⚠️</span>
+                    <span class="text-amber-600 text-xl mt-0.5">!</span>
                     <div>
-                      <h3 class="font-semibold text-amber-900 mb-1">Project Locked for Editing</h3>
+                      <h3 class="font-semibold text-amber-900 mb-1">Judgment Settings Locked</h3>
                       <p class="text-amber-800 text-sm">
-                        This project cannot be modified because a judgment job exists for it. All fields and buttons
-                        have been disabled to preserve the integrity of the running/finished job.
+                        Name, description, and prompts can still be edited. Model, article scope, dates, and content
+                        settings are locked to preserve existing judgment integrity.
                       </p>
                     </div>
                   </div>
@@ -801,6 +826,25 @@ const EditProject = (): JSX.Element => {
               <Show when={errorMessage()}>
                 <div id="test" class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
                   {errorMessage()}
+                </div>
+              </Show>
+              <Show when={promptCleanupSummary()}>
+                <div class="mb-4 p-4 bg-emerald-50 border border-emerald-200 rounded-md text-emerald-900 text-sm">
+                  <h3 class="font-semibold mb-1">Prompt Changes Saved</h3>
+                  <p>
+                    Existing judgments were preserved where safe. If this project has a judgment job, use Start Job
+                    Clean before rerunning so only unassessed prompt pairs are queued.
+                  </p>
+                  <div class="mt-3 grid gap-1 sm:grid-cols-2">
+                    <p>Changed prompt links: {promptCleanupSummary()?.changedPromptLinks.length ?? 0}</p>
+                    <p>Deleted human answers: {promptCleanupSummary()?.deletedHumanPromptAnswers ?? 0}</p>
+                    <p>Soft-deleted LLM judgments: {promptCleanupSummary()?.softDeletedLlmJudgments ?? 0}</p>
+                    <p>Kept shared LLM judgments: {promptCleanupSummary()?.keptSharedLlmJudgments ?? 0}</p>
+                    <p>
+                      Kept comparison judgments:{' '}
+                      {promptCleanupSummary()?.skippedComparisonPromptReferencedJudgments ?? 0}
+                    </p>
+                  </div>
                 </div>
               </Show>
 
@@ -820,12 +864,12 @@ const EditProject = (): JSX.Element => {
                   <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length > 0}>
                     <select
                       id="model"
-                      class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                      class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${judgmentConfigFieldStateClass()}`}
                       value={selectedModelId()}
                       onChange={(event) => {
                         return setSelectedModelId(event.currentTarget.value)
                       }}
-                      disabled={isLocked()}
+                      disabled={!canEditJudgmentConfig()}
                     >
                       <For each={availableModels()}>
                         {(m) => {
@@ -877,7 +921,7 @@ const EditProject = (): JSX.Element => {
                           const showRouteHint = Boolean(name) && name !== r.route && !isImportedFileRoute(r.route)
                           return (
                             <label
-                              class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${isLocked() ? 'opacity-60' : 'border-input'}`}
+                              class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${canEditJudgmentConfig() ? 'border-input' : 'opacity-60'}`}
                             >
                               <input
                                 type="checkbox"
@@ -886,7 +930,7 @@ const EditProject = (): JSX.Element => {
                                 onChange={() => {
                                   return toggleImportRouteSelection(r.route)
                                 }}
-                                disabled={isLocked()}
+                                disabled={!canEditJudgmentConfig()}
                               />
                               <div class="flex-1">
                                 <p class="text-sm font-medium text-gray-900">{displayName}</p>
@@ -913,9 +957,8 @@ const EditProject = (): JSX.Element => {
                       return setProjectName(event.currentTarget.value)
                     }}
                     placeholder="Enter project name"
-                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${editableFieldStateClass}`}
                     required
-                    disabled={isLocked()}
                   />
                 </div>
 
@@ -931,15 +974,16 @@ const EditProject = (): JSX.Element => {
                     }}
                     placeholder="Describe your project..."
                     rows="4"
-                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
-                    disabled={isLocked()}
+                    class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${editableFieldStateClass}`}
                   />
                 </div>
 
                 <div>
                   <p class="block text-sm font-medium mb-2">Project Timeline</p>
                   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
+                    <label
+                      class={`flex flex-col text-sm font-medium gap-1 ${canEditJudgmentConfig() ? '' : 'opacity-60'}`}
+                    >
                       <span>Start Date</span>
                       <input
                         type="text"
@@ -948,11 +992,13 @@ const EditProject = (): JSX.Element => {
                           return setDateFrom(event.currentTarget.value)
                         }}
                         placeholder="YYYY-MM-DD"
-                        class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                        disabled={isLocked()}
+                        class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${judgmentConfigFieldStateClass()}`}
+                        disabled={!canEditJudgmentConfig()}
                       />
                     </label>
-                    <label class={`flex flex-col text-sm font-medium gap-1 ${isLocked() ? 'opacity-60' : ''}`}>
+                    <label
+                      class={`flex flex-col text-sm font-medium gap-1 ${canEditJudgmentConfig() ? '' : 'opacity-60'}`}
+                    >
                       <span>End Date</span>
                       <input
                         type="text"
@@ -961,8 +1007,8 @@ const EditProject = (): JSX.Element => {
                           return setDateTo(event.currentTarget.value)
                         }}
                         placeholder="YYYY-MM-DD"
-                        class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                        disabled={isLocked()}
+                        class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${judgmentConfigFieldStateClass()}`}
+                        disabled={!canEditJudgmentConfig()}
                       />
                     </label>
                   </div>
@@ -973,7 +1019,7 @@ const EditProject = (): JSX.Element => {
                   <div class="space-y-2">
                     <label
                       class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
-                        isLocked() ? 'opacity-60' : 'border-input'
+                        canEditJudgmentConfig() ? 'border-input' : 'opacity-60'
                       }`}
                     >
                       <input
@@ -983,7 +1029,7 @@ const EditProject = (): JSX.Element => {
                         onChange={(event) => {
                           return setUseTitle(event.currentTarget.checked)
                         }}
-                        disabled={isLocked()}
+                        disabled={!canEditJudgmentConfig()}
                       />
                       <div class="flex-1">
                         <p class="text-sm font-medium text-gray-900">Use Article Title</p>
@@ -991,7 +1037,7 @@ const EditProject = (): JSX.Element => {
                     </label>
                     <label
                       class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
-                        isLocked() ? 'opacity-60' : 'border-input'
+                        canEditJudgmentConfig() ? 'border-input' : 'opacity-60'
                       }`}
                     >
                       <input
@@ -1001,7 +1047,7 @@ const EditProject = (): JSX.Element => {
                         onChange={(event) => {
                           return setUseAbstract(event.currentTarget.checked)
                         }}
-                        disabled={isLocked()}
+                        disabled={!canEditJudgmentConfig()}
                       />
                       <div class="flex-1">
                         <p class="text-sm font-medium text-gray-900">Use Article Abstract</p>
@@ -1009,7 +1055,7 @@ const EditProject = (): JSX.Element => {
                     </label>
                     <label
                       class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
-                        isLocked() ? 'opacity-60' : 'border-input'
+                        canEditJudgmentConfig() ? 'border-input' : 'opacity-60'
                       }`}
                     >
                       <input
@@ -1022,7 +1068,7 @@ const EditProject = (): JSX.Element => {
                           // Mutual exclusivity: uncheck the other if this is checked
                           if (checked) setUseFulltextNoImages(false)
                         }}
-                        disabled={isLocked()}
+                        disabled={!canEditJudgmentConfig()}
                       />
                       <div class="flex-1">
                         <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
@@ -1033,7 +1079,7 @@ const EditProject = (): JSX.Element => {
                     </label>
                     <label
                       class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
-                        isLocked() ? 'opacity-60' : 'border-input'
+                        canEditJudgmentConfig() ? 'border-input' : 'opacity-60'
                       }`}
                     >
                       <input
@@ -1046,7 +1092,7 @@ const EditProject = (): JSX.Element => {
                           // Mutual exclusivity: uncheck the other if this is checked
                           if (checked) setUseFulltext(false)
                         }}
-                        disabled={isLocked()}
+                        disabled={!canEditJudgmentConfig()}
                       />
                       <div class="flex-1">
                         <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
@@ -1061,14 +1107,7 @@ const EditProject = (): JSX.Element => {
                 <div>
                   <div class="flex items-center justify-between mb-2">
                     <label class="block text-sm font-medium">Your questions about the article</label>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={addPromptInput}
-                      disabled={isLocked()}
-                      class={actionStateClass()}
-                    >
+                    <Button type="button" variant="outline" size="sm" onClick={addPromptInput}>
                       + Add Prompt
                     </Button>
                   </div>
@@ -1097,8 +1136,7 @@ const EditProject = (): JSX.Element => {
                                   return updatePromptInput(promptItem.id, 'promptHeading', event.currentTarget.value)
                                 }}
                                 placeholder={`Prompt ${index() + 1} heading (optional)...`}
-                                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                                disabled={isLocked()}
+                                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${editableFieldStateClass}`}
                               />
                               <input
                                 type="text"
@@ -1107,8 +1145,7 @@ const EditProject = (): JSX.Element => {
                                   return updatePromptInput(promptItem.id, 'type', event.currentTarget.value)
                                 }}
                                 placeholder={`Prompt ${index() + 1} type (optional)...`}
-                                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
-                                disabled={isLocked()}
+                                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${editableFieldStateClass}`}
                               />
                               <textarea
                                 value={promptItem.originalText}
@@ -1117,21 +1154,19 @@ const EditProject = (): JSX.Element => {
                                 }}
                                 placeholder={`Enter prompt ${index() + 1} content...`}
                                 rows="4"
-                                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${fieldStateClass()}`}
-                                disabled={isLocked()}
+                                class={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none ${editableFieldStateClass}`}
                               />
                               <div class="flex items-center gap-4">
                                 <label class="flex items-center gap-2 text-sm">
                                   <span>Order</span>
                                   <input
                                     type="number"
-                                    class={`w-20 px-2 py-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${fieldStateClass()}`}
+                                    class={`w-20 px-2 py-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent ${editableFieldStateClass}`}
                                     value={promptItem.order}
                                     onInput={(e) => {
                                       const val = Number(e.currentTarget.value || 0)
                                       return updatePromptInput(promptItem.id, 'order', Number.isNaN(val) ? 0 : val)
                                     }}
-                                    disabled={isLocked()}
                                   />
                                 </label>
                               </div>
@@ -1143,8 +1178,7 @@ const EditProject = (): JSX.Element => {
                               onClick={() => {
                                 return removePromptInput(promptItem.id)
                               }}
-                              class={`self-start mt-1 ${actionStateClass()}`}
-                              disabled={isLocked()}
+                              class="self-start mt-1"
                             >
                               ×
                             </Button>
@@ -1211,7 +1245,7 @@ const EditProject = (): JSX.Element => {
                                     </span>
                                   </Show>
                                 </div>
-                                <label class={`flex items-center gap-2 ${isLocked() ? 'opacity-60' : ''}`}>
+                                <label class="flex items-center gap-2">
                                   <input
                                     type="checkbox"
                                     class="mt-0.5"
@@ -1219,7 +1253,6 @@ const EditProject = (): JSX.Element => {
                                     onChange={() => {
                                       return toggleImportedPromptEnabled(promptItem.id)
                                     }}
-                                    disabled={isLocked()}
                                   />
                                   <span class="text-sm">Enabled</span>
                                 </label>
@@ -1256,12 +1289,7 @@ const EditProject = (): JSX.Element => {
                 </Show>
 
                 <div class="flex gap-3 pt-4">
-                  <Button
-                    type="submit"
-                    disabled={!projectName().trim() || isLoading() || isLocked()}
-                    title={isLocked() ? 'Cannot update: a judgment job exists for this project' : undefined}
-                    class={actionStateClass()}
-                  >
+                  <Button type="submit" disabled={!projectName().trim() || isLoading()}>
                     {isLoading() ? 'Updating...' : 'Update Project'}
                   </Button>
                   <Button as={Link} to="/projects" variant="outline">

@@ -740,6 +740,48 @@ test('project review details raw fallback query uses project-visible scope witho
   expect(judgmentStatement).not.toContain('j.project_id =')
 })
 
+test('project review details human prompt map is scoped to project and current prompts', async () => {
+  let humanPromptMapStatement = ''
+
+  fullArticlesByIdsRef.current = async () => {
+    return [{articleTitle: 'Article 1', id: 'article-1'}]
+  }
+  projectReviewConfigRef.current = async () => {
+    return {
+      humanJudgmentMode: 'prompt',
+      modelId: 'model-1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
+  }
+  queryJsonRef.current = async (statement) => {
+    if (statement.includes('FROM app.judgment_human') && statement.includes('answer IS NOT NULL')) {
+      humanPromptMapStatement = statement
+      return [{articleId: 'article-1', promptId: 'prompt-1', answer: 'yes', updatedAt: '2024-01-05T00:00:00.000Z'}]
+    }
+
+    return statement.includes('FROM app.project_prompt pp')
+      ? [getPromptRow('prompt-1', 0)]
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow()]
+        : statement.includes('FROM app.judgment j')
+          ? [getArticleJudgmentRow({judgmentId: 'judgment-1', judgmentPromptId: 'prompt-1'})]
+          : []
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    humanAnswersByPrompt: Record<string, Array<{answer: string; userName: string}>>
+  }
+
+  expect(response.status).toBe(200)
+  expect(humanPromptMapStatement).toContain("project_id = 'project-1'")
+  expect(humanPromptMapStatement).toContain("prompt_id IN ('prompt-1')")
+  expect(body.humanAnswersByPrompt).toEqual({'prompt-1': [{answer: 'yes', userName: 'System'}]})
+})
+
 test('project review details exposes summary-mode overall answers without prompt human map', async () => {
   fullArticlesByIdsRef.current = async () => {
     return [{articleTitle: 'Article 1', id: 'article-1'}]
