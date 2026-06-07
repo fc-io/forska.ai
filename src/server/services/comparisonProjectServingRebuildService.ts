@@ -751,11 +751,26 @@ const markComparisonProjectsServingStale = async (
   }
 
   await dependencies.database.transaction((runner) => {
-    return recordComparisonProjectsServingStale({
-      comparisonProjectIds: uniqueComparisonProjectIds,
-      now: new Date(),
-      runner,
-    })
+    return markComparisonProjectsServingStaleTx(uniqueComparisonProjectIds, runner)
+  })
+
+  return uniqueComparisonProjectIds
+}
+
+const markComparisonProjectsServingStaleTx = async (
+  comparisonProjectIds: string[],
+  runner: ComparisonProjectServingRebuildRunner,
+) => {
+  const uniqueComparisonProjectIds = Array.from(new Set(comparisonProjectIds))
+
+  if (uniqueComparisonProjectIds.length === 0) {
+    return []
+  }
+
+  await recordComparisonProjectsServingStale({
+    comparisonProjectIds: uniqueComparisonProjectIds,
+    now: new Date(),
+    runner,
   })
 
   return uniqueComparisonProjectIds
@@ -765,6 +780,7 @@ const comparisonProjectServingRebuildService = {
   getComparisonProjectServingStatus,
   markComparisonProjectServingStale,
   markComparisonProjectsServingStale,
+  markComparisonProjectsServingStaleTx,
   rebuildComparisonProjectServing,
 }
 

@@ -2351,6 +2351,359 @@ test('edit route reuses existing prompt judgments and preserves association meta
   expect(Number(activeJudgmentCount?.count ?? 0)).toBe(1)
 })
 
+test('edit route preserves judgments when a removed prompt is reused as a replacement target', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-reuse-removed-target-connection'
+  const modelId = 'edit-job-reuse-removed-target-model'
+  const projectId = 'edit-job-reuse-removed-target-project'
+  const sourcePromptId = 'edit-job-reuse-removed-target-source-prompt'
+  const targetPromptId = 'edit-job-reuse-removed-target-target-prompt'
+  const sourcePromptText = 'Reuse removed target source prompt text'
+  const targetPromptText = 'Reuse removed target target prompt text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(sourcePromptText, null, 'source', 'string'),
+    order: 0,
+    originProjectId: projectId,
+    originalText: sourcePromptText,
+    projectId,
+    projectPromptId: 'edit-job-reuse-removed-target-source-project-prompt',
+    promptHeading: 'source',
+    promptId: sourcePromptId,
+    type: 'string',
+  })
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(targetPromptText, null, 'target', 'string'),
+    order: 1,
+    originProjectId: projectId,
+    originalText: targetPromptText,
+    projectId,
+    projectPromptId: 'edit-job-reuse-removed-target-target-project-prompt',
+    promptHeading: 'target',
+    promptId: targetPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-job-reuse-removed-target-article', 'Reuse removed target article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-job-reuse-removed-target-project-article', '${projectId}', 'edit-job-reuse-removed-target-article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered, answer)
+    VALUES
+      (
+        'edit-job-reuse-removed-target-source-human',
+        '${projectId}',
+        'edit-job-reuse-removed-target-article',
+        '${sourcePromptId}',
+        TRUE,
+        'yes'
+      ),
+      (
+        'edit-job-reuse-removed-target-target-human',
+        '${projectId}',
+        'edit-job-reuse-removed-target-article',
+        '${targetPromptId}',
+        TRUE,
+        'no'
+      )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original
+    )
+    VALUES (
+      'edit-job-reuse-removed-target-target-judgment',
+      'edit-job-reuse-removed-target-article',
+      '${targetPromptId}',
+      '${modelId}',
+      '${projectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'no'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-reuse-removed-target-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-reuse-removed-target-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: sourcePromptId,
+            originalText: targetPromptText,
+            promptHeading: 'target',
+            type: 'string',
+            order: 0,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {
+      promptCleanupSummary: {
+        changedPromptLinks: Array<{newPromptId: string | null; oldPromptId: string; projectPromptId: string}>
+        deletedHumanPromptAnswers: number
+      }
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary).toEqual({
+    changedPromptLinks: [
+      {
+        newPromptId: targetPromptId,
+        oldPromptId: sourcePromptId,
+        projectPromptId: 'edit-job-reuse-removed-target-source-project-prompt',
+        reason: 'replaced',
+      },
+    ],
+    deletedHumanPromptAnswers: 1,
+    keptSharedLlmJudgments: 0,
+    skippedComparisonPromptReferencedJudgments: 0,
+    softDeletedLlmJudgments: 0,
+  })
+
+  const projectPromptRows = await queryDatabase<{order: number; promptId: string}>(`
+    SELECT prompt_id AS promptId, CAST(prompt_order AS INTEGER) AS "order"
+    FROM app.project_prompt
+    WHERE project_id = '${projectId}'
+    ORDER BY prompt_order ASC
+  `)
+  const [sourceHumanCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_human
+    WHERE id = 'edit-job-reuse-removed-target-source-human'
+  `)
+  const [targetHumanCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_human
+    WHERE id = 'edit-job-reuse-removed-target-target-human'
+  `)
+  const [targetJudgmentRow] = await queryDatabase<{deletedAt: string | null}>(`
+    SELECT CAST(deleted_at AS VARCHAR) AS deletedAt
+    FROM app.judgment
+    WHERE id = 'edit-job-reuse-removed-target-target-judgment'
+    LIMIT 1
+  `)
+
+  expect(projectPromptRows).toEqual([{order: 0, promptId: targetPromptId}])
+  expect(Number(sourceHumanCount?.count ?? 0)).toBe(0)
+  expect(Number(targetHumanCount?.count ?? 0)).toBe(1)
+  expect(targetJudgmentRow?.deletedAt).toBe(null)
+})
+
+test('edit route keeps replacement targets that are also edited later in the same save', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-edited-target-connection'
+  const modelId = 'edit-job-edited-target-model'
+  const projectId = 'edit-job-edited-target-project'
+  const sourcePromptId = 'edit-job-edited-target-source-prompt'
+  const targetPromptId = 'edit-job-edited-target-target-prompt'
+  const sourcePromptText = 'Edited target source prompt text'
+  const targetPromptText = 'Edited target target prompt text'
+  const newTargetPromptText = 'Edited target new prompt text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(sourcePromptText, null, 'source', 'string'),
+    order: 0,
+    originProjectId: projectId,
+    originalText: sourcePromptText,
+    projectId,
+    projectPromptId: 'edit-job-edited-target-source-project-prompt',
+    promptHeading: 'source',
+    promptId: sourcePromptId,
+    type: 'string',
+  })
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(targetPromptText, null, 'target', 'string'),
+    order: 1,
+    originProjectId: projectId,
+    originalText: targetPromptText,
+    projectId,
+    projectPromptId: 'edit-job-edited-target-target-project-prompt',
+    promptHeading: 'target',
+    promptId: targetPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-job-edited-target-article', 'Edited target article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-job-edited-target-project-article', '${projectId}', 'edit-job-edited-target-article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered, answer)
+    VALUES
+      (
+        'edit-job-edited-target-source-human',
+        '${projectId}',
+        'edit-job-edited-target-article',
+        '${sourcePromptId}',
+        TRUE,
+        'yes'
+      ),
+      (
+        'edit-job-edited-target-target-human',
+        '${projectId}',
+        'edit-job-edited-target-article',
+        '${targetPromptId}',
+        TRUE,
+        'no'
+      )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original
+    )
+    VALUES (
+      'edit-job-edited-target-target-judgment',
+      'edit-job-edited-target-article',
+      '${targetPromptId}',
+      '${modelId}',
+      '${projectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'no'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-edited-target-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-edited-target-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: sourcePromptId,
+            originalText: targetPromptText,
+            promptHeading: 'target',
+            type: 'string',
+            order: 0,
+          },
+          {
+            originalId: targetPromptId,
+            originalText: newTargetPromptText,
+            promptHeading: 'new target',
+            type: 'string',
+            order: 1,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {
+      promptCleanupSummary: {
+        changedPromptLinks: Array<{newPromptId: string | null; oldPromptId: string; projectPromptId: string}>
+        deletedHumanPromptAnswers: number
+      }
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary).toEqual({
+    changedPromptLinks: [
+      {
+        newPromptId: targetPromptId,
+        oldPromptId: sourcePromptId,
+        projectPromptId: 'edit-job-edited-target-source-project-prompt',
+        reason: 'replaced',
+      },
+    ],
+    deletedHumanPromptAnswers: 1,
+    keptSharedLlmJudgments: 0,
+    skippedComparisonPromptReferencedJudgments: 0,
+    softDeletedLlmJudgments: 0,
+  })
+
+  const projectPromptRows = await queryDatabase<{order: number; originalText: string; promptId: string}>(`
+    SELECT
+      p.id AS promptId,
+      p.original_text AS originalText,
+      CAST(pp.prompt_order AS INTEGER) AS "order"
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+    ORDER BY pp.prompt_order ASC
+  `)
+  const [sourceHumanCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_human
+    WHERE id = 'edit-job-edited-target-source-human'
+  `)
+  const [targetHumanCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_human
+    WHERE id = 'edit-job-edited-target-target-human'
+  `)
+  const [targetJudgmentRow] = await queryDatabase<{deletedAt: string | null}>(`
+    SELECT CAST(deleted_at AS VARCHAR) AS deletedAt
+    FROM app.judgment
+    WHERE id = 'edit-job-edited-target-target-judgment'
+    LIMIT 1
+  `)
+
+  expect(projectPromptRows[0]).toEqual({order: 0, originalText: targetPromptText, promptId: targetPromptId})
+  expect(projectPromptRows[1]?.order).toBe(1)
+  expect(projectPromptRows[1]?.originalText).toBe(newTargetPromptText)
+  expect(projectPromptRows[1]?.promptId).not.toBe(targetPromptId)
+  expect(Number(sourceHumanCount?.count ?? 0)).toBe(0)
+  expect(Number(targetHumanCount?.count ?? 0)).toBe(1)
+  expect(targetJudgmentRow?.deletedAt).toBe(null)
+})
+
 test('edit route removes safe prompt links and cleans only removed prompt human answers', async () => {
   if (!app || !queryDatabase || !runDatabase) {
     throw new Error('Test app not initialized')
