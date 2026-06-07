@@ -143,8 +143,8 @@ const logProjectPromptCleanupSummary = (params: {projectId: string; summary: Pro
   )
 }
 
-const getComparisonProjectIdsAffectedByProjectPromptEdit = async (projectId: string) => {
-  return getAppDatabaseService().queryJson<{comparisonProjectId: string}>(`
+const getComparisonProjectIdsAffectedByProjectPromptEdit = async (db: AppQueryRunner, projectId: string) => {
+  return db.queryJson<{comparisonProjectId: string}>(`
     SELECT DISTINCT comparison_project.id AS comparisonProjectId
     FROM app.comparison_project comparison_project
     LEFT JOIN app.comparison_project_source_project source_project
@@ -158,12 +158,13 @@ const getComparisonProjectIdsAffectedByProjectPromptEdit = async (projectId: str
   `)
 }
 
-const markComparisonServingStaleForProjectPromptEdit = async (projectId: string) => {
-  const comparisonProjectRows = await getComparisonProjectIdsAffectedByProjectPromptEdit(projectId)
-  await getComparisonProjectServingRebuildService().markComparisonProjectsServingStale(
+const markComparisonServingStaleForProjectPromptEditTx = async (tx: AppTx, projectId: string) => {
+  const comparisonProjectRows = await getComparisonProjectIdsAffectedByProjectPromptEdit(tx, projectId)
+  await getComparisonProjectServingRebuildService().markComparisonProjectsServingStaleTx(
     comparisonProjectRows.map((row) => {
       return row.comparisonProjectId
     }),
+    tx,
   )
 }
 
@@ -551,8 +552,16 @@ const getChangedProjectPromptLinks = ({
   removedAssociations: ExistingProjectPromptAssociation[]
   resolvedPromptEdits: ResolvedProjectPromptEdit[]
 }) => {
+  const finalTargetPromptIds = new Set(
+    resolvedPromptEdits.map((promptEdit) => {
+      return promptEdit.targetPromptId
+    }),
+  )
   const replacedLinks = resolvedPromptEdits.flatMap((promptEdit): ChangedProjectPromptLink[] => {
-    return promptEdit.shouldDeleteOriginalAssociation && promptEdit.originalId && promptEdit.currentAssociation
+    return promptEdit.shouldDeleteOriginalAssociation
+      && promptEdit.originalId
+      && promptEdit.currentAssociation
+      && !finalTargetPromptIds.has(promptEdit.originalId)
       ? [
           {
             newPromptId: promptEdit.targetPromptId,
@@ -1801,35 +1810,50 @@ export const projectsRoutes = new Elysia()
                   return typeof id === 'string'
                 }),
             )
+            const finalTargetPromptIds = new Set(
+              resolvedPromptEdits.map((promptEdit) => {
+                return promptEdit.targetPromptId
+              }),
+            )
             const toDeleteAssoc = existing.filter((entry) => {
-              return !receivedOriginalIds.has(entry.promptId)
+              return !receivedOriginalIds.has(entry.promptId) && !finalTargetPromptIds.has(entry.promptId)
             })
+            const originalPromptIdsToDelete = getUniqueSortedStrings(
+              resolvedPromptEdits
+                .filter((promptEdit) => {
+                  return (
+                    promptEdit.shouldDeleteOriginalAssociation
+                    && typeof promptEdit.originalId === 'string'
+                    && !finalTargetPromptIds.has(promptEdit.originalId)
+                  )
+                })
+                .map((promptEdit) => {
+                  return promptEdit.originalId
+                })
+                .filter((id): id is string => {
+                  return typeof id === 'string'
+                }),
+            )
+            const promptIdsToDelete = getUniqueSortedStrings([
+              ...toDeleteAssoc.map((entry) => {
+                return entry.promptId
+              }),
+              ...originalPromptIdsToDelete,
+            ])
             const changedPromptLinks = getChangedProjectPromptLinks({
               removedAssociations: toDeleteAssoc,
               resolvedPromptEdits,
             })
 
-            if (toDeleteAssoc.length > 0) {
+            if (promptIdsToDelete.length > 0) {
               await tx.run(`
               DELETE FROM app.project_prompt
               WHERE project_id = '${escapeSqlString(params.id)}'
-                AND prompt_id IN (${getQuotedStringList(
-                  toDeleteAssoc.map((entry) => {
-                    return entry.promptId
-                  }),
-                ).join(', ')})
+                AND prompt_id IN (${getQuotedStringList(promptIdsToDelete).join(', ')})
             `)
             }
 
             for (const promptEdit of resolvedPromptEdits) {
-              if (promptEdit.shouldDeleteOriginalAssociation && promptEdit.originalId) {
-                await tx.run(`
-                  DELETE FROM app.project_prompt
-                  WHERE project_id = '${escapeSqlString(params.id)}'
-                    AND prompt_id = '${escapeSqlString(promptEdit.originalId)}'
-                `)
-              }
-
               if (promptEdit.currentAssociation) {
                 await upsertProjectPromptTx(tx, {
                   projectId: params.id,
@@ -1866,6 +1890,10 @@ export const projectsRoutes = new Elysia()
               ...(await softDeleteProjectPromptLlmJudgmentsTx(tx, {changedPromptLinks, projectId: params.id})),
             }
             logProjectPromptCleanupSummary({projectId: params.id, summary: promptCleanupSummary})
+          }
+
+          if (promptCleanupSummary) {
+            await markComparisonServingStaleForProjectPromptEditTx(tx, params.id)
           }
 
           if (body.importRoutes !== undefined && !hasExistingJob) {
@@ -1953,10 +1981,6 @@ export const projectsRoutes = new Elysia()
       }
 
       const result = await runEditTransaction()
-
-      if (result.promptCleanupSummary) {
-        await markComparisonServingStaleForProjectPromptEdit(params.id)
-      }
 
       return {data: result}
     },
