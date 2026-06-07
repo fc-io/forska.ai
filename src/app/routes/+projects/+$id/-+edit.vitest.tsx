@@ -40,7 +40,16 @@ type MockProjectDetails = {
 
 const mockState = vi.hoisted(() => {
   return {
-    apiCallCounts: {importRoutes: 0, models: 0, projectAccess: 0, projectDetails: 0, providerConnections: 0},
+    apiCallCounts: {
+      importRoutes: 0,
+      modelEnsure: 0,
+      models: 0,
+      projectAccess: 0,
+      projectDetails: 0,
+      providerConnections: 0,
+    },
+    editPatchResponse: null as {data?: unknown; error?: unknown; status?: number} | null,
+    editPayloads: [] as unknown[],
     importRoutes: [] as Array<{name: string | null; route: string}>,
     models: [
       {
@@ -118,7 +127,25 @@ const waitForUpdates = async () => {
 }
 
 const resetApiCallCounts = () => {
-  mockState.apiCallCounts = {importRoutes: 0, models: 0, projectAccess: 0, projectDetails: 0, providerConnections: 0}
+  mockState.apiCallCounts = {
+    importRoutes: 0,
+    modelEnsure: 0,
+    models: 0,
+    projectAccess: 0,
+    projectDetails: 0,
+    providerConnections: 0,
+  }
+  mockState.editPatchResponse = null
+  mockState.editPayloads = []
+}
+
+const setFormValue = (element: HTMLInputElement | HTMLTextAreaElement | null, value: string) => {
+  expect(element).not.toBeNull()
+  if (!element) {
+    return
+  }
+  element.value = value
+  element.dispatchEvent(new Event('input', {bubbles: true}))
 }
 
 const expectNoEditRouteFetches = () => {
@@ -274,6 +301,7 @@ vi.mock('../../../../services/apiClient.ts', () => {
           },
           ensure: {
             post: async () => {
+              mockState.apiCallCounts.modelEnsure += 1
               return {data: {data: {modelId: 'model-1'}, error: null}}
             },
           },
@@ -301,6 +329,16 @@ vi.mock('../../../../services/apiClient.ts', () => {
             get: async () => {
               mockState.apiCallCounts.projectDetails += 1
               return {data: {data: getProjectDetails(id)}}
+            },
+            edit: {
+              patch: async (payload: unknown) => {
+                mockState.editPayloads.push(payload)
+                if (mockState.editPatchResponse) {
+                  return mockState.editPatchResponse
+                }
+                const details = getProjectDetails(id)
+                return {data: {data: {project: details.project, prompts: details.prompts}}}
+              },
             },
             patch: async () => {
               return {data: {data: getProjectDetails(id)}}
@@ -375,6 +413,277 @@ describe('project edit route regressions', () => {
       browserFailures.assertNoFailures()
     } finally {
       browserFailures.dispose()
+      queryClient.clear()
+      providerQueryClient.clear()
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('judged project edit keeps metadata and prompts editable while locking judgment settings', async () => {
+    const projectId = 'project-partial-lock-test'
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
+    const queryClient = routeContext.appQueryClient
+    const providerQueryClient = new QueryClient()
+    const browserFailures = createBrowserFailureAssertions(window)
+
+    mockState.importRoutes = [{name: 'Locked Route', route: 'locked-route'}]
+    mockState.projectDetailsById[projectId] = {
+      ...buildProjectDetails(projectId),
+      hasJudgedArticles: true,
+      importRoutes: ['locked-route'],
+    }
+    queryClient.clear()
+    seedEditRouteQueries(queryClient, projectId)
+
+    const {container, dispose} = await mountRouterAtPath({
+      path: `/projects/${projectId}/edit`,
+      queryClient: providerQueryClient,
+      routeTree: routeContext.routeTree,
+      solidQueryModule: routeContext.solidQueryModule,
+      solidRouterModule: routeContext.solidRouterModule,
+      solidWebModule: routeContext.solidWebModule,
+    })
+
+    try {
+      const text = container.textContent ?? ''
+      const modelSelect = container.querySelector<HTMLSelectElement>('#model')
+      const projectNameInput = container.querySelector<HTMLInputElement>('#project-name')
+      const descriptionInput = container.querySelector<HTMLTextAreaElement>('#description')
+      const dateInput = container.querySelector<HTMLInputElement>('input[placeholder="YYYY-MM-DD"]')
+      const checkboxes = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+      const routeCheckbox = checkboxes[0]
+      const headingInput = container.querySelector<HTMLInputElement>(
+        'input[placeholder="Prompt 1 heading (optional)..."]',
+      )
+      const typeInput = container.querySelector<HTMLInputElement>('input[placeholder="Prompt 1 type (optional)..."]')
+      const orderInput = container.querySelector<HTMLInputElement>('input[type="number"]')
+      const textareas = Array.from(container.querySelectorAll<HTMLTextAreaElement>('textarea'))
+      const addPromptButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => {
+        return button.textContent?.includes('+ Add Prompt')
+      })
+      const removePromptButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => {
+        return button.textContent?.includes('×')
+      })
+      const submitButton = container.querySelector<HTMLButtonElement>('button[type="submit"]')
+
+      expect(text).toContain('Judgment Settings Locked')
+      expect(text).not.toContain('Project Locked for Editing')
+      expect(modelSelect?.disabled).toBe(true)
+      expect(routeCheckbox?.disabled).toBe(true)
+      expect(
+        checkboxes.every((checkbox) => {
+          return checkbox.disabled
+        }),
+      ).toBe(true)
+      expect(dateInput?.disabled).toBe(true)
+      expect(projectNameInput?.disabled).toBe(false)
+      expect(descriptionInput?.disabled).toBe(false)
+      expect(headingInput?.disabled).toBe(false)
+      expect(typeInput?.disabled).toBe(false)
+      expect(orderInput?.disabled).toBe(false)
+      expect(textareas[1]?.disabled).toBe(false)
+      expect(addPromptButton?.disabled).toBe(false)
+      expect(removePromptButton?.disabled).toBe(false)
+      expect(submitButton?.disabled).toBe(false)
+      browserFailures.assertNoFailures()
+    } finally {
+      browserFailures.dispose()
+      queryClient.clear()
+      providerQueryClient.clear()
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('judged project submit omits protected settings and skips model ensure', async () => {
+    const projectId = 'project-restricted-submit-test'
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
+    const queryClient = routeContext.appQueryClient
+    const providerQueryClient = new QueryClient()
+
+    mockState.importRoutes = [{name: 'Restricted Route', route: 'restricted-route'}]
+    mockState.projectDetailsById[projectId] = {
+      ...buildProjectDetails(projectId),
+      hasJudgedArticles: true,
+      importRoutes: ['restricted-route'],
+    }
+    queryClient.clear()
+    seedEditRouteQueries(queryClient, projectId)
+
+    const {container, dispose} = await mountRouterAtPath({
+      path: `/projects/${projectId}/edit`,
+      queryClient: providerQueryClient,
+      routeTree: routeContext.routeTree,
+      solidQueryModule: routeContext.solidQueryModule,
+      solidRouterModule: routeContext.solidRouterModule,
+      solidWebModule: routeContext.solidWebModule,
+    })
+
+    try {
+      const form = container.querySelector<HTMLFormElement>('form')
+
+      form?.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))
+      await waitForUpdates()
+
+      const payload = mockState.editPayloads[0] as Record<string, unknown>
+
+      expect(mockState.apiCallCounts.modelEnsure).toBe(0)
+      expect(payload.name).toBe(`Project ${projectId}`)
+      expect(payload.description).toBe(`Description for ${projectId}`)
+      expect(Array.isArray(payload.prompts)).toBe(true)
+      expect(Object.prototype.hasOwnProperty.call(payload, 'modelId')).toBe(false)
+      expect(Object.prototype.hasOwnProperty.call(payload, 'dateFrom')).toBe(false)
+      expect(Object.prototype.hasOwnProperty.call(payload, 'dateTo')).toBe(false)
+      expect(Object.prototype.hasOwnProperty.call(payload, 'importRoutes')).toBe(false)
+      expect(Object.prototype.hasOwnProperty.call(payload, 'useTitle')).toBe(false)
+      expect(Object.prototype.hasOwnProperty.call(payload, 'useAbstract')).toBe(false)
+      expect(Object.prototype.hasOwnProperty.call(payload, 'useFulltext')).toBe(false)
+      expect(Object.prototype.hasOwnProperty.call(payload, 'useFulltextNoImages')).toBe(false)
+    } finally {
+      queryClient.clear()
+      providerQueryClient.clear()
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('judged project submit includes cleared prompt heading and type', async () => {
+    const projectId = 'project-cleared-prompt-meta-test'
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
+    const queryClient = routeContext.appQueryClient
+    const providerQueryClient = new QueryClient()
+
+    mockState.projectDetailsById[projectId] = {...buildProjectDetails(projectId), hasJudgedArticles: true}
+    queryClient.clear()
+    seedEditRouteQueries(queryClient, projectId)
+
+    const {container, dispose} = await mountRouterAtPath({
+      path: `/projects/${projectId}/edit`,
+      queryClient: providerQueryClient,
+      routeTree: routeContext.routeTree,
+      solidQueryModule: routeContext.solidQueryModule,
+      solidRouterModule: routeContext.solidRouterModule,
+      solidWebModule: routeContext.solidWebModule,
+    })
+
+    try {
+      const form = container.querySelector<HTMLFormElement>('form')
+      const headingInput = container.querySelector<HTMLInputElement>(
+        'input[placeholder="Prompt 1 heading (optional)..."]',
+      )
+      const typeInput = container.querySelector<HTMLInputElement>('input[placeholder="Prompt 1 type (optional)..."]')
+
+      setFormValue(headingInput, '')
+      setFormValue(typeInput, '')
+      form?.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))
+      await waitForUpdates()
+
+      const payload = mockState.editPayloads[0] as Record<string, unknown>
+      const prompts = payload.prompts as Array<Record<string, unknown>>
+      const prompt = prompts[0]
+
+      expect(Object.prototype.hasOwnProperty.call(prompt, 'promptHeading')).toBe(true)
+      expect(Object.prototype.hasOwnProperty.call(prompt, 'type')).toBe(true)
+      expect(prompt?.promptHeading).toBe('')
+      expect(prompt?.type).toBe('')
+    } finally {
+      queryClient.clear()
+      providerQueryClient.clear()
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('judged project unsafe prompt edit 409 is surfaced to the user', async () => {
+    const projectId = 'project-unsafe-prompt-edit-test'
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
+    const queryClient = routeContext.appQueryClient
+    const providerQueryClient = new QueryClient()
+
+    mockState.editPatchResponse = {
+      data: {error: {message: 'Pause or drain the judgment job before editing prompts.'}},
+      status: 409,
+    }
+    mockState.projectDetailsById[projectId] = {...buildProjectDetails(projectId), hasJudgedArticles: true}
+    queryClient.clear()
+    seedEditRouteQueries(queryClient, projectId)
+
+    const {container, dispose} = await mountRouterAtPath({
+      path: `/projects/${projectId}/edit`,
+      queryClient: providerQueryClient,
+      routeTree: routeContext.routeTree,
+      solidQueryModule: routeContext.solidQueryModule,
+      solidRouterModule: routeContext.solidRouterModule,
+      solidWebModule: routeContext.solidWebModule,
+    })
+
+    try {
+      const form = container.querySelector<HTMLFormElement>('form')
+
+      form?.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))
+      await waitForUpdates()
+
+      expect(container.textContent ?? '').toContain('Pause or drain the judgment job before editing prompts.')
+    } finally {
+      queryClient.clear()
+      providerQueryClient.clear()
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('judged project prompt cleanup summary renders rerun guidance', async () => {
+    const projectId = 'project-cleanup-summary-test'
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
+    const queryClient = routeContext.appQueryClient
+    const providerQueryClient = new QueryClient()
+    const details = {...buildProjectDetails(projectId), hasJudgedArticles: true}
+
+    mockState.projectDetailsById[projectId] = details
+    mockState.editPatchResponse = {
+      data: {
+        data: {
+          project: details.project,
+          promptCleanupSummary: {
+            changedPromptLinks: [{newPromptId: 'prompt-new', oldPromptId: 'prompt-old', projectPromptId: 'link-1'}],
+            deletedHumanPromptAnswers: 2,
+            keptSharedLlmJudgments: 3,
+            skippedComparisonPromptReferencedJudgments: 4,
+            softDeletedLlmJudgments: 5,
+          },
+          prompts: details.prompts,
+        },
+      },
+    }
+    queryClient.clear()
+    seedEditRouteQueries(queryClient, projectId)
+
+    const {container, dispose} = await mountRouterAtPath({
+      path: `/projects/${projectId}/edit`,
+      queryClient: providerQueryClient,
+      routeTree: routeContext.routeTree,
+      solidQueryModule: routeContext.solidQueryModule,
+      solidRouterModule: routeContext.solidRouterModule,
+      solidWebModule: routeContext.solidWebModule,
+    })
+
+    try {
+      const form = container.querySelector<HTMLFormElement>('form')
+
+      form?.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))
+      await waitForUpdates()
+
+      const text = container.textContent ?? ''
+
+      expect(text).toContain('Prompt Changes Saved')
+      expect(text).toContain('Start Job Clean')
+      expect(text).toContain('Changed prompt links: 1')
+      expect(text).toContain('Deleted human answers: 2')
+      expect(text).toContain('Soft-deleted LLM judgments: 5')
+      expect(text).toContain('Kept shared LLM judgments: 3')
+      expect(text).toContain('Kept comparison judgments: 4')
+    } finally {
       queryClient.clear()
       providerQueryClient.clear()
       dispose()

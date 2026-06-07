@@ -155,6 +155,68 @@ const insertProjectPromptFixture = async ({
   `)
 }
 
+const insertJudgmentJobSqliteHealthProjectionFixture = async ({
+  claimedOutboxCount = 0,
+  jobId,
+  orphanedJudgedRowCount = 0,
+  outboxRowCount = 0,
+  pendingCompletionAckCount = 0,
+  promptClaimedCount = 0,
+  promptReadyCount = 0,
+  promptRunningCount = 0,
+}: {
+  claimedOutboxCount?: number
+  jobId: string
+  orphanedJudgedRowCount?: number
+  outboxRowCount?: number
+  pendingCompletionAckCount?: number
+  promptClaimedCount?: number
+  promptReadyCount?: number
+  promptRunningCount?: number
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const retainedRowCount = promptReadyCount + promptClaimedCount + promptRunningCount
+
+  await runDatabase(`
+    INSERT INTO app.judgment_job_sqlite_health_projection (
+      job_id,
+      projection_source,
+      projected_at,
+      fresh_until_at,
+      has_outbox_rows,
+      has_queue_rows,
+      outbox_row_count,
+      claimed_outbox_count,
+      orphaned_judged_row_count,
+      retained_row_count,
+      pending_completion_ack_count,
+      has_pending_completion_ack,
+      prompt_ready_count,
+      prompt_claimed_count,
+      prompt_running_count
+    ) VALUES (
+      '${jobId}',
+      'test',
+      current_timestamp,
+      TIMESTAMPTZ '2999-01-01T00:00:00.000Z',
+      ${outboxRowCount > 0 ? 'TRUE' : 'FALSE'},
+      ${retainedRowCount > 0 ? 'TRUE' : 'FALSE'},
+      ${outboxRowCount},
+      ${claimedOutboxCount},
+      ${orphanedJudgedRowCount},
+      ${retainedRowCount},
+      ${pendingCompletionAckCount},
+      ${pendingCompletionAckCount > 0 ? 'TRUE' : 'FALSE'},
+      ${promptReadyCount},
+      ${promptClaimedCount},
+      ${promptRunningCount}
+    )
+  `)
+}
+
 type CloneRerunProjectConfig = {
   modelId: string
   useAbstract: boolean
@@ -1389,6 +1451,2167 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(judgmentHumanProjectId?.projectId).toBe(null)
 })
 
+test('simple patch route allows name and description edits when a judgment job exists', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'patch-job-metadata-connection'
+  const modelId = 'patch-job-metadata-model'
+  const projectId = 'patch-job-metadata-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('patch-job-metadata-job', '${projectId}', 'completed')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}`, {
+      body: JSON.stringify({name: 'Updated job metadata project', description: 'Updated job metadata description'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {description: string | null; name: string}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.name).toBe('Updated job metadata project')
+  expect(body.data.description).toBe('Updated job metadata description')
+
+  const [jobRow] = await queryDatabase<{status: string}>(`
+    SELECT status
+    FROM app.judgment_job
+    WHERE id = 'patch-job-metadata-job'
+    LIMIT 1
+  `)
+
+  expect(jobRow?.status).toBe('completed')
+})
+
+test('edit patch routes reject archived and delete-pending projects', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const archivedProjectId = 'edit-guard-archived-project'
+  const deletePendingProjectId = 'edit-guard-delete-pending-project'
+
+  await insertProjectFixture({
+    archived: true,
+    connectionId: 'edit-guard-archived-connection',
+    modelId: 'edit-guard-archived-model',
+    projectId: archivedProjectId,
+  })
+  await insertProjectFixture({
+    connectionId: 'edit-guard-delete-pending-connection',
+    modelId: 'edit-guard-delete-pending-model',
+    projectId: deletePendingProjectId,
+  })
+  await runDatabase(`
+    UPDATE app.project
+    SET delete_pending_at = current_timestamp
+    WHERE id = '${deletePendingProjectId}'
+  `)
+
+  const archivedSimpleResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${archivedProjectId}`, {
+      body: JSON.stringify({name: 'Archived simple patch should fail'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const archivedEditResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${archivedProjectId}/edit`, {
+      body: JSON.stringify({name: 'Archived edit patch should fail'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const deletePendingSimpleResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${deletePendingProjectId}`, {
+      body: JSON.stringify({name: 'Delete-pending simple patch should fail'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const deletePendingEditResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${deletePendingProjectId}/edit`, {
+      body: JSON.stringify({name: 'Delete-pending edit patch should fail'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(archivedSimpleResponse.status).toBe(500)
+  expect(await archivedSimpleResponse.text()).toContain('Archived projects must be unarchived before use')
+  expect(archivedEditResponse.status).toBe(500)
+  expect(await archivedEditResponse.text()).toContain('Archived projects must be unarchived before use')
+  expect(deletePendingSimpleResponse.status).toBe(500)
+  expect(await deletePendingSimpleResponse.text()).toContain('Project not found')
+  expect(deletePendingEditResponse.status).toBe(500)
+  expect(await deletePendingEditResponse.text()).toContain('Project not found')
+
+  const projectRows = await queryDatabase<{id: string; name: string}>(`
+    SELECT id, name
+    FROM app.project
+    WHERE id IN ('${archivedProjectId}', '${deletePendingProjectId}')
+    ORDER BY id ASC
+  `)
+
+  expect(projectRows).toEqual([
+    {id: archivedProjectId, name: 'Archive Regression Project'},
+    {id: deletePendingProjectId, name: 'Archive Regression Project'},
+  ])
+})
+
+test('edit route allows name-only edit when a judgment job exists', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-name-connection'
+  const modelId = 'edit-job-name-model'
+  const projectId = 'edit-job-name-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('edit-job-name-job', '${projectId}', 'running')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({name: 'Judged project renamed'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {project: {name: string}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.project.name).toBe('Judged project renamed')
+})
+
+test('edit route allows description-only edit when a judgment job exists', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-description-connection'
+  const modelId = 'edit-job-description-model'
+  const projectId = 'edit-job-description-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('edit-job-description-job', '${projectId}', 'completed')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({description: 'Judged project description changed'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {project: {description: string | null}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.project.description).toBe('Judged project description changed')
+})
+
+test('edit route still supports full config and prompt edits before a judgment job exists', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-no-job-full-connection'
+  const modelId = 'edit-no-job-full-model'
+  const nextModelId = 'edit-no-job-full-next-model'
+  const projectId = 'edit-no-job-full-project'
+  const importRouteId = 'edit-no-job-full-route-id'
+  const importRoute = '/edit-no-job-full-route'
+  const originalPromptId = 'edit-no-job-full-original-prompt'
+  const originalPromptText = 'No job original prompt'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${nextModelId}', '${connectionId}', 'No Job Next', 'No Job Next', 'No Job Next', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name)
+    VALUES ('${importRouteId}', '${importRoute}', 'No job route')
+  `)
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(originalPromptText, null, 'no job original heading', 'string'),
+    order: 1,
+    originProjectId: null,
+    originalText: originalPromptText,
+    projectId,
+    projectPromptId: 'edit-no-job-full-project-prompt',
+    promptHeading: 'no job original heading',
+    promptId: originalPromptId,
+    type: 'string',
+  })
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        dateFrom: '2026-02-03',
+        dateTo: '2026-03-04',
+        description: 'No job full edit description',
+        humanJudgmentMode: 'summary',
+        importRoutes: [importRoute],
+        modelId: nextModelId,
+        name: 'No job full edit renamed',
+        prompts: [
+          {
+            archived: true,
+            enabled: false,
+            order: 7,
+            originalId: originalPromptId,
+            originalText: 'No job edited prompt',
+            promptHeading: 'no job edited heading',
+            type: 'boolean',
+          },
+        ],
+        useAbstract: false,
+        useFulltext: false,
+        useFulltextNoImages: true,
+        useTitle: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {project: {modelId: string; name: string}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.project.name).toBe('No job full edit renamed')
+  expect(body.data.project.modelId).toBe(nextModelId)
+
+  const [projectRow] = await queryDatabase<{
+    dateFrom: string | null
+    dateTo: string | null
+    description: string | null
+    humanJudgmentMode: string
+    modelId: string
+    name: string
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    useTitle: boolean
+  }>(`
+    SELECT
+      name,
+      description,
+      model_id AS modelId,
+      human_judgment_mode AS humanJudgmentMode,
+      CAST(date_from AS VARCHAR) AS dateFrom,
+      CAST(date_to AS VARCHAR) AS dateTo,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+  const importRouteRows = await queryDatabase<{route: string}>(`
+    SELECT ir.route
+    FROM app.project_import_route pir
+    INNER JOIN app.import_route ir ON ir.id = pir.import_route_id
+    WHERE pir.project_id = '${projectId}'
+  `)
+  const promptRows = await queryDatabase<{
+    archived: boolean
+    enabled: boolean
+    order: number
+    originalText: string
+    promptHeading: string | null
+    promptId: string
+    type: string | null
+  }>(`
+    SELECT
+      pp.prompt_id AS promptId,
+      pp.prompt_order AS "order",
+      pp.archived,
+      pp.enabled,
+      p.original_text AS originalText,
+      p.prompt_heading AS promptHeading,
+      p.type
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+  `)
+
+  expect(projectRow?.name).toBe('No job full edit renamed')
+  expect(projectRow?.description).toBe('No job full edit description')
+  expect(projectRow?.modelId).toBe(nextModelId)
+  expect(projectRow?.humanJudgmentMode).toBe('summary')
+  expect(projectRow?.dateFrom).toContain('2026-02-03')
+  expect(projectRow?.dateTo).toContain('2026-03-04')
+  expect(projectRow?.useTitle).toBe(false)
+  expect(projectRow?.useAbstract).toBe(false)
+  expect(projectRow?.useFulltext).toBe(false)
+  expect(projectRow?.useFulltextNoImages).toBe(true)
+  expect(importRouteRows).toEqual([{route: importRoute}])
+  expect(promptRows).toHaveLength(1)
+  expect(promptRows[0]?.promptId).not.toBe(originalPromptId)
+  expect(promptRows[0]?.originalText).toBe('No job edited prompt')
+  expect(promptRows[0]?.promptHeading).toBe('no job edited heading')
+  expect(promptRows[0]?.type).toBe('boolean')
+  expect(promptRows[0]?.order).toBe(7)
+  expect(promptRows[0]?.archived).toBe(true)
+  expect(promptRows[0]?.enabled).toBe(false)
+})
+
+test('edit route rejects protected config changes when a judgment job exists', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-protected-connection'
+  const modelId = 'edit-job-protected-model'
+  const nextModelId = 'edit-job-protected-next-model'
+  const projectId = 'edit-job-protected-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${nextModelId}', '${connectionId}', 'Protected Next', 'Protected Next', 'Protected Next', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('edit-job-protected-job', '${projectId}', 'completed')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({modelId: nextModelId, useTitle: false}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = await response.text()
+
+  expect(response.status).toBe(409)
+  expect(body).toContain('modelId')
+  expect(body).toContain('useTitle')
+
+  const [projectRow] = await queryDatabase<{modelId: string; useTitle: boolean}>(`
+    SELECT model_id AS modelId, use_title AS useTitle
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(projectRow).toEqual({modelId, useTitle: true})
+})
+
+test('edit route rejects all remaining protected config changes when a judgment job exists', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-protected-rest-connection'
+  const modelId = 'edit-job-protected-rest-model'
+  const projectId = 'edit-job-protected-rest-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('edit-job-protected-rest-job', '${projectId}', 'completed')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        dateFrom: '2026-01-01',
+        dateTo: '2026-12-31',
+        humanJudgmentMode: 'summary',
+        importRoutes: ['locked-route-change'],
+        useAbstract: false,
+        useFulltext: true,
+        useFulltextNoImages: true,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = await response.text()
+
+  expect(response.status).toBe(409)
+  expect(body).toContain('useAbstract')
+  expect(body).toContain('useFulltext')
+  expect(body).toContain('useFulltextNoImages')
+  expect(body).toContain('humanJudgmentMode')
+  expect(body).toContain('dateFrom')
+  expect(body).toContain('dateTo')
+  expect(body).toContain('importRoutes')
+
+  const [projectRow] = await queryDatabase<{
+    dateFrom: string | null
+    dateTo: string | null
+    humanJudgmentMode: string
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+  }>(`
+    SELECT
+      CAST(date_from AS VARCHAR) AS dateFrom,
+      CAST(date_to AS VARCHAR) AS dateTo,
+      human_judgment_mode AS humanJudgmentMode,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+  const [importRouteCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_import_route
+    WHERE project_id = '${projectId}'
+  `)
+
+  expect(projectRow).toEqual({
+    dateFrom: null,
+    dateTo: null,
+    humanJudgmentMode: 'prompt',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+  })
+  expect(Number(importRouteCount?.count ?? 0)).toBe(0)
+})
+
+test('edit route does not validate an unchanged protected model when a judgment job exists', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-unchanged-model-connection'
+  const modelId = 'edit-job-unchanged-model'
+  const projectId = 'edit-job-unchanged-model-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    UPDATE app.model
+    SET enabled = FALSE
+    WHERE id = '${modelId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('edit-job-unchanged-model-job', '${projectId}', 'completed')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({modelId, name: 'Judged project with unchanged disabled model'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {project: {modelId: string; name: string}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.project.modelId).toBe(modelId)
+  expect(body.data.project.name).toBe('Judged project with unchanged disabled model')
+})
+
+test('edit route returns 409 for prompt changes with unsafe retained SQLite job state', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-prompt-change-connection'
+  const modelId = 'edit-job-prompt-change-model'
+  const projectId = 'edit-job-prompt-change-project'
+  const promptId = 'edit-job-prompt-change-prompt'
+  const originalPromptText = 'Prompt change job original text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(originalPromptText, null, 'Prompt change job heading', 'string'),
+    originProjectId: projectId,
+    originalText: originalPromptText,
+    projectId,
+    projectPromptId: 'edit-job-prompt-change-project-prompt',
+    promptHeading: 'Prompt change job heading',
+    promptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('edit-job-prompt-change-job', '${projectId}', 'completed')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-prompt-change-job', outboxRowCount: 1})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: promptId,
+            originalText: 'Prompt change job edited text',
+            promptHeading: 'Prompt change job heading',
+            type: 'string',
+            order: 0,
+            enabled: true,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = await response.text()
+
+  expect(response.status).toBe(409)
+  expect(body).toContain('Pause or drain the judgment job before editing prompts.')
+
+  const promptRows = await queryDatabase<{originalText: string; promptId: string}>(`
+    SELECT pp.prompt_id AS promptId, p.original_text AS originalText
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+  `)
+
+  expect(promptRows).toEqual([{originalText: originalPromptText, promptId}])
+})
+
+test('edit route allows safe prompt replacement with a drained judgment job and cleans project human answers', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-safe-prompt-connection'
+  const modelId = 'edit-job-safe-prompt-model'
+  const projectId = 'edit-job-safe-prompt-project'
+  const otherProjectId = 'edit-job-safe-prompt-other-project'
+  const promptId = 'edit-job-safe-prompt-original-prompt'
+  const originalPromptText = 'Safe prompt original text'
+  const editedPromptText = 'Safe prompt edited text'
+  const promptHeading = 'safe prompt heading'
+  const promptType = 'string'
+  const editedPromptHash = computePromptContentHash(editedPromptText, null, promptHeading, promptType)
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.project (
+      id,
+      name,
+      model_id,
+      human_judgment_mode,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      archived
+    )
+    VALUES (
+      '${otherProjectId}',
+      'Other safe prompt project',
+      '${modelId}',
+      'prompt',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      FALSE
+    )
+  `)
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(originalPromptText, null, promptHeading, promptType),
+    originProjectId: projectId,
+    originalText: originalPromptText,
+    projectId,
+    projectPromptId: 'edit-job-safe-prompt-project-prompt',
+    promptHeading,
+    promptId,
+    type: promptType,
+  })
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES
+      ('edit-job-safe-prompt-article-1', 'Safe prompt article 1'),
+      ('edit-job-safe-prompt-article-2', 'Safe prompt article 2')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered, answer)
+    VALUES
+      (
+        'edit-job-safe-prompt-human-answered',
+        '${projectId}',
+        'edit-job-safe-prompt-article-1',
+        '${promptId}',
+        TRUE,
+        'yes'
+      ),
+      (
+        'edit-job-safe-prompt-human-pending',
+        '${projectId}',
+        'edit-job-safe-prompt-article-2',
+        '${promptId}',
+        FALSE,
+        NULL
+      ),
+      (
+        'edit-job-safe-prompt-human-other-project',
+        '${otherProjectId}',
+        'edit-job-safe-prompt-article-1',
+        '${promptId}',
+        TRUE,
+        'no'
+      )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-safe-prompt-job', '${projectId}', 'paused', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-safe-prompt-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: promptId,
+            originalText: editedPromptText,
+            promptHeading,
+            type: promptType,
+            order: 0,
+            enabled: true,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {
+      promptCleanupSummary: {
+        changedPromptLinks: Array<{
+          newPromptId: string | null
+          oldPromptId: string
+          projectPromptId: string
+          reason: string
+        }>
+        deletedHumanPromptAnswers: number
+      }
+      prompts: Array<{id: string; originalText: string}>
+    }
+  }
+
+  expect(response.status).toBe(200)
+
+  const [projectPromptRow] = await queryDatabase<{contentHash: string | null; originalText: string; promptId: string}>(`
+    SELECT p.id AS promptId, p.original_text AS originalText, p.content_hash AS contentHash
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+    LIMIT 1
+  `)
+  const [oldPromptRow] = await queryDatabase<{originalText: string}>(`
+    SELECT original_text AS originalText
+    FROM app.prompt
+    WHERE id = '${promptId}'
+    LIMIT 1
+  `)
+  const [editedProjectHumanCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_human
+    WHERE project_id = '${projectId}'
+      AND prompt_id = '${promptId}'
+  `)
+  const [otherProjectHumanCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_human
+    WHERE project_id = '${otherProjectId}'
+      AND prompt_id = '${promptId}'
+  `)
+  const [jobRow] = await queryDatabase<{status: string; storageState: string}>(`
+    SELECT status, storage_state AS storageState
+    FROM app.judgment_job
+    WHERE id = 'edit-job-safe-prompt-job'
+    LIMIT 1
+  `)
+  const [refreshState] = await queryDatabase<{dirtyToken: number; reason: string | null}>(`
+    SELECT CAST(dirty_token AS INTEGER) AS dirtyToken, last_request_reason AS reason
+    FROM app.project_mart_refresh_state
+    WHERE project_id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(projectPromptRow?.promptId).not.toBe(promptId)
+  expect(projectPromptRow).toEqual({
+    contentHash: editedPromptHash,
+    originalText: editedPromptText,
+    promptId: body.data.prompts[0]?.id,
+  })
+  expect(oldPromptRow).toEqual({originalText: originalPromptText})
+  expect(body.data.promptCleanupSummary).toEqual({
+    changedPromptLinks: [
+      {
+        newPromptId: projectPromptRow?.promptId,
+        oldPromptId: promptId,
+        projectPromptId: 'edit-job-safe-prompt-project-prompt',
+        reason: 'replaced',
+      },
+    ],
+    deletedHumanPromptAnswers: 2,
+    keptSharedLlmJudgments: 0,
+    skippedComparisonPromptReferencedJudgments: 0,
+    softDeletedLlmJudgments: 0,
+  })
+  expect(Number(editedProjectHumanCount?.count ?? 0)).toBe(0)
+  expect(Number(otherProjectHumanCount?.count ?? 0)).toBe(1)
+  expect(jobRow).toEqual({status: 'paused', storageState: 'draining'})
+  expect(refreshState).toEqual({dirtyToken: 1, reason: 'ProjectsRoutes.edit'})
+})
+
+test('edit route reuses existing prompt judgments and preserves association metadata during safe replacement', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-reuse-judgment-connection'
+  const modelId = 'edit-job-reuse-judgment-model'
+  const projectId = 'edit-job-reuse-judgment-project'
+  const originalPromptId = 'edit-job-reuse-judgment-original-prompt'
+  const targetPromptId = 'edit-job-reuse-judgment-target-prompt'
+  const originalPromptText = 'Reuse judgment original prompt text'
+  const targetPromptText = 'Reuse judgment target prompt text'
+  const targetPromptHeading = 'target heading'
+  const targetPromptType = 'boolean'
+  const targetPromptHash = computePromptContentHash(targetPromptText, null, targetPromptHeading, targetPromptType)
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    archived: true,
+    contentHash: computePromptContentHash(originalPromptText, null, 'original heading', 'string'),
+    criteriaDisposition: 'combined',
+    criteriaSectionKey: 'eligibility',
+    criteriaSectionLabel: 'Eligibility',
+    enabled: false,
+    order: 0,
+    originProjectId: projectId,
+    originalText: originalPromptText,
+    projectId,
+    projectPromptId: 'edit-job-reuse-judgment-project-prompt',
+    promptHeading: 'original heading',
+    promptId: originalPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash)
+    VALUES (
+      '${targetPromptId}',
+      '${targetPromptText}',
+      '${targetPromptHeading}',
+      '${targetPromptType}',
+      '${targetPromptHash}'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-job-reuse-judgment-article', 'Reuse judgment article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original
+    )
+    VALUES (
+      'edit-job-reuse-judgment-active',
+      'edit-job-reuse-judgment-article',
+      '${targetPromptId}',
+      '${modelId}',
+      '${projectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'yes'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-reuse-judgment-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-reuse-judgment-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: originalPromptId,
+            originalText: targetPromptText,
+            promptHeading: targetPromptHeading,
+            type: targetPromptType,
+            order: 7,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {
+      promptCleanupSummary: {
+        changedPromptLinks: Array<{newPromptId: string | null; oldPromptId: string; projectPromptId: string}>
+        deletedHumanPromptAnswers: number
+      }
+    }
+  }
+
+  expect(response.status).toBe(200)
+
+  const [projectPromptRow] = await queryDatabase<{
+    archived: boolean
+    criteriaDisposition: string | null
+    criteriaSectionKey: string | null
+    criteriaSectionLabel: string | null
+    enabled: boolean
+    order: number
+    promptHeading: string | null
+    promptId: string
+    type: string | null
+  }>(`
+    SELECT
+      pp.prompt_id AS promptId,
+      pp.prompt_order AS "order",
+      pp.archived AS archived,
+      pp.enabled AS enabled,
+      pp.criteria_disposition AS criteriaDisposition,
+      pp.criteria_section_key AS criteriaSectionKey,
+      pp.criteria_section_label AS criteriaSectionLabel,
+      p.prompt_heading AS promptHeading,
+      p.type AS type
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+    LIMIT 1
+  `)
+  const [targetPromptHashCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.prompt
+    WHERE content_hash = '${targetPromptHash}'
+  `)
+  const [activeJudgmentCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment
+    WHERE id = 'edit-job-reuse-judgment-active'
+      AND prompt_id = '${targetPromptId}'
+      AND deleted_at IS NULL
+  `)
+
+  expect(projectPromptRow).toEqual({
+    archived: true,
+    criteriaDisposition: 'combined',
+    criteriaSectionKey: 'eligibility',
+    criteriaSectionLabel: 'Eligibility',
+    enabled: false,
+    order: 7,
+    promptHeading: targetPromptHeading,
+    promptId: targetPromptId,
+    type: targetPromptType,
+  })
+  expect(body.data.promptCleanupSummary).toEqual({
+    changedPromptLinks: [
+      {
+        newPromptId: targetPromptId,
+        oldPromptId: originalPromptId,
+        projectPromptId: 'edit-job-reuse-judgment-project-prompt',
+        reason: 'replaced',
+      },
+    ],
+    deletedHumanPromptAnswers: 0,
+    keptSharedLlmJudgments: 0,
+    skippedComparisonPromptReferencedJudgments: 0,
+    softDeletedLlmJudgments: 0,
+  })
+  expect(Number(targetPromptHashCount?.count ?? 0)).toBe(1)
+  expect(Number(activeJudgmentCount?.count ?? 0)).toBe(1)
+})
+
+test('edit route removes safe prompt links and cleans only removed prompt human answers', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-remove-prompt-connection'
+  const modelId = 'edit-job-remove-prompt-model'
+  const projectId = 'edit-job-remove-prompt-project'
+  const keptPromptId = 'edit-job-remove-prompt-kept'
+  const removedPromptId = 'edit-job-remove-prompt-removed'
+  const keptPromptText = 'Prompt removal kept text'
+  const removedPromptText = 'Prompt removal removed text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(keptPromptText, null, 'kept', 'string'),
+    order: 0,
+    originProjectId: projectId,
+    originalText: keptPromptText,
+    projectId,
+    projectPromptId: 'edit-job-remove-prompt-kept-project-prompt',
+    promptHeading: 'kept',
+    promptId: keptPromptId,
+    type: 'string',
+  })
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(removedPromptText, null, 'removed', 'string'),
+    order: 1,
+    originProjectId: projectId,
+    originalText: removedPromptText,
+    projectId,
+    projectPromptId: 'edit-job-remove-prompt-removed-project-prompt',
+    promptHeading: 'removed',
+    promptId: removedPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-job-remove-prompt-article', 'Prompt removal article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered, answer)
+    VALUES
+      (
+        'edit-job-remove-prompt-kept-human',
+        '${projectId}',
+        'edit-job-remove-prompt-article',
+        '${keptPromptId}',
+        TRUE,
+        'yes'
+      ),
+      (
+        'edit-job-remove-prompt-removed-human',
+        '${projectId}',
+        'edit-job-remove-prompt-article',
+        '${removedPromptId}',
+        TRUE,
+        'no'
+      )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-remove-prompt-job', '${projectId}', 'paused', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-remove-prompt-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {originalId: keptPromptId, originalText: keptPromptText, promptHeading: 'kept', type: 'string', order: 0},
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {
+      promptCleanupSummary: {
+        changedPromptLinks: Array<{
+          newPromptId: string | null
+          oldPromptId: string
+          projectPromptId: string
+          reason: string
+        }>
+        deletedHumanPromptAnswers: number
+      }
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary).toEqual({
+    changedPromptLinks: [
+      {
+        newPromptId: null,
+        oldPromptId: removedPromptId,
+        projectPromptId: 'edit-job-remove-prompt-removed-project-prompt',
+        reason: 'removed',
+      },
+    ],
+    deletedHumanPromptAnswers: 1,
+    keptSharedLlmJudgments: 0,
+    skippedComparisonPromptReferencedJudgments: 0,
+    softDeletedLlmJudgments: 0,
+  })
+
+  const projectPromptRows = await queryDatabase<{promptId: string}>(`
+    SELECT prompt_id AS promptId
+    FROM app.project_prompt
+    WHERE project_id = '${projectId}'
+  `)
+  const [keptHumanCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_human
+    WHERE id = 'edit-job-remove-prompt-kept-human'
+  `)
+  const [removedHumanCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_human
+    WHERE id = 'edit-job-remove-prompt-removed-human'
+  `)
+
+  expect(projectPromptRows).toEqual([{promptId: keptPromptId}])
+  expect(Number(keptHumanCount?.count ?? 0)).toBe(1)
+  expect(Number(removedHumanCount?.count ?? 0)).toBe(0)
+})
+
+test('edit route does not touch human summary judgments during judged prompt edits', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-summary-human-connection'
+  const modelId = 'edit-job-summary-human-model'
+  const projectId = 'edit-job-summary-human-project'
+  const promptId = 'edit-job-summary-human-prompt'
+  const articleId = 'edit-job-summary-human-article'
+  const originalPromptText = 'Summary human original prompt'
+
+  await insertProjectFixture({connectionId, humanJudgmentMode: 'summary', modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(originalPromptText, null, 'summary', 'string'),
+    originProjectId: projectId,
+    originalText: originalPromptText,
+    projectId,
+    projectPromptId: 'edit-job-summary-human-project-prompt',
+    promptHeading: 'summary',
+    promptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Summary human article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_human_summary (id, project_id, article_id, answer, origin)
+    VALUES ('edit-job-summary-human-judgment', '${projectId}', '${articleId}', 'yes', 'manual_override')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-summary-human-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-summary-human-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: promptId,
+            originalText: 'Summary human edited prompt',
+            promptHeading: 'summary edited',
+            type: 'string',
+            order: 0,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(response.status).toBe(200)
+
+  const summaryRows = await queryDatabase<{answer: string | null; articleId: string; origin: string}>(`
+    SELECT answer, article_id AS articleId, origin
+    FROM app.judgment_human_summary
+    WHERE project_id = '${projectId}'
+  `)
+
+  expect(summaryRows).toEqual([{answer: 'yes', articleId, origin: 'manual_override'}])
+})
+
+test('edit route soft-deletes old prompt LLM judgments not used elsewhere and bumps delete generation', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-soft-delete-llm-connection'
+  const modelId = 'edit-job-soft-delete-llm-model'
+  const projectId = 'edit-job-soft-delete-llm-project'
+  const oldPromptId = 'edit-job-soft-delete-llm-old-prompt'
+  const oldPromptText = 'Soft delete old prompt text'
+  const newPromptText = 'Soft delete new prompt text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(oldPromptText, null, 'old', 'string'),
+    originProjectId: projectId,
+    originalText: oldPromptText,
+    projectId,
+    projectPromptId: 'edit-job-soft-delete-llm-project-prompt',
+    promptHeading: 'old',
+    promptId: oldPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-job-soft-delete-llm-article', 'Soft delete LLM article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-job-soft-delete-llm-project-article', '${projectId}', 'edit-job-soft-delete-llm-article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original
+    )
+    VALUES (
+      'edit-job-soft-delete-llm-judgment',
+      'edit-job-soft-delete-llm-article',
+      '${oldPromptId}',
+      '${modelId}',
+      '${projectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'yes'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-soft-delete-llm-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-soft-delete-llm-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {originalId: oldPromptId, originalText: newPromptText, promptHeading: 'new', type: 'string', order: 0},
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {promptCleanupSummary: {softDeletedLlmJudgments: number}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary.softDeletedLlmJudgments).toBe(1)
+
+  const [judgmentRow] = await queryDatabase<{deleteGeneration: number; deletedAt: string | null}>(`
+    SELECT CAST(delete_generation AS INTEGER) AS deleteGeneration, CAST(deleted_at AS VARCHAR) AS deletedAt
+    FROM app.judgment
+    WHERE id = 'edit-job-soft-delete-llm-judgment'
+    LIMIT 1
+  `)
+
+  expect(judgmentRow?.deleteGeneration).toBe(1)
+  expect(judgmentRow?.deletedAt).not.toBe(null)
+})
+
+test('edit route ignores already deleted old prompt LLM judgments during cleanup', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-ignore-deleted-llm-connection'
+  const modelId = 'edit-job-ignore-deleted-llm-model'
+  const projectId = 'edit-job-ignore-deleted-llm-project'
+  const oldPromptId = 'edit-job-ignore-deleted-llm-old-prompt'
+  const oldPromptText = 'Ignore deleted old prompt text'
+  const newPromptText = 'Ignore deleted new prompt text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(oldPromptText, null, 'old', 'string'),
+    originProjectId: projectId,
+    originalText: oldPromptText,
+    projectId,
+    projectPromptId: 'edit-job-ignore-deleted-llm-project-prompt',
+    promptHeading: 'old',
+    promptId: oldPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-job-ignore-deleted-llm-article', 'Ignore deleted LLM article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-job-ignore-deleted-llm-project-article', '${projectId}', 'edit-job-ignore-deleted-llm-article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original,
+      deleted_at,
+      delete_generation
+    )
+    VALUES (
+      'edit-job-ignore-deleted-llm-judgment',
+      'edit-job-ignore-deleted-llm-article',
+      '${oldPromptId}',
+      '${modelId}',
+      '${projectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'yes',
+      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
+      9
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-ignore-deleted-llm-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-ignore-deleted-llm-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {originalId: oldPromptId, originalText: newPromptText, promptHeading: 'new', type: 'string', order: 0},
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {promptCleanupSummary: {softDeletedLlmJudgments: number}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary.softDeletedLlmJudgments).toBe(0)
+
+  const [judgmentRow] = await queryDatabase<{deleteGeneration: number; deletedAt: string | null}>(`
+    SELECT CAST(delete_generation AS INTEGER) AS deleteGeneration, CAST(deleted_at AS VARCHAR) AS deletedAt
+    FROM app.judgment
+    WHERE id = 'edit-job-ignore-deleted-llm-judgment'
+    LIMIT 1
+  `)
+
+  expect(judgmentRow?.deleteGeneration).toBe(9)
+  expect(judgmentRow?.deletedAt).toContain('2026-01-01')
+})
+
+test('edit route keeps old prompt LLM judgments used by another active curated project', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-keep-curated-llm-connection'
+  const modelId = 'edit-job-keep-curated-llm-model'
+  const projectId = 'edit-job-keep-curated-llm-project'
+  const otherProjectId = 'edit-job-keep-curated-llm-other-project'
+  const oldPromptId = 'edit-job-keep-curated-llm-old-prompt'
+  const oldPromptText = 'Keep curated old prompt text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.project (
+      id,
+      name,
+      model_id,
+      human_judgment_mode,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      archived
+    )
+    VALUES ('${otherProjectId}', 'Other curated keep project', '${modelId}', 'prompt', TRUE, TRUE, FALSE, FALSE, FALSE)
+  `)
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(oldPromptText, null, 'old', 'string'),
+    originProjectId: projectId,
+    originalText: oldPromptText,
+    projectId,
+    projectPromptId: 'edit-job-keep-curated-llm-project-prompt',
+    promptHeading: 'old',
+    promptId: oldPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES ('edit-job-keep-curated-llm-other-project-prompt', '${otherProjectId}', '${oldPromptId}', 0, FALSE, TRUE, NULL)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-job-keep-curated-llm-article', 'Keep curated LLM article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('edit-job-keep-curated-llm-project-article', '${projectId}', 'edit-job-keep-curated-llm-article'),
+      ('edit-job-keep-curated-llm-other-project-article', '${otherProjectId}', 'edit-job-keep-curated-llm-article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original
+    )
+    VALUES (
+      'edit-job-keep-curated-llm-judgment',
+      'edit-job-keep-curated-llm-article',
+      '${oldPromptId}',
+      '${modelId}',
+      '${projectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'yes'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-keep-curated-llm-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-keep-curated-llm-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: oldPromptId,
+            originalText: 'Keep curated new prompt text',
+            promptHeading: 'new',
+            type: 'string',
+            order: 0,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {promptCleanupSummary: {keptSharedLlmJudgments: number; softDeletedLlmJudgments: number}}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary.keptSharedLlmJudgments).toBe(1)
+  expect(body.data.promptCleanupSummary.softDeletedLlmJudgments).toBe(0)
+
+  const [judgmentRow] = await queryDatabase<{deletedAt: string | null}>(`
+    SELECT CAST(deleted_at AS VARCHAR) AS deletedAt
+    FROM app.judgment
+    WHERE id = 'edit-job-keep-curated-llm-judgment'
+    LIMIT 1
+  `)
+
+  expect(judgmentRow?.deletedAt).toBe(null)
+})
+
+test('edit route keeps old prompt LLM judgments referenced by an active comparison project', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-keep-comparison-llm-connection'
+  const modelId = 'edit-job-keep-comparison-llm-model'
+  const projectId = 'edit-job-keep-comparison-llm-project'
+  const oldPromptId = 'edit-job-keep-comparison-llm-old-prompt'
+  const oldPromptText = 'Keep comparison old prompt text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(oldPromptText, null, 'old', 'string'),
+    originProjectId: projectId,
+    originalText: oldPromptText,
+    projectId,
+    projectPromptId: 'edit-job-keep-comparison-llm-project-prompt',
+    promptHeading: 'old',
+    promptId: oldPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.comparison_project (id, name, archived)
+    VALUES ('edit-job-keep-comparison-project', 'Keep comparison project', FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.comparison_project_prompt (id, comparison_project_id, prompt_id, prompt_order)
+    VALUES ('edit-job-keep-comparison-project-prompt', 'edit-job-keep-comparison-project', '${oldPromptId}', 0)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-job-keep-comparison-llm-article', 'Keep comparison LLM article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-job-keep-comparison-llm-project-article', '${projectId}', 'edit-job-keep-comparison-llm-article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original
+    )
+    VALUES (
+      'edit-job-keep-comparison-llm-judgment',
+      'edit-job-keep-comparison-llm-article',
+      '${oldPromptId}',
+      '${modelId}',
+      '${projectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'yes'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-keep-comparison-llm-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-keep-comparison-llm-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: oldPromptId,
+            originalText: 'Keep comparison new prompt text',
+            promptHeading: 'new',
+            type: 'string',
+            order: 0,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {promptCleanupSummary: {skippedComparisonPromptReferencedJudgments: number; softDeletedLlmJudgments: number}}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary.skippedComparisonPromptReferencedJudgments).toBe(1)
+  expect(body.data.promptCleanupSummary.softDeletedLlmJudgments).toBe(0)
+
+  const [judgmentRow] = await queryDatabase<{deletedAt: string | null}>(`
+    SELECT CAST(deleted_at AS VARCHAR) AS deletedAt
+    FROM app.judgment
+    WHERE id = 'edit-job-keep-comparison-llm-judgment'
+    LIMIT 1
+  `)
+
+  expect(judgmentRow?.deletedAt).toBe(null)
+})
+
+test('edit route marks active comparison serving stale after project prompt edits', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-comparison-serving-stale-connection'
+  const modelId = 'edit-job-comparison-serving-stale-model'
+  const projectId = 'edit-job-comparison-serving-stale-project'
+  const oldPromptId = 'edit-job-comparison-serving-stale-old-prompt'
+  const oldPromptText = 'Comparison serving stale old prompt text'
+  const sourceComparisonId = 'edit-job-comparison-serving-stale-source-comparison'
+  const summaryComparisonId = 'edit-job-comparison-serving-stale-summary-comparison'
+  const archivedComparisonId = 'edit-job-comparison-serving-stale-archived-comparison'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(oldPromptText, null, 'old', 'string'),
+    originProjectId: projectId,
+    originalText: oldPromptText,
+    projectId,
+    projectPromptId: 'edit-job-comparison-serving-stale-project-prompt',
+    promptHeading: 'old',
+    promptId: oldPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.comparison_project (
+      id,
+      name,
+      model_ids,
+      compare_with_humans,
+      summary_source_project_id,
+      archived
+    )
+    VALUES
+      ('${sourceComparisonId}', 'Source comparison', ['${modelId}'], FALSE, NULL, FALSE),
+      ('${summaryComparisonId}', 'Summary comparison', ['${modelId}'], FALSE, '${projectId}', FALSE),
+      ('${archivedComparisonId}', 'Archived comparison', ['${modelId}'], FALSE, NULL, TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.comparison_project_source_project (id, comparison_project_id, source_project_id)
+    VALUES
+      ('edit-job-comparison-serving-stale-source-link', '${sourceComparisonId}', '${projectId}'),
+      ('edit-job-comparison-serving-stale-archived-link', '${archivedComparisonId}', '${projectId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.comparison_project_serving_generation (
+      comparison_project_id,
+      active_generation,
+      serving_status,
+      serving_generation,
+      serving_completed_at
+    )
+    VALUES
+      ('${sourceComparisonId}', 1, 'ready', 1, current_timestamp),
+      ('${summaryComparisonId}', 1, 'ready', 1, current_timestamp),
+      ('${archivedComparisonId}', 1, 'ready', 1, current_timestamp)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-comparison-serving-stale-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-comparison-serving-stale-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: oldPromptId,
+            originalText: 'Comparison serving stale new prompt text',
+            promptHeading: 'new',
+            type: 'string',
+            order: 0,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(response.status).toBe(200)
+
+  const servingRows = await queryDatabase<{
+    comparisonProjectId: string
+    servingGeneration: number | null
+    servingStatus: string | null
+  }>(`
+    SELECT
+      comparison_project_id AS comparisonProjectId,
+      CAST(serving_generation AS INTEGER) AS servingGeneration,
+      serving_status AS servingStatus
+    FROM app.comparison_project_serving_generation
+    WHERE comparison_project_id IN ('${sourceComparisonId}', '${summaryComparisonId}', '${archivedComparisonId}')
+    ORDER BY comparison_project_id ASC
+  `)
+
+  expect(servingRows).toEqual([
+    {comparisonProjectId: archivedComparisonId, servingGeneration: 1, servingStatus: 'ready'},
+    {comparisonProjectId: sourceComparisonId, servingGeneration: null, servingStatus: 'stale'},
+    {comparisonProjectId: summaryComparisonId, servingGeneration: null, servingStatus: 'stale'},
+  ])
+})
+
+test('edit route keeps old prompt LLM judgments used by another active route-scoped project', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-keep-route-llm-connection'
+  const modelId = 'edit-job-keep-route-llm-model'
+  const projectId = 'edit-job-keep-route-llm-project'
+  const otherProjectId = 'edit-job-keep-route-llm-other-project'
+  const oldPromptId = 'edit-job-keep-route-llm-old-prompt'
+  const oldPromptText = 'Keep route old prompt text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.project (
+      id,
+      name,
+      model_id,
+      human_judgment_mode,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      archived
+    )
+    VALUES ('${otherProjectId}', 'Other route keep project', '${modelId}', 'prompt', TRUE, TRUE, FALSE, FALSE, FALSE)
+  `)
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(oldPromptText, null, 'old', 'string'),
+    originProjectId: projectId,
+    originalText: oldPromptText,
+    projectId,
+    projectPromptId: 'edit-job-keep-route-llm-project-prompt',
+    promptHeading: 'old',
+    promptId: oldPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES ('edit-job-keep-route-llm-other-project-prompt', '${otherProjectId}', '${oldPromptId}', 0, FALSE, TRUE, NULL)
+  `)
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name)
+    VALUES ('edit-job-keep-route-llm-route', 'edit-job-keep-route-llm-route', 'Keep route')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-job-keep-route-llm-article', 'Keep route LLM article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-job-keep-route-llm-project-article', '${projectId}', 'edit-job-keep-route-llm-article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES ('edit-job-keep-route-llm-other-project-route', '${otherProjectId}', 'edit-job-keep-route-llm-route')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article_import_route (id, article_id, import_route_id)
+    VALUES ('edit-job-keep-route-llm-article-route', 'edit-job-keep-route-llm-article', 'edit-job-keep-route-llm-route')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original
+    )
+    VALUES (
+      'edit-job-keep-route-llm-judgment',
+      'edit-job-keep-route-llm-article',
+      '${oldPromptId}',
+      '${modelId}',
+      '${projectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'yes'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-keep-route-llm-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-keep-route-llm-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: oldPromptId,
+            originalText: 'Keep route new prompt text',
+            promptHeading: 'new',
+            type: 'string',
+            order: 0,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {promptCleanupSummary: {keptSharedLlmJudgments: number; softDeletedLlmJudgments: number}}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary.keptSharedLlmJudgments).toBe(1)
+  expect(body.data.promptCleanupSummary.softDeletedLlmJudgments).toBe(0)
+
+  const [judgmentRow] = await queryDatabase<{deletedAt: string | null}>(`
+    SELECT CAST(deleted_at AS VARCHAR) AS deletedAt
+    FROM app.judgment
+    WHERE id = 'edit-job-keep-route-llm-judgment'
+    LIMIT 1
+  `)
+
+  expect(judgmentRow?.deletedAt).toBe(null)
+})
+
+test('edit route respects other project date filters when checking shared old LLM usage', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-date-filter-llm-connection'
+  const modelId = 'edit-job-date-filter-llm-model'
+  const projectId = 'edit-job-date-filter-llm-project'
+  const otherProjectId = 'edit-job-date-filter-llm-other-project'
+  const oldPromptId = 'edit-job-date-filter-llm-old-prompt'
+  const oldPromptText = 'Date filter old prompt text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.project (
+      id,
+      name,
+      model_id,
+      human_judgment_mode,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      date_from,
+      archived
+    )
+    VALUES (
+      '${otherProjectId}',
+      'Other date-filter keep project',
+      '${modelId}',
+      'prompt',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TIMESTAMPTZ '2027-01-01T00:00:00.000Z',
+      FALSE
+    )
+  `)
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(oldPromptText, null, 'old', 'string'),
+    originProjectId: projectId,
+    originalText: oldPromptText,
+    projectId,
+    projectPromptId: 'edit-job-date-filter-llm-project-prompt',
+    promptHeading: 'old',
+    promptId: oldPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES ('edit-job-date-filter-llm-other-project-prompt', '${otherProjectId}', '${oldPromptId}', 0, FALSE, TRUE, NULL)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title, article_created_at)
+    VALUES ('edit-job-date-filter-llm-article', 'Date filter LLM article', TIMESTAMPTZ '2026-01-01T00:00:00.000Z')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('edit-job-date-filter-llm-project-article', '${projectId}', 'edit-job-date-filter-llm-article'),
+      ('edit-job-date-filter-llm-other-project-article', '${otherProjectId}', 'edit-job-date-filter-llm-article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original
+    )
+    VALUES (
+      'edit-job-date-filter-llm-judgment',
+      'edit-job-date-filter-llm-article',
+      '${oldPromptId}',
+      '${modelId}',
+      '${projectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'yes'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-date-filter-llm-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-date-filter-llm-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: oldPromptId,
+            originalText: 'Date filter new prompt text',
+            promptHeading: 'new',
+            type: 'string',
+            order: 0,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {promptCleanupSummary: {keptSharedLlmJudgments: number; softDeletedLlmJudgments: number}}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary.keptSharedLlmJudgments).toBe(0)
+  expect(body.data.promptCleanupSummary.softDeletedLlmJudgments).toBe(1)
+
+  const [judgmentRow] = await queryDatabase<{deletedAt: string | null}>(`
+    SELECT CAST(deleted_at AS VARCHAR) AS deletedAt
+    FROM app.judgment
+    WHERE id = 'edit-job-date-filter-llm-judgment'
+    LIMIT 1
+  `)
+
+  expect(judgmentRow?.deletedAt).not.toBe(null)
+})
+
+test('edit route soft-deletes old prompt LLM judgments used only by archived projects', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-archived-keep-llm-connection'
+  const modelId = 'edit-job-archived-keep-llm-model'
+  const projectId = 'edit-job-archived-keep-llm-project'
+  const archivedProjectId = 'edit-job-archived-keep-llm-archived-project'
+  const oldPromptId = 'edit-job-archived-keep-llm-old-prompt'
+  const oldPromptText = 'Archived keep old prompt text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.project (
+      id,
+      name,
+      model_id,
+      human_judgment_mode,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      archived
+    )
+    VALUES ('${archivedProjectId}', 'Archived old prompt user', '${modelId}', 'prompt', TRUE, TRUE, FALSE, FALSE, TRUE)
+  `)
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(oldPromptText, null, 'old', 'string'),
+    originProjectId: projectId,
+    originalText: oldPromptText,
+    projectId,
+    projectPromptId: 'edit-job-archived-keep-llm-project-prompt',
+    promptHeading: 'old',
+    promptId: oldPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES ('edit-job-archived-keep-llm-archived-project-prompt', '${archivedProjectId}', '${oldPromptId}', 0, FALSE, TRUE, NULL)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-job-archived-keep-llm-article', 'Archived keep LLM article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('edit-job-archived-keep-llm-project-article', '${projectId}', 'edit-job-archived-keep-llm-article'),
+      ('edit-job-archived-keep-llm-archived-project-article', '${archivedProjectId}', 'edit-job-archived-keep-llm-article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original
+    )
+    VALUES (
+      'edit-job-archived-keep-llm-judgment',
+      'edit-job-archived-keep-llm-article',
+      '${oldPromptId}',
+      '${modelId}',
+      '${projectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'yes'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-archived-keep-llm-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-archived-keep-llm-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: oldPromptId,
+            originalText: 'Archived keep new prompt text',
+            promptHeading: 'new',
+            type: 'string',
+            order: 0,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {promptCleanupSummary: {keptSharedLlmJudgments: number; softDeletedLlmJudgments: number}}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary.keptSharedLlmJudgments).toBe(0)
+  expect(body.data.promptCleanupSummary.softDeletedLlmJudgments).toBe(1)
+
+  const [judgmentRow] = await queryDatabase<{deletedAt: string | null}>(`
+    SELECT CAST(deleted_at AS VARCHAR) AS deletedAt
+    FROM app.judgment
+    WHERE id = 'edit-job-archived-keep-llm-judgment'
+    LIMIT 1
+  `)
+
+  expect(judgmentRow?.deletedAt).not.toBe(null)
+})
+
+test('edit route allows safe prompt reorder without deleting LLM or human judgments', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-reorder-connection'
+  const modelId = 'edit-job-reorder-model'
+  const projectId = 'edit-job-reorder-project'
+  const firstPromptId = 'edit-job-reorder-first-prompt'
+  const secondPromptId = 'edit-job-reorder-second-prompt'
+  const firstPromptText = 'Reorder first prompt text'
+  const secondPromptText = 'Reorder second prompt text'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(firstPromptText, null, 'first', 'string'),
+    order: 0,
+    originProjectId: projectId,
+    originalText: firstPromptText,
+    projectId,
+    projectPromptId: 'edit-job-reorder-first-project-prompt',
+    promptHeading: 'first',
+    promptId: firstPromptId,
+    type: 'string',
+  })
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(secondPromptText, null, 'second', 'string'),
+    order: 1,
+    originProjectId: projectId,
+    originalText: secondPromptText,
+    projectId,
+    projectPromptId: 'edit-job-reorder-second-project-prompt',
+    promptHeading: 'second',
+    promptId: secondPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-job-reorder-article', 'Reorder article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original
+    )
+    VALUES
+      (
+        'edit-job-reorder-first-judgment',
+        'edit-job-reorder-article',
+        '${firstPromptId}',
+        '${modelId}',
+        '${projectId}',
+        TRUE,
+        TRUE,
+        FALSE,
+        FALSE,
+        TRUE,
+        'yes'
+      ),
+      (
+        'edit-job-reorder-second-judgment',
+        'edit-job-reorder-article',
+        '${secondPromptId}',
+        '${modelId}',
+        '${projectId}',
+        TRUE,
+        TRUE,
+        FALSE,
+        FALSE,
+        TRUE,
+        'no'
+      )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered, answer)
+    VALUES
+      (
+        'edit-job-reorder-first-human',
+        '${projectId}',
+        'edit-job-reorder-article',
+        '${firstPromptId}',
+        TRUE,
+        'yes'
+      ),
+      (
+        'edit-job-reorder-second-human',
+        '${projectId}',
+        'edit-job-reorder-article',
+        '${secondPromptId}',
+        TRUE,
+        'no'
+      )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-reorder-job', '${projectId}', 'paused', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-reorder-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {originalId: firstPromptId, originalText: firstPromptText, promptHeading: 'first', type: 'string', order: 1},
+          {
+            originalId: secondPromptId,
+            originalText: secondPromptText,
+            promptHeading: 'second',
+            type: 'string',
+            order: 0,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {promptCleanupSummary: {changedPromptLinks: unknown[]; deletedHumanPromptAnswers: number}}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary).toEqual({
+    changedPromptLinks: [],
+    deletedHumanPromptAnswers: 0,
+    keptSharedLlmJudgments: 0,
+    skippedComparisonPromptReferencedJudgments: 0,
+    softDeletedLlmJudgments: 0,
+  })
+
+  const projectPromptRows = await queryDatabase<{order: number; promptId: string}>(`
+    SELECT prompt_id AS promptId, prompt_order AS "order"
+    FROM app.project_prompt
+    WHERE project_id = '${projectId}'
+    ORDER BY prompt_order ASC
+  `)
+  const [judgmentCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment
+    WHERE id IN ('edit-job-reorder-first-judgment', 'edit-job-reorder-second-judgment')
+      AND deleted_at IS NULL
+  `)
+  const [humanJudgmentCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_human
+    WHERE id IN ('edit-job-reorder-first-human', 'edit-job-reorder-second-human')
+  `)
+
+  expect(projectPromptRows).toEqual([
+    {order: 0, promptId: secondPromptId},
+    {order: 1, promptId: firstPromptId},
+  ])
+  expect(Number(judgmentCount?.count ?? 0)).toBe(2)
+  expect(Number(humanJudgmentCount?.count ?? 0)).toBe(2)
+})
+
 test('edit route accepts full client payload when the model is unchanged', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
@@ -1468,6 +3691,193 @@ test('edit route accepts full client payload when the model is unchanged', async
     projectId,
     targetDirtyToken: 1,
   })
+
+  await flushMartRefreshes()
+})
+
+test('edit route rejects duplicate resolved target prompt ids before mutating links', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-duplicate-target-connection'
+  const modelId = 'edit-duplicate-target-model'
+  const projectId = 'edit-duplicate-target-project'
+  const originalPromptId = 'edit-duplicate-target-original-prompt'
+  const existingTargetPromptId = 'edit-duplicate-target-existing-prompt'
+  const originalPromptText = 'Original duplicate target prompt text'
+  const targetPromptText = 'Shared duplicate target prompt text'
+  const targetPromptHeading = 'Shared duplicate target heading'
+  const targetPromptType = 'string'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(
+      originalPromptText,
+      null,
+      'Original duplicate target heading',
+      targetPromptType,
+    ),
+    originProjectId: projectId,
+    originalText: originalPromptText,
+    projectId,
+    projectPromptId: 'edit-duplicate-target-original-project-prompt',
+    promptHeading: 'Original duplicate target heading',
+    promptId: originalPromptId,
+    type: targetPromptType,
+  })
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(targetPromptText, null, targetPromptHeading, targetPromptType),
+    originProjectId: projectId,
+    order: 1,
+    originalText: targetPromptText,
+    projectId,
+    projectPromptId: 'edit-duplicate-target-existing-project-prompt',
+    promptHeading: targetPromptHeading,
+    promptId: existingTargetPromptId,
+    type: targetPromptType,
+  })
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Duplicate target edit should not persist',
+        description: null,
+        prompts: [
+          {
+            originalId: originalPromptId,
+            originalText: targetPromptText,
+            promptHeading: targetPromptHeading,
+            type: targetPromptType,
+            order: 0,
+            enabled: true,
+          },
+          {
+            originalId: existingTargetPromptId,
+            originalText: targetPromptText,
+            promptHeading: targetPromptHeading,
+            type: targetPromptType,
+            order: 1,
+            enabled: true,
+          },
+        ],
+        dateFrom: null,
+        dateTo: null,
+        modelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  expect(response.status).toBe(400)
+  expect(await response.text()).toContain('unique prompt content')
+
+  const promptRows = await queryDatabase<{order: number; originalText: string; promptId: string}>(`
+    SELECT
+      pp.prompt_id AS promptId,
+      CAST(pp.prompt_order AS INTEGER) AS "order",
+      p.original_text AS originalText
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+    ORDER BY pp.prompt_order ASC
+  `)
+  const [projectRow] = await queryDatabase<{name: string}>(`
+    SELECT name
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(promptRows).toEqual([
+    {order: 0, originalText: originalPromptText, promptId: originalPromptId},
+    {order: 1, originalText: targetPromptText, promptId: existingTargetPromptId},
+  ])
+  expect(projectRow?.name).toBe('Archive Regression Project')
+})
+
+test('edit route can clear prompt heading and type immutably', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-clear-prompt-metadata-connection'
+  const modelId = 'edit-clear-prompt-metadata-model'
+  const projectId = 'edit-clear-prompt-metadata-project'
+  const originalPromptId = 'edit-clear-prompt-metadata-original-prompt'
+  const originalPromptText = 'Prompt metadata clearing text'
+  const originalPromptHeading = 'Prompt metadata heading'
+  const originalPromptType = 'string'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(originalPromptText, null, originalPromptHeading, originalPromptType),
+    originProjectId: projectId,
+    originalText: originalPromptText,
+    projectId,
+    projectPromptId: 'edit-clear-prompt-metadata-project-prompt',
+    promptHeading: originalPromptHeading,
+    promptId: originalPromptId,
+    type: originalPromptType,
+  })
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Clear prompt metadata project',
+        description: null,
+        prompts: [
+          {
+            originalId: originalPromptId,
+            originalText: originalPromptText,
+            promptHeading: '',
+            type: '',
+            order: 0,
+            enabled: true,
+          },
+        ],
+        dateFrom: null,
+        dateTo: null,
+        modelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(response.status).toBe(200)
+
+  const [linkedPromptRow] = await queryDatabase<{promptHeading: string | null; promptId: string; type: string | null}>(`
+    SELECT
+      p.id AS promptId,
+      p.prompt_heading AS promptHeading,
+      p.type AS type
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+    LIMIT 1
+  `)
+  const [originalPromptRow] = await queryDatabase<{promptHeading: string | null; type: string | null}>(`
+    SELECT prompt_heading AS promptHeading, type
+    FROM app.prompt
+    WHERE id = '${originalPromptId}'
+    LIMIT 1
+  `)
+
+  expect(linkedPromptRow?.promptId).not.toBe(originalPromptId)
+  expect(linkedPromptRow?.promptHeading).toBe(null)
+  expect(linkedPromptRow?.type).toBe(null)
+  expect(originalPromptRow).toEqual({promptHeading: originalPromptHeading, type: originalPromptType})
 
   await flushMartRefreshes()
 })
@@ -2980,7 +5390,7 @@ test('edit route creates a new immutable prompt row instead of mutating a shared
   await flushMartRefreshes()
 })
 
-test('edit route reuses archived hash-matching prompt instead of creating a parallel prompt', async () => {
+test('edit route reuses archived hash-matching prompt without globally unarchiving it', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -3063,7 +5473,7 @@ test('edit route reuses archived hash-matching prompt instead of creating a para
 
   expect(promptRows).toEqual([
     {
-      archived: false,
+      archived: true,
       contentHash: promptHash,
       linkedProjectId: projectId,
       promptId: 'edit-archived-canonical-target-prompt',

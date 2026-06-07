@@ -1126,6 +1126,14 @@ const getHasReviewArticleServingRows = async (scope: ProjectOlapScope) => {
       WHERE generation.project_id = ${getDuckdbSqlString(scope.projectId)}
         AND generation.active_generation > 0
     ),
+    dirty_state AS (
+      SELECT
+        state.project_id AS projectId,
+        state.dirty_token AS dirtyToken,
+        state.last_completed_dirty_token AS lastCompletedDirtyToken
+      FROM app.project_mart_refresh_state state
+      WHERE state.project_id = ${getDuckdbSqlString(scope.projectId)}
+    ),
     scope_counts AS (
       SELECT COUNT(*) AS scopeRowCount
       FROM mart.project_scope_article scope_article
@@ -1141,9 +1149,12 @@ const getHasReviewArticleServingRows = async (scope: ProjectOlapScope) => {
     )
     SELECT active.projectId
     FROM active_generation active
+    LEFT JOIN dirty_state dirty
+      ON dirty.projectId = active.projectId
     CROSS JOIN scope_counts scope_counts
     CROSS JOIN serving_counts serving_counts
     WHERE scope_counts.scopeRowCount = serving_counts.servingRowCount
+      AND COALESCE(dirty.dirtyToken, 0) = COALESCE(dirty.lastCompletedDirtyToken, 0)
     LIMIT 1
   `)
 
@@ -2414,10 +2425,15 @@ const getHasRequiredLlmJudgments = (params: {
   articleJudgments: Array<{promptId: string}>
   llmStatus?: LlmStatus
 }) => {
+  const promptIdSet = new Set(params.promptIds)
   const judgedPromptCount = new Set(
-    params.articleJudgments.map((judgment) => {
-      return judgment.promptId
-    }),
+    params.articleJudgments
+      .filter((judgment) => {
+        return promptIdSet.has(judgment.promptId)
+      })
+      .map((judgment) => {
+        return judgment.promptId
+      }),
   ).size
 
   return params.llmStatus === 'complete'
