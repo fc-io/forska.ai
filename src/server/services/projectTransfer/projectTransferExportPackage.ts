@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto'
-import {mkdir, rm} from 'node:fs/promises'
+import {mkdir, readFile, rm} from 'node:fs/promises'
 import {dirname, join} from 'node:path'
 
 import {Effect} from 'effect'
@@ -22,11 +22,7 @@ import {
   type ProjectTransferExportSerializedPayloads,
   serializeProjectTransferExportPayloads,
 } from './projectTransferExport.ts'
-import {
-  getProjectTransferCanonicalJson,
-  getProjectTransferPackageFingerprint,
-  getProjectTransferSha256Checksum,
-} from './projectTransferFingerprint.ts'
+import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import {buildProjectTransferManifest, getProjectTransferManifestPayloadEntry} from './projectTransferManifest.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import type {ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
@@ -37,9 +33,17 @@ import {
   projectTransferPayloadKeys,
   projectTransferPayloadPathByKey,
 } from './projectTransferSchemas.ts'
-import {getProjectTransferExportTempLayout, type ProjectTransferExportTempLayout} from './projectTransferSession.ts'
+import {
+  getProjectTransferExportTempLayout,
+  projectTransferExportArtifacts,
+  type ProjectTransferExportTempLayout,
+} from './projectTransferSession.ts'
 import {getProjectTransferSessionRepository} from './projectTransferSessionRepository.ts'
-import {type ProjectTransferZipJsModule, writeProjectTransferZipPackage} from './projectTransferZip.ts'
+import {
+  type ProjectTransferZipJsModule,
+  type ProjectTransferZipWrittenFilePackage,
+  writeProjectTransferZipPackageToFile,
+} from './projectTransferZip.ts'
 
 type ProjectTransferExportRuntimeOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
 
@@ -49,6 +53,7 @@ type ProjectTransferExportPackageBuildInput = ProjectTransferExportRuntimeOption
   exportedAt?: Date
   heartbeat?: () => Promise<unknown>
   layout: ProjectTransferExportTempLayout
+  packageOutputPath?: string
   projectId: string
   sessionId: string
   zipModule?: ProjectTransferZipJsModule
@@ -72,6 +77,7 @@ type RunProjectTransferExportSessionInput = ProjectTransferExportRuntimeOptions 
   sessionId: string
   zipModule?: ProjectTransferZipJsModule
 }
+type ProjectTransferExportWrittenPackage = ProjectTransferZipWrittenFilePackage & {bytes: Uint8Array | null}
 
 export type ProjectTransferExportPackageMetadata = {
   byteLength: number
@@ -92,7 +98,8 @@ export type ProjectTransferExportPackageBuild = {
   executionMode: ProjectTransferExecutionMode
   manifest: ProjectTransferManifest
   metadata: ProjectTransferExportPackageMetadata
-  packageBytes: Uint8Array
+  packageBytes: Uint8Array | null
+  packagePath: string | null
   payloads: ProjectTransferPayloadByKey
   serializedPayloads: ProjectTransferExportSerializedPayloads
 }
@@ -242,10 +249,29 @@ const getManifestWithFingerprint = ({
   serializedPayloads: ProjectTransferExportSerializedPayloads
 }) => {
   const unsignedManifest = buildManifest({assetBytes, assembly, exportedAt, serializedPayloads})
-  const packageFingerprint = getProjectTransferPackageFingerprint({
-    manifest: unsignedManifest,
-    payloads: assembly.payloads,
-  })
+  const packageFingerprint = getProjectTransferSha256Checksum(
+    getProjectTransferCanonicalJson({
+      assetSummary: unsignedManifest.assetSummary ?? null,
+      payloads: projectTransferPayloadKeys.reduce<Record<ProjectTransferPayloadKey, unknown>>(
+        (payloadEntries, key) => {
+          const payload = unsignedManifest.payloads[key]
+
+          return {
+            ...payloadEntries,
+            [key]: {
+              checksumSha256: payload.checksumSha256,
+              format: payload.format,
+              path: payload.path,
+              recordCount: payload.recordCount,
+            },
+          }
+        },
+        {} as Record<ProjectTransferPayloadKey, unknown>,
+      ),
+      schemaVersion: unsignedManifest.schemaVersion,
+      sourceAppVersion: unsignedManifest.sourceAppVersion,
+    }),
+  )
 
   return buildManifest({assetBytes, assembly, exportedAt, packageFingerprint, serializedPayloads})
 }
@@ -268,6 +294,20 @@ const getPackageEntries = ({
       return {bytes: entry.bytes, path: entry.path}
     }),
   ]
+}
+
+const writeProjectTransferExportZipPackage = async ({
+  entries,
+  outputPath,
+  readBytes,
+}: {
+  entries: ReturnType<typeof getPackageEntries>
+  outputPath: string
+  readBytes: boolean
+}): Promise<ProjectTransferExportWrittenPackage> => {
+  const writtenPackage = await writeProjectTransferZipPackageToFile({entries, outputPath})
+
+  return {...writtenPackage, bytes: readBytes ? new Uint8Array(await readFile(outputPath)) : null}
 }
 
 const getErrorLogAttrs = (error: unknown) => {
@@ -395,6 +435,28 @@ const writePackageArtifact = async ({
   await globalThis.Bun.write(packagePath, packageBytes)
 }
 
+const getRequiredProjectTransferExportPackageBytes = (build: ProjectTransferExportPackageBuild) => {
+  if (build.packageBytes === null) {
+    throw new Error('Project transfer export package bytes are unavailable')
+  }
+
+  return build.packageBytes
+}
+
+const writeProjectTransferExportPackageArtifact = async ({
+  build,
+  layout,
+  runtimeOptions,
+}: {
+  build: ProjectTransferExportPackageBuild
+  layout: ProjectTransferExportTempLayout
+  runtimeOptions: ProjectTransferExportRuntimeOptions
+}) => {
+  if (build.packageBytes !== null) {
+    await writePackageArtifact({layout, packageBytes: build.packageBytes, runtimeOptions})
+  }
+}
+
 const getQueuedExportMetadata = ({
   expiresAt,
   projectId,
@@ -465,7 +527,7 @@ const persistCompletedProjectTransferExportBuild = async ({
   const readyPayload = getReadyExportPayload(build)
   const readyProgress = getReadyProgress({build, expiresAt, startedAt})
 
-  await writePackageArtifact({layout, packageBytes: build.packageBytes, runtimeOptions: input})
+  await writeProjectTransferExportPackageArtifact({build, layout, runtimeOptions: input})
   await writeManifestArtifact({layout, manifest: build.manifest, runtimeOptions: input})
   await writeExportCompletionFile({layout, metadata: readyPayload, runtimeOptions: input})
   await writeExportProgressFile({layout, progress: readyProgress, runtimeOptions: input})
@@ -616,6 +678,7 @@ export const buildProjectTransferExportPackage = async (
         }, 0)
         const manifest = getManifestWithFingerprint({assetBytes, assembly, exportedAt, serializedPayloads})
         const entries = getPackageEntries({assembly, manifest, serializedPayloads})
+        const packageOutputPath = input.packageOutputPath ?? join(buildPath, projectTransferExportArtifacts.package)
         yield* Effect.promise(() => {
           return runProjectTransferExportHeartbeatOperation({
             heartbeat: input.heartbeat,
@@ -630,24 +693,25 @@ export const buildProjectTransferExportPackage = async (
           return runProjectTransferExportHeartbeatOperation({
             heartbeat: input.heartbeat,
             operation: () => {
-              return writeProjectTransferZipPackage({entries, zipModule: input.zipModule})
+              return writeProjectTransferExportZipPackage({
+                entries,
+                outputPath: packageOutputPath,
+                readBytes: input.packageOutputPath === undefined,
+              })
             },
             sessionId: input.sessionId,
           })
         })
         const packageFingerprint = manifest.packageFingerprint ?? ''
         const metadata = {
-          byteLength: packageArchive.bytes.byteLength,
-          checksumSha256: getProjectTransferSha256Checksum(packageArchive.bytes),
+          byteLength: packageArchive.byteLength,
+          checksumSha256: packageArchive.checksumSha256,
           downloadUrl: getDownloadUrl(input.sessionId),
           expiresAt: expiresAt.toISOString(),
           filename: getExportFilename(input.projectId, packageFingerprint),
           packageFingerprint,
         }
-        const executionMode = getProjectTransferExportExecutionMode({
-          assetBytes,
-          packageBytes: packageArchive.bytes.byteLength,
-        })
+        const executionMode = getProjectTransferExportExecutionMode({assetBytes, packageBytes: metadata.byteLength})
 
         return {
           assetBytes,
@@ -655,6 +719,7 @@ export const buildProjectTransferExportPackage = async (
           manifest,
           metadata,
           packageBytes: packageArchive.bytes,
+          packagePath: input.packageOutputPath ?? null,
           payloads: assembly.payloads,
           serializedPayloads,
         }
@@ -712,6 +777,7 @@ export const runProjectTransferExportSession = async (input: RunProjectTransferE
       expiresAt,
       heartbeat,
       layout,
+      packageOutputPath: resolveProjectTransferTempWritablePath({...input, pathValue: layout.packagePath}),
       sessionId: input.sessionId,
     })
     const packagingProgress = getProgress({
@@ -742,7 +808,7 @@ export const runProjectTransferExportSession = async (input: RunProjectTransferE
       sessionId: input.sessionId,
       state: 'packaging',
     })
-    await writePackageArtifact({layout, packageBytes: build.packageBytes, runtimeOptions: input})
+    await writeProjectTransferExportPackageArtifact({build, layout, runtimeOptions: input})
     await writeManifestArtifact({layout, manifest: build.manifest, runtimeOptions: input})
 
     const readyPayload = getReadyExportPayload(build)
@@ -814,7 +880,7 @@ export const createProjectTransferExport = async (
         executionMode: 'inline',
         manifest: build.manifest,
         metadata: {...build.metadata, expiresAt: expiresAt.toISOString()},
-        packageBytes: build.packageBytes,
+        packageBytes: getRequiredProjectTransferExportPackageBytes(build),
       }
     : {
         executionMode: 'background',

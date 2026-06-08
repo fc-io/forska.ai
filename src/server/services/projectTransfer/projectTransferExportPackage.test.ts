@@ -1,4 +1,5 @@
-import {mkdtempSync, rmSync} from 'node:fs'
+import {createHash} from 'node:crypto'
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -12,6 +13,7 @@ import type {
 } from './projectTransferExport.ts'
 import type {ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
 import {projectTransferPayloadKeys} from './projectTransferSchemas.ts'
+import {getProjectTransferExportTempLayout} from './projectTransferSession.ts'
 
 const exportModulePath = new URL('./projectTransferExport.ts', import.meta.url).pathname
 const sessionRepositoryModulePath = new URL('./projectTransferSessionRepository.ts', import.meta.url).pathname
@@ -23,6 +25,9 @@ type CreateProjectTransferSessionMockParams = {
   expiresAt?: Date
   id?: string
   state?: string
+}
+type PersistProjectTransferSessionExportReadyMockParams = {
+  completionPayload: {byteLength: number; checksumSha256: string; status: 'ready'}
 }
 
 const now = new Date('2026-05-24T08:00:00.000Z')
@@ -63,6 +68,20 @@ const createProjectTransferSessionMock = mock(async (_params: CreateProjectTrans
 const claimProjectTransferExportSessionOwnerMock = mock(async () => {
   return null
 })
+const heartbeatProjectTransferExportSessionOwnerMock = mock(async () => {
+  return sessionRecord
+})
+let persistedReadyPayload: PersistProjectTransferSessionExportReadyMockParams['completionPayload'] | null = null
+const persistProjectTransferSessionExportReadyMock = mock(
+  async (params: PersistProjectTransferSessionExportReadyMockParams) => {
+    persistedReadyPayload = params.completionPayload
+
+    return {...sessionRecord, state: 'ready'} satisfies ProjectTransferSessionRecord
+  },
+)
+const failProjectTransferSessionExportMock = mock(async () => {
+  return {...sessionRecord, state: 'failed'} satisfies ProjectTransferSessionRecord
+})
 
 void mock.module(exportModulePath, () => {
   return {
@@ -78,6 +97,9 @@ void mock.module(sessionRepositoryModulePath, () => {
       return {
         claimProjectTransferExportSessionOwner: claimProjectTransferExportSessionOwnerMock,
         createProjectTransferSession: createProjectTransferSessionMock,
+        failProjectTransferSessionExport: failProjectTransferSessionExportMock,
+        heartbeatProjectTransferExportSessionOwner: heartbeatProjectTransferExportSessionOwnerMock,
+        persistProjectTransferSessionExportReady: persistProjectTransferSessionExportReadyMock,
       }
     },
   }
@@ -131,12 +153,53 @@ const getFakeZipModule = () => {
   }
 }
 
+const getSha256Digest = (bytes: Uint8Array) => {
+  return createHash('sha256').update(bytes).digest('hex')
+}
+
+const getPayloadAssembly = (): ProjectTransferExportPayloadAssembly => {
+  const payloads = {
+    articleImportRoutes: [],
+    articles: [],
+    assetManifest: {entries: []},
+    humanJudgmentSummaries: [],
+    humanJudgments: [],
+    importRoutes: [],
+    judgmentAssessments: [],
+    judgments: [],
+    models: [],
+    project: {
+      humanJudgmentMode: 'prompt',
+      modelSignature: null,
+      name: 'Large Export',
+      settings: {humanJudgmentMode: 'prompt'},
+      sourceProjectId: 'project-large',
+    },
+    projectArticles: [],
+    projectImportRoutes: [],
+    projectPrompts: [],
+    prompts: [],
+    providerConnections: [],
+    reviews: [],
+  } as ProjectTransferPayloadByKey
+
+  return {
+    assetEntries: [{bytes: new Uint8Array([1, 2]), path: 'assets/project-transfer-test/large.bin'}],
+    payloads,
+    warnings: [],
+  }
+}
+
 beforeEach(() => {
   getProjectTransferExportPayloadsMock.mockClear()
   getProjectTransferExportPreflightEstimateMock.mockClear()
   serializeProjectTransferExportPayloadsMock.mockClear()
   createProjectTransferSessionMock.mockClear()
   claimProjectTransferExportSessionOwnerMock.mockClear()
+  heartbeatProjectTransferExportSessionOwnerMock.mockClear()
+  persistProjectTransferSessionExportReadyMock.mockClear()
+  failProjectTransferSessionExportMock.mockClear()
+  persistedReadyPayload = null
 })
 
 afterAll(() => {
@@ -170,35 +233,7 @@ test('project-transfer export reuses completed builds when actual size crosses b
   const runtimeRoot = mkdtempSync(join(tmpdir(), `f2-project-transfer-package-${process.pid}-`))
   const originalInlineAssetBytes = projectTransferExecutionThresholds.exportInlineAssetBytes
   const thresholds = projectTransferExecutionThresholds as unknown as {exportInlineAssetBytes: number}
-  const payloads = {
-    articleImportRoutes: [],
-    articles: [],
-    assetManifest: {entries: []},
-    humanJudgmentSummaries: [],
-    humanJudgments: [],
-    importRoutes: [],
-    judgmentAssessments: [],
-    judgments: [],
-    models: [],
-    project: {
-      humanJudgmentMode: 'prompt',
-      modelSignature: null,
-      name: 'Large Export',
-      settings: {humanJudgmentMode: 'prompt'},
-      sourceProjectId: 'project-large',
-    },
-    projectArticles: [],
-    projectImportRoutes: [],
-    projectPrompts: [],
-    prompts: [],
-    providerConnections: [],
-    reviews: [],
-  } as ProjectTransferPayloadByKey
-  const assembly = {
-    assetEntries: [{bytes: new Uint8Array([1, 2]), path: 'assets/project-transfer-test/large.bin'}],
-    payloads,
-    warnings: [],
-  } satisfies ProjectTransferExportPayloadAssembly
+  const assembly = getPayloadAssembly()
   const database = {
     transaction: <TValue>(operation: (runner: unknown) => Promise<TValue>) => {
       return operation({})
@@ -235,6 +270,46 @@ test('project-transfer export reuses completed builds when actual size crosses b
     expect(getProjectTransferExportPayloadsMock).toHaveBeenCalledTimes(1)
   } finally {
     thresholds.exportInlineAssetBytes = originalInlineAssetBytes
+    rmSync(runtimeRoot, {force: true, recursive: true})
+  }
+})
+
+test('project-transfer export worker writes background packages directly to an artifact file', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), `f2-project-transfer-worker-package-${process.pid}-`))
+  const layout = getProjectTransferExportTempLayout('export-worker-ready')
+  const database = {
+    transaction: <TValue>(operation: (runner: unknown) => Promise<TValue>) => {
+      return operation({})
+    },
+  }
+  getProjectTransferExportPayloadsMock.mockResolvedValueOnce(getPayloadAssembly())
+  claimProjectTransferExportSessionOwnerMock
+    .mockResolvedValueOnce({...sessionRecord, ownerToken: 'owner-token', state: 'assembling'})
+    .mockResolvedValueOnce({...sessionRecord, ownerToken: 'owner-token', state: 'packaging'})
+
+  try {
+    const {runProjectTransferExportSession} = await loadProjectTransferExportPackage()
+    const result = await runProjectTransferExportSession({
+      cwd: runtimeRoot,
+      database: database as never,
+      expiresAt,
+      exportedAt: now,
+      ownerToken: 'owner-token',
+      projectId: 'project-large',
+      sessionId: 'export-worker-ready',
+      zipModule: getFakeZipModule(),
+    })
+    const packageBytes = new Uint8Array(readFileSync(join(runtimeRoot, layout.packagePath)))
+
+    expect(result?.state).toBe('ready')
+    expect(packageBytes.byteLength).toBeGreaterThan(0)
+    expect(persistedReadyPayload).toMatchObject({
+      byteLength: packageBytes.byteLength,
+      checksumSha256: getSha256Digest(packageBytes),
+      status: 'ready',
+    })
+    expect(failProjectTransferSessionExportMock).not.toHaveBeenCalled()
+  } finally {
     rmSync(runtimeRoot, {force: true, recursive: true})
   }
 })

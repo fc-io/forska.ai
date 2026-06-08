@@ -19,16 +19,22 @@ const getSerializedError = (error: unknown): string | undefined => {
   return typeof error === 'object' && error !== null ? JSON.stringify(error) : undefined
 }
 
+const getUsefulMessage = (message: string | undefined): string | undefined => {
+  const trimmed = message?.trim()
+
+  return trimmed && trimmed !== '[object Object]' ? trimmed : undefined
+}
+
 const getApiErrorMessage = (error: unknown, fallback: string): string => {
   const nested = getNestedErrorValue(error)
-  const message = getErrorWithMessage(error)?.message
+  const message = getUsefulMessage(getErrorWithMessage(error)?.message)
   const serialized = getSerializedError(error)
 
   return typeof error === 'string'
     ? error
     : typeof error === 'number' || typeof error === 'boolean'
       ? String(error)
-      : message && message.trim().length > 0
+      : message
         ? message
         : nested !== undefined
           ? getApiErrorMessage(nested, fallback)

@@ -18,3 +18,14 @@ test('handleApiResponse uses nested treaty error messages', () => {
 
   expect(getResult).toThrow('No articles left to judge')
 })
+
+test('handleApiResponse skips stringified object treaty error messages', () => {
+  const getResult = () => {
+    return handleApiResponse(
+      {error: {value: {data: null, error: 'Project transfer export failed'}, message: '[object Object]'}},
+      'Failed to fetch project transfer export status',
+    )
+  }
+
+  expect(getResult).toThrow('Project transfer export failed')
+})

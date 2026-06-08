@@ -8,6 +8,7 @@ import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 import type {ProjectListItem} from '../../services/projectsService.ts'
 import {ProjectsGrid} from './ProjectsGrid.tsx'
 import {
+  fetchProjectTransferExportSession,
   getProjectTransferDownloadRequestUrl,
   getProjectTransferExportRequestUrl,
 } from './projectsGrid/projectTransferExportAction.tsx'
@@ -228,6 +229,38 @@ describe('ProjectsGrid export project action', () => {
     }
   })
 
+  test('parses direct and nested export status success envelopes', async () => {
+    mockApiState.getExportSession
+      .mockResolvedValueOnce({
+        data: {
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+          exportId: 'export-1',
+          progress: {percent: 100},
+          status: 'assembling',
+        },
+        error: null,
+      })
+      .mockResolvedValueOnce({data: {data: {...getReadyExportData(), expiresAt: new Date('2030-01-01T00:00:00.000Z')}}})
+      .mockResolvedValueOnce({data: {data: {data: getReadyExportData(), error: null}, error: null}, error: null})
+
+    const pendingSession = await fetchProjectTransferExportSession('export-1')
+    const dataOnlyReadySession = await fetchProjectTransferExportSession('export-1')
+    const nestedReadySession = await fetchProjectTransferExportSession('export-1')
+
+    expect(pendingSession).toMatchObject({exportId: 'export-1', progress: {percent: 100}, status: 'assembling'})
+    expect(pendingSession.expiresAt).toBe('2030-01-01T00:00:00.000Z')
+    expect(dataOnlyReadySession).toMatchObject({
+      exportId: 'export-1',
+      filename: 'ready-project-transfer.zip',
+      status: 'ready',
+    })
+    expect(nestedReadySession).toMatchObject({
+      exportId: 'export-1',
+      filename: 'ready-project-transfer.zip',
+      status: 'ready',
+    })
+  })
+
   test('downloads an inline full-fidelity export without changing the CSV export link', async () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockResolvedValueOnce(getZipResponse('project-transfer-project-1.zip'))
@@ -257,7 +290,7 @@ describe('ProjectsGrid export project action', () => {
 
   test('shows preparing state for queued exports, polls JSON metadata, and downloads the ready package', async () => {
     const fetchMock = vi.mocked(fetch)
-    const readyDeferred = createDeferred<{data: {data: ReadyExportData; error: null}; error: null}>()
+    const readyDeferred = createDeferred<{data: ReadyExportData; error: null}>()
     fetchMock.mockResolvedValueOnce(getQueuedExportResponse())
     fetchMock.mockResolvedValueOnce(getZipResponse('ready-project-transfer.zip'))
     mockApiState.getExportSession.mockReturnValue(readyDeferred.promise)
@@ -275,7 +308,7 @@ describe('ProjectsGrid export project action', () => {
         expect(mockApiState.getExportSession).toHaveBeenCalledWith('export-1')
       })
 
-      readyDeferred.resolve({data: {data: getReadyExportData(), error: null}, error: null})
+      readyDeferred.resolve({data: getReadyExportData(), error: null})
 
       await waitForCondition(() => {
         expect(fetchMock).toHaveBeenLastCalledWith('http://127.0.0.1:3001/api/projects/export/export-1/download', {
@@ -291,9 +324,38 @@ describe('ProjectsGrid export project action', () => {
     }
   })
 
+  test('stops polling after a terminal export status failure', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockResolvedValueOnce(getQueuedExportResponse())
+    mockApiState.getExportSession.mockRejectedValue(new Error('Project transfer export failed'))
+    const {container, dispose, queryClient} = await renderProjectsGrid()
+
+    try {
+      const exportProjectButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.trim() === 'Export Project'
+      })
+
+      exportProjectButton?.click()
+
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('Project transfer export failed')
+        expect(mockApiState.getExportSession).toHaveBeenCalledTimes(1)
+      })
+      await tick()
+
+      expect(mockApiState.getExportSession).toHaveBeenCalledTimes(1)
+      expect(container.textContent).not.toContain('Assembling package')
+      expect(container.textContent).not.toContain('Preparing download')
+    } finally {
+      dispose()
+      queryClient.clear()
+      container.remove()
+    }
+  })
+
   test('does not immediately retry a failed ready-session download', async () => {
     const fetchMock = vi.mocked(fetch)
-    const readyDeferred = createDeferred<{data: {data: ReadyExportData; error: null}; error: null}>()
+    const readyDeferred = createDeferred<{data: ReadyExportData; error: null}>()
     fetchMock.mockResolvedValueOnce(getQueuedExportResponse())
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify({data: null, error: 'Project transfer export package artifact is unavailable'}), {
@@ -315,7 +377,7 @@ describe('ProjectsGrid export project action', () => {
         expect(mockApiState.getExportSession).toHaveBeenCalledWith('export-1')
       })
 
-      readyDeferred.resolve({data: {data: getReadyExportData(), error: null}, error: null})
+      readyDeferred.resolve({data: getReadyExportData(), error: null})
 
       await waitForCondition(() => {
         expect(container.textContent).toContain('Project transfer export package artifact is unavailable')

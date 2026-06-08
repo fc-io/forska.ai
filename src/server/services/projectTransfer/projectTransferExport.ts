@@ -25,20 +25,27 @@ import {
 } from './projectTransferExportAssets.ts'
 import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import type {ProjectTransferArticleIdentifierSource} from './projectTransferIdentifierNormalization.ts'
-import {getProjectTransferStrongIdentifierComparisonKeys} from './projectTransferIdentifierNormalization.ts'
+import {
+  getProjectTransferNormalizedArticleIdentifiers,
+  getProjectTransferStrongIdentifierComparisonKeys,
+} from './projectTransferIdentifierNormalization.ts'
 import {
   assertProjectTransferPayload,
   normalizeProjectTransferModelVariant,
   type ProjectTransferContentSettings,
   type ProjectTransferPayloadByKey,
   type ProjectTransferPayloadRecord,
+  type ProjectTransferPayloadWarning,
   serializeProjectTransferPayload,
 } from './projectTransferPayloadSchemas.ts'
 import {redactProjectTransferPayloads} from './projectTransferRedaction.ts'
 import type {ProjectTransferManifestWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
 import {projectTransferPayloadKeys} from './projectTransferSchemas.ts'
 
-type ProjectTransferExportQueryOptions = {database?: AppQueryDatabaseService}
+type ProjectTransferExportQueryOptions = {
+  articleRawJsonOmissionThresholdChars?: number
+  database?: AppQueryDatabaseService
+}
 
 export type ProjectTransferExportSourceProjectSettings = {
   archived: boolean
@@ -338,6 +345,22 @@ export type ProjectTransferExportSerializedPayloads = Record<ProjectTransferPayl
 
 export type ProjectTransferExportPreflightEstimate = {assetBytes: number; packageBytes: number}
 
+type ProjectTransferExportIdentifierOmission = {inputKind: ArticleIdentifierInputKind; rawValue: string; source: string}
+
+type ProjectTransferExportNormalizedArticleIdentifiers = ReturnType<
+  typeof getProjectTransferNormalizedArticleIdentifiers
+>
+
+type ProjectTransferExportRejectedIdentifier = ProjectTransferExportNormalizedArticleIdentifiers['rejected'][number]
+
+type ProjectTransferExportIdentifierConflict = ProjectTransferExportNormalizedArticleIdentifiers['conflicts'][number]
+
+type ProjectTransferExportArticleIdentifierPayloadField = 'arxivId' | 'biorxivId' | 'doi' | 'medrxivId' | 'pubmedId'
+
+const articleIdentifierPayloadFieldBySource: Partial<
+  Record<string, ProjectTransferExportArticleIdentifierPayloadField>
+> = {arxivId: 'arxivId', biorxivId: 'biorxivId', doi: 'doi', medrxivId: 'medrxivId', pubmedId: 'pubmedId'}
+
 const providerSecretRedaction = {
   action: 'redacted',
   code: 'providerSecretRedacted' as const,
@@ -370,6 +393,7 @@ const singlePromptEvidenceOutputSchema = {
   type: 'object',
 }
 const reviewedSectionContractVersion = 1 as const
+const articleRawJsonOmissionThresholdChars = 64 * 1024 * 1024
 
 const getDatabase = (options: ProjectTransferExportQueryOptions = {}) => {
   return options.database ?? getAppDatabaseService()
@@ -403,6 +427,12 @@ const getStringValue = (value: unknown) => {
 
 const getNumberValue = (value: unknown) => {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const getQueryNumberValue = (value: unknown) => {
+  const numericValue = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : 0
+
+  return Number.isFinite(numericValue) ? numericValue : 0
 }
 
 const getDigestValue = (value: unknown) => {
@@ -738,7 +768,47 @@ const getProjectTransferExportArticleIdentifierRows = async (
     `)
 }
 
-const getProjectTransferExportArticleRows = async (projectId: string, database: AppQueryDatabaseService) => {
+const getProjectTransferExportArticleRawJsonSelectSql = (includeRawArticleJson: boolean) => {
+  return includeRawArticleJson
+    ? {
+        canonicalOriginalData: 'a.original_data',
+        canonicalSourceMetadata: 'a.source_metadata',
+        originalData: 'COALESCE(selected_import.raw_payload, a.original_data)',
+        scopedImportMetadata: 'selected_import.import_metadata',
+        scopedRawPayload: 'selected_import.raw_payload',
+        selectedImportMetadata: 'air.import_metadata',
+        selectedRawPayload: 'air.raw_payload',
+        sourceMetadata: `
+          CASE
+            WHEN a.source_metadata IS NULL
+              AND selected_import.import_metadata IS NULL
+              THEN NULL
+            ELSE json_merge_patch(
+              COALESCE(a.source_metadata, CAST('{}' AS JSON)),
+              COALESCE(selected_import.import_metadata, CAST('{}' AS JSON))
+            )
+          END
+        `,
+      }
+    : {
+        canonicalOriginalData: 'NULL',
+        canonicalSourceMetadata: 'NULL',
+        originalData: 'NULL',
+        scopedImportMetadata: 'NULL',
+        scopedRawPayload: 'NULL',
+        selectedImportMetadata: 'NULL',
+        selectedRawPayload: 'NULL',
+        sourceMetadata: 'NULL',
+      }
+}
+
+const getProjectTransferExportArticleRows = async (
+  projectId: string,
+  database: AppQueryDatabaseService,
+  options: {includeFullText?: boolean; includeRawArticleJson?: boolean} = {},
+) => {
+  const fullTextSelectSql = options.includeFullText ? 'a.full_text' : 'NULL'
+  const rawJsonSelectSql = getProjectTransferExportArticleRawJsonSelectSql(options.includeRawArticleJson ?? true)
   const articleRows = await database.queryJson<ProjectTransferExportArticleRow>(`
     WITH
     ${getProjectTransferExportScopedArticleCteSql(projectId)},
@@ -749,10 +819,10 @@ const getProjectTransferExportArticleRows = async (projectId: string, database: 
           air.article_id,
           air.external_article_id,
           air.id,
-          air.import_metadata,
+          ${rawJsonSelectSql.selectedImportMetadata} AS import_metadata,
           ir.route AS import_route,
           air.import_route_id,
-          air.raw_payload,
+          ${rawJsonSelectSql.selectedRawPayload} AS raw_payload,
           air.source_kind,
           air.source_record_hash,
           air.source_record_key,
@@ -798,7 +868,7 @@ const getProjectTransferExportArticleRows = async (projectId: string, database: 
       a.pubmed_id AS pubmedId,
       a.url,
       a.full_text_fetched_at AS fullTextFetchedAt,
-      a.full_text AS fullText,
+      ${fullTextSelectSql} AS fullText,
       a.full_text_html AS fullTextHtml,
       a.full_text_source AS fullTextSource,
       a.full_text_original_format AS fullTextOriginalFormat,
@@ -812,11 +882,11 @@ const getProjectTransferExportArticleRows = async (projectId: string, database: 
       a.full_text_char_count AS fullTextCharCount,
       a.content_hash AS contentHash,
       COALESCE(selected_import.import_route, a.import_route) AS importRoute,
-      a.original_data AS canonicalOriginalData,
-      COALESCE(selected_import.raw_payload, a.original_data) AS originalData,
-      a.source_metadata AS canonicalSourceMetadata,
-      selected_import.import_metadata AS scopedImportMetadata,
-      selected_import.raw_payload AS scopedRawPayload,
+      ${rawJsonSelectSql.canonicalOriginalData} AS canonicalOriginalData,
+      ${rawJsonSelectSql.originalData} AS originalData,
+      ${rawJsonSelectSql.canonicalSourceMetadata} AS canonicalSourceMetadata,
+      ${rawJsonSelectSql.scopedImportMetadata} AS scopedImportMetadata,
+      ${rawJsonSelectSql.scopedRawPayload} AS scopedRawPayload,
       selected_import.external_article_id AS selectedExternalArticleId,
       selected_import.id AS selectedImportRecordId,
       selected_import.import_route_id AS selectedImportRouteId,
@@ -824,15 +894,7 @@ const getProjectTransferExportArticleRows = async (projectId: string, database: 
       selected_import.source_kind AS selectedSourceKind,
       selected_import.source_record_key AS selectedSourceRecordKey,
       selected_import.source_record_hash AS selectedSourceRecordHash,
-      CASE
-        WHEN a.source_metadata IS NULL
-          AND selected_import.import_metadata IS NULL
-          THEN NULL
-        ELSE json_merge_patch(
-          COALESCE(a.source_metadata, CAST('{}' AS JSON)),
-          COALESCE(selected_import.import_metadata, CAST('{}' AS JSON))
-        )
-      END AS sourceMetadata,
+      ${rawJsonSelectSql.sourceMetadata} AS sourceMetadata,
       a.publication_status AS publicationStatus
     FROM app.article a
     INNER JOIN project_transfer_scope_article scope ON scope.article_id = a.id
@@ -852,6 +914,89 @@ const getProjectTransferExportArticleRows = async (projectId: string, database: 
   return articleRows.map((row) => {
     return getProjectTransferExportArticlePayloadRecord(row, identifiersByArticleId[row.canonicalArticleId ?? ''] ?? [])
   })
+}
+
+const getProjectTransferExportArticleRawJsonEstimate = async (
+  projectId: string,
+  database: AppQueryDatabaseService,
+): Promise<ProjectTransferExportArticleRawJsonEstimate> => {
+  const [row] = await database.queryJson<ProjectTransferExportArticleRawJsonEstimateRow>(`
+    WITH
+    ${getProjectTransferExportScopedArticleCteSql(projectId)},
+    project_transfer_selected_article_import AS (
+      SELECT *
+      FROM (
+        SELECT
+          air.article_id,
+          air.import_metadata,
+          air.raw_payload,
+          ROW_NUMBER() OVER (
+            PARTITION BY air.article_id
+            ORDER BY
+              CASE
+                WHEN json_extract_string(air.import_metadata, '$.covidence.hasDuplicateStudyRecords') = 'true'
+                  OR json_extract_string(air.import_metadata, '$.covidence.hasStudyDecisionConflict') = 'true'
+                  THEN 0
+                WHEN json_extract_string(air.import_metadata, '$.covidence.studyKey') IS NOT NULL THEN 1
+                WHEN air.import_metadata IS NOT NULL THEN 2
+                ELSE 3
+              END ASC,
+              CASE WHEN air.external_article_id IS NOT NULL THEN 0 ELSE 1 END ASC,
+              CASE WHEN air.raw_payload IS NOT NULL THEN 0 ELSE 1 END ASC,
+              air.import_route_id ASC,
+              air.id ASC
+          ) AS selected_rank
+        FROM app.article_import_route air
+        INNER JOIN app.project_import_route pir ON pir.import_route_id = air.import_route_id
+        INNER JOIN project_transfer_scope_article scope ON scope.article_id = air.article_id
+        WHERE pir.project_id = ${getSqlLiteral(projectId)}
+      ) ranked_scoped_article_import
+      WHERE selected_rank = 1
+    )
+    SELECT
+      COUNT(*) AS rowCount,
+      COALESCE(SUM(
+        COALESCE(LENGTH(CAST(a.original_data AS VARCHAR)), 0)
+        + COALESCE(LENGTH(CAST(a.source_metadata AS VARCHAR)), 0)
+        + COALESCE(LENGTH(CAST(selected_import.import_metadata AS VARCHAR)), 0)
+        + COALESCE(LENGTH(CAST(selected_import.raw_payload AS VARCHAR)), 0)
+      ), 0) AS estimatedChars
+    FROM app.article a
+    INNER JOIN project_transfer_scope_article scope ON scope.article_id = a.id
+    LEFT JOIN project_transfer_selected_article_import selected_import ON selected_import.article_id = a.id
+  `)
+
+  return {estimatedChars: getQueryNumberValue(row?.estimatedChars), rowCount: getQueryNumberValue(row?.rowCount)}
+}
+
+const getProjectTransferExportArticleRawJsonOmissionWarnings = (
+  estimate: ProjectTransferExportArticleRawJsonEstimate,
+  thresholdChars = articleRawJsonOmissionThresholdChars,
+): ProjectTransferManifestWarning[] => {
+  return estimate.estimatedChars <= thresholdChars
+    ? []
+    : [
+        {
+          action: 'omitted',
+          code: 'payloadOmitted',
+          details: {
+            estimatedChars: estimate.estimatedChars,
+            fields: [
+              'canonicalOriginalData',
+              'canonicalSourceMetadata',
+              'originalData',
+              'scopedImportMetadata',
+              'scopedRawPayload',
+              'sourceMetadata',
+            ],
+            rowCount: estimate.rowCount,
+            thresholdChars,
+          },
+          message: 'Large article raw provenance JSON was omitted from the transfer payload.',
+          scope: 'articles',
+          severity: 'fidelity',
+        },
+      ]
 }
 
 const getProjectTransferExportArticleImportRouteRows = async (projectId: string, database: AppQueryDatabaseService) => {
@@ -1178,6 +1323,187 @@ const getProjectTransferExportProviderConnectionRows = async (
 
 const getProjectTransferExportArticleSignature = (record: ProjectTransferExportArticlePayloadRecord) => {
   return {identifierKeys: getProjectTransferStrongIdentifierComparisonKeys(record), title: record.articleTitle}
+}
+
+const getProjectTransferExportArticleIdentifierPayloadField = (
+  source: string,
+): ProjectTransferExportArticleIdentifierPayloadField | null => {
+  return articleIdentifierPayloadFieldBySource[source] ?? null
+}
+
+const getProjectTransferExportIdentifierRawValue = (value: unknown) => {
+  return typeof value === 'number' ? String(value) : typeof value === 'string' ? value : ''
+}
+
+const getProjectTransferExportIdentifierOmissionKey = (omission: ProjectTransferExportIdentifierOmission) => {
+  return `${omission.inputKind}\u0000${omission.source}\u0000${omission.rawValue}`
+}
+
+const getProjectTransferExportIdentifierInputKey = (input: ArticleIdentifierInput) => {
+  return getProjectTransferExportIdentifierOmissionKey({
+    inputKind: input.inputKind,
+    rawValue: getProjectTransferExportIdentifierRawValue(input.value),
+    source: input.source,
+  })
+}
+
+const getProjectTransferExportArticleIdentifierJsonPointer = (
+  record: ProjectTransferExportArticlePayloadRecord,
+  omission: ProjectTransferExportIdentifierOmission,
+) => {
+  const field = getProjectTransferExportArticleIdentifierPayloadField(omission.source)
+  const inputIndex = record.identifierInputs.findIndex((input) => {
+    return getProjectTransferExportIdentifierInputKey(input) === getProjectTransferExportIdentifierOmissionKey(omission)
+  })
+
+  return field !== null ? `/${field}` : inputIndex >= 0 ? `/identifierInputs/${inputIndex}` : '/identifierInputs'
+}
+
+const getProjectTransferExportArticleIdentifierWarning = ({
+  code,
+  details,
+  jsonPointer,
+  message,
+  sourceArticleId,
+}: {
+  code: ProjectTransferPayloadWarning['code']
+  details: unknown
+  jsonPointer: string
+  message: string
+  sourceArticleId: string
+}): ProjectTransferPayloadWarning => {
+  return {
+    action: 'omitted',
+    code,
+    details,
+    jsonPointer,
+    message,
+    scope: 'articles',
+    severity: 'warning',
+    sourceRef: `article:${sourceArticleId}`,
+  }
+}
+
+const getProjectTransferExportRejectedIdentifierOmission = (
+  rejected: ProjectTransferExportRejectedIdentifier,
+): ProjectTransferExportIdentifierOmission => {
+  return {inputKind: rejected.inputKind, rawValue: rejected.rawValue, source: rejected.source}
+}
+
+const getProjectTransferExportConflictIdentifierOmissions = (
+  conflict: ProjectTransferExportIdentifierConflict,
+): ProjectTransferExportIdentifierOmission[] => {
+  return conflict.candidates.map((candidate) => {
+    return {inputKind: candidate.inputKind, rawValue: candidate.rawValue, source: candidate.source}
+  })
+}
+
+const getUniqueProjectTransferExportIdentifierOmissions = (omissions: ProjectTransferExportIdentifierOmission[]) => {
+  return Array.from(
+    new Map(
+      omissions.map((omission) => {
+        return [getProjectTransferExportIdentifierOmissionKey(omission), omission]
+      }),
+    ).values(),
+  )
+}
+
+const getProjectTransferExportRejectedIdentifierWarning = (
+  record: ProjectTransferExportArticlePayloadRecord,
+  rejected: ProjectTransferExportRejectedIdentifier,
+) => {
+  const omission = getProjectTransferExportRejectedIdentifierOmission(rejected)
+
+  return getProjectTransferExportArticleIdentifierWarning({
+    code: 'identifierRejected',
+    details: {detail: rejected.detail, inputKind: rejected.inputKind, reason: rejected.reason, source: rejected.source},
+    jsonPointer: getProjectTransferExportArticleIdentifierJsonPointer(record, omission),
+    message: 'Rejected article identifier was omitted from transfer identity.',
+    sourceArticleId: record.sourceArticleId,
+  })
+}
+
+const getProjectTransferExportIdentifierConflictWarning = (
+  record: ProjectTransferExportArticlePayloadRecord,
+  conflict: ProjectTransferExportIdentifierConflict,
+) => {
+  return getProjectTransferExportArticleIdentifierWarning({
+    code: 'identifierConflict',
+    details: {
+      candidateCount: conflict.candidates.length,
+      kind: conflict.kind,
+      normalizedValues: conflict.normalizedValues,
+      reason: conflict.reason,
+    },
+    jsonPointer: '/signature/identifierKeys',
+    message: 'Conflicting article identifiers were omitted from transfer identity.',
+    sourceArticleId: record.sourceArticleId,
+  })
+}
+
+const getProjectTransferExportArticleIdentifierWarnings = (
+  record: ProjectTransferExportArticlePayloadRecord,
+  normalized: ProjectTransferExportNormalizedArticleIdentifiers,
+) => {
+  return [
+    ...normalized.rejected.map((rejected) => {
+      return getProjectTransferExportRejectedIdentifierWarning(record, rejected)
+    }),
+    ...normalized.conflicts.map((conflict) => {
+      return getProjectTransferExportIdentifierConflictWarning(record, conflict)
+    }),
+  ]
+}
+
+const getProjectTransferExportIdentifierOmittedFields = (omissions: ProjectTransferExportIdentifierOmission[]) => {
+  return omissions.reduce<Partial<Record<ProjectTransferExportArticleIdentifierPayloadField, null>>>(
+    (fields, omission) => {
+      const field = getProjectTransferExportArticleIdentifierPayloadField(omission.source)
+
+      return field === null ? fields : {...fields, [field]: null}
+    },
+    {},
+  )
+}
+
+const getProjectTransferExportSanitizedIdentifierInputs = (
+  inputs: ArticleIdentifierInput[],
+  omissions: ProjectTransferExportIdentifierOmission[],
+) => {
+  const omissionKeys = new Set(omissions.map(getProjectTransferExportIdentifierOmissionKey))
+
+  return inputs.filter((input) => {
+    return !omissionKeys.has(getProjectTransferExportIdentifierInputKey(input))
+  })
+}
+
+const getProjectTransferExportSanitizedArticleIdentifierRecord = (
+  record: ProjectTransferExportArticlePayloadRecord,
+): ProjectTransferExportArticlePayloadRecord => {
+  const normalized = getProjectTransferNormalizedArticleIdentifiers(record)
+  const omissions = getUniqueProjectTransferExportIdentifierOmissions([
+    ...normalized.rejected.map(getProjectTransferExportRejectedIdentifierOmission),
+    ...normalized.conflicts.flatMap(getProjectTransferExportConflictIdentifierOmissions),
+  ])
+  const warnings = getProjectTransferExportArticleIdentifierWarnings(record, normalized)
+  const sanitizedRecord = {
+    ...record,
+    ...getProjectTransferExportIdentifierOmittedFields(omissions),
+    identifierInputs: getProjectTransferExportSanitizedIdentifierInputs(record.identifierInputs, omissions),
+  }
+  const sanitizedRecordWithWarnings =
+    warnings.length === 0 ? sanitizedRecord : {...sanitizedRecord, warnings: [...(record.warnings ?? []), ...warnings]}
+
+  return {
+    ...sanitizedRecordWithWarnings,
+    signature: getProjectTransferExportArticleSignature(sanitizedRecordWithWarnings),
+  }
+}
+
+const getProjectTransferExportArticleWarnings = (articles: ProjectTransferExportArticlePayloadRecord[]) => {
+  return articles.flatMap((article) => {
+    return article.warnings ?? []
+  })
 }
 
 const getProjectTransferExportPromptSignature = (
@@ -1568,7 +1894,10 @@ const getProjectTransferExportArticlePayloadRecord = (
     url: row.url,
   }
 
-  return {...record, signature: getProjectTransferExportArticleSignature(record)}
+  return getProjectTransferExportSanitizedArticleIdentifierRecord({
+    ...record,
+    signature: getProjectTransferExportArticleSignature(record),
+  })
 }
 
 const getProjectTransferExportArticleSignatureById = (articleRows: ProjectTransferExportArticlePayloadRecord[]) => {
@@ -2165,33 +2494,32 @@ const getProjectTransferExportContext = async (
 ): Promise<ProjectTransferExportContext> => {
   const database = getDatabase(options)
   const project = await getProjectTransferExportSourceProjectSettings(projectId, {database})
-  const [
-    projectPromptRows,
-    importRouteRows,
-    projectImportRouteRows,
-    articleRows,
-    articleImportRouteRows,
-    projectArticleRows,
-    ambiguousJudgmentWarnings,
-    judgmentRows,
-    judgmentAssessmentRows,
-    humanJudgmentRows,
-    humanJudgmentSummaryRows,
-    reviewRows,
-  ] = await Promise.all([
-    getProjectTransferExportProjectPromptRows(projectId, database),
-    getProjectTransferExportImportRouteRows(projectId, database),
-    getProjectTransferExportProjectImportRouteRows(projectId, database),
-    getProjectTransferExportArticleRows(projectId, database),
-    getProjectTransferExportArticleImportRouteRows(projectId, database),
-    getProjectTransferExportProjectArticleRows(projectId, database),
-    getProjectTransferExportAmbiguousJudgmentWarnings(projectId, database),
-    getProjectTransferExportJudgmentRows(projectId, database),
-    getProjectTransferExportJudgmentAssessmentRows(projectId, database),
-    getProjectTransferExportHumanJudgmentRows(projectId, database),
-    getProjectTransferExportHumanJudgmentSummaryRows(projectId, database),
-    getProjectTransferExportReviewRows(projectId, database),
-  ])
+  const projectPromptRows = await getProjectTransferExportProjectPromptRows(projectId, database)
+  const importRouteRows = await getProjectTransferExportImportRouteRows(projectId, database)
+  const projectImportRouteRows = await getProjectTransferExportProjectImportRouteRows(projectId, database)
+  const articleImportRouteRows = await getProjectTransferExportArticleImportRouteRows(projectId, database)
+  const projectArticleRows = await getProjectTransferExportProjectArticleRows(projectId, database)
+  const ambiguousJudgmentWarnings = await getProjectTransferExportAmbiguousJudgmentWarnings(projectId, database)
+  const judgmentRows = await getProjectTransferExportJudgmentRows(projectId, database)
+  const includeFullText =
+    project.useFulltext
+    || project.useFulltextNoImages
+    || judgmentRows.some((row) => {
+      return row.useFulltext || row.useFulltextNoImages
+    })
+  const articleRawJsonEstimate = await getProjectTransferExportArticleRawJsonEstimate(projectId, database)
+  const articleRawJsonWarnings = getProjectTransferExportArticleRawJsonOmissionWarnings(
+    articleRawJsonEstimate,
+    options.articleRawJsonOmissionThresholdChars,
+  )
+  const articleRows = await getProjectTransferExportArticleRows(projectId, database, {
+    includeFullText,
+    includeRawArticleJson: articleRawJsonWarnings.length === 0,
+  })
+  const judgmentAssessmentRows = await getProjectTransferExportJudgmentAssessmentRows(projectId, database)
+  const humanJudgmentRows = await getProjectTransferExportHumanJudgmentRows(projectId, database)
+  const humanJudgmentSummaryRows = await getProjectTransferExportHumanJudgmentSummaryRows(projectId, database)
+  const reviewRows = await getProjectTransferExportReviewRows(projectId, database)
   const chunkedJudgmentWarnings = getProjectTransferExportChunkedJudgmentWarnings(judgmentRows)
   const exportedJudgmentRows = judgmentRows.filter((row) => {
     return row.chunkingStrategy === null
@@ -2241,7 +2569,12 @@ const getProjectTransferExportContext = async (
     projectPromptRows,
     providerConnectionRows,
     reviewRows,
-    warnings: [...ambiguousJudgmentWarnings, ...chunkedJudgmentWarnings],
+    warnings: [
+      ...ambiguousJudgmentWarnings,
+      ...chunkedJudgmentWarnings,
+      ...articleRawJsonWarnings,
+      ...getProjectTransferExportArticleWarnings(articleRows),
+    ],
   }
 }
 
@@ -2257,6 +2590,13 @@ type ProjectTransferExportPreflightAssetArticleRow = {
   fullTextPdf: string | null
   sourceArticleId: string
 }
+
+type ProjectTransferExportArticleRawJsonEstimateRow = {
+  estimatedChars: number | string | null
+  rowCount: number | string | null
+}
+
+type ProjectTransferExportArticleRawJsonEstimate = {estimatedChars: number; rowCount: number}
 
 const getProjectTransferExportPreflightPackageEstimate = async (
   projectId: string,

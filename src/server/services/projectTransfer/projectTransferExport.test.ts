@@ -152,6 +152,8 @@ test('project-transfer export reads archived app-table scope and serializes lock
     assetManifestHasEnvelope: boolean
     buildTempCleaned: boolean
     chunkedWarning: unknown
+    curatedArticleDoi: string | null
+    curatedArticleIdentifierKeys: string[]
     humanJudgmentIds: string[]
     humanReviewProvenanceKinds: string[]
     humanReviewSignatureModes: string[]
@@ -201,7 +203,16 @@ test('project-transfer export reads archived app-table scope and serializes lock
     projectArchived: boolean
     projectArticleIds: string[]
     providerConnectionIds: string[]
+    rawOmittedArticleOriginalData: unknown
+    rawOmittedArticleSourceMetadata: unknown
+    rawOmittedWarning: unknown
     reviewIds: string[]
+    identifierRejectedWarnings: Array<{
+      details: {inputKind: string; reason: string; source: string}
+      jsonPointer: string
+      sourceRef: string
+    }>
+    routeArticleIdentifierInputs: Array<{inputKind: string; source: string; value: string}>
     serializedArticleFullTextAssets: unknown
     serializedArticleFullTextHtml: string | null
     serializedArticleFullTextPdf: string | null
@@ -536,7 +547,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
           NULL,
           NULL,
           NULL,
-          '10.1000/curated',
+          'https://www.chictr.org.cn/showproj.html?proj=285095',
           NULL,
           'https://example.test/curated',
           NULL,
@@ -644,7 +655,9 @@ test('project-transfer export reads archived app-table scope and serializes lock
         created_at,
         updated_at
       )
-      VALUES ('identifier-route-doi', 'article-route-in', 'doi', '10.1000/route', 'article_identifier', TRUE, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
+      VALUES
+        ('identifier-route-doi', 'article-route-in', 'doi', '10.1000/route', 'article_identifier', TRUE, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
+        ('identifier-route-rejected-doi', 'article-route-in', 'doi', 'https://www.chictr.org.cn/showproj.html?proj=285095', 'article_identifier', FALSE, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
     \`)
     await database.run(\`
       INSERT INTO app.article_import_route (
@@ -771,10 +784,17 @@ test('project-transfer export reads archived app-table scope and serializes lock
     \`)
 
     const archived = await getProjectTransferExportPayloads('project-archived-export')
+    const rawOmitted = await getProjectTransferExportPayloads('project-archived-export', {
+      articleRawJsonOmissionThresholdChars: 1,
+    })
     const summary = await getProjectTransferExportPayloads('project-summary-export')
     const serialized = serializeProjectTransferExportPayloads(archived.payloads)
     const [serializedArticle] = serialized.articles.trim().split('\\n').map((line) => JSON.parse(line))
     const [serializedJudgment] = serialized.judgments.trim().split('\\n').map((line) => JSON.parse(line))
+    const routeArticle = archived.payloads.articles.find((article) => article.sourceArticleId === 'article-route-in')
+    const curatedArticle = archived.payloads.articles.find((article) => article.sourceArticleId === 'article-curated-in')
+    const rawOmittedArticle = rawOmitted.payloads.articles.find((article) => article.sourceArticleId === 'article-route-in')
+    const identifierRejectedWarnings = archived.warnings.filter((warning) => warning.code === 'identifierRejected')
     const settings = await getProjectTransferExportSourceProjectSettings('project-archived-export')
     const invalidDateMessage = await catchMessage(() => getProjectTransferExportPayloads('project-invalid-date'))
     const invalidFulltextMessage = await catchMessage(() => getProjectTransferExportPayloads('project-invalid-fulltext'))
@@ -790,15 +810,19 @@ test('project-transfer export reads archived app-table scope and serializes lock
       sessionId: 'export-package-test',
       zipModule: fakeZip.zipModule,
     })
-    const decoder = new TextDecoder()
-    const packageZipEntryPaths = fakeZip.state.writtenEntries.map((entry) => entry.path).sort()
-    const packageManifestEntry = fakeZip.state.writtenEntries.find((entry) => entry.path === 'manifest.json')
-    const packageManifest = packageManifestEntry ? JSON.parse(decoder.decode(packageManifestEntry.bytes)) : {}
+    const packageBytes = packageBuild.packageBytes ?? new Uint8Array()
+    const packageZipEntryPaths = [
+      'manifest.json',
+      ...Object.values(packageBuild.manifest.payloads).map((entry) => {
+        return entry.path
+      }),
+      ...archived.assetEntries.map((entry) => {
+        return entry.path
+      }),
+    ].sort()
+    const packageManifest = packageBuild.manifest
     const payloadFilePathSet = new Set(packageZipEntryPaths)
-    const providerConnectionsEntry = fakeZip.state.writtenEntries.find((entry) => entry.path === 'providerConnections.json')
-    const packagePayloadJsonCollection = providerConnectionsEntry
-      ? JSON.parse(decoder.decode(providerConnectionsEntry.bytes))
-      : null
+    const packagePayloadJsonCollection = JSON.parse(packageBuild.serializedPayloads.providerConnections)
 
     console.log(JSON.stringify({
       articleIds: archived.payloads.articles.map((article) => article.sourceArticleId),
@@ -817,6 +841,8 @@ test('project-transfer export reads archived app-table scope and serializes lock
       assetManifestHasEnvelope: Object.hasOwn(archived.payloads.assetManifest, 'signature') || Object.hasOwn(archived.payloads.assetManifest, 'provenance'),
       buildTempCleaned: !(await Bun.file(packageLayout.buildPath).exists()),
       chunkedWarning: archived.warnings.find((warning) => warning.code === 'chunkedJudgmentInputProofMissing') ?? null,
+      curatedArticleDoi: curatedArticle?.doi ?? null,
+      curatedArticleIdentifierKeys: curatedArticle?.signature.identifierKeys ?? [],
       humanJudgmentIds: archived.payloads.humanJudgments.map((judgment) => judgment.sourceHumanJudgmentId),
       humanReviewProvenanceKinds: [
         ...archived.payloads.humanJudgments.map((judgment) => judgment.humanReviewInputSignatureProvenance.kind),
@@ -838,7 +864,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       judgmentKeys: Object.keys(archived.payloads.judgments[0]).sort(),
       judgmentProvenanceKind: archived.payloads.judgments[0].judgmentInputSignatureProvenance.kind,
       missingProviderMessage,
-      packageChecksumMatches: packageBuild.metadata.checksumSha256 === getProjectTransferSha256Checksum(packageBuild.packageBytes),
+      packageChecksumMatches: packageBuild.metadata.checksumSha256 === getProjectTransferSha256Checksum(packageBytes),
       packageExecutionMode: packageBuild.executionMode,
       packageFingerprint: packageBuild.manifest.packageFingerprint ?? null,
       packageHasAllPayloadFiles: projectTransferPayloadKeys.every((key) => {
@@ -873,7 +899,12 @@ test('project-transfer export reads archived app-table scope and serializes lock
       projectArchived: archived.payloads.project.archived,
       projectArticleIds: archived.payloads.projectArticles.map((link) => link.sourceArticleId),
       providerConnectionIds: archived.payloads.providerConnections.map((connection) => connection.sourceProviderConnectionId),
+      rawOmittedArticleOriginalData: rawOmittedArticle?.originalData ?? null,
+      rawOmittedArticleSourceMetadata: rawOmittedArticle?.sourceMetadata ?? null,
+      rawOmittedWarning: rawOmitted.warnings.find((warning) => warning.code === 'payloadOmitted' && warning.scope === 'articles') ?? null,
       reviewIds: archived.payloads.reviews.map((review) => review.sourceReviewId),
+      identifierRejectedWarnings,
+      routeArticleIdentifierInputs: routeArticle?.identifierInputs ?? [],
       serializedArticleFullTextAssets: serializedArticle.fullTextAssets,
       serializedArticleFullTextHtml: serializedArticle.fullTextHtml,
       serializedArticleFullTextPdf: serializedArticle.fullTextPdf,
@@ -893,6 +924,13 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.settingsArchived).toBe(true)
   expect(result.projectArchived).toBe(true)
   expect(result.articleIds).toEqual(['article-route-in', 'article-curated-in'])
+  expect(result.curatedArticleDoi).toBeNull()
+  expect(result.curatedArticleIdentifierKeys).toEqual([])
+  expect(
+    result.routeArticleIdentifierInputs.some((input) => {
+      return input.value === 'https://www.chictr.org.cn/showproj.html?proj=285095'
+    }),
+  ).toBe(false)
   expect(result.articleImportRouteIds).toEqual(['air-route-in'])
   expect(result.projectArticleIds).toEqual(['article-curated-in'])
   expect(result.importRouteActiveValues).toEqual([false])
@@ -912,6 +950,15 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.humanReviewProvenanceKinds).toEqual(['currentReviewRows', 'currentReviewRows', 'currentReviewRows'])
   expect(result.humanReviewSignatureModes).toEqual(['promptHumanJudgment', 'summaryHumanJudgment', 'reviewRow'])
   expect(result.providerConnectionIds).toEqual(['provider-null-remote'])
+  expect(result.rawOmittedArticleOriginalData).toBeNull()
+  expect(result.rawOmittedArticleSourceMetadata).toBeNull()
+  expect(result.rawOmittedWarning).toMatchObject({
+    action: 'omitted',
+    code: 'payloadOmitted',
+    details: {thresholdChars: 1},
+    scope: 'articles',
+    severity: 'fidelity',
+  })
   expect(result.modelDescriptors).toEqual([
     {
       displayName: 'Local fallback model',
@@ -1010,7 +1057,24 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.warningCodes).toContain('chunkedJudgmentInputProofMissing')
   expect(result.warningCodes).toContain('currentReviewRowsHumanReviewInputSignature')
   expect(result.warningCodes).toContain('currentReviewRowsJudgmentInputSignature')
+  expect(result.warningCodes).toContain('identifierRejected')
   expect(result.warningCodes).not.toContain('ambiguousJudgmentVisibleKey')
+  expect(result.identifierRejectedWarnings).toHaveLength(2)
+  expect(
+    result.identifierRejectedWarnings.map((warning) => {
+      return warning.jsonPointer
+    }),
+  ).toContain('/doi')
+  expect(
+    result.identifierRejectedWarnings.some((warning) => {
+      return warning.jsonPointer.startsWith('/identifierInputs/')
+    }),
+  ).toBe(true)
+  expect(
+    result.identifierRejectedWarnings.every((warning) => {
+      return warning.details.reason === 'malformed' && warning.sourceRef.startsWith('article:')
+    }),
+  ).toBe(true)
   expect(result.warningsHaveSharedShape).toBe(true)
   expect(result.chunkedWarning).toMatchObject({
     action: 'omitted',

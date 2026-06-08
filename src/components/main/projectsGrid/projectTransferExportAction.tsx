@@ -6,7 +6,6 @@ import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 import {Button} from '../../ui/button'
 
-type ProjectTransferApiResponse<TData> = {data: TData; error: null} | {data: null; error: string}
 type ProjectTransferExportPendingStatus = 'assembling' | 'packaging' | 'queued'
 type ProjectTransferExportProgress = Record<string, unknown> & {percent?: number | null}
 type ProjectTransferExportPendingSession = {
@@ -45,10 +44,34 @@ const getStringValue = (record: Record<string, unknown>, key: string) => {
   return typeof value === 'string' ? value : null
 }
 
+const getDateStringValue = (record: Record<string, unknown>, key: string) => {
+  const value = record[key]
+
+  return typeof value === 'string'
+    ? value
+    : value instanceof Date && !Number.isNaN(value.getTime())
+      ? value.toISOString()
+      : null
+}
+
 const getNumberValue = (record: Record<string, unknown>, key: string) => {
   const value = record[key]
 
   return typeof value === 'number' ? value : null
+}
+
+const getRecordKeys = (value: unknown) => {
+  return isRecord(value) ? Object.keys(value).sort().join(',') : null
+}
+
+const getInvalidProjectTransferExportSessionMessage = (value: unknown, errorMessage: string) => {
+  const keys = getRecordKeys(value)
+  const dataKeys = isRecord(value) && 'data' in value ? getRecordKeys(value.data) : null
+  const status = isRecord(value) && 'status' in value ? String(value.status) : null
+
+  return keys === null
+    ? `${errorMessage}: ${typeof value}`
+    : `${errorMessage}: keys=${keys || 'none'}${status === null ? '' : ` status=${status}`}${dataKeys === null ? '' : ` dataKeys=${dataKeys || 'none'}`}`
 }
 
 const isProjectTransferExportPendingStatus = (value: unknown): value is ProjectTransferExportPendingStatus => {
@@ -63,7 +86,7 @@ const getProjectTransferExportPendingSession = (
   value: Record<string, unknown>,
 ): ProjectTransferExportPendingSession | null => {
   const exportId = getStringValue(value, 'exportId')
-  const expiresAt = getStringValue(value, 'expiresAt')
+  const expiresAt = getDateStringValue(value, 'expiresAt')
   const status = value.status
 
   return exportId !== null && expiresAt !== null && isProjectTransferExportPendingStatus(status)
@@ -84,7 +107,7 @@ const getProjectTransferExportReadySession = (
   const byteLength = getNumberValue(value, 'byteLength')
   const checksumSha256 = getStringValue(value, 'checksumSha256')
   const downloadUrl = getStringValue(value, 'downloadUrl')
-  const expiresAt = getStringValue(value, 'expiresAt')
+  const expiresAt = getDateStringValue(value, 'expiresAt')
   const exportId = getStringValue(value, 'exportId')
   const filename = getStringValue(value, 'filename')
   const packageFingerprint = getStringValue(value, 'packageFingerprint')
@@ -113,7 +136,7 @@ const getProjectTransferExportReadySession = (
 
 const parseProjectTransferExportSession = (value: unknown, errorMessage: string): ProjectTransferExportSession => {
   if (!isRecord(value)) {
-    throw new Error(errorMessage)
+    throw new Error(getInvalidProjectTransferExportSessionMessage(value, errorMessage))
   }
 
   const pendingSession = getProjectTransferExportPendingSession(value)
@@ -123,7 +146,7 @@ const parseProjectTransferExportSession = (value: unknown, errorMessage: string)
     pendingSession
     ?? readySession
     ?? (() => {
-      throw new Error(errorMessage)
+      throw new Error(getInvalidProjectTransferExportSessionMessage(value, errorMessage))
     })()
   )
 }
@@ -134,6 +157,12 @@ const getEnvelopeError = (value: unknown) => {
 
 const getEnvelopeData = (value: unknown) => {
   return isRecord(value) && 'data' in value ? value.data : null
+}
+
+const getProjectTransferExportSessionPayload = (value: unknown): unknown => {
+  return isRecord(value) && 'data' in value && !('exportId' in value) && (value.error === null || !('error' in value))
+    ? getProjectTransferExportSessionPayload(value.data)
+    : value
 }
 
 const readJsonResponseBody = async (response: Response): Promise<unknown> => {
@@ -203,12 +232,12 @@ export const getProjectTransferDownloadRequestUrl = (
 
 export const fetchProjectTransferExportSession = async (exportId: string): Promise<ProjectTransferExportSession> => {
   const response = await apiClient.api.projects.export({exportId}).get()
-  const envelope = handleApiResponse<ProjectTransferApiResponse<unknown>>(
-    response,
-    'Failed to fetch project transfer export status',
-  )
+  const data = handleApiResponse<unknown>(response, 'Failed to fetch project transfer export status')
 
-  return parseProjectTransferExportSession(envelope.data, 'Invalid project transfer export status response')
+  return parseProjectTransferExportSession(
+    getProjectTransferExportSessionPayload(data),
+    'Invalid project transfer export status response',
+  )
 }
 
 const readProjectTransferExportSessionResponse = async (
@@ -306,6 +335,7 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
 
         return data && data.status !== 'ready' ? 2_000 : false
       },
+      retry: false,
       suspense: false,
     }
   })
@@ -407,6 +437,7 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
   createEffect(() => {
     if (sessionQuery.isError) {
       setErrorMessage(getErrorMessage(sessionQuery.error, 'Failed to fetch project transfer export status'))
+      setSession(null)
     }
   })
 

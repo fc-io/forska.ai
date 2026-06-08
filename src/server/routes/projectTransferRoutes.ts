@@ -990,6 +990,19 @@ const getExportSessionData = (response: ProjectTransferSessionResponse): Project
     : null
 }
 
+const getProjectTransferExportFailureMessage = (error: unknown) => {
+  const detail =
+    isRecord(error) && typeof error.message === 'string'
+      ? error.message.trim()
+      : isRecord(error) && typeof error.reason === 'string'
+        ? error.reason.trim()
+        : typeof error === 'string'
+          ? error.trim()
+          : ''
+
+  return detail.length > 0 ? `Project transfer export failed: ${detail}` : 'Project transfer export failed'
+}
+
 const getExportSessionError = (
   response: ProjectTransferSessionResponse,
   now: Date,
@@ -999,7 +1012,7 @@ const getExportSessionError = (
   }
 
   if (response.state === 'failed') {
-    return {error: 'Project transfer export failed', status: 409}
+    return {error: getProjectTransferExportFailureMessage(response.error), status: 409}
   }
 
   if (response.state === 'expired' || hasSessionExpired(response, now)) {

@@ -39,6 +39,14 @@ type DuckdbOwnerStreamingProxyRequestTemplate = {
 const duckdbOwnerProxyRetryDelayMs = 250
 const duckdbOwnerProxyRetryTimeoutMs = 4000
 const duckdbOwnerProxyRetryableMethods = new Set(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'])
+const duckdbOwnerProxyHopByHopResponseHeaders = new Set([
+  'connection',
+  'keep-alive',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+])
 
 const getCurrentServerHostAliases = () => {
   const aliases = new Set(['127.0.0.1', '0.0.0.0', 'localhost', '::1'])
@@ -186,6 +194,24 @@ const getDuckdbOwnerProxyFailureResponse = (requestTemplate: {failClosedWithoutD
   return requestTemplate.failClosedWithoutDuckdbOwner ? getDuckdbOwnerProxyUnavailableResponse() : null
 }
 
+const getDuckdbOwnerProxyResponseHeaders = (response: Response) => {
+  return Array.from(response.headers.entries()).reduce<Headers>((headers, [key, value]) => {
+    if (!duckdbOwnerProxyHopByHopResponseHeaders.has(key.toLowerCase())) {
+      headers.set(key, value)
+    }
+
+    return headers
+  }, new Headers())
+}
+
+const getDuckdbOwnerProxyResponse = (response: Response) => {
+  return new Response(response.body, {
+    headers: getDuckdbOwnerProxyResponseHeaders(response),
+    status: response.status,
+    statusText: response.statusText,
+  })
+}
+
 const getIncompatibleDuckdbOwnerPeerResponse = (request: Request) => {
   const requestUrl = new URL(request.url)
   const classification = classifyApiRoute(requestUrl.pathname, request.method)
@@ -226,7 +252,9 @@ const forwardStreamingApiRequestToDuckdbOwner = async (
   }
 
   try {
-    return await fetchDuckdbOwnerStreamingProxyResponse(requestTemplate, target.duckdbOwnerUrl)
+    return getDuckdbOwnerProxyResponse(
+      await fetchDuckdbOwnerStreamingProxyResponse(requestTemplate, target.duckdbOwnerUrl),
+    )
   } catch {
     return getDuckdbOwnerProxyFailureResponse(requestTemplate)
   }
@@ -248,16 +276,17 @@ const forwardBufferedApiRequestToDuckdbOwner = async (request: Request): Promise
   const shouldRetryProxyRequest = duckdbOwnerProxyRetryableMethods.has(requestTemplate.method)
 
   try {
-    return await fetchDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl)
+    return getDuckdbOwnerProxyResponse(await fetchDuckdbOwnerProxyResponse(requestTemplate, target.duckdbOwnerUrl))
   } catch {
     if (!shouldRetryProxyRequest) {
       return getDuckdbOwnerProxyFailureResponse(requestTemplate)
     }
 
-    return (
-      (await getRetriedProxyResponse(requestTemplate, target.duckdbOwnerUrl))
-      ?? getDuckdbOwnerProxyFailureResponse(requestTemplate)
-    )
+    const retriedResponse = await getRetriedProxyResponse(requestTemplate, target.duckdbOwnerUrl)
+
+    return retriedResponse === null
+      ? getDuckdbOwnerProxyFailureResponse(requestTemplate)
+      : getDuckdbOwnerProxyResponse(retriedResponse)
   }
 }
 

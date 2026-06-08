@@ -1,4 +1,7 @@
 import {createHash} from 'node:crypto'
+import {mkdtemp, readFile, rm} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -9,6 +12,7 @@ import {
   type ProjectTransferZipJsUint8ArrayWriter,
   readProjectTransferZipPackage,
   writeProjectTransferZipPackage,
+  writeProjectTransferZipPackageToFile,
 } from './projectTransferZip.ts'
 
 type FakeZipReadEntry = ProjectTransferZipJsEntry & {readCount: () => number}
@@ -222,6 +226,41 @@ test('writes a ZIP64 project-transfer package after validating payload paths and
   ])
   expect(result.uncompressedSize).toBe(getBytes('{"schemaVersion":1}article-one').byteLength)
   expect(result.checksumSha256).toBe(getSha256Digest(result.bytes))
+})
+
+test('writes a project-transfer package directly to a file without returning archive bytes', async () => {
+  const rootPath = await mkdtemp(join(tmpdir(), `f2-project-transfer-zip-${process.pid}-`))
+  const outputPath = join(rootPath, 'export.zip')
+
+  try {
+    const result = await writeProjectTransferZipPackageToFile({
+      entries: [
+        {bytes: '{"schemaVersion":1}', path: 'manifest.json'},
+        {bytes: 'article-one', path: 'assets/articles/article-1.txt'},
+      ],
+      outputPath,
+    })
+    const bytes = new Uint8Array(await readFile(outputPath))
+
+    expect(result.byteLength).toBe(bytes.byteLength)
+    expect(result.checksumSha256).toBe(getSha256Digest(bytes))
+    expect(result.entries).toMatchObject([
+      {
+        checksumSha256: getSha256Digest(getBytes('{"schemaVersion":1}')),
+        path: 'manifest.json',
+        uncompressedSize: getBytes('{"schemaVersion":1}').byteLength,
+      },
+      {
+        checksumSha256: getSha256Digest(getBytes('article-one')),
+        path: 'assets/articles/article-1.txt',
+        uncompressedSize: getBytes('article-one').byteLength,
+      },
+    ])
+    expect(bytes[0]).toBe(0x50)
+    expect(bytes[1]).toBe(0x4b)
+  } finally {
+    await rm(rootPath, {force: true, recursive: true})
+  }
 })
 
 test('reads project-transfer packages using writer bytes for counters and checksums instead of advisory sizes', async () => {

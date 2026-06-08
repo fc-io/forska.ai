@@ -696,7 +696,11 @@ test('project transfer export polling rejects missing, wrong-direction, failed, 
     id: 'import-session',
     state: 'awaiting_upload',
   })
-  routeState.sessions['failed-session'] = getSessionRecord({id: 'failed-session', state: 'failed'})
+  routeState.sessions['failed-session'] = getSessionRecord({
+    errorJson: {message: 'Out of memory'},
+    id: 'failed-session',
+    state: 'failed',
+  })
   routeState.sessions['expired-session'] = getSessionRecord({id: 'expired-session', state: 'expired'})
   routeState.sessions['ready-expired-session'] = getReadySessionRecord({
     expiresAt: pastDate,
@@ -706,7 +710,7 @@ test('project transfer export polling rejects missing, wrong-direction, failed, 
   const cases = [
     {error: 'Project transfer export session not found', id: 'missing-session', status: 404},
     {error: 'Project transfer session is not an export session', id: 'import-session', status: 409},
-    {error: 'Project transfer export failed', id: 'failed-session', status: 409},
+    {error: 'Project transfer export failed: Out of memory', id: 'failed-session', status: 409},
     {error: 'Project transfer export session expired', id: 'expired-session', status: 410},
     {error: 'Project transfer export session expired', id: 'ready-expired-session', status: 410},
   ]
