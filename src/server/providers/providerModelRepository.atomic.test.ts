@@ -159,6 +159,54 @@ test('updateProviderModel re-enables model row and removes provider config disab
   expect(JSON.parse(storedConnection?.configJson ?? '{}')).toMatchObject({disabledModelIds: []})
 })
 
+test('updateProviderModel updates a model referenced by projects and judgments', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  await insertProviderModelFixture({connectionId: 'referenced-update-connection', modelId: 'referenced-update-model'})
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id)
+    VALUES ('referenced-update-project', 'Referenced Update Project', 'referenced-update-model')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('referenced-update-article', 'Referenced Update Article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text)
+    VALUES ('referenced-update-prompt', 'Include?')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (id, article_id, prompt_id, model_id)
+    VALUES (
+      'referenced-update-judgment',
+      'referenced-update-article',
+      'referenced-update-prompt',
+      'referenced-update-model'
+    )
+  `)
+
+  const updated = await updateProviderModel({
+    displayName: 'Updated Referenced Model',
+    enabled: true,
+    id: 'referenced-update-model',
+    options: {thinking: 'high'},
+    variant: null,
+  })
+  const [storedModel] = await queryDatabase<{displayName: string; thinking: string | null}>(`
+    SELECT
+      display_name AS displayName,
+      json_extract_string(metadata_json, '$.options.thinking') AS thinking
+    FROM app.model
+    WHERE id = 'referenced-update-model'
+    LIMIT 1
+  `)
+
+  expect(updated.displayName).toBe('Updated Referenced Model')
+  expect(storedModel).toEqual({displayName: 'Updated Referenced Model', thinking: 'high'})
+})
+
 test('updateProviderModel rolls back model enabled change when provider config write fails later', async () => {
   if (!queryDatabase) {
     throw new Error('Test database not initialized')
