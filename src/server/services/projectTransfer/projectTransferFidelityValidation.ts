@@ -1,5 +1,5 @@
 import type {ProviderConnectionForAdmin, ProviderModelRecord} from '../../providers/providerTypes.ts'
-import {getSqlLiteral} from '../appQueryHelpers.ts'
+import {getJsonValue, getSqlLiteral} from '../appQueryHelpers.ts'
 import type {ProjectTransferAnalyzeTargetRunner, ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
 import type {
   ProjectTransferConflictCounts,
@@ -804,11 +804,11 @@ const getHumanReviewSignature = ({
 const getTargetJudgmentFieldSignature = (row: TargetJudgmentRow) => {
   return {
     answeredOriginal: row.answeredOriginal,
-    answeredOriginalAsArray: Array.isArray(row.answeredOriginalAsArray) ? row.answeredOriginalAsArray : [],
+    answeredOriginalAsArray: getArrayField(row.answeredOriginalAsArray),
     confidenceOriginal: row.confidenceOriginal ?? 50,
     explanation: row.explanation,
     isAnswered: row.isAnswered ?? false,
-    quotes: Array.isArray(row.quotes) ? row.quotes : [],
+    quotes: getArrayField(row.quotes),
   }
 }
 
@@ -834,6 +834,16 @@ const getTargetAssessmentSignature = (assessment: TargetJudgmentAssessmentRow) =
   return {assessmentComment: assessment.assessmentComment, assessmentIsCorrect: assessment.assessmentIsCorrect ?? false}
 }
 
+const getArrayField = (value: unknown) => {
+  const parsed = getJsonValue(value)
+
+  return Array.isArray(parsed)
+    ? (parsed as readonly unknown[]).map((entry) => {
+        return entry
+      })
+    : []
+}
+
 const getBlockersForJudgmentPlanEntry = ({
   entry,
   sourceJudgmentId,
@@ -844,7 +854,10 @@ const getBlockersForJudgmentPlanEntry = ({
   return entry.conflictCodes.map((code) => {
     return getPlanBlocker({
       code,
-      message: `${sourceJudgmentId} cannot preserve its imported judgment against the final target input`,
+      message:
+        code === 'judgment_reused_benchmark_field_conflict'
+          ? `${sourceJudgmentId} matches an existing target judgment, but its saved answer, confidence, explanation, or quotes differ from the imported judgment`
+          : `${sourceJudgmentId} cannot preserve its imported judgment against the final target input`,
       scope: `judgments.${sourceJudgmentId}`,
     })
   })

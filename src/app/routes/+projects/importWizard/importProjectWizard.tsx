@@ -615,7 +615,7 @@ const MappingPanel = (props: {mapping: Record<string, string> | null | undefined
   )
 }
 
-const ProvenancePanel = (props: {entries: unknown[]; title: string}) => {
+const ProvenancePanel = (props: {description: string; entries: unknown[]; title: string}) => {
   const counts = createMemo(() => {
     return Object.entries(getProvenanceCounts(props.entries))
   })
@@ -623,6 +623,7 @@ const ProvenancePanel = (props: {entries: unknown[]; title: string}) => {
   return (
     <section class="rounded-lg border border-gray-200 bg-white p-4">
       <h2 class="text-base font-semibold text-gray-900">{props.title}</h2>
+      <p class="mt-1 text-sm text-gray-500">{props.description}</p>
       <Show when={counts().length > 0} fallback={<p class="mt-3 text-sm text-gray-500">No provenance rows.</p>}>
         <div class="mt-3 grid gap-2 sm:grid-cols-2">
           <For each={counts()}>
@@ -1052,6 +1053,11 @@ export const ImportProjectWizard = () => {
       && !commitMutation.isPending
     )
   })
+  const shouldShowDependencyResolution = createMemo(() => {
+    const session = currentSession()
+
+    return session !== null && hasUnresolvedDependencies(session)
+  })
   const commitmentState = createMemo(() => {
     const session = currentSession()
 
@@ -1399,41 +1405,351 @@ export const ImportProjectWizard = () => {
             <DependencyStatusTable session={currentSession()} />
             <BlockersPanel summary={planSummary()} />
 
-            <section class="rounded-lg border border-gray-200 bg-white p-4">
-              <div class="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 class="text-base font-semibold text-gray-900">Dependency resolution</h2>
-                  <p class="mt-1 text-sm text-gray-500">
-                    Existing connections stay unchanged. New connections and model rows are created explicitly.
-                  </p>
+            <Show when={shouldShowDependencyResolution()}>
+              <section class="rounded-lg border border-gray-200 bg-white p-4">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 class="text-base font-semibold text-gray-900">Dependency resolution</h2>
+                    <p class="mt-1 text-sm text-gray-500">
+                      Existing connections stay unchanged. New connections and model rows are created explicitly.
+                    </p>
+                  </div>
+                  <Button
+                    disabled={!currentSession() || resolveMutation.isPending}
+                    onClick={handleAutoResolve}
+                    type="button"
+                  >
+                    Auto-resolve
+                  </Button>
                 </div>
-                <Button
-                  disabled={!currentSession() || resolveMutation.isPending}
-                  onClick={handleAutoResolve}
-                  type="button"
-                >
-                  Auto-resolve
-                </Button>
-              </div>
 
-              <div class="mt-4 grid gap-4 lg:grid-cols-2">
-                <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                  <h3 class="text-sm font-semibold text-gray-900">Provider mapping</h3>
-                  <div class="mt-3 space-y-3">
+                <div class="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <h3 class="text-sm font-semibold text-gray-900">Provider mapping</h3>
+                    <div class="mt-3 space-y-3">
+                      <label class="block text-sm font-medium text-gray-700">
+                        <span>Source provider</span>
+                        <select
+                          class="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                          onChange={(event) => {
+                            setSelectedProviderSourceId(event.currentTarget.value)
+                          }}
+                          value={selectedProviderSourceId()}
+                        >
+                          <For each={providerSourceIds()}>
+                            {(sourceId) => {
+                              return (
+                                <option value={sourceId}>
+                                  {sourceId} ({getDependencyStatus(planSummary(), 'provider:', sourceId)})
+                                </option>
+                              )
+                            }}
+                          </For>
+                        </select>
+                      </label>
+                      <label class="block text-sm font-medium text-gray-700">
+                        <span>Existing enabled target connection</span>
+                        <select
+                          class="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                          onChange={(event) => {
+                            setSelectedTargetProviderConnectionId(event.currentTarget.value)
+                          }}
+                          value={selectedTargetProviderConnectionId()}
+                        >
+                          <For each={enabledConnections()}>
+                            {(connection) => {
+                              return (
+                                <option value={connection.id}>
+                                  {connection.label} ({getProviderLabel(catalog(), connection.providerKind)})
+                                </option>
+                              )
+                            }}
+                          </For>
+                        </select>
+                      </label>
+                      <div class="flex flex-wrap gap-2">
+                        <Button
+                          disabled={!selectedProviderSourceId() || !selectedTargetProviderConnectionId()}
+                          onClick={handleUseSelectedProvider}
+                          type="button"
+                        >
+                          Use connection
+                        </Button>
+                        <Button
+                          disabled={!selectedProviderSourceId()}
+                          onClick={handleMarkProviderUnresolved}
+                          type="button"
+                          variant="outline"
+                        >
+                          Mark unresolved
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <h3 class="text-sm font-semibold text-gray-900">Create target connection</h3>
+                    <div class="mt-3 grid gap-3">
+                      <label class="block text-sm font-medium text-gray-700">
+                        <span>Provider kind</span>
+                        <select
+                          class="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                          onChange={(event) => {
+                            setConnectionDraft((draft) => {
+                              return {...draft, providerKind: event.currentTarget.value}
+                            })
+                          }}
+                          value={connectionDraft().providerKind}
+                        >
+                          <For each={catalog()}>
+                            {(entry) => {
+                              return <option value={entry.kind}>{entry.label}</option>
+                            }}
+                          </For>
+                        </select>
+                      </label>
+                      <label class="block text-sm font-medium text-gray-700">
+                        <span>Connection label</span>
+                        <input
+                          class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                          onInput={(event) => {
+                            setConnectionDraft((draft) => {
+                              return {...draft, label: event.currentTarget.value}
+                            })
+                          }}
+                          value={connectionDraft().label}
+                        />
+                      </label>
+                      <label class="block text-sm font-medium text-gray-700">
+                        <span>Base URL</span>
+                        <input
+                          class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                          onInput={(event) => {
+                            setConnectionDraft((draft) => {
+                              return {...draft, baseURL: event.currentTarget.value}
+                            })
+                          }}
+                          placeholder="Optional"
+                          value={connectionDraft().baseURL}
+                        />
+                      </label>
+                      <label class="block text-sm font-medium text-gray-700">
+                        <span>API key</span>
+                        <input
+                          class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                          onInput={(event) => {
+                            setConnectionDraft((draft) => {
+                              return {...draft, apiKey: event.currentTarget.value}
+                            })
+                          }}
+                          placeholder="Optional or managed auth"
+                          type="password"
+                          value={connectionDraft().apiKey}
+                        />
+                      </label>
+                      <Button
+                        disabled={createConnectionMutation.isPending}
+                        onClick={handleCreateConnection}
+                        type="button"
+                      >
+                        Create connection
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <h3 class="text-sm font-semibold text-gray-900">Managed auth and discovery</h3>
+                    <div class="mt-3 grid gap-3">
+                      <label class="block text-sm font-medium text-gray-700">
+                        <span>Connection</span>
+                        <select
+                          class="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                          onChange={(event) => {
+                            const connection = getProviderConnectionForId(connections(), event.currentTarget.value)
+
+                            setAuthDraft({
+                              connectionId: event.currentTarget.value,
+                              providerKind: connection?.providerKind ?? authDraft().providerKind,
+                              secretValue: '',
+                            })
+                          }}
+                          value={selectedAuthConnectionId()}
+                        >
+                          <For each={enabledConnections()}>
+                            {(connection) => {
+                              return <option value={connection.id}>{connection.label}</option>
+                            }}
+                          </For>
+                        </select>
+                      </label>
+                      <input
+                        class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        onInput={(event) => {
+                          setAuthDraft((draft) => {
+                            return {...draft, secretValue: event.currentTarget.value}
+                          })
+                        }}
+                        placeholder="Managed auth secret, when requested"
+                        type="password"
+                        value={authDraft().secretValue}
+                      />
+                      <div class="flex flex-wrap gap-2">
+                        <Button
+                          disabled={beginAuthMutation.isPending}
+                          onClick={handleBeginAuth}
+                          type="button"
+                          variant="outline"
+                        >
+                          Begin auth
+                        </Button>
+                        <Button
+                          disabled={finishAuthMutation.isPending}
+                          onClick={handleFinishAuth}
+                          type="button"
+                          variant="outline"
+                        >
+                          Finish auth
+                        </Button>
+                        <Button
+                          disabled={!selectedAuthConnectionId() || testConnectionMutation.isPending}
+                          onClick={() => {
+                            testConnectionMutation.mutate(selectedAuthConnectionId())
+                          }}
+                          type="button"
+                          variant="outline"
+                        >
+                          Test
+                        </Button>
+                        <Button
+                          disabled={!selectedAuthConnectionId() || discoverModelsMutation.isPending}
+                          onClick={() => {
+                            discoverModelsMutation.mutate(selectedAuthConnectionId())
+                          }}
+                          type="button"
+                          variant="outline"
+                        >
+                          Discover
+                        </Button>
+                        <Button
+                          disabled={!selectedAuthConnectionId() || syncModelsMutation.isPending}
+                          onClick={() => {
+                            syncModelsMutation.mutate(selectedAuthConnectionId())
+                          }}
+                          type="button"
+                          variant="outline"
+                        >
+                          Sync models
+                        </Button>
+                      </div>
+                      <Show when={authMessage()}>
+                        <p class="text-sm text-gray-600">{authMessage()}</p>
+                      </Show>
+                      <Show when={discoveredModels().length > 0}>
+                        <div class="rounded-md border border-gray-200 bg-white p-3 text-sm text-gray-700">
+                          <div class="font-medium text-gray-900">Discovered models</div>
+                          <ul class="mt-2 space-y-1">
+                            <For each={discoveredModels()}>
+                              {(model) => {
+                                return <li>{model.displayName || model.modelName}</li>
+                              }}
+                            </For>
+                          </ul>
+                        </div>
+                      </Show>
+                    </div>
+                  </div>
+
+                  <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <h3 class="text-sm font-semibold text-gray-900">Codex status and login</h3>
+                    <div class="mt-3 space-y-3 text-sm text-gray-700">
+                      <Show when={codexStatusQuery.data} fallback={<p>Codex status has not loaded yet.</p>}>
+                        {(status) => {
+                          return (
+                            <div class="space-y-2">
+                              <div>
+                                CLI:{' '}
+                                <span
+                                  class={
+                                    status().cli.loggedIn ? 'font-medium text-green-700' : 'font-medium text-amber-700'
+                                  }
+                                >
+                                  {status().cli.loggedIn ? 'Logged in' : 'Login required'}
+                                </span>
+                              </div>
+                              <div>
+                                App server:{' '}
+                                <span
+                                  class={
+                                    status().appServerReady
+                                      ? 'font-medium text-green-700'
+                                      : 'font-medium text-amber-700'
+                                  }
+                                >
+                                  {status().appServerReady ? 'Ready' : 'Not ready'}
+                                </span>
+                              </div>
+                              <p class="break-words text-gray-500">{status().message}</p>
+                            </div>
+                          )
+                        }}
+                      </Show>
+                      <div class="flex flex-wrap gap-2">
+                        <Button
+                          disabled={codexStatusQuery.isFetching}
+                          onClick={() => {
+                            void codexStatusQuery.refetch()
+                          }}
+                          type="button"
+                          variant="outline"
+                        >
+                          Refresh status
+                        </Button>
+                        <Button
+                          disabled={codexLoginMutation.isPending}
+                          onClick={() => {
+                            return codexLoginMutation.mutate()
+                          }}
+                          type="button"
+                        >
+                          Start login
+                        </Button>
+                        <Button
+                          disabled={!currentSession()}
+                          onClick={() => {
+                            resolveWithCurrentRevision({codexSetupState: 'complete'})
+                          }}
+                          type="button"
+                          variant="outline"
+                        >
+                          Mark Codex complete
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                  <h3 class="text-sm font-semibold text-gray-900">Model mapping and materialization</h3>
+                  <div class="mt-3 grid gap-3 lg:grid-cols-2">
                     <label class="block text-sm font-medium text-gray-700">
-                      <span>Source provider</span>
+                      <span>Source model</span>
                       <select
                         class="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
                         onChange={(event) => {
-                          setSelectedProviderSourceId(event.currentTarget.value)
+                          setSelectedModelSourceId(event.currentTarget.value)
+                          setMaterializationDraft((draft) => {
+                            return {...draft, sourceModelId: event.currentTarget.value}
+                          })
                         }}
-                        value={selectedProviderSourceId()}
+                        value={selectedModelSourceId()}
                       >
-                        <For each={providerSourceIds()}>
+                        <For each={modelSourceIds()}>
                           {(sourceId) => {
                             return (
                               <option value={sourceId}>
-                                {sourceId} ({getDependencyStatus(planSummary(), 'provider:', sourceId)})
+                                {sourceId} ({getDependencyStatus(planSummary(), 'model:', sourceId)})
                               </option>
                             )
                           }}
@@ -1441,420 +1757,118 @@ export const ImportProjectWizard = () => {
                       </select>
                     </label>
                     <label class="block text-sm font-medium text-gray-700">
-                      <span>Existing enabled target connection</span>
+                      <span>Existing enabled target model</span>
                       <select
                         class="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
                         onChange={(event) => {
-                          setSelectedTargetProviderConnectionId(event.currentTarget.value)
+                          setSelectedTargetModelId(event.currentTarget.value)
                         }}
-                        value={selectedTargetProviderConnectionId()}
+                        value={selectedTargetModelId()}
                       >
-                        <For each={enabledConnections()}>
-                          {(connection) => {
+                        <For each={selectableModels()}>
+                          {(model) => {
                             return (
-                              <option value={connection.id}>
-                                {connection.label} ({getProviderLabel(catalog(), connection.providerKind)})
+                              <option value={model.id}>
+                                {model.displayName ?? model.name} ({model.connectionLabel})
                               </option>
                             )
                           }}
                         </For>
                       </select>
                     </label>
-                    <div class="flex flex-wrap gap-2">
-                      <Button
-                        disabled={!selectedProviderSourceId() || !selectedTargetProviderConnectionId()}
-                        onClick={handleUseSelectedProvider}
-                        type="button"
-                      >
-                        Use connection
-                      </Button>
-                      <Button
-                        disabled={!selectedProviderSourceId()}
-                        onClick={handleMarkProviderUnresolved}
-                        type="button"
-                        variant="outline"
-                      >
-                        Mark unresolved
-                      </Button>
-                    </div>
                   </div>
-                </div>
-
-                <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                  <h3 class="text-sm font-semibold text-gray-900">Create target connection</h3>
-                  <div class="mt-3 grid gap-3">
-                    <label class="block text-sm font-medium text-gray-700">
-                      <span>Provider kind</span>
-                      <select
-                        class="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                  <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+                      <input
+                        checked={acceptSubstituteModel()}
                         onChange={(event) => {
-                          setConnectionDraft((draft) => {
-                            return {...draft, providerKind: event.currentTarget.value}
-                          })
+                          setAcceptSubstituteModel(event.currentTarget.checked)
                         }}
-                        value={connectionDraft().providerKind}
-                      >
-                        <For each={catalog()}>
-                          {(entry) => {
-                            return <option value={entry.kind}>{entry.label}</option>
-                          }}
-                        </For>
-                      </select>
-                    </label>
-                    <label class="block text-sm font-medium text-gray-700">
-                      <span>Connection label</span>
-                      <input
-                        class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-                        onInput={(event) => {
-                          setConnectionDraft((draft) => {
-                            return {...draft, label: event.currentTarget.value}
-                          })
-                        }}
-                        value={connectionDraft().label}
+                        type="checkbox"
                       />
-                    </label>
-                    <label class="block text-sm font-medium text-gray-700">
-                      <span>Base URL</span>
-                      <input
-                        class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-                        onInput={(event) => {
-                          setConnectionDraft((draft) => {
-                            return {...draft, baseURL: event.currentTarget.value}
-                          })
-                        }}
-                        placeholder="Optional"
-                        value={connectionDraft().baseURL}
-                      />
-                    </label>
-                    <label class="block text-sm font-medium text-gray-700">
-                      <span>API key</span>
-                      <input
-                        class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-                        onInput={(event) => {
-                          setConnectionDraft((draft) => {
-                            return {...draft, apiKey: event.currentTarget.value}
-                          })
-                        }}
-                        placeholder="Optional or managed auth"
-                        type="password"
-                        value={connectionDraft().apiKey}
-                      />
+                      Accept substitute only when no imported judgments reference this model
                     </label>
                     <Button
-                      disabled={createConnectionMutation.isPending}
-                      onClick={handleCreateConnection}
+                      disabled={!selectedModelSourceId() || !selectedTargetModelId()}
+                      onClick={handleUseSelectedModel}
                       type="button"
                     >
-                      Create connection
+                      Use model
+                    </Button>
+                    <Button
+                      disabled={!selectedModelSourceId()}
+                      onClick={handleMarkModelUnresolved}
+                      type="button"
+                      variant="outline"
+                    >
+                      Mark unresolved
                     </Button>
                   </div>
-                </div>
-              </div>
-
-              <div class="mt-4 grid gap-4 lg:grid-cols-2">
-                <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                  <h3 class="text-sm font-semibold text-gray-900">Managed auth and discovery</h3>
-                  <div class="mt-3 grid gap-3">
-                    <label class="block text-sm font-medium text-gray-700">
-                      <span>Connection</span>
-                      <select
-                        class="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
-                        onChange={(event) => {
-                          const connection = getProviderConnectionForId(connections(), event.currentTarget.value)
-
-                          setAuthDraft({
-                            connectionId: event.currentTarget.value,
-                            providerKind: connection?.providerKind ?? authDraft().providerKind,
-                            secretValue: '',
-                          })
-                        }}
-                        value={selectedAuthConnectionId()}
-                      >
-                        <For each={enabledConnections()}>
-                          {(connection) => {
-                            return <option value={connection.id}>{connection.label}</option>
-                          }}
-                        </For>
-                      </select>
-                    </label>
+                  <div class="mt-4 grid gap-3 lg:grid-cols-4">
                     <input
-                      class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      class="rounded-md border border-gray-300 px-3 py-2 text-sm"
                       onInput={(event) => {
-                        setAuthDraft((draft) => {
-                          return {...draft, secretValue: event.currentTarget.value}
-                        })
-                      }}
-                      placeholder="Managed auth secret, when requested"
-                      type="password"
-                      value={authDraft().secretValue}
-                    />
-                    <div class="flex flex-wrap gap-2">
-                      <Button
-                        disabled={beginAuthMutation.isPending}
-                        onClick={handleBeginAuth}
-                        type="button"
-                        variant="outline"
-                      >
-                        Begin auth
-                      </Button>
-                      <Button
-                        disabled={finishAuthMutation.isPending}
-                        onClick={handleFinishAuth}
-                        type="button"
-                        variant="outline"
-                      >
-                        Finish auth
-                      </Button>
-                      <Button
-                        disabled={!selectedAuthConnectionId() || testConnectionMutation.isPending}
-                        onClick={() => {
-                          testConnectionMutation.mutate(selectedAuthConnectionId())
-                        }}
-                        type="button"
-                        variant="outline"
-                      >
-                        Test
-                      </Button>
-                      <Button
-                        disabled={!selectedAuthConnectionId() || discoverModelsMutation.isPending}
-                        onClick={() => {
-                          discoverModelsMutation.mutate(selectedAuthConnectionId())
-                        }}
-                        type="button"
-                        variant="outline"
-                      >
-                        Discover
-                      </Button>
-                      <Button
-                        disabled={!selectedAuthConnectionId() || syncModelsMutation.isPending}
-                        onClick={() => {
-                          syncModelsMutation.mutate(selectedAuthConnectionId())
-                        }}
-                        type="button"
-                        variant="outline"
-                      >
-                        Sync models
-                      </Button>
-                    </div>
-                    <Show when={authMessage()}>
-                      <p class="text-sm text-gray-600">{authMessage()}</p>
-                    </Show>
-                    <Show when={discoveredModels().length > 0}>
-                      <div class="rounded-md border border-gray-200 bg-white p-3 text-sm text-gray-700">
-                        <div class="font-medium text-gray-900">Discovered models</div>
-                        <ul class="mt-2 space-y-1">
-                          <For each={discoveredModels()}>
-                            {(model) => {
-                              return <li>{model.displayName || model.modelName}</li>
-                            }}
-                          </For>
-                        </ul>
-                      </div>
-                    </Show>
-                  </div>
-                </div>
-
-                <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                  <h3 class="text-sm font-semibold text-gray-900">Codex status and login</h3>
-                  <div class="mt-3 space-y-3 text-sm text-gray-700">
-                    <Show when={codexStatusQuery.data} fallback={<p>Codex status has not loaded yet.</p>}>
-                      {(status) => {
-                        return (
-                          <div class="space-y-2">
-                            <div>
-                              CLI:{' '}
-                              <span
-                                class={
-                                  status().cli.loggedIn ? 'font-medium text-green-700' : 'font-medium text-amber-700'
-                                }
-                              >
-                                {status().cli.loggedIn ? 'Logged in' : 'Login required'}
-                              </span>
-                            </div>
-                            <div>
-                              App server:{' '}
-                              <span
-                                class={
-                                  status().appServerReady ? 'font-medium text-green-700' : 'font-medium text-amber-700'
-                                }
-                              >
-                                {status().appServerReady ? 'Ready' : 'Not ready'}
-                              </span>
-                            </div>
-                            <p class="break-words text-gray-500">{status().message}</p>
-                          </div>
-                        )
-                      }}
-                    </Show>
-                    <div class="flex flex-wrap gap-2">
-                      <Button
-                        disabled={codexStatusQuery.isFetching}
-                        onClick={() => {
-                          void codexStatusQuery.refetch()
-                        }}
-                        type="button"
-                        variant="outline"
-                      >
-                        Refresh status
-                      </Button>
-                      <Button
-                        disabled={codexLoginMutation.isPending}
-                        onClick={() => {
-                          return codexLoginMutation.mutate()
-                        }}
-                        type="button"
-                      >
-                        Start login
-                      </Button>
-                      <Button
-                        disabled={!currentSession()}
-                        onClick={() => {
-                          resolveWithCurrentRevision({codexSetupState: 'complete'})
-                        }}
-                        type="button"
-                        variant="outline"
-                      >
-                        Mark Codex complete
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
-                <h3 class="text-sm font-semibold text-gray-900">Model mapping and materialization</h3>
-                <div class="mt-3 grid gap-3 lg:grid-cols-2">
-                  <label class="block text-sm font-medium text-gray-700">
-                    <span>Source model</span>
-                    <select
-                      class="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
-                      onChange={(event) => {
-                        setSelectedModelSourceId(event.currentTarget.value)
                         setMaterializationDraft((draft) => {
-                          return {...draft, sourceModelId: event.currentTarget.value}
+                          return {...draft, remoteModelId: event.currentTarget.value}
                         })
                       }}
-                      value={selectedModelSourceId()}
-                    >
-                      <For each={modelSourceIds()}>
-                        {(sourceId) => {
-                          return (
-                            <option value={sourceId}>
-                              {sourceId} ({getDependencyStatus(planSummary(), 'model:', sourceId)})
-                            </option>
-                          )
-                        }}
-                      </For>
-                    </select>
-                  </label>
-                  <label class="block text-sm font-medium text-gray-700">
-                    <span>Existing enabled target model</span>
-                    <select
-                      class="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
-                      onChange={(event) => {
-                        setSelectedTargetModelId(event.currentTarget.value)
-                      }}
-                      value={selectedTargetModelId()}
-                    >
-                      <For each={selectableModels()}>
-                        {(model) => {
-                          return (
-                            <option value={model.id}>
-                              {model.displayName ?? model.name} ({model.connectionLabel})
-                            </option>
-                          )
-                        }}
-                      </For>
-                    </select>
-                  </label>
-                </div>
-                <div class="mt-3 flex flex-wrap items-center gap-2">
-                  <label class="inline-flex items-center gap-2 text-sm text-gray-700">
-                    <input
-                      checked={acceptSubstituteModel()}
-                      onChange={(event) => {
-                        setAcceptSubstituteModel(event.currentTarget.checked)
-                      }}
-                      type="checkbox"
+                      placeholder="Remote model id"
+                      value={materializationDraft().remoteModelId}
                     />
-                    Accept substitute only when no imported judgments reference this model
-                  </label>
-                  <Button
-                    disabled={!selectedModelSourceId() || !selectedTargetModelId()}
-                    onClick={handleUseSelectedModel}
-                    type="button"
-                  >
-                    Use model
-                  </Button>
-                  <Button
-                    disabled={!selectedModelSourceId()}
-                    onClick={handleMarkModelUnresolved}
-                    type="button"
-                    variant="outline"
-                  >
-                    Mark unresolved
-                  </Button>
+                    <input
+                      class="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      onInput={(event) => {
+                        setMaterializationDraft((draft) => {
+                          return {...draft, displayName: event.currentTarget.value}
+                        })
+                      }}
+                      placeholder="Display name"
+                      value={materializationDraft().displayName}
+                    />
+                    <input
+                      class="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      onInput={(event) => {
+                        setMaterializationDraft((draft) => {
+                          return {...draft, variant: event.currentTarget.value}
+                        })
+                      }}
+                      placeholder="Variant"
+                      value={materializationDraft().variant}
+                    />
+                    <Button
+                      disabled={materializeModelMutation.isPending}
+                      onClick={handleMaterializeModel}
+                      type="button"
+                    >
+                      Materialize model
+                    </Button>
+                  </div>
+                  <Show when={selectedConnection()}>
+                    {(connection) => {
+                      return (
+                        <p class="mt-3 text-xs text-gray-500">
+                          Selected connection: {connection().label} ({connection().id})
+                        </p>
+                      )
+                    }}
+                  </Show>
+                  <Show when={selectedTargetModel()}>
+                    {(model) => {
+                      return (
+                        <p class="mt-1 text-xs text-gray-500">
+                          Selected model: {model().displayName ?? model().name} ({model().id})
+                        </p>
+                      )
+                    }}
+                  </Show>
                 </div>
-                <div class="mt-4 grid gap-3 lg:grid-cols-4">
-                  <input
-                    class="rounded-md border border-gray-300 px-3 py-2 text-sm"
-                    onInput={(event) => {
-                      setMaterializationDraft((draft) => {
-                        return {...draft, remoteModelId: event.currentTarget.value}
-                      })
-                    }}
-                    placeholder="Remote model id"
-                    value={materializationDraft().remoteModelId}
-                  />
-                  <input
-                    class="rounded-md border border-gray-300 px-3 py-2 text-sm"
-                    onInput={(event) => {
-                      setMaterializationDraft((draft) => {
-                        return {...draft, displayName: event.currentTarget.value}
-                      })
-                    }}
-                    placeholder="Display name"
-                    value={materializationDraft().displayName}
-                  />
-                  <input
-                    class="rounded-md border border-gray-300 px-3 py-2 text-sm"
-                    onInput={(event) => {
-                      setMaterializationDraft((draft) => {
-                        return {...draft, variant: event.currentTarget.value}
-                      })
-                    }}
-                    placeholder="Variant"
-                    value={materializationDraft().variant}
-                  />
-                  <Button disabled={materializeModelMutation.isPending} onClick={handleMaterializeModel} type="button">
-                    Materialize model
-                  </Button>
-                </div>
-                <Show when={selectedConnection()}>
-                  {(connection) => {
-                    return (
-                      <p class="mt-3 text-xs text-gray-500">
-                        Selected connection: {connection().label} ({connection().id})
-                      </p>
-                    )
-                  }}
-                </Show>
-                <Show when={selectedTargetModel()}>
-                  {(model) => {
-                    return (
-                      <p class="mt-1 text-xs text-gray-500">
-                        Selected model: {model().displayName ?? model().name} ({model().id})
-                      </p>
-                    )
-                  }}
-                </Show>
-              </div>
-            </section>
+              </section>
+            </Show>
 
             <section class="rounded-lg border border-gray-200 bg-white p-4">
               <div class="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h2 class="text-base font-semibold text-gray-900">Plan review</h2>
+                  <h2 class="text-base font-semibold text-gray-900">Project</h2>
                   <p class="mt-1 text-sm text-gray-500">{getCommitUnavailableReason(currentSession())}</p>
                 </div>
                 <div class="flex items-center gap-3">
@@ -1864,52 +1878,70 @@ export const ImportProjectWizard = () => {
                       <Match when={commitMutation.isPending}>Committing...</Match>
                       <Match when={currentSession()?.state === 'committing'}>Commit running</Match>
                       <Match when={currentSession()?.state === 'completed'}>Committed</Match>
-                      <Match when={true}>Commit import</Match>
+                      <Match when={true}>Create project from import</Match>
                     </Switch>
                   </Button>
                 </div>
               </div>
             </section>
 
-            <div class="grid gap-4 lg:grid-cols-2">
-              <MappingPanel
-                mapping={plan()?.dependencyResolution?.providerTargetBySourceId}
-                title="Final provider mappings"
-              />
-              <MappingPanel
-                mapping={plan()?.dependencyResolution?.modelTargetBySourceId}
-                title="Final model mappings"
-              />
-              <ProvenancePanel entries={judgmentPlan()} title="Judgment signature provenance" />
-              <ProvenancePanel entries={humanReviewPlan()} title="Human/review signature provenance" />
-            </div>
-
-            <PlanDetailList
-              emptyLabel="No reused-article updates are planned."
-              entries={getPlanArray(plan(), 'articleUpdatePlan')}
-              title="Reused-article update plan"
-            />
-            <PlanDetailList
-              emptyLabel="No omitted project route links."
-              entries={getOmittedRoutes(plan())}
-              title="Route-link omissions"
-            />
-            <PlanDetailList
-              emptyLabel="No omitted article route links."
-              entries={getOmittedArticleRoutes(plan())}
-              title="Article route-link omissions"
-            />
-            <PlanDetailList
-              emptyLabel="No snapshot project-article links."
-              entries={getSnapshotArticleRoutes(plan())}
-              title="Snapshot project-article links"
-            />
-            <PlanDetailList emptyLabel="No judgment plan rows." entries={judgmentPlan()} title="Judgment plan rows" />
-            <PlanDetailList
-              emptyLabel="No human/review plan rows."
-              entries={humanReviewPlan()}
-              title="Human/review plan rows"
-            />
+            <details class="rounded-lg border border-gray-200 bg-white p-4">
+              <summary class="cursor-pointer text-base font-semibold text-gray-900">Debug</summary>
+              <div class="mt-4 space-y-4">
+                <div class="grid gap-4 lg:grid-cols-2">
+                  <MappingPanel
+                    mapping={plan()?.dependencyResolution?.providerTargetBySourceId}
+                    title="Final provider mappings"
+                  />
+                  <MappingPanel
+                    mapping={plan()?.dependencyResolution?.modelTargetBySourceId}
+                    title="Final model mappings"
+                  />
+                </div>
+                <div class="grid gap-4 lg:grid-cols-2">
+                  <ProvenancePanel
+                    description="Shows where the judgment comparison signature came from when import checks whether an existing target judgment already matches."
+                    entries={judgmentPlan()}
+                    title="Judgment comparison signature source"
+                  />
+                  <ProvenancePanel
+                    description="Shows where the human/review comparison signature came from when import checks whether existing human judgment or review state already matches."
+                    entries={humanReviewPlan()}
+                    title="Human/review comparison signature source"
+                  />
+                </div>
+                <PlanDetailList
+                  emptyLabel="No reused-article updates are planned."
+                  entries={getPlanArray(plan(), 'articleUpdatePlan')}
+                  title="Reused-article update plan"
+                />
+                <PlanDetailList
+                  emptyLabel="No omitted project route links."
+                  entries={getOmittedRoutes(plan())}
+                  title="Route-link omissions"
+                />
+                <PlanDetailList
+                  emptyLabel="No omitted article route links."
+                  entries={getOmittedArticleRoutes(plan())}
+                  title="Article route-link omissions"
+                />
+                <PlanDetailList
+                  emptyLabel="No snapshot project-article links."
+                  entries={getSnapshotArticleRoutes(plan())}
+                  title="Snapshot project-article links"
+                />
+                <PlanDetailList
+                  emptyLabel="No judgment plan rows."
+                  entries={judgmentPlan()}
+                  title="Judgment plan rows"
+                />
+                <PlanDetailList
+                  emptyLabel="No human/review plan rows."
+                  entries={humanReviewPlan()}
+                  title="Human/review plan rows"
+                />
+              </div>
+            </details>
           </div>
 
           <aside class="space-y-4">

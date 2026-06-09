@@ -427,17 +427,25 @@ describe('project import route', () => {
     const {container, dispose} = await renderImportWizard()
 
     try {
+      const debugSection = Array.from(container.querySelectorAll('details')).find((details) => {
+        return details.querySelector('summary')?.textContent?.includes('Debug')
+      })
+
       expect(container.textContent).toContain('Import Project')
       expect(container.textContent).toContain('Upload a transfer package')
+      expect(container.textContent).toContain('Debug')
       expect(container.textContent).toContain('Reused-article update plan')
       expect(container.textContent).toContain('Route-link omissions')
       expect(container.textContent).toContain('Snapshot project-article links')
       expect(container.textContent).toContain('Final provider mappings')
       expect(container.textContent).toContain('Final model mappings')
-      expect(container.textContent).toContain('Judgment signature provenance')
-      expect(container.textContent).toContain('Human/review signature provenance')
+      expect(container.textContent).toContain('Judgment comparison signature source')
+      expect(container.textContent).toContain('Human/review comparison signature source')
+      expect(container.textContent).toContain('Shows where the judgment comparison signature came from')
+      expect(container.textContent).not.toContain('Dependency resolution')
       expect(container.textContent).toContain('requires new package or target changes')
-      expect(container.textContent).toContain('Commit import')
+      expect(container.textContent).toContain('Create project from import')
+      expect(debugSection?.hasAttribute('open')).toBe(false)
     } finally {
       dispose()
       container.remove()
@@ -489,7 +497,7 @@ describe('project import route', () => {
 
     try {
       const commitButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.includes('Commit import')
+        return button.textContent?.includes('Create project from import')
       })
 
       commitButton?.click()
@@ -517,7 +525,7 @@ describe('project import route', () => {
 
     try {
       const commitButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.includes('Commit import')
+        return button.textContent?.includes('Create project from import')
       })
 
       commitButton?.click()
@@ -543,6 +551,15 @@ describe('project import route', () => {
     }
     const originalConnections = mockState.providerConnectionsQueryResult.data.connections
     mockState.providerConnectionsQueryResult.data.connections = [...originalConnections, secondConnection]
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({
+        planSummary: {
+          ...getSession().planSummary,
+          dependencyStatuses: {'model:model-source-1': 'missing', 'provider:provider-source-1': 'missing'},
+        },
+      }),
+    }
 
     const {container, dispose} = await renderImportWizard()
 
@@ -574,7 +591,11 @@ describe('project import route', () => {
         id: 'provider-target-2',
         remoteModelId: 'remote-model-2',
       })
-      expect(mockState.resolveInputs[0]).toMatchObject({
+      expect(
+        mockState.resolveInputs.find((input) => {
+          return typeof input === 'object' && input !== null && 'materializedModels' in input
+        }),
+      ).toMatchObject({
         materializedModels: [
           {
             sourceModelId: 'model-source-1',
@@ -634,7 +655,7 @@ describe('project import route', () => {
 
     try {
       const commitButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.includes('Commit import')
+        return button.textContent?.includes('Create project from import')
       })
 
       expect(container.textContent).toContain('Plan revision changed')
