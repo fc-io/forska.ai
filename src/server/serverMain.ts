@@ -18,6 +18,7 @@ import {judgmentDispatchTelemetryRoutes} from './routes/JudgmentDispatchTelemetr
 import {getProductApiRoutes} from './routes/productApiRoutes.ts'
 import {publicRouteSurfaceGate} from './routes/publicRouteSurfaceGate.ts'
 import {runtimeReadyRoutes} from './routes/runtimeReadyRoutes.ts'
+import {projectTransferResourceGateLimits} from './services/projectTransfer/projectTransferContracts.ts'
 import {
   type ProjectTransferSessionRecoveryResult,
   runProjectTransferStartupRecovery,
@@ -288,7 +289,12 @@ export const app = new Elysia()
   .use(judgmentCronRoutes)
   .use(publicProductApiRoutes)
   .use(duckdbOwnerPrivateApiRoutes)
-  .listen({hostname: '127.0.0.1', port: env.API_SERVER_PORT, idleTimeout: 255})
+  .listen({
+    hostname: '127.0.0.1',
+    idleTimeout: 255,
+    maxRequestBodySize: projectTransferResourceGateLimits.maxSingleFileBytes,
+    port: env.API_SERVER_PORT,
+  })
 
 writeRuntimeOperatorLogEvent({
   attrs: {
