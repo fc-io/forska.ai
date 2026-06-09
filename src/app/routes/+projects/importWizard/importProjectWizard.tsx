@@ -287,6 +287,12 @@ const getProgressPercent = (session: ProjectImportSession | null, uploadPercent:
   return typeof progressPercent === 'number' ? Math.round(progressPercent) : uploadPercent
 }
 
+const hasUnresolvedDependencies = (session: ProjectImportSession | null) => {
+  return Object.values(session?.planSummary?.dependencyStatuses ?? {}).some((status) => {
+    return status !== 'resolved' && status !== 'not_required'
+  })
+}
+
 const shouldPollSession = (session: ProjectImportSession | undefined) => {
   return session !== undefined && activeSessionStates.has(session.state)
 }
@@ -683,6 +689,7 @@ export const ImportProjectWizard = () => {
   const [sessionId, setSessionId] = createSignal<string | null>(getInitialSessionId())
   const [sessionOverride, setSessionOverride] = createSignal<ProjectImportSession | null>(null)
   const [navigatedProjectId, setNavigatedProjectId] = createSignal<string | null>(null)
+  const [autoResolvedRevisionKey, setAutoResolvedRevisionKey] = createSignal<string | null>(null)
   const [selectedFile, setSelectedFile] = createSignal<File | null>(null)
   const [uploadPercent, setUploadPercent] = createSignal<number | null>(null)
   const [pageError, setPageError] = createSignal('')
@@ -778,6 +785,7 @@ export const ImportProjectWizard = () => {
   }
   const setResolveResult = (session: ProjectImportSession) => {
     setActiveSession(session)
+    void providerConnectionsQuery.refetch()
     setPageMessage(session.stalePlan ? 'Plan revision was stale; refreshed latest plan.' : 'Dependency plan updated.')
   }
   const navigateToCompletedProject = (session: ProjectImportSession) => {
@@ -1074,6 +1082,25 @@ export const ImportProjectWizard = () => {
     if (session?.state === 'completed') {
       navigateToCompletedProject(session)
     }
+  })
+
+  createEffect(() => {
+    const session = currentSession()
+    const revisionKey = session ? `${session.id}:${session.planRevision}` : null
+
+    if (
+      session === null
+      || session.state !== 'awaiting_resolution'
+      || !hasUnresolvedDependencies(session)
+      || resolveMutation.isPending
+      || autoResolvedRevisionKey() === revisionKey
+    ) {
+      return
+    }
+
+    setAutoResolvedRevisionKey(revisionKey)
+    setPageError('')
+    resolveMutation.mutate({autoResolve: true, planRevision: session.planRevision, sessionId: session.id})
   })
 
   createEffect(() => {

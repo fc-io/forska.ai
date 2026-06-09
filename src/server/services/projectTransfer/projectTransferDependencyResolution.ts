@@ -1,5 +1,6 @@
 import {MAX_COMPLETION_TOKENS} from '../../../agent/judge.ts'
 import type {ProviderModelOptions} from '../../../utils/providerModelOptions.ts'
+import {ensureCodexProviderModel} from '../../providers/ensureCodexProviderModel.ts'
 import {getResolvedProviderBaseURL} from '../../providers/providerConnectionHelpers.ts'
 import {getProviderConnection, listProviderConnections} from '../../providers/providerConnectionRepository.ts'
 import {
@@ -113,6 +114,11 @@ type ProjectTransferResolvedDependencyPlanArtifact = ProjectTransferImportPlanAr
 
 export type ProjectTransferDependencyResolutionRepositories = {
   analyzeTargetRunner?: ProjectTransferAnalyzeTargetRunner | null
+  ensureCodexProviderModel?: (input: {
+    modelName: string
+    name: string
+    version?: string | null
+  }) => Promise<{modelId: string; providerConnectionId: string}>
   getProviderConnectionById?: (id: string) => Promise<ProviderConnectionRecord | null>
   getProviderModelsByIds?: (modelIds: string[]) => Promise<Map<string, ProviderModelRecord>>
   listProviderConnections?: () => Promise<ProviderConnectionForAdmin[]>
@@ -186,6 +192,7 @@ const getRepositories = (repositories?: ProjectTransferDependencyResolutionRepos
   return {
     analyzeTargetRunner:
       repositories === undefined ? getAppDatabaseService() : (repositories.analyzeTargetRunner ?? null),
+    ensureCodexProviderModel: repositories?.ensureCodexProviderModel ?? ensureCodexProviderModel,
     getProviderConnectionById: repositories?.getProviderConnectionById ?? getProviderConnection,
     getProviderModelsByIds: repositories?.getProviderModelsByIds ?? getProviderModels,
     listProviderConnections: repositories?.listProviderConnections ?? listProviderConnections,
@@ -610,6 +617,12 @@ const getModelsBySourceProviderId = (models: ImportedModel[]) => {
   }, {})
 }
 
+const getImportedProvidersBySourceId = (providers: ImportedProviderConnection[]) => {
+  return providers.reduce<Record<string, ImportedProviderConnection>>((mapped, provider) => {
+    return {...mapped, [provider.sourceProviderConnectionId]: provider}
+  }, {})
+}
+
 const getJudgmentModelSourceIds = (judgments: ImportedJudgment[]) => {
   return new Set(
     judgments.flatMap((judgment) => {
@@ -631,6 +644,66 @@ const getSelectableConnectionModels = (connection: ProviderConnectionForAdmin) =
   return connection.models.filter((model) => {
     return model.enabled && model.providerConnectionId === connection.id
   })
+}
+
+const isCodexImportedProvider = (provider: ImportedProviderConnection) => {
+  return getProviderFingerprint(provider).providerKind === 'codex'
+}
+
+const getCodexEnsureModelInput = (model: ImportedModel) => {
+  const modelName = getStringValue(model.remoteModelId) ?? getStringValue(model.modelName)
+  const name = getStringValue(model.displayName) ?? getStringValue(model.name) ?? modelName
+  const version =
+    normalizeProjectTransferModelVariant(model.variant) ?? normalizeProjectTransferModelVariant(model.version)
+
+  return modelName === null || name === null ? null : {modelName, name, version}
+}
+
+const ensureAutoResolvedCodexDependencies = async ({
+  autoResolve,
+  connections,
+  importedModels,
+  importedProvidersBySourceId,
+  repositories,
+  resolutionState,
+}: {
+  autoResolve: boolean
+  connections: ProviderConnectionForAdmin[]
+  importedModels: ImportedModel[]
+  importedProvidersBySourceId: Record<string, ImportedProviderConnection>
+  repositories: ReturnType<typeof getRepositories>
+  resolutionState: ProjectTransferDependencyResolutionState
+}) => {
+  if (!autoResolve) {
+    return connections
+  }
+
+  const connectionById = getConnectionById(connections)
+  const ensuredAny = await importedModels.reduce<Promise<boolean>>(async (previous, importedModel) => {
+    const hasEnsured = await previous
+    const sourceProviderConnectionId = importedModel.sourceProviderConnectionId
+    const importedProvider = importedProvidersBySourceId[sourceProviderConnectionId] ?? null
+    const targetProviderConnectionId = resolutionState.providerTargetBySourceId[sourceProviderConnectionId] ?? null
+    const targetConnection = targetProviderConnectionId ? (connectionById[targetProviderConnectionId] ?? null) : null
+    const shouldSkip =
+      importedProvider === null
+      || !isCodexImportedProvider(importedProvider)
+      || resolutionState.unresolvedProviderSourceIds.includes(sourceProviderConnectionId)
+      || resolutionState.unresolvedModelSourceIds.includes(importedModel.sourceModelId)
+      || resolutionState.modelTargetBySourceId[importedModel.sourceModelId] !== undefined
+      || (targetConnection !== null && targetConnection.providerKind !== 'codex')
+    const ensureInput = getCodexEnsureModelInput(importedModel)
+
+    if (shouldSkip || ensureInput === null) {
+      return hasEnsured
+    }
+
+    await repositories.ensureCodexProviderModel(ensureInput)
+
+    return true
+  }, Promise.resolve(false))
+
+  return ensuredAny ? repositories.listProviderConnections() : connections
 }
 
 const modelVariantMatches = (source: ImportedModel, target: ProviderModelRecord) => {
@@ -1149,8 +1222,8 @@ export const revalidateProjectTransferResolvedDependencies = async (
   input: ProjectTransferDependencyRevalidationInput,
 ): Promise<ProjectTransferDependencyResolutionResult> => {
   const repositories = getRepositories(input.repositories)
-  const connections = await repositories.listProviderConnections()
-  const connectionById = getConnectionById(connections)
+  const initialConnections = await repositories.listProviderConnections()
+  const initialConnectionById = getConnectionById(initialConnections)
   const previousResolutionState = getPlanDependencyResolution(input.plan)
   const importedModels = (input.payloads.models ?? []).map(getImportedModel)
   const requestedResolutionState = getNextResolutionState({
@@ -1159,7 +1232,7 @@ export const revalidateProjectTransferResolvedDependencies = async (
     request: input.request,
   })
   const explicitProviderError = await validateExplicitProviderSelections({
-    connectionById,
+    connectionById: initialConnectionById,
     getProviderConnectionById: repositories.getProviderConnectionById,
     resolutionState: requestedResolutionState,
   })
@@ -1179,9 +1252,19 @@ export const revalidateProjectTransferResolvedDependencies = async (
 
   const importedProviders = (input.payloads.providerConnections ?? []).map(getImportedProviderConnection)
   const importedJudgments = (input.payloads.judgments ?? []).map(getImportedJudgment)
+  const importedProvidersBySourceId = getImportedProvidersBySourceId(importedProviders)
   const modelsBySourceProviderId = getModelsBySourceProviderId(importedModels)
   const judgmentModelSourceIds = getJudgmentModelSourceIds(importedJudgments)
   const judgmentModelSignaturesBySourceId = getJudgmentModelSignaturesBySourceId(importedJudgments)
+  const connections = await ensureAutoResolvedCodexDependencies({
+    autoResolve: input.request.autoResolve !== false,
+    connections: initialConnections,
+    importedModels,
+    importedProvidersBySourceId,
+    repositories,
+    resolutionState: requestedResolutionState,
+  })
+  const connectionById = getConnectionById(connections)
   const providerTargetBySourceId = getResolvedProviderMappings({
     autoResolve: input.request.autoResolve !== false,
     connections,

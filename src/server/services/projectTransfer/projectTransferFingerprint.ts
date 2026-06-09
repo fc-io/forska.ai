@@ -21,6 +21,11 @@ type ProjectTransferLogicalPackageFingerprintInput = {
   payloads: Partial<Record<ProjectTransferPayloadKey, unknown>>
 }
 
+type ProjectTransferLegacyPackageFingerprintInput = Pick<
+  ProjectTransferManifest,
+  'assetSummary' | 'payloads' | 'schemaVersion' | 'sourceAppVersion'
+>
+
 type ProjectTransferPayloadInputValue = {orderInsensitiveRecords: boolean; value: unknown}
 
 type ProjectTransferCanonicalPayloadChecksumInput =
@@ -220,6 +225,34 @@ export const getProjectTransferLogicalPackageFingerprint = (
 ): string => {
   return getProjectTransferSha256Checksum(
     getProjectTransferCanonicalJson(getProjectTransferLogicalPackageFingerprintPayload(input)),
+  )
+}
+
+export const getProjectTransferLegacyPackageFingerprint = (
+  input: ProjectTransferLegacyPackageFingerprintInput,
+): string => {
+  return getProjectTransferSha256Checksum(
+    getProjectTransferCanonicalJson({
+      assetSummary: input.assetSummary ?? null,
+      payloads: projectTransferPayloadKeys.reduce<Record<ProjectTransferPayloadKey, unknown>>(
+        (payloadEntries, key) => {
+          const payload = input.payloads[key]
+
+          return {
+            ...payloadEntries,
+            [key]: {
+              checksumSha256: payload.checksumSha256,
+              format: payload.format,
+              path: payload.path,
+              recordCount: payload.recordCount,
+            },
+          }
+        },
+        {} as Record<ProjectTransferPayloadKey, unknown>,
+      ),
+      schemaVersion: input.schemaVersion,
+      sourceAppVersion: input.sourceAppVersion,
+    }),
   )
 }
 

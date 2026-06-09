@@ -599,6 +599,31 @@ describe('project import route', () => {
     }
   })
 
+  test('auto-resolves unresolved dependencies when the analyzed session is awaiting resolution', async () => {
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({
+        planSummary: {
+          ...getSession().planSummary,
+          dependencyStatuses: {'model:model-source-1': 'missing', 'provider:provider-source-1': 'missing'},
+        },
+      }),
+    }
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      await Promise.resolve()
+
+      expect(mockState.resolveInputs[0]).toEqual({autoResolve: true, planRevision: 2, sessionId: 'session-1'})
+      expect(mockState.providerConnectionsQueryResult.refetch).toHaveBeenCalled()
+      expect(container.textContent).toContain('Dependency plan updated.')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('shows stale plan handling and keeps final commit disabled', async () => {
     mockState.sessionQueryResult = {
       ...mockState.sessionQueryResult,

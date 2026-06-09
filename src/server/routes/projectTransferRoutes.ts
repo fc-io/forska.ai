@@ -573,6 +573,37 @@ const closeFileStream = (stream: WriteStream) => {
   })
 }
 
+const writeRequestBodyChunks = async ({
+  availableDiskBytes,
+  fileStream,
+  hash,
+  reader,
+  state,
+  tempRootPath,
+}: {
+  availableDiskBytes: number
+  fileStream: WriteStream
+  hash: ReturnType<typeof createHash>
+  reader: ReadableStreamDefaultReader<Uint8Array>
+  state: {byteLength: number}
+  tempRootPath: string
+}): Promise<void> => {
+  const next = await reader.read()
+
+  if (next.done) {
+    return closeFileStream(fileStream)
+  }
+
+  const nextByteLength = state.byteLength + next.value.byteLength
+
+  assertUploadResourceGate({availableDiskBytes, byteLength: nextByteLength, tempRootPath})
+  state.byteLength = nextByteLength
+  hash.update(next.value)
+  await writeFileStreamChunk(fileStream, next.value)
+
+  return writeRequestBodyChunks({availableDiskBytes, fileStream, hash, reader, state, tempRootPath})
+}
+
 const getAvailableDiskBytes = async (pathValue: string) => {
   const stats = await statfs(pathValue)
 
@@ -693,28 +724,17 @@ const writeImportUploadArtifact = async ({
   const availableDiskBytes = await getAvailableDiskBytes(dirname(uploadPath))
 
   const fileStream = createWriteStream(tempPath)
-  const stream = new WritableStream<Uint8Array>({
-    abort(reason) {
-      fileStream.destroy(reason instanceof Error ? reason : undefined)
-    },
-    close() {
-      return closeFileStream(fileStream)
-    },
-    write(chunk) {
-      const nextByteLength = state.byteLength + chunk.byteLength
-      assertUploadResourceGate({availableDiskBytes, byteLength: nextByteLength, tempRootPath: layout.rootPath})
-      state.byteLength = nextByteLength
-      hash.update(chunk)
-      return writeFileStreamChunk(fileStream, chunk)
-    },
-  })
+  const reader = request.body.getReader()
 
   try {
-    await request.body.pipeTo(stream)
+    await writeRequestBodyChunks({availableDiskBytes, fileStream, hash, reader, state, tempRootPath: layout.rootPath})
     await rename(tempPath, uploadPath)
     writeSucceeded = true
   } finally {
+    reader.releaseLock()
+
     if (!writeSucceeded) {
+      fileStream.destroy()
       await rm(tempPath, {force: true})
     }
   }

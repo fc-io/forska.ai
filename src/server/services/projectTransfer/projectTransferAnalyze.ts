@@ -18,6 +18,7 @@ import {
 } from './projectTransferContracts.ts'
 import {
   getProjectTransferCanonicalJson,
+  getProjectTransferLegacyPackageFingerprint,
   getProjectTransferPackageFingerprint,
   getProjectTransferSha256Checksum,
 } from './projectTransferFingerprint.ts'
@@ -33,6 +34,8 @@ import {
   type ProjectTransferAssetReference,
   type ProjectTransferPayload,
   type ProjectTransferPayloadByKey,
+  type ProjectTransferPayloadRecord,
+  serializeProjectTransferPayload,
 } from './projectTransferPayloadSchemas.ts'
 import {
   type ProjectTransferManifest,
@@ -167,6 +170,40 @@ const getEntryMap = (entries: readonly ProjectTransferZipReadEntry[]) => {
 
     return entryMap
   }, new Map())
+}
+
+const isUnsafeLegacyArticleRoute = (value: string | null) => {
+  return (
+    value !== null
+    && (value.includes('/api/runtime-asset')
+      || value.includes('tmp/project-transfer')
+      || /^\/(?!\/)/.test(value)
+      || /^[A-Za-z]:[\\/]/.test(value)
+      || value.startsWith('file://'))
+  )
+}
+
+const getSanitizedLegacyArticleRoute = (value: unknown) => {
+  return typeof value === 'string' && isUnsafeLegacyArticleRoute(value) ? null : value
+}
+
+const sanitizeLegacyArticlePayloads = (articles: ProjectTransferPayloadRecord[]) => {
+  return articles.map((article) => {
+    const importRoute = getSanitizedLegacyArticleRoute(article.importRoute)
+    const selectedImportRoute = getSanitizedLegacyArticleRoute(article.selectedImportRoute)
+
+    return importRoute === article.importRoute && selectedImportRoute === article.selectedImportRoute
+      ? article
+      : {...article, importRoute, selectedImportRoute}
+  })
+}
+
+const sanitizeLegacyPayloads = (
+  payloads: Partial<ProjectTransferPayloadByKey>,
+): Partial<ProjectTransferPayloadByKey> => {
+  return payloads.articles === undefined
+    ? payloads
+    : {...payloads, articles: sanitizeLegacyArticlePayloads(payloads.articles)}
 }
 
 const sumNumbers = (values: readonly number[]) => {
@@ -813,9 +850,11 @@ const getAssetBlockers = ({
 
 const getPackageFingerprintBlockers = ({
   computedPackageFingerprint,
+  legacyPackageFingerprint,
   manifest,
 }: {
   computedPackageFingerprint: string | null
+  legacyPackageFingerprint: string | null
   manifest: ProjectTransferManifest
 }) => {
   if (manifest.packageFingerprint === undefined || manifest.packageFingerprint === null) {
@@ -829,6 +868,7 @@ const getPackageFingerprintBlockers = ({
   }
 
   return computedPackageFingerprint === manifest.packageFingerprint
+    || legacyPackageFingerprint === manifest.packageFingerprint
     ? []
     : [
         getPlanBlocker({
@@ -856,11 +896,13 @@ const getComputedPackageFingerprint = ({
 const getSemanticBlockers = ({
   archiveEntries,
   computedPackageFingerprint,
+  legacyPackageFingerprint,
   manifest,
   payloads,
 }: {
   archiveEntries: readonly ProjectTransferZipReadEntry[]
   computedPackageFingerprint: string | null
+  legacyPackageFingerprint: string | null
   manifest: ProjectTransferManifest
   payloads: Partial<ProjectTransferPayloadByKey>
 }) => {
@@ -868,7 +910,7 @@ const getSemanticBlockers = ({
     ...getProjectSummaryBlockers({manifest, payloads}),
     ...getCurrentModelBlockers({manifest, payloads}),
     ...getAssetBlockers({archiveEntries, manifest, payloads}),
-    ...getPackageFingerprintBlockers({computedPackageFingerprint, manifest}),
+    ...getPackageFingerprintBlockers({computedPackageFingerprint, legacyPackageFingerprint, manifest}),
   ]
 }
 
@@ -1014,6 +1056,35 @@ const writeExtractedEntries = async ({
   }, Promise.resolve())
 }
 
+const writeExtractedPayloadArtifacts = async ({
+  extractionRootPath,
+  payloads,
+  runtimeOptions,
+}: {
+  extractionRootPath: string
+  payloads: Partial<ProjectTransferPayloadByKey>
+  runtimeOptions: ProjectTransferAnalyzeRuntimeOptions
+}) => {
+  await projectTransferPayloadKeys.reduce<Promise<void>>(async (previous, key) => {
+    await previous
+
+    const payload = payloads[key]
+
+    if (payload === undefined) {
+      return
+    }
+
+    const resolvedPath = resolveProjectTransferArchiveMemberWritablePath({
+      ...runtimeOptions,
+      archiveMemberPath: projectTransferPayloadPathByKey[key],
+      extractionRootPath,
+    })
+
+    await mkdir(dirname(resolvedPath), {recursive: true})
+    await globalThis.Bun.write(resolvedPath, serializeProjectTransferPayload(key, payload as never))
+  }, Promise.resolve())
+}
+
 const assertJsonMetricsResourceGate = ({
   availableDiskBytes,
   archiveMemberCount,
@@ -1126,19 +1197,22 @@ export const analyzeProjectTransferImportPackage = async (
   const manifest = parseProjectTransferManifestJson(zipPackage.manifest.bytes)
   const entriesByPath = getEntryMap(zipPackage.entries)
   const parsed = parsePayloads({entriesByPath, manifest})
-  const computedPackageFingerprint = getComputedPackageFingerprint({manifest, payloads: parsed.payloads})
+  const sanitizedPayloads = sanitizeLegacyPayloads(parsed.payloads)
+  const computedPackageFingerprint = getComputedPackageFingerprint({manifest, payloads: sanitizedPayloads})
+  const legacyPackageFingerprint = getProjectTransferLegacyPackageFingerprint(manifest)
   const packageFingerprint = computedPackageFingerprint ?? manifest.packageFingerprint ?? null
-  const packageCounts = getCompletePayloadCounts(parsed.payloads, manifest)
+  const packageCounts = getCompletePayloadCounts(sanitizedPayloads, manifest)
   const semanticBlockers = getSemanticBlockers({
     archiveEntries: zipPackage.entries,
     computedPackageFingerprint,
+    legacyPackageFingerprint,
     manifest,
-    payloads: parsed.payloads,
+    payloads: sanitizedPayloads,
   })
   const packageContractBlockers = [...parsed.blockers, ...semanticBlockers]
   const targetAnalysis = await getProjectTransferAnalyzeTargetPlan({
     packageFingerprint,
-    payloads: parsed.payloads,
+    payloads: sanitizedPayloads,
     runner: input.runner,
   })
   const blockers = [...packageContractBlockers, ...targetAnalysis.blockers]
@@ -1212,6 +1286,11 @@ export const analyzeProjectTransferImportPackage = async (
   await writeExtractedEntries({
     entries: zipPackage.entries,
     extractionRootPath: input.layout.extractedPath,
+    runtimeOptions,
+  })
+  await writeExtractedPayloadArtifacts({
+    extractionRootPath: input.layout.extractedPath,
+    payloads: sanitizedPayloads,
     runtimeOptions,
   })
   await writeJsonArtifact({pathValue: input.layout.manifestPath, runtimeOptions, value: manifest})

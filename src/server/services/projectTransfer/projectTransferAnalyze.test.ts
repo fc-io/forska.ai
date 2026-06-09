@@ -10,6 +10,7 @@ import {analyzeProjectTransferImportPackage} from './projectTransferAnalyze.ts'
 import type {ProjectTransferAnalyzeTargetRunner} from './projectTransferAnalyzeTarget.ts'
 import {
   getProjectTransferCanonicalJson,
+  getProjectTransferLegacyPackageFingerprint,
   getProjectTransferPackageFingerprint,
   getProjectTransferSha256Checksum,
 } from './projectTransferFingerprint.ts'
@@ -507,6 +508,55 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
     expect(planArtifact).toMatchObject({canCommit: false, planRevision: 1})
     expect(existsSync(analysisPath)).toBe(true)
     expect(existsSync(extractedAssetPath)).toBe(true)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('analyzes a legacy export package by accepting the legacy fingerprint and sanitizing article route paths', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const {layout, manifest, uploadMetadata, zipModule} = await writeAnalyzeUpload({
+      cwd,
+      manifestOverride: (currentManifest) => {
+        return {...currentManifest, packageFingerprint: getProjectTransferLegacyPackageFingerprint(currentManifest)}
+      },
+      payloadOverride: (payloads) => {
+        return {
+          ...payloads,
+          articles: payloads.articles.map((article) => {
+            return {
+              ...article,
+              importRoute: '/Users/export/legacy-route.csv',
+              selectedImportRoute: 'file:///Users/export/selected-route.csv',
+            }
+          }),
+        }
+      },
+    })
+    const result = await analyzeProjectTransferImportPackage({
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      layout,
+      planRevision: 1,
+      runner: getEmptyAnalyzeTargetRunner(),
+      uploadMetadata,
+      zipModule,
+    })
+    const extractedArticlesText = await readFile(
+      join(cwd, layout.extractedPath, projectTransferPayloadPathByKey.articles),
+      'utf8',
+    )
+    const blockerCodes = result.planSummary.blockers.map((blocker) => {
+      return blocker.code
+    })
+
+    expect(manifest.packageFingerprint).not.toBe(result.packageFingerprint)
+    expect(blockerCodes).not.toContain('package_fingerprint_mismatch')
+    expect(blockerCodes).not.toContain('article_absolute_path_reference')
+    expect(extractedArticlesText).toContain('"importRoute":null')
+    expect(extractedArticlesText).toContain('"selectedImportRoute":null')
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

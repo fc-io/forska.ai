@@ -5,19 +5,11 @@ import {
   appendProviderModelThinkingBadgeLabel,
   getProviderModelThinkingBadgeValue,
 } from '../../utils/providerModelLabel.ts'
-import {getProviderModelThinkingOption} from '../../utils/providerModelOptions.ts'
+import {ensureCodexProviderModel} from '../providers/ensureCodexProviderModel.ts'
 import {resolveProviderRuntimeCredentials} from '../providers/providerAuthService.ts'
-import {
-  createProviderConnection,
-  getFirstEnabledProviderConnection,
-  listProviderConnections,
-} from '../providers/providerConnectionRepository.ts'
-import {getManualProviderModelMetadata, getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
-import {
-  createProviderModel,
-  listSelectableProviderModels,
-  updateProviderModel,
-} from '../providers/providerModelRepository.ts'
+import {getFirstEnabledProviderConnection, listProviderConnections} from '../providers/providerConnectionRepository.ts'
+import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
+import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {requireProviderRegistryEntry} from '../providers/providerRegistry.ts'
 import {type ProviderModelRecord} from '../providers/providerTypes.ts'
 import {
@@ -25,8 +17,6 @@ import {
   getCodexAppRuntimeStatus,
   startCodexAppDeviceLogin,
 } from '../providers/transports/codexAppTransport.ts'
-import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {normalizeProviderKind} from '../services/providerCatalog.ts'
 import {getInferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -344,22 +334,6 @@ const getSelectableModelsPayload = async () => {
   return [...nonCodexModels, ...anthropicModels, ...codexModels]
 }
 
-const getCodexConnectionForEnsure = async () => {
-  const existing = await getFirstEnabledProviderConnection('codex')
-
-  return existing
-    ? existing
-    : createProviderConnection({
-        authMode: 'codex-cli',
-        baseURL: null,
-        config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
-        label: 'Codex',
-        maxInflightRequests: null,
-        providerKind: 'codex',
-        secretRef: null,
-      })
-}
-
 export const modelsRoutes = new Elysia()
   .use(withErrorHandler())
   .get('/api/models', async () => {
@@ -430,52 +404,13 @@ export const modelsRoutes = new Elysia()
         return {data: null, error: 'modelName is required'}
       }
 
-      const version = getTrimmedValue(body.version)
-
-      const displayName = normalizeDisplayName(body.name)
-      const connection = await getCodexConnectionForEnsure()
-      const thinking = version ? getProviderModelThinkingOption(version) : null
-      const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
-        SELECT id
-        FROM app.model
-        WHERE provider_connection_id = ${getSqlLiteral(connection.id)}
-          AND remote_model_id = ${getSqlLiteral(modelName)}
-          AND ${version ? `variant = ${getSqlLiteral(version)}` : 'variant IS NULL'}
-        LIMIT 1
-      `)
-
-      if (existing) {
-        const model = await updateProviderModel({
-          displayName,
-          enabled: true,
-          id: existing.id,
-          options: {thinking},
-          variant: version,
-        })
-
-        return {data: {modelId: model.id}, error: null}
-      }
-
-      const model = await createProviderModel({
-        connection,
-        displayName,
-        metadataJson: getManualProviderModelMetadata({
-          displayName,
-          modelName,
-          options: {thinking},
-          providerKind: connection.providerKind,
-          remoteModelId: modelName,
-          variant: version,
-          version,
-        }),
+      const ensured = await ensureCodexProviderModel({
         modelName,
-        remoteModelId: modelName,
-        source: 'manual',
-        variant: version,
-        version,
+        name: normalizeDisplayName(body.name),
+        version: getTrimmedValue(body.version),
       })
 
-      return {data: {modelId: model.id}, error: null}
+      return {data: {modelId: ensured.modelId}, error: null}
     },
     {body: t.Object({modelName: t.String(), name: t.String(), provider: t.String(), version: t.Optional(t.String())})},
   )
