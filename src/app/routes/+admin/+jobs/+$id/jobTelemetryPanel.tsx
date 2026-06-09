@@ -147,9 +147,9 @@ export const JobTelemetryPanel = (props: JobTelemetryPanelProps): JSX.Element =>
               >
                 <div class="grid gap-2">
                   <TelemetryMetric
-                    description={`Provider key: ${provider().leaseAuthority.providerKey}`}
+                    description={`Provider-wide admission leases, not this job's local live request count. Provider key: ${provider().leaseAuthority.providerKey}`}
                     tone="blue"
-                    label="Leased Remote Requests"
+                    label="Provider-Wide Leased Requests"
                   >
                     {formatTelemetryRatio(
                       provider().leaseAuthority.providerLeasedLiveRequests,

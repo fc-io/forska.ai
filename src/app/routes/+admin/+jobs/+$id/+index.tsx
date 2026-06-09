@@ -937,7 +937,10 @@ const AdminJudgmentJobDetail = () => {
                         </Show>
                       </Show>
                     </DenseMetric>
-                    <DenseMetric label="Unassessed Articles">
+                    <DenseMetric
+                      description="DuckDB/project-mart count; local SQLite completions disappear here after import and refresh."
+                      label="Unassessed Articles"
+                    >
                       <Show when={!unassessedCountQuery.isLoading} fallback={<span>Loading...</span>}>
                         <Show
                           when={shouldLinkToUnassessedArticles()}
@@ -1001,13 +1004,20 @@ const AdminJudgmentJobDetail = () => {
                       description="Request attempts are counted separately from prompt lifecycle rows."
                       title="Request Activity"
                     >
-                      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                         <DenseMetric
                           description="Request-level LLM calls running right now."
                           label="Live Request LLM Calls"
                           tone="sky"
                         >
                           {formatMetricCount(liveRequestLlmCalls())}
+                        </DenseMetric>
+                        <DenseMetric
+                          description="Job-local live, waiting, or post-response persistence work still tracked."
+                          label="Request Work Backlog"
+                          tone="amber"
+                        >
+                          {formatMetricCount(data()?.requestStats?.requestWorkBacklog)}
                         </DenseMetric>
                         <DenseMetric
                           description="Total runtime request attempts, not distinct prompts."
