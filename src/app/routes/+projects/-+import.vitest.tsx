@@ -471,6 +471,43 @@ describe('project import route', () => {
     }
   })
 
+  test('groups repeated package warnings by message', async () => {
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({
+        planSummary: {
+          ...getSession().planSummary,
+          packageWarnings: [
+            {code: 'payloadOmitted', message: 'Dependent payload row was omitted because its parent row was omitted.'},
+            {code: 'payloadOmitted', message: 'Dependent payload row was omitted because its parent row was omitted.'},
+            {
+              code: 'urlRedacted',
+              message: 'URL credentials, query, or fragment were redacted from the package payload.',
+            },
+            {
+              code: 'urlRedacted',
+              message: 'URL credentials, query, or fragment were redacted from the package payload.',
+            },
+          ],
+        },
+      }),
+    }
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      expect(container.textContent).toContain(
+        'Dependent payload row was omitted because its parent row was omitted. (x2)',
+      )
+      expect(container.textContent).toContain(
+        'URL credentials, query, or fragment were redacted from the package payload. (x2)',
+      )
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('commits a ready plan, shows post-import warnings, and navigates to imported project', async () => {
     const completion = {
       importWarnings: [{code: 'route_omitted', message: 'One route link was omitted.'}],

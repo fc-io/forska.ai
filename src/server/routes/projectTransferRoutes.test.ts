@@ -877,6 +877,75 @@ test('project transfer import upload streams to upload.zip and persists public m
   expect(text).not.toContain('tmp/project-transfer')
 })
 
+test('project transfer import get auto-resolves unresolved dependencies before returning the session', async () => {
+  routeState.sessions['import-auto-resolve-get'] = getImportSessionRecord({
+    id: 'import-auto-resolve-get',
+    planRevision: 1,
+    planSummaryJson: {
+      blockerCount: 2,
+      conflictCounts: getFinalConflictCounts(),
+      dependencyStatuses: {'model:model-1': 'missing', 'provider:provider-connection-1': 'missing'},
+      overlapCounts: getFinalOverlapCounts(),
+      warningCount: 0,
+    },
+    state: 'awaiting_resolution',
+  })
+  mkdirSync('tmp/project-transfer/import/import-auto-resolve-get', {recursive: true})
+  await globalThis.Bun.write('tmp/project-transfer/import/import-auto-resolve-get/plan.json', '{}')
+  const app = await getProjectTransferApp()
+
+  const response = await app.handle(new Request('http://localhost/api/projects/import/import-auto-resolve-get'))
+  const body = (await response.json()) as {
+    data: {planRevision: number; planSummary: {dependencyStatuses: Record<string, string>}; state: string}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {
+      planRevision: 2,
+      planSummary: {dependencyStatuses: {'model:model-1': 'resolved', 'provider:provider-connection-1': 'resolved'}},
+      state: 'ready_to_commit',
+    },
+    error: null,
+  })
+  expect(resolveProjectTransferDependenciesMock).toHaveBeenCalledWith(
+    expect.objectContaining({deferPlanWrite: true, request: {autoResolve: true, planRevision: 1}}),
+  )
+  expect(writeProjectTransferDependencyPlanMock).toHaveBeenCalledWith(expect.objectContaining({plan: {}}))
+})
+
+test('project transfer import get fails the session when dependency artifacts are missing', async () => {
+  routeState.sessions['import-missing-artifacts-get'] = getImportSessionRecord({
+    id: 'import-missing-artifacts-get',
+    planRevision: 1,
+    planSummaryJson: {
+      blockerCount: 2,
+      conflictCounts: getFinalConflictCounts(),
+      dependencyStatuses: {'model:model-1': 'missing', 'provider:provider-connection-1': 'missing'},
+      overlapCounts: getFinalOverlapCounts(),
+      warningCount: 0,
+    },
+    state: 'awaiting_resolution',
+  })
+  const app = await getProjectTransferApp()
+
+  const response = await app.handle(new Request('http://localhost/api/projects/import/import-missing-artifacts-get'))
+  const body = (await response.json()) as {data: {error: {message: string}; state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {
+      error: {
+        message:
+          'Project transfer import artifacts are unavailable. Create a new import session and upload the package again.',
+      },
+      state: 'failed',
+    },
+    error: null,
+  })
+})
+
 test('project transfer import analyze claims queued uploads and writes an inline contract plan', async () => {
   routeState.sessions['import-analyze'] = getImportSessionRecord({
     id: 'import-analyze',
@@ -1019,6 +1088,48 @@ test('project transfer import resolve updates the durable dependency plan and co
   expect(commitProjectTransferImportSessionMock).toHaveBeenCalledWith({
     request: {expectedPlanRevision: 1},
     sessionId: 'import-resolve',
+  })
+})
+
+test('project transfer import resolve fails the session when dependency artifacts are missing', async () => {
+  routeState.sessions['import-missing-artifacts-resolve'] = getImportSessionRecord({
+    id: 'import-missing-artifacts-resolve',
+    planRevision: 1,
+    planSummaryJson: {
+      blockerCount: 2,
+      conflictCounts: getFinalConflictCounts(),
+      dependencyStatuses: {'model:model-1': 'missing', 'provider:provider-connection-1': 'missing'},
+      overlapCounts: getFinalOverlapCounts(),
+      warningCount: 0,
+    },
+    state: 'awaiting_resolution',
+  })
+  routeState.resolveResult = {
+    error: 'Project transfer import plan artifact is unavailable',
+    status: 'error',
+    statusCode: 409,
+  }
+  const app = await getProjectTransferApp()
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/import-missing-artifacts-resolve/resolve-dependencies', {
+      body: JSON.stringify({planRevision: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {error: {message: string}; state: string}; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({
+    data: {
+      error: {
+        message:
+          'Project transfer import artifacts are unavailable. Create a new import session and upload the package again.',
+      },
+      state: 'failed',
+    },
+    error: null,
   })
 })
 

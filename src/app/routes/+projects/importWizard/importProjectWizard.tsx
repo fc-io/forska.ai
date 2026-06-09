@@ -277,6 +277,25 @@ const getPostImportWarnings = (completion: ProjectImportCompletion | null): Proj
   return completion?.importWarnings ?? []
 }
 
+const getGroupedWarningMessages = (warnings: ProjectImportPackageWarning[]) => {
+  return warnings.reduce<Array<{count: number; message: string}>>((grouped, warning) => {
+    const message = warning.message.trim()
+    const existing = grouped.find((entry) => {
+      return entry.message === message
+    })
+
+    return existing === undefined
+      ? [...grouped, {count: 1, message}]
+      : grouped.map((entry) => {
+          return entry.message === message ? {...entry, count: entry.count + 1} : entry
+        })
+  }, [])
+}
+
+const formatGroupedWarningMessage = (warning: {count: number; message: string}) => {
+  return warning.count > 1 ? `${warning.message} (x${warning.count})` : warning.message
+}
+
 const getCompletedProjectId = (completion: ProjectImportCompletion | null) => {
   return completion?.targetProjectId ?? completion?.projectId ?? null
 }
@@ -434,8 +453,14 @@ const PackageReviewPanel = (props: {session: ProjectImportSession | null}) => {
   const warnings = createMemo(() => {
     return props.session?.planSummary?.packageWarnings ?? []
   })
+  const groupedWarnings = createMemo(() => {
+    return getGroupedWarningMessages(warnings())
+  })
   const duplicateWarnings = createMemo(() => {
     return getDuplicateWarnings(props.session)
+  })
+  const groupedDuplicateWarnings = createMemo(() => {
+    return getGroupedWarningMessages(duplicateWarnings())
   })
   const counts = createMemo(() => {
     return Object.entries(props.session?.planSummary?.packageCounts ?? {})
@@ -462,11 +487,11 @@ const PackageReviewPanel = (props: {session: ProjectImportSession | null}) => {
       <div class="mt-4 grid gap-3 lg:grid-cols-2">
         <div class="rounded-md border border-amber-200 bg-amber-50 p-3">
           <div class="text-sm font-medium text-amber-900">Warnings</div>
-          <Show when={warnings().length > 0} fallback={<p class="mt-2 text-sm text-amber-800">No warnings.</p>}>
+          <Show when={groupedWarnings().length > 0} fallback={<p class="mt-2 text-sm text-amber-800">No warnings.</p>}>
             <ul class="mt-2 space-y-2 text-sm text-amber-900">
-              <For each={warnings()}>
+              <For each={groupedWarnings()}>
                 {(warning) => {
-                  return <li>{warning.message}</li>
+                  return <li>{formatGroupedWarningMessage(warning)}</li>
                 }}
               </For>
             </ul>
@@ -475,13 +500,13 @@ const PackageReviewPanel = (props: {session: ProjectImportSession | null}) => {
         <div class="rounded-md border border-amber-200 bg-amber-50 p-3">
           <div class="text-sm font-medium text-amber-900">Duplicate warnings</div>
           <Show
-            when={duplicateWarnings().length > 0}
+            when={groupedDuplicateWarnings().length > 0}
             fallback={<p class="mt-2 text-sm text-amber-800">No duplicate package warnings.</p>}
           >
             <ul class="mt-2 space-y-2 text-sm text-amber-900">
-              <For each={duplicateWarnings()}>
+              <For each={groupedDuplicateWarnings()}>
                 {(warning) => {
-                  return <li>{warning.message}</li>
+                  return <li>{formatGroupedWarningMessage(warning)}</li>
                 }}
               </For>
             </ul>
@@ -496,15 +521,18 @@ const PostImportWarningsPanel = (props: {session: ProjectImportSession | null}) 
   const warnings = createMemo(() => {
     return getPostImportWarnings(props.session?.completion ?? null)
   })
+  const groupedWarnings = createMemo(() => {
+    return getGroupedWarningMessages(warnings())
+  })
 
   return (
-    <Show when={props.session?.state === 'completed' && warnings().length > 0}>
+    <Show when={props.session?.state === 'completed' && groupedWarnings().length > 0}>
       <section class="rounded-lg border border-amber-200 bg-amber-50 p-4">
         <h2 class="text-base font-semibold text-amber-950">Post-import warnings</h2>
         <ul class="mt-3 space-y-2 text-sm text-amber-900">
-          <For each={warnings()}>
+          <For each={groupedWarnings()}>
             {(warning) => {
-              return <li>{warning.message}</li>
+              return <li>{formatGroupedWarningMessage(warning)}</li>
             }}
           </For>
         </ul>

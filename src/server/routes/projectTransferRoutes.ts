@@ -6,6 +6,7 @@ import {dirname} from 'node:path'
 import {type as arktype} from 'arktype'
 import {Elysia, t} from 'elysia'
 
+import type {ProjectTransferSessionRecord} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {
@@ -535,6 +536,112 @@ const getImportSessionResponseFromRecord = async (
   const plan = await readImportPlanArtifact(response.id)
 
   return {data: getImportSessionData(response, plan, executionMode), error: null}
+}
+
+const importArtifactsUnavailableMessage =
+  'Project transfer import artifacts are unavailable. Create a new import session and upload the package again.'
+
+const getImportArtifactsUnavailableError = (error: string) => {
+  return (
+    error === 'Project transfer dependency payloads are unavailable'
+    || error === 'Project transfer import plan artifact is unavailable'
+  )
+}
+
+const getFailedImportArtifactsProgress = (record: ProjectTransferSessionRecord, now: Date) => {
+  const response = toProjectTransferSessionResponse(record)
+
+  return response.progress
+    ? {...response.progress, status: 'failed' as const, updatedAt: now.toISOString()}
+    : getAnalyzeProgress({
+        now,
+        phase: 'analyze',
+        status: 'failed',
+        upload: getUploadMetadataFromProgress(response.progress),
+      })
+}
+
+const failImportSessionForUnavailableArtifacts = async ({
+  record,
+  set,
+}: {
+  record: ProjectTransferSessionRecord
+  set: RouteSet
+}): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData>> => {
+  const now = new Date()
+  const failed = await getProjectTransferSessionRepository().transitionProjectTransferSessionState({
+    error: {message: importArtifactsUnavailableMessage, name: 'ProjectTransferImportArtifactsUnavailableError'},
+    expectedState: record.state,
+    nextOwnerToken: null,
+    nextState: 'failed',
+    progress: getFailedImportArtifactsProgress(record, now),
+    sessionId: record.id,
+  })
+
+  if (failed === null) {
+    set.status = 409
+
+    return {data: null, error: importArtifactsUnavailableMessage}
+  }
+
+  set.status = 200
+
+  return (
+    (await getImportSessionResponseFromRecord(set, failed))
+    ?? getProjectTransferApiError(set, 500, 'Import session unavailable')
+  )
+}
+
+const hasOnlyReadyDependencyStatuses = (planSummary: ProjectTransferPlanSummary | null) => {
+  return Object.values(planSummary?.dependencyStatuses ?? {}).every((status) => {
+    return status === 'resolved' || status === 'not_required'
+  })
+}
+
+const getAutoResolvedImportSessionRecord = async (
+  record: Awaited<ReturnType<ReturnType<typeof getProjectTransferSessionRepository>['getProjectTransferSession']>>,
+) => {
+  if (record === null) {
+    return null
+  }
+
+  const response = toProjectTransferSessionResponse(record)
+
+  if (
+    response.direction !== 'import'
+    || (response.state !== 'awaiting_resolution' && response.state !== 'ready_to_commit')
+    || hasOnlyReadyDependencyStatuses(response.planSummary)
+  ) {
+    return record
+  }
+
+  const layout = getProjectTransferImportTempLayout(record.id)
+  const result = await resolveProjectTransferDependencies({
+    deferPlanWrite: true,
+    layout,
+    nextPlanRevision: record.planRevision + 1,
+    request: {autoResolve: true, planRevision: record.planRevision},
+  })
+
+  if (result.status === 'error' || !result.changed) {
+    return record
+  }
+
+  const updated = await getProjectTransferSessionRepository().updateProjectTransferSessionPlanRevision({
+    expectedPlanRevision: record.planRevision,
+    nextState: getImportAnalyzeNextState(result.planSummary),
+    now: new Date(),
+    planSummary: result.planSummary,
+    sessionId: record.id,
+  })
+
+  if (updated === null) {
+    return record
+  }
+
+  await writeProjectTransferDependencyPlan({layout, plan: result.plan})
+
+  return updated
 }
 
 const getUploadFileName = (request: Request) => {
@@ -1148,7 +1255,20 @@ const getImportSession = async (
   sessionId: string,
 ): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData>> => {
   const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId})
-  const response = await getImportSessionResponseFromRecord(set, record)
+
+  if (record !== null && (record.state === 'awaiting_resolution' || record.state === 'ready_to_commit')) {
+    const layout = getProjectTransferImportTempLayout(sessionId)
+    const hasPlanArtifact = await globalThis.Bun.file(
+      resolveProjectTransferTempWritablePath({pathValue: layout.planPath}),
+    ).exists()
+
+    if (!hasPlanArtifact) {
+      return failImportSessionForUnavailableArtifacts({record, set})
+    }
+  }
+
+  const resolvedRecord = await getAutoResolvedImportSessionRecord(record)
+  const response = await getImportSessionResponseFromRecord(set, resolvedRecord)
 
   return response === null
     ? getProjectTransferApiError(set, 404, 'Project transfer import session not found')
@@ -1339,7 +1459,12 @@ const resolveImportDependencies = async (
     return getProjectTransferApiError(set, 400, request.error)
   }
 
-  const response = await getImportSession(set, sessionId)
+  const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId})
+  const response = await getImportSessionResponseFromRecord(set, record)
+
+  if (response === null) {
+    return getProjectTransferApiError(set, 404, 'Project transfer import session not found')
+  }
 
   if (response.error !== null) {
     return response
@@ -1362,6 +1487,10 @@ const resolveImportDependencies = async (
   })
 
   if (result.status === 'error') {
+    if (getImportArtifactsUnavailableError(result.error)) {
+      return failImportSessionForUnavailableArtifacts({record, set})
+    }
+
     return getProjectTransferApiError(set, result.statusCode, result.error)
   }
 
