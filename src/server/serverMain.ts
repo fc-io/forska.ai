@@ -275,7 +275,7 @@ export const app = new Elysia()
     cors({
       origin: allowedOrigins,
       credentials: true,
-      allowedHeaders: ['Content-Type', 'Authorization'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'x-project-transfer-filename'],
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
   )

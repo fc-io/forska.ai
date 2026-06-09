@@ -199,12 +199,6 @@ const unwrapProjectImportResponse = <TData>(response: ProjectImportApiResponse<T
   return response.data
 }
 
-const readJsonBody = async (response: Response): Promise<unknown> => {
-  return response.json().catch(() => {
-    return null
-  }) as Promise<unknown>
-}
-
 const getEnvelopeError = (value: unknown) => {
   return typeof value === 'object' && value !== null && 'error' in value && typeof value.error === 'string'
     ? value.error
@@ -215,23 +209,54 @@ const getEnvelopeData = (value: unknown) => {
   return typeof value === 'object' && value !== null && 'data' in value ? value.data : null
 }
 
-const getUploadProgressStream = (file: File, onProgress: (percent: number) => void) => {
-  const reader = file.stream().getReader()
-  const uploaded = {bytes: 0}
+const readJsonText = async (value: string): Promise<unknown> => {
+  return value.trim() === ''
+    ? null
+    : new Response(value).json().catch(() => {
+        return null
+      })
+}
 
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const next = await reader.read()
+const getUploadFileNameHeaderValue = (file: File) => {
+  return file.name.replace(/[\r\n]/g, '_')
+}
 
-      if (next.done) {
-        controller.close()
-        return
-      }
+const getUploadProgressPercent = (file: File, loadedBytes: number) => {
+  return file.size === 0 ? 100 : Math.max(0, Math.min(100, Math.round((loadedBytes / file.size) * 100)))
+}
 
-      uploaded.bytes += next.value.byteLength
-      onProgress(file.size === 0 ? 100 : Math.round((uploaded.bytes / file.size) * 100))
-      controller.enqueue(next.value)
-    },
+const uploadProjectImportPackageRequest = ({
+  file,
+  onProgress,
+  sessionId,
+}: {
+  file: File
+  onProgress: (percent: number) => void
+  sessionId: string
+}) => {
+  return new Promise<{body: unknown; status: number}>((resolve, reject) => {
+    const request = new XMLHttpRequest()
+
+    request.addEventListener('error', () => {
+      reject(new Error('Failed to upload project import package'))
+    })
+    request.addEventListener('abort', () => {
+      reject(new Error('Project import upload was cancelled'))
+    })
+    request.addEventListener('load', () => {
+      void readJsonText(request.responseText).then((body) => {
+        resolve({body, status: request.status})
+      })
+    })
+    request.upload.addEventListener('progress', (event) => {
+      onProgress(getUploadProgressPercent(file, event.loaded))
+    })
+
+    request.open('PUT', getProjectImportUploadRequestUrl(sessionId))
+    request.withCredentials = true
+    request.setRequestHeader('content-type', file.type || 'application/zip')
+    request.setRequestHeader('x-project-transfer-filename', getUploadFileNameHeaderValue(file))
+    request.send(file)
   })
 }
 
@@ -330,21 +355,12 @@ export const uploadProjectImportPackage = async ({
   onProgress: (percent: number) => void
   sessionId: string
 }) => {
-  const response = await fetch(getProjectImportUploadRequestUrl(sessionId), {
-    body: getUploadProgressStream(file, onProgress),
-    credentials: 'include',
-    headers: {
-      'content-type': file.type || 'application/zip',
-      'x-project-transfer-filename': file.name.replace(/[\r\n]/g, '_'),
-    },
-    method: 'PUT',
-    ...(file.size === 0 ? {} : {duplex: 'half'}),
-  } as RequestInit & {duplex?: 'half'})
-  const body = await readJsonBody(response)
+  const response = await uploadProjectImportPackageRequest({file, onProgress, sessionId})
+  const body = response.body
   const error = getEnvelopeError(body)
   const data = getEnvelopeData(body)
 
-  if (!response.ok || error !== null) {
+  if (response.status < 200 || response.status >= 300 || error !== null) {
     throw new Error(error ?? 'Failed to upload project import package')
   }
 
