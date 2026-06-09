@@ -263,6 +263,35 @@ test('project-transfer duplicate fingerprints are stable across ordering and pro
   expect(firstFingerprint).toBe(secondFingerprint)
 })
 
+test('project-transfer duplicate fingerprints handle large logically equivalent payload strings', () => {
+  const firstPayload = Array.from({length: 2000}, (_, index) => {
+    return {
+      articleTitle: `row-${index}-${'x'.repeat(1024)}`,
+      createdAt: '2026-05-21T07:00:00.000Z',
+      id: `article-a-${index}`,
+    }
+  })
+  const secondPayload = Array.from({length: 2000}, (_, index) => {
+    const reversedIndex = 1999 - index
+
+    return {
+      articleTitle: `row-${reversedIndex}-${'x'.repeat(1024)}`,
+      createdAt: '2026-05-22T07:00:00.000Z',
+      id: `article-b-${reversedIndex}`,
+    }
+  })
+  const firstFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getManifest('9'),
+    payloads: {articles: firstPayload},
+  })
+  const secondFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getManifest('10'),
+    payloads: {articles: secondPayload},
+  })
+
+  expect(firstFingerprint).toBe(secondFingerprint)
+})
+
 test('project-transfer duplicate fingerprints ignore source and target id fields across payloads', () => {
   const firstFingerprint = getProjectTransferLogicalPackageFingerprint({
     manifest: getProvenanceIdManifest('1'),
