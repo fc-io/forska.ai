@@ -27,6 +27,7 @@ import {
 import {ProviderInvocationError} from '../server/providers/providerTypes.ts'
 import {inferenceRuntimeConfig} from '../server/utils/getInferenceRuntimeConfig.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
+import {getSinglePromptJudgmentRequest} from './judge/getSinglePromptJudgmentRequest.ts'
 import {
   chunkArticleText,
   chunkPatientMarkdown,
@@ -34,11 +35,7 @@ import {
   type JudgmentChunkingStrategy,
 } from './judge/judgeChunking.ts'
 import type {ContentSettings} from './judge/judgeGetPrompt.ts'
-import {getSinglePromptJudgmentRequest} from './judge/getSinglePromptJudgmentRequest.ts'
-import {
-  getSinglePromptEvidenceSystemPromptForArticle,
-  isFhirEhrPatientArticle,
-} from './judge/judgePromptSelection.ts'
+import {getSinglePromptEvidenceSystemPromptForArticle, isFhirEhrPatientArticle} from './judge/judgePromptSelection.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
 import {mapAsyncWithConcurrency} from './judge/mapAsyncWithConcurrency.ts'
 import {parseSinglePromptEvidence} from './judge/parseSinglePromptEvidence.ts'
@@ -1334,12 +1331,11 @@ export const judgeSinglePrompt = async ({
   const startDuration = performance.now()
   let shouldRequeueError: JudgmentPersistenceError | null = null
 
-  const {recordText: recordTextForQuoteValidation, systemPrompt, userPrompt: basePrompt} = getSinglePromptJudgmentRequest({
-    article,
-    contentSettings,
-    prompt,
-    provider,
-  })
+  const {
+    recordText: recordTextForQuoteValidation,
+    systemPrompt,
+    userPrompt: basePrompt,
+  } = getSinglePromptJudgmentRequest({article, contentSettings, prompt, provider})
   const promptIds = [prompt.id]
 
   const baseBudget = isWithinContextBudget({
