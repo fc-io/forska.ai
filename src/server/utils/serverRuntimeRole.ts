@@ -37,6 +37,8 @@ type ServerRuntimeState = {
   autoMonitorStarted: boolean
   currentLease: DuckdbOwnerLease | null
   currentRole: EffectiveServerRole
+  ownerLeaseHeartbeatMonitor: ReturnType<typeof setInterval> | null
+  ownerLeaseHeartbeatPromise: Promise<void> | null
   lastKnownDuckdbOwnerUrl: string | null
   duckdbOwnerDemotionHandlers: Array<(reason: string) => Promise<void> | void>
 }
@@ -57,6 +59,8 @@ const getServerRuntimeState = () => {
     autoMonitorStarted: false,
     currentLease: null,
     currentRole: getEffectiveServerRole(getRuntimeEnv().SERVER_ROLE),
+    ownerLeaseHeartbeatMonitor: null,
+    ownerLeaseHeartbeatPromise: null,
     lastKnownDuckdbOwnerUrl: null,
     duckdbOwnerDemotionHandlers: [],
   }
@@ -206,6 +210,59 @@ const readDuckdbOwnerUrlFromLease = async () => {
 
   setLastKnownDuckdbOwnerUrl(duckdbOwnerUrl)
   return duckdbOwnerUrl
+}
+
+const refreshExplicitDuckdbOwnerLease = async () => {
+  const currentLease = serverRuntimeState.currentLease
+
+  if (currentLease === null || isAutoServerRole(getRuntimeEnv().SERVER_ROLE) || !canCurrentServerOwnDuckdb()) {
+    return
+  }
+
+  try {
+    serverRuntimeState.currentLease = await Effect.runPromise(updateDuckdbOwnerLeaseHeartbeat(currentLease))
+    setLastKnownDuckdbOwnerUrl(getCurrentServerUrl())
+  } catch (error) {
+    autoServerRoleLogger.warn(
+      'server-role:explicit-duckdb-owner-heartbeat',
+      '[server] explicit DuckDB owner lease heartbeat failed',
+      error,
+    )
+  }
+}
+
+const startExplicitDuckdbOwnerLeaseHeartbeatMonitor = () => {
+  if (isAutoServerRole(getRuntimeEnv().SERVER_ROLE) || serverRuntimeState.ownerLeaseHeartbeatMonitor !== null) {
+    return
+  }
+
+  const interval = setInterval(() => {
+    if (serverRuntimeState.ownerLeaseHeartbeatPromise !== null) {
+      return
+    }
+
+    serverRuntimeState.ownerLeaseHeartbeatPromise = refreshExplicitDuckdbOwnerLease().finally(() => {
+      serverRuntimeState.ownerLeaseHeartbeatPromise = null
+    })
+  }, autoServerRolePollIntervalMs)
+
+  interval.unref?.()
+  serverRuntimeState.ownerLeaseHeartbeatMonitor = interval
+}
+
+const stopExplicitDuckdbOwnerLeaseHeartbeatMonitor = async () => {
+  const currentMonitor = serverRuntimeState.ownerLeaseHeartbeatMonitor
+  serverRuntimeState.ownerLeaseHeartbeatMonitor = null
+
+  if (currentMonitor !== null) {
+    clearInterval(currentMonitor)
+  }
+
+  const currentPromise = serverRuntimeState.ownerLeaseHeartbeatPromise
+
+  if (currentPromise !== null) {
+    await currentPromise
+  }
 }
 
 const promoteAutoServerToDuckdbOwner = async (reason: string, takeoverLeaseId?: string) => {
@@ -483,6 +540,7 @@ export const ensureCurrentDuckdbOwnerLease = async () => {
   }
 
   if (serverRuntimeState.currentLease !== null) {
+    startExplicitDuckdbOwnerLeaseHeartbeatMonitor()
     return serverRuntimeState.currentLease
   }
 
@@ -496,10 +554,13 @@ export const ensureCurrentDuckdbOwnerLease = async () => {
 
   serverRuntimeState.currentLease = nextLease
   setLastKnownDuckdbOwnerUrl(getCurrentServerUrl())
+  startExplicitDuckdbOwnerLeaseHeartbeatMonitor()
   return nextLease
 }
 
 export const releaseCurrentDuckdbOwnerLease = async () => {
+  await stopExplicitDuckdbOwnerLeaseHeartbeatMonitor()
+
   const currentLease = serverRuntimeState.currentLease
   serverRuntimeState.currentLease = null
 
@@ -517,9 +578,15 @@ export const registerDuckdbOwnerDemotionHandler = (handler: (reason: string) => 
 export const resetServerRuntimeRoleForTests = () => {
   const env = getRuntimeEnv()
 
+  if (serverRuntimeState.ownerLeaseHeartbeatMonitor !== null) {
+    clearInterval(serverRuntimeState.ownerLeaseHeartbeatMonitor)
+  }
+
   serverRuntimeState.autoMonitorStarted = false
   serverRuntimeState.currentLease = null
   serverRuntimeState.currentRole = getEffectiveServerRole(env.SERVER_ROLE)
+  serverRuntimeState.ownerLeaseHeartbeatMonitor = null
+  serverRuntimeState.ownerLeaseHeartbeatPromise = null
   serverRuntimeState.lastKnownDuckdbOwnerUrl = null
   serverRuntimeState.duckdbOwnerDemotionHandlers = []
 }
