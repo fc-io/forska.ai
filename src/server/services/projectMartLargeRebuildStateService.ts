@@ -124,7 +124,6 @@ const getFencedLargeRebuildStatePredicateSql = ({
   expectedRebuildPhase,
   expectedRefreshToken,
   expectedTargetGeneration,
-  now,
   projectId,
   workerId,
 }: LargeRebuildFencedTransitionParams & {now: Date}) => {
@@ -135,13 +134,7 @@ const getFencedLargeRebuildStatePredicateSql = ({
       ${expectedRebuildPhase === undefined ? '' : `AND rebuild_phase = ${getSqlLiteral(expectedRebuildPhase)}`}
       ${getExpectedTargetGenerationPredicateSql(expectedTargetGeneration)}
       AND superseded_at IS NULL
-      ${
-        workerId === undefined
-          ? ''
-          : `AND refresh_status = 'running'
-      AND lease_expires_at IS NOT NULL
-      AND lease_expires_at > ${getTimestampLiteral(now)}`
-      }
+      ${workerId === undefined ? '' : `AND refresh_status = 'running'`}
   `
 }
 

@@ -904,7 +904,6 @@ const getPromotionGuardSql = ({
   expectedRebuildPhase,
   expectedRefreshToken,
   expectedTargetGeneration,
-  now,
   projectLiteral,
   targetGeneration,
   targetGenerationLiteral,
@@ -935,8 +934,6 @@ const getPromotionGuardSql = ({
           )}
           AND rebuild_state.target_generation IS NOT DISTINCT FROM ${targetGenerationLiteral}
           AND rebuild_state.superseded_at IS NULL
-          AND rebuild_state.lease_expires_at IS NOT NULL
-          AND rebuild_state.lease_expires_at > ${now === undefined ? 'current_timestamp' : getTimestampLiteral(now)}
       )
     `
 }

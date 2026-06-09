@@ -455,6 +455,49 @@ test('claimLargeRebuilds preserves target generation across expired lease resume
   expect(result.row?.workerId).toBe('worker-2')
 })
 
+test('resetLargeRebuild succeeds after lease expiry when the claim was not transferred', () => {
+  const result = runScript<{
+    reset: {cursorArticleId: string | null; projectId: string; rebuildPhase: string; refreshStatus: string} | null
+  }>(`
+    await service.requestLargeRebuild({
+      cursorArticleCreatedAt: new Date('2026-04-03T08:00:00.000Z'),
+      cursorArticleId: 'article-1',
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'review_answer_dictionary',
+      refreshToken: 7,
+      targetGeneration: 13,
+    })
+
+    const [claim] = await service.claimLargeRebuilds({
+      leaseMs: 1000,
+      limit: 1,
+      now: new Date('2026-04-03T09:00:00.000Z'),
+      workerId: 'worker-1',
+    })
+
+    const reset = await service.resetLargeRebuild({
+      cursorArticleCreatedAt: new Date('2026-04-03T08:01:00.000Z'),
+      cursorArticleId: 'article-2',
+      expectedRebuildPhase: claim.rebuildPhase,
+      expectedRefreshToken: claim.refreshToken,
+      expectedTargetGeneration: claim.targetGeneration,
+      now: new Date('2026-04-03T09:00:02.000Z'),
+      projectId: claim.projectId,
+      rebuildPhase: 'review_article_filter_member',
+      targetGeneration: claim.targetGeneration,
+      workerId: claim.workerId,
+    })
+
+    console.log(JSON.stringify({reset}))
+    await database.close()
+  `)
+
+  expect(result.reset?.projectId).toBe('large-rebuild-project-1')
+  expect(result.reset?.refreshStatus).toBe('idle')
+  expect(result.reset?.rebuildPhase).toBe('review_article_filter_member')
+  expect(result.reset?.cursorArticleId).toBe('article-2')
+})
+
 test('claimLargeRebuilds rotates to less recently started work instead of starving other projects', () => {
   const result = runScript<{firstClaim: Array<{projectId: string}>; secondClaim: Array<{projectId: string}>}>(`
     await service.requestLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 1})

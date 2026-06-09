@@ -206,6 +206,67 @@ test('stale large rebuild lease cannot promote or complete after claim transfer'
   expect(result.activeGeneration).toBe(2)
 })
 
+test('expired large rebuild lease can still promote and complete when the claim was not transferred', () => {
+  const result = runScript<{activeGeneration: number; completed: {projectId: string} | null; promoted: boolean}>(`
+    await stateService.requestLargeRebuild({
+      projectId: 'large-rebuild-fence-project',
+      rebuildPhase: 'review_article_serving',
+      refreshToken: 7,
+      targetGeneration: 2,
+    })
+    const [claim] = await stateService.claimLargeRebuilds({
+      leaseMs: 1000,
+      limit: 1,
+      now: new Date('2026-04-03T08:00:00.000Z'),
+      workerId: 'worker-current',
+    })
+
+    await database.run(\`
+      INSERT INTO app.project_review_serving_generation (project_id, active_generation)
+      VALUES ('large-rebuild-fence-project', 1)
+    \`)
+    await database.run(\`
+      INSERT INTO mart.review_article_serving (
+        project_id, generation, article_id, article_created_at, article_updated_at, article_title,
+        has_all_llm_judgments, llm_judged_prompt_count, enabled_prompt_count, human_answered_prompt_count,
+        has_all_human_answers, review_opened, review_sections_completed
+      ) VALUES (
+        'large-rebuild-fence-project', 2, 'large-rebuild-fence-article-1',
+        TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z',
+        'Article 1', TRUE, 1, 1, 0, FALSE, FALSE, 0
+      )
+    \`)
+
+    const promoted = await executor.finalizeProjectReviewServing('large-rebuild-fence-project', 2, {
+      expectedRebuildPhase: claim.rebuildPhase,
+      expectedRefreshToken: claim.refreshToken,
+      expectedTargetGeneration: claim.targetGeneration,
+      now: new Date('2026-04-03T08:00:02.000Z'),
+      workerId: claim.workerId,
+    })
+    const completed = await stateService.completeLargeRebuild({
+      expectedRebuildPhase: claim.rebuildPhase,
+      expectedRefreshToken: claim.refreshToken,
+      expectedTargetGeneration: claim.targetGeneration,
+      now: new Date('2026-04-03T08:00:02.000Z'),
+      projectId: claim.projectId,
+      workerId: claim.workerId,
+    })
+    const [generation] = await database.queryJson(\`
+      SELECT CAST(active_generation AS INTEGER) AS activeGeneration
+      FROM app.project_review_serving_generation
+      WHERE project_id = 'large-rebuild-fence-project'
+    \`)
+
+    console.log(JSON.stringify({activeGeneration: generation.activeGeneration, completed, promoted}))
+    await database.close()
+  `)
+
+  expect(result.promoted).toBe(true)
+  expect(result.completed?.projectId).toBe('large-rebuild-fence-project')
+  expect(result.activeGeneration).toBe(2)
+})
+
 test('old generation cleanup skips target generation and deletes only leased generation batches', () => {
   const result = runScript<{
     cleanupLeaseRows: Array<{consumerId: string; queueId: string | null}>
