@@ -509,112 +509,6 @@ const validateDiskHeadroom = ({
     : {error: 'Project transfer disk headroom requires target bytes plus 10%', ok: false}
 }
 
-const validateArchiveMemberBudget = (archiveMemberCount: number | null | undefined) => {
-  return archiveMemberCount === null
-    || archiveMemberCount === undefined
-    || archiveMemberCount <= projectTransferResourceGateLimits.maxArchiveMemberCount
-    ? {ok: true as const}
-    : {error: 'Project transfer archive member budget exceeded', ok: false as const}
-}
-
-const validateArchiveInodeBudget = (archiveInodeCount: number | null | undefined) => {
-  return archiveInodeCount === null
-    || archiveInodeCount === undefined
-    || archiveInodeCount <= projectTransferResourceGateLimits.maxArchiveInodeCount
-    ? {ok: true as const}
-    : {error: 'Project transfer archive inode budget exceeded', ok: false as const}
-}
-
-const validateFileSizeLimit = (fileBytes: number | null | undefined) => {
-  return fileBytes === null
-    || fileBytes === undefined
-    || fileBytes <= projectTransferResourceGateLimits.maxSingleFileBytes
-    ? {ok: true as const}
-    : {error: 'Project transfer file-size limit exceeded', ok: false as const}
-}
-
-const validateNdjsonLineLimit = (ndjsonLineBytes: number | null | undefined) => {
-  return ndjsonLineBytes === null
-    || ndjsonLineBytes === undefined
-    || ndjsonLineBytes <= projectTransferResourceGateLimits.maxNdjsonLineBytes
-    ? {ok: true as const}
-    : {error: 'Project transfer NDJSON line-size limit exceeded', ok: false as const}
-}
-
-const validateJsonDepthLimit = (jsonDepth: number | null | undefined) => {
-  return jsonDepth === null || jsonDepth === undefined || jsonDepth <= projectTransferResourceGateLimits.maxJsonDepth
-    ? {ok: true as const}
-    : {error: 'Project transfer JSON depth limit exceeded', ok: false as const}
-}
-
-const validateJsonMemberLimit = (jsonMemberCount: number | null | undefined) => {
-  return jsonMemberCount === null
-    || jsonMemberCount === undefined
-    || jsonMemberCount <= projectTransferResourceGateLimits.maxJsonMemberCount
-    ? {ok: true as const}
-    : {error: 'Project transfer JSON member-count limit exceeded', ok: false as const}
-}
-
-const usesLargePayloadParserBudget = (input: ProjectTransferResourceGateInput) => {
-  const zipBytes = input.zipBytes ?? 0
-  const expandedBytes = input.expandedBytes ?? 0
-  const fileBytes = input.fileBytes ?? 0
-
-  return (
-    zipBytes > projectTransferExecutionThresholds.importAnalyzeInlineZipBytes
-    || expandedBytes > projectTransferExecutionThresholds.importAnalyzeInlineExpandedBytes
-    || fileBytes > projectTransferExecutionThresholds.importAnalyzeInlineZipBytes
-  )
-}
-
-const validateStreamingParser = (input: ProjectTransferResourceGateInput) => {
-  return input.usesStreamingParser || !usesLargePayloadParserBudget(input)
-    ? {ok: true as const}
-    : {error: 'Project transfer large payload parsing must use streaming parsers', ok: false as const}
-}
-
-const validateExpandedArchiveBudget = (expandedBytes: number | null | undefined) => {
-  return expandedBytes === null
-    || expandedBytes === undefined
-    || expandedBytes <= projectTransferResourceGateLimits.maxExpandedArchiveBytes
-    ? {ok: true as const}
-    : {error: 'Project transfer expanded archive byte budget exceeded', ok: false as const}
-}
-
-const getDecompressionRatio = ({
-  expandedBytes,
-  zipBytes,
-}: {
-  expandedBytes?: number | null
-  zipBytes?: number | null
-}) => {
-  const expandedByteCount = expandedBytes ?? 0
-
-  if (zipBytes === null || zipBytes === undefined) {
-    return null
-  }
-
-  if (zipBytes === 0) {
-    return expandedByteCount === 0 ? 0 : Number.POSITIVE_INFINITY
-  }
-
-  return expandedByteCount / zipBytes
-}
-
-const validateDecompressionRatio = ({
-  expandedBytes,
-  zipBytes,
-}: {
-  expandedBytes?: number | null
-  zipBytes?: number | null
-}) => {
-  const ratio = getDecompressionRatio({expandedBytes, zipBytes})
-
-  return ratio === null || ratio <= projectTransferResourceGateLimits.maxDecompressionRatio
-    ? {ok: true as const}
-    : {error: 'Project transfer decompression ratio budget exceeded', ok: false as const}
-}
-
 const getFirstFailedValidation = (validations: ProjectTransferValidationResult[]) => {
   return (
     validations.find((validation) => {
@@ -771,15 +665,6 @@ export const validateProjectTransferResourceGates = (
     validateOptionalNonNegativeInteger(input.expandedBytes, 'expandedBytes'),
     validateResourcePaths(input.resourcePaths),
     validateDiskHeadroom(input),
-    validateArchiveMemberBudget(input.archiveMemberCount),
-    validateArchiveInodeBudget(input.archiveInodeCount),
-    validateFileSizeLimit(input.fileBytes),
-    validateNdjsonLineLimit(input.ndjsonLineBytes),
-    validateJsonDepthLimit(input.jsonDepth),
-    validateJsonMemberLimit(input.jsonMemberCount),
-    validateStreamingParser(input),
-    validateExpandedArchiveBudget(input.expandedBytes),
-    validateDecompressionRatio(input),
   ]
 
   return getFirstFailedValidation(validations)

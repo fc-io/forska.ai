@@ -138,33 +138,16 @@ test('locks project-transfer execution thresholds at inclusive and background bo
   ).toBe('background')
 })
 
-test('locks project-transfer resource gates for temp roots, disk headroom, budgets, and parser safety', () => {
+test('locks project-transfer resource gates for temp roots and disk headroom without static size ceilings', () => {
   expect(projectTransferResourceGateLimits.writableTempRoot).toBe('tmp/project-transfer')
   expect(projectTransferResourceGateLimits.minimumDiskHeadroomRatio).toBe(0.1)
   expect(projectTransferResourceGateLimits.maxPathLength).toBe(2048)
   expect(projectTransferResourceGateLimits.maxPathSegmentLength).toBe(255)
-  expect(projectTransferResourceGateLimits.maxDecompressionRatio).toBe(100)
 
   expect(validateProjectTransferResourceGates(getValidResourceGateInput())).toEqual({ok: true})
   expect(getResourceGateError({tempRootPath: 'assets/project-transfer/session-1'})).toContain('temp root')
   expect(getResourceGateError({tempRootPath: 'tmp/project-transfer/../outside'})).toContain('traversal')
   expect(getResourceGateError({availableDiskBytes: 1_099})).toContain('disk headroom')
-  expect(
-    getResourceGateError({archiveMemberCount: projectTransferResourceGateLimits.maxArchiveMemberCount + 1}),
-  ).toContain('archive member budget')
-  expect(
-    getResourceGateError({archiveInodeCount: projectTransferResourceGateLimits.maxArchiveInodeCount + 1}),
-  ).toContain('archive inode budget')
-  expect(getResourceGateError({fileBytes: projectTransferResourceGateLimits.maxSingleFileBytes + 1})).toContain(
-    'file-size limit',
-  )
-  expect(getResourceGateError({ndjsonLineBytes: projectTransferResourceGateLimits.maxNdjsonLineBytes + 1})).toContain(
-    'NDJSON line-size',
-  )
-  expect(getResourceGateError({jsonDepth: projectTransferResourceGateLimits.maxJsonDepth + 1})).toContain('JSON depth')
-  expect(getResourceGateError({jsonMemberCount: projectTransferResourceGateLimits.maxJsonMemberCount + 1})).toContain(
-    'JSON member-count',
-  )
   expect(
     validateProjectTransferResourceGates(
       getValidResourceGateInput({
@@ -175,11 +158,21 @@ test('locks project-transfer resource gates for temp roots, disk headroom, budge
       }),
     ),
   ).toEqual({ok: true})
-  expect(getResourceGateError({usesStreamingParser: false})).toContain('streaming parsers')
-  expect(getResourceGateError({expandedBytes: 101 * projectTransferMiB, zipBytes: 1 * projectTransferMiB})).toContain(
-    'decompression ratio',
-  )
-  expect(getResourceGateError({expandedBytes: 1, zipBytes: 0})).toContain('decompression ratio')
+  expect(
+    validateProjectTransferResourceGates(
+      getValidResourceGateInput({
+        archiveInodeCount: projectTransferResourceGateLimits.maxArchiveInodeCount + 1,
+        archiveMemberCount: projectTransferResourceGateLimits.maxArchiveMemberCount + 1,
+        expandedBytes: 32 * projectTransferGiB,
+        fileBytes: 4 * projectTransferGiB,
+        jsonDepth: projectTransferResourceGateLimits.maxJsonDepth + 1,
+        jsonMemberCount: projectTransferResourceGateLimits.maxJsonMemberCount + 1,
+        ndjsonLineBytes: projectTransferResourceGateLimits.maxNdjsonLineBytes + 1,
+        usesStreamingParser: false,
+        zipBytes: 1,
+      }),
+    ),
+  ).toEqual({ok: true})
   expect(validateProjectTransferResourceGates(getValidResourceGateInput({expandedBytes: 0, zipBytes: 0}))).toEqual({
     ok: true,
   })

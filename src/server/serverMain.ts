@@ -18,7 +18,6 @@ import {judgmentDispatchTelemetryRoutes} from './routes/JudgmentDispatchTelemetr
 import {getProductApiRoutes} from './routes/productApiRoutes.ts'
 import {publicRouteSurfaceGate} from './routes/publicRouteSurfaceGate.ts'
 import {runtimeReadyRoutes} from './routes/runtimeReadyRoutes.ts'
-import {projectTransferResourceGateLimits} from './services/projectTransfer/projectTransferContracts.ts'
 import {
   type ProjectTransferSessionRecoveryResult,
   runProjectTransferStartupRecovery,
@@ -292,7 +291,7 @@ export const app = new Elysia()
   .listen({
     hostname: '127.0.0.1',
     idleTimeout: 255,
-    maxRequestBodySize: projectTransferResourceGateLimits.maxSingleFileBytes,
+    maxRequestBodySize: Number.MAX_SAFE_INTEGER,
     port: env.API_SERVER_PORT,
   })
 
