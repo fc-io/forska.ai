@@ -2040,6 +2040,15 @@ const getScopedActivityArticleWindow = async (params: {
   const whereParts = [
     getDuckdbScopeClause({articleAlias: 'a', routeIds: params.scope.routeIds, projectId: params.scope.projectId}),
   ]
+
+  if (params.scope.dateFrom) {
+    whereParts.push(`a.article_created_at >= ${getDuckdbTimestampLiteral(params.scope.dateFrom)}`)
+  }
+
+  if (params.scope.dateTo) {
+    whereParts.push(`a.article_created_at <= ${getDuckdbTimestampLiteral(params.scope.dateTo)}`)
+  }
+
   const activityExpression = getDuckdbActivityTimestampExpression('a')
   const priorityBucketExpression = getDuckdbUnassessedPairsPriorityBucketExpression(params.scope)
   const priorityJoinClause = getDuckdbUnassessedPairsPriorityJoinClause(params.scope, 'a.id')

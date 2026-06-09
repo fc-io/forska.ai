@@ -930,6 +930,35 @@ test('getUnassessedPairsFromDuckdb keeps date-filtered projects on serving rows 
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('FROM app.article a')
 })
 
+test('getUnassessedPairsFromDuckdb applies project date filters on raw fallback scans', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1', 'prompt', {dateFrom: '2026-04-01T00:00:00.000Z', dateTo: '2026-05-01T23:59:59.999Z'}),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1', articleCreatedAt: '2026-04-10T00:00:00.000Z'})],
+    [],
+  ])
+
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+  const result = await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 10,
+    cursor: null,
+  })
+
+  expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain(
+    "a.article_created_at >= TIMESTAMPTZ '2026-04-01T00:00:00.000Z'",
+  )
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain(
+    "a.article_created_at <= TIMESTAMPTZ '2026-05-01T23:59:59.999Z'",
+  )
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
+})
+
 test('getUnassessedPairsFromDuckdb compares raw queue cursors at millisecond precision', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
