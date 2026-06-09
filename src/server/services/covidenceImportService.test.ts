@@ -2815,8 +2815,8 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
         }
 
         const config = await createConfig(
-          'Title,Authors,Abstract,Year,DOI,Tags,Notes\\nStudy A,"Doe, Jane",Summary A,2024,10.1000/alpha,tag-a,first note\\nStudy B,"Roe, John",Summary B,2023,10.1000/beta,tag-b,second note\\n',
-          'Title,Authors,Year,DOI\\nStudy B,"Roe, John",2023,10.1000/beta\\n',
+          'Title,Authors,Abstract,Year,DOI,Tags,Notes\\nStudy A,"Doe, Jane",Summary A,2024,https://dx.doi.org/10.1000/Alpha,tag-a,first note\\nStudy B,"Roe, John",Summary B,2023,https://dx.doi.org/0161903/AIM.009,tag-b,second note\\n',
+          'Title,Authors,Year,DOI\\nStudy B,"Roe, John",2023,https://dx.doi.org/0161903/AIM.009\\n',
         )
 
         await database.transaction(async (tx) => {
@@ -2830,6 +2830,7 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
             a.article_title AS articleTitle,
             a.article_summary AS articleSummary,
             a.doi,
+            a.url AS articleUrl,
             a.pubmed_id AS pubmedId,
             TO_JSON(air.raw_payload) AS originalData,
             TO_JSON(air.import_metadata) AS importMetadata,
@@ -2838,7 +2839,7 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
           INNER JOIN app.article_import_route air ON air.article_id = a.id
           INNER JOIN app.import_route ir ON ir.id = air.import_route_id
           WHERE ir.route = '${importRoute}'
-          ORDER BY air.external_article_id
+          ORDER BY a.article_title ASC
         \`)
         const linkedArticles = await database.queryJson(\`
           SELECT COUNT(*)::INTEGER AS count
@@ -2893,6 +2894,7 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
         articleId: string
         articleSummary: string | null
         articleTitle: string
+        articleUrl: string | null
         canonicalLegacyArticleId: string | null
         doi: string | null
         importMetadata: {covidence: {mode: string; stageMembership: Record<string, boolean>}}
@@ -2910,6 +2912,7 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
     expect(parsed.articles[0]?.articleTitle).toBe('Study A')
     expect(parsed.articles[0]?.articleSummary).toBe('Summary A')
     expect(parsed.articles[0]?.doi).toBe('10.1000/alpha')
+    expect(parsed.articles[0]?.articleUrl).toBe('https://doi.org/10.1000/alpha')
     expect(parsed.articles[0]?.originalData.covidence.citation.title).toBe('Study A')
     expect(parsed.articles[0]?.originalData.covidence.sourceRows).toHaveLength(2)
     expect(parsed.articles[0]?.sourceMetadata).toMatchObject({journalTitle: null})
@@ -2923,6 +2926,8 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
       irrelevant: false,
     })
     expect(parsed.articles[1]?.articleTitle).toBe('Study B')
+    expect(parsed.articles[1]?.doi).toBeNull()
+    expect(parsed.articles[1]?.articleUrl).toBe('https://dx.doi.org/0161903/AIM.009')
   } finally {
     deleteCovidencePackageFiles(datasourceId)
     ;[

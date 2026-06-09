@@ -1781,6 +1781,24 @@ const getCovidenceCanonicalSourceMetadata = (candidate: CovidenceMergedArticleCa
   return {journalTitle: candidate.citation.journal ?? null}
 }
 
+const getCovidenceDoiResolverUrl = (value: string | null) => {
+  const trimmedValue = value?.trim() ?? ''
+  const parsedUrl = URL.canParse(trimmedValue) ? new URL(trimmedValue) : null
+  const normalizedHost = parsedUrl?.hostname.toLowerCase().replace(/^www\./, '') ?? null
+
+  return parsedUrl
+    && (parsedUrl.protocol === 'https:' || parsedUrl.protocol === 'http:')
+    && (normalizedHost === 'doi.org' || normalizedHost === 'dx.doi.org')
+    ? trimmedValue
+    : null
+}
+
+const getCovidenceArticleUrl = (citation: Record<string, string | null>) => {
+  const url = citation.url?.trim() ?? ''
+
+  return url === '' ? getCovidenceDoiResolverUrl(citation.doi) : url
+}
+
 const getCovidenceArticleExternalId = (params: {candidate: CovidenceMergedArticleCandidate; importRoute: string}) => {
   return `${params.importRoute}:${getSafeIdentityPart(params.candidate.articleKey)}`
 }
@@ -1825,7 +1843,7 @@ const getCovidenceImportRows = (params: {
       sourceKind: 'covidence',
       sourceMetadata: getCovidenceCanonicalSourceMetadata(candidate),
       sourceRecordKey: candidate.articleKey,
-      url: candidate.citation.url ?? null,
+      url: getCovidenceArticleUrl(candidate.citation),
     }
   })
 }
