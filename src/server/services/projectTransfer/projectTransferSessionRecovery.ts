@@ -94,6 +94,7 @@ const defaultExportOwnerHeartbeatStaleMs = 5 * 60 * 1000
 const defaultExportQueuedSessionStaleMs = 10 * 60 * 1000
 const defaultImportAnalyzeHeartbeatStaleMs = 5 * 60 * 1000
 const defaultImportCommitHeartbeatStaleMs = 5 * 60 * 1000
+const defaultTerminalSessionPruneAgeMs = 24 * 60 * 60 * 1000
 const maxRecoveryBatchSize = 500
 const terminalStateListSql = getQuotedStringList([...projectTransferTerminalStates]).join(', ')
 
@@ -985,6 +986,40 @@ const markTerminalCleanupComplete = async ({
   `)
 }
 
+const pruneExpiredTerminalSessions = async ({
+  batchSize,
+  now,
+  runner,
+}: {
+  batchSize: number
+  now: Date
+  runner: ProjectTransferSessionRecoveryRunner
+}) => {
+  const pruneBefore = getDateBefore({ms: defaultTerminalSessionPruneAgeMs, now})
+  const rows = await runner.queryJson<{id: string}>(`
+    SELECT id
+    FROM app.project_transfer_session
+    WHERE state IN (${terminalStateListSql})
+      AND terminal_cleanup_at IS NOT NULL
+      AND expires_at <= ${getTimestampLiteral(now)}
+      AND terminal_cleanup_at <= ${getTimestampLiteral(pruneBefore)}
+    ORDER BY expires_at ASC, terminal_cleanup_at ASC, id ASC
+    LIMIT ${batchSize}
+  `)
+  const sessionIds = rows.map((row) => {
+    return row.id
+  })
+
+  if (sessionIds.length === 0) {
+    return
+  }
+
+  await runner.run(`
+    DELETE FROM app.project_transfer_session
+    WHERE id IN (${getQuotedStringList(sessionIds).join(', ')})
+  `)
+}
+
 const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionRecoveryParams = {}) => {
   const isActiveWriter = params.isActiveWriter ?? canCurrentServerOwnDuckdb
 
@@ -1038,6 +1073,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
   const cleanupCounts = await getCleanupCounts({plans, runtimeOptions: {cwd: params.cwd, envValues: params.envValues}})
   const {failedPlans, successfulPlans, ...cleanupResultCounts} = cleanupCounts
   await markTerminalCleanupComplete({now, plans: successfulPlans, runner})
+  await pruneExpiredTerminalSessions({batchSize, now, runner})
   throwFailedCleanupPlans(failedPlans)
 
   return {

@@ -575,7 +575,8 @@ afterEach(() => {
   }
   routeState.sessions = {}
   rmSync(`tmp/project-transfer/export/${readySessionId}`, {force: true, recursive: true})
-  rmSync('tmp/project-transfer/import', {force: true, recursive: true})
+  rmSync(`tmp/project-transfer/import/${uploadSessionId}`, {force: true, recursive: true})
+  rmSync('tmp/project-transfer/import/import-auto-resolve-get', {force: true, recursive: true})
 })
 
 afterAll(() => {

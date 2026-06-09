@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto'
-import {mkdir} from 'node:fs/promises'
+import {mkdir, rm} from 'node:fs/promises'
 import {dirname} from 'node:path'
 
 import type {ProjectTransferHistoryRecord, ProjectTransferSessionRecord} from '../../../db/schemaTypes.ts'
@@ -69,6 +69,7 @@ type ProjectTransferCommitRepositories = {
   sessionRepository?: Pick<
     ReturnType<typeof getProjectTransferSessionRepository>,
     | 'getProjectTransferSession'
+    | 'markProjectTransferSessionTerminalCleanupComplete'
     | 'persistProjectTransferSessionCompletion'
     | 'reopenProjectTransferCommitSession'
     | 'transitionProjectTransferSessionState'
@@ -275,6 +276,27 @@ const writeCompletionArtifact = async ({
   const resolvedPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: layout.completionPath})
   await mkdir(dirname(resolvedPath), {recursive: true})
   await globalThis.Bun.write(resolvedPath, getProjectTransferCanonicalJson(completion))
+}
+
+const cleanupCompletedImportArtifacts = async ({
+  layout,
+  repositories,
+  runtimeOptions,
+  sessionId,
+}: {
+  layout: ProjectTransferImportTempLayout
+  repositories: ProjectTransferCommitRepositorySet
+  runtimeOptions: RuntimePathOptions
+  sessionId: string
+}) => {
+  const rootPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: layout.rootPath})
+
+  await rm(rootPath, {force: true, recursive: true})
+  await repositories.sessionRepository.markProjectTransferSessionTerminalCleanupComplete({
+    expectedOwnerToken: null,
+    expectedState: 'completed',
+    sessionId,
+  })
 }
 
 const getPayloadPath = (layout: ProjectTransferImportTempLayout, key: keyof ProjectTransferPayloadByKey) => {
@@ -1113,6 +1135,9 @@ const runClaimedProjectTransferImportCommit = async ({
     )
     await settleCompletionSideEffect(
       writeCompletionArtifact({completion: writeResult.completion, layout: artifacts.layout, runtimeOptions}),
+    )
+    await settleCompletionSideEffect(
+      cleanupCompletedImportArtifacts({layout: artifacts.layout, repositories, runtimeOptions, sessionId}),
     )
 
     return {

@@ -290,6 +290,45 @@ test('project transfer recovery marks terminal cleanup and prioritizes stale act
   expect(result.afterThirdStates).toEqual(result.afterFirstStates)
 })
 
+test('project transfer recovery prunes expired terminal-cleaned session rows', () => {
+  const result = runRecoveryScript<{
+    recoveryResult: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}
+    remainingIds: string[]
+  }>(`
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt: expiredAt,
+      id: 'terminal-cleaned-old',
+      state: 'completed',
+    })
+    await database.run(
+      "UPDATE app.project_transfer_session SET terminal_cleanup_at = TIMESTAMPTZ '2026-05-20T10:00:00.000Z' WHERE id = 'terminal-cleaned-old'",
+    )
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt: futureAt,
+      id: 'terminal-cleaned-fresh',
+      state: 'completed',
+    })
+    await database.run(
+      "UPDATE app.project_transfer_session SET terminal_cleanup_at = TIMESTAMPTZ '2026-05-21T11:30:00.000Z' WHERE id = 'terminal-cleaned-fresh'",
+    )
+
+    const recoveryResult = await recovery.runProjectTransferStartupRecovery({
+      cwd: runtimeRoot,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const remainingIds = (await database.queryJson(\`SELECT id FROM app.project_transfer_session ORDER BY id ASC\`)).map((row) => row.id)
+
+    console.log(JSON.stringify({recoveryResult, remainingIds}))
+  `)
+
+  expect(result.recoveryResult.scannedSessionCount).toBe(0)
+  expect(result.remainingIds).toEqual(['terminal-cleaned-fresh'])
+})
+
 test('project transfer recovery fails stale export workers but keeps ready artifacts until public expiry', () => {
   const result = runRecoveryScript<{
     futureReadyPackageExists: boolean

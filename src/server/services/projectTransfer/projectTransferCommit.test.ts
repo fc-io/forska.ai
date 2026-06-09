@@ -366,16 +366,23 @@ const getSession = (overrides?: Partial<ProjectTransferSessionRecord>): ProjectT
 }
 
 const getFakeSessionRepository = (initialSession: ProjectTransferSessionRecord) => {
-  const calls: {persist: unknown[]; reopen: unknown[]; transition: unknown[]; updatePlan: unknown[]} = {
-    persist: [],
-    reopen: [],
-    transition: [],
-    updatePlan: [],
-  }
+  const calls: {
+    cleanup: unknown[]
+    persist: unknown[]
+    reopen: unknown[]
+    transition: unknown[]
+    updatePlan: unknown[]
+  } = {cleanup: [], persist: [], reopen: [], transition: [], updatePlan: []}
   let session = initialSession
   const repository: MutableSessionRepository = {
     getProjectTransferSession: async () => {
       return session
+    },
+    markProjectTransferSessionTerminalCleanupComplete: async (params) => {
+      calls.cleanup = [...calls.cleanup, params]
+      session = session.state === 'completed' ? {...session, terminalCleanupAt: params.now ?? new Date()} : session
+
+      return session.state === 'completed' ? session : null
     },
     reopenProjectTransferCommitSession: async (params) => {
       calls.reopen = [...calls.reopen, params]
@@ -562,9 +569,7 @@ test('project transfer commit loads frozen artifacts and claims with server gene
         return {changed: false, plan, ready: true}
       },
     })
-    const completionArtifact = JSON.parse(await readFile(join(cwd, layout.completionPath), 'utf8')) as {
-      transferHistoryId: string
-    }
+    const tempRootExists = await globalThis.Bun.file(join(cwd, layout.rootPath)).exists()
 
     expect(result.status).toBe('completed')
     expect(result.statusCode).toBe(200)
@@ -595,9 +600,11 @@ test('project transfer commit loads frozen artifacts and claims with server gene
     expect((fake.calls.persist[0] as {now: Date}).now.toISOString()).toBe(
       (fake.calls.transition[2] as {progress: {updatedAt: string}}).progress.updatedAt,
     )
+    expect(fake.calls.cleanup).toHaveLength(1)
+    expect(fake.getSession().terminalCleanupAt).not.toBeNull()
     expect(fake.calls.updatePlan).toHaveLength(0)
     expect(revalidationInputs).toHaveLength(2)
-    expect(completionArtifact.transferHistoryId).toBe('history-generated')
+    expect(tempRootExists).toBe(false)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
