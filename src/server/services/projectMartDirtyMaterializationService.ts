@@ -49,6 +49,14 @@ type AdvanceDirtyMaterializationCursorParams = DirtyMaterializationFence & {
 
 type CompleteDirtyMaterializationParams = DirtyMaterializationFence
 
+type RequeueDirtyMaterializationParams = {
+  now?: Date
+  projectId: string
+  runner?: DirtyMaterializationRunner
+  sourceKind: string
+  targetDirtyToken: number
+}
+
 type FailDirtyMaterializationParams = DirtyMaterializationFence & {error: string}
 
 type GetProjectScopeDirtyMaterializationSnapshotParams = {projectId: string; runner?: DirtyMaterializationRunner}
@@ -97,6 +105,16 @@ type NormalizedDirtyMaterializationSourceSnapshot = {
 }
 
 const projectScopeDirtyMaterializationSourceKind = 'project_scope_article'
+const projectScopeDirtyMaterializationSourceChangedError =
+  'project scope source changed before dirty materialization completed'
+
+const withDirtyMaterializationTransaction = async <T>(
+  runner: DirtyMaterializationRunner | undefined,
+  work: (tx: DirtyMaterializationRunner) => Promise<T>,
+) => {
+  return runner ? work(runner) : (getAppDatabaseService().transaction(work) as Promise<T>)
+}
+
 const getNow = (value?: Date) => {
   return value ?? new Date()
 }
@@ -127,6 +145,16 @@ const getSourceSnapshot = (
     sourceScopeHighWaterArticleCreatedAt: snapshot.sourceScopeHighWaterArticleCreatedAt ?? null,
     sourceScopeHighWaterArticleId: snapshot.sourceScopeHighWaterArticleId ?? null,
   }
+}
+
+const getSourceSnapshotFromMaterializationState = (state: ProjectMartDirtyMaterializationStateRecord) => {
+  return getSourceSnapshot({
+    sourceScopeExpectedRowCount: state.sourceScopeExpectedRowCount,
+    sourceScopeFingerprint: state.sourceScopeFingerprint,
+    sourceScopeGeneration: state.sourceScopeGeneration,
+    sourceScopeHighWaterArticleCreatedAt: state.sourceScopeHighWaterArticleCreatedAt,
+    sourceScopeHighWaterArticleId: state.sourceScopeHighWaterArticleId,
+  })
 }
 
 const withStatisticsPropagationDisabled = async <T>(
@@ -428,6 +456,38 @@ const queueDirtyMaterialization = async ({
   return getDirtyMaterializationStateRecord(activeRunner, {projectId, sourceKind, targetDirtyToken})
 }
 
+const requeueDirtyMaterialization = async ({
+  now,
+  projectId,
+  runner,
+  sourceKind,
+  targetDirtyToken,
+}: RequeueDirtyMaterializationParams) => {
+  const currentNow = getNow(now)
+
+  return withDirtyMaterializationTransaction(runner, async (tx) => {
+    const currentState = await getDirtyMaterializationStateRecord(tx, {projectId, sourceKind, targetDirtyToken})
+
+    if (currentState === null) {
+      return null
+    }
+
+    const sourceSnapshot =
+      sourceKind === projectScopeDirtyMaterializationSourceKind
+        ? await getProjectScopeDirtyMaterializationSnapshot({projectId, runner: tx})
+        : getSourceSnapshotFromMaterializationState(currentState)
+
+    return queueDirtyMaterialization({
+      ...sourceSnapshot,
+      now: currentNow,
+      projectId,
+      runner: tx,
+      sourceKind,
+      targetDirtyToken,
+    })
+  })
+}
+
 const claimDirtyMaterializations = async ({
   leaseMs,
   limit,
@@ -681,7 +741,7 @@ const reconcileProjectScopeDirtyMaterialization = async ({
   const insertedRowCount = Number(insertedRows?.insertedRowCount ?? 0)
 
   if (!isSameSourceSnapshot(sourceSnapshot, currentSnapshot)) {
-    return {error: 'project scope source changed before dirty materialization completed'}
+    return {error: projectScopeDirtyMaterializationSourceChangedError}
   }
 
   if (insertedRowCount !== sourceSnapshot.sourceScopeExpectedRowCount) {
@@ -752,18 +812,20 @@ const completeDirtyMaterializationWithRunner = async ({
       : {error: null}
 
   if (reconciliation.error !== null) {
-    await markDirtyMaterializationUnreconciled({
-      currentNow,
-      error: reconciliation.error,
-      materializationOwner,
-      projectId,
-      sourceKind,
-      targetDirtyToken,
-      tx,
-      ...snapshot,
-    })
-
-    return null
+    return reconciliation.error === projectScopeDirtyMaterializationSourceChangedError
+      ? requeueDirtyMaterialization({now: currentNow, projectId, runner: tx, sourceKind, targetDirtyToken})
+      : markDirtyMaterializationUnreconciled({
+          currentNow,
+          error: reconciliation.error,
+          materializationOwner,
+          projectId,
+          sourceKind,
+          targetDirtyToken,
+          tx,
+          ...snapshot,
+        }).then(() => {
+          return null
+        })
   }
 
   const [row] = await tx.queryJson<ProjectMartDirtyMaterializationStateRecord>(`
@@ -1021,9 +1083,10 @@ const projectMartDirtyMaterializationService = {
   getClaimedDirtyMaterialization,
   getCompletedDirtyMaterializationToken,
   getProjectScopeDirtyMaterializationSnapshot,
-  queueDirtyMaterialization,
   heartbeatDirtyMaterialization,
   materializeProjectScopeDirtyBatch,
+  queueDirtyMaterialization,
+  requeueDirtyMaterialization,
 }
 
 export const getProjectMartDirtyMaterializationService = () => {
@@ -1045,6 +1108,7 @@ export type {
   MaterializeProjectScopeDirtyBatchParams,
   ProjectScopeDirtyMaterializationSnapshot,
   QueueDirtyMaterializationParams,
+  RequeueDirtyMaterializationParams,
 }
 
 export {projectScopeDirtyMaterializationSourceKind}

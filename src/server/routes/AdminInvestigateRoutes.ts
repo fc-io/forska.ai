@@ -8,6 +8,7 @@ import {
   getJudgmentJobSqliteHealthProjectionService,
   type JudgmentJobSqliteHealthProjectionReader,
 } from '../services/judgmentJobSqliteHealthProjectionService.ts'
+import {getProjectMartDirtyMaterializationService} from '../services/projectMartDirtyMaterializationService.ts'
 import {runProjectMartLargeRebuildCycles} from '../services/projectMartLargeRebuildCyclesService.ts'
 import {
   getProjectMartLargeRebuildPhaseIndex,
@@ -46,6 +47,7 @@ import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 
 const appDatabaseService = getAppDatabaseService()
 const appQueryService = getAppQueryService()
+const projectMartDirtyMaterializationService = getProjectMartDirtyMaterializationService()
 const projectMartLargeRebuildStateService = getProjectMartLargeRebuildStateService()
 export const workerRuntimeDiagnosticsPath = '/api/admin/worker-runtime-diagnostics'
 
@@ -999,6 +1001,17 @@ export const adminInvestigateRoutes = new Elysia()
       })
     },
     {body: t.Object({note: t.Union([t.String(), t.Null()]), projectId: t.String()})},
+  )
+  .post(
+    '/api/admin/project-mart-dirty-materialization-requeue',
+    async ({body}) => {
+      return projectMartDirtyMaterializationService.requeueDirtyMaterialization({
+        projectId: body.projectId,
+        sourceKind: body.sourceKind,
+        targetDirtyToken: body.targetDirtyToken,
+      })
+    },
+    {body: t.Object({projectId: t.String(), sourceKind: t.String(), targetDirtyToken: t.Numeric()})},
   )
   .get('/api/admin/list-prompts-with-types', async () => {
     const promptsList = await getTypedPrompts()

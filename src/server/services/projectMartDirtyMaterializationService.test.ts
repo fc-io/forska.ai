@@ -671,11 +671,15 @@ test('dirty project claims stay behind earlier incomplete materialization tokens
   })
 })
 
-test('project-wide dirty materialization marks unreconciled when the source fingerprint changes', () => {
+test('project-wide dirty materialization requeues with a fresh snapshot when the source fingerprint changes', () => {
   const result = runDirtyMaterializationScript<{
     claimAfterMutation: Array<{claimedToken: number; projectId: string}>
     materializationState: ProjectMartDirtyMaterializationStateRecord | null
+    reclaimed: Array<{materializationOwner: string; targetDirtyToken: number}>
     finalBatch: {insertedRowCountDelta: number; isComplete: boolean}
+    retryBatch: {insertedRowCountDelta: number; isComplete: boolean}
+    completedRetryBatch: {insertedRowCountDelta: number; isComplete: boolean}
+    claimAfterRetry: Array<{claimedToken: number; projectId: string}>
   }>(`
     const {getProjectMartDirtyMaterializationService} = await import(
       './src/server/services/projectMartDirtyMaterializationService.ts'
@@ -730,6 +734,29 @@ test('project-wide dirty materialization marks unreconciled when the source fing
       leaseMs: 5000,
       now: new Date('2026-04-04T11:00:04.000Z'),
     })
+    const reclaimed = await materializationService.claimDirtyMaterializations({
+      sourceKind: 'project_scope_article',
+      workerId: 'dirty-materialization-worker-retry',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-04T11:00:05.000Z'),
+    })
+    const retryBatch = await materializationService.materializeProjectScopeDirtyBatch({
+      ...reclaimed[0],
+      batchSize: 2,
+      now: new Date('2026-04-04T11:00:06.000Z'),
+    })
+    const completedRetryBatch = await materializationService.materializeProjectScopeDirtyBatch({
+      ...reclaimed[0],
+      batchSize: 2,
+      now: new Date('2026-04-04T11:00:07.000Z'),
+    })
+    const claimAfterRetry = await refreshStateService.claimDirtyProjects({
+      workerId: 'refresh-worker-after-retry',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-04T11:00:08.000Z'),
+    })
     const [materializationState] = await database.queryJson(\`
       SELECT
         project_id AS projectId,
@@ -759,16 +786,32 @@ test('project-wide dirty materialization marks unreconciled when the source fing
       LIMIT 1
     \`)
 
-    console.log(JSON.stringify({claimAfterMutation, finalBatch, materializationState}))
+    console.log(JSON.stringify({
+      claimAfterMutation,
+      claimAfterRetry,
+      completedRetryBatch,
+      finalBatch,
+      materializationState,
+      reclaimed,
+      retryBatch,
+    }))
     await database.close()
   `)
 
   expect(result.finalBatch).toMatchObject({insertedRowCountDelta: 0, isComplete: false})
+  expect(result.reclaimed).toMatchObject([
+    {materializationOwner: 'dirty-materialization-worker-retry', targetDirtyToken: 1},
+  ])
+  expect(result.retryBatch).toMatchObject({insertedRowCountDelta: 2, isComplete: false})
+  expect(result.completedRetryBatch).toMatchObject({insertedRowCountDelta: 0, isComplete: true})
   expect(result.materializationState).toMatchObject({
-    lastError: 'project scope source changed before dirty materialization completed',
-    materializationStatus: 'unreconciled',
-    sourceScopeExpectedRowCount: 1,
+    lastError: null,
+    materializationStatus: 'completed',
+    sourceScopeExpectedRowCount: 2,
     targetDirtyToken: 1,
   })
   expect(result.claimAfterMutation).toEqual([])
+  expect(result.claimAfterRetry).toMatchObject([
+    {claimedToken: 1, lastCompletedToken: 0, projectId: 'dirty-materialization-project'},
+  ])
 })
