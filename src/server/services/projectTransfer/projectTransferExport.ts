@@ -1506,6 +1506,21 @@ const getProjectTransferExportArticleWarnings = (articles: ProjectTransferExport
   })
 }
 
+const isUnsafeProjectTransferArticleRoute = (value: string | null) => {
+  return (
+    value !== null
+    && (value.includes('/api/runtime-asset')
+      || value.includes('tmp/project-transfer')
+      || /^\/(?!\/)/.test(value)
+      || /^[A-Za-z]:[\\/]/.test(value)
+      || value.startsWith('file://'))
+  )
+}
+
+const getPortableProjectTransferArticleRoute = (value: string | null) => {
+  return isUnsafeProjectTransferArticleRoute(value) ? null : value
+}
+
 const getProjectTransferExportPromptSignature = (
   row: Pick<ProjectTransferExportProjectPromptRow, 'contentHash' | 'originalText'>,
 ) => {
@@ -1872,7 +1887,7 @@ const getProjectTransferExportArticlePayloadRecord = (
     fullTextPdf: row.fullTextPdf,
     fullTextSource: row.fullTextSource,
     identifierInputs,
-    importRoute: row.importRoute,
+    importRoute: getPortableProjectTransferArticleRoute(row.importRoute),
     medrxivId: row.medrxivId,
     originalData: getJsonValue(row.originalData),
     provenance: {sourceArticleId},
@@ -1882,7 +1897,7 @@ const getProjectTransferExportArticlePayloadRecord = (
     scopedRawPayload: getJsonValue(row.scopedRawPayload),
     selectedExternalArticleId: row.selectedExternalArticleId,
     selectedImportRecordId: row.selectedImportRecordId,
-    selectedImportRoute: row.selectedImportRoute,
+    selectedImportRoute: getPortableProjectTransferArticleRoute(row.selectedImportRoute),
     selectedImportRouteId: row.selectedImportRouteId,
     selectedSourceKind: row.selectedSourceKind,
     selectedSourceRecordHash: row.selectedSourceRecordHash,

@@ -22,7 +22,7 @@ import {
   type ProjectTransferExportSerializedPayloads,
   serializeProjectTransferExportPayloads,
 } from './projectTransferExport.ts'
-import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
+import {getProjectTransferCanonicalJson, getProjectTransferPackageFingerprint} from './projectTransferFingerprint.ts'
 import {buildProjectTransferManifest, getProjectTransferManifestPayloadEntry} from './projectTransferManifest.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import type {ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
@@ -249,29 +249,10 @@ const getManifestWithFingerprint = ({
   serializedPayloads: ProjectTransferExportSerializedPayloads
 }) => {
   const unsignedManifest = buildManifest({assetBytes, assembly, exportedAt, serializedPayloads})
-  const packageFingerprint = getProjectTransferSha256Checksum(
-    getProjectTransferCanonicalJson({
-      assetSummary: unsignedManifest.assetSummary ?? null,
-      payloads: projectTransferPayloadKeys.reduce<Record<ProjectTransferPayloadKey, unknown>>(
-        (payloadEntries, key) => {
-          const payload = unsignedManifest.payloads[key]
-
-          return {
-            ...payloadEntries,
-            [key]: {
-              checksumSha256: payload.checksumSha256,
-              format: payload.format,
-              path: payload.path,
-              recordCount: payload.recordCount,
-            },
-          }
-        },
-        {} as Record<ProjectTransferPayloadKey, unknown>,
-      ),
-      schemaVersion: unsignedManifest.schemaVersion,
-      sourceAppVersion: unsignedManifest.sourceAppVersion,
-    }),
-  )
+  const packageFingerprint = getProjectTransferPackageFingerprint({
+    manifest: unsignedManifest,
+    payloads: assembly.payloads,
+  })
 
   return buildManifest({assetBytes, assembly, exportedAt, packageFingerprint, serializedPayloads})
 }

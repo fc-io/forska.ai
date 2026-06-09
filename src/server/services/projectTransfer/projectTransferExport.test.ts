@@ -37,7 +37,7 @@ const getProjectTransferExportScript = (body: string) => {
       serializeProjectTransferExportPayloads,
     } = await import('./src/server/services/projectTransfer/projectTransferExport.ts')
     const {buildProjectTransferExportPackage: buildExportPackage} = await import('./src/server/services/projectTransfer/projectTransferExportPackage.ts')
-    const {getProjectTransferSha256Checksum} = await import('./src/server/services/projectTransfer/projectTransferFingerprint.ts')
+    const {getProjectTransferPackageFingerprint, getProjectTransferSha256Checksum} = await import('./src/server/services/projectTransfer/projectTransferFingerprint.ts')
     const {projectTransferPayloadKeys} = await import('./src/server/services/projectTransfer/projectTransferSchemas.ts')
     const {getProjectTransferExportTempLayout} = await import('./src/server/services/projectTransfer/projectTransferSession.ts')
 
@@ -175,6 +175,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
     packageChecksumMatches: boolean
     packageExecutionMode: string
     packageFingerprint: string | null
+    packageFingerprintMatchesAnalyze: boolean
     packageHasAllPayloadFiles: boolean
     packageHasManifest: boolean
     packageManifestAssetSummary: {byteLength: number; entryCount: number} | undefined
@@ -207,12 +208,14 @@ test('project-transfer export reads archived app-table scope and serializes lock
     rawOmittedArticleSourceMetadata: unknown
     rawOmittedWarning: unknown
     reviewIds: string[]
+    routeArticleImportRoute: string | null
     identifierRejectedWarnings: Array<{
       details: {inputKind: string; reason: string; source: string}
       jsonPointer: string
       sourceRef: string
     }>
     routeArticleIdentifierInputs: Array<{inputKind: string; source: string; value: string}>
+    routeArticleSelectedImportRoute: string | null
     serializedArticleFullTextAssets: unknown
     serializedArticleFullTextHtml: string | null
     serializedArticleFullTextPdf: string | null
@@ -449,7 +452,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
         updated_at
       )
       VALUES
-        ('route-inactive', 'inactive-covidence', 'Inactive Covidence', 'Inactive route still scopes export', FALSE, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
+        ('route-inactive', '/Users/export/inactive-covidence.csv', 'Inactive Covidence', 'Inactive route still scopes export', FALSE, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
     \`)
     await database.run(\`
       INSERT INTO app.project_import_route (
@@ -528,7 +531,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
           CAST('{"pages":2}' AS JSON),
           9,
           'article-route-hash',
-          'legacy-route',
+          '/Users/export/legacy-route.csv',
           CAST('{"legacy":true}' AS JSON),
           'published',
           CAST('{"canonical":true}' AS JSON),
@@ -867,6 +870,9 @@ test('project-transfer export reads archived app-table scope and serializes lock
       packageChecksumMatches: packageBuild.metadata.checksumSha256 === getProjectTransferSha256Checksum(packageBytes),
       packageExecutionMode: packageBuild.executionMode,
       packageFingerprint: packageBuild.manifest.packageFingerprint ?? null,
+      packageFingerprintMatchesAnalyze:
+        (packageBuild.manifest.packageFingerprint ?? null)
+        === getProjectTransferPackageFingerprint({manifest: packageBuild.manifest, payloads: archived.payloads}),
       packageHasAllPayloadFiles: projectTransferPayloadKeys.every((key) => {
         return payloadFilePathSet.has(packageBuild.manifest.payloads[key].path)
       }),
@@ -903,8 +909,10 @@ test('project-transfer export reads archived app-table scope and serializes lock
       rawOmittedArticleSourceMetadata: rawOmittedArticle?.sourceMetadata ?? null,
       rawOmittedWarning: rawOmitted.warnings.find((warning) => warning.code === 'payloadOmitted' && warning.scope === 'articles') ?? null,
       reviewIds: archived.payloads.reviews.map((review) => review.sourceReviewId),
+      routeArticleImportRoute: routeArticle?.importRoute ?? null,
       identifierRejectedWarnings,
       routeArticleIdentifierInputs: routeArticle?.identifierInputs ?? [],
+      routeArticleSelectedImportRoute: routeArticle?.selectedImportRoute ?? null,
       serializedArticleFullTextAssets: serializedArticle.fullTextAssets,
       serializedArticleFullTextHtml: serializedArticle.fullTextHtml,
       serializedArticleFullTextPdf: serializedArticle.fullTextPdf,
@@ -950,6 +958,8 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.humanReviewProvenanceKinds).toEqual(['currentReviewRows', 'currentReviewRows', 'currentReviewRows'])
   expect(result.humanReviewSignatureModes).toEqual(['promptHumanJudgment', 'summaryHumanJudgment', 'reviewRow'])
   expect(result.providerConnectionIds).toEqual(['provider-null-remote'])
+  expect(result.routeArticleImportRoute).toBeNull()
+  expect(result.routeArticleSelectedImportRoute).toBeNull()
   expect(result.rawOmittedArticleOriginalData).toBeNull()
   expect(result.rawOmittedArticleSourceMetadata).toBeNull()
   expect(result.rawOmittedWarning).toMatchObject({
@@ -980,6 +990,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.packageExecutionMode).toBe('inline')
   expect(result.packageHasManifest).toBe(true)
   expect(result.packageHasAllPayloadFiles).toBe(true)
+  expect(result.packageFingerprintMatchesAnalyze).toBe(true)
   expect(result.packageManifestPayloadKeys).toEqual([...projectTransferPayloadKeys].sort())
   expect(result.packageManifestExportedAt).toBe('2026-05-24T08:00:00.000Z')
   expect(result.packageManifestSourceAppVersion).toMatch(/^\d+\.\d+\.\d+/)
