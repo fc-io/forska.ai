@@ -30,6 +30,7 @@ import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projects
 import {projectsRoutesGetArticlesReviewsHuman} from './projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts'
 import {projectsRoutesGetArticlesReviewsHumanFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts'
 import {projectsRoutesGetArticlesReviewsUnassessed} from './projectsRoutes/projectsRoutesGetArticlesReviewsUnassessed.ts'
+import {projectsRoutesGetPromptPreview} from './projectsRoutes/projectsRoutesGetPromptPreview.ts'
 import {projectsRoutesGetReviewsWarnings} from './projectsRoutes/projectsRoutesGetReviewsWarnings.ts'
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
 import {projectsRoutesPostDeleteArchived} from './projectsRoutes/projectsRoutesPostDeleteArchived.ts'
@@ -880,6 +881,7 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesReviewsUnassessed)
   .use(projectsRoutesGetArticlesReviewsFilters)
   .use(projectsRoutesGetArticlesReviewsHumanFilters)
+  .use(projectsRoutesGetPromptPreview)
   .use(projectsRoutesPostArticleReviewDetails)
   .use(projectsRoutesPostDeleteArchived)
   .use(projectsRoutesGetReviewsWarnings)

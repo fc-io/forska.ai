@@ -155,6 +155,39 @@ const insertProjectPromptFixture = async ({
   `)
 }
 
+const insertProjectArticleFixture = async ({
+  articleId,
+  articleSeq,
+  projectArticleId,
+  projectId,
+  summary = null,
+  title,
+}: {
+  articleId: string
+  articleSeq: number
+  projectArticleId: string
+  projectId: string
+  summary?: string | null
+  title: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title, article_summary)
+    VALUES ('${articleId}', ${getSqlLiteral(title)}, ${getSqlLiteral(summary)})
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${projectArticleId}', '${projectId}', '${articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article_ordinal (project_id, article_id, article_seq)
+    VALUES ('${projectId}', '${articleId}', ${articleSeq})
+  `)
+}
+
 const insertJudgmentJobSqliteHealthProjectionFixture = async ({
   claimedOutboxCount = 0,
   jobId,
@@ -484,6 +517,93 @@ afterAll(async () => {
   await flushMartRefreshes?.()
   await closeDatabase?.()
   tempRuntimeRoot.cleanup()
+})
+
+test('project prompt preview uses the first project article and shared prompt builders', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = 'project-preview-route'
+  const promptId = 'prompt-preview-route'
+
+  await insertProjectFixture({connectionId: 'preview-connection-route', modelId: 'preview-model-route', projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash('Is this study about healthcare?', null, `'yes' | 'no' | 'unsure'`),
+    originalText: 'Is this study about healthcare?',
+    originProjectId: projectId,
+    projectId,
+    projectPromptId: 'project-prompt-preview-route',
+    promptHeading: 'Healthcare',
+    promptId,
+    type: `'yes' | 'no' | 'unsure'`,
+  })
+  await insertProjectArticleFixture({
+    articleId: 'preview-article-second',
+    articleSeq: 2,
+    projectArticleId: 'project-article-preview-second',
+    projectId,
+    summary: 'Second article summary',
+    title: 'Second article title',
+  })
+  await insertProjectArticleFixture({
+    articleId: 'preview-article-first',
+    articleSeq: 1,
+    projectArticleId: 'project-article-preview-first',
+    projectId,
+    summary: 'First article summary',
+    title: 'First article title',
+  })
+  await runDatabase(`
+    INSERT INTO mart.project_scope_article (
+      project_id,
+      article_id,
+      in_curated_scope,
+      in_route_scope,
+      article_created_at,
+      article_updated_at
+    ) VALUES
+      (
+        '${projectId}',
+        'preview-article-second',
+        TRUE,
+        TRUE,
+        TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
+        NULL
+      ),
+      (
+        '${projectId}',
+        'preview-article-first',
+        TRUE,
+        TRUE,
+        TIMESTAMPTZ '2026-02-01T00:00:00.000Z',
+        NULL
+      )
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/prompts/${promptId}/preview`),
+  )
+  const payload = (await response.json()) as {
+    data: {
+      articleId: string | null
+      previewText: string | null
+      status: 'ready' | 'unavailable'
+      systemPrompt: string | null
+      userPrompt: string | null
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(payload.data.status).toBe('ready')
+  expect(payload.data.articleId).toBe('preview-article-second')
+  expect(payload.data.systemPrompt).toContain('You are a helpful deep research assistant.')
+  expect(payload.data.userPrompt).toContain('Second article title')
+  expect(payload.data.userPrompt).toContain('Second article summary')
+  expect(payload.data.userPrompt).toContain('Is this study about healthcare?')
+  expect(payload.data.userPrompt).not.toContain('First article title')
+  expect(payload.data.previewText).toContain('## System Prompt')
+  expect(payload.data.previewText).toContain('## User Prompt')
 })
 
 test('archive route clears refresh state for archived projects without depending on the legacy queue', async () => {

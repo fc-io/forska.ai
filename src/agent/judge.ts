@@ -34,10 +34,9 @@ import {
   type JudgmentChunkingStrategy,
 } from './judge/judgeChunking.ts'
 import type {ContentSettings} from './judge/judgeGetPrompt.ts'
-import {judgeGetSinglePrompt} from './judge/judgeGetPrompt.ts'
+import {getSinglePromptJudgmentRequest} from './judge/getSinglePromptJudgmentRequest.ts'
 import {
   getSinglePromptEvidenceSystemPromptForArticle,
-  getSinglePromptSystemPromptForArticle,
   isFhirEhrPatientArticle,
 } from './judge/judgePromptSelection.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
@@ -839,13 +838,6 @@ const getChunkingTarget = ({
       : {field: 'articleTitle', text: title.length > 0 ? title : String(article.articleTitle ?? '')}
 }
 
-const getRecordTextForQuoteValidation = (article: ArticlesType[number]): string => {
-  const title = article.articleTitle ?? ''
-  const summary = article.articleSummary ?? ''
-  const fullText = article.fullText ?? ''
-  return `${title}\n\n${summary}\n\n${fullText}`
-}
-
 const OUTER_QUOTE_WRAPPER_PAIRS: Array<[string, string]> = [
   ['"', '"'],
   ["'", "'"],
@@ -1342,11 +1334,13 @@ export const judgeSinglePrompt = async ({
   const startDuration = performance.now()
   let shouldRequeueError: JudgmentPersistenceError | null = null
 
-  const systemPrompt = getSinglePromptSystemPromptForArticle(article, provider)
-
-  const basePrompt = judgeGetSinglePrompt(article, prompt, contentSettings, provider)
+  const {recordText: recordTextForQuoteValidation, systemPrompt, userPrompt: basePrompt} = getSinglePromptJudgmentRequest({
+    article,
+    contentSettings,
+    prompt,
+    provider,
+  })
   const promptIds = [prompt.id]
-  const recordTextForQuoteValidation = getRecordTextForQuoteValidation(article)
 
   const baseBudget = isWithinContextBudget({
     systemPrompt,

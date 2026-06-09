@@ -30,6 +30,16 @@ export type ProjectListItem = {
   useTitle: boolean
 }
 
+export type ProjectPromptPreview = {
+  articleId: string | null
+  articleTitle: string | null
+  previewText: string | null
+  reason: 'conversion_failed' | 'no_articles' | 'no_fulltext' | 'transient_failure' | null
+  status: 'ready' | 'unavailable'
+  systemPrompt: string | null
+  userPrompt: string | null
+}
+
 const getResponseData = <T>(
   response: {data?: T | {data: T} | null; error?: unknown; status?: number},
   errorMessage: string,
@@ -200,6 +210,17 @@ export const fetchProjectWithPrompts = async (projectId: string) => {
     return getResponseData(response, 'Project not found')
   } catch (err) {
     console.error('Error fetching project with prompts:', err)
+    throw err
+  }
+}
+
+export const fetchProjectPromptPreview = async (projectId: string, promptId: string): Promise<ProjectPromptPreview> => {
+  try {
+    const response = await apiClient.api.projects({id: projectId}).prompts({promptId}).preview.get()
+
+    return getResponseData(response, 'Failed to fetch project prompt preview')
+  } catch (err) {
+    console.error('Error fetching project prompt preview:', err)
     throw err
   }
 }
