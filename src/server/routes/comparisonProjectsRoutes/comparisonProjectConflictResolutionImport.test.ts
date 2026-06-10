@@ -9,6 +9,7 @@ import {
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportTargetArticle,
   getComparisonProjectConflictResolutionImportAnalyzeResult,
+  getComparisonProjectConflictResolutionImportCommitResult,
   getComparisonProjectConflictResolutionImportDoiTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdTitleKey,
@@ -488,6 +489,40 @@ test('analyzes transfer artifact rows with stable importable and skipped details
     },
   ])
   expect(result.warnings).toMatchObject([{code: 'invalid-target-resolution-value'}])
+})
+
+test('commit result keeps analyze shape and adds inserted count', () => {
+  const artifact = {
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: comparisonProjectConflictResolutionTransferVersion,
+    exportedAt: '2026-06-10T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [
+      {
+        sourceResolutionId: 'source-resolution-importable',
+        sourceArticleRowId: 'source-article-importable',
+        externalArticleId: 'external-importable',
+        title: 'Importable source',
+        doi: '10.1000/importable',
+        identifiers: [],
+        resolution: {mode: 'summary' as const, value: 'yes', label: 'Yes'},
+      },
+    ],
+  } satisfies ComparisonProjectConflictResolutionTransferArtifactV1
+  const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
+  const analyzeResult = getComparisonProjectConflictResolutionImportAnalyzeResult({
+    artifact,
+    sourceRows,
+    targetArticles: [getTargetArticle({articleId: 'target-importable', doi: '10.1000/importable'})],
+    targetSummaryOptionValues: ['yes', 'no'],
+  })
+  const commitResult = getComparisonProjectConflictResolutionImportCommitResult({analyzeResult, inserted: 1})
+
+  expect(commitResult).toEqual({...analyzeResult, summary: {...analyzeResult.summary, inserted: 1}})
 })
 
 test('import plan matches file-backed articles by canonical PMID', () => {

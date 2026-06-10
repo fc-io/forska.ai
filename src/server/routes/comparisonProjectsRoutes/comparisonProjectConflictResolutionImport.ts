@@ -258,6 +258,14 @@ export type ComparisonProjectConflictResolutionImportAnalyzeResult = {
   warnings: ComparisonProjectConflictResolutionImportWarning[]
 }
 
+export type ComparisonProjectConflictResolutionImportCommitSummary =
+  ComparisonProjectConflictResolutionImportAnalyzeSummary & {inserted: number}
+
+export type ComparisonProjectConflictResolutionImportCommitResult = Omit<
+  ComparisonProjectConflictResolutionImportAnalyzeResult,
+  'summary'
+> & {summary: ComparisonProjectConflictResolutionImportCommitSummary}
+
 type NormalizedSourceRow = Omit<
   ComparisonProjectConflictResolutionImportSourceRow,
   'doiKeys' | 'identifierKeys' | 'resolutionMode'
@@ -1902,4 +1910,11 @@ export const getComparisonProjectConflictResolutionImportAnalyzeResult = (params
     skippedRows,
     warnings: plan.warnings,
   }
+}
+
+export const getComparisonProjectConflictResolutionImportCommitResult = (params: {
+  analyzeResult: ComparisonProjectConflictResolutionImportAnalyzeResult
+  inserted: number
+}): ComparisonProjectConflictResolutionImportCommitResult => {
+  return {...params.analyzeResult, summary: {...params.analyzeResult.summary, inserted: params.inserted}}
 }
