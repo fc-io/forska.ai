@@ -191,12 +191,13 @@
         "Run `bun run desktop:build` if shared upload/download wiring, runtime paths, or API URL helpers changed."
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-006",
         "US-007"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-009",
@@ -247,6 +248,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-06-10T13:29:51.692Z"
+    "updatedAt": "2026-06-10T13:47:55.819Z"
   }
 }
