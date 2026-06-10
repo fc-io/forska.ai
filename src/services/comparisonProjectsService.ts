@@ -1,3 +1,4 @@
+import {getApiRequestUrl} from '../app/utils/getApiRequestUrl.ts'
 import type {
   ComparisonProjectRecord,
   ComparisonProjectServingStatus,
@@ -415,6 +416,155 @@ export type ComparisonProjectJudgmentsPageRequest = ComparisonProjectRowsRequest
 }
 export type ComparisonProjectJudgmentsCountRequest = ComparisonProjectRowsRequestFilters & {limit: string}
 export type ComparisonProjectExportRequest = ComparisonProjectRowsRequestFilters
+export type ComparisonProjectConflictResolutionTransferIdentifierKind = 'arxiv' | 'doi' | 'pmid'
+export type ComparisonProjectConflictResolutionTransferMatchKind =
+  | ComparisonProjectConflictResolutionTransferIdentifierKind
+  | 'id-title'
+export type ComparisonProjectConflictResolutionTransferIdentifier = {
+  sourceIdentifierId: string
+  kind: ComparisonProjectConflictResolutionTransferIdentifierKind
+  normalizedValue: string
+  source: string
+  isPrimary: boolean
+}
+export type ComparisonProjectConflictResolutionTransferResolution = {
+  mode: HumanJudgmentMode
+  value: string
+  label: string
+}
+export type ComparisonProjectConflictResolutionTransferRow = {
+  sourceResolutionId: string
+  sourceArticleRowId: string
+  externalArticleId: string | null
+  title: string | null
+  doi?: string | null
+  pubmedId?: string | null
+  arxivId?: string | null
+  biorxivId?: string | null
+  medrxivId?: string | null
+  url?: string | null
+  identifiers: ComparisonProjectConflictResolutionTransferIdentifier[]
+  resolution: ComparisonProjectConflictResolutionTransferResolution
+}
+export type ComparisonProjectConflictResolutionTransferSource = {
+  comparisonProjectId: string
+  comparisonProjectName: string
+  comparisonProjectDescription: string | null
+}
+export type ComparisonProjectConflictResolutionTransferArtifact = {
+  format: 'forska.comparisonProject.conflictResolution.transfer'
+  version: 1
+  exportedAt: string
+  source: ComparisonProjectConflictResolutionTransferSource
+  rows: ComparisonProjectConflictResolutionTransferRow[]
+}
+export type ComparisonProjectConflictResolutionExportResult = {
+  artifact: ComparisonProjectConflictResolutionTransferArtifact
+  filename: string
+}
+export type ComparisonProjectConflictResolutionImportSkipReason =
+  | 'ambiguous-target-match'
+  | 'conflicting-identifiers'
+  | 'conflicting-resolution-values'
+  | 'existing-target-resolution'
+  | 'invalid-target-resolution-value'
+  | 'no-usable-key'
+  | 'no-target-match'
+  | 'not-conflicting'
+  | 'unsupported-mode'
+export type ComparisonProjectConflictResolutionImportWarningCode =
+  | 'ambiguous-target-match'
+  | 'conflicting-identifiers'
+  | 'conflicting-resolution-values'
+  | 'invalid-target-resolution-value'
+export type ComparisonProjectConflictResolutionImportWarningSourceRow = {
+  articleId: string
+  articleTitle: string | null
+  compareProjectId: string
+  compareProjectName: string
+  externalArticleId: string | null
+  resolutionAnswer: string
+  sourceResolutionId: string
+  sourceRowId: string
+}
+export type ComparisonProjectConflictResolutionImportWarningTargetArticle = {
+  articleId: string
+  articleTitle: string | null
+  doiKeys: string[]
+  externalArticleId: string | null
+  identifierKeys: string[]
+}
+export type ComparisonProjectConflictResolutionImportWarning = {
+  code: ComparisonProjectConflictResolutionImportWarningCode
+  matchKey?: string
+  matchKeys?: string[]
+  matchKind?: ComparisonProjectConflictResolutionTransferMatchKind
+  matchKinds?: ComparisonProjectConflictResolutionTransferMatchKind[]
+  message: string
+  sourceRows: ComparisonProjectConflictResolutionImportWarningSourceRow[]
+  targetArticles: ComparisonProjectConflictResolutionImportWarningTargetArticle[]
+  value?: string
+  values?: string[]
+}
+export type ComparisonProjectConflictResolutionImportAnalyzeSource = {
+  comparisonProjectId: string
+  comparisonProjectName: string
+  comparisonProjectDescription: string | null
+  exportedAt: string
+  format: string
+  version: number
+  rowCount: number
+}
+export type ComparisonProjectConflictResolutionImportAnalyzeSummary = {
+  scanned: number
+  matched: number
+  importable: number
+  deduped: number
+  skipped: number
+  skippedExisting: number
+  skippedUnsupportedMode: number
+  skippedNoUsableKey: number
+  skippedNoTargetMatch: number
+  skippedNotConflicting: number
+  skippedAmbiguousTarget: number
+  skippedConflicting: number
+  skippedInvalidValue: number
+}
+export type ComparisonProjectConflictResolutionImportAnalyzeRowBase = {
+  sourceTitle: string | null
+  sourceArticleRowId: string
+  sourceExternalArticleId: string | null
+  sourceResolutionId: string
+  sourceComparisonProjectId: string
+  sourceComparisonProjectName: string
+  targetTitle: string | null
+  targetArticleId: string | null
+  targetArticleIds: string[]
+  targetExternalArticleId: string | null
+  targetExternalArticleIds: string[]
+  selectedResolution: string
+  matchKind: ComparisonProjectConflictResolutionTransferMatchKind | null
+  matchKey: string | null
+}
+export type ComparisonProjectConflictResolutionImportImportableRow =
+  ComparisonProjectConflictResolutionImportAnalyzeRowBase & {reason: 'importable'; targetArticleId: string}
+export type ComparisonProjectConflictResolutionImportSkippedRow =
+  ComparisonProjectConflictResolutionImportAnalyzeRowBase & {
+    reason: ComparisonProjectConflictResolutionImportSkipReason
+  }
+export type ComparisonProjectConflictResolutionImportAnalyzePreview = {
+  source: ComparisonProjectConflictResolutionImportAnalyzeSource
+  summary: ComparisonProjectConflictResolutionImportAnalyzeSummary
+  importableRows: ComparisonProjectConflictResolutionImportImportableRow[]
+  skippedRows: ComparisonProjectConflictResolutionImportSkippedRow[]
+  warnings: ComparisonProjectConflictResolutionImportWarning[]
+}
+export type ComparisonProjectConflictResolutionImportCommitSummary =
+  ComparisonProjectConflictResolutionImportAnalyzeSummary & {inserted: number}
+export type ComparisonProjectConflictResolutionImportCommitResponse = Omit<
+  ComparisonProjectConflictResolutionImportAnalyzePreview,
+  'summary'
+> & {summary: ComparisonProjectConflictResolutionImportCommitSummary}
 
 const getResponseData = <T>(
   response: {data?: {data?: T | null; error?: unknown} | null; error?: unknown; status?: number},
@@ -440,6 +590,40 @@ const getResponseEnvelopeData = <TData, TEnvelope extends {data?: TData | null; 
   }
 
   return {...result, data: result.data}
+}
+
+const getResponseJson = async (response: Response): Promise<unknown> => {
+  return response.json().catch(() => {
+    return null
+  }) as Promise<unknown>
+}
+
+const getHeaderFilename = (contentDisposition: string | null) => {
+  const filenameStarMatch = contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i)
+  const filenameMatch = contentDisposition?.match(/filename="?([^";]+)"?/i)
+  const filename = filenameStarMatch?.[1] ?? filenameMatch?.[1] ?? null
+
+  return filename && filename.trim().length > 0 ? decodeURIComponent(filename.trim()) : null
+}
+
+const getComparisonProjectConflictResolutionExportFallbackFilename = (comparisonProjectId: string) => {
+  return `comparison-project-${comparisonProjectId}-conflict-resolutions.json`
+}
+
+const readComparisonProjectConflictResolutionExportResponse = async (
+  response: Response,
+  errorMessage: string,
+): Promise<ComparisonProjectConflictResolutionTransferArtifact> => {
+  const payload = await getResponseJson(response)
+
+  return handleApiResponse<ComparisonProjectConflictResolutionTransferArtifact>(
+    {
+      data: response.ok ? (payload as ComparisonProjectConflictResolutionTransferArtifact) : undefined,
+      error: response.ok ? undefined : payload,
+      status: response.status,
+    },
+    errorMessage,
+  )
 }
 
 type ConflictResolutionImportWarningApiSourceRow = Omit<
@@ -599,6 +783,68 @@ export const fetchComparisonProjectStats = async (comparisonProjectId: string) =
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).stats.get()
 
   return getResponseData<ComparisonProjectStats>(response, 'Failed to fetch comparison project stats')
+}
+
+export const getComparisonProjectConflictResolutionExportRequestPath = (comparisonProjectId: string) => {
+  return `/api/comparison-projects/${encodeURIComponent(comparisonProjectId)}/conflict-resolutions/export`
+}
+
+export const getComparisonProjectConflictResolutionExportRequestUrl = (
+  comparisonProjectId: string,
+  locationOrigin?: string | null,
+  desktopApiOrigin?: string | null,
+) => {
+  return getApiRequestUrl(
+    getComparisonProjectConflictResolutionExportRequestPath(comparisonProjectId),
+    locationOrigin,
+    desktopApiOrigin,
+  )
+}
+
+export const fetchComparisonProjectConflictResolutionExportArtifact = async (
+  comparisonProjectId: string,
+): Promise<ComparisonProjectConflictResolutionExportResult> => {
+  const response = await fetch(getComparisonProjectConflictResolutionExportRequestUrl(comparisonProjectId), {
+    credentials: 'include',
+    method: 'POST',
+  })
+  const artifact = await readComparisonProjectConflictResolutionExportResponse(
+    response,
+    'Failed to export comparison project conflict resolutions',
+  )
+  const filename =
+    getHeaderFilename(response.headers.get('Content-Disposition'))
+    ?? getComparisonProjectConflictResolutionExportFallbackFilename(comparisonProjectId)
+
+  return {artifact, filename}
+}
+
+export const analyzeComparisonProjectConflictResolutionImport = async (
+  comparisonProjectId: string,
+  artifact: ComparisonProjectConflictResolutionTransferArtifact,
+) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId})[
+    'conflict-resolutions'
+  ].import.analyze.post(artifact)
+
+  return getResponseData<ComparisonProjectConflictResolutionImportAnalyzePreview>(
+    response,
+    'Failed to analyze comparison project conflict resolution import',
+  )
+}
+
+export const commitComparisonProjectConflictResolutionImport = async (
+  comparisonProjectId: string,
+  artifact: ComparisonProjectConflictResolutionTransferArtifact,
+) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId})[
+    'conflict-resolutions'
+  ].import.commit.post(artifact)
+
+  return getResponseData<ComparisonProjectConflictResolutionImportCommitResponse>(
+    response,
+    'Failed to commit comparison project conflict resolution import',
+  )
 }
 
 export const setComparisonProjectConflictResolution = async (
