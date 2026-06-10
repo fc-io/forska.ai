@@ -25,7 +25,9 @@ Object.assign(globalThis, {
   window: testWindow,
 })
 
-const {compareProjectResolutionImportDisabledCopy, getImportResolutionsHref, handleExportResolutionsClick} =
+const {handleExportResolutionsClick} =
+  require('../../../../../components/main/compareProjectResolutionExportAction.tsx') as typeof import('../../../../../components/main/compareProjectResolutionExportAction.tsx')
+const {compareProjectResolutionImportDisabledCopy, getImportResolutionsHref} =
   require('./compareProjectResolutionTransferActions.tsx') as typeof import('./compareProjectResolutionTransferActions.tsx')
 
 const originalCreateObjectURL = Reflect.get(URL, 'createObjectURL')
