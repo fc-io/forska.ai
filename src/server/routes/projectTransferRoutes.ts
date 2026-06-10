@@ -711,6 +711,31 @@ const writeRequestBodyChunks = async ({
   return writeRequestBodyChunks({availableDiskBytes, fileStream, hash, reader, state, tempRootPath})
 }
 
+const writeRequestBodyArrayBuffer = async ({
+  availableDiskBytes,
+  fileStream,
+  hash,
+  request,
+  state,
+  tempRootPath,
+}: {
+  availableDiskBytes: number
+  fileStream: WriteStream
+  hash: ReturnType<typeof createHash>
+  request: Request
+  state: {byteLength: number}
+  tempRootPath: string
+}) => {
+  const bytes = new Uint8Array(await request.arrayBuffer())
+
+  assertUploadResourceGate({availableDiskBytes, byteLength: bytes.byteLength, tempRootPath})
+  state.byteLength = bytes.byteLength
+  hash.update(bytes)
+  await writeFileStreamChunk(fileStream, bytes)
+
+  return closeFileStream(fileStream)
+}
+
 const getAvailableDiskBytes = async (pathValue: string) => {
   const stats = await statfs(pathValue)
 
@@ -831,15 +856,30 @@ const writeImportUploadArtifact = async ({
   const availableDiskBytes = await getAvailableDiskBytes(dirname(uploadPath))
 
   const fileStream = createWriteStream(tempPath)
-  const reader = request.body.getReader()
 
   try {
-    await writeRequestBodyChunks({availableDiskBytes, fileStream, hash, reader, state, tempRootPath: layout.rootPath})
+    if (typeof request.body.getReader === 'function') {
+      const reader = request.body.getReader()
+
+      try {
+        await writeRequestBodyChunks({availableDiskBytes, fileStream, hash, reader, state, tempRootPath: layout.rootPath})
+      } finally {
+        reader.releaseLock()
+      }
+    } else {
+      await writeRequestBodyArrayBuffer({
+        availableDiskBytes,
+        fileStream,
+        hash,
+        request,
+        state,
+        tempRootPath: layout.rootPath,
+      })
+    }
+
     await rename(tempPath, uploadPath)
     writeSucceeded = true
   } finally {
-    reader.releaseLock()
-
     if (!writeSucceeded) {
       fileStream.destroy()
       await rm(tempPath, {force: true})

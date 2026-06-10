@@ -124,6 +124,9 @@ const state = {
   startCodexAppDeviceLogin: mock(() => {
     return {id: 'codex-login-1', state: 'running'}
   }),
+  updateProviderConnection: mock(async () => {
+    return getCodexConnection()
+  }),
   updateProviderModel: mock(
     async (input: {id: string; options?: {thinking?: string | null}; variant?: string | null}) => {
       return {
@@ -158,9 +161,7 @@ const registerModuleMocks = () => {
       getProviderConnection: state.getProviderConnection,
       listProviderConnections: state.listProviderConnections,
       setProviderConnectionCheckState: mock(async () => {}),
-      updateProviderConnection: mock(async () => {
-        return getCodexConnection()
-      }),
+      updateProviderConnection: state.updateProviderConnection,
     }
   })
 
@@ -286,6 +287,38 @@ test('models ensure reconciles existing Codex variant thinking metadata', async 
     options: {thinking: 'high'},
     variant: 'high',
   })
+})
+
+test('models ensure re-enables a disabled singleton Codex connection before materializing', async () => {
+  state.createProviderModel.mockClear()
+  state.updateProviderConnection.mockClear()
+  state.getFirstEnabledProviderConnection.mockImplementationOnce(async () => {
+    return null
+  })
+  state.createProviderConnection.mockImplementationOnce(async () => {
+    return {...getCodexConnection(), enabled: false}
+  })
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/models/ensure', {
+      body: JSON.stringify({modelName: 'codex-thinking', name: 'Codex Thinking', provider: 'codex', version: 'high'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  expect(response.status).toBe(200)
+  expect(state.updateProviderConnection).toHaveBeenCalledWith({
+    authMode: 'codex-cli',
+    baseURL: null,
+    config: {disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+    enabled: true,
+    id: 'codex-connection-1',
+    label: 'Codex',
+    maxInflightRequests: null,
+    secretRef: null,
+  })
+  expect(state.createProviderModel).toHaveBeenCalledTimes(1)
 })
 
 test('models list omits disabled Codex connection fallback models', async () => {

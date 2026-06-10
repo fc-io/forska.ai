@@ -595,6 +595,22 @@ const isVirtualSelectableModelId = (modelId: string) => {
   return modelId.startsWith('codex:') || modelId.startsWith('anthropic:')
 }
 
+const getImportedTargetProviderConnectionId = (sourceProviderConnectionId: string) => {
+  return `new:provider:${sourceProviderConnectionId}`
+}
+
+const getImportedTargetModelId = (sourceModelId: string) => {
+  return `new:model:${sourceModelId}`
+}
+
+const isImportedTargetProviderConnectionId = (targetProviderConnectionId: string) => {
+  return targetProviderConnectionId.startsWith('new:provider:')
+}
+
+const isImportedTargetModelId = (targetModelId: string) => {
+  return targetModelId.startsWith('new:model:')
+}
+
 const getDependencyBlocker = ({code, message, scope}: DependencyBlockerInput): ProjectTransferPlanBlocker => {
   return {code, message, resolutionKind: 'wizard_resolvable', scope}
 }
@@ -607,14 +623,6 @@ const getBasePlanBlockers = (plan: ProjectTransferResolvedDependencyPlanArtifact
   return (plan.blockers ?? []).filter((blocker) => {
     return !isDependencyBlocker(blocker) && !isProjectTransferFidelityBlocker(blocker)
   })
-}
-
-const getModelsBySourceProviderId = (models: ImportedModel[]) => {
-  return models.reduce<Record<string, ImportedModel[]>>((mapped, model) => {
-    const existing = mapped[model.sourceProviderConnectionId] ?? []
-
-    return {...mapped, [model.sourceProviderConnectionId]: [...existing, model]}
-  }, {})
 }
 
 const getImportedProvidersBySourceId = (providers: ImportedProviderConnection[]) => {
@@ -662,6 +670,7 @@ const getCodexEnsureModelInput = (model: ImportedModel) => {
 const ensureAutoResolvedCodexDependencies = async ({
   autoResolve,
   connections,
+  explicitMaterializedModelSourceIds,
   importedModels,
   importedProvidersBySourceId,
   repositories,
@@ -669,6 +678,7 @@ const ensureAutoResolvedCodexDependencies = async ({
 }: {
   autoResolve: boolean
   connections: ProviderConnectionForAdmin[]
+  explicitMaterializedModelSourceIds: Set<string>
   importedModels: ImportedModel[]
   importedProvidersBySourceId: Record<string, ImportedProviderConnection>
   repositories: ReturnType<typeof getRepositories>
@@ -688,9 +698,11 @@ const ensureAutoResolvedCodexDependencies = async ({
     const shouldSkip =
       importedProvider === null
       || !isCodexImportedProvider(importedProvider)
+      || targetProviderConnectionId === null
+      || explicitMaterializedModelSourceIds.has(importedModel.sourceModelId)
       || resolutionState.unresolvedProviderSourceIds.includes(sourceProviderConnectionId)
       || resolutionState.unresolvedModelSourceIds.includes(importedModel.sourceModelId)
-      || resolutionState.modelTargetBySourceId[importedModel.sourceModelId] !== undefined
+      || resolutionState.acceptedSubstituteModelSourceIds.includes(importedModel.sourceModelId)
       || (targetConnection !== null && targetConnection.providerKind !== 'codex')
     const ensureInput = getCodexEnsureModelInput(importedModel)
 
@@ -800,43 +812,6 @@ const getUniqueEquivalentTargetModel = ({
   return candidates.length === 1 ? candidates[0] : null
 }
 
-const connectionHasSelectableRequiredModels = ({
-  connection,
-  judgmentModelSignaturesBySourceId,
-  sourceModels,
-}: {
-  connection: ProviderConnectionForAdmin
-  judgmentModelSignaturesBySourceId: Record<string, unknown[]>
-  sourceModels: ImportedModel[]
-}) => {
-  return sourceModels.every((sourceModel) => {
-    return getUniqueEquivalentTargetModel({connection, judgmentModelSignaturesBySourceId, sourceModel}) !== null
-  })
-}
-
-const getAutoMatchedProviderConnection = ({
-  connections,
-  importedProvider,
-  judgmentModelSignaturesBySourceId,
-  sourceModels,
-}: {
-  connections: ProviderConnectionForAdmin[]
-  importedProvider: ImportedProviderConnection
-  judgmentModelSignaturesBySourceId: Record<string, unknown[]>
-  sourceModels: ImportedModel[]
-}) => {
-  const candidates = connections.filter((connection) => {
-    return (
-      connection.enabled
-      && !connection.config.archived
-      && providerFingerprintsMatch(importedProvider, connection)
-      && connectionHasSelectableRequiredModels({connection, judgmentModelSignaturesBySourceId, sourceModels})
-    )
-  })
-
-  return candidates.length === 1 ? candidates[0] : null
-}
-
 const getConnectionById = (connections: ProviderConnectionForAdmin[]) => {
   return connections.reduce<Record<string, ProviderConnectionForAdmin>>((mapped, connection) => {
     return {...mapped, [connection.id]: connection}
@@ -889,6 +864,10 @@ const validateExplicitProviderSelections = async ({
         return previousResult
       }
 
+      if (isImportedTargetProviderConnectionId(targetProviderConnectionId)) {
+        return previousResult
+      }
+
       return requireListedEnabledConnection({connectionById, getProviderConnectionById, targetProviderConnectionId})
     },
     Promise.resolve({ok: true as const}),
@@ -904,7 +883,9 @@ const validateExplicitModelSelections = async ({
   getProviderModelsByIds: (modelIds: string[]) => Promise<Map<string, ProviderModelRecord>>
   resolutionState: ProjectTransferDependencyResolutionState
 }) => {
-  const targetModelIds = Array.from(new Set(Object.values(resolutionState.modelTargetBySourceId)))
+  const targetModelIds = Array.from(new Set(Object.values(resolutionState.modelTargetBySourceId))).filter((id) => {
+    return !isImportedTargetModelId(id)
+  })
   const virtualTargetModelId =
     targetModelIds.find((targetModelId) => {
       return isVirtualSelectableModelId(targetModelId)
@@ -926,36 +907,24 @@ const validateExplicitModelSelections = async ({
 
 const getResolvedProviderMappings = ({
   autoResolve,
-  connections,
   importedProviders,
-  judgmentModelSignaturesBySourceId,
-  modelsBySourceProviderId,
   resolutionState,
 }: {
   autoResolve: boolean
-  connections: ProviderConnectionForAdmin[]
   importedProviders: ImportedProviderConnection[]
-  judgmentModelSignaturesBySourceId: Record<string, unknown[]>
-  modelsBySourceProviderId: Record<string, ImportedModel[]>
   resolutionState: ProjectTransferDependencyResolutionState
 }) => {
   return importedProviders.reduce<Record<string, string>>((mapped, importedProvider) => {
     const sourceProviderConnectionId = importedProvider.sourceProviderConnectionId
     const existingTargetId = mapped[sourceProviderConnectionId]
-    const sourceModels = modelsBySourceProviderId[sourceProviderConnectionId] ?? []
-    const autoMatched =
+    const targetProviderConnectionId =
       existingTargetId
       || resolutionState.unresolvedProviderSourceIds.includes(sourceProviderConnectionId)
       || !autoResolve
         ? null
-        : getAutoMatchedProviderConnection({
-            connections,
-            importedProvider,
-            judgmentModelSignaturesBySourceId,
-            sourceModels,
-          })
+        : getImportedTargetProviderConnectionId(sourceProviderConnectionId)
 
-    return autoMatched ? {...mapped, [sourceProviderConnectionId]: autoMatched.id} : mapped
+    return targetProviderConnectionId ? {...mapped, [sourceProviderConnectionId]: targetProviderConnectionId} : mapped
   }, resolutionState.providerTargetBySourceId)
 }
 
@@ -977,12 +946,18 @@ const getResolvedModelMappings = ({
     const existingTargetId = mapped[sourceModelId]
     const targetProviderConnectionId = providerTargetBySourceId[importedModel.sourceProviderConnectionId]
     const connection = targetProviderConnectionId ? (connectionById[targetProviderConnectionId] ?? null) : null
-    const autoMatched =
-      existingTargetId || resolutionState.unresolvedModelSourceIds.includes(sourceModelId) || connection === null
+    const targetModelId =
+      existingTargetId || resolutionState.unresolvedModelSourceIds.includes(sourceModelId) || !targetProviderConnectionId
         ? null
-        : getUniqueEquivalentTargetModel({connection, judgmentModelSignaturesBySourceId, sourceModel: importedModel})
+        : isImportedTargetProviderConnectionId(targetProviderConnectionId)
+          ? getImportedTargetModelId(sourceModelId)
+          : connection === null
+            ? null
+            : (getUniqueEquivalentTargetModel({connection, judgmentModelSignaturesBySourceId, sourceModel: importedModel})
+                ?.id
+              ?? getImportedTargetModelId(sourceModelId))
 
-    return autoMatched ? {...mapped, [sourceModelId]: autoMatched.id} : mapped
+    return targetModelId ? {...mapped, [sourceModelId]: targetModelId} : mapped
   }, resolutionState.modelTargetBySourceId)
 }
 
@@ -1005,12 +980,15 @@ const getProviderStatusesAndBlockers = ({
       const sourceProviderConnectionId = importedProvider.sourceProviderConnectionId
       const targetProviderConnectionId = providerTargetBySourceId[sourceProviderConnectionId]
       const explicitUnresolved = resolutionState.unresolvedProviderSourceIds.includes(sourceProviderConnectionId)
+      const importedTarget =
+        targetProviderConnectionId !== undefined && isImportedTargetProviderConnectionId(targetProviderConnectionId)
       const targetConnection = targetProviderConnectionId ? (connectionById[targetProviderConnectionId] ?? null) : null
       const equivalentConnection = targetConnection
         ? providerFingerprintsMatch(importedProvider, targetConnection)
         : false
-      const status: ProjectTransferDependencyStatus =
-        targetConnection && targetConnection.enabled && !targetConnection.config.archived && equivalentConnection
+      const status: ProjectTransferDependencyStatus = importedTarget
+        ? 'resolved'
+        : targetConnection && targetConnection.enabled && !targetConnection.config.archived && equivalentConnection
           ? 'resolved'
           : targetConnection
             ? 'blocked'
@@ -1054,6 +1032,7 @@ const getModelStatus = ({
   judgmentModelSourceIds,
   judgmentModelSignaturesBySourceId,
   providerTargetBySourceId,
+  targetModelId,
   targetModel,
 }: {
   acceptedSubstitute: boolean
@@ -1061,8 +1040,13 @@ const getModelStatus = ({
   judgmentModelSourceIds: Set<string>
   judgmentModelSignaturesBySourceId: Record<string, unknown[]>
   providerTargetBySourceId: Record<string, string>
+  targetModelId: string | null
   targetModel: ProviderModelRecord | null
 }): ProjectTransferDependencyStatus => {
+  if (targetModelId !== null && isImportedTargetModelId(targetModelId)) {
+    return providerTargetBySourceId[importedModel.sourceProviderConnectionId] ? 'resolved' : 'missing'
+  }
+
   if (!targetModel || !targetModel.enabled || !targetModel.providerConnectionId) {
     return 'missing'
   }
@@ -1116,6 +1100,7 @@ const getModelStatusesAndBlockers = ({
         judgmentModelSignaturesBySourceId,
         judgmentModelSourceIds,
         providerTargetBySourceId,
+        targetModelId: targetModelId ?? null,
         targetModel,
       })
       const blocker =
@@ -1223,16 +1208,34 @@ export const revalidateProjectTransferResolvedDependencies = async (
 ): Promise<ProjectTransferDependencyResolutionResult> => {
   const repositories = getRepositories(input.repositories)
   const initialConnections = await repositories.listProviderConnections()
-  const initialConnectionById = getConnectionById(initialConnections)
   const previousResolutionState = getPlanDependencyResolution(input.plan)
   const importedModels = (input.payloads.models ?? []).map(getImportedModel)
+  const importedProviders = (input.payloads.providerConnections ?? []).map(getImportedProviderConnection)
+  const importedJudgments = (input.payloads.judgments ?? []).map(getImportedJudgment)
+  const importedProvidersBySourceId = getImportedProvidersBySourceId(importedProviders)
+  const judgmentModelSourceIds = getJudgmentModelSourceIds(importedJudgments)
+  const judgmentModelSignaturesBySourceId = getJudgmentModelSignaturesBySourceId(importedJudgments)
   const requestedResolutionState = getNextResolutionState({
     importedModels,
     previous: previousResolutionState,
     request: input.request,
   })
+  const connections = await ensureAutoResolvedCodexDependencies({
+    autoResolve: input.request.autoResolve !== false,
+    connections: initialConnections,
+    explicitMaterializedModelSourceIds: new Set(
+      (input.request.materializedModels ?? []).map((entry) => {
+        return entry.sourceModelId
+      }),
+    ),
+    importedModels,
+    importedProvidersBySourceId,
+    repositories,
+    resolutionState: requestedResolutionState,
+  })
+  const connectionById = getConnectionById(connections)
   const explicitProviderError = await validateExplicitProviderSelections({
-    connectionById: initialConnectionById,
+    connectionById,
     getProviderConnectionById: repositories.getProviderConnectionById,
     resolutionState: requestedResolutionState,
   })
@@ -1250,27 +1253,9 @@ export const revalidateProjectTransferResolvedDependencies = async (
     return {error: explicitModelError, status: 'error', statusCode: 400}
   }
 
-  const importedProviders = (input.payloads.providerConnections ?? []).map(getImportedProviderConnection)
-  const importedJudgments = (input.payloads.judgments ?? []).map(getImportedJudgment)
-  const importedProvidersBySourceId = getImportedProvidersBySourceId(importedProviders)
-  const modelsBySourceProviderId = getModelsBySourceProviderId(importedModels)
-  const judgmentModelSourceIds = getJudgmentModelSourceIds(importedJudgments)
-  const judgmentModelSignaturesBySourceId = getJudgmentModelSignaturesBySourceId(importedJudgments)
-  const connections = await ensureAutoResolvedCodexDependencies({
-    autoResolve: input.request.autoResolve !== false,
-    connections: initialConnections,
-    importedModels,
-    importedProvidersBySourceId,
-    repositories,
-    resolutionState: requestedResolutionState,
-  })
-  const connectionById = getConnectionById(connections)
   const providerTargetBySourceId = getResolvedProviderMappings({
     autoResolve: input.request.autoResolve !== false,
-    connections,
     importedProviders,
-    judgmentModelSignaturesBySourceId,
-    modelsBySourceProviderId,
     resolutionState: requestedResolutionState,
   })
   const modelTargetBySourceId = getResolvedModelMappings({

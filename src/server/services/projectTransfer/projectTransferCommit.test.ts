@@ -680,6 +680,100 @@ test('project transfer commit returns the current committing session without loa
   expect(fake.calls.transition).toHaveLength(0)
 })
 
+test('project transfer commit claims large imports before running background revalidation', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = {
+      ...getPlan({planRevision: 1, summary}),
+      packageCounts: {
+        ...getPlan({planRevision: 1, summary}).packageCounts,
+        articles: 10_000,
+        judgments: 40_000,
+      },
+    }
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    let backgroundOperation: null | (() => Promise<void>) = null
+    let revalidateCount = 0
+
+    const result = await commitProjectTransferImportSession({
+      cwd,
+      now: new Date('2026-05-28T10:30:00.000Z'),
+      repositories: {
+        getCommitId: () => {
+          return 'commit-generated'
+        },
+        getOwnerToken: () => {
+          return 'owner-generated'
+        },
+        historyRepository: getNoopHistoryRepository(),
+        revalidate: async () => {
+          revalidateCount += 1
+          return {changed: false, plan, ready: true}
+        },
+        runAppTableWrites: async () => {
+          const completion = {
+            finalCounts: {articles: 0, judgments: 0, prompts: 0, reviews: 0, routes: 0, warnings: 0},
+            importWarnings: [],
+            packageFingerprint: 'fingerprint-commit',
+            payloadCounts: plan.packageCounts,
+            projectId: 'target-project',
+            projectName: 'Target Project',
+            status: 'completed' as const,
+            targetProjectId: 'target-project',
+            targetProjectName: 'Target Project',
+            transferHistoryId: 'history-generated',
+          }
+
+          return {
+            articleIdBySourceId: {},
+            completion,
+            history: {
+              commitId: 'commit-generated',
+              completionPayloadJson: completion,
+              createdAt: new Date('2026-05-28T10:30:00.000Z'),
+              direction: 'import' as const,
+              id: 'history-generated',
+              packageFingerprint: 'fingerprint-commit',
+              payloadCountsJson: plan.packageCounts,
+              schemaVersion: 1,
+              sessionId: 'commit-session',
+              sourceProjectId: 'source-project',
+              sourceProjectName: 'Source Project',
+              targetProjectId: 'target-project',
+              targetProjectName: 'Target Project',
+            },
+            importWarnings: [],
+            projectId: 'target-project',
+            projectName: 'Target Project',
+            promptIdBySourceId: {},
+            routeIdBySourceId: {},
+          }
+        },
+        sessionRepository: fake.repository,
+        startBackgroundCommit: (operation) => {
+          backgroundOperation = operation
+        },
+      },
+      request: {planRevision: 1},
+      sessionId: 'commit-session',
+    })
+
+    expect(result).toMatchObject({executionMode: 'background', status: 'claimed', statusCode: 202})
+    expect(revalidateCount).toBe(0)
+    expect(backgroundOperation).not.toBeNull()
+
+    await backgroundOperation?.()
+
+    expect(revalidateCount).toBe(1)
+    expect(fake.getSession()).toMatchObject({ownerToken: null, state: 'completed'})
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('project transfer commit reopens stale plans before claiming', async () => {
   const cwd = getRuntimeRoot()
 
@@ -1307,6 +1401,76 @@ test('project transfer commit writer creates project rows and preserves safe pac
   ])
   expect(result.martCounts).toEqual({projectScopeArticleCount: 0, reviewServingCount: 0})
   expect(result.warningCodes).toContain('targetArticleImportRouteOmitted')
+})
+
+test('project transfer commit writer materializes imported provider and model dependencies', () => {
+  const result = runCommitWriterScript<{
+    modelRow: {
+      displayName: string | null
+      enabled: boolean
+      providerConnectionId: string
+      remoteModelId: string | null
+      variant: string | null
+    }
+    projectRow: {modelId: string}
+    providerRow: {authMode: string | null; enabled: boolean; id: string; label: string; providerKind: string}
+  }>(`
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const importedDependencyResolution = {
+      modelTargetBySourceId: {'source-model': 'new:model:source-model'},
+      providerTargetBySourceId: {'source-provider': 'new:provider:source-provider'},
+    }
+    const writeResult = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-materialized-provider-model',
+      now,
+      payloads: {
+        models: [getModelPayload()],
+        project: getProjectPayload(settings),
+        providerConnections: [
+          {
+            authMode: 'apiKey',
+            baseURL: null,
+            configJson: {archived: false, disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+            enabled: false,
+            label: 'Imported Provider',
+            maxInflightRequests: 4,
+            providerKind: 'openai',
+            secretRef: null,
+            sourceProviderConnectionId: 'source-provider',
+          },
+        ],
+      },
+      plan: getBasePlan({}, importedDependencyResolution),
+      promotion: {
+        articleCreates: [],
+        articleFieldFills: [],
+        manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-materialized-provider-model', updatedAt: now.toISOString()},
+        promotionPathByPackagePath: {},
+      },
+      schemaVersion: 1,
+      sessionId: 'session-materialized-provider-model',
+    })
+    const [projectRow] = await database.queryJson("SELECT model_id AS modelId FROM app.project WHERE id = '" + writeResult.projectId + "'")
+    const [modelRow] = await database.queryJson("SELECT provider_connection_id AS providerConnectionId, display_name AS displayName, remote_model_id AS remoteModelId, variant, COALESCE(enabled, TRUE) AS enabled FROM app.model WHERE id = '" + projectRow.modelId + "'")
+    const [providerRow] = await database.queryJson("SELECT id, provider_kind AS providerKind, label, enabled, auth_mode AS authMode FROM app.provider_connection WHERE id = '" + modelRow.providerConnectionId + "'")
+
+    console.log(JSON.stringify({modelRow, projectRow, providerRow}))
+  `)
+
+  expect(result.projectRow.modelId).toBeTruthy()
+  expect(result.providerRow).toMatchObject({
+    authMode: 'apiKey',
+    enabled: false,
+    label: 'Imported Provider',
+    providerKind: 'openai',
+  })
+  expect(result.modelRow).toMatchObject({
+    displayName: null,
+    enabled: true,
+    remoteModelId: 'target-remote',
+    variant: null,
+  })
+  expect(result.modelRow.providerConnectionId).toBe(result.providerRow.id)
 })
 
 test('project transfer commit writer blocks target article_id conflicts before insert', () => {

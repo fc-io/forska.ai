@@ -1,7 +1,11 @@
 import {getProviderModelThinkingOption} from '../../utils/providerModelOptions.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {createProviderConnection, getFirstEnabledProviderConnection} from './providerConnectionRepository.ts'
+import {
+  createProviderConnection,
+  getFirstEnabledProviderConnection,
+  updateProviderConnection,
+} from './providerConnectionRepository.ts'
 import {getManualProviderModelMetadata} from './providerModelMetadata.ts'
 import {createProviderModel, updateProviderModel} from './providerModelRepository.ts'
 
@@ -18,16 +22,31 @@ const getCodexDisplayName = (value: string) => {
 const getCodexConnectionForEnsure = async () => {
   const existing = await getFirstEnabledProviderConnection('codex')
 
-  return existing
-    ? existing
-    : createProviderConnection({
-        authMode: 'codex-cli',
-        baseURL: null,
-        config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
-        label: 'Codex',
-        maxInflightRequests: null,
-        providerKind: 'codex',
-        secretRef: null,
+  if (existing) {
+    return existing
+  }
+
+  const connection = await createProviderConnection({
+    authMode: 'codex-cli',
+    baseURL: null,
+    config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
+    label: 'Codex',
+    maxInflightRequests: null,
+    providerKind: 'codex',
+    secretRef: null,
+  })
+
+  return connection.enabled
+    ? connection
+    : updateProviderConnection({
+        authMode: connection.authMode,
+        baseURL: connection.baseURL,
+        config: connection.config,
+        enabled: true,
+        id: connection.id,
+        label: connection.label,
+        maxInflightRequests: connection.maxInflightRequests,
+        secretRef: connection.secretRef,
       })
 }
 

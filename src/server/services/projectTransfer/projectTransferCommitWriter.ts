@@ -63,6 +63,31 @@ type DependencyResolutionState = {
   providerTargetBySourceId?: Record<string, string>
 }
 
+type ImportedProviderConnectionCommitRow = {
+  authMode: string | null
+  baseURL: string | null
+  configJson: unknown
+  enabled: boolean
+  label: string
+  maxInflightRequests: number | null
+  providerKind: string
+  secretRef: string | null
+  sourceProviderConnectionId: string
+}
+
+type ImportedModelCommitRow = {
+  displayName: string | null
+  enabled: boolean
+  metadataJson: unknown
+  modelName: string | null
+  name: string
+  remoteModelId: string | null
+  source: string | null
+  sourceModelId: string
+  sourceProviderConnectionId: string
+  variant: string | null
+}
+
 type ArticleField = keyof typeof articleColumnByPayloadField
 type ArticleMatchPlan = ProjectTransferTargetPlan['articleMatches'][number]
 type ArticleIdentifierCommitRow = {
@@ -380,6 +405,212 @@ const getCreatedArticleValuesSql = ({
 
 const getDependencyResolutionState = (plan: ProjectTransferImportPlanArtifact): DependencyResolutionState => {
   return isRecord(plan.dependencyResolution) ? (plan.dependencyResolution as DependencyResolutionState) : {}
+}
+
+const getImportedTargetProviderConnectionId = (sourceProviderConnectionId: string) => {
+  return `new:provider:${sourceProviderConnectionId}`
+}
+
+const getImportedTargetModelId = (sourceModelId: string) => {
+  return `new:model:${sourceModelId}`
+}
+
+const isImportedTargetProviderConnectionId = (targetProviderConnectionId: string) => {
+  return targetProviderConnectionId.startsWith(getImportedTargetProviderConnectionId(''))
+}
+
+const isImportedTargetModelId = (targetModelId: string) => {
+  return targetModelId.startsWith(getImportedTargetModelId(''))
+}
+
+const getImportedProviderConnection = (record: ProjectTransferPayloadRecord): ImportedProviderConnectionCommitRow => {
+  return {
+    authMode: getNullableString(getRecordField(record, 'authMode')),
+    baseURL: getNullableString(getRecordField(record, 'baseURL')),
+    configJson: getRecordField(record, 'configJson'),
+    enabled: getBoolean(getRecordField(record, 'enabled'), true),
+    label: getRequiredString(getRecordField(record, 'label'), 'providerConnections.label'),
+    maxInflightRequests: getNullableNumber(getRecordField(record, 'maxInflightRequests')),
+    providerKind: getRequiredString(getRecordField(record, 'providerKind'), 'providerConnections.providerKind'),
+    secretRef: getNullableString(getRecordField(record, 'secretRef')),
+    sourceProviderConnectionId: getRequiredString(
+      getRecordField(record, 'sourceProviderConnectionId'),
+      'providerConnections.sourceProviderConnectionId',
+    ),
+  }
+}
+
+const getImportedModel = (record: ProjectTransferPayloadRecord): ImportedModelCommitRow => {
+  return {
+    displayName: getNullableString(getRecordField(record, 'displayName')),
+    enabled: getBoolean(getRecordField(record, 'enabled'), true),
+    metadataJson: getRecordField(record, 'metadataJson'),
+    modelName: getNullableString(getRecordField(record, 'modelName')),
+    name: getRequiredString(getRecordField(record, 'name'), 'models.name'),
+    remoteModelId: getNullableString(getRecordField(record, 'remoteModelId')),
+    source: getNullableString(getRecordField(record, 'source')),
+    sourceModelId: getRequiredString(getRecordField(record, 'sourceModelId'), 'models.sourceModelId'),
+    sourceProviderConnectionId: getRequiredString(
+      getRecordField(record, 'sourceProviderConnectionId'),
+      'models.sourceProviderConnectionId',
+    ),
+    variant: getNullableString(getRecordField(record, 'variant')) ?? getNullableString(getRecordField(record, 'version')),
+  }
+}
+
+const getImportedProviderConnectionBySourceId = (providers: readonly ProjectTransferPayloadRecord[]) => {
+  return providers.reduce<Record<string, ImportedProviderConnectionCommitRow>>((mapped, provider) => {
+    const importedProvider = getImportedProviderConnection(provider)
+
+    return {...mapped, [importedProvider.sourceProviderConnectionId]: importedProvider}
+  }, {})
+}
+
+const getImportedModelBySourceId = (models: readonly ProjectTransferPayloadRecord[]) => {
+  return models.reduce<Record<string, ImportedModelCommitRow>>((mapped, model) => {
+    const importedModel = getImportedModel(model)
+
+    return {...mapped, [importedModel.sourceModelId]: importedModel}
+  }, {})
+}
+
+const getMaterializedProviderTargetBySourceId = async ({
+  importedProviderBySourceId,
+  providerTargetBySourceId,
+  tx,
+}: {
+  importedProviderBySourceId: Record<string, ImportedProviderConnectionCommitRow>
+  providerTargetBySourceId: Record<string, string>
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  return Object.entries(providerTargetBySourceId).reduce<Promise<Record<string, string>>>(async (previous, entry) => {
+    const mapped = await previous
+    const [sourceProviderConnectionId, targetProviderConnectionId] = entry
+
+    if (!isImportedTargetProviderConnectionId(targetProviderConnectionId)) {
+      return {...mapped, [sourceProviderConnectionId]: targetProviderConnectionId}
+    }
+
+    const importedProvider =
+      importedProviderBySourceId[sourceProviderConnectionId]
+      ?? failCommitWriter(`missing imported provider for ${sourceProviderConnectionId}`)
+    const providerConnectionId = randomUUID()
+
+    await tx.run(`
+      INSERT INTO app.provider_connection (
+        id,
+        provider_kind,
+        label,
+        enabled,
+        auth_mode,
+        base_url,
+        max_inflight_requests,
+        config_json,
+        secret_ref
+      ) VALUES (
+        ${getSqlLiteral(providerConnectionId)},
+        ${getSqlLiteral(importedProvider.providerKind)},
+        ${getSqlLiteral(importedProvider.label)},
+        ${getSqlLiteral(importedProvider.enabled)},
+        ${getSqlLiteral(importedProvider.authMode)},
+        ${getSqlLiteral(importedProvider.baseURL)},
+        ${getSqlLiteral(importedProvider.maxInflightRequests)},
+        ${getJsonLiteral(importedProvider.configJson)},
+        ${getSqlLiteral(importedProvider.secretRef)}
+      )
+    `)
+
+    return {...mapped, [sourceProviderConnectionId]: providerConnectionId}
+  }, Promise.resolve({}))
+}
+
+const getMaterializedModelTargetBySourceId = async ({
+  importedModelBySourceId,
+  modelTargetBySourceId,
+  providerTargetBySourceId,
+  tx,
+}: {
+  importedModelBySourceId: Record<string, ImportedModelCommitRow>
+  modelTargetBySourceId: Record<string, string>
+  providerTargetBySourceId: Record<string, string>
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  return Object.entries(modelTargetBySourceId).reduce<Promise<Record<string, string>>>(async (previous, entry) => {
+    const mapped = await previous
+    const [sourceModelId, targetModelId] = entry
+
+    if (!isImportedTargetModelId(targetModelId)) {
+      return {...mapped, [sourceModelId]: targetModelId}
+    }
+
+    const importedModel = importedModelBySourceId[sourceModelId] ?? failCommitWriter(`missing imported model for ${sourceModelId}`)
+    const providerConnectionId = getMappedTargetId({
+      label: 'provider connection',
+      mapped: providerTargetBySourceId,
+      sourceId: importedModel.sourceProviderConnectionId,
+    })
+    const materializedModelId = randomUUID()
+
+    await tx.run(`
+      INSERT INTO app.model (
+        id,
+        provider_connection_id,
+        name,
+        remote_model_id,
+        display_name,
+        variant,
+        source,
+        enabled,
+        metadata_json
+      ) VALUES (
+        ${getSqlLiteral(materializedModelId)},
+        ${getSqlLiteral(providerConnectionId)},
+        ${getSqlLiteral(importedModel.name)},
+        ${getSqlLiteral(importedModel.remoteModelId ?? importedModel.modelName)},
+        ${getSqlLiteral(importedModel.displayName)},
+        ${getSqlLiteral(importedModel.variant)},
+        ${getSqlLiteral(importedModel.source ?? 'manual')},
+        ${getSqlLiteral(importedModel.enabled)},
+        ${getJsonLiteral(importedModel.metadataJson)}
+      )
+    `)
+
+    return {...mapped, [sourceModelId]: materializedModelId}
+  }, Promise.resolve({}))
+}
+
+const getPlanWithMaterializedImportedDependencies = async ({
+  payloads,
+  plan,
+  tx,
+}: {
+  payloads: Partial<ProjectTransferPayloadByKey>
+  plan: ProjectTransferImportPlanArtifact
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const dependencyResolution = getDependencyResolutionState(plan)
+  const providerTargetBySourceId = dependencyResolution.providerTargetBySourceId ?? {}
+  const modelTargetBySourceId = dependencyResolution.modelTargetBySourceId ?? {}
+  const materializedProviderTargetBySourceId = await getMaterializedProviderTargetBySourceId({
+    importedProviderBySourceId: getImportedProviderConnectionBySourceId(payloads.providerConnections ?? []),
+    providerTargetBySourceId,
+    tx,
+  })
+  const materializedModelTargetBySourceId = await getMaterializedModelTargetBySourceId({
+    importedModelBySourceId: getImportedModelBySourceId(payloads.models ?? []),
+    modelTargetBySourceId,
+    providerTargetBySourceId: materializedProviderTargetBySourceId,
+    tx,
+  })
+
+  return {
+    ...plan,
+    dependencyResolution: {
+      ...(isRecord(plan.dependencyResolution) ? plan.dependencyResolution : {}),
+      modelTargetBySourceId: materializedModelTargetBySourceId,
+      providerTargetBySourceId: materializedProviderTargetBySourceId,
+    },
+  }
 }
 
 const getPayloadArrayBySourceId = <TRecord extends ProjectTransferPayloadRecord>(
@@ -2638,41 +2869,42 @@ const writeProjectTransferCommitAppTablesTx = async ({
   const humanJudgmentSummaries = payloads.humanJudgmentSummaries ?? []
   const reviews = payloads.reviews ?? []
   const importedAt = now ?? new Date()
-  const judgmentPlan = getRequiredPlanEntries(plan.targetPlan.judgmentPlan, 'judgment plan', judgments.length)
+  const materializedPlan = await getPlanWithMaterializedImportedDependencies({payloads, plan, tx})
+  const judgmentPlan = getRequiredPlanEntries(materializedPlan.targetPlan.judgmentPlan, 'judgment plan', judgments.length)
   const judgmentAssessmentPlan = getRequiredPlanEntries(
-    plan.targetPlan.judgmentAssessmentPlan,
+    materializedPlan.targetPlan.judgmentAssessmentPlan,
     'judgment assessment plan',
     judgmentAssessments.length,
   )
   const humanReviewPlan = getRequiredPlanEntries(
-    plan.targetPlan.humanReviewPlan,
+    materializedPlan.targetPlan.humanReviewPlan,
     'human review plan',
     humanJudgments.length + humanJudgmentSummaries.length + reviews.length,
   )
   const createdProject = await insertImportedProject({
     models: payloads.models ?? [],
     now: importedAt,
-    plan,
+    plan: materializedPlan,
     project,
     tx,
   })
-  const activeSourcePromptIds = getActiveSourcePromptIds(plan.targetPlan.projectPromptPlan)
+  const activeSourcePromptIds = getActiveSourcePromptIds(materializedPlan.targetPlan.projectPromptPlan)
 
-  assertPromptPlanHashes({promptPlan: plan.targetPlan.promptPlan, prompts})
+  assertPromptPlanHashes({promptPlan: materializedPlan.targetPlan.promptPlan, prompts})
 
   const promptIdBySourceId = await getPromptIdBySourceId({activeSourcePromptIds, prompts, tx})
   const projectPromptRows = getProjectPromptRows({
     projectId: createdProject.id,
-    projectPromptPlan: plan.targetPlan.projectPromptPlan,
+    projectPromptPlan: materializedPlan.targetPlan.projectPromptPlan,
     projectPrompts,
     promptIdBySourceId,
   })
   const articleIdBySourceId = getResolvedArticleIdBySourceId({
-    articleMatches: plan.targetPlan.articleMatches,
+    articleMatches: materializedPlan.targetPlan.articleMatches,
     promotion,
   })
 
-  await assertNoArticleIdConflicts({articles, matches: plan.targetPlan.articleMatches, tx})
+  await assertNoArticleIdConflicts({articles, matches: materializedPlan.targetPlan.articleMatches, tx})
   await insertProjectPromptRows(tx, projectPromptRows)
   await insertCreatedArticles({articleIdBySourceId, now: importedAt, promotion, tx})
   const targetArticleById = await getFillTargetArticleRows({promotion, tx})
@@ -2680,27 +2912,27 @@ const writeProjectTransferCommitAppTablesTx = async ({
   await markUpdatedReusedArticlesDirty({promotion, tx})
   await insertArticleIdentifiers({
     articleIdBySourceId,
-    articleMatches: plan.targetPlan.articleMatches,
+    articleMatches: materializedPlan.targetPlan.articleMatches,
     articles,
     now: importedAt,
     tx,
   })
   await insertProjectImportRoutes({
     projectId: createdProject.id,
-    projectRoutePlan: plan.targetPlan.projectRoutePlan,
+    projectRoutePlan: materializedPlan.targetPlan.projectRoutePlan,
     tx,
   })
-  const routeIdBySourceId = getRouteIdBySourceId(plan.targetPlan.projectRoutePlan)
+  const routeIdBySourceId = getRouteIdBySourceId(materializedPlan.targetPlan.projectRoutePlan)
   const articleImportRouteRows = getArticleImportRouteRows({
     articleIdBySourceId,
     articleImportRoutes,
-    articleRoutePlan: plan.targetPlan.articleRoutePlan,
+    articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
     routeIdBySourceId,
   })
   await insertArticleImportRoutes({rows: articleImportRouteRows, tx})
   await insertProjectArticles({
     articleIdBySourceId,
-    articleRoutePlan: plan.targetPlan.articleRoutePlan,
+    articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
     projectArticles,
     projectId: createdProject.id,
     tx,
@@ -2711,7 +2943,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
     judgmentPlan,
     judgments,
     now: importedAt,
-    plan,
+    plan: materializedPlan,
     promptIdBySourceId,
   })
   await insertJudgmentRows({projectId: createdProject.id, rows: judgmentRows, tx})
@@ -2754,12 +2986,12 @@ const writeProjectTransferCommitAppTablesTx = async ({
   await insertHumanJudgmentSummaryRows({rows: humanSummaryRows, tx})
   await insertReviewRows({rows: reviewRows, tx})
   const importWarnings = getCommitImportWarnings({
-    articleRoutePlan: plan.targetPlan.articleRoutePlan,
+    articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
     judgmentPlan,
-    plan,
-    projectRoutePlan: plan.targetPlan.projectRoutePlan,
+    plan: materializedPlan,
+    projectRoutePlan: materializedPlan.targetPlan.projectRoutePlan,
   })
-  const payloadCounts = getPayloadCounts(plan)
+  const payloadCounts = getPayloadCounts(materializedPlan)
   const transferHistoryId = randomUUID()
   const completion = getCompletionPayload({
     finalCounts: getFinalCounts({
@@ -2774,7 +3006,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
       routeIdBySourceId,
     }),
     importWarnings,
-    packageFingerprint: getRequiredString(plan.packageFingerprint, 'plan.packageFingerprint'),
+    packageFingerprint: getRequiredString(materializedPlan.packageFingerprint, 'plan.packageFingerprint'),
     payloadCounts,
     projectId: createdProject.id,
     projectName: createdProject.name,

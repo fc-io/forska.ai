@@ -19,6 +19,7 @@ export const projectTransferExecutionThresholds = {
   commitBackgroundArticleCount: 25_000,
   commitBackgroundExtractedAssetBytes: 2 * projectTransferGiB,
   commitBackgroundJudgmentCount: 250_000,
+  commitBackgroundTotalRowCount: 50_000,
   exportInlineAssetBytes: 64 * projectTransferMiB,
   exportInlinePackageBytes: 128 * projectTransferMiB,
   importAnalyzeInlineExpandedBytes: 512 * projectTransferMiB,
@@ -642,6 +643,7 @@ export const getProjectTransferCommitExecutionMode = (
   }
 
   return input.articleCount >= projectTransferExecutionThresholds.commitBackgroundArticleCount
+    || input.articleCount + input.judgmentCount >= projectTransferExecutionThresholds.commitBackgroundTotalRowCount
     || input.judgmentCount >= projectTransferExecutionThresholds.commitBackgroundJudgmentCount
     || input.extractedAssetBytes >= projectTransferExecutionThresholds.commitBackgroundExtractedAssetBytes
     ? 'background'

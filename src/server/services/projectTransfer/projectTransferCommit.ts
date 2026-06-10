@@ -872,6 +872,54 @@ const persistPostClaimStalePlan = async ({
   return reopened
 }
 
+const getPostClaimRevalidationResult = async ({
+  artifacts,
+  claimed,
+  commitId,
+  inputRepositories,
+  now,
+  ownerToken,
+  repositories,
+  runtimeOptions,
+}: {
+  artifacts: ProjectTransferCommitArtifacts
+  claimed: ProjectTransferSessionRecord
+  commitId: string
+  inputRepositories?: ProjectTransferCommitRepositories
+  now: Date
+  ownerToken: string
+  repositories: ProjectTransferCommitRepositorySet
+  runtimeOptions: RuntimePathOptions
+}) => {
+  const postClaimRevalidation = await repositories.revalidate({
+    ...runtimeOptions,
+    analysis: artifacts.analysis,
+    layout: artifacts.layout,
+    nextPlanRevision: claimed.planRevision + 1,
+    plan: artifacts.plan,
+    repositories: inputRepositories,
+  })
+
+  if (!postClaimRevalidation.ready || postClaimRevalidation.changed) {
+    const reopened = await persistPostClaimStalePlan({
+      artifacts,
+      commitId,
+      nextPlan: postClaimRevalidation.plan,
+      now,
+      ownerToken,
+      repositories,
+      runtimeOptions,
+      session: claimed,
+    })
+
+    return reopened === null
+      ? {error: 'Project transfer commit could not reopen claimed stale plan', ok: false as const}
+      : {ok: true as const, session: reopened, stalePlan: postClaimRevalidation.plan}
+  }
+
+  return {artifacts: {...artifacts, plan: postClaimRevalidation.plan}, ok: true as const}
+}
+
 const getRepositorySet = (repositories?: ProjectTransferCommitRepositories) => {
   return {
     getCommitId: repositories?.getCommitId ?? randomUUID,
@@ -1205,28 +1253,30 @@ export const commitProjectTransferImportSession = async ({
     return {error: artifactConsistency.error, status: 'error', statusCode: 409}
   }
 
-  const preClaimRevalidation = await repositories.revalidate({
-    ...runtimeOptions,
-    analysis: artifacts.analysis,
-    layout: artifacts.layout,
-    nextPlanRevision: current.planRevision + 1,
-    plan: artifacts.plan,
-    repositories: inputRepositories,
-  })
-
-  if (!preClaimRevalidation.ready || preClaimRevalidation.changed) {
-    const reopened = await persistPreClaimStalePlan({
-      artifacts,
-      nextPlan: preClaimRevalidation.plan,
-      now,
-      repositories,
-      runtimeOptions,
-      sessionId,
+  if (executionMode !== 'background') {
+    const preClaimRevalidation = await repositories.revalidate({
+      ...runtimeOptions,
+      analysis: artifacts.analysis,
+      layout: artifacts.layout,
+      nextPlanRevision: current.planRevision + 1,
+      plan: artifacts.plan,
+      repositories: inputRepositories,
     })
 
-    return reopened === null
-      ? {error: 'Project transfer commit could not reopen stale plan', status: 'error', statusCode: 409}
-      : {plan: preClaimRevalidation.plan, session: reopened, status: 'stale', statusCode: 200}
+    if (!preClaimRevalidation.ready || preClaimRevalidation.changed) {
+      const reopened = await persistPreClaimStalePlan({
+        artifacts,
+        nextPlan: preClaimRevalidation.plan,
+        now,
+        repositories,
+        runtimeOptions,
+        sessionId,
+      })
+
+      return reopened === null
+        ? {error: 'Project transfer commit could not reopen stale plan', status: 'error', statusCode: 409}
+        : {plan: preClaimRevalidation.plan, session: reopened, status: 'stale', statusCode: 200}
+    }
   }
 
   const commitId = repositories.getCommitId()
@@ -1262,34 +1312,7 @@ export const commitProjectTransferImportSession = async ({
 
   writeProjectTransferCommitRuntimeEvent({ownerToken, progress: claimProgress, sessionId, state: claimed.state})
 
-  const postClaimRevalidation = await repositories.revalidate({
-    ...runtimeOptions,
-    analysis: artifacts.analysis,
-    layout: artifacts.layout,
-    nextPlanRevision: claimed.planRevision + 1,
-    plan: artifacts.plan,
-    repositories: inputRepositories,
-  })
-
-  if (!postClaimRevalidation.ready || postClaimRevalidation.changed) {
-    const reopened = await persistPostClaimStalePlan({
-      artifacts,
-      commitId,
-      nextPlan: postClaimRevalidation.plan,
-      now,
-      ownerToken,
-      repositories,
-      runtimeOptions,
-      session: claimed,
-    })
-
-    return reopened === null
-      ? {error: 'Project transfer commit could not reopen claimed stale plan', status: 'error', statusCode: 409}
-      : {plan: postClaimRevalidation.plan, session: reopened, status: 'stale', statusCode: 200}
-  }
-
-  const claimedArtifacts = {...artifacts, plan: postClaimRevalidation.plan}
-  const runClaimed = () => {
+  const runClaimed = (claimedArtifacts: ProjectTransferCommitArtifacts) => {
     return runClaimedProjectTransferImportCommit({
       artifacts: claimedArtifacts,
       claimed,
@@ -1304,11 +1327,39 @@ export const commitProjectTransferImportSession = async ({
 
   if (executionMode === 'background') {
     repositories.startBackgroundCommit(async () => {
-      await runClaimed()
+      const revalidation = await getPostClaimRevalidationResult({
+        artifacts,
+        claimed,
+        commitId,
+      inputRepositories,
+      now,
+      ownerToken,
+      repositories,
+      runtimeOptions,
+    })
+
+      if ('artifacts' in revalidation) {
+        await runClaimed(revalidation.artifacts)
+      }
     })
 
     return {commitId, executionMode, session: claimed, status: 'claimed', statusCode: 202}
   }
 
-  return runClaimed()
+  const postClaimRevalidation = await getPostClaimRevalidationResult({
+    artifacts,
+    claimed,
+    commitId,
+    inputRepositories,
+    now,
+    ownerToken,
+    repositories,
+    runtimeOptions,
+  })
+
+  return 'artifacts' in postClaimRevalidation
+    ? runClaimed(postClaimRevalidation.artifacts)
+    : postClaimRevalidation.stalePlan
+      ? {plan: postClaimRevalidation.stalePlan, session: postClaimRevalidation.session, status: 'stale', statusCode: 200}
+      : {error: postClaimRevalidation.error, status: 'error', statusCode: 409}
 }

@@ -250,7 +250,7 @@ const getCodexPayloads = (): ProjectTransferPayloadByKey => {
   }
 }
 
-test('project transfer dependency resolution auto-matches one safe enabled provider and equivalent selectable model', async () => {
+test('project transfer dependency resolution auto-resolves imported provider and model placeholders', async () => {
   const cwd = getRuntimeRoot()
 
   try {
@@ -285,15 +285,15 @@ test('project transfer dependency resolution auto-matches one safe enabled provi
     })
     expect(persistedPlan.planRevision).toBe(2)
     expect(persistedPlan.dependencyResolution.providerTargetBySourceId).toEqual({
-      'provider-connection-1': 'target-provider-1',
+      'provider-connection-1': 'new:provider:provider-connection-1',
     })
-    expect(persistedPlan.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': 'target-model-1'})
+    expect(persistedPlan.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': 'new:model:model-1'})
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
 })
 
-test('project transfer dependency resolution reuses equivalent target judgments after dependency remap', async () => {
+test('project transfer dependency resolution inserts imported judgments when provider and model are imported as new dependencies', async () => {
   const cwd = getRuntimeRoot()
 
   try {
@@ -377,8 +377,8 @@ test('project transfer dependency resolution reuses equivalent target judgments 
 
     expect(result.status).toBe('ok')
     expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
-    expect(result.status === 'ok' ? result.planSummary.overlapCounts.reusedJudgmentCount : 0).toBe(1)
-    expect(result.status === 'ok' ? result.plan.targetPlan.judgmentPlan?.[0]?.action : null).toBe('reuse')
+    expect(result.status === 'ok' ? result.planSummary.overlapCounts.reusedJudgmentCount : 0).toBe(0)
+    expect(result.status === 'ok' ? result.plan.targetPlan.judgmentPlan?.[0]?.action : null).toBe('insert')
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
@@ -573,6 +573,9 @@ test('project transfer dependency resolution keeps Codex materialization unresol
       layout,
       nextPlanRevision: 2,
       repositories: {
+        ensureCodexProviderModel: async () => {
+          return {modelId: 'target-codex-model-1', providerConnectionId: 'target-codex-provider-1'}
+        },
         getProviderModelsByIds: async () => {
           return new Map([['target-codex-model-1', codexModel]])
         },
@@ -628,6 +631,9 @@ test('project transfer dependency resolution resolves Codex after materialized m
       layout,
       nextPlanRevision: 2,
       repositories: {
+        ensureCodexProviderModel: async () => {
+          return {modelId: 'target-codex-model-1', providerConnectionId: 'target-codex-provider-1'}
+        },
         getProviderModelsByIds: async () => {
           return new Map([['target-codex-model-1', codexModel]])
         },
@@ -661,13 +667,105 @@ test('project transfer dependency resolution resolves Codex after materialized m
   }
 })
 
-test('project transfer dependency resolution auto-ensures Codex models on an existing local Codex connection', async () => {
+test('project transfer dependency resolution auto-resolves Codex dependencies to imported placeholders on existing local connections', async () => {
   const cwd = getRuntimeRoot()
 
   try {
     const payloads = getCodexPayloads()
-    const codexModel = getTargetModel({
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+    let ensured = false
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        ensureCodexProviderModel: async () => {
+          ensured = true
+
+          return {modelId: 'target-codex-model-1', providerConnectionId: 'target-codex-provider-1'}
+        },
+        listProviderConnections: async () => {
+          return [
+            getTargetConnection(
+              {authMode: 'codex-cli', id: 'target-codex-provider-1', label: 'Codex target', providerKind: 'codex'},
+              [],
+            ),
+          ]
+        },
+      },
+      request: {planRevision: 1},
+    })
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
+    })
+    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.providerTargetBySourceId : {}).toEqual({
+      'provider-connection-1': 'new:provider:provider-connection-1',
+    })
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
+      'model-1': 'new:model:model-1',
+    })
+    expect(ensured).toBe(false)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer dependency resolution auto-resolves Codex dependencies to imported placeholders when Codex is not present locally', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getCodexPayloads()
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+    let ensured = false
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        ensureCodexProviderModel: async () => {
+          ensured = true
+
+          return {modelId: 'target-codex-model-2', providerConnectionId: 'target-codex-provider-2'}
+        },
+        listProviderConnections: async () => {
+          return []
+        },
+      },
+      request: {planRevision: 1},
+    })
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
+    })
+    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.providerTargetBySourceId : {}).toEqual({
+      'provider-connection-1': 'new:provider:provider-connection-1',
+    })
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
+      'model-1': 'new:model:model-1',
+    })
+    expect(ensured).toBe(false)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer dependency resolution re-enables stale mapped Codex dependencies before validation', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getCodexPayloads()
+    const disabledCodexModel = getTargetModel({
       displayName: 'Codex Thinking',
+      enabled: false,
       id: 'target-codex-model-1',
       metadataJson: {options: {thinking: 'medium'}},
       modelName: 'codex-thinking',
@@ -678,16 +776,38 @@ test('project transfer dependency resolution auto-ensures Codex models on an exi
       variant: 'medium',
       version: 'medium',
     })
-    const codexConnectionWithoutModels = getTargetConnection(
-      {authMode: 'codex-cli', id: 'target-codex-provider-1', label: 'Codex target', providerKind: 'codex'},
-      [],
+    const enabledCodexModel = {...disabledCodexModel, enabled: true}
+    const layout = await writeProjectTransferArtifacts({
+      cwd,
+      payloads,
+      plan: {
+        ...getBasePlan(),
+        dependencyResolution: {
+          acceptedSubstituteModelSourceIds: [],
+          codexSetupState: null,
+          modelMaterializationRequests: [],
+          modelTargetBySourceId: {'model-1': 'target-codex-model-1'},
+          providerTargetBySourceId: {'provider-connection-1': 'target-codex-provider-1'},
+          unresolvedModelSourceIds: [],
+          unresolvedProviderSourceIds: [],
+        },
+      },
+    })
+    const disabledCodexConnection = getTargetConnection(
+      {
+        authMode: 'codex-cli',
+        enabled: false,
+        id: 'target-codex-provider-1',
+        label: 'Codex target',
+        providerKind: 'codex',
+      },
+      [disabledCodexModel],
     )
-    const codexConnectionWithModel = getTargetConnection(
+    const enabledCodexConnection = getTargetConnection(
       {authMode: 'codex-cli', id: 'target-codex-provider-1', label: 'Codex target', providerKind: 'codex'},
-      [codexModel],
+      [enabledCodexModel],
     )
-    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
-    const ensureInputs: Array<{modelName: string; name: string; version?: string | null}> = []
+    let ensured = false
     let listCallCount = 0
 
     const result = await resolveProjectTransferDependencies({
@@ -695,18 +815,21 @@ test('project transfer dependency resolution auto-ensures Codex models on an exi
       layout,
       nextPlanRevision: 2,
       repositories: {
-        ensureCodexProviderModel: async (input) => {
-          ensureInputs.push(input)
+        ensureCodexProviderModel: async () => {
+          ensured = true
 
           return {modelId: 'target-codex-model-1', providerConnectionId: 'target-codex-provider-1'}
         },
+        getProviderModelsByIds: async () => {
+          return new Map([['target-codex-model-1', ensured ? enabledCodexModel : disabledCodexModel]])
+        },
         listProviderConnections: async () => {
           listCallCount += 1
 
-          return listCallCount === 1 ? [codexConnectionWithoutModels] : [codexConnectionWithModel]
+          return listCallCount === 1 ? [disabledCodexConnection] : [enabledCodexConnection]
         },
       },
-      request: {planRevision: 1},
+      request: {autoResolve: true, planRevision: 1},
     })
 
     expect(result.status).toBe('ok')
@@ -715,75 +838,7 @@ test('project transfer dependency resolution auto-ensures Codex models on an exi
       'provider:provider-connection-1': 'resolved',
     })
     expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
-    expect(result.status === 'ok' ? result.plan.dependencyResolution?.providerTargetBySourceId : {}).toEqual({
-      'provider-connection-1': 'target-codex-provider-1',
-    })
-    expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
-      'model-1': 'target-codex-model-1',
-    })
-    expect(ensureInputs).toEqual([{modelName: 'codex-thinking', name: 'Codex Thinking', version: 'medium'}])
-  } finally {
-    rmSync(cwd, {force: true, recursive: true})
-  }
-})
-
-test('project transfer dependency resolution auto-ensures Codex connection and model when Codex is not present locally', async () => {
-  const cwd = getRuntimeRoot()
-
-  try {
-    const payloads = getCodexPayloads()
-    const codexModel = getTargetModel({
-      displayName: 'Codex Thinking',
-      id: 'target-codex-model-2',
-      metadataJson: {options: {thinking: 'medium'}},
-      modelName: 'codex-thinking',
-      name: 'Codex Thinking',
-      provider: 'codex',
-      providerConnectionId: 'target-codex-provider-2',
-      remoteModelId: 'codex-thinking',
-      variant: 'medium',
-      version: 'medium',
-    })
-    const codexConnectionWithModel = getTargetConnection(
-      {authMode: 'codex-cli', id: 'target-codex-provider-2', label: 'Codex target', providerKind: 'codex'},
-      [codexModel],
-    )
-    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
-    const ensureInputs: Array<{modelName: string; name: string; version?: string | null}> = []
-    let listCallCount = 0
-
-    const result = await resolveProjectTransferDependencies({
-      cwd,
-      layout,
-      nextPlanRevision: 2,
-      repositories: {
-        ensureCodexProviderModel: async (input) => {
-          ensureInputs.push(input)
-
-          return {modelId: 'target-codex-model-2', providerConnectionId: 'target-codex-provider-2'}
-        },
-        listProviderConnections: async () => {
-          listCallCount += 1
-
-          return listCallCount === 1 ? [] : [codexConnectionWithModel]
-        },
-      },
-      request: {planRevision: 1},
-    })
-
-    expect(result.status).toBe('ok')
-    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
-      'model:model-1': 'resolved',
-      'provider:provider-connection-1': 'resolved',
-    })
-    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
-    expect(result.status === 'ok' ? result.plan.dependencyResolution?.providerTargetBySourceId : {}).toEqual({
-      'provider-connection-1': 'target-codex-provider-2',
-    })
-    expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
-      'model-1': 'target-codex-model-2',
-    })
-    expect(ensureInputs).toEqual([{modelName: 'codex-thinking', name: 'Codex Thinking', version: 'medium'}])
+    expect(ensured).toBe(true)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
@@ -950,8 +1005,8 @@ test('project transfer dependency resolution leaves nullable remote model descri
 
     expect(result.status).toBe('ok')
     expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
-      'model:model-1': 'missing',
-      'provider:provider-connection-1': 'missing',
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
     })
   } finally {
     rmSync(cwd, {force: true, recursive: true})

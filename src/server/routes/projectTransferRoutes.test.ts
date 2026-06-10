@@ -878,6 +878,36 @@ test('project transfer import upload streams to upload.zip and persists public m
   expect(text).not.toContain('tmp/project-transfer')
 })
 
+test('project transfer import upload falls back when the request body has no reader', async () => {
+  rmSync('tmp/project-transfer/import/import-upload-array-buffer', {force: true, recursive: true})
+  routeState.sessions['import-upload-array-buffer'] = getImportSessionRecord({id: 'import-upload-array-buffer'})
+  const app = await getProjectTransferApp()
+  const bytes = textEncoder.encode('zip-body')
+  const request = new Request('http://localhost/api/projects/import/import-upload-array-buffer/upload', {
+    body: bytes,
+    headers: {'content-type': 'application/zip'},
+    method: 'PUT',
+  })
+
+  Object.defineProperty(request, 'arrayBuffer', {
+    value: async () => {
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    },
+  })
+  Object.defineProperty(request, 'body', {value: {}})
+
+  const response = await app.handle(request)
+  const body = (await response.json()) as {
+    data: {state: string; upload: {byteLength: number; checksumSha256: string; fileName: string}}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.error).toBe(null)
+  expect(body.data.state).toBe('queued')
+  expect(body.data.upload).toEqual(getUploadMetadata('zip-body'))
+})
+
 test('project transfer import get auto-resolves unresolved dependencies before returning the session', async () => {
   routeState.sessions['import-auto-resolve-get'] = getImportSessionRecord({
     id: 'import-auto-resolve-get',

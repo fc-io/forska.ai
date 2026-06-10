@@ -96,6 +96,7 @@ test('locks project-transfer execution thresholds at inclusive and background bo
   expect(projectTransferExecutionThresholds.importAnalyzeInlineExpandedBytes).toBe(512 * projectTransferMiB)
   expect(projectTransferExecutionThresholds.commitBackgroundArticleCount).toBe(25_000)
   expect(projectTransferExecutionThresholds.commitBackgroundJudgmentCount).toBe(250_000)
+  expect(projectTransferExecutionThresholds.commitBackgroundTotalRowCount).toBe(50_000)
   expect(projectTransferExecutionThresholds.commitBackgroundExtractedAssetBytes).toBe(2 * projectTransferGiB)
 
   expect(
@@ -124,9 +125,16 @@ test('locks project-transfer execution thresholds at inclusive and background bo
   ).toBe('background')
   expect(
     getProjectTransferCommitExecutionMode({
-      articleCount: projectTransferExecutionThresholds.commitBackgroundArticleCount - 1,
+      articleCount: 10_000,
       extractedAssetBytes: projectTransferExecutionThresholds.commitBackgroundExtractedAssetBytes - 1,
-      judgmentCount: projectTransferExecutionThresholds.commitBackgroundJudgmentCount - 1,
+      judgmentCount: 10_000,
+    }),
+  ).toBe('inline')
+  expect(
+    getProjectTransferCommitExecutionMode({
+      articleCount: 10_000,
+      extractedAssetBytes: 0,
+      judgmentCount: projectTransferExecutionThresholds.commitBackgroundTotalRowCount - 10_000 - 1,
     }),
   ).toBe('inline')
   expect(
@@ -134,6 +142,13 @@ test('locks project-transfer execution thresholds at inclusive and background bo
       articleCount: projectTransferExecutionThresholds.commitBackgroundArticleCount,
       extractedAssetBytes: 0,
       judgmentCount: 0,
+    }),
+  ).toBe('background')
+  expect(
+    getProjectTransferCommitExecutionMode({
+      articleCount: 10_000,
+      extractedAssetBytes: 0,
+      judgmentCount: projectTransferExecutionThresholds.commitBackgroundTotalRowCount - 10_000,
     }),
   ).toBe('background')
 })
