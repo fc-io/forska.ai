@@ -5,6 +5,7 @@ import {
   conflictResolutionImportInvalidJsonCopy,
   getAnalyzeImportDisabledReason,
   getCommitImportDisabledReason,
+  getCommitSummaryStats,
   getImportSummaryStats,
   getMatchKeyLabel,
   getMatchKindLabel,
@@ -128,6 +129,32 @@ describe('compare project import resolutions helpers', () => {
       ['Skipped', 2],
       ['Already resolved', 1],
       ['Deduped', 1],
+    ])
+  })
+
+  test('formats commit result inserted and skipped counts', () => {
+    expect(
+      getCommitSummaryStats({
+        deduped: 1,
+        importable: 2,
+        inserted: 1,
+        matched: 3,
+        scanned: 4,
+        skipped: 2,
+        skippedAmbiguousTarget: 0,
+        skippedConflicting: 0,
+        skippedExisting: 1,
+        skippedInvalidValue: 0,
+        skippedNoTargetMatch: 1,
+        skippedNoUsableKey: 0,
+        skippedNotConflicting: 0,
+        skippedUnsupportedMode: 0,
+      }).map((stat) => {
+        return [stat.label, stat.value]
+      }),
+    ).toEqual([
+      ['Inserted', 1],
+      ['Skipped', 2],
     ])
   })
 })

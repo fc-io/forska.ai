@@ -1,6 +1,6 @@
 import {useMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {createMemo, createSignal, Match, Show, Switch} from 'solid-js'
+import {createMemo, createSignal, For, Match, Show, Switch} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
 import {
@@ -14,10 +14,15 @@ import {
 import {
   getAnalyzeImportDisabledReason,
   getCommitImportDisabledReason,
+  getCommitSummaryStats,
   getResolutionCountLabel,
   readConflictResolutionImportFile,
 } from './+import-resolutions/compareProjectImportResolutionsHelpers.ts'
 import {CompareProjectImportResolutionsResults} from './+import-resolutions/compareProjectImportResolutionsResults.tsx'
+import {
+  getConflictResolutionImportCommittedSearchParams,
+  getConflictResolutionImportRefreshQueryKeys,
+} from './compareProjectConflictResolutionImportReturn.ts'
 
 const getComparisonProjectId = (params: Record<string, string>) => {
   return 'id' in params ? params.id : ''
@@ -90,10 +95,11 @@ const CompareProjectImportResolutionsPage = () => {
         setCommitError(null)
         setCommitResult(result)
         setAnalyzePreview(result)
-        await Promise.all([
-          queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-page', comparisonProjectId()]}),
-          queryClient.invalidateQueries({queryKey: ['comparison-project-stats', comparisonProjectId()]}),
-        ])
+        await Promise.all(
+          getConflictResolutionImportRefreshQueryKeys(comparisonProjectId()).map((queryKey) => {
+            return queryClient.invalidateQueries({queryKey})
+          }),
+        )
       },
     }
   })
@@ -320,7 +326,37 @@ const CompareProjectImportResolutionsPage = () => {
                 {(result) => {
                   return (
                     <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
-                      Imported {getResolutionCountLabel(result().summary.inserted)}.
+                      <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p class="font-medium">Import committed</p>
+                          <p class="mt-1">
+                            Inserted {getResolutionCountLabel(result().summary.inserted)} and skipped{' '}
+                            {getResolutionCountLabel(result().summary.skipped)}.
+                          </p>
+                        </div>
+                        <Button
+                          as={Link}
+                          to="/compare-judgments/$id"
+                          params={{id: comparisonProjectId()} as never}
+                          search={getConflictResolutionImportCommittedSearchParams() as never}
+                          variant="outline"
+                          size="sm"
+                        >
+                          Back to comparison
+                        </Button>
+                      </div>
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <For each={getCommitSummaryStats(result().summary)}>
+                          {(stat) => {
+                            return (
+                              <span class="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-white/80 px-3 py-1.5">
+                                <span class="font-medium text-emerald-950">{stat.label}</span>
+                                <span>{getResolutionCountLabel(stat.value)}</span>
+                              </span>
+                            )
+                          }}
+                        </For>
+                      </div>
                     </div>
                   )
                 }}
