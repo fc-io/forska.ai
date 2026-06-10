@@ -1,6 +1,7 @@
 import type {
   ComparisonProjectConflictResolutionImportAnalyzeRowBase,
   ComparisonProjectConflictResolutionImportAnalyzeSummary,
+  ComparisonProjectConflictResolutionImportCommitSummary,
   ComparisonProjectConflictResolutionImportSkipReason,
   ComparisonProjectConflictResolutionTransferArtifact,
   ComparisonProjectConflictResolutionTransferMatchKind,
@@ -59,6 +60,15 @@ export const getImportSummaryStats = (
       description: 'Rows with an existing target conflict resolution.',
     },
     {label: 'Deduped', value: summary.deduped, description: 'Duplicate compatible source rows folded into one import.'},
+  ]
+}
+
+export const getCommitSummaryStats = (
+  summary: ComparisonProjectConflictResolutionImportCommitSummary,
+): ImportSummaryStat[] => {
+  return [
+    {label: 'Inserted', value: summary.inserted, description: 'Saved decisions created in this comparison project.'},
+    {label: 'Skipped', value: summary.skipped, description: 'Rows the server rechecked and left unchanged.'},
   ]
 }
 

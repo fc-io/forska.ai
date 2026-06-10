@@ -39,6 +39,10 @@ import {
 import {CompareProjectResolutionTransferActions} from './+index/compareProjectResolutionTransferActions.tsx'
 import {ComparisonProjectServingProgress} from './+index/comparisonProjectServingProgress.tsx'
 import {ComparisonProjectStatsCard} from './+index/comparisonProjectStatsCard.tsx'
+import {
+  getConflictResolutionImportRefreshQueryKeys,
+  getHasConflictResolutionImportCommittedSearchParam,
+} from './compareProjectConflictResolutionImportReturn.ts'
 
 const getContentSettingsLabel = (contentVariants: Array<{label: string}>) => {
   return contentVariants.length > 0
@@ -235,6 +239,9 @@ const CompareProjectJudgmentsPage = () => {
   const [rowFilter, setRowFilter] = createSignal<ComparisonProjectRowFilter>(initialUrlState.rowFilter)
   const [differenceFilter, setDifferenceFilter] = createSignal<ComparisonProjectDifferenceFilter>(
     initialUrlState.differenceFilter,
+  )
+  const [shouldRefreshCommittedImport, setShouldRefreshCommittedImport] = createSignal(
+    getHasConflictResolutionImportCommittedSearchParam(search() as Record<string, unknown>),
   )
   const [conflictResolutionPendingArticleId, setConflictResolutionPendingArticleId] = createSignal<string | null>(null)
   const [conflictResolutionError, setConflictResolutionError] = createSignal<string | null>(null)
@@ -456,6 +463,23 @@ const CompareProjectJudgmentsPage = () => {
   const refetchComparisonProjectStats = async () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-stats', comparisonProjectId()]})
   }
+  const refetchCommittedImportQueries = async () => {
+    await Promise.all(
+      getConflictResolutionImportRefreshQueryKeys(comparisonProjectId()).map((queryKey) => {
+        return queryClient.invalidateQueries({queryKey})
+      }),
+    )
+  }
+  createEffect(
+    on(searchInitialized, () => {
+      if (!searchInitialized() || !shouldRefreshCommittedImport()) {
+        return
+      }
+
+      setShouldRefreshCommittedImport(false)
+      void refetchCommittedImportQueries()
+    }),
+  )
   const handleConflictResolutionSelect = async (articleId: string, value: string) => {
     setConflictResolutionPendingArticleId(articleId)
     setConflictResolutionError(null)
