@@ -51,6 +51,7 @@ import {
   type ComparisonProjectConflictResolutionImportTargetArticle,
   type ComparisonProjectConflictResolutionImportTargetArticleQueryRow,
   getComparisonProjectConflictResolutionImportAnalyzeResult,
+  getComparisonProjectConflictResolutionImportCommitResult,
   getComparisonProjectConflictResolutionImportIdentifierKeys,
   getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdTitleKey,
@@ -1696,6 +1697,45 @@ const analyzeComparisonProjectConflictResolutionImport = async (scope: Compariso
     sourceRows,
     targetArticles,
     targetSummaryOptionValues: getComparisonProjectScopeSummaryOptionValues(scope),
+  })
+}
+
+const getConflictResolutionArtifactImportAnalysis = async (params: {
+  body: unknown
+  scope: ComparisonProjectScope
+  tx: AppQueryRunner
+}) => {
+  validateConflictResolutionImportAnalyzeTarget(params.scope)
+
+  const artifact = getValidatedComparisonProjectConflictResolutionImportArtifact(params.body)
+  const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
+  const targetArticles = await getConflictResolutionImportTargetArticles({
+    sourceRows,
+    scope: params.scope,
+    tx: params.tx,
+  })
+  const targetSummaryOptionValues = getComparisonProjectScopeSummaryOptionValues(params.scope)
+  const plan = getComparisonProjectConflictResolutionImportPlan({sourceRows, targetArticles, targetSummaryOptionValues})
+  const analyzeResult = getComparisonProjectConflictResolutionImportAnalyzeResult({
+    artifact,
+    sourceRows,
+    targetArticles,
+    targetSummaryOptionValues,
+  })
+
+  return {analyzeResult, plan}
+}
+
+const commitComparisonProjectConflictResolutionImport = async (scope: ComparisonProjectScope, body: unknown) => {
+  return appDatabaseService.transaction(async (tx) => {
+    const {analyzeResult, plan} = await getConflictResolutionArtifactImportAnalysis({body, scope, tx})
+    const inserted = await insertComparisonProjectConflictResolutionImportCandidates({
+      candidates: plan.candidates,
+      comparisonProjectId: scope.id,
+      tx,
+    })
+
+    return getComparisonProjectConflictResolutionImportCommitResult({analyzeResult, inserted})
   })
 }
 
@@ -4145,6 +4185,23 @@ export const comparisonProjectsRoutes = new Elysia()
       }
 
       const data = await analyzeComparisonProjectConflictResolutionImport(scope, context.body)
+
+      return {data}
+    },
+    {body: t.Any()},
+  )
+  .post(
+    '/api/comparison-projects/:id/conflict-resolutions/import/commit',
+    async (context) => {
+      const {params, set} = context
+      const scope = await getComparisonProjectScope(params.id)
+
+      if (!scope) {
+        set.status = 404
+        return {data: null, error: 'Comparison project not found'}
+      }
+
+      const data = await commitComparisonProjectConflictResolutionImport(scope, context.body)
 
       return {data}
     },
