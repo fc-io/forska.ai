@@ -36,6 +36,7 @@ import {
   getCompareProjectJudgmentsSearchParams,
   getInitialCompareProjectJudgmentsUrlState,
 } from './+index/compareProjectJudgmentsUrlState.ts'
+import {CompareProjectResolutionTransferActions} from './+index/compareProjectResolutionTransferActions.tsx'
 import {ComparisonProjectServingProgress} from './+index/comparisonProjectServingProgress.tsx'
 import {ComparisonProjectStatsCard} from './+index/comparisonProjectStatsCard.tsx'
 
@@ -507,6 +508,10 @@ const CompareProjectJudgmentsPage = () => {
           >
             Export data
           </Button>
+          <CompareProjectResolutionTransferActions
+            allowConflictResolution={comparisonProjectQuery.data?.allowConflictResolution}
+            comparisonProjectId={comparisonProjectId()}
+          />
           <Show when={comparisonProjectQuery.data?.archived}>
             <span class="inline-flex items-center rounded-full bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700">
               Archived
