@@ -1,12 +1,18 @@
 import {expect, test} from 'bun:test'
 
 import {
+  comparisonProjectConflictResolutionTransferFormat,
+  comparisonProjectConflictResolutionTransferVersion,
+} from './comparisonProjectConflictResolutionFileTransfer.ts'
+import {
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportTargetArticle,
   getComparisonProjectConflictResolutionImportDoiTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdTitleKey,
   getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql,
   getComparisonProjectConflictResolutionImportPlan,
+  getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact,
   getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
@@ -69,11 +75,14 @@ const getWarningCodes = (params: ReturnType<typeof getPlan>) => {
 const getSkipCounts = (overrides: Partial<ReturnType<typeof getPlan>['skipCounts']> = {}) => {
   return {
     ambiguousTarget: 0,
+    conflictingIdentifiers: 0,
     conflicting: 0,
+    existingTargetResolution: 0,
     invalidValue: 0,
     noTargetMatch: 0,
     noUsableKey: 0,
     notConflicting: 0,
+    unsupportedMode: 0,
     ...overrides,
   }
 }
@@ -132,12 +141,22 @@ test('import source row query starts from selected conflict-resolution rows', ()
   expect(sql).toContain('LIST(DISTINCT normalized_value ORDER BY normalized_value) AS doiKeys')
   expect(sql).toContain('doi_identifier.doiKeys AS doiKeys')
   expect(sql).toContain("WHERE kind = 'doi'")
+  expect(sql).toContain("WHERE kind IN ('doi', 'pmid', 'arxiv')")
+  expect(sql).toContain('strong_identifier.identifierKeys AS identifierKeys')
+  expect(sql).toContain('source_article.pubmed_id AS pubmedId')
+  expect(sql).toContain('source_article.arxiv_id AS arxivId')
 })
 
 test('target article queries are constrained by selected normalized matching keys and scope', () => {
   const idTitleKey = getComparisonProjectConflictResolutionImportIdTitleKey({
     externalArticleId: ' External-1 ',
     title: ' A   Multi\nLine   Title ',
+  })
+  const identifierSql = getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql({
+    articleIdentifierTable: 'app.article_identifier',
+    articleScopeConditions: ['EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)'],
+    articleTable: 'app.article',
+    identifierKeys: ['pmid\u001F12345'],
   })
   const doiSql = getComparisonProjectConflictResolutionImportDoiTargetArticlesSql({
     articleIdentifierTable: 'app.article_identifier',
@@ -161,11 +180,19 @@ test('target article queries are constrained by selected normalized matching key
   expect(doiSql).toContain(
     'LIST(DISTINCT doi_identifier.normalized_value ORDER BY doi_identifier.normalized_value) AS doiKeys',
   )
+  expect(identifierSql).toContain("target_identifier.kind IN ('doi', 'pmid', 'arxiv')")
+  expect(identifierSql).toContain('pmid\u001F12345')
+  expect(identifierSql).toContain('strong_identifier.kind')
+  expect(identifierSql).toContain('strong_identifier.normalizedValue')
+  expect(identifierSql).toContain('legacy_article.pubmed_id')
+  expect(identifierSql).toContain('legacy_article.arxiv_id')
+  expect(identifierSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
   expect(doiSql).not.toContain('NULL AS externalArticleId')
   expect(doiSql).not.toContain('NULL AS title')
   expect(idTitleSql).toContain('regexp_replace(LOWER(TRIM(COALESCE(a.article_title')
   expect(idTitleSql).toContain('doi_identifier.doi AS doi')
   expect(idTitleSql).toContain('LEFT JOIN doi_identifier ON doi_identifier.articleId = a.id')
+  expect(idTitleSql).toContain('strong_identifier.normalizedValue')
   expect(idTitleSql).toContain(idTitleKey ?? '')
   expect(idTitleSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
 })
@@ -181,9 +208,13 @@ test('target article query rows merge DOI and id-title metadata by article id', 
   expect(rows).toEqual([
     {
       articleId: 'target-article-1',
+      arxivId: null,
       doi: '10.1000/primary',
       doiKeys: ['10.1000/primary', '10.1000/secondary'],
       externalArticleId: 'target-ext-1',
+      identifierKeys: ['doi\u001F10.1000/primary', 'doi\u001F10.1000/secondary'],
+      legacyDoi: null,
+      pubmedId: null,
       title: 'Target title',
     },
     {articleId: 'target-article-2', doi: null, externalArticleId: 'target-ext-2', title: 'Second target title'},
@@ -231,6 +262,177 @@ test('import plan matches articles by any normalized source DOI key', () => {
     {
       resolutionValue: 'yes',
       sourceRows: [{matchKey: '10.1000/match', matchKind: 'doi', sourceRowId: 'source-row-1'}],
+      targetArticleId: 'target-article-1',
+    },
+  ])
+})
+
+test('adapts exported transfer rows into import planner source rows', () => {
+  const rows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact({
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: comparisonProjectConflictResolutionTransferVersion,
+    exportedAt: '2026-06-10T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [
+      {
+        sourceResolutionId: 'source-resolution-file',
+        sourceArticleRowId: 'source-article-file',
+        externalArticleId: 'external-file',
+        title: 'File title',
+        doi: '10.1000/file',
+        pubmedId: '00012345',
+        arxivId: 'https://arxiv.org/abs/2401.12345v2',
+        identifiers: [
+          {
+            sourceIdentifierId: 'source-identifier-pmid',
+            kind: 'pmid',
+            normalizedValue: '12345',
+            source: 'pubmed_id',
+            isPrimary: true,
+          },
+        ],
+        resolution: {mode: 'summary', value: 'yes', label: 'Yes'},
+      },
+    ],
+  })
+
+  expect(rows).toEqual([
+    {
+      arxivId: 'https://arxiv.org/abs/2401.12345v2',
+      doi: '10.1000/file',
+      externalArticleId: 'external-file',
+      identifiers: [{kind: 'pmid', normalizedValue: '12345'}],
+      pubmedId: '00012345',
+      resolutionMode: 'summary',
+      resolutionValue: 'yes',
+      sourceArticleId: 'source-article-file',
+      sourceArticleTitle: 'File title',
+      sourceComparisonProjectId: 'source-comparison-project-file',
+      sourceComparisonProjectName: 'File source project',
+      sourceExternalArticleId: 'external-file',
+      sourceResolutionId: 'source-resolution-file',
+      sourceRowId: 'source-resolution-file',
+      title: 'File title',
+    },
+  ])
+})
+
+test('import plan matches file-backed articles by canonical PMID', () => {
+  const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact({
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: comparisonProjectConflictResolutionTransferVersion,
+    exportedAt: '2026-06-10T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [
+      {
+        sourceResolutionId: 'source-resolution-pmid',
+        sourceArticleRowId: 'source-article-pmid',
+        externalArticleId: 'source-ext-does-not-match',
+        title: 'Source PMID title',
+        identifiers: [
+          {
+            sourceIdentifierId: 'source-identifier-pmid',
+            kind: 'pmid',
+            normalizedValue: '00012345',
+            source: 'pubmed_id',
+            isPrimary: true,
+          },
+        ],
+        resolution: {mode: 'summary', value: 'yes', label: 'Yes'},
+      },
+    ],
+  })
+  const plan = getPlan({
+    sourceRows,
+    targetArticles: [
+      getTargetArticle({
+        externalArticleId: 'target-ext-does-not-match',
+        identifiers: [{kind: 'pmid', normalizedValue: '12345'}],
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [{matchKey: 'pmid:12345', matchKind: 'pmid', sourceRowId: 'source-resolution-pmid'}],
+      targetArticleId: 'target-article-1',
+    },
+  ])
+})
+
+test('import plan matches file-backed articles by canonical arXiv id', () => {
+  const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact({
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: comparisonProjectConflictResolutionTransferVersion,
+    exportedAt: '2026-06-10T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [
+      {
+        sourceResolutionId: 'source-resolution-arxiv',
+        sourceArticleRowId: 'source-article-arxiv',
+        externalArticleId: 'source-ext-does-not-match',
+        title: 'Source arXiv title',
+        identifiers: [
+          {
+            sourceIdentifierId: 'source-identifier-arxiv',
+            kind: 'arxiv',
+            normalizedValue: 'https://arxiv.org/abs/2401.12345v2',
+            source: 'arxiv_id',
+            isPrimary: true,
+          },
+        ],
+        resolution: {mode: 'summary', value: 'maybe', label: 'Maybe'},
+      },
+    ],
+  })
+  const plan = getPlan({
+    sourceRows,
+    targetArticles: [
+      getTargetArticle({
+        externalArticleId: 'target-ext-does-not-match',
+        identifiers: [{kind: 'arxiv', normalizedValue: '2401.12345'}],
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'maybe',
+      sourceRows: [{matchKey: 'arxiv:2401.12345', matchKind: 'arxiv', sourceRowId: 'source-resolution-arxiv'}],
+      targetArticleId: 'target-article-1',
+    },
+  ])
+})
+
+test('import plan matches articles by legacy stable IDs after canonical identifiers', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: null, externalArticleId: 'source-ext-does-not-match', pubmedId: '00012345'})],
+    targetArticles: [getTargetArticle({externalArticleId: 'target-ext-does-not-match', pubmedId: '12345'})],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [{matchKey: 'pmid:12345', matchKind: 'pmid', sourceRowId: 'source-row-1'}],
       targetArticleId: 'target-article-1',
     },
   ])
@@ -346,6 +548,71 @@ test('import plan prefers DOI over external ID and title when both match differe
 
   expect(plan.errors).toEqual([])
   expect(plan.candidates).toMatchObject([{sourceRows: [{matchKind: 'doi'}], targetArticleId: 'target-doi'}])
+})
+
+test('import plan skips rows when exact canonical identifiers point to different targets', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({
+        doi: null,
+        externalArticleId: 'source-ext-does-not-match',
+        identifiers: [
+          {kind: 'pmid', normalizedValue: '12345'},
+          {kind: 'arxiv', normalizedValue: '2401.12345'},
+        ],
+      }),
+    ],
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'target-pmid',
+        externalArticleId: 'target-pmid-ext',
+        identifiers: [{kind: 'pmid', normalizedValue: '12345'}],
+      }),
+      getTargetArticle({
+        articleId: 'target-arxiv',
+        externalArticleId: 'target-arxiv-ext',
+        identifiers: [{kind: 'arxiv', normalizedValue: '2401.12345'}],
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts({conflictingIdentifiers: 1}))
+  expect(plan.skippedRows).toEqual([{reason: 'conflicting-identifiers', sourceRowId: 'source-row-1'}])
+  expect(plan.warnings).toMatchObject([
+    {
+      code: 'conflicting-identifiers',
+      matchKeys: ['pmid:12345', 'arxiv:2401.12345'],
+      targetArticles: [{articleId: 'target-pmid'}, {articleId: 'target-arxiv'}],
+    },
+  ])
+})
+
+test('import plan skips rows with an existing target resolution', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: '10.1000/existing'})],
+    targetArticles: [getTargetArticle({doi: '10.1000/existing', hasExistingResolution: true})],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts({existingTargetResolution: 1}))
+  expect(plan.skippedRows).toEqual([{reason: 'existing-target-resolution', sourceRowId: 'source-row-1'}])
+  expect(plan.warnings).toEqual([])
+})
+
+test('import plan skips unsupported source resolution modes', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: '10.1000/prompt-mode', resolutionMode: 'prompt'})],
+    targetArticles: [getTargetArticle({doi: '10.1000/prompt-mode'})],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts({unsupportedMode: 1}))
+  expect(plan.skippedRows).toEqual([{reason: 'unsupported-mode', sourceRowId: 'source-row-1'}])
+  expect(plan.warnings).toEqual([])
 })
 
 test('import plan dedupes duplicate source DOI keys with the same normalized value', () => {
@@ -802,7 +1069,7 @@ test('import plan ignores invalid resolution values on skipped source rows', () 
 
 test('import plan skips source rows without a usable matching key', () => {
   const plan = getPlan({
-    sourceRows: [getSourceRow({doi: null, externalArticleId: ' ', title: null})],
+    sourceRows: [getSourceRow({doi: null, externalArticleId: ' ', title: 'Title only'})],
     targetArticles: [getTargetArticle()],
   })
 

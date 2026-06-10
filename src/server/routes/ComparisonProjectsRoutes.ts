@@ -49,8 +49,8 @@ import {
   type ComparisonProjectConflictResolutionImportSummary,
   type ComparisonProjectConflictResolutionImportTargetArticle,
   type ComparisonProjectConflictResolutionImportTargetArticleQueryRow,
-  getComparisonProjectConflictResolutionImportDoiKeys,
-  getComparisonProjectConflictResolutionImportDoiTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportIdentifierKeys,
+  getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdTitleKey,
   getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql,
   getComparisonProjectConflictResolutionImportPlan,
@@ -1330,13 +1330,13 @@ const getConflictResolutionImportSourceRows = async (
   )
 }
 
-const getConflictResolutionImportDoiKeys = (
+const getConflictResolutionImportIdentifierKeys = (
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[],
 ) => {
   return getUniqueStringValues(
     sourceRows
       .flatMap((row) => {
-        return getComparisonProjectConflictResolutionImportDoiKeys(row)
+        return getComparisonProjectConflictResolutionImportIdentifierKeys(row)
       })
       .filter(Boolean),
   )
@@ -1355,7 +1355,7 @@ const getConflictResolutionImportIdTitleKeys = (
 }
 
 const getConflictResolutionImportCandidateTargetRows = async (params: {
-  doiKeys: string[]
+  identifierKeys: string[]
   idTitleKeys: string[]
   scope: ComparisonProjectScope
   tx: AppQueryRunner
@@ -1365,14 +1365,14 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
     params.scope.sourceProjectIds,
     params.scope.useImportRoutesForScope,
   )
-  const doiTargetRows =
-    params.doiKeys.length > 0
+  const identifierTargetRows =
+    params.identifierKeys.length > 0
       ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
-          getComparisonProjectConflictResolutionImportDoiTargetArticlesSql({
+          getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql({
             articleIdentifierTable,
             articleScopeConditions,
             articleTable,
-            doiKeys: params.doiKeys,
+            identifierKeys: params.identifierKeys,
           }),
         )
       : []
@@ -1388,7 +1388,10 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
         )
       : []
 
-  return mergeComparisonProjectConflictResolutionImportTargetArticleRows([...doiTargetRows, ...idTitleTargetRows])
+  return mergeComparisonProjectConflictResolutionImportTargetArticleRows([
+    ...identifierTargetRows,
+    ...idTitleTargetRows,
+  ])
 }
 
 const getConflictResolutionImportTargetArticles = async (params: {
@@ -1397,7 +1400,7 @@ const getConflictResolutionImportTargetArticles = async (params: {
   tx: AppQueryRunner
 }): Promise<ComparisonProjectConflictResolutionImportTargetArticle[]> => {
   const candidateRows = await getConflictResolutionImportCandidateTargetRows({
-    doiKeys: getConflictResolutionImportDoiKeys(params.sourceRows),
+    identifierKeys: getConflictResolutionImportIdentifierKeys(params.sourceRows),
     idTitleKeys: getConflictResolutionImportIdTitleKeys(params.sourceRows),
     scope: params.scope,
     tx: params.tx,
@@ -1440,11 +1443,14 @@ const getConflictResolutionImportSummary = (params: {
 }): ComparisonProjectConflictResolutionImportSummary => {
   const skippedCount =
     params.plan.skipCounts.ambiguousTarget
+    + params.plan.skipCounts.conflictingIdentifiers
     + params.plan.skipCounts.conflicting
+    + params.plan.skipCounts.existingTargetResolution
     + params.plan.skipCounts.invalidValue
     + params.plan.skipCounts.noTargetMatch
     + params.plan.skipCounts.noUsableKey
     + params.plan.skipCounts.notConflicting
+    + params.plan.skipCounts.unsupportedMode
 
   return {
     deduped: params.plan.dedupedCount,
@@ -1455,11 +1461,14 @@ const getConflictResolutionImportSummary = (params: {
     imported: params.importedCount,
     skipped: skippedCount,
     skippedAmbiguousTarget: params.plan.skipCounts.ambiguousTarget,
+    skippedConflictingIdentifiers: params.plan.skipCounts.conflictingIdentifiers,
     skippedConflicting: params.plan.skipCounts.conflicting,
+    skippedExistingTargetResolution: params.plan.skipCounts.existingTargetResolution,
     skippedInvalidValue: params.plan.skipCounts.invalidValue,
     skippedNoTargetMatch: params.plan.skipCounts.noTargetMatch,
     skippedNoUsableKey: params.plan.skipCounts.noUsableKey,
     skippedNotConflicting: params.plan.skipCounts.notConflicting,
+    skippedUnsupportedMode: params.plan.skipCounts.unsupportedMode,
     warnings: params.plan.warnings,
   }
 }
@@ -1472,11 +1481,14 @@ const getEmptyConflictResolutionImportSummary = (): ComparisonProjectConflictRes
     imported: 0,
     skipped: 0,
     skippedAmbiguousTarget: 0,
+    skippedConflictingIdentifiers: 0,
     skippedConflicting: 0,
+    skippedExistingTargetResolution: 0,
     skippedInvalidValue: 0,
     skippedNoTargetMatch: 0,
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
+    skippedUnsupportedMode: 0,
     warnings: [],
   }
 }
