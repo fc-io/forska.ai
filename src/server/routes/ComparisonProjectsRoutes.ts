@@ -38,6 +38,12 @@ import {
 } from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {
+  type ComparisonProjectConflictResolutionTransferSourceRow,
+  createComparisonProjectConflictResolutionTransferArtifact,
+  getComparisonProjectConflictResolutionTransferFilename,
+  getComparisonProjectConflictResolutionTransferRows,
+} from './comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.ts'
+import {
   type ComparisonProjectConflictResolutionImportSourceQueryRow,
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportSummary,
@@ -165,6 +171,10 @@ type ComparisonProjectStatsResponse = {
 type ComparisonProjectLlmRow = ComparisonProjectJudgmentLlmRow
 type ComparisonProjectHumanRow = ComparisonProjectJudgmentHumanRow
 type ComparisonProjectConflictResolution = {articleId: string; label: string; value: string}
+type ComparisonProjectConflictResolutionExportQueryRow = Omit<
+  ComparisonProjectConflictResolutionTransferSourceRow,
+  'resolutionLabel' | 'resolutionMode' | 'resolutionValue'
+> & {answerValue: string | null; promptId: string | null}
 type ComparisonProjectExportRow = ComparisonProjectJudgmentRow & {
   conflictResolution?: ComparisonProjectConflictResolution | null
 }
@@ -2922,6 +2932,89 @@ const resetComparisonProjectConflictResolution = async (params: {articleId: stri
   return {articleId: params.articleId}
 }
 
+const getComparisonProjectConflictResolutionExportResolutionValue = (
+  scope: ComparisonProjectScope,
+  row: ComparisonProjectConflictResolutionExportQueryRow,
+) => {
+  return getIsSummaryMode(scope) ? row.answerValue : row.promptId
+}
+
+const getComparisonProjectConflictResolutionExportSourceRow = (
+  scope: ComparisonProjectScope,
+  optionByValue: Map<string, ComparisonProjectConflictResolutionOption>,
+  row: ComparisonProjectConflictResolutionExportQueryRow,
+): ComparisonProjectConflictResolutionTransferSourceRow => {
+  const resolutionValue = getComparisonProjectConflictResolutionExportResolutionValue(scope, row) ?? ''
+  const option = optionByValue.get(resolutionValue)
+
+  return {
+    ...row,
+    resolutionLabel: option?.label ?? resolutionValue,
+    resolutionMode: getIsSummaryMode(scope) ? 'summary' : 'prompt',
+    resolutionValue,
+  }
+}
+
+const getComparisonProjectConflictResolutionExportSourceRows = async (
+  scope: ComparisonProjectScope,
+): Promise<ComparisonProjectConflictResolutionTransferSourceRow[]> => {
+  const optionByValue = getComparisonProjectConflictResolutionOptionByValue(scope)
+  const rows = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionExportQueryRow>(`
+    SELECT
+      cr.id AS sourceResolutionId,
+      cr.article_id AS sourceArticleRowId,
+      a.article_id AS externalArticleId,
+      a.article_title AS title,
+      a.doi AS doi,
+      a.pubmed_id AS pubmedId,
+      a.arxiv_id AS arxivId,
+      a.biorxiv_id AS biorxivId,
+      a.medrxiv_id AS medrxivId,
+      a.url AS url,
+      ai.id AS sourceIdentifierId,
+      ai.kind AS identifierKind,
+      ai.normalized_value AS identifierNormalizedValue,
+      ai.source AS identifierSource,
+      ai.is_primary AS identifierIsPrimary,
+      cr.prompt_id AS promptId,
+      cr.answer_value AS answerValue
+    FROM ${comparisonProjectConflictResolutionTable} cr
+    INNER JOIN ${articleTable} a ON a.id = cr.article_id
+    LEFT JOIN ${articleIdentifierTable} ai ON ai.article_id = a.id
+    WHERE cr.comparison_project_id = ${getSqlLiteral(scope.id)}
+    ORDER BY
+      cr.created_at ASC,
+      cr.id ASC,
+      ai.is_primary DESC,
+      ai.kind ASC,
+      ai.normalized_value ASC,
+      ai.id ASC
+  `)
+
+  return rows.map((row) => {
+    return getComparisonProjectConflictResolutionExportSourceRow(scope, optionByValue, row)
+  })
+}
+
+const getComparisonProjectConflictResolutionExportResponse = async (scope: ComparisonProjectScope) => {
+  const exportedAt = new Date()
+  const sourceRows = await getComparisonProjectConflictResolutionExportSourceRows(scope)
+  const artifact = createComparisonProjectConflictResolutionTransferArtifact({
+    exportedAt,
+    source: {
+      comparisonProjectId: scope.id,
+      comparisonProjectName: scope.name,
+      comparisonProjectDescription: scope.description,
+    },
+    rows: getComparisonProjectConflictResolutionTransferRows(sourceRows),
+  })
+  const filename = getComparisonProjectConflictResolutionTransferFilename({exportedAt, sourceName: scope.name})
+
+  return new Response(JSON.stringify(artifact), {
+    headers: {'Content-Disposition': `attachment; filename="${filename}"`, 'Content-Type': 'application/json'},
+  })
+}
+
 const escapeComparisonProjectCsvValue = (value: string) => {
   return value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')
     ? `"${value.replace(/"/g, '""')}"`
@@ -3943,6 +4036,17 @@ export const comparisonProjectsRoutes = new Elysia()
     },
     {body: t.Object({articleId: t.String()})},
   )
+  .post('/api/comparison-projects/:id/conflict-resolutions/export', async (context) => {
+    const {params, set} = context
+    const scope = await getComparisonProjectScope(params.id)
+
+    if (!scope) {
+      set.status = 404
+      return {data: null, error: 'Comparison project not found'}
+    }
+
+    return getComparisonProjectConflictResolutionExportResponse(scope)
+  })
   .post(
     '/api/comparison-projects/:id/export',
     async (context) => {
