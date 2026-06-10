@@ -11,15 +11,21 @@ export type ComparisonProjectConflictResolutionTransferMatchKind =
   | 'id-title'
 
 export type ComparisonProjectConflictResolutionTransferSourceRow = {
+  arxivId?: string | null
+  biorxivId?: string | null
+  doi?: string | null
   externalArticleId?: string | null
   identifierIsPrimary?: boolean | null
   identifierKind?: string | null
   identifierNormalizedValue?: string | null
   identifierSource?: string | null
+  medrxivId?: string | null
+  pubmedId?: string | null
   sourceArticleRowId: string
   sourceIdentifierId?: string | null
   sourceResolutionId: string
   title?: string | null
+  url?: string | null
   resolutionLabel: string
   resolutionMode: HumanJudgmentMode
   resolutionValue: string
@@ -44,6 +50,12 @@ export type ComparisonProjectConflictResolutionTransferRowV1 = {
   sourceArticleRowId: string
   externalArticleId: string | null
   title: string | null
+  doi?: string | null
+  pubmedId?: string | null
+  arxivId?: string | null
+  biorxivId?: string | null
+  medrxivId?: string | null
+  url?: string | null
   identifiers: ComparisonProjectConflictResolutionTransferIdentifierV1[]
   resolution: ComparisonProjectConflictResolutionTransferResolutionV1
 }
@@ -83,6 +95,12 @@ const TransferRow = arktype({
   sourceArticleRowId: 'string',
   externalArticleId: 'string | null',
   title: 'string | null',
+  'doi?': 'string | null',
+  'pubmedId?': 'string | null',
+  'arxivId?': 'string | null',
+  'biorxivId?': 'string | null',
+  'medrxivId?': 'string | null',
+  'url?': 'string | null',
   identifiers: TransferIdentifier.array(),
   resolution: TransferResolution,
 })
@@ -186,6 +204,37 @@ const getComparisonProjectConflictResolutionTransferIdentifierKey = (
   )
 }
 
+const hasComparisonProjectConflictResolutionTransferSourceField = (
+  row: ComparisonProjectConflictResolutionTransferSourceRow,
+  field: keyof Pick<
+    ComparisonProjectConflictResolutionTransferSourceRow,
+    'arxivId' | 'biorxivId' | 'doi' | 'medrxivId' | 'pubmedId' | 'url'
+  >,
+) => {
+  return Object.prototype.hasOwnProperty.call(row, field)
+}
+
+const getComparisonProjectConflictResolutionTransferIdentityFields = (
+  row: ComparisonProjectConflictResolutionTransferSourceRow,
+) => {
+  return {
+    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'doi') ? {doi: getTrimmedText(row.doi)} : {}),
+    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'pubmedId')
+      ? {pubmedId: getTrimmedText(row.pubmedId)}
+      : {}),
+    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'arxivId')
+      ? {arxivId: getTrimmedText(row.arxivId)}
+      : {}),
+    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'biorxivId')
+      ? {biorxivId: getTrimmedText(row.biorxivId)}
+      : {}),
+    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'medrxivId')
+      ? {medrxivId: getTrimmedText(row.medrxivId)}
+      : {}),
+    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'url') ? {url: getTrimmedText(row.url)} : {}),
+  }
+}
+
 const getUniqueComparisonProjectConflictResolutionTransferIdentifiers = (
   identifiers: readonly ComparisonProjectConflictResolutionTransferIdentifierV1[],
 ) => {
@@ -212,6 +261,7 @@ const getComparisonProjectConflictResolutionTransferRowBase = (
     sourceArticleRowId: row.sourceArticleRowId,
     externalArticleId: getTrimmedText(row.externalArticleId),
     title: getTrimmedText(row.title),
+    ...getComparisonProjectConflictResolutionTransferIdentityFields(row),
     identifiers: [],
     resolution: {mode: row.resolutionMode, value: row.resolutionValue.trim(), label: row.resolutionLabel.trim()},
   }

@@ -96,12 +96,17 @@ type MockDatabaseState = {
   conflictResolutionRows: Array<{
     answerValue: string | null
     articleId: string
+    arxivId?: string | null
+    biorxivId?: string | null
     comparisonProjectId?: string
     doi?: string | null
     externalArticleId?: string | null
     id?: string
+    medrxivId?: string | null
     promptId: string | null
+    pubmedId?: string | null
     title?: string | null
+    url?: string | null
   }>
   extraLlmRows: MockLlmJudgmentRow[]
   failPromptInsert: boolean
@@ -406,6 +411,65 @@ const getMockLlmJudgmentRow = (params: {answer: string; articleId: string; model
   }
 }
 
+const getMockConflictResolutionExportIdentifierRows = (row: MockDatabaseState['conflictResolutionRows'][number]) => {
+  return row.articleId === 'article-1'
+    ? [
+        {
+          identifierIsPrimary: true,
+          identifierKind: 'doi',
+          identifierNormalizedValue: row.doi ?? '10.1000/export-primary',
+          identifierSource: 'doi',
+          sourceIdentifierId: 'identifier-article-1-doi',
+        },
+        {
+          identifierIsPrimary: false,
+          identifierKind: 'pmid',
+          identifierNormalizedValue: row.pubmedId ?? '12345',
+          identifierSource: 'pubmed_id',
+          sourceIdentifierId: 'identifier-article-1-pmid',
+        },
+      ]
+    : [
+        {
+          identifierIsPrimary: null,
+          identifierKind: null,
+          identifierNormalizedValue: null,
+          identifierSource: null,
+          sourceIdentifierId: null,
+        },
+      ]
+}
+
+const getMockConflictResolutionExportRows = (statement: string, state: MockDatabaseState) => {
+  return state.conflictResolutionRows
+    .filter((row) => {
+      const comparisonProjectId = row.comparisonProjectId ?? 'comparison-project-1'
+
+      return statement.includes(`'${comparisonProjectId}'`)
+    })
+    .flatMap((row) => {
+      const comparisonProjectId = row.comparisonProjectId ?? 'comparison-project-1'
+      const baseRow = {
+        answerValue: row.answerValue,
+        arxivId: row.arxivId ?? null,
+        biorxivId: row.biorxivId ?? null,
+        doi: row.doi ?? null,
+        externalArticleId: row.externalArticleId ?? row.articleId,
+        medrxivId: row.medrxivId ?? null,
+        promptId: row.promptId,
+        pubmedId: row.pubmedId ?? null,
+        sourceArticleRowId: row.articleId,
+        sourceResolutionId: row.id ?? `${comparisonProjectId}:${row.articleId}`,
+        title: row.title ?? `Article ${row.articleId.slice(-1)}`,
+        url: row.url ?? null,
+      }
+
+      return getMockConflictResolutionExportIdentifierRows(row).map((identifierRow) => {
+        return {...baseRow, ...identifierRow}
+      })
+    })
+}
+
 type MockServingRow = {
   articleCreatedAt: Date
   articleId: string
@@ -651,6 +715,14 @@ const postComparisonProjectExport = (
     new Request('http://localhost/api/comparison-projects/comparison-project-1/export', {
       body: JSON.stringify(body),
       headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+}
+
+const postComparisonProjectConflictResolutionExport = (app: {handle: (request: Request) => Promise<Response>}) => {
+  return app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolutions/export', {
       method: 'POST',
     }),
   )
@@ -1124,6 +1196,13 @@ const queryJson = async (
     getMockDatabaseState().lastConflictResolutionInsertStatement = statement
 
     return [{articleId: statement.includes("'article-2'") ? 'article-2' : 'article-1'}]
+  }
+
+  if (
+    statement.includes('FROM app.comparison_project_conflict_resolution cr')
+    && statement.includes('LEFT JOIN app.article_identifier ai')
+  ) {
+    return getMockConflictResolutionExportRows(statement, getMockDatabaseState())
   }
 
   if (
@@ -4893,6 +4972,140 @@ test('comparison project export streams ordered csv rows with article context an
       )
     }),
   ).toBe(false)
+})
+
+test('comparison project conflict resolution export returns saved resolutions as compact json', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'article-1',
+        arxivId: '2401.12345',
+        biorxivId: '10.1101/2024.01.01.123456',
+        doi: '10.1000/export-primary',
+        externalArticleId: 'external-1',
+        id: 'resolution-1',
+        medrxivId: '10.1101/2024.02.02.654321',
+        promptId: null,
+        pubmedId: '12345',
+        title: 'Export Article 1',
+        url: 'https://example.test/article-1',
+      },
+      {
+        answerValue: 'maybe',
+        articleId: 'article-2',
+        externalArticleId: 'external-2',
+        id: 'resolution-2',
+        promptId: null,
+        title: 'Export Article 2',
+      },
+    ],
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionExport(app)
+  const artifact = (await response.json()) as {
+    exportedAt: string
+    format: string
+    rows: Array<{
+      arxivId?: string | null
+      biorxivId?: string | null
+      doi?: string | null
+      externalArticleId: string | null
+      identifiers: Array<{isPrimary: boolean; kind: string; normalizedValue: string; source: string}>
+      medrxivId?: string | null
+      pubmedId?: string | null
+      resolution: {label: string; mode: string; value: string}
+      sourceArticleRowId: string
+      sourceResolutionId: string
+      title: string | null
+      url?: string | null
+    }>
+    source: {comparisonProjectId: string; comparisonProjectName: string}
+    version: number
+  }
+  const state = getMockDatabaseState()
+  const exportStatement =
+    state.queryStatements.find((statement) => {
+      return statement.includes('LEFT JOIN app.article_identifier ai')
+    }) ?? ''
+
+  expect(response.status).toBe(200)
+  expect(response.headers.get('Content-Type') ?? '').toContain('application/json')
+  expect(response.headers.get('Content-Disposition') ?? '').toContain('Rollback_test_project_conflict_resolutions_')
+  expect(artifact.format).toBe('forska.comparisonProject.conflictResolution.transfer')
+  expect(artifact.version).toBe(1)
+  expect(typeof artifact.exportedAt).toBe('string')
+  expect(artifact.source).toMatchObject({
+    comparisonProjectId: 'comparison-project-1',
+    comparisonProjectName: 'Rollback test project',
+  })
+  expect(artifact.rows).toEqual([
+    {
+      sourceResolutionId: 'resolution-1',
+      sourceArticleRowId: 'article-1',
+      externalArticleId: 'external-1',
+      title: 'Export Article 1',
+      doi: '10.1000/export-primary',
+      pubmedId: '12345',
+      arxivId: '2401.12345',
+      biorxivId: '10.1101/2024.01.01.123456',
+      medrxivId: '10.1101/2024.02.02.654321',
+      url: 'https://example.test/article-1',
+      identifiers: [
+        {
+          sourceIdentifierId: 'identifier-article-1-doi',
+          kind: 'doi',
+          normalizedValue: '10.1000/export-primary',
+          source: 'doi',
+          isPrimary: true,
+        },
+        {
+          sourceIdentifierId: 'identifier-article-1-pmid',
+          kind: 'pmid',
+          normalizedValue: '12345',
+          source: 'pubmed_id',
+          isPrimary: false,
+        },
+      ],
+      resolution: {mode: 'summary', value: 'yes', label: 'yes'},
+    },
+    {
+      sourceResolutionId: 'resolution-2',
+      sourceArticleRowId: 'article-2',
+      externalArticleId: 'external-2',
+      title: 'Export Article 2',
+      doi: null,
+      pubmedId: null,
+      arxivId: null,
+      biorxivId: null,
+      medrxivId: null,
+      url: null,
+      identifiers: [],
+      resolution: {mode: 'summary', value: 'maybe', label: 'maybe'},
+    },
+  ])
+  expect(exportStatement).toContain('FROM app.comparison_project_conflict_resolution cr')
+  expect(exportStatement).toContain('INNER JOIN app.article a ON a.id = cr.article_id')
+  expect(exportStatement).toContain('LEFT JOIN app.article_identifier ai ON ai.article_id = a.id')
+  expect(exportStatement).not.toContain('LIMIT')
+  expect(exportStatement).not.toContain('row_filter')
+  expect(exportStatement).not.toContain('difference_filter')
 })
 
 test('summary comparison project export streams synthetic summary csv columns', async () => {
