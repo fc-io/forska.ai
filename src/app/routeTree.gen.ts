@@ -26,6 +26,7 @@ import { Route as ArticlesIndexRouteImport } from './routes/+articles/+index'
 import { Route as ProjectsIdHumanAssessmentRouteImport } from './routes/+projects/+$id/+humanAssessment'
 import { Route as ProjectsIdExportRouteImport } from './routes/+projects/+$id/+export'
 import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edit'
+import { Route as CompareJudgmentsIdImportResolutionsRouteImport } from './routes/+compare-judgments/+$id/+import-resolutions'
 import { Route as CompareJudgmentsIdExportRouteImport } from './routes/+compare-judgments/+$id/+export'
 import { Route as CompareJudgmentsIdEditRouteImport } from './routes/+compare-judgments/+$id/+edit'
 import { Route as ArticlesIdFulltextRouteImport } from './routes/+articles/+$id/+fulltext'
@@ -160,6 +161,12 @@ const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
   path: '/projects/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CompareJudgmentsIdImportResolutionsRoute =
+  CompareJudgmentsIdImportResolutionsRouteImport.update({
+    id: '/compare-judgments/$id/import-resolutions',
+    path: '/compare-judgments/$id/import-resolutions',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const CompareJudgmentsIdExportRoute =
   CompareJudgmentsIdExportRouteImport.update({
     id: '/compare-judgments/$id/export',
@@ -452,6 +459,7 @@ export interface FileRoutesByFullPath {
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
   '/compare-judgments/$id/export': typeof CompareJudgmentsIdExportRoute
+  '/compare-judgments/$id/import-resolutions': typeof CompareJudgmentsIdImportResolutionsRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
@@ -516,6 +524,7 @@ export interface FileRoutesByTo {
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
   '/compare-judgments/$id/export': typeof CompareJudgmentsIdExportRoute
+  '/compare-judgments/$id/import-resolutions': typeof CompareJudgmentsIdImportResolutionsRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
@@ -581,6 +590,7 @@ export interface FileRoutesById {
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
   '/compare-judgments/$id/export': typeof CompareJudgmentsIdExportRoute
+  '/compare-judgments/$id/import-resolutions': typeof CompareJudgmentsIdImportResolutionsRoute
   '/projects/$id/edit': typeof ProjectsIdEditRoute
   '/projects/$id/export': typeof ProjectsIdExportRoute
   '/projects/$id/humanAssessment': typeof ProjectsIdHumanAssessmentRoute
@@ -647,6 +657,7 @@ export interface FileRouteTypes {
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
     | '/compare-judgments/$id/export'
+    | '/compare-judgments/$id/import-resolutions'
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
@@ -711,6 +722,7 @@ export interface FileRouteTypes {
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
     | '/compare-judgments/$id/export'
+    | '/compare-judgments/$id/import-resolutions'
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
@@ -775,6 +787,7 @@ export interface FileRouteTypes {
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
     | '/compare-judgments/$id/export'
+    | '/compare-judgments/$id/import-resolutions'
     | '/projects/$id/edit'
     | '/projects/$id/export'
     | '/projects/$id/humanAssessment'
@@ -840,6 +853,7 @@ export interface RootRouteChildren {
   ArticlesIdFulltextRoute: typeof ArticlesIdFulltextRoute
   CompareJudgmentsIdEditRoute: typeof CompareJudgmentsIdEditRoute
   CompareJudgmentsIdExportRoute: typeof CompareJudgmentsIdExportRoute
+  CompareJudgmentsIdImportResolutionsRoute: typeof CompareJudgmentsIdImportResolutionsRoute
   ProjectsIdEditRoute: typeof ProjectsIdEditRoute
   ProjectsIdExportRoute: typeof ProjectsIdExportRoute
   ProjectsIdHumanAssessmentRoute: typeof ProjectsIdHumanAssessmentRoute
@@ -981,6 +995,13 @@ declare module '@tanstack/solid-router' {
       path: '/projects/$id/edit'
       fullPath: '/projects/$id/edit'
       preLoaderRoute: typeof ProjectsIdEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/compare-judgments/$id/import-resolutions': {
+      id: '/compare-judgments/$id/import-resolutions'
+      path: '/compare-judgments/$id/import-resolutions'
+      fullPath: '/compare-judgments/$id/import-resolutions'
+      preLoaderRoute: typeof CompareJudgmentsIdImportResolutionsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/compare-judgments/$id/export': {
@@ -1347,6 +1368,8 @@ const rootRouteChildren: RootRouteChildren = {
   ArticlesIdFulltextRoute: ArticlesIdFulltextRoute,
   CompareJudgmentsIdEditRoute: CompareJudgmentsIdEditRoute,
   CompareJudgmentsIdExportRoute: CompareJudgmentsIdExportRoute,
+  CompareJudgmentsIdImportResolutionsRoute:
+    CompareJudgmentsIdImportResolutionsRoute,
   ProjectsIdEditRoute: ProjectsIdEditRoute,
   ProjectsIdExportRoute: ProjectsIdExportRoute,
   ProjectsIdHumanAssessmentRoute: ProjectsIdHumanAssessmentRoute,
