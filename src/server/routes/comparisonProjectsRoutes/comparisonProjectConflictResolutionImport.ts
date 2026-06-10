@@ -1,5 +1,13 @@
 import type {HumanJudgmentMode} from '../../../db/schemaTypes.ts'
+import {
+  type ArticleStrongIdentifierKind,
+  normalizeSourceRowIdentifiers,
+} from '../../../utils/articleIdentifierNormalization.ts'
 import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import type {
+  ComparisonProjectConflictResolutionTransferArtifactV1,
+  ComparisonProjectConflictResolutionTransferRowV1,
+} from './comparisonProjectConflictResolutionFileTransfer.ts'
 
 export type ComparisonProjectConflictResolutionImportSource = {
   id: string
@@ -19,12 +27,22 @@ export type ComparisonProjectConflictResolutionImportSourceQueryRow = {
   resolutionCount: unknown
 }
 
-export type ComparisonProjectConflictResolutionImportMatchKind = 'doi' | 'id-title'
+export type ComparisonProjectConflictResolutionImportMatchKind = ArticleStrongIdentifierKind | 'id-title'
+
+export type ComparisonProjectConflictResolutionImportIdentifier = {
+  kind: ArticleStrongIdentifierKind
+  normalizedValue: string
+}
 
 export type ComparisonProjectConflictResolutionImportSourceRow = {
+  arxivId?: string | null
   doi?: string | null
   doiKeys?: readonly (string | null | undefined)[] | null
   externalArticleId?: string | null
+  identifierKeys?: readonly (string | null | undefined)[] | null
+  identifiers?: readonly ComparisonProjectConflictResolutionImportIdentifier[] | null
+  pubmedId?: string | null
+  resolutionMode?: HumanJudgmentMode | null
   resolutionValue: string
   sourceArticleId: string
   sourceArticleTitle?: string | null
@@ -38,10 +56,16 @@ export type ComparisonProjectConflictResolutionImportSourceRow = {
 
 export type ComparisonProjectConflictResolutionImportTargetArticle = {
   articleId: string
+  arxivId?: string | null
   doi?: string | null
   doiKeys?: readonly (string | null | undefined)[] | null
   externalArticleId?: string | null
+  hasExistingResolution?: boolean
+  identifierKeys?: readonly (string | null | undefined)[] | null
+  identifiers?: readonly ComparisonProjectConflictResolutionImportIdentifier[] | null
+  legacyDoi?: string | null
   isConflictResolutionEligible: boolean
+  pubmedId?: string | null
   title?: string | null
 }
 
@@ -64,11 +88,14 @@ export type ComparisonProjectConflictResolutionImportCandidate = {
 
 export type ComparisonProjectConflictResolutionImportSkipReason =
   | 'ambiguous-target-match'
+  | 'conflicting-identifiers'
   | 'conflicting-resolution-values'
+  | 'existing-target-resolution'
   | 'invalid-target-resolution-value'
   | 'no-usable-key'
   | 'no-target-match'
   | 'not-conflicting'
+  | 'unsupported-mode'
 
 export type ComparisonProjectConflictResolutionImportSkippedRow = {
   reason: ComparisonProjectConflictResolutionImportSkipReason
@@ -77,11 +104,14 @@ export type ComparisonProjectConflictResolutionImportSkippedRow = {
 
 export type ComparisonProjectConflictResolutionImportSkipCounts = {
   ambiguousTarget: number
+  conflictingIdentifiers: number
   conflicting: number
+  existingTargetResolution: number
   invalidValue: number
   noTargetMatch: number
   noUsableKey: number
   notConflicting: number
+  unsupportedMode: number
 }
 
 export type ComparisonProjectConflictResolutionImportErrorCode =
@@ -103,6 +133,7 @@ export type ComparisonProjectConflictResolutionImportError = {
 
 export type ComparisonProjectConflictResolutionImportWarningCode =
   | 'ambiguous-target-match'
+  | 'conflicting-identifiers'
   | 'conflicting-resolution-values'
   | 'invalid-target-resolution-value'
 
@@ -122,6 +153,7 @@ export type ComparisonProjectConflictResolutionImportWarningTargetArticle = {
   articleTitle: string | null
   doiKeys: string[]
   externalArticleId: string | null
+  identifierKeys: string[]
 }
 
 export type ComparisonProjectConflictResolutionImportWarning = {
@@ -159,24 +191,32 @@ export type ComparisonProjectConflictResolutionImportSummary = {
   imported: number
   skipped: number
   skippedAmbiguousTarget: number
+  skippedConflictingIdentifiers: number
   skippedConflicting: number
+  skippedExistingTargetResolution: number
   skippedInvalidValue: number
   skippedNoTargetMatch: number
   skippedNoUsableKey: number
   skippedNotConflicting: number
+  skippedUnsupportedMode: number
   warnings: ComparisonProjectConflictResolutionImportWarning[]
 }
 
-type NormalizedSourceRow = Omit<ComparisonProjectConflictResolutionImportSourceRow, 'doiKeys'> & {
+type NormalizedSourceRow = Omit<
+  ComparisonProjectConflictResolutionImportSourceRow,
+  'doiKeys' | 'identifierKeys' | 'resolutionMode'
+> & {
   doiKeys: string[]
+  identifierKeys: NormalizedIdentifierKey[]
   idTitleKey: string | null
+  resolutionMode: HumanJudgmentMode
   resolutionValue: string
 }
 
-type NormalizedTargetArticle = ComparisonProjectConflictResolutionImportTargetArticle & {
-  doiKeys: string[]
-  idTitleKey: string | null
-}
+type NormalizedTargetArticle = Omit<
+  ComparisonProjectConflictResolutionImportTargetArticle,
+  'doiKeys' | 'identifierKeys'
+> & {doiKeys: string[]; identifierKeys: NormalizedIdentifierKey[]; idTitleKey: string | null}
 
 type ImportCandidateRow = {
   matchKey: string
@@ -188,7 +228,12 @@ type ImportCandidateRow = {
   targetArticleId: string
 }
 
-type ImportTargetArticleMatch = {matchKey: string; targetArticle: NormalizedTargetArticle}
+type ImportTargetArticleMatch = {
+  identifierKey?: NormalizedIdentifierKey
+  matchKey: string
+  matchKind: ComparisonProjectConflictResolutionImportMatchKind
+  targetArticle: NormalizedTargetArticle
+}
 
 type ImportCandidateRowResult = {
   candidate: ImportCandidateRow | null
@@ -198,6 +243,19 @@ type ImportCandidateRowResult = {
 
 const doiPrefixPattern = /^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)/i
 const idTitleKeySeparator = '\u001F'
+const identifierKeySeparator = '\u001F'
+const strongIdentifierKinds = ['doi', 'pmid', 'arxiv'] as const satisfies ArticleStrongIdentifierKind[]
+const sourceIdentifierTierOrder = ['doi', 'canonical', 'legacy'] as const
+
+type SourceIdentifierTier = (typeof sourceIdentifierTierOrder)[number]
+
+type NormalizedIdentifierKey = {
+  key: string
+  kind: ArticleStrongIdentifierKind
+  matchKey: string
+  normalizedValue: string
+  tier?: SourceIdentifierTier
+}
 
 const getInClause = (values: string[]) => {
   return getQuotedStringList(values).join(', ')
@@ -219,6 +277,65 @@ const getComparisonProjectConflictResolutionImportIdTitleKeySql = (params: {
   titleColumn: string
 }) => {
   return `LOWER(TRIM(COALESCE(${params.externalArticleIdColumn}, ''))) || ${getSqlLiteral(idTitleKeySeparator)} || ${getComparisonProjectConflictResolutionImportTitleKeySql(params.titleColumn)}`
+}
+
+const getComparisonProjectConflictResolutionImportDoiIdentifierValueSql = (column: string) => {
+  return `regexp_replace(LOWER(TRIM(COALESCE(${column}, ''))), '^(https?://(dx\\.)?doi\\.org/|doi:\\s*)', '')`
+}
+
+const getComparisonProjectConflictResolutionImportPmidIdentifierValueSql = (column: string) => {
+  return `regexp_replace(regexp_replace(LOWER(TRIM(COALESCE(${column}, ''))), '^(pmid:|pubmed:)', ''), '^0+', '')`
+}
+
+const getComparisonProjectConflictResolutionImportArxivIdentifierValueSql = (column: string) => {
+  return `regexp_replace(regexp_replace(regexp_replace(LOWER(TRIM(COALESCE(${column}, ''))), '^(https?://(www\\.)?arxiv\\.org/(abs|pdf)/|oai:arxiv\\.org:|arxiv:)', ''), '\\.pdf$', ''), 'v[0-9]+$', '')`
+}
+
+const getComparisonProjectConflictResolutionImportTargetIdentifierCtesSql = (params: {
+  articleIdentifierTable: string
+  articleTable: string
+}) => {
+  const legacyDoiSql = getComparisonProjectConflictResolutionImportDoiIdentifierValueSql('legacy_article.doi')
+  const legacyPmidSql = getComparisonProjectConflictResolutionImportPmidIdentifierValueSql('legacy_article.pubmed_id')
+  const legacyArxivSql = getComparisonProjectConflictResolutionImportArxivIdentifierValueSql('legacy_article.arxiv_id')
+
+  return `
+    canonical_identifier AS (
+      SELECT
+        article_id AS articleId,
+        kind,
+        normalized_value AS normalizedValue
+      FROM ${params.articleIdentifierTable}
+      WHERE kind IN ('doi', 'pmid', 'arxiv')
+    ),
+    legacy_identifier AS (
+      SELECT
+        legacy_article.id AS articleId,
+        'doi' AS kind,
+        ${legacyDoiSql} AS normalizedValue
+      FROM ${params.articleTable} legacy_article
+      WHERE ${legacyDoiSql} <> ''
+      UNION ALL
+      SELECT
+        legacy_article.id AS articleId,
+        'pmid' AS kind,
+        ${legacyPmidSql} AS normalizedValue
+      FROM ${params.articleTable} legacy_article
+      WHERE ${legacyPmidSql} <> ''
+      UNION ALL
+      SELECT
+        legacy_article.id AS articleId,
+        'arxiv' AS kind,
+        ${legacyArxivSql} AS normalizedValue
+      FROM ${params.articleTable} legacy_article
+      WHERE ${legacyArxivSql} <> ''
+    ),
+    target_identifier AS (
+      SELECT articleId, kind, normalizedValue FROM canonical_identifier
+      UNION
+      SELECT articleId, kind, normalizedValue FROM legacy_identifier
+    )
+  `
 }
 
 export const getComparisonProjectConflictResolutionImportSourcesSql = (params: {
@@ -274,6 +391,14 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
       FROM ${params.articleIdentifierTable}
       WHERE kind = 'doi'
       GROUP BY article_id
+    ),
+    strong_identifier AS (
+      SELECT
+        article_id AS articleId,
+        LIST(DISTINCT kind || ${getSqlLiteral(identifierKeySeparator)} || normalized_value ORDER BY kind || ${getSqlLiteral(identifierKeySeparator)} || normalized_value) AS identifierKeys
+      FROM ${params.articleIdentifierTable}
+      WHERE kind IN ('doi', 'pmid', 'arxiv')
+      GROUP BY article_id
     )
     SELECT
       source_resolution.sourceComparisonProjectId AS sourceComparisonProjectId,
@@ -284,7 +409,12 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
       source_article.article_id AS sourceExternalArticleId,
       source_article.article_title AS sourceArticleTitle,
       source_resolution.resolutionValue AS resolutionValue,
+      'summary' AS resolutionMode,
       doi_identifier.doiKeys AS doiKeys,
+      strong_identifier.identifierKeys AS identifierKeys,
+      source_article.doi AS doi,
+      source_article.pubmed_id AS pubmedId,
+      source_article.arxiv_id AS arxivId,
       source_article.article_id AS externalArticleId,
       source_article.article_title AS title
     FROM source_resolution
@@ -292,6 +422,7 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
       ON source_comparison_project.id = source_resolution.sourceComparisonProjectId
     INNER JOIN ${params.articleTable} source_article ON source_article.id = source_resolution.sourceArticleId
     LEFT JOIN doi_identifier ON doi_identifier.articleId = source_article.id
+    LEFT JOIN strong_identifier ON strong_identifier.articleId = source_article.id
     ORDER BY source_resolution.sourceRowId ASC
   `
 }
@@ -321,6 +452,45 @@ export const getComparisonProjectConflictResolutionImportDoiTargetArticlesSql = 
   `
 }
 
+export const getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql = (params: {
+  articleIdentifierTable: string
+  articleScopeConditions: readonly string[]
+  articleTable: string
+  identifierKeys: string[]
+}) => {
+  const identifierKeySql = `strong_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || strong_identifier.normalizedValue`
+  const matchedIdentifierKeySql = `target_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || target_identifier.normalizedValue`
+
+  return `
+    WITH ${getComparisonProjectConflictResolutionImportTargetIdentifierCtesSql({
+      articleIdentifierTable: params.articleIdentifierTable,
+      articleTable: params.articleTable,
+    })},
+    matched_article AS (
+      SELECT DISTINCT target_identifier.articleId AS articleId
+      FROM target_identifier
+      WHERE target_identifier.kind IN ('doi', 'pmid', 'arxiv')
+        AND ${matchedIdentifierKeySql} IN (${params.identifierKeys.length > 0 ? getInClause(params.identifierKeys) : 'NULL'})
+    )
+    SELECT
+      a.id AS articleId,
+      MIN(CASE WHEN strong_identifier.kind = 'doi' THEN strong_identifier.normalizedValue ELSE NULL END) AS doi,
+      LIST(DISTINCT ${identifierKeySql} ORDER BY ${identifierKeySql}) FILTER (WHERE strong_identifier.kind IS NOT NULL) AS identifierKeys,
+      a.doi AS legacyDoi,
+      a.pubmed_id AS pubmedId,
+      a.arxiv_id AS arxivId,
+      a.article_id AS externalArticleId,
+      a.article_title AS title
+    FROM matched_article
+    INNER JOIN ${params.articleTable} a ON a.id = matched_article.articleId
+    LEFT JOIN target_identifier strong_identifier
+      ON strong_identifier.articleId = a.id
+    ${getWhereClause(params.articleScopeConditions)}
+    GROUP BY a.id, a.doi, a.pubmed_id, a.arxiv_id, a.article_id, a.article_title
+    ORDER BY a.id ASC
+  `
+}
+
 export const getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql = (params: {
   articleIdentifierTable: string
   articleScopeConditions: readonly string[]
@@ -340,18 +510,28 @@ export const getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSq
       FROM ${params.articleIdentifierTable}
       WHERE kind = 'doi'
       GROUP BY article_id
-    )
+    ),
+    ${getComparisonProjectConflictResolutionImportTargetIdentifierCtesSql({
+      articleIdentifierTable: params.articleIdentifierTable,
+      articleTable: params.articleTable,
+    })}
     SELECT
       a.id AS articleId,
       doi_identifier.doi AS doi,
+      LIST(DISTINCT strong_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || strong_identifier.normalizedValue ORDER BY strong_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || strong_identifier.normalizedValue) FILTER (WHERE strong_identifier.kind IS NOT NULL) AS identifierKeys,
+      a.doi AS legacyDoi,
+      a.pubmed_id AS pubmedId,
+      a.arxiv_id AS arxivId,
       a.article_id AS externalArticleId,
       a.article_title AS title
     FROM ${params.articleTable} a
     LEFT JOIN doi_identifier ON doi_identifier.articleId = a.id
+    LEFT JOIN target_identifier strong_identifier ON strong_identifier.articleId = a.id
     ${getWhereClause([
       ...params.articleScopeConditions,
       params.idTitleKeys.length > 0 ? `${idTitleKeySql} IN (${getInClause(params.idTitleKeys)})` : 'FALSE',
     ])}
+    GROUP BY a.id, doi_identifier.doi, a.doi, a.pubmed_id, a.arxiv_id, a.article_id, a.article_title
     ORDER BY a.id ASC
   `
 }
@@ -369,6 +549,44 @@ export const getComparisonProjectConflictResolutionImportSourceValue = (
   }
 }
 
+export const getComparisonProjectConflictResolutionImportSourceRowsFromTransferRows = (params: {
+  rows: readonly ComparisonProjectConflictResolutionTransferRowV1[]
+  sourceComparisonProjectId: string
+  sourceComparisonProjectName: string
+}): ComparisonProjectConflictResolutionImportSourceRow[] => {
+  return params.rows.map((row) => {
+    return {
+      arxivId: row.arxivId ?? null,
+      doi: row.doi ?? null,
+      externalArticleId: row.externalArticleId,
+      identifiers: row.identifiers.map((identifier) => {
+        return {kind: identifier.kind, normalizedValue: identifier.normalizedValue}
+      }),
+      pubmedId: row.pubmedId ?? null,
+      resolutionMode: row.resolution.mode,
+      resolutionValue: row.resolution.value,
+      sourceArticleId: row.sourceArticleRowId,
+      sourceArticleTitle: row.title,
+      sourceComparisonProjectId: params.sourceComparisonProjectId,
+      sourceComparisonProjectName: params.sourceComparisonProjectName,
+      sourceExternalArticleId: row.externalArticleId,
+      sourceResolutionId: row.sourceResolutionId,
+      sourceRowId: row.sourceResolutionId,
+      title: row.title,
+    }
+  })
+}
+
+export const getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact = (
+  artifact: ComparisonProjectConflictResolutionTransferArtifactV1,
+): ComparisonProjectConflictResolutionImportSourceRow[] => {
+  return getComparisonProjectConflictResolutionImportSourceRowsFromTransferRows({
+    rows: artifact.rows,
+    sourceComparisonProjectId: artifact.source.comparisonProjectId,
+    sourceComparisonProjectName: artifact.source.comparisonProjectName,
+  })
+}
+
 const getTrimmedText = (value: string | null | undefined) => {
   const trimmedValue = value?.trim() ?? ''
   return trimmedValue.length > 0 ? trimmedValue : null
@@ -378,6 +596,148 @@ const getNormalizedResolutionValue = (value: string) => {
   return value.trim()
 }
 
+const getStrongIdentifierKind = (value: string | null | undefined) => {
+  const normalizedValue = getTrimmedText(value)?.toLowerCase()
+
+  return normalizedValue && strongIdentifierKinds.includes(normalizedValue as ArticleStrongIdentifierKind)
+    ? (normalizedValue as ArticleStrongIdentifierKind)
+    : null
+}
+
+const getIdentifierKeyValue = (identifier: ComparisonProjectConflictResolutionImportIdentifier) => {
+  return `${identifier.kind}${identifierKeySeparator}${identifier.normalizedValue}`
+}
+
+const getIdentifierMatchKey = (identifier: ComparisonProjectConflictResolutionImportIdentifier) => {
+  return identifier.kind === 'doi' ? identifier.normalizedValue : `${identifier.kind}:${identifier.normalizedValue}`
+}
+
+const getIdentifierKeyParts = (
+  value: string | null | undefined,
+): ComparisonProjectConflictResolutionImportIdentifier | null => {
+  const trimmedValue = getTrimmedText(value)
+  const [kindValue, normalizedValue, ...extraValues] = trimmedValue?.split(identifierKeySeparator) ?? []
+  const kind = getStrongIdentifierKind(kindValue)
+  const normalizedIdentifierValue = getTrimmedText(normalizedValue)
+
+  return kind && normalizedIdentifierValue && extraValues.length === 0
+    ? {kind, normalizedValue: normalizedIdentifierValue}
+    : null
+}
+
+const getNormalizedIdentifierKey = (params: {
+  kind: ArticleStrongIdentifierKind
+  source: string
+  tier?: SourceIdentifierTier
+  value: string | null | undefined
+}): NormalizedIdentifierKey | null => {
+  const normalizedIdentifiers = normalizeSourceRowIdentifiers([
+    {inputKind: params.kind, source: params.source, value: params.value},
+  ]).strongIdentifiers
+  const identifier = normalizedIdentifiers[0]
+
+  return identifier
+    ? {
+        key: getIdentifierKeyValue(identifier),
+        kind: identifier.kind,
+        matchKey: getIdentifierMatchKey(identifier),
+        normalizedValue: identifier.normalizedValue,
+        ...(params.tier ? {tier: params.tier} : {}),
+      }
+    : null
+}
+
+const getNormalizedIdentifierKeyFromParts = (params: {
+  identifier: ComparisonProjectConflictResolutionImportIdentifier
+  source: string
+  tier?: SourceIdentifierTier
+}) => {
+  return getNormalizedIdentifierKey({
+    kind: params.identifier.kind,
+    source: params.source,
+    tier: params.tier,
+    value: params.identifier.normalizedValue,
+  })
+}
+
+const getUniqueNormalizedIdentifierKeys = (identifierKeys: readonly NormalizedIdentifierKey[]) => {
+  return Array.from(
+    identifierKeys
+      .reduce<Map<string, NormalizedIdentifierKey>>((identifierMap, identifier) => {
+        return identifierMap.has(identifier.key) ? identifierMap : identifierMap.set(identifier.key, identifier)
+      }, new Map<string, NormalizedIdentifierKey>())
+      .values(),
+  )
+}
+
+const getCanonicalIdentifierTier = (kind: ArticleStrongIdentifierKind): SourceIdentifierTier => {
+  return kind === 'doi' ? 'doi' : 'canonical'
+}
+
+const getIdentifierKeysFromCanonicalPairs = (
+  identifiers: readonly ComparisonProjectConflictResolutionImportIdentifier[] | null | undefined,
+) => {
+  return (identifiers ?? []).flatMap((identifier) => {
+    const tier = getCanonicalIdentifierTier(identifier.kind)
+    const identifierKey = getNormalizedIdentifierKeyFromParts({identifier, source: 'article_identifier', tier})
+
+    return identifierKey ? [identifierKey] : []
+  })
+}
+
+const getIdentifierKeysFromCanonicalKeyValues = (
+  identifierKeys: readonly (string | null | undefined)[] | null | undefined,
+) => {
+  return (identifierKeys ?? []).flatMap((value) => {
+    const identifier = getIdentifierKeyParts(value)
+    const tier = identifier ? getCanonicalIdentifierTier(identifier.kind) : null
+    const identifierKey =
+      identifier && tier ? getNormalizedIdentifierKeyFromParts({identifier, source: 'article_identifier', tier}) : null
+
+    return identifierKey ? [identifierKey] : []
+  })
+}
+
+const getIdentifierKeysFromDoiValues = (values: readonly (string | null | undefined)[]) => {
+  return values.flatMap((value) => {
+    const identifierKey = getNormalizedIdentifierKey({kind: 'doi', source: 'doi', tier: 'doi', value})
+
+    return identifierKey ? [identifierKey] : []
+  })
+}
+
+const getIdentifierKeysFromLegacyFields = (params: {
+  arxivId?: string | null
+  doi?: string | null
+  legacyDoi?: string | null
+  pubmedId?: string | null
+}) => {
+  return [
+    ...getIdentifierKeysFromDoiValues([params.doi, params.legacyDoi]),
+    getNormalizedIdentifierKey({kind: 'pmid', source: 'pubmed_id', tier: 'legacy', value: params.pubmedId}),
+    getNormalizedIdentifierKey({kind: 'arxiv', source: 'arxiv_id', tier: 'legacy', value: params.arxivId}),
+  ].filter((identifierKey): identifierKey is NormalizedIdentifierKey => {
+    return identifierKey !== null
+  })
+}
+
+const getNormalizedIdentifierKeys = (row: {
+  arxivId?: string | null
+  doi?: string | null
+  doiKeys?: readonly (string | null | undefined)[] | null
+  identifierKeys?: readonly (string | null | undefined)[] | null
+  identifiers?: readonly ComparisonProjectConflictResolutionImportIdentifier[] | null
+  legacyDoi?: string | null
+  pubmedId?: string | null
+}) => {
+  return getUniqueNormalizedIdentifierKeys([
+    ...getIdentifierKeysFromDoiValues(row.doiKeys ?? []),
+    ...getIdentifierKeysFromCanonicalPairs(row.identifiers),
+    ...getIdentifierKeysFromCanonicalKeyValues(row.identifierKeys),
+    ...getIdentifierKeysFromLegacyFields(row),
+  ])
+}
+
 export const normalizeComparisonProjectConflictResolutionImportDoi = (value: string | null | undefined) => {
   const trimmedValue = getTrimmedText(value)
   const normalizedValue = trimmedValue?.toLowerCase().replace(doiPrefixPattern, '').trim() ?? ''
@@ -385,20 +745,30 @@ export const normalizeComparisonProjectConflictResolutionImportDoi = (value: str
   return normalizedValue.length > 0 ? normalizedValue : null
 }
 
-export const getComparisonProjectConflictResolutionImportDoiKeys = (
-  row: Pick<ComparisonProjectConflictResolutionImportSourceRow, 'doi' | 'doiKeys'>,
+export const getComparisonProjectConflictResolutionImportDoiKeys = (row: {
+  arxivId?: string | null
+  doi?: string | null
+  doiKeys?: readonly (string | null | undefined)[] | null
+  identifierKeys?: readonly (string | null | undefined)[] | null
+  identifiers?: readonly ComparisonProjectConflictResolutionImportIdentifier[] | null
+  legacyDoi?: string | null
+  pubmedId?: string | null
+}) => {
+  return getNormalizedIdentifierKeys(row)
+    .filter((identifierKey) => {
+      return identifierKey.kind === 'doi'
+    })
+    .map((identifierKey) => {
+      return identifierKey.normalizedValue
+    })
+}
+
+export const getComparisonProjectConflictResolutionImportIdentifierKeys = (
+  row: Parameters<typeof getComparisonProjectConflictResolutionImportDoiKeys>[0],
 ) => {
-  return Array.from(
-    new Set(
-      [...(row.doiKeys ?? []), row.doi]
-        .map((value) => {
-          return normalizeComparisonProjectConflictResolutionImportDoi(value)
-        })
-        .filter((value): value is string => {
-          return value !== null
-        }),
-    ),
-  )
+  return getNormalizedIdentifierKeys(row).map((identifierKey) => {
+    return identifierKey.key
+  })
 }
 
 const mergeComparisonProjectConflictResolutionImportTargetArticleRow = (
@@ -412,7 +782,18 @@ const mergeComparisonProjectConflictResolutionImportTargetArticleRow = (
       ...getComparisonProjectConflictResolutionImportDoiKeys(currentRow),
       ...getComparisonProjectConflictResolutionImportDoiKeys(nextRow),
     ]),
+    identifierKeys: getUniqueStringValues([
+      ...getNormalizedIdentifierKeys(currentRow).map((identifierKey) => {
+        return identifierKey.key
+      }),
+      ...getNormalizedIdentifierKeys(nextRow).map((identifierKey) => {
+        return identifierKey.key
+      }),
+    ]),
     externalArticleId: currentRow.externalArticleId ?? nextRow.externalArticleId ?? null,
+    legacyDoi: currentRow.legacyDoi ?? nextRow.legacyDoi ?? null,
+    pubmedId: currentRow.pubmedId ?? nextRow.pubmedId ?? null,
+    arxivId: currentRow.arxivId ?? nextRow.arxivId ?? null,
     title: currentRow.title ?? nextRow.title ?? null,
   }
 }
@@ -468,7 +849,9 @@ const getNormalizedSourceRows = (
     return {
       ...row,
       doiKeys: getComparisonProjectConflictResolutionImportDoiKeys(row),
+      identifierKeys: getNormalizedIdentifierKeys(row),
       idTitleKey: getComparisonProjectConflictResolutionImportIdTitleKey(row),
+      resolutionMode: row.resolutionMode ?? 'summary',
       resolutionValue: getNormalizedResolutionValue(row.resolutionValue),
     }
   })
@@ -480,7 +863,12 @@ const getNormalizedTargetArticles = (
   return targetArticles.map((article) => {
     const doiKeys = getComparisonProjectConflictResolutionImportDoiKeys(article)
 
-    return {...article, doiKeys, idTitleKey: getComparisonProjectConflictResolutionImportIdTitleKey(article)}
+    return {
+      ...article,
+      doiKeys,
+      identifierKeys: getNormalizedIdentifierKeys(article),
+      idTitleKey: getComparisonProjectConflictResolutionImportIdTitleKey(article),
+    }
   })
 }
 
@@ -510,13 +898,13 @@ const getTargetArticleGroupsByKey = (
   }, new Map<string, NormalizedTargetArticle[]>())
 }
 
-const getTargetArticlesByDoiKey = (targetArticles: readonly NormalizedTargetArticle[]) => {
+const getTargetArticlesByIdentifierKey = (targetArticles: readonly NormalizedTargetArticle[]) => {
   return targetArticles.reduce<Map<string, NormalizedTargetArticle[]>>((articleMap, article) => {
-    return article.doiKeys.reduce<Map<string, NormalizedTargetArticle[]>>((doiMap, doiKey) => {
-      const currentArticles = doiMap.get(doiKey) ?? []
+    return article.identifierKeys.reduce<Map<string, NormalizedTargetArticle[]>>((identifierMap, identifierKey) => {
+      const currentArticles = identifierMap.get(identifierKey.key) ?? []
 
-      doiMap.set(doiKey, [...currentArticles, article])
-      return doiMap
+      identifierMap.set(identifierKey.key, [...currentArticles, article])
+      return identifierMap
     }, articleMap)
   }, new Map<string, NormalizedTargetArticle[]>())
 }
@@ -527,13 +915,13 @@ const getTargetArticlesByIdTitleKey = (targetArticles: readonly NormalizedTarget
   })
 }
 
-const getTargetArticlesForSourceDoiKeys = (
-  row: NormalizedSourceRow,
-  targetArticlesByDoiKey: Map<string, NormalizedTargetArticle[]>,
+const getTargetArticlesForSourceIdentifierKeys = (
+  identifierKeys: readonly NormalizedIdentifierKey[],
+  targetArticlesByIdentifierKey: Map<string, NormalizedTargetArticle[]>,
 ) => {
-  return row.doiKeys.flatMap((doiKey) => {
-    return (targetArticlesByDoiKey.get(doiKey) ?? []).map((targetArticle) => {
-      return {matchKey: doiKey, targetArticle}
+  return identifierKeys.flatMap((identifierKey) => {
+    return (targetArticlesByIdentifierKey.get(identifierKey.key) ?? []).map((targetArticle) => {
+      return {identifierKey, matchKey: identifierKey.matchKey, matchKind: identifierKey.kind, targetArticle}
     })
   })
 }
@@ -551,7 +939,10 @@ const getUniqueTargetArticleMatches = (matches: readonly ImportTargetArticleMatc
 }
 
 const getCanUseIdTitleFallbackTargetArticle = (row: NormalizedSourceRow, targetArticle: NormalizedTargetArticle) => {
-  return row.idTitleKey === targetArticle.idTitleKey && (row.doiKeys.length === 0 || targetArticle.doiKeys.length === 0)
+  return (
+    row.idTitleKey === targetArticle.idTitleKey
+    && (row.identifierKeys.length === 0 || targetArticle.identifierKeys.length === 0)
+  )
 }
 
 const getWarningSourceRow = (row: NormalizedSourceRow): ComparisonProjectConflictResolutionImportWarningSourceRow => {
@@ -575,6 +966,9 @@ const getWarningTargetArticle = (
     articleTitle: targetArticle.title ?? null,
     doiKeys: targetArticle.doiKeys,
     externalArticleId: targetArticle.externalArticleId ?? null,
+    identifierKeys: targetArticle.identifierKeys.map((identifierKey) => {
+      return identifierKey.matchKey
+    }),
   }
 }
 
@@ -593,6 +987,35 @@ const getAmbiguousTargetMatchWarning = (params: {
     message: `Source row ${params.sourceRow.sourceRowId} matched multiple eligible target articles: ${targetArticleIds.join(', ')}`,
     sourceRows: [getWarningSourceRow(params.sourceRow)],
     targetArticles: params.targetArticles.map(getWarningTargetArticle),
+  }
+}
+
+const getConflictingIdentifiersWarning = (params: {
+  matches: readonly ImportTargetArticleMatch[]
+  sourceRow: NormalizedSourceRow
+}): ComparisonProjectConflictResolutionImportWarning => {
+  const matchKeys = getUniqueStringValues(
+    params.matches.map((match) => {
+      return match.matchKey
+    }),
+  )
+  const matchKinds = params.matches.reduce<ComparisonProjectConflictResolutionImportMatchKind[]>(
+    (matchKinds, match) => {
+      return matchKinds.includes(match.matchKind) ? matchKinds : [...matchKinds, match.matchKind]
+    },
+    [],
+  )
+  const targetArticleIds = getTargetArticleIds(getTargetArticlesFromMatches(params.matches))
+
+  return {
+    code: 'conflicting-identifiers',
+    matchKey: matchKeys.join(', '),
+    matchKeys,
+    matchKind: matchKinds[0],
+    matchKinds,
+    message: `Source row ${params.sourceRow.sourceRowId} identifiers point to different target articles: ${targetArticleIds.join(', ')}`,
+    sourceRows: [getWarningSourceRow(params.sourceRow)],
+    targetArticles: getTargetArticlesFromMatches(params.matches).map(getWarningTargetArticle),
   }
 }
 
@@ -640,7 +1063,7 @@ const getInvalidTargetResolutionValueWarning = (
 
 const getTargetArticleMaps = (targetArticles: readonly NormalizedTargetArticle[]) => {
   return {
-    byDoiKey: getTargetArticlesByDoiKey(targetArticles),
+    byIdentifierKey: getTargetArticlesByIdentifierKey(targetArticles),
     byIdTitleKey: getTargetArticlesByIdTitleKey(targetArticles),
   }
 }
@@ -665,6 +1088,10 @@ const getAmbiguousMatchKey = (matches: readonly ImportTargetArticleMatch[]) => {
   ).join(', ')
 }
 
+const getAmbiguousMatchKind = (matches: readonly ImportTargetArticleMatch[]) => {
+  return matches[0]?.matchKind ?? 'id-title'
+}
+
 const getCandidateRow = (params: {
   matchKey: string
   matchKind: ComparisonProjectConflictResolutionImportMatchKind
@@ -682,7 +1109,7 @@ const getCandidateRow = (params: {
   }
 }
 
-const getDoiTieBreakerMatches = (row: NormalizedSourceRow, matches: readonly ImportTargetArticleMatch[]) => {
+const getIdentifierTieBreakerMatches = (row: NormalizedSourceRow, matches: readonly ImportTargetArticleMatch[]) => {
   return row.idTitleKey
     ? matches.filter((match) => {
         return match.targetArticle.idTitleKey === row.idTitleKey
@@ -690,15 +1117,44 @@ const getDoiTieBreakerMatches = (row: NormalizedSourceRow, matches: readonly Imp
     : []
 }
 
-const getDoiImportCandidateRow = (
+const getHasConflictingIdentifierMatches = (matches: readonly ImportTargetArticleMatch[]) => {
+  const targetArticleIds = getTargetArticleIds(getTargetArticlesFromMatches(matches))
+  const matchKeys = getUniqueStringValues(
+    matches.map((match) => {
+      return match.matchKey
+    }),
+  )
+
+  return targetArticleIds.length > 1 && matchKeys.length > 1
+}
+
+const getExistingTargetResolutionResult = (
+  row: NormalizedSourceRow,
+  selectedMatch: ImportTargetArticleMatch,
+): ImportCandidateRowResult | null => {
+  return selectedMatch.targetArticle.hasExistingResolution
+    ? {candidate: null, skippedRow: getSkippedRow(row.sourceRowId, 'existing-target-resolution'), warnings: []}
+    : null
+}
+
+const getIdentifierKeysForTier = (row: NormalizedSourceRow, tier: SourceIdentifierTier) => {
+  return row.identifierKeys.filter((identifierKey) => {
+    return identifierKey.tier === tier
+  })
+}
+
+const getIdentifierImportCandidateRowForTier = (
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
+  tier: SourceIdentifierTier,
 ): ImportCandidateRowResult | null => {
+  const identifierKeys = getIdentifierKeysForTier(row, tier)
   const targetMatches = getUniqueTargetArticleMatches(
-    getTargetArticlesForSourceDoiKeys(row, targetArticleMaps.byDoiKey),
+    getTargetArticlesForSourceIdentifierKeys(identifierKeys, targetArticleMaps.byIdentifierKey),
   )
   const eligibleMatches = getEligibleTargetMatches(targetMatches)
-  const tieBreakerMatches = getDoiTieBreakerMatches(row, eligibleMatches)
+  const hasConflictingIdentifiers = getHasConflictingIdentifierMatches(eligibleMatches)
+  const tieBreakerMatches = hasConflictingIdentifiers ? [] : getIdentifierTieBreakerMatches(row, eligibleMatches)
   const selectedMatch =
     eligibleMatches.length === 1 ? eligibleMatches[0] : tieBreakerMatches.length === 1 ? tieBreakerMatches[0] : null
   const skipReason =
@@ -706,38 +1162,54 @@ const getDoiImportCandidateRow = (
       ? null
       : eligibleMatches.length === 0
         ? 'not-conflicting'
-        : selectedMatch
-          ? null
-          : 'ambiguous-target-match'
+        : hasConflictingIdentifiers
+          ? 'conflicting-identifiers'
+          : selectedMatch
+            ? null
+            : 'ambiguous-target-match'
+  const existingResolutionResult = selectedMatch ? getExistingTargetResolutionResult(row, selectedMatch) : null
 
-  return selectedMatch
-    ? {
-        candidate: getCandidateRow({
-          matchKey: selectedMatch.matchKey,
-          matchKind: 'doi',
-          row,
-          targetArticle: selectedMatch.targetArticle,
-        }),
-        skippedRow: null,
-        warnings: [],
-      }
-    : skipReason
+  return existingResolutionResult
+    ? existingResolutionResult
+    : selectedMatch
       ? {
-          candidate: null,
-          skippedRow: getSkippedRow(row.sourceRowId, skipReason),
-          warnings:
-            skipReason === 'ambiguous-target-match'
-              ? [
-                  getAmbiguousTargetMatchWarning({
-                    matchKey: getAmbiguousMatchKey(eligibleMatches),
-                    matchKind: 'doi',
-                    sourceRow: row,
-                    targetArticles: getTargetArticlesFromMatches(eligibleMatches),
-                  }),
-                ]
-              : [],
+          candidate: getCandidateRow({
+            matchKey: selectedMatch.matchKey,
+            matchKind: selectedMatch.matchKind,
+            row,
+            targetArticle: selectedMatch.targetArticle,
+          }),
+          skippedRow: null,
+          warnings: [],
         }
-      : null
+      : skipReason
+        ? {
+            candidate: null,
+            skippedRow: getSkippedRow(row.sourceRowId, skipReason),
+            warnings:
+              skipReason === 'ambiguous-target-match'
+                ? [
+                    getAmbiguousTargetMatchWarning({
+                      matchKey: getAmbiguousMatchKey(eligibleMatches),
+                      matchKind: getAmbiguousMatchKind(eligibleMatches),
+                      sourceRow: row,
+                      targetArticles: getTargetArticlesFromMatches(eligibleMatches),
+                    }),
+                  ]
+                : skipReason === 'conflicting-identifiers'
+                  ? [getConflictingIdentifiersWarning({matches: eligibleMatches, sourceRow: row})]
+                  : [],
+          }
+        : null
+}
+
+const getIdentifierImportCandidateRow = (
+  row: NormalizedSourceRow,
+  targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
+) => {
+  return sourceIdentifierTierOrder.reduce<ImportCandidateRowResult | null>((result, tier) => {
+    return result ?? getIdentifierImportCandidateRowForTier(row, targetArticleMaps, tier)
+  }, null)
 }
 
 const getIdTitleImportCandidateRow = (
@@ -751,12 +1223,13 @@ const getIdTitleImportCandidateRow = (
             return getCanUseIdTitleFallbackTargetArticle(row, targetArticle)
           })
           .map((targetArticle) => {
-            return {matchKey: row.idTitleKey ?? '', targetArticle}
+            return {matchKey: row.idTitleKey ?? '', matchKind: 'id-title' as const, targetArticle}
           })
       : [],
   )
   const eligibleMatches = getEligibleTargetMatches(targetMatches)
   const selectedMatch = eligibleMatches.length === 1 ? eligibleMatches[0] : null
+  const existingResolutionResult = selectedMatch ? getExistingTargetResolutionResult(row, selectedMatch) : null
   const skipReason =
     targetMatches.length === 0
       ? 'no-target-match'
@@ -766,46 +1239,50 @@ const getIdTitleImportCandidateRow = (
           ? null
           : 'ambiguous-target-match'
 
-  return selectedMatch
-    ? {
-        candidate: getCandidateRow({
-          matchKey: selectedMatch.matchKey,
-          matchKind: 'id-title',
-          row,
-          targetArticle: selectedMatch.targetArticle,
-        }),
-        skippedRow: null,
-        warnings: [],
-      }
-    : {
-        candidate: null,
-        skippedRow: getSkippedRow(row.sourceRowId, skipReason),
-        warnings:
-          skipReason === 'ambiguous-target-match'
-            ? [
-                getAmbiguousTargetMatchWarning({
-                  matchKey: getAmbiguousMatchKey(eligibleMatches),
-                  matchKind: 'id-title',
-                  sourceRow: row,
-                  targetArticles: getTargetArticlesFromMatches(eligibleMatches),
-                }),
-              ]
-            : [],
-      }
+  return existingResolutionResult
+    ? existingResolutionResult
+    : selectedMatch
+      ? {
+          candidate: getCandidateRow({
+            matchKey: selectedMatch.matchKey,
+            matchKind: 'id-title',
+            row,
+            targetArticle: selectedMatch.targetArticle,
+          }),
+          skippedRow: null,
+          warnings: [],
+        }
+      : {
+          candidate: null,
+          skippedRow: getSkippedRow(row.sourceRowId, skipReason),
+          warnings:
+            skipReason === 'ambiguous-target-match'
+              ? [
+                  getAmbiguousTargetMatchWarning({
+                    matchKey: getAmbiguousMatchKey(eligibleMatches),
+                    matchKind: 'id-title',
+                    sourceRow: row,
+                    targetArticles: getTargetArticlesFromMatches(eligibleMatches),
+                  }),
+                ]
+              : [],
+        }
 }
 
 const getImportCandidateRow = (
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): ImportCandidateRowResult => {
-  const hasUsableKey = row.doiKeys.length > 0 || Boolean(row.idTitleKey)
-  const doiResult = hasUsableKey && row.doiKeys.length > 0 ? getDoiImportCandidateRow(row, targetArticleMaps) : null
+  const hasUsableKey = row.identifierKeys.length > 0 || Boolean(row.idTitleKey)
+  const identifierResult = hasUsableKey ? getIdentifierImportCandidateRow(row, targetArticleMaps) : null
 
-  return !hasUsableKey
-    ? {candidate: null, skippedRow: getSkippedRow(row.sourceRowId, 'no-usable-key'), warnings: []}
-    : doiResult
-      ? doiResult
-      : getIdTitleImportCandidateRow(row, targetArticleMaps)
+  return row.resolutionMode !== 'summary'
+    ? {candidate: null, skippedRow: getSkippedRow(row.sourceRowId, 'unsupported-mode'), warnings: []}
+    : !hasUsableKey
+      ? {candidate: null, skippedRow: getSkippedRow(row.sourceRowId, 'no-usable-key'), warnings: []}
+      : identifierResult
+        ? identifierResult
+        : getIdTitleImportCandidateRow(row, targetArticleMaps)
 }
 
 const getCandidateRows = (
@@ -826,14 +1303,29 @@ const getSkipCounts = (
     (counts, skippedRow) => {
       return {
         ambiguousTarget: counts.ambiguousTarget + (skippedRow.reason === 'ambiguous-target-match' ? 1 : 0),
+        conflictingIdentifiers:
+          counts.conflictingIdentifiers + (skippedRow.reason === 'conflicting-identifiers' ? 1 : 0),
         conflicting: counts.conflicting + (skippedRow.reason === 'conflicting-resolution-values' ? 1 : 0),
+        existingTargetResolution:
+          counts.existingTargetResolution + (skippedRow.reason === 'existing-target-resolution' ? 1 : 0),
         invalidValue: counts.invalidValue + (skippedRow.reason === 'invalid-target-resolution-value' ? 1 : 0),
         noTargetMatch: counts.noTargetMatch + (skippedRow.reason === 'no-target-match' ? 1 : 0),
         noUsableKey: counts.noUsableKey + (skippedRow.reason === 'no-usable-key' ? 1 : 0),
         notConflicting: counts.notConflicting + (skippedRow.reason === 'not-conflicting' ? 1 : 0),
+        unsupportedMode: counts.unsupportedMode + (skippedRow.reason === 'unsupported-mode' ? 1 : 0),
       }
     },
-    {ambiguousTarget: 0, conflicting: 0, invalidValue: 0, noTargetMatch: 0, noUsableKey: 0, notConflicting: 0},
+    {
+      ambiguousTarget: 0,
+      conflictingIdentifiers: 0,
+      conflicting: 0,
+      existingTargetResolution: 0,
+      invalidValue: 0,
+      noTargetMatch: 0,
+      noUsableKey: 0,
+      notConflicting: 0,
+      unsupportedMode: 0,
+    },
   )
 }
 

@@ -79,10 +79,11 @@ export type ComparisonProjectConflictResolutionImportSource = {
   resolutionCount: number
 }
 
-export type ConflictResolutionImportMatchKind = 'doi' | 'id-title'
+export type ConflictResolutionImportMatchKind = 'doi' | 'pmid' | 'arxiv' | 'id-title'
 
 export type ConflictResolutionImportWarningCode =
   | 'ambiguous-target-match'
+  | 'conflicting-identifiers'
   | 'conflicting-resolution-values'
   | 'invalid-target-resolution-value'
 
@@ -104,6 +105,7 @@ export type ConflictResolutionImportWarningTargetArticle = {
   articleTitle: string | null
   doiKeys: string[]
   externalArticleId: string | null
+  identifierKeys?: string[]
 }
 
 export type ConflictResolutionImportWarning = {
@@ -126,11 +128,14 @@ export type ConflictResolutionImportSummary = {
   imported: number
   skipped: number
   skippedAmbiguousTarget: number
+  skippedConflictingIdentifiers: number
   skippedConflicting: number
+  skippedExistingTargetResolution: number
   skippedInvalidValue: number
   skippedNoTargetMatch: number
   skippedNoUsableKey: number
   skippedNotConflicting: number
+  skippedUnsupportedMode: number
   warnings: ConflictResolutionImportWarning[]
 }
 
