@@ -202,6 +202,62 @@ export type ComparisonProjectConflictResolutionImportSummary = {
   warnings: ComparisonProjectConflictResolutionImportWarning[]
 }
 
+export type ComparisonProjectConflictResolutionImportAnalyzeSource = {
+  comparisonProjectId: string
+  comparisonProjectName: string
+  comparisonProjectDescription: string | null
+  exportedAt: string
+  format: string
+  version: number
+  rowCount: number
+}
+
+export type ComparisonProjectConflictResolutionImportAnalyzeSummary = {
+  scanned: number
+  matched: number
+  importable: number
+  deduped: number
+  skipped: number
+  skippedExisting: number
+  skippedUnsupportedMode: number
+  skippedNoUsableKey: number
+  skippedNoTargetMatch: number
+  skippedNotConflicting: number
+  skippedAmbiguousTarget: number
+  skippedConflicting: number
+  skippedInvalidValue: number
+}
+
+export type ComparisonProjectConflictResolutionImportAnalyzeRowReason =
+  | 'importable'
+  | ComparisonProjectConflictResolutionImportSkipReason
+
+export type ComparisonProjectConflictResolutionImportAnalyzeRow = {
+  sourceTitle: string | null
+  sourceArticleRowId: string
+  sourceExternalArticleId: string | null
+  sourceResolutionId: string
+  sourceComparisonProjectId: string
+  sourceComparisonProjectName: string
+  targetTitle: string | null
+  targetArticleId: string | null
+  targetArticleIds: string[]
+  targetExternalArticleId: string | null
+  targetExternalArticleIds: string[]
+  selectedResolution: string
+  matchKind: ComparisonProjectConflictResolutionImportMatchKind | null
+  matchKey: string | null
+  reason: ComparisonProjectConflictResolutionImportAnalyzeRowReason
+}
+
+export type ComparisonProjectConflictResolutionImportAnalyzeResult = {
+  source: ComparisonProjectConflictResolutionImportAnalyzeSource
+  summary: ComparisonProjectConflictResolutionImportAnalyzeSummary
+  importableRows: ComparisonProjectConflictResolutionImportAnalyzeRow[]
+  skippedRows: ComparisonProjectConflictResolutionImportAnalyzeRow[]
+  warnings: ComparisonProjectConflictResolutionImportWarning[]
+}
+
 type NormalizedSourceRow = Omit<
   ComparisonProjectConflictResolutionImportSourceRow,
   'doiKeys' | 'identifierKeys' | 'resolutionMode'
@@ -237,8 +293,16 @@ type ImportTargetArticleMatch = {
 
 type ImportCandidateRowResult = {
   candidate: ImportCandidateRow | null
+  detail: ImportRowMatchDetail | null
   skippedRow: ComparisonProjectConflictResolutionImportSkippedRow | null
   warnings: ComparisonProjectConflictResolutionImportWarning[]
+}
+
+type ImportRowMatchDetail = {
+  matchKey: string | null
+  matchKind: ComparisonProjectConflictResolutionImportMatchKind | null
+  sourceRow: NormalizedSourceRow
+  targetArticles: NormalizedTargetArticle[]
 }
 
 const doiPrefixPattern = /^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)/i
@@ -1026,6 +1090,51 @@ const getSkippedRow = (
   return {reason, sourceRowId}
 }
 
+const getFirstIdentifierKeyForTier = (row: NormalizedSourceRow, tier: SourceIdentifierTier) => {
+  return row.identifierKeys.find((identifierKey) => {
+    return identifierKey.tier === tier
+  })
+}
+
+const getPreferredSourceRowMatchDetail = (row: NormalizedSourceRow): ImportRowMatchDetail => {
+  const identifierKey =
+    sourceIdentifierTierOrder.reduce<NormalizedIdentifierKey | null>((selectedIdentifierKey, tier) => {
+      return selectedIdentifierKey ?? getFirstIdentifierKeyForTier(row, tier) ?? null
+    }, null) ?? row.identifierKeys[0]
+
+  return identifierKey
+    ? {matchKey: identifierKey.matchKey, matchKind: identifierKey.kind, sourceRow: row, targetArticles: []}
+    : row.idTitleKey
+      ? {matchKey: row.idTitleKey, matchKind: 'id-title', sourceRow: row, targetArticles: []}
+      : {matchKey: null, matchKind: null, sourceRow: row, targetArticles: []}
+}
+
+const getImportRowMatchDetail = (params: {
+  matchKey: string | null
+  matchKind: ComparisonProjectConflictResolutionImportMatchKind | null
+  sourceRow: NormalizedSourceRow
+  targetArticles: readonly NormalizedTargetArticle[]
+}): ImportRowMatchDetail => {
+  return {
+    matchKey: params.matchKey,
+    matchKind: params.matchKind,
+    sourceRow: params.sourceRow,
+    targetArticles: [...params.targetArticles],
+  }
+}
+
+const getImportRowMatchDetailFromMatch = (
+  row: NormalizedSourceRow,
+  match: ImportTargetArticleMatch,
+): ImportRowMatchDetail => {
+  return getImportRowMatchDetail({
+    matchKey: match.matchKey,
+    matchKind: match.matchKind,
+    sourceRow: row,
+    targetArticles: [match.targetArticle],
+  })
+}
+
 const getTargetSummaryOptionValueMap = (targetSummaryOptionValues: readonly string[]) => {
   return targetSummaryOptionValues.reduce<Map<string, string[]>>((optionValueMap, optionValue) => {
     const normalizedValue = getNormalizedResolutionValue(optionValue)
@@ -1133,7 +1242,12 @@ const getExistingTargetResolutionResult = (
   selectedMatch: ImportTargetArticleMatch,
 ): ImportCandidateRowResult | null => {
   return selectedMatch.targetArticle.hasExistingResolution
-    ? {candidate: null, skippedRow: getSkippedRow(row.sourceRowId, 'existing-target-resolution'), warnings: []}
+    ? {
+        candidate: null,
+        detail: getImportRowMatchDetailFromMatch(row, selectedMatch),
+        skippedRow: getSkippedRow(row.sourceRowId, 'existing-target-resolution'),
+        warnings: [],
+      }
     : null
 }
 
@@ -1179,12 +1293,21 @@ const getIdentifierImportCandidateRowForTier = (
             row,
             targetArticle: selectedMatch.targetArticle,
           }),
+          detail: getImportRowMatchDetailFromMatch(row, selectedMatch),
           skippedRow: null,
           warnings: [],
         }
       : skipReason
         ? {
             candidate: null,
+            detail: getImportRowMatchDetail({
+              matchKey: getAmbiguousMatchKey(eligibleMatches.length > 0 ? eligibleMatches : targetMatches),
+              matchKind: getAmbiguousMatchKind(eligibleMatches.length > 0 ? eligibleMatches : targetMatches),
+              sourceRow: row,
+              targetArticles: getTargetArticlesFromMatches(
+                eligibleMatches.length > 0 ? eligibleMatches : targetMatches,
+              ),
+            }),
             skippedRow: getSkippedRow(row.sourceRowId, skipReason),
             warnings:
               skipReason === 'ambiguous-target-match'
@@ -1249,11 +1372,18 @@ const getIdTitleImportCandidateRow = (
             row,
             targetArticle: selectedMatch.targetArticle,
           }),
+          detail: getImportRowMatchDetailFromMatch(row, selectedMatch),
           skippedRow: null,
           warnings: [],
         }
       : {
           candidate: null,
+          detail: getImportRowMatchDetail({
+            matchKey: row.idTitleKey,
+            matchKind: row.idTitleKey ? 'id-title' : null,
+            sourceRow: row,
+            targetArticles: getTargetArticlesFromMatches(eligibleMatches.length > 0 ? eligibleMatches : targetMatches),
+          }),
           skippedRow: getSkippedRow(row.sourceRowId, skipReason),
           warnings:
             skipReason === 'ambiguous-target-match'
@@ -1277,9 +1407,19 @@ const getImportCandidateRow = (
   const identifierResult = hasUsableKey ? getIdentifierImportCandidateRow(row, targetArticleMaps) : null
 
   return row.resolutionMode !== 'summary'
-    ? {candidate: null, skippedRow: getSkippedRow(row.sourceRowId, 'unsupported-mode'), warnings: []}
+    ? {
+        candidate: null,
+        detail: getPreferredSourceRowMatchDetail(row),
+        skippedRow: getSkippedRow(row.sourceRowId, 'unsupported-mode'),
+        warnings: [],
+      }
     : !hasUsableKey
-      ? {candidate: null, skippedRow: getSkippedRow(row.sourceRowId, 'no-usable-key'), warnings: []}
+      ? {
+          candidate: null,
+          detail: getPreferredSourceRowMatchDetail(row),
+          skippedRow: getSkippedRow(row.sourceRowId, 'no-usable-key'),
+          warnings: [],
+        }
       : identifierResult
         ? identifierResult
         : getIdTitleImportCandidateRow(row, targetArticleMaps)
@@ -1474,11 +1614,11 @@ const getDedupedCount = (candidates: readonly ComparisonProjectConflictResolutio
   }, 0)
 }
 
-export const getComparisonProjectConflictResolutionImportPlan = ({
+const getComparisonProjectConflictResolutionImportPlanState = ({
   sourceRows,
   targetArticles,
   targetSummaryOptionValues,
-}: ComparisonProjectConflictResolutionImportPlanParams): ComparisonProjectConflictResolutionImportPlan => {
+}: ComparisonProjectConflictResolutionImportPlanParams) => {
   const normalizedSourceRows = getNormalizedSourceRows(sourceRows)
   const normalizedTargetArticles = getNormalizedTargetArticles(targetArticles)
   const candidateRowResults = getCandidateRows(normalizedSourceRows, normalizedTargetArticles)
@@ -1513,11 +1653,253 @@ export const getComparisonProjectConflictResolutionImportPlan = ({
   ]
 
   return {
-    candidates: groupedImportCandidateResults.candidates,
-    dedupedCount: getDedupedCount(groupedImportCandidateResults.candidates),
+    allSkippedRows,
+    allWarnings,
+    candidateRowResults,
+    candidateRows,
+    groupedImportCandidateResults,
+    normalizedSourceRows,
+    normalizedTargetArticles,
+    targetResolvedCandidateRowResults,
+  }
+}
+
+export const getComparisonProjectConflictResolutionImportPlan = (
+  params: ComparisonProjectConflictResolutionImportPlanParams,
+): ComparisonProjectConflictResolutionImportPlan => {
+  const planState = getComparisonProjectConflictResolutionImportPlanState(params)
+
+  return {
+    candidates: planState.groupedImportCandidateResults.candidates,
+    dedupedCount: getDedupedCount(planState.groupedImportCandidateResults.candidates),
     errors: [],
-    skipCounts: getSkipCounts(allSkippedRows),
-    skippedRows: allSkippedRows,
-    warnings: allWarnings,
+    skipCounts: getSkipCounts(planState.allSkippedRows),
+    skippedRows: planState.allSkippedRows,
+    warnings: planState.allWarnings,
+  }
+}
+
+const getAnalyzeSource = (
+  artifact: ComparisonProjectConflictResolutionTransferArtifactV1,
+): ComparisonProjectConflictResolutionImportAnalyzeSource => {
+  return {
+    comparisonProjectId: artifact.source.comparisonProjectId,
+    comparisonProjectName: artifact.source.comparisonProjectName,
+    comparisonProjectDescription: artifact.source.comparisonProjectDescription,
+    exportedAt: artifact.exportedAt,
+    format: artifact.format,
+    version: artifact.version,
+    rowCount: artifact.rows.length,
+  }
+}
+
+const getFirstAnalyzeTargetArticle = (targetArticles: readonly NormalizedTargetArticle[]) => {
+  return targetArticles[0] ?? null
+}
+
+const getAnalyzeTargetArticleIds = (targetArticles: readonly NormalizedTargetArticle[]) => {
+  return getUniqueStringValues(
+    targetArticles.map((targetArticle) => {
+      return targetArticle.articleId
+    }),
+  )
+}
+
+const getAnalyzeTargetExternalArticleIds = (targetArticles: readonly NormalizedTargetArticle[]) => {
+  return getUniqueStringValues(
+    targetArticles
+      .map((targetArticle) => {
+        return targetArticle.externalArticleId ?? ''
+      })
+      .filter(Boolean),
+  )
+}
+
+const getAnalyzeRow = (params: {
+  detail: ImportRowMatchDetail
+  reason: ComparisonProjectConflictResolutionImportAnalyzeRowReason
+  selectedResolution: string
+}): ComparisonProjectConflictResolutionImportAnalyzeRow => {
+  const firstTargetArticle = getFirstAnalyzeTargetArticle(params.detail.targetArticles)
+
+  return {
+    sourceTitle: params.detail.sourceRow.sourceArticleTitle ?? params.detail.sourceRow.title ?? null,
+    sourceArticleRowId: params.detail.sourceRow.sourceArticleId,
+    sourceExternalArticleId:
+      params.detail.sourceRow.sourceExternalArticleId ?? params.detail.sourceRow.externalArticleId ?? null,
+    sourceResolutionId: params.detail.sourceRow.sourceResolutionId,
+    sourceComparisonProjectId: params.detail.sourceRow.sourceComparisonProjectId,
+    sourceComparisonProjectName: params.detail.sourceRow.sourceComparisonProjectName,
+    targetTitle: firstTargetArticle?.title ?? null,
+    targetArticleId: firstTargetArticle?.articleId ?? null,
+    targetArticleIds: getAnalyzeTargetArticleIds(params.detail.targetArticles),
+    targetExternalArticleId: firstTargetArticle?.externalArticleId ?? null,
+    targetExternalArticleIds: getAnalyzeTargetExternalArticleIds(params.detail.targetArticles),
+    selectedResolution: params.selectedResolution,
+    matchKind: params.detail.matchKind,
+    matchKey: params.detail.matchKey,
+    reason: params.reason,
+  }
+}
+
+const getAnalyzeRowFromCandidateRow = (
+  candidateRow: ImportCandidateRow,
+): ComparisonProjectConflictResolutionImportAnalyzeRow => {
+  return getAnalyzeRow({
+    detail: getImportRowMatchDetail({
+      matchKey: candidateRow.matchKey,
+      matchKind: candidateRow.matchKind,
+      sourceRow: candidateRow.sourceRow,
+      targetArticles: [candidateRow.targetArticle],
+    }),
+    reason: 'importable',
+    selectedResolution: candidateRow.resolutionValue,
+  })
+}
+
+const getCandidateRowsForCandidates = (params: {
+  candidates: readonly ComparisonProjectConflictResolutionImportCandidate[]
+  candidateRows: readonly ImportCandidateRow[]
+}) => {
+  const candidateSourceRowIds = new Set(
+    params.candidates.flatMap((candidate) => {
+      return candidate.sourceRows.map((sourceRow) => {
+        return sourceRow.sourceRowId
+      })
+    }),
+  )
+
+  return params.candidateRows.filter((candidateRow) => {
+    return candidateSourceRowIds.has(candidateRow.sourceRowId)
+  })
+}
+
+const getInitialAnalyzeSkippedRows = (
+  candidateRowResults: readonly ImportCandidateRowResult[],
+): ComparisonProjectConflictResolutionImportAnalyzeRow[] => {
+  return candidateRowResults.flatMap((result) => {
+    return result.skippedRow && result.detail
+      ? [
+          getAnalyzeRow({
+            detail: result.detail,
+            reason: result.skippedRow.reason,
+            selectedResolution: result.detail.sourceRow.resolutionValue,
+          }),
+        ]
+      : []
+  })
+}
+
+const getInvalidValueAnalyzeSkippedRows = (
+  candidateRows: readonly ImportCandidateRow[],
+  skippedRows: readonly ComparisonProjectConflictResolutionImportSkippedRow[],
+): ComparisonProjectConflictResolutionImportAnalyzeRow[] => {
+  const skippedSourceRowIds = new Set(
+    skippedRows.map((skippedRow) => {
+      return skippedRow.sourceRowId
+    }),
+  )
+
+  return candidateRows
+    .filter((candidateRow) => {
+      return skippedSourceRowIds.has(candidateRow.sourceRowId)
+    })
+    .map((candidateRow) => {
+      return {...getAnalyzeRowFromCandidateRow(candidateRow), reason: 'invalid-target-resolution-value' as const}
+    })
+}
+
+const getConflictingAnalyzeSkippedRows = (
+  candidateRows: readonly ImportCandidateRow[],
+  skippedRows: readonly ComparisonProjectConflictResolutionImportSkippedRow[],
+): ComparisonProjectConflictResolutionImportAnalyzeRow[] => {
+  const skippedSourceRowIds = new Set(
+    skippedRows.map((skippedRow) => {
+      return skippedRow.sourceRowId
+    }),
+  )
+
+  return candidateRows
+    .filter((candidateRow) => {
+      return skippedSourceRowIds.has(candidateRow.sourceRowId)
+    })
+    .map((candidateRow) => {
+      return {...getAnalyzeRowFromCandidateRow(candidateRow), reason: 'conflicting-resolution-values' as const}
+    })
+}
+
+const getAnalyzeSummary = (params: {
+  importableCount: number
+  plan: ComparisonProjectConflictResolutionImportPlan
+  scannedCount: number
+}): ComparisonProjectConflictResolutionImportAnalyzeSummary => {
+  const skippedConflicting = params.plan.skipCounts.conflicting + params.plan.skipCounts.conflictingIdentifiers
+  const skipped =
+    params.plan.skipCounts.ambiguousTarget
+    + skippedConflicting
+    + params.plan.skipCounts.existingTargetResolution
+    + params.plan.skipCounts.invalidValue
+    + params.plan.skipCounts.noTargetMatch
+    + params.plan.skipCounts.noUsableKey
+    + params.plan.skipCounts.notConflicting
+    + params.plan.skipCounts.unsupportedMode
+
+  return {
+    scanned: params.scannedCount,
+    matched: params.plan.candidates.reduce((count, candidate) => {
+      return count + candidate.sourceRows.length
+    }, 0),
+    importable: params.importableCount,
+    deduped: params.plan.dedupedCount,
+    skipped,
+    skippedExisting: params.plan.skipCounts.existingTargetResolution,
+    skippedUnsupportedMode: params.plan.skipCounts.unsupportedMode,
+    skippedNoUsableKey: params.plan.skipCounts.noUsableKey,
+    skippedNoTargetMatch: params.plan.skipCounts.noTargetMatch,
+    skippedNotConflicting: params.plan.skipCounts.notConflicting,
+    skippedAmbiguousTarget: params.plan.skipCounts.ambiguousTarget,
+    skippedConflicting,
+    skippedInvalidValue: params.plan.skipCounts.invalidValue,
+  }
+}
+
+export const getComparisonProjectConflictResolutionImportAnalyzeResult = (params: {
+  artifact: ComparisonProjectConflictResolutionTransferArtifactV1
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
+  targetArticles: readonly ComparisonProjectConflictResolutionImportTargetArticle[]
+  targetSummaryOptionValues: readonly string[]
+}): ComparisonProjectConflictResolutionImportAnalyzeResult => {
+  const planState = getComparisonProjectConflictResolutionImportPlanState({
+    sourceRows: params.sourceRows,
+    targetArticles: params.targetArticles,
+    targetSummaryOptionValues: params.targetSummaryOptionValues,
+  })
+  const plan = getComparisonProjectConflictResolutionImportPlan({
+    sourceRows: params.sourceRows,
+    targetArticles: params.targetArticles,
+    targetSummaryOptionValues: params.targetSummaryOptionValues,
+  })
+  const importableCandidateRows = getCandidateRowsForCandidates({
+    candidates: plan.candidates,
+    candidateRows: planState.targetResolvedCandidateRowResults.candidateRows,
+  })
+  const skippedRows = [
+    ...getInitialAnalyzeSkippedRows(planState.candidateRowResults),
+    ...getInvalidValueAnalyzeSkippedRows(
+      planState.candidateRows,
+      planState.targetResolvedCandidateRowResults.skippedRows,
+    ),
+    ...getConflictingAnalyzeSkippedRows(
+      planState.targetResolvedCandidateRowResults.candidateRows,
+      planState.groupedImportCandidateResults.skippedRows,
+    ),
+  ]
+
+  return {
+    source: getAnalyzeSource(params.artifact),
+    summary: getAnalyzeSummary({importableCount: plan.candidates.length, plan, scannedCount: params.sourceRows.length}),
+    importableRows: importableCandidateRows.map(getAnalyzeRowFromCandidateRow),
+    skippedRows,
+    warnings: plan.warnings,
   }
 }

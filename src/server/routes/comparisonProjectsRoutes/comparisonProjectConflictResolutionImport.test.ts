@@ -1,12 +1,14 @@
 import {expect, test} from 'bun:test'
 
 import {
+  type ComparisonProjectConflictResolutionTransferArtifactV1,
   comparisonProjectConflictResolutionTransferFormat,
   comparisonProjectConflictResolutionTransferVersion,
 } from './comparisonProjectConflictResolutionFileTransfer.ts'
 import {
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportTargetArticle,
+  getComparisonProjectConflictResolutionImportAnalyzeResult,
   getComparisonProjectConflictResolutionImportDoiTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdTitleKey,
@@ -319,6 +321,173 @@ test('adapts exported transfer rows into import planner source rows', () => {
       title: 'File title',
     },
   ])
+})
+
+test('analyzes transfer artifact rows with stable importable and skipped details', () => {
+  const artifact = {
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: comparisonProjectConflictResolutionTransferVersion,
+    exportedAt: '2026-06-10T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [
+      {
+        sourceResolutionId: 'source-resolution-importable',
+        sourceArticleRowId: 'source-article-importable',
+        externalArticleId: 'external-importable',
+        title: 'Importable source',
+        doi: '10.1000/importable',
+        identifiers: [],
+        resolution: {mode: 'summary' as const, value: 'yes', label: 'Yes'},
+      },
+      {
+        sourceResolutionId: 'source-resolution-existing',
+        sourceArticleRowId: 'source-article-existing',
+        externalArticleId: 'external-existing',
+        title: 'Existing source',
+        doi: '10.1000/existing',
+        identifiers: [],
+        resolution: {mode: 'summary' as const, value: 'no', label: 'No'},
+      },
+      {
+        sourceResolutionId: 'source-resolution-prompt',
+        sourceArticleRowId: 'source-article-prompt',
+        externalArticleId: 'external-prompt',
+        title: 'Prompt source',
+        doi: '10.1000/prompt',
+        identifiers: [],
+        resolution: {mode: 'prompt' as const, value: 'prompt-1', label: 'Prompt 1'},
+      },
+      {
+        sourceResolutionId: 'source-resolution-no-key',
+        sourceArticleRowId: 'source-article-no-key',
+        externalArticleId: null,
+        title: 'No key source',
+        identifiers: [],
+        resolution: {mode: 'summary' as const, value: 'yes', label: 'Yes'},
+      },
+      {
+        sourceResolutionId: 'source-resolution-invalid',
+        sourceArticleRowId: 'source-article-invalid',
+        externalArticleId: 'external-invalid',
+        title: 'Invalid source',
+        doi: '10.1000/invalid',
+        identifiers: [],
+        resolution: {mode: 'summary' as const, value: 'unclear', label: 'Unclear'},
+      },
+    ],
+  } satisfies ComparisonProjectConflictResolutionTransferArtifactV1
+  const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
+  const result = getComparisonProjectConflictResolutionImportAnalyzeResult({
+    artifact,
+    sourceRows,
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'target-importable',
+        doi: '10.1000/importable',
+        externalArticleId: 'target-external-importable',
+        title: 'Target importable',
+      }),
+      getTargetArticle({
+        articleId: 'target-existing',
+        doi: '10.1000/existing',
+        externalArticleId: 'target-external-existing',
+        hasExistingResolution: true,
+        title: 'Target existing',
+      }),
+      getTargetArticle({
+        articleId: 'target-invalid',
+        doi: '10.1000/invalid',
+        externalArticleId: 'target-external-invalid',
+        title: 'Target invalid',
+      }),
+    ],
+    targetSummaryOptionValues: ['yes', 'no'],
+  })
+
+  expect(result.source).toEqual({
+    comparisonProjectDescription: null,
+    comparisonProjectId: 'source-comparison-project-file',
+    comparisonProjectName: 'File source project',
+    exportedAt: '2026-06-10T10:00:00.000Z',
+    format: comparisonProjectConflictResolutionTransferFormat,
+    rowCount: 5,
+    version: 1,
+  })
+  expect(result.summary).toEqual({
+    deduped: 0,
+    importable: 1,
+    matched: 1,
+    scanned: 5,
+    skipped: 4,
+    skippedAmbiguousTarget: 0,
+    skippedConflicting: 0,
+    skippedExisting: 1,
+    skippedInvalidValue: 1,
+    skippedNoTargetMatch: 0,
+    skippedNoUsableKey: 1,
+    skippedNotConflicting: 0,
+    skippedUnsupportedMode: 1,
+  })
+  expect(result.importableRows).toEqual([
+    {
+      matchKey: '10.1000/importable',
+      matchKind: 'doi',
+      reason: 'importable',
+      selectedResolution: 'yes',
+      sourceArticleRowId: 'source-article-importable',
+      sourceComparisonProjectId: 'source-comparison-project-file',
+      sourceComparisonProjectName: 'File source project',
+      sourceExternalArticleId: 'external-importable',
+      sourceResolutionId: 'source-resolution-importable',
+      sourceTitle: 'Importable source',
+      targetArticleId: 'target-importable',
+      targetArticleIds: ['target-importable'],
+      targetExternalArticleId: 'target-external-importable',
+      targetExternalArticleIds: ['target-external-importable'],
+      targetTitle: 'Target importable',
+    },
+  ])
+  expect(result.skippedRows).toMatchObject([
+    {
+      matchKey: '10.1000/existing',
+      matchKind: 'doi',
+      reason: 'existing-target-resolution',
+      sourceResolutionId: 'source-resolution-existing',
+      targetArticleId: 'target-existing',
+      targetArticleIds: ['target-existing'],
+    },
+    {
+      matchKey: '10.1000/prompt',
+      matchKind: 'doi',
+      reason: 'unsupported-mode',
+      selectedResolution: 'prompt-1',
+      sourceResolutionId: 'source-resolution-prompt',
+      targetArticleId: null,
+      targetArticleIds: [],
+    },
+    {
+      matchKey: null,
+      matchKind: null,
+      reason: 'no-usable-key',
+      sourceResolutionId: 'source-resolution-no-key',
+      targetArticleId: null,
+      targetArticleIds: [],
+    },
+    {
+      matchKey: '10.1000/invalid',
+      matchKind: 'doi',
+      reason: 'invalid-target-resolution-value',
+      selectedResolution: 'unclear',
+      sourceResolutionId: 'source-resolution-invalid',
+      targetArticleId: 'target-invalid',
+      targetArticleIds: ['target-invalid'],
+    },
+  ])
+  expect(result.warnings).toMatchObject([{code: 'invalid-target-resolution-value'}])
 })
 
 test('import plan matches file-backed articles by canonical PMID', () => {
