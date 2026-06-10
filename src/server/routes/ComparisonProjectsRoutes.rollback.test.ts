@@ -12,6 +12,10 @@ import {
   comparisonProjectRowFilters,
   getComparisonProjectPassesRowFilter,
 } from '../../utils/comparisonProjectRowFilter.ts'
+import {
+  comparisonProjectConflictResolutionTransferFormat,
+  comparisonProjectConflictResolutionTransferVersion,
+} from './comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.ts'
 
 const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
 const comparisonProjectServingRebuildServiceModulePath = new URL(
@@ -39,10 +43,13 @@ type ConflictResolutionImportSummaryResponse = {
   skipped: number
   skippedAmbiguousTarget: number
   skippedConflicting: number
+  skippedConflictingIdentifiers: number
+  skippedExistingTargetResolution: number
   skippedInvalidValue: number
   skippedNoTargetMatch: number
   skippedNoUsableKey: number
   skippedNotConflicting: number
+  skippedUnsupportedMode: number
   warnings: Array<{
     code: string
     matchKey?: string
@@ -470,6 +477,52 @@ const getMockConflictResolutionExportRows = (statement: string, state: MockDatab
     })
 }
 
+const conflictResolutionImportTargetRows = [
+  {
+    articleId: 'article-1',
+    doi: '10.1000/import-match',
+    externalArticleId: 'source-ext-1',
+    identifierKeys: ['doi\u001F10.1000/import-match', 'doi\u001F10.1000/ambiguous-import'],
+    title: 'Article 1',
+  },
+  {
+    articleId: 'article-2',
+    doi: '10.1000/import-solo',
+    externalArticleId: 'source-ext-2',
+    identifierKeys: ['doi\u001F10.1000/import-solo', 'doi\u001F10.1000/ambiguous-import'],
+    title: 'Article 2',
+  },
+]
+
+const getMockConflictResolutionImportIdentifierTargetRows = (statement: string) => {
+  return conflictResolutionImportTargetRows.filter((row) => {
+    return row.identifierKeys.some((identifierKey) => {
+      return statement.includes(`'${identifierKey}'`)
+    })
+  })
+}
+
+const getMockConflictResolutionImportIdTitleTargetRows = (statement: string) => {
+  return conflictResolutionImportTargetRows.filter((row) => {
+    return statement.includes(row.externalArticleId)
+  })
+}
+
+const getMockConflictResolutionExistingTargetResolutionRows = (statement: string, state: MockDatabaseState) => {
+  const comparisonProjectId = statement.match(/comparison_project_id = '([^']+)'/)?.[1] ?? ''
+
+  return state.conflictResolutionRows
+    .filter((row) => {
+      return (
+        (row.comparisonProjectId ?? 'comparison-project-1') === comparisonProjectId
+        && statement.includes(`'${row.articleId}'`)
+      )
+    })
+    .map((row) => {
+      return {articleId: row.articleId}
+    })
+}
+
 type MockServingRow = {
   articleCreatedAt: Date
   articleId: string
@@ -723,6 +776,19 @@ const postComparisonProjectExport = (
 const postComparisonProjectConflictResolutionExport = (app: {handle: (request: Request) => Promise<Response>}) => {
   return app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolutions/export', {
+      method: 'POST',
+    }),
+  )
+}
+
+const postComparisonProjectConflictResolutionImportAnalyze = (
+  app: {handle: (request: Request) => Promise<Response>},
+  body: Record<string, unknown>,
+) => {
+  return app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolutions/import/analyze', {
+      body: JSON.stringify(body),
+      headers: {'content-type': 'application/json'},
       method: 'POST',
     }),
   )
@@ -1206,6 +1272,15 @@ const queryJson = async (
   }
 
   if (
+    statement.includes('SELECT article_id AS articleId')
+    && statement.includes('FROM app.comparison_project_conflict_resolution')
+    && statement.includes('comparison_project_id =')
+    && statement.includes('article_id IN')
+  ) {
+    return getMockConflictResolutionExistingTargetResolutionRows(statement, state)
+  }
+
+  if (
     statement.includes('FROM app.comparison_project_conflict_resolution')
     && !statement.includes('WITH source_resolution AS')
     && !statement.includes('FROM mart.comparison_cell_serving cell')
@@ -1472,6 +1547,10 @@ const queryJson = async (
       })
   }
 
+  if (statement.includes('WITH') && statement.includes('target_identifier.kind ||')) {
+    return getMockConflictResolutionImportIdentifierTargetRows(statement)
+  }
+
   if (
     statement.includes('FROM app.article_identifier doi_identifier')
     && statement.includes('MIN(doi_identifier.normalized_value) AS doi')
@@ -1511,12 +1590,7 @@ const queryJson = async (
   }
 
   if (statement.includes('regexp_replace(LOWER(TRIM(COALESCE(a.article_title')) {
-    return [
-      {articleId: 'article-1', doi: null, externalArticleId: 'source-ext-1', title: 'Article 1'},
-      {articleId: 'article-2', doi: null, externalArticleId: 'source-ext-2', title: 'Article 2'},
-    ].filter((row) => {
-      return statement.includes(row.externalArticleId)
-    })
+    return getMockConflictResolutionImportIdTitleTargetRows(statement)
   }
 
   if (statement.includes('FROM app.model')) {
@@ -2688,20 +2762,7 @@ test('comparison project create-from-project imports selected conflict resolutio
   }
 
   const body = JSON.parse(bodyText) as {
-    conflictResolutionImportSummary: {
-      deduped: number
-      imported: number
-      matched: number
-      scanned: number
-      skipped: number
-      skippedAmbiguousTarget: number
-      skippedConflicting: number
-      skippedInvalidValue: number
-      skippedNoTargetMatch: number
-      skippedNoUsableKey: number
-      skippedNotConflicting: number
-      warnings: unknown[]
-    }
+    conflictResolutionImportSummary: ConflictResolutionImportSummaryResponse
     data: {id: string}
   }
   const state = getMockDatabaseState()
@@ -2711,8 +2772,8 @@ test('comparison project create-from-project imports selected conflict resolutio
   const sourceRowQuery = state.queryStatements.find((statement) => {
     return statement.includes('WITH source_resolution AS')
   })
-  const doiTargetQuery = state.queryStatements.find((statement) => {
-    return statement.includes('doi_identifier.normalized_value IN')
+  const identifierTargetQuery = state.queryStatements.find((statement) => {
+    return statement.includes('target_identifier.kind ||')
   })
 
   expect(response.status).toBe(200)
@@ -2725,10 +2786,13 @@ test('comparison project create-from-project imports selected conflict resolutio
     skipped: 0,
     skippedAmbiguousTarget: 0,
     skippedConflicting: 0,
+    skippedConflictingIdentifiers: 0,
+    skippedExistingTargetResolution: 0,
     skippedInvalidValue: 0,
     skippedNoTargetMatch: 0,
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
+    skippedUnsupportedMode: 0,
     warnings: [],
   })
   expect(insertedResolution).toMatchObject({
@@ -2741,7 +2805,7 @@ test('comparison project create-from-project imports selected conflict resolutio
   expect(state.staleServingIds).toEqual(['comparison-project-created'])
   expect(state.rootQueryStatementsDuringTransaction).toEqual([])
   expect(sourceRowQuery ?? '').toContain("cr.comparison_project_id IN ('source-comparison-project-1')")
-  expect(doiTargetQuery ?? '').toContain("doi_identifier.normalized_value IN ('10.1000/import-match')")
+  expect(identifierTargetQuery ?? '').toContain("'doi\u001F10.1000/import-match'")
 })
 
 test('comparison project conflict resolution import preview returns counts without creating project', async () => {
@@ -2818,15 +2882,245 @@ test('comparison project conflict resolution import preview returns counts witho
     skipped: 0,
     skippedAmbiguousTarget: 0,
     skippedConflicting: 0,
+    skippedConflictingIdentifiers: 0,
+    skippedExistingTargetResolution: 0,
     skippedInvalidValue: 0,
     skippedNoTargetMatch: 0,
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
+    skippedUnsupportedMode: 0,
     warnings: [],
   })
   expect(state.createdComparisonProjectIds).toEqual([])
   expect(state.conflictResolutionRows).toHaveLength(2)
   expect(state.staleServingIds).toEqual([])
+  expect(state.transactionCalls).toBe(0)
+})
+
+test('comparison project conflict resolution import analyze returns row details without creating upload session', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'article-1',
+        comparisonProjectId: 'comparison-project-1',
+        id: 'existing-resolution-1',
+        promptId: null,
+      },
+    ],
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-2'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-2'}),
+    ],
+    sourceProjectLinks: [
+      {id: 'comparison-project-source-1', sourceProjectId: 'source-project-1'},
+      {id: 'comparison-project-source-2', sourceProjectId: 'source-project-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionImportAnalyze(app, {
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: comparisonProjectConflictResolutionTransferVersion,
+    exportedAt: '2026-06-10T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [
+      {
+        sourceResolutionId: 'source-resolution-importable',
+        sourceArticleRowId: 'source-article-importable',
+        externalArticleId: 'source-ext-2',
+        title: 'Importable source',
+        doi: '10.1000/import-solo',
+        identifiers: [],
+        resolution: {mode: 'summary', value: 'yes', label: 'Yes'},
+      },
+      {
+        sourceResolutionId: 'source-resolution-existing',
+        sourceArticleRowId: 'source-article-existing',
+        externalArticleId: 'source-ext-1',
+        title: 'Existing source',
+        doi: '10.1000/import-match',
+        identifiers: [],
+        resolution: {mode: 'summary', value: 'no', label: 'No'},
+      },
+      {
+        sourceResolutionId: 'source-resolution-prompt',
+        sourceArticleRowId: 'source-article-prompt',
+        externalArticleId: 'source-ext-2',
+        title: 'Prompt source',
+        doi: '10.1000/import-solo',
+        identifiers: [],
+        resolution: {mode: 'prompt', value: 'prompt-1', label: 'Prompt 1'},
+      },
+      {
+        sourceResolutionId: 'source-resolution-no-key',
+        sourceArticleRowId: 'source-article-no-key',
+        externalArticleId: null,
+        title: 'No key source',
+        identifiers: [],
+        resolution: {mode: 'summary', value: 'yes', label: 'Yes'},
+      },
+      {
+        sourceResolutionId: 'source-resolution-invalid',
+        sourceArticleRowId: 'source-article-invalid',
+        externalArticleId: 'source-ext-2',
+        title: 'Invalid source',
+        doi: '10.1000/import-solo',
+        identifiers: [],
+        resolution: {mode: 'summary', value: 'unclear', label: 'Unclear'},
+      },
+    ],
+  })
+  const bodyText = await response.text()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  const body = JSON.parse(bodyText) as {
+    data: {
+      source: Record<string, unknown>
+      summary: Record<string, number>
+      importableRows: Array<Record<string, unknown>>
+      skippedRows: Array<Record<string, unknown>>
+      warnings: Array<{code: string}>
+    }
+  }
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.data.source).toEqual({
+    comparisonProjectDescription: null,
+    comparisonProjectId: 'source-comparison-project-file',
+    comparisonProjectName: 'File source project',
+    exportedAt: '2026-06-10T10:00:00.000Z',
+    format: comparisonProjectConflictResolutionTransferFormat,
+    rowCount: 5,
+    version: 1,
+  })
+  expect(body.data.summary).toEqual({
+    deduped: 0,
+    importable: 1,
+    matched: 1,
+    scanned: 5,
+    skipped: 4,
+    skippedAmbiguousTarget: 0,
+    skippedConflicting: 0,
+    skippedExisting: 1,
+    skippedInvalidValue: 1,
+    skippedNoTargetMatch: 0,
+    skippedNoUsableKey: 1,
+    skippedNotConflicting: 0,
+    skippedUnsupportedMode: 1,
+  })
+  expect(body.data.importableRows).toMatchObject([
+    {
+      matchKey: '10.1000/import-solo',
+      matchKind: 'doi',
+      reason: 'importable',
+      selectedResolution: 'yes',
+      sourceArticleRowId: 'source-article-importable',
+      sourceExternalArticleId: 'source-ext-2',
+      sourceResolutionId: 'source-resolution-importable',
+      sourceTitle: 'Importable source',
+      targetArticleId: 'article-2',
+      targetArticleIds: ['article-2'],
+      targetExternalArticleId: 'source-ext-2',
+      targetTitle: 'Article 2',
+    },
+  ])
+  expect(body.data.skippedRows).toMatchObject([
+    {
+      matchKey: '10.1000/import-match',
+      matchKind: 'doi',
+      reason: 'existing-target-resolution',
+      sourceResolutionId: 'source-resolution-existing',
+      targetArticleId: 'article-1',
+      targetArticleIds: ['article-1'],
+    },
+    {
+      matchKey: '10.1000/import-solo',
+      matchKind: 'doi',
+      reason: 'unsupported-mode',
+      selectedResolution: 'prompt-1',
+      sourceResolutionId: 'source-resolution-prompt',
+      targetArticleId: null,
+      targetArticleIds: [],
+    },
+    {
+      matchKey: null,
+      matchKind: null,
+      reason: 'no-usable-key',
+      sourceResolutionId: 'source-resolution-no-key',
+      targetArticleId: null,
+      targetArticleIds: [],
+    },
+    {
+      matchKey: '10.1000/import-solo',
+      matchKind: 'doi',
+      reason: 'invalid-target-resolution-value',
+      selectedResolution: 'unclear',
+      sourceResolutionId: 'source-resolution-invalid',
+      targetArticleId: 'article-2',
+      targetArticleIds: ['article-2'],
+    },
+  ])
+  expect(body.data.warnings).toMatchObject([{code: 'invalid-target-resolution-value'}])
+  expect(state.transactionCalls).toBe(0)
+  expect(state.rootRunStatements).toEqual([])
+  expect(state.createdComparisonProjectIds).toEqual([])
+  expect(state.staleServingIds).toEqual([])
+})
+
+test('comparison project conflict resolution import analyze rejects disabled target projects', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      allowConflictResolution: false,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1'],
+      summarySourceProjectId: 'source-project-1',
+    },
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionImportAnalyze(app, {
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: comparisonProjectConflictResolutionTransferVersion,
+    exportedAt: '2026-06-10T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [],
+  })
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(400)
+  expect(bodyText).toContain(
+    'Conflict resolution imports require summary mode and allow conflict resolution to be enabled',
+  )
   expect(state.transactionCalls).toBe(0)
 })
 
@@ -2895,22 +3189,7 @@ test('comparison project create-from-project dedupes duplicate conflict resoluti
     throw new Error(bodyText)
   }
 
-  const body = JSON.parse(bodyText) as {
-    conflictResolutionImportSummary: {
-      deduped: number
-      imported: number
-      matched: number
-      scanned: number
-      skipped: number
-      skippedAmbiguousTarget: number
-      skippedConflicting: number
-      skippedInvalidValue: number
-      skippedNoTargetMatch: number
-      skippedNoUsableKey: number
-      skippedNotConflicting: number
-      warnings: unknown[]
-    }
-  }
+  const body = JSON.parse(bodyText) as {conflictResolutionImportSummary: ConflictResolutionImportSummaryResponse}
   const insertedResolutions = state.conflictResolutionRows.filter((row) => {
     return row.comparisonProjectId === 'comparison-project-created'
   })
@@ -2924,10 +3203,13 @@ test('comparison project create-from-project dedupes duplicate conflict resoluti
     skipped: 0,
     skippedAmbiguousTarget: 0,
     skippedConflicting: 0,
+    skippedConflictingIdentifiers: 0,
+    skippedExistingTargetResolution: 0,
     skippedInvalidValue: 0,
     skippedNoTargetMatch: 0,
     skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
+    skippedUnsupportedMode: 0,
     warnings: [],
   })
   expect(insertedResolutions).toHaveLength(1)

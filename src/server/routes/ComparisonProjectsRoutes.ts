@@ -42,6 +42,7 @@ import {
   createComparisonProjectConflictResolutionTransferArtifact,
   getComparisonProjectConflictResolutionTransferFilename,
   getComparisonProjectConflictResolutionTransferRows,
+  validateComparisonProjectConflictResolutionTransferArtifact,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.ts'
 import {
   type ComparisonProjectConflictResolutionImportSourceQueryRow,
@@ -49,11 +50,13 @@ import {
   type ComparisonProjectConflictResolutionImportSummary,
   type ComparisonProjectConflictResolutionImportTargetArticle,
   type ComparisonProjectConflictResolutionImportTargetArticleQueryRow,
+  getComparisonProjectConflictResolutionImportAnalyzeResult,
   getComparisonProjectConflictResolutionImportIdentifierKeys,
   getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdTitleKey,
   getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql,
   getComparisonProjectConflictResolutionImportPlan,
+  getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact,
   getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
@@ -1394,6 +1397,29 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
   ])
 }
 
+const getConflictResolutionImportExistingTargetResolutionIds = async (params: {
+  articleIds: string[]
+  comparisonProjectId: string
+  tx: AppQueryRunner
+}) => {
+  if (params.articleIds.length === 0) {
+    return new Set<string>()
+  }
+
+  const rows = await params.tx.queryJson<{articleId: string}>(`
+    SELECT article_id AS articleId
+    FROM ${comparisonProjectConflictResolutionTable}
+    WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+      AND article_id IN (${getInClause(params.articleIds)})
+  `)
+
+  return new Set(
+    rows.map((row) => {
+      return row.articleId
+    }),
+  )
+}
+
 const getConflictResolutionImportTargetArticles = async (params: {
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
   scope: ComparisonProjectScope
@@ -1420,9 +1446,18 @@ const getConflictResolutionImportTargetArticles = async (params: {
         return row.canonicalArticleId
       }),
   )
+  const existingTargetResolutionIds = await getConflictResolutionImportExistingTargetResolutionIds({
+    articleIds,
+    comparisonProjectId: params.scope.id,
+    tx: params.tx,
+  })
 
   return candidateRows.map((row) => {
-    return {...row, isConflictResolutionEligible: conflictingArticleIds.has(row.articleId)}
+    return {
+      ...row,
+      hasExistingResolution: existingTargetResolutionIds.has(row.articleId),
+      isConflictResolutionEligible: conflictingArticleIds.has(row.articleId),
+    }
   })
 }
 
@@ -1431,6 +1466,14 @@ const getComparisonProjectSummaryOptionValues = async (db: AppQueryRunner, promp
 
   return getUniqueStringValues(
     promptConfigs.flatMap((promptConfig) => {
+      return getComparisonProjectPromptTypeOptions(promptConfig.type)
+    }),
+  )
+}
+
+const getComparisonProjectScopeSummaryOptionValues = (scope: ComparisonProjectScope) => {
+  return getUniqueStringValues(
+    scope.prompts.flatMap((promptConfig) => {
       return getComparisonProjectPromptTypeOptions(promptConfig.type)
     }),
   )
@@ -1622,6 +1665,37 @@ const getComparisonProjectConflictResolutionImportPreview = async (
     }),
     sourceComparisonProjectIds,
     tx: appDatabaseService,
+  })
+}
+
+const getValidatedComparisonProjectConflictResolutionImportArtifact = (body: unknown) => {
+  try {
+    return validateComparisonProjectConflictResolutionTransferArtifact(body)
+  } catch (error) {
+    throw getConflictResolutionImportRejectedError(error instanceof Error ? error.message : 'Invalid import artifact')
+  }
+}
+
+const validateConflictResolutionImportAnalyzeTarget = (scope: ComparisonProjectScope) => {
+  if (!scope.allowConflictResolution || !getIsSummaryMode(scope)) {
+    throw getConflictResolutionImportRejectedError(
+      'Conflict resolution imports require summary mode and allow conflict resolution to be enabled',
+    )
+  }
+}
+
+const analyzeComparisonProjectConflictResolutionImport = async (scope: ComparisonProjectScope, body: unknown) => {
+  validateConflictResolutionImportAnalyzeTarget(scope)
+
+  const artifact = getValidatedComparisonProjectConflictResolutionImportArtifact(body)
+  const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
+  const targetArticles = await getConflictResolutionImportTargetArticles({sourceRows, scope, tx: appDatabaseService})
+
+  return getComparisonProjectConflictResolutionImportAnalyzeResult({
+    artifact,
+    sourceRows,
+    targetArticles,
+    targetSummaryOptionValues: getComparisonProjectScopeSummaryOptionValues(scope),
   })
 }
 
@@ -4059,6 +4133,23 @@ export const comparisonProjectsRoutes = new Elysia()
 
     return getComparisonProjectConflictResolutionExportResponse(scope)
   })
+  .post(
+    '/api/comparison-projects/:id/conflict-resolutions/import/analyze',
+    async (context) => {
+      const {params, set} = context
+      const scope = await getComparisonProjectScope(params.id)
+
+      if (!scope) {
+        set.status = 404
+        return {data: null, error: 'Comparison project not found'}
+      }
+
+      const data = await analyzeComparisonProjectConflictResolutionImport(scope, context.body)
+
+      return {data}
+    },
+    {body: t.Any()},
+  )
   .post(
     '/api/comparison-projects/:id/export',
     async (context) => {
