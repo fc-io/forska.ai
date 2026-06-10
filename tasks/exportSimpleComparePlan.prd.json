@@ -1,0 +1,242 @@
+{
+  "name": "Simple Compare Conflict Resolution Transfer",
+  "description": "Add a compact JSON import/export flow for comparison-project conflict resolutions, with article identifier matching and analyze-before-commit import preview.",
+  "branchName": "ralph/simple-compare-conflict-resolution-transfer",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Define conflict resolution transfer schema and helpers",
+      "description": "As a maintainer, I want a small versioned JSON contract for conflict-resolution transfer so export and import share one validated artifact shape.",
+      "acceptanceCriteria": [
+        "Add a helper under `src/server/routes/comparisonProjectsRoutes/` for the V1 artifact schema, ArkType validation, filename generation, identifier normalization, and row shaping.",
+        "The artifact root contains `format`, `version`, `exportedAt`, `source`, and `rows` fields without project-transfer zip/session metadata.",
+        "Each row contains `sourceResolutionId`, compact article identity fields, all available `app.article_identifier` rows, and a `resolution` object with mode, value, and label.",
+        "The helper treats `sourceArticleRowId` as provenance only and does not use it as a portable match key.",
+        "Add helper tests covering valid artifacts, invalid artifacts, DOI normalization, and title-only rows being non-matchable.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.test.ts` passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes."
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Add conflict resolution export endpoint",
+      "description": "As a compare project user, I want to export saved conflict resolutions as a compact JSON file so I can reuse them in another comparison project.",
+      "acceptanceCriteria": [
+        "Add `POST /api/comparison-projects/:id/conflict-resolutions/export` in `src/server/routes/ComparisonProjectsRoutes.ts`.",
+        "The endpoint validates that the comparison project exists and exports all saved conflict-resolution rows for that project, independent of current table filters or pagination.",
+        "The export joins `app.comparison_project_conflict_resolution` to `app.article` and aggregates all `app.article_identifier` rows for each article.",
+        "The exported article identity includes external article ID, title, DOI, PubMed ID, arXiv ID, bioRxiv ID, medRxiv ID, URL, and canonical identifiers when available.",
+        "The response is `application/json` with a `Content-Disposition` filename like `<comparison-name>_conflict_resolutions_YYYY-MM-DD.json`.",
+        "The existing `POST /api/comparison-projects/:id/export` CSV route remains unchanged.",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes for export coverage.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.test.ts` passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes."
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Extend import matching for file-backed identifiers",
+      "description": "As a maintainer, I want file-backed resolution rows to match target articles by exact normalized identifiers so imports are safe and explainable.",
+      "acceptanceCriteria": [
+        "Adapt exported JSON rows into the existing conflict-resolution import planner source-row shape where possible.",
+        "Extend matching to support canonical `kind + normalizedValue` identifier pairs beyond DOI, including PMID and arXiv when present.",
+        "Keep DOI as the strongest match key, followed by canonical identifiers, legacy stable IDs, and then external article ID plus normalized title.",
+        "Never match by title alone.",
+        "Restrict candidate target articles to the target comparison project's article scope.",
+        "Return row-level skip reasons for no usable key, no target match, ambiguous target, conflicting identifiers, invalid value, not conflicting, existing target resolution, and unsupported mode.",
+        "Add tests for DOI, PMID, arXiv, external ID plus title, title-only skip, ambiguous target skip, and identifiers pointing to different target articles.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.test.ts` passes.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.test.ts` passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Add conflict resolution import analyze endpoint",
+      "description": "As a compare project user, I want to analyze a resolution import before committing so I can see exactly what will and will not be imported.",
+      "acceptanceCriteria": [
+        "Add `POST /api/comparison-projects/:id/conflict-resolutions/import/analyze`.",
+        "The endpoint accepts the parsed JSON artifact in the request body and does not create a server-side upload session in V1.",
+        "The endpoint validates the target comparison project exists, has conflict resolution enabled, and is summary mode for V1 imports.",
+        "Prompt-mode artifact rows are skipped with `skippedUnsupportedMode` instead of being imported.",
+        "The response includes `source`, `summary`, `importableRows`, `skippedRows`, and `warnings` at stable field names.",
+        "Importable and skipped rows include source title, source IDs, target title when known, target IDs when known, selected resolution, match kind, match key, and reason.",
+        "The summary includes scanned, matched, importable, deduped, skipped, skippedExisting, skippedUnsupportedMode, skippedNoUsableKey, skippedNoTargetMatch, skippedNotConflicting, skippedAmbiguousTarget, skippedConflicting, and skippedInvalidValue counts.",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes for analyze route coverage.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.test.ts` passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Add conflict resolution import commit endpoint",
+      "description": "As a compare project user, I want to commit only the safe analyzed resolution rows so existing target decisions and unsafe matches are preserved.",
+      "acceptanceCriteria": [
+        "Add `POST /api/comparison-projects/:id/conflict-resolutions/import/commit`.",
+        "The endpoint accepts the same parsed JSON artifact as analyze and re-runs analysis during commit.",
+        "The commit runs in one transaction and inserts only still-safe candidates into `app.comparison_project_conflict_resolution`.",
+        "Summary-mode imports insert `prompt_id = NULL` and `answer_value = <target option value>`.",
+        "Existing target conflict-resolution rows are not overwritten by default and are reported as `skippedExisting`.",
+        "The response returns the same summary shape as analyze plus `inserted`.",
+        "Add tests proving commit writes safe rows, skips existing target rows, and skips rows that became unsafe after preview.",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes for commit route coverage.",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.test.ts` passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes."
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Add client service methods for resolution transfer",
+      "description": "As a frontend developer, I want typed client methods for resolution export, analyze, and commit so the UI can use the new routes consistently.",
+      "acceptanceCriteria": [
+        "Add service types for the export artifact, analyze preview, skipped rows, warnings, and commit response in `src/services/comparisonProjectsService.ts`.",
+        "Add client methods for export, analyze import, and commit import using nearby comparison project service patterns.",
+        "Preserve Eden/TanStack Query conventions used by nearby compare project code.",
+        "Use existing API URL helpers for browser and desktop compatibility.",
+        "Do not introduce generic service files outside the local comparison project service unless existing patterns require it.",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-004",
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Add detail page export and import entry points",
+      "description": "As a compare project user, I want clear resolution import/export actions on the comparison detail page so I can transfer decisions from the target project context.",
+      "acceptanceCriteria": [
+        "Add `Export resolutions` on `src/app/routes/+compare-judgments/+$id/+index.tsx` near the existing `Export data` action.",
+        "The export action downloads the JSON artifact returned by the new export endpoint.",
+        "Add `Import resolutions` next to `Export resolutions` when `allowConflictResolution` is enabled.",
+        "The import action links to `/compare-judgments/:id/import-resolutions`.",
+        "When conflict resolution is disabled, hide or disable `Import resolutions` with copy explaining that the target comparison project must allow conflict resolution.",
+        "The existing CSV `Export data` action remains unchanged.",
+        "`bun test <new compare detail import/export UI test>` passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "Browser verify the compare detail page shows the correct export/import actions.",
+        "Run `bun run desktop:build` if shared upload/download wiring, runtime paths, or API URL helpers changed."
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Build import page analyze preview",
+      "description": "As a compare project user, I want an import page that analyzes a selected JSON file before commit so I can review importable and skipped decisions.",
+      "acceptanceCriteria": [
+        "Add `src/app/routes/+compare-judgments/+$id/+import-resolutions.tsx` for `/compare-judgments/:id/import-resolutions`.",
+        "The page title is `Import conflict resolutions` and it shows the target comparison project name.",
+        "The page explains that import only adds saved conflict-resolution decisions to articles already present in the target comparison project.",
+        "The page lets the user choose or drop a `.json` conflict-resolution export file and shows a clear invalid-file error when JSON parsing fails.",
+        "Clicking `Analyze import` calls the analyze endpoint with the parsed artifact.",
+        "The analyze result shows summary counts, a table of rows that will be imported, and a table of rows that will not be imported.",
+        "Skipped rows show source article details, attempted target details when known, selected resolution, match kind, match key, and skip reason.",
+        "`Commit import` is disabled until analyze succeeds and at least one row is importable.",
+        "`bun test <new compare detail import/export UI test>` passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "Browser verify selecting a file, analyzing it, and seeing importable/skipped rows.",
+        "Run `bun run desktop:build` if shared upload/download wiring, runtime paths, or API URL helpers changed."
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006",
+        "US-007"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Add import page commit flow",
+      "description": "As a compare project user, I want to commit the analyzed import and return to the comparison with imported resolutions visible.",
+      "acceptanceCriteria": [
+        "Clicking `Commit import` calls the commit endpoint with the same parsed artifact used for analyze.",
+        "The page handles commit loading and error states without losing the selected artifact or analyze result.",
+        "After commit, the page shows inserted and skipped counts from the server response.",
+        "After commit, the page provides a link back to `/compare-judgments/:id`.",
+        "Returning to the comparison detail invalidates or refreshes comparison judgment queries so imported resolutions appear in the table.",
+        "The commit flow remains disabled when analyze has no importable rows.",
+        "`bun test <new compare detail import/export UI test>` passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "Browser verify analyzing, committing, returning to the comparison, and seeing imported resolutions in the table.",
+        "Run `bun run desktop:build` if shared upload/download wiring, runtime paths, or API URL helpers changed."
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005",
+        "US-008"
+      ]
+    },
+    {
+      "id": "US-010",
+      "title": "Add comparison grid export shortcut",
+      "description": "As a compare project user, I want an optional grid-level export shortcut so I can download resolution artifacts without first opening the detail page.",
+      "acceptanceCriteria": [
+        "Add a secondary `Export resolutions` action on comparison project cards in `src/components/main/comparisonProjectsGrid.tsx` after the detail-page flow is working.",
+        "The grid action downloads the same JSON artifact as the detail page export action.",
+        "Do not add grid-level import in V1 because import requires a target comparison project context and analyze preview.",
+        "Keep existing comparison project card actions, including `Export data`, unchanged.",
+        "`bun test <new compare detail import/export UI test>` passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "Browser verify the grid export shortcut downloads the resolution JSON.",
+        "Run `bun run desktop:build` if shared upload/download wiring, runtime paths, or API URL helpers changed."
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-007"
+      ]
+    }
+  ]
+}
