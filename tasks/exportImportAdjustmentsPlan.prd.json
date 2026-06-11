@@ -152,11 +152,12 @@
         "Verify in browser that project export can be started with each raw provenance mode"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-001"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-009",
@@ -200,6 +201,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-06-11T14:22:02.061Z"
+    "updatedAt": "2026-06-11T14:27:47.072Z"
   }
 }

@@ -219,9 +219,19 @@ describe('ProjectsGrid export project action', () => {
     try {
       const labels = getActionLabels(container)
       const exportDataIndex = labels.indexOf('Export data')
+      const rawProvenanceSelect = container.querySelector<HTMLSelectElement>('select[aria-label="Raw provenance mode"]')
+      const rawProvenanceOptions = Array.from(rawProvenanceSelect?.options ?? []).map((option) => {
+        return {label: option.textContent?.trim(), value: option.value}
+      })
 
       expect(container.querySelector('a[href="/projects/project-1/export"]')?.textContent?.trim()).toBe('Export data')
       expect(labels[exportDataIndex + 1]).toBe('Export Project')
+      expect(rawProvenanceSelect?.value).toBe('auto')
+      expect(rawProvenanceOptions).toEqual([
+        {label: 'Auto', value: 'auto'},
+        {label: 'Include raw', value: 'include'},
+        {label: 'Omit raw', value: 'omit'},
+      ])
     } finally {
       dispose()
       queryClient.clear()
@@ -275,7 +285,9 @@ describe('ProjectsGrid export project action', () => {
 
       await waitForCondition(() => {
         expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:3001/api/projects/project-1/export-project', {
+          body: JSON.stringify({rawArticleProvenanceMode: 'auto'}),
           credentials: 'include',
+          headers: {'content-type': 'application/json'},
           method: 'POST',
         })
         expect(anchorClickSpy).toHaveBeenCalled()
@@ -297,13 +309,24 @@ describe('ProjectsGrid export project action', () => {
     const {container, dispose, queryClient} = await renderProjectsGrid()
 
     try {
+      const rawProvenanceSelect = container.querySelector<HTMLSelectElement>('select[aria-label="Raw provenance mode"]')
       const exportProjectButton = Array.from(container.querySelectorAll('button')).find((button) => {
         return button.textContent?.trim() === 'Export Project'
       })
 
+      if (rawProvenanceSelect) {
+        rawProvenanceSelect.value = 'include'
+        rawProvenanceSelect.dispatchEvent(new Event('change', {bubbles: true}))
+      }
       exportProjectButton?.click()
 
       await waitForCondition(() => {
+        expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:3001/api/projects/project-1/export-project', {
+          body: JSON.stringify({rawArticleProvenanceMode: 'include'}),
+          credentials: 'include',
+          headers: {'content-type': 'application/json'},
+          method: 'POST',
+        })
         expect(container.textContent).toContain('Preparing download...')
         expect(mockApiState.getExportSession).toHaveBeenCalledWith('export-1')
       })
@@ -316,6 +339,38 @@ describe('ProjectsGrid export project action', () => {
           method: 'GET',
         })
         expect(anchorClickSpy).toHaveBeenCalled()
+      })
+    } finally {
+      dispose()
+      queryClient.clear()
+      container.remove()
+    }
+  })
+
+  test('sends omit raw provenance mode when starting an export', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockResolvedValueOnce(getZipResponse('project-transfer-project-1.zip'))
+    const {container, dispose, queryClient} = await renderProjectsGrid()
+
+    try {
+      const rawProvenanceSelect = container.querySelector<HTMLSelectElement>('select[aria-label="Raw provenance mode"]')
+      const exportProjectButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.trim() === 'Export Project'
+      })
+
+      if (rawProvenanceSelect) {
+        rawProvenanceSelect.value = 'omit'
+        rawProvenanceSelect.dispatchEvent(new Event('change', {bubbles: true}))
+      }
+      exportProjectButton?.click()
+
+      await waitForCondition(() => {
+        expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:3001/api/projects/project-1/export-project', {
+          body: JSON.stringify({rawArticleProvenanceMode: 'omit'}),
+          credentials: 'include',
+          headers: {'content-type': 'application/json'},
+          method: 'POST',
+        })
       })
     } finally {
       dispose()
