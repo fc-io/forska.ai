@@ -79,7 +79,6 @@ const getComparisonProject = (overrides: Partial<ComparisonProject> = {}): Compa
     id: 'comparison-project-1',
     name: 'Comparison project',
     promptCount: 2,
-    resolutionCount: 3,
     routeCount: 1,
     summarySourceProjectId: 'project-1',
     useAbstract: true,
@@ -163,7 +162,7 @@ describe('ComparisonProjectsGrid resolution export action', () => {
       expect(
         container.querySelector('a[href="/compare-judgments/comparison-project-1/export"]')?.textContent?.trim(),
       ).toBe('Export data')
-      expect(labels[exportDataIndex + 1]).toBe('Export resolutions (3)')
+      expect(labels[exportDataIndex + 1]).toBe('Export resolutions')
       expect(labels).not.toContain('Import resolutions')
     } finally {
       dispose()
@@ -192,7 +191,7 @@ describe('ComparisonProjectsGrid resolution export action', () => {
 
     try {
       const exportButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.trim() === 'Export resolutions (3)'
+        return button.textContent?.trim() === 'Export resolutions'
       })
 
       exportButton?.click()

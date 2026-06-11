@@ -162,7 +162,6 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
                     <CompareProjectResolutionExportAction
                       buttonClass="px-3 py-1 text-sm"
                       comparisonProjectId={comparisonProject.id}
-                      resolutionCount={comparisonProject.resolutionCount}
                     />
                   </Show>
                   <Show when={!props.isArchived}>
