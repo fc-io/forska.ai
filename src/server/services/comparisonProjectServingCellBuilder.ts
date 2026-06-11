@@ -1,21 +1,31 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
 
-type ComparisonProjectServingCellBuilderRunner = {run: (statement: string) => Promise<void>}
+type ComparisonProjectServingCellBuilderRunner = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
 
 type ComparisonProjectServingCellBuilderParams = {comparisonProjectId: string; generation: number}
 
-type ComparisonProjectServingCellBuilderDependencies = {run: (statement: string) => Promise<void>}
+type ComparisonProjectServingCellInsertParams = ComparisonProjectServingCellBuilderParams & {articleIds?: string[]}
+
+type ComparisonProjectServingCellBuilderDependencies = {
+  queryJson?: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
+
+type ComparisonProjectArticleCellBatch = {articleIds: string[]; hasMore: boolean}
 
 const comparisonCellServingTable = 'mart.comparison_cell_serving'
+const comparisonProjectServingCellArticleBatchSize = 250
 const summaryPromptId = 'summary'
 
-const getDefaultComparisonProjectServingCellBuilderDependencies =
-  (): ComparisonProjectServingCellBuilderDependencies => {
-    const database = getAppDatabaseService()
+const getDefaultComparisonProjectServingCellBuilderDependencies = (): ComparisonProjectServingCellBuilderRunner => {
+  const database = getAppDatabaseService()
 
-    return {run: database.runBackground}
-  }
+  return {queryJson: database.queryJsonBackground, run: database.runBackground}
+}
 
 const getComparisonProjectServingGenerationSql = (generation: number) => {
   if (!Number.isSafeInteger(generation) || generation <= 0) {
@@ -146,6 +156,35 @@ const getComparisonProjectScopeCtesSql = () => {
       )
     )
   `
+}
+
+const getComparisonProjectArticleBatchCteSql = (articleIds: string[] | undefined) => {
+  if (articleIds === undefined) {
+    return null
+  }
+
+  return articleIds.length === 0
+    ? `article_batch(article_id) AS (
+      SELECT NULL::VARCHAR AS article_id
+      WHERE FALSE
+    )`
+    : `article_batch(article_id) AS (
+      VALUES ${articleIds
+        .map((articleId) => {
+          return `(${getSqlLiteral(articleId)})`
+        })
+        .join(', ')}
+    )`
+}
+
+const getComparisonProjectArticleBatchCtePrefixSql = (articleIds: string[] | undefined) => {
+  const cteSql = getComparisonProjectArticleBatchCteSql(articleIds)
+
+  return cteSql === null ? '' : `${cteSql},`
+}
+
+const getComparisonProjectArticleBatchJoinSql = (articleIdExpression: string, useArticleBatch: boolean) => {
+  return useArticleBatch ? `INNER JOIN article_batch ON article_batch.article_id = ${articleIdExpression}` : ''
 }
 
 const getComparisonProjectPromptConfigCteSql = () => {
@@ -430,11 +469,13 @@ const getNormalizedCellCteSql = () => {
 }
 
 const getPromptModeComparisonProjectLlmCellServingInsertSql = ({
+  articleIds,
   comparisonProjectId,
   generation,
-}: ComparisonProjectServingCellBuilderParams) => {
+}: ComparisonProjectServingCellInsertParams) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getComparisonProjectServingGenerationSql(generation)
+  const useArticleBatch = articleIds !== undefined
 
   return `
     INSERT INTO ${comparisonCellServingTable} (
@@ -459,6 +500,7 @@ const getPromptModeComparisonProjectLlmCellServingInsertSql = ({
       WHERE cp.id = ${comparisonProjectLiteral}
         ${getPromptModeComparisonProjectPredicateSql()}
     ),
+    ${getComparisonProjectArticleBatchCtePrefixSql(articleIds)}
     ${getComparisonProjectPromptConfigCteSql()},
     ${getComparisonProjectContentVariantCteSql()},
     ${getComparisonProjectScopeCtesSql()},
@@ -477,6 +519,7 @@ const getPromptModeComparisonProjectLlmCellServingInsertSql = ({
         content_variant.content_order,
         content_variant.content_key
       FROM app.judgment j
+      ${getComparisonProjectArticleBatchJoinSql('j.article_id', useArticleBatch)}
       INNER JOIN scoped_article scoped_article ON scoped_article.article_id = j.article_id
       INNER JOIN prompt_config prompt_config ON prompt_config.prompt_id = j.prompt_id
       INNER JOIN model_config model_config ON model_config.model_id = j.model_id
@@ -514,11 +557,13 @@ const getPromptModeComparisonProjectLlmCellServingInsertSql = ({
 }
 
 const getPromptModeComparisonProjectHumanCellServingInsertSql = ({
+  articleIds,
   comparisonProjectId,
   generation,
-}: ComparisonProjectServingCellBuilderParams) => {
+}: ComparisonProjectServingCellInsertParams) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getComparisonProjectServingGenerationSql(generation)
+  const useArticleBatch = articleIds !== undefined
 
   return `
     INSERT INTO ${comparisonCellServingTable} (
@@ -543,6 +588,7 @@ const getPromptModeComparisonProjectHumanCellServingInsertSql = ({
       WHERE cp.id = ${comparisonProjectLiteral}
         ${getHumanPromptModeComparisonProjectPredicateSql()}
     ),
+    ${getComparisonProjectArticleBatchCtePrefixSql(articleIds)}
     ${getComparisonProjectPromptConfigCteSql()},
     ${getComparisonProjectContentVariantCteSql()},
     ${getComparisonProjectScopeCtesSql()},
@@ -564,6 +610,7 @@ const getPromptModeComparisonProjectHumanCellServingInsertSql = ({
           ORDER BY h.updated_at DESC NULLS LAST, h.created_at DESC NULLS LAST, h.id DESC
         ) AS answer_rank
       FROM app.judgment_human h
+      ${getComparisonProjectArticleBatchJoinSql('h.article_id', useArticleBatch)}
       INNER JOIN scoped_article scoped_article ON scoped_article.article_id = h.article_id
       INNER JOIN prompt_config prompt_config ON prompt_config.prompt_id = h.prompt_id
       WHERE h.is_answered = TRUE
@@ -602,11 +649,13 @@ const getPromptModeComparisonProjectHumanCellServingInsertSql = ({
 }
 
 const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
+  articleIds,
   comparisonProjectId,
   generation,
-}: ComparisonProjectServingCellBuilderParams) => {
+}: ComparisonProjectServingCellInsertParams) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getComparisonProjectServingGenerationSql(generation)
+  const useArticleBatch = articleIds !== undefined
 
   return `
     INSERT INTO ${comparisonCellServingTable} (
@@ -631,6 +680,7 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
       WHERE cp.id = ${comparisonProjectLiteral}
         ${getSummaryModeComparisonProjectPredicateSql()}
     ),
+    ${getComparisonProjectArticleBatchCtePrefixSql(articleIds)}
     ${getSummaryModeComparisonProjectConfigCtesSql()},
     llm_source AS (
       SELECT
@@ -644,6 +694,7 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
         content_variant.content_order,
         content_variant.content_key
       FROM app.judgment j
+      ${getComparisonProjectArticleBatchJoinSql('j.article_id', useArticleBatch)}
       INNER JOIN scoped_article scoped_article ON scoped_article.article_id = j.article_id
       INNER JOIN summary_prompt_id_config prompt_config ON prompt_config.prompt_id = j.prompt_id
       INNER JOIN model_config model_config ON model_config.model_id = j.model_id
@@ -811,11 +862,13 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
 }
 
 const getSummaryModeComparisonProjectHumanCellServingInsertSql = ({
+  articleIds,
   comparisonProjectId,
   generation,
-}: ComparisonProjectServingCellBuilderParams) => {
+}: ComparisonProjectServingCellInsertParams) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getComparisonProjectServingGenerationSql(generation)
+  const useArticleBatch = articleIds !== undefined
 
   return `
     INSERT INTO ${comparisonCellServingTable} (
@@ -841,6 +894,7 @@ const getSummaryModeComparisonProjectHumanCellServingInsertSql = ({
         ${getSummaryModeComparisonProjectPredicateSql()}
         AND cp.summary_source_project_id IS NOT NULL
     ),
+    ${getComparisonProjectArticleBatchCtePrefixSql(articleIds)}
     ${getSummaryModeComparisonProjectConfigCtesSql()},
     human_source AS (
       SELECT
@@ -849,6 +903,7 @@ const getSummaryModeComparisonProjectHumanCellServingInsertSql = ({
         h.created_at AS source_created_at,
         h.updated_at AS source_updated_at
       FROM app.judgment_human_summary h
+      ${getComparisonProjectArticleBatchJoinSql('h.article_id', useArticleBatch)}
       INNER JOIN comparison_project cp ON cp.summary_source_project_id = h.project_id
       INNER JOIN scoped_article scoped_article ON scoped_article.article_id = h.article_id
       WHERE NULLIF(TRIM(COALESCE(h.answer, '')), '') IS NOT NULL
@@ -879,48 +934,161 @@ const getSummaryModeComparisonProjectHumanCellServingInsertSql = ({
   `
 }
 
+const getComparisonProjectArticleCellBatchSql = ({
+  comparisonProjectId,
+  cursor,
+  modePredicateSql,
+}: ComparisonProjectServingCellBuilderParams & {cursor: string | null; modePredicateSql: string}) => {
+  const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
+  const cursorClause = cursor ? `WHERE scoped_article.article_id > ${getSqlLiteral(cursor)}` : ''
+
+  return `
+    WITH comparison_project AS (
+      SELECT *
+      FROM app.comparison_project cp
+      WHERE cp.id = ${comparisonProjectLiteral}
+        ${modePredicateSql}
+    ),
+    ${getComparisonProjectScopeCtesSql()}
+    SELECT scoped_article.article_id AS articleId
+    FROM scoped_article
+    INNER JOIN comparison_project cp ON TRUE
+    ${cursorClause}
+    ORDER BY scoped_article.article_id ASC
+    LIMIT ${comparisonProjectServingCellArticleBatchSize + 1}
+  `
+}
+
+const getComparisonProjectCellQueryJson = (dependencies: ComparisonProjectServingCellBuilderDependencies) => {
+  if (dependencies.queryJson) {
+    return dependencies.queryJson
+  }
+
+  throw new Error('Comparison project serving cell batching requires queryJson')
+}
+
+const getComparisonProjectArticleCellBatch = async (
+  params: ComparisonProjectServingCellBuilderParams & {cursor: string | null; modePredicateSql: string},
+  dependencies: ComparisonProjectServingCellBuilderDependencies,
+): Promise<ComparisonProjectArticleCellBatch> => {
+  const queryJson = getComparisonProjectCellQueryJson(dependencies)
+  const rows = await queryJson<{articleId: string}>(getComparisonProjectArticleCellBatchSql(params))
+  const articleIds = rows.slice(0, comparisonProjectServingCellArticleBatchSize).map((row) => {
+    return row.articleId
+  })
+
+  return {articleIds, hasMore: rows.length > comparisonProjectServingCellArticleBatchSize}
+}
+
+const getComparisonProjectArticleCellBatchCursor = (batch: ComparisonProjectArticleCellBatch) => {
+  return batch.articleIds[batch.articleIds.length - 1] ?? null
+}
+
+const insertComparisonProjectArticleCellBatches = async (
+  params: ComparisonProjectServingCellBuilderParams,
+  dependencies: ComparisonProjectServingCellBuilderDependencies,
+  modePredicateSql: string,
+  insertBatch: (insertParams: ComparisonProjectServingCellInsertParams) => Promise<void>,
+  cursor: string | null = null,
+): Promise<void> => {
+  const batch = await getComparisonProjectArticleCellBatch({...params, cursor, modePredicateSql}, dependencies)
+  const nextCursor = getComparisonProjectArticleCellBatchCursor(batch)
+
+  if (batch.articleIds.length === 0 || nextCursor === null) {
+    return
+  }
+
+  await insertBatch({...params, articleIds: batch.articleIds})
+
+  return batch.hasMore
+    ? insertComparisonProjectArticleCellBatches(params, dependencies, modePredicateSql, insertBatch, nextCursor)
+    : undefined
+}
+
 const insertPromptModeComparisonProjectLlmCells = (
   params: ComparisonProjectServingCellBuilderParams,
   dependencies: ComparisonProjectServingCellBuilderDependencies = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
-  return dependencies.run(getPromptModeComparisonProjectLlmCellServingInsertSql(params))
+  return insertComparisonProjectArticleCellBatches(
+    params,
+    dependencies,
+    getPromptModeComparisonProjectPredicateSql(),
+    (batch) => {
+      return dependencies.run(getPromptModeComparisonProjectLlmCellServingInsertSql(batch))
+    },
+  )
 }
 
 const insertPromptModeComparisonProjectHumanCells = (
   params: ComparisonProjectServingCellBuilderParams,
   dependencies: ComparisonProjectServingCellBuilderDependencies = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
-  return dependencies.run(getPromptModeComparisonProjectHumanCellServingInsertSql(params))
+  return insertComparisonProjectArticleCellBatches(
+    params,
+    dependencies,
+    getHumanPromptModeComparisonProjectPredicateSql(),
+    (batch) => {
+      return dependencies.run(getPromptModeComparisonProjectHumanCellServingInsertSql(batch))
+    },
+  )
 }
 
 const insertPromptModeComparisonProjectCells = async (
   params: ComparisonProjectServingCellBuilderParams,
   runner: ComparisonProjectServingCellBuilderRunner = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
-  await insertPromptModeComparisonProjectLlmCells(params, runner)
-  await insertPromptModeComparisonProjectHumanCells(params, runner)
+  return insertComparisonProjectArticleCellBatches(
+    params,
+    runner,
+    getPromptModeComparisonProjectPredicateSql(),
+    async (batch) => {
+      await runner.run(getPromptModeComparisonProjectLlmCellServingInsertSql(batch))
+      await runner.run(getPromptModeComparisonProjectHumanCellServingInsertSql(batch))
+    },
+  )
 }
 
 const insertSummaryModeComparisonProjectLlmCells = (
   params: ComparisonProjectServingCellBuilderParams,
   dependencies: ComparisonProjectServingCellBuilderDependencies = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
-  return dependencies.run(getSummaryModeComparisonProjectLlmCellServingInsertSql(params))
+  return insertComparisonProjectArticleCellBatches(
+    params,
+    dependencies,
+    getSummaryModeComparisonProjectPredicateSql(),
+    (batch) => {
+      return dependencies.run(getSummaryModeComparisonProjectLlmCellServingInsertSql(batch))
+    },
+  )
 }
 
 const insertSummaryModeComparisonProjectHumanCells = (
   params: ComparisonProjectServingCellBuilderParams,
   dependencies: ComparisonProjectServingCellBuilderDependencies = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
-  return dependencies.run(getSummaryModeComparisonProjectHumanCellServingInsertSql(params))
+  return insertComparisonProjectArticleCellBatches(
+    params,
+    dependencies,
+    getSummaryModeComparisonProjectPredicateSql(),
+    (batch) => {
+      return dependencies.run(getSummaryModeComparisonProjectHumanCellServingInsertSql(batch))
+    },
+  )
 }
 
 const insertSummaryModeComparisonProjectCells = async (
   params: ComparisonProjectServingCellBuilderParams,
   runner: ComparisonProjectServingCellBuilderRunner = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
-  await insertSummaryModeComparisonProjectLlmCells(params, runner)
-  await insertSummaryModeComparisonProjectHumanCells(params, runner)
+  return insertComparisonProjectArticleCellBatches(
+    params,
+    runner,
+    getSummaryModeComparisonProjectPredicateSql(),
+    async (batch) => {
+      await runner.run(getSummaryModeComparisonProjectLlmCellServingInsertSql(batch))
+      await runner.run(getSummaryModeComparisonProjectHumanCellServingInsertSql(batch))
+    },
+  )
 }
 
 const comparisonProjectServingCellBuilder = {

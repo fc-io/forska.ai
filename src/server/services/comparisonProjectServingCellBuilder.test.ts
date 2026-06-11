@@ -9,6 +9,13 @@ import {
   getComparisonProjectColumnId,
   getComparisonProjectContentKey,
 } from '../routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
+import {
+  getComparisonProjectServingCellBuilder,
+  getPromptModeComparisonProjectHumanCellServingInsertSql,
+  getPromptModeComparisonProjectLlmCellServingInsertSql,
+  getSummaryModeComparisonProjectHumanCellServingInsertSql,
+  getSummaryModeComparisonProjectLlmCellServingInsertSql,
+} from './comparisonProjectServingCellBuilder.ts'
 
 type ActualServingCellRow = {
   articleId: string
@@ -32,6 +39,12 @@ const missingMetadataComparisonProjectId = 'comparison-project-summary-missing-m
 const contentSettings = {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
 const contentKey = getComparisonProjectContentKey(contentSettings)
 const summaryPromptId = 'summary'
+
+const getArticleBatchRows = (start: number, end: number) => {
+  return Array.from({length: end - start}, (_, index) => {
+    return {articleId: `article-${String(start + index).padStart(4, '0')}`}
+  })
+}
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
@@ -314,7 +327,7 @@ const getPromptModeServingCellsScript = () => {
 
     await builder.insertPromptModeComparisonProjectCells(
       {comparisonProjectId: '${comparisonProjectId}', generation: 1},
-      {run: database.run},
+      {queryJson: database.queryJson, run: database.run},
     )
 
     const actualRows = await database.queryJson(\`
@@ -600,11 +613,11 @@ const getSummaryModeServingCellsScript = () => {
 
     await builder.insertSummaryModeComparisonProjectCells(
       {comparisonProjectId: '${summaryModeComparisonProjectId}', generation: 1},
-      {run: database.run},
+      {queryJson: database.queryJson, run: database.run},
     )
     await builder.insertSummaryModeComparisonProjectLlmCells(
       {comparisonProjectId: '${missingMetadataComparisonProjectId}', generation: 1},
-      {run: database.run},
+      {queryJson: database.queryJson, run: database.run},
     )
 
     const actualRows = await database.queryJson(\`
@@ -704,4 +717,80 @@ test('summary-mode serving cells derive LLM summaries and normalized human summa
     rowsByProjectArticleAndColumn.get(`${summaryModeComparisonProjectId}:article-summary-yes:${humanSummaryColumnId}`)
       ?.columnOrder,
   ).toBe(2)
+})
+
+test('generated cell insert SQL constrains source rows by article_batch', () => {
+  const params = {
+    articleIds: ['article-a', 'article-b'],
+    comparisonProjectId: 'comparison-serving-batched-cell-sql',
+    generation: 1,
+  }
+  const statements = [
+    {
+      joinSql: 'INNER JOIN article_batch ON article_batch.article_id = j.article_id',
+      sql: getPromptModeComparisonProjectLlmCellServingInsertSql(params),
+    },
+    {
+      joinSql: 'INNER JOIN article_batch ON article_batch.article_id = h.article_id',
+      sql: getPromptModeComparisonProjectHumanCellServingInsertSql(params),
+    },
+    {
+      joinSql: 'INNER JOIN article_batch ON article_batch.article_id = j.article_id',
+      sql: getSummaryModeComparisonProjectLlmCellServingInsertSql(params),
+    },
+    {
+      joinSql: 'INNER JOIN article_batch ON article_batch.article_id = h.article_id',
+      sql: getSummaryModeComparisonProjectHumanCellServingInsertSql(params),
+    },
+  ]
+
+  expect(
+    statements.map(({joinSql, sql}) => {
+      return {
+        hasArticleA: sql.includes("('article-a')"),
+        hasArticleB: sql.includes("('article-b')"),
+        hasBatchCte: sql.includes('article_batch(article_id) AS ('),
+        hasBatchJoin: sql.includes(joinSql),
+      }
+    }),
+  ).toEqual([
+    {hasArticleA: true, hasArticleB: true, hasBatchCte: true, hasBatchJoin: true},
+    {hasArticleA: true, hasArticleB: true, hasBatchCte: true, hasBatchJoin: true},
+    {hasArticleA: true, hasArticleB: true, hasBatchCte: true, hasBatchJoin: true},
+    {hasArticleA: true, hasArticleB: true, hasBatchCte: true, hasBatchJoin: true},
+  ])
+})
+
+test('prompt-mode cell inserts are split by discovered article batches', async () => {
+  const queryStatements: string[] = []
+  const statements: string[] = []
+  const queryResults = [getArticleBatchRows(0, 251), getArticleBatchRows(250, 251)]
+  const builder = getComparisonProjectServingCellBuilder()
+
+  await builder.insertPromptModeComparisonProjectCells(
+    {comparisonProjectId: 'comparison-serving-batched-cell-project', generation: 1},
+    {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        queryStatements.push(statement)
+
+        return (queryResults.shift() ?? []) as T[]
+      },
+      run: async (statement) => {
+        statements.push(statement)
+      },
+    },
+  )
+
+  expect(queryStatements).toHaveLength(2)
+  expect(queryStatements[0]).toContain('LIMIT 251')
+  expect(queryStatements[1]).toContain("WHERE scoped_article.article_id > 'article-0249'")
+  expect(statements).toHaveLength(4)
+  expect(statements[0]).toContain("('article-0000')")
+  expect(statements[0]).not.toContain("('article-0250')")
+  expect(statements[2]).toContain("('article-0250')")
+  expect(
+    statements.map((statement) => {
+      return statement.includes('article_batch(article_id) AS (')
+    }),
+  ).toEqual([true, true, true, true])
 })

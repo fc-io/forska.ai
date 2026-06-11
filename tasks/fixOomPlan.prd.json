@@ -104,11 +104,12 @@
         "Targeted `bunx eslint` on changed files passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-004"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-006",
@@ -201,6 +202,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-06-11T11:15:29.139Z"
+    "updatedAt": "2026-06-11T11:24:37.762Z"
   }
 }
