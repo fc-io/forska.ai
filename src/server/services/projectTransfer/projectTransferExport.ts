@@ -1036,7 +1036,13 @@ const getProjectTransferExportArticleRawJsonDecision = ({
       }
 }
 
-const getProjectTransferExportArticleImportRouteRows = async (projectId: string, database: AppQueryDatabaseService) => {
+const getProjectTransferExportArticleImportRouteRows = async (
+  projectId: string,
+  database: AppQueryDatabaseService,
+  options: {includeRawArticleJson?: boolean} = {},
+) => {
+  const rawJsonSelectSql = getProjectTransferExportArticleRawJsonSelectSql(options.includeRawArticleJson ?? true)
+
   return database.queryJson<ProjectTransferExportArticleImportRouteRow>(`
     WITH
     ${getProjectTransferExportScopedArticleCteSql(projectId)}
@@ -1046,12 +1052,12 @@ const getProjectTransferExportArticleImportRouteRows = async (projectId: string,
       air.import_route_id AS importRouteId,
       air.external_article_id AS externalArticleId,
       air.source_kind AS sourceKind,
-      TO_JSON(air.import_metadata) AS importMetadata,
+      ${rawJsonSelectSql.selectedImportMetadata} AS importMetadata,
       TO_JSON(air.match_metadata) AS matchMetadata,
       air.import_run_id AS importRunId,
       air.source_record_key AS sourceRecordKey,
       air.source_record_hash AS sourceRecordHash,
-      TO_JSON(air.raw_payload) AS rawPayload,
+      ${rawJsonSelectSql.selectedRawPayload} AS rawPayload,
       air.created_at AS createdAt,
       air.updated_at AS updatedAt
     FROM app.article_import_route air
@@ -2549,7 +2555,6 @@ const getProjectTransferExportContext = async (
   const projectPromptRows = await getProjectTransferExportProjectPromptRows(projectId, database)
   const importRouteRows = await getProjectTransferExportImportRouteRows(projectId, database)
   const projectImportRouteRows = await getProjectTransferExportProjectImportRouteRows(projectId, database)
-  const articleImportRouteRows = await getProjectTransferExportArticleImportRouteRows(projectId, database)
   const projectArticleRows = await getProjectTransferExportProjectArticleRows(projectId, database)
   const ambiguousJudgmentWarnings = await getProjectTransferExportAmbiguousJudgmentWarnings(projectId, database)
   const judgmentRows = await getProjectTransferExportJudgmentRows(projectId, database)
@@ -2567,6 +2572,9 @@ const getProjectTransferExportContext = async (
   })
   const articleRows = await getProjectTransferExportArticleRows(projectId, database, {
     includeFullText,
+    includeRawArticleJson: articleRawJsonDecision.includeRawArticleJson,
+  })
+  const articleImportRouteRows = await getProjectTransferExportArticleImportRouteRows(projectId, database, {
     includeRawArticleJson: articleRawJsonDecision.includeRawArticleJson,
   })
   const judgmentAssessmentRows = await getProjectTransferExportJudgmentAssessmentRows(projectId, database)
