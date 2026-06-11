@@ -860,6 +860,20 @@ const getConnectionById = (connections: ProviderConnectionForAdmin[]) => {
   }, {})
 }
 
+const getUniqueEquivalentTargetProviderConnection = ({
+  connections,
+  importedProvider,
+}: {
+  connections: ProviderConnectionForAdmin[]
+  importedProvider: ImportedProviderConnection
+}) => {
+  const candidates = connections.filter((connection) => {
+    return connection.enabled && !connection.config.archived && providerFingerprintsMatch(importedProvider, connection)
+  })
+
+  return candidates.length === 1 ? candidates[0] : null
+}
+
 const requireListedEnabledConnection = async ({
   connectionById,
   getProviderConnectionById,
@@ -949,22 +963,28 @@ const validateExplicitModelSelections = async ({
 
 const getResolvedProviderMappings = ({
   autoResolve,
+  connections,
   importedProviders,
   resolutionState,
 }: {
   autoResolve: boolean
+  connections: ProviderConnectionForAdmin[]
   importedProviders: ImportedProviderConnection[]
   resolutionState: ProjectTransferDependencyResolutionState
 }) => {
   return importedProviders.reduce<Record<string, string>>((mapped, importedProvider) => {
     const sourceProviderConnectionId = importedProvider.sourceProviderConnectionId
     const existingTargetId = mapped[sourceProviderConnectionId]
+    const equivalentTargetProviderConnection = getUniqueEquivalentTargetProviderConnection({
+      connections,
+      importedProvider,
+    })
     const targetProviderConnectionId =
       existingTargetId
       || resolutionState.unresolvedProviderSourceIds.includes(sourceProviderConnectionId)
       || !autoResolve
         ? null
-        : getImportedTargetProviderConnectionId(sourceProviderConnectionId)
+        : (equivalentTargetProviderConnection?.id ?? getImportedTargetProviderConnectionId(sourceProviderConnectionId))
 
     return targetProviderConnectionId ? {...mapped, [sourceProviderConnectionId]: targetProviderConnectionId} : mapped
   }, resolutionState.providerTargetBySourceId)
@@ -1326,6 +1346,7 @@ export const revalidateProjectTransferResolvedDependencies = async (
 
   const providerTargetBySourceId = getResolvedProviderMappings({
     autoResolve: input.request.autoResolve !== false,
+    connections,
     importedProviders,
     resolutionState: requestedResolutionState,
   })

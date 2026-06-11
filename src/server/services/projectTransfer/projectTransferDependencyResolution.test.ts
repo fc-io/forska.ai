@@ -313,7 +313,7 @@ const getCodexPayloads = (): ProjectTransferPayloadByKey => {
   }
 }
 
-test('project transfer dependency resolution auto-resolves imported provider and model placeholders', async () => {
+test('project transfer dependency resolution auto-resolves exact imported provider and model snapshots', async () => {
   const cwd = getRuntimeRoot()
 
   try {
@@ -327,6 +327,60 @@ test('project transfer dependency resolution auto-resolves imported provider and
       repositories: {
         listProviderConnections: async () => {
           return [getTargetConnection()]
+        },
+      },
+      request: {planRevision: 1},
+    })
+    const persistedPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as {
+      dependencyResolution: {
+        modelTargetBySourceId: Record<string, string>
+        providerTargetBySourceId: Record<string, string>
+      }
+      planRevision: number
+      summary: {dependencyStatuses: Record<string, string>}
+    }
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.changed : false).toBe(true)
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
+    })
+    expect(persistedPlan.planRevision).toBe(2)
+    expect(persistedPlan.dependencyResolution.providerTargetBySourceId).toEqual({
+      'provider-connection-1': 'target-provider-1',
+    })
+    expect(persistedPlan.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': 'target-model-1'})
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer dependency resolution preserves imported placeholders when no exact snapshot matches', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getProjectTransferPayloadFixtureMap()
+    const targetModel = getTargetModel({metadataJson: {options: {thinking: 'high'}}})
+    const targetConnection = getTargetConnection(
+      {
+        config: {
+          disabledModelIds: [],
+          manualWorkerUrls: [],
+          workerUrlMode: 'auto',
+        } as ProviderConnectionForAdmin['config'],
+      },
+      [targetModel],
+    )
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        listProviderConnections: async () => {
+          return [targetConnection]
         },
       },
       request: {planRevision: 1},
@@ -432,7 +486,7 @@ test('project transfer dependency resolution inserts imported judgments when pro
           },
         },
         listProviderConnections: async () => {
-          return [getTargetConnection()]
+          return []
         },
       },
       request: {planRevision: 1},
@@ -866,7 +920,17 @@ test('project transfer dependency resolution auto-resolves Codex dependencies to
         listProviderConnections: async () => {
           return [
             getTargetConnection(
-              {authMode: 'codex-cli', id: 'target-codex-provider-1', label: 'Codex target', providerKind: 'codex'},
+              {
+                authMode: 'codex-cli',
+                config: {
+                  disabledModelIds: [],
+                  manualWorkerUrls: [],
+                  workerUrlMode: 'manual',
+                } as ProviderConnectionForAdmin['config'],
+                id: 'target-codex-provider-1',
+                label: 'Codex target',
+                providerKind: 'codex',
+              },
               [],
             ),
           ]
