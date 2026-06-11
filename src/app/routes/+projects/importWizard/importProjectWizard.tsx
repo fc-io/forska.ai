@@ -40,6 +40,8 @@ import {
 
 type SummaryField = {key: string; label: string}
 type ConnectionDraft = {apiKey: string; baseURL: string; label: string; providerKind: string}
+type WarningDetailRow = {label: string; value: string}
+type GroupedWarning = {count: number; detailRows: WarningDetailRow[]; key: string; message: string}
 type ModelMaterializationDraft = {
   displayName: string
   remoteModelId: string
@@ -277,23 +279,92 @@ const getPostImportWarnings = (completion: ProjectImportCompletion | null): Proj
   return completion?.importWarnings ?? []
 }
 
+const warningDetailFields: Array<{key: string; label: string}> = [
+  {key: 'sourceRowId', label: 'Source row'},
+  {key: 'triggeringField', label: 'Field'},
+  {key: 'field', label: 'Field'},
+  {key: 'dependencyReason', label: 'Dependency reason'},
+  {key: 'omittedParentRef', label: 'Omitted parent'},
+  {key: 'reason', label: 'Reason'},
+]
+
+const getStableJsonValue = (value: unknown): unknown => {
+  return Array.isArray(value)
+    ? value.map(getStableJsonValue)
+    : isRecord(value)
+      ? Object.keys(value)
+          .sort()
+          .reduce<Record<string, unknown>>((stable, key) => {
+            return {...stable, [key]: getStableJsonValue(value[key])}
+          }, {})
+      : value
+}
+
+const getWarningDetailRows = (warning: ProjectImportPackageWarning) => {
+  const details = warning.details
+  const detailRows = warningDetailFields.reduce<WarningDetailRow[]>((rows, field) => {
+    const value = getStringField(details, field.key)
+    const hasExistingLabel = rows.some((row) => {
+      return row.label === field.label
+    })
+
+    return value === null || hasExistingLabel ? rows : [...rows, {label: field.label, value}]
+  }, [])
+  const sourceRef = typeof warning.scope === 'string' && warning.scope.trim().length > 0 ? warning.scope.trim() : null
+
+  return sourceRef === null ? detailRows : [...detailRows, {label: 'Scope', value: sourceRef}]
+}
+
+const getWarningGroupingKey = (warning: ProjectImportPackageWarning) => {
+  return JSON.stringify({
+    action: warning.action ?? null,
+    code: warning.code ?? null,
+    details: getStableJsonValue(warning.details ?? null),
+    message: warning.message.trim(),
+    scope: warning.scope ?? null,
+  })
+}
+
 const getGroupedWarningMessages = (warnings: ProjectImportPackageWarning[]) => {
-  return warnings.reduce<Array<{count: number; message: string}>>((grouped, warning) => {
+  return warnings.reduce<GroupedWarning[]>((grouped, warning) => {
     const message = warning.message.trim()
+    const key = getWarningGroupingKey(warning)
     const existing = grouped.find((entry) => {
-      return entry.message === message
+      return entry.key === key
     })
 
     return existing === undefined
-      ? [...grouped, {count: 1, message}]
+      ? [...grouped, {count: 1, detailRows: getWarningDetailRows(warning), key, message}]
       : grouped.map((entry) => {
-          return entry.message === message ? {...entry, count: entry.count + 1} : entry
+          return entry.key === key ? {...entry, count: entry.count + 1} : entry
         })
   }, [])
 }
 
-const formatGroupedWarningMessage = (warning: {count: number; message: string}) => {
+const formatGroupedWarningMessage = (warning: GroupedWarning) => {
   return warning.count > 1 ? `${warning.message} (x${warning.count})` : warning.message
+}
+
+const WarningListItem = (props: {warning: GroupedWarning}) => {
+  return (
+    <li>
+      <div>{formatGroupedWarningMessage(props.warning)}</div>
+      <Show when={props.warning.detailRows.length > 0}>
+        <dl class="mt-1 grid gap-x-3 gap-y-1 text-xs text-amber-950 sm:grid-cols-[max-content_1fr]">
+          <For each={props.warning.detailRows}>
+            {(row) => {
+              return (
+                <>
+                  <dt class="font-medium">{row.label}</dt>
+                  <dd class="break-all">{row.value}</dd>
+                </>
+              )
+            }}
+          </For>
+        </dl>
+      </Show>
+    </li>
+  )
 }
 
 const getCompletedProjectId = (completion: ProjectImportCompletion | null) => {
@@ -491,7 +562,7 @@ const PackageReviewPanel = (props: {session: ProjectImportSession | null}) => {
             <ul class="mt-2 space-y-2 text-sm text-amber-900">
               <For each={groupedWarnings()}>
                 {(warning) => {
-                  return <li>{formatGroupedWarningMessage(warning)}</li>
+                  return <WarningListItem warning={warning} />
                 }}
               </For>
             </ul>
@@ -506,7 +577,7 @@ const PackageReviewPanel = (props: {session: ProjectImportSession | null}) => {
             <ul class="mt-2 space-y-2 text-sm text-amber-900">
               <For each={groupedDuplicateWarnings()}>
                 {(warning) => {
-                  return <li>{formatGroupedWarningMessage(warning)}</li>
+                  return <WarningListItem warning={warning} />
                 }}
               </For>
             </ul>
@@ -532,7 +603,7 @@ const PostImportWarningsPanel = (props: {session: ProjectImportSession | null}) 
         <ul class="mt-3 space-y-2 text-sm text-amber-900">
           <For each={groupedWarnings()}>
             {(warning) => {
-              return <li>{formatGroupedWarningMessage(warning)}</li>
+              return <WarningListItem warning={warning} />
             }}
           </For>
         </ul>
