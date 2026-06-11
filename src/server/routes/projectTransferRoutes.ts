@@ -22,6 +22,7 @@ import {
   type ProjectTransferExportReadyPayload,
   type ProjectTransferPlanSummary,
   type ProjectTransferProgressPayload,
+  type ProjectTransferRawArticleProvenanceMode,
   type ProjectTransferSessionResponse,
   type ProjectTransferUploadMetadataPayload,
   validateProjectTransferPlanReadyToCommit,
@@ -85,6 +86,7 @@ type ProjectTransferImportSessionData = ProjectTransferSessionResponse & {
   uploadUrl: string
   warnings: string[]
 }
+type ExportProjectRequest = {rawArticleProvenanceMode?: ProjectTransferRawArticleProvenanceMode}
 type ProjectTransferSourceProjectRow = {deletePendingAt: unknown; id: string}
 type RouteSet = {status?: number | string}
 type ProjectTransferPackageHeaderMetadata = Pick<
@@ -161,7 +163,13 @@ export const projectTransferRouteSpecs = [
 const routeParamSchema = t.Object({id: t.String({minLength: 1})})
 const exportParamSchema = t.Object({exportId: t.String({minLength: 1})})
 const importSessionParamSchema = t.Object({sessionId: t.String({minLength: 1})})
-const exportProjectBodySchema = t.Optional(t.Object({}, {additionalProperties: true}))
+const exportProjectBodySchema = t.Optional(
+  t.Object(
+    {rawArticleProvenanceMode: t.Optional(t.Union([t.Literal('auto'), t.Literal('include'), t.Literal('omit')]))},
+    {additionalProperties: true},
+  ),
+)
+const exportProjectRequestShape = arktype({'rawArticleProvenanceMode?': '"auto" | "include" | "omit"'})
 const createImportSessionRequestShape = arktype({
   'expiresAt?': 'string',
   'packageFingerprint?': 'string | null',
@@ -385,6 +393,14 @@ const parseResolveDependenciesRequest = (
   const nestedValidation = validateResolveDependenciesNestedKeys((body ?? {}) as Record<string, unknown>)
 
   return nestedValidation.ok ? request : nestedValidation
+}
+
+const parseExportProjectRequest = (
+  body: unknown,
+): {error: string; ok: false} | {ok: true; value: ExportProjectRequest} => {
+  return parseRequestBody<ExportProjectRequest>(body, exportProjectRequestShape, [
+    'rawArticleProvenanceMode',
+  ] satisfies Array<keyof ExportProjectRequest>)
 }
 
 const getImportSessionUrls = (sessionId: string) => {
@@ -1804,14 +1820,24 @@ export const projectTransferRoutes = new Elysia()
   .use(withErrorHandler())
   .post(
     '/api/projects/:id/export-project',
-    async ({params, set}) => {
+    async ({body, params, set}) => {
+      const request = parseExportProjectRequest(body)
+
+      if (!request.ok) {
+        return getProjectTransferApiError(set, 400, request.error)
+      }
+
       const sourceProjectError = await getExportSourceProjectError(set, params.id)
 
       if (sourceProjectError !== null) {
         return sourceProjectError
       }
 
-      const result = await createProjectTransferExport({projectId: params.id})
+      const exportInput =
+        request.value.rawArticleProvenanceMode === undefined
+          ? {projectId: params.id}
+          : {projectId: params.id, rawArticleProvenanceMode: request.value.rawArticleProvenanceMode}
+      const result = await createProjectTransferExport(exportInput)
 
       if (result.executionMode === 'inline') {
         return new Response(getArrayBufferBody(result.packageBytes), {

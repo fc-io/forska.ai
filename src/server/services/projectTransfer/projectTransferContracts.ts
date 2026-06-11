@@ -53,6 +53,8 @@ export const projectTransferReadyDependencyStatuses = ['not_required', 'resolved
 
 export const projectTransferJudgmentConflictStatuses = ['blocked', 'clear', 'unknown'] as const
 
+export const projectTransferRawArticleProvenanceModes = ['auto', 'include', 'omit'] as const
+
 export const projectTransferOverlapSummaryKeys = [
   'reusedArticleCount',
   'newArticleCount',
@@ -124,6 +126,7 @@ export type ProjectTransferOverlapSummaryKey = (typeof projectTransferOverlapSum
 
 export type ProjectTransferConflictCountKey = (typeof projectTransferConflictCountKeys)[number]
 export type ProjectTransferJudgmentConflictStatus = (typeof projectTransferJudgmentConflictStatuses)[number]
+export type ProjectTransferRawArticleProvenanceMode = (typeof projectTransferRawArticleProvenanceModes)[number]
 
 export type ProjectTransferOverlapCounts = Record<ProjectTransferOverlapSummaryKey, number> & Record<string, number>
 
