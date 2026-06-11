@@ -22,9 +22,10 @@ type RowRedactionResult<TRecord> = {
 }
 
 type RedactionMatch = {
-  code: 'freeFormValueRedacted' | 'providerSecretRedacted' | 'runtimePathRedacted' | 'urlRedacted'
+  code: 'freeFormValueRedacted' | 'nonLocalUrlPreserved' | 'providerSecretRedacted' | 'runtimePathRedacted'
   message: string
   placeholder: string
+  redacts: boolean
 }
 
 const redactedValuePlaceholder = '[redacted]'
@@ -133,31 +134,37 @@ const getStringRedactionMatch = (value: string): RedactionMatch | null => {
         code: 'runtimePathRedacted',
         message: 'Local URL or runtime path was redacted from the package payload.',
         placeholder: redactedUrlPlaceholder,
+        redacts: true,
       }
     : hasUnsafeUrlParts
       ? {
-          code: 'urlRedacted',
-          message: 'URL credentials, query, or fragment were redacted from the package payload.',
-          placeholder: `${url.origin}${url.pathname}`,
+          code: 'nonLocalUrlPreserved',
+          message: 'Non-local URL contains credentials, query parameters, or a fragment and was preserved unchanged.',
+          placeholder: value,
+          redacts: false,
         }
       : hasLocalPath
         ? {
             code: 'runtimePathRedacted',
             message: 'Local runtime path was redacted from the package payload.',
             placeholder: redactedLocalPathPlaceholder,
+            redacts: true,
           }
         : secretPattern.test(value)
           ? {
               code: 'providerSecretRedacted',
               message: 'Secret-like value was redacted from the package payload.',
               placeholder: redactedValuePlaceholder,
+              redacts: true,
             }
           : null
 }
 
 const hasUnsafeRedactableValue = (value: unknown): boolean => {
-  return isString(value)
-    ? getStringRedactionMatch(value) !== null
+  const stringMatch = isString(value) ? getStringRedactionMatch(value) : null
+
+  return stringMatch
+    ? stringMatch.redacts
     : Array.isArray(value)
       ? value.some(hasUnsafeRedactableValue)
       : isRecord(value)
@@ -171,11 +178,11 @@ const redactStringValue = (value: string, context: RedactionContext): RedactedVa
   return match === null
     ? {changed: false, value, warnings: []}
     : {
-        changed: true,
+        changed: match.redacts,
         value: match.placeholder,
         warnings: [
           getWarning({
-            action: 'redacted',
+            action: match.redacts ? 'redacted' : 'warned',
             code: match.code,
             details: {reason: match.code},
             jsonPointer: context.jsonPointer,
@@ -255,8 +262,12 @@ const redactStringField = <TRecord extends JsonRecord>(
     : null
   const nextValue = result?.changed && !required ? null : result?.value
 
-  return result?.changed
-    ? {changed: true, value: {...record, [field]: nextValue}, warnings: result.warnings}
+  return result?.changed || (result?.warnings.length ?? 0) > 0
+    ? {
+        changed: result.changed,
+        value: result.changed ? {...record, [field]: nextValue} : record,
+        warnings: result.warnings,
+      }
     : {changed: false, value: record, warnings: []}
 }
 
@@ -268,8 +279,12 @@ const redactJsonField = <TRecord extends JsonRecord>(
   const value = record[field]
   const result = redactJsonValue(value, {...context, jsonPointer: childPointer(context.jsonPointer, field)})
 
-  return result.changed
-    ? {changed: true, value: {...record, [field]: result.value}, warnings: result.warnings}
+  return result.changed || result.warnings.length > 0
+    ? {
+        changed: result.changed,
+        value: result.changed ? {...record, [field]: result.value} : record,
+        warnings: result.warnings,
+      }
     : {changed: false, value: record, warnings: []}
 }
 

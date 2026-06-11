@@ -220,13 +220,16 @@ test('project-transfer export reads archived app-table scope and serializes lock
     }>
     routeArticleIdentifierInputs: Array<{inputKind: string; source: string; value: string}>
     routeArticleSelectedImportRoute: string | null
+    routeArticleUrl: string | null
     serializedArticleFullTextAssets: unknown
     serializedArticleFullTextHtml: string | null
     serializedArticleFullTextPdf: string | null
+    serializedArticleUrl: string | null
     serializedArticleHasFullTextPdf: boolean
     serializedJudgmentHasDeleteGeneration: boolean
     settingsArchived: boolean
     summaryReviewIds: string[]
+    preservedUrlWarnings: Array<{action: string; code: string; jsonPointer: string; severity: string}>
     warnings: unknown[]
     warningCodes: string[]
     warningsHaveSharedShape: boolean
@@ -520,7 +523,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
           NULL,
           '10.1000/route',
           '12345',
-          'https://example.test/route',
+          'https://user:pass@example.test/route?X-Amz-Credential=abc%2F20260611&X-Amz-Signature=secret#source',
           'full text',
           '<p>full text</p><img src="/api/runtime-asset?path=assets/project-transfer-export-test/html-image.png">',
           'assets/project-transfer-export-test/route.pdf',
@@ -934,13 +937,23 @@ test('project-transfer export reads archived app-table scope and serializes lock
       identifierRejectedWarnings,
       routeArticleIdentifierInputs: routeArticle?.identifierInputs ?? [],
       routeArticleSelectedImportRoute: routeArticle?.selectedImportRoute ?? null,
+      routeArticleUrl: routeArticle?.url ?? null,
       serializedArticleFullTextAssets: serializedArticle.fullTextAssets,
       serializedArticleFullTextHtml: serializedArticle.fullTextHtml,
       serializedArticleFullTextPdf: serializedArticle.fullTextPdf,
+      serializedArticleUrl: serializedArticle.url,
       serializedArticleHasFullTextPdf: Object.hasOwn(serializedArticle, 'fullTextPdf'),
       serializedJudgmentHasDeleteGeneration: Object.hasOwn(serializedJudgment, 'deleteGeneration'),
       settingsArchived: settings.archived,
       summaryReviewIds: summary.payloads.reviews.map((review) => review.sourceReviewId),
+      preservedUrlWarnings: archived.warnings.filter((warning) => warning.code === 'nonLocalUrlPreserved').map((warning) => {
+        return {
+          action: warning.action,
+          code: warning.code,
+          jsonPointer: warning.jsonPointer,
+          severity: warning.severity,
+        }
+      }),
       warnings: archived.warnings,
       warningCodes: archived.warnings.map((warning) => warning.code).sort(),
       warningsHaveSharedShape: archived.warnings.every((warning) => {
@@ -981,6 +994,10 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.providerConnectionIds).toEqual(['provider-null-remote'])
   expect(result.routeArticleImportRoute).toBeNull()
   expect(result.routeArticleSelectedImportRoute).toBeNull()
+  expect(result.routeArticleUrl).toBe(
+    'https://user:pass@example.test/route?X-Amz-Credential=abc%2F20260611&X-Amz-Signature=secret#source',
+  )
+  expect(result.serializedArticleUrl).toBe(result.routeArticleUrl)
   expect(result.rawOmittedArticleOriginalData).toBeNull()
   expect(result.rawOmittedArticleSourceMetadata).toBeNull()
   expect(result.rawOmittedWarning).toMatchObject({
@@ -1094,7 +1111,11 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.warningCodes).toContain('currentReviewRowsHumanReviewInputSignature')
   expect(result.warningCodes).toContain('currentReviewRowsJudgmentInputSignature')
   expect(result.warningCodes).toContain('identifierRejected')
+  expect(result.warningCodes).toContain('nonLocalUrlPreserved')
   expect(result.warningCodes).not.toContain('ambiguousJudgmentVisibleKey')
+  expect(result.preservedUrlWarnings).toEqual([
+    {action: 'warned', code: 'nonLocalUrlPreserved', jsonPointer: '/0/url', severity: 'warning'},
+  ])
   expect(result.identifierRejectedWarnings).toHaveLength(2)
   expect(
     result.identifierRejectedWarnings.map((warning) => {
