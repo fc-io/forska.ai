@@ -54,6 +54,22 @@ const getRuntimeEnv = () => {
   return getEnv()
 }
 
+const getRuntimeRoleErrorMessage = (error: unknown) => {
+  return error instanceof Error
+    ? error.message
+    : typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string'
+      ? error.message
+      : String(error)
+}
+
+const isDuckdbOwnerRoleLossError = (error: unknown) => {
+  const message = getRuntimeRoleErrorMessage(error)
+
+  return duckdbRoleErrorFragments.some((fragment) => {
+    return message.includes(fragment)
+  })
+}
+
 const getServerRuntimeState = () => {
   globalThis.__forskaServerRuntimeState ??= {
     autoMonitorStarted: false,
@@ -223,6 +239,13 @@ const refreshExplicitDuckdbOwnerLease = async () => {
     serverRuntimeState.currentLease = await Effect.runPromise(updateDuckdbOwnerLeaseHeartbeat(currentLease))
     setLastKnownDuckdbOwnerUrl(getCurrentServerUrl())
   } catch (error) {
+    if (isDuckdbOwnerRoleLossError(error)) {
+      serverRuntimeState.currentLease = null
+      setCurrentServerRole('api')
+      await runDuckdbOwnerDemotionHandlers('lease-lost')
+      await readDuckdbOwnerUrlFromLease()
+    }
+
     autoServerRoleLogger.warn(
       'server-role:explicit-duckdb-owner-heartbeat',
       '[server] explicit DuckDB owner lease heartbeat failed',
@@ -474,16 +497,7 @@ export const shouldCurrentServerMountDuckdbOwnerPrivateApi = () => {
 }
 
 export const isExpectedDuckdbOwnerRoleLossError = (error: unknown) => {
-  const message =
-    error instanceof Error
-      ? error.message
-      : typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string'
-        ? error.message
-        : String(error)
-
-  return duckdbRoleErrorFragments.some((fragment) => {
-    return message.includes(fragment)
-  })
+  return isDuckdbOwnerRoleLossError(error)
 }
 
 export const isCurrentServerDuckdbOwnerProxyDisabled = () => {

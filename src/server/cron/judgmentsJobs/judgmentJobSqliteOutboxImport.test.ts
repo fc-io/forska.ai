@@ -377,6 +377,149 @@ test('background import fast flushes draining jobs before active jobs', () => {
   expect(result.summary).toEqual({attemptedCount: 1, failedCount: 0, skippedCount: 0, succeededCount: 1})
 })
 
+test('background import skips locked draining jobs and imports the next candidate', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const outboxImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
+        const isolatedImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteIsolatedImport.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const activeImportJobIds = []
+        const flushJobIds = []
+        const healthSnapshotJobIds = []
+        const queryStatements = []
+        const runStatements = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  queryStatements.push(statement)
+
+                  return statement.includes("storage_state = 'draining'") && statement.includes('status IN')
+                    ? [
+                        {id: 'active-job', storageState: 'active'},
+                        {id: 'draining-job', storageState: 'draining'},
+                      ]
+                    : []
+                },
+                run: async (statement) => {
+                  runStatements.push(statement)
+                },
+              }
+            },
+          }
+        })
+
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+            getJudgmentJobSqliteService: () => {
+              return {
+                getHealthSnapshot: async (jobId) => {
+                  healthSnapshotJobIds.push(jobId)
+                  return null
+                },
+                hasOwnedLease: () => false,
+                syncOwnedLeases: async () => {},
+              }
+            },
+          }
+        })
+
+        void mock.module(outboxImportModulePath, () => {
+          return {
+            runJudgmentJobSqliteOutboxImportCycle: async ({jobId}) => {
+              activeImportJobIds.push(jobId)
+              return {
+                claimedBy: 'test-server',
+                discardedCount: 0,
+                duplicateCount: 0,
+                importedCount: 1,
+                jobId,
+                outboxClaimId: 'claim-1',
+                outboxRowCount: 1,
+                status: 'imported',
+              }
+            },
+          }
+        })
+
+        void mock.module(isolatedImportModulePath, () => {
+          return {
+            runJudgmentJobSqliteIsolatedFlush: async ({jobId}) => {
+              flushJobIds.push(jobId)
+              return {
+                cycleCount: 1,
+                errorMessage: 'Failed to acquire SQLite job lease for draining-job',
+                exitCode: 1,
+                importedCount: 0,
+                lastResult: null,
+              }
+            },
+          }
+        })
+
+        const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?draining-lock-skip=' + Date.now())
+        const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
+
+        console.log(
+          JSON.stringify({
+            activeImportJobIds,
+            flushJobIds,
+            healthSnapshotJobIds,
+            queryStatements,
+            runStatements,
+            summary,
+          }),
+        )
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'SQLite draining lock skip regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    activeImportJobIds: string[]
+    flushJobIds: string[]
+    healthSnapshotJobIds: string[]
+    queryStatements: string[]
+    runStatements: string[]
+    summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
+  }
+
+  expect(result.flushJobIds).toEqual(['draining-job'])
+  expect(result.activeImportJobIds).toEqual(['active-job'])
+  expect(result.healthSnapshotJobIds).toEqual(['active-job'])
+  expect(result.summary).toEqual({attemptedCount: 2, failedCount: 0, skippedCount: 1, succeededCount: 1})
+  expect(
+    result.queryStatements.some((statement) => {
+      return statement.includes('last_import_error')
+    }),
+  ).toBe(false)
+  expect(
+    result.runStatements.filter((statement) => {
+      return statement.includes('last_import_started_at')
+    }),
+  ).toHaveLength(2)
+})
+
 test('background import records metadata and quarantines repeated failures for the attempted job', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

@@ -16,6 +16,13 @@ const drainingRetentionPruneChunkSize = 1_000
 
 type ImportableJudgmentJobRow = {id: string; storageState?: string | null}
 type ImportableJudgmentJob = {id: string; storageState: string}
+type BackgroundImportSummary = {
+  attemptedCount: number
+  failedCount: number
+  skippedCount: number
+  succeededCount: number
+}
+type BackgroundImportAttempt = {continueToNextJob: boolean; summary: BackgroundImportSummary}
 type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
 
 const normalizeImportableJudgmentJob = (row: ImportableJudgmentJobRow): ImportableJudgmentJob => {
@@ -83,6 +90,22 @@ const getImportableJudgmentJobs = async () => {
 
 const getEmptyRetentionPruneResult = (): RetentionPruneResult => {
   return {outboxRowsDeleted: 0, queuePromptRowsDeleted: 0}
+}
+
+const getEmptyBackgroundImportSummary = (): BackgroundImportSummary => {
+  return {attemptedCount: 0, failedCount: 0, skippedCount: 0, succeededCount: 0}
+}
+
+const addBackgroundImportSummaries = (
+  left: BackgroundImportSummary,
+  right: BackgroundImportSummary,
+): BackgroundImportSummary => {
+  return {
+    attemptedCount: left.attemptedCount + right.attemptedCount,
+    failedCount: left.failedCount + right.failedCount,
+    skippedCount: left.skippedCount + right.skippedCount,
+    succeededCount: left.succeededCount + right.succeededCount,
+  }
 }
 
 const addRetentionPruneResults = (left: RetentionPruneResult, right: RetentionPruneResult): RetentionPruneResult => {
@@ -230,17 +253,14 @@ const recordTransientImportFailure = async ({
   `)
 }
 
-export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimedBy: string}) => {
+const runJudgmentJobSqliteBackgroundImportAttempt = async ({
+  claimedBy,
+  job,
+}: {
+  claimedBy: string
+  job: ImportableJudgmentJob
+}): Promise<BackgroundImportAttempt> => {
   const sqliteService = getJudgmentJobSqliteService()
-
-  await sqliteService.syncOwnedLeases([])
-
-  const [job = null] = await getImportableJudgmentJobs()
-
-  if (!job) {
-    return {attemptedCount: 0, failedCount: 0, skippedCount: 0, succeededCount: 0}
-  }
-
   const jobId = job.id
 
   await recordImportStart(jobId)
@@ -254,11 +274,23 @@ export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimed
     await recordImportSuccess({exitCode: result.exitCode, jobId})
     await sqliteService.getHealthSnapshot(jobId)
     return !result.changed
-      ? {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0}
-      : {attemptedCount: 1, failedCount: 0, skippedCount: 0, succeededCount: 1}
+      ? {continueToNextJob: false, summary: {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0}}
+      : {continueToNextJob: false, summary: {attemptedCount: 1, failedCount: 0, skippedCount: 0, succeededCount: 1}}
   } catch (error) {
     const errorMessage = getJudgmentJobSqliteErrorMessage(error)
-    const [failureState] = isTransientJudgmentJobSqliteLockMessage(errorMessage)
+    const isTransientLock = isTransientJudgmentJobSqliteLockMessage(errorMessage)
+
+    if (job.storageState === 'draining' && isTransientLock) {
+      judgmentJobSqliteBackgroundImportLogger.log(
+        `judgment-job-sqlite-background-import:skipped:${jobId}`,
+        '[judgment-job-sqlite-background-import] skipped draining job because SQLite lease is unavailable',
+        {claimedBy, errorMessage, jobId, storageState: job.storageState},
+      )
+
+      return {continueToNextJob: true, summary: {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0}}
+    }
+
+    const [failureState] = isTransientLock
       ? await recordTransientImportFailure({errorMessage, exitCode: 1, jobId})
       : await recordImportFailure({errorMessage, exitCode: 1, jobId})
 
@@ -275,6 +307,37 @@ export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimed
       },
     )
 
-    return {attemptedCount: 1, failedCount: 1, skippedCount: 0, succeededCount: 0}
+    return {continueToNextJob: false, summary: {attemptedCount: 1, failedCount: 1, skippedCount: 0, succeededCount: 0}}
   }
+}
+
+const runNextJudgmentJobSqliteBackgroundImport = async ({
+  claimedBy,
+  jobs,
+  summary = getEmptyBackgroundImportSummary(),
+}: {
+  claimedBy: string
+  jobs: ImportableJudgmentJob[]
+  summary?: BackgroundImportSummary
+}): Promise<BackgroundImportSummary> => {
+  const [job = null, ...remainingJobs] = jobs
+
+  if (!job) {
+    return summary
+  }
+
+  const attempt = await runJudgmentJobSqliteBackgroundImportAttempt({claimedBy, job})
+  const nextSummary = addBackgroundImportSummaries(summary, attempt.summary)
+
+  return attempt.continueToNextJob
+    ? runNextJudgmentJobSqliteBackgroundImport({claimedBy, jobs: remainingJobs, summary: nextSummary})
+    : nextSummary
+}
+
+export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimedBy: string}) => {
+  const sqliteService = getJudgmentJobSqliteService()
+
+  await sqliteService.syncOwnedLeases([])
+
+  return runNextJudgmentJobSqliteBackgroundImport({claimedBy, jobs: await getImportableJudgmentJobs()})
 }
