@@ -101,6 +101,7 @@ type DuckdbServiceState = {
   backgroundTotalDurationMs: number
   backgroundTotalWaitMs: number
   controlConnection: DuckDBConnection | null
+  controlTransactionDepth: number
   duckdbInstance: DuckDBInstance | null
   duckdbLastDurationMs: number | null
   duckdbLastWaitMs: number | null
@@ -179,6 +180,7 @@ const getDuckdbServiceState = () => {
     backgroundTotalDurationMs: 0,
     backgroundTotalWaitMs: 0,
     controlConnection: null,
+    controlTransactionDepth: 0,
     duckdbInstance: null,
     duckdbLastDurationMs: null,
     duckdbLastWaitMs: null,
@@ -553,6 +555,7 @@ const resetDuckdbRuntimeState = () => {
   duckdbServiceState.backgroundTotalDurationMs = 0
   duckdbServiceState.backgroundTotalWaitMs = 0
   duckdbServiceState.controlConnection = null
+  duckdbServiceState.controlTransactionDepth = 0
   duckdbServiceState.duckdbInstance = null
   duckdbServiceState.duckdbLastDurationMs = null
   duckdbServiceState.duckdbLastWaitMs = null
@@ -676,8 +679,8 @@ const getAppendConnectionCloseErrors = (appendConnections: DuckDBConnection[]): 
   })
 }
 
-const checkpointDuckdbBeforeClose = async (connection: DuckDBConnection | null) => {
-  if (connection === null) {
+const checkpointDuckdbBeforeClose = async (connection: DuckDBConnection | null, hasOpenTransaction: boolean) => {
+  if (connection === null || hasOpenTransaction) {
     return
   }
 
@@ -698,9 +701,10 @@ const closeDuckdbServiceWithoutBarrier = async () => {
   const activeConnection = duckdbServiceState.controlConnection
   const activeAppendConnections = [...duckdbServiceState.appendConnections]
   const activeBackgroundConnection = duckdbServiceState.backgroundConnection
+  const hasOpenControlTransaction = duckdbServiceState.controlTransactionDepth > 0
   const activeInstance = duckdbServiceState.duckdbInstance
 
-  await checkpointDuckdbBeforeClose(activeConnection)
+  await checkpointDuckdbBeforeClose(activeConnection, hasOpenControlTransaction)
 
   resetDuckdbRuntimeState()
 
@@ -1184,8 +1188,26 @@ const splitDuckdbStatements = (statement: string) => {
     .statements
 }
 
+const recordDuckdbControlTransactionStatement = (duckdbConnection: DuckDBConnection, statement: string) => {
+  if (duckdbConnection !== duckdbServiceState.controlConnection) {
+    return
+  }
+
+  const normalizedStatement = statement.trim()
+
+  if (/^BEGIN\b/i.test(normalizedStatement)) {
+    duckdbServiceState.controlTransactionDepth += 1
+    return
+  }
+
+  if (/^(COMMIT|ROLLBACK)\b/i.test(normalizedStatement)) {
+    duckdbServiceState.controlTransactionDepth = Math.max(0, duckdbServiceState.controlTransactionDepth - 1)
+  }
+}
+
 const runDuckdbSingleStatement = async (duckdbConnection: DuckDBConnection, statement: string) => {
   await duckdbConnection.run(statement)
+  recordDuckdbControlTransactionStatement(duckdbConnection, statement)
 }
 
 const runDuckdbSingleStatementAndReadAll = async <T>(

@@ -384,20 +384,22 @@ const getDirtyProjectsForArticleIds = async (runner: RefreshStateRunner, article
       SELECT
         project_article.project_id AS projectId,
         project_article.article_id AS articleId
-      FROM app.project_article project_article
+      FROM ${dirtyRefreshArticleInputTableName} article_input
+      INNER JOIN app.project_article project_article
+        ON project_article.article_id = article_input.article_id
       INNER JOIN app.project project ON project.id = project_article.project_id
-      WHERE ${getDirtyRefreshArticleInputExistsSql('project_article.article_id')}
-        AND project.archived = FALSE
+      WHERE project.archived = FALSE
       UNION
       SELECT
         project_import_route.project_id AS projectId,
-        article_import_route.article_id AS articleId
-      FROM app.article_import_route article_import_route
+        article_input.article_id AS articleId
+      FROM ${dirtyRefreshArticleInputTableName} article_input
+      INNER JOIN app.article_import_route article_import_route
+        ON article_import_route.article_id = article_input.article_id
       INNER JOIN app.project_import_route project_import_route
         ON project_import_route.import_route_id = article_import_route.import_route_id
       INNER JOIN app.project project ON project.id = project_import_route.project_id
-      WHERE ${getDirtyRefreshArticleInputExistsSql('article_import_route.article_id')}
-        AND project.archived = FALSE
+      WHERE project.archived = FALSE
     ) resolved_projects
     ORDER BY projectId ASC, articleId ASC
   `)
