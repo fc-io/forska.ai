@@ -275,7 +275,7 @@ test('comparison serving rebuild stages builds promotes and records ready status
   })
   expect(rowsByTable.article?.rowCount).toBe('2')
   expect(rowsByTable.cell?.rowCount).toBe('4')
-  expect(Number(rowsByTable.member?.rowCount ?? 0)).toBeGreaterThan(0)
+  expect(Number(rowsByTable.member?.rowCount ?? 0)).toBe(0)
   expect(rowsByTable.stats?.rowCount).toBe(
     String(comparisonProjectRowFilters.length * comparisonProjectDifferenceFilters.length),
   )

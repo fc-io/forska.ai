@@ -65,6 +65,14 @@ const getLlmRow = (params: {
   }
 }
 
+const getEncodedServingCursor = (cursor: {articleId: string; createdAt: string | null; title: string}) => {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
+}
+
+const getDecodedServingCursor = (cursor: string | null) => {
+  return cursor ? (JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown) : null
+}
+
 test('scoped article batch sql selects stable article context with limit and offset', () => {
   const sql = getComparisonProjectScopedArticleBatchSql({
     articleTable: 'app.article',
@@ -177,22 +185,28 @@ test('row batch iterator yields filtered rows by scoped article batch', async ()
   expect(yieldedRowIds).toEqual([['article-1'], ['article-3']])
 })
 
-test('serving member sql resolves active generation and pages by filter cursor', () => {
+test('serving member sql resolves active generation and pages by keyset cursor', () => {
+  const cursor = getEncodedServingCursor({
+    articleId: 'article-4',
+    createdAt: '2026-04-04T00:00:00.000Z',
+    title: 'Article 4',
+  })
   const sql = getComparisonProjectServingMemberSql({
     comparisonProjectId: 'comparison-project-1',
-    cursor: '4',
+    cursor,
     differenceFilter: 'llm-vs-llm',
     limit: 25,
     rowFilter: 'fully-answered',
   })
 
   expect(sql).toContain('FROM app.comparison_project_serving_generation')
-  expect(sql).toContain('FROM mart.comparison_filter_member member')
+  expect(sql).toContain('FROM mart.comparison_article_serving article')
   expect(sql).toContain("comparison_project_id = 'comparison-project-1'")
-  expect(sql).toContain("member.row_filter = 'fully-answered'")
-  expect(sql).toContain("member.difference_filter = 'llm-vs-llm'")
-  expect(sql).toContain('member.ordinal > 4')
-  expect(sql).toContain('ORDER BY member.ordinal ASC')
+  expect(sql).toContain('article.passes_row_filter_fully_answered')
+  expect(sql).toContain('article.passes_difference_filter_llm_vs_llm')
+  expect(sql).toContain("article.row_sort_created_at < TIMESTAMPTZ '2026-04-04T00:00:00.000Z'")
+  expect(sql).toContain("article.row_sort_title > 'Article 4'")
+  expect(sql).toContain('ORDER BY article.row_sort_created_at DESC NULLS LAST, article.row_sort_title ASC')
   expect(sql).toContain('LIMIT 26')
 })
 
@@ -276,11 +290,29 @@ test('serving judgment rows return next cursor and hydrate page rows only', asyn
       queryJson: async <T>(statement: string): Promise<T[]> => {
         statements.push(statement)
 
-        return statement.includes('FROM mart.comparison_filter_member')
+        return statement.includes('article.row_sort_created_at AS rowSortCreatedAt')
           ? ([
-              {articleId: 'article-1', generation: 1, ordinal: 0},
-              {articleId: 'article-2', generation: 1, ordinal: 1},
-              {articleId: 'article-3', generation: 1, ordinal: 2},
+              {
+                articleId: 'article-1',
+                generation: 1,
+                rowSortArticleId: 'article-1',
+                rowSortCreatedAt: new Date('2026-04-03T00:00:00.000Z'),
+                rowSortTitle: 'Article 1',
+              },
+              {
+                articleId: 'article-2',
+                generation: 1,
+                rowSortArticleId: 'article-2',
+                rowSortCreatedAt: new Date('2026-04-02T00:00:00.000Z'),
+                rowSortTitle: 'Article 2',
+              },
+              {
+                articleId: 'article-3',
+                generation: 1,
+                rowSortArticleId: 'article-3',
+                rowSortCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+                rowSortTitle: 'Article 3',
+              },
             ] as T[])
           : statement.includes('FROM mart.comparison_article_serving')
             ? ([
@@ -312,7 +344,11 @@ test('serving judgment rows return next cursor and hydrate page rows only', asyn
     rowFilter: 'all',
   })
 
-  expect(page.nextCursor).toBe('1')
+  expect(getDecodedServingCursor(page.nextCursor)).toEqual({
+    articleId: 'article-2',
+    createdAt: '2026-04-02T00:00:00.000Z',
+    title: 'Article 2',
+  })
   expect(page.rows).toEqual([
     {
       articleCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
@@ -339,7 +375,7 @@ test('serving judgment rows return next cursor and hydrate page rows only', asyn
   expect(statements[2]).toContain("cell.article_id IN ('article-1', 'article-2')")
 })
 
-test('serving row batch iterator walks filter members by ordinal cursor', async () => {
+test('serving row batch iterator walks article-serving rows by keyset cursor', async () => {
   const statements: string[] = []
   const yieldedRowIds: string[][] = []
 
@@ -358,14 +394,41 @@ test('serving row batch iterator walks filter members by ordinal cursor', async 
       queryJson: async <T>(statement: string): Promise<T[]> => {
         statements.push(statement)
 
-        return statement.includes('FROM mart.comparison_filter_member') && !statement.includes('member.ordinal > 1')
+        return statement.includes('article.row_sort_created_at AS rowSortCreatedAt')
+          && !statement.includes("article.row_sort_created_at < TIMESTAMPTZ '2026-04-02T00:00:00.000Z'")
           ? ([
-              {articleId: 'article-1', generation: 1, ordinal: 0},
-              {articleId: 'article-2', generation: 1, ordinal: 1},
-              {articleId: 'article-3', generation: 1, ordinal: 2},
+              {
+                articleId: 'article-1',
+                generation: 1,
+                rowSortArticleId: 'article-1',
+                rowSortCreatedAt: new Date('2026-04-03T00:00:00.000Z'),
+                rowSortTitle: 'article-1',
+              },
+              {
+                articleId: 'article-2',
+                generation: 1,
+                rowSortArticleId: 'article-2',
+                rowSortCreatedAt: new Date('2026-04-02T00:00:00.000Z'),
+                rowSortTitle: 'article-2',
+              },
+              {
+                articleId: 'article-3',
+                generation: 1,
+                rowSortArticleId: 'article-3',
+                rowSortCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+                rowSortTitle: 'article-3',
+              },
             ] as T[])
-          : statement.includes('FROM mart.comparison_filter_member')
-            ? ([{articleId: 'article-3', generation: 1, ordinal: 2}] as T[])
+          : statement.includes('article.row_sort_created_at AS rowSortCreatedAt')
+            ? ([
+                {
+                  articleId: 'article-3',
+                  generation: 1,
+                  rowSortArticleId: 'article-3',
+                  rowSortCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+                  rowSortTitle: 'article-3',
+                },
+              ] as T[])
             : statement.includes('FROM mart.comparison_article_serving')
               ? (['article-1', 'article-2', 'article-3']
                   .filter((articleId) => {
@@ -398,15 +461,18 @@ test('serving row batch iterator walks filter members by ordinal cursor', async 
   expect(
     statements.some((statement) => {
       return (
-        statement.includes('FROM mart.comparison_filter_member member')
-        && statement.includes("member.row_filter = 'fully-answered'")
-        && statement.includes("member.difference_filter = 'llm-vs-llm'")
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes('article.passes_row_filter_fully_answered')
+        && statement.includes('article.passes_difference_filter_llm_vs_llm')
       )
     }),
   ).toBe(true)
   expect(
     statements.some((statement) => {
-      return statement.includes('FROM mart.comparison_filter_member member') && statement.includes('member.ordinal > 1')
+      return (
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes("article.row_sort_created_at < TIMESTAMPTZ '2026-04-02T00:00:00.000Z'")
+      )
     }),
   ).toBe(true)
   expect(
@@ -446,7 +512,7 @@ test('serving judgment rows return empty page when active generation is missing'
 
   expect(page).toEqual({nextCursor: null, rows: []})
   expect(statements).toHaveLength(1)
-  expect(statements[0]).toContain('FROM mart.comparison_filter_member')
+  expect(statements[0]).toContain('FROM mart.comparison_article_serving article')
   expect(statements[0]).not.toContain('FROM app.article')
   expect(statements[0]).not.toContain('FROM app.judgment')
 })

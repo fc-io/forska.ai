@@ -10,22 +10,32 @@ import {
   getScopedArticleExternalIdExpression,
 } from './scopedArticleReadAdapter.ts'
 
-type ComparisonProjectServingRollupBuilderRunner = {run: (statement: string) => Promise<void>}
+type ComparisonProjectServingRollupBuilderRunner = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
 
 type ComparisonProjectServingRollupBuilderParams = {comparisonProjectId: string; generation: number}
 
-type ComparisonProjectFilterMemberBuilderParams = ComparisonProjectServingRollupBuilderParams & {
+type ComparisonProjectArticleRollupBuilderParams = ComparisonProjectServingRollupBuilderParams & {articleIds?: string[]}
+
+type ComparisonProjectFilterStatsBuilderParams = ComparisonProjectServingRollupBuilderParams & {
   differenceFilter?: ComparisonProjectDifferenceFilter
   rowFilter?: ComparisonProjectRowFilter
 }
 
-type ComparisonProjectServingRollupBuilderDependencies = {run: (statement: string) => Promise<void>}
+type ComparisonProjectServingRollupBuilderDependencies = {
+  queryJson?: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
+
+type ComparisonProjectArticleRollupBatch = {articleIds: string[]; hasMore: boolean}
 
 const comparisonArticleServingTable = 'mart.comparison_article_serving'
 const comparisonCellServingTable = 'mart.comparison_cell_serving'
-const comparisonFilterMemberTable = 'mart.comparison_filter_member'
 const comparisonFilterStatsTable = 'mart.comparison_filter_stats'
 const comparisonScopedImportAlias = 'selected_import'
+const comparisonProjectServingArticleRollupBatchSize = 1000
 const summaryPromptId = 'summary'
 const chineseArticleCategory = 'chinese'
 const nonChineseArticleCategory = 'non_chinese'
@@ -57,7 +67,7 @@ const getDefaultComparisonProjectServingRollupBuilderDependencies =
   (): ComparisonProjectServingRollupBuilderDependencies => {
     const database = getAppDatabaseService()
 
-    return {run: database.runBackground}
+    return {queryJson: database.queryJsonBackground, run: database.runBackground}
   }
 
 const getComparisonProjectServingGenerationSql = (generation: number) => {
@@ -210,7 +220,27 @@ const getComparisonProjectScopeCtesSql = () => {
   `
 }
 
-const getComparisonProjectScopedImportSelectionCteSql = () => {
+const getComparisonProjectArticleBatchCteSql = (articleIds: string[] | undefined) => {
+  return articleIds
+    ? `article_batch(article_id) AS (
+      VALUES ${articleIds
+        .map((articleId) => {
+          return `(${getSqlLiteral(articleId)})`
+        })
+        .join(', ')}
+    )`
+    : null
+}
+
+const getComparisonProjectArticleBatchJoinSql = (articleIdExpression: string, useArticleBatch: boolean) => {
+  return useArticleBatch ? `INNER JOIN article_batch ON article_batch.article_id = ${articleIdExpression}` : ''
+}
+
+const getComparisonProjectArticleCellScopeJoinSql = (useArticleBatch: boolean) => {
+  return useArticleBatch ? '' : 'INNER JOIN scoped_article ON scoped_article.article_id = cell.article_id'
+}
+
+const getComparisonProjectScopedImportSelectionCteSql = ({useArticleBatch}: {useArticleBatch: boolean}) => {
   return `
     comparison_article_import_candidate AS (
       SELECT
@@ -225,6 +255,7 @@ const getComparisonProjectScopedImportSelectionCteSql = () => {
       INNER JOIN comparison_project cp ON cp.id = cpsp.comparison_project_id
       INNER JOIN app.project_import_route pir ON pir.project_id = cpsp.source_project_id
       INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+      ${getComparisonProjectArticleBatchJoinSql('air.article_id', useArticleBatch)}
 
       UNION ALL
 
@@ -239,6 +270,7 @@ const getComparisonProjectScopedImportSelectionCteSql = () => {
       FROM app.comparison_project_import_route cpir
       INNER JOIN comparison_project cp ON cp.id = cpir.comparison_project_id
       INNER JOIN app.article_import_route air ON air.import_route_id = cpir.import_route_id
+      ${getComparisonProjectArticleBatchJoinSql('air.article_id', useArticleBatch)}
     ),
     selected_comparison_article_import AS (
       SELECT
@@ -533,11 +565,14 @@ const getComparisonProjectRequiredColumnCtesSql = () => {
 }
 
 const getComparisonProjectArticleServingInsertSql = ({
+  articleIds,
   comparisonProjectId,
   generation,
-}: ComparisonProjectServingRollupBuilderParams) => {
+}: ComparisonProjectArticleRollupBuilderParams) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getComparisonProjectServingGenerationSql(generation)
+  const articleBatchCte = getComparisonProjectArticleBatchCteSql(articleIds)
+  const useArticleBatch = articleBatchCte !== null
   const articleExternalIdExpression = getScopedArticleExternalIdExpression({
     articleAlias: 'article',
     scopedImportAlias: comparisonScopedImportAlias,
@@ -577,6 +612,12 @@ const getComparisonProjectArticleServingInsertSql = ({
       has_all_llm_columns,
       has_all_human_columns,
       has_multiple_answers,
+      has_llm_answered_yes,
+      has_llm_answered_no,
+      has_llm_answered_maybe,
+      has_human_answered_yes,
+      has_human_answered_no,
+      has_human_answered_maybe,
       is_fully_answered,
       passes_row_filter_multiple_answers,
       passes_row_filter_fully_answered,
@@ -606,8 +647,9 @@ const getComparisonProjectArticleServingInsertSql = ({
           AND COALESCE(cp.human_judgment_mode, 'prompt') = 'summary' AS is_summary_mode
       FROM comparison_project cp
     ),
+    ${articleBatchCte ? `${articleBatchCte},` : ''}
     ${getComparisonProjectRequiredColumnCtesSql()},
-    ${getComparisonProjectScopedImportSelectionCteSql()},
+    ${getComparisonProjectScopedImportSelectionCteSql({useArticleBatch})},
     required_column_counts AS (
       SELECT
         CAST(COUNT(*) AS INTEGER) AS required_column_count,
@@ -633,7 +675,8 @@ const getComparisonProjectArticleServingInsertSql = ({
       SELECT cell.*
       FROM ${comparisonCellServingTable} cell
       INNER JOIN required_column ON required_column.column_id = cell.column_id
-      INNER JOIN scoped_article ON scoped_article.article_id = cell.article_id
+      ${getComparisonProjectArticleCellScopeJoinSql(useArticleBatch)}
+      ${getComparisonProjectArticleBatchJoinSql('cell.article_id', useArticleBatch)}
       WHERE cell.comparison_project_id = ${comparisonProjectLiteral}
         AND cell.generation = ${generationLiteral}
     ),
@@ -659,6 +702,18 @@ const getComparisonProjectArticleServingInsertSql = ({
       WHERE article_cell.normalized_answers IS NOT NULL
         AND ARRAY_LENGTH(article_cell.normalized_answers) > 0
         AND NULLIF(TRIM(answer.answer_value), '') IS NOT NULL
+    ),
+    article_answer_value_rollup AS (
+      SELECT
+        article_id,
+        COALESCE(BOOL_OR(kind = 'llm' AND LOWER(answer_value) = 'yes'), FALSE) AS has_llm_answered_yes,
+        COALESCE(BOOL_OR(kind = 'llm' AND LOWER(answer_value) = 'no'), FALSE) AS has_llm_answered_no,
+        COALESCE(BOOL_OR(kind = 'llm' AND LOWER(answer_value) = 'maybe'), FALSE) AS has_llm_answered_maybe,
+        COALESCE(BOOL_OR(kind = 'human' AND LOWER(answer_value) = 'yes'), FALSE) AS has_human_answered_yes,
+        COALESCE(BOOL_OR(kind = 'human' AND LOWER(answer_value) = 'no'), FALSE) AS has_human_answered_no,
+        COALESCE(BOOL_OR(kind = 'human' AND LOWER(answer_value) = 'maybe'), FALSE) AS has_human_answered_maybe
+      FROM cell_answer
+      GROUP BY article_id
     ),
     prompt_answer_count AS (
       SELECT
@@ -730,6 +785,7 @@ const getComparisonProjectArticleServingInsertSql = ({
     rollup_scoped_article AS (
       SELECT source_project_scope.article_id
       FROM source_project_scope
+      ${getComparisonProjectArticleBatchJoinSql('source_project_scope.article_id', useArticleBatch)}
       CROSS JOIN scope_config
       WHERE scope_config.source_project_link_count > 0
 
@@ -737,6 +793,7 @@ const getComparisonProjectArticleServingInsertSql = ({
 
       SELECT import_route_scope.article_id
       FROM import_route_scope
+      ${getComparisonProjectArticleBatchJoinSql('import_route_scope.article_id', useArticleBatch)}
       CROSS JOIN scope_config
       WHERE scope_config.source_project_link_count = 0
         AND scope_config.import_route_link_count > 0
@@ -765,6 +822,12 @@ const getComparisonProjectArticleServingInsertSql = ({
           WHEN project_mode.is_summary_mode THEN COALESCE(article_cell_rollup.answered_column_count, 0) >= 2
           ELSE COALESCE(article_cell_rollup.answered_prompt_count, 0) >= 2
         END AS has_multiple_answers,
+        COALESCE(article_answer_value_rollup.has_llm_answered_yes, FALSE) AS has_llm_answered_yes,
+        COALESCE(article_answer_value_rollup.has_llm_answered_no, FALSE) AS has_llm_answered_no,
+        COALESCE(article_answer_value_rollup.has_llm_answered_maybe, FALSE) AS has_llm_answered_maybe,
+        COALESCE(article_answer_value_rollup.has_human_answered_yes, FALSE) AS has_human_answered_yes,
+        COALESCE(article_answer_value_rollup.has_human_answered_no, FALSE) AS has_human_answered_no,
+        COALESCE(article_answer_value_rollup.has_human_answered_maybe, FALSE) AS has_human_answered_maybe,
         COALESCE(article_difference_rollup.has_human_vs_llm_overlap, FALSE) AS has_human_vs_llm_overlap,
         COALESCE(article_difference_rollup.has_human_vs_llm_difference, FALSE) AS has_human_vs_llm_difference,
         COALESCE(article_difference_rollup.has_human_vs_llm_true_conflict, FALSE) AS has_human_vs_llm_true_conflict,
@@ -779,6 +842,7 @@ const getComparisonProjectArticleServingInsertSql = ({
       CROSS JOIN project_mode
       CROSS JOIN difference_filter_availability
       LEFT JOIN article_cell_rollup ON article_cell_rollup.article_id = rollup_scoped_article.article_id
+      LEFT JOIN article_answer_value_rollup ON article_answer_value_rollup.article_id = rollup_scoped_article.article_id
       LEFT JOIN article_difference_rollup ON article_difference_rollup.article_id = article_cell_rollup.article_id
     ),
     serving_article AS (
@@ -832,6 +896,12 @@ const getComparisonProjectArticleServingInsertSql = ({
       serving_article.has_all_llm_columns,
       serving_article.has_all_human_columns,
       serving_article.has_multiple_answers,
+      serving_article.has_llm_answered_yes,
+      serving_article.has_llm_answered_no,
+      serving_article.has_llm_answered_maybe,
+      serving_article.has_human_answered_yes,
+      serving_article.has_human_answered_no,
+      serving_article.has_human_answered_maybe,
       serving_article.has_all_llm_columns AND serving_article.has_all_human_columns AS is_fully_answered,
       serving_article.has_multiple_answers AS passes_row_filter_multiple_answers,
       serving_article.has_all_llm_columns AND serving_article.has_all_human_columns AS passes_row_filter_fully_answered,
@@ -906,114 +976,50 @@ const getComparisonProjectFilterValuesCteSql = (params: {
   `
 }
 
-const getComparisonProjectFilterMemberInsertSql = ({
-  comparisonProjectId,
-  differenceFilter,
-  generation,
-  rowFilter,
-}: ComparisonProjectFilterMemberBuilderParams) => {
-  const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
-  const generationLiteral = getComparisonProjectServingGenerationSql(generation)
+const getComparisonProjectArticleRowFilterPredicateSql = (rowFilterExpression: string, articleAlias: string) => {
+  return `CASE ${rowFilterExpression}
+          WHEN 'multiple-answers' THEN ${articleAlias}.passes_row_filter_multiple_answers
+          WHEN 'fully-answered' THEN ${articleAlias}.passes_row_filter_fully_answered
+          WHEN 'llm-answered-yes' THEN ${articleAlias}.has_llm_answered_yes
+          WHEN 'llm-answered-no' THEN ${articleAlias}.has_llm_answered_no
+          WHEN 'llm-answered-maybe' THEN ${articleAlias}.has_llm_answered_maybe
+          WHEN 'human-answered-yes' THEN ${articleAlias}.has_human_answered_yes
+          WHEN 'human-answered-no' THEN ${articleAlias}.has_human_answered_no
+          WHEN 'human-answered-maybe' THEN ${articleAlias}.has_human_answered_maybe
+          ELSE ${articleAlias}.passes_row_filter_all
+        END`
+}
 
-  return `
-    INSERT INTO ${comparisonFilterMemberTable} (
-      comparison_project_id,
-      generation,
-      row_filter,
-      difference_filter,
-      article_id,
-      ordinal,
-      article_created_at,
-      article_title,
-      member_updated_at
-    )
-    WITH ${getComparisonProjectFilterValuesCteSql({differenceFilter, rowFilter})},
-    article_answer_rollup AS (
-      SELECT
-        cell.comparison_project_id,
-        cell.generation,
-        cell.article_id,
-        COALESCE(BOOL_OR(cell.kind = 'llm' AND LOWER(TRIM(answer.answer_value)) = 'yes'), FALSE) AS has_llm_yes,
-        COALESCE(BOOL_OR(cell.kind = 'llm' AND LOWER(TRIM(answer.answer_value)) = 'no'), FALSE) AS has_llm_no,
-        COALESCE(BOOL_OR(cell.kind = 'llm' AND LOWER(TRIM(answer.answer_value)) = 'maybe'), FALSE) AS has_llm_maybe,
-        COALESCE(BOOL_OR(cell.kind = 'human' AND LOWER(TRIM(answer.answer_value)) = 'yes'), FALSE) AS has_human_yes,
-        COALESCE(BOOL_OR(cell.kind = 'human' AND LOWER(TRIM(answer.answer_value)) = 'no'), FALSE) AS has_human_no,
-        COALESCE(BOOL_OR(cell.kind = 'human' AND LOWER(TRIM(answer.answer_value)) = 'maybe'), FALSE) AS has_human_maybe
-      FROM ${comparisonCellServingTable} cell,
-        UNNEST(cell.normalized_answers) AS answer(answer_value)
-      WHERE cell.comparison_project_id = ${comparisonProjectLiteral}
-        AND cell.generation = ${generationLiteral}
-        AND cell.normalized_answers IS NOT NULL
-        AND ARRAY_LENGTH(cell.normalized_answers) > 0
-        AND NULLIF(TRIM(answer.answer_value), '') IS NOT NULL
-      GROUP BY cell.comparison_project_id, cell.generation, cell.article_id
-    ),
-    eligible_member AS (
-      SELECT
-        article.comparison_project_id,
-        article.generation,
-        filter_combination.row_filter,
-        filter_combination.difference_filter,
-        article.article_id,
-        article.article_created_at,
-        article.article_title,
-        article.row_sort_created_at,
-        article.row_sort_title,
-        article.row_sort_article_id
-      FROM ${comparisonArticleServingTable} article
-      CROSS JOIN filter_combination
-      LEFT JOIN article_answer_rollup answer_rollup
-        ON answer_rollup.comparison_project_id = article.comparison_project_id
-       AND answer_rollup.generation = article.generation
-       AND answer_rollup.article_id = article.article_id
-      WHERE article.comparison_project_id = ${comparisonProjectLiteral}
-        AND article.generation = ${generationLiteral}
-        AND CASE filter_combination.row_filter
-          WHEN 'multiple-answers' THEN article.passes_row_filter_multiple_answers
-          WHEN 'fully-answered' THEN article.passes_row_filter_fully_answered
-          WHEN 'llm-answered-yes' THEN COALESCE(answer_rollup.has_llm_yes, FALSE)
-          WHEN 'llm-answered-no' THEN COALESCE(answer_rollup.has_llm_no, FALSE)
-          WHEN 'llm-answered-maybe' THEN COALESCE(answer_rollup.has_llm_maybe, FALSE)
-          WHEN 'human-answered-yes' THEN COALESCE(answer_rollup.has_human_yes, FALSE)
-          WHEN 'human-answered-no' THEN COALESCE(answer_rollup.has_human_no, FALSE)
-          WHEN 'human-answered-maybe' THEN COALESCE(answer_rollup.has_human_maybe, FALSE)
-          ELSE article.passes_row_filter_all
-        END
-        AND CASE filter_combination.difference_filter
-          WHEN 'human-vs-llm-overlap' THEN article.passes_difference_filter_human_vs_llm_overlap
-          WHEN 'human-vs-llm' THEN article.passes_difference_filter_human_vs_llm
-          WHEN 'human-vs-llm-true-conflict' THEN article.passes_difference_filter_human_vs_llm_true_conflict
-          WHEN 'llm-vs-llm' THEN article.passes_difference_filter_llm_vs_llm
-          WHEN 'any-disagreement' THEN article.passes_difference_filter_any_disagreement
-          ELSE article.passes_difference_filter_all
-        END
-    )
-    SELECT
-      eligible_member.comparison_project_id,
-      eligible_member.generation,
-      eligible_member.row_filter,
-      eligible_member.difference_filter,
-      eligible_member.article_id,
-      ROW_NUMBER() OVER (
-        PARTITION BY eligible_member.row_filter, eligible_member.difference_filter
-        ORDER BY
-          eligible_member.row_sort_created_at DESC NULLS LAST,
-          eligible_member.row_sort_title ASC,
-          eligible_member.row_sort_article_id ASC
-      ) - 1 AS ordinal,
-      eligible_member.article_created_at,
-      eligible_member.article_title,
-      current_timestamp AS member_updated_at
-    FROM eligible_member
-  `
+const getComparisonProjectArticleDifferenceFilterPredicateSql = (
+  differenceFilterExpression: string,
+  articleAlias: string,
+) => {
+  return `CASE ${differenceFilterExpression}
+          WHEN 'human-vs-llm-overlap' THEN ${articleAlias}.passes_difference_filter_human_vs_llm_overlap
+          WHEN 'human-vs-llm' THEN ${articleAlias}.passes_difference_filter_human_vs_llm
+          WHEN 'human-vs-llm-true-conflict' THEN ${articleAlias}.passes_difference_filter_human_vs_llm_true_conflict
+          WHEN 'llm-vs-llm' THEN ${articleAlias}.passes_difference_filter_llm_vs_llm
+          WHEN 'any-disagreement' THEN ${articleAlias}.passes_difference_filter_any_disagreement
+          ELSE ${articleAlias}.passes_difference_filter_all
+        END`
 }
 
 const getComparisonProjectFilterStatsInsertSql = ({
   comparisonProjectId,
+  differenceFilter,
   generation,
-}: ComparisonProjectServingRollupBuilderParams) => {
+  rowFilter,
+}: ComparisonProjectFilterStatsBuilderParams) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getComparisonProjectServingGenerationSql(generation)
+  const rowFilterPredicate = getComparisonProjectArticleRowFilterPredicateSql(
+    'filter_combination.row_filter',
+    'article',
+  )
+  const differenceFilterPredicate = getComparisonProjectArticleDifferenceFilterPredicateSql(
+    'filter_combination.difference_filter',
+    'article',
+  )
 
   return `
     INSERT INTO ${comparisonFilterStatsTable} (
@@ -1024,16 +1030,19 @@ const getComparisonProjectFilterStatsInsertSql = ({
       total_count,
       stats_updated_at
     )
-    WITH ${getComparisonProjectFilterValuesCteSql({})},
+    WITH ${getComparisonProjectFilterValuesCteSql({differenceFilter, rowFilter})},
     member_count AS (
       SELECT
-        row_filter,
-        difference_filter,
-        COUNT(*) AS total_count
-      FROM ${comparisonFilterMemberTable}
-      WHERE comparison_project_id = ${comparisonProjectLiteral}
-        AND generation = ${generationLiteral}
-      GROUP BY row_filter, difference_filter
+        filter_combination.row_filter,
+        filter_combination.difference_filter,
+        COUNT(article.article_id) AS total_count
+      FROM filter_combination
+      LEFT JOIN ${comparisonArticleServingTable} article
+        ON article.comparison_project_id = ${comparisonProjectLiteral}
+       AND article.generation = ${generationLiteral}
+       AND ${rowFilterPredicate}
+       AND ${differenceFilterPredicate}
+      GROUP BY filter_combination.row_filter, filter_combination.difference_filter
     )
     SELECT
       ${comparisonProjectLiteral} AS comparison_project_id,
@@ -1049,17 +1058,118 @@ const getComparisonProjectFilterStatsInsertSql = ({
   `
 }
 
-const insertComparisonProjectArticleRollups = (
+const getComparisonProjectArticleRollupBatchSql = ({
+  comparisonProjectId,
+  cursor,
+  generation,
+}: ComparisonProjectServingRollupBuilderParams & {cursor: string | null}) => {
+  const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
+  const generationLiteral = getComparisonProjectServingGenerationSql(generation)
+  const cursorClause = cursor ? `WHERE rollup_scoped_article.article_id > ${getSqlLiteral(cursor)}` : ''
+
+  return `
+    WITH comparison_project AS (
+      SELECT *
+      FROM app.comparison_project cp
+      WHERE cp.id = ${comparisonProjectLiteral}
+    ),
+    ${getComparisonProjectScopeCtesSql()},
+    rollup_scoped_article AS (
+      SELECT source_project_scope.article_id
+      FROM source_project_scope
+      CROSS JOIN scope_config
+      WHERE scope_config.source_project_link_count > 0
+
+      UNION
+
+      SELECT import_route_scope.article_id
+      FROM import_route_scope
+      CROSS JOIN scope_config
+      WHERE scope_config.source_project_link_count = 0
+        AND scope_config.import_route_link_count > 0
+
+      UNION
+
+      SELECT cell.article_id
+      FROM ${comparisonCellServingTable} cell
+      CROSS JOIN scope_config
+      WHERE scope_config.source_project_link_count = 0
+        AND scope_config.import_route_link_count = 0
+        AND cell.comparison_project_id = ${comparisonProjectLiteral}
+        AND cell.generation = ${generationLiteral}
+      GROUP BY cell.article_id
+    )
+    SELECT rollup_scoped_article.article_id AS articleId
+    FROM rollup_scoped_article
+    ${cursorClause}
+    ORDER BY rollup_scoped_article.article_id ASC
+    LIMIT ${comparisonProjectServingArticleRollupBatchSize + 1}
+  `
+}
+
+const getComparisonProjectRollupQueryJson = (dependencies: ComparisonProjectServingRollupBuilderDependencies) => {
+  if (dependencies.queryJson) {
+    return dependencies.queryJson
+  }
+
+  throw new Error('Comparison project serving rollup batching requires queryJson')
+}
+
+const getComparisonProjectArticleRollupBatch = async (
+  params: ComparisonProjectServingRollupBuilderParams & {cursor: string | null},
+  dependencies: ComparisonProjectServingRollupBuilderDependencies,
+): Promise<ComparisonProjectArticleRollupBatch> => {
+  const queryJson = getComparisonProjectRollupQueryJson(dependencies)
+  const rows = await queryJson<{articleId: string}>(getComparisonProjectArticleRollupBatchSql(params))
+  const articleIds = rows.slice(0, comparisonProjectServingArticleRollupBatchSize).map((row) => {
+    return row.articleId
+  })
+
+  return {articleIds, hasMore: rows.length > comparisonProjectServingArticleRollupBatchSize}
+}
+
+const getComparisonProjectArticleRollupBatchCursor = (batch: ComparisonProjectArticleRollupBatch) => {
+  return batch.articleIds[batch.articleIds.length - 1] ?? null
+}
+
+const insertComparisonProjectArticleRollupBatches = async (
+  params: ComparisonProjectServingRollupBuilderParams,
+  dependencies: ComparisonProjectServingRollupBuilderDependencies,
+  cursor: string | null = null,
+): Promise<void> => {
+  const batch = await getComparisonProjectArticleRollupBatch({...params, cursor}, dependencies)
+  const nextCursor = getComparisonProjectArticleRollupBatchCursor(batch)
+
+  if (batch.articleIds.length === 0 || nextCursor === null) {
+    return
+  }
+
+  await dependencies.run(getComparisonProjectArticleServingInsertSql({...params, articleIds: batch.articleIds}))
+
+  return batch.hasMore ? insertComparisonProjectArticleRollupBatches(params, dependencies, nextCursor) : undefined
+}
+
+const insertComparisonProjectArticleRollups = async (
   params: ComparisonProjectServingRollupBuilderParams,
   dependencies: ComparisonProjectServingRollupBuilderDependencies = getDefaultComparisonProjectServingRollupBuilderDependencies(),
 ) => {
-  return dependencies.run(getComparisonProjectArticleServingInsertSql(params))
+  return insertComparisonProjectArticleRollupBatches(params, dependencies)
 }
 
-const getComparisonProjectFilterMemberInsertStatements = (params: ComparisonProjectServingRollupBuilderParams) => {
+const insertComparisonProjectFilterMembers = (
+  params: ComparisonProjectServingRollupBuilderParams,
+  dependencies: ComparisonProjectServingRollupBuilderDependencies = getDefaultComparisonProjectServingRollupBuilderDependencies(),
+) => {
+  void params
+  void dependencies
+
+  return Promise.resolve()
+}
+
+const getComparisonProjectFilterStatsInsertStatements = (params: ComparisonProjectServingRollupBuilderParams) => {
   return comparisonProjectRowFilters.flatMap((rowFilter) => {
     return comparisonProjectDifferenceFilters.map((differenceFilter) => {
-      return getComparisonProjectFilterMemberInsertSql({...params, differenceFilter, rowFilter})
+      return getComparisonProjectFilterStatsInsertSql({...params, differenceFilter, rowFilter})
     })
   })
 }
@@ -1080,18 +1190,11 @@ const runComparisonProjectRollupStatements = async (
   return runComparisonProjectRollupStatements(statements, dependencies, index + 1)
 }
 
-const insertComparisonProjectFilterMembers = (
-  params: ComparisonProjectServingRollupBuilderParams,
-  dependencies: ComparisonProjectServingRollupBuilderDependencies = getDefaultComparisonProjectServingRollupBuilderDependencies(),
-) => {
-  return runComparisonProjectRollupStatements(getComparisonProjectFilterMemberInsertStatements(params), dependencies)
-}
-
 const insertComparisonProjectFilterStats = (
   params: ComparisonProjectServingRollupBuilderParams,
   dependencies: ComparisonProjectServingRollupBuilderDependencies = getDefaultComparisonProjectServingRollupBuilderDependencies(),
 ) => {
-  return dependencies.run(getComparisonProjectFilterStatsInsertSql(params))
+  return runComparisonProjectRollupStatements(getComparisonProjectFilterStatsInsertStatements(params), dependencies)
 }
 
 const insertComparisonProjectServingRollups = async (
@@ -1099,13 +1202,11 @@ const insertComparisonProjectServingRollups = async (
   runner: ComparisonProjectServingRollupBuilderRunner = getDefaultComparisonProjectServingRollupBuilderDependencies(),
 ) => {
   await insertComparisonProjectArticleRollups(params, runner)
-  await insertComparisonProjectFilterMembers(params, runner)
   await insertComparisonProjectFilterStats(params, runner)
 }
 
 const comparisonProjectServingRollupBuilder = {
   getComparisonProjectArticleServingInsertSql,
-  getComparisonProjectFilterMemberInsertSql,
   getComparisonProjectFilterStatsInsertSql,
   insertComparisonProjectArticleRollups,
   insertComparisonProjectFilterMembers,
@@ -1117,10 +1218,6 @@ export const getComparisonProjectServingRollupBuilder = () => {
   return comparisonProjectServingRollupBuilder
 }
 
-export {
-  getComparisonProjectArticleServingInsertSql,
-  getComparisonProjectFilterMemberInsertSql,
-  getComparisonProjectFilterStatsInsertSql,
-}
+export {getComparisonProjectArticleServingInsertSql, getComparisonProjectFilterStatsInsertSql}
 
 export type {ComparisonProjectServingRollupBuilderParams}

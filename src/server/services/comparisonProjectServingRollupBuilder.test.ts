@@ -731,7 +731,7 @@ const getRollupScript = () => {
     for (const project of fixtureProjects) {
       await builder.insertComparisonProjectServingRollups(
         {comparisonProjectId: project.id, generation},
-        {run: database.run}
+        {queryJson: database.queryJson, run: database.run}
       )
     }
 
@@ -897,7 +897,7 @@ const getTrueConflictRollupScript = () => {
 
     await builder.insertComparisonProjectServingRollups(
       {comparisonProjectId: projectId, generation},
-      {run: database.run}
+      {queryJson: database.queryJson, run: database.run}
     )
 
     const articleRows = await database.queryJson(\`
@@ -1103,15 +1103,15 @@ const getScopedImportRollupScript = () => {
 
     await builder.insertComparisonProjectServingRollups(
       {comparisonProjectId: 'comparison-no-scope', generation},
-      {run: database.run}
+      {queryJson: database.queryJson, run: database.run}
     )
     await builder.insertComparisonProjectServingRollups(
       {comparisonProjectId: 'comparison-source-scope', generation},
-      {run: database.run}
+      {queryJson: database.queryJson, run: database.run}
     )
     await builder.insertComparisonProjectServingRollups(
       {comparisonProjectId: 'comparison-route-scope', generation},
-      {run: database.run}
+      {queryJson: database.queryJson, run: database.run}
     )
 
     const articleRows = await database.queryJson(\`
@@ -1248,7 +1248,7 @@ const getArticleCategoryRollupScript = () => {
 
     await builder.insertComparisonProjectServingRollups(
       {comparisonProjectId: projectId, generation},
-      {run: database.run}
+      {queryJson: database.queryJson, run: database.run}
     )
 
     const articleRows = await database.queryJson(\`
@@ -1293,7 +1293,54 @@ const runScript = <T>(body: string) => {
   }
 }
 
-test('filter member inserts are split by filter combination', async () => {
+test('filter member inserts are disabled for bounded serving rebuilds', async () => {
+  const statements: string[] = []
+  const builder = getComparisonProjectServingRollupBuilder()
+
+  await builder.insertComparisonProjectFilterMembers(
+    {comparisonProjectId: 'comparison-serving-split-project', generation: 1},
+    {
+      run: async (statement) => {
+        statements.push(statement)
+      },
+    },
+  )
+
+  expect(statements).toEqual([])
+})
+
+test('article rollup inserts are batched by article id', async () => {
+  const statements: string[] = []
+  const queryStatements: string[] = []
+  const builder = getComparisonProjectServingRollupBuilder()
+  const firstRows = Array.from({length: 1001}, (_, index) => {
+    return {articleId: `article-${String(index).padStart(4, '0')}`}
+  })
+  const secondRows = [{articleId: 'article-1000'}]
+  const queryResults = [firstRows, secondRows]
+
+  await builder.insertComparisonProjectArticleRollups(
+    {comparisonProjectId: 'comparison-serving-batched-rollup-project', generation: 1},
+    {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        queryStatements.push(statement)
+        return (queryResults.shift() ?? []) as T[]
+      },
+      run: async (statement) => {
+        statements.push(statement)
+      },
+    },
+  )
+
+  expect(queryStatements).toHaveLength(2)
+  expect(statements).toHaveLength(2)
+  expect(statements[0]).toContain("('article-0000')")
+  expect(statements[0]).not.toContain("('article-1000')")
+  expect(statements[1]).toContain("('article-1000')")
+  expect(statements[0]).toContain('INNER JOIN article_batch ON article_batch.article_id = cell.article_id')
+})
+
+test('filter stats inserts are split by filter combination', async () => {
   const statements: string[] = []
   const builder = getComparisonProjectServingRollupBuilder()
   const expectedPairs = comparisonProjectRowFilters.flatMap((rowFilter) => {
@@ -1302,8 +1349,8 @@ test('filter member inserts are split by filter combination', async () => {
     })
   })
 
-  await builder.insertComparisonProjectFilterMembers(
-    {comparisonProjectId: 'comparison-serving-split-project', generation: 1},
+  await builder.insertComparisonProjectFilterStats(
+    {comparisonProjectId: 'comparison-serving-split-stats-project', generation: 1},
     {
       run: async (statement) => {
         statements.push(statement)
@@ -1332,12 +1379,6 @@ test('serving rollups, filter members, and stats match current page and export f
     },
     new Map<string, ActualArticleRollup>(),
   )
-  const actualMembersByFilter = result.memberRows.reduce<Map<string, ActualFilterMember[]>>((rowMap, row) => {
-    const key = `${row.comparisonProjectId}:${row.rowFilter}:${row.differenceFilter}`
-    const currentRows = rowMap.get(key) ?? []
-    rowMap.set(key, [...currentRows, row])
-    return rowMap
-  }, new Map<string, ActualFilterMember[]>())
   const actualStatsByFilter = result.statsRows.reduce<Map<string, ActualFilterStats>>((rowMap, row) => {
     rowMap.set(`${row.comparisonProjectId}:${row.rowFilter}:${row.differenceFilter}`, row)
     return rowMap
@@ -1357,26 +1398,13 @@ test('serving rollups, filter members, and stats match current page and export f
       differenceFilters.forEach((differenceFilter) => {
         const key = `${project.id}:${rowFilter}:${differenceFilter}`
         const expectedArticleIds = getExpectedArticleIds(project, rowFilter, differenceFilter)
-        const actualMembers = actualMembersByFilter.get(key) ?? []
 
-        expect(
-          actualMembers.map((row) => {
-            return row.articleId
-          }),
-        ).toEqual(expectedArticleIds)
-        expect(
-          actualMembers.map((row) => {
-            return row.ordinal
-          }),
-        ).toEqual(
-          expectedArticleIds.map((_, index) => {
-            return index
-          }),
-        )
         expect(actualStatsByFilter.get(key)?.totalCount).toBe(expectedArticleIds.length)
       })
     })
   })
+
+  expect(result.memberRows).toEqual([])
 })
 
 test('serving rollups materialize human vs llm true conflicts', () => {
@@ -1392,17 +1420,13 @@ test('serving rollups materialize human vs llm true conflicts', () => {
     .sort((left, right) => {
       return left.articleId.localeCompare(right.articleId)
     })
-  const expectedMemberRows = trueConflictCases
-    .filter((testCase) => {
-      return testCase.hasTrueConflict
-    })
-    .map((testCase, index) => {
-      return {articleId: testCase.articleId, ordinal: index}
-    })
+  const expectedTrueConflictCount = trueConflictCases.filter((testCase) => {
+    return testCase.hasTrueConflict
+  }).length
 
   expect(result.articleRows).toEqual(expectedArticleRows)
-  expect(result.memberRows).toEqual(expectedMemberRows)
-  expect(result.statsRows).toEqual([{totalCount: expectedMemberRows.length}])
+  expect(result.memberRows).toEqual([])
+  expect(result.statsRows).toEqual([{totalCount: expectedTrueConflictCount}])
 })
 
 test('serving rollups materialize article language categories', () => {
