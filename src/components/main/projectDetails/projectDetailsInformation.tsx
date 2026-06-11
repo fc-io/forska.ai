@@ -12,6 +12,7 @@ type ProjectDetailsInformationProject = {
   description: string | null
   dateFrom: Date | string | null
   dateTo: Date | string | null
+  humanJudgmentMode: 'prompt' | 'summary' | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -64,6 +65,12 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
   const modelName = createMemo(() => {
     return props.model?.name ?? 'Unknown'
   })
+  const isSummaryMode = createMemo(() => {
+    return props.project.humanJudgmentMode === 'summary'
+  })
+  const humanJudgmentModeLabel = createMemo(() => {
+    return isSummaryMode() ? 'Summary mode' : 'Prompt mode'
+  })
   const useFlags = createMemo(() => {
     return {
       title: props.project.useTitle,
@@ -75,7 +82,7 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
 
   return (
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-      <div class="grid grid-cols-1 md:grid-cols-2 md:grid-flow-col md:grid-rows-4 gap-1">
+      <div class="grid grid-cols-1 md:grid-cols-2 md:grid-flow-col md:grid-rows-5 gap-1">
         <div class="flex gap-2 items-start">
           <label class="text-sm font-medium text-muted-foreground">Project Name:</label>
           <p class="text-sm">{props.project.name}</p>
@@ -92,6 +99,16 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
           <label class="text-sm font-medium text-muted-foreground">Status:</label>
           <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
             Active
+          </span>
+        </div>
+        <div class="flex gap-2 items-start">
+          <label class="text-sm font-medium text-muted-foreground">Human Review:</label>
+          <span
+            class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+              isSummaryMode() ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'
+            }`}
+          >
+            {humanJudgmentModeLabel()}
           </span>
         </div>
         <div class="flex gap-2 items-start">
