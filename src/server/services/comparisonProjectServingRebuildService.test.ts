@@ -115,12 +115,13 @@ const getScript = (body: string) => {
     const {getComparisonProjectServingCellBuilder} = await import('./src/server/services/comparisonProjectServingCellBuilder.ts')
     const {getComparisonProjectServingGenerationService} = await import('./src/server/services/comparisonProjectServingGenerationService.ts')
     const {getComparisonProjectServingRebuildService} = await import('./src/server/services/comparisonProjectServingRebuildService.ts')
+    const {getDuckdbBackgroundRuntimeDiagnostics} = await import('./src/server/utils/duckdbService.ts')
 
     await migrateDuckdb()
 
     const database = getAppDatabaseService()
     const service = getComparisonProjectServingRebuildService()
-    const comparisonProjectId = 'comparison-serving-rebuild-project'
+    const comparisonProjectId = '9fd6f6e9-5191-4d3e-a688-d1f86088d93c'
 
     await database.run(\`
       INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
@@ -297,7 +298,9 @@ const runScript = <T>(body: string) => {
     env: {
       ...process.env,
       API_SERVER_PORT: '3001',
+      DUCKDB_MEMORY_LIMIT: '1GB',
       DUCKDB_PATH: duckdbPath,
+      DUCKDB_TEMP_DIRECTORY: '/tmp/duckdb-temp',
       SERVER_ROLE: 'dev-single',
       VITE_PORT: '3000',
     },
@@ -451,19 +454,52 @@ test('comparison serving rebuild invokes bulk phases outside transactions and ke
 
 test('comparison serving rebuild stages builds promotes and records ready status', () => {
   const result = runScript<{
+    diagnosticsAfter: {
+      effective: {memoryLimit: string | null; tempDirectory: string | null}
+      queues: {
+        background: {queueDepth: number; tasksCompleted: number; tasksStarted: number}
+        main: {queueDepth: number; tasksCompleted: number; tasksStarted: number}
+      }
+      tempSpill: {available: boolean; tempDirectory: string | null; totalBytes: number | null}
+    }
+    diagnosticsBefore: {
+      queues: {
+        background: {tasksCompleted: number; tasksStarted: number}
+        main: {tasksCompleted: number; tasksStarted: number}
+      }
+    }
     rebuildResult: {cleanupResult: {deletedRowCount: number}; generation: number; status: {servingStatus: string}}
     rows: GenerationRow[]
     statusRow: StatusRow
   }>(`
+    const diagnosticsBefore = await getDuckdbBackgroundRuntimeDiagnostics()
     const rebuildResult = await service.rebuildComparisonProjectServing(comparisonProjectId)
     const rows = await getGenerationRows()
     const statusRow = await getStatusRow()
+    const diagnosticsAfter = await getDuckdbBackgroundRuntimeDiagnostics()
 
-    console.log(JSON.stringify({rebuildResult, rows, statusRow}))
+    console.log(JSON.stringify({diagnosticsAfter, diagnosticsBefore, rebuildResult, rows, statusRow}))
     await database.close()
   `)
   const rowsByTable = getRowsByTable(result.rows)
 
+  expect(result.diagnosticsAfter.effective.memoryLimit).not.toBeNull()
+  expect(result.diagnosticsAfter.effective.tempDirectory).toBe('/tmp/duckdb-temp')
+  expect(result.diagnosticsAfter.tempSpill.available).toBe(true)
+  expect(result.diagnosticsAfter.tempSpill.tempDirectory).toBe('/tmp/duckdb-temp')
+  expect(result.diagnosticsAfter.tempSpill.totalBytes).not.toBeNull()
+  expect(
+    result.diagnosticsAfter.queues.background.tasksStarted + result.diagnosticsAfter.queues.main.tasksStarted,
+  ).toBeGreaterThan(
+    result.diagnosticsBefore.queues.background.tasksStarted + result.diagnosticsBefore.queues.main.tasksStarted,
+  )
+  expect(
+    result.diagnosticsAfter.queues.background.tasksCompleted + result.diagnosticsAfter.queues.main.tasksCompleted,
+  ).toBeGreaterThan(
+    result.diagnosticsBefore.queues.background.tasksCompleted + result.diagnosticsBefore.queues.main.tasksCompleted,
+  )
+  expect(result.diagnosticsAfter.queues.background.queueDepth).toBe(0)
+  expect(result.diagnosticsAfter.queues.main.queueDepth).toBe(0)
   expect(result.rebuildResult.generation).toBe(1)
   expect(result.rebuildResult.cleanupResult.deletedRowCount).toBe(0)
   expect(result.rebuildResult.status.servingStatus).toBe('ready')

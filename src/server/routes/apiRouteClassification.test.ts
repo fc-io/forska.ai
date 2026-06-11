@@ -10,13 +10,42 @@ import {
 import {projectTransferRouteSpecs} from './projectTransferRoutes.ts'
 
 const csvExportRoute = {endpoint: 'csv-export', method: 'POST', samplePath: '/api/projects/project-1/export'} as const
+const comparisonJudgmentsRoute = {
+  endpoint: 'comparison-judgments',
+  method: 'POST',
+  samplePath: '/api/comparison-projects/comparison-project-1/judgments',
+} as const
+const comparisonJudgmentsCountRoute = {
+  endpoint: 'comparison-judgments-count',
+  method: 'POST',
+  samplePath: '/api/comparison-projects/comparison-project-1/judgments/count',
+} as const
 const runningJudgmentJobsRoute = {
   endpoint: 'running-judgment-jobs',
   method: 'GET',
   samplePath: '/api/judgmentsjobs-running',
 } as const
+const judgmentJobUnassessedArticlesRoute = {
+  endpoint: 'judgment-job-unassessed-articles',
+  method: 'GET',
+  samplePath: '/api/judgmentsjobs-unassessed-articles',
+} as const
+const judgmentJobUnassessedCountRoute = {
+  endpoint: 'judgment-job-unassessed-count',
+  method: 'GET',
+  samplePath: '/api/judgmentsjobs-unassessed-count',
+} as const
 const runtimeAssetRoute = {endpoint: 'runtime-asset', method: 'GET', samplePath: '/api/runtime-asset'} as const
-const ownerRoutedRoutes = [...projectTransferRouteSpecs, csvExportRoute, runningJudgmentJobsRoute, runtimeAssetRoute]
+const ownerRoutedRoutes = [
+  ...projectTransferRouteSpecs,
+  comparisonJudgmentsRoute,
+  comparisonJudgmentsCountRoute,
+  csvExportRoute,
+  judgmentJobUnassessedArticlesRoute,
+  judgmentJobUnassessedCountRoute,
+  runningJudgmentJobsRoute,
+  runtimeAssetRoute,
+]
 
 test('owner-backed routes proxy to the DuckDB owner and fail closed without one', () => {
   const results = ownerRoutedRoutes.map((route) => {

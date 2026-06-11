@@ -4295,7 +4295,7 @@ test('unassessed endpoints bypass stale serving rows and invalidate cached count
   const projectId = `unassessed-freshness-project-${now}`
   const modelId = `unassessed-freshness-model-${now}`
   const connectionId = `unassessed-freshness-connection-${now}`
-  const jobId = `unassessed-freshness-job-${now}`
+  const jobId = 'dc227fc7-9760-420e-ad36-65149a16c850'
   const {getProjectMartDirtyRefreshStateService} = await import('../services/projectMartDirtyRefreshStateService.ts')
 
   await insertProjectFixture({connectionId, modelId, projectId})
