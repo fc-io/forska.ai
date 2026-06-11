@@ -2,6 +2,9 @@ import {rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
+import {comparisonProjectDifferenceFilters} from '../../utils/comparisonProjectDifferenceFilter.ts'
+import {comparisonProjectRowFilters} from '../../utils/comparisonProjectRowFilter.ts'
+
 type GenerationRow = {generation: string; rowCount: string; tableName: string}
 
 type StatusRow = {
@@ -273,7 +276,9 @@ test('comparison serving rebuild stages builds promotes and records ready status
   expect(rowsByTable.article?.rowCount).toBe('2')
   expect(rowsByTable.cell?.rowCount).toBe('4')
   expect(Number(rowsByTable.member?.rowCount ?? 0)).toBeGreaterThan(0)
-  expect(rowsByTable.stats?.rowCount).toBe('12')
+  expect(rowsByTable.stats?.rowCount).toBe(
+    String(comparisonProjectRowFilters.length * comparisonProjectDifferenceFilters.length),
+  )
 })
 
 test('comparison serving rebuild failure records error and preserves the active generation', () => {

@@ -1,4 +1,8 @@
-import {comparisonProjectRowFilters} from '../../utils/comparisonProjectRowFilter.ts'
+import {
+  type ComparisonProjectDifferenceFilter,
+  comparisonProjectDifferenceFilters,
+} from '../../utils/comparisonProjectDifferenceFilter.ts'
+import {type ComparisonProjectRowFilter, comparisonProjectRowFilters} from '../../utils/comparisonProjectRowFilter.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
 import {
@@ -9,6 +13,11 @@ import {
 type ComparisonProjectServingRollupBuilderRunner = {run: (statement: string) => Promise<void>}
 
 type ComparisonProjectServingRollupBuilderParams = {comparisonProjectId: string; generation: number}
+
+type ComparisonProjectFilterMemberBuilderParams = ComparisonProjectServingRollupBuilderParams & {
+  differenceFilter?: ComparisonProjectDifferenceFilter
+  rowFilter?: ComparisonProjectRowFilter
+}
 
 type ComparisonProjectServingRollupBuilderDependencies = {run: (statement: string) => Promise<void>}
 
@@ -859,10 +868,20 @@ const getComparisonProjectArticleServingInsertSql = ({
   `
 }
 
-const getComparisonProjectFilterValuesCteSql = () => {
-  const rowFilterValues = comparisonProjectRowFilters
+const getComparisonProjectFilterValuesCteSql = (params: {
+  differenceFilter?: ComparisonProjectDifferenceFilter
+  rowFilter?: ComparisonProjectRowFilter
+}) => {
+  const rowFilters = params.rowFilter ? [params.rowFilter] : comparisonProjectRowFilters
+  const differenceFilters = params.differenceFilter ? [params.differenceFilter] : comparisonProjectDifferenceFilters
+  const rowFilterValues = rowFilters
     .map((rowFilter) => {
       return `(${getSqlLiteral(rowFilter)})`
+    })
+    .join(', ')
+  const differenceFilterValues = differenceFilters
+    .map((differenceFilter) => {
+      return `(${getSqlLiteral(differenceFilter)})`
     })
     .join(', ')
 
@@ -876,7 +895,7 @@ const getComparisonProjectFilterValuesCteSql = () => {
     difference_filter AS (
       SELECT difference_filter
       FROM (
-        VALUES ('all'), ('human-vs-llm-overlap'), ('human-vs-llm'), ('human-vs-llm-true-conflict'), ('llm-vs-llm'), ('any-disagreement')
+        VALUES ${differenceFilterValues}
       ) AS difference_filter_value(difference_filter)
     ),
     filter_combination AS (
@@ -889,8 +908,10 @@ const getComparisonProjectFilterValuesCteSql = () => {
 
 const getComparisonProjectFilterMemberInsertSql = ({
   comparisonProjectId,
+  differenceFilter,
   generation,
-}: ComparisonProjectServingRollupBuilderParams) => {
+  rowFilter,
+}: ComparisonProjectFilterMemberBuilderParams) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getComparisonProjectServingGenerationSql(generation)
 
@@ -906,7 +927,7 @@ const getComparisonProjectFilterMemberInsertSql = ({
       article_title,
       member_updated_at
     )
-    WITH ${getComparisonProjectFilterValuesCteSql()},
+    WITH ${getComparisonProjectFilterValuesCteSql({differenceFilter, rowFilter})},
     article_answer_rollup AS (
       SELECT
         cell.comparison_project_id,
@@ -1003,7 +1024,7 @@ const getComparisonProjectFilterStatsInsertSql = ({
       total_count,
       stats_updated_at
     )
-    WITH ${getComparisonProjectFilterValuesCteSql()},
+    WITH ${getComparisonProjectFilterValuesCteSql({})},
     member_count AS (
       SELECT
         row_filter,
@@ -1035,11 +1056,35 @@ const insertComparisonProjectArticleRollups = (
   return dependencies.run(getComparisonProjectArticleServingInsertSql(params))
 }
 
+const getComparisonProjectFilterMemberInsertStatements = (params: ComparisonProjectServingRollupBuilderParams) => {
+  return comparisonProjectRowFilters.flatMap((rowFilter) => {
+    return comparisonProjectDifferenceFilters.map((differenceFilter) => {
+      return getComparisonProjectFilterMemberInsertSql({...params, differenceFilter, rowFilter})
+    })
+  })
+}
+
+const runComparisonProjectRollupStatements = async (
+  statements: readonly string[],
+  dependencies: ComparisonProjectServingRollupBuilderDependencies,
+  index = 0,
+): Promise<void> => {
+  const statement = statements[index]
+
+  if (!statement) {
+    return
+  }
+
+  await dependencies.run(statement)
+
+  return runComparisonProjectRollupStatements(statements, dependencies, index + 1)
+}
+
 const insertComparisonProjectFilterMembers = (
   params: ComparisonProjectServingRollupBuilderParams,
   dependencies: ComparisonProjectServingRollupBuilderDependencies = getDefaultComparisonProjectServingRollupBuilderDependencies(),
 ) => {
-  return dependencies.run(getComparisonProjectFilterMemberInsertSql(params))
+  return runComparisonProjectRollupStatements(getComparisonProjectFilterMemberInsertStatements(params), dependencies)
 }
 
 const insertComparisonProjectFilterStats = (

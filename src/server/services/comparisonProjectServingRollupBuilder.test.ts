@@ -17,6 +17,7 @@ import {
   type ComparisonProjectScopedArticle,
   getComparisonProjectRequiredColumnIds,
 } from '../routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
+import {getComparisonProjectServingRollupBuilder} from './comparisonProjectServingRollupBuilder.ts'
 
 type FixtureArticle = {
   articleCreatedAt: string
@@ -1291,6 +1292,36 @@ const runScript = <T>(body: string) => {
     removeFileIfExists(`${duckdbPath}.wal`)
   }
 }
+
+test('filter member inserts are split by filter combination', async () => {
+  const statements: string[] = []
+  const builder = getComparisonProjectServingRollupBuilder()
+  const expectedPairs = comparisonProjectRowFilters.flatMap((rowFilter) => {
+    return differenceFilters.map((differenceFilter) => {
+      return {differenceFilter, rowFilter}
+    })
+  })
+
+  await builder.insertComparisonProjectFilterMembers(
+    {comparisonProjectId: 'comparison-serving-split-project', generation: 1},
+    {
+      run: async (statement) => {
+        statements.push(statement)
+      },
+    },
+  )
+
+  expect(statements).toHaveLength(expectedPairs.length)
+  expect(
+    statements.map((statement) => {
+      return (statement.match(/VALUES \('[^']+'\)/g) ?? []).slice(0, 2)
+    }),
+  ).toEqual(
+    expectedPairs.map((pair) => {
+      return [`VALUES ('${pair.rowFilter}')`, `VALUES ('${pair.differenceFilter}')`]
+    }),
+  )
+})
 
 test('serving rollups, filter members, and stats match current page and export filters', () => {
   const result = runScript<RollupBuilderResult>(getRollupScript())
