@@ -318,27 +318,12 @@ export const getComparisonProjectConflictResolutionTransferMatchKeys = (
   return idTitleKey ? [...identifierMatchKeys, {kind: 'id-title', value: idTitleKey}] : identifierMatchKeys
 }
 
-const getFilenameSafeName = (value: string) => {
-  const safeName = value
-    .trim()
-    .replace(/[^a-zA-Z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 80)
-
-  return safeName.length > 0 ? safeName : 'comparison_project'
+export const getComparisonProjectConflictResolutionTransferFilename = (comparisonProjectId: string) => {
+  return `conflict-resolutions-${comparisonProjectId}.json`
 }
 
 const getExportedAtDate = (value: Date | string) => {
   return new Date(value).toISOString()
-}
-
-export const getComparisonProjectConflictResolutionTransferFilename = (params: {
-  exportedAt?: Date | string
-  sourceName: string
-}) => {
-  const exportedAt = getExportedAtDate(params.exportedAt ?? new Date()).slice(0, 10)
-
-  return `${getFilenameSafeName(params.sourceName)}_conflict_resolutions_${exportedAt}.json`
 }
 
 const getUnexpectedRootKeys = (artifact: unknown) => {

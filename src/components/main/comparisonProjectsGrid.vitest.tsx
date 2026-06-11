@@ -66,7 +66,7 @@ const transferArtifact = {
   version: 1,
 } as const
 
-let exportResult = {artifact: transferArtifact, filename: 'comparison-project-conflict-resolutions.json'}
+let exportResult = {artifact: transferArtifact, filename: 'conflict-resolutions-comparison-project-1.json'}
 
 const getComparisonProject = (overrides: Partial<ComparisonProject> = {}): ComparisonProject => {
   return {
@@ -79,6 +79,7 @@ const getComparisonProject = (overrides: Partial<ComparisonProject> = {}): Compa
     id: 'comparison-project-1',
     name: 'Comparison project',
     promptCount: 2,
+    resolutionCount: 3,
     routeCount: 1,
     summarySourceProjectId: 'project-1',
     useAbstract: true,
@@ -132,7 +133,7 @@ beforeEach(() => {
   mockServiceState.fetchComparisonProjectConflictResolutionExportArtifact.mockReset()
   mockServiceState.fetchComparisonProjectConflictResolutionExportArtifact.mockResolvedValue(exportResult)
   mockServiceState.unarchiveComparisonProject.mockReset()
-  exportResult = {artifact: transferArtifact, filename: 'comparison-project-conflict-resolutions.json'}
+  exportResult = {artifact: transferArtifact, filename: 'conflict-resolutions-comparison-project-1.json'}
   Object.defineProperty(URL, 'createObjectURL', {
     configurable: true,
     value: vi.fn(() => {
@@ -162,7 +163,7 @@ describe('ComparisonProjectsGrid resolution export action', () => {
       expect(
         container.querySelector('a[href="/compare-judgments/comparison-project-1/export"]')?.textContent?.trim(),
       ).toBe('Export data')
-      expect(labels[exportDataIndex + 1]).toBe('Export resolutions')
+      expect(labels[exportDataIndex + 1]).toBe('Export resolutions (3)')
       expect(labels).not.toContain('Import resolutions')
     } finally {
       dispose()
@@ -191,7 +192,7 @@ describe('ComparisonProjectsGrid resolution export action', () => {
 
     try {
       const exportButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.trim() === 'Export resolutions'
+        return button.textContent?.trim() === 'Export resolutions (3)'
       })
 
       exportButton?.click()

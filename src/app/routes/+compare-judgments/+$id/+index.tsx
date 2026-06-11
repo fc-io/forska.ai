@@ -463,6 +463,9 @@ const CompareProjectJudgmentsPage = () => {
   const refetchComparisonProjectStats = async () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-stats', comparisonProjectId()]})
   }
+  const refetchComparisonProjectMetadata = async () => {
+    await queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-metadata', comparisonProjectId()]})
+  }
   const refetchCommittedImportQueries = async () => {
     await Promise.all(
       getConflictResolutionImportRefreshQueryKeys(comparisonProjectId()).map((queryKey) => {
@@ -487,7 +490,11 @@ const CompareProjectJudgmentsPage = () => {
     try {
       const conflictResolution = await setComparisonProjectConflictResolution(comparisonProjectId(), {articleId, value})
       updateCurrentJudgmentsPageConflictResolution(articleId, conflictResolution)
-      await Promise.all([refetchCurrentJudgmentsPage(), refetchComparisonProjectStats()])
+      await Promise.all([
+        refetchCurrentJudgmentsPage(),
+        refetchComparisonProjectStats(),
+        refetchComparisonProjectMetadata(),
+      ])
     } catch (error) {
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to save conflict resolution')
     } finally {
@@ -501,7 +508,11 @@ const CompareProjectJudgmentsPage = () => {
     try {
       await resetComparisonProjectConflictResolution(comparisonProjectId(), {articleId})
       updateCurrentJudgmentsPageConflictResolution(articleId, null)
-      await Promise.all([refetchCurrentJudgmentsPage(), refetchComparisonProjectStats()])
+      await Promise.all([
+        refetchCurrentJudgmentsPage(),
+        refetchComparisonProjectStats(),
+        refetchComparisonProjectMetadata(),
+      ])
     } catch (error) {
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to reset conflict resolution')
     } finally {
@@ -535,6 +546,7 @@ const CompareProjectJudgmentsPage = () => {
           <CompareProjectResolutionTransferActions
             allowConflictResolution={comparisonProjectQuery.data?.allowConflictResolution}
             comparisonProjectId={comparisonProjectId()}
+            resolutionCount={comparisonProjectQuery.data?.resolutionCount}
           />
           <Show when={comparisonProjectQuery.data?.archived}>
             <span class="inline-flex items-center rounded-full bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700">

@@ -25,7 +25,7 @@ Object.assign(globalThis, {
   window: testWindow,
 })
 
-const {handleExportResolutionsClick} =
+const {getExportResolutionsButtonLabel, handleExportResolutionsClick} =
   require('../../../../../components/main/compareProjectResolutionExportAction.tsx') as typeof import('../../../../../components/main/compareProjectResolutionExportAction.tsx')
 const {compareProjectResolutionImportDisabledCopy, getImportResolutionsHref} =
   require('./compareProjectResolutionTransferActions.tsx') as typeof import('./compareProjectResolutionTransferActions.tsx')
@@ -125,6 +125,11 @@ describe('compare detail resolution transfer actions', () => {
     expect(getImportResolutionsHref('comparison-project-1')).toBe(
       '/compare-judgments/comparison-project-1/import-resolutions',
     )
+  })
+
+  test('formats export resolutions label with the saved resolution count', () => {
+    expect(getExportResolutionsButtonLabel(3)).toBe('Export resolutions (3)')
+    expect(getExportResolutionsButtonLabel()).toBe('Export resolutions')
   })
 
   test('keeps disabled import copy explicit', () => {

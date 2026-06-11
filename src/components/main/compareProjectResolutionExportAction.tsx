@@ -6,7 +6,11 @@ import {
 } from '../../services/comparisonProjectsService'
 import {Button} from '../ui/button'
 
-type CompareProjectResolutionExportActionProps = {buttonClass?: string; comparisonProjectId: string}
+type CompareProjectResolutionExportActionProps = {
+  buttonClass?: string
+  comparisonProjectId: string
+  resolutionCount?: number
+}
 
 type DownloadJsonArtifactParams = {artifact: ComparisonProjectConflictResolutionTransferArtifact; filename: string}
 
@@ -30,6 +34,12 @@ export const downloadJsonArtifact = (params: DownloadJsonArtifactParams) => {
 
 const getErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : 'Failed to export resolutions'
+}
+
+export const getExportResolutionsButtonLabel = (resolutionCount?: number) => {
+  return typeof resolutionCount === 'number' && Number.isFinite(resolutionCount)
+    ? `Export resolutions (${resolutionCount})`
+    : 'Export resolutions'
 }
 
 export const handleExportResolutionsClick = async (params: HandleExportResolutionsClickParams) => {
@@ -66,7 +76,7 @@ export const CompareProjectResolutionExportAction = (props: CompareProjectResolu
           })
         }}
       >
-        <Show when={isExporting()} fallback="Export resolutions">
+        <Show when={isExporting()} fallback={getExportResolutionsButtonLabel(props.resolutionCount)}>
           Exporting...
         </Show>
       </Button>

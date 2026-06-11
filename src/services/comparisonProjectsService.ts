@@ -256,6 +256,7 @@ export type ComparisonProjectJudgmentsMetadata = {
   allowConflictResolution: boolean
   humanJudgmentMode: HumanJudgmentMode
   isServingReady: boolean
+  resolutionCount: number
   servingProgress: ComparisonProjectServingProgress
   servingStatus: ComparisonProjectServingStatus
   servingUpdatedAt: Date | string | null
@@ -607,7 +608,7 @@ const getHeaderFilename = (contentDisposition: string | null) => {
 }
 
 const getComparisonProjectConflictResolutionExportFallbackFilename = (comparisonProjectId: string) => {
-  return `comparison-project-${comparisonProjectId}-conflict-resolutions.json`
+  return `conflict-resolutions-${comparisonProjectId}.json`
 }
 
 const readComparisonProjectConflictResolutionExportResponse = async (

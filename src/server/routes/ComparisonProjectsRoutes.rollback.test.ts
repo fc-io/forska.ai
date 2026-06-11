@@ -1321,6 +1321,21 @@ const queryJson = async (
   }
 
   if (
+    statement.includes('SELECT COUNT(*) AS resolutionCount')
+    && statement.includes('FROM app.comparison_project_conflict_resolution')
+  ) {
+    const comparisonProjectId = statement.match(/comparison_project_id = '([^']+)'/)?.[1] ?? 'comparison-project-1'
+
+    return [
+      {
+        resolutionCount: state.conflictResolutionRows.filter((row) => {
+          return (row.comparisonProjectId ?? 'comparison-project-1') === comparisonProjectId
+        }).length,
+      },
+    ]
+  }
+
+  if (
     statement.includes('SELECT article_id AS articleId')
     && statement.includes('FROM app.comparison_project_conflict_resolution')
     && statement.includes('comparison_project_id =')
@@ -4167,6 +4182,26 @@ test('comparison project metadata exposes serving readiness states', async () =>
   }, Promise.resolve())
 })
 
+test('comparison project metadata exposes conflict resolution count', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    conflictResolutionRows: [
+      {answerValue: 'include', articleId: 'article-1', promptId: null},
+      {answerValue: 'exclude', articleId: 'article-2', promptId: null},
+      {answerValue: 'include', articleId: 'article-3', comparisonProjectId: 'comparison-project-2', promptId: null},
+    ],
+    failPromptInsert: false,
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(new Request('http://localhost/api/comparison-projects/comparison-project-1'))
+  const body = (await response.json()) as {data: {resolutionCount: number}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.resolutionCount).toBe(2)
+})
+
 test('comparison project metadata queues a rebuild when serving is missing', async () => {
   mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false}
 
@@ -5612,7 +5647,9 @@ test('comparison project conflict resolution export returns saved resolutions as
 
   expect(response.status).toBe(200)
   expect(response.headers.get('Content-Type') ?? '').toContain('application/json')
-  expect(response.headers.get('Content-Disposition') ?? '').toContain('Rollback_test_project_conflict_resolutions_')
+  expect(response.headers.get('Content-Disposition')).toBe(
+    'attachment; filename="conflict-resolutions-comparison-project-1.json"',
+  )
   expect(artifact.format).toBe('forska.comparisonProject.conflictResolution.transfer')
   expect(artifact.version).toBe(1)
   expect(typeof artifact.exportedAt).toBe('string')

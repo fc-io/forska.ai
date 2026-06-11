@@ -66,12 +66,9 @@ test('validates V1 conflict resolution transfer artifacts without project transf
 
   expect(Object.keys(validated).sort()).toEqual(['exportedAt', 'format', 'rows', 'source', 'version'])
   expect(validated).toEqual(getArtifact())
-  expect(
-    getComparisonProjectConflictResolutionTransferFilename({
-      exportedAt: artifact.exportedAt,
-      sourceName: 'A/B Project',
-    }),
-  ).toBe('A_B_Project_conflict_resolutions_2026-06-10.json')
+  expect(getComparisonProjectConflictResolutionTransferFilename('comparison-project-1')).toBe(
+    'conflict-resolutions-comparison-project-1.json',
+  )
 })
 
 test('rejects invalid conflict resolution transfer artifacts', () => {

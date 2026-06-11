@@ -753,6 +753,7 @@ const getComparisonProjectsList = async (archived: boolean) => {
     archived: boolean
     createdAt: unknown
     promptCount: number
+    resolutionCount: unknown
     routeCount: number
   }>(`
     SELECT
@@ -770,6 +771,7 @@ const getComparisonProjectsList = async (archived: boolean) => {
       cp.archived AS archived,
       cp.created_at AS createdAt,
       COALESCE(prompt_counts.promptCount, 0) AS promptCount,
+      COALESCE(resolution_counts.resolutionCount, 0) AS resolutionCount,
       COALESCE(route_counts.routeCount, 0) AS routeCount
     FROM ${comparisonProjectTable} cp
     LEFT JOIN (
@@ -782,13 +784,33 @@ const getComparisonProjectsList = async (archived: boolean) => {
       FROM ${comparisonProjectImportRouteTable}
       GROUP BY comparison_project_id
     ) route_counts ON route_counts.comparisonProjectId = cp.id
+    LEFT JOIN (
+      SELECT comparison_project_id AS comparisonProjectId, COUNT(*) AS resolutionCount
+      FROM ${comparisonProjectConflictResolutionTable}
+      GROUP BY comparison_project_id
+    ) resolution_counts ON resolution_counts.comparisonProjectId = cp.id
     WHERE cp.archived = ${getBooleanLiteral(archived)}
     ORDER BY ${archived ? 'cp.created_at DESC' : 'cp.name ASC'}
   `)
 
   return rows.map((row) => {
-    return {...row, humanJudgmentMode: row.humanJudgmentMode ?? 'prompt', createdAt: getDateValue(row.createdAt)}
+    return {
+      ...row,
+      humanJudgmentMode: row.humanJudgmentMode ?? 'prompt',
+      createdAt: getDateValue(row.createdAt),
+      resolutionCount: Number(row.resolutionCount ?? 0),
+    }
   })
+}
+
+const getComparisonProjectResolutionCount = async (comparisonProjectId: string) => {
+  const [row] = await appDatabaseService.queryJson<{resolutionCount: unknown}>(`
+    SELECT COUNT(*) AS resolutionCount
+    FROM ${comparisonProjectConflictResolutionTable}
+    WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+  `)
+
+  return Number(row?.resolutionCount ?? 0)
 }
 
 const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]> => {
@@ -3134,7 +3156,7 @@ const getComparisonProjectConflictResolutionExportResponse = async (scope: Compa
     },
     rows: getComparisonProjectConflictResolutionTransferRows(sourceRows),
   })
-  const filename = getComparisonProjectConflictResolutionTransferFilename({exportedAt, sourceName: scope.name})
+  const filename = getComparisonProjectConflictResolutionTransferFilename(scope.id)
 
   return new Response(JSON.stringify(artifact), {
     headers: {'Content-Disposition': `attachment; filename="${filename}"`, 'Content-Type': 'application/json'},
@@ -4038,7 +4060,9 @@ export const comparisonProjectsRoutes = new Elysia()
 
     queueUnavailableComparisonProjectServingRebuild(data)
 
-    return {data}
+    const resolutionCount = await getComparisonProjectResolutionCount(params.id)
+
+    return {data: {...data, resolutionCount}}
   })
   .post(
     '/api/comparison-projects/:id/judgments',

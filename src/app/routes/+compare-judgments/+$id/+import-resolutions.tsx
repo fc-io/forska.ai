@@ -36,7 +36,7 @@ const getErrorMessage = (error: unknown, fallback: string) => {
   return error instanceof Error ? error.message : fallback
 }
 
-const CompareProjectImportResolutionsPage = () => {
+export const CompareProjectImportResolutionsPage = () => {
   const params = Route.useParams()
   const queryClient = useQueryClient()
   const comparisonProjectId = () => {
@@ -72,10 +72,21 @@ const CompareProjectImportResolutionsPage = () => {
       mutationFn: (artifact: ComparisonProjectConflictResolutionTransferArtifact) => {
         return analyzeComparisonProjectConflictResolutionImport(comparisonProjectId(), artifact)
       },
-      onError: (error: unknown) => {
+      onError: (error: unknown, artifact: ComparisonProjectConflictResolutionTransferArtifact) => {
+        if (parsedArtifact() !== artifact) {
+          return
+        }
+
         setAnalyzeError(getErrorMessage(error, 'Failed to analyze import'))
       },
-      onSuccess: (preview: ComparisonProjectConflictResolutionImportAnalyzePreview) => {
+      onSuccess: (
+        preview: ComparisonProjectConflictResolutionImportAnalyzePreview,
+        artifact: ComparisonProjectConflictResolutionTransferArtifact,
+      ) => {
+        if (parsedArtifact() !== artifact) {
+          return
+        }
+
         setAnalyzeError(null)
         setCommitResult(null)
         setAnalyzePreview(preview)
@@ -125,6 +136,7 @@ const CompareProjectImportResolutionsPage = () => {
     try {
       const parsedFile = await readConflictResolutionImportFile(file)
       setParsedArtifact(parsedFile.artifact)
+      analyzeMutation.mutate(parsedFile.artifact)
     } catch (error) {
       setParsedArtifact(null)
       setFileError(getErrorMessage(error, 'Failed to read selected file'))
@@ -272,7 +284,7 @@ const CompareProjectImportResolutionsPage = () => {
                     Choose or drop a .json conflict-resolution export
                   </span>
                   <span class="mt-1 text-xs text-gray-500">
-                    Selected file is analyzed before any decisions are saved.
+                    Selected file is analyzed automatically before any decisions are saved.
                   </span>
                   <input
                     accept=".json,application/json"

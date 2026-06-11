@@ -18,6 +18,7 @@ describe('compare project conflict resolution import return helpers', () => {
     expect(getConflictResolutionImportRefreshQueryKeys('comparison-project-1')).toEqual([
       ['comparison-project-judgments-page', 'comparison-project-1'],
       ['comparison-project-judgments-count', 'comparison-project-1'],
+      ['comparison-project-judgments-metadata', 'comparison-project-1'],
       ['comparison-project-stats', 'comparison-project-1'],
     ])
   })

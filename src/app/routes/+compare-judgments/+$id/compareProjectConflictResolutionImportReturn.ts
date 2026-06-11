@@ -23,6 +23,7 @@ export const getConflictResolutionImportRefreshQueryKeys = (comparisonProjectId:
   return [
     ['comparison-project-judgments-page', comparisonProjectId],
     ['comparison-project-judgments-count', comparisonProjectId],
+    ['comparison-project-judgments-metadata', comparisonProjectId],
     ['comparison-project-stats', comparisonProjectId],
   ] as const
 }
