@@ -2562,9 +2562,9 @@ test('getUnassessedPairsFromDuckdb derives raw summary priority from non-empty p
     lastDate: new Date('2024-01-02T00:00:00.000Z'),
     priorityBucket: 1,
   })
-  expect(rawArticleQuery).toContain('FROM app.judgment_human_summary')
-  expect(rawArticleQuery).toContain("WHERE project_id = 'project-1'")
-  expect(rawArticleQuery).toContain("AND NULLIF(TRIM(COALESCE(answer, '')), '') IS NOT NULL")
+  expect(rawArticleQuery).toContain('LEFT JOIN app.judgment_human_summary human_summary_priority')
+  expect(rawArticleQuery).toContain("ON human_summary_priority.project_id = 'project-1'")
+  expect(rawArticleQuery).toContain("AND NULLIF(TRIM(COALESCE(human_summary_priority.answer, '')), '') IS NOT NULL")
   expect(rawArticleQuery).toContain('CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END < 1')
   expect(rawArticleQuery).toContain(
     'ORDER BY CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END DESC',
@@ -2859,8 +2859,8 @@ test('getUnassessedPairsFromDuckdb ignores blank null and cross-project summary 
     {articleId: 'article-summary-null', promptId: 'prompt-1'},
     {articleId: 'article-summary-null', promptId: 'prompt-2'},
   ])
-  expect(rawArticleQuery).toContain("WHERE project_id = 'project-1'")
-  expect(rawArticleQuery).toContain("AND NULLIF(TRIM(COALESCE(answer, '')), '') IS NOT NULL")
+  expect(rawArticleQuery).toContain("ON human_summary_priority.project_id = 'project-1'")
+  expect(rawArticleQuery).toContain("AND NULLIF(TRIM(COALESCE(human_summary_priority.answer, '')), '') IS NOT NULL")
   expect(rawArticleQuery).toContain(
     'ORDER BY CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END DESC',
   )

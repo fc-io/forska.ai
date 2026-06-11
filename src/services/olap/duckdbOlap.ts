@@ -1556,13 +1556,10 @@ const getDuckdbScopeArticleActivityTimestampExpression = (rowAlias: string) => {
 const getDuckdbUnassessedPairsPriorityJoinClause = (scope: ProjectOlapScope, articleIdExpression: string) => {
   return scope.humanJudgmentMode === 'summary'
     ? `
-      LEFT JOIN (
-        SELECT DISTINCT article_id
-        FROM app.judgment_human_summary
-        WHERE project_id = ${getDuckdbSqlString(scope.projectId)}
-          AND NULLIF(TRIM(COALESCE(answer, '')), '') IS NOT NULL
-      ) human_summary_priority
-        ON human_summary_priority.article_id = ${articleIdExpression}
+      LEFT JOIN app.judgment_human_summary human_summary_priority
+        ON human_summary_priority.project_id = ${getDuckdbSqlString(scope.projectId)}
+       AND human_summary_priority.article_id = ${articleIdExpression}
+       AND NULLIF(TRIM(COALESCE(human_summary_priority.answer, '')), '') IS NOT NULL
     `
     : ''
 }
