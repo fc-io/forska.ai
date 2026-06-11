@@ -9,6 +9,7 @@ import {
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportTargetArticle,
   getComparisonProjectConflictResolutionImportAnalyzeResult,
+  getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql,
   getComparisonProjectConflictResolutionImportCommitResult,
   getComparisonProjectConflictResolutionImportDoiTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql,
@@ -161,6 +162,12 @@ test('target article queries are constrained by selected normalized matching key
     articleTable: 'app.article',
     identifierKeys: ['pmid\u001F12345'],
   })
+  const articleIdSql = getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql({
+    articleIds: ['article-1'],
+    articleIdentifierTable: 'app.article_identifier',
+    articleScopeConditions: ['EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)'],
+    articleTable: 'app.article',
+  })
   const doiSql = getComparisonProjectConflictResolutionImportDoiTargetArticlesSql({
     articleIdentifierTable: 'app.article_identifier',
     articleScopeConditions: ['EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)'],
@@ -190,6 +197,10 @@ test('target article queries are constrained by selected normalized matching key
   expect(identifierSql).toContain('legacy_article.pubmed_id')
   expect(identifierSql).toContain('legacy_article.arxiv_id')
   expect(identifierSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
+  expect(articleIdSql).toContain('a.id AS articleId')
+  expect(articleIdSql).toContain("a.id IN ('article-1')")
+  expect(articleIdSql).toContain('LEFT JOIN app.article_identifier strong_identifier')
+  expect(articleIdSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
   expect(doiSql).not.toContain('NULL AS externalArticleId')
   expect(doiSql).not.toContain('NULL AS title')
   expect(idTitleSql).toContain('regexp_replace(LOWER(TRIM(COALESCE(a.article_title')
@@ -244,6 +255,56 @@ test('import plan matches articles by normalized DOI', () => {
       resolutionValue: 'yes',
       sourceRows: [{matchKey: '10.1000/example', matchKind: 'doi', sourceRowId: 'source-row-1'}],
       targetArticleId: 'target-article-1',
+    },
+  ])
+})
+
+test('import plan matches same database articles by source article row id', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({
+        doi: null,
+        externalArticleId: null,
+        sourceArticleId: 'shared-article-1',
+        sourceExternalArticleId: null,
+      }),
+    ],
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'shared-article-1',
+        doi: null,
+        externalArticleId: null,
+        title: 'Different target title',
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [{matchKey: 'shared-article-1', matchKind: 'article-id', sourceRowId: 'source-row-1'}],
+      targetArticleId: 'shared-article-1',
+    },
+  ])
+})
+
+test('import plan prefers source article row id over portable identifiers', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: '10.1000/portable-match', sourceArticleId: 'shared-article-1'})],
+    targetArticles: [
+      getTargetArticle({articleId: 'shared-article-1', doi: null}),
+      getTargetArticle({articleId: 'portable-target', doi: '10.1000/portable-match'}),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [{matchKey: 'shared-article-1', matchKind: 'article-id', sourceRowId: 'source-row-1'}],
+      targetArticleId: 'shared-article-1',
     },
   ])
 })

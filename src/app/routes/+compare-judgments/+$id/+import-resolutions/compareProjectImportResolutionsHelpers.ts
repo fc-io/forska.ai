@@ -91,6 +91,7 @@ export const getSkipReasonLabel = (reason: ComparisonProjectConflictResolutionIm
 export const getMatchKindLabel = (matchKind: ComparisonProjectConflictResolutionTransferMatchKind | null) => {
   const labels: Record<ComparisonProjectConflictResolutionTransferMatchKind, string> = {
     arxiv: 'arXiv',
+    'article-id': 'Article ID',
     doi: 'DOI',
     'id-title': 'External ID + title',
     pmid: 'PMID',

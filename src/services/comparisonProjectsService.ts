@@ -80,7 +80,7 @@ export type ComparisonProjectConflictResolutionImportSource = {
   resolutionCount: number
 }
 
-export type ConflictResolutionImportMatchKind = 'doi' | 'pmid' | 'arxiv' | 'id-title'
+export type ConflictResolutionImportMatchKind = 'doi' | 'pmid' | 'arxiv' | 'article-id' | 'id-title'
 
 export type ConflictResolutionImportWarningCode =
   | 'ambiguous-target-match'
@@ -420,6 +420,7 @@ export type ComparisonProjectExportRequest = ComparisonProjectRowsRequestFilters
 export type ComparisonProjectConflictResolutionTransferIdentifierKind = 'arxiv' | 'doi' | 'pmid'
 export type ComparisonProjectConflictResolutionTransferMatchKind =
   | ComparisonProjectConflictResolutionTransferIdentifierKind
+  | 'article-id'
   | 'id-title'
 export type ComparisonProjectConflictResolutionTransferIdentifier = {
   sourceIdentifierId: string

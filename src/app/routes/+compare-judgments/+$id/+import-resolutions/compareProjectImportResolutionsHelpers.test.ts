@@ -102,6 +102,7 @@ describe('compare project import resolutions helpers', () => {
 
   test('formats analyze result labels for tables and summary cards', () => {
     expect(getSkipReasonLabel('existing-target-resolution')).toBe('Existing target resolution')
+    expect(getMatchKindLabel('article-id')).toBe('Article ID')
     expect(getMatchKindLabel('id-title')).toBe('External ID + title')
     expect(getMatchKeyLabel('id-title', 'external-1\u001ftitle 1')).toBe('external-1 / title 1')
     expect(

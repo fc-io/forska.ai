@@ -27,7 +27,7 @@ export type ComparisonProjectConflictResolutionImportSourceQueryRow = {
   resolutionCount: unknown
 }
 
-export type ComparisonProjectConflictResolutionImportMatchKind = ArticleStrongIdentifierKind | 'id-title'
+export type ComparisonProjectConflictResolutionImportMatchKind = ArticleStrongIdentifierKind | 'article-id' | 'id-title'
 
 export type ComparisonProjectConflictResolutionImportIdentifier = {
   kind: ArticleStrongIdentifierKind
@@ -558,6 +558,37 @@ export const getComparisonProjectConflictResolutionImportIdentifierTargetArticle
     LEFT JOIN target_identifier strong_identifier
       ON strong_identifier.articleId = a.id
     ${getWhereClause(params.articleScopeConditions)}
+    GROUP BY a.id, a.doi, a.pubmed_id, a.arxiv_id, a.article_id, a.article_title
+    ORDER BY a.id ASC
+  `
+}
+
+export const getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql = (params: {
+  articleIds: string[]
+  articleIdentifierTable: string
+  articleScopeConditions: readonly string[]
+  articleTable: string
+}) => {
+  const identifierKeySql = `strong_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || strong_identifier.normalized_value`
+
+  return `
+    SELECT
+      a.id AS articleId,
+      MIN(CASE WHEN strong_identifier.kind = 'doi' THEN strong_identifier.normalized_value ELSE NULL END) AS doi,
+      LIST(DISTINCT ${identifierKeySql} ORDER BY ${identifierKeySql}) FILTER (WHERE strong_identifier.kind IS NOT NULL) AS identifierKeys,
+      a.doi AS legacyDoi,
+      a.pubmed_id AS pubmedId,
+      a.arxiv_id AS arxivId,
+      a.article_id AS externalArticleId,
+      a.article_title AS title
+    FROM ${params.articleTable} a
+    LEFT JOIN ${params.articleIdentifierTable} strong_identifier
+      ON strong_identifier.article_id = a.id
+      AND strong_identifier.kind IN ('doi', 'pmid', 'arxiv')
+    ${getWhereClause([
+      ...params.articleScopeConditions,
+      params.articleIds.length > 0 ? `a.id IN (${getInClause(params.articleIds)})` : 'FALSE',
+    ])}
     GROUP BY a.id, a.doi, a.pubmed_id, a.arxiv_id, a.article_id, a.article_title
     ORDER BY a.id ASC
   `
@@ -1180,9 +1211,17 @@ const getInvalidTargetResolutionValueWarning = (
 
 const getTargetArticleMaps = (targetArticles: readonly NormalizedTargetArticle[]) => {
   return {
+    byArticleId: getTargetArticlesByArticleId(targetArticles),
     byIdentifierKey: getTargetArticlesByIdentifierKey(targetArticles),
     byIdTitleKey: getTargetArticlesByIdTitleKey(targetArticles),
   }
+}
+
+const getTargetArticlesByArticleId = (targetArticles: readonly NormalizedTargetArticle[]) => {
+  return targetArticles.reduce<Map<string, NormalizedTargetArticle>>((articleMap, article) => {
+    articleMap.set(article.articleId, article)
+    return articleMap
+  }, new Map<string, NormalizedTargetArticle>())
 }
 
 const getEligibleTargetMatches = (matches: readonly ImportTargetArticleMatch[]) => {
@@ -1343,6 +1382,41 @@ const getIdentifierImportCandidateRow = (
   }, null)
 }
 
+const getArticleIdImportCandidateRow = (
+  row: NormalizedSourceRow,
+  targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
+): ImportCandidateRowResult | null => {
+  const targetArticle = targetArticleMaps.byArticleId.get(row.sourceArticleId) ?? null
+  const targetMatch = targetArticle
+    ? {matchKey: row.sourceArticleId, matchKind: 'article-id' as const, targetArticle}
+    : null
+  const eligibleMatch = targetMatch?.targetArticle.isConflictResolutionEligible ? targetMatch : null
+  const existingResolutionResult = eligibleMatch ? getExistingTargetResolutionResult(row, eligibleMatch) : null
+
+  return existingResolutionResult
+    ? existingResolutionResult
+    : eligibleMatch
+      ? {
+          candidate: getCandidateRow({
+            matchKey: eligibleMatch.matchKey,
+            matchKind: eligibleMatch.matchKind,
+            row,
+            targetArticle: eligibleMatch.targetArticle,
+          }),
+          detail: getImportRowMatchDetailFromMatch(row, eligibleMatch),
+          skippedRow: null,
+          warnings: [],
+        }
+      : targetMatch
+        ? {
+            candidate: null,
+            detail: getImportRowMatchDetailFromMatch(row, targetMatch),
+            skippedRow: getSkippedRow(row.sourceRowId, 'not-conflicting'),
+            warnings: [],
+          }
+        : null
+}
+
 const getIdTitleImportCandidateRow = (
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
@@ -1412,6 +1486,7 @@ const getImportCandidateRow = (
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): ImportCandidateRowResult => {
   const hasUsableKey = row.identifierKeys.length > 0 || Boolean(row.idTitleKey)
+  const articleIdResult = getArticleIdImportCandidateRow(row, targetArticleMaps)
   const identifierResult = hasUsableKey ? getIdentifierImportCandidateRow(row, targetArticleMaps) : null
 
   return row.resolutionMode !== 'summary'
@@ -1421,16 +1496,18 @@ const getImportCandidateRow = (
         skippedRow: getSkippedRow(row.sourceRowId, 'unsupported-mode'),
         warnings: [],
       }
-    : !hasUsableKey
-      ? {
-          candidate: null,
-          detail: getPreferredSourceRowMatchDetail(row),
-          skippedRow: getSkippedRow(row.sourceRowId, 'no-usable-key'),
-          warnings: [],
-        }
-      : identifierResult
-        ? identifierResult
-        : getIdTitleImportCandidateRow(row, targetArticleMaps)
+    : articleIdResult
+      ? articleIdResult
+      : !hasUsableKey
+        ? {
+            candidate: null,
+            detail: getPreferredSourceRowMatchDetail(row),
+            skippedRow: getSkippedRow(row.sourceRowId, 'no-usable-key'),
+            warnings: [],
+          }
+        : identifierResult
+          ? identifierResult
+          : getIdTitleImportCandidateRow(row, targetArticleMaps)
 }
 
 const getCandidateRows = (

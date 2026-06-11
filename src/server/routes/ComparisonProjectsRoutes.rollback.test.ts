@@ -525,6 +525,12 @@ const getMockConflictResolutionImportIdTitleTargetRows = (statement: string) => 
   })
 }
 
+const getMockConflictResolutionImportArticleIdTargetRows = (statement: string) => {
+  return conflictResolutionImportTargetRows.filter((row) => {
+    return statement.includes(`'${row.articleId}'`)
+  })
+}
+
 const getMockConflictResolutionExistingTargetResolutionRows = (statement: string, state: MockDatabaseState) => {
   const comparisonProjectId = statement.match(/comparison_project_id = '([^']+)'/)?.[1] ?? ''
 
@@ -1613,6 +1619,10 @@ const queryJson = async (
 
   if (statement.includes('WITH') && statement.includes('target_identifier.kind ||')) {
     return getMockConflictResolutionImportIdentifierTargetRows(statement)
+  }
+
+  if (statement.includes('a.id AS articleId') && statement.includes('a.id IN')) {
+    return getMockConflictResolutionImportArticleIdTargetRows(statement)
   }
 
   if (
@@ -3141,6 +3151,82 @@ test('comparison project conflict resolution import analyze returns row details 
   expect(state.rootRunStatements).toEqual([])
   expect(state.createdComparisonProjectIds).toEqual([])
   expect(state.staleServingIds).toEqual([])
+})
+
+test('comparison project conflict resolution import matches same article rows before identifier lookup', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-2'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-2'}),
+    ],
+    sourceProjectLinks: [
+      {id: 'comparison-project-source-1', sourceProjectId: 'source-project-1'},
+      {id: 'comparison-project-source-2', sourceProjectId: 'source-project-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionImportAnalyze(app, {
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: comparisonProjectConflictResolutionTransferVersion,
+    exportedAt: '2026-06-10T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [
+      {
+        sourceResolutionId: 'source-resolution-article-id',
+        sourceArticleRowId: 'article-2',
+        externalArticleId: null,
+        title: 'Article 2',
+        identifiers: [],
+        resolution: {mode: 'summary', value: 'yes', label: 'Yes'},
+      },
+    ],
+  })
+  const bodyText = await response.text()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  const body = JSON.parse(bodyText) as {
+    data: {importableRows: Array<Record<string, unknown>>; summary: Record<string, number>}
+  }
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.data.summary).toMatchObject({importable: 1, matched: 1, scanned: 1, skipped: 0})
+  expect(body.data.importableRows).toMatchObject([
+    {
+      matchKey: 'article-2',
+      matchKind: 'article-id',
+      reason: 'importable',
+      sourceArticleRowId: 'article-2',
+      sourceResolutionId: 'source-resolution-article-id',
+      targetArticleId: 'article-2',
+      targetArticleIds: ['article-2'],
+    },
+  ])
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('target_identifier.kind ||')
+    }),
+  ).toBe(false)
 })
 
 test('comparison project conflict resolution import commit writes safe rows and skips existing target rows', async () => {

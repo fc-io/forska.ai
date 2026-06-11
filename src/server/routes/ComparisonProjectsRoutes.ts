@@ -51,6 +51,7 @@ import {
   type ComparisonProjectConflictResolutionImportTargetArticle,
   type ComparisonProjectConflictResolutionImportTargetArticleQueryRow,
   getComparisonProjectConflictResolutionImportAnalyzeResult,
+  getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql,
   getComparisonProjectConflictResolutionImportCommitResult,
   getComparisonProjectConflictResolutionImportIdentifierKeys,
   getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql,
@@ -1368,9 +1369,35 @@ const getConflictResolutionImportIdTitleKeys = (
   )
 }
 
+const getConflictResolutionImportSourceArticleIds = (
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[],
+) => {
+  return getUniqueStringValues(
+    sourceRows
+      .map((row) => {
+        return row.sourceArticleId
+      })
+      .filter(Boolean),
+  )
+}
+
+const getConflictResolutionImportUnmatchedSourceRows = (params: {
+  articleIdTargetRows: readonly ComparisonProjectConflictResolutionImportTargetArticleQueryRow[]
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
+}) => {
+  const matchedArticleIds = new Set(
+    params.articleIdTargetRows.map((row) => {
+      return row.articleId
+    }),
+  )
+
+  return params.sourceRows.filter((row) => {
+    return !matchedArticleIds.has(row.sourceArticleId)
+  })
+}
+
 const getConflictResolutionImportCandidateTargetRows = async (params: {
-  identifierKeys: string[]
-  idTitleKeys: string[]
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
   scope: ComparisonProjectScope
   tx: AppQueryRunner
 }) => {
@@ -1379,30 +1406,49 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
     params.scope.sourceProjectIds,
     params.scope.useImportRoutesForScope,
   )
+  const sourceArticleIds = getConflictResolutionImportSourceArticleIds(params.sourceRows)
+  const articleIdTargetRows =
+    sourceArticleIds.length > 0
+      ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
+          getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql({
+            articleIds: sourceArticleIds,
+            articleIdentifierTable,
+            articleScopeConditions,
+            articleTable,
+          }),
+        )
+      : []
+  const unmatchedSourceRows = getConflictResolutionImportUnmatchedSourceRows({
+    articleIdTargetRows,
+    sourceRows: params.sourceRows,
+  })
+  const identifierKeys = getConflictResolutionImportIdentifierKeys(unmatchedSourceRows)
+  const idTitleKeys = getConflictResolutionImportIdTitleKeys(unmatchedSourceRows)
   const identifierTargetRows =
-    params.identifierKeys.length > 0
+    identifierKeys.length > 0
       ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
           getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql({
             articleIdentifierTable,
             articleScopeConditions,
             articleTable,
-            identifierKeys: params.identifierKeys,
+            identifierKeys,
           }),
         )
       : []
   const idTitleTargetRows =
-    params.idTitleKeys.length > 0
+    idTitleKeys.length > 0
       ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
           getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql({
             articleIdentifierTable,
             articleScopeConditions,
             articleTable,
-            idTitleKeys: params.idTitleKeys,
+            idTitleKeys,
           }),
         )
       : []
 
   return mergeComparisonProjectConflictResolutionImportTargetArticleRows([
+    ...articleIdTargetRows,
     ...identifierTargetRows,
     ...idTitleTargetRows,
   ])
@@ -1437,8 +1483,7 @@ const getConflictResolutionImportTargetArticles = async (params: {
   tx: AppQueryRunner
 }): Promise<ComparisonProjectConflictResolutionImportTargetArticle[]> => {
   const candidateRows = await getConflictResolutionImportCandidateTargetRows({
-    identifierKeys: getConflictResolutionImportIdentifierKeys(params.sourceRows),
-    idTitleKeys: getConflictResolutionImportIdTitleKeys(params.sourceRows),
+    sourceRows: params.sourceRows,
     scope: params.scope,
     tx: params.tx,
   })
