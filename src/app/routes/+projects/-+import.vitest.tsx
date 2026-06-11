@@ -508,6 +508,68 @@ describe('project import route', () => {
     }
   })
 
+  test('renders omission warning context and keeps distinct rows distinguishable', async () => {
+    const decisionMessage = 'Decision payload row was omitted because a field could not be safely exported.'
+    const dependentMessage = 'Dependent payload row was omitted because its parent row was omitted.'
+
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({
+        planSummary: {
+          ...getSession().planSummary,
+          packageWarnings: [
+            {
+              code: 'decisionPayloadRowOmitted',
+              details: {reason: 'runtimePathRedacted', sourceRowId: 'article-1', triggeringField: 'articleTitle'},
+              message: decisionMessage,
+            },
+            {
+              code: 'decisionPayloadRowOmitted',
+              details: {reason: 'runtimePathRedacted', sourceRowId: 'article-1', triggeringField: 'articleTitle'},
+              message: decisionMessage,
+            },
+            {
+              code: 'decisionPayloadRowOmitted',
+              details: {reason: 'providerSecretRedacted', sourceRowId: 'article-2', triggeringField: 'abstract'},
+              message: decisionMessage,
+            },
+            {
+              code: 'dependentPayloadRowOmitted',
+              details: {dependencyReason: 'sourceArticle', omittedParentRef: 'article-1', reason: 'sourceArticle'},
+              message: dependentMessage,
+            },
+          ],
+        },
+      }),
+    }
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      const warningItems = Array.from(container.querySelectorAll('li')).map((item) => {
+        return item.textContent ?? ''
+      })
+      const decisionWarningItems = warningItems.filter((item) => {
+        return item.includes(decisionMessage)
+      })
+
+      expect(decisionWarningItems).toHaveLength(2)
+      expect(decisionWarningItems[0]).toContain('(x2)')
+      expect(decisionWarningItems[0]).toContain('Source row')
+      expect(decisionWarningItems[0]).toContain('article-1')
+      expect(decisionWarningItems[0]).toContain('Field')
+      expect(decisionWarningItems[0]).toContain('articleTitle')
+      expect(decisionWarningItems[1]).toContain('article-2')
+      expect(decisionWarningItems[1]).toContain('abstract')
+      expect(container.textContent).toContain('Dependency reason')
+      expect(container.textContent).toContain('sourceArticle')
+      expect(container.textContent).toContain('Omitted parent')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('commits a ready plan, shows post-import warnings, and navigates to imported project', async () => {
     const completion = {
       importWarnings: [{code: 'route_omitted', message: 'One route link was omitted.'}],

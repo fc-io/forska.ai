@@ -193,15 +193,16 @@
         "Verify in browser that the import wizard shows richer omission warnings without losing the existing shell layout"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-003",
         "US-009"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     }
   ],
   "metadata": {
-    "updatedAt": "2026-06-11T14:31:45.655Z"
+    "updatedAt": "2026-06-11T14:36:16.255Z"
   }
 }
