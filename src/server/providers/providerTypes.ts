@@ -105,6 +105,7 @@ export type ProviderConnectionConfig = {
   disabledModelIds?: string[]
   llamaCppMode?: ProviderLlamaCppMode
   manualWorkerUrls: string[]
+  projectTransferImportedSnapshot?: Record<string, unknown>
   workerUrlMode: ProviderWorkerUrlMode
 }
 

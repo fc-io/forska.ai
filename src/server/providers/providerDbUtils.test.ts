@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test'
 
-import {getPersistedProviderConnectionConfigValue} from './providerDbUtils.ts'
+import {getPersistedProviderConnectionConfigValue, getProviderConnectionConfigFromJson} from './providerDbUtils.ts'
 
 test('provider connection config persistence drops empty default manual config', () => {
   const persisted = getPersistedProviderConnectionConfigValue({
@@ -40,6 +40,24 @@ test('provider connection config persistence keeps llama.cpp cli mode', () => {
     disabledModelIds: [],
     llamaCppMode: 'cli',
     manualWorkerUrls: [],
+    workerUrlMode: 'manual',
+  })
+})
+
+test('provider connection config preserves imported project transfer snapshot marker', () => {
+  const marker = {sourceProviderConnectionId: 'source-provider'}
+  const parsed = getProviderConnectionConfigFromJson({
+    providerKind: 'openai',
+    value: {projectTransferImportedSnapshot: marker},
+  })
+  const persisted = getPersistedProviderConnectionConfigValue({config: parsed, providerKind: 'openai'})
+
+  expect(parsed.projectTransferImportedSnapshot).toEqual(marker)
+  expect(persisted).toEqual({
+    archived: false,
+    disabledModelIds: [],
+    manualWorkerUrls: [],
+    projectTransferImportedSnapshot: marker,
     workerUrlMode: 'manual',
   })
 })

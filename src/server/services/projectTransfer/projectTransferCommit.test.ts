@@ -1408,12 +1408,21 @@ test('project transfer commit writer materializes imported provider and model de
     modelRow: {
       displayName: string | null
       enabled: boolean
+      importedSourceModelId: string | null
+      importedSourceProviderConnectionId: string | null
       providerConnectionId: string
       remoteModelId: string | null
       variant: string | null
     }
     projectRow: {modelId: string}
-    providerRow: {authMode: string | null; enabled: boolean; id: string; label: string; providerKind: string}
+    providerRow: {
+      authMode: string | null
+      enabled: boolean
+      id: string
+      importedSourceProviderConnectionId: string | null
+      label: string
+      providerKind: string
+    }
   }>(`
     const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
     const importedDependencyResolution = {
@@ -1451,8 +1460,8 @@ test('project transfer commit writer materializes imported provider and model de
       sessionId: 'session-materialized-provider-model',
     })
     const [projectRow] = await database.queryJson("SELECT model_id AS modelId FROM app.project WHERE id = '" + writeResult.projectId + "'")
-    const [modelRow] = await database.queryJson("SELECT provider_connection_id AS providerConnectionId, display_name AS displayName, remote_model_id AS remoteModelId, variant, COALESCE(enabled, TRUE) AS enabled FROM app.model WHERE id = '" + projectRow.modelId + "'")
-    const [providerRow] = await database.queryJson("SELECT id, provider_kind AS providerKind, label, enabled, auth_mode AS authMode FROM app.provider_connection WHERE id = '" + modelRow.providerConnectionId + "'")
+    const [modelRow] = await database.queryJson("SELECT provider_connection_id AS providerConnectionId, display_name AS displayName, remote_model_id AS remoteModelId, variant, COALESCE(enabled, TRUE) AS enabled, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') AS importedSourceModelId, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') AS importedSourceProviderConnectionId FROM app.model WHERE id = '" + projectRow.modelId + "'")
+    const [providerRow] = await database.queryJson("SELECT id, provider_kind AS providerKind, label, enabled, auth_mode AS authMode, json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') AS importedSourceProviderConnectionId FROM app.provider_connection WHERE id = '" + modelRow.providerConnectionId + "'")
 
     console.log(JSON.stringify({modelRow, projectRow, providerRow}))
   `)
@@ -1464,9 +1473,12 @@ test('project transfer commit writer materializes imported provider and model de
     label: 'Imported Provider',
     providerKind: 'openai',
   })
+  expect(result.providerRow.importedSourceProviderConnectionId).toBe('source-provider')
   expect(result.modelRow).toMatchObject({
     displayName: null,
     enabled: true,
+    importedSourceModelId: 'source-model',
+    importedSourceProviderConnectionId: 'source-provider',
     remoteModelId: 'target-remote',
     variant: null,
   })
