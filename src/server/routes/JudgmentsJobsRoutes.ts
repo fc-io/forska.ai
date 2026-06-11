@@ -570,7 +570,7 @@ const getOwnerBackedClaimResponse = (
   })
 }
 
-const startOwnerBackedClaimRecovery = ({
+const runOwnerBackedClaimRecovery = async ({
   claimedBy,
   jobId,
   protectedRecordIds,
@@ -578,12 +578,12 @@ const startOwnerBackedClaimRecovery = ({
   claimedBy: string
   jobId: string
   protectedRecordIds?: string[]
-}) => {
+}): Promise<void> => {
   if (!shouldRunOwnerBackedClaimRecovery(jobId, claimedBy)) {
     return
   }
 
-  void getJudgmentJobSqliteService()
+  await getJudgmentJobSqliteService()
     .requeueAbandonedSentPrompts({
       jobId,
       serverJobId: claimedBy,
@@ -783,7 +783,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
 
 const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequestBody | undefined) => {
   const claimedBy = body?.claimedBy ?? judgmentJobServerId
-  startOwnerBackedClaimRecovery({claimedBy, jobId, protectedRecordIds: body?.protectedRecordIds})
+  await runOwnerBackedClaimRecovery({claimedBy, jobId, protectedRecordIds: body?.protectedRecordIds})
 
   try {
     const claims = await getJudgmentJobSqliteService().claimReadyPrompts(
@@ -861,9 +861,14 @@ const assertCompletionSnapshotIdentity = async (identity: JudgmentCompletionIden
   if (!snapshotValid) {
     throw new HttpError(409, 'snapshot identity mismatch for judgment completion')
   }
+}
 
+const assertCompletionClaimIdentity = async (
+  identity: JudgmentCompletionIdentity,
+  options: {allowUnclaimedReadyPrompt?: boolean} = {},
+) => {
   try {
-    await getJudgmentJobSqliteService().assertPromptClaimIdentity(identity)
+    await getJudgmentJobSqliteService().assertPromptClaimIdentity(identity, options)
   } catch (error) {
     if (error instanceof JudgmentPromptClaimIdentityError) {
       throw new HttpError(409, error.message)
@@ -1009,8 +1014,10 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
   }
 
   const identity = {...body, jobId}
+  const allowUnclaimedReadyPrompt = !['failed', 'retry', 'skipped'].includes(body.status ?? '')
 
   await assertCompletionSnapshotIdentity(identity)
+  await assertCompletionClaimIdentity(identity, {allowUnclaimedReadyPrompt})
   const tokenUseId = getCompletionTokenUseIdOrNull(body)
   const completionAckRequestAttemptsJson = getCompletionRequestAttemptsJson(body, 'completion_ack', tokenUseId)
 
@@ -1060,35 +1067,47 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
   const now = new Date()
   const judgmentId = body.judgmentId ?? crypto.randomUUID()
 
-  await getJudgmentJobSqliteService().recordJudgmentSuccess(jobId, {
-    answeredOriginal: getCompletionAnsweredOriginal(body.answeredOriginal ?? answer),
-    answeredOriginalAsArray: getCompletionAnsweredOriginalAsArray(body.answeredOriginalAsArray, answer),
-    articleId: body.articleId,
-    claimId: body.claimId,
-    chunkingStrategy: body.chunkingStrategy ?? null,
-    confidenceOriginal: body.confidenceOriginal ?? 50,
-    createdAt: getDateValue(judgment.createdAt) ?? now,
-    explanation: body.explanation ?? (typeof judgment.explanation === 'string' ? judgment.explanation : null),
-    executionSnapshotHash: body.executionSnapshotHash,
-    executionSnapshotId: body.executionSnapshotId,
-    isAnswered: body.isAnswered ?? true,
-    judgmentId,
-    modelId: body.modelId,
-    projectId: body.projectId,
-    promptId: body.promptId,
-    queuePromptId: body.queueRecordId,
-    completionTokenUseId: tokenUseId,
-    quotes: body.quotes ?? judgment.quotes ?? null,
-    rawResponseJson: body.rawResponseJson ?? body.judgment ?? null,
-    requestAttemptsJson: getCompletionRequestAttemptsJson(body, 'judgment_outbox', judgmentId),
-    snapshotProjectId: body.projectId,
-    snapshotProjectModelName: null,
-    updatedAt: getDateValue(judgment.updatedAt) ?? now,
-    useAbstract: body.useAbstract,
-    useFulltext: body.useFulltext,
-    useFulltextNoImages: body.useFulltextNoImages,
-    useTitle: body.useTitle,
-  })
+  try {
+    await getJudgmentJobSqliteService().recordJudgmentSuccess(
+      jobId,
+      {
+        answeredOriginal: getCompletionAnsweredOriginal(body.answeredOriginal ?? answer),
+        answeredOriginalAsArray: getCompletionAnsweredOriginalAsArray(body.answeredOriginalAsArray, answer),
+        articleId: body.articleId,
+        claimId: body.claimId,
+        chunkingStrategy: body.chunkingStrategy ?? null,
+        confidenceOriginal: body.confidenceOriginal ?? 50,
+        createdAt: getDateValue(judgment.createdAt) ?? now,
+        explanation: body.explanation ?? (typeof judgment.explanation === 'string' ? judgment.explanation : null),
+        executionSnapshotHash: body.executionSnapshotHash,
+        executionSnapshotId: body.executionSnapshotId,
+        isAnswered: body.isAnswered ?? true,
+        judgmentId,
+        modelId: body.modelId,
+        projectId: body.projectId,
+        promptId: body.promptId,
+        queuePromptId: body.queueRecordId,
+        completionTokenUseId: tokenUseId,
+        quotes: body.quotes ?? judgment.quotes ?? null,
+        rawResponseJson: body.rawResponseJson ?? body.judgment ?? null,
+        requestAttemptsJson: getCompletionRequestAttemptsJson(body, 'judgment_outbox', judgmentId),
+        snapshotProjectId: body.projectId,
+        snapshotProjectModelName: null,
+        updatedAt: getDateValue(judgment.updatedAt) ?? now,
+        useAbstract: body.useAbstract,
+        useFulltext: body.useFulltext,
+        useFulltextNoImages: body.useFulltextNoImages,
+        useTitle: body.useTitle,
+      },
+      {allowUnclaimedReadyPrompt},
+    )
+  } catch (error) {
+    if (error instanceof JudgmentPromptClaimIdentityError) {
+      throw new HttpError(409, error.message)
+    }
+
+    throw error
+  }
   await applyAcceptedCompletionTokenUseOnce(body)
 
   return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}, error: null}

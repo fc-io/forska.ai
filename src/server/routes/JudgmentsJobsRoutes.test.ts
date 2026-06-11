@@ -1015,6 +1015,116 @@ test('owner-backed completion rejects snapshot mismatch before accepting the cla
   await sqliteService.closeAll()
 })
 
+test('owner-backed completion accepts successful replay after stale claim was requeued but not reclaimed', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqlitePath} = await import('../cron/judgmentsJobs/judgmentJobPaths.ts')
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const projectId = `requeued-complete-project-${Date.now()}`
+  const modelId = `requeued-complete-model-${Date.now()}`
+  const connectionId = `requeued-complete-connection-${Date.now()}`
+  const jobId = `requeued-complete-job-${Date.now()}`
+  const articleId = `requeued-complete-article-${Date.now()}`
+  const promptId = `requeued-complete-prompt-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const claimResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-a', limit: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const claimBody = (await claimResponse.json()) as {
+    data: {
+      claims: Array<{
+        articleId: string
+        claimId: string
+        executionSnapshotHash: string
+        executionSnapshotId: string
+        modelId: string
+        projectId: string
+        promptId: string
+        recordId: string
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        useTitle: boolean
+      }>
+    }
+  }
+  const [claim] = claimBody.data.claims
+
+  if (!claim) {
+    throw new Error('Expected owner-backed claim')
+  }
+
+  const completionBody = {
+    articleId: claim.articleId,
+    claimId: claim.claimId,
+    executionSnapshotHash: claim.executionSnapshotHash,
+    executionSnapshotId: claim.executionSnapshotId,
+    jobId,
+    judgment: {answer: 'yes', explanation: 'late success', quotes: ['quote']},
+    modelId: claim.modelId,
+    projectId: claim.projectId,
+    promptId: claim.promptId,
+    queueRecordId: claim.recordId,
+    useAbstract: claim.useAbstract,
+    useFulltext: claim.useFulltext,
+    useFulltextNoImages: claim.useFulltextNoImages,
+    useTitle: claim.useTitle,
+  }
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+  const now = new Date().toISOString()
+
+  try {
+    sqliteDatabase
+      .query(
+        `
+          UPDATE queue_prompt
+          SET status = 'ready',
+              sent_at = NULL,
+              retry_after_at = NULL,
+              updated_at = ?,
+              claim_id = NULL,
+              execution_snapshot_id = NULL,
+              execution_snapshot_hash = NULL
+          WHERE id = ?
+        `,
+      )
+      .run(now, claim.recordId)
+  } finally {
+    sqliteDatabase.close()
+  }
+
+  const completionResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
+      body: JSON.stringify(completionBody),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const completionResponseBody = (await completionResponse.json()) as {data: {status: string}}
+
+  expect(completionResponse.status).toBe(200)
+  expect(completionResponseBody.data.status).toBe('judged')
+  expect(await sqliteService.getReadyCount(jobId)).toBe(0)
+  expect(await sqliteService.getOutboxCount(jobId)).toBe(1)
+
+  await sqliteService.closeAll()
+})
+
 test('owner-backed completion replay accepts existing ack when token use conflicts', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

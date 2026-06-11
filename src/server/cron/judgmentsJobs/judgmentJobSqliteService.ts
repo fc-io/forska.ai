@@ -421,7 +421,9 @@ type PromptClaimIdentityRow = {
   executionSnapshotHash: string | null
   executionSnapshotId: string | null
   promptId: string
+  status: string
 }
+type PromptClaimIdentityOptions = {allowUnclaimedReadyPrompt?: boolean}
 
 type PromptCompletionAck = {
   claimId: string
@@ -3529,7 +3531,8 @@ const getPromptClaimIdentityFromDatabase = (
           qp.prompt_id AS promptId,
           qp.claim_id AS claimId,
           qp.execution_snapshot_id AS executionSnapshotId,
-          qp.execution_snapshot_hash AS executionSnapshotHash
+          qp.execution_snapshot_hash AS executionSnapshotHash,
+          qp.status AS status
         FROM queue_prompt qp
         WHERE qp.id = ?
           AND qp.job_id = ?
@@ -3558,9 +3561,54 @@ const getPromptClaimIdentityFromDatabase = (
     : null
 }
 
-const getPromptClaimIdentityMismatch = (expected: PromptClaimIdentity, actual: PromptClaimIdentity | null) => {
+const getReadyPromptIdentity = (
+  jobId: string,
+  queueRecordId: string,
+  row: PromptClaimIdentityRow,
+  jobInfo: OrphanedJudgedQueueRepairJobInfo,
+): Omit<PromptClaimIdentity, 'claimId' | 'executionSnapshotHash' | 'executionSnapshotId'> => {
+  return {
+    articleId: row.articleId,
+    jobId,
+    modelId: jobInfo.modelId,
+    projectId: jobInfo.projectId,
+    promptId: row.promptId,
+    queueRecordId,
+    useAbstract: jobInfo.useAbstract,
+    useFulltext: jobInfo.useFulltext,
+    useFulltextNoImages: jobInfo.useFulltextNoImages,
+    useTitle: jobInfo.useTitle,
+  }
+}
+
+const getPromptClaimIdentityMismatch = (
+  expected: PromptClaimIdentity,
+  actual: PromptClaimIdentity | null,
+  readyPromptActual?: Omit<PromptClaimIdentity, 'claimId' | 'executionSnapshotHash' | 'executionSnapshotId'> | null,
+) => {
   if (!actual) {
-    return 'missing claimed prompt identity'
+    if (!readyPromptActual) {
+      return 'missing claimed prompt identity'
+    }
+
+    const mismatchedReadyKey = (
+      [
+        'articleId',
+        'jobId',
+        'modelId',
+        'projectId',
+        'promptId',
+        'queueRecordId',
+        'useAbstract',
+        'useFulltext',
+        'useFulltextNoImages',
+        'useTitle',
+      ] as const
+    ).find((key) => {
+      return readyPromptActual[key] !== expected[key]
+    })
+
+    return mismatchedReadyKey ? `snapshot claim identity mismatch for ${mismatchedReadyKey}` : null
   }
 
   const mismatchedKey = (
@@ -3589,15 +3637,60 @@ const getPromptClaimIdentityMismatch = (expected: PromptClaimIdentity, actual: P
 const assertPromptClaimIdentityFromDatabase = (
   database: Database,
   expected: PromptClaimIdentity,
+  options: PromptClaimIdentityOptions = {},
 ): PromptClaimIdentity => {
-  const actual = getPromptClaimIdentityFromDatabase(database, expected.jobId, expected.queueRecordId)
-  const mismatch = getPromptClaimIdentityMismatch(expected, actual)
+  const row = database
+    .query(
+      `
+        SELECT
+          qp.article_id AS articleId,
+          qp.prompt_id AS promptId,
+          qp.claim_id AS claimId,
+          qp.execution_snapshot_id AS executionSnapshotId,
+          qp.execution_snapshot_hash AS executionSnapshotHash,
+          qp.status AS status
+        FROM queue_prompt qp
+        WHERE qp.id = ?
+          AND qp.job_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(expected.queueRecordId, expected.jobId) as PromptClaimIdentityRow | null
+  const jobInfo = getOrphanedJudgedQueueRepairJobInfo(database, expected.jobId)
+  const actual =
+    row?.claimId && row.executionSnapshotId && row.executionSnapshotHash && jobInfo
+      ? {
+          articleId: row.articleId,
+          claimId: row.claimId,
+          executionSnapshotHash: row.executionSnapshotHash,
+          executionSnapshotId: row.executionSnapshotId,
+          jobId: expected.jobId,
+          modelId: jobInfo.modelId,
+          projectId: jobInfo.projectId,
+          promptId: row.promptId,
+          queueRecordId: expected.queueRecordId,
+          useAbstract: jobInfo.useAbstract,
+          useFulltext: jobInfo.useFulltext,
+          useFulltextNoImages: jobInfo.useFulltextNoImages,
+          useTitle: jobInfo.useTitle,
+        }
+      : null
+  const readyPromptActual =
+    options.allowUnclaimedReadyPrompt
+    && row?.status === 'ready'
+    && !row.claimId
+    && !row.executionSnapshotId
+    && !row.executionSnapshotHash
+    && jobInfo
+      ? getReadyPromptIdentity(expected.jobId, expected.queueRecordId, row, jobInfo)
+      : null
+  const mismatch = getPromptClaimIdentityMismatch(expected, actual, readyPromptActual)
 
   if (mismatch) {
     throw new JudgmentPromptClaimIdentityError(mismatch)
   }
 
-  return actual as PromptClaimIdentity
+  return actual ?? expected
 }
 
 const getPromptClaimIdentityFromOutboxInsert = (
@@ -4758,10 +4851,13 @@ const sqliteService = {
       return mutateQueuePromptManifestFromDatabase({database, mutation, owner})
     })
   },
-  assertPromptClaimIdentity: async (identity: PromptClaimIdentity): Promise<PromptClaimIdentity> => {
+  assertPromptClaimIdentity: async (
+    identity: PromptClaimIdentity,
+    options: PromptClaimIdentityOptions = {},
+  ): Promise<PromptClaimIdentity> => {
     return (
       (await withOwnedJobDatabase(identity.jobId, false, (database) => {
-        return assertPromptClaimIdentityFromDatabase(database, identity)
+        return assertPromptClaimIdentityFromDatabase(database, identity, options)
       })) ?? Promise.reject(new JudgmentPromptClaimIdentityError('missing SQLite job database'))
     )
   },
@@ -5383,13 +5479,17 @@ const sqliteService = {
         : undefined
     })
   },
-  recordJudgmentSuccess: async (jobId: string, outboxInsert: QueuePromptOutboxInsert) => {
+  recordJudgmentSuccess: async (
+    jobId: string,
+    outboxInsert: QueuePromptOutboxInsert,
+    options: PromptClaimIdentityOptions = {},
+  ) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
       const insertedRows = database.transaction((input: QueuePromptOutboxInsert) => {
         const expectedIdentity = getPromptClaimIdentityFromOutboxInsert(jobId, input)
 
         if (expectedIdentity) {
-          assertPromptClaimIdentityFromDatabase(database, expectedIdentity)
+          assertPromptClaimIdentityFromDatabase(database, expectedIdentity, options)
         }
 
         const insertResult = database
