@@ -411,7 +411,6 @@ const queueUnavailableComparisonProjectServingRebuild = (
     && comparisonProject.servingProgress.lastProgressedAt === null
   const isStaleWithoutStartedBuild =
     comparisonProject.servingStatus === 'stale'
-    && comparisonProject.servingProgress.generation === null
     && comparisonProject.servingProgress.startedAt === null
     && comparisonProject.servingProgress.lastProgressedAt === null
   const isRefreshingFromPreviousRouteLoad =

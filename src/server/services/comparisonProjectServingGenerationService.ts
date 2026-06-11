@@ -190,8 +190,18 @@ const promoteComparisonProjectServingGeneration = async (
   comparisonProjectId: string,
   generation: number,
   dependencies: ComparisonProjectServingGenerationDependencies = getDefaultComparisonProjectServingGenerationDependencies(),
+  options: {requireServingGenerationClaim?: boolean} = {},
 ) => {
   const targetGeneration = getComparisonProjectServingGenerationNumber(generation)
+  const generationClaimCondition = options.requireServingGenerationClaim
+    ? `
+        AND serving_status = 'refreshing'
+        AND serving_generation = ${getSqlLiteral(targetGeneration)}
+        AND active_generation < ${getSqlLiteral(targetGeneration)}
+      `
+    : `
+        AND active_generation + 1 = ${getSqlLiteral(targetGeneration)}
+      `
 
   return dependencies.transaction(async (runner) => {
     const [promoted] = await runner.queryJson<{activeGeneration: number}>(`
@@ -199,7 +209,7 @@ const promoteComparisonProjectServingGeneration = async (
       SET active_generation = ${getSqlLiteral(targetGeneration)},
           generation_updated_at = current_timestamp
       WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
-        AND active_generation + 1 = ${getSqlLiteral(targetGeneration)}
+        ${generationClaimCondition}
       RETURNING CAST(active_generation AS INTEGER) AS activeGeneration
     `)
 

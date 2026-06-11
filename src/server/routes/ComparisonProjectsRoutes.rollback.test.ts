@@ -583,6 +583,27 @@ const differenceFilters = [
   'any-disagreement',
 ] as const
 
+const servingArticleRowFilterPredicates = {
+  all: 'article.passes_row_filter_all',
+  'fully-answered': 'article.passes_row_filter_fully_answered',
+  'human-answered-maybe': 'article.has_human_answered_maybe',
+  'human-answered-no': 'article.has_human_answered_no',
+  'human-answered-yes': 'article.has_human_answered_yes',
+  'llm-answered-maybe': 'article.has_llm_answered_maybe',
+  'llm-answered-no': 'article.has_llm_answered_no',
+  'llm-answered-yes': 'article.has_llm_answered_yes',
+  'multiple-answers': 'article.passes_row_filter_multiple_answers',
+} satisfies Record<ComparisonProjectRowFilter, string>
+
+const servingArticleDifferenceFilterPredicates = {
+  all: 'article.passes_difference_filter_all',
+  'any-disagreement': 'article.passes_difference_filter_any_disagreement',
+  'human-vs-llm': 'article.passes_difference_filter_human_vs_llm',
+  'human-vs-llm-overlap': 'article.passes_difference_filter_human_vs_llm_overlap',
+  'human-vs-llm-true-conflict': 'article.passes_difference_filter_human_vs_llm_true_conflict',
+  'llm-vs-llm': 'article.passes_difference_filter_llm_vs_llm',
+} satisfies Record<ComparisonProjectDifferenceFilter, string>
+
 const hasServingCellValue = (value: string | null | undefined) => {
   return (value?.trim() ?? '') !== ''
 }
@@ -902,9 +923,15 @@ const getSqlFilterValue = <T extends string>(params: {
 }) => {
   return (
     params.values.find((value) => {
+      const articlePredicate =
+        params.column === 'row_filter'
+          ? servingArticleRowFilterPredicates[value as ComparisonProjectRowFilter]
+          : servingArticleDifferenceFilterPredicates[value as ComparisonProjectDifferenceFilter]
+
       return (
         params.statement.includes(`member.${params.column} = '${value}'`)
         || params.statement.includes(`stats.${params.column} = '${value}'`)
+        || (articlePredicate !== undefined && params.statement.includes(articlePredicate))
       )
     }) ?? params.fallback
   )
@@ -922,6 +949,41 @@ const getSqlCursorOrdinal = (statement: string) => {
   const cursor = Number.parseInt(cursorMatch?.[1] ?? '', 10)
 
   return Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : null
+}
+
+const getSqlArticleCursorArticleId = (statement: string) => {
+  return statement.match(/article\.row_sort_article_id > '([^']+)'/)?.[1] ?? null
+}
+
+const getMockServingArticlePageRows = (statement: string, state: MockDatabaseState, generation: number) => {
+  const rowFilter = getSqlFilterValue({
+    column: 'row_filter',
+    fallback: 'multiple-answers',
+    statement,
+    values: comparisonProjectRowFilters,
+  })
+  const differenceFilter = getSqlFilterValue({
+    column: 'difference_filter',
+    fallback: 'all',
+    statement,
+    values: differenceFilters,
+  })
+  const cursorArticleId = getSqlArticleCursorArticleId(statement)
+  const rows = getMockServingRows(state, rowFilter, differenceFilter)
+  const cursorIndex = rows.findIndex((row) => {
+    return row.articleId === cursorArticleId
+  })
+  const cursorRows = cursorIndex >= 0 ? rows.slice(cursorIndex + 1) : rows
+
+  return cursorRows.slice(0, getSqlLimitValue(statement)).map((row) => {
+    return {
+      articleId: row.articleId,
+      generation,
+      rowSortArticleId: row.articleId,
+      rowSortCreatedAt: row.articleCreatedAt,
+      rowSortTitle: row.articleTitle,
+    }
+  })
 }
 
 type MockComparisonProjectStatsGroup = {
@@ -1414,6 +1476,15 @@ const queryJson = async (
         return cursor === null || row.ordinal > cursor
       })
       .slice(0, limit)
+  }
+
+  if (
+    statement.includes('FROM mart.comparison_article_serving article')
+    && statement.includes('INNER JOIN active_generation active')
+  ) {
+    const generation = getMockDatabaseState().servingStatus.activeGeneration
+
+    return generation === null ? [] : getMockServingArticlePageRows(statement, getMockDatabaseState(), generation)
   }
 
   if (statement.includes('FROM mart.comparison_article_serving')) {
@@ -4893,7 +4964,12 @@ test('comparison judgments page serving rows by cursor and return serving status
       return row.articleTitle
     }),
   ).toEqual(['Article 1'])
-  expect(firstBody.data.nextCursor).toBe('0')
+  expect(firstBody.data.nextCursor).toBe(
+    Buffer.from(
+      JSON.stringify({articleId: 'article-1', createdAt: '2026-03-30T00:00:00.000Z', title: 'Article 1'}),
+      'utf8',
+    ).toString('base64url'),
+  )
   expect(firstBody.data.totalCount).toBeNull()
   expect(firstBody.data.totalPages).toBeNull()
   expect(firstBody.data.activeGeneration).toBe(1)
@@ -4906,7 +4982,10 @@ test('comparison judgments page serving rows by cursor and return serving status
   expect(secondBody.data.nextCursor).toBeNull()
   expect(
     state.queryStatements.some((statement) => {
-      return statement.includes('FROM mart.comparison_filter_member') && statement.includes('member.ordinal > 0')
+      return (
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes("article.row_sort_article_id > 'article-1'")
+      )
     }),
   ).toBe(true)
 })
@@ -5481,9 +5560,9 @@ test('comparison export filters match judgments endpoint for every row and diffe
   expect(
     state.queryStatements.some((statement) => {
       return (
-        statement.includes('FROM mart.comparison_filter_member')
-        && statement.includes("member.row_filter = 'fully-answered'")
-        && statement.includes("member.difference_filter = 'llm-vs-llm'")
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes(servingArticleRowFilterPredicates['fully-answered'])
+        && statement.includes(servingArticleDifferenceFilterPredicates['llm-vs-llm'])
       )
     }),
   ).toBe(true)
@@ -5644,9 +5723,9 @@ test('comparison project export streams ordered csv rows with article context an
   expect(
     state.queryStatements.some((statement) => {
       return (
-        statement.includes('FROM mart.comparison_filter_member member')
-        && statement.includes("member.row_filter = 'fully-answered'")
-        && statement.includes("member.difference_filter = 'all'")
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes(servingArticleRowFilterPredicates['fully-answered'])
+        && statement.includes(servingArticleDifferenceFilterPredicates.all)
       )
     }),
   ).toBe(true)
@@ -5959,9 +6038,9 @@ test('summary comparison judgments use synthetic summary columns and derived cel
   expect(
     state.queryStatements.some((statement) => {
       return (
-        statement.includes('FROM mart.comparison_filter_member')
-        && statement.includes("member.row_filter = 'fully-answered'")
-        && statement.includes("member.difference_filter = 'llm-vs-llm'")
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes(servingArticleRowFilterPredicates['fully-answered'])
+        && statement.includes(servingArticleDifferenceFilterPredicates['llm-vs-llm'])
       )
     }),
   ).toBe(true)
@@ -6045,7 +6124,10 @@ test('summary comparison judgments scope to explicit source project links when a
   expect(row?.cells['human:summary']).toBe('maybe')
   expect(
     state.queryStatements.some((statement) => {
-      return statement.includes('FROM mart.comparison_filter_member')
+      return (
+        statement.includes('FROM mart.comparison_article_serving article')
+        && statement.includes('INNER JOIN active_generation active')
+      )
     }),
   ).toBe(true)
 })

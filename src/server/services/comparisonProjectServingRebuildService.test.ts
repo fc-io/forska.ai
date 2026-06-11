@@ -281,6 +281,145 @@ test('comparison serving rebuild stages builds promotes and records ready status
   )
 })
 
+test('comparison serving rebuild skips duplicate concurrent claims for one project', () => {
+  const result = runScript<{
+    firstRebuildResult: {generation: number; status: {servingStatus: string}}
+    promptBuildCount: number
+    promptGenerations: number[]
+    promoteCount: number
+    promotedGenerations: number[]
+    rows: GenerationRow[]
+    secondRebuildResult: {generation: number | null; skipped?: boolean; status: {servingStatus: string}}
+    statusRow: StatusRow
+  }>(`
+    const realCellBuilder = getComparisonProjectServingCellBuilder()
+    const realGenerationService = getComparisonProjectServingGenerationService()
+    const promptGenerations = []
+    const promotedGenerations = []
+    let firstPromptBuildStartedResolve = () => {}
+    let promptBuildReleaseResolve = () => {}
+    let promptBuildCount = 0
+    let promoteCount = 0
+    const firstPromptBuildStarted = new Promise((resolve) => {
+      firstPromptBuildStartedResolve = resolve
+    })
+    const promptBuildRelease = new Promise((resolve) => {
+      promptBuildReleaseResolve = resolve
+    })
+    const rebuildOverrides = {
+      cellBuilder: {
+        insertPromptModeComparisonProjectCells: async (params, runner) => {
+          promptBuildCount += 1
+          promptGenerations.push(params.generation)
+
+          if (promptBuildCount === 1) {
+            firstPromptBuildStartedResolve()
+            await promptBuildRelease
+          }
+
+          return realCellBuilder.insertPromptModeComparisonProjectCells(params, runner)
+        },
+        insertSummaryModeComparisonProjectCells: realCellBuilder.insertSummaryModeComparisonProjectCells,
+      },
+      generationService: {
+        ...realGenerationService,
+        promoteComparisonProjectServingGeneration: async (...args) => {
+          promoteCount += 1
+          promotedGenerations.push(args[1])
+
+          return realGenerationService.promoteComparisonProjectServingGeneration(...args)
+        },
+      },
+    }
+    const firstRebuildPromise = service.rebuildComparisonProjectServing(comparisonProjectId, rebuildOverrides)
+
+    await firstPromptBuildStarted
+
+    const secondRebuildPromise = service.rebuildComparisonProjectServing(comparisonProjectId, rebuildOverrides)
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10)
+    })
+
+    promptBuildReleaseResolve()
+
+    const [firstRebuildResult, secondRebuildResult] = await Promise.all([
+      firstRebuildPromise,
+      secondRebuildPromise,
+    ])
+    const rows = await getGenerationRows()
+    const statusRow = await getStatusRow()
+
+    console.log(JSON.stringify({
+      firstRebuildResult,
+      promptBuildCount,
+      promptGenerations,
+      promoteCount,
+      promotedGenerations,
+      rows,
+      secondRebuildResult,
+      statusRow,
+    }))
+    await database.close()
+  `)
+
+  expect(result.firstRebuildResult.generation).toBe(1)
+  expect(result.firstRebuildResult.status.servingStatus).toBe('ready')
+  expect(result.secondRebuildResult.generation).toBe(1)
+  expect(result.secondRebuildResult.skipped).toBe(true)
+  expect(result.promptBuildCount).toBe(1)
+  expect(result.promptGenerations).toEqual([1])
+  expect(result.promoteCount).toBe(1)
+  expect(result.promotedGenerations).toEqual([1])
+  expect(result.statusRow.activeGeneration).toBe('1')
+  expect(result.statusRow.servingGeneration).toBe('1')
+  expect(result.statusRow.servingStatus).toBe('ready')
+  expect(
+    result.rows.every((row) => {
+      return row.generation === '1'
+    }),
+  ).toBe(true)
+})
+
+test('comparison serving rebuild reclaims expired refreshing status with a newer generation', () => {
+  const result = runScript<{
+    rebuildResult: {generation: number; status: {servingStatus: string}}
+    rows: GenerationRow[]
+    statusRow: StatusRow
+  }>(`
+    await service.rebuildComparisonProjectServing(comparisonProjectId)
+    await database.run(\`
+      UPDATE app.comparison_project_serving_generation
+      SET
+        serving_status = 'refreshing',
+        serving_generation = 2,
+        serving_started_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+        serving_phase = 'prompt_cells',
+        serving_phase_started_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+        serving_last_progressed_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+      WHERE comparison_project_id = '\${comparisonProjectId}'
+    \`)
+
+    const rebuildResult = await service.rebuildComparisonProjectServing(comparisonProjectId)
+    const rows = await getGenerationRows()
+    const statusRow = await getStatusRow()
+
+    console.log(JSON.stringify({rebuildResult, rows, statusRow}))
+    await database.close()
+  `)
+
+  expect(result.rebuildResult.generation).toBe(3)
+  expect(result.rebuildResult.status.servingStatus).toBe('ready')
+  expect(result.statusRow.activeGeneration).toBe('3')
+  expect(result.statusRow.servingGeneration).toBe('3')
+  expect(result.statusRow.servingStatus).toBe('ready')
+  expect(
+    result.rows.every((row) => {
+      return row.generation === '3'
+    }),
+  ).toBe(true)
+})
+
 test('comparison serving rebuild failure records error and preserves the active generation', () => {
   const result = runScript<{failureText: string; rows: GenerationRow[]; statusRow: StatusRow}>(`
     await service.rebuildComparisonProjectServing(comparisonProjectId)
