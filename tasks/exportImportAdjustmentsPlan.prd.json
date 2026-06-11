@@ -1,0 +1,199 @@
+{
+  "name": "Export/Import Adjustments",
+  "description": "Adjust project transfer export/import behavior for raw provenance settings, URL fidelity, omission diagnostics, and imported provider/model snapshots.",
+  "branchName": "ralph/export-import-adjustments",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add raw article provenance export mode to the backend contract",
+      "description": "As a project transfer operator, I want raw article provenance export behavior to be selectable so that I can choose package size versus fidelity intentionally.",
+      "acceptanceCriteria": [
+        "Add a `rawArticleProvenanceMode` export option with `auto`, `include`, and `omit` values to the project-transfer export request and thread it through the export service and export context assembly.",
+        "`auto` preserves the current threshold-driven behavior, `include` forces raw provenance JSON fields into the package even above the current threshold, and `omit` forces those raw provenance fields out of the package regardless of estimate.",
+        "Export warnings and serialized payloads reflect the selected mode instead of only the current hardcoded threshold path.",
+        "bun test src/server/services/projectTransfer/projectTransferExport.test.ts passes",
+        "bun test src/server/routes/projectTransferRoutes.test.ts passes",
+        "bun run build passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Preserve non-local URLs unchanged during export",
+      "description": "As a project transfer operator, I want signed and credential-bearing URLs to survive export unchanged so that review inputs and source provenance are not silently rewritten.",
+      "acceptanceCriteria": [
+        "Recognized non-local URLs remain byte-for-byte unchanged during export even when they contain credentials, signed query parameters, or fragments.",
+        "Generic secret-pattern redaction no longer re-catches parsed non-local URL strings after URL detection.",
+        "Export emits a non-redacting warning for credential-bearing or signed URLs without changing the payload value.",
+        "bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts passes",
+        "bun test src/server/services/projectTransfer/projectTransferExport.test.ts passes",
+        "bun run build passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-003",
+      "title": "Improve omission diagnostics and eliminate URL-driven omission cascades",
+      "description": "As a maintainer, I want omission warnings to identify the triggering row and field so that export fidelity problems are explainable and URL-only review inputs do not cascade into avoidable row loss.",
+      "acceptanceCriteria": [
+        "Article and prompt omission warnings include the source row id, triggering field name, and omission reason in warning details.",
+        "Dependent omission warnings include the omitted parent reference and dependency reason in warning details.",
+        "Article titles or summaries that contain only recognized non-local URLs no longer trigger `decisionPayloadRowOmitted` or downstream dependent omission cascades.",
+        "Existing local-path, private-host, and non-URL secret cases still follow the intended omission or redaction path.",
+        "bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts passes",
+        "bun test src/server/services/projectTransfer/projectTransferExport.test.ts passes",
+        "bun run build passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Mark imported provider and model snapshots explicitly",
+      "description": "As a maintainer, I want imported provider and model snapshots to carry an explicit marker so that snapshot reuse never drifts back into remapping arbitrary local rows.",
+      "acceptanceCriteria": [
+        "Imported provider snapshot rows persist an explicit imported-snapshot marker in `config_json` or an equivalent durable field.",
+        "Imported model snapshot rows persist an explicit imported-snapshot marker in model fields or metadata used during reuse lookup.",
+        "Reuse lookup code only considers rows carrying the imported-snapshot marker and ignores manual or discovered local provider/model rows.",
+        "bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts passes",
+        "bun test src/server/services/projectTransfer/projectTransferCommit.test.ts passes",
+        "bun run build passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-005",
+      "title": "Add dedicated imported snapshot fingerprints",
+      "description": "As a maintainer, I want stronger imported snapshot fingerprints so that only request-equivalent provider and model snapshots are ever reused.",
+      "acceptanceCriteria": [
+        "Add provider and model snapshot fingerprint helpers that include provider runtime-signature inputs plus the full model metadata needed for judgment request equivalence.",
+        "Fingerprint comparisons differ when model metadata changes `contextLimit`, `promptTokenLimit`, or `modelOptions`.",
+        "Snapshot reuse no longer relies on the current exported model `signature` alone.",
+        "bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts passes",
+        "bun test src/server/services/projectTransfer/projectTransferCommit.test.ts passes",
+        "bun run build passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Resolve imported snapshots during analysis",
+      "description": "As a maintainer, I want dependency resolution and fidelity validation to target imported snapshots during analysis so that judgment planning works without rebinding to existing local models.",
+      "acceptanceCriteria": [
+        "During analysis, source providers and models resolve to concrete existing imported snapshot ids when the imported-snapshot marker and fingerprint match exactly.",
+        "When no exact imported snapshot exists, analysis preserves virtual `new:provider:*` and `new:model:*` ids through target planning and fidelity validation.",
+        "Judgment reuse and conflict detection operate on these resolved or virtual imported ids without matching onto existing enabled local provider/model rows.",
+        "bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts passes",
+        "bun test src/server/services/projectTransfer/projectTransferCommit.test.ts passes",
+        "bun run build passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Reuse or materialize imported snapshots during commit",
+      "description": "As a maintainer, I want commit-time provider and model writes to reuse imported snapshots by fingerprint or materialize new ones so that repeated imports stay stable without remapping to local rows.",
+      "acceptanceCriteria": [
+        "Commit reuses exact-match imported provider and model snapshot ids chosen during analysis and materializes new snapshot rows only for the remaining virtual ids.",
+        "Imported provider rows keep `secretRef = null`, and reused or newly materialized imported provider/model snapshot rows end disabled after import.",
+        "Importing the same package twice reuses the same imported snapshots by marker and fingerprint rather than creating duplicates.",
+        "bun test src/server/services/projectTransfer/projectTransferCommit.test.ts passes",
+        "bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts passes",
+        "bun run build passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Add raw provenance mode controls to the export UI",
+      "description": "As a project transfer operator, I want to choose raw provenance mode from the export UI so that the browser and desktop flows use the intended export behavior without manual API calls.",
+      "acceptanceCriteria": [
+        "The export action UI exposes raw provenance mode choices for project export with `auto` as the default.",
+        "The selected mode is sent in the export start request for both inline downloads and queued export sessions.",
+        "Adding the selector does not break the existing CSV export action or block the surrounding project list shell.",
+        "bun test src/components/main/projectsGrid.vitest.tsx passes",
+        "bun run build passes",
+        "bun run desktop:build passes",
+        "Verify in browser that project export can be started with each raw provenance mode"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Choose a stronger policy for remaining decision-bearing omissions",
+      "description": "As a maintainer, I want remaining decision-bearing omission cases to fail loudly or warn prominently so that partial exports are never mistaken for clean fidelity-preserving packages.",
+      "acceptanceCriteria": [
+        "Implement one consistent policy for remaining decision-bearing parent omissions after URL preservation changes: explicit export blocking or a high-visibility preflight fidelity warning before package finalization.",
+        "The policy applies consistently across article, prompt, judgment, human judgment, human summary, and review omission paths.",
+        "Tests prevent quiet continuation of partial exports when decision-bearing rows are omitted for non-URL reasons.",
+        "bun test src/server/services/projectTransfer/projectTransferExport.test.ts passes",
+        "bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts passes",
+        "bun run build passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-010",
+      "title": "Render richer omission warnings in the import UI",
+      "description": "As a project transfer operator, I want the import wizard to show source row and field context for omission warnings so that I can understand package fidelity issues without reading server code.",
+      "acceptanceCriteria": [
+        "The import wizard surfaces omission-warning context such as source row id, field name, and dependency reason when that detail is present.",
+        "Warnings that are truly identical still group cleanly, while warnings with distinct row or field context remain distinguishable in the rendered UI.",
+        "The browser and desktop import flows continue to render the wizard shell correctly while showing the richer warning information.",
+        "bun test src/app/routes/+projects/-+import.vitest.tsx passes",
+        "bun run build passes",
+        "bun run desktop:build passes",
+        "Verify in browser that the import wizard shows richer omission warnings without losing the existing shell layout"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-009"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-06-11T13:45:22.222Z"
+  }
+}

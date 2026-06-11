@@ -13,6 +13,7 @@ import {
   type ProjectTransferExecutionMode,
   type ProjectTransferExportReadyPayload,
   type ProjectTransferProgressPayload,
+  type ProjectTransferRawArticleProvenanceMode,
   type ProjectTransferRuntimeEvent,
 } from './projectTransferContracts.ts'
 import {
@@ -55,6 +56,7 @@ type ProjectTransferExportPackageBuildInput = ProjectTransferExportRuntimeOption
   layout: ProjectTransferExportTempLayout
   packageOutputPath?: string
   projectId: string
+  rawArticleProvenanceMode?: ProjectTransferRawArticleProvenanceMode
   sessionId: string
   zipModule?: ProjectTransferZipJsModule
 }
@@ -64,6 +66,7 @@ type CreateProjectTransferExportInput = ProjectTransferExportRuntimeOptions & {
   expiresAt?: Date
   exportedAt?: Date
   projectId: string
+  rawArticleProvenanceMode?: ProjectTransferRawArticleProvenanceMode
   sessionId?: string
   zipModule?: ProjectTransferZipJsModule
 }
@@ -74,6 +77,7 @@ type RunProjectTransferExportSessionInput = ProjectTransferExportRuntimeOptions 
   exportedAt?: Date
   ownerToken?: string
   projectId: string
+  rawArticleProvenanceMode?: ProjectTransferRawArticleProvenanceMode
   sessionId: string
   zipModule?: ProjectTransferZipJsModule
 }
@@ -647,7 +651,10 @@ export const buildProjectTransferExportPackage = async (
               const database = input.database ?? getAppDatabaseService()
 
               return database.transaction((runner) => {
-                return getProjectTransferExportPayloads(input.projectId, {database: runner})
+                return getProjectTransferExportPayloads(input.projectId, {
+                  database: runner,
+                  rawArticleProvenanceMode: input.rawArticleProvenanceMode,
+                })
               }) as Promise<ProjectTransferExportPayloadAssembly>
             },
             sessionId: input.sessionId,
@@ -847,7 +854,10 @@ export const createProjectTransferExport = async (
       sessionId,
     }
   }
-  const preflight = await getProjectTransferExportPreflightEstimate(input.projectId, {database: input.database})
+  const preflight = await getProjectTransferExportPreflightEstimate(input.projectId, {
+    database: input.database,
+    rawArticleProvenanceMode: input.rawArticleProvenanceMode,
+  })
   const preflightExecutionMode = getProjectTransferExportExecutionMode(preflight)
 
   if (preflightExecutionMode === 'background') {

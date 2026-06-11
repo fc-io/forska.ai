@@ -204,9 +204,13 @@ test('project-transfer export reads archived app-table scope and serializes lock
     projectArchived: boolean
     projectArticleIds: string[]
     providerConnectionIds: string[]
+    rawForcedOmittedArticleOriginalData: unknown
+    rawForcedOmittedWarning: {details: {rawArticleProvenanceMode: string}} | null
+    rawIncludedArticleOriginalData: unknown
+    rawIncludedWarning: unknown
     rawOmittedArticleOriginalData: unknown
     rawOmittedArticleSourceMetadata: unknown
-    rawOmittedWarning: unknown
+    rawOmittedWarning: {details: {rawArticleProvenanceMode: string; thresholdChars: number}} | null
     reviewIds: string[]
     routeArticleImportRoute: string | null
     identifierRejectedWarnings: Array<{
@@ -790,6 +794,13 @@ test('project-transfer export reads archived app-table scope and serializes lock
     const rawOmitted = await getProjectTransferExportPayloads('project-archived-export', {
       articleRawJsonOmissionThresholdChars: 1,
     })
+    const rawIncluded = await getProjectTransferExportPayloads('project-archived-export', {
+      articleRawJsonOmissionThresholdChars: 1,
+      rawArticleProvenanceMode: 'include',
+    })
+    const rawForcedOmitted = await getProjectTransferExportPayloads('project-archived-export', {
+      rawArticleProvenanceMode: 'omit',
+    })
     const summary = await getProjectTransferExportPayloads('project-summary-export')
     const serialized = serializeProjectTransferExportPayloads(archived.payloads)
     const [serializedArticle] = serialized.articles.trim().split('\\n').map((line) => JSON.parse(line))
@@ -797,6 +808,10 @@ test('project-transfer export reads archived app-table scope and serializes lock
     const routeArticle = archived.payloads.articles.find((article) => article.sourceArticleId === 'article-route-in')
     const curatedArticle = archived.payloads.articles.find((article) => article.sourceArticleId === 'article-curated-in')
     const rawOmittedArticle = rawOmitted.payloads.articles.find((article) => article.sourceArticleId === 'article-route-in')
+    const rawIncludedArticle = rawIncluded.payloads.articles.find((article) => article.sourceArticleId === 'article-route-in')
+    const rawForcedOmittedArticle = rawForcedOmitted.payloads.articles.find((article) => {
+      return article.sourceArticleId === 'article-route-in'
+    })
     const identifierRejectedWarnings = archived.warnings.filter((warning) => warning.code === 'identifierRejected')
     const settings = await getProjectTransferExportSourceProjectSettings('project-archived-export')
     const invalidDateMessage = await catchMessage(() => getProjectTransferExportPayloads('project-invalid-date'))
@@ -907,6 +922,12 @@ test('project-transfer export reads archived app-table scope and serializes lock
       providerConnectionIds: archived.payloads.providerConnections.map((connection) => connection.sourceProviderConnectionId),
       rawOmittedArticleOriginalData: rawOmittedArticle?.originalData ?? null,
       rawOmittedArticleSourceMetadata: rawOmittedArticle?.sourceMetadata ?? null,
+      rawIncludedArticleOriginalData: rawIncludedArticle?.originalData ?? null,
+      rawIncludedWarning: rawIncluded.warnings.find((warning) => warning.code === 'payloadOmitted' && warning.scope === 'articles') ?? null,
+      rawForcedOmittedArticleOriginalData: rawForcedOmittedArticle?.originalData ?? null,
+      rawForcedOmittedWarning: rawForcedOmitted.warnings.find((warning) => {
+        return warning.code === 'payloadOmitted' && warning.scope === 'articles'
+      }) ?? null,
       rawOmittedWarning: rawOmitted.warnings.find((warning) => warning.code === 'payloadOmitted' && warning.scope === 'articles') ?? null,
       reviewIds: archived.payloads.reviews.map((review) => review.sourceReviewId),
       routeArticleImportRoute: routeArticle?.importRoute ?? null,
@@ -965,10 +986,14 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.rawOmittedWarning).toMatchObject({
     action: 'omitted',
     code: 'payloadOmitted',
-    details: {thresholdChars: 1},
+    details: {rawArticleProvenanceMode: 'auto', thresholdChars: 1},
     scope: 'articles',
     severity: 'fidelity',
   })
+  expect(result.rawIncludedArticleOriginalData).toEqual({raw: 'route'})
+  expect(result.rawIncludedWarning).toBeNull()
+  expect(result.rawForcedOmittedArticleOriginalData).toBeNull()
+  expect(result.rawForcedOmittedWarning).toMatchObject({details: {rawArticleProvenanceMode: 'omit'}})
   expect(result.modelDescriptors).toEqual([
     {
       displayName: 'Local fallback model',

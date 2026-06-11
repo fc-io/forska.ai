@@ -120,7 +120,7 @@ Purpose:
 Implementation checklist:
 
 - Add phase timing helpers for upload, zip scan, payload parse, staging/load, target analysis, dependency resolution, revalidation, asset promotion, app-table writes, history write, cleanup, export assembly, and export package write.
-- Add row counters per payload family: articles, identifiers, article import routes, project articles, prompts, project prompts, judgments, assessments, human judgments, human summaries, reviews, assets.
+- Add row counters keyed by the current `projectTransferPayloadKeys` surface so instrumentation stays aligned with package contracts: `project`, `articles`, `importRoutes`, `projectImportRoutes`, `articleImportRoutes`, `projectArticles`, `prompts`, `projectPrompts`, `providerConnections`, `models`, `judgments`, `judgmentAssessments`, `humanJudgments`, `humanJudgmentSummaries`, `reviews`, plus `assetManifest.entries`.
 - Add byte counters for upload bytes, zip bytes, expanded bytes, NDJSON bytes, asset bytes, promoted bytes, and export package bytes.
 - Add DuckDB writer transaction timing around commit and any future staging metadata writes.
 - Add peak-memory sampling when available in Bun/Node runtime APIs; if exact peak is unavailable, record sampled RSS at phase boundaries.
@@ -280,7 +280,7 @@ Purpose:
 
 Implementation checklist:
 
-- Identify every table and key range that can affect import safety: articles, identifiers, import routes, project links, prompts, judgments, assessments, human review rows, models, provider connections, project-transfer history.
+- Identify every table and key range that can affect import safety: projects and project scope state (`archived`, `date_from`, `date_to`), articles, identifiers, import routes, project links, prompts, judgments, assessments, human review rows, models, provider connections, project-transfer history.
 - Add a small shared target-state dirty-token or version service for those safety surfaces.
 - Add a target-state coverage version that records which code version initialized token coverage and which safety surfaces are covered.
 - Store the coverage version with every analyze-time token set and reviewed plan revision.
@@ -292,9 +292,10 @@ Implementation checklist:
 - At commit, compare current dirty tokens with analyze-time dirty tokens before running detailed revalidation.
 - Fall back to full target revalidation when any relevant token is missing, unknown, stale, or not covered by shared write helpers.
 - Keep detailed revalidation for changed target surfaces only when the dirty token tells us which surface changed.
-- Persist stale-plan reasons by surface: dependency, target article, target prompt, target route, judgment, assessment, human review, duplicate package history.
+- Persist stale-plan reasons by surface: dependency, target project, target article, target prompt, target route, judgment, assessment, human review, duplicate package history.
 - Add a test inventory for every route, service, queue, cron, import, and maintenance path that writes safety surfaces.
 - Add tests where target state changes after analyze and before commit.
+- Add tests where target project archive/date-scope state changes after analyze and before commit.
 - Add tests where dirty-token coverage is missing and full revalidation is forced.
 - Add tests where the coverage version changes between analyze and commit and full revalidation is forced.
 
@@ -319,7 +320,7 @@ Estimated impact:
 Acceptance criteria:
 
 - Unchanged target state does not rerun full target analysis at commit time.
-- Changed target state still reopens the plan safely before writes.
+- Changed target state, including target project scope/archive/date changes, still reopens the plan safely before writes.
 - Missing or unverifiable target-state coverage forces full revalidation instead of optimistic commit.
 - Incremental revalidation is disabled by default until coverage has been initialized for every safety surface.
 
@@ -436,9 +437,9 @@ Implementation checklist:
 
 - Add a new transfer schema version for streaming export output.
 - Add a new package fingerprint version when canonical payload formatting changes.
-- Run export assembly against one consistent DuckDB snapshot. Keep the read transaction open while streaming to staging files, or materialize all export source rows into request-safe staged files before releasing the snapshot.
+- Run export assembly against one consistent DuckDB snapshot. Materialize export rows and asset metadata into request-safe staged files from that snapshot before releasing it; do not hold a DuckDB transaction open across asset copy or package streaming.
 - Stream payload assembly from DuckDB queries into deterministic NDJSON files instead of collecting large payload arrays.
-- Stream export asset collection: discover asset references while writing article payloads, copy asset files to package staging with bounded concurrency, and compute byte counts/checksums incrementally.
+- Stream export asset collection: discover asset references while writing article payloads, copy asset files to package staging with bounded concurrency, compute byte counts/checksums incrementally, and preserve a stable-source verification step so assets that change during copy fail the export before manifest and fingerprint finalization.
 - Do not store export asset bytes in JS arrays. Package entries should reference staged files or streams plus metadata.
 - Stream package creation to file for large exports and keep in-memory zip bytes only for small inline exports.
 - Extend the zip writer to accept staged files or streams so large payloads and assets are not converted back into `Uint8Array` entries.
@@ -463,7 +464,7 @@ After measurement:
 - Verify asset-heavy exports do not hold asset bytes or all payload rows in JS memory.
 - Verify golden package tests pass for the new schema version.
 - Verify exported packages import successfully through the same-branch new import flow.
-- Verify new packages exported by the branch import successfully in the same branch.
+- Verify same-branch export/import round trips preserve counts, warnings, and dependency-resolution semantics under the new schema version.
 
 Estimated impact:
 
@@ -522,8 +523,11 @@ Acceptance criteria:
 ## Cross-Phase Implementation Checklist
 
 - Add import/export benchmark fixtures and timing helpers under existing project-transfer tests or scripts.
+- Add a dedicated `bun run bench:project-transfer` benchmark entrypoint with fixture selection and machine-readable output for the benchmark matrix.
 - Prefer temp-root staging files plus operation-local DuckDB temp tables. Add DuckDB migrations under `src/db/duckdbMigrations/` only for target-state dirty tokens, transfer metadata, or app-scoped scratch tables that must be queryable across request boundaries.
 - Add a staging repository/helper near `src/server/services/projectTransfer/`.
+- Change `projectTransferSchemas.ts`, `projectTransferManifest.ts`, `projectTransferPayloadSchemas.ts`, and `projectTransferContracts.ts` together for any schema, fingerprint, manifest, or progress contract cutover.
+- Change `projectTransferPaths.ts`, `projectTransferSessionRepository.ts`, and `projectTransferSessionRecovery.ts` together when staging paths, request-gap survival, ownership leases, or cleanup semantics change.
 - Change `projectTransferFingerprint.ts` to support schema-vNext streaming logical fingerprints from staged row digests and singleton payload digests.
 - Change `projectTransferAnalyze.ts` to stream/load payloads into staging before target analysis.
 - Change `projectTransferAnalyzeTarget.ts` to query staged rows with joins instead of generated `IN` and `OR` clauses.
@@ -570,6 +574,7 @@ Benchmark pass/fail rules:
 
 - `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferAnalyzeTarget.test.ts` if added.
+- `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferFidelityValidation.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`
@@ -579,10 +584,17 @@ Benchmark pass/fail rules:
 - `bun test src/server/services/projectTransfer/projectTransferExportAssets.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferExportPackage.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferFingerprint.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferHistoryRepository.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferPaths.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferPayloadSchemas.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferZip.test.ts`
 - `bun test src/server/routes/projectTransferRoutes.test.ts`
 - Add and run golden package/fingerprint tests for any new transfer schema version.
 - Add and run same-branch export/import tests for any new transfer schema version.
+- `bun run bench:project-transfer -- --fixture=<targeted-fixture>` for each benchmark shape the PR claims to improve, with before/after median and worst-run results attached to the PR or implementation note.
 - `bun run db:mig` if target-state dirty tokens, app-scoped scratch tables, or transfer metadata migrations are added.
 - `bun run lint`
 - `bun run build` if shared UI, route response types, or import wizard progress changes.

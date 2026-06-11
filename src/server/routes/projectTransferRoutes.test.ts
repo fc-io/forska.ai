@@ -137,9 +137,11 @@ const queryJsonMock = mock(async (statement: string) => {
   return routeState.projectRows
 })
 
-const createProjectTransferExportMock = mock(async (_input: {projectId: string}) => {
-  return routeState.exportResult
-})
+const createProjectTransferExportMock = mock(
+  async (_input: {projectId: string; rawArticleProvenanceMode?: 'auto' | 'include' | 'omit'}) => {
+    return routeState.exportResult
+  },
+)
 
 const analyzeProjectTransferImportPackageMock = mock(async (input: {planRevision: number}) => {
   const planSummary = {
@@ -474,14 +476,19 @@ const getProjectTransferApp = async () => {
   return new Elysia().use(projectTransferRoutes)
 }
 
-const getRequestInit = (method: string): RequestInit => {
+const getRequestInit = (method: string, body: Record<string, unknown> = {}): RequestInit => {
   return bodyMethods.has(method)
-    ? {body: JSON.stringify({}), headers: {'content-type': 'application/json'}, method}
+    ? {body: JSON.stringify(body), headers: {'content-type': 'application/json'}, method}
     : {method}
 }
 
-const getRouteResponse = async (app: RouteTestApp, path: string, method: string) => {
-  return app.handle(new Request(`http://localhost${path}`, getRequestInit(method)))
+const getRouteResponse = async (
+  app: RouteTestApp,
+  path: string,
+  method: string,
+  body: Record<string, unknown> = {},
+) => {
+  return app.handle(new Request(`http://localhost${path}`, getRequestInit(method, body)))
 }
 
 const getSessionRecord = (overrides: Partial<ProjectTransferSessionRecord> = {}): ProjectTransferSessionRecord => {
@@ -596,6 +603,20 @@ test('project transfer export route returns an inline zip with server metadata h
   expect(response.headers.get('x-project-transfer-package-fingerprint')).toBe('inline-fingerprint')
   expect(await response.text()).toBe('zip-body')
   expect(createProjectTransferExportMock).toHaveBeenCalledWith({projectId: 'project-1'})
+})
+
+test('project transfer export route forwards raw article provenance mode', async () => {
+  const app = await getProjectTransferApp()
+
+  const response = await getRouteResponse(app, '/api/projects/project-1/export-project', 'POST', {
+    rawArticleProvenanceMode: 'omit',
+  })
+
+  expect(response.status).toBe(200)
+  expect(createProjectTransferExportMock).toHaveBeenCalledWith({
+    projectId: 'project-1',
+    rawArticleProvenanceMode: 'omit',
+  })
 })
 
 test('project transfer export route returns queued JSON for large exports without package bytes', async () => {

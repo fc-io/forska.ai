@@ -15,7 +15,10 @@ import {processFulltextForLLM} from '../../utils/fulltextProcessing.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getDateValue, getJsonValue, getSqlLiteral} from '../appQueryHelpers.ts'
 import type {AppQueryDatabaseService} from '../appQueryServiceCore.ts'
-import {projectTransferExecutionThresholds} from './projectTransferContracts.ts'
+import {
+  projectTransferExecutionThresholds,
+  type ProjectTransferRawArticleProvenanceMode,
+} from './projectTransferContracts.ts'
 import {
   filterProjectTransferExportAssetCollectionByArticles,
   getProjectTransferExportAssetByteEstimateForArticles,
@@ -45,6 +48,7 @@ import {projectTransferPayloadKeys} from './projectTransferSchemas.ts'
 type ProjectTransferExportQueryOptions = {
   articleRawJsonOmissionThresholdChars?: number
   database?: AppQueryDatabaseService
+  rawArticleProvenanceMode?: ProjectTransferRawArticleProvenanceMode
 }
 
 export type ProjectTransferExportSourceProjectSettings = {
@@ -394,6 +398,15 @@ const singlePromptEvidenceOutputSchema = {
 }
 const reviewedSectionContractVersion = 1 as const
 const articleRawJsonOmissionThresholdChars = 64 * 1024 * 1024
+const defaultRawArticleProvenanceMode: ProjectTransferRawArticleProvenanceMode = 'auto'
+const rawArticleProvenanceFields = [
+  'canonicalOriginalData',
+  'canonicalSourceMetadata',
+  'originalData',
+  'scopedImportMetadata',
+  'scopedRawPayload',
+  'sourceMetadata',
+] as const
 
 const getDatabase = (options: ProjectTransferExportQueryOptions = {}) => {
   return options.database ?? getAppDatabaseService()
@@ -427,6 +440,12 @@ const getStringValue = (value: unknown) => {
 
 const getNumberValue = (value: unknown) => {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const getRawArticleProvenanceMode = (
+  mode?: ProjectTransferRawArticleProvenanceMode,
+): ProjectTransferRawArticleProvenanceMode => {
+  return mode ?? defaultRawArticleProvenanceMode
 }
 
 const getQueryNumberValue = (value: unknown) => {
@@ -969,34 +988,52 @@ const getProjectTransferExportArticleRawJsonEstimate = async (
   return {estimatedChars: getQueryNumberValue(row?.estimatedChars), rowCount: getQueryNumberValue(row?.rowCount)}
 }
 
-const getProjectTransferExportArticleRawJsonOmissionWarnings = (
-  estimate: ProjectTransferExportArticleRawJsonEstimate,
+const getProjectTransferExportArticleRawJsonOmissionWarning = ({
+  estimate,
+  mode,
+  thresholdChars,
+}: {
+  estimate: ProjectTransferExportArticleRawJsonEstimate
+  mode: ProjectTransferRawArticleProvenanceMode
+  thresholdChars: number
+}): ProjectTransferManifestWarning => {
+  return {
+    action: 'omitted',
+    code: 'payloadOmitted',
+    details: {
+      estimatedChars: estimate.estimatedChars,
+      fields: [...rawArticleProvenanceFields],
+      rawArticleProvenanceMode: mode,
+      rowCount: estimate.rowCount,
+      thresholdChars,
+    },
+    message:
+      mode === 'omit'
+        ? 'Article raw provenance JSON was omitted from the transfer payload by export option.'
+        : 'Large article raw provenance JSON was omitted from the transfer payload.',
+    scope: 'articles',
+    severity: 'fidelity',
+  }
+}
+
+const getProjectTransferExportArticleRawJsonDecision = ({
+  estimate,
+  mode,
   thresholdChars = articleRawJsonOmissionThresholdChars,
-): ProjectTransferManifestWarning[] => {
-  return estimate.estimatedChars <= thresholdChars
-    ? []
-    : [
-        {
-          action: 'omitted',
-          code: 'payloadOmitted',
-          details: {
-            estimatedChars: estimate.estimatedChars,
-            fields: [
-              'canonicalOriginalData',
-              'canonicalSourceMetadata',
-              'originalData',
-              'scopedImportMetadata',
-              'scopedRawPayload',
-              'sourceMetadata',
-            ],
-            rowCount: estimate.rowCount,
-            thresholdChars,
-          },
-          message: 'Large article raw provenance JSON was omitted from the transfer payload.',
-          scope: 'articles',
-          severity: 'fidelity',
-        },
-      ]
+}: {
+  estimate: ProjectTransferExportArticleRawJsonEstimate
+  mode: ProjectTransferRawArticleProvenanceMode
+  thresholdChars?: number
+}): ProjectTransferExportArticleRawJsonDecision => {
+  const includeRawArticleJson = mode === 'include' || (mode === 'auto' && estimate.estimatedChars <= thresholdChars)
+
+  return includeRawArticleJson
+    ? {includeRawArticleJson, rawArticleProvenanceMode: mode, warnings: []}
+    : {
+        includeRawArticleJson,
+        rawArticleProvenanceMode: mode,
+        warnings: [getProjectTransferExportArticleRawJsonOmissionWarning({estimate, mode, thresholdChars})],
+      }
 }
 
 const getProjectTransferExportArticleImportRouteRows = async (projectId: string, database: AppQueryDatabaseService) => {
@@ -2523,13 +2560,14 @@ const getProjectTransferExportContext = async (
       return row.useFulltext || row.useFulltextNoImages
     })
   const articleRawJsonEstimate = await getProjectTransferExportArticleRawJsonEstimate(projectId, database)
-  const articleRawJsonWarnings = getProjectTransferExportArticleRawJsonOmissionWarnings(
-    articleRawJsonEstimate,
-    options.articleRawJsonOmissionThresholdChars,
-  )
+  const articleRawJsonDecision = getProjectTransferExportArticleRawJsonDecision({
+    estimate: articleRawJsonEstimate,
+    mode: getRawArticleProvenanceMode(options.rawArticleProvenanceMode),
+    thresholdChars: options.articleRawJsonOmissionThresholdChars,
+  })
   const articleRows = await getProjectTransferExportArticleRows(projectId, database, {
     includeFullText,
-    includeRawArticleJson: articleRawJsonWarnings.length === 0,
+    includeRawArticleJson: articleRawJsonDecision.includeRawArticleJson,
   })
   const judgmentAssessmentRows = await getProjectTransferExportJudgmentAssessmentRows(projectId, database)
   const humanJudgmentRows = await getProjectTransferExportHumanJudgmentRows(projectId, database)
@@ -2587,7 +2625,7 @@ const getProjectTransferExportContext = async (
     warnings: [
       ...ambiguousJudgmentWarnings,
       ...chunkedJudgmentWarnings,
-      ...articleRawJsonWarnings,
+      ...articleRawJsonDecision.warnings,
       ...getProjectTransferExportArticleWarnings(articleRows),
     ],
   }
@@ -2612,11 +2650,18 @@ type ProjectTransferExportArticleRawJsonEstimateRow = {
 }
 
 type ProjectTransferExportArticleRawJsonEstimate = {estimatedChars: number; rowCount: number}
+type ProjectTransferExportArticleRawJsonDecision = {
+  includeRawArticleJson: boolean
+  rawArticleProvenanceMode: ProjectTransferRawArticleProvenanceMode
+  warnings: ProjectTransferManifestWarning[]
+}
 
 const getProjectTransferExportPreflightPackageEstimate = async (
   projectId: string,
   database: AppQueryDatabaseService,
+  options: {rawArticleProvenanceMode?: ProjectTransferRawArticleProvenanceMode} = {},
 ) => {
+  const includeRawArticleProvenanceInEstimate = getRawArticleProvenanceMode(options.rawArticleProvenanceMode) !== 'omit'
   const [row] = await database.queryJson<ProjectTransferExportPreflightEstimateRow>(`
     WITH
     ${getProjectTransferExportScopedArticleCteSql(projectId)},
@@ -2672,8 +2717,7 @@ const getProjectTransferExportPreflightPackageEstimate = async (
           'article.full_text_conversion_metadata',
           'article.content_hash',
           'article.import_route',
-          'article.original_data',
-          'article.source_metadata',
+          ...(includeRawArticleProvenanceInEstimate ? ['article.original_data', 'article.source_metadata'] : []),
           'article.publication_status',
         ],
       )}
@@ -2687,9 +2731,10 @@ const getProjectTransferExportPreflightPackageEstimate = async (
         [
           'article_import_route.id',
           'article_import_route.external_article_id',
-          'article_import_route.import_metadata',
           'article_import_route.match_metadata',
-          'article_import_route.raw_payload',
+          ...(includeRawArticleProvenanceInEstimate
+            ? ['article_import_route.import_metadata', 'article_import_route.raw_payload']
+            : []),
           'article_import_route.source_kind',
           'article_import_route.source_record_hash',
           'article_import_route.source_record_key',
@@ -2947,7 +2992,9 @@ export const getProjectTransferExportPreflightEstimate = async (
   const database = getDatabase(options)
   await getProjectTransferExportSourceProjectSettings(projectId, {database})
 
-  const packageEstimate = await getProjectTransferExportPreflightPackageEstimate(projectId, database)
+  const packageEstimate = await getProjectTransferExportPreflightPackageEstimate(projectId, database, {
+    rawArticleProvenanceMode: options.rawArticleProvenanceMode,
+  })
   const packageBytes = getProjectTransferExportEstimatedPackageBytes({
     estimatedPayloadChars: getProjectTransferExportEstimateNumber(packageEstimate.estimatedPayloadChars),
     rowCount: getProjectTransferExportEstimateNumber(packageEstimate.rowCount),
