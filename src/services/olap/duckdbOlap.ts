@@ -1572,8 +1572,8 @@ const getActivityDate = (article: Pick<ScopedArticleRow, 'createdAt' | 'articleC
   return article.articleUpdatedAt ?? article.articleCreatedAt ?? article.createdAt
 }
 
-const getDuckdbActivityTimestampExpression = (rowAlias: string) => {
-  return `COALESCE(${rowAlias}.article_updated_at, ${rowAlias}.article_created_at, ${rowAlias}.created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')`
+const getDuckdbScopeArticleActivityTimestampExpression = (rowAlias: string) => {
+  return `COALESCE(${rowAlias}.article_updated_at, ${rowAlias}.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')`
 }
 
 const getDuckdbUnassessedPairsPriorityJoinClause = (scope: ProjectOlapScope, articleIdExpression: string) => {
@@ -2031,32 +2031,76 @@ const getScopedArticles = async (params: {
 
 const rawUnassessedArticleWindowSize = 1000
 
+const getScopedActivityProjectScopeWhereParts = (scope: ProjectOlapScope) => {
+  return [
+    `scope_article.project_id = ${getDuckdbSqlString(scope.projectId)}`,
+    scope.dateFrom ? `scope_article.article_created_at >= ${getDuckdbTimestampLiteral(scope.dateFrom)}` : null,
+    scope.dateTo ? `scope_article.article_created_at <= ${getDuckdbTimestampLiteral(scope.dateTo)}` : null,
+  ].filter((part): part is string => {
+    return part !== null
+  })
+}
+
+const getScopedActivityDirtyArticleWhereParts = (scope: ProjectOlapScope) => {
+  return [
+    `refresh_state.project_id = ${getDuckdbSqlString(scope.projectId)}`,
+    'article_state.first_dirty_token <= refresh_state.dirty_token',
+    'article_state.last_dirty_token > refresh_state.last_completed_dirty_token',
+    getDuckdbScopeClause({articleAlias: 'dirty_article', routeIds: scope.routeIds, projectId: scope.projectId}),
+    scope.dateFrom ? `dirty_article.article_created_at >= ${getDuckdbTimestampLiteral(scope.dateFrom)}` : null,
+    scope.dateTo ? `dirty_article.article_created_at <= ${getDuckdbTimestampLiteral(scope.dateTo)}` : null,
+  ].filter((part): part is string => {
+    return part !== null
+  })
+}
+
+const getDuckdbScopedActivityArticleCandidatesCteSql = (scope: ProjectOlapScope) => {
+  return `WITH dirty_scope_candidate AS (
+    SELECT
+      dirty_article.id AS article_id,
+      dirty_article.article_created_at AS article_created_at,
+      dirty_article.article_updated_at AS article_updated_at
+    FROM app.project_mart_refresh_state refresh_state
+    INNER JOIN app.project_mart_refresh_article_state article_state
+      ON article_state.project_id = refresh_state.project_id
+    INNER JOIN app.article dirty_article ON dirty_article.id = article_state.article_id
+    WHERE ${getScopedActivityDirtyArticleWhereParts(scope).join(' AND ')}
+  ),
+  scope_article_candidate AS (
+    SELECT
+      scope_article.article_id AS article_id,
+      scope_article.article_created_at AS article_created_at,
+      scope_article.article_updated_at AS article_updated_at
+    FROM mart.project_scope_article scope_article
+    WHERE ${getScopedActivityProjectScopeWhereParts(scope).join(' AND ')}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM dirty_scope_candidate dirty_scope
+        WHERE dirty_scope.article_id = scope_article.article_id
+      )
+  ),
+  scoped_activity_article_candidate AS (
+    SELECT * FROM dirty_scope_candidate
+    UNION ALL
+    SELECT * FROM scope_article_candidate
+  )`
+}
+
 const getScopedActivityArticleWindow = async (params: {
   scope: ProjectOlapScope
   cursor: UnassessedPairsCursor | null
   limit: number
 }) => {
   const normalizedLimit = Math.max(1, Math.trunc(params.limit))
-  const whereParts = [
-    getDuckdbScopeClause({articleAlias: 'a', routeIds: params.scope.routeIds, projectId: params.scope.projectId}),
-  ]
-
-  if (params.scope.dateFrom) {
-    whereParts.push(`a.article_created_at >= ${getDuckdbTimestampLiteral(params.scope.dateFrom)}`)
-  }
-
-  if (params.scope.dateTo) {
-    whereParts.push(`a.article_created_at <= ${getDuckdbTimestampLiteral(params.scope.dateTo)}`)
-  }
-
-  const activityExpression = getDuckdbActivityTimestampExpression('a')
+  const whereParts: string[] = []
+  const activityExpression = getDuckdbScopeArticleActivityTimestampExpression('candidate')
   const priorityBucketExpression = getDuckdbUnassessedPairsPriorityBucketExpression(params.scope)
-  const priorityJoinClause = getDuckdbUnassessedPairsPriorityJoinClause(params.scope, 'a.id')
+  const priorityJoinClause = getDuckdbUnassessedPairsPriorityJoinClause(params.scope, 'candidate.article_id')
   const normalizedCursor = getUnassessedPairsCursor(params.cursor)
   const cursorClause = normalizedCursor
     ? getDuckdbUnassessedPairsCursorWhereClause({
         activityExpression,
-        articleIdExpression: 'a.id',
+        articleIdExpression: 'candidate.article_id',
         cursor: normalizedCursor,
         priorityBucketExpression,
       })
@@ -2073,18 +2117,19 @@ const getScopedActivityArticleWindow = async (params: {
     articleUpdatedAt: unknown
     priorityBucket: number
   }>(`
+    ${getDuckdbScopedActivityArticleCandidatesCteSql(params.scope)}
     SELECT
-      a.id AS id,
-      a.created_at AS createdAt,
-      a.article_created_at AS articleCreatedAt,
-      a.article_updated_at AS articleUpdatedAt,
+      candidate.article_id AS id,
+      ${activityExpression} AS createdAt,
+      candidate.article_created_at AS articleCreatedAt,
+      candidate.article_updated_at AS articleUpdatedAt,
       ${priorityBucketExpression} AS priorityBucket
-    FROM app.article a
+    FROM scoped_activity_article_candidate candidate
     ${priorityJoinClause}
-    WHERE ${whereParts.join(' AND ')}
+    ${whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : ''}
     ORDER BY ${getDuckdbUnassessedPairsOrderByClause({
       activityExpression,
-      articleIdExpression: 'a.id',
+      articleIdExpression: 'candidate.article_id',
       priorityBucketExpression,
     })}
     LIMIT ${normalizedLimit + 1}

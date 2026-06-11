@@ -815,7 +815,8 @@ test('getUnassessedPairsFromDuckdb falls back to raw judgments when serving rows
 
   expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
   expect(result.nextCursor?.lastArticleId).toBe('article-1')
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.project_scope_article scope_article')
+  expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('FROM app.article a')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('LIMIT 101')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
   expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('TO_JSON')
@@ -886,7 +887,8 @@ test('getUnassessedPairsFromDuckdb bypasses stale serving rows when dirty state 
   expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
   expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM app.project_mart_refresh_state state')
   expect(duckdbRunnerMockRef.current.queries[3]).toContain('COALESCE(dirty.dirtyToken, 0)')
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.project_scope_article scope_article')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('INNER JOIN app.article dirty_article')
 })
 
 test('getUnassessedPairsFromDuckdb keeps date-filtered projects on serving rows when coverage matches scope', async () => {
@@ -950,12 +952,15 @@ test('getUnassessedPairsFromDuckdb applies project date filters on raw fallback 
 
   expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
   expect(duckdbRunnerMockRef.current.queries[4]).toContain(
-    "a.article_created_at >= TIMESTAMPTZ '2026-04-01T00:00:00.000Z'",
+    "scope_article.article_created_at >= TIMESTAMPTZ '2026-04-01T00:00:00.000Z'",
   )
   expect(duckdbRunnerMockRef.current.queries[4]).toContain(
-    "a.article_created_at <= TIMESTAMPTZ '2026-05-01T23:59:59.999Z'",
+    "scope_article.article_created_at <= TIMESTAMPTZ '2026-05-01T23:59:59.999Z'",
   )
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.project_scope_article scope_article')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain(
+    "dirty_article.article_created_at >= TIMESTAMPTZ '2026-04-01T00:00:00.000Z'",
+  )
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
 })
 
@@ -979,7 +984,7 @@ test('getUnassessedPairsFromDuckdb compares raw queue cursors at millisecond pre
 
   const rawQuery = duckdbRunnerMockRef.current.queries[4] ?? ''
   const activityExpression =
-    "COALESCE(a.article_updated_at, a.article_created_at, a.created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')"
+    "COALESCE(candidate.article_updated_at, candidate.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')"
 
   expect(rawQuery).toContain(
     `date_trunc('millisecond', ${activityExpression}) < TIMESTAMPTZ '2026-04-24T09:09:01.566Z'`,
@@ -988,7 +993,7 @@ test('getUnassessedPairsFromDuckdb compares raw queue cursors at millisecond pre
     `date_trunc('millisecond', ${activityExpression}) = TIMESTAMPTZ '2026-04-24T09:09:01.566Z'`,
   )
   expect(rawQuery).toContain(
-    `ORDER BY CAST(0 AS INTEGER) DESC, date_trunc('millisecond', ${activityExpression}) DESC, a.id DESC`,
+    `ORDER BY CAST(0 AS INTEGER) DESC, date_trunc('millisecond', ${activityExpression}) DESC, candidate.article_id DESC`,
   )
 })
 
