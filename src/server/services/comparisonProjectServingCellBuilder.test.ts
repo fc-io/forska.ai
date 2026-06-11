@@ -946,6 +946,12 @@ test('prompt-mode cell inserts are split by discovered article batches', async (
 
   expect(batchQueryStatements).toHaveLength(2)
   expect(batchQueryStatements[0]).toContain('LIMIT 251')
+  expect(batchQueryStatements[0]).toContain(
+    'INNER JOIN app.project_article pa ON pa.project_id = cpsp.source_project_id',
+  )
+  expect(batchQueryStatements[0]).toContain(
+    'INNER JOIN app.article_import_route air ON air.import_route_id = cpir.import_route_id',
+  )
   expect(batchQueryStatements[1]).toContain("WHERE scoped_article.article_id > 'article-0249'")
   expect(
     statements.some((statement) => {

@@ -525,6 +525,7 @@ CREATE INDEX IF NOT EXISTS idx_app_article_article_id ON app.article(article_id)
 CREATE INDEX IF NOT EXISTS idx_app_project_prompt_project_id ON app.project_prompt(project_id, prompt_id);
 CREATE INDEX IF NOT EXISTS idx_app_project_import_route_project_id ON app.project_import_route(project_id, import_route_id);
 CREATE INDEX IF NOT EXISTS idx_app_article_import_route_import_route_id ON app.article_import_route(import_route_id, article_id);
+CREATE INDEX IF NOT EXISTS idx_app_article_import_route_article_id ON app.article_import_route(article_id, import_route_id);
 CREATE INDEX IF NOT EXISTS idx_app_project_article_project_id ON app.project_article(project_id, article_id);
 CREATE INDEX IF NOT EXISTS idx_app_judgment_lookup ON app.judgment(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, delete_generation);
 CREATE INDEX IF NOT EXISTS idx_app_judgment_human_lookup ON app.judgment_human(project_id, article_id, prompt_id);

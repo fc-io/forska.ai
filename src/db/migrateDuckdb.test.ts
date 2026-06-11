@@ -300,6 +300,7 @@ test('DuckDB migrations add import-scoped source record identity and idempotency
     expect(sourceRecordMigrationSql).toContain('SET external_article_id =')
     expect(currentUniqueColumns).toContainEqual(['article_id', 'import_route_id'])
     expect(sourceRecordUniqueColumns).toContainEqual(['import_route_id', 'source_record_key'])
+    expect(indexNames).toContain('idx_app_article_import_route_article_id')
     expect(indexNames).toContain('idx_app_article_import_route_external_article_id')
     expect(indexNames).toContain('idx_app_article_import_route_source_record_external_article_id')
     expect(parsed.duplicateCurrentMembershipRejected).toBe(true)

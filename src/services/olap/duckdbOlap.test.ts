@@ -739,6 +739,10 @@ test('getUnassessedCountFromDuckdb uses bounded raw windows for stale job count 
   expect(duckdbRunnerMockRef.current.queries).toHaveLength(5)
   expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.project_scope_article scope_article')
   expect(duckdbRunnerMockRef.current.queries[3]).toContain('INNER JOIN app.article dirty_article')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('WHERE arl.article_id = dirty_article.id')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain("arl.import_route_id IN ('route-1')")
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('WHERE pa.article_id = dirty_article.id')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain("pa.project_id = 'project-1'")
   expect(duckdbRunnerMockRef.current.queries[3]).toContain('LIMIT 1001')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.judgment j')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain("j.article_id IN ('article-1', 'article-2', 'article-3')")
@@ -819,6 +823,8 @@ test('getUnassessedCountFromDuckdb scopes Covidence import ranking to the curren
   expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('selected_scoped_article_import')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('WITH selected_scoped_article_import AS')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain("air.article_id IN ('article-1', 'article-2')")
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain("air.import_route_id IN ('route-1')")
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain("pir.project_id IN ('project-1')")
   expect(duckdbRunnerMockRef.current.queries[4]).toContain(
     'json_extract_string(CASE\n    WHEN a.source_metadata IS NULL',
   )
@@ -912,6 +918,8 @@ test('getUnassessedArticlesFromDuckdb bounded raw preview hydrates only the requ
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('TO_JSON')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('WITH selected_scoped_article_import AS')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain("air.article_id IN ('article-1', 'article-2')")
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain("air.import_route_id IN ('route-1')")
   expect(duckdbRunnerMockRef.current.queries[5]).toContain("a.id IN ('article-1', 'article-2')")
   expect(duckdbRunnerMockRef.current.queries[5]).not.toContain("'article-3'")
 })
