@@ -23,6 +23,10 @@ import {
 } from './projectTransferPayloadSchemas.ts'
 import {projectTransferPayloadKeys, projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 import {getProjectTransferImportTempLayout} from './projectTransferSession.ts'
+import {
+  getProjectTransferModelSnapshotFingerprint,
+  getProjectTransferProviderSnapshotFingerprint,
+} from './projectTransferSnapshotFingerprint.ts'
 
 const sessionId = 'dependency-session-1'
 
@@ -30,21 +34,22 @@ const getRuntimeRoot = () => {
   return mkdtempSync(join(tmpdir(), `f2-project-transfer-dependencies-${process.pid}-`))
 }
 
-const getImportedSnapshotMarker = (value: Record<string, string>) => {
+const getImportedSnapshotMarker = (value: Record<string, unknown>) => {
   return {projectTransferImportedSnapshot: value}
 }
 
+const withImportedSnapshotMarker = (record: Record<string, unknown>, marker: Record<string, unknown>) => {
+  return {...record, ...getImportedSnapshotMarker(marker)}
+}
+
 const getTargetModel = (overrides: Partial<ProviderModelRecord> = {}): ProviderModelRecord => {
-  return {
+  const model = {
     baseURL: null,
     createdAt: null,
     displayName: 'GPT 5.4',
     enabled: true,
     id: 'target-model-1',
-    metadataJson: {
-      ...getImportedSnapshotMarker({sourceModelId: 'model-1', sourceProviderConnectionId: 'provider-connection-1'}),
-      options: {thinking: 'medium'},
-    },
+    metadataJson: {options: {thinking: 'medium'}},
     modelName: 'gpt-5.4',
     name: 'GPT 5.4',
     provider: 'openai',
@@ -56,17 +61,47 @@ const getTargetModel = (overrides: Partial<ProviderModelRecord> = {}): ProviderM
     version: null,
     ...overrides,
   }
+  const metadataJson = model.metadataJson
+  const marker =
+    overrides.metadataJson === undefined
+    || (typeof metadataJson === 'object'
+      && metadataJson !== null
+      && !Array.isArray(metadataJson)
+      && 'projectTransferImportedSnapshot' in metadataJson)
+      ? {
+          snapshotFingerprint: getProjectTransferModelSnapshotFingerprint({
+            displayName: model.displayName,
+            metadataJson,
+            modelName: model.modelName,
+            name: model.name,
+            provider: {
+              authMode: model.provider === 'codex' ? 'codex-cli' : 'api-key',
+              baseURL: null,
+              configJson: {workerUrlMode: 'manual'},
+              providerKind: model.provider,
+            },
+            remoteModelId: model.remoteModelId,
+            variant: model.variant,
+            version: model.version,
+          }),
+          sourceModelId: 'model-1',
+          sourceProviderConnectionId: 'provider-connection-1',
+        }
+      : null
+
+  return marker === null || typeof metadataJson !== 'object' || metadataJson === null || Array.isArray(metadataJson)
+    ? model
+    : {...model, metadataJson: withImportedSnapshotMarker(metadataJson, marker)}
 }
 
 const getTargetConnection = (
   overrides: Partial<ProviderConnectionForAdmin> = {},
   models: ProviderModelRecord[] = [getTargetModel()],
 ): ProviderConnectionForAdmin => {
-  return {
+  const connection = {
     authMode: 'api-key',
     baseURL: null,
     config: {
-      ...getImportedSnapshotMarker({sourceProviderConnectionId: 'provider-connection-1'}),
       disabledModelIds: [],
       manualWorkerUrls: [],
       workerUrlMode: 'manual',
@@ -85,6 +120,22 @@ const getTargetConnection = (
     updatedAt: null,
     ...overrides,
   }
+  const marker =
+    overrides.config === undefined || connection.config.projectTransferImportedSnapshot
+      ? {
+          snapshotFingerprint: getProjectTransferProviderSnapshotFingerprint({
+            authMode: connection.authMode,
+            baseURL: connection.baseURL,
+            providerKind: connection.providerKind,
+            targetConfig: connection.config,
+          }),
+          sourceProviderConnectionId: 'provider-connection-1',
+        }
+      : null
+
+  return marker === null
+    ? connection
+    : {...connection, config: {...connection.config, ...getImportedSnapshotMarker(marker)}}
 }
 
 const getBasePlan = (): ProjectTransferImportPlanArtifact => {
@@ -605,6 +656,65 @@ test('project transfer dependency resolution ignores unmarked local provider and
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
+})
+
+test('project transfer dependency resolution blocks snapshot reuse when imported model metadata changes', async () => {
+  const cases = [
+    {metadataJson: {discovery: {contextWindow: {totalTokens: 100000}}, options: {thinking: 'medium'}}},
+    {
+      metadataJson: {
+        discovery: {contextWindow: {inputTokens: 12000, totalTokens: 32768}},
+        options: {thinking: 'medium'},
+      },
+    },
+    {metadataJson: {options: {thinking: 'high'}}},
+  ]
+
+  await cases.reduce<Promise<void>>(async (previous, testCase) => {
+    await previous
+    const cwd = getRuntimeRoot()
+
+    try {
+      const payloads = {
+        ...getProjectTransferPayloadFixtureMap(),
+        judgments: [],
+        models: getProjectTransferPayloadFixtureMap().models.map((model) => {
+          return {...model, metadataJson: testCase.metadataJson}
+        }),
+      }
+      const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+      const targetModel = getTargetModel()
+      const result = await resolveProjectTransferDependencies({
+        cwd,
+        layout,
+        nextPlanRevision: 2,
+        repositories: {
+          getProviderModelsByIds: async () => {
+            return new Map([['target-model-1', targetModel]])
+          },
+          listProviderConnections: async () => {
+            return [getTargetConnection({}, [targetModel])]
+          },
+        },
+        request: {
+          planRevision: 1,
+          selectedModels: [{sourceModelId: 'model-1', targetModelId: 'target-model-1'}],
+          selectedProviderConnections: [
+            {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: 'target-provider-1'},
+          ],
+        },
+      })
+
+      expect(result.status).toBe('ok')
+      expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+        'model:model-1': 'blocked',
+        'provider:provider-connection-1': 'resolved',
+      })
+      expect(result.status === 'ok' ? result.plan.canCommit : true).toBe(false)
+    } finally {
+      rmSync(cwd, {force: true, recursive: true})
+    }
+  }, Promise.resolve())
 })
 
 test('project transfer dependency resolution keeps Codex materialization unresolved until the model is visible on a live connection', async () => {

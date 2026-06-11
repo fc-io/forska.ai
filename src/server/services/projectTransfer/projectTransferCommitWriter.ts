@@ -26,6 +26,10 @@ import type {
   ProjectTransferProjectPayload,
 } from './projectTransferPayloadSchemas.ts'
 import type {ProjectTransferPackageWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
+import {
+  getProjectTransferModelSnapshotFingerprint,
+  getProjectTransferProviderSnapshotFingerprint,
+} from './projectTransferSnapshotFingerprint.ts'
 
 type ProjectTransferCommitWriterTx = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -351,11 +355,44 @@ const getJsonLiteral = (value: unknown) => {
   return value === null || value === undefined ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(value))} AS JSON)`
 }
 
-const getImportedSnapshotJson = (value: unknown, snapshot: Record<string, string>) => {
+const getImportedSnapshotJson = (value: unknown, snapshot: Record<string, unknown>) => {
   const parsed = getJsonValue(value)
   const record = isRecord(parsed) ? parsed : {}
 
   return {...record, [importedSnapshotMarker]: snapshot}
+}
+
+const getImportedProviderSnapshotFingerprint = (importedProvider: ImportedProviderConnectionCommitRow) => {
+  return getProjectTransferProviderSnapshotFingerprint({
+    authMode: importedProvider.authMode,
+    baseURL: importedProvider.baseURL,
+    configJson: importedProvider.configJson,
+    providerKind: importedProvider.providerKind,
+  })
+}
+
+const getImportedModelSnapshotFingerprint = ({
+  importedModel,
+  importedProvider,
+}: {
+  importedModel: ImportedModelCommitRow
+  importedProvider: ImportedProviderConnectionCommitRow
+}) => {
+  return getProjectTransferModelSnapshotFingerprint({
+    displayName: importedModel.displayName,
+    metadataJson: importedModel.metadataJson,
+    modelName: importedModel.modelName,
+    name: importedModel.name,
+    provider: {
+      authMode: importedProvider.authMode,
+      baseURL: importedProvider.baseURL,
+      configJson: importedProvider.configJson,
+      providerKind: importedProvider.providerKind,
+    },
+    remoteModelId: importedModel.remoteModelId,
+    variant: importedModel.variant,
+    version: importedModel.variant,
+  })
 }
 
 const getNullableDateLiteral = (value: unknown) => {
@@ -462,7 +499,8 @@ const getImportedModel = (record: ProjectTransferPayloadRecord): ImportedModelCo
       getRecordField(record, 'sourceProviderConnectionId'),
       'models.sourceProviderConnectionId',
     ),
-    variant: getNullableString(getRecordField(record, 'variant')) ?? getNullableString(getRecordField(record, 'version')),
+    variant:
+      getNullableString(getRecordField(record, 'variant')) ?? getNullableString(getRecordField(record, 'version')),
   }
 }
 
@@ -525,6 +563,7 @@ const getMaterializedProviderTargetBySourceId = async ({
         ${getSqlLiteral(importedProvider.maxInflightRequests)},
         ${getJsonLiteral(
           getImportedSnapshotJson(importedProvider.configJson, {
+            snapshotFingerprint: getImportedProviderSnapshotFingerprint(importedProvider),
             sourceProviderConnectionId: importedProvider.sourceProviderConnectionId,
           }),
         )},
@@ -537,11 +576,13 @@ const getMaterializedProviderTargetBySourceId = async ({
 }
 
 const getMaterializedModelTargetBySourceId = async ({
+  importedProviderBySourceId,
   importedModelBySourceId,
   modelTargetBySourceId,
   providerTargetBySourceId,
   tx,
 }: {
+  importedProviderBySourceId: Record<string, ImportedProviderConnectionCommitRow>
   importedModelBySourceId: Record<string, ImportedModelCommitRow>
   modelTargetBySourceId: Record<string, string>
   providerTargetBySourceId: Record<string, string>
@@ -555,7 +596,11 @@ const getMaterializedModelTargetBySourceId = async ({
       return {...mapped, [sourceModelId]: targetModelId}
     }
 
-    const importedModel = importedModelBySourceId[sourceModelId] ?? failCommitWriter(`missing imported model for ${sourceModelId}`)
+    const importedModel =
+      importedModelBySourceId[sourceModelId] ?? failCommitWriter(`missing imported model for ${sourceModelId}`)
+    const importedProvider =
+      importedProviderBySourceId[importedModel.sourceProviderConnectionId]
+      ?? failCommitWriter(`missing imported provider for ${importedModel.sourceProviderConnectionId}`)
     const providerConnectionId = getMappedTargetId({
       label: 'provider connection',
       mapped: providerTargetBySourceId,
@@ -585,6 +630,7 @@ const getMaterializedModelTargetBySourceId = async ({
         ${getSqlLiteral(importedModel.enabled)},
         ${getJsonLiteral(
           getImportedSnapshotJson(importedModel.metadataJson, {
+            snapshotFingerprint: getImportedModelSnapshotFingerprint({importedModel, importedProvider}),
             sourceModelId: importedModel.sourceModelId,
             sourceProviderConnectionId: importedModel.sourceProviderConnectionId,
           }),
@@ -614,6 +660,7 @@ const getPlanWithMaterializedImportedDependencies = async ({
     tx,
   })
   const materializedModelTargetBySourceId = await getMaterializedModelTargetBySourceId({
+    importedProviderBySourceId: getImportedProviderConnectionBySourceId(payloads.providerConnections ?? []),
     importedModelBySourceId: getImportedModelBySourceId(payloads.models ?? []),
     modelTargetBySourceId,
     providerTargetBySourceId: materializedProviderTargetBySourceId,
