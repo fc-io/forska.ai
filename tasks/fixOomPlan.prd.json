@@ -1,0 +1,203 @@
+{
+  "name": "Fix OOM Plan",
+  "description": "Eliminate recurring DuckDB OOMs in judgment-job unassessed counts and comparison-project serving rebuilds without raising DUCKDB_MEMORY_LIMIT as the primary fix.",
+  "branchName": "ralph/fix-oom",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Bound raw unassessed count fallback",
+      "description": "As a maintainer, I want `/api/judgmentsjobs-unassessed-count` to compute exact raw fallback counts in bounded article windows so the endpoint does not OOM when project marts are stale.",
+      "acceptanceCriteria": [
+        "Replace the raw fallback path behind `getUnassessedCountFromDuckdb` so it does not run one full-scope `countDuckdbUnassessedArticles` aggregate for stale projects.",
+        "Use a mart-backed article candidate window that includes dirty article candidates and existing `mart.project_scope_article` rows for stale project state.",
+        "For each article window, query judged prompt ids or counts with `article_id IN (...)`, model/content settings, and project prompt ids, then accumulate an exact count in TypeScript.",
+        "Do not emit or execute `selected_scoped_article_import` for unassessed-count raw fallback when `hasDuplicateStudyRecords` and `hasStudyDecisionConflict` filters are absent.",
+        "When metadata filters are present, scope any selected import ranking to the current article batch rather than the full project scope.",
+        "Add tests for the failing count shape using job/project settings equivalent to `GET /api/judgmentsjobs-unassessed-count?jobId=dc227fc7-9760-420e-ad36-65149a16c850`.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "Targeted `bunx eslint` on changed files passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Bound raw unassessed article preview",
+      "description": "As a maintainer, I want `/api/judgmentsjobs-unassessed-articles` to reuse bounded unassessed candidates so the preview endpoint does not scan the entire project before slicing one page.",
+      "acceptanceCriteria": [
+        "Replace the raw fallback use of `getUnassessedArticleRows` for the judgment-job preview route with the bounded candidate window logic from the count fix.",
+        "Stop scanning after collecting `offset + limit` unassessed articles for the requested page.",
+        "Hydrate display fields only for the returned article ids.",
+        "Keep the serving-row path unchanged when fresh `mart.review_article_serving` rows exist.",
+        "Add tests proving raw preview does not enumerate all scoped articles before slicing.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "Targeted `bunx eslint` on changed files passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Add comparison rebuild lease",
+      "description": "As a maintainer, I want one active comparison serving rebuild per comparison project so duplicate route-triggered rebuilds do not interleave or delete each other's staged generation rows.",
+      "acceptanceCriteria": [
+        "Add a per-comparison-project rebuild claim in `comparisonProjectServingRebuildService` or a sibling service.",
+        "Claim only when no fresh `refreshing` workflow exists for the same comparison project, or when the existing workflow is stale or expired.",
+        "Duplicate fire-and-forget route-triggered rebuilds return or skip without starting another memory-heavy workflow.",
+        "Progress updates refresh the claim at phase boundaries.",
+        "Failure cleanup deletes only the claimed generation and does not mark a newer claimed generation failed.",
+        "Add tests that two concurrent rebuild calls for one comparison project do not both build or promote the same generation.",
+        "`bun test src/server/services/comparisonProjectServingRebuildService.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "Targeted `bunx eslint` on changed files passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-004",
+      "title": "Narrow rebuild transaction boundaries",
+      "description": "As a maintainer, I want comparison serving rebuilds to keep only status and generation transitions transactional so DuckDB can release memory between bulk batch statements.",
+      "acceptanceCriteria": [
+        "Keep `stageComparisonProjectServingGeneration`, status updates, promotion, and cleanup transactional.",
+        "Do not wrap full prompt cell, summary cell, or rollup phases in one transaction.",
+        "Record progress before and after each phase without requiring a long-lived transaction around bulk inserts.",
+        "Preserve inactive generation semantics so readers continue using the active generation until promotion.",
+        "Add tests proving bulk phases are invoked outside a single long transaction while status and promotion remain transactional.",
+        "`bun test src/server/services/comparisonProjectServingRebuildService.test.ts` passes",
+        "`bun test src/server/services/comparisonProjectServingRollupBuilder.test.ts` passes",
+        "Targeted `bunx eslint` on changed files passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Batch comparison cell inserts",
+      "description": "As a maintainer, I want comparison serving cell creation to insert cells by article batch so prompt and summary cell phases cannot materialize the full project scope at once.",
+      "acceptanceCriteria": [
+        "Add article batch discovery for comparison cell builds, similar to `getComparisonProjectArticleRollupBatch`.",
+        "Batch prompt-mode LLM cell inserts with a small `article_batch` CTE.",
+        "Batch prompt-mode human cell inserts with the same `article_batch` CTE.",
+        "Batch summary-mode LLM cell inserts with the same `article_batch` CTE.",
+        "Batch summary-mode human cell inserts with the same `article_batch` CTE.",
+        "Keep the default batch size safe for the 6400MiB maintenance-worker profile.",
+        "Add SQL tests showing each generated cell insert is constrained by `article_batch`.",
+        "`bun test src/server/services/comparisonProjectServingCellBuilder.test.ts` passes",
+        "`bun test src/server/services/comparisonProjectServingRebuildService.test.ts` passes",
+        "Targeted `bunx eslint` on changed files passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Materialize comparison generation config",
+      "description": "As a maintainer, I want stable comparison column and model configuration materialized once per generation so batched cell and rollup statements do not repeat full-scope model discovery.",
+      "acceptanceCriteria": [
+        "Extract prompt order, content variants, selected or discovered model order, source project summary config, and required column ids from the current CTEs into compact generation-scoped state.",
+        "Use temporary tables inside the rebuild when they are safe across batched statements on one connection, otherwise add small mart tables with generation cleanup.",
+        "Do not add backward-compatible parallel paths for obsolete intermediate state.",
+        "Update cell and rollup builders to read the compact config instead of repeating full-scope model discovery in every batch.",
+        "Add tests that selected model order, discovered model order, prompt-mode columns, and summary-mode columns remain stable after materialization.",
+        "`bun test src/server/services/comparisonProjectServingCellBuilder.test.ts` passes",
+        "`bun test src/server/services/comparisonProjectServingRollupBuilder.test.ts` passes",
+        "`bun run db:mig` passes if a DuckDB migration is added",
+        "Targeted `bunx eslint` on changed files passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Validate comparison rollup compatibility",
+      "description": "As a maintainer, I want the existing bounded comparison rollup and filter stats paths to keep working with leased, batched, config-backed rebuilds.",
+      "acceptanceCriteria": [
+        "Preserve the existing bounded article rollup batching behavior.",
+        "Preserve the existing bounded filter stats statement splitting behavior.",
+        "Ensure comparison judgment row reads still use `mart.comparison_article_serving` and `mart.comparison_filter_stats` rather than `mart.comparison_filter_member`.",
+        "Add or update tests for comparison judgment rows after the rebuild pipeline changes.",
+        "`bun test src/server/services/comparisonProjectServingRollupBuilder.test.ts` passes",
+        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.test.ts` passes",
+        "`bun test src/server/services/comparisonProjectServingRebuildService.test.ts` passes",
+        "Targeted `bunx eslint` on changed files passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Review bounded-path indexes",
+      "description": "As a maintainer, I want the new bounded unassessed and comparison rebuild queries to use appropriate DuckDB indexes without adding speculative indexes.",
+      "acceptanceCriteria": [
+        "Confirm the new bounded query paths can use existing indexes such as `idx_app_article_import_route_import_route_id` and `idx_app_project_article_article_id` where relevant.",
+        "Add a DuckDB migration for `app.article_import_route(article_id, import_route_id)` only if batch scoped import ranking needs article-first lookup.",
+        "Do not add indexes that are not exercised by the bounded paths.",
+        "If a migration is added, ensure stale/obsolete intermediate state is clearly cut over rather than supported in parallel.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/services/comparisonProjectServingCellBuilder.test.ts` passes",
+        "`bun run db:mig` passes if a DuckDB migration is added",
+        "Targeted `bunx eslint` on changed files passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Verify OOM fixes end to end",
+      "description": "As a maintainer, I want end-to-end verification that the repaired count endpoint and comparison rebuild path avoid OOM while preserving browser and desktop flows.",
+      "acceptanceCriteria": [
+        "Retry or locally exercise the judgment-job unassessed count path corresponding to `jobId=dc227fc7-9760-420e-ad36-65149a16c850` after the raw count fix is in place.",
+        "Retry or locally exercise comparison serving rebuild for `comparisonProjectId=9fd6f6e9-5191-4d3e-a688-d1f86088d93c` after the rebuild fixes are in place.",
+        "Check maintenance-worker DuckDB diagnostics for queue depth, temp spill, and effective memory-limit settings during the exercised paths.",
+        "Keep normal browser owner-proxy behavior unchanged for comparison and judgment routes.",
+        "Run `bun run desktop:build` if shared runtime path, owner proxy, or migration behavior changed.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/services/comparisonProjectServingRebuildService.test.ts` passes",
+        "`bun test src/server/routes/ComparisonProjectsRoutes.rollback.test.ts` passes",
+        "Targeted `bunx eslint` on changed files passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-007",
+        "US-008"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-06-11T10:50:50.764Z"
+  }
+}

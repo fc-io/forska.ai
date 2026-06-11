@@ -95,6 +95,13 @@ type UnassessedCandidateRow = {
   llmJudgedPromptIds: string[]
   priorityBucket: number
 }
+type ScopedActivityArticleWindowRow = {
+  id: string
+  createdAt: Date
+  articleCreatedAt: Date | null
+  articleUpdatedAt: Date | null
+  priorityBucket: number
+}
 
 const duckdbOlapComponent = 'duckdbOlap'
 const duckdbOlapErrorLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
@@ -266,6 +273,13 @@ const getMatchesCovidenceSourceMetadataFilters = (params: {
     (!params.hasDuplicateStudyRecords || params.sourceMetadata.covidence?.hasDuplicateStudyRecords === true)
     && (!params.hasStudyDecisionConflict || params.sourceMetadata.covidence?.hasStudyDecisionConflict === true)
   )
+}
+
+const getHasCovidenceSourceMetadataFilters = (params: {
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
+}) => {
+  return params.hasDuplicateStudyRecords === true || params.hasStudyDecisionConflict === true
 }
 
 const getDuckdbCovidenceMetadataWhereParts = (params: {
@@ -1527,43 +1541,6 @@ const countDuckdbReviewedArticles = async (params: {
   return Number(rows[0]?.totalCount ?? 0)
 }
 
-const countDuckdbUnassessedArticles = async (params: {
-  scope: ProjectOlapScope
-  hasDuplicateStudyRecords?: boolean
-  hasStudyDecisionConflict?: boolean
-  from?: string | null
-  to?: string | null
-  search?: string | null
-}) => {
-  const sections = getDuckdbReviewedArticlesQuerySections(params)
-  const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
-    WITH ${sections.scopedArticleImportCteSql},
-    scope_article_ids AS (
-      ${sections.scopeArticleIdsQuery}
-    ),
-    filtered_scope_article_ids AS (
-      SELECT a.id AS articleId
-      FROM app.article a
-      INNER JOIN scope_article_ids s ON s.articleId = a.id
-      ${sections.scopedArticleImportJoinSql}
-      ${sections.filteredScopeWhereClause}
-    ),
-    judged_prompt_counts AS (
-      SELECT s.articleId, COUNT(DISTINCT j.prompt_id) AS judgedPromptCount
-      FROM filtered_scope_article_ids s
-      LEFT JOIN app.judgment j
-        ON j.article_id = s.articleId
-       AND ${sections.judgmentsWhereClause}
-      GROUP BY s.articleId
-    )
-    SELECT COUNT(*) AS totalCount
-    FROM judged_prompt_counts
-    WHERE judgedPromptCount < ${params.scope.promptIds.length}
-  `)
-
-  return Number(rows[0]?.totalCount ?? 0)
-}
-
 const getActivitySortMs = (article: ScopedArticleRow) => {
   return (article.articleUpdatedAt ?? article.articleCreatedAt ?? article.createdAt).getTime()
 }
@@ -2090,7 +2067,7 @@ const getScopedActivityArticleWindow = async (params: {
   scope: ProjectOlapScope
   cursor: UnassessedPairsCursor | null
   limit: number
-}) => {
+}): Promise<{hasMore: boolean; rows: ScopedActivityArticleWindowRow[]}> => {
   const normalizedLimit = Math.max(1, Math.trunc(params.limit))
   const whereParts: string[] = []
   const activityExpression = getDuckdbScopeArticleActivityTimestampExpression('candidate')
@@ -2230,7 +2207,7 @@ const getLlmJudgedPromptRows = async (
   }
 
   return runDuckdbJsonQuery<{articleId: string; promptId: string}>(`
-    SELECT
+    SELECT DISTINCT
       j.article_id AS articleId,
       j.prompt_id AS promptId
     FROM app.judgment j
@@ -2244,6 +2221,102 @@ const getLlmJudgedPromptRows = async (
       AND j.use_fulltext_no_images = ${getDuckdbSqlBoolean(scope.useFulltextNoImages)}
       AND j.deleted_at IS NULL
   `)
+}
+
+const getScopedActivityArticleWindowRowsMatchingCovidenceFilters = async (params: {
+  scope: ProjectOlapScope
+  rows: ScopedActivityArticleWindowRow[]
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
+}) => {
+  if (!getHasCovidenceSourceMetadataFilters(params)) {
+    return params.rows
+  }
+
+  const articleIds = params.rows.map((row) => {
+    return row.id
+  })
+
+  if (articleIds.length === 0) {
+    return []
+  }
+
+  const sourceMetadataExpression = getDuckdbScopedArticleMetadataExpression('a')
+  const rows = await runDuckdbJsonQuery<{articleId: string}>(`
+    WITH ${getScopedArticleImportSelectionCteSql({
+      articleIds,
+      importRouteIds: params.scope.routeIds,
+      projectIds: [params.scope.projectId],
+    })}
+    SELECT a.id AS articleId
+    FROM app.article a
+    ${getDuckdbScopedArticleImportJoinSql('a.id')}
+    WHERE a.id IN (${getDuckdbSqlStringList(articleIds).join(', ')})
+      AND ${getDuckdbCovidenceMetadataWhereParts({
+        sourceMetadataExpression,
+        hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+        hasStudyDecisionConflict: params.hasStudyDecisionConflict,
+      }).join('\n      AND ')}
+  `)
+  const matchedArticleIds = new Set(
+    rows.map((row) => {
+      return row.articleId
+    }),
+  )
+
+  return params.rows.filter((row) => {
+    return matchedArticleIds.has(row.id)
+  })
+}
+
+const countRawUnassessedArticleWindow = async (params: {
+  scope: ProjectOlapScope
+  rows: ScopedActivityArticleWindowRow[]
+}) => {
+  const articleIds = params.rows.map((row) => {
+    return row.id
+  })
+  const llmJudgedPromptRows = await getLlmJudgedPromptRows(params.scope, articleIds)
+  const llmJudgmentsByArticle = groupByArticleId(llmJudgedPromptRows)
+
+  return params.rows.filter((row) => {
+    const articleJudgments = llmJudgmentsByArticle.get(row.id) ?? []
+    return !getHasAllProjectPrompts(params.scope.promptIds, articleJudgments)
+  }).length
+}
+
+const countDuckdbUnassessedArticlesInWindows = async (params: {
+  scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
+}): Promise<number> => {
+  const countWindow = async (cursor: UnassessedPairsCursor | null, totalCount: number): Promise<number> => {
+    const articleWindow = await getScopedActivityArticleWindow({
+      scope: params.scope,
+      cursor,
+      limit: rawUnassessedArticleWindowSize,
+    })
+    const filteredRows = await getScopedActivityArticleWindowRowsMatchingCovidenceFilters({
+      scope: params.scope,
+      rows: articleWindow.rows,
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
+    })
+    const windowCount = await countRawUnassessedArticleWindow({scope: params.scope, rows: filteredRows})
+    const lastWindowArticle = articleWindow.rows[articleWindow.rows.length - 1] ?? null
+    const nextCursor = lastWindowArticle
+      ? {
+          lastArticleId: lastWindowArticle.id,
+          lastDate: getActivityDate(lastWindowArticle),
+          priorityBucket: lastWindowArticle.priorityBucket,
+        }
+      : null
+    const nextTotalCount = totalCount + windowCount
+
+    return articleWindow.hasMore && nextCursor ? countWindow(nextCursor, nextTotalCount) : nextTotalCount
+  }
+
+  return countWindow(null, 0)
 }
 
 const getRawUnassessedCandidateRows = async (params: {
@@ -3146,12 +3219,16 @@ export const getUnassessedCountFromDuckdb = async (params: UnassessedCountParams
     })
   }
 
-  return countDuckdbUnassessedArticles({
-    scope,
+  const rawFallbackScope = {
+    ...scope,
+    dateFrom: getEffectiveFromDate(scope.dateFrom, params.projectDateFrom ?? null),
+    dateTo: getEffectiveToDate(scope.dateTo, params.projectDateTo ?? null),
+  }
+
+  return countDuckdbUnassessedArticlesInWindows({
+    scope: rawFallbackScope,
     hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
     hasStudyDecisionConflict: params.hasStudyDecisionConflict,
-    from: params.projectDateFrom ? params.projectDateFrom.toISOString().slice(0, 10) : null,
-    to: params.projectDateTo ? params.projectDateTo.toISOString().slice(0, 10) : null,
   })
 }
 
