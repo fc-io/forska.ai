@@ -277,6 +277,8 @@ test('serving judgment count returns pages from stats and zero for missing stats
   expect(count).toEqual({totalCount: 51, totalPages: 3})
   expect(missingCount).toEqual({totalCount: 0, totalPages: 0})
   expect(statements[0]).toContain('FROM mart.comparison_filter_stats stats')
+  expect(statements[0]).not.toContain('comparison_filter_member')
+  expect(statements[0]).not.toContain('comparison_article_serving')
 })
 
 test('serving judgment rows return next cursor and hydrate page rows only', async () => {
@@ -371,8 +373,14 @@ test('serving judgment rows return next cursor and hydrate page rows only', asyn
       id: 'article-2',
     },
   ])
+  expect(statements[0]).toContain('FROM mart.comparison_article_serving article')
   expect(statements[1]).toContain("article.article_id IN ('article-1', 'article-2')")
   expect(statements[2]).toContain("cell.article_id IN ('article-1', 'article-2')")
+  expect(
+    statements.some((statement) => {
+      return statement.includes('comparison_filter_member')
+    }),
+  ).toBe(false)
 })
 
 test('serving row batch iterator walks article-serving rows by keyset cursor', async () => {

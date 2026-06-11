@@ -1533,6 +1533,16 @@ test('filter stats inserts are split by filter combination', async () => {
 
   expect(statements).toHaveLength(expectedPairs.length)
   expect(
+    statements.every((statement) => {
+      return statement.includes('LEFT JOIN mart.comparison_article_serving article')
+    }),
+  ).toBe(true)
+  expect(
+    statements.some((statement) => {
+      return statement.includes('comparison_filter_member')
+    }),
+  ).toBe(false)
+  expect(
     statements.map((statement) => {
       return (statement.match(/VALUES \('[^']+'\)/g) ?? []).slice(0, 2)
     }),
