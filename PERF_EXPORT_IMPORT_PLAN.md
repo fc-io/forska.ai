@@ -5,7 +5,7 @@
 - Make project transfer import and export scale to large projects without high memory pressure, long DuckDB writer occupancy, or opaque progress.
 - Treat this as a durable architecture improvement, not a threshold or batch-size tuning pass.
 - Preserve package correctness, dependency fidelity, rollback safety, browser flow, and desktop flow.
-- Allow clean transfer-schema and package-fingerprint cutovers; backward compatibility with old transfer internals is not required.
+- Allow clean transfer-schema and package-fingerprint cutovers; backward compatibility with old transfer packages, fingerprints, or transfer internals is not required.
 
 ## Current State
 
@@ -34,13 +34,27 @@ Move transfer processing to a staged, set-based pipeline.
 upload artifact
 -> streaming package scan
 -> request-safe temp-root staging files and operation-local DuckDB tables
+-> streaming schema-vNext package fingerprint validation
 -> set-based analysis plan
--> dependency resolution
--> incremental revalidation
--> set-based commit
--> bounded asset promotion
+-> dependency resolution from staged rows
+-> dirty-token-gated incremental revalidation
+-> bounded asset promotion and path rewrite plan
+-> set-based commit with promoted asset paths
 -> cleanup
 ```
+
+Commit ordering rule:
+
+- Asset promotion and asset path rewriting happen before app-table writes begin.
+- A failed promotion stops commit before any DB write.
+- A failed DB commit rolls back promoted session-owned assets with the rollback manifest.
+- Do not move asset promotion after DB commit unless assets become transactionally staged and only finalized after the DB commit succeeds.
+
+Compatibility rule:
+
+- The streaming cutover may reject old transfer schema versions and old package fingerprints with a clear error.
+- Same-branch export/import for the new schema must work before merge.
+- Do not spend implementation effort preserving old package import paths unless a future product requirement reverses this decision.
 
 ## Estimated Impact
 
@@ -144,6 +158,13 @@ Implementation checklist:
 - Use temp-root staging files or app-scoped scratch keyed by `sessionId` as the source of truth between analyze, dependency-resolution, and commit requests.
 - Use DuckDB temp tables only as operation-local acceleration that can be rebuilt from the temp-root staging files.
 - Do not rely on connection-local DuckDB temp tables or in-memory maps to survive across separate API requests.
+- Cut over to a new transfer schema and package fingerprint version with the staging change; reject older schema versions clearly instead of adapting them.
+- Make every repeatable payload family NDJSON in the new schema. Keep JSON only for singleton metadata payloads such as `project`, the manifest, and compact summaries.
+- Define deterministic sort keys for every NDJSON payload family so streaming export, staged import, and fingerprint calculation use the same ordering contract.
+- Compute the new package fingerprint from staged canonical logical row digests and singleton payload digests, not from reconstructed full payload arrays.
+- For order-insensitive row families, stage `{payloadKey, sortKey, rowDigest, canonicalRowBytes}` records, sort by `sortKey` and canonical bytes, and hash the canonical sequence from disk or DuckDB.
+- For singleton JSON payloads, use a streaming canonicalizer or bounded metadata file; if a singleton can grow with project size, convert it to NDJSON before shipping the schema.
+- Store per-payload checksum, logical digest, byte count, row count, and fingerprint inputs in the staging manifest.
 - Define staging schemas for package rows and normalized helper rows.
 - Write staged files atomically: write to a temporary path, verify counts and checksums, then rename into the session staging directory.
 - Write a staging manifest that records file paths, payload keys, schema version, row counts, byte counts, checksums, and creation phase.
@@ -158,18 +179,24 @@ Implementation checklist:
 
 Candidate staging surfaces:
 
+- `project_transfer_stage_project`
+- `project_transfer_stage_import_route`
+- `project_transfer_stage_project_import_route`
 - `project_transfer_stage_article`
 - `project_transfer_stage_article_identifier`
 - `project_transfer_stage_article_import_route`
 - `project_transfer_stage_project_article`
 - `project_transfer_stage_prompt`
 - `project_transfer_stage_project_prompt`
+- `project_transfer_stage_provider_connection`
+- `project_transfer_stage_model`
 - `project_transfer_stage_judgment`
 - `project_transfer_stage_judgment_assessment`
 - `project_transfer_stage_human_judgment`
 - `project_transfer_stage_human_summary`
 - `project_transfer_stage_review`
 - `project_transfer_stage_asset_manifest`
+- `project_transfer_stage_payload_digest`
 
 Before measurement:
 
@@ -181,7 +208,7 @@ After measurement:
 
 - Rerun the same packages and compare parse/load time, peak memory, and temp disk bytes.
 - Verify peak memory is bounded by active batch size plus asset buffers, not total package row count.
-- Verify package counts and checksums match the current implementation or the new schema-version rules.
+- Verify package counts, checksums, logical digests, and package fingerprints match the new schema-version rules.
 
 Estimated impact:
 
@@ -192,6 +219,7 @@ Estimated impact:
 Acceptance criteria:
 
 - Analyze validates package counts and checksums without holding all payload rows in memory.
+- Analyze validates the new package fingerprint without holding all payload rows in memory.
 - Staging survives normal request gaps between analyze, dependency resolution, and commit while the session remains active.
 - Staging cleanup is deterministic on cancel, failure, expiry, successful commit, and startup cleanup of abandoned temp roots.
 - Later requests never consume partially written staging files.
@@ -217,6 +245,7 @@ Implementation checklist:
 - Compute judgment, assessment, and human-review blockers with set-based duplicate and target-conflict queries.
 - Store reviewed target plan data as versioned transfer-schema rows or a rebuilt versioned artifact.
 - Keep a compact JSON summary artifact for UI plan review.
+- Change dependency resolution to read staged provider, model, judgment, assessment, and human-review rows instead of reparsing extracted payload files into full JS arrays.
 - Ensure dependency resolution and commit read exactly the reviewed plan revision.
 - Remove plan shapes that store full duplicate target row payloads unless the UI needs them.
 
@@ -253,15 +282,21 @@ Implementation checklist:
 
 - Identify every table and key range that can affect import safety: articles, identifiers, import routes, project links, prompts, judgments, assessments, human review rows, models, provider connections, project-transfer history.
 - Add a small shared target-state dirty-token or version service for those safety surfaces.
+- Add a target-state coverage version that records which code version initialized token coverage and which safety surfaces are covered.
+- Store the coverage version with every analyze-time token set and reviewed plan revision.
+- Allow incremental commit revalidation only when the current coverage version exactly matches the analyze-time coverage version and every required surface has a known token.
 - Keep dirty-token updates coarse, cheap, and transactional with the write that changed the target surface.
 - Update dirty tokens through shared write helpers inside existing write paths instead of spreading ad hoc dirty-token updates across the codebase.
+- Route all app writes touching safety surfaces through those shared helpers. Direct maintenance scripts must update the token transactionally or advance a global unknown token that forces full revalidation.
 - Store the analyze-time dirty-token set with the reviewed plan revision.
 - At commit, compare current dirty tokens with analyze-time dirty tokens before running detailed revalidation.
 - Fall back to full target revalidation when any relevant token is missing, unknown, stale, or not covered by shared write helpers.
 - Keep detailed revalidation for changed target surfaces only when the dirty token tells us which surface changed.
 - Persist stale-plan reasons by surface: dependency, target article, target prompt, target route, judgment, assessment, human review, duplicate package history.
+- Add a test inventory for every route, service, queue, cron, import, and maintenance path that writes safety surfaces.
 - Add tests where target state changes after analyze and before commit.
 - Add tests where dirty-token coverage is missing and full revalidation is forced.
+- Add tests where the coverage version changes between analyze and commit and full revalidation is forced.
 
 Before measurement:
 
@@ -274,6 +309,7 @@ After measurement:
 - Rerun unchanged-target commits and verify full target analysis is skipped.
 - Rerun changed-target commits and verify stale plans still reopen safely.
 - Rerun missing dirty-token coverage tests and verify full revalidation runs.
+- Rerun coverage-version mismatch tests and verify full revalidation runs.
 
 Estimated impact:
 
@@ -285,6 +321,7 @@ Acceptance criteria:
 - Unchanged target state does not rerun full target analysis at commit time.
 - Changed target state still reopens the plan safely before writes.
 - Missing or unverifiable target-state coverage forces full revalidation instead of optimistic commit.
+- Incremental revalidation is disabled by default until coverage has been initialized for every safety surface.
 
 ## Phase 4: Set-Based Commit Writer
 
@@ -297,6 +334,8 @@ Implementation checklist:
 - Create operation-local source-to-target id mapping tables for articles, prompts, routes, judgments, assessments, human review rows, and assets.
 - Generate new target ids once per reviewed commit attempt, validate collisions before writes, and persist them in request-safe staging or a reviewed commit plan artifact.
 - Rebuild operation-local mapping tables from the persisted id map at commit time.
+- Begin app-table writes only after asset promotion has verified copied byte counts/checksums and produced a promoted-path map.
+- Join staged article rows with the promoted-path map before app-table writes so DB rows never point at unverified package asset paths.
 - Convert created-article inserts to `INSERT ... SELECT` from staged article rows and target id maps.
 - Convert article identifier inserts to set-based insert from staged normalized identifiers.
 - Convert article import route inserts to set-based insert from staged article-route plan rows.
@@ -309,6 +348,7 @@ Implementation checklist:
 - Remove only post-insert scans whose condition is fully proven by constraints and insert result counts.
 - Keep one commit transaction, but minimize statement count and generated SQL size.
 - Preserve rollback, history, dirty-project marking, and completion payload semantics.
+- Preserve the existing safety boundary: promotion failure produces no app-table writes; app-table write failure rolls back DB changes and removes session-owned promoted assets.
 - Add failure tests proving partial set-based writes roll back cleanly.
 
 High-value write paths to convert first:
@@ -354,6 +394,7 @@ Implementation checklist:
 
 - Replace whole-file asset reads with stream copy and incremental checksum.
 - Avoid reading promoted assets a second time when the copy path already verified byte count and checksum.
+- Keep asset promotion before app-table writes. Do not commit DB rows before required asset copies are verified.
 - Write rollback-safe promotion status with less manifest churn.
 - Record each promotion as pending before copy and copied only after byte count and checksum verification.
 - Use bounded concurrency for independent asset copies.
@@ -395,9 +436,14 @@ Implementation checklist:
 
 - Add a new transfer schema version for streaming export output.
 - Add a new package fingerprint version when canonical payload formatting changes.
-- Stream payload assembly from DuckDB queries into NDJSON files instead of collecting large payload arrays.
+- Run export assembly against one consistent DuckDB snapshot. Keep the read transaction open while streaming to staging files, or materialize all export source rows into request-safe staged files before releasing the snapshot.
+- Stream payload assembly from DuckDB queries into deterministic NDJSON files instead of collecting large payload arrays.
+- Stream export asset collection: discover asset references while writing article payloads, copy asset files to package staging with bounded concurrency, and compute byte counts/checksums incrementally.
+- Do not store export asset bytes in JS arrays. Package entries should reference staged files or streams plus metadata.
 - Stream package creation to file for large exports and keep in-memory zip bytes only for small inline exports.
+- Extend the zip writer to accept staged files or streams so large payloads and assets are not converted back into `Uint8Array` entries.
 - Preserve deterministic ordering within the new schema version.
+- Compute package checksums and fingerprints from staged payload files, staged asset metadata, and streaming logical digest inputs.
 - Preserve benchmark-critical model, provider, thinking, content-setting, and judgment settings exactly.
 - Preserve failure behavior: do not silently retry, downgrade, or mutate model/provider settings to make export succeed.
 - Add golden package tests for new schema version, payload ordering, checksums, and package fingerprints.
@@ -408,13 +454,15 @@ Implementation checklist:
 Before measurement:
 
 - Measure export assembly time, package write time, peak memory, output bytes/sec, package bytes, expanded bytes, and package fingerprint cost.
+- Measure export asset read count, concurrent asset copy count, asset bytes/sec, and asset bytes resident in JS memory.
 - Benchmark article-heavy, judgment-heavy, and asset-heavy exports.
 
 After measurement:
 
 - Rerun the same exports and compare assembly time, package write time, peak memory, and bytes/sec.
+- Verify asset-heavy exports do not hold asset bytes or all payload rows in JS memory.
 - Verify golden package tests pass for the new schema version.
-- Verify exported packages import successfully through the optimized or current import flow.
+- Verify exported packages import successfully through the same-branch new import flow.
 - Verify new packages exported by the branch import successfully in the same branch.
 
 Estimated impact:
@@ -425,6 +473,8 @@ Estimated impact:
 Acceptance criteria:
 
 - Large exports write package files with bounded memory.
+- Large asset-heavy exports package staged asset files or streams without materializing all asset bytes in JS.
+- Export payload rows are internally consistent because they are read from one snapshot or from staged rows materialized from one snapshot.
 - Export packages are deterministic within the new schema version for payload ordering, checksums, and fingerprints.
 - Golden package tests prove the new schema version and fingerprint rules are stable.
 - Same-branch export/import works for the new transfer schema version before shipping.
@@ -438,7 +488,7 @@ Purpose:
 Implementation checklist:
 
 - Keep layout-first import UI behavior and avoid full-page blocking spinners.
-- Add progress phases for upload, package scan, staging load, analyze, dependency resolution, revalidation, asset promotion, commit, cleanup, export assembly, and export package write.
+- Add progress phases for upload, package scan, staging load, fingerprint validation, analyze, dependency resolution, revalidation, asset promotion, commit, cleanup, export assembly, export asset staging, and export package write.
 - Show row progress when row totals are reliable.
 - Show byte progress when byte totals are reliable.
 - Avoid fake precision when a phase cannot know total work.
@@ -474,13 +524,15 @@ Acceptance criteria:
 - Add import/export benchmark fixtures and timing helpers under existing project-transfer tests or scripts.
 - Prefer temp-root staging files plus operation-local DuckDB temp tables. Add DuckDB migrations under `src/db/duckdbMigrations/` only for target-state dirty tokens, transfer metadata, or app-scoped scratch tables that must be queryable across request boundaries.
 - Add a staging repository/helper near `src/server/services/projectTransfer/`.
+- Change `projectTransferFingerprint.ts` to support schema-vNext streaming logical fingerprints from staged row digests and singleton payload digests.
 - Change `projectTransferAnalyze.ts` to stream/load payloads into staging before target analysis.
 - Change `projectTransferAnalyzeTarget.ts` to query staged rows with joins instead of generated `IN` and `OR` clauses.
+- Change `projectTransferDependencyResolution.ts` to query staged dependency and fidelity rows instead of reparsing extracted payload files.
 - Change `projectTransferFidelityValidation.ts` to use staged judgment and human-review rows for conflict detection.
 - Add target-state dirty tokens or fingerprints used by analyze and commit revalidation, plus tests proving missing coverage forces full revalidation.
 - Change `projectTransferCommitWriter.ts` to rebuild operation-local DuckDB tables from request-safe staged rows and commit from those tables.
 - Change `projectTransferCommitRollback.ts` to stream asset promotion with rollback-safe manifests.
-- Change export assembly in `projectTransferExport.ts` and `projectTransferExportPackage.ts` to stream large payloads and packages.
+- Change export assembly in `projectTransferExport.ts`, `projectTransferExportAssets.ts`, and `projectTransferExportPackage.ts` to stream large payloads, assets, and packages.
 - Add a new transfer schema/fingerprint version for the streaming cutover.
 - Update `projectTransferRoutes.ts` progress payloads to report phase-specific metrics.
 - Add cleanup and recovery tests for staged rows/files.
@@ -518,12 +570,15 @@ Benchmark pass/fail rules:
 
 - `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferAnalyzeTarget.test.ts` if added.
+- `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferFidelityValidation.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferCommitRollback.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferExport.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferExportAssets.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferExportPackage.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferFingerprint.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferZip.test.ts`
 - `bun test src/server/routes/projectTransferRoutes.test.ts`
 - Add and run golden package/fingerprint tests for any new transfer schema version.
@@ -541,6 +596,7 @@ Benchmark pass/fail rules:
 - Do not silently skip commit revalidation.
 - Do not silently retry, downgrade, or alter benchmark-critical model/provider settings.
 - Do not require staged analyze or commit state to survive server restart, but do keep active-session staging available across normal API request gaps.
+- Do not import old transfer schema versions after the streaming cutover; fail with a clear unsupported-schema error.
 - Do not preserve old transfer package fingerprints across the streaming export cutover.
 - Do not add backward-compatibility shims for old transfer packages or intermediate staging state.
 - Do not optimize only one happy-path package shape; article-heavy, judgment-heavy, and asset-heavy packages need separate coverage.
