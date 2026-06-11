@@ -1,5 +1,5 @@
 import {useMutation, useQuery} from '@tanstack/solid-query'
-import {createEffect, createMemo, createSignal, Show} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 
 import {getApiRequestUrl} from '../../../app/utils/getApiRequestUrl.ts'
 import {apiClient} from '../../../services/apiClient.ts'
@@ -31,8 +31,19 @@ type ProjectTransferExportSession = ProjectTransferExportPendingSession | Projec
 type ProjectTransferExportStartResult =
   | {session: ProjectTransferExportSession; status: 'session'}
   | {status: 'downloaded'}
+type ProjectTransferRawArticleProvenanceMode = 'auto' | 'include' | 'omit'
+type ProjectTransferExportStartInput = {
+  projectId: string
+  rawArticleProvenanceMode: ProjectTransferRawArticleProvenanceMode
+}
 
 type ProjectTransferExportActionProps = {align?: 'end' | 'start'; class?: string; projectId: string}
+
+const rawArticleProvenanceModeOptions: Array<{label: string; value: ProjectTransferRawArticleProvenanceMode}> = [
+  {label: 'Auto', value: 'auto'},
+  {label: 'Include raw', value: 'include'},
+  {label: 'Omit raw', value: 'omit'},
+]
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null
@@ -255,11 +266,18 @@ const readProjectTransferExportSessionResponse = async (
   return parseProjectTransferExportSession(data, errorMessage)
 }
 
-const startProjectTransferExport = async (projectId: string): Promise<ProjectTransferExportStartResult> => {
-  const response = await fetch(getProjectTransferExportRequestUrl(projectId), {credentials: 'include', method: 'POST'})
+const startProjectTransferExport = async (
+  input: ProjectTransferExportStartInput,
+): Promise<ProjectTransferExportStartResult> => {
+  const response = await fetch(getProjectTransferExportRequestUrl(input.projectId), {
+    body: JSON.stringify({rawArticleProvenanceMode: input.rawArticleProvenanceMode}),
+    credentials: 'include',
+    headers: {'content-type': 'application/json'},
+    method: 'POST',
+  })
 
   if (response.ok && isProjectTransferPackageResponse(response)) {
-    await downloadProjectTransferPackageResponse(response, `project-transfer-${projectId}.zip`)
+    await downloadProjectTransferPackageResponse(response, `project-transfer-${input.projectId}.zip`)
 
     return {status: 'downloaded'}
   }
@@ -318,6 +336,8 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
   const [downloadFailedIds, setDownloadFailedIds] = createSignal<Set<string>>(new Set())
   const [downloadedIds, setDownloadedIds] = createSignal<Set<string>>(new Set())
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
+  const [rawArticleProvenanceMode, setRawArticleProvenanceMode] =
+    createSignal<ProjectTransferRawArticleProvenanceMode>('auto')
   const sessionId = createMemo(() => {
     return session()?.exportId ?? null
   })
@@ -411,7 +431,7 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
     setDownloadFailedIds(new Set())
     setDownloadedIds(new Set())
     setSession(null)
-    startExportMutation.mutate(props.projectId)
+    startExportMutation.mutate({projectId: props.projectId, rawArticleProvenanceMode: rawArticleProvenanceMode()})
   }
 
   createEffect(() => {
@@ -443,6 +463,24 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
 
   return (
     <div class={wrapperClass()}>
+      <label class="flex items-center gap-2 text-xs text-muted-foreground">
+        <span>Raw provenance</span>
+        <select
+          aria-label="Raw provenance mode"
+          class="h-7 rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          disabled={isBusy()}
+          value={rawArticleProvenanceMode()}
+          onChange={(event) => {
+            return setRawArticleProvenanceMode(event.currentTarget.value as ProjectTransferRawArticleProvenanceMode)
+          }}
+        >
+          <For each={rawArticleProvenanceModeOptions}>
+            {(option) => {
+              return <option value={option.value}>{option.label}</option>
+            }}
+          </For>
+        </select>
+      </label>
       <Button size="sm" variant="outline" class={props.class} disabled={isBusy()} onClick={handleExportProject}>
         {buttonLabel()}
       </Button>
