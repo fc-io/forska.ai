@@ -191,6 +191,7 @@ export type UnassessedArticlesParams = UnassessedCountParams & {
   search?: string
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
+  boundedRawPreview?: boolean
 }
 
 export type PromptQueueEntry = {articleId: string; promptId: string}

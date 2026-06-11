@@ -156,6 +156,16 @@ const getDuckdbScopedArticleRow = (
   }
 }
 
+const getDuckdbScopedActivityArticleRow = (id: string) => {
+  return {
+    id,
+    createdAt: '2024-01-03T00:00:00.000Z',
+    articleCreatedAt: '2024-01-01T00:00:00.000Z',
+    articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+    priorityBucket: 0,
+  }
+}
+
 const getDuckdbJudgmentRow = (
   overrides: Partial<{
     id: string
@@ -851,6 +861,59 @@ test('getUnassessedArticlesFromDuckdb falls back to raw judgments when serving r
   ).toEqual(['article-2'])
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
+})
+
+test('getUnassessedArticlesFromDuckdb bounded raw preview hydrates only the requested page ids', async () => {
+  const candidateRows = Array.from({length: 1001}, (_value, index) => {
+    return getDuckdbScopedActivityArticleRow(`article-${index + 1}`)
+  })
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    candidateRows,
+    [],
+    [
+      getDuckdbScopedArticleRow({id: 'article-1'}),
+      getDuckdbScopedArticleRow({id: 'article-2', articleId: 'external-2'}),
+    ],
+  ])
+
+  const {getUnassessedArticlesFromDuckdb} = await loadDuckdbOlap()
+  const result = await getUnassessedArticlesFromDuckdb({
+    projectId: 'project-1',
+    projectModelId: 'model-1',
+    projectDateFrom: null,
+    projectDateTo: null,
+    importRouteIds: ['route-1'],
+    useTitle: true,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    limit: 2,
+    offset: 0,
+    preferRawFallback: true,
+    boundedRawPreview: true,
+  })
+
+  expect(result.totalCount).toBe(2)
+  expect(
+    result.articles.map((article) => {
+      return article.id
+    }),
+  ).toEqual(['article-1', 'article-2'])
+  expect(duckdbRunnerMockRef.current.queries).toHaveLength(6)
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.project_scope_article scope_article')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('INNER JOIN app.article dirty_article')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('LIMIT 1001')
+  expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('TO_JSON')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('WITH selected_scoped_article_import AS')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain("a.id IN ('article-1', 'article-2')")
+  expect(duckdbRunnerMockRef.current.queries[5]).not.toContain("'article-3'")
 })
 
 test('getUnassessedPairsFromDuckdb falls back to raw judgments when serving rows are missing', async () => {

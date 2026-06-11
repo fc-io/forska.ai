@@ -2008,17 +2008,26 @@ const getScopedArticles = async (params: {
 
 const rawUnassessedArticleWindowSize = 1000
 
-const getScopedActivityProjectScopeWhereParts = (scope: ProjectOlapScope) => {
+const getScopedActivityArticleTitleSearchWherePart = (articleTitleExpression: string, search?: string | null) => {
+  const trimmedSearch = search?.trim() ?? ''
+
+  return trimmedSearch
+    ? `LOWER(COALESCE(${articleTitleExpression}, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`
+    : null
+}
+
+const getScopedActivityProjectScopeWhereParts = (scope: ProjectOlapScope, search?: string | null) => {
   return [
     `scope_article.project_id = ${getDuckdbSqlString(scope.projectId)}`,
     scope.dateFrom ? `scope_article.article_created_at >= ${getDuckdbTimestampLiteral(scope.dateFrom)}` : null,
     scope.dateTo ? `scope_article.article_created_at <= ${getDuckdbTimestampLiteral(scope.dateTo)}` : null,
+    getScopedActivityArticleTitleSearchWherePart('scope_article.article_title', search),
   ].filter((part): part is string => {
     return part !== null
   })
 }
 
-const getScopedActivityDirtyArticleWhereParts = (scope: ProjectOlapScope) => {
+const getScopedActivityDirtyArticleWhereParts = (scope: ProjectOlapScope, search?: string | null) => {
   return [
     `refresh_state.project_id = ${getDuckdbSqlString(scope.projectId)}`,
     'article_state.first_dirty_token <= refresh_state.dirty_token',
@@ -2026,12 +2035,13 @@ const getScopedActivityDirtyArticleWhereParts = (scope: ProjectOlapScope) => {
     getDuckdbScopeClause({articleAlias: 'dirty_article', routeIds: scope.routeIds, projectId: scope.projectId}),
     scope.dateFrom ? `dirty_article.article_created_at >= ${getDuckdbTimestampLiteral(scope.dateFrom)}` : null,
     scope.dateTo ? `dirty_article.article_created_at <= ${getDuckdbTimestampLiteral(scope.dateTo)}` : null,
+    getScopedActivityArticleTitleSearchWherePart('dirty_article.article_title', search),
   ].filter((part): part is string => {
     return part !== null
   })
 }
 
-const getDuckdbScopedActivityArticleCandidatesCteSql = (scope: ProjectOlapScope) => {
+const getDuckdbScopedActivityArticleCandidatesCteSql = (scope: ProjectOlapScope, search?: string | null) => {
   return `WITH dirty_scope_candidate AS (
     SELECT
       dirty_article.id AS article_id,
@@ -2041,7 +2051,7 @@ const getDuckdbScopedActivityArticleCandidatesCteSql = (scope: ProjectOlapScope)
     INNER JOIN app.project_mart_refresh_article_state article_state
       ON article_state.project_id = refresh_state.project_id
     INNER JOIN app.article dirty_article ON dirty_article.id = article_state.article_id
-    WHERE ${getScopedActivityDirtyArticleWhereParts(scope).join(' AND ')}
+    WHERE ${getScopedActivityDirtyArticleWhereParts(scope, search).join(' AND ')}
   ),
   scope_article_candidate AS (
     SELECT
@@ -2049,7 +2059,7 @@ const getDuckdbScopedActivityArticleCandidatesCteSql = (scope: ProjectOlapScope)
       scope_article.article_created_at AS article_created_at,
       scope_article.article_updated_at AS article_updated_at
     FROM mart.project_scope_article scope_article
-    WHERE ${getScopedActivityProjectScopeWhereParts(scope).join(' AND ')}
+    WHERE ${getScopedActivityProjectScopeWhereParts(scope, search).join(' AND ')}
       AND NOT EXISTS (
         SELECT 1
         FROM dirty_scope_candidate dirty_scope
@@ -2067,6 +2077,7 @@ const getScopedActivityArticleWindow = async (params: {
   scope: ProjectOlapScope
   cursor: UnassessedPairsCursor | null
   limit: number
+  search?: string | null
 }): Promise<{hasMore: boolean; rows: ScopedActivityArticleWindowRow[]}> => {
   const normalizedLimit = Math.max(1, Math.trunc(params.limit))
   const whereParts: string[] = []
@@ -2094,7 +2105,7 @@ const getScopedActivityArticleWindow = async (params: {
     articleUpdatedAt: unknown
     priorityBucket: number
   }>(`
-    ${getDuckdbScopedActivityArticleCandidatesCteSql(params.scope)}
+    ${getDuckdbScopedActivityArticleCandidatesCteSql(params.scope, params.search)}
     SELECT
       candidate.article_id AS id,
       ${activityExpression} AS createdAt,
@@ -2317,6 +2328,128 @@ const countDuckdbUnassessedArticlesInWindows = async (params: {
   }
 
   return countWindow(null, 0)
+}
+
+const getRawUnassessedArticleDisplayRows = async (params: {
+  scope: ProjectOlapScope
+  articleIds: string[]
+}): Promise<UnassessedArticleRow[]> => {
+  if (params.articleIds.length === 0) {
+    return []
+  }
+
+  const rows = await runDuckdbJsonQuery<{
+    id: string
+    articleId: string | null
+    articleTitle: string
+    articleCreatedAt: unknown
+    articleUpdatedAt: unknown
+  }>(`
+    WITH ${getScopedArticleImportSelectionCteSql({
+      articleIds: params.articleIds,
+      importRouteIds: params.scope.routeIds,
+      projectIds: [params.scope.projectId],
+    })}
+    SELECT
+      a.id AS id,
+      ${getDuckdbScopedArticleExternalIdExpression('a')} AS articleId,
+      a.article_title AS articleTitle,
+      a.article_created_at AS articleCreatedAt,
+      a.article_updated_at AS articleUpdatedAt
+    FROM app.article a
+    ${getDuckdbScopedArticleImportJoinSql('a.id')}
+    WHERE a.id IN (${getDuckdbSqlStringList(params.articleIds).join(', ')})
+  `)
+  const rowsByArticleId = rows.reduce<Map<string, UnassessedArticleRow>>((rowMap, row) => {
+    rowMap.set(row.id, {
+      id: row.id,
+      articleId: row.articleId,
+      articleTitle: row.articleTitle,
+      articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
+      articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+    })
+    return rowMap
+  }, new Map<string, UnassessedArticleRow>())
+
+  return params.articleIds.flatMap((articleId) => {
+    const row = rowsByArticleId.get(articleId)
+    return row ? [row] : []
+  })
+}
+
+const getRawUnassessedArticleIdsForPreview = async (params: {
+  scope: ProjectOlapScope
+  limit: number
+  offset: number
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
+  search?: string | null
+}) => {
+  const normalizedOffset = Math.max(0, Math.trunc(params.offset))
+  const normalizedLimit = Math.max(0, Math.trunc(params.limit))
+  const requestedCount = normalizedOffset + normalizedLimit
+
+  if (requestedCount === 0) {
+    return []
+  }
+
+  const collectArticleIds = async (cursor: UnassessedPairsCursor | null, articleIds: string[]): Promise<string[]> => {
+    const articleWindow = await getScopedActivityArticleWindow({
+      scope: params.scope,
+      cursor,
+      limit: rawUnassessedArticleWindowSize,
+      search: params.search,
+    })
+    const filteredRows = await getScopedActivityArticleWindowRowsMatchingCovidenceFilters({
+      scope: params.scope,
+      rows: articleWindow.rows,
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
+    })
+    const llmJudgedPromptRows = await getLlmJudgedPromptRows(
+      params.scope,
+      filteredRows.map((row) => {
+        return row.id
+      }),
+    )
+    const llmJudgmentsByArticle = groupByArticleId(llmJudgedPromptRows)
+    const nextArticleIds = [
+      ...articleIds,
+      ...filteredRows.flatMap((row) => {
+        const articleJudgments = llmJudgmentsByArticle.get(row.id) ?? []
+        return getHasAllProjectPrompts(params.scope.promptIds, articleJudgments) ? [] : [row.id]
+      }),
+    ].slice(0, requestedCount)
+    const lastWindowArticle = articleWindow.rows[articleWindow.rows.length - 1] ?? null
+    const nextCursor = lastWindowArticle
+      ? {
+          lastArticleId: lastWindowArticle.id,
+          lastDate: getActivityDate(lastWindowArticle),
+          priorityBucket: lastWindowArticle.priorityBucket,
+        }
+      : null
+
+    return nextArticleIds.length >= requestedCount || !articleWindow.hasMore || nextCursor === null
+      ? nextArticleIds
+      : collectArticleIds(nextCursor, nextArticleIds)
+  }
+
+  const collectedArticleIds = await collectArticleIds(null, [])
+  return collectedArticleIds.slice(normalizedOffset, requestedCount)
+}
+
+const getRawUnassessedArticlesPreview = async (params: {
+  scope: ProjectOlapScope
+  limit: number
+  offset: number
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
+  search?: string | null
+}) => {
+  const articleIds = await getRawUnassessedArticleIdsForPreview(params)
+  const articles = await getRawUnassessedArticleDisplayRows({scope: params.scope, articleIds})
+
+  return {articles, totalCount: params.offset + articles.length}
 }
 
 const getRawUnassessedCandidateRows = async (params: {
@@ -3265,6 +3398,23 @@ export const getUnassessedArticlesFromDuckdb = async (
       }),
       totalCount: servingResult.totalCount,
     }
+  }
+
+  if (params.boundedRawPreview) {
+    const rawFallbackScope = {
+      ...scope,
+      dateFrom: getEffectiveFromDate(scope.dateFrom, params.projectDateFrom ?? null),
+      dateTo: getEffectiveToDate(scope.dateTo, params.projectDateTo ?? null),
+    }
+
+    return getRawUnassessedArticlesPreview({
+      scope: rawFallbackScope,
+      limit: params.limit,
+      offset: params.offset,
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
+      search: params.search,
+    })
   }
 
   const rawResult = await getUnassessedArticleRows({

@@ -3119,6 +3119,7 @@ export const judgmentsJobsRoutes = new Elysia()
         limit: 100,
         offset: 0,
         preferRawFallback: !freshness.isFresh,
+        boundedRawPreview: true,
       })
 
       const unassessedArticles = articles.map((a) => {
