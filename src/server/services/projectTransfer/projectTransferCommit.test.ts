@@ -1565,6 +1565,83 @@ test('project transfer commit writer reuses imported provider and model snapshot
   expect(result.projectModelIds).toEqual([result.modelIds[0], result.modelIds[0]])
 })
 
+test('project transfer commit writer blocks commit when a reused imported model fingerprint drifts', () => {
+  const result = runCommitWriterScript<{
+    errorMessage: string | null
+    modelCount: number
+    projectCount: number
+    providerCount: number
+  }>(`
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const importedDependencyResolution = {
+      modelTargetBySourceId: {'source-model': 'new:model:source-model'},
+      providerTargetBySourceId: {'source-provider': 'new:provider:source-provider'},
+    }
+    const payloads = {
+      models: [getModelPayload()],
+      project: getProjectPayload(settings),
+      providerConnections: [
+        {
+          authMode: 'apiKey',
+          baseURL: null,
+          configJson: {archived: false, disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+          enabled: true,
+          label: 'Imported Provider',
+          maxInflightRequests: 4,
+          providerKind: 'openai',
+          secretRef: 'secret:should-not-import',
+          sourceProviderConnectionId: 'source-provider',
+        },
+      ],
+    }
+    const promotion = {
+      articleCreates: [],
+      articleFieldFills: [],
+      manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-drifted-provider-model', updatedAt: now.toISOString()},
+      promotionPathByPackagePath: {},
+    }
+    const firstWrite = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-drifted-provider-model-1',
+      now,
+      payloads,
+      plan: getBasePlan({}, importedDependencyResolution),
+      promotion,
+      schemaVersion: 1,
+      sessionId: 'session-drifted-provider-model-1',
+    })
+    const [driftedModel] = await database.queryJson("SELECT id FROM app.model WHERE json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') = 'source-model' ORDER BY id ASC LIMIT 1")
+    await database.run(\`UPDATE app.model SET metadata_json = json_merge_patch(COALESCE(metadata_json, CAST('{}' AS JSON)), CAST('{"options":{"thinking":"high"}}' AS JSON)) WHERE id = '\${driftedModel.id}'\`)
+    const errorMessage = await catchMessage(() => {
+      return writeProjectTransferCommitAppTables({
+        commitId: 'commit-drifted-provider-model-2',
+        now,
+        payloads,
+        plan: getBasePlan({}, importedDependencyResolution),
+        promotion,
+        schemaVersion: 1,
+        sessionId: 'session-drifted-provider-model-2',
+      })
+    })
+    const [providerCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.provider_connection WHERE json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') = 'source-provider'")
+    const [modelCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.model WHERE json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') = 'source-model'")
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+
+    console.log(JSON.stringify({
+      errorMessage,
+      modelCount: modelCount.count,
+      projectCount: projectCount.count,
+      providerCount: providerCount.count,
+    }))
+  `)
+
+  expect(result.errorMessage).toContain(
+    'imported model snapshot source-model no longer matches its materialized target; rerun import analysis before commit',
+  )
+  expect(result.providerCount).toBe(1)
+  expect(result.modelCount).toBe(1)
+  expect(result.projectCount).toBe(1)
+})
+
 test('project transfer commit writer blocks target article_id conflicts before insert', () => {
   const result = runCommitWriterScript<{articleCount: number; errorMessage: string | null; projectCount: number}>(`
     await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")

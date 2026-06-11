@@ -299,10 +299,16 @@ test('project-transfer export reads archived app-table scope and serializes lock
     projectArchived: boolean
     projectArticleIds: string[]
     providerConnectionIds: string[]
+    rawForcedOmittedArticleImportRouteImportMetadata: unknown
+    rawForcedOmittedArticleImportRouteRawPayload: unknown
     rawForcedOmittedArticleOriginalData: unknown
     rawForcedOmittedWarning: {details: {rawArticleProvenanceMode: string}} | null
+    rawIncludedArticleImportRouteImportMetadata: unknown
+    rawIncludedArticleImportRouteRawPayload: unknown
     rawIncludedArticleOriginalData: unknown
     rawIncludedWarning: unknown
+    rawOmittedArticleImportRouteImportMetadata: unknown
+    rawOmittedArticleImportRouteRawPayload: unknown
     rawOmittedArticleOriginalData: unknown
     rawOmittedArticleSourceMetadata: unknown
     rawOmittedWarning: {details: {rawArticleProvenanceMode: string; thresholdChars: number}} | null
@@ -910,6 +916,15 @@ test('project-transfer export reads archived app-table scope and serializes lock
     const rawForcedOmittedArticle = rawForcedOmitted.payloads.articles.find((article) => {
       return article.sourceArticleId === 'article-route-in'
     })
+    const rawOmittedArticleImportRoute = rawOmitted.payloads.articleImportRoutes.find((link) => {
+      return link.sourceArticleImportRouteId === 'air-route-in'
+    })
+    const rawIncludedArticleImportRoute = rawIncluded.payloads.articleImportRoutes.find((link) => {
+      return link.sourceArticleImportRouteId === 'air-route-in'
+    })
+    const rawForcedOmittedArticleImportRoute = rawForcedOmitted.payloads.articleImportRoutes.find((link) => {
+      return link.sourceArticleImportRouteId === 'air-route-in'
+    })
     const identifierRejectedWarnings = archived.warnings.filter((warning) => warning.code === 'identifierRejected')
     const settings = await getProjectTransferExportSourceProjectSettings('project-archived-export')
     const invalidDateMessage = await catchMessage(() => getProjectTransferExportPayloads('project-invalid-date'))
@@ -1018,9 +1033,15 @@ test('project-transfer export reads archived app-table scope and serializes lock
       projectArchived: archived.payloads.project.archived,
       projectArticleIds: archived.payloads.projectArticles.map((link) => link.sourceArticleId),
       providerConnectionIds: archived.payloads.providerConnections.map((connection) => connection.sourceProviderConnectionId),
+      rawForcedOmittedArticleImportRouteImportMetadata: rawForcedOmittedArticleImportRoute?.importMetadata ?? null,
+      rawForcedOmittedArticleImportRouteRawPayload: rawForcedOmittedArticleImportRoute?.rawPayload ?? null,
       rawOmittedArticleOriginalData: rawOmittedArticle?.originalData ?? null,
+      rawOmittedArticleImportRouteImportMetadata: rawOmittedArticleImportRoute?.importMetadata ?? null,
+      rawOmittedArticleImportRouteRawPayload: rawOmittedArticleImportRoute?.rawPayload ?? null,
       rawOmittedArticleSourceMetadata: rawOmittedArticle?.sourceMetadata ?? null,
       rawIncludedArticleOriginalData: rawIncludedArticle?.originalData ?? null,
+      rawIncludedArticleImportRouteImportMetadata: rawIncludedArticleImportRoute?.importMetadata ?? null,
+      rawIncludedArticleImportRouteRawPayload: rawIncludedArticleImportRoute?.rawPayload ?? null,
       rawIncludedWarning: rawIncluded.warnings.find((warning) => warning.code === 'payloadOmitted' && warning.scope === 'articles') ?? null,
       rawForcedOmittedArticleOriginalData: rawForcedOmittedArticle?.originalData ?? null,
       rawForcedOmittedWarning: rawForcedOmitted.warnings.find((warning) => {
@@ -1094,6 +1115,8 @@ test('project-transfer export reads archived app-table scope and serializes lock
   )
   expect(result.serializedArticleUrl).toBe(result.routeArticleUrl)
   expect(result.rawOmittedArticleOriginalData).toBeNull()
+  expect(result.rawOmittedArticleImportRouteImportMetadata).toBeNull()
+  expect(result.rawOmittedArticleImportRouteRawPayload).toBeNull()
   expect(result.rawOmittedArticleSourceMetadata).toBeNull()
   expect(result.rawOmittedWarning).toMatchObject({
     action: 'omitted',
@@ -1103,8 +1126,12 @@ test('project-transfer export reads archived app-table scope and serializes lock
     severity: 'fidelity',
   })
   expect(result.rawIncludedArticleOriginalData).toEqual({raw: 'route'})
+  expect(result.rawIncludedArticleImportRouteImportMetadata).toEqual({covidence: {studyKey: 'study-route'}})
+  expect(result.rawIncludedArticleImportRouteRawPayload).toEqual({raw: 'route'})
   expect(result.rawIncludedWarning).toBeNull()
   expect(result.rawForcedOmittedArticleOriginalData).toBeNull()
+  expect(result.rawForcedOmittedArticleImportRouteImportMetadata).toBeNull()
+  expect(result.rawForcedOmittedArticleImportRouteRawPayload).toBeNull()
   expect(result.rawForcedOmittedWarning).toMatchObject({details: {rawArticleProvenanceMode: 'omit'}})
   expect(result.modelDescriptors).toEqual([
     {

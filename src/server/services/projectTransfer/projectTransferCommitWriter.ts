@@ -105,6 +105,10 @@ type ImportedModelSnapshotTargetRow = {
   id: string
   metadataJson: unknown
   name: string
+  providerAuthMode: string | null
+  providerBaseURL: string | null
+  providerConfigJson: unknown
+  providerKind: string
   remoteModelId: string | null
   variant: string | null
 }
@@ -435,6 +439,30 @@ const getImportedModelSnapshotFingerprint = ({
   })
 }
 
+const getTargetModelSnapshotFingerprint = ({
+  importedModel,
+  targetModel,
+}: {
+  importedModel: ImportedModelCommitRow
+  targetModel: ImportedModelSnapshotTargetRow
+}) => {
+  return getProjectTransferModelSnapshotFingerprint({
+    displayName: targetModel.displayName,
+    metadataJson: targetModel.metadataJson,
+    modelName: importedModel.modelName,
+    name: targetModel.name,
+    provider: {
+      authMode: targetModel.providerAuthMode,
+      baseURL: targetModel.providerBaseURL,
+      configJson: targetModel.providerConfigJson,
+      providerKind: targetModel.providerKind,
+    },
+    remoteModelId: targetModel.remoteModelId,
+    variant: targetModel.variant,
+    version: targetModel.variant,
+  })
+}
+
 const targetModelIdentityMatches = ({
   importedModel,
   targetModel,
@@ -496,25 +524,38 @@ const getReusableImportedModelId = async ({
   const sourceFingerprint = getImportedModelSnapshotFingerprint({importedModel, importedProvider})
   const rows = await tx.queryJson<ImportedModelSnapshotTargetRow>(`
     SELECT
-      id,
-      name,
-      remote_model_id AS remoteModelId,
-      display_name AS displayName,
-      variant,
-      TO_JSON(metadata_json) AS metadataJson
-    FROM app.model
-    WHERE provider_connection_id = ${getSqlLiteral(providerConnectionId)}
-      AND json_extract_string(metadata_json, '$.${importedSnapshotMarker}.sourceModelId') = ${getSqlLiteral(importedModel.sourceModelId)}
-    ORDER BY created_at ASC, id ASC
+      model.id,
+      model.name,
+      model.remote_model_id AS remoteModelId,
+      model.display_name AS displayName,
+      model.variant,
+      TO_JSON(model.metadata_json) AS metadataJson,
+      provider.provider_kind AS providerKind,
+      provider.auth_mode AS providerAuthMode,
+      provider.base_url AS providerBaseURL,
+      TO_JSON(provider.config_json) AS providerConfigJson
+    FROM app.model model
+    INNER JOIN app.provider_connection provider ON provider.id = model.provider_connection_id
+    WHERE model.provider_connection_id = ${getSqlLiteral(providerConnectionId)}
+      AND json_extract_string(model.metadata_json, '$.${importedSnapshotMarker}.sourceModelId') = ${getSqlLiteral(importedModel.sourceModelId)}
+    ORDER BY model.created_at ASC, model.id ASC
   `)
   const matchingRows = rows.filter((row) => {
     const marker = getImportedSnapshotMarker(row.metadataJson)
+    const targetFingerprint = getTargetModelSnapshotFingerprint({importedModel, targetModel: row})
 
     return (
       targetModelIdentityMatches({importedModel, targetModel: row})
       && importedSnapshotMarkerFingerprintMatches({fingerprint: sourceFingerprint, marker})
+      && getProjectTransferCanonicalJson(targetFingerprint) === getProjectTransferCanonicalJson(sourceFingerprint)
     )
   })
+
+  if (rows.length > 0 && matchingRows.length === 0) {
+    failCommitWriter(
+      `imported model snapshot ${importedModel.sourceModelId} no longer matches its materialized target; rerun import analysis before commit`,
+    )
+  }
 
   return matchingRows.length === 1 ? (matchingRows[0]?.id ?? null) : null
 }
