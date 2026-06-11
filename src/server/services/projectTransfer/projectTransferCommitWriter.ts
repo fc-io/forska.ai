@@ -92,6 +92,23 @@ type ImportedModelCommitRow = {
   variant: string | null
 }
 
+type ImportedProviderSnapshotTargetRow = {
+  authMode: string | null
+  baseURL: string | null
+  configJson: unknown
+  id: string
+  providerKind: string
+}
+
+type ImportedModelSnapshotTargetRow = {
+  displayName: string | null
+  id: string
+  metadataJson: unknown
+  name: string
+  remoteModelId: string | null
+  variant: string | null
+}
+
 type ArticleField = keyof typeof articleColumnByPayloadField
 type ArticleMatchPlan = ProjectTransferTargetPlan['articleMatches'][number]
 type ArticleIdentifierCommitRow = {
@@ -362,12 +379,35 @@ const getImportedSnapshotJson = (value: unknown, snapshot: Record<string, unknow
   return {...record, [importedSnapshotMarker]: snapshot}
 }
 
+const getImportedSnapshotMarker = (value: unknown) => {
+  const parsed = getJsonValue(value)
+  const marker = isRecord(parsed) ? parsed[importedSnapshotMarker] : null
+
+  return isRecord(marker) ? marker : null
+}
+
+const importedSnapshotMarkerFingerprintMatches = ({fingerprint, marker}: {fingerprint: unknown; marker: unknown}) => {
+  return (
+    isRecord(marker)
+    && getProjectTransferCanonicalJson(marker.snapshotFingerprint) === getProjectTransferCanonicalJson(fingerprint)
+  )
+}
+
 const getImportedProviderSnapshotFingerprint = (importedProvider: ImportedProviderConnectionCommitRow) => {
   return getProjectTransferProviderSnapshotFingerprint({
     authMode: importedProvider.authMode,
     baseURL: importedProvider.baseURL,
     configJson: importedProvider.configJson,
     providerKind: importedProvider.providerKind,
+  })
+}
+
+const getTargetProviderSnapshotFingerprint = (targetProvider: ImportedProviderSnapshotTargetRow) => {
+  return getProjectTransferProviderSnapshotFingerprint({
+    authMode: targetProvider.authMode,
+    baseURL: targetProvider.baseURL,
+    configJson: targetProvider.configJson,
+    providerKind: targetProvider.providerKind,
   })
 }
 
@@ -393,6 +433,90 @@ const getImportedModelSnapshotFingerprint = ({
     variant: importedModel.variant,
     version: importedModel.variant,
   })
+}
+
+const targetModelIdentityMatches = ({
+  importedModel,
+  targetModel,
+}: {
+  importedModel: ImportedModelCommitRow
+  targetModel: ImportedModelSnapshotTargetRow
+}) => {
+  return (
+    targetModel.name === importedModel.name
+    && targetModel.remoteModelId === (importedModel.remoteModelId ?? importedModel.modelName)
+    && targetModel.displayName === importedModel.displayName
+    && targetModel.variant === importedModel.variant
+  )
+}
+
+const getReusableImportedProviderConnectionId = async ({
+  importedProvider,
+  tx,
+}: {
+  importedProvider: ImportedProviderConnectionCommitRow
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const sourceFingerprint = getImportedProviderSnapshotFingerprint(importedProvider)
+  const rows = await tx.queryJson<ImportedProviderSnapshotTargetRow>(`
+    SELECT
+      id,
+      provider_kind AS providerKind,
+      auth_mode AS authMode,
+      base_url AS baseURL,
+      TO_JSON(config_json) AS configJson
+    FROM app.provider_connection
+    WHERE json_extract_string(config_json, '$.${importedSnapshotMarker}.sourceProviderConnectionId') = ${getSqlLiteral(importedProvider.sourceProviderConnectionId)}
+    ORDER BY created_at ASC, id ASC
+  `)
+  const matchingRows = rows.filter((row) => {
+    const marker = getImportedSnapshotMarker(row.configJson)
+    const targetFingerprint = getTargetProviderSnapshotFingerprint(row)
+
+    return (
+      importedSnapshotMarkerFingerprintMatches({fingerprint: sourceFingerprint, marker})
+      && getProjectTransferCanonicalJson(targetFingerprint) === getProjectTransferCanonicalJson(sourceFingerprint)
+    )
+  })
+
+  return matchingRows.length === 1 ? (matchingRows[0]?.id ?? null) : null
+}
+
+const getReusableImportedModelId = async ({
+  importedModel,
+  importedProvider,
+  providerConnectionId,
+  tx,
+}: {
+  importedModel: ImportedModelCommitRow
+  importedProvider: ImportedProviderConnectionCommitRow
+  providerConnectionId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const sourceFingerprint = getImportedModelSnapshotFingerprint({importedModel, importedProvider})
+  const rows = await tx.queryJson<ImportedModelSnapshotTargetRow>(`
+    SELECT
+      id,
+      name,
+      remote_model_id AS remoteModelId,
+      display_name AS displayName,
+      variant,
+      TO_JSON(metadata_json) AS metadataJson
+    FROM app.model
+    WHERE provider_connection_id = ${getSqlLiteral(providerConnectionId)}
+      AND json_extract_string(metadata_json, '$.${importedSnapshotMarker}.sourceModelId') = ${getSqlLiteral(importedModel.sourceModelId)}
+    ORDER BY created_at ASC, id ASC
+  `)
+  const matchingRows = rows.filter((row) => {
+    const marker = getImportedSnapshotMarker(row.metadataJson)
+
+    return (
+      targetModelIdentityMatches({importedModel, targetModel: row})
+      && importedSnapshotMarkerFingerprintMatches({fingerprint: sourceFingerprint, marker})
+    )
+  })
+
+  return matchingRows.length === 1 ? (matchingRows[0]?.id ?? null) : null
 }
 
 const getNullableDateLiteral = (value: unknown) => {
@@ -540,6 +664,12 @@ const getMaterializedProviderTargetBySourceId = async ({
     const importedProvider =
       importedProviderBySourceId[sourceProviderConnectionId]
       ?? failCommitWriter(`missing imported provider for ${sourceProviderConnectionId}`)
+    const existingProviderConnectionId = await getReusableImportedProviderConnectionId({importedProvider, tx})
+
+    if (existingProviderConnectionId !== null) {
+      return {...mapped, [sourceProviderConnectionId]: existingProviderConnectionId}
+    }
+
     const providerConnectionId = randomUUID()
 
     await tx.run(`
@@ -557,7 +687,7 @@ const getMaterializedProviderTargetBySourceId = async ({
         ${getSqlLiteral(providerConnectionId)},
         ${getSqlLiteral(importedProvider.providerKind)},
         ${getSqlLiteral(importedProvider.label)},
-        ${getSqlLiteral(importedProvider.enabled)},
+        FALSE,
         ${getSqlLiteral(importedProvider.authMode)},
         ${getSqlLiteral(importedProvider.baseURL)},
         ${getSqlLiteral(importedProvider.maxInflightRequests)},
@@ -567,7 +697,7 @@ const getMaterializedProviderTargetBySourceId = async ({
             sourceProviderConnectionId: importedProvider.sourceProviderConnectionId,
           }),
         )},
-        ${getSqlLiteral(importedProvider.secretRef)}
+        NULL
       )
     `)
 
@@ -606,6 +736,17 @@ const getMaterializedModelTargetBySourceId = async ({
       mapped: providerTargetBySourceId,
       sourceId: importedModel.sourceProviderConnectionId,
     })
+    const existingModelId = await getReusableImportedModelId({
+      importedModel,
+      importedProvider,
+      providerConnectionId,
+      tx,
+    })
+
+    if (existingModelId !== null) {
+      return {...mapped, [sourceModelId]: existingModelId}
+    }
+
     const materializedModelId = randomUUID()
 
     await tx.run(`
@@ -627,7 +768,7 @@ const getMaterializedModelTargetBySourceId = async ({
         ${getSqlLiteral(importedModel.displayName)},
         ${getSqlLiteral(importedModel.variant)},
         ${getSqlLiteral(importedModel.source ?? 'manual')},
-        ${getSqlLiteral(importedModel.enabled)},
+        FALSE,
         ${getJsonLiteral(
           getImportedSnapshotJson(importedModel.metadataJson, {
             snapshotFingerprint: getImportedModelSnapshotFingerprint({importedModel, importedProvider}),
@@ -2934,7 +3075,11 @@ const writeProjectTransferCommitAppTablesTx = async ({
   const reviews = payloads.reviews ?? []
   const importedAt = now ?? new Date()
   const materializedPlan = await getPlanWithMaterializedImportedDependencies({payloads, plan, tx})
-  const judgmentPlan = getRequiredPlanEntries(materializedPlan.targetPlan.judgmentPlan, 'judgment plan', judgments.length)
+  const judgmentPlan = getRequiredPlanEntries(
+    materializedPlan.targetPlan.judgmentPlan,
+    'judgment plan',
+    judgments.length,
+  )
   const judgmentAssessmentPlan = getRequiredPlanEntries(
     materializedPlan.targetPlan.judgmentAssessmentPlan,
     'judgment assessment plan',
