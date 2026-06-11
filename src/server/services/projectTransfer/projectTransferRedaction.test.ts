@@ -136,6 +136,43 @@ test('project-transfer redaction preserves recognized non-local URLs while warni
   ).toBe(false)
 })
 
+test('project-transfer redaction preserves URL-only article decision fields without dependent omission cascades', () => {
+  const payloads = getPayloads()
+  const titleUrl = 'https://example.test/review-title?token=secret-value#title'
+  const summaryUrl = 'https://example.test/review-summary?api_key=secret-value#summary'
+
+  payloads.articles[0] = {...payloads.articles[0], articleSummary: summaryUrl, articleTitle: titleUrl}
+
+  const redacted = redactProjectTransferPayloads(payloads)
+  const omittedWarnings = redacted.warnings.filter((warning) => {
+    return warning.action === 'omitted'
+  })
+
+  expect(redacted.payloads.articles).toHaveLength(1)
+  expect(redacted.payloads.projectArticles).toHaveLength(1)
+  expect(redacted.payloads.articleImportRoutes).toHaveLength(1)
+  expect(redacted.payloads.judgments).toHaveLength(1)
+  expect(redacted.payloads.humanJudgments).toHaveLength(1)
+  expect(redacted.payloads.reviews).toHaveLength(1)
+  expect(redacted.payloads.articles[0]?.articleTitle).toBe(titleUrl)
+  expect(redacted.payloads.articles[0]?.articleSummary).toBe(summaryUrl)
+  expect(
+    redacted.warnings.some((warning) => {
+      return warning.code === 'decisionPayloadRowOmitted'
+    }),
+  ).toBe(false)
+  expect(
+    omittedWarnings.some((warning) => {
+      return warning.code === 'dependentPayloadRowOmitted'
+    }),
+  ).toBe(false)
+  expect(
+    redacted.warnings.some((warning) => {
+      return warning.code === 'nonLocalUrlPreserved' && warning.jsonPointer === '/0/articleSummary'
+    }),
+  ).toBe(true)
+})
+
 test('project-transfer redaction omits decision-bearing rows instead of sanitizing decisions in place', () => {
   const payloads = getPayloads()
 
@@ -159,6 +196,7 @@ test('project-transfer redaction omits decision-bearing rows instead of sanitizi
   ).toMatchObject({
     action: 'omitted',
     code: 'decisionPayloadRowOmitted',
+    details: {reason: 'runtimePathRedacted', sourceRowId: 'judgment-1', triggeringField: 'answeredOriginal'},
     jsonPointer: '/0/answeredOriginal',
     severity: 'fidelity',
   })
@@ -166,7 +204,12 @@ test('project-transfer redaction omits decision-bearing rows instead of sanitizi
     redacted.warnings.find((warning) => {
       return warning.scope === 'judgmentAssessments'
     }),
-  ).toMatchObject({action: 'omitted', code: 'dependentPayloadRowOmitted', severity: 'fidelity'})
+  ).toMatchObject({
+    action: 'omitted',
+    code: 'dependentPayloadRowOmitted',
+    details: {dependencyReason: 'sourceJudgment', omittedParentRef: 'judgment-1', reason: 'sourceJudgment'},
+    severity: 'fidelity',
+  })
   expect(
     redacted.warnings.find((warning) => {
       return warning.scope === 'humanJudgments'
@@ -174,6 +217,7 @@ test('project-transfer redaction omits decision-bearing rows instead of sanitizi
   ).toMatchObject({
     action: 'omitted',
     code: 'decisionPayloadRowOmitted',
+    details: {reason: 'providerSecretRedacted', sourceRowId: 'human-judgment-1', triggeringField: 'answer'},
     jsonPointer: '/0/answer',
     severity: 'fidelity',
   })
@@ -184,6 +228,7 @@ test('project-transfer redaction omits decision-bearing rows instead of sanitizi
   ).toMatchObject({
     action: 'omitted',
     code: 'decisionPayloadRowOmitted',
+    details: {reason: 'providerSecretRedacted', sourceRowId: 'human-summary-1', triggeringField: 'answer'},
     jsonPointer: '/0/answer',
     severity: 'fidelity',
   })
@@ -210,17 +255,29 @@ test('project-transfer redaction omits unsafe parent rows and dependent review p
     redacted.warnings.find((warning) => {
       return warning.scope === 'articles'
     }),
-  ).toMatchObject({code: 'decisionPayloadRowOmitted', severity: 'fidelity'})
+  ).toMatchObject({
+    code: 'decisionPayloadRowOmitted',
+    details: {reason: 'runtimePathRedacted', sourceRowId: 'article-1', triggeringField: 'articleTitle'},
+    severity: 'fidelity',
+  })
   expect(
     redacted.warnings.find((warning) => {
       return warning.scope === 'prompts'
     }),
-  ).toMatchObject({code: 'decisionPayloadRowOmitted', severity: 'fidelity'})
+  ).toMatchObject({
+    code: 'decisionPayloadRowOmitted',
+    details: {reason: 'providerSecretRedacted', sourceRowId: 'prompt-1', triggeringField: 'originalText'},
+    severity: 'fidelity',
+  })
   expect(
     redacted.warnings.find((warning) => {
       return warning.scope === 'reviews'
     }),
-  ).toMatchObject({code: 'dependentPayloadRowOmitted', severity: 'fidelity'})
+  ).toMatchObject({
+    code: 'dependentPayloadRowOmitted',
+    details: {dependencyReason: 'sourceArticle', omittedParentRef: 'article-1', reason: 'sourceArticle'},
+    severity: 'fidelity',
+  })
 })
 
 test('project-transfer payload serialization migrates internal annotations into package warnings', () => {

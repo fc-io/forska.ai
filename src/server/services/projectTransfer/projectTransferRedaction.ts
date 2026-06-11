@@ -160,16 +160,18 @@ const getStringRedactionMatch = (value: string): RedactionMatch | null => {
           : null
 }
 
-const hasUnsafeRedactableValue = (value: unknown): boolean => {
+const getUnsafeRedactionReason = (value: unknown): string | null => {
   const stringMatch = isString(value) ? getStringRedactionMatch(value) : null
 
   return stringMatch
     ? stringMatch.redacts
+      ? stringMatch.code
+      : null
     : Array.isArray(value)
-      ? value.some(hasUnsafeRedactableValue)
+      ? (value.map(getUnsafeRedactionReason).find(isString) ?? null)
       : isRecord(value)
-        ? Object.values(value).some(hasUnsafeRedactableValue)
-        : false
+        ? (Object.values(value).map(getUnsafeRedactionReason).find(isString) ?? null)
+        : null
 }
 
 const redactStringValue = (value: string, context: RedactionContext): RedactedValue<string> => {
@@ -325,29 +327,58 @@ const getRecordSourceRef = (record: JsonRecord) => {
   )
 }
 
+const getRecordSourceRowId = (record: JsonRecord) => {
+  const sourceRowId =
+    record.sourceJudgmentId
+    ?? record.sourceJudgmentAssessmentId
+    ?? record.sourceHumanJudgmentId
+    ?? record.sourceHumanJudgmentSummaryId
+    ?? record.sourceReviewId
+    ?? record.sourceArticleId
+    ?? record.sourcePromptId
+    ?? record.sourceModelId
+    ?? record.sourceProviderConnectionId
+    ?? record.sourceProjectId
+
+  return isString(sourceRowId) ? sourceRowId : undefined
+}
+
 const omitRecordWarning = ({
   code,
+  details,
   jsonPointer,
   message,
   payloadKey,
   sourceRef,
 }: {
   code: string
+  details?: unknown
   jsonPointer: string
   message: string
   payloadKey: ProjectTransferPayloadKey
   sourceRef?: string
 }) => {
-  return getWarning({action: 'omitted', code, jsonPointer, message, payloadKey, severity: 'fidelity', sourceRef})
+  return getWarning({
+    action: 'omitted',
+    code,
+    details,
+    jsonPointer,
+    message,
+    payloadKey,
+    severity: 'fidelity',
+    sourceRef,
+  })
 }
 
 const omitDependentRecordWarning = ({
   jsonPointer,
+  omittedParentRef,
   payloadKey,
   reason,
   sourceRef,
 }: {
   jsonPointer: string
+  omittedParentRef: string
   payloadKey: ProjectTransferPayloadKey
   reason: string
   sourceRef?: string
@@ -355,7 +386,7 @@ const omitDependentRecordWarning = ({
   return getWarning({
     action: 'omitted',
     code: 'dependentPayloadRowOmitted',
-    details: {reason},
+    details: {dependencyReason: reason, omittedParentRef, reason},
     jsonPointer,
     message: 'Dependent payload row was omitted because its parent row was omitted.',
     payloadKey,
@@ -364,10 +395,20 @@ const omitDependentRecordWarning = ({
   })
 }
 
-const getUnsafeField = (record: JsonRecord, fields: readonly string[]) => {
-  return fields.find((field) => {
-    return hasUnsafeRedactableValue(record[field])
-  })
+const getUnsafeFieldOmission = (record: JsonRecord, fields: readonly string[]) => {
+  const omission = fields
+    .map((field) => {
+      return {field, reason: getUnsafeRedactionReason(record[field])}
+    })
+    .find(({reason}) => {
+      return reason !== null
+    })
+
+  return omission?.reason ? {field: omission.field, reason: omission.reason} : null
+}
+
+const getDecisionOmissionDetails = (record: JsonRecord, field: string, reason: string) => {
+  return {reason, sourceRowId: getRecordSourceRowId(record), triggeringField: field}
 }
 
 const redactProjectRecord = (
@@ -398,7 +439,7 @@ const redactPromptRecords = (
     (result, record, index) => {
       const jsonPointer = `/${index}`
       const sourceRef = getRecordSourceRef(record)
-      const unsafeField = getUnsafeField(record, promptDecisionFields)
+      const unsafeFieldOmission = getUnsafeFieldOmission(record, promptDecisionFields)
 
       const redacted = applyFieldRedactions(record, [
         (recordValue) => {
@@ -409,7 +450,7 @@ const redactPromptRecords = (
         },
       ])
 
-      return unsafeField
+      return unsafeFieldOmission
         ? {
             omittedSourceIds: [...result.omittedSourceIds, record.sourcePromptId],
             records: result.records,
@@ -417,7 +458,8 @@ const redactPromptRecords = (
               ...result.warnings,
               omitRecordWarning({
                 code: 'decisionPayloadRowOmitted',
-                jsonPointer: childPointer(jsonPointer, unsafeField),
+                details: getDecisionOmissionDetails(record, unsafeFieldOmission.field, unsafeFieldOmission.reason),
+                jsonPointer: childPointer(jsonPointer, unsafeFieldOmission.field),
                 message: 'Prompt row was omitted because a benchmark input field would require redaction.',
                 payloadKey: 'prompts',
                 sourceRef,
@@ -518,11 +560,11 @@ const redactArticleRecords = (
     (result, record, index) => {
       const jsonPointer = `/${index}`
       const sourceRef = getRecordSourceRef(record)
-      const unsafeField = getUnsafeField(record, decisionFields)
+      const unsafeFieldOmission = getUnsafeFieldOmission(record, decisionFields)
 
       const redacted = redactArticleRecord(record, {jsonPointer, payloadKey: 'articles', sourceRef})
 
-      return unsafeField
+      return unsafeFieldOmission
         ? {
             omittedSourceIds: [...result.omittedSourceIds, record.sourceArticleId],
             records: result.records,
@@ -530,7 +572,8 @@ const redactArticleRecords = (
               ...result.warnings,
               omitRecordWarning({
                 code: 'decisionPayloadRowOmitted',
-                jsonPointer: childPointer(jsonPointer, unsafeField),
+                details: getDecisionOmissionDetails(record, unsafeFieldOmission.field, unsafeFieldOmission.reason),
+                jsonPointer: childPointer(jsonPointer, unsafeFieldOmission.field),
                 message: 'Article row was omitted because a review input field would require redaction.',
                 payloadKey: 'articles',
                 sourceRef,
@@ -622,7 +665,7 @@ const redactJudgments = (
     (result, record, index) => {
       const jsonPointer = `/${index}`
       const sourceRef = getRecordSourceRef(record)
-      const unsafeField = getUnsafeField(record, judgmentDecisionFields)
+      const unsafeFieldOmission = getUnsafeFieldOmission(record, judgmentDecisionFields)
 
       const redacted = applyFieldRedactions(record, [
         (recordValue) => {
@@ -634,7 +677,7 @@ const redactJudgments = (
         },
       ])
 
-      return unsafeField
+      return unsafeFieldOmission
         ? {
             omittedSourceIds: [...result.omittedSourceIds, record.sourceJudgmentId],
             records: result.records,
@@ -642,7 +685,8 @@ const redactJudgments = (
               ...result.warnings,
               omitRecordWarning({
                 code: 'decisionPayloadRowOmitted',
-                jsonPointer: childPointer(jsonPointer, unsafeField),
+                details: getDecisionOmissionDetails(record, unsafeFieldOmission.field, unsafeFieldOmission.reason),
+                jsonPointer: childPointer(jsonPointer, unsafeFieldOmission.field),
                 message: 'Judgment row was omitted because an LLM decision field would require redaction.',
                 payloadKey: 'judgments',
                 sourceRef,
@@ -678,13 +722,14 @@ const redactHumanJudgments = (
     (result, record, index) => {
       const jsonPointer = `/${index}`
       const sourceRef = getRecordSourceRef(record)
+      const unsafeAnswerReason = getUnsafeRedactionReason(record.answer)
       const redacted = applyFieldRedactions(record, [
         (recordValue) => {
           return redactStringField(recordValue, 'comment', {jsonPointer, payloadKey: 'humanJudgments', sourceRef})
         },
       ])
 
-      return hasUnsafeRedactableValue(record.answer)
+      return unsafeAnswerReason
         ? {
             omittedSourceIds: [...result.omittedSourceIds, record.sourceHumanJudgmentId],
             records: result.records,
@@ -692,6 +737,7 @@ const redactHumanJudgments = (
               ...result.warnings,
               omitRecordWarning({
                 code: 'decisionPayloadRowOmitted',
+                details: getDecisionOmissionDetails(record, 'answer', unsafeAnswerReason),
                 jsonPointer: childPointer(jsonPointer, 'answer'),
                 message: 'Human judgment row was omitted because the answer would require redaction.',
                 payloadKey: 'humanJudgments',
@@ -716,8 +762,9 @@ const redactHumanJudgmentSummaries = (
     (result, record, index) => {
       const jsonPointer = `/${index}`
       const sourceRef = getRecordSourceRef(record)
+      const unsafeAnswerReason = getUnsafeRedactionReason(record.answer)
 
-      return hasUnsafeRedactableValue(record.answer)
+      return unsafeAnswerReason
         ? {
             omittedSourceIds: [...result.omittedSourceIds, record.sourceHumanJudgmentSummaryId],
             records: result.records,
@@ -725,6 +772,7 @@ const redactHumanJudgmentSummaries = (
               ...result.warnings,
               omitRecordWarning({
                 code: 'decisionPayloadRowOmitted',
+                details: getDecisionOmissionDetails(record, 'answer', unsafeAnswerReason),
                 jsonPointer: childPointer(jsonPointer, 'answer'),
                 message: 'Human judgment summary row was omitted because the answer would require redaction.',
                 payloadKey: 'humanJudgmentSummaries',
@@ -873,6 +921,7 @@ const omitDependentRecords = <TRecord extends ProjectTransferPayloadRecord>({
               ...result.warnings,
               omitDependentRecordWarning({
                 jsonPointer: `/${index}`,
+                omittedParentRef: dependencyId,
                 payloadKey,
                 reason,
                 sourceRef: getRecordSourceRef(record),
