@@ -29,6 +29,7 @@ import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import type {ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
 import {
   type ProjectTransferManifest,
+  type ProjectTransferManifestWarning,
   projectTransferPayloadFormatByKey,
   type ProjectTransferPayloadKey,
   projectTransferPayloadKeys,
@@ -125,6 +126,7 @@ export type ProjectTransferExportCreationResult =
 const manifestPath = 'manifest.json'
 const defaultExportSessionTtlMs = 24 * 60 * 60 * 1000
 const exportWorkerHeartbeatIntervalMs = 60_000
+const decisionBearingOmissionWarningCodes = new Set(['decisionPayloadRowOmitted', 'dependentPayloadRowOmitted'])
 
 const getNow = (now?: Date) => {
   return now ?? new Date()
@@ -259,6 +261,29 @@ const getManifestWithFingerprint = ({
   })
 
   return buildManifest({assetBytes, assembly, exportedAt, packageFingerprint, serializedPayloads})
+}
+
+const isDecisionBearingOmissionWarning = (warning: ProjectTransferManifestWarning) => {
+  return warning.action === 'omitted' && decisionBearingOmissionWarningCodes.has(warning.code)
+}
+
+export const assertProjectTransferExportPackageFinalizationAllowed = (
+  warnings: ProjectTransferManifestWarning[] = [],
+) => {
+  const blockingWarnings = warnings.filter(isDecisionBearingOmissionWarning)
+  const scopes = Array.from(
+    new Set(
+      blockingWarnings.map((warning) => {
+        return warning.scope
+      }),
+    ),
+  )
+
+  if (blockingWarnings.length > 0) {
+    throw new Error(
+      `Project transfer export blocked: ${blockingWarnings.length} decision-bearing payload omission(s) would make the package partial. Omitted scopes: ${scopes.join(', ')}`,
+    )
+  }
 }
 
 const getPackageEntries = ({
@@ -660,6 +685,7 @@ export const buildProjectTransferExportPackage = async (
             sessionId: input.sessionId,
           })
         })
+        assertProjectTransferExportPackageFinalizationAllowed(assembly.warnings)
         const serializedPayloads = serializeProjectTransferExportPayloads(assembly.payloads)
         const assetBytes = assembly.assetEntries.reduce((total, entry) => {
           return total + entry.bytes.byteLength
