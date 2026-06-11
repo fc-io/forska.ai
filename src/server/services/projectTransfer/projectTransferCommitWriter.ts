@@ -261,6 +261,7 @@ const articleFieldSelectSql = Object.entries(articleColumnByPayloadField)
   })
   .join(',\n')
 const commitWriterInsertBatchSize = 500
+const importedSnapshotMarker = 'projectTransferImportedSnapshot'
 
 const failCommitWriter = (message: string): never => {
   throw new Error(`Project transfer commit writer: ${message}`)
@@ -348,6 +349,13 @@ const valuesEquivalent = (left: unknown, right: unknown) => {
 
 const getJsonLiteral = (value: unknown) => {
   return value === null || value === undefined ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(value))} AS JSON)`
+}
+
+const getImportedSnapshotJson = (value: unknown, snapshot: Record<string, string>) => {
+  const parsed = getJsonValue(value)
+  const record = isRecord(parsed) ? parsed : {}
+
+  return {...record, [importedSnapshotMarker]: snapshot}
 }
 
 const getNullableDateLiteral = (value: unknown) => {
@@ -515,7 +523,11 @@ const getMaterializedProviderTargetBySourceId = async ({
         ${getSqlLiteral(importedProvider.authMode)},
         ${getSqlLiteral(importedProvider.baseURL)},
         ${getSqlLiteral(importedProvider.maxInflightRequests)},
-        ${getJsonLiteral(importedProvider.configJson)},
+        ${getJsonLiteral(
+          getImportedSnapshotJson(importedProvider.configJson, {
+            sourceProviderConnectionId: importedProvider.sourceProviderConnectionId,
+          }),
+        )},
         ${getSqlLiteral(importedProvider.secretRef)}
       )
     `)
@@ -571,7 +583,12 @@ const getMaterializedModelTargetBySourceId = async ({
         ${getSqlLiteral(importedModel.variant)},
         ${getSqlLiteral(importedModel.source ?? 'manual')},
         ${getSqlLiteral(importedModel.enabled)},
-        ${getJsonLiteral(importedModel.metadataJson)}
+        ${getJsonLiteral(
+          getImportedSnapshotJson(importedModel.metadataJson, {
+            sourceModelId: importedModel.sourceModelId,
+            sourceProviderConnectionId: importedModel.sourceProviderConnectionId,
+          }),
+        )}
       )
     `)
 

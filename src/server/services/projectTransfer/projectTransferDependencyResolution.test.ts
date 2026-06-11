@@ -30,6 +30,10 @@ const getRuntimeRoot = () => {
   return mkdtempSync(join(tmpdir(), `f2-project-transfer-dependencies-${process.pid}-`))
 }
 
+const getImportedSnapshotMarker = (value: Record<string, string>) => {
+  return {projectTransferImportedSnapshot: value}
+}
+
 const getTargetModel = (overrides: Partial<ProviderModelRecord> = {}): ProviderModelRecord => {
   return {
     baseURL: null,
@@ -37,7 +41,10 @@ const getTargetModel = (overrides: Partial<ProviderModelRecord> = {}): ProviderM
     displayName: 'GPT 5.4',
     enabled: true,
     id: 'target-model-1',
-    metadataJson: {options: {thinking: 'medium'}},
+    metadataJson: {
+      ...getImportedSnapshotMarker({sourceModelId: 'model-1', sourceProviderConnectionId: 'provider-connection-1'}),
+      options: {thinking: 'medium'},
+    },
     modelName: 'gpt-5.4',
     name: 'GPT 5.4',
     provider: 'openai',
@@ -58,7 +65,12 @@ const getTargetConnection = (
   return {
     authMode: 'api-key',
     baseURL: null,
-    config: {disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+    config: {
+      ...getImportedSnapshotMarker({sourceProviderConnectionId: 'provider-connection-1'}),
+      disabledModelIds: [],
+      manualWorkerUrls: [],
+      workerUrlMode: 'manual',
+    } as ProviderConnectionForAdmin['config'],
     createdAt: null,
     enabled: true,
     hasSecret: true,
@@ -545,6 +557,56 @@ test('project transfer dependency resolution maps materialized models to provide
   }
 })
 
+test('project transfer dependency resolution ignores unmarked local provider and model rows for snapshot reuse', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getProjectTransferPayloadFixtureMap()
+    const targetModel = getTargetModel({metadataJson: {options: {thinking: 'medium'}}})
+    const targetConnection = getTargetConnection(
+      {
+        config: {
+          disabledModelIds: [],
+          manualWorkerUrls: [],
+          workerUrlMode: 'manual',
+        } as ProviderConnectionForAdmin['config'],
+      },
+      [targetModel],
+    )
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        getProviderModelsByIds: async () => {
+          return new Map([['target-model-1', targetModel]])
+        },
+        listProviderConnections: async () => {
+          return [targetConnection]
+        },
+      },
+      request: {
+        planRevision: 1,
+        selectedModels: [{sourceModelId: 'model-1', targetModelId: 'target-model-1'}],
+        selectedProviderConnections: [
+          {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: 'target-provider-1'},
+        ],
+      },
+    })
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'blocked',
+      'provider:provider-connection-1': 'blocked',
+    })
+    expect(result.status === 'ok' ? result.plan.canCommit : true).toBe(false)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('project transfer dependency resolution keeps Codex materialization unresolved until the model is visible on a live connection', async () => {
   const cwd = getRuntimeRoot()
 
@@ -553,7 +615,10 @@ test('project transfer dependency resolution keeps Codex materialization unresol
     const codexModel = getTargetModel({
       displayName: 'Codex Thinking',
       id: 'target-codex-model-1',
-      metadataJson: {options: {thinking: 'medium'}},
+      metadataJson: {
+        ...getImportedSnapshotMarker({sourceModelId: 'model-1', sourceProviderConnectionId: 'provider-connection-1'}),
+        options: {thinking: 'medium'},
+      },
       modelName: 'codex-thinking',
       name: 'Codex Thinking',
       provider: 'codex',
@@ -611,7 +676,10 @@ test('project transfer dependency resolution resolves Codex after materialized m
     const codexModel = getTargetModel({
       displayName: 'Codex Thinking',
       id: 'target-codex-model-1',
-      metadataJson: {options: {thinking: 'medium'}},
+      metadataJson: {
+        ...getImportedSnapshotMarker({sourceModelId: 'model-1', sourceProviderConnectionId: 'provider-connection-1'}),
+        options: {thinking: 'medium'},
+      },
       modelName: 'codex-thinking',
       name: 'Codex Thinking',
       provider: 'codex',
@@ -767,7 +835,10 @@ test('project transfer dependency resolution re-enables stale mapped Codex depen
       displayName: 'Codex Thinking',
       enabled: false,
       id: 'target-codex-model-1',
-      metadataJson: {options: {thinking: 'medium'}},
+      metadataJson: {
+        ...getImportedSnapshotMarker({sourceModelId: 'model-1', sourceProviderConnectionId: 'provider-connection-1'}),
+        options: {thinking: 'medium'},
+      },
       modelName: 'codex-thinking',
       name: 'Codex Thinking',
       provider: 'codex',

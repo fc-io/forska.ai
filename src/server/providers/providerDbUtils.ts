@@ -89,6 +89,18 @@ const normalizeModelIds = (value: unknown): string[] => {
     : []
 }
 
+const getProjectTransferImportedSnapshot = (value: unknown): Record<string, unknown> | undefined => {
+  const parsed = getJsonValue(value)
+  const marker =
+    typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as {projectTransferImportedSnapshot?: unknown}).projectTransferImportedSnapshot
+      : null
+
+  return typeof marker === 'object' && marker !== null && !Array.isArray(marker)
+    ? (marker as Record<string, unknown>)
+    : undefined
+}
+
 export const getProviderConnectionConfigFromJson = ({
   providerKind,
   value,
@@ -123,10 +135,11 @@ export const getProviderConnectionConfigFromJson = ({
     typeof parsed === 'object' && parsed !== null && 'llamaCppMode' in parsed
       ? getLlamaCppMode({providerKind, value: (parsed as {llamaCppMode?: unknown}).llamaCppMode})
       : undefined
+  const projectTransferImportedSnapshot = getProjectTransferImportedSnapshot(value)
+  const importedSnapshotConfig = projectTransferImportedSnapshot === undefined ? {} : {projectTransferImportedSnapshot}
+  const config = {archived, disabledModelIds, manualWorkerUrls, ...importedSnapshotConfig, workerUrlMode}
 
-  return llamaCppMode
-    ? {archived, disabledModelIds, llamaCppMode, manualWorkerUrls, workerUrlMode}
-    : {archived, disabledModelIds, manualWorkerUrls, workerUrlMode}
+  return llamaCppMode ? {...config, llamaCppMode} : config
 }
 
 export const getPersistedProviderConnectionConfigValue = ({
@@ -142,17 +155,26 @@ export const getPersistedProviderConnectionConfigValue = ({
   const archived = config.archived === true
   const disabledModelIds = normalizeModelIds(config.disabledModelIds)
   const llamaCppMode = getLlamaCppMode({providerKind, value: config.llamaCppMode})
+  const projectTransferImportedSnapshot =
+    typeof config.projectTransferImportedSnapshot === 'object'
+    && config.projectTransferImportedSnapshot !== null
+    && !Array.isArray(config.projectTransferImportedSnapshot)
+      ? config.projectTransferImportedSnapshot
+      : undefined
+  const importedSnapshotConfig = projectTransferImportedSnapshot === undefined ? {} : {projectTransferImportedSnapshot}
+  const persistedConfig = {archived, disabledModelIds, manualWorkerUrls, ...importedSnapshotConfig, workerUrlMode}
 
   return !archived
     && disabledModelIds.length === 0
     && !llamaCppMode
     && manualWorkerUrls.length === 0
+    && projectTransferImportedSnapshot === undefined
     && workerUrlMode === defaultWorkerUrlMode
     && workerUrlMode === 'manual'
     ? null
     : llamaCppMode
-      ? {archived, disabledModelIds, llamaCppMode, manualWorkerUrls, workerUrlMode}
-      : {archived, disabledModelIds, manualWorkerUrls, workerUrlMode}
+      ? {...persistedConfig, llamaCppMode}
+      : persistedConfig
 }
 
 export const getJsonSqlLiteral = (value: unknown): string => {

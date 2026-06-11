@@ -187,6 +187,7 @@ type DependencyBlockerInput = {code: string; message: string; scope: string}
 const defaultJudgmentModelContext = 32768
 const defaultJudgmentPromptTokenLimit = Math.max(0, defaultJudgmentModelContext - MAX_COMPLETION_TOKENS)
 const dependencyScopePrefix = 'dependencies.'
+const importedSnapshotMarker = 'projectTransferImportedSnapshot'
 
 const getRepositories = (repositories?: ProjectTransferDependencyResolutionRepositories) => {
   return {
@@ -275,6 +276,37 @@ const getConfigRecord = (value: unknown): Record<string, unknown> => {
   return isRecord(parsed) ? parsed : {}
 }
 
+const getImportedSnapshotMarker = (value: unknown) => {
+  const record = getConfigRecord(value)
+  const marker = record[importedSnapshotMarker]
+
+  return isRecord(marker) ? marker : null
+}
+
+const providerHasImportedSnapshotMarker = ({
+  sourceProviderConnectionId,
+  targetProvider,
+}: {
+  sourceProviderConnectionId: string
+  targetProvider: ProviderConnectionForAdmin | ProviderConnectionRecord
+}) => {
+  const marker = getImportedSnapshotMarker(targetProvider.config)
+
+  return marker?.sourceProviderConnectionId === sourceProviderConnectionId
+}
+
+const modelHasImportedSnapshotMarker = ({
+  sourceModelId,
+  targetModel,
+}: {
+  sourceModelId: string
+  targetModel: ProviderModelRecord
+}) => {
+  const marker = getImportedSnapshotMarker(targetModel.metadataJson)
+
+  return marker?.sourceModelId === sourceModelId
+}
+
 const getSourceConfigSignature = ({providerKind, value}: {providerKind: string; value: unknown}) => {
   const record = getConfigRecord(value)
 
@@ -324,8 +356,12 @@ const providerFingerprintsMatch = (
   targetProvider: ProviderConnectionForAdmin,
 ) => {
   return (
-    getProjectTransferCanonicalJson(getProviderFingerprint(sourceProvider))
-    === getProjectTransferCanonicalJson(getProviderFingerprint(targetProvider))
+    providerHasImportedSnapshotMarker({
+      sourceProviderConnectionId: sourceProvider.sourceProviderConnectionId,
+      targetProvider,
+    })
+    && getProjectTransferCanonicalJson(getProviderFingerprint(sourceProvider))
+      === getProjectTransferCanonicalJson(getProviderFingerprint(targetProvider))
   )
 }
 
@@ -727,7 +763,8 @@ const modelVariantMatches = (source: ImportedModel, target: ProviderModelRecord)
 
 const remoteModelMatches = (source: ImportedModel, target: ProviderModelRecord) => {
   return (
-    source.remoteModelId !== null
+    modelHasImportedSnapshotMarker({sourceModelId: source.sourceModelId, targetModel: target})
+    && source.remoteModelId !== null
     && normalizeComparableString(target.remoteModelId) === normalizeComparableString(source.remoteModelId)
     && modelVariantMatches(source, target)
   )
@@ -735,7 +772,8 @@ const remoteModelMatches = (source: ImportedModel, target: ProviderModelRecord) 
 
 const nullableRemoteModelMatches = (source: ImportedModel, target: ProviderModelRecord) => {
   return (
-    source.remoteModelId === null
+    modelHasImportedSnapshotMarker({sourceModelId: source.sourceModelId, targetModel: target})
+    && source.remoteModelId === null
     && normalizeComparableString(target.remoteModelId) === null
     && normalizeComparableString(target.modelName) === normalizeComparableString(source.modelName)
     && normalizeComparableString(target.name) === normalizeComparableString(source.name)
@@ -947,15 +985,19 @@ const getResolvedModelMappings = ({
     const targetProviderConnectionId = providerTargetBySourceId[importedModel.sourceProviderConnectionId]
     const connection = targetProviderConnectionId ? (connectionById[targetProviderConnectionId] ?? null) : null
     const targetModelId =
-      existingTargetId || resolutionState.unresolvedModelSourceIds.includes(sourceModelId) || !targetProviderConnectionId
+      existingTargetId
+      || resolutionState.unresolvedModelSourceIds.includes(sourceModelId)
+      || !targetProviderConnectionId
         ? null
         : isImportedTargetProviderConnectionId(targetProviderConnectionId)
           ? getImportedTargetModelId(sourceModelId)
           : connection === null
             ? null
-            : (getUniqueEquivalentTargetModel({connection, judgmentModelSignaturesBySourceId, sourceModel: importedModel})
-                ?.id
-              ?? getImportedTargetModelId(sourceModelId))
+            : (getUniqueEquivalentTargetModel({
+                connection,
+                judgmentModelSignaturesBySourceId,
+                sourceModel: importedModel,
+              })?.id ?? getImportedTargetModelId(sourceModelId))
 
     return targetModelId ? {...mapped, [sourceModelId]: targetModelId} : mapped
   }, resolutionState.modelTargetBySourceId)
