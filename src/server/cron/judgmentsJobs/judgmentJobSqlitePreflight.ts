@@ -1,7 +1,9 @@
+import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {HttpError} from '../../utils/httpError.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {canCurrentServerOwnDuckdb, getCurrentServerDuckdbOwnerUrl} from '../../utils/serverRuntimeRole.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import {
   getJudgmentJobSqliteErrorMessage,
@@ -30,7 +32,43 @@ const getTransientLockedJobErrorMessage = ({jobId, reason}: {jobId: string; reas
   return `Job ${jobId} SQLite preflight hit a transient lock. ${reason} Forska will retry automatically once the lock clears; the job was not quarantined.`
 }
 
+const getDuckdbOwnerUrlForQuarantine = async (): Promise<string> => {
+  const configuredUrl = String(process.env.SERVER_DUCKDB_OWNER_URL ?? '').trim()
+  const ownerUrl = configuredUrl.length > 0 ? configuredUrl : await getCurrentServerDuckdbOwnerUrl()
+
+  if (ownerUrl === null) {
+    throw new Error('DuckDB owner URL is required to quarantine a judgment job from a non-owner process')
+  }
+
+  return ownerUrl.endsWith('/') ? ownerUrl.slice(0, -1) : ownerUrl
+}
+
+const requestOwnerJobQuarantine = async ({errorMessage, jobId}: {errorMessage: string; jobId: string}) => {
+  const ownerUrl = await getDuckdbOwnerUrlForQuarantine()
+  const response = await fetch(
+    `${ownerUrl}${duckdbOwnerPrivateApiPrefix}/api/judgmentsjobs/${encodeURIComponent(jobId)}/quarantine`,
+    {
+      body: JSON.stringify({reason: errorMessage}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+      signal: AbortSignal.timeout(10_000),
+    },
+  )
+  const text = await response.text()
+  const parsed = text.trim() === '' ? null : (JSON.parse(text) as {error?: unknown})
+  const error = parsed && 'error' in parsed ? parsed.error : null
+
+  if (!response.ok || error) {
+    throw new Error(typeof error === 'string' ? error : text || response.statusText)
+  }
+}
+
 const quarantineJobForPreflightFailure = async ({errorMessage, jobId}: {errorMessage: string; jobId: string}) => {
+  if (!canCurrentServerOwnDuckdb()) {
+    await requestOwnerJobQuarantine({errorMessage, jobId})
+    return
+  }
+
   await getAppDatabaseService().run(`
     UPDATE app.judgment_job
     SET status = 'failed',
