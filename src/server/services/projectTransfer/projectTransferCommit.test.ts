@@ -1410,6 +1410,9 @@ test('project transfer commit writer materializes imported provider and model de
       enabled: boolean
       importedSourceModelId: string | null
       importedSourceProviderConnectionId: string | null
+      snapshotContextLimit: number | null
+      snapshotModelOptionThinking: string | null
+      snapshotPromptTokenLimit: number | null
       providerConnectionId: string
       remoteModelId: string | null
       variant: string | null
@@ -1422,6 +1425,8 @@ test('project transfer commit writer materializes imported provider and model de
       importedSourceProviderConnectionId: string | null
       label: string
       providerKind: string
+      snapshotProviderKind: string | null
+      snapshotWorkerUrlMode: string | null
     }
   }>(`
     const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
@@ -1460,8 +1465,8 @@ test('project transfer commit writer materializes imported provider and model de
       sessionId: 'session-materialized-provider-model',
     })
     const [projectRow] = await database.queryJson("SELECT model_id AS modelId FROM app.project WHERE id = '" + writeResult.projectId + "'")
-    const [modelRow] = await database.queryJson("SELECT provider_connection_id AS providerConnectionId, display_name AS displayName, remote_model_id AS remoteModelId, variant, COALESCE(enabled, TRUE) AS enabled, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') AS importedSourceModelId, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') AS importedSourceProviderConnectionId FROM app.model WHERE id = '" + projectRow.modelId + "'")
-    const [providerRow] = await database.queryJson("SELECT id, provider_kind AS providerKind, label, enabled, auth_mode AS authMode, json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') AS importedSourceProviderConnectionId FROM app.provider_connection WHERE id = '" + modelRow.providerConnectionId + "'")
+    const [modelRow] = await database.queryJson("SELECT provider_connection_id AS providerConnectionId, display_name AS displayName, remote_model_id AS remoteModelId, variant, COALESCE(enabled, TRUE) AS enabled, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') AS importedSourceModelId, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') AS importedSourceProviderConnectionId, json_extract(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.contextLimit')::INTEGER AS snapshotContextLimit, json_extract(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.promptTokenLimit')::INTEGER AS snapshotPromptTokenLimit, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.modelOptions.thinking') AS snapshotModelOptionThinking FROM app.model WHERE id = '" + projectRow.modelId + "'")
+    const [providerRow] = await database.queryJson("SELECT id, provider_kind AS providerKind, label, enabled, auth_mode AS authMode, json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') AS importedSourceProviderConnectionId, json_extract_string(config_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.providerKind') AS snapshotProviderKind, json_extract_string(config_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.runtimeMode.workerUrlMode') AS snapshotWorkerUrlMode FROM app.provider_connection WHERE id = '" + modelRow.providerConnectionId + "'")
 
     console.log(JSON.stringify({modelRow, projectRow, providerRow}))
   `)
@@ -1474,6 +1479,8 @@ test('project transfer commit writer materializes imported provider and model de
     providerKind: 'openai',
   })
   expect(result.providerRow.importedSourceProviderConnectionId).toBe('source-provider')
+  expect(result.providerRow.snapshotProviderKind).toBe('openai')
+  expect(result.providerRow.snapshotWorkerUrlMode).toBe('manual')
   expect(result.modelRow).toMatchObject({
     displayName: null,
     enabled: true,
@@ -1482,6 +1489,9 @@ test('project transfer commit writer materializes imported provider and model de
     remoteModelId: 'target-remote',
     variant: null,
   })
+  expect(result.modelRow.snapshotContextLimit).toBe(32768)
+  expect(result.modelRow.snapshotModelOptionThinking).toBe(null)
+  expect(result.modelRow.snapshotPromptTokenLimit).toBe(28768)
   expect(result.modelRow.providerConnectionId).toBe(result.providerRow.id)
 })
 
