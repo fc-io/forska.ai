@@ -93,6 +93,49 @@ test('project-transfer redaction removes package-boundary secrets, local paths, 
   ).toContain('providerSecretRedacted')
 })
 
+test('project-transfer redaction preserves recognized non-local URLs while warning on credentials and signed parts', () => {
+  const payloads = getPayloads()
+  const signedUrl =
+    'https://user:pass@example.test/export/path?X-Amz-Credential=abc%2F20260611&X-Amz-Signature=secret#source-fragment'
+
+  payloads.articles[0] = {
+    ...payloads.articles[0],
+    originalData: {nested: {callback: 'https://example.test/callback?token=secret-value'}, signedUrl},
+    sourceMetadata: {url: 'https://example.test/source?api_key=secret-value#fragment'},
+    url: signedUrl,
+  }
+  payloads.providerConnections[0] = {
+    ...payloads.providerConnections[0],
+    baseURL: 'https://provider.example.test/v1?token=secret-value',
+  }
+
+  const redacted = redactProjectTransferPayloads(payloads)
+  const article = redacted.payloads.articles[0]
+  const providerConnection = redacted.payloads.providerConnections[0]
+  const preservedWarnings = redacted.warnings.filter((warning) => {
+    return warning.code === 'nonLocalUrlPreserved'
+  })
+
+  expect(article?.url).toBe(signedUrl)
+  expect(article?.originalData).toEqual({
+    nested: {callback: 'https://example.test/callback?token=secret-value'},
+    signedUrl,
+  })
+  expect(article?.sourceMetadata).toEqual({url: 'https://example.test/source?api_key=secret-value#fragment'})
+  expect(providerConnection?.baseURL).toBe('https://provider.example.test/v1?token=secret-value')
+  expect(preservedWarnings).toHaveLength(5)
+  expect(
+    preservedWarnings.every((warning) => {
+      return warning.action === 'warned' && warning.severity === 'warning'
+    }),
+  ).toBe(true)
+  expect(
+    redacted.warnings.some((warning) => {
+      return warning.code === 'providerSecretRedacted' && warning.jsonPointer?.includes('sourceMetadata')
+    }),
+  ).toBe(false)
+})
+
 test('project-transfer redaction omits decision-bearing rows instead of sanitizing decisions in place', () => {
   const payloads = getPayloads()
 

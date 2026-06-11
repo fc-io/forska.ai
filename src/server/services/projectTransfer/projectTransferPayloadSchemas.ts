@@ -52,6 +52,7 @@ export const projectTransferPayloadWarningCodes = [
   'freeFormValueRedacted',
   'identifierConflict',
   'identifierRejected',
+  'nonLocalUrlPreserved',
   'payloadOmitted',
   'projectSettingUnsupported',
   'providerConfigValueRedacted',
