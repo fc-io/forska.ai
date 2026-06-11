@@ -1112,18 +1112,58 @@ test('getUnassessedPairsFromDuckdb compares raw queue cursors at millisecond pre
   })
 
   const rawQuery = duckdbRunnerMockRef.current.queries[4] ?? ''
-  const activityExpression =
-    "COALESCE(candidate.article_updated_at, candidate.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')"
+  const dirtyActivityExpression =
+    "COALESCE(dirty_article.article_updated_at, dirty_article.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')"
+  const scopeActivityExpression =
+    "COALESCE(scope_article.article_updated_at, scope_article.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')"
 
   expect(rawQuery).toContain(
-    `date_trunc('millisecond', ${activityExpression}) < TIMESTAMPTZ '2026-04-24T09:09:01.566Z'`,
+    `date_trunc('millisecond', ${dirtyActivityExpression}) < TIMESTAMPTZ '2026-04-24T09:09:01.566Z'`,
   )
   expect(rawQuery).toContain(
-    `date_trunc('millisecond', ${activityExpression}) = TIMESTAMPTZ '2026-04-24T09:09:01.566Z'`,
+    `date_trunc('millisecond', ${scopeActivityExpression}) = TIMESTAMPTZ '2026-04-24T09:09:01.566Z'`,
   )
   expect(rawQuery).toContain(
-    `ORDER BY CAST(0 AS INTEGER) DESC, date_trunc('millisecond', ${activityExpression}) DESC, candidate.article_id DESC`,
+    `ORDER BY CAST(0 AS INTEGER) DESC, date_trunc('millisecond', ${dirtyActivityExpression}) DESC, dirty_article.id DESC`,
   )
+  expect(rawQuery).toContain(
+    `ORDER BY CAST(0 AS INTEGER) DESC, date_trunc('millisecond', ${scopeActivityExpression}) DESC, scope_article.article_id DESC`,
+  )
+})
+
+test('getUnassessedPairsFromDuckdb bounds dirty and serving raw queue branches before union', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1'})],
+    [],
+  ])
+
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+  await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 10,
+    cursor: {lastArticleId: 'article-cursor', lastDate: new Date('2026-04-24T09:09:01.566Z'), priorityBucket: 0},
+    preferRawFallback: true,
+  })
+
+  const rawArticleQuery = duckdbRunnerMockRef.current.queries[4] ?? ''
+  const dirtyBranchStart = rawArticleQuery.indexOf('dirty_scope_candidate AS')
+  const scopeBranchStart = rawArticleQuery.indexOf('scope_article_candidate AS')
+  const unionStart = rawArticleQuery.indexOf('scoped_activity_article_candidate AS')
+  const dirtyBranchSql = rawArticleQuery.slice(dirtyBranchStart, scopeBranchStart)
+  const scopeBranchSql = rawArticleQuery.slice(scopeBranchStart, unionStart)
+
+  expect(dirtyBranchSql).toContain('LIMIT 101')
+  expect(scopeBranchSql).toContain('LIMIT 101')
+  expect(dirtyBranchSql).toContain("dirty_article.id < 'article-cursor'")
+  expect(scopeBranchSql).toContain("scope_article.article_id < 'article-cursor'")
+  expect(scopeBranchSql).not.toContain('FROM dirty_scope_candidate dirty_scope')
+  expect(scopeBranchSql).toContain('NOT EXISTS')
+  expect(scopeBranchSql).toContain('app.project_mart_refresh_article_state article_state')
 })
 
 test('getDatabaseBasedFiltersFromDuckdb returns values when project modelId is null', async () => {

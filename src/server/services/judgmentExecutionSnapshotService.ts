@@ -309,16 +309,11 @@ const getSnapshotRows = async (
     scoped_article_import_candidate AS (
       SELECT
         snapshot_request_project.request_order,
-        current_import.article_id,
+        current_import.id AS source_row_id,
         current_import.external_article_id,
-        current_import.id,
-        current_import.import_metadata,
-        import_route.route AS import_route,
         current_import.import_route_id,
-        current_import.raw_payload,
-        current_import.source_kind,
-        current_import.source_record_key,
         project_import_route.project_id,
+        'article_import_route' AS source_table,
         CASE WHEN current_import.external_article_id = snapshot_request_project.article_id THEN 0 ELSE 1 END AS selected_identifier_rank,
         0 AS selected_source_rank
       FROM snapshot_request_project
@@ -329,22 +324,16 @@ const getSnapshotRows = async (
       INNER JOIN app.article_import_route current_import
         ON current_import.import_route_id = project_import_route.import_route_id
        AND current_import.article_id = snapshot_article_resolution.canonical_article_id
-      LEFT JOIN app.import_route import_route ON import_route.id = current_import.import_route_id
 
       UNION ALL
 
       SELECT
         snapshot_request_project.request_order,
-        source_record.article_id,
+        source_record.id AS source_row_id,
         source_record.external_article_id,
-        source_record.id,
-        source_record.import_metadata,
-        import_route.route AS import_route,
         source_record.import_route_id,
-        source_record.raw_payload,
-        source_record.source_kind,
-        source_record.source_record_key,
         project_import_route.project_id,
+        'article_import_route_source_record' AS source_table,
         0 AS selected_identifier_rank,
         1 AS selected_source_rank
       FROM snapshot_request_project
@@ -357,39 +346,62 @@ const getSnapshotRows = async (
        AND source_record.article_id = snapshot_article_resolution.canonical_article_id
        AND source_record.external_article_id = snapshot_request_project.article_id
        AND source_record.quarantined_at IS NULL
-      LEFT JOIN app.import_route import_route ON import_route.id = source_record.import_route_id
     ),
-    selected_scoped_article_import AS (
+    selected_scoped_article_import_key AS (
       SELECT
         request_order,
-        article_id,
-        external_article_id,
-        id,
-        import_metadata,
-        import_route,
-        import_route_id,
-        raw_payload,
-        source_kind,
-        source_record_key
+        source_row_id,
+        source_table
       FROM (
         SELECT
           request_order,
-          article_id,
-          external_article_id,
-          id,
-          import_metadata,
-          import_route,
           import_route_id,
-          raw_payload,
-          source_kind,
-          source_record_key,
+          source_row_id,
+          source_table,
           ROW_NUMBER() OVER (
             PARTITION BY request_order
-            ORDER BY selected_identifier_rank ASC, selected_source_rank ASC, project_id ASC, import_route_id ASC, id ASC
+            ORDER BY selected_identifier_rank ASC, selected_source_rank ASC, project_id ASC, import_route_id ASC, source_row_id ASC
           ) AS selected_rank
         FROM scoped_article_import_candidate
       ) ranked_scoped_article_import
       WHERE selected_rank = 1
+    ),
+    selected_scoped_article_import AS (
+      SELECT
+        selected_key.request_order,
+        current_import.article_id,
+        current_import.external_article_id,
+        current_import.id,
+        current_import.import_metadata,
+        import_route.route AS import_route,
+        current_import.import_route_id,
+        current_import.raw_payload,
+        current_import.source_kind,
+        current_import.source_record_key
+      FROM selected_scoped_article_import_key selected_key
+      INNER JOIN app.article_import_route current_import
+        ON current_import.id = selected_key.source_row_id
+       AND selected_key.source_table = 'article_import_route'
+      LEFT JOIN app.import_route import_route ON import_route.id = current_import.import_route_id
+
+      UNION ALL
+
+      SELECT
+        selected_key.request_order,
+        source_record.article_id,
+        source_record.external_article_id,
+        source_record.id,
+        source_record.import_metadata,
+        import_route.route AS import_route,
+        source_record.import_route_id,
+        source_record.raw_payload,
+        source_record.source_kind,
+        source_record.source_record_key
+      FROM selected_scoped_article_import_key selected_key
+      INNER JOIN app.article_import_route_source_record source_record
+        ON source_record.id = selected_key.source_row_id
+       AND selected_key.source_table = 'article_import_route_source_record'
+      LEFT JOIN app.import_route import_route ON import_route.id = source_record.import_route_id
     )
     SELECT
       jj.id AS jobId,

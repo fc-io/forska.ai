@@ -101,6 +101,38 @@ test('snapshot scoped import selection prefers the requested source identifier',
   expect(snapshotSql).toContain('ORDER BY selected_identifier_rank ASC, selected_source_rank ASC')
 })
 
+test('snapshot scoped import selection ranks lightweight rows before reading raw payloads', async () => {
+  let snapshotSql = ''
+
+  await createTransientJudgmentExecutionSnapshotsForClaims(
+    [
+      {
+        articleId: 'requested-external-id',
+        claimId: 'claim-1',
+        claimedBy: 'server-1',
+        jobId: 'job-1',
+        promptId: 'prompt-1',
+        queueRecordId: 'queue-1',
+      },
+    ],
+    {
+      queryJson: async (statement) => {
+        snapshotSql = statement
+        return []
+      },
+    },
+  )
+
+  const candidateStart = snapshotSql.indexOf('scoped_article_import_candidate AS')
+  const candidateEnd = snapshotSql.indexOf('selected_scoped_article_import_key AS')
+  const candidateSql = snapshotSql.slice(candidateStart, candidateEnd)
+
+  expect(candidateSql).not.toContain('raw_payload')
+  expect(snapshotSql).toContain('selected_scoped_article_import_key AS')
+  expect(snapshotSql).toContain('current_import.id = selected_key.source_row_id')
+  expect(snapshotSql).toContain('source_record.id = selected_key.source_row_id')
+})
+
 test('snapshot article resolution prefers project-scoped imports over legacy ids', () => {
   const result = runScript<{articleId: string; articleTitle: string; selectedExternalArticleId: string}>(`
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
