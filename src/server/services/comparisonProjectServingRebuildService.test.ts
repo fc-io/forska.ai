@@ -4,6 +4,7 @@ import {expect, test} from 'bun:test'
 
 import {comparisonProjectDifferenceFilters} from '../../utils/comparisonProjectDifferenceFilter.ts'
 import {comparisonProjectRowFilters} from '../../utils/comparisonProjectRowFilter.ts'
+import {getComparisonProjectServingRebuildService} from './comparisonProjectServingRebuildService.ts'
 
 type GenerationRow = {generation: string; rowCount: string; tableName: string}
 
@@ -14,8 +15,84 @@ type StatusRow = {
   servingStatus: string
 }
 
+type RebuildBoundaryEvent = {activeTransaction: boolean; kind: string}
+
+const comparisonProjectServingPhaseNames = [
+  'cleanup',
+  'prompt_cells',
+  'promoting',
+  'queued',
+  'ready',
+  'rollups',
+  'summary_cells',
+]
+
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
+}
+
+const getComparisonProjectServingPhaseEventKind = (statement: string) => {
+  const phase = comparisonProjectServingPhaseNames.find((phaseName) => {
+    return statement.includes(`serving_phase = '${phaseName}'`)
+  })
+
+  return phase ? `status:${phase}` : null
+}
+
+const getComparisonProjectServingBoundaryQueryEventKind = (statement: string) => {
+  const phaseKind = getComparisonProjectServingPhaseEventKind(statement)
+
+  if (phaseKind) {
+    return phaseKind
+  }
+
+  if (statement.includes('(SELECT COUNT(*) FROM mart.comparison_article_serving')) {
+    return 'counts'
+  }
+
+  if (statement.includes('FROM app.comparison_project_serving_generation')) {
+    return 'status-read'
+  }
+
+  return 'query'
+}
+
+const getComparisonProjectServingBoundaryQueryRows = <T>(statement: string) => {
+  if (statement.includes('RETURNING CAST(serving_generation AS INTEGER) AS generation')) {
+    return [{generation: 1}] as T[]
+  }
+
+  if (statement.includes('RETURNING comparison_project_id AS comparisonProjectId')) {
+    return [{comparisonProjectId: 'comparison-boundary-project'}] as T[]
+  }
+
+  if (statement.includes('(SELECT COUNT(*) FROM mart.comparison_article_serving')) {
+    return [{stagedArticleCount: 2, stagedCellCount: 4, stagedFilterMemberCount: 6, stagedFilterStatsCount: 8}] as T[]
+  }
+
+  if (statement.includes('SELECT') && statement.includes('CAST(active_generation AS INTEGER) AS activeGeneration')) {
+    return [
+      {
+        activeGeneration: 1,
+        generationUpdatedAt: new Date('2026-06-11T00:00:00.000Z'),
+        servingCompletedAt: new Date('2026-06-11T00:00:00.000Z'),
+        servingError: null,
+        servingFailedAt: null,
+        servingGeneration: 1,
+        servingLastProgressedAt: new Date('2026-06-11T00:00:00.000Z'),
+        servingPhase: 'ready',
+        servingPhaseStartedAt: new Date('2026-06-11T00:00:00.000Z'),
+        servingStartedAt: new Date('2026-06-11T00:00:00.000Z'),
+        servingStagedArticleCount: 2,
+        servingStagedCellCount: 4,
+        servingStagedFilterMemberCount: 6,
+        servingStagedFilterStatsCount: 8,
+        servingStatus: 'ready',
+      },
+    ] as T[]
+  }
+
+  return [] as T[]
 }
 
 const getLastJsonLine = (stdout: string) => {
@@ -248,6 +325,129 @@ const getRowsByTable = (rows: GenerationRow[]) => {
     return {...rowMap, [row.tableName]: row}
   }, {})
 }
+
+test('comparison serving rebuild invokes bulk phases outside transactions and keeps status transitions transactional', async () => {
+  const events: RebuildBoundaryEvent[] = []
+  let transactionDepth = 0
+  const recordEvent = (kind: string) => {
+    events.push({activeTransaction: transactionDepth > 0, kind})
+  }
+  const queryJson = async <T>(statement: string): Promise<T[]> => {
+    recordEvent(getComparisonProjectServingBoundaryQueryEventKind(statement))
+
+    return getComparisonProjectServingBoundaryQueryRows<T>(statement)
+  }
+  const run = async (statement: string) => {
+    recordEvent(statement)
+  }
+  const database = {
+    queryJson,
+    run,
+    transaction: async <T>(operation: (runner: {queryJson: typeof queryJson; run: typeof run}) => Promise<T>) => {
+      recordEvent('transaction:start')
+      transactionDepth += 1
+
+      try {
+        return await operation({queryJson, run})
+      } finally {
+        transactionDepth -= 1
+        recordEvent('transaction:end')
+      }
+    },
+  }
+  const getBulkPhase = (phase: string) => {
+    return async (_params: {comparisonProjectId: string; generation: number}, runner?: {run: typeof run}) => {
+      const phaseRunner = runner ?? database
+
+      recordEvent(`bulk:${phase}`)
+      await phaseRunner.run(`bulk-run:${phase}`)
+    }
+  }
+  const service = getComparisonProjectServingRebuildService()
+
+  await service.rebuildComparisonProjectServing('comparison-boundary-project', {
+    cellBuilder: {
+      insertPromptModeComparisonProjectCells: getBulkPhase('prompt_cells'),
+      insertSummaryModeComparisonProjectCells: getBulkPhase('summary_cells'),
+    },
+    database,
+    generationService: {
+      cleanupComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
+        const generationDependencies = dependencies ?? database
+
+        recordEvent('generation:cleanup-staged')
+
+        return generationDependencies.transaction(async () => {
+          return {deletedRowCount: 0, tables: []}
+        })
+      },
+      cleanupOldComparisonProjectServingGenerations: async (_comparisonProjectId, dependencies) => {
+        const generationDependencies = dependencies ?? database
+
+        recordEvent('generation:cleanup-old')
+
+        return generationDependencies.transaction(async () => {
+          return {deletedRowCount: 0, tables: []}
+        })
+      },
+      createInactiveComparisonProjectServingGeneration: async () => {
+        recordEvent('generation:create-inactive')
+
+        return 1
+      },
+      promoteComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
+        const generationDependencies = dependencies ?? database
+
+        recordEvent('generation:promote')
+
+        return generationDependencies.transaction(async () => {
+          return true
+        })
+      },
+    },
+    rollupBuilder: {insertComparisonProjectServingRollups: getBulkPhase('rollups')},
+  })
+
+  const mutationAndBulkEvents = events
+    .filter((event) => {
+      return event.kind.startsWith('status:') || event.kind.startsWith('bulk:')
+    })
+    .map((event) => {
+      return event.kind
+    })
+  const transactionalEvents = events.filter((event) => {
+    return event.kind.startsWith('status:') || event.kind.startsWith('generation:')
+  })
+  const bulkEvents = events.filter((event) => {
+    return event.kind.startsWith('bulk:') || event.kind.startsWith('bulk-run:')
+  })
+
+  expect(mutationAndBulkEvents).toEqual([
+    'status:queued',
+    'status:prompt_cells',
+    'bulk:prompt_cells',
+    'status:prompt_cells',
+    'status:summary_cells',
+    'bulk:summary_cells',
+    'status:summary_cells',
+    'status:rollups',
+    'bulk:rollups',
+    'status:rollups',
+    'status:promoting',
+    'status:cleanup',
+    'status:ready',
+  ])
+  expect(
+    transactionalEvents.every((event) => {
+      return event.activeTransaction
+    }),
+  ).toBe(true)
+  expect(
+    bulkEvents.every((event) => {
+      return !event.activeTransaction
+    }),
+  ).toBe(true)
+})
 
 test('comparison serving rebuild stages builds promotes and records ready status', () => {
   const result = runScript<{

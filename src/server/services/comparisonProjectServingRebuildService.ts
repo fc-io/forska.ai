@@ -15,6 +15,7 @@ type ComparisonProjectServingRebuildRunner = {
 
 type ComparisonProjectServingRebuildDatabase = {
   queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
   transaction: <T>(operation: (runner: ComparisonProjectServingRebuildRunner) => Promise<T>) => Promise<T>
 }
 
@@ -132,10 +133,19 @@ const comparisonProjectServingProgressPhases = new Set<ComparisonProjectServingP
 
 const getDefaultComparisonProjectServingRebuildDependencies = (): ComparisonProjectServingRebuildDependencies => {
   const database = getAppDatabaseService()
+  const rebuildDatabase: ComparisonProjectServingRebuildDatabase = {
+    queryJson: database.queryJsonBackground,
+    run: database.runBackground,
+    transaction: <T>(operation: (runner: ComparisonProjectServingRebuildRunner) => Promise<T>) => {
+      return database.transaction((runner) => {
+        return operation(runner)
+      }) as Promise<T>
+    },
+  }
 
   return {
     cellBuilder: getComparisonProjectServingCellBuilder(),
-    database: {queryJson: database.queryJsonBackground, transaction: database.transaction},
+    database: rebuildDatabase,
     generationService: getComparisonProjectServingGenerationService(),
     rollupBuilder: getComparisonProjectServingRollupBuilder(),
   }
@@ -567,9 +577,7 @@ const runComparisonProjectServingBuildPhase = async (params: {
     throw new Error(`Comparison serving generation ${params.generation} is no longer claimed`)
   }
 
-  await params.dependencies.database.transaction((runner) => {
-    return params.run(phaseParams, runner)
-  })
+  await params.run(phaseParams, params.dependencies.database)
 
   const counts = await getComparisonProjectServingProgressCounts(params.dependencies.database, phaseParams)
 
@@ -752,11 +760,13 @@ const rebuildComparisonProjectServing = async (
     })
 
     if (stagedGeneration !== null) {
+      const failedGeneration = stagedGeneration
+
       await dependencies.database.transaction((runner) => {
         return recordComparisonProjectServingRebuildFailed({
           comparisonProjectId,
           error: getComparisonProjectServingRebuildErrorMessage(error),
-          generation: stagedGeneration,
+          generation: failedGeneration,
           now: new Date(),
           runner,
         })
