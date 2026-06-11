@@ -687,11 +687,7 @@ test('project transfer commit claims large imports before running background rev
     const summary = getReadySummary()
     const plan = {
       ...getPlan({planRevision: 1, summary}),
-      packageCounts: {
-        ...getPlan({planRevision: 1, summary}).packageCounts,
-        articles: 10_000,
-        judgments: 40_000,
-      },
+      packageCounts: {...getPlan({planRevision: 1, summary}).packageCounts, articles: 10_000, judgments: 40_000},
     }
     await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
     const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
@@ -1425,6 +1421,7 @@ test('project transfer commit writer materializes imported provider and model de
       importedSourceProviderConnectionId: string | null
       label: string
       providerKind: string
+      secretRef: string | null
       snapshotProviderKind: string | null
       snapshotWorkerUrlMode: string | null
     }
@@ -1449,7 +1446,7 @@ test('project transfer commit writer materializes imported provider and model de
             label: 'Imported Provider',
             maxInflightRequests: 4,
             providerKind: 'openai',
-            secretRef: null,
+            secretRef: 'secret:should-not-import',
             sourceProviderConnectionId: 'source-provider',
           },
         ],
@@ -1466,7 +1463,7 @@ test('project transfer commit writer materializes imported provider and model de
     })
     const [projectRow] = await database.queryJson("SELECT model_id AS modelId FROM app.project WHERE id = '" + writeResult.projectId + "'")
     const [modelRow] = await database.queryJson("SELECT provider_connection_id AS providerConnectionId, display_name AS displayName, remote_model_id AS remoteModelId, variant, COALESCE(enabled, TRUE) AS enabled, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') AS importedSourceModelId, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') AS importedSourceProviderConnectionId, json_extract(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.contextLimit')::INTEGER AS snapshotContextLimit, json_extract(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.promptTokenLimit')::INTEGER AS snapshotPromptTokenLimit, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.modelOptions.thinking') AS snapshotModelOptionThinking FROM app.model WHERE id = '" + projectRow.modelId + "'")
-    const [providerRow] = await database.queryJson("SELECT id, provider_kind AS providerKind, label, enabled, auth_mode AS authMode, json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') AS importedSourceProviderConnectionId, json_extract_string(config_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.providerKind') AS snapshotProviderKind, json_extract_string(config_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.runtimeMode.workerUrlMode') AS snapshotWorkerUrlMode FROM app.provider_connection WHERE id = '" + modelRow.providerConnectionId + "'")
+    const [providerRow] = await database.queryJson("SELECT id, provider_kind AS providerKind, label, enabled, auth_mode AS authMode, secret_ref AS secretRef, json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') AS importedSourceProviderConnectionId, json_extract_string(config_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.providerKind') AS snapshotProviderKind, json_extract_string(config_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.runtimeMode.workerUrlMode') AS snapshotWorkerUrlMode FROM app.provider_connection WHERE id = '" + modelRow.providerConnectionId + "'")
 
     console.log(JSON.stringify({modelRow, projectRow, providerRow}))
   `)
@@ -1477,13 +1474,14 @@ test('project transfer commit writer materializes imported provider and model de
     enabled: false,
     label: 'Imported Provider',
     providerKind: 'openai',
+    secretRef: null,
   })
   expect(result.providerRow.importedSourceProviderConnectionId).toBe('source-provider')
   expect(result.providerRow.snapshotProviderKind).toBe('openai')
   expect(result.providerRow.snapshotWorkerUrlMode).toBe('manual')
   expect(result.modelRow).toMatchObject({
     displayName: null,
-    enabled: true,
+    enabled: false,
     importedSourceModelId: 'source-model',
     importedSourceProviderConnectionId: 'source-provider',
     remoteModelId: 'target-remote',
@@ -1493,6 +1491,78 @@ test('project transfer commit writer materializes imported provider and model de
   expect(result.modelRow.snapshotModelOptionThinking).toBe(null)
   expect(result.modelRow.snapshotPromptTokenLimit).toBe(28768)
   expect(result.modelRow.providerConnectionId).toBe(result.providerRow.id)
+})
+
+test('project transfer commit writer reuses imported provider and model snapshots by marker and fingerprint', () => {
+  const result = runCommitWriterScript<{
+    modelCount: number
+    modelIds: string[]
+    projectModelIds: string[]
+    providerCount: number
+    providerIds: string[]
+  }>(`
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const importedDependencyResolution = {
+      modelTargetBySourceId: {'source-model': 'new:model:source-model'},
+      providerTargetBySourceId: {'source-provider': 'new:provider:source-provider'},
+    }
+    const payloads = {
+      models: [getModelPayload()],
+      project: getProjectPayload(settings),
+      providerConnections: [
+        {
+          authMode: 'apiKey',
+          baseURL: null,
+          configJson: {archived: false, disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+          enabled: true,
+          label: 'Imported Provider',
+          maxInflightRequests: 4,
+          providerKind: 'openai',
+          secretRef: 'secret:should-not-import',
+          sourceProviderConnectionId: 'source-provider',
+        },
+      ],
+    }
+    const promotion = {
+      articleCreates: [],
+      articleFieldFills: [],
+      manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-reused-provider-model', updatedAt: now.toISOString()},
+      promotionPathByPackagePath: {},
+    }
+    const firstWrite = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-reused-provider-model-1',
+      now,
+      payloads,
+      plan: getBasePlan({}, importedDependencyResolution),
+      promotion,
+      schemaVersion: 1,
+      sessionId: 'session-reused-provider-model-1',
+    })
+    const secondWrite = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-reused-provider-model-2',
+      now,
+      payloads,
+      plan: getBasePlan({}, importedDependencyResolution),
+      promotion,
+      schemaVersion: 1,
+      sessionId: 'session-reused-provider-model-2',
+    })
+    const providerRows = await database.queryJson("SELECT id FROM app.provider_connection WHERE json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') = 'source-provider' ORDER BY id ASC")
+    const modelRows = await database.queryJson("SELECT id FROM app.model WHERE json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') = 'source-model' ORDER BY id ASC")
+    const projectRows = await database.queryJson("SELECT id, model_id AS modelId FROM app.project WHERE id IN ('" + firstWrite.projectId + "', '" + secondWrite.projectId + "') ORDER BY id ASC")
+
+    console.log(JSON.stringify({
+      modelCount: modelRows.length,
+      modelIds: modelRows.map((row) => row.id),
+      projectModelIds: projectRows.map((row) => row.modelId),
+      providerCount: providerRows.length,
+      providerIds: providerRows.map((row) => row.id),
+    }))
+  `)
+
+  expect(result.providerCount).toBe(1)
+  expect(result.modelCount).toBe(1)
+  expect(result.projectModelIds).toEqual([result.modelIds[0], result.modelIds[0]])
 })
 
 test('project transfer commit writer blocks target article_id conflicts before insert', () => {
