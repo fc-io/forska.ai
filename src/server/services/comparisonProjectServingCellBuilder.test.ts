@@ -32,6 +32,9 @@ type ActualServingCellRow = {
 
 type PromptModeServingCellsResult = {actualRows: ActualServingCellRow[]}
 type SummaryModeServingCellsResult = {actualRows: Array<ActualServingCellRow & {comparisonProjectId: string}>}
+type MaterializedModelOrderResult = {
+  actualRows: Array<{columnOrder: number; comparisonProjectId: string; modelId: string}>
+}
 
 const comparisonProjectId = 'comparison-project-prompt-cells'
 const summaryModeComparisonProjectId = 'comparison-project-summary-cells'
@@ -399,6 +402,157 @@ test('prompt-mode serving cells match current TypeScript row assembly', () => {
   expect(rowsByArticleAndColumn.get(`article-with-cells:${llmYesColumnId}`)?.columnOrder).toBe(0)
   expect(rowsByArticleAndColumn.get(`article-with-cells:${llmArrayColumnId}`)?.columnOrder).toBe(2)
   expect(rowsByArticleAndColumn.get(`article-with-cells:${humanPromptAColumnId}`)?.columnOrder).toBe(4)
+})
+
+const getMaterializedModelOrderScript = () => {
+  return `
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {getComparisonProjectServingCellBuilder} = await import('./src/server/services/comparisonProjectServingCellBuilder.ts')
+    const {ensureComparisonProjectServingGenerationConfig} = await import('./src/server/services/comparisonProjectServingGenerationConfig.ts')
+
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+    const builder = getComparisonProjectServingCellBuilder()
+    const selectedProjectId = 'comparison-materialized-selected-order'
+    const discoveredProjectId = 'comparison-materialized-discovered-order'
+    const runner = {queryJson: database.queryJson, run: database.run}
+
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('provider-materialized-model-order', 'sglang', 'Provider Materialized Order', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.model (
+        id,
+        provider_connection_id,
+        name,
+        remote_model_id,
+        display_name,
+        variant,
+        source,
+        enabled,
+        metadata_json
+      ) VALUES
+        ('model-a', 'provider-materialized-model-order', 'Alpha Model', 'model-a', 'Alpha Model', 'manual', 'manual', TRUE, '{}'::JSON),
+        ('model-b', 'provider-materialized-model-order', 'Beta Model', 'model-b', 'Beta Model', 'manual', 'manual', TRUE, '{}'::JSON)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash, created_at)
+      VALUES ('prompt-materialized-order', 'Prompt Order', 'Prompt Order', NULL, 'prompt-materialized-order-hash', TIMESTAMPTZ '2026-05-01T00:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.article (
+        id,
+        article_id,
+        article_title,
+        article_summary,
+        article_created_at,
+        article_updated_at
+      ) VALUES
+        ('article-selected-order', 'article-selected-order', 'Selected Order', 'Selected summary', TIMESTAMPTZ '2026-05-01T00:00:00.000Z', TIMESTAMPTZ '2026-05-01T01:00:00.000Z'),
+        ('article-discovered-order', 'article-discovered-order', 'Discovered Order', 'Discovered summary', TIMESTAMPTZ '2026-05-02T00:00:00.000Z', TIMESTAMPTZ '2026-05-02T01:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project (
+        id,
+        name,
+        description,
+        model_ids,
+        compare_with_humans,
+        human_judgment_mode,
+        summary_source_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      ) VALUES
+        ('\${selectedProjectId}', 'Selected Order', NULL, ['model-b', 'model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
+        ('\${discoveredProjectId}', 'Discovered Order', NULL, []::VARCHAR[], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project_prompt (id, comparison_project_id, prompt_id, prompt_order)
+      VALUES
+        ('comparison-selected-order-prompt', '\${selectedProjectId}', 'prompt-materialized-order', 0),
+        ('comparison-discovered-order-prompt', '\${discoveredProjectId}', 'prompt-materialized-order', 0)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        created_at,
+        updated_at
+      ) VALUES
+        ('judgment-selected-model-a', 'article-selected-order', 'prompt-materialized-order', 'model-a', NULL, TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-05-03T00:00:00.000Z', TIMESTAMPTZ '2026-05-03T01:00:00.000Z'),
+        ('judgment-selected-model-b', 'article-selected-order', 'prompt-materialized-order', 'model-b', NULL, TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-05-03T00:00:00.000Z', TIMESTAMPTZ '2026-05-03T01:00:00.000Z'),
+        ('judgment-discovered-model-a', 'article-discovered-order', 'prompt-materialized-order', 'model-a', NULL, TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-05-03T00:00:00.000Z', TIMESTAMPTZ '2026-05-03T01:00:00.000Z'),
+        ('judgment-discovered-model-b', 'article-discovered-order', 'prompt-materialized-order', 'model-b', NULL, TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-05-03T00:00:00.000Z', TIMESTAMPTZ '2026-05-03T01:00:00.000Z')
+    \`)
+
+    await ensureComparisonProjectServingGenerationConfig({comparisonProjectId: selectedProjectId, generation: 1}, runner)
+    await ensureComparisonProjectServingGenerationConfig({comparisonProjectId: discoveredProjectId, generation: 1}, runner)
+
+    await database.run(\`
+      UPDATE app.comparison_project
+      SET model_ids = ['model-a', 'model-b']
+      WHERE id = '\${selectedProjectId}'
+    \`)
+
+    await database.run(\`
+      UPDATE app.model
+      SET name = CASE
+        WHEN id = 'model-a' THEN 'Zulu Model'
+        WHEN id = 'model-b' THEN 'Aardvark Model'
+        ELSE name
+      END
+      WHERE id IN ('model-a', 'model-b')
+    \`)
+
+    await builder.insertPromptModeComparisonProjectCells({comparisonProjectId: selectedProjectId, generation: 1}, runner)
+    await builder.insertPromptModeComparisonProjectCells({comparisonProjectId: discoveredProjectId, generation: 1}, runner)
+
+    const actualRows = await database.queryJson(\`
+      SELECT DISTINCT
+        comparison_project_id AS comparisonProjectId,
+        model_id AS modelId,
+        CAST(column_order AS INTEGER) AS columnOrder
+      FROM mart.comparison_cell_serving
+      WHERE comparison_project_id IN ('\${selectedProjectId}', '\${discoveredProjectId}')
+        AND generation = 1
+        AND kind = 'llm'
+      ORDER BY comparison_project_id ASC, column_order ASC
+    \`)
+
+    console.log(JSON.stringify({actualRows}))
+  `
+}
+
+test('materialized prompt cell config keeps selected and discovered model order stable', () => {
+  const result = runScript<MaterializedModelOrderResult>(getMaterializedModelOrderScript())
+
+  expect(result.actualRows).toEqual([
+    {columnOrder: 0, comparisonProjectId: 'comparison-materialized-discovered-order', modelId: 'model-a'},
+    {columnOrder: 1, comparisonProjectId: 'comparison-materialized-discovered-order', modelId: 'model-b'},
+    {columnOrder: 0, comparisonProjectId: 'comparison-materialized-selected-order', modelId: 'model-b'},
+    {columnOrder: 1, comparisonProjectId: 'comparison-materialized-selected-order', modelId: 'model-a'},
+  ])
 })
 
 const getSummaryModeServingCellsScript = () => {
@@ -773,7 +927,9 @@ test('prompt-mode cell inserts are split by discovered article batches', async (
       queryJson: async <T>(statement: string): Promise<T[]> => {
         queryStatements.push(statement)
 
-        return (queryResults.shift() ?? []) as T[]
+        return statement.includes('SELECT scoped_article.article_id AS articleId')
+          ? ((queryResults.shift() ?? []) as T[])
+          : ([] as T[])
       },
       run: async (statement) => {
         statements.push(statement)
@@ -781,15 +937,27 @@ test('prompt-mode cell inserts are split by discovered article batches', async (
     },
   )
 
-  expect(queryStatements).toHaveLength(2)
-  expect(queryStatements[0]).toContain('LIMIT 251')
-  expect(queryStatements[1]).toContain("WHERE scoped_article.article_id > 'article-0249'")
-  expect(statements).toHaveLength(4)
-  expect(statements[0]).toContain("('article-0000')")
-  expect(statements[0]).not.toContain("('article-0250')")
-  expect(statements[2]).toContain("('article-0250')")
+  const batchQueryStatements = queryStatements.filter((statement) => {
+    return statement.includes('SELECT scoped_article.article_id AS articleId')
+  })
+  const cellInsertStatements = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.comparison_cell_serving')
+  })
+
+  expect(batchQueryStatements).toHaveLength(2)
+  expect(batchQueryStatements[0]).toContain('LIMIT 251')
+  expect(batchQueryStatements[1]).toContain("WHERE scoped_article.article_id > 'article-0249'")
   expect(
-    statements.map((statement) => {
+    statements.some((statement) => {
+      return statement.includes('comparison_serving_generation_model_config')
+    }),
+  ).toBe(true)
+  expect(cellInsertStatements).toHaveLength(4)
+  expect(cellInsertStatements[0]).toContain("('article-0000')")
+  expect(cellInsertStatements[0]).not.toContain("('article-0250')")
+  expect(cellInsertStatements[2]).toContain("('article-0250')")
+  expect(
+    cellInsertStatements.map((statement) => {
       return statement.includes('article_batch(article_id) AS (')
     }),
   ).toEqual([true, true, true, true])

@@ -118,6 +118,9 @@ type ScopedImportRollupResult = {articleRows: ScopedImportRollupRow[]}
 type ArticleCategory = 'chinese' | 'non_chinese'
 
 type ArticleCategoryRollupResult = {articleRows: Array<{articleCategory: ArticleCategory; articleId: string}>}
+type RequiredColumnStabilityResult = {
+  actualRows: Array<{columnId: string; comparisonProjectId: string; kind: string; promptId: string}>
+}
 
 type TrueConflictCase = {
   articleCreatedAt: string
@@ -1264,6 +1267,162 @@ const getArticleCategoryRollupScript = () => {
   `
 }
 
+const getRequiredColumnStabilityScript = () => {
+  return `
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {
+      comparisonProjectServingGenerationConfigTables,
+      ensureComparisonProjectServingGenerationConfig,
+    } = await import('./src/server/services/comparisonProjectServingGenerationConfig.ts')
+
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+    const runner = {queryJson: database.queryJson, run: database.run}
+    const promptProjectId = 'comparison-required-prompt-columns'
+    const summaryProjectId = 'comparison-required-summary-columns'
+
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('provider-required-columns', 'sglang', 'Provider Required Columns', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.model (
+        id,
+        provider_connection_id,
+        name,
+        remote_model_id,
+        display_name,
+        variant,
+        source,
+        enabled,
+        metadata_json
+      ) VALUES
+        ('model-a', 'provider-required-columns', 'Model A', 'model-a', 'Model A', 'manual', 'manual', TRUE, '{}'::JSON),
+        ('model-b', 'provider-required-columns', 'Model B', 'model-b', 'Model B', 'manual', 'manual', TRUE, '{}'::JSON)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash, created_at)
+      VALUES
+        ('prompt-required-a', 'Prompt Required A', 'Prompt Required A', NULL, 'prompt-required-a-hash', TIMESTAMPTZ '2026-10-01T00:00:00.000Z'),
+        ('prompt-required-b', 'Prompt Required B', 'Prompt Required B', NULL, 'prompt-required-b-hash', TIMESTAMPTZ '2026-10-02T00:00:00.000Z'),
+        ('prompt-summary-a', 'Prompt Summary A', 'Prompt Summary A', NULL, 'prompt-summary-a-hash', TIMESTAMPTZ '2026-10-03T00:00:00.000Z'),
+        ('prompt-summary-b', 'Prompt Summary B', 'Prompt Summary B', NULL, 'prompt-summary-b-hash', TIMESTAMPTZ '2026-10-04T00:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.project (
+        id,
+        name,
+        description,
+        model_id,
+        human_judgment_mode,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      ) VALUES
+        ('source-project-a', 'Source Project A', NULL, 'model-a', 'summary', TRUE, TRUE, FALSE, FALSE),
+        ('source-project-b', 'Source Project B', NULL, 'model-b', 'summary', TRUE, TRUE, FALSE, FALSE)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.project_prompt (
+        id,
+        project_id,
+        prompt_id,
+        prompt_order,
+        enabled,
+        criteria_disposition,
+        criteria_section_key,
+        criteria_section_label
+      ) VALUES
+        ('source-project-a-summary-prompt', 'source-project-a', 'prompt-summary-a', 0, TRUE, 'include', 'population', 'Population'),
+        ('source-project-b-summary-prompt', 'source-project-b', 'prompt-summary-b', 0, TRUE, 'include', 'population', 'Population')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project (
+        id,
+        name,
+        description,
+        model_ids,
+        compare_with_humans,
+        human_judgment_mode,
+        summary_source_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      ) VALUES
+        ('\${promptProjectId}', 'Required Prompt Columns', NULL, ['model-a'], TRUE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
+        ('\${summaryProjectId}', 'Required Summary Columns', NULL, ['model-a', 'model-b'], TRUE, 'summary', 'source-project-a', TRUE, TRUE, FALSE, FALSE)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project_prompt (
+        id,
+        comparison_project_id,
+        prompt_id,
+        prompt_order,
+        criteria_disposition,
+        criteria_section_key,
+        criteria_section_label
+      ) VALUES
+        ('comparison-required-prompt-a', '\${promptProjectId}', 'prompt-required-a', 0, NULL, NULL, NULL),
+        ('comparison-required-summary-fallback', '\${summaryProjectId}', 'prompt-summary-a', 0, 'include', 'population', 'Population')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project_source_project (id, comparison_project_id, source_project_id, created_at)
+      VALUES ('comparison-required-summary-source-a', '\${summaryProjectId}', 'source-project-a', TIMESTAMPTZ '2026-10-01T00:00:00.000Z')
+    \`)
+
+    await ensureComparisonProjectServingGenerationConfig({comparisonProjectId: promptProjectId, generation: 1}, runner)
+    await ensureComparisonProjectServingGenerationConfig({comparisonProjectId: summaryProjectId, generation: 1}, runner)
+
+    await database.run(\`
+      UPDATE app.comparison_project
+      SET model_ids = ['model-b']
+      WHERE id = '\${promptProjectId}'
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project_prompt (
+        id,
+        comparison_project_id,
+        prompt_id,
+        prompt_order,
+        criteria_disposition,
+        criteria_section_key,
+        criteria_section_label
+      ) VALUES ('comparison-required-prompt-b', '\${promptProjectId}', 'prompt-required-b', 1, NULL, NULL, NULL)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project_source_project (id, comparison_project_id, source_project_id, created_at)
+      VALUES ('comparison-required-summary-source-b', '\${summaryProjectId}', 'source-project-b', TIMESTAMPTZ '2026-10-02T00:00:00.000Z')
+    \`)
+
+    const actualRows = await database.queryJson(\`
+      SELECT
+        comparison_project_id AS comparisonProjectId,
+        column_id AS columnId,
+        kind,
+        prompt_id AS promptId
+      FROM \${comparisonProjectServingGenerationConfigTables.requiredColumn}
+      WHERE comparison_project_id IN ('\${promptProjectId}', '\${summaryProjectId}')
+        AND generation = 1
+      ORDER BY comparison_project_id ASC, column_id ASC
+    \`)
+
+    console.log(JSON.stringify({actualRows}))
+  `
+}
+
 const runScript = <T>(body: string) => {
   const duckdbPath = `/tmp/f1-comparison-project-serving-rollups-${Date.now()}-${Math.random()
     .toString(16)
@@ -1324,7 +1483,9 @@ test('article rollup inserts are batched by article id', async () => {
     {
       queryJson: async <T>(statement: string): Promise<T[]> => {
         queryStatements.push(statement)
-        return (queryResults.shift() ?? []) as T[]
+        return statement.includes('SELECT rollup_scoped_article.article_id AS articleId')
+          ? ((queryResults.shift() ?? []) as T[])
+          : ([] as T[])
       },
       run: async (statement) => {
         statements.push(statement)
@@ -1332,12 +1493,24 @@ test('article rollup inserts are batched by article id', async () => {
     },
   )
 
-  expect(queryStatements).toHaveLength(2)
-  expect(statements).toHaveLength(2)
-  expect(statements[0]).toContain("('article-0000')")
-  expect(statements[0]).not.toContain("('article-1000')")
-  expect(statements[1]).toContain("('article-1000')")
-  expect(statements[0]).toContain('INNER JOIN article_batch ON article_batch.article_id = cell.article_id')
+  const batchQueryStatements = queryStatements.filter((statement) => {
+    return statement.includes('SELECT rollup_scoped_article.article_id AS articleId')
+  })
+  const articleInsertStatements = statements.filter((statement) => {
+    return statement.includes('INSERT INTO mart.comparison_article_serving')
+  })
+
+  expect(batchQueryStatements).toHaveLength(2)
+  expect(
+    statements.some((statement) => {
+      return statement.includes('comparison_serving_generation_required_column_config')
+    }),
+  ).toBe(true)
+  expect(articleInsertStatements).toHaveLength(2)
+  expect(articleInsertStatements[0]).toContain("('article-0000')")
+  expect(articleInsertStatements[0]).not.toContain("('article-1000')")
+  expect(articleInsertStatements[1]).toContain("('article-1000')")
+  expect(articleInsertStatements[0]).toContain('INNER JOIN article_batch ON article_batch.article_id = cell.article_id')
 })
 
 test('filter stats inserts are split by filter combination', async () => {
@@ -1388,9 +1561,16 @@ test('serving rollups, filter members, and stats match current page and export f
     const expectedRollups = getExpectedArticleRollups(project)
 
     project.articles.forEach((article) => {
+      const expectedRollup = expectedRollups[article.id]
+
+      expect(expectedRollup).toBeDefined()
+      if (expectedRollup === undefined) {
+        return
+      }
+
       expect(actualArticleRowsByProjectAndArticle.get(`${project.id}:${article.id}`)).toEqual({
         comparisonProjectId: project.id,
-        ...expectedRollups[article.id],
+        ...expectedRollup,
       })
     })
 
@@ -1467,6 +1647,37 @@ test('serving rollups use selected scoped import external ids and merged metadat
       journalTitle: 'Route A Journal',
       sameValue: 'route-a',
       scopedOnly: 'route-a',
+    },
+  ])
+})
+
+test('materialized required columns stay stable for prompt and summary modes', () => {
+  const result = runScript<RequiredColumnStabilityResult>(getRequiredColumnStabilityScript())
+
+  expect(result.actualRows).toEqual([
+    {
+      columnId: 'human:prompt-required-a',
+      comparisonProjectId: 'comparison-required-prompt-columns',
+      kind: 'human',
+      promptId: 'prompt-required-a',
+    },
+    {
+      columnId: 'llm:model-a:1100:prompt-required-a',
+      comparisonProjectId: 'comparison-required-prompt-columns',
+      kind: 'llm',
+      promptId: 'prompt-required-a',
+    },
+    {
+      columnId: 'human:summary',
+      comparisonProjectId: 'comparison-required-summary-columns',
+      kind: 'human',
+      promptId: 'summary',
+    },
+    {
+      columnId: 'llm:source-project-a:model-a:1100:summary',
+      comparisonProjectId: 'comparison-required-summary-columns',
+      kind: 'llm',
+      promptId: 'summary',
     },
   ])
 })

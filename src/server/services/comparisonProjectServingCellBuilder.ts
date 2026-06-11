@@ -1,5 +1,10 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
+import {
+  comparisonProjectServingGenerationConfigTables,
+  ensureComparisonProjectServingGenerationConfig,
+  getComparisonProjectServingGenerationSql,
+} from './comparisonProjectServingGenerationConfig.ts'
 
 type ComparisonProjectServingCellBuilderRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -27,14 +32,6 @@ const getDefaultComparisonProjectServingCellBuilderDependencies = (): Comparison
   return {queryJson: database.queryJsonBackground, run: database.runBackground}
 }
 
-const getComparisonProjectServingGenerationSql = (generation: number) => {
-  if (!Number.isSafeInteger(generation) || generation <= 0) {
-    throw new Error(`Invalid comparison project serving generation: ${generation}`)
-  }
-
-  return getSqlLiteral(generation)
-}
-
 const getPromptModeComparisonProjectPredicateSql = () => {
   return `
       AND NOT (
@@ -56,48 +53,6 @@ const getSummaryModeComparisonProjectPredicateSql = () => {
       AND cp.compare_with_humans = TRUE
       AND COALESCE(cp.human_judgment_mode, 'prompt') = 'summary'
     `
-}
-
-const getComparisonProjectContentVariantCteSql = () => {
-  return `
-    content_variant AS (
-      SELECT
-        0 AS content_order,
-        CASE WHEN cp.use_title THEN '1' ELSE '0' END
-          || CASE WHEN cp.use_abstract THEN '1' ELSE '0' END
-          || '00' AS content_key,
-        cp.use_title AS use_title,
-        cp.use_abstract AS use_abstract,
-        FALSE AS use_fulltext,
-        FALSE AS use_fulltext_no_images
-      FROM comparison_project cp
-      WHERE cp.use_title = TRUE OR cp.use_abstract = TRUE
-
-      UNION ALL
-
-      SELECT
-        1 AS content_order,
-        '0010' AS content_key,
-        FALSE AS use_title,
-        FALSE AS use_abstract,
-        TRUE AS use_fulltext,
-        FALSE AS use_fulltext_no_images
-      FROM comparison_project cp
-      WHERE cp.use_fulltext = TRUE
-
-      UNION ALL
-
-      SELECT
-        2 AS content_order,
-        '0001' AS content_key,
-        FALSE AS use_title,
-        FALSE AS use_abstract,
-        FALSE AS use_fulltext,
-        TRUE AS use_fulltext_no_images
-      FROM comparison_project cp
-      WHERE cp.use_fulltext_no_images = TRUE
-    )
-  `
 }
 
 const getComparisonProjectScopeCtesSql = () => {
@@ -187,178 +142,116 @@ const getComparisonProjectArticleBatchJoinSql = (articleIdExpression: string, us
   return useArticleBatch ? `INNER JOIN article_batch ON article_batch.article_id = ${articleIdExpression}` : ''
 }
 
-const getComparisonProjectPromptConfigCteSql = () => {
+const getMaterializedPromptModeComparisonProjectConfigCtesSql = ({
+  comparisonProjectLiteral,
+  generationLiteral,
+}: {
+  comparisonProjectLiteral: string
+  generationLiteral: string
+}) => {
   return `
     prompt_config AS (
       SELECT
-        cpp.prompt_id,
-        CAST(
-          ROW_NUMBER() OVER (
-            ORDER BY cpp.prompt_order ASC NULLS LAST, p.created_at ASC, p.id ASC
-          ) - 1 AS INTEGER
-        ) AS prompt_order
-      FROM app.comparison_project_prompt cpp
-      INNER JOIN comparison_project cp ON cp.id = cpp.comparison_project_id
-      INNER JOIN app.prompt p ON p.id = cpp.prompt_id
-    )
-  `
-}
-
-const getComparisonProjectModelConfigCtesSql = (promptConfigCteName = 'prompt_config') => {
-  return `
-    selected_model_source AS (
-      SELECT selected_model.model_id, MIN(CAST(selected_model.ordinal - 1 AS INTEGER)) AS model_order
-      FROM comparison_project cp
-      CROSS JOIN UNNEST(cp.model_ids) WITH ORDINALITY AS selected_model(model_id, ordinal)
-      INNER JOIN app.model m ON m.id = selected_model.model_id
-      GROUP BY selected_model.model_id
+        prompt_id,
+        prompt_order
+      FROM ${comparisonProjectServingGenerationConfigTables.promptConfig}
+      WHERE comparison_project_id = ${comparisonProjectLiteral}
+        AND generation = ${generationLiteral}
     ),
-    selected_model_config AS (
+    content_variant AS (
       SELECT
-        selected_model_source.model_id,
-        selected_model_source.model_order
-      FROM selected_model_source
-      CROSS JOIN comparison_project cp
-      WHERE COALESCE(ARRAY_LENGTH(cp.model_ids), 0) > 0
-    ),
-    discovered_model_source AS (
-      SELECT
-        j.model_id,
-        MIN(m.name) AS model_name
-      FROM app.judgment j
-      INNER JOIN scoped_article scoped_article ON scoped_article.article_id = j.article_id
-      INNER JOIN ${promptConfigCteName} prompt_config ON prompt_config.prompt_id = j.prompt_id
-      INNER JOIN content_variant content_variant
-        ON content_variant.use_title = j.use_title
-       AND content_variant.use_abstract = j.use_abstract
-       AND content_variant.use_fulltext = j.use_fulltext
-       AND content_variant.use_fulltext_no_images = j.use_fulltext_no_images
-      INNER JOIN app.model m ON m.id = j.model_id
-      WHERE j.deleted_at IS NULL
-        AND NOT EXISTS (SELECT 1 FROM selected_model_config)
-      GROUP BY j.model_id
-    ),
-    discovered_model_config AS (
-      SELECT
-        discovered_model_source.model_id,
-        CAST(
-          ROW_NUMBER() OVER (
-            ORDER BY discovered_model_source.model_name ASC, discovered_model_source.model_id ASC
-          ) - 1 AS INTEGER
-        ) AS model_order
-      FROM discovered_model_source
+        content_order,
+        content_key,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      FROM ${comparisonProjectServingGenerationConfigTables.contentVariant}
+      WHERE comparison_project_id = ${comparisonProjectLiteral}
+        AND generation = ${generationLiteral}
     ),
     model_config AS (
-      SELECT model_id, model_order FROM selected_model_config
-      UNION ALL
-      SELECT model_id, model_order FROM discovered_model_config
+      SELECT
+        model_id,
+        model_order
+      FROM ${comparisonProjectServingGenerationConfigTables.modelConfig}
+      WHERE comparison_project_id = ${comparisonProjectLiteral}
+        AND generation = ${generationLiteral}
+        AND mode = 'prompt'
     ),
     cell_column_counts AS (
       SELECT
-        (SELECT COUNT(*) FROM ${promptConfigCteName}) AS prompt_count,
+        (SELECT COUNT(*) FROM prompt_config) AS prompt_count,
         (SELECT COUNT(*) FROM model_config) AS model_count,
         (SELECT COUNT(*) FROM content_variant) AS content_variant_count
     )
   `
 }
 
-const getSummaryModeComparisonProjectConfigCtesSql = () => {
+const getMaterializedSummaryModeComparisonProjectConfigCtesSql = ({
+  comparisonProjectLiteral,
+  generationLiteral,
+}: {
+  comparisonProjectLiteral: string
+  generationLiteral: string
+}) => {
   return `
     source_project_config AS (
       SELECT
-        p.id AS source_project_id,
-        p.model_id,
-        CAST(
-          ROW_NUMBER() OVER (
-            ORDER BY cpsp.created_at ASC NULLS LAST, cpsp.id ASC
-          ) - 1 AS INTEGER
-        ) AS source_project_order
-      FROM app.comparison_project_source_project cpsp
-      INNER JOIN comparison_project cp ON cp.id = cpsp.comparison_project_id
-      INNER JOIN app.project p ON p.id = cpsp.source_project_id
-    ),
-    source_project_summary_prompt AS (
-      SELECT
-        source_project_config.source_project_id,
-        source_project_config.model_id,
-        source_project_config.source_project_order,
-        pp.prompt_id,
-        CAST(
-          ROW_NUMBER() OVER (
-            PARTITION BY source_project_config.source_project_id
-            ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC, p.id ASC
-          ) - 1 AS INTEGER
-        ) AS prompt_order,
-        CAST(pp.criteria_disposition AS VARCHAR) AS criteria_disposition
-      FROM source_project_config
-      INNER JOIN app.project_prompt pp ON pp.project_id = source_project_config.source_project_id
-      INNER JOIN app.prompt p ON p.id = pp.prompt_id
-      WHERE pp.enabled = TRUE
-        AND pp.criteria_disposition IS NOT NULL
-        AND pp.criteria_section_key IS NOT NULL
-    ),
-    source_project_summary_prompt_count AS (
-      SELECT COUNT(*) AS prompt_count
-      FROM source_project_summary_prompt
-    ),
-    fallback_summary_prompt AS (
-      SELECT
-        NULL AS source_project_id,
-        NULL AS model_id,
-        0 AS source_project_order,
-        cpp.prompt_id,
-        CAST(
-          ROW_NUMBER() OVER (
-            ORDER BY cpp.prompt_order ASC NULLS LAST, p.created_at ASC, p.id ASC
-          ) - 1 AS INTEGER
-        ) AS prompt_order,
-        CAST(cpp.criteria_disposition AS VARCHAR) AS criteria_disposition
-      FROM app.comparison_project_prompt cpp
-      INNER JOIN comparison_project cp ON cp.id = cpp.comparison_project_id
-      INNER JOIN app.prompt p ON p.id = cpp.prompt_id
-      CROSS JOIN source_project_summary_prompt_count
-      WHERE source_project_summary_prompt_count.prompt_count = 0
+        source_project_id,
+        model_id,
+        source_project_order
+      FROM ${comparisonProjectServingGenerationConfigTables.sourceProjectConfig}
+      WHERE comparison_project_id = ${comparisonProjectLiteral}
+        AND generation = ${generationLiteral}
     ),
     summary_prompt_group AS (
       SELECT
-        COALESCE(source_project_id, '__fallback__') AS summary_group_key,
+        summary_group_key,
         source_project_id,
         model_id,
         source_project_order,
         prompt_id,
         prompt_order,
         criteria_disposition
-      FROM source_project_summary_prompt
-
-      UNION ALL
-
-      SELECT
-        COALESCE(source_project_id, '__fallback__') AS summary_group_key,
-        source_project_id,
-        model_id,
-        source_project_order,
-        prompt_id,
-        prompt_order,
-        criteria_disposition
-      FROM fallback_summary_prompt
+      FROM ${comparisonProjectServingGenerationConfigTables.summaryPromptGroup}
+      WHERE comparison_project_id = ${comparisonProjectLiteral}
+        AND generation = ${generationLiteral}
     ),
     summary_prompt_id_config AS (
       SELECT prompt_id
       FROM summary_prompt_group
       GROUP BY prompt_id
     ),
-    ${getComparisonProjectContentVariantCteSql()},
-    ${getComparisonProjectScopeCtesSql()},
-    ${getComparisonProjectModelConfigCtesSql('summary_prompt_id_config')},
+    content_variant AS (
+      SELECT
+        content_order,
+        content_key,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      FROM ${comparisonProjectServingGenerationConfigTables.contentVariant}
+      WHERE comparison_project_id = ${comparisonProjectLiteral}
+        AND generation = ${generationLiteral}
+    ),
+    model_config AS (
+      SELECT
+        model_id,
+        model_order
+      FROM ${comparisonProjectServingGenerationConfigTables.modelConfig}
+      WHERE comparison_project_id = ${comparisonProjectLiteral}
+        AND generation = ${generationLiteral}
+        AND mode = 'summary'
+    ),
     source_project_column_config AS (
       SELECT
-        source_project_config.source_project_id,
-        source_project_config.model_id,
-        source_project_config.source_project_order
-      FROM source_project_config
-      INNER JOIN model_config ON model_config.model_id = source_project_config.model_id
-      CROSS JOIN source_project_summary_prompt_count
-      WHERE source_project_summary_prompt_count.prompt_count > 0
+        source_project_id,
+        model_id,
+        source_project_order
+      FROM ${comparisonProjectServingGenerationConfigTables.sourceProjectColumnConfig}
+      WHERE comparison_project_id = ${comparisonProjectLiteral}
+        AND generation = ${generationLiteral}
     ),
     summary_column_counts AS (
       SELECT
@@ -501,10 +394,8 @@ const getPromptModeComparisonProjectLlmCellServingInsertSql = ({
         ${getPromptModeComparisonProjectPredicateSql()}
     ),
     ${getComparisonProjectArticleBatchCtePrefixSql(articleIds)}
-    ${getComparisonProjectPromptConfigCteSql()},
-    ${getComparisonProjectContentVariantCteSql()},
+    ${getMaterializedPromptModeComparisonProjectConfigCtesSql({comparisonProjectLiteral, generationLiteral})},
     ${getComparisonProjectScopeCtesSql()},
-    ${getComparisonProjectModelConfigCtesSql()},
     llm_source AS (
       SELECT
         j.article_id,
@@ -589,10 +480,8 @@ const getPromptModeComparisonProjectHumanCellServingInsertSql = ({
         ${getHumanPromptModeComparisonProjectPredicateSql()}
     ),
     ${getComparisonProjectArticleBatchCtePrefixSql(articleIds)}
-    ${getComparisonProjectPromptConfigCteSql()},
-    ${getComparisonProjectContentVariantCteSql()},
+    ${getMaterializedPromptModeComparisonProjectConfigCtesSql({comparisonProjectLiteral, generationLiteral})},
     ${getComparisonProjectScopeCtesSql()},
-    ${getComparisonProjectModelConfigCtesSql()},
     llm_column_counts AS (
       SELECT prompt_count * model_count * content_variant_count AS llm_column_count
       FROM cell_column_counts
@@ -681,7 +570,8 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
         ${getSummaryModeComparisonProjectPredicateSql()}
     ),
     ${getComparisonProjectArticleBatchCtePrefixSql(articleIds)}
-    ${getSummaryModeComparisonProjectConfigCtesSql()},
+    ${getMaterializedSummaryModeComparisonProjectConfigCtesSql({comparisonProjectLiteral, generationLiteral})},
+    ${getComparisonProjectScopeCtesSql()},
     llm_source AS (
       SELECT
         j.article_id,
@@ -895,7 +785,8 @@ const getSummaryModeComparisonProjectHumanCellServingInsertSql = ({
         AND cp.summary_source_project_id IS NOT NULL
     ),
     ${getComparisonProjectArticleBatchCtePrefixSql(articleIds)}
-    ${getSummaryModeComparisonProjectConfigCtesSql()},
+    ${getMaterializedSummaryModeComparisonProjectConfigCtesSql({comparisonProjectLiteral, generationLiteral})},
+    ${getComparisonProjectScopeCtesSql()},
     human_source AS (
       SELECT
         h.article_id,
@@ -967,6 +858,16 @@ const getComparisonProjectCellQueryJson = (dependencies: ComparisonProjectServin
   throw new Error('Comparison project serving cell batching requires queryJson')
 }
 
+const ensureComparisonProjectServingCellGenerationConfig = (
+  params: ComparisonProjectServingCellBuilderParams,
+  dependencies: ComparisonProjectServingCellBuilderDependencies,
+) => {
+  return ensureComparisonProjectServingGenerationConfig(params, {
+    queryJson: getComparisonProjectCellQueryJson(dependencies),
+    run: dependencies.run,
+  })
+}
+
 const getComparisonProjectArticleCellBatch = async (
   params: ComparisonProjectServingCellBuilderParams & {cursor: string | null; modePredicateSql: string},
   dependencies: ComparisonProjectServingCellBuilderDependencies,
@@ -1005,10 +906,12 @@ const insertComparisonProjectArticleCellBatches = async (
     : undefined
 }
 
-const insertPromptModeComparisonProjectLlmCells = (
+const insertPromptModeComparisonProjectLlmCells = async (
   params: ComparisonProjectServingCellBuilderParams,
   dependencies: ComparisonProjectServingCellBuilderDependencies = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
+  await ensureComparisonProjectServingCellGenerationConfig(params, dependencies)
+
   return insertComparisonProjectArticleCellBatches(
     params,
     dependencies,
@@ -1019,10 +922,12 @@ const insertPromptModeComparisonProjectLlmCells = (
   )
 }
 
-const insertPromptModeComparisonProjectHumanCells = (
+const insertPromptModeComparisonProjectHumanCells = async (
   params: ComparisonProjectServingCellBuilderParams,
   dependencies: ComparisonProjectServingCellBuilderDependencies = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
+  await ensureComparisonProjectServingCellGenerationConfig(params, dependencies)
+
   return insertComparisonProjectArticleCellBatches(
     params,
     dependencies,
@@ -1037,6 +942,8 @@ const insertPromptModeComparisonProjectCells = async (
   params: ComparisonProjectServingCellBuilderParams,
   runner: ComparisonProjectServingCellBuilderRunner = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
+  await ensureComparisonProjectServingGenerationConfig(params, runner)
+
   return insertComparisonProjectArticleCellBatches(
     params,
     runner,
@@ -1048,10 +955,12 @@ const insertPromptModeComparisonProjectCells = async (
   )
 }
 
-const insertSummaryModeComparisonProjectLlmCells = (
+const insertSummaryModeComparisonProjectLlmCells = async (
   params: ComparisonProjectServingCellBuilderParams,
   dependencies: ComparisonProjectServingCellBuilderDependencies = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
+  await ensureComparisonProjectServingCellGenerationConfig(params, dependencies)
+
   return insertComparisonProjectArticleCellBatches(
     params,
     dependencies,
@@ -1062,10 +971,12 @@ const insertSummaryModeComparisonProjectLlmCells = (
   )
 }
 
-const insertSummaryModeComparisonProjectHumanCells = (
+const insertSummaryModeComparisonProjectHumanCells = async (
   params: ComparisonProjectServingCellBuilderParams,
   dependencies: ComparisonProjectServingCellBuilderDependencies = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
+  await ensureComparisonProjectServingCellGenerationConfig(params, dependencies)
+
   return insertComparisonProjectArticleCellBatches(
     params,
     dependencies,
@@ -1080,6 +991,8 @@ const insertSummaryModeComparisonProjectCells = async (
   params: ComparisonProjectServingCellBuilderParams,
   runner: ComparisonProjectServingCellBuilderRunner = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
+  await ensureComparisonProjectServingGenerationConfig(params, runner)
+
   return insertComparisonProjectArticleCellBatches(
     params,
     runner,
