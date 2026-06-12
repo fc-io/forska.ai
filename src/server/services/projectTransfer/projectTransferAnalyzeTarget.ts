@@ -20,6 +20,7 @@ import {
 } from './projectTransferIdentifierNormalization.ts'
 import {
   type ProjectTransferOperationTableRunner,
+  type ProjectTransferOperationTableSet,
   withProjectTransferOperationTables,
 } from './projectTransferOperationTables.ts'
 import {validateProjectTransferRuntimeAssetPath} from './projectTransferPaths.ts'
@@ -32,9 +33,13 @@ import type {
 import type {ProjectTransferPackageWarning} from './projectTransferSchemas.ts'
 import type {ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 
-export type ProjectTransferAnalyzeTargetRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+export type ProjectTransferAnalyzeTargetRunner = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run?: (statement: string) => Promise<void>
+}
 
 type ProjectTransferAnalyzeTargetInput = {
+  operationTables?: ProjectTransferOperationTableSet
   packageFingerprint: string | null
   payloads: Partial<ProjectTransferPayloadByKey>
   runner?: ProjectTransferAnalyzeTargetRunner
@@ -87,11 +92,9 @@ type TargetArticleRow = {
 
 type TargetArticleMatchedIdentifier = {identifierType: string; key: string; value: string}
 
-type TargetArticleCandidate = {
-  matchedIdentifiers: TargetArticleMatchedIdentifier[]
-  targetArticle: TargetArticleRow
-  targetArticleId: string
-}
+type TargetArticleCandidate = {matchedIdentifiers: TargetArticleMatchedIdentifier[]; targetArticleId: string}
+
+type TargetArticleCandidateDetail = TargetArticleCandidate & {targetArticle: TargetArticleRow}
 
 type ArticleMatchPlan = {
   action: 'blocked' | 'create' | 'reuse'
@@ -163,6 +166,15 @@ type ReferencingProjectRow = {
   dateTo: unknown
   projectId: string
   targetArticleId: string
+}
+
+type TargetArticleMatchRow = TargetArticleRow & {matchedKey: string; matchedValue: string; sourceArticleId: string}
+
+type ProjectTransferTargetAnalysisTableSet = {
+  articleIds: string
+  articleIdentifiers: string
+  articleMatches: string
+  promptHashes: string
 }
 
 type ProjectRoutePlanEntry = {
@@ -310,8 +322,20 @@ const getStringField = (record: Record<string, unknown>, field: string) => {
   return typeof value === 'string' ? value : ''
 }
 
-const getSqlValueList = (values: readonly string[]) => {
-  return values.map(getSqlLiteral).join(', ')
+const getSqlValues = (rows: readonly (readonly unknown[])[]) => {
+  return rows
+    .map((row) => {
+      return `(${row.map(getSqlLiteral).join(', ')})`
+    })
+    .join(', ')
+}
+
+const chunkValues = <T>(values: readonly T[], size: number) => {
+  return values.reduce<T[][]>((chunks, value) => {
+    const last = chunks.at(-1)
+
+    return last === undefined || last.length >= size ? [...chunks, [value]] : [...chunks.slice(0, -1), [...last, value]]
+  }, [])
 }
 
 const getComparisonKeyParts = (key: ProjectTransferStrongIdentifierComparisonKey) => {
@@ -367,89 +391,354 @@ const getImportedArticleInputs = (articles: readonly ProjectTransferArticlePaylo
   })
 }
 
-const getTargetArticlesByPackageArticleId = async ({
-  articleIds,
-  runner,
-}: {
-  articleIds: readonly string[]
-  runner: ProjectTransferAnalyzeTargetRunner
-}) => {
-  return articleIds.length === 0
-    ? []
-    : runner.queryJson<TargetArticleRow>(`
-      SELECT ${getTargetArticleSelectSql()}
-      FROM app.article a
-      WHERE a.article_id IN (${getSqlValueList(articleIds)})
-      ORDER BY a.id ASC
-    `)
+const getProjectTransferTargetAnalysisTableNames = (
+  operationTables: ProjectTransferOperationTableSet,
+): ProjectTransferTargetAnalysisTableSet => {
+  return {
+    articleIds: `temp_project_transfer_${operationTables.operationId}_target_article_ids`,
+    articleIdentifiers: `temp_project_transfer_${operationTables.operationId}_target_article_identifiers`,
+    articleMatches: `temp_project_transfer_${operationTables.operationId}_target_article_matches`,
+    promptHashes: `temp_project_transfer_${operationTables.operationId}_target_prompt_hashes`,
+  }
 }
 
-const getIdentifierMatchWhereClause = (identifierKeys: readonly ProjectTransferStrongIdentifierComparisonKey[]) => {
-  return identifierKeys
-    .map(getComparisonKeyParts)
-    .map((key) => {
-      return `(ai.kind = ${getSqlLiteral(key.kind)} AND ai.normalized_value = ${getSqlLiteral(key.normalizedValue)})`
+const getArticleIdentifierRows = (articles: readonly ProjectTransferArticlePayloadRecord[]) => {
+  return articles.flatMap((article) => {
+    return getProjectTransferStrongIdentifierComparisonKeys(article).map((key) => {
+      const parts = getComparisonKeyParts(key)
+
+      return [article.sourceArticleId, parts.kind, parts.normalizedValue, key] as const
     })
-    .join(' OR ')
+  })
+}
+
+const getPromptHashRows = (prompts: readonly ProjectTransferPayloadRecord[]) => {
+  return prompts.map((prompt) => {
+    const sourcePromptId = getStringField(prompt, 'sourcePromptId')
+    const computedContentHash = computePromptContentHash(
+      getStringField(prompt, 'originalText'),
+      getNonEmptyString(getRecordField(prompt, 'transformedText')),
+      getNonEmptyString(getRecordField(prompt, 'promptHeading')),
+      getNonEmptyString(getRecordField(prompt, 'type')),
+    )
+    const packageContentHash = getNonEmptyString(getRecordField(prompt, 'contentHash'))
+
+    return [sourcePromptId, computedContentHash, packageContentHash] as const
+  })
+}
+
+const runCreateTempTable = async ({
+  columns,
+  runner,
+  tableName,
+}: {
+  columns: readonly string[]
+  runner: ProjectTransferAnalyzeTargetRunner
+  tableName: string
+}) => {
+  return runner.run?.(`
+    DROP TABLE IF EXISTS ${tableName};
+    CREATE TEMP TABLE ${tableName} (
+      ${columns.join(',\n')}
+    )
+  `)
+}
+
+const insertTempRows = async ({
+  columns,
+  rows,
+  runner,
+  tableName,
+}: {
+  columns: readonly string[]
+  rows: readonly (readonly unknown[])[]
+  runner: ProjectTransferAnalyzeTargetRunner
+  tableName: string
+}) => {
+  return chunkValues(rows, 500).reduce<Promise<void>>(async (previous, rowChunk) => {
+    await previous
+
+    return rowChunk.length === 0 || runner.run === undefined
+      ? undefined
+      : runner.run(`
+          INSERT INTO ${tableName} (${columns.join(', ')})
+          VALUES ${getSqlValues(rowChunk)}
+        `)
+  }, Promise.resolve())
+}
+
+const createLoadedTempTable = async ({
+  columnDefinitions,
+  columnNames,
+  rows,
+  runner,
+  tableName,
+}: {
+  columnDefinitions: readonly string[]
+  columnNames: readonly string[]
+  rows: readonly (readonly unknown[])[]
+  runner: ProjectTransferAnalyzeTargetRunner
+  tableName: string
+}) => {
+  await runCreateTempTable({columns: columnDefinitions, runner, tableName})
+  await insertTempRows({columns: columnNames, rows, runner, tableName})
+}
+
+const loadProjectTransferTargetAnalysisTables = async ({
+  articles,
+  operationTables,
+  prompts,
+  runner,
+}: {
+  articles: readonly ProjectTransferArticlePayloadRecord[]
+  operationTables: ProjectTransferOperationTableSet
+  prompts: readonly ProjectTransferPayloadRecord[]
+  runner: ProjectTransferAnalyzeTargetRunner
+}) => {
+  const tables = getProjectTransferTargetAnalysisTableNames(operationTables)
+  const articleIdRows = articles.map((article) => {
+    return [article.sourceArticleId, getNonEmptyString(getRecordField(article, 'articleId'))] as const
+  })
+
+  await createLoadedTempTable({
+    columnDefinitions: ['source_article_id VARCHAR NOT NULL', 'package_article_id VARCHAR'],
+    columnNames: ['source_article_id', 'package_article_id'],
+    rows: articleIdRows,
+    runner,
+    tableName: tables.articleIds,
+  })
+  await createLoadedTempTable({
+    columnDefinitions: [
+      'source_article_id VARCHAR NOT NULL',
+      'kind VARCHAR NOT NULL',
+      'normalized_value VARCHAR NOT NULL',
+      'matched_key VARCHAR NOT NULL',
+    ],
+    columnNames: ['source_article_id', 'kind', 'normalized_value', 'matched_key'],
+    rows: getArticleIdentifierRows(articles),
+    runner,
+    tableName: tables.articleIdentifiers,
+  })
+  await createLoadedTempTable({
+    columnDefinitions: ['source_article_id VARCHAR NOT NULL', 'target_article_id VARCHAR', 'action VARCHAR NOT NULL'],
+    columnNames: ['source_article_id', 'target_article_id', 'action'],
+    rows: [],
+    runner,
+    tableName: tables.articleMatches,
+  })
+  await createLoadedTempTable({
+    columnDefinitions: [
+      'source_prompt_id VARCHAR NOT NULL',
+      'computed_content_hash VARCHAR NOT NULL',
+      'package_content_hash VARCHAR',
+    ],
+    columnNames: ['source_prompt_id', 'computed_content_hash', 'package_content_hash'],
+    rows: getPromptHashRows(prompts),
+    runner,
+    tableName: tables.promptHashes,
+  })
+
+  return tables
+}
+
+const dropProjectTransferTargetAnalysisTables = async ({
+  runner,
+  tables,
+}: {
+  runner: ProjectTransferAnalyzeTargetRunner
+  tables: ProjectTransferTargetAnalysisTableSet
+}) => {
+  return Object.values(tables).reduce<Promise<void>>(async (previous, tableName) => {
+    await previous
+
+    return runner.run?.(`DROP TABLE IF EXISTS ${tableName}`)
+  }, Promise.resolve())
+}
+
+const withProjectTransferTargetAnalysisTables = async <T>({
+  articles,
+  operationTables,
+  prompts,
+  runner,
+  work,
+}: {
+  articles: readonly ProjectTransferArticlePayloadRecord[]
+  operationTables?: ProjectTransferOperationTableSet
+  prompts: readonly ProjectTransferPayloadRecord[]
+  runner: ProjectTransferAnalyzeTargetRunner
+  work: (tables?: ProjectTransferTargetAnalysisTableSet) => Promise<T>
+}) => {
+  if (operationTables === undefined || runner.run === undefined) {
+    return work()
+  }
+
+  const tables = await loadProjectTransferTargetAnalysisTables({articles, operationTables, prompts, runner})
+
+  try {
+    const result = await work(tables)
+    await dropProjectTransferTargetAnalysisTables({runner, tables})
+
+    return result
+  } catch (error) {
+    await dropProjectTransferTargetAnalysisTables({runner, tables}).catch(() => {
+      return undefined
+    })
+    throw error
+  }
+}
+
+const getTargetArticlesByPackageArticleId = async ({
+  analysisTables,
+  inputs,
+  runner,
+}: {
+  analysisTables?: ProjectTransferTargetAnalysisTableSet
+  inputs: readonly ImportedArticleMatchInput[]
+  runner: ProjectTransferAnalyzeTargetRunner
+}) => {
+  const articleIdRows = inputs
+    .filter((input) => {
+      return input.packageArticleId !== null
+    })
+    .map((input) => {
+      return [input.sourceArticleId, input.packageArticleId] as const
+    })
+
+  const rows =
+    analysisTables === undefined && articleIdRows.length === 0
+      ? []
+      : await runner.queryJson<Partial<TargetArticleMatchRow>>(`
+      ${
+        analysisTables === undefined
+          ? `WITH staged_article_id(source_article_id, package_article_id) AS (VALUES ${getSqlValues(articleIdRows)})`
+          : ''
+      }
+      SELECT
+        ${getTargetArticleSelectSql()},
+        staged_article_id.source_article_id AS sourceArticleId,
+        'articleId' AS matchedKey,
+        staged_article_id.package_article_id AS matchedValue
+      FROM ${analysisTables?.articleIds ?? 'staged_article_id'} staged_article_id
+      INNER JOIN app.article a ON a.article_id = staged_article_id.package_article_id
+      ORDER BY staged_article_id.source_article_id ASC, a.id ASC
+    `)
+
+  return getNormalizedTargetArticleMatchRows({
+    inputs,
+    rows: rows.map((row) => {
+      return {...row, matchedKey: row.matchedKey ?? 'articleId', matchedValue: row.matchedValue ?? row.articleId}
+    }),
+  })
+}
+
+const getNormalizedTargetArticleMatchRows = ({
+  inputs,
+  rows,
+}: {
+  inputs: readonly ImportedArticleMatchInput[]
+  rows: readonly Partial<TargetArticleMatchRow>[]
+}) => {
+  return rows.flatMap((row) => {
+    const matchedKey = typeof row.matchedKey === 'string' ? row.matchedKey : ''
+    const matchedValue =
+      typeof row.matchedValue === 'string'
+        ? row.matchedValue
+        : matchedKey === 'articleId'
+          ? row.articleId
+          : getComparisonKeyParts(matchedKey as ProjectTransferStrongIdentifierComparisonKey).normalizedValue
+    const sourceArticleIds =
+      typeof row.sourceArticleId === 'string'
+        ? [row.sourceArticleId]
+        : inputs
+            .filter((input) => {
+              return matchedKey === 'articleId'
+                ? input.packageArticleId !== null && input.packageArticleId === row.articleId
+                : input.identifierKeys.includes(matchedKey as ProjectTransferStrongIdentifierComparisonKey)
+            })
+            .map((input) => {
+              return input.sourceArticleId
+            })
+
+    return matchedKey === '' || typeof matchedValue !== 'string'
+      ? []
+      : sourceArticleIds.map((sourceArticleId) => {
+          return {...row, matchedKey, matchedValue, sourceArticleId} as TargetArticleMatchRow
+        })
+  })
 }
 
 const getTargetArticlesByIdentifier = async ({
-  identifierKeys,
+  analysisTables,
+  inputs,
   runner,
 }: {
-  identifierKeys: readonly ProjectTransferStrongIdentifierComparisonKey[]
+  analysisTables?: ProjectTransferTargetAnalysisTableSet
+  inputs: readonly ImportedArticleMatchInput[]
   runner: ProjectTransferAnalyzeTargetRunner
 }) => {
-  return identifierKeys.length === 0
-    ? []
-    : runner.queryJson<TargetArticleRow & {matchedKey: ProjectTransferStrongIdentifierComparisonKey}>(`
+  const identifierRows = [
+    ...new Map(
+      inputs
+        .flatMap((input) => {
+          return input.identifierKeys.map((key) => {
+            const parts = getComparisonKeyParts(key)
+
+            return [key, [input.sourceArticleId, parts.kind, parts.normalizedValue, key] as const] as const
+          })
+        })
+        .map((entry) => {
+          return [`${entry[1][0]}\u0000${entry[0]}`, entry[1]] as const
+        }),
+    ).values(),
+  ]
+  const rows =
+    analysisTables === undefined && identifierRows.length === 0
+      ? []
+      : await runner.queryJson<Partial<TargetArticleMatchRow>>(`
+      ${
+        analysisTables === undefined
+          ? `WITH staged_article_identifier(source_article_id, kind, normalized_value, matched_key) AS (VALUES ${getSqlValues(identifierRows)})`
+          : ''
+      }
       SELECT
         ${getTargetArticleSelectSql()},
-        ai.kind || ':' || ai.normalized_value AS matchedKey
+        staged_article_identifier.source_article_id AS sourceArticleId,
+        staged_article_identifier.matched_key AS matchedKey,
+        staged_article_identifier.normalized_value AS matchedValue
       FROM app.article_identifier ai
+      INNER JOIN ${analysisTables?.articleIdentifiers ?? 'staged_article_identifier'} staged_article_identifier
+        ON staged_article_identifier.kind = ai.kind
+        AND ai.normalized_value = staged_article_identifier.normalized_value
       INNER JOIN app.article a ON a.id = ai.article_id
-      WHERE ${getIdentifierMatchWhereClause(identifierKeys)}
-      ORDER BY a.id ASC, ai.kind ASC, ai.normalized_value ASC
+      ORDER BY staged_article_identifier.source_article_id ASC, a.id ASC, ai.kind ASC, ai.normalized_value ASC
     `)
+
+  return getNormalizedTargetArticleMatchRows({inputs, rows})
 }
 
 const getCandidateArticleMap = ({
-  articleIdRows,
-  identifierRows,
   input,
+  rows,
 }: {
-  articleIdRows: readonly TargetArticleRow[]
-  identifierRows: readonly (TargetArticleRow & {matchedKey: ProjectTransferStrongIdentifierComparisonKey})[]
   input: ImportedArticleMatchInput
+  rows: readonly TargetArticleMatchRow[]
 }) => {
-  const candidateRows = [
-    ...articleIdRows
-      .filter((row) => {
-        return input.packageArticleId !== null && row.articleId === input.packageArticleId
-      })
-      .map((row) => {
-        return {
-          matchedIdentifier: {identifierType: 'articleId', key: 'articleId', value: input.packageArticleId ?? ''},
-          targetArticle: row,
-        }
-      }),
-    ...identifierRows
-      .filter((row) => {
-        return input.identifierKeys.includes(row.matchedKey)
-      })
-      .map((row) => {
-        return {
-          matchedIdentifier: {
-            identifierType: getIdentifierTypeFromKey(row.matchedKey),
-            key: row.matchedKey,
-            value: getComparisonKeyParts(row.matchedKey).normalizedValue,
-          },
-          targetArticle: row,
-        }
-      }),
-  ]
+  const candidateRows = rows
+    .filter((row) => {
+      return row.sourceArticleId === input.sourceArticleId
+    })
+    .map((row) => {
+      return {
+        matchedIdentifier: {
+          identifierType: getIdentifierTypeFromKey(row.matchedKey),
+          key: row.matchedKey,
+          value: row.matchedValue,
+        },
+        targetArticle: row,
+      }
+    })
 
-  return candidateRows.reduce<Map<string, TargetArticleCandidate>>((candidateMap, row) => {
+  return candidateRows.reduce<Map<string, TargetArticleCandidateDetail>>((candidateMap, row) => {
     const existing = candidateMap.get(row.targetArticle.targetArticleId)
     const matchedIdentifiers = existing?.matchedIdentifiers ?? []
     const hasIdentifier = matchedIdentifiers.some((identifier) => {
@@ -520,17 +809,27 @@ const getIdentifierConflictBlocker = ({
       ]
 }
 
+const getPlanCandidates = (candidates: readonly TargetArticleCandidateDetail[]) => {
+  return candidates.map((candidate): TargetArticleCandidate => {
+    return {matchedIdentifiers: candidate.matchedIdentifiers, targetArticleId: candidate.targetArticleId}
+  })
+}
+
 const getInitialArticleMatchPlans = ({
-  articleIdRows,
-  identifierRows,
   inputs,
+  rows,
 }: {
-  articleIdRows: readonly TargetArticleRow[]
-  identifierRows: readonly (TargetArticleRow & {matchedKey: ProjectTransferStrongIdentifierComparisonKey})[]
   inputs: readonly ImportedArticleMatchInput[]
+  rows: readonly TargetArticleMatchRow[]
 }) => {
+  const candidateDetailsBySourceArticleId = inputs.reduce<Record<string, TargetArticleCandidateDetail[]>>(
+    (candidateMap, input) => {
+      return {...candidateMap, [input.sourceArticleId]: [...getCandidateArticleMap({input, rows}).values()]}
+    },
+    {},
+  )
   const blockers = inputs.flatMap((input) => {
-    const candidates = [...getCandidateArticleMap({articleIdRows, identifierRows, input}).values()]
+    const candidates = candidateDetailsBySourceArticleId[input.sourceArticleId] ?? []
 
     return [
       ...getAmbiguousIdentifierBlockers({candidates, sourceArticleId: input.sourceArticleId}),
@@ -538,7 +837,7 @@ const getInitialArticleMatchPlans = ({
     ]
   })
   const plans = inputs.map((input): ArticleMatchPlan => {
-    const candidates = [...getCandidateArticleMap({articleIdRows, identifierRows, input}).values()]
+    const candidates = candidateDetailsBySourceArticleId[input.sourceArticleId] ?? []
     const sourceBlockers = blockers.filter((blocker) => {
       return blocker.scope === `articles.${input.sourceArticleId}`
     })
@@ -548,7 +847,7 @@ const getInitialArticleMatchPlans = ({
 
     return {
       action,
-      candidates,
+      candidates: getPlanCandidates(candidates),
       conflicts: sourceBlockers.map((blocker) => {
         return blocker.code
       }),
@@ -559,7 +858,7 @@ const getInitialArticleMatchPlans = ({
     }
   })
 
-  return {blockers, plans}
+  return {blockers, candidateDetailsBySourceArticleId, plans}
 }
 
 const getCollapseBlockers = (plans: readonly ArticleMatchPlan[]) => {
@@ -613,69 +912,79 @@ const applyCollapseBlockers = (
   })
 }
 
+const getSelectedTargetArticleBySourceFromCandidateDetails = ({
+  candidateDetailsBySourceArticleId,
+  plans,
+}: {
+  candidateDetailsBySourceArticleId: Record<string, readonly TargetArticleCandidateDetail[]>
+  plans: readonly ArticleMatchPlan[]
+}) => {
+  return plans.reduce<Record<string, TargetArticleRow | null>>((articleMap, plan) => {
+    const targetArticle =
+      plan.selectedTargetArticleId === null
+        ? null
+        : (candidateDetailsBySourceArticleId[plan.sourceArticleId]?.find((candidate) => {
+            return candidate.targetArticleId === plan.selectedTargetArticleId
+          })?.targetArticle ?? null)
+
+    return {...articleMap, [plan.sourceArticleId]: targetArticle}
+  }, {})
+}
+
+const replaceProjectTransferArticleMatchPlanTable = async ({
+  analysisTables,
+  plans,
+  runner,
+}: {
+  analysisTables?: ProjectTransferTargetAnalysisTableSet
+  plans: readonly ArticleMatchPlan[]
+  runner: ProjectTransferAnalyzeTargetRunner
+}) => {
+  return analysisTables === undefined || runner.run === undefined
+    ? undefined
+    : createLoadedTempTable({
+        columnDefinitions: [
+          'source_article_id VARCHAR NOT NULL',
+          'target_article_id VARCHAR',
+          'action VARCHAR NOT NULL',
+        ],
+        columnNames: ['source_article_id', 'target_article_id', 'action'],
+        rows: plans.map((plan) => {
+          return [plan.sourceArticleId, plan.selectedTargetArticleId, plan.action] as const
+        }),
+        runner,
+        tableName: analysisTables.articleMatches,
+      })
+}
+
 const getArticleMatchAnalysis = async ({
+  analysisTables,
   articles,
   runner,
 }: {
+  analysisTables?: ProjectTransferTargetAnalysisTableSet
   articles: readonly ProjectTransferArticlePayloadRecord[]
   runner: ProjectTransferAnalyzeTargetRunner
 }) => {
   const inputs = getImportedArticleInputs(articles)
-  const packageArticleIds = [
-    ...new Set(
-      inputs
-        .map((input) => {
-          return input.packageArticleId
-        })
-        .filter((value): value is string => {
-          return value !== null
-        }),
-    ),
-  ]
-  const identifierKeys = [
-    ...new Set(
-      inputs.flatMap((input) => {
-        return input.identifierKeys
-      }),
-    ),
-  ]
   const [articleIdRows, identifierRows] = await Promise.all([
-    getTargetArticlesByPackageArticleId({articleIds: packageArticleIds, runner}),
-    getTargetArticlesByIdentifier({identifierKeys, runner}),
+    getTargetArticlesByPackageArticleId({analysisTables, inputs, runner}),
+    getTargetArticlesByIdentifier({analysisTables, inputs, runner}),
   ])
-  const initial = getInitialArticleMatchPlans({articleIdRows, identifierRows, inputs})
+  const initial = getInitialArticleMatchPlans({inputs, rows: [...articleIdRows, ...identifierRows]})
   const collapseBlockers = getCollapseBlockers(initial.plans)
   const plans = applyCollapseBlockers(initial.plans, collapseBlockers)
+  const targetArticleBySource = getSelectedTargetArticleBySourceFromCandidateDetails({
+    candidateDetailsBySourceArticleId: initial.candidateDetailsBySourceArticleId,
+    plans,
+  })
 
-  return {blockers: [...initial.blockers, ...collapseBlockers], plans}
-}
-
-const getTargetArticleById = (plans: readonly ArticleMatchPlan[]) => {
-  return plans.reduce<Map<string, TargetArticleRow>>((articleMap, plan) => {
-    const candidate = plan.candidates.find((entry) => {
-      return entry.targetArticleId === plan.selectedTargetArticleId
-    })
-
-    return candidate ? articleMap.set(candidate.targetArticleId, candidate.targetArticle) : articleMap
-  }, new Map())
+  return {blockers: [...initial.blockers, ...collapseBlockers], plans, targetArticleBySource}
 }
 
 const getResolvedArticleIdBySource = (plans: readonly ArticleMatchPlan[]) => {
   return plans.reduce<Record<string, string | null>>((articleMap, plan) => {
     return {...articleMap, [plan.sourceArticleId]: plan.selectedTargetArticleId}
-  }, {})
-}
-
-const getSelectedTargetArticleBySource = (plans: readonly ArticleMatchPlan[]) => {
-  return plans.reduce<Record<string, TargetArticleRow | null>>((articleMap, plan) => {
-    const targetArticle =
-      plan.selectedTargetArticleId === null
-        ? null
-        : (plan.candidates.find((candidate) => {
-            return candidate.targetArticleId === plan.selectedTargetArticleId
-          })?.targetArticle ?? null)
-
-    return {...articleMap, [plan.sourceArticleId]: targetArticle}
   }, {})
 }
 
@@ -744,24 +1053,34 @@ const getArticleFieldFills = ({
 }
 
 const getReferencingProjects = async ({
+  analysisTables,
   runner,
   targetArticleIds,
 }: {
+  analysisTables?: ProjectTransferTargetAnalysisTableSet
   runner: ProjectTransferAnalyzeTargetRunner
   targetArticleIds: readonly string[]
 }) => {
-  return targetArticleIds.length === 0
+  const targetArticleRows = targetArticleIds.map((targetArticleId) => {
+    return [targetArticleId] as const
+  })
+  const selectedArticleSql =
+    analysisTables === undefined
+      ? `(VALUES ${getSqlValues(targetArticleRows)})`
+      : `(SELECT DISTINCT target_article_id FROM ${analysisTables.articleMatches} WHERE target_article_id IS NOT NULL)`
+
+  return analysisTables === undefined && targetArticleRows.length === 0
     ? []
     : runner.queryJson<ReferencingProjectRow>(`
       WITH referenced_article AS (
         SELECT pa.article_id AS targetArticleId, pa.project_id AS projectId
         FROM app.project_article pa
-        WHERE pa.article_id IN (${getSqlValueList(targetArticleIds)})
+        INNER JOIN ${selectedArticleSql} selected_article(target_article_id) ON selected_article.target_article_id = pa.article_id
         UNION
         SELECT air.article_id AS targetArticleId, pir.project_id AS projectId
         FROM app.article_import_route air
         INNER JOIN app.project_import_route pir ON pir.import_route_id = air.import_route_id
-        WHERE air.article_id IN (${getSqlValueList(targetArticleIds)})
+        INNER JOIN ${selectedArticleSql} selected_article(target_article_id) ON selected_article.target_article_id = air.article_id
       )
       SELECT DISTINCT
         referenced_article.targetArticleId,
@@ -857,23 +1176,27 @@ const getArticleCreatedAtFillExpansionBlockers = ({
 }
 
 const getArticleUpdatePlan = async ({
+  analysisTables,
   articleMatches,
   articles,
   assetManifestEntries,
   importedProject,
   runner,
+  targetArticleBySource,
 }: {
+  analysisTables?: ProjectTransferTargetAnalysisTableSet
   articleMatches: readonly ArticleMatchPlan[]
   articles: readonly ProjectTransferArticlePayloadRecord[]
   assetManifestEntries: readonly ProjectTransferAssetManifestEntry[]
   importedProject: ProjectTransferPayloadByKey['project'] | null
   runner: ProjectTransferAnalyzeTargetRunner
+  targetArticleBySource: Record<string, TargetArticleRow | null>
 }) => {
-  const targetArticleById = getTargetArticleById(articleMatches)
   const reusedMatches = articleMatches.filter((match) => {
     return match.action === 'reuse' && match.selectedTargetArticleId !== null
   })
   const referencingProjects = await getReferencingProjects({
+    analysisTables,
     runner,
     targetArticleIds: reusedMatches.map((match) => {
       return match.selectedTargetArticleId ?? ''
@@ -888,7 +1211,7 @@ const getArticleUpdatePlan = async ({
   const importedDateFrom = getRecordField(importedProject ?? {}, 'dateFrom')
   const importedDateTo = getRecordField(importedProject ?? {}, 'dateTo')
   const updatePlan = reusedMatches.map((match): ArticleUpdatePlan => {
-    const targetArticle = targetArticleById.get(match.selectedTargetArticleId ?? '') as TargetArticleRow
+    const targetArticle = targetArticleBySource[match.sourceArticleId] as TargetArticleRow
     const article = articlesBySource[match.sourceArticleId] as ProjectTransferArticlePayloadRecord
     const assetPathsByField = getArticleFieldAssetPaths(article)
     const fieldFills = getArticleFieldFills({article, assetPathsByField, targetArticle}).filter((fill) => {
@@ -931,7 +1254,7 @@ const getArticleUpdatePlan = async ({
     importedDateFrom === null && importedDateTo === null
       ? []
       : reusedMatches.flatMap((match) => {
-          const targetArticle = targetArticleById.get(match.selectedTargetArticleId ?? '') as TargetArticleRow
+          const targetArticle = targetArticleBySource[match.sourceArticleId] as TargetArticleRow
           const article = articlesBySource[match.sourceArticleId] as ProjectTransferArticlePayloadRecord
           const effectiveArticleCreatedAt = isMissingTargetValue(targetArticle.articleCreatedAt)
             ? getRecordField(article, 'articleCreatedAt')
@@ -957,30 +1280,45 @@ const getArticleUpdatePlan = async ({
 }
 
 const getPromptRowsByContentHash = async ({
+  analysisTables,
   contentHashes,
   runner,
 }: {
+  analysisTables?: ProjectTransferTargetAnalysisTableSet
   contentHashes: readonly string[]
   runner: ProjectTransferAnalyzeTargetRunner
 }) => {
-  return contentHashes.length === 0
+  const contentHashRows = contentHashes.map((contentHash) => {
+    return [contentHash] as const
+  })
+
+  return analysisTables === undefined && contentHashRows.length === 0
     ? []
     : runner.queryJson<TargetPromptRow>(`
+      ${
+        analysisTables === undefined
+          ? `WITH staged_prompt_hash(computed_content_hash) AS (VALUES ${getSqlValues(contentHashRows)})`
+          : ''
+      }
       SELECT
-        id AS targetPromptId,
-        content_hash AS contentHash,
-        archived
-      FROM app.prompt
-      WHERE content_hash IN (${getSqlValueList(contentHashes)})
-      ORDER BY id ASC
+        p.id AS targetPromptId,
+        p.content_hash AS contentHash,
+        p.archived
+      FROM app.prompt p
+      INNER JOIN ${
+        analysisTables?.promptHashes ?? 'staged_prompt_hash'
+      } staged_prompt_hash ON staged_prompt_hash.computed_content_hash = p.content_hash
+      ORDER BY p.id ASC
     `)
 }
 
 const getPromptPlan = async ({
+  analysisTables,
   projectPrompts,
   prompts,
   runner,
 }: {
+  analysisTables?: ProjectTransferTargetAnalysisTableSet
   projectPrompts: readonly ProjectTransferPayloadRecord[]
   prompts: readonly ProjectTransferPayloadRecord[]
   runner: ProjectTransferAnalyzeTargetRunner
@@ -1001,6 +1339,7 @@ const getPromptPlan = async ({
     }
   })
   const promptRows = await getPromptRowsByContentHash({
+    analysisTables,
     contentHashes: [
       ...new Set(
         promptInputs.map((prompt) => {
@@ -1098,56 +1437,105 @@ const getPromptPlan = async ({
 }
 
 const getTargetImportRoutes = async ({
+  operationTables,
   routeValues,
   runner,
 }: {
+  operationTables?: ProjectTransferOperationTableSet
   routeValues: readonly string[]
   runner: ProjectTransferAnalyzeTargetRunner
 }) => {
-  return routeValues.length === 0
+  const routeRows = routeValues.map((routeValue) => {
+    return [routeValue] as const
+  })
+
+  return operationTables === undefined && routeRows.length === 0
     ? []
     : runner.queryJson<TargetImportRouteRow>(`
+      ${
+        operationTables === undefined
+          ? `WITH staged_import_route(route_value) AS (VALUES ${getSqlValues(routeRows)})`
+          : `WITH staged_import_route AS (
+              SELECT DISTINCT route_payload->>'route' AS route_value
+              FROM ${operationTables.tableNames.importRoutes} staged_import_route_table,
+                UNNEST(json_extract(staged_import_route_table.payload_json, '$[*]')) AS route_rows(route_payload)
+            )`
+      }
       SELECT
-        id AS targetImportRouteId,
-        route,
-        active
-      FROM app.import_route
-      WHERE route IN (${getSqlValueList(routeValues)})
-      ORDER BY route ASC, active DESC, id ASC
+        ir.id AS targetImportRouteId,
+        ir.route,
+        ir.active
+      FROM app.import_route ir
+      INNER JOIN staged_import_route ON staged_import_route.route_value = ir.route
+      ORDER BY ir.route ASC, ir.active DESC, ir.id ASC
     `)
 }
 
 const getRouteArticles = async ({
+  operationTables,
   runner,
   targetImportRouteIds,
 }: {
+  operationTables?: ProjectTransferOperationTableSet
   runner: ProjectTransferAnalyzeTargetRunner
   targetImportRouteIds: readonly string[]
 }) => {
-  return targetImportRouteIds.length === 0
+  const targetRouteRows = targetImportRouteIds.map((routeId) => {
+    return [routeId] as const
+  })
+
+  return operationTables === undefined && targetRouteRows.length === 0
     ? []
     : runner.queryJson<RouteArticleRow>(`
+      ${
+        operationTables === undefined
+          ? `WITH target_route(target_import_route_id) AS (VALUES ${getSqlValues(targetRouteRows)})`
+          : `WITH target_route AS (
+              SELECT DISTINCT ir.id AS target_import_route_id
+              FROM ${operationTables.tableNames.importRoutes} staged_import_route_table,
+                UNNEST(json_extract(staged_import_route_table.payload_json, '$[*]')) AS staged_import_route(route_payload)
+              INNER JOIN app.import_route ir ON ir.route = (staged_import_route.route_payload->>'route')
+              WHERE ir.active
+            )`
+      }
       SELECT
         air.import_route_id AS targetImportRouteId,
         air.article_id AS targetArticleId,
         a.article_created_at AS articleCreatedAt
       FROM app.article_import_route air
+      INNER JOIN target_route ON target_route.target_import_route_id = air.import_route_id
       INNER JOIN app.article a ON a.id = air.article_id
-      WHERE air.import_route_id IN (${getSqlValueList(targetImportRouteIds)})
       ORDER BY air.import_route_id ASC, air.article_id ASC
     `)
 }
 
 const getProjectRouteReferences = async ({
+  operationTables,
   runner,
   targetImportRouteIds,
 }: {
+  operationTables?: ProjectTransferOperationTableSet
   runner: ProjectTransferAnalyzeTargetRunner
   targetImportRouteIds: readonly string[]
 }) => {
-  return targetImportRouteIds.length === 0
+  const targetRouteRows = targetImportRouteIds.map((routeId) => {
+    return [routeId] as const
+  })
+
+  return operationTables === undefined && targetRouteRows.length === 0
     ? []
     : runner.queryJson<ProjectRouteReferenceRow>(`
+      ${
+        operationTables === undefined
+          ? `WITH target_route(target_import_route_id) AS (VALUES ${getSqlValues(targetRouteRows)})`
+          : `WITH target_route AS (
+              SELECT DISTINCT ir.id AS target_import_route_id
+              FROM ${operationTables.tableNames.importRoutes} staged_import_route_table,
+                UNNEST(json_extract(staged_import_route_table.payload_json, '$[*]')) AS staged_import_route(route_payload)
+              INNER JOIN app.import_route ir ON ir.route = (staged_import_route.route_payload->>'route')
+              WHERE ir.active
+            )`
+      }
       SELECT
         pir.import_route_id AS targetImportRouteId,
         pir.project_id AS projectId,
@@ -1155,31 +1543,61 @@ const getProjectRouteReferences = async ({
         p.date_from AS dateFrom,
         p.date_to AS dateTo
       FROM app.project_import_route pir
+      INNER JOIN target_route ON target_route.target_import_route_id = pir.import_route_id
       INNER JOIN app.project p ON p.id = pir.project_id
-      WHERE pir.import_route_id IN (${getSqlValueList(targetImportRouteIds)})
       ORDER BY pir.import_route_id ASC, pir.project_id ASC
     `)
 }
 
 const getProjectArticleReferences = async ({
+  analysisTables,
+  operationTables,
   projectIds,
   runner,
   targetArticleIds,
 }: {
+  analysisTables?: ProjectTransferTargetAnalysisTableSet
+  operationTables?: ProjectTransferOperationTableSet
   projectIds: readonly string[]
   runner: ProjectTransferAnalyzeTargetRunner
   targetArticleIds: readonly string[]
 }) => {
-  return projectIds.length === 0 || targetArticleIds.length === 0
+  const projectRows = projectIds.map((projectId) => {
+    return [projectId] as const
+  })
+  const targetArticleRows = targetArticleIds.map((articleId) => {
+    return [articleId] as const
+  })
+
+  return (analysisTables === undefined || operationTables === undefined)
+    && (projectRows.length === 0 || targetArticleRows.length === 0)
     ? []
     : runner.queryJson<ProjectArticleReferenceRow>(`
+      ${
+        analysisTables !== undefined && operationTables !== undefined
+          ? `WITH target_project AS (
+              SELECT DISTINCT pir.project_id
+              FROM ${operationTables.tableNames.importRoutes} staged_import_route_table,
+                UNNEST(json_extract(staged_import_route_table.payload_json, '$[*]')) AS staged_import_route(route_payload)
+              INNER JOIN app.import_route ir ON ir.route = (staged_import_route.route_payload->>'route')
+              INNER JOIN app.project_import_route pir ON pir.import_route_id = ir.id
+              WHERE ir.active
+            ),
+            target_article AS (
+              SELECT DISTINCT target_article_id
+              FROM ${analysisTables.articleMatches}
+              WHERE target_article_id IS NOT NULL
+            )`
+          : `WITH target_project(project_id) AS (VALUES ${getSqlValues(projectRows)}),
+            target_article(target_article_id) AS (VALUES ${getSqlValues(targetArticleRows)})`
+      }
       SELECT
-        project_id AS projectId,
-        article_id AS targetArticleId
-      FROM app.project_article
-      WHERE project_id IN (${getSqlValueList(projectIds)})
-        AND article_id IN (${getSqlValueList(targetArticleIds)})
-      ORDER BY project_id ASC, article_id ASC
+        pa.project_id AS projectId,
+        pa.article_id AS targetArticleId
+      FROM app.project_article pa
+      INNER JOIN target_project ON target_project.project_id = pa.project_id
+      INNER JOIN target_article ON target_article.target_article_id = pa.article_id
+      ORDER BY pa.project_id ASC, pa.article_id ASC
     `)
 }
 
@@ -1313,6 +1731,7 @@ const getArticleRoutePlan = ({
   projectArticles,
   projectRouteReferences,
   routeArticles,
+  targetArticleBySource,
 }: {
   activeRouteBySource: Record<string, TargetImportRouteRow | null>
   articleImportRoutes: readonly ProjectTransferPayloadRecord[]
@@ -1322,9 +1741,9 @@ const getArticleRoutePlan = ({
   projectArticles: readonly ProjectTransferPayloadRecord[]
   projectRouteReferences: readonly ProjectRouteReferenceRow[]
   routeArticles: readonly RouteArticleRow[]
+  targetArticleBySource: Record<string, TargetArticleRow | null>
 }) => {
-  const targetArticleBySource = getResolvedArticleIdBySource(articleMatches)
-  const targetArticleRecordBySource = getSelectedTargetArticleBySource(articleMatches)
+  const targetArticleBySourceId = getResolvedArticleIdBySource(articleMatches)
   const importedArticleBySource = getImportedArticleBySource(articles)
   const projectArticleSourceSet = getProjectArticleSourceSet(projectArticles)
   const routeArticleSet = new Set(
@@ -1342,8 +1761,8 @@ const getArticleRoutePlan = ({
     const sourceArticleId = getStringField(articleRoute, 'sourceArticleId')
     const sourceImportRouteId = getStringField(articleRoute, 'sourceImportRouteId')
     const sourceArticleImportRouteId = getStringField(articleRoute, 'sourceArticleImportRouteId')
-    const targetArticleId = targetArticleBySource[sourceArticleId] ?? null
-    const targetArticle = targetArticleRecordBySource[sourceArticleId] ?? null
+    const targetArticleId = targetArticleBySourceId[sourceArticleId] ?? null
+    const targetArticle = targetArticleBySource[sourceArticleId] ?? null
     const importedArticle = importedArticleBySource[sourceArticleId] ?? null
     const articleCreatedAt =
       targetArticle?.articleCreatedAt ?? getRecordField(importedArticle ?? {}, 'articleCreatedAt')
@@ -1386,23 +1805,29 @@ const getArticleRoutePlan = ({
 }
 
 const getRoutePlan = async ({
+  analysisTables,
   articleImportRoutes,
   articleMatches,
   articles,
   importRoutes,
   importedProject,
+  operationTables,
   projectArticles,
   projectImportRoutes,
   runner,
+  targetArticleBySource,
 }: {
+  analysisTables?: ProjectTransferTargetAnalysisTableSet
   articleImportRoutes: readonly ProjectTransferPayloadRecord[]
   articleMatches: readonly ArticleMatchPlan[]
   articles: readonly ProjectTransferArticlePayloadRecord[]
   importRoutes: readonly ProjectTransferPayloadRecord[]
   importedProject: ProjectTransferPayloadByKey['project'] | null
+  operationTables?: ProjectTransferOperationTableSet
   projectArticles: readonly ProjectTransferPayloadRecord[]
   projectImportRoutes: readonly ProjectTransferPayloadRecord[]
   runner: ProjectTransferAnalyzeTargetRunner
+  targetArticleBySource: Record<string, TargetArticleRow | null>
 }) => {
   const routeValues = [
     ...new Set(
@@ -1411,7 +1836,7 @@ const getRoutePlan = async ({
       }),
     ),
   ]
-  const targetRoutes = await getTargetImportRoutes({routeValues, runner})
+  const targetRoutes = await getTargetImportRoutes({operationTables, routeValues, runner})
   const activeRouteBySource = getActiveRouteBySource({importRoutes, targetRoutes})
   const targetImportRouteIds = [
     ...new Set(
@@ -1424,8 +1849,8 @@ const getRoutePlan = async ({
         }),
     ),
   ]
-  const routeArticles = await getRouteArticles({runner, targetImportRouteIds})
-  const projectRouteReferences = await getProjectRouteReferences({runner, targetImportRouteIds})
+  const routeArticles = await getRouteArticles({operationTables, runner, targetImportRouteIds})
+  const projectRouteReferences = await getProjectRouteReferences({operationTables, runner, targetImportRouteIds})
   const targetArticleIds = [
     ...new Set(
       articleMatches
@@ -1438,6 +1863,8 @@ const getRoutePlan = async ({
     ),
   ]
   const projectArticleReferences = await getProjectArticleReferences({
+    analysisTables,
+    operationTables,
     projectIds: [
       ...new Set(
         projectRouteReferences.map((projectRoute) => {
@@ -1464,6 +1891,7 @@ const getRoutePlan = async ({
     projectArticles,
     projectRouteReferences,
     routeArticles,
+    targetArticleBySource,
   })
 
   return {articleRoutePlan, projectRoutePlan, warnings: getRouteWarnings({importRoutes, targetRoutes})}
@@ -1758,6 +2186,7 @@ const getTargetOverlapCounts = ({
 }
 
 export const getProjectTransferAnalyzeTargetPlan = async ({
+  operationTables,
   packageFingerprint,
   payloads,
   runner: inputRunner,
@@ -1766,79 +2195,100 @@ export const getProjectTransferAnalyzeTargetPlan = async ({
   const articles = payloads.articles ?? []
   const assetManifestEntries = payloads.assetManifest?.entries ?? []
   const importedProject = payloads.project ?? null
-  const duplicateDetection = await getProjectTransferDuplicateImportDetection({packageFingerprint, runner})
-  const articleReferenceBlockers = getArticleReferenceBlockers({articles, assetManifestEntries})
-  const articleMatchAnalysis = await getArticleMatchAnalysis({articles, runner})
-  const articleUpdateAnalysis = await getArticleUpdatePlan({
-    articleMatches: articleMatchAnalysis.plans,
-    articles,
-    assetManifestEntries,
-    importedProject,
-    runner,
-  })
-  const promptAnalysis = await getPromptPlan({
-    projectPrompts: payloads.projectPrompts ?? [],
-    prompts: payloads.prompts ?? [],
-    runner,
-  })
-  const routePlan = await getRoutePlan({
-    articleImportRoutes: payloads.articleImportRoutes ?? [],
-    articleMatches: articleMatchAnalysis.plans,
-    articles,
-    importRoutes: payloads.importRoutes ?? [],
-    importedProject,
-    projectArticles: payloads.projectArticles ?? [],
-    projectImportRoutes: payloads.projectImportRoutes ?? [],
-    runner,
-  })
-  const articleBlockers = [
-    ...articleReferenceBlockers,
-    ...articleMatchAnalysis.blockers,
-    ...articleUpdateAnalysis.blockers,
-  ]
-  const assetPromotionPlan = getAssetPromotionPlan({
-    articleMatches: articleMatchAnalysis.plans,
-    articleUpdatePlan: articleUpdateAnalysis.updatePlan,
-    articles,
-    assetManifestEntries,
-  })
-  const baseTargetPlan = {
-    articleMatches: articleMatchAnalysis.plans,
-    articleRoutePlan: routePlan.articleRoutePlan,
-    articleUpdatePlan: articleUpdateAnalysis.updatePlan,
-    assetPromotionPlan,
-    duplicateImportMatches: duplicateDetection.matches,
-    projectPromptPlan: promptAnalysis.projectPromptPlan,
-    projectRoutePlan: routePlan.projectRoutePlan,
-    promptPlan: promptAnalysis.promptPlan,
-  }
-  const fidelityValidation = await getProjectTransferFidelityValidation({payloads, runner, targetPlan: baseTargetPlan})
-  const overlapCounts = {
-    ...getTargetOverlapCounts({
-      articleMatches: articleMatchAnalysis.plans,
-      articleRoutePlan: routePlan.articleRoutePlan,
-      articleUpdatePlan: articleUpdateAnalysis.updatePlan,
-      assetPromotionPlan,
-      duplicateImportMatchCount: duplicateDetection.matches.length,
-      projectRoutePlan: routePlan.projectRoutePlan,
-    }),
-    ...fidelityValidation.overlapCounts,
-  }
-  const blockers = [...articleBlockers, ...promptAnalysis.blockers, ...fidelityValidation.blockers]
+  const prompts = payloads.prompts ?? []
 
-  return {
-    blockers,
-    conflictCounts: {
-      articleConflictCount: articleBlockers.length,
-      humanReviewFidelityConflictCount: fidelityValidation.conflictCounts.humanReviewFidelityConflictCount,
-      judgmentConflictCount: fidelityValidation.conflictCounts.judgmentConflictCount,
-      projectPromptConflictCount: promptAnalysis.blockers.length,
+  return withProjectTransferTargetAnalysisTables({
+    articles,
+    operationTables,
+    prompts,
+    runner,
+    work: async (analysisTables) => {
+      const duplicateDetection = await getProjectTransferDuplicateImportDetection({packageFingerprint, runner})
+      const articleReferenceBlockers = getArticleReferenceBlockers({articles, assetManifestEntries})
+      const articleMatchAnalysis = await getArticleMatchAnalysis({analysisTables, articles, runner})
+      await replaceProjectTransferArticleMatchPlanTable({analysisTables, plans: articleMatchAnalysis.plans, runner})
+      const articleUpdateAnalysis = await getArticleUpdatePlan({
+        analysisTables,
+        articleMatches: articleMatchAnalysis.plans,
+        articles,
+        assetManifestEntries,
+        importedProject,
+        runner,
+        targetArticleBySource: articleMatchAnalysis.targetArticleBySource,
+      })
+      const promptAnalysis = await getPromptPlan({
+        analysisTables,
+        projectPrompts: payloads.projectPrompts ?? [],
+        prompts,
+        runner,
+      })
+      const routePlan = await getRoutePlan({
+        analysisTables,
+        articleImportRoutes: payloads.articleImportRoutes ?? [],
+        articleMatches: articleMatchAnalysis.plans,
+        articles,
+        importRoutes: payloads.importRoutes ?? [],
+        importedProject,
+        operationTables,
+        projectArticles: payloads.projectArticles ?? [],
+        projectImportRoutes: payloads.projectImportRoutes ?? [],
+        runner,
+        targetArticleBySource: articleMatchAnalysis.targetArticleBySource,
+      })
+      const articleBlockers = [
+        ...articleReferenceBlockers,
+        ...articleMatchAnalysis.blockers,
+        ...articleUpdateAnalysis.blockers,
+      ]
+      const assetPromotionPlan = getAssetPromotionPlan({
+        articleMatches: articleMatchAnalysis.plans,
+        articleUpdatePlan: articleUpdateAnalysis.updatePlan,
+        articles,
+        assetManifestEntries,
+      })
+      const baseTargetPlan = {
+        articleMatches: articleMatchAnalysis.plans,
+        articleRoutePlan: routePlan.articleRoutePlan,
+        articleUpdatePlan: articleUpdateAnalysis.updatePlan,
+        assetPromotionPlan,
+        duplicateImportMatches: duplicateDetection.matches,
+        projectPromptPlan: promptAnalysis.projectPromptPlan,
+        projectRoutePlan: routePlan.projectRoutePlan,
+        promptPlan: promptAnalysis.promptPlan,
+      }
+      const fidelityValidation = await getProjectTransferFidelityValidation({
+        payloads,
+        runner,
+        targetPlan: baseTargetPlan,
+      })
+      const overlapCounts = {
+        ...getTargetOverlapCounts({
+          articleMatches: articleMatchAnalysis.plans,
+          articleRoutePlan: routePlan.articleRoutePlan,
+          articleUpdatePlan: articleUpdateAnalysis.updatePlan,
+          assetPromotionPlan,
+          duplicateImportMatchCount: duplicateDetection.matches.length,
+          projectRoutePlan: routePlan.projectRoutePlan,
+        }),
+        ...fidelityValidation.overlapCounts,
+      }
+      const blockers = [...articleBlockers, ...promptAnalysis.blockers, ...fidelityValidation.blockers]
+
+      return {
+        blockers,
+        conflictCounts: {
+          articleConflictCount: articleBlockers.length,
+          humanReviewFidelityConflictCount: fidelityValidation.conflictCounts.humanReviewFidelityConflictCount,
+          judgmentConflictCount: fidelityValidation.conflictCounts.judgmentConflictCount,
+          projectPromptConflictCount: promptAnalysis.blockers.length,
+        },
+        judgmentConflictStatus: fidelityValidation.judgmentConflictStatus,
+        overlapCounts,
+        packageWarnings: [...duplicateDetection.warnings, ...promptAnalysis.warnings, ...routePlan.warnings],
+        targetPlan: {...baseTargetPlan, ...fidelityValidation.targetPlan},
+      }
     },
-    judgmentConflictStatus: fidelityValidation.judgmentConflictStatus,
-    overlapCounts,
-    packageWarnings: [...duplicateDetection.warnings, ...promptAnalysis.warnings, ...routePlan.warnings],
-    targetPlan: {...baseTargetPlan, ...fidelityValidation.targetPlan},
-  }
+  })
 }
 
 export const getProjectTransferAnalyzeTargetPlanWithOperationTables = async ({
@@ -1856,8 +2306,13 @@ export const getProjectTransferAnalyzeTargetPlanWithOperationTables = async ({
     layout,
     operationId,
     runner,
-    work: ({runner: operationRunner}) => {
-      return getProjectTransferAnalyzeTargetPlan({packageFingerprint, payloads, runner: operationRunner})
+    work: ({runner: operationRunner, tables}) => {
+      return getProjectTransferAnalyzeTargetPlan({
+        operationTables: tables,
+        packageFingerprint,
+        payloads,
+        runner: operationRunner,
+      })
     },
   })
 }

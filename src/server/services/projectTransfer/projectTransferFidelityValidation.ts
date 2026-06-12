@@ -317,10 +317,7 @@ const getArticleInputBySource = ({
 
   return targetPlan.articleMatches.reduce<Record<string, ExportArticleInput>>((mapped, match) => {
     const sourceArticle = sourceArticlesById[match.sourceArticleId]
-    const targetArticle = match.candidates.find((candidate) => {
-      return candidate.targetArticleId === match.selectedTargetArticleId
-    })?.targetArticle
-    const baseArticle = targetArticle ?? sourceArticle ?? null
+    const baseArticle = sourceArticle ?? null
     const update = updatesBySource[match.sourceArticleId] ?? null
     const filledArticle = update
       ? update.fieldFills.reduce<Record<string, unknown>>(
