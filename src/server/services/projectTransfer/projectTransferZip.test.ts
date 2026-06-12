@@ -263,6 +263,27 @@ test('writes a project-transfer package directly to a file without returning arc
   }
 })
 
+test('reads and writes project-transfer packages without the optional zip module', async () => {
+  const manifestBytes = getBytes('{"schemaVersion":1}')
+  const articleBytes = getBytes('article-one')
+  const written = await writeProjectTransferZipPackage({
+    entries: [
+      {bytes: manifestBytes, path: 'manifest.json'},
+      {bytes: articleBytes, path: 'assets/articles/article-1.txt'},
+    ],
+  })
+  const read = await readProjectTransferZipPackage({bytes: written.bytes})
+
+  expect(read.manifest.bytes).toEqual(manifestBytes)
+  expect(
+    read.entries.map((entry) => {
+      return entry.path
+    }),
+  ).toEqual(['manifest.json', 'assets/articles/article-1.txt'])
+  expect(read.entries[1]?.bytes).toEqual(articleBytes)
+  expect(read.entries[1]?.compressedSize).toBe(articleBytes.byteLength)
+})
+
 test('reads project-transfer packages using writer bytes for counters and checksums instead of advisory sizes', async () => {
   const manifestChunks = [getBytes('{"schema'), getBytes('Version":1}')]
   const assetChunks = [getBytes('asset-'), getBytes('bytes')]

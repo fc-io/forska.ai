@@ -247,16 +247,18 @@ const writeAnalyzeUpload = async ({
   cwd,
   manifestOverride,
   payloadOverride,
+  useZipModule = true,
 }: {
   cwd: string
   manifestOverride?: PackageOverride['manifest']
   payloadOverride?: PackageOverride['payloads']
+  useZipModule?: boolean
 }) => {
   const layout = getProjectTransferImportTempLayout(sessionId)
   const payloads = getFixturePayloads(payloadOverride)
   const serializedPayloads = getSerializedPayloads(payloads)
   const manifest = getManifest({manifestOverride, payloads, serializedPayloads})
-  const zipModule = getFakeZipModule()
+  const zipModule = useZipModule ? getFakeZipModule() : undefined
   const entries = [
     {bytes: getProjectTransferCanonicalJson(manifest), path: 'manifest.json'},
     ...projectTransferPayloadKeys.map((key) => {
@@ -478,7 +480,7 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
   const cwd = getRuntimeRoot()
 
   try {
-    const {layout, manifest, uploadMetadata, zipModule} = await writeAnalyzeUpload({cwd})
+    const {layout, manifest, uploadMetadata, zipModule} = await writeAnalyzeUpload({cwd, useZipModule: false})
     const result = await analyzeProjectTransferImportPackage({
       availableDiskBytes: 10_000_000_000,
       cwd,

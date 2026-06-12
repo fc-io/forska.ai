@@ -37,6 +37,8 @@ import {
 const duckdbOwnerConnectionHeartbeatWindowMs = 45_000
 const duckdbOwnerConnectionRetentionMs = 10 * 60_000
 const workerRegistryStorageVersion = 1
+const workerRegistryWriteRetryCount = 5
+const workerRegistryWriteRetryDelayMs = 25
 const duckdbOwnerConnectionHeaderNames = {
   apiServerPort: 'x-forska-api-server-port',
   hostname: 'x-forska-hostname',
@@ -184,6 +186,7 @@ const getDuckdbOwnerConnectionState = () => {
 }
 
 const duckdbOwnerConnectionState = getDuckdbOwnerConnectionState()
+const workerRegistryWriteQueuesByPath = new Map<string, Promise<void>>()
 
 const getWorkerRegistryStorageDirectory = (databasePath: string) => {
   return databasePath === ':memory:' ? null : `${databasePath}.worker-registry`
@@ -745,6 +748,41 @@ const isMissingFileError = (error: unknown) => {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
 }
 
+const isTransientWorkerRegistryWriteError = (error: unknown) => {
+  return (
+    isMissingFileError(error)
+    || (typeof error === 'object'
+      && error !== null
+      && 'code' in error
+      && ['EACCES', 'EBUSY', 'EPERM'].includes(String(error.code)))
+  )
+}
+
+const sleep = (ms: number) => {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+const enqueueWorkerRegistryWrite = (recordPath: string, write: () => Promise<void>) => {
+  const previous = workerRegistryWriteQueuesByPath.get(recordPath) ?? Promise.resolve()
+  const queued = previous
+    .catch(() => {
+      return undefined
+    })
+    .then(write)
+  let tracked: Promise<void> | null = null
+
+  tracked = queued.finally(() => {
+    if (tracked !== null && workerRegistryWriteQueuesByPath.get(recordPath) === tracked) {
+      workerRegistryWriteQueuesByPath.delete(recordPath)
+    }
+  })
+  workerRegistryWriteQueuesByPath.set(recordPath, tracked)
+
+  return tracked
+}
+
 const isJsonSyntaxError = (error: unknown) => {
   return error instanceof SyntaxError || (error instanceof Error && error.name === 'SyntaxError')
 }
@@ -827,28 +865,29 @@ const writeWorkerRegistryRecord = async (record: DuckdbOwnerConnectionStoredReco
 
   const payload = JSON.stringify({storageVersion: workerRegistryStorageVersion, ...record}, null, 2)
 
-  const persistRecord = async (retriesRemaining: number): Promise<void> => {
+  const persistRecord = async (attempt: number): Promise<void> => {
     await mkdir(storageDirectory, {recursive: true})
     const temporaryPath = `${recordPath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
 
     await writeFile(temporaryPath, payload)
 
-    return rename(temporaryPath, recordPath).catch((error: unknown) => {
-      if (!isMissingFileError(error) || retriesRemaining <= 0) {
+    return rename(temporaryPath, recordPath).catch(async (error: unknown) => {
+      await unlink(temporaryPath).catch(() => {
+        return undefined
+      })
+
+      if (!isTransientWorkerRegistryWriteError(error) || attempt >= workerRegistryWriteRetryCount) {
         throw error
       }
 
-      return unlink(temporaryPath)
-        .catch(() => {
-          return undefined
-        })
-        .then(() => {
-          return persistRecord(retriesRemaining - 1)
-        })
+      await sleep(workerRegistryWriteRetryDelayMs * (attempt + 1))
+      return persistRecord(attempt + 1)
     })
   }
 
-  return persistRecord(1)
+  return enqueueWorkerRegistryWrite(recordPath, () => {
+    return persistRecord(0)
+  })
 }
 
 const readWorkerRegistryRecords = async (
