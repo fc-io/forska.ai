@@ -509,6 +509,128 @@ test('DuckDB migrations add project transfer session and history invariants', as
   }
 })
 
+test('DuckDB migrations add project transfer target-state dirty token coverage tables', async () => {
+  const duckdbPath = `/tmp/forska-project-transfer-target-state-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const dirtyTokenColumns = await database.queryJson(
+          "SELECT column_name AS columnName FROM duckdb_columns() WHERE schema_name = 'app' AND table_name = 'project_transfer_target_state_dirty_token' ORDER BY column_index"
+        )
+        const unknownTokenColumns = await database.queryJson(
+          "SELECT column_name AS columnName FROM duckdb_columns() WHERE schema_name = 'app' AND table_name = 'project_transfer_target_state_unknown_token' ORDER BY column_index"
+        )
+        const coverageColumns = await database.queryJson(
+          "SELECT column_name AS columnName FROM duckdb_columns() WHERE schema_name = 'app' AND table_name = 'project_transfer_target_state_coverage' ORDER BY column_index"
+        )
+        const constraints = await database.queryJson(
+          "SELECT table_name AS tableName, constraint_type AS constraintType, constraint_column_names AS columnNames FROM duckdb_constraints() WHERE schema_name = 'app' AND table_name IN ('project_transfer_target_state_dirty_token', 'project_transfer_target_state_unknown_token', 'project_transfer_target_state_coverage') ORDER BY table_name ASC, constraint_name ASC"
+        )
+        const [unknownToken] = await database.queryJson(
+          "SELECT id, CAST(dirty_token AS INTEGER) AS dirtyToken FROM app.project_transfer_target_state_unknown_token WHERE id = 'global'"
+        )
+
+        console.log(JSON.stringify({constraints, coverageColumns, dirtyTokenColumns, unknownToken, unknownTokenColumns}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to verify target-state dirty token schema',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      constraints: Array<{columnNames: string[]; constraintType: string; tableName: string}>
+      coverageColumns: Array<{columnName: string}>
+      dirtyTokenColumns: Array<{columnName: string}>
+      unknownToken: {dirtyToken: number; id: string} | null
+      unknownTokenColumns: Array<{columnName: string}>
+    }
+    const dirtyTokenColumnNames = parsed.dirtyTokenColumns.map((column) => {
+      return column.columnName
+    })
+    const unknownTokenColumnNames = parsed.unknownTokenColumns.map((column) => {
+      return column.columnName
+    })
+    const coverageColumnNames = parsed.coverageColumns.map((column) => {
+      return column.columnName
+    })
+    const primaryKeyConstraints = parsed.constraints.filter((constraint) => {
+      return constraint.constraintType === 'PRIMARY KEY'
+    })
+
+    expect(dirtyTokenColumnNames).toEqual([
+      'surface',
+      'dirty_token',
+      'last_reason',
+      'last_advanced_at',
+      'created_at',
+      'updated_at',
+    ])
+    expect(unknownTokenColumnNames).toEqual([
+      'id',
+      'dirty_token',
+      'last_reason',
+      'last_advanced_at',
+      'created_at',
+      'updated_at',
+    ])
+    expect(coverageColumnNames).toEqual([
+      'id',
+      'coverage_code_version',
+      'covered_surfaces_json',
+      'dependency_fingerprint_algorithm',
+      'dependency_fingerprint_code_version',
+      'initialized_at',
+      'updated_at',
+    ])
+    expect(primaryKeyConstraints).toHaveLength(3)
+    expect(parsed.unknownToken).toEqual({dirtyToken: 0, id: 'global'})
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('provider model natural key migration deduplicates existing model references before adding the index', async () => {
   const duckdbPath = `/tmp/forska-provider-model-natural-key-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(

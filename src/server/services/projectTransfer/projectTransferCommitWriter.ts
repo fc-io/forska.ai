@@ -36,6 +36,10 @@ import {
   getProjectTransferModelSnapshotFingerprint,
   getProjectTransferProviderSnapshotFingerprint,
 } from './projectTransferSnapshotFingerprint.ts'
+import {
+  getProjectTransferTargetStateDirtyTokenService,
+  type ProjectTransferTargetStateSafetySurface,
+} from './projectTransferTargetStateDirtyTokenService.ts'
 
 type ProjectTransferCommitWriterTx = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -296,6 +300,25 @@ const articleFieldSelectSql = Object.entries(articleColumnByPayloadField)
   .join(',\n')
 const commitWriterInsertBatchSize = 500
 const importedSnapshotMarker = 'projectTransferImportedSnapshot'
+const projectTransferCommitWriteDirtyTokenSurfaces = [
+  'project',
+  'article',
+  'articleIdentifier',
+  'importRoute',
+  'projectImportRoute',
+  'projectArticle',
+  'prompt',
+  'projectPrompt',
+  'judgment',
+  'judgmentAssessment',
+  'humanJudgment',
+  'humanJudgmentSummary',
+  'review',
+  'model',
+  'providerConnection',
+  'importedSnapshotMarker',
+  'snapshotFingerprintInput',
+] as const satisfies readonly ProjectTransferTargetStateSafetySurface[]
 
 const failCommitWriter = (message: string): never => {
   throw new Error(`Project transfer commit writer: ${message}`)
@@ -1878,6 +1901,15 @@ const getPlanWarnings = (plan: ProjectTransferImportPlanArtifact) => {
   return getDedupedWarnings([...(plan.packageWarnings ?? []), ...(plan.summary.packageWarnings ?? [])])
 }
 
+const advanceCommitTargetStateDirtyTokens = async ({now, tx}: {now: Date; tx: ProjectTransferCommitWriterTx}) => {
+  await getProjectTransferTargetStateDirtyTokenService().advanceTargetStateDirtyTokensAtomically({
+    now,
+    reason: 'projectTransferCommit.write',
+    runner: tx,
+    surfaces: projectTransferCommitWriteDirtyTokenSurfaces,
+  })
+}
+
 const getEquivalentReusedJudgmentWarnings = (
   judgmentPlan: readonly JudgmentPlanEntry[],
 ): ProjectTransferPackageWarning[] => {
@@ -3318,6 +3350,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
     })
   })
   const history = historyWrite.value
+  await advanceCommitTargetStateDirtyTokens({now: importedAt, tx})
   const performanceMetrics = getProjectTransferPerformanceMetrics({
     benchmark: {packageFingerprint: completion.packageFingerprint ?? undefined, schemaVersion},
     operation: 'import',

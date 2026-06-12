@@ -75,6 +75,10 @@ import {
   verifyProjectTransferStagingRevision,
 } from './projectTransferStaging.ts'
 import {
+  getProjectTransferTargetStateDirtyTokenService,
+  type ProjectTransferTargetStateDirtyTokenSnapshot,
+} from './projectTransferTargetStateDirtyTokenService.ts'
+import {
   type ProjectTransferZipJsEntry,
   type ProjectTransferZipJsModule,
   type ProjectTransferZipReadEntry,
@@ -123,6 +127,7 @@ export type ProjectTransferImportPlanArtifact = {
   stagingRevision?: number
   summary: ProjectTransferPlanSummary
   targetPlan: ProjectTransferTargetPlan
+  targetState?: ProjectTransferTargetStateDirtyTokenSnapshot | null
 }
 
 export type ProjectTransferImportAnalyzeResult = {
@@ -1358,6 +1363,7 @@ const getPlanArtifact = ({
   planSummary,
   stagingRevision,
   targetPlan,
+  targetState,
 }: {
   blockers: ProjectTransferPlanBlocker[]
   packageCounts: Record<ProjectTransferPayloadKey, number>
@@ -1367,6 +1373,7 @@ const getPlanArtifact = ({
   planSummary: ProjectTransferPlanSummary
   stagingRevision: number
   targetPlan: ProjectTransferTargetPlan
+  targetState?: ProjectTransferTargetStateDirtyTokenSnapshot | null
 }): ProjectTransferImportPlanArtifact => {
   return {
     blockers,
@@ -1381,7 +1388,16 @@ const getPlanArtifact = ({
     stagingRevision,
     summary: planSummary,
     targetPlan,
+    targetState,
   }
+}
+
+const getTargetStateDirtyTokenSnapshotForPlan = async (runner?: ProjectTransferAnalyzeTargetRunner) => {
+  return runner === undefined
+    ? getProjectTransferTargetStateDirtyTokenService().getTargetStateDirtyTokenSnapshot()
+    : runner.run === undefined
+      ? null
+      : getProjectTransferTargetStateDirtyTokenService().getTargetStateDirtyTokenSnapshot({runner})
 }
 
 const writeJsonArtifact = async ({
@@ -1879,6 +1895,7 @@ export const analyzeProjectTransferImportPackage = async (
       : getProjectTransferAnalyzeTargetPlan({packageFingerprint, payloads: parsed.payloads, runner: input.runner})
   })
   const targetAnalysis = targetAnalysisMeasurement.value
+  const targetState = await getTargetStateDirtyTokenSnapshotForPlan(input.runner)
   const blockers = [...packageContractBlockers, ...targetAnalysis.blockers]
   const packageWarnings = [...parsed.warnings, ...targetAnalysis.packageWarnings]
   const payloadValues = Object.values(parsed.payloads)
@@ -1918,6 +1935,7 @@ export const analyzeProjectTransferImportPackage = async (
     planSummary,
     stagingRevision,
     targetPlan: targetAnalysis.targetPlan,
+    targetState,
   })
   const assetManifest = getAssetManifest(parsed.payloads)
   const assetSummaryBytes = sumNumbers(

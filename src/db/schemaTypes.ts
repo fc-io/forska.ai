@@ -499,6 +499,34 @@ export type ProjectTransferHistoryRecord = {
   createdAt: Date
 }
 
+export type ProjectTransferTargetStateDirtyTokenRecord = {
+  surface: string
+  dirtyToken: number
+  lastReason: string | null
+  lastAdvancedAt: Date | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type ProjectTransferTargetStateUnknownTokenRecord = {
+  id: string
+  dirtyToken: number
+  lastReason: string | null
+  lastAdvancedAt: Date | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type ProjectTransferTargetStateCoverageRecord = {
+  id: string
+  coverageCodeVersion: string
+  coveredSurfacesJson: unknown
+  dependencyFingerprintAlgorithm: string
+  dependencyFingerprintCodeVersion: string
+  initializedAt: Date
+  updatedAt: Date
+}
+
 export type ProjectMartDirtyRefreshStateRecord = {
   projectId: string
   dirtyToken: number

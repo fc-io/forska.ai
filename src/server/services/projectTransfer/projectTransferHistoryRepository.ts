@@ -4,8 +4,16 @@ import type {ProjectTransferDirection, ProjectTransferHistoryRecord} from '../..
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
 import type {ProjectTransferCompletionPayload} from './projectTransferSession.ts'
+import {
+  getProjectTransferTargetStateDirtyTokenService,
+  type TargetStateDirtyTokenRunner,
+} from './projectTransferTargetStateDirtyTokenService.ts'
 
-type ProjectTransferHistoryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+type ProjectTransferHistoryRunner = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run?: (statement: string) => Promise<void>
+}
+type ProjectTransferHistoryWriterRunner = ProjectTransferHistoryRunner & {run: (statement: string) => Promise<void>}
 
 type ProjectTransferPayloadCounts = Record<string, number>
 
@@ -188,10 +196,27 @@ const findDuplicateImportHistoryByPackageFingerprint = async ({
   return rows.map(mapProjectTransferHistoryRecord)
 }
 
-const createProjectTransferHistory = async (params: CreateProjectTransferHistoryParams) => {
-  assertProjectTransferHistoryParams(params)
+const advanceProjectTransferHistoryDirtyToken = async ({
+  now,
+  runner,
+}: {
+  now: Date
+  runner: ProjectTransferHistoryRunner
+}) => {
+  return runner.run === undefined
+    ? undefined
+    : getProjectTransferTargetStateDirtyTokenService().advanceTargetStateDirtyTokensAtomically({
+        now,
+        reason: 'projectTransferHistory.write',
+        runner: runner as TargetStateDirtyTokenRunner,
+        surfaces: ['projectTransferHistory'],
+      })
+}
 
-  const runner = getRunner(params.runner)
+const createProjectTransferHistoryTx = async (
+  params: CreateProjectTransferHistoryParams & {runner: ProjectTransferHistoryRunner},
+) => {
+  const runner = params.runner
   const currentNow = params.now ?? new Date()
   const conflictClause = params.direction === 'import' ? 'ON CONFLICT(direction, session_id) DO NOTHING' : ''
   const [row] = await runner.queryJson<
@@ -232,6 +257,8 @@ const createProjectTransferHistory = async (params: CreateProjectTransferHistory
     ${conflictClause}
     RETURNING ${getProjectTransferHistorySelectSql()}
   `)
+  await (row ? advanceProjectTransferHistoryDirtyToken({now: currentNow, runner}) : undefined)
+
   const history =
     (row ? mapProjectTransferHistoryRecord(row) : null)
     ?? (params.direction === 'import'
@@ -243,6 +270,16 @@ const createProjectTransferHistory = async (params: CreateProjectTransferHistory
   }
 
   return history
+}
+
+const createProjectTransferHistory = async (params: CreateProjectTransferHistoryParams) => {
+  assertProjectTransferHistoryParams(params)
+
+  return params.runner
+    ? createProjectTransferHistoryTx({...params, runner: params.runner})
+    : (getAppDatabaseService().transaction((tx) => {
+        return createProjectTransferHistoryTx({...params, runner: tx as ProjectTransferHistoryWriterRunner})
+      }) as Promise<ProjectTransferHistoryRecord>)
 }
 
 const projectTransferHistoryRepository = {
