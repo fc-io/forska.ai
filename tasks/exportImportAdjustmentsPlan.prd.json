@@ -8,8 +8,8 @@
       "title": "Add raw article provenance export mode to the backend contract",
       "description": "As a project transfer operator, I want raw article provenance export behavior to be selectable so that I can choose package size versus fidelity intentionally.",
       "acceptanceCriteria": [
-        "Add a `rawArticleProvenanceMode` export option with `auto`, `include`, and `omit` values to the project-transfer export request and thread it through the export service and export context assembly.",
-        "`auto` preserves the current threshold-driven behavior, `include` forces raw provenance JSON fields into the package even above the current threshold, and `omit` forces those raw provenance fields out of the package regardless of estimate.",
+        "Add a `rawArticleProvenanceMode` export option with `include` and `omit` values to the project-transfer export request and thread it through the export service and export context assembly.",
+        "`include` forces raw provenance JSON fields into the package and `omit` forces those raw provenance fields out of the package regardless of estimate; `omit` is the default and `auto` is not supported.",
         "Export warnings and serialized payloads reflect the selected mode instead of only the current hardcoded threshold path.",
         "bun test src/server/services/projectTransfer/projectTransferExport.test.ts passes",
         "bun test src/server/routes/projectTransferRoutes.test.ts passes",
@@ -143,13 +143,13 @@
       "title": "Add raw provenance mode controls to the export UI",
       "description": "As a project transfer operator, I want to choose raw provenance mode from the export UI so that the browser and desktop flows use the intended export behavior without manual API calls.",
       "acceptanceCriteria": [
-        "The export action UI exposes raw provenance mode choices for project export with `auto` as the default.",
+        "The export action UI exposes raw provenance mode choices for project export with `omit` as the default.",
         "The selected mode is sent in the export start request for both inline downloads and queued export sessions.",
         "Adding the selector does not break the existing CSV export action or block the surrounding project list shell.",
         "bun test src/components/main/projectsGrid.vitest.tsx passes",
         "bun run build passes",
         "bun run desktop:build passes",
-        "Verify in browser that project export can be started with each raw provenance mode"
+        "Verify in browser that project export can be started with raw provenance mode `include` and `omit`"
       ],
       "priority": 8,
       "passes": true,

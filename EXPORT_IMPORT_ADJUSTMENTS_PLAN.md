@@ -64,7 +64,7 @@
 
 | # | Fix | What It Does Now | What It Should Do | Why It Helps |
 | --- | --- | --- | --- | --- |
-| 1 | Add an export-time raw provenance setting | Raw article provenance JSON is auto-omitted when the estimated size exceeds the hardcoded threshold | Add an export setting such as `rawArticleProvenanceMode: auto | include | omit`, with `auto` preserving the current heuristic | Makes omission user-controlled instead of surprising |
+| 1 | Add an export-time raw provenance setting | Raw article provenance JSON is omitted by default unless export explicitly requests inclusion | Keep `rawArticleProvenanceMode: include | omit`, with `omit` as the default; do not reintroduce `auto` | Makes omission user-controlled instead of surprising |
 | 2 | Thread the export setting through API and UI | Export route accepts an empty body and the UI always uses the default behavior | Accept export options in `/api/projects/:id/export-project` and expose the choice in the export action UI | Lets users choose fidelity vs package size intentionally |
 | 3 | Replace target remapping with imported-snapshot planning | Import analysis tries to map source providers/models onto existing enabled target rows | Resolve to concrete existing imported snapshot ids when an exact imported-snapshot match already exists; otherwise preserve analyze-time virtual ids like `new:provider:*` and `new:model:*` | Avoids silently changing benchmark-critical provider/model identity while keeping analyze and fidelity validation functional |
 | 4 | Reuse identical imported snapshots by dedicated snapshot fingerprint | Imported provider/model rows are currently created through the dependency-resolution materialization path | Reuse an existing imported snapshot row only when a stronger provider/model snapshot fingerprint matches exactly; otherwise materialize a new imported snapshot row | Prevents duplicate source-snapshot rows across repeated imports without collapsing nonequivalent models |
@@ -113,7 +113,7 @@
 - `bun test src/app/routes/+projects/-+import.vitest.tsx`
 - `bun run build`
 - `bun run desktop:build` if the export UI or shared import flow is touched
-- Browser verification: export a project with each raw provenance mode and inspect resulting warnings
+- Browser verification: export a project with raw provenance mode `include` and `omit` and inspect resulting warnings
 - Browser verification: export a project containing signed or credential-bearing URLs and confirm the package warns but preserves the exact URL values
 - Browser verification: import the same package twice and confirm exact-match imported provider/model snapshots are reused by fingerprint
 - Browser verification: import a package with judgments/human review rows and confirm analysis resolves judgments against reused or virtual imported snapshots without remapping
