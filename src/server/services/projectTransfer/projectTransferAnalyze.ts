@@ -18,6 +18,7 @@ import {
   type ProjectTransferStagedPackageMetadata,
   type ProjectTransferStagedPayloadMetadata,
   type ProjectTransferStagingProgressPayload,
+  type ProjectTransferStalePlanReasons,
   type ProjectTransferUploadMetadataPayload,
   validateProjectTransferPlanReadyToCommit,
   validateProjectTransferResourceGates,
@@ -128,6 +129,7 @@ export type ProjectTransferImportPlanArtifact = {
   summary: ProjectTransferPlanSummary
   targetPlan: ProjectTransferTargetPlan
   targetState?: ProjectTransferTargetStateDirtyTokenSnapshot | null
+  stalePlanReasons?: ProjectTransferStalePlanReasons
 }
 
 export type ProjectTransferImportAnalyzeResult = {

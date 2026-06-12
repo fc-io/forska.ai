@@ -1,5 +1,9 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {
+  getProjectTransferTargetStateDirtyTokenService,
+  projectTransferProviderDependencyDirtyTokenSurfaces,
+} from '../services/projectTransfer/projectTransferTargetStateDirtyTokenService.ts'
 import {getProviderCatalogEntry, type ProviderKind} from '../services/providerCatalog.ts'
 import {
   attachModelsToConnections,
@@ -36,6 +40,20 @@ type ProviderConnectionUsage = {
   projectCount: number
 }
 type DeleteProviderConnectionOptions = {afterModelCleanup?: () => Promise<void>}
+
+const advanceProviderConnectionProjectTransferDirtyTokens = async ({
+  databaseRunner,
+  reason,
+}: {
+  databaseRunner: DatabaseRunner
+  reason: string
+}) => {
+  await getProjectTransferTargetStateDirtyTokenService().advanceTargetStateDirtyTokensAtomically({
+    reason,
+    runner: databaseRunner,
+    surfaces: projectTransferProviderDependencyDirtyTokenSurfaces,
+  })
+}
 
 const isArchivedProviderConnection = (connection: ProviderConnectionRecord): boolean => {
   return connection.config.archived === true
@@ -308,11 +326,16 @@ const deleteProviderConnectionWithFallback = async (
 
       if (hasProviderConnectionDeleteUsage(usage)) {
         await archiveProviderConnections(databaseRunner, deleteTarget, options)
+        await advanceProviderConnectionProjectTransferDirtyTokens({
+          databaseRunner,
+          reason: 'providerConnection.archive',
+        })
 
         return getArchivedDeleteResult(usage)
       }
 
       await deleteProviderConnections(databaseRunner, deleteTarget.connectionIds, options)
+      await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner, reason: 'providerConnection.delete'})
 
       return getDeletedDeleteResult(usage)
     })) as DeleteProviderConnectionResult
@@ -329,6 +352,7 @@ const deleteProviderConnectionWithFallback = async (
       }
 
       await archiveProviderConnections(databaseRunner, deleteTarget)
+      await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner, reason: 'providerConnection.archive'})
 
       return getArchivedDeleteResult(usage)
     })) as DeleteProviderConnectionResult
@@ -505,44 +529,52 @@ export const createProviderConnection = async ({
   }
 
   const persistedConfig = getPersistedProviderConnectionConfigValue({config, providerKind})
-  const [created] = await getAppDatabaseService().queryJson<ProviderConnectionRow>(`
-    INSERT INTO app.provider_connection (
-      id,
-      provider_kind,
-      label,
-      enabled,
-      auth_mode,
-      base_url,
-      max_inflight_requests,
-      config_json,
-      secret_ref
-    )
-    VALUES (
-      ${getSqlLiteral(crypto.randomUUID())},
-      ${getSqlLiteral(providerKind)},
-      ${getSqlLiteral(label)},
-      TRUE,
-      ${getSqlLiteral(authMode)},
-      ${getSqlLiteral(baseURL)},
-      ${getSqlLiteral(maxInflightRequests)},
-      ${getJsonSqlLiteral(persistedConfig)},
-      ${getSqlLiteral(secretRef)}
-    )
-    RETURNING
-      id,
-      provider_kind AS providerKind,
-      label,
-      enabled,
-      auth_mode AS authMode,
-      base_url AS baseURL,
-      max_inflight_requests AS maxInflightRequests,
-      TO_JSON(config_json) AS configJson,
-      secret_ref AS secretRef,
-      last_checked_at AS lastCheckedAt,
-      last_error AS lastError,
-      created_at AS createdAt,
-      updated_at AS updatedAt
-  `)
+  const [created] = (await getAppDatabaseService().transaction(async (databaseRunner) => {
+    const rows = await databaseRunner.queryJson<ProviderConnectionRow>(`
+      INSERT INTO app.provider_connection (
+        id,
+        provider_kind,
+        label,
+        enabled,
+        auth_mode,
+        base_url,
+        max_inflight_requests,
+        config_json,
+        secret_ref
+      )
+      VALUES (
+        ${getSqlLiteral(crypto.randomUUID())},
+        ${getSqlLiteral(providerKind)},
+        ${getSqlLiteral(label)},
+        TRUE,
+        ${getSqlLiteral(authMode)},
+        ${getSqlLiteral(baseURL)},
+        ${getSqlLiteral(maxInflightRequests)},
+        ${getJsonSqlLiteral(persistedConfig)},
+        ${getSqlLiteral(secretRef)}
+      )
+      RETURNING
+        id,
+        provider_kind AS providerKind,
+        label,
+        enabled,
+        auth_mode AS authMode,
+        base_url AS baseURL,
+        max_inflight_requests AS maxInflightRequests,
+        TO_JSON(config_json) AS configJson,
+        secret_ref AS secretRef,
+        last_checked_at AS lastCheckedAt,
+        last_error AS lastError,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+    `)
+
+    if (rows.length > 0) {
+      await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner, reason: 'providerConnection.create'})
+    }
+
+    return rows
+  })) as ProviderConnectionRow[]
 
   if (!created) {
     throw new Error('Failed to create provider connection')
@@ -608,6 +640,8 @@ export const updateProviderConnection = async ({
     if (!nextConnection) {
       throw new Error('Failed to update provider connection')
     }
+
+    await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner: tx, reason: 'providerConnection.update'})
 
     return getProviderConnectionRecordFromRow(nextConnection)
   })) as ProviderConnectionRecord

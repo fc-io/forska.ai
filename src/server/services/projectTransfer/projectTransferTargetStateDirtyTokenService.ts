@@ -62,6 +62,13 @@ export const projectTransferTargetStateSafetySurfaces = [
   'projectTransferHistory',
 ] as const
 
+export const projectTransferProviderDependencyDirtyTokenSurfaces = [
+  'model',
+  'providerConnection',
+  'importedSnapshotMarker',
+  'snapshotFingerprintInput',
+] as const satisfies readonly ProjectTransferTargetStateSafetySurface[]
+
 export type ProjectTransferTargetStateSafetySurface = (typeof projectTransferTargetStateSafetySurfaces)[number]
 
 export type ProjectTransferTargetStateCoverageVersion = {

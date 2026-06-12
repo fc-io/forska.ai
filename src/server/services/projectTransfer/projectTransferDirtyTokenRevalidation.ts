@@ -1,4 +1,9 @@
 import {
+  type ProjectTransferStalePlanReasons,
+  type ProjectTransferStalePlanReasonSurface,
+  projectTransferStalePlanReasonSurfaces,
+} from './projectTransferContracts.ts'
+import {
   isProjectTransferTargetStateCoverageComplete,
   projectTransferDependencyFingerprintAlgorithm,
   projectTransferDependencyFingerprintCodeVersion,
@@ -11,6 +16,7 @@ import {
 export type ProjectTransferDirtyTokenFullRevalidationReason =
   | 'analyzed_target_state_missing'
   | 'analyzed_target_state_coverage_incomplete'
+  | 'current_target_state_missing'
   | 'current_target_state_coverage_incomplete'
   | 'target_state_coverage_version_changed'
   | 'target_state_dependency_fingerprint_version_changed'
@@ -30,9 +36,45 @@ export type ProjectTransferDirtyTokenRevalidationDecision =
 
 type ProjectTransferDirtyTokenRevalidationInput = {
   analyzedTargetState?: ProjectTransferTargetStateDirtyTokenSnapshot | null
-  currentTargetState: ProjectTransferTargetStateDirtyTokenSnapshot
+  currentTargetState?: ProjectTransferTargetStateDirtyTokenSnapshot | null
   enableIncrementalRevalidation?: boolean
 }
+
+const projectTransferAllStalePlanReasonSurfaces = [...projectTransferStalePlanReasonSurfaces]
+
+const projectTransferDirtyTokenStalePlanSurfaceByTargetStateSurface = {
+  article: ['targetArticle'],
+  articleIdentifier: ['targetArticle'],
+  humanJudgment: ['humanReview'],
+  humanJudgmentSummary: ['humanReview'],
+  importedSnapshotMarker: ['dependency'],
+  importRoute: ['targetRoute'],
+  judgment: ['judgment'],
+  judgmentAssessment: ['assessment'],
+  model: ['dependency'],
+  project: ['targetProject'],
+  projectArticle: ['targetArticle'],
+  projectImportRoute: ['targetRoute'],
+  projectPrompt: ['targetPrompt'],
+  projectTransferHistory: ['duplicatePackageHistory'],
+  prompt: ['targetPrompt'],
+  providerConnection: ['dependency'],
+  review: ['humanReview'],
+  snapshotFingerprintInput: ['dependency'],
+} as const satisfies Record<ProjectTransferTargetStateSafetySurface, readonly ProjectTransferStalePlanReasonSurface[]>
+
+const projectTransferAllSurfaceFallbackReasons = new Set<ProjectTransferDirtyTokenFullRevalidationReason>([
+  'analyzed_target_state_missing',
+  'analyzed_target_state_coverage_incomplete',
+  'current_target_state_missing',
+  'current_target_state_coverage_incomplete',
+  'target_state_coverage_version_changed',
+  'target_state_global_unknown_token_changed',
+])
+
+const projectTransferDependencySurfaceFallbackReasons = new Set<ProjectTransferDirtyTokenFullRevalidationReason>([
+  'target_state_dependency_fingerprint_version_changed',
+])
 
 const getFullRevalidationDecision = (
   reason: ProjectTransferDirtyTokenFullRevalidationReason,
@@ -74,10 +116,14 @@ const dependencyFingerprintVersionChanged = (
 export const getProjectTransferDirtyTokenRevalidationDecision = ({
   analyzedTargetState,
   currentTargetState,
-  enableIncrementalRevalidation = false,
+  enableIncrementalRevalidation = true,
 }: ProjectTransferDirtyTokenRevalidationInput): ProjectTransferDirtyTokenRevalidationDecision => {
   if (analyzedTargetState === null || analyzedTargetState === undefined) {
     return getFullRevalidationDecision('analyzed_target_state_missing')
+  }
+
+  if (currentTargetState === null || currentTargetState === undefined) {
+    return getFullRevalidationDecision('current_target_state_missing')
   }
 
   if (!isProjectTransferTargetStateCoverageComplete(analyzedTargetState)) {
@@ -123,4 +169,28 @@ export const getProjectTransferDirtyTokenRevalidationDecision = ({
         status: 'incremental_revalidation_allowed',
       }
     : getFullRevalidationDecision('incremental_revalidation_disabled')
+}
+
+const getReasonSurfaces = (decision: ProjectTransferDirtyTokenRevalidationDecision) => {
+  return decision.eligible
+    ? []
+    : projectTransferAllSurfaceFallbackReasons.has(decision.reason)
+      ? projectTransferAllStalePlanReasonSurfaces
+      : projectTransferDependencySurfaceFallbackReasons.has(decision.reason)
+        ? (['dependency', 'judgment', 'assessment', 'humanReview'] as const)
+        : decision.changedSurfaces.flatMap((surface) => {
+            return projectTransferDirtyTokenStalePlanSurfaceByTargetStateSurface[surface]
+          })
+}
+
+export const getProjectTransferDirtyTokenStalePlanReasons = (
+  decision: ProjectTransferDirtyTokenRevalidationDecision,
+): ProjectTransferStalePlanReasons => {
+  const reasonSurfaces = Array.from(new Set(getReasonSurfaces(decision)))
+
+  return decision.eligible
+    ? {}
+    : reasonSurfaces.reduce<ProjectTransferStalePlanReasons>((reasons, surface) => {
+        return {...reasons, [surface]: [{reason: decision.reason, targetStateSurfaces: decision.changedSurfaces}]}
+      }, {})
 }

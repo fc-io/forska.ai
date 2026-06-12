@@ -43,6 +43,11 @@ import {
   type ProjectTransferDependencyResolutionState,
   revalidateProjectTransferResolvedDependencies,
 } from './projectTransferDependencyResolution.ts'
+import {
+  getProjectTransferDirtyTokenRevalidationDecision,
+  getProjectTransferDirtyTokenStalePlanReasons,
+  type ProjectTransferDirtyTokenRevalidationDecision,
+} from './projectTransferDirtyTokenRevalidation.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
 import {
@@ -72,6 +77,10 @@ import {
   getProjectTransferProgressStagingRevision,
   validateProjectTransferReviewedPlanStagingRevision,
 } from './projectTransferStaging.ts'
+import {
+  getProjectTransferTargetStateDirtyTokenService,
+  type ProjectTransferTargetStateDirtyTokenSnapshot,
+} from './projectTransferTargetStateDirtyTokenService.ts'
 
 type RuntimePathOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
 
@@ -126,6 +135,11 @@ type ProjectTransferCommitRevalidationResult = {
   performanceMetrics?: ProjectTransferPerformanceMetrics
   plan: ProjectTransferImportPlanArtifact
   ready: boolean
+}
+
+type ProjectTransferCommitRevalidationContext = {
+  currentTargetState: ProjectTransferTargetStateDirtyTokenSnapshot | null
+  dirtyTokenDecision: ProjectTransferDirtyTokenRevalidationDecision
 }
 
 type ProjectTransferCommitResolvedDependencyPlanArtifact = ProjectTransferImportPlanArtifact & {
@@ -760,6 +774,51 @@ const getCommitAnalyzeTargetRunner = ({
   return repositories?.analyzeTargetRunner ?? analyzeTargetRunner
 }
 
+const getCurrentTargetStateDirtyTokenSnapshotForCommit = async (runner?: ProjectTransferAnalyzeTargetRunner | null) => {
+  return runner === null
+    ? null
+    : runner === undefined
+      ? getProjectTransferTargetStateDirtyTokenService().getTargetStateDirtyTokenSnapshot()
+      : runner.run === undefined
+        ? null
+        : getProjectTransferTargetStateDirtyTokenService().getTargetStateDirtyTokenSnapshot({runner})
+}
+
+const getCommitRevalidationContext = async ({
+  plan,
+  repositories,
+}: {
+  plan: ProjectTransferImportPlanArtifact
+  repositories?: ProjectTransferCommitRevalidationInput['repositories']
+}): Promise<ProjectTransferCommitRevalidationContext> => {
+  const targetStateRunner =
+    repositories?.analyzeTargetRunner ?? repositories?.dependencyRepositories?.analyzeTargetRunner
+  const currentTargetState = await getCurrentTargetStateDirtyTokenSnapshotForCommit(targetStateRunner)
+  const dirtyTokenDecision = getProjectTransferDirtyTokenRevalidationDecision({
+    analyzedTargetState: plan.targetState,
+    currentTargetState,
+  })
+
+  return {currentTargetState, dirtyTokenDecision}
+}
+
+const getPlanWithCommitRevalidationContext = ({
+  context,
+  plan,
+}: {
+  context: ProjectTransferCommitRevalidationContext
+  plan: ProjectTransferImportPlanArtifact
+}): ProjectTransferImportPlanArtifact => {
+  const stalePlanReasons = getProjectTransferDirtyTokenStalePlanReasons(context.dirtyTokenDecision)
+
+  return {
+    ...plan,
+    stalePlanReasons,
+    summary: {...plan.summary, stalePlanReasons},
+    targetState: context.currentTargetState ?? plan.targetState ?? null,
+  }
+}
+
 export const revalidateProjectTransferCommitPlan = async ({
   analysis,
   layout,
@@ -768,8 +827,14 @@ export const revalidateProjectTransferCommitPlan = async ({
   repositories,
   ...runtimeOptions
 }: ProjectTransferCommitRevalidationInput): Promise<ProjectTransferCommitRevalidationResult> => {
-  const payloads = await readExtractedPayloads({...runtimeOptions, layout})
+  const context = await getCommitRevalidationContext({plan, repositories})
+
+  if (context.dirtyTokenDecision.eligible) {
+    return getCommitRevalidationResult(plan, false)
+  }
+
   const revalidate = async (analyzeTargetRunner?: ProjectTransferAnalyzeTargetRunner) => {
+    const payloads = await readExtractedPayloads({...runtimeOptions, layout})
     const freshTarget = await getProjectTransferAnalyzeTargetPlan({
       packageFingerprint: analysis.packageFingerprint,
       payloads,
@@ -778,7 +843,10 @@ export const revalidateProjectTransferCommitPlan = async ({
 
     if (targetPlanRevalidationChanged({currentPlan: plan.targetPlan, freshPlan: freshTarget.targetPlan})) {
       return getCommitRevalidationResult(
-        {...getPlanWithTargetRevalidation({freshTarget, plan}), planRevision: nextPlanRevision},
+        getPlanWithCommitRevalidationContext({
+          context,
+          plan: {...getPlanWithTargetRevalidation({freshTarget, plan}), planRevision: nextPlanRevision},
+        }),
         true,
       )
     }
@@ -793,26 +861,32 @@ export const revalidateProjectTransferCommitPlan = async ({
 
     if (dependencyResult.status === 'error') {
       return getCommitRevalidationResult(
-        {
-          ...getPlanWithDependencyRevalidationError({error: dependencyResult.error, plan}),
-          planRevision: nextPlanRevision,
-        },
+        getPlanWithCommitRevalidationContext({
+          context,
+          plan: {
+            ...getPlanWithDependencyRevalidationError({error: dependencyResult.error, plan}),
+            planRevision: nextPlanRevision,
+          },
+        }),
         true,
       )
     }
 
     return dependencyResult.changed
       ? getCommitRevalidationResult(
-          getPlanWithRevalidationBlocker({
-            blocker: getCommitBlocker({
-              code: 'commit_dependency_plan_stale',
-              message: 'Provider, model, judgment, or human review assumptions changed since analysis',
+          getPlanWithCommitRevalidationContext({
+            context,
+            plan: getPlanWithRevalidationBlocker({
+              blocker: getCommitBlocker({
+                code: 'commit_dependency_plan_stale',
+                message: 'Provider, model, judgment, or human review assumptions changed since analysis',
+              }),
+              plan: dependencyResult.plan,
             }),
-            plan: dependencyResult.plan,
           }),
           true,
         )
-      : getCommitRevalidationResult(plan, false)
+      : getCommitRevalidationResult(getPlanWithCommitRevalidationContext({context, plan}), false)
   }
 
   return repositories?.analyzeTargetRunner === undefined

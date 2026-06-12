@@ -144,6 +144,18 @@ export const projectTransferConflictCountKeys = [
   'humanReviewFidelityConflictCount',
 ] as const
 
+export const projectTransferStalePlanReasonSurfaces = [
+  'dependency',
+  'targetProject',
+  'targetArticle',
+  'targetPrompt',
+  'targetRoute',
+  'judgment',
+  'assessment',
+  'humanReview',
+  'duplicatePackageHistory',
+] as const
+
 export const projectTransferWriterOnlyCleanupStates = ['cancelled', 'expired'] as const
 
 export type ProjectTransferValidationResult = {ok: true} | {error: string; ok: false}
@@ -245,10 +257,17 @@ export type ProjectTransferOverlapSummaryKey = (typeof projectTransferOverlapSum
 export type ProjectTransferConflictCountKey = (typeof projectTransferConflictCountKeys)[number]
 export type ProjectTransferJudgmentConflictStatus = (typeof projectTransferJudgmentConflictStatuses)[number]
 export type ProjectTransferRawArticleProvenanceMode = (typeof projectTransferRawArticleProvenanceModes)[number]
+export type ProjectTransferStalePlanReasonSurface = (typeof projectTransferStalePlanReasonSurfaces)[number]
 
 export type ProjectTransferOverlapCounts = Record<ProjectTransferOverlapSummaryKey, number> & Record<string, number>
 
 export type ProjectTransferConflictCounts = Record<ProjectTransferConflictCountKey, number> & Record<string, number>
+
+export type ProjectTransferStalePlanReason = {reason: string; targetStateSurfaces: string[]}
+
+export type ProjectTransferStalePlanReasons = Partial<
+  Record<ProjectTransferStalePlanReasonSurface, ProjectTransferStalePlanReason[]>
+>
 
 export type ProjectTransferPlanBlockerResolutionKind = 'requires_new_package_or_target_changes' | 'wizard_resolvable'
 
@@ -269,6 +288,7 @@ export type ProjectTransferPlanSummary = {
   packageCounts?: Record<ProjectTransferPayloadKey, number>
   packageFingerprint?: string | null
   packageWarnings?: ProjectTransferPackageWarning[]
+  stalePlanReasons?: ProjectTransferStalePlanReasons
   warningCount: number
 }
 

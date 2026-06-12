@@ -3,6 +3,10 @@ import {getProviderModelOptions, type ProviderModelOptions} from '../../utils/pr
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {
+  getProjectTransferTargetStateDirtyTokenService,
+  projectTransferProviderDependencyDirtyTokenSurfaces,
+} from '../services/projectTransfer/projectTransferTargetStateDirtyTokenService.ts'
+import {
   type DatabaseQueryRunner,
   type DatabaseRunner,
   getJsonSqlLiteral,
@@ -18,6 +22,20 @@ import {
   setProviderModelMetadataOptions,
 } from './providerModelMetadata.ts'
 import {type ProviderConnectionRecord, type ProviderListedModel, type ProviderModelRecord} from './providerTypes.ts'
+
+const advanceProviderModelProjectTransferDirtyTokens = async ({
+  databaseRunner,
+  reason,
+}: {
+  databaseRunner: DatabaseRunner
+  reason: string
+}) => {
+  await getProjectTransferTargetStateDirtyTokenService().advanceTargetStateDirtyTokensAtomically({
+    reason,
+    runner: databaseRunner,
+    surfaces: projectTransferProviderDependencyDirtyTokenSurfaces,
+  })
+}
 
 const getProviderModelRows = async ({enabledOnly}: {enabledOnly: boolean}): Promise<ProviderModelRecord[]> => {
   const enabledClause = enabledOnly ? `WHERE COALESCE(pc.enabled, TRUE) = TRUE` : ''
@@ -401,46 +419,53 @@ export const createProviderModel = async ({
     providerKind: connection.providerKind,
     source: source === 'manual' ? 'manual' : 'provider',
   })
-  const databaseRunner = getAppDatabaseService()
-  const [created] = await queryProviderModelReturnRows({
-    databaseRunner,
-    providerConnectionId: connection.id,
-    remoteModelId,
-    statement: `
-      INSERT INTO app.model (
-        id,
-        provider_connection_id,
-        name,
-        remote_model_id,
-        display_name,
-        variant,
-        source,
-        enabled,
-        metadata_json
-      )
-      VALUES (
-        ${getSqlLiteral(crypto.randomUUID())},
-        ${getSqlLiteral(connection.id)},
-        ${getSqlLiteral(displayName)},
-        ${getSqlLiteral(remoteModelId)},
-        ${getSqlLiteral(displayName)},
-        ${getSqlLiteral(variant)},
-        ${getSqlLiteral(source)},
-        TRUE,
-        ${getJsonSqlLiteral(persistedMetadataJson)}
-      )
-      ON CONFLICT DO NOTHING
-    `,
-    variant,
-  })
-  const createdRow =
-    created
-    ?? (await getProviderModelRowByNaturalKey({
+  const createdRow = (await getAppDatabaseService().transaction(async (databaseRunner) => {
+    const [created] = await queryProviderModelReturnRows({
       databaseRunner,
       providerConnectionId: connection.id,
       remoteModelId,
+      statement: `
+        INSERT INTO app.model (
+          id,
+          provider_connection_id,
+          name,
+          remote_model_id,
+          display_name,
+          variant,
+          source,
+          enabled,
+          metadata_json
+        )
+        VALUES (
+          ${getSqlLiteral(crypto.randomUUID())},
+          ${getSqlLiteral(connection.id)},
+          ${getSqlLiteral(displayName)},
+          ${getSqlLiteral(remoteModelId)},
+          ${getSqlLiteral(displayName)},
+          ${getSqlLiteral(variant)},
+          ${getSqlLiteral(source)},
+          TRUE,
+          ${getJsonSqlLiteral(persistedMetadataJson)}
+        )
+        ON CONFLICT DO NOTHING
+      `,
       variant,
-    }))
+    })
+    const row =
+      created
+      ?? (await getProviderModelRowByNaturalKey({
+        databaseRunner,
+        providerConnectionId: connection.id,
+        remoteModelId,
+        variant,
+      }))
+
+    if (row) {
+      await advanceProviderModelProjectTransferDirtyTokens({databaseRunner, reason: 'providerModel.create'})
+    }
+
+    return row
+  })) as ProviderModelRow | null
 
   if (!createdRow) {
     throw new Error('Failed to create provider model')
@@ -504,6 +529,8 @@ export const updateProviderModel = async (
       })
     }
 
+    await advanceProviderModelProjectTransferDirtyTokens({databaseRunner, reason: 'providerModel.update'})
+
     return getProviderModelRowByIdWithRunner(databaseRunner, id)
   })) as ProviderModelRow | null
 
@@ -522,12 +549,18 @@ export const upsertDiscoveredModels = async ({
   models: ProviderListedModel[]
 }): Promise<ProviderModelRecord[]> => {
   return (await getAppDatabaseService().transaction(async (databaseRunner) => {
-    return upsertDiscoveredProviderModelsRecursively({
+    const savedModels = await upsertDiscoveredProviderModelsRecursively({
       connection,
       databaseRunner,
       discoveredModels: models,
       processed: [],
     })
+
+    if (models.length > 0) {
+      await advanceProviderModelProjectTransferDirtyTokens({databaseRunner, reason: 'providerModel.upsertDiscovered'})
+    }
+
+    return savedModels
   })) as ProviderModelRecord[]
 }
 

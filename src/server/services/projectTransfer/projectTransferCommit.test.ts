@@ -14,13 +14,77 @@ import {
   commitProjectTransferImportSession,
   type ProjectTransferCommitInput,
   type ProjectTransferCommitResult,
+  revalidateProjectTransferCommitPlan,
 } from './projectTransferCommit.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import type {ProjectTransferPlanSummary} from './projectTransferSession.ts'
 import {getProjectTransferImportTempLayout} from './projectTransferSession.ts'
+import {
+  projectTransferDependencyFingerprintAlgorithm,
+  projectTransferDependencyFingerprintCodeVersion,
+  projectTransferTargetStateCoverageCodeVersion,
+  type ProjectTransferTargetStateDirtyTokenSnapshot,
+  type ProjectTransferTargetStateSafetySurface,
+  projectTransferTargetStateSafetySurfaces,
+} from './projectTransferTargetStateDirtyTokenService.ts'
 
 type MutableSessionRepository = NonNullable<ProjectTransferCommitInput['repositories']>['sessionRepository']
 type RevalidateInput = Parameters<NonNullable<NonNullable<ProjectTransferCommitInput['repositories']>['revalidate']>>[0]
+
+const getCompleteTargetStateTokens = (overrides?: Partial<Record<ProjectTransferTargetStateSafetySurface, number>>) => {
+  return projectTransferTargetStateSafetySurfaces.reduce<
+    Partial<Record<ProjectTransferTargetStateSafetySurface, number>>
+  >((tokens, surface) => {
+    return {...tokens, [surface]: overrides?.[surface] ?? 0}
+  }, {})
+}
+
+const getTargetStateSnapshot = (
+  overrides?: Partial<ProjectTransferTargetStateDirtyTokenSnapshot>,
+): ProjectTransferTargetStateDirtyTokenSnapshot => {
+  return {
+    capturedAt: '2026-05-28T10:00:00.000Z',
+    coverage: {
+      coverageCodeVersion: projectTransferTargetStateCoverageCodeVersion,
+      coveredSurfaces: [...projectTransferTargetStateSafetySurfaces],
+      dependencyFingerprintAlgorithm: projectTransferDependencyFingerprintAlgorithm,
+      dependencyFingerprintCodeVersion: projectTransferDependencyFingerprintCodeVersion,
+      initializedAt: '2026-05-28T09:00:00.000Z',
+      updatedAt: '2026-05-28T09:00:00.000Z',
+    },
+    globalUnknownToken: 0,
+    tokens: getCompleteTargetStateTokens(),
+    ...overrides,
+  }
+}
+
+const getTargetStateSnapshotRunner = (snapshot: ProjectTransferTargetStateDirtyTokenSnapshot) => {
+  return {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      return statement.includes('project_transfer_target_state_coverage')
+        ? ([
+            {
+              coverageCodeVersion: snapshot.coverage?.coverageCodeVersion ?? null,
+              coveredSurfacesJson: snapshot.coverage?.coveredSurfaces ?? [],
+              dependencyFingerprintAlgorithm: snapshot.coverage?.dependencyFingerprintAlgorithm ?? null,
+              dependencyFingerprintCodeVersion: snapshot.coverage?.dependencyFingerprintCodeVersion ?? null,
+              initializedAt: snapshot.coverage?.initializedAt ?? '2026-05-28T09:00:00.000Z',
+              updatedAt: snapshot.coverage?.updatedAt ?? '2026-05-28T09:00:00.000Z',
+            },
+          ] as T[])
+        : statement.includes('project_transfer_target_state_unknown_token')
+          ? ([{dirtyToken: snapshot.globalUnknownToken}] as T[])
+          : statement.includes('project_transfer_target_state_dirty_token')
+            ? (Object.entries(snapshot.tokens).map(([surface, dirtyToken]) => {
+                return {dirtyToken, surface}
+              }) as T[])
+            : []
+    },
+    run: async () => {
+      return undefined
+    },
+  }
+}
 
 const getRuntimeRoot = () => {
   return mkdtempSync(join(tmpdir(), `f2-project-transfer-commit-${process.pid}-`))
@@ -657,6 +721,27 @@ test('project transfer commit allows older analysis snapshots for resolved plan 
 
     expect(result.status).toBe('completed')
     expect(fake.calls.transition[0]).toMatchObject({expectedPlanRevision: 2, nextState: 'committing'})
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit revalidation skips payload reads when target-state dirty tokens are unchanged', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const targetState = getTargetStateSnapshot()
+    const plan = {...getPlan({planRevision: 1}), targetState}
+    const result = await revalidateProjectTransferCommitPlan({
+      analysis: getAnalysis(1),
+      cwd,
+      layout: getProjectTransferImportTempLayout('commit-session'),
+      nextPlanRevision: 2,
+      plan,
+      repositories: {analyzeTargetRunner: getTargetStateSnapshotRunner(targetState)},
+    })
+
+    expect(result).toMatchObject({changed: false, ready: true})
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

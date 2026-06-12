@@ -2,7 +2,10 @@ import {rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
-import {getProjectTransferDirtyTokenRevalidationDecision} from './projectTransferDirtyTokenRevalidation.ts'
+import {
+  getProjectTransferDirtyTokenRevalidationDecision,
+  getProjectTransferDirtyTokenStalePlanReasons,
+} from './projectTransferDirtyTokenRevalidation.ts'
 import {
   projectTransferDependencyFingerprintAlgorithm,
   projectTransferDependencyFingerprintCodeVersion,
@@ -120,6 +123,10 @@ test('project transfer dirty-token revalidation falls back when coverage or toke
     analyzedTargetState: null,
     currentTargetState: completeSnapshot,
   })
+  const missingCurrent = getProjectTransferDirtyTokenRevalidationDecision({
+    analyzedTargetState: completeSnapshot,
+    currentTargetState: null,
+  })
   const missingToken = getProjectTransferDirtyTokenRevalidationDecision({
     analyzedTargetState: getSnapshot({tokens: missingArticleTokens}),
     currentTargetState: completeSnapshot,
@@ -132,6 +139,7 @@ test('project transfer dirty-token revalidation falls back when coverage or toke
   })
 
   expect(missingAnalyzed).toMatchObject({reason: 'analyzed_target_state_missing', status: 'full_revalidation_required'})
+  expect(missingCurrent).toMatchObject({reason: 'current_target_state_missing', status: 'full_revalidation_required'})
   expect(missingToken).toMatchObject({
     changedSurfaces: ['article'],
     reason: 'target_state_dirty_token_missing',
@@ -165,14 +173,14 @@ test('project transfer dirty-token revalidation requires matching coverage versi
     currentTargetState: completeSnapshot,
     enableIncrementalRevalidation: true,
   })
-  const disabledByDefault = getProjectTransferDirtyTokenRevalidationDecision({
+  const enabledByDefault = getProjectTransferDirtyTokenRevalidationDecision({
     analyzedTargetState: completeSnapshot,
     currentTargetState: completeSnapshot,
   })
-  const enabled = getProjectTransferDirtyTokenRevalidationDecision({
+  const disabled = getProjectTransferDirtyTokenRevalidationDecision({
     analyzedTargetState: completeSnapshot,
     currentTargetState: completeSnapshot,
-    enableIncrementalRevalidation: true,
+    enableIncrementalRevalidation: false,
   })
 
   expect(staleCoverage).toMatchObject({
@@ -183,11 +191,63 @@ test('project transfer dirty-token revalidation requires matching coverage versi
     reason: 'target_state_dependency_fingerprint_version_changed',
     status: 'full_revalidation_required',
   })
-  expect(disabledByDefault).toMatchObject({
-    reason: 'incremental_revalidation_disabled',
+  expect(enabledByDefault).toMatchObject({eligible: true, reason: 'target_state_unchanged'})
+  expect(disabled).toMatchObject({reason: 'incremental_revalidation_disabled', status: 'full_revalidation_required'})
+})
+
+test('project transfer dirty-token revalidation reports changed surfaces as stale-plan reasons', () => {
+  const completeSnapshot = getSnapshot()
+  const changed = getProjectTransferDirtyTokenRevalidationDecision({
+    analyzedTargetState: completeSnapshot,
+    currentTargetState: getSnapshot({tokens: getCompleteTokens({article: 2, prompt: 3, projectTransferHistory: 4})}),
+  })
+  const reasons = getProjectTransferDirtyTokenStalePlanReasons(changed)
+
+  expect(changed).toMatchObject({
+    changedSurfaces: ['article', 'prompt', 'projectTransferHistory'],
+    reason: 'target_state_dirty_token_changed',
     status: 'full_revalidation_required',
   })
-  expect(enabled).toMatchObject({eligible: true, reason: 'target_state_unchanged'})
+  expect(reasons).toMatchObject({
+    duplicatePackageHistory: [{reason: 'target_state_dirty_token_changed'}],
+    targetArticle: [{reason: 'target_state_dirty_token_changed'}],
+    targetPrompt: [{reason: 'target_state_dirty_token_changed'}],
+  })
+})
+
+test('project transfer dirty-token revalidation maps full fallback reasons to conservative stale surfaces', () => {
+  const completeSnapshot = getSnapshot()
+  const unknownChanged = getProjectTransferDirtyTokenRevalidationDecision({
+    analyzedTargetState: completeSnapshot,
+    currentTargetState: getSnapshot({globalUnknownToken: 1}),
+  })
+  const dependencyFingerprintChanged = getProjectTransferDirtyTokenRevalidationDecision({
+    analyzedTargetState: getSnapshot({
+      coverage: {
+        ...(completeSnapshot.coverage as NonNullable<typeof completeSnapshot.coverage>),
+        dependencyFingerprintCodeVersion: 'older-fingerprint-version',
+      },
+    }),
+    currentTargetState: completeSnapshot,
+  })
+
+  expect(Object.keys(getProjectTransferDirtyTokenStalePlanReasons(unknownChanged)).sort()).toEqual([
+    'assessment',
+    'dependency',
+    'duplicatePackageHistory',
+    'humanReview',
+    'judgment',
+    'targetArticle',
+    'targetProject',
+    'targetPrompt',
+    'targetRoute',
+  ])
+  expect(Object.keys(getProjectTransferDirtyTokenStalePlanReasons(dependencyFingerprintChanged)).sort()).toEqual([
+    'assessment',
+    'dependency',
+    'humanReview',
+    'judgment',
+  ])
 })
 
 test('project transfer target-state service stores coverage and advances known and unknown tokens', () => {

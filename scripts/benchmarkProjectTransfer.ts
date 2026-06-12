@@ -3,10 +3,22 @@ import {mkdir} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
-import {analyzeProjectTransferImportPackage} from '../src/server/services/projectTransfer/projectTransferAnalyze.ts'
+import {
+  analyzeProjectTransferImportPackage,
+  type ProjectTransferImportAnalysisArtifact,
+  type ProjectTransferImportPlanArtifact,
+} from '../src/server/services/projectTransfer/projectTransferAnalyze.ts'
 import type {ProjectTransferAnalyzeTargetRunner} from '../src/server/services/projectTransfer/projectTransferAnalyzeTarget.ts'
-import {getProjectTransferPackageFingerprint, getProjectTransferSha256Checksum} from '../src/server/services/projectTransfer/projectTransferFingerprint.ts'
-import {buildProjectTransferManifest, getProjectTransferManifestPayloadEntry} from '../src/server/services/projectTransfer/projectTransferManifest.ts'
+import {revalidateProjectTransferCommitPlan} from '../src/server/services/projectTransfer/projectTransferCommit.ts'
+import type {ProjectTransferPlanSummary} from '../src/server/services/projectTransfer/projectTransferContracts.ts'
+import {
+  getProjectTransferPackageFingerprint,
+  getProjectTransferSha256Checksum,
+} from '../src/server/services/projectTransfer/projectTransferFingerprint.ts'
+import {
+  buildProjectTransferManifest,
+  getProjectTransferManifestPayloadEntry,
+} from '../src/server/services/projectTransfer/projectTransferManifest.ts'
 import {
   getProjectTransferPayloadFixtureMap,
   type ProjectTransferPayload,
@@ -15,6 +27,8 @@ import {
 } from '../src/server/services/projectTransfer/projectTransferPayloadSchemas.ts'
 import {
   getProjectTransferPerformanceMetrics,
+  getProjectTransferPerformanceRowCountersFromPayloads,
+  measureProjectTransferPhase,
   projectTransferMetricUnavailable,
   type ProjectTransferPerformanceMetrics,
 } from '../src/server/services/projectTransfer/projectTransferPerformanceMetrics.ts'
@@ -26,6 +40,14 @@ import {
   projectTransferPayloadPathByKey,
 } from '../src/server/services/projectTransfer/projectTransferSchemas.ts'
 import {getProjectTransferImportTempLayout} from '../src/server/services/projectTransfer/projectTransferSession.ts'
+import {
+  projectTransferDependencyFingerprintAlgorithm,
+  projectTransferDependencyFingerprintCodeVersion,
+  projectTransferTargetStateCoverageCodeVersion,
+  type ProjectTransferTargetStateDirtyTokenSnapshot,
+  type ProjectTransferTargetStateSafetySurface,
+  projectTransferTargetStateSafetySurfaces,
+} from '../src/server/services/projectTransfer/projectTransferTargetStateDirtyTokenService.ts'
 import {writeProjectTransferZipPackage} from '../src/server/services/projectTransfer/projectTransferZip.ts'
 
 type ProjectTransferBenchmarkFixture =
@@ -46,6 +68,9 @@ type ProjectTransferBenchmarkArgs = {
 }
 
 type ProjectTransferBenchmarkPayloadOverride = (payloads: ProjectTransferPayloadByKey) => ProjectTransferPayloadByKey
+type ProjectTransferGeneratedBenchmarkMetrics = (
+  fixture: ProjectTransferBenchmarkFixture,
+) => Promise<ProjectTransferPerformanceMetrics>
 
 const projectTransferBenchmarkFixtures = [
   'small-inline',
@@ -123,6 +148,60 @@ const getEmptyAnalyzeTargetRunner = (): ProjectTransferAnalyzeTargetRunner => {
   }
 }
 
+const getCompleteTargetStateTokens = () => {
+  return projectTransferTargetStateSafetySurfaces.reduce<
+    Partial<Record<ProjectTransferTargetStateSafetySurface, number>>
+  >((tokens, surface) => {
+    return {...tokens, [surface]: 0}
+  }, {})
+}
+
+const getBenchmarkTargetStateSnapshot = (): ProjectTransferTargetStateDirtyTokenSnapshot => {
+  return {
+    capturedAt: '2026-06-12T00:00:00.000Z',
+    coverage: {
+      coverageCodeVersion: projectTransferTargetStateCoverageCodeVersion,
+      coveredSurfaces: [...projectTransferTargetStateSafetySurfaces],
+      dependencyFingerprintAlgorithm: projectTransferDependencyFingerprintAlgorithm,
+      dependencyFingerprintCodeVersion: projectTransferDependencyFingerprintCodeVersion,
+      initializedAt: '2026-06-12T00:00:00.000Z',
+      updatedAt: '2026-06-12T00:00:00.000Z',
+    },
+    globalUnknownToken: 0,
+    tokens: getCompleteTargetStateTokens(),
+  }
+}
+
+const getTargetStateSnapshotRunner = (
+  snapshot: ProjectTransferTargetStateDirtyTokenSnapshot,
+): ProjectTransferAnalyzeTargetRunner => {
+  return {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      return statement.includes('project_transfer_target_state_coverage')
+        ? ([
+            {
+              coverageCodeVersion: snapshot.coverage?.coverageCodeVersion ?? null,
+              coveredSurfacesJson: snapshot.coverage?.coveredSurfaces ?? [],
+              dependencyFingerprintAlgorithm: snapshot.coverage?.dependencyFingerprintAlgorithm ?? null,
+              dependencyFingerprintCodeVersion: snapshot.coverage?.dependencyFingerprintCodeVersion ?? null,
+              initializedAt: snapshot.coverage?.initializedAt ?? '2026-06-12T00:00:00.000Z',
+              updatedAt: snapshot.coverage?.updatedAt ?? '2026-06-12T00:00:00.000Z',
+            },
+          ] as T[])
+        : statement.includes('project_transfer_target_state_unknown_token')
+          ? ([{dirtyToken: snapshot.globalUnknownToken}] as T[])
+          : statement.includes('project_transfer_target_state_dirty_token')
+            ? (Object.entries(snapshot.tokens).map(([surface, dirtyToken]) => {
+                return {dirtyToken, surface}
+              }) as T[])
+            : []
+    },
+    run: async () => {
+      return undefined
+    },
+  }
+}
+
 const getPayloadRecordCount = (key: ProjectTransferPayloadKey, payload: ProjectTransferPayload) => {
   return key === 'project'
     ? 1
@@ -131,6 +210,58 @@ const getPayloadRecordCount = (key: ProjectTransferPayloadKey, payload: ProjectT
       : Array.isArray(payload)
         ? payload.length
         : 0
+}
+
+const getBenchmarkConflictCounts = () => {
+  return {
+    articleConflictCount: 0,
+    humanReviewFidelityConflictCount: 0,
+    judgmentConflictCount: 0,
+    packageContractConflictCount: 0,
+    projectPromptConflictCount: 0,
+  }
+}
+
+const getBenchmarkOverlapCounts = () => {
+  return {
+    currentReviewRowsSignatureHumanReviewCount: 0,
+    currentReviewRowsSignatureJudgmentCount: 0,
+    dirtiedExistingProjectCount: 0,
+    duplicateImportMatchCount: 0,
+    newArticleCount: 0,
+    omittedArticleRouteLinkCount: 0,
+    omittedRouteLinkCount: 0,
+    reusedArticleAssetPromotionCount: 0,
+    reusedArticleCount: 0,
+    reusedArticleFieldFillCount: 0,
+    reusedArticleUpdateCount: 0,
+    reusedJudgmentCount: 0,
+    routeArticleSnapshotLinkCount: 0,
+    snapshotVerifiedJudgmentCount: 0,
+    storedSignatureHumanReviewCount: 0,
+    storedSignatureJudgmentCount: 0,
+  }
+}
+
+const getBenchmarkPlanSummary = ({
+  packageCounts,
+  packageFingerprint,
+}: {
+  packageCounts: Record<ProjectTransferPayloadKey, number>
+  packageFingerprint: string
+}): ProjectTransferPlanSummary => {
+  return {
+    blockerCount: 0,
+    blockers: [],
+    conflictCounts: getBenchmarkConflictCounts(),
+    dependencyStatuses: {},
+    judgmentConflictStatus: 'clear',
+    overlapCounts: getBenchmarkOverlapCounts(),
+    packageCounts,
+    packageFingerprint,
+    packageWarnings: [],
+    warningCount: 0,
+  }
 }
 
 const getBenchmarkArticleSignature = (index: number) => {
@@ -283,13 +414,84 @@ const getBenchmarkManifest = ({
   return buildProjectTransferManifest({...manifestInput, packageFingerprint})
 }
 
-const writeBenchmarkUpload = async ({
-  cwd,
-  fixture,
+const getBenchmarkPackageCounts = (payloads: ProjectTransferPayloadByKey) => {
+  return projectTransferPayloadKeys.reduce<Record<ProjectTransferPayloadKey, number>>(
+    (counts, key) => {
+      return {...counts, [key]: getPayloadRecordCount(key, payloads[key])}
+    },
+    {} as Record<ProjectTransferPayloadKey, number>,
+  )
+}
+
+const getBenchmarkTargetPlan = (): ProjectTransferImportPlanArtifact['targetPlan'] => {
+  return {
+    articleMatches: [],
+    articleRoutePlan: [],
+    articleUpdatePlan: [],
+    assetPromotionPlan: [],
+    duplicateImportMatches: [],
+    projectPromptPlan: [],
+    projectRoutePlan: [],
+    promptPlan: [],
+  }
+}
+
+const getBenchmarkAnalysisArtifact = ({
+  manifest,
+  packageCounts,
+  packageFingerprint,
+  payloads,
 }: {
-  cwd: string
-  fixture: ProjectTransferBenchmarkFixture
-}) => {
+  manifest: ProjectTransferManifest
+  packageCounts: Record<ProjectTransferPayloadKey, number>
+  packageFingerprint: string
+  payloads: ProjectTransferPayloadByKey
+}): ProjectTransferImportAnalysisArtifact => {
+  return {
+    analyzedAt: '2026-06-12T00:00:00.000Z',
+    archive: {expandedBytes: 0, memberCount: 0, packageChecksumSha256: '0'.repeat(64), packageSizeBytes: 0},
+    assetSummary: {
+      actualByteLength: benchmarkAssetBytes.byteLength,
+      actualEntryCount: payloads.assetManifest.entries.length,
+      manifestByteLength: manifest.assetSummary?.byteLength ?? null,
+      manifestEntryCount: manifest.assetSummary?.entryCount ?? null,
+    },
+    computedPackageFingerprint: packageFingerprint,
+    manifest,
+    packageCounts,
+    packageFingerprint,
+    packageWarnings: [],
+    payloads: {} as ProjectTransferImportAnalysisArtifact['payloads'],
+    planRevision: 1,
+  }
+}
+
+const getBenchmarkPlanArtifact = ({
+  packageCounts,
+  packageFingerprint,
+  targetState,
+}: {
+  packageCounts: Record<ProjectTransferPayloadKey, number>
+  packageFingerprint: string
+  targetState: ProjectTransferTargetStateDirtyTokenSnapshot
+}): ProjectTransferImportPlanArtifact => {
+  const summary = getBenchmarkPlanSummary({packageCounts, packageFingerprint})
+
+  return {
+    blockers: [],
+    canCommit: true,
+    packageCounts,
+    packageFingerprint,
+    packageWarnings: [],
+    planRevision: 1,
+    resolutionKinds: {},
+    summary,
+    targetPlan: getBenchmarkTargetPlan(),
+    targetState,
+  }
+}
+
+const writeBenchmarkUpload = async ({cwd, fixture}: {cwd: string; fixture: ProjectTransferBenchmarkFixture}) => {
   const layout = getProjectTransferImportTempLayout(benchmarkSessionId)
   const payloads = getBenchmarkPayloads(fixture)
   const serializedPayloads = getSerializedPayloads(payloads)
@@ -340,10 +542,62 @@ const runBenchmarkFixture = async (fixture: ProjectTransferBenchmarkFixture) => 
   }
 }
 
-const getBenchmarkMetrics = async (args: ProjectTransferBenchmarkArgs) => {
-  const inputMetrics = getMetricsFromRecord(readJsonFile(args.metricsFile)) ?? getMetricsFromRecord(readJsonFile(args.progressFile))
+const runReuseHeavyRevalidationBenchmark = async () => {
+  const cwd = mkdtempSync(join(tmpdir(), `f2-project-transfer-revalidation-benchmark-${process.pid}-`))
 
-  return inputMetrics ?? (args.fixture === 'article-heavy-package' ? runBenchmarkFixture(args.fixture) : getInputMetrics(args))
+  try {
+    const payloads = getArticleHeavyPayloads(getBenchmarkPayloads('reuse-heavy-package'))
+    const serializedPayloads = getSerializedPayloads(payloads)
+    const manifest = getBenchmarkManifest({payloads, serializedPayloads})
+    const packageCounts = getBenchmarkPackageCounts(payloads)
+    const packageFingerprint = manifest.packageFingerprint ?? 'reuse-heavy-package'
+    const targetState = getBenchmarkTargetStateSnapshot()
+    const plan = getBenchmarkPlanArtifact({packageCounts, packageFingerprint, targetState})
+    const analysis = getBenchmarkAnalysisArtifact({manifest, packageCounts, packageFingerprint, payloads})
+    const layout = getProjectTransferImportTempLayout(benchmarkSessionId)
+    const revalidation = await measureProjectTransferPhase('revalidation', () => {
+      return revalidateProjectTransferCommitPlan({
+        analysis,
+        cwd,
+        layout,
+        nextPlanRevision: 2,
+        plan,
+        repositories: {analyzeTargetRunner: getTargetStateSnapshotRunner(targetState)},
+      })
+    })
+
+    return getProjectTransferPerformanceMetrics({
+      benchmark: {
+        conflictShape: plan.summary.conflictCounts,
+        packageFingerprint,
+        revalidationOutcome: {changed: revalidation.value.changed, ready: revalidation.value.ready},
+        schemaVersion: manifest.schemaVersion,
+        wallTimeMs: revalidation.timing.durationMs,
+      },
+      operation: 'import',
+      phases: {revalidation: revalidation.timing},
+      rows: getProjectTransferPerformanceRowCountersFromPayloads(payloads),
+    })
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+}
+
+const generatedBenchmarkMetricsByFixture: Partial<
+  Record<ProjectTransferBenchmarkFixture, ProjectTransferGeneratedBenchmarkMetrics>
+> = {'article-heavy-package': runBenchmarkFixture, 'reuse-heavy-package': runReuseHeavyRevalidationBenchmark}
+
+const getGeneratedBenchmarkMetrics = (args: ProjectTransferBenchmarkArgs) => {
+  const generator = generatedBenchmarkMetricsByFixture[args.fixture]
+
+  return generator ? generator(args.fixture) : getInputMetrics(args)
+}
+
+const getBenchmarkMetrics = async (args: ProjectTransferBenchmarkArgs) => {
+  const inputMetrics =
+    getMetricsFromRecord(readJsonFile(args.metricsFile)) ?? getMetricsFromRecord(readJsonFile(args.progressFile))
+
+  return inputMetrics ?? getGeneratedBenchmarkMetrics(args)
 }
 
 const getMetricStatus = (metrics: ProjectTransferPerformanceMetrics) => {
