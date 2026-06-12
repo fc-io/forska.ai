@@ -28,6 +28,7 @@ type JobConfig = {
   useFulltext: boolean
   useFulltextNoImages: boolean
 }
+type ProjectMartVisibilityState = {dirtyToken: number | null; lastCompletedDirtyToken: number | null}
 
 const addToQueueLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const addToQueueWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
@@ -517,16 +518,33 @@ const hasSqliteExhaustedCooldown = (exhaustedAt: Date | null) => {
   return exhaustedAt ? Date.now() - exhaustedAt.getTime() < sqliteScanExhaustedCooldownMs : false
 }
 
-const getProjectDirtyToken = async (jobId: string): Promise<number | null> => {
-  const [row] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{dirtyToken: number | null}>(`
-    SELECT CAST(pmrs.dirty_token AS INTEGER) AS dirtyToken
+const getProjectMartVisibilityState = async (jobId: string): Promise<ProjectMartVisibilityState | null> => {
+  const [row] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<ProjectMartVisibilityState>(`
+    SELECT
+      CAST(pmrs.dirty_token AS INTEGER) AS dirtyToken,
+      CAST(pmrs.last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken
     FROM app.judgment_job jj
     INNER JOIN app.project_mart_refresh_state pmrs ON pmrs.project_id = jj.project_id
     WHERE jj.id = '${escapeSqlString(jobId)}'
     LIMIT 1
   `)
 
-  return row?.dirtyToken == null ? null : Number(row.dirtyToken)
+  return row
+    ? {
+        dirtyToken: row.dirtyToken == null ? null : Number(row.dirtyToken),
+        lastCompletedDirtyToken: row.lastCompletedDirtyToken == null ? null : Number(row.lastCompletedDirtyToken),
+      }
+    : null
+}
+
+const getProjectDirtyToken = async (jobId: string): Promise<number | null> => {
+  return (await getProjectMartVisibilityState(jobId))?.dirtyToken ?? null
+}
+
+const hasFreshProjectMartVisibility = (state: ProjectMartVisibilityState | null): boolean => {
+  return state?.dirtyToken == null || state.lastCompletedDirtyToken == null
+    ? false
+    : state.lastCompletedDirtyToken >= state.dirtyToken
 }
 
 const getWrapVisibilityToken = ({
@@ -611,7 +629,8 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   }
 
   const scanState = await sqliteService.getScanState(job.id)
-  const exhaustedProjectDirtyToken = scanState.exhaustedAt ? await getProjectDirtyToken(job.id) : null
+  const exhaustedProjectMartState = scanState.exhaustedAt ? await getProjectMartVisibilityState(job.id) : null
+  const exhaustedProjectDirtyToken = exhaustedProjectMartState?.dirtyToken ?? null
   const wrapVisibilityAckSeq = getMaxVisibilityToken([
     scanState.wrapVisibilityAckSeq,
     scanState.exhaustedAt
@@ -621,10 +640,9 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
         })
       : null,
   ])
-  const shouldForceRawFallback = !hasWrapVisibility({
-    lastProjectRefreshAckSeq: scanState.lastProjectRefreshAckSeq,
-    wrapVisibilityAckSeq,
-  })
+  const shouldForceRawFallback =
+    !hasFreshProjectMartVisibility(exhaustedProjectMartState)
+    && !hasWrapVisibility({lastProjectRefreshAckSeq: scanState.lastProjectRefreshAckSeq, wrapVisibilityAckSeq})
 
   if (hasSqliteExhaustedCooldown(scanState.exhaustedAt) && !shouldForceRawFallback) {
     return

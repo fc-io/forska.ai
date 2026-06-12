@@ -177,6 +177,7 @@ const registerSharedMocks = (
     existingJudgmentRows = [],
     inferenceConfig = {codexMaxInflight: 1, judgmentsAddToQueueMaxBatchSize: 1, judgmentsReadyTargetMultiplier: 1},
     projectDirtyToken = null,
+    projectLastCompletedDirtyToken = null,
     runningJobs = [getRunningJob()],
   }: {
     jobConfigRow?: MockJobConfigRow
@@ -197,6 +198,7 @@ const registerSharedMocks = (
       judgmentsReadyTargetMultiplier: number
     }
     projectDirtyToken?: number | null
+    projectLastCompletedDirtyToken?: number | null
     runningJobs?: MockRunningJob[]
   } = {},
 ) => {
@@ -207,8 +209,8 @@ const registerSharedMocks = (
       getJudgeWorkerReadOnlyAppDatabaseService: () => {
         return {
           queryJson: async <T>(statement: string): Promise<T[]> => {
-            return statement.includes('FROM app.project_mart_refresh_state pmrs')
-              ? [{dirtyToken: projectDirtyToken} as T]
+            return statement.includes('app.project_mart_refresh_state pmrs')
+              ? [{dirtyToken: projectDirtyToken, lastCompletedDirtyToken: projectLastCompletedDirtyToken} as T]
               : statement.includes('FROM app.judgment_human_summary')
                 ? ((answeredHumanSummaryTableRows
                     ? answeredHumanSummaryTableRows
@@ -452,6 +454,67 @@ test('continues raw OLAP fallback during exhausted cooldown when mart visibility
   expect(setScanStateCalls[0]).toEqual({
     jobId: 'job-1',
     state: {cursor: null, exhaustedAt: null, scanEpoch: 4, wrapVisibilityAckSeq: 12},
+  })
+})
+
+test('uses serving OLAP when mart visibility is fresh despite a stale SQLite ack', async () => {
+  const getPromptsCalls = {count: 0}
+  const preferRawFallbackValues: boolean[] = []
+  const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async () => {
+      return 0
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return getExhaustedScanState(11, 12)
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async (jobId: string, state: Record<string, unknown>) => {
+      setScanStateCalls.push({jobId, state})
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async (_projectId, _jobId, _numberOfPromptsToGet, _cursor, preferRawFallback) => {
+      preferRawFallbackValues.push(Boolean(preferRawFallback))
+      return {nextCursor: null, promptEntries: []}
+    },
+    projectDirtyToken: 12,
+    projectLastCompletedDirtyToken: 12,
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?fresh-mart-stale-ack=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(preferRawFallbackValues).toEqual([false])
+  expect(setScanStateCalls).toHaveLength(2)
+  expect(setScanStateCalls[0]).toEqual({
+    jobId: 'job-1',
+    state: {cursor: null, exhaustedAt: null, scanEpoch: 4, wrapVisibilityAckSeq: null},
   })
 })
 

@@ -213,9 +213,25 @@ const getSnapshotTextColumnSelect = ({
   return includeFulltext ? selectSql : 'NULL'
 }
 
+const snapshotMarkdownImageRegexSql = String.raw`'!\[([^\]]*)\]\(data:image/[^;]+;base64,[^)]+\)'`
+
+const getSnapshotFullTextColumnSelect = ({
+  includeFulltext,
+  stripImages,
+}: {
+  includeFulltext: boolean
+  stripImages: boolean
+}): string => {
+  return !includeFulltext
+    ? 'NULL'
+    : stripImages
+      ? `regexp_replace(a.full_text, ${snapshotMarkdownImageRegexSql}, '', 'g')`
+      : 'a.full_text'
+}
+
 const getSnapshotRows = async (
   requests: JudgmentExecutionSnapshotClaimInput[],
-  {includeFulltext}: {includeFulltext: boolean},
+  {includeFulltext, stripImages}: {includeFulltext: boolean; stripImages: boolean},
   database: SnapshotQueryService = getAppDatabaseService(),
 ): Promise<JudgmentExecutionSnapshotRow[]> => {
   if (requests.length === 0) {
@@ -437,25 +453,25 @@ const getSnapshotRows = async (
       a.article_updated_at AS articleUpdatedAt,
       a.doi AS doi,
       a.url AS url,
-      ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text'})} AS fullText,
-      ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_html'})} AS fullTextHtml,
+      ${getSnapshotFullTextColumnSelect({includeFulltext, stripImages})} AS fullText,
+      NULL AS fullTextHtml,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_pdf'})} AS fullTextPdf,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_source'})} AS fullTextSource,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_original_format'})} AS fullTextOriginalFormat,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_fetched_at'})} AS fullTextFetchedAt,
-      ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'TO_JSON(a.full_text_assets)'})} AS fullTextAssets,
+      NULL AS fullTextAssets,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_conversion_status'})} AS fullTextConversionStatus,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_conversion_error'})} AS fullTextConversionError,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_conversion_attempts'})} AS fullTextConversionAttempts,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_conversion_model_id'})} AS fullTextConversionModelId,
-      ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'TO_JSON(a.full_text_conversion_metadata)'})} AS fullTextConversionMetadata,
+      NULL AS fullTextConversionMetadata,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_char_count'})} AS fullTextCharCount,
       a.content_hash AS contentHash,
-      ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'TO_JSON(a.original_data)'})} AS originalData,
+      NULL AS originalData,
       a.publication_status AS publicationStatus,
       TO_JSON(a.source_metadata) AS sourceMetadata,
       TO_JSON(scoped_import.import_metadata) AS scopedImportMetadata,
-      TO_JSON(scoped_import.raw_payload) AS scopedRawPayload,
+      NULL AS scopedRawPayload,
       scoped_import.external_article_id AS selectedExternalArticleId,
       scoped_import.id AS selectedImportRecordId,
       scoped_import.import_route AS selectedImportRoute,
@@ -749,6 +765,12 @@ const shouldIncludeFulltext = (requests: JudgmentExecutionSnapshotClaimInput[]):
     : true
 }
 
+const shouldStripFulltextImages = (requests: JudgmentExecutionSnapshotClaimInput[]): boolean => {
+  return requests.every((request) => {
+    return request.useFulltextNoImages === true && request.useFulltext !== true
+  })
+}
+
 const getSnapshotIdentityForTransientRow = (row: JudgmentExecutionSnapshotRow): JudgmentExecutionSnapshotClaim => {
   const payload = getSnapshotPayload(row)
 
@@ -773,7 +795,11 @@ export const createTransientJudgmentExecutionSnapshotsForClaims = async (
     return []
   }
 
-  const sourceRows = await getSnapshotRows(requests, {includeFulltext: shouldIncludeFulltext(requests)}, database)
+  const sourceRows = await getSnapshotRows(
+    requests,
+    {includeFulltext: shouldIncludeFulltext(requests), stripImages: shouldStripFulltextImages(requests)},
+    database,
+  )
 
   return sourceRows.map((row) => {
     return getSnapshotIdentityForTransientRow(row)
@@ -789,7 +815,10 @@ export const createJudgmentExecutionSnapshotsForClaims = async (
     return []
   }
 
-  const [row] = await getSnapshotRows([request], {includeFulltext: shouldIncludeFulltext([request])})
+  const [row] = await getSnapshotRows([request], {
+    includeFulltext: shouldIncludeFulltext([request]),
+    stripImages: shouldStripFulltextImages([request]),
+  })
 
   if (!row) {
     throw new Error(`Failed to build judgment execution snapshot for claim ${request.claimId}`)

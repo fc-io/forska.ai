@@ -133,6 +133,41 @@ test('snapshot scoped import selection ranks lightweight rows before reading raw
   expect(snapshotSql).toContain('source_record.id = selected_key.source_row_id')
 })
 
+test('snapshot hydration avoids bulky raw payloads for no-image fulltext claims', async () => {
+  let snapshotSql = ''
+
+  await createTransientJudgmentExecutionSnapshotsForClaims(
+    [
+      {
+        articleId: 'requested-external-id',
+        claimId: 'claim-1',
+        claimedBy: 'server-1',
+        jobId: 'job-1',
+        promptId: 'prompt-1',
+        queueRecordId: 'queue-1',
+        useFulltext: false,
+        useFulltextNoImages: true,
+      },
+    ],
+    {
+      queryJson: async (statement) => {
+        snapshotSql = statement
+        return []
+      },
+    },
+  )
+
+  expect(snapshotSql).toContain('regexp_replace(a.full_text')
+  expect(snapshotSql).toContain('NULL AS fullTextHtml')
+  expect(snapshotSql).toContain('NULL AS fullTextAssets')
+  expect(snapshotSql).toContain('NULL AS fullTextConversionMetadata')
+  expect(snapshotSql).toContain('NULL AS originalData')
+  expect(snapshotSql).toContain('NULL AS scopedRawPayload')
+  expect(snapshotSql).not.toContain('TO_JSON(scoped_import.raw_payload)')
+  expect(snapshotSql).not.toContain('TO_JSON(a.original_data)')
+  expect(snapshotSql).not.toContain('TO_JSON(a.full_text_assets)')
+})
+
 test('snapshot article resolution prefers project-scoped imports over legacy ids', () => {
   const result = runScript<{articleId: string; articleTitle: string; selectedExternalArticleId: string}>(`
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
