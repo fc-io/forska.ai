@@ -10,6 +10,7 @@ import {
   validateProjectTransferRuntimeAssetPath,
   validateProjectTransferTempWritablePath,
 } from './projectTransferPaths.ts'
+import type {ProjectTransferPerformanceMetrics} from './projectTransferPerformanceMetrics.ts'
 import type {ProjectTransferPackageWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
 
 const projectTransferMiB = 1024 * 1024
@@ -106,6 +107,7 @@ export type ProjectTransferProgressPayload = {
   expiresAt?: string | null
   message?: string | null
   percent?: number | null
+  performanceMetrics?: ProjectTransferPerformanceMetrics
   phase: ProjectTransferProgressPhase
   planRevision?: number | null
   rowCountProcessed?: number | null

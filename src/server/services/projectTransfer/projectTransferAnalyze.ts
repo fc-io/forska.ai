@@ -38,6 +38,15 @@ import {
   serializeProjectTransferPayload,
 } from './projectTransferPayloadSchemas.ts'
 import {
+  getProjectTransferPerformanceMetrics,
+  getProjectTransferPerformanceRowCounters,
+  measureProjectTransferPhase,
+  projectTransferMetricUnavailable,
+  type ProjectTransferMetricValue,
+  type ProjectTransferPerformanceMetrics,
+  type ProjectTransferPerformancePhaseTiming,
+} from './projectTransferPerformanceMetrics.ts'
+import {
   type ProjectTransferManifest,
   type ProjectTransferManifestPayload,
   type ProjectTransferPackageWarning,
@@ -77,6 +86,7 @@ export type ProjectTransferImportAnalysisArtifact = {
   packageCounts: Record<ProjectTransferPayloadKey, number>
   packageFingerprint: string | null
   packageWarnings: ProjectTransferPackageWarning[]
+  performanceMetrics?: ProjectTransferPerformanceMetrics
   payloads: Record<ProjectTransferPayloadKey, ProjectTransferPayloadAnalysis>
   planRevision: number
 }
@@ -286,7 +296,7 @@ const assertArchiveMetadataResourceGate = ({
       }),
       targetWriteBytes: sumNumbers(uncompressedSizes),
       tempRootPath,
-      usesStreamingParser: true,
+      usesStreamingParser: false,
       zipBytes,
     },
     'archive_metadata',
@@ -1119,11 +1129,76 @@ const assertJsonMetricsResourceGate = ({
       resourcePaths,
       targetWriteBytes: expandedBytes,
       tempRootPath,
-      usesStreamingParser: true,
+      usesStreamingParser: false,
       zipBytes,
     },
     'json',
   )
+}
+
+const getAssetReferenceCount = (assetManifest: ProjectTransferPayloadByKey['assetManifest']) => {
+  return assetManifest.entries.reduce((total, entry) => {
+    return total + entry.references.length
+  }, 0)
+}
+
+const getPayloadByteCounters = (payloadAnalysis: Record<ProjectTransferPayloadKey, ProjectTransferPayloadAnalysis>) => {
+  return projectTransferPayloadKeys.reduce<Record<string, ProjectTransferMetricValue>>((counters, key) => {
+    return {...counters, [`payload.${key}`]: payloadAnalysis[key].actualByteLength ?? projectTransferMetricUnavailable}
+  }, {})
+}
+
+const getImportAnalysisPerformanceMetrics = ({
+  assetManifest,
+  assetSummaryBytes,
+  conflictShape,
+  expandedBytes,
+  packageBytes,
+  packageCounts,
+  packageFingerprint,
+  payloadAnalysis,
+  phases,
+  schemaVersion,
+  warnings,
+}: {
+  assetManifest: ProjectTransferPayloadByKey['assetManifest']
+  assetSummaryBytes: number
+  conflictShape: unknown
+  expandedBytes: number
+  packageBytes: number
+  packageCounts: Record<ProjectTransferPayloadKey, number>
+  packageFingerprint: string | null
+  payloadAnalysis: Record<ProjectTransferPayloadKey, ProjectTransferPayloadAnalysis>
+  phases: Partial<
+    Record<'payloadParse' | 'stagingLoad' | 'targetAnalysis' | 'zipScan', ProjectTransferPerformancePhaseTiming>
+  >
+  schemaVersion: number
+  warnings: ProjectTransferPackageWarning[]
+}) => {
+  const rowCounts = getProjectTransferPerformanceRowCounters({
+    assetEntryCount: assetManifest.entries.length,
+    assetReferenceCount: getAssetReferenceCount(assetManifest),
+    payloadCounts: packageCounts,
+  })
+
+  return getProjectTransferPerformanceMetrics({
+    benchmark: {
+      conflictShape,
+      finalAssetBytes: assetSummaryBytes,
+      packageFingerprint: packageFingerprint ?? undefined,
+      schemaVersion,
+    },
+    bytes: {
+      assetBytes: assetSummaryBytes,
+      expandedArchiveBytes: expandedBytes,
+      packageBytes,
+      ...getPayloadByteCounters(payloadAnalysis),
+    },
+    operation: 'import',
+    phases,
+    rows: rowCounts,
+    warnings,
+  })
 }
 
 export const analyzeProjectTransferImportPackage = async (
@@ -1144,24 +1219,27 @@ export const analyzeProjectTransferImportPackage = async (
       fileBytes: packageBytes.byteLength,
       targetWriteBytes: packageBytes.byteLength,
       tempRootPath: input.layout.rootPath,
-      usesStreamingParser: true,
+      usesStreamingParser: false,
       zipBytes: packageBytes.byteLength,
     },
     'pre_extract',
   )
 
-  const zipPackage = await readProjectTransferZipPackage({
-    beforeReadEntries: (entries) => {
-      assertArchiveMetadataResourceGate({
-        availableDiskBytes,
-        entries,
-        tempRootPath: input.layout.rootPath,
-        zipBytes: packageBytes.byteLength,
-      })
-    },
-    bytes: packageBytes,
-    zipModule: input.zipModule,
+  const zipScan = await measureProjectTransferPhase('zipScan', () => {
+    return readProjectTransferZipPackage({
+      beforeReadEntries: (entries) => {
+        assertArchiveMetadataResourceGate({
+          availableDiskBytes,
+          entries,
+          tempRootPath: input.layout.rootPath,
+          zipBytes: packageBytes.byteLength,
+        })
+      },
+      bytes: packageBytes,
+      zipModule: input.zipModule,
+    })
   })
+  const zipPackage = zipScan.value
   const expandedBytes = sumNumbers(
     zipPackage.entries.map((entry) => {
       return entry.uncompressedSize
@@ -1188,7 +1266,7 @@ export const analyzeProjectTransferImportPackage = async (
       resourcePaths,
       targetWriteBytes: expandedBytes,
       tempRootPath: input.layout.rootPath,
-      usesStreamingParser: true,
+      usesStreamingParser: false,
       zipBytes: packageBytes.byteLength,
     },
     'extract',
@@ -1196,7 +1274,10 @@ export const analyzeProjectTransferImportPackage = async (
 
   const manifest = parseProjectTransferManifestJson(zipPackage.manifest.bytes)
   const entriesByPath = getEntryMap(zipPackage.entries)
-  const parsed = parsePayloads({entriesByPath, manifest})
+  const parsedMeasurement = await measureProjectTransferPhase('payloadParse', () => {
+    return parsePayloads({entriesByPath, manifest})
+  })
+  const parsed = parsedMeasurement.value
   const sanitizedPayloads = sanitizeLegacyPayloads(parsed.payloads)
   const computedPackageFingerprint = getComputedPackageFingerprint({manifest, payloads: sanitizedPayloads})
   const legacyPackageFingerprint = getProjectTransferLegacyPackageFingerprint(manifest)
@@ -1210,11 +1291,10 @@ export const analyzeProjectTransferImportPackage = async (
     payloads: sanitizedPayloads,
   })
   const packageContractBlockers = [...parsed.blockers, ...semanticBlockers]
-  const targetAnalysis = await getProjectTransferAnalyzeTargetPlan({
-    packageFingerprint,
-    payloads: sanitizedPayloads,
-    runner: input.runner,
+  const targetAnalysisMeasurement = await measureProjectTransferPhase('targetAnalysis', () => {
+    return getProjectTransferAnalyzeTargetPlan({packageFingerprint, payloads: sanitizedPayloads, runner: input.runner})
   })
+  const targetAnalysis = targetAnalysisMeasurement.value
   const blockers = [...packageContractBlockers, ...targetAnalysis.blockers]
   const packageWarnings = [...parsed.warnings, ...targetAnalysis.packageWarnings]
   const payloadValues = Object.values(parsed.payloads)
@@ -1260,6 +1340,24 @@ export const analyzeProjectTransferImportPackage = async (
       return entry.byteLength
     }),
   )
+  const payloadAnalysis = getPayloadAnalysisRecord(parsed.payloadAnalysis, manifest)
+  const performanceMetrics = getImportAnalysisPerformanceMetrics({
+    assetManifest,
+    assetSummaryBytes,
+    conflictShape: planSummary.conflictCounts,
+    expandedBytes,
+    packageBytes: packageBytes.byteLength,
+    packageCounts,
+    packageFingerprint,
+    payloadAnalysis,
+    phases: {
+      payloadParse: parsedMeasurement.timing,
+      targetAnalysis: targetAnalysisMeasurement.timing,
+      zipScan: zipScan.timing,
+    },
+    schemaVersion: manifest.schemaVersion,
+    warnings: packageWarnings,
+  })
   const analysis = {
     analyzedAt: new Date().toISOString(),
     archive: {
@@ -1279,23 +1377,53 @@ export const analyzeProjectTransferImportPackage = async (
     packageCounts,
     packageFingerprint,
     packageWarnings,
-    payloads: getPayloadAnalysisRecord(parsed.payloadAnalysis, manifest),
+    performanceMetrics,
+    payloads: payloadAnalysis,
     planRevision: input.planRevision,
   } satisfies ProjectTransferImportAnalysisArtifact
 
-  await writeExtractedEntries({
-    entries: zipPackage.entries,
-    extractionRootPath: input.layout.extractedPath,
-    runtimeOptions,
+  const stagingLoad = await measureProjectTransferPhase('stagingLoad', async () => {
+    await writeExtractedEntries({
+      entries: zipPackage.entries,
+      extractionRootPath: input.layout.extractedPath,
+      runtimeOptions,
+    })
+    await writeExtractedPayloadArtifacts({
+      extractionRootPath: input.layout.extractedPath,
+      payloads: sanitizedPayloads,
+      runtimeOptions,
+    })
+    await writeJsonArtifact({pathValue: input.layout.manifestPath, runtimeOptions, value: manifest})
+    await writeJsonArtifact({pathValue: input.layout.planPath, runtimeOptions, value: plan})
   })
-  await writeExtractedPayloadArtifacts({
-    extractionRootPath: input.layout.extractedPath,
-    payloads: sanitizedPayloads,
-    runtimeOptions,
+  const completedPerformanceMetrics = getImportAnalysisPerformanceMetrics({
+    assetManifest,
+    assetSummaryBytes,
+    conflictShape: planSummary.conflictCounts,
+    expandedBytes,
+    packageBytes: packageBytes.byteLength,
+    packageCounts,
+    packageFingerprint,
+    payloadAnalysis,
+    phases: {
+      payloadParse: parsedMeasurement.timing,
+      stagingLoad: stagingLoad.timing,
+      targetAnalysis: targetAnalysisMeasurement.timing,
+      zipScan: zipScan.timing,
+    },
+    schemaVersion: manifest.schemaVersion,
+    warnings: packageWarnings,
   })
-  await writeJsonArtifact({pathValue: input.layout.manifestPath, runtimeOptions, value: manifest})
-  await writeJsonArtifact({pathValue: input.layout.analysisPath, runtimeOptions, value: analysis})
-  await writeJsonArtifact({pathValue: input.layout.planPath, runtimeOptions, value: plan})
+  await writeJsonArtifact({
+    pathValue: input.layout.analysisPath,
+    runtimeOptions,
+    value: {...analysis, performanceMetrics: completedPerformanceMetrics},
+  })
 
-  return {analysis, packageFingerprint, plan, planSummary}
+  return {
+    analysis: {...analysis, performanceMetrics: completedPerformanceMetrics},
+    packageFingerprint,
+    plan,
+    planSummary,
+  }
 }

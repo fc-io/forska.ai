@@ -427,6 +427,21 @@ const markProjectTransferSessionTerminalCleanupCompleteMock = mock(
   },
 )
 
+const updateProjectTransferSessionProgressMock = mock(
+  async (params: {expectedOwnerToken?: string | null; now?: Date; progress: unknown; sessionId: string}) => {
+    const current = routeState.sessions[params.sessionId] ?? null
+
+    if (current === null || !getOwnerMatches(current.ownerToken, params.expectedOwnerToken)) {
+      return null
+    }
+
+    const next = {...current, progressJson: params.progress, updatedAt: getNow(params.now)}
+    routeState.sessions[params.sessionId] = next
+
+    return next
+  },
+)
+
 void mock.module(appDatabaseServiceModulePath, () => {
   return {
     getAppDatabaseService: () => {
@@ -469,6 +484,7 @@ void mock.module(sessionRepositoryModulePath, () => {
         markProjectTransferSessionTerminalCleanupComplete: markProjectTransferSessionTerminalCleanupCompleteMock,
         transitionProjectTransferSessionState: transitionProjectTransferSessionStateMock,
         updateProjectTransferSessionPlanRevision: updateProjectTransferSessionPlanRevisionMock,
+        updateProjectTransferSessionProgress: updateProjectTransferSessionProgressMock,
       }
     },
   }
@@ -580,6 +596,7 @@ afterEach(() => {
   resolveProjectTransferDependenciesMock.mockClear()
   transitionProjectTransferSessionStateMock.mockClear()
   updateProjectTransferSessionPlanRevisionMock.mockClear()
+  updateProjectTransferSessionProgressMock.mockClear()
   writeProjectTransferDependencyPlanMock.mockClear()
   routeState.exportResult = getInlineExportResult()
   routeState.exportSummary = {

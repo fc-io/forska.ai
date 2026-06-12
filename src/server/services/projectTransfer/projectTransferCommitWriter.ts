@@ -25,6 +25,12 @@ import type {
   ProjectTransferPayloadRecord,
   ProjectTransferProjectPayload,
 } from './projectTransferPayloadSchemas.ts'
+import {
+  getProjectTransferPerformanceMetrics,
+  measureProjectTransferPhase,
+  mergeProjectTransferPerformanceMetrics,
+  type ProjectTransferPerformanceMetrics,
+} from './projectTransferPerformanceMetrics.ts'
 import type {ProjectTransferPackageWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
 import {
   getProjectTransferModelSnapshotFingerprint,
@@ -56,6 +62,7 @@ export type ProjectTransferCommitAppWriteResult = {
   completion: ProjectTransferImportCompletionPayload
   history: ProjectTransferHistoryRecord
   importWarnings: ProjectTransferPackageWarning[]
+  performanceMetrics?: ProjectTransferPerformanceMetrics
   projectId: string
   projectName: string
   promptIdBySourceId: Record<string, string>
@@ -3288,20 +3295,30 @@ const writeProjectTransferCommitAppTablesTx = async ({
     projectName: createdProject.name,
     transferHistoryId,
   })
-  const history = await getProjectTransferHistoryRepository().createProjectTransferHistory({
-    commitId,
-    completionPayload: completion,
-    direction: 'import',
-    id: transferHistoryId,
-    packageFingerprint: completion.packageFingerprint ?? failCommitWriter('completion package fingerprint is required'),
-    payloadCounts,
-    runner: tx,
-    schemaVersion,
-    sessionId,
-    sourceProjectId: project.sourceProjectId,
-    sourceProjectName: project.name,
-    targetProjectId: createdProject.id,
-    targetProjectName: createdProject.name,
+  const historyWrite = await measureProjectTransferPhase('historyWrite', () => {
+    return getProjectTransferHistoryRepository().createProjectTransferHistory({
+      commitId,
+      completionPayload: completion,
+      direction: 'import',
+      id: transferHistoryId,
+      packageFingerprint:
+        completion.packageFingerprint ?? failCommitWriter('completion package fingerprint is required'),
+      payloadCounts,
+      runner: tx,
+      schemaVersion,
+      sessionId,
+      sourceProjectId: project.sourceProjectId,
+      sourceProjectName: project.name,
+      targetProjectId: createdProject.id,
+      targetProjectName: createdProject.name,
+    })
+  })
+  const history = historyWrite.value
+  const performanceMetrics = getProjectTransferPerformanceMetrics({
+    benchmark: {packageFingerprint: completion.packageFingerprint ?? undefined, schemaVersion},
+    operation: 'import',
+    phases: {historyWrite: historyWrite.timing},
+    warnings: importWarnings,
   })
 
   return {
@@ -3309,6 +3326,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
     completion,
     history,
     importWarnings,
+    performanceMetrics,
     projectId: createdProject.id,
     projectName: createdProject.name,
     promptIdBySourceId,
@@ -3322,9 +3340,22 @@ export const writeProjectTransferCommitAppTables = async ({
 }: ProjectTransferCommitWriterInput): Promise<ProjectTransferCommitAppWriteResult> => {
   const database = inputDatabase ?? getAppDatabaseService()
 
-  const result = await database.transaction((tx) => {
-    return writeProjectTransferCommitAppTablesTx({...input, tx})
+  const transaction = await measureProjectTransferPhase('appTableWrites', () => {
+    return database.transaction((tx) => {
+      return writeProjectTransferCommitAppTablesTx({...input, tx})
+    }) as Promise<ProjectTransferCommitAppWriteResult>
   })
+  const transactionMetrics = getProjectTransferPerformanceMetrics({
+    benchmark: {writerTransactionMs: transaction.timing.durationMs},
+    operation: 'import',
+    phases: {appTableWrites: transaction.timing},
+    warnings: transaction.value.importWarnings,
+    writerTransactionMs: transaction.timing.durationMs,
+  })
+  const performanceMetrics = mergeProjectTransferPerformanceMetrics(
+    transaction.value.performanceMetrics ?? getProjectTransferPerformanceMetrics({operation: 'import'}),
+    transactionMetrics,
+  )
 
-  return result as ProjectTransferCommitAppWriteResult
+  return {...transaction.value, performanceMetrics}
 }

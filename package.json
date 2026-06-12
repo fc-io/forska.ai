@@ -15,6 +15,7 @@
     "build": "bunx --bun vite build",
     "bench:articlesreviews": "bun scripts/benchmarkArticlesReviews.ts",
     "bench:duckdb-append-lanes": "bun scripts/benchmarkDuckdbAppendLanes.ts",
+    "bench:project-transfer": "bun scripts/benchmarkProjectTransfer.ts",
     "preview": "bunx --bun vite preview",
     "test": "sh -c 'bun run test:bun; bun_status=$?; bun run test:vitest; vitest_status=$?; bun run test:playwright; playwright_status=$?; [ $bun_status -eq 0 ] && [ $vitest_status -eq 0 ] && [ $playwright_status -eq 0 ]'",
     "test:bun": "bun scripts/runBunTests.ts",

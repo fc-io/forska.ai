@@ -13,7 +13,10 @@ import {
   type ProjectTransferAnalyzeTargetRunner,
   type ProjectTransferTargetPlan,
 } from './projectTransferAnalyzeTarget.ts'
-import {runProjectTransferCommitWithPromotionRollback} from './projectTransferCommitRollback.ts'
+import {
+  promoteProjectTransferCommitAssets,
+  rollbackProjectTransferCommitPromotion,
+} from './projectTransferCommitRollback.ts'
 import {
   type ProjectTransferCommitAppWriteResult,
   writeProjectTransferCommitAppTables,
@@ -46,6 +49,15 @@ import {
   type ProjectTransferPayload,
   type ProjectTransferPayloadByKey,
 } from './projectTransferPayloadSchemas.ts'
+import {
+  getProjectTransferPerformanceMetrics,
+  getProjectTransferPerformanceRowCounters,
+  getProjectTransferPerformanceRowCountersFromPayloads,
+  measureProjectTransferPhase,
+  mergeProjectTransferPerformanceMetrics,
+  projectTransferMetricUnavailable,
+  type ProjectTransferPerformanceMetrics,
+} from './projectTransferPerformanceMetrics.ts'
 import {projectTransferPayloadKeys, projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 import {getProjectTransferImportTempLayout, type ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 import {getProjectTransferSessionRepository} from './projectTransferSessionRepository.ts'
@@ -100,6 +112,7 @@ type ProjectTransferCommitRevalidationInput = RuntimePathOptions & {
 
 type ProjectTransferCommitRevalidationResult = {
   changed: boolean
+  performanceMetrics?: ProjectTransferPerformanceMetrics
   plan: ProjectTransferImportPlanArtifact
   ready: boolean
 }
@@ -346,6 +359,55 @@ const getCommitRowCount = (plan: ProjectTransferImportPlanArtifact) => {
   return Object.values(plan.packageCounts).reduce((total, count) => {
     return total + (typeof count === 'number' && Number.isInteger(count) && count >= 0 ? count : 0)
   }, 0)
+}
+
+const getImportPerformanceMetrics = (performanceMetrics: ProjectTransferPerformanceMetrics | null | undefined) => {
+  return performanceMetrics ?? getProjectTransferPerformanceMetrics({operation: 'import'})
+}
+
+const getCommitPerformanceMetrics = ({
+  artifacts,
+  baseMetrics,
+  payloads,
+  writeMetrics,
+}: {
+  artifacts: ProjectTransferCommitArtifacts
+  baseMetrics?: ProjectTransferPerformanceMetrics | null
+  payloads?: Partial<ProjectTransferPayloadByKey>
+  writeMetrics?: ProjectTransferPerformanceMetrics | null
+}) => {
+  const payloadRows =
+    payloads === undefined
+      ? getProjectTransferPerformanceRowCounters({
+          assetEntryCount: artifacts.analysis.assetSummary.actualEntryCount,
+          assetReferenceCount: projectTransferMetricUnavailable,
+          payloadCounts: artifacts.plan.packageCounts,
+        })
+      : getProjectTransferPerformanceRowCountersFromPayloads(payloads)
+  const commitMetrics = getProjectTransferPerformanceMetrics({
+    benchmark: {
+      conflictShape: artifacts.plan.summary.conflictCounts,
+      finalAssetBytes: artifacts.analysis.assetSummary.actualByteLength,
+      packageFingerprint: artifacts.analysis.packageFingerprint ?? undefined,
+      schemaVersion: artifacts.analysis.manifest.schemaVersion,
+    },
+    bytes: {
+      assetBytes: artifacts.analysis.assetSummary.actualByteLength,
+      expandedArchiveBytes: artifacts.analysis.archive.expandedBytes,
+      packageBytes: artifacts.analysis.archive.packageSizeBytes,
+    },
+    operation: 'import',
+    rows: payloadRows,
+    warnings: artifacts.plan.summary.packageWarnings ?? [],
+  })
+  const withBase = mergeProjectTransferPerformanceMetrics(
+    getImportPerformanceMetrics(baseMetrics ?? artifacts.analysis.performanceMetrics),
+    commitMetrics,
+  )
+
+  return writeMetrics === null || writeMetrics === undefined
+    ? withBase
+    : mergeProjectTransferPerformanceMetrics(withBase, writeMetrics)
 }
 
 const getCommitExecutionMode = (artifacts: ProjectTransferCommitArtifacts): ProjectTransferExecutionMode => {
@@ -703,6 +765,7 @@ const getCommitProgress = ({
   message,
   now,
   percent,
+  performanceMetrics,
   planRevision,
   status,
 }: {
@@ -712,6 +775,7 @@ const getCommitProgress = ({
   message: string
   now: Date
   percent: number
+  performanceMetrics?: ProjectTransferPerformanceMetrics
   planRevision: number
   status: ProjectTransferProgressPayload['status']
 }): ProjectTransferProgressPayload => {
@@ -725,6 +789,7 @@ const getCommitProgress = ({
     completedRows,
     message,
     percent,
+    performanceMetrics,
     phase: 'commit',
     planRevision,
     startedAt: now.toISOString(),
@@ -891,14 +956,28 @@ const getPostClaimRevalidationResult = async ({
   repositories: ProjectTransferCommitRepositorySet
   runtimeOptions: RuntimePathOptions
 }) => {
-  const postClaimRevalidation = await repositories.revalidate({
-    ...runtimeOptions,
-    analysis: artifacts.analysis,
-    layout: artifacts.layout,
-    nextPlanRevision: claimed.planRevision + 1,
-    plan: artifacts.plan,
-    repositories: inputRepositories,
+  const postClaimRevalidationMeasurement = await measureProjectTransferPhase('revalidation', () => {
+    return repositories.revalidate({
+      ...runtimeOptions,
+      analysis: artifacts.analysis,
+      layout: artifacts.layout,
+      nextPlanRevision: claimed.planRevision + 1,
+      plan: artifacts.plan,
+      repositories: inputRepositories,
+    })
   })
+  const postClaimRevalidation = postClaimRevalidationMeasurement.value
+  const performanceMetrics = mergeProjectTransferPerformanceMetrics(
+    getImportPerformanceMetrics(postClaimRevalidation.performanceMetrics),
+    getProjectTransferPerformanceMetrics({
+      benchmark: {
+        revalidationOutcome: {changed: postClaimRevalidation.changed, ready: postClaimRevalidation.ready},
+        wallTimeMs: postClaimRevalidationMeasurement.timing.durationMs,
+      },
+      operation: 'import',
+      phases: {revalidation: postClaimRevalidationMeasurement.timing},
+    }),
+  )
 
   if (!postClaimRevalidation.ready || postClaimRevalidation.changed) {
     const reopened = await persistPostClaimStalePlan({
@@ -914,10 +993,10 @@ const getPostClaimRevalidationResult = async ({
 
     return reopened === null
       ? {error: 'Project transfer commit could not reopen claimed stale plan', ok: false as const}
-      : {ok: true as const, session: reopened, stalePlan: postClaimRevalidation.plan}
+      : {ok: true as const, performanceMetrics, session: reopened, stalePlan: postClaimRevalidation.plan}
   }
 
-  return {artifacts: {...artifacts, plan: postClaimRevalidation.plan}, ok: true as const}
+  return {artifacts: {...artifacts, plan: postClaimRevalidation.plan}, ok: true as const, performanceMetrics}
 }
 
 const getRepositorySet = (repositories?: ProjectTransferCommitRepositories) => {
@@ -946,24 +1025,64 @@ const runProjectTransferCommitAppTableWrites = async ({
   schemaVersion: number
   sessionId: string
 }) => {
-  const payloads = await readExtractedPayloads({...runtimeOptions, layout: artifacts.layout})
+  const stagingLoad = await measureProjectTransferPhase('stagingLoad', () => {
+    return readExtractedPayloads({...runtimeOptions, layout: artifacts.layout})
+  })
+  const payloads = stagingLoad.value
+  const assetPromotion = await measureProjectTransferPhase('assetPromotion', () => {
+    return promoteProjectTransferCommitAssets({...runtimeOptions, now, sessionId})
+  })
 
-  return runProjectTransferCommitWithPromotionRollback({
-    ...runtimeOptions,
-    now,
-    sessionId,
-    work: (promotion) => {
+  try {
+    const appTableWrites = await measureProjectTransferPhase('appTableWrites', () => {
       return writeProjectTransferCommitAppTables({
         commitId,
         now,
         payloads,
         plan: artifacts.plan,
-        promotion,
+        promotion: assetPromotion.value,
         schemaVersion,
         sessionId,
       })
-    },
-  })
+    })
+    const phaseMetrics = getProjectTransferPerformanceMetrics({
+      benchmark: {
+        finalAssetBytes: artifacts.analysis.assetSummary.actualByteLength,
+        packageFingerprint: artifacts.analysis.packageFingerprint ?? undefined,
+        schemaVersion,
+      },
+      bytes: {
+        assetBytes: artifacts.analysis.assetSummary.actualByteLength,
+        expandedArchiveBytes: artifacts.analysis.archive.expandedBytes,
+        packageBytes: artifacts.analysis.archive.packageSizeBytes,
+      },
+      operation: 'import',
+      phases: {
+        appTableWrites: appTableWrites.timing,
+        assetPromotion: assetPromotion.timing,
+        stagingLoad: stagingLoad.timing,
+      },
+      rows: getProjectTransferPerformanceRowCountersFromPayloads(payloads),
+      warnings: artifacts.plan.summary.packageWarnings ?? [],
+    })
+    const performanceMetrics = mergeProjectTransferPerformanceMetrics(
+      phaseMetrics,
+      appTableWrites.value.performanceMetrics ?? getProjectTransferPerformanceMetrics({operation: 'import'}),
+    )
+
+    return {...appTableWrites.value, performanceMetrics}
+  } catch (error) {
+    await measureProjectTransferPhase('cleanup', () => {
+      return rollbackProjectTransferCommitPromotion({
+        ...runtimeOptions,
+        manifest: assetPromotion.value.manifest,
+        sessionId,
+      }).catch(() => {
+        return undefined
+      })
+    })
+    throw error
+  }
 }
 
 const settleCompletionSideEffect = async <TValue>(operation: Promise<TValue>) => {
@@ -1107,6 +1226,7 @@ const runClaimedProjectTransferImportCommit = async ({
   commitId,
   now,
   ownerToken,
+  performanceMetrics,
   repositories,
   runtimeOptions,
   sessionId,
@@ -1116,6 +1236,7 @@ const runClaimedProjectTransferImportCommit = async ({
   commitId: string
   now: Date
   ownerToken: string
+  performanceMetrics?: ProjectTransferPerformanceMetrics | null
   repositories: ProjectTransferCommitRepositorySet
   runtimeOptions: RuntimePathOptions
   sessionId: string
@@ -1157,6 +1278,11 @@ const runClaimedProjectTransferImportCommit = async ({
       sessionId,
     })
     const completionNow = new Date()
+    const completedPerformanceMetrics = getCommitPerformanceMetrics({
+      artifacts,
+      baseMetrics: performanceMetrics,
+      writeMetrics: writeResult.performanceMetrics,
+    })
     const completedProgress = getCommitProgress({
       artifacts,
       completedBytes: getExtractedAssetBytes(artifacts.analysis),
@@ -1164,6 +1290,7 @@ const runClaimedProjectTransferImportCommit = async ({
       message: 'Commit transaction completed',
       now: completionNow,
       percent: 100,
+      performanceMetrics: completedPerformanceMetrics,
       planRevision: claimed.planRevision,
       status: 'completed',
     })
@@ -1254,14 +1381,17 @@ export const commitProjectTransferImportSession = async ({
   }
 
   if (executionMode !== 'background') {
-    const preClaimRevalidation = await repositories.revalidate({
-      ...runtimeOptions,
-      analysis: artifacts.analysis,
-      layout: artifacts.layout,
-      nextPlanRevision: current.planRevision + 1,
-      plan: artifacts.plan,
-      repositories: inputRepositories,
+    const preClaimRevalidationMeasurement = await measureProjectTransferPhase('revalidation', () => {
+      return repositories.revalidate({
+        ...runtimeOptions,
+        analysis: artifacts.analysis,
+        layout: artifacts.layout,
+        nextPlanRevision: current.planRevision + 1,
+        plan: artifacts.plan,
+        repositories: inputRepositories,
+      })
     })
+    const preClaimRevalidation = preClaimRevalidationMeasurement.value
 
     if (!preClaimRevalidation.ready || preClaimRevalidation.changed) {
       const reopened = await persistPreClaimStalePlan({
@@ -1312,13 +1442,17 @@ export const commitProjectTransferImportSession = async ({
 
   writeProjectTransferCommitRuntimeEvent({ownerToken, progress: claimProgress, sessionId, state: claimed.state})
 
-  const runClaimed = (claimedArtifacts: ProjectTransferCommitArtifacts) => {
+  const runClaimed = (
+    claimedArtifacts: ProjectTransferCommitArtifacts,
+    performanceMetrics?: ProjectTransferPerformanceMetrics | null,
+  ) => {
     return runClaimedProjectTransferImportCommit({
       artifacts: claimedArtifacts,
       claimed,
       commitId,
       now,
       ownerToken,
+      performanceMetrics,
       repositories,
       runtimeOptions,
       sessionId,
@@ -1339,7 +1473,7 @@ export const commitProjectTransferImportSession = async ({
       })
 
       if ('artifacts' in revalidation) {
-        await runClaimed(revalidation.artifacts)
+        await runClaimed(revalidation.artifacts, revalidation.performanceMetrics)
       }
     })
 
@@ -1358,7 +1492,7 @@ export const commitProjectTransferImportSession = async ({
   })
 
   return 'artifacts' in postClaimRevalidation
-    ? runClaimed(postClaimRevalidation.artifacts)
+    ? runClaimed(postClaimRevalidation.artifacts, postClaimRevalidation.performanceMetrics)
     : postClaimRevalidation.stalePlan
       ? {
           plan: postClaimRevalidation.stalePlan,

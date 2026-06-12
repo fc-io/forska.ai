@@ -28,6 +28,12 @@ import {buildProjectTransferManifest, getProjectTransferManifestPayloadEntry} fr
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import type {ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
 import {
+  getProjectTransferPerformanceMetrics,
+  getProjectTransferPerformanceRowCountersFromPayloads,
+  measureProjectTransferPhase,
+  type ProjectTransferPerformanceMetrics,
+} from './projectTransferPerformanceMetrics.ts'
+import {
   type ProjectTransferManifest,
   projectTransferPayloadFormatByKey,
   type ProjectTransferPayloadKey,
@@ -104,6 +110,7 @@ export type ProjectTransferExportPackageBuild = {
   metadata: ProjectTransferExportPackageMetadata
   packageBytes: Uint8Array | null
   packagePath: string | null
+  performanceMetrics: ProjectTransferPerformanceMetrics
   payloads: ProjectTransferPayloadByKey
   serializedPayloads: ProjectTransferExportSerializedPayloads
 }
@@ -125,6 +132,7 @@ export type ProjectTransferExportCreationResult =
 const manifestPath = 'manifest.json'
 const defaultExportSessionTtlMs = 24 * 60 * 60 * 1000
 const exportWorkerHeartbeatIntervalMs = 60_000
+const textEncoder = new TextEncoder()
 
 const getNow = (now?: Date) => {
   return now ?? new Date()
@@ -196,6 +204,12 @@ const getPayloadCounts = (payloads: ProjectTransferPayloadByKey) => {
     },
     {} as Record<ProjectTransferPayloadKey, number>,
   )
+}
+
+const getSerializedPayloadByteCounters = (serializedPayloads: ProjectTransferExportSerializedPayloads) => {
+  return projectTransferPayloadKeys.reduce<Record<string, number>>((counters, key) => {
+    return {...counters, [`payload.${key}`]: textEncoder.encode(serializedPayloads[key]).byteLength}
+  }, {})
 }
 
 const getCurrentModelSummary = (payloads: ProjectTransferPayloadByKey) => {
@@ -485,6 +499,7 @@ const getReadyProgress = ({
     bytesTotal,
     expiresAt,
     phase: 'export_package',
+    performanceMetrics: build.performanceMetrics,
     rowCountProcessed: rowCount,
     rowCountTotal: rowCount,
     startedAt,
@@ -540,6 +555,7 @@ const getProgress = ({
   bytesTotal,
   expiresAt,
   phase,
+  performanceMetrics,
   rowCountProcessed,
   rowCountTotal,
   startedAt,
@@ -550,6 +566,7 @@ const getProgress = ({
   bytesTotal: number
   expiresAt: Date
   phase: 'export_assembly' | 'export_package'
+  performanceMetrics?: ProjectTransferPerformanceMetrics
   rowCountProcessed: number
   rowCountTotal: number
   startedAt: Date
@@ -565,6 +582,7 @@ const getProgress = ({
     completedBytes: bytesProcessed,
     completedRows: rowCountProcessed,
     expiresAt: expiresAt.toISOString(),
+    performanceMetrics,
     percent,
     phase,
     rowCountProcessed,
@@ -644,22 +662,25 @@ export const buildProjectTransferExportPackage = async (
             })
           },
         )
-        const assembly = yield* Effect.promise(async () => {
-          return runProjectTransferExportHeartbeatOperation({
-            heartbeat: input.heartbeat,
-            operation: async () => {
-              const database = input.database ?? getAppDatabaseService()
+        const assemblyMeasurement = yield* Effect.promise(() => {
+          return measureProjectTransferPhase('exportAssembly', () => {
+            return runProjectTransferExportHeartbeatOperation({
+              heartbeat: input.heartbeat,
+              operation: async () => {
+                const database = input.database ?? getAppDatabaseService()
 
-              return database.transaction((runner) => {
-                return getProjectTransferExportPayloads(input.projectId, {
-                  database: runner,
-                  rawArticleProvenanceMode: input.rawArticleProvenanceMode,
-                })
-              }) as Promise<ProjectTransferExportPayloadAssembly>
-            },
-            sessionId: input.sessionId,
+                return database.transaction((runner) => {
+                  return getProjectTransferExportPayloads(input.projectId, {
+                    database: runner,
+                    rawArticleProvenanceMode: input.rawArticleProvenanceMode,
+                  })
+                }) as Promise<ProjectTransferExportPayloadAssembly>
+              },
+              sessionId: input.sessionId,
+            })
           })
         })
+        const assembly = assemblyMeasurement.value
         const serializedPayloads = serializeProjectTransferExportPayloads(assembly.payloads)
         const assetBytes = assembly.assetEntries.reduce((total, entry) => {
           return total + entry.bytes.byteLength
@@ -667,29 +688,24 @@ export const buildProjectTransferExportPackage = async (
         const manifest = getManifestWithFingerprint({assetBytes, assembly, exportedAt, serializedPayloads})
         const entries = getPackageEntries({assembly, manifest, serializedPayloads})
         const packageOutputPath = input.packageOutputPath ?? join(buildPath, projectTransferExportArtifacts.package)
-        yield* Effect.promise(() => {
-          return runProjectTransferExportHeartbeatOperation({
-            heartbeat: input.heartbeat,
-            operation: () => {
-              return writeBuildEntries({entries, rootPath: buildPath})
-            },
-            sessionId: input.sessionId,
-          })
-        })
+        const packageWriteMeasurement = yield* Effect.promise(() => {
+          return measureProjectTransferPhase('exportPackageWrite', () => {
+            return runProjectTransferExportHeartbeatOperation({
+              heartbeat: input.heartbeat,
+              operation: async () => {
+                await writeBuildEntries({entries, rootPath: buildPath})
 
-        const packageArchive = yield* Effect.promise(() => {
-          return runProjectTransferExportHeartbeatOperation({
-            heartbeat: input.heartbeat,
-            operation: () => {
-              return writeProjectTransferExportZipPackage({
-                entries,
-                outputPath: packageOutputPath,
-                readBytes: input.packageOutputPath === undefined,
-              })
-            },
-            sessionId: input.sessionId,
+                return writeProjectTransferExportZipPackage({
+                  entries,
+                  outputPath: packageOutputPath,
+                  readBytes: input.packageOutputPath === undefined,
+                })
+              },
+              sessionId: input.sessionId,
+            })
           })
         })
+        const packageArchive = packageWriteMeasurement.value
         const packageFingerprint = manifest.packageFingerprint ?? ''
         const metadata = {
           byteLength: packageArchive.byteLength,
@@ -700,6 +716,23 @@ export const buildProjectTransferExportPackage = async (
           packageFingerprint,
         }
         const executionMode = getProjectTransferExportExecutionMode({assetBytes, packageBytes: metadata.byteLength})
+        const performanceMetrics = getProjectTransferPerformanceMetrics({
+          benchmark: {
+            finalAssetBytes: assetBytes,
+            packageFingerprint,
+            rawArticleProvenanceMode: input.rawArticleProvenanceMode ?? 'omit',
+            schemaVersion: manifest.schemaVersion,
+          },
+          bytes: {
+            assetBytes,
+            packageBytes: metadata.byteLength,
+            ...getSerializedPayloadByteCounters(serializedPayloads),
+          },
+          operation: 'export',
+          phases: {exportAssembly: assemblyMeasurement.timing, exportPackageWrite: packageWriteMeasurement.timing},
+          rows: getProjectTransferPerformanceRowCountersFromPayloads(assembly.payloads),
+          warnings: assembly.warnings,
+        })
 
         return {
           assetBytes,
@@ -708,6 +741,7 @@ export const buildProjectTransferExportPackage = async (
           metadata,
           packageBytes: packageArchive.bytes,
           packagePath: input.packageOutputPath ?? null,
+          performanceMetrics,
           payloads: assembly.payloads,
           serializedPayloads,
         }
@@ -773,6 +807,7 @@ export const runProjectTransferExportSession = async (input: RunProjectTransferE
       bytesTotal: build.metadata.byteLength + build.assetBytes,
       expiresAt,
       phase: 'export_package',
+      performanceMetrics: build.performanceMetrics,
       rowCountProcessed: 0,
       rowCountTotal: 0,
       startedAt,

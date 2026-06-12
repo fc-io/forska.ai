@@ -43,6 +43,13 @@ import {
 } from '../services/projectTransfer/projectTransferExportPackage.ts'
 import {resolveProjectTransferTempWritablePath} from '../services/projectTransfer/projectTransferPaths.ts'
 import {
+  getProjectTransferPerformanceMetrics,
+  measureProjectTransferPhase,
+  mergeProjectTransferPerformanceMetrics,
+  projectTransferMetricUnavailable,
+  type ProjectTransferPerformanceMetrics,
+} from '../services/projectTransfer/projectTransferPerformanceMetrics.ts'
+import {
   getProjectTransferExportTempLayout,
   getProjectTransferImportTempLayout,
   isProjectTransferSessionId,
@@ -778,7 +785,7 @@ const getUploadResourceGateError = ({
     fileBytes: byteLength,
     targetWriteBytes: byteLength,
     tempRootPath,
-    usesStreamingParser: true,
+    usesStreamingParser: false,
     zipBytes: byteLength,
   })
 
@@ -804,13 +811,29 @@ const isUploadResourceGateError = (error: unknown) => {
   return error instanceof Error && error.name === 'ProjectTransferUploadResourceGateError'
 }
 
+const getDefaultImportPerformanceMetrics = () => {
+  return getProjectTransferPerformanceMetrics({operation: 'import'})
+}
+
+const getMergedImportPerformanceMetrics = (
+  left: ProjectTransferPerformanceMetrics | null | undefined,
+  right: ProjectTransferPerformanceMetrics | null | undefined,
+) => {
+  return mergeProjectTransferPerformanceMetrics(
+    left ?? getDefaultImportPerformanceMetrics(),
+    right ?? getDefaultImportPerformanceMetrics(),
+  )
+}
+
 const getUploadProgress = ({
   metadata,
   now,
+  performanceMetrics,
   status,
 }: {
   metadata?: ProjectTransferUploadMetadataPayload | null
   now: Date
+  performanceMetrics?: ProjectTransferPerformanceMetrics
   status: ProjectTransferProgressPayload['status']
 }): ProjectTransferProgressPayload => {
   const byteLength = metadata?.byteLength ?? 0
@@ -820,6 +843,7 @@ const getUploadProgress = ({
     bytesTotal: byteLength,
     completedBytes: byteLength,
     phase: 'upload',
+    performanceMetrics,
     status,
     totalBytes: byteLength,
     updatedAt: now.toISOString(),
@@ -829,11 +853,13 @@ const getUploadProgress = ({
 
 const getAnalyzeProgress = ({
   now,
+  performanceMetrics,
   phase,
   status,
   upload,
 }: {
   now: Date
+  performanceMetrics?: ProjectTransferPerformanceMetrics
   phase: 'analyze' | 'extract'
   status: ProjectTransferProgressPayload['status']
   upload: ProjectTransferUploadMetadataPayload | null
@@ -845,6 +871,7 @@ const getAnalyzeProgress = ({
     bytesTotal: byteLength,
     completedBytes: byteLength,
     phase,
+    performanceMetrics,
     percent: status === 'completed' ? 100 : 0,
     status,
     totalBytes: byteLength,
@@ -972,17 +999,19 @@ const runProjectTransferImportWorkerHeartbeat = async <TValue>({
 
 const getCompletedAnalyzeProgress = ({
   now,
+  performanceMetrics,
   planSummary,
   upload,
 }: {
   now: Date
+  performanceMetrics?: ProjectTransferPerformanceMetrics
   planSummary: ProjectTransferPlanSummary
   upload: ProjectTransferUploadMetadataPayload | null
 }) => {
   const rowCount = getImportPlanRowCount(planSummary)
 
   return {
-    ...getAnalyzeProgress({now, phase: 'analyze', status: 'completed', upload}),
+    ...getAnalyzeProgress({now, performanceMetrics, phase: 'analyze', status: 'completed', upload}),
     completedRows: rowCount,
     rowCountProcessed: rowCount,
     rowCountTotal: rowCount,
@@ -1041,7 +1070,12 @@ const runProjectTransferImportAnalyzeJob = async ({ownerToken, sessionId}: {owne
     sessionId,
   })
   const completedAt = new Date()
-  const completedProgress = getCompletedAnalyzeProgress({now: completedAt, planSummary: analysis.planSummary, upload})
+  const completedProgress = getCompletedAnalyzeProgress({
+    now: completedAt,
+    performanceMetrics: analysis.analysis.performanceMetrics,
+    planSummary: analysis.planSummary,
+    upload,
+  })
   const nextState = getImportAnalyzeNextState(analysis.planSummary)
   const planned = await repository.updateProjectTransferSessionPlanRevision({
     expectedOwnerToken: ownerToken,
@@ -1398,12 +1432,21 @@ const uploadImportPackage = async ({
     return getProjectTransferApiError(set, 409, 'Project transfer import session upload could not be claimed')
   }
 
-  const upload = await runProjectTransferImportWorkerHeartbeat({
-    operation: () => {
-      return getUploadWriteAttempt({fileName: getUploadFileName(request), request, sessionId: params.sessionId})
-    },
-    ownerToken,
-    sessionId: params.sessionId,
+  const uploadMeasurement = await measureProjectTransferPhase('upload', () => {
+    return runProjectTransferImportWorkerHeartbeat({
+      operation: () => {
+        return getUploadWriteAttempt({fileName: getUploadFileName(request), request, sessionId: params.sessionId})
+      },
+      ownerToken,
+      sessionId: params.sessionId,
+    })
+  })
+  const upload = uploadMeasurement.value
+  const uploadPerformanceMetrics = getProjectTransferPerformanceMetrics({
+    benchmark: {wallTimeMs: uploadMeasurement.timing.durationMs},
+    bytes: {uploadPackageBytes: upload.ok ? upload.metadata.byteLength : projectTransferMetricUnavailable},
+    operation: 'import',
+    phases: {upload: uploadMeasurement.timing},
   })
 
   if (!upload.ok) {
@@ -1417,7 +1460,12 @@ const uploadImportPackage = async ({
       expectedState: 'uploading',
       nextOwnerToken: null,
       nextState: 'failed',
-      progress: getUploadProgress({metadata: null, now: new Date(), status: 'failed'}),
+      progress: getUploadProgress({
+        metadata: null,
+        now: new Date(),
+        performanceMetrics: uploadPerformanceMetrics,
+        status: 'failed',
+      }),
       sessionId: params.sessionId,
     })
 
@@ -1431,7 +1479,12 @@ const uploadImportPackage = async ({
     nextOwnerToken: null,
     nextState: 'queued',
     now: completedAt,
-    progress: getUploadProgress({metadata: upload.metadata, now: completedAt, status: 'completed'}),
+    progress: getUploadProgress({
+      metadata: upload.metadata,
+      now: completedAt,
+      performanceMetrics: uploadPerformanceMetrics,
+      status: 'completed',
+    }),
     sessionId: params.sessionId,
   })
 
@@ -1548,12 +1601,15 @@ const resolveImportDependencies = async (
   }
 
   const layout = getProjectTransferImportTempLayout(sessionId)
-  const result = await resolveProjectTransferDependencies({
-    deferPlanWrite: true,
-    layout,
-    nextPlanRevision: response.data.planRevision + 1,
-    request: request.value,
+  const dependencyResolutionMeasurement = await measureProjectTransferPhase('dependencyResolution', () => {
+    return resolveProjectTransferDependencies({
+      deferPlanWrite: true,
+      layout,
+      nextPlanRevision: response.data.planRevision + 1,
+      request: request.value,
+    })
   })
+  const result = dependencyResolutionMeasurement.value
 
   if (result.status === 'error') {
     if (getImportArtifactsUnavailableError(result.error)) {
@@ -1567,11 +1623,35 @@ const resolveImportDependencies = async (
     return response
   }
 
+  const dependencyPerformanceMetrics = getMergedImportPerformanceMetrics(
+    response.data.progress?.performanceMetrics,
+    getProjectTransferPerformanceMetrics({
+      benchmark: {
+        dependencyExecutionSignature: result.plan.dependencyResolution ?? projectTransferMetricUnavailable,
+        warningDetails: [],
+        wallTimeMs: dependencyResolutionMeasurement.timing.durationMs,
+      },
+      operation: 'import',
+      phases: {dependencyResolution: dependencyResolutionMeasurement.timing},
+      rows: response.data.progress?.performanceMetrics?.rows,
+      warnings: result.planSummary.packageWarnings ?? [],
+    }),
+  )
   const updated = await getProjectTransferSessionRepository().updateProjectTransferSessionPlanRevision({
     expectedPlanRevision: response.data.planRevision,
     nextState: getImportAnalyzeNextState(result.planSummary),
     now: new Date(),
     planSummary: result.planSummary,
+    ...(response.data.progress === null
+      ? {}
+      : {
+          progress: {
+            ...response.data.progress,
+            performanceMetrics: dependencyPerformanceMetrics,
+            updatedAt: new Date().toISOString(),
+            warningCount: result.planSummary.warningCount,
+          },
+        }),
     sessionId,
   })
 
@@ -1714,14 +1794,17 @@ const isMatchingTerminalCancellationRequest = ({
 const getCancelProgress = ({
   cleanupTempArtifacts,
   now,
+  performanceMetrics,
   upload,
 }: {
   cleanupTempArtifacts: boolean
   now: Date
+  performanceMetrics?: ProjectTransferPerformanceMetrics
   upload: ProjectTransferUploadMetadataPayload | null
 }): ProjectTransferProgressPayload => {
   return {
     phase: 'cleanup',
+    performanceMetrics,
     status: cleanupTempArtifacts ? 'completed' : 'pending',
     updatedAt: now.toISOString(),
     uploadMetadata: upload,
@@ -1816,15 +1899,35 @@ const cancelImportSession = async (
     return getProjectTransferApiError(set, 409, 'Project transfer import session cancellation could not be claimed')
   }
 
-  const cleaned = await cleanupCancelledImportSession({
-    cleanupTempArtifacts: request.cleanupTempArtifacts,
-    ownerToken,
+  const cleanupMeasurement = await measureProjectTransferPhase('cleanup', () => {
+    return cleanupCancelledImportSession({
+      cleanupTempArtifacts: request.cleanupTempArtifacts,
+      ownerToken,
+      sessionId,
+      state: nextState,
+    })
+  })
+  const cleanupPerformanceMetrics = getMergedImportPerformanceMetrics(
+    response.data.progress?.performanceMetrics,
+    getProjectTransferPerformanceMetrics({
+      benchmark: {wallTimeMs: cleanupMeasurement.timing.durationMs},
+      operation: 'import',
+      phases: {cleanup: cleanupMeasurement.timing},
+    }),
+  )
+  const cleaned = await getProjectTransferSessionRepository().updateProjectTransferSessionProgress({
+    expectedOwnerToken: ownerToken,
+    progress: getCancelProgress({
+      cleanupTempArtifacts: request.cleanupTempArtifacts,
+      now: new Date(),
+      performanceMetrics: cleanupPerformanceMetrics,
+      upload: response.data.upload,
+    }),
     sessionId,
-    state: nextState,
   })
 
   return (
-    (await getImportSessionResponseFromRecord(set, cleaned ?? cancelled))
+    (await getImportSessionResponseFromRecord(set, cleaned ?? cleanupMeasurement.value ?? cancelled))
     ?? getProjectTransferApiError(set, 500, 'Import session unavailable')
   )
 }
