@@ -16,6 +16,10 @@ import {
 } from '../src/server/services/projectTransfer/projectTransferCommitRollback.ts'
 import type {ProjectTransferPlanSummary} from '../src/server/services/projectTransfer/projectTransferContracts.ts'
 import {
+  getProjectTransferExportAssetCollectionForReferences,
+  type ProjectTransferExportAssetReferenceInput,
+} from '../src/server/services/projectTransfer/projectTransferExportAssets.ts'
+import {
   getProjectTransferPackageFingerprint,
   getProjectTransferSha256Checksum,
 } from '../src/server/services/projectTransfer/projectTransferFingerprint.ts'
@@ -619,6 +623,34 @@ const getAssetHeavyPromotionPlan = ({
   })
 }
 
+const getAssetHeavyExportReferences = (
+  assets: ReturnType<typeof getAssetHeavyPromotionAssets>,
+): ProjectTransferExportAssetReferenceInput[] => {
+  return assets.map((asset, index) => {
+    const articleNumber = index + 1
+
+    return {
+      assetPath: asset.packagePath,
+      fieldPath: `articles[${index}].fullTextPdf`,
+      jsonPointer: `/${index}/fullTextPdf`,
+      kind: 'fullTextPdf',
+      sourceArticleId: `benchmark-export-article-${articleNumber}`,
+    }
+  })
+}
+
+const writeAssetHeavyExportArtifacts = async ({cwd}: {cwd: string}) => {
+  const assets = getAssetHeavyPromotionAssets()
+
+  await Promise.all(
+    assets.map((asset) => {
+      return writeBenchmarkRuntimeFile({cwd, path: asset.packagePath, value: asset.bytes})
+    }),
+  )
+
+  return {assets, references: getAssetHeavyExportReferences(assets)}
+}
+
 const writeAssetHeavyPromotionArtifacts = async ({cwd}: {cwd: string}) => {
   const layout = getProjectTransferImportTempLayout(benchmarkSessionId)
   const assets = getAssetHeavyPromotionAssets()
@@ -735,6 +767,55 @@ const runAssetHeavyPromotionBenchmark = async () => {
   }
 }
 
+const runAssetHeavyExportBenchmark = async () => {
+  const cwd = mkdtempSync(join(tmpdir(), `f2-project-transfer-asset-export-benchmark-${process.pid}-`))
+
+  try {
+    const {assets, references} = await writeAssetHeavyExportArtifacts({cwd})
+    const stagingRootPath = join(cwd, 'tmp/project-transfer/asset-heavy-export-build')
+    const collection = await measureProjectTransferPhase('exportAssembly', () => {
+      return getProjectTransferExportAssetCollectionForReferences(references, {
+        cwd,
+        maxConcurrency: assetHeavyPromotionConcurrency,
+        stagingRootPath,
+      })
+    })
+    const assetByteLength = collection.value.assetEntries.reduce((total, asset) => {
+      return total + asset.byteLength
+    }, 0)
+
+    return getProjectTransferPerformanceMetrics({
+      benchmark: {
+        bytesPerSecond: getBenchmarkRatePerSecond({
+          durationMs: collection.timing.durationMs,
+          value: assetByteLength,
+        }),
+        correctnessChecks: {
+          boundedConcurrency: assetHeavyPromotionConcurrency,
+          copiedAssetCount: collection.value.assetEntries.length,
+          sourceAssetCount: assets.length,
+          stagedManifestEntryCount: collection.value.assetManifest.entries.length,
+        },
+        finalAssetBytes: assetByteLength,
+        packageFingerprint: 'asset-heavy-export',
+        peakMemoryBytes: collection.timing.sampledPeakMemoryBytes,
+        schemaVersion: 1,
+        temporaryDiskBytes: assetByteLength,
+        wallTimeMs: collection.timing.durationMs,
+      },
+      bytes: {
+        assetBytes: assetByteLength,
+        exportAssetCopyBytes: assetByteLength,
+      },
+      operation: 'export',
+      phases: {exportAssembly: collection.timing},
+      rows: {assetEntries: collection.value.assetEntries.length, assetReferences: references.length},
+    })
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+}
+
 const runBenchmarkFixture = async (fixture: ProjectTransferBenchmarkFixture) => {
   const cwd = mkdtempSync(join(tmpdir(), `f2-project-transfer-benchmark-${process.pid}-`))
 
@@ -800,6 +881,7 @@ const generatedBenchmarkMetricsByFixture: Partial<
   Record<ProjectTransferBenchmarkFixture, ProjectTransferGeneratedBenchmarkMetrics>
 > = {
   'article-heavy-package': runBenchmarkFixture,
+  'asset-heavy-export': runAssetHeavyExportBenchmark,
   'asset-heavy-package': runAssetHeavyPromotionBenchmark,
   'reuse-heavy-package': runReuseHeavyRevalidationBenchmark,
 }

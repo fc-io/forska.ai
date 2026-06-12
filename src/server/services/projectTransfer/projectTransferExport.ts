@@ -61,7 +61,9 @@ import {
 
 type ProjectTransferExportQueryOptions = {
   articleRawJsonOmissionThresholdChars?: number
+  cwd?: string
   database?: AppQueryDatabaseService
+  envValues?: Record<string, string | undefined>
   rawArticleProvenanceMode?: ProjectTransferRawArticleProvenanceMode
 }
 
@@ -3211,6 +3213,7 @@ export const getProjectTransferExportPreflightEstimate = async (
   })
   const assetBytes = await getProjectTransferExportAssetByteEstimateForArticles(
     await getProjectTransferExportPreflightAssetArticles(projectId, database),
+    {cwd: options.cwd, envValues: options.envValues},
   )
 
   return {assetBytes, packageBytes, stagedPayloadBytes}
@@ -3427,7 +3430,10 @@ export const getProjectTransferExportPayloads = async (
   options: ProjectTransferExportQueryOptions = {},
 ): Promise<ProjectTransferExportPayloadAssembly> => {
   const context = await getProjectTransferExportContext(projectId, options)
-  const assetCollection = await getProjectTransferExportAssetCollectionForArticles(context.articleRows)
+  const assetCollection = await getProjectTransferExportAssetCollectionForArticles(context.articleRows, {
+    cwd: options.cwd,
+    envValues: options.envValues,
+  })
   const contextWithAssets = {...context, articleRows: assetCollection.articles}
 
   return {
@@ -3469,14 +3475,21 @@ export const stageProjectTransferExportPayloadRows = async ({
 }
 
 export const completeProjectTransferExportStagedPayloads = async ({
+  cwd,
+  envValues,
   rootPath,
   stagedRows,
 }: {
+  cwd?: string
+  envValues?: Record<string, string | undefined>
   rootPath: string
   stagedRows: ProjectTransferExportStagedPayloadRows
 }): Promise<ProjectTransferExportStagedPayloadAssembly> => {
   const assetCollection = await getProjectTransferExportAssetCollectionForReferences(stagedRows.assetReferences, {
+    cwd,
+    envValues,
     readBytes: false,
+    stagingRootPath: rootPath,
   })
   const payloads = {
     ...stagedRows.payloads,

@@ -1,9 +1,9 @@
 import {createHash} from 'node:crypto'
-import {createReadStream} from 'node:fs'
-import {lstat} from 'node:fs/promises'
-import {posix, win32} from 'node:path'
+import {once} from 'node:events'
+import {createReadStream, createWriteStream, type WriteStream} from 'node:fs'
+import {lstat, mkdir, rm} from 'node:fs/promises'
+import {dirname, join, posix, win32} from 'node:path'
 
-import {getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import {
   resolveProjectTransferPersistedRuntimeAssetPath,
   validateProjectTransferArchiveMemberPath,
@@ -19,6 +19,7 @@ import {
 import {projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 
 type JsonRecord = Record<string, unknown>
+type RuntimePathOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
 
 export type ProjectTransferExportAssetArticle = ProjectTransferArticlePayloadRecord & {
   fullTextAssets?: unknown
@@ -43,6 +44,12 @@ type ProjectTransferExportArticleAssetReferenceCollection = {
   references: ProjectTransferExportAssetReferenceInput[]
 }
 
+type ProjectTransferExportAssetCollectionOptions = RuntimePathOptions & {
+  maxConcurrency?: number
+  readBytes?: boolean
+  stagingRootPath?: string
+}
+
 type AssetReferenceInput = {
   assetPath: string
   fieldPath: string
@@ -65,10 +72,41 @@ type FullTextAssetRewriteResult = {references: AssetReferenceInput[]; value: unk
 
 type HtmlRewriteResult = {references: HtmlAttributeAssetReference[]; value: string}
 
+type AssetUrlPolicy = {
+  collectRuntimeAssetPath: boolean
+  collectRuntimeAssetUrl: boolean
+  preserveNonLocalUrl: boolean
+  rejectUnsafeLocalPath: boolean
+}
+
+type RuntimeAssetFileSnapshot = {ctimeMs: number; dev: number; ino: number; mtimeMs: number; size: number}
+
 const htmlAssetAttributePattern = /\b(src|href)(\s*=\s*)("([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi
 const runtimeAssetUrlPath = '/api/runtime-asset'
 const localPathPattern = /^(\/Users\/|\/home\/|\/private\/|\/tmp\/|\/var\/folders\/|[A-Za-z]:\\)/
 const textEncoder = new TextEncoder()
+const defaultAssetCopyConcurrency = 4
+const sourceRuntimeAssetOrigin = 'http://project-transfer.local'
+const assetUrlPolicyByField = {
+  fullTextAssets: {
+    collectRuntimeAssetPath: true,
+    collectRuntimeAssetUrl: true,
+    preserveNonLocalUrl: true,
+    rejectUnsafeLocalPath: true,
+  },
+  fullTextHtml: {
+    collectRuntimeAssetPath: true,
+    collectRuntimeAssetUrl: true,
+    preserveNonLocalUrl: true,
+    rejectUnsafeLocalPath: false,
+  },
+  fullTextPdf: {
+    collectRuntimeAssetPath: true,
+    collectRuntimeAssetUrl: true,
+    preserveNonLocalUrl: true,
+    rejectUnsafeLocalPath: true,
+  },
+} as const satisfies Record<ProjectTransferAssetReferenceKind, AssetUrlPolicy>
 
 const isRecord = (value: unknown): value is JsonRecord => {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -104,7 +142,7 @@ const getUrlValue = (value: string) => {
 
 const getRuntimeAssetUrlValue = (value: string) => {
   try {
-    return new URL(value, 'http://project-transfer.local')
+    return new URL(value, sourceRuntimeAssetOrigin)
   } catch {
     return null
   }
@@ -126,9 +164,16 @@ const assertRuntimeAssetPath = (pathValue: string) => {
 }
 
 const getRuntimeAssetPathFromUrl = (value: string): AssetPathResult => {
-  const url = getRuntimeAssetUrlValue(value.replaceAll('&amp;', '&'))
+  const normalizedValue = value.replaceAll('&amp;', '&')
+  const absoluteUrl = getUrlValue(normalizedValue)
 
-  if (url?.pathname !== runtimeAssetUrlPath) {
+  if (absoluteUrl !== null && absoluteUrl.origin !== sourceRuntimeAssetOrigin) {
+    return {kind: 'none'}
+  }
+
+  const url = absoluteUrl ?? getRuntimeAssetUrlValue(normalizedValue)
+
+  if (url?.origin !== sourceRuntimeAssetOrigin || url.pathname !== runtimeAssetUrlPath) {
     return {kind: 'none'}
   }
 
@@ -139,45 +184,56 @@ const getRuntimeAssetPathFromUrl = (value: string): AssetPathResult => {
     : {kind: 'unsafe', message: 'runtime asset URL is missing a path parameter'}
 }
 
-const isUnsafeSourcePath = (value: string) => {
+const isPreservedNonLocalUrl = (value: string, policy: AssetUrlPolicy) => {
+  const parsedUrl = getUrlValue(value.trim())
+
+  return parsedUrl !== null && parsedUrl.protocol !== 'file:' && policy.preserveNonLocalUrl
+}
+
+const isUnsafeSourcePath = (value: string, policy: AssetUrlPolicy) => {
   const trimmed = value.trim()
   const parsedUrl = getUrlValue(trimmed)
   const hasUnsafeProtocol =
     parsedUrl !== null
+    && !isPreservedNonLocalUrl(trimmed, policy)
     && parsedUrl.protocol !== 'data:'
     && parsedUrl.protocol !== 'mailto:'
     && parsedUrl.protocol !== 'tel:'
-
-  return (
-    hasUnsafeProtocol
-    || localPathPattern.test(trimmed)
+  const hasUnsafeLocalPath =
+    localPathPattern.test(trimmed)
     || posix.isAbsolute(trimmed)
     || win32.isAbsolute(trimmed)
     || trimmed.startsWith('tmp/')
     || trimmed.includes('\\')
-  )
+
+  return hasUnsafeProtocol || (policy.rejectUnsafeLocalPath && hasUnsafeLocalPath)
 }
 
-const getCanonicalAssetPath = (value: string): AssetPathResult => {
+const getCanonicalAssetPath = (value: string, policy: AssetUrlPolicy): AssetPathResult => {
   const trimmed = value.trim()
   const runtimeAssetPath = getRuntimeAssetPathFromUrl(trimmed)
 
-  if (runtimeAssetPath.kind !== 'none') {
+  if (policy.collectRuntimeAssetUrl && runtimeAssetPath.kind !== 'none') {
     return runtimeAssetPath
   }
 
-  return trimmed.startsWith('assets/')
+  return policy.collectRuntimeAssetPath && trimmed.startsWith('assets/')
     ? {kind: 'asset', path: assertRuntimeAssetPath(trimmed)}
-    : isUnsafeSourcePath(trimmed)
+    : isUnsafeSourcePath(trimmed, policy)
       ? {kind: 'unsafe', message: `unsafe asset reference ${trimmed}`}
       : {kind: 'none'}
 }
 
 const assertRequiredAssetPath = (value: string, fieldPath: string) => {
-  const assetPath = getCanonicalAssetPath(value)
+  const policy = assetUrlPolicyByField.fullTextPdf
+  const assetPath = getCanonicalAssetPath(value, policy)
 
   if (assetPath.kind === 'asset') {
     return assetPath.path
+  }
+
+  if (assetPath.kind === 'none' && isPreservedNonLocalUrl(value, policy)) {
+    return null
   }
 
   return getProjectTransferExportAssetError(
@@ -218,18 +274,20 @@ const rewriteFullTextPdf = (
 
   const assetPath = assertRequiredAssetPath(value, `articles[${articleIndex}].fullTextPdf`)
 
-  return {
-    references: [
-      {
-        assetPath,
-        fieldPath: `articles[${articleIndex}].fullTextPdf`,
-        jsonPointer: `/${articleIndex}/fullTextPdf`,
-        kind: 'fullTextPdf',
-        sourceArticleId,
-      },
-    ],
-    value: assetPath,
-  }
+  return assetPath === null
+    ? {references: [], value}
+    : {
+        references: [
+          {
+            assetPath,
+            fieldPath: `articles[${articleIndex}].fullTextPdf`,
+            jsonPointer: `/${articleIndex}/fullTextPdf`,
+            kind: 'fullTextPdf',
+            sourceArticleId,
+          },
+        ],
+        value: assetPath,
+      }
 }
 
 const rewriteFullTextAssetsString = ({
@@ -245,7 +303,7 @@ const rewriteFullTextAssetsString = ({
   sourceArticleId: string
   value: string
 }): FullTextAssetRewriteResult => {
-  const assetPath = getCanonicalAssetPath(value)
+  const assetPath = getCanonicalAssetPath(value, assetUrlPolicyByField.fullTextAssets)
 
   if (assetPath.kind === 'unsafe') {
     return getProjectTransferExportAssetError(`articles[${articleIndex}].fullTextAssets ${assetPath.message}`)
@@ -338,13 +396,7 @@ const rewriteHtmlAttributeValue = ({
   value: string
 }) => {
   const trimmed = value.trim()
-  const runtimeAssetPath = getRuntimeAssetPathFromUrl(trimmed)
-  const assetPath =
-    runtimeAssetPath.kind !== 'none'
-      ? runtimeAssetPath
-      : trimmed.startsWith('assets/')
-        ? {kind: 'asset' as const, path: assertRuntimeAssetPath(trimmed)}
-        : {kind: 'none' as const}
+  const assetPath = getCanonicalAssetPath(trimmed, assetUrlPolicyByField.fullTextHtml)
 
   if (assetPath.kind === 'unsafe') {
     return getProjectTransferExportAssetError(`articles[${articleIndex}].fullTextHtml ${assetPath.message}`)
@@ -438,6 +490,7 @@ const getArticleAssetReferences = (article: ProjectTransferExportAssetArticle, a
 
 export const getProjectTransferExportAssetByteEstimateForArticles = async (
   articles: ProjectTransferExportAssetArticle[],
+  runtimeOptions: RuntimePathOptions = {},
 ) => {
   const articleReferences = articles.map((article, articleIndex) => {
     return getArticleAssetReferences(article, articleIndex)
@@ -453,7 +506,7 @@ export const getProjectTransferExportAssetByteEstimateForArticles = async (
   ].sort()
   const sizes = await Promise.all(
     packagePaths.map(async (packagePath) => {
-      const absolutePath = resolveProjectTransferPersistedRuntimeAssetPath({pathValue: packagePath})
+      const absolutePath = resolveProjectTransferPersistedRuntimeAssetPath({...runtimeOptions, pathValue: packagePath})
       const stats = await lstat(absolutePath)
 
       return stats.isFile()
@@ -467,20 +520,12 @@ export const getProjectTransferExportAssetByteEstimateForArticles = async (
   }, 0)
 }
 
-const getFileChecksumSha256 = async (filePath: string) => {
-  const hash = createHash('sha256')
-
-  for await (const chunk of createReadStream(filePath)) {
-    const bytes = chunk instanceof Uint8Array ? chunk : textEncoder.encode(String(chunk))
-
-    hash.update(bytes)
-  }
-
-  return hash.digest('hex')
+const getRuntimeAssetFileSnapshot = (stats: Awaited<ReturnType<typeof lstat>>): RuntimeAssetFileSnapshot => {
+  return {ctimeMs: stats.ctimeMs, dev: stats.dev, ino: stats.ino, mtimeMs: stats.mtimeMs, size: stats.size}
 }
 
-const readAssetFile = async (pathValue: string, readBytes: boolean) => {
-  const absolutePath = resolveProjectTransferPersistedRuntimeAssetPath({pathValue})
+const getValidatedRuntimeAssetFile = async (pathValue: string, runtimeOptions: RuntimePathOptions) => {
+  const absolutePath = resolveProjectTransferPersistedRuntimeAssetPath({...runtimeOptions, pathValue})
   const assetFile = globalThis.Bun.file(absolutePath)
   const exists = await assetFile.exists()
 
@@ -498,25 +543,136 @@ const readAssetFile = async (pathValue: string, readBytes: boolean) => {
     return getProjectTransferExportAssetError(`runtime asset is not a regular file ${pathValue}`)
   }
 
-  const checksumSha256 = readBytes
-    ? getProjectTransferSha256Checksum(new Uint8Array(await assetFile.arrayBuffer()))
-    : await getFileChecksumSha256(absolutePath)
-  const secondFile = globalThis.Bun.file(absolutePath)
-  const bytes = readBytes ? new Uint8Array(await secondFile.arrayBuffer()) : undefined
-  const byteLength = bytes?.byteLength ?? before.size
-  const after = await lstat(absolutePath)
-  const secondChecksumSha256 = bytes ? getProjectTransferSha256Checksum(bytes) : checksumSha256
+  return {absolutePath, contentType: assetFile.type || null, snapshot: getRuntimeAssetFileSnapshot(before)}
+}
 
-  if (before.size !== after.size || before.size !== byteLength || secondChecksumSha256 !== checksumSha256) {
+const getStreamChunkBytes = (chunk: unknown) => {
+  return chunk instanceof Uint8Array ? chunk : textEncoder.encode(String(chunk))
+}
+
+const writeStreamBytes = async (stream: WriteStream, bytes: Uint8Array) => {
+  if (bytes.byteLength === 0) {
+    return undefined
+  }
+
+  if (!stream.write(bytes)) {
+    await once(stream, 'drain')
+  }
+
+  return undefined
+}
+
+const closeAssetWriteStream = async (stream: WriteStream) => {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      reject(error)
+    }
+
+    stream.once('error', onError)
+    stream.end(() => {
+      stream.off('error', onError)
+      resolve()
+    })
+  })
+}
+
+const getStagedAssetFilePath = (stagingRootPath: string, packagePath: string) => {
+  return join(stagingRootPath, packagePath)
+}
+
+const streamRuntimeAssetFile = async ({absolutePath, targetPath}: {absolutePath: string; targetPath?: string}) => {
+  const hash = createHash('sha256')
+  const state = {byteLength: 0}
+  const writeStream = targetPath ? createWriteStream(targetPath) : null
+
+  try {
+    for await (const chunk of createReadStream(absolutePath)) {
+      const bytes = getStreamChunkBytes(chunk)
+
+      hash.update(bytes)
+      state.byteLength += bytes.byteLength
+      await (writeStream ? writeStreamBytes(writeStream, bytes) : Promise.resolve())
+    }
+
+    await (writeStream ? closeAssetWriteStream(writeStream) : Promise.resolve())
+
+    return {byteLength: state.byteLength, checksumSha256: hash.digest('hex')}
+  } catch (error) {
+    writeStream?.destroy()
+    await (targetPath ? rm(targetPath, {force: true}) : Promise.resolve())
+    throw error
+  }
+}
+
+const isRuntimeAssetFileSnapshotStable = (left: RuntimeAssetFileSnapshot, right: RuntimeAssetFileSnapshot) => {
+  return (
+    left.size === right.size
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs
+  )
+}
+
+const assertRuntimeAssetFileStayedStable = ({
+  after,
+  before,
+  byteLength,
+  pathValue,
+}: {
+  after: RuntimeAssetFileSnapshot
+  before: RuntimeAssetFileSnapshot
+  byteLength: number
+  pathValue: string
+}) => {
+  if (before.size !== byteLength || !isRuntimeAssetFileSnapshotStable(before, after)) {
     return getProjectTransferExportAssetError(`runtime asset changed while being copied ${pathValue}`)
   }
 
+  return undefined
+}
+
+const getCopiedAssetFile = async ({
+  pathValue,
+  runtimeOptions,
+  stagingRootPath,
+}: {
+  pathValue: string
+  runtimeOptions: RuntimePathOptions
+  stagingRootPath?: string
+}) => {
+  const sourceFile = await getValidatedRuntimeAssetFile(pathValue, runtimeOptions)
+  const targetPath = stagingRootPath ? getStagedAssetFilePath(stagingRootPath, pathValue) : sourceFile.absolutePath
+
+  await (stagingRootPath ? mkdir(dirname(targetPath), {recursive: true}) : Promise.resolve())
+
+  const copied = await streamRuntimeAssetFile({
+    absolutePath: sourceFile.absolutePath,
+    targetPath: stagingRootPath ? targetPath : undefined,
+  })
+  const afterStats = await lstat(sourceFile.absolutePath)
+  const afterSnapshot = getRuntimeAssetFileSnapshot(afterStats)
+
+  if (afterStats.isSymbolicLink()) {
+    return getProjectTransferExportAssetError(`runtime asset is a symlink ${pathValue}`)
+  }
+
+  if (!afterStats.isFile()) {
+    return getProjectTransferExportAssetError(`runtime asset is not a regular file ${pathValue}`)
+  }
+
+  assertRuntimeAssetFileStayedStable({
+    after: afterSnapshot,
+    before: sourceFile.snapshot,
+    byteLength: copied.byteLength,
+    pathValue,
+  })
+
   return {
-    byteLength,
-    bytes,
-    checksumSha256,
-    contentType: secondFile.type || assetFile.type || null,
-    filePath: absolutePath,
+    byteLength: copied.byteLength,
+    checksumSha256: copied.checksumSha256,
+    contentType: sourceFile.contentType,
+    filePath: targetPath,
     packagePath: pathValue,
   }
 }
@@ -534,9 +690,13 @@ const getReferencesByAssetPath = (references: AssetReferenceInput[]) => {
 const getAssetManifestEntry = async (
   packagePath: string,
   references: ProjectTransferAssetReference[],
-  readBytes: boolean,
+  options: ProjectTransferExportAssetCollectionOptions,
 ): Promise<{assetEntry: ProjectTransferExportAssetEntry; manifestEntry: ProjectTransferAssetManifestEntry}> => {
-  const file = await readAssetFile(packagePath, readBytes)
+  const file = await getCopiedAssetFile({
+    pathValue: packagePath,
+    runtimeOptions: {cwd: options.cwd, envValues: options.envValues},
+    stagingRootPath: options.stagingRootPath,
+  })
   const baseManifestEntry = {
     byteLength: file.byteLength,
     checksumSha256: file.checksumSha256,
@@ -545,22 +705,63 @@ const getAssetManifestEntry = async (
   }
 
   return {
-    assetEntry:
-      file.bytes === undefined
-        ? {byteLength: file.byteLength, filePath: file.filePath, path: file.packagePath}
-        : {byteLength: file.byteLength, bytes: file.bytes, filePath: file.filePath, path: file.packagePath},
+    assetEntry: {byteLength: file.byteLength, filePath: file.filePath, path: file.packagePath},
     manifestEntry: file.contentType ? {...baseManifestEntry, contentType: file.contentType} : baseManifestEntry,
   }
 }
 
-const getAssetManifestEntries = async (references: AssetReferenceInput[], options: {readBytes?: boolean} = {}) => {
+const getAssetCopyConcurrency = (value: number | undefined) => {
+  const normalized = Math.floor(value ?? defaultAssetCopyConcurrency)
+
+  return Number.isFinite(normalized) && normalized > 0 ? normalized : defaultAssetCopyConcurrency
+}
+
+const runBoundedAssetTasks = async <TValue>(
+  tasks: Array<() => Promise<TValue>>,
+  maxConcurrency: number | undefined,
+) => {
+  const workerCount = Math.min(getAssetCopyConcurrency(maxConcurrency), tasks.length)
+  const runWorker = async (workerIndex: number): Promise<Array<{index: number; value: TValue}>> => {
+    const task = tasks[workerIndex]
+
+    if (!task) {
+      return []
+    }
+
+    const value = await task()
+    const rest = await runWorker(workerIndex + workerCount)
+
+    return [{index: workerIndex, value}, ...rest]
+  }
+  const results = await Promise.all(
+    Array.from({length: workerCount}, (_entry, workerIndex) => {
+      return runWorker(workerIndex)
+    }),
+  )
+
+  return results
+    .flat()
+    .sort((left, right) => {
+      return left.index - right.index
+    })
+    .map((entry) => {
+      return entry.value
+    })
+}
+
+const getAssetManifestEntries = async (
+  references: AssetReferenceInput[],
+  options: ProjectTransferExportAssetCollectionOptions = {},
+) => {
   const referencesByAssetPath = getReferencesByAssetPath(references)
   const packagePaths = [...referencesByAssetPath.keys()].sort()
-  const readBytes = options.readBytes ?? true
-  const entries = await Promise.all(
+  const entries = await runBoundedAssetTasks(
     packagePaths.map((packagePath) => {
-      return getAssetManifestEntry(packagePath, referencesByAssetPath.get(packagePath) ?? [], readBytes)
+      return () => {
+        return getAssetManifestEntry(packagePath, referencesByAssetPath.get(packagePath) ?? [], options)
+      }
     }),
+    options.maxConcurrency,
   )
 
   return {
@@ -598,16 +799,17 @@ export const getProjectTransferExportAssetReferenceCollectionForArticles = (
 
 export const getProjectTransferExportAssetCollectionForReferences = async (
   references: ProjectTransferExportAssetReferenceInput[],
-  options: {readBytes?: boolean} = {},
+  options: ProjectTransferExportAssetCollectionOptions = {},
 ): Promise<ProjectTransferExportAssetCollection> => {
   return getAssetManifestEntries(references, options)
 }
 
 export const getProjectTransferExportAssetCollectionForArticles = async (
   articles: ProjectTransferArticlePayloadRecord[],
+  options: ProjectTransferExportAssetCollectionOptions = {},
 ): Promise<ProjectTransferExportArticleAssetCollection> => {
   const articleReferences = getProjectTransferExportAssetReferenceCollectionForArticles(articles)
-  const assetCollection = await getAssetManifestEntries(articleReferences.references, {readBytes: true})
+  const assetCollection = await getAssetManifestEntries(articleReferences.references, options)
 
   return {...assetCollection, articles: articleReferences.articles}
 }

@@ -831,7 +831,9 @@ export const buildProjectTransferExportPackage = async (
               operation: async () => {
                 const database = input.database ?? getAppDatabaseService()
                 const estimate = await getProjectTransferExportPreflightEstimate(input.projectId, {
+                  cwd: input.cwd,
                   database,
+                  envValues: input.envValues,
                   rawArticleProvenanceMode: input.rawArticleProvenanceMode,
                 })
 
@@ -851,7 +853,12 @@ export const buildProjectTransferExportPackage = async (
                   })
                 })) as Awaited<ReturnType<typeof stageProjectTransferExportPayloadRows>>
 
-                return completeProjectTransferExportStagedPayloads({rootPath: buildPath, stagedRows})
+                return completeProjectTransferExportStagedPayloads({
+                  cwd: input.cwd,
+                  envValues: input.envValues,
+                  rootPath: buildPath,
+                  stagedRows,
+                })
               },
               sessionId: input.sessionId,
             })
@@ -1079,7 +1086,9 @@ export const createProjectTransferExport = async (
     }
   }
   const preflight = await getProjectTransferExportPreflightEstimate(input.projectId, {
+    cwd: input.cwd,
     database: input.database,
+    envValues: input.envValues,
     rawArticleProvenanceMode: input.rawArticleProvenanceMode,
   })
   const resolvedRootPath = resolveProjectTransferTempWritablePath({...input, pathValue: layout.rootPath})
