@@ -811,7 +811,7 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       p.description AS description,
       p.model_id AS modelId,
       TO_JSON(m.metadata_json) AS modelMetadataJson,
-      COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+      COALESCE(m.display_name, m.name, m.remote_model_id, p.model_id) AS modelName,
       pc.provider_kind AS modelProvider,
       m.variant AS modelVersion,
       p.human_judgment_mode AS humanJudgmentMode,
@@ -820,7 +820,7 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       p.use_fulltext AS useFulltext,
       p.use_fulltext_no_images AS useFulltextNoImages
     FROM ${projectTable} p
-    INNER JOIN ${modelTable} m ON m.id = p.model_id
+    LEFT JOIN ${modelTable} m ON m.id = p.model_id
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE p.archived = FALSE
     ORDER BY p.name ASC
@@ -938,10 +938,10 @@ const getComparisonProjectSourceProjects = async (sourceProjectIds: string[]) =>
       p.name AS name,
       p.description AS description,
       p.model_id AS modelId,
-      COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+      COALESCE(m.display_name, m.name, m.remote_model_id, p.model_id) AS modelName,
       p.human_judgment_mode AS humanJudgmentMode
     FROM ${projectTable} p
-    INNER JOIN ${modelTable} m ON m.id = p.model_id
+    LEFT JOIN ${modelTable} m ON m.id = p.model_id
     WHERE p.id IN (${getInClause(sourceProjectIds)})
     ORDER BY p.name ASC
   `)
@@ -983,14 +983,14 @@ const getSummarySourceProject = async (summarySourceProjectId: string | null) =>
       p.name AS name,
       p.description AS description,
       p.model_id AS modelId,
-      COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+      COALESCE(m.display_name, m.name, m.remote_model_id, p.model_id) AS modelName,
       p.human_judgment_mode AS humanJudgmentMode,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
       p.use_fulltext_no_images AS useFulltextNoImages
     FROM ${projectTable} p
-    INNER JOIN ${modelTable} m ON m.id = p.model_id
+    LEFT JOIN ${modelTable} m ON m.id = p.model_id
     WHERE p.id = ${getSqlLiteral(summarySourceProjectId)}
     LIMIT 1
   `)
@@ -2129,12 +2129,13 @@ const getComparisonProjectModels = async (
       LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
       WHERE m.id IN (${getInClause(selectedModelIds)})
     `)
-    const orderLookup = selectedModelIds.reduce<Record<string, number>>((acc, modelId, index) => {
-      return {...acc, [modelId]: index}
-    }, {})
+    const modelRowsById = modelRows.reduce<Map<string, ComparisonProjectModelConfig>>((rowMap, modelRow) => {
+      rowMap.set(modelRow.id, modelRow)
+      return rowMap
+    }, new Map<string, ComparisonProjectModelConfig>())
 
-    return modelRows.sort((left, right) => {
-      return (orderLookup[left.id] ?? Number.MAX_SAFE_INTEGER) - (orderLookup[right.id] ?? Number.MAX_SAFE_INTEGER)
+    return selectedModelIds.map((modelId) => {
+      return modelRowsById.get(modelId) ?? {id: modelId, metadataJson: {}, name: modelId, provider: null, version: null}
     })
   }
 
@@ -3628,6 +3629,22 @@ const getValidatedModelIds = async (db: AppQueryRunner, modelIds: string[]) => {
   })
 }
 
+const getStoredComparisonProjectModelIds = (modelIds: string[]) => {
+  return modelIds.length === 0 ? null : modelIds
+}
+
+const getComparisonProjectRecordModelIds = async (
+  db: AppQueryRunner,
+  modelIds: string[],
+  validateModelIds: boolean,
+) => {
+  const uniqueModelIds = getUniqueStringValues(modelIds)
+
+  return validateModelIds
+    ? getValidatedModelIds(db, uniqueModelIds)
+    : getStoredComparisonProjectModelIds(uniqueModelIds)
+}
+
 const getValidatedPromptSelections = async (db: AppQueryRunner, promptSelections: PromptSelection[]) => {
   const uniquePromptSelections = getUniquePromptSelections(promptSelections)
 
@@ -3867,6 +3884,7 @@ const createComparisonProjectRecord = async (
     importRoutes?: string[]
     sourceProjectIds?: string[]
     promptSelections?: PromptSelection[]
+    validateModelIds?: boolean
   },
 ): Promise<ReturnType<typeof getComparisonProjectRecordValue>> => {
   const useTitle = body.useTitle ?? true
@@ -3878,7 +3896,11 @@ const createComparisonProjectRecord = async (
     throw new Error('Select at least one article content option to compare')
   }
 
-  const validatedModelIds = await getValidatedModelIds(tx, getUniqueStringValues(body.modelIds ?? []))
+  const comparisonProjectModelIds = await getComparisonProjectRecordModelIds(
+    tx,
+    body.modelIds ?? [],
+    body.validateModelIds ?? true,
+  )
   const humanJudgmentMode = body.humanJudgmentMode ?? 'prompt'
   const summarySourceProjectId =
     humanJudgmentMode === 'summary' ? getSummarySourceProjectId(body.summarySourceProjectId) : null
@@ -3925,7 +3947,7 @@ const createComparisonProjectRecord = async (
       ${getSqlLiteral(crypto.randomUUID())},
       ${getSqlLiteral(body.name)},
       ${getSqlLiteral(body.description?.trim() || null)},
-      ${getSqlLiteral(validatedModelIds)},
+      ${getSqlLiteral(comparisonProjectModelIds)},
       ${getBooleanLiteral(body.compareWithHumans ?? false)},
       ${getBooleanLiteral(body.allowConflictResolution ?? false)},
       ${getSqlLiteral(humanJudgmentMode)},
@@ -4048,6 +4070,7 @@ export const comparisonProjectsRoutes = new Elysia()
               ? fromProjectContext.selectedSourceProjectIds
               : [fromProjectContext.sourceProject.id],
           promptSelections: fromProjectContext.sourcePromptSelections,
+          validateModelIds: false,
         })
         const conflictResolutionImportSummary = hasConflictResolutionImportSources
           ? await importComparisonProjectConflictResolutions({

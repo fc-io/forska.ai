@@ -134,6 +134,7 @@ type MockDatabaseState = {
   }>
   extraLlmRows: MockLlmJudgmentRow[]
   failPromptInsert: boolean
+  failSelectableModelValidation?: boolean
   includeSingleAnswerArticle: boolean
   isInTransaction: boolean
   lastConflictResolutionInsertStatement: string | null
@@ -156,6 +157,7 @@ type MockDatabaseState = {
   staleServingIds: string[]
   rootRunStatements: string[]
   rootQueryStatementsDuringTransaction: string[]
+  selectableModelValidationCalls?: number
   transactionCalls: number
 }
 
@@ -1897,6 +1899,13 @@ const registerModuleMocks = () => {
   void mock.module(providerModelRepositoryModulePath, () => {
     return {
       assertSelectableProviderModelIds: async (_db: unknown, params: {modelIds: string[]}) => {
+        const state = getMockDatabaseState()
+        state.selectableModelValidationCalls = (state.selectableModelValidationCalls ?? 0) + 1
+
+        if (state.failSelectableModelValidation) {
+          throw new Error('One or more selected models do not exist or are disabled')
+        }
+
         return params.modelIds
       },
     }
@@ -2176,6 +2185,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     conflictResolutionImportSourceRows: [],
     extraLlmRows: [],
     failPromptInsert: true,
+    failSelectableModelValidation: false,
     includeSingleAnswerArticle: false,
     isInTransaction: false,
     lastConflictResolutionInsertStatement: null,
@@ -2187,6 +2197,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     queuedServingRebuildIds: [],
     rootRunStatements: [],
     rootQueryStatementsDuringTransaction: [],
+    selectableModelValidationCalls: 0,
     routeLinks: [{id: 'comparison-project-route-1', importRouteId: 'import-route-1'}],
     servingStatus: getMockServingStatus(),
     sourceProjectLinks: [],
@@ -2463,6 +2474,36 @@ test('comparison project create-from-project defaults summary-capable sources to
   ])
   expect(state.routeLinks[0]?.importRouteId).toBe('import-route-1')
   expect(state.sourceProjectLinks).toEqual([{id: 'comparison-project-source-1', sourceProjectId: 'source-project-1'}])
+})
+
+test('comparison project create-from-project does not require selectable source models', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    failPromptInsert: false,
+    failSelectableModelValidation: true,
+    promptLinks: [],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/from-project', {
+      body: JSON.stringify({
+        compareWithHumans: true,
+        description: 'Covevidence summary comparison',
+        name: 'Covevidence summary comparison',
+        sourceProjectId: 'source-project-1',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {modelIds: string[] | null}}
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.data.modelIds).toEqual(['model-1'])
+  expect(state.selectableModelValidationCalls).toBe(0)
 })
 
 test('comparison project create-from-project includes compatible additional summary projects', async () => {
