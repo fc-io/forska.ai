@@ -1,9 +1,9 @@
 import {type QueryClient, useQueryClient} from '@tanstack/solid-query'
+import {Link} from '@tanstack/solid-router'
 import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
 import {format} from 'date-fns'
 import {type Accessor, createEffect, createMemo, createSignal, For, type Setter, Show} from 'solid-js'
 
-import {ProjectTransferExportAction} from '../../../../components/main/projectsGrid/projectTransferExportAction.tsx'
 import {Button} from '../../../../components/ui/button'
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '../../../../components/ui/table'
 import {
@@ -262,7 +262,15 @@ const getArchivedProjectsColumns = (
             <span class="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
               Archived
             </span>
-            <ProjectTransferExportAction align="end" projectId={project.id} />
+            <Button
+              as={Link}
+              to="/projects/$id/export-project"
+              params={{id: project.id} as never}
+              size="sm"
+              variant="outline"
+            >
+              Export Project
+            </Button>
             <Button
               size="sm"
               disabled={isUnarchiving}

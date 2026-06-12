@@ -346,6 +346,13 @@ export type ProjectTransferExportPayloadAssembly = {
 export type ProjectTransferExportSerializedPayloads = Record<ProjectTransferPayloadKey, string>
 
 export type ProjectTransferExportPreflightEstimate = {assetBytes: number; packageBytes: number}
+export type ProjectTransferExportSummary = {
+  articleCount: number
+  humanJudgmentCount: number
+  judgmentCount: number
+  promptHumanJudgmentCount: number
+  summaryHumanJudgmentCount: number
+}
 
 type ProjectTransferExportIdentifierOmission = {inputKind: ArticleIdentifierInputKind; rawValue: string; source: string}
 
@@ -396,7 +403,7 @@ const singlePromptEvidenceOutputSchema = {
 }
 const reviewedSectionContractVersion = 1 as const
 const articleRawJsonOmissionThresholdChars = 64 * 1024 * 1024
-const defaultRawArticleProvenanceMode: ProjectTransferRawArticleProvenanceMode = 'auto'
+const defaultRawArticleProvenanceMode: ProjectTransferRawArticleProvenanceMode = 'omit'
 const rawArticleProvenanceFields = [
   'canonicalOriginalData',
   'canonicalSourceMetadata',
@@ -1023,7 +1030,7 @@ const getProjectTransferExportArticleRawJsonDecision = ({
   mode: ProjectTransferRawArticleProvenanceMode
   thresholdChars?: number
 }): ProjectTransferExportArticleRawJsonDecision => {
-  const includeRawArticleJson = mode === 'include' || (mode === 'auto' && estimate.estimatedChars <= thresholdChars)
+  const includeRawArticleJson = mode === 'include'
 
   return includeRawArticleJson
     ? {includeRawArticleJson, rawArticleProvenanceMode: mode, warnings: []}
@@ -2640,6 +2647,13 @@ type ProjectTransferExportArticleRawJsonEstimateRow = {
   rowCount: number | string | null
 }
 
+type ProjectTransferExportSummaryRow = {
+  articleCount: number | string | null
+  judgmentCount: number | string | null
+  promptHumanJudgmentCount: number | string | null
+  summaryHumanJudgmentCount: number | string | null
+}
+
 type ProjectTransferExportArticleRawJsonEstimate = {estimatedChars: number; rowCount: number}
 type ProjectTransferExportArticleRawJsonDecision = {
   includeRawArticleJson: boolean
@@ -2998,6 +3012,58 @@ export const getProjectTransferExportPreflightEstimate = async (
         )
 
   return {assetBytes, packageBytes}
+}
+
+export const getProjectTransferExportSummary = async (
+  projectId: string,
+  options: {database?: AppQueryDatabaseService} = {},
+): Promise<ProjectTransferExportSummary> => {
+  const database = getDatabase(options)
+  const [row] = await database.queryJson<ProjectTransferExportSummaryRow>(`
+    WITH
+    ${getProjectTransferExportScopedArticleCteSql(projectId)},
+    ${getProjectTransferExportAmbiguousJudgmentCteSql()},
+    project_transfer_export_judgment AS (
+      SELECT j.*
+      FROM app.judgment j
+      INNER JOIN project_transfer_scope_article scope ON scope.article_id = j.article_id
+      INNER JOIN project_transfer_source_project project ON TRUE
+      INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
+      LEFT JOIN project_transfer_ambiguous_judgment_visible_key ambiguous
+        ON ${getProjectTransferExportJudgmentAmbiguityJoinSql()}
+      WHERE ${getProjectTransferExportAnsweredJudgmentCandidateWhereSql()}
+        AND ambiguous.article_id IS NULL
+        AND j.chunking_strategy IS NULL
+    )
+    SELECT
+      (SELECT COUNT(*) FROM project_transfer_scope_article)::DOUBLE AS articleCount,
+      (SELECT COUNT(*) FROM project_transfer_export_judgment)::DOUBLE AS judgmentCount,
+      (
+        SELECT COUNT(*)
+        FROM app.judgment_human human_judgment
+        INNER JOIN project_transfer_scope_article scope ON scope.article_id = human_judgment.article_id
+        INNER JOIN app.project_prompt project_prompt
+          ON project_prompt.project_id = ${getSqlLiteral(projectId)}
+         AND project_prompt.prompt_id = human_judgment.prompt_id
+        WHERE human_judgment.project_id = ${getSqlLiteral(projectId)}
+      )::DOUBLE AS promptHumanJudgmentCount,
+      (
+        SELECT COUNT(*)
+        FROM app.judgment_human_summary human_judgment_summary
+        INNER JOIN project_transfer_scope_article scope ON scope.article_id = human_judgment_summary.article_id
+        WHERE human_judgment_summary.project_id = ${getSqlLiteral(projectId)}
+      )::DOUBLE AS summaryHumanJudgmentCount
+  `)
+  const promptHumanJudgmentCount = getQueryNumberValue(row?.promptHumanJudgmentCount)
+  const summaryHumanJudgmentCount = getQueryNumberValue(row?.summaryHumanJudgmentCount)
+
+  return {
+    articleCount: getQueryNumberValue(row?.articleCount),
+    humanJudgmentCount: promptHumanJudgmentCount + summaryHumanJudgmentCount,
+    judgmentCount: getQueryNumberValue(row?.judgmentCount),
+    promptHumanJudgmentCount,
+    summaryHumanJudgmentCount,
+  }
 }
 
 export const getProjectTransferExportProjectPayload = async (

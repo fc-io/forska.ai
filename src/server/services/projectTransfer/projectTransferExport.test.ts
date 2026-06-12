@@ -34,6 +34,7 @@ const getProjectTransferExportScript = (body: string) => {
       getProjectTransferExportPreflightEstimate,
       getProjectTransferExportPayloads,
       getProjectTransferExportSourceProjectSettings,
+      getProjectTransferExportSummary,
       serializeProjectTransferExportPayloads,
     } = await import('./src/server/services/projectTransfer/projectTransferExport.ts')
     const {buildProjectTransferExportPackage: buildExportPackage} = await import('./src/server/services/projectTransfer/projectTransferExportPackage.ts')
@@ -836,6 +837,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
     const invalidFulltextMessage = await catchMessage(() => getProjectTransferExportPayloads('project-invalid-fulltext'))
     const missingProviderMessage = await catchMessage(() => getProjectTransferExportPayloads('project-missing-provider'))
     const preflightEstimate = await getProjectTransferExportPreflightEstimate('project-archived-export')
+    const exportSummary = await getProjectTransferExportSummary('project-archived-export')
     const packageLayout = getProjectTransferExportTempLayout('export-package-test')
     const fakeZip = getFakeZipModule()
     const packageBuild = await buildExportPackage({
@@ -902,6 +904,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       missingProviderMessage,
       packageChecksumMatches: packageBuild.metadata.checksumSha256 === getProjectTransferSha256Checksum(packageBytes),
       packageExecutionMode: packageBuild.executionMode,
+      exportSummary,
       packageFingerprint: packageBuild.manifest.packageFingerprint ?? null,
       packageFingerprintMatchesAnalyze:
         (packageBuild.manifest.packageFingerprint ?? null)
@@ -1001,6 +1004,13 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.judgmentAssessmentIds).toEqual(['assessment-duplicate', 'assessment-export'])
   expect(result.humanJudgmentIds).toEqual(['human-disabled'])
   expect(result.humanSummaryIds).toEqual(['summary-human'])
+  expect(result.exportSummary).toEqual({
+    articleCount: 2,
+    humanJudgmentCount: 1,
+    judgmentCount: 2,
+    promptHumanJudgmentCount: 1,
+    summaryHumanJudgmentCount: 0,
+  })
   expect(result.reviewIds).toEqual(['review-archived'])
   expect(result.summaryReviewIds).toEqual(['review-summary'])
   expect(result.judgmentProvenanceKind).toBe('currentReviewRows')
@@ -1026,7 +1036,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.rawOmittedWarning).toMatchObject({
     action: 'omitted',
     code: 'payloadOmitted',
-    details: {rawArticleProvenanceMode: 'auto', thresholdChars: 1},
+    details: {rawArticleProvenanceMode: 'omit', thresholdChars: 1},
     scope: 'articles',
     severity: 'fidelity',
   })

@@ -1,15 +1,26 @@
 // @vitest-environment happy-dom
 
 import {QueryClient, QueryClientProvider} from '@tanstack/solid-query'
+import type {ParentProps} from 'solid-js'
 import {render} from 'solid-js/web'
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 
 import type {ProjectListItem} from '../../../../services/projectsService.ts'
 import {ArchivedProjectsTable} from './archivedProjectsTable.tsx'
 
-const originalCreateObjectURL = Reflect.get(URL, 'createObjectURL')
-const originalRevokeObjectURL = Reflect.get(URL, 'revokeObjectURL')
-let anchorClickSpy: ReturnType<typeof vi.spyOn>
+type MockLinkProps = ParentProps<{class?: string; params?: {id?: string}; to: string}>
+
+vi.mock('@tanstack/solid-router', () => {
+  return {
+    Link: (props: MockLinkProps) => {
+      return (
+        <a class={props.class} href={props.params?.id ? props.to.replace('$id', props.params.id) : props.to}>
+          {props.children}
+        </a>
+      )
+    },
+  }
+})
 
 const getArchivedProject = (overrides: Partial<ProjectListItem> = {}): ProjectListItem => {
   return {
@@ -55,85 +66,26 @@ const renderArchivedProjectsTable = async (projects: ProjectListItem[] = [getArc
   return {container, dispose, queryClient}
 }
 
-const getZipResponse = () => {
-  return new Response('zip-body', {
-    headers: {
-      'content-disposition': 'attachment; filename="archived-project-transfer.zip"',
-      'content-type': 'application/zip',
-    },
-  })
-}
-
-const waitForCondition = async (assertion: () => void, remaining = 30): Promise<void> => {
-  try {
-    assertion()
-  } catch (error) {
-    if (remaining <= 0) {
-      throw error
-    }
-
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0)
-    })
-    return waitForCondition(assertion, remaining - 1)
-  }
-}
-
 beforeEach(() => {
   document.body.innerHTML = ''
   window.history.replaceState({}, '', 'http://localhost:3000/projects/archived')
-  vi.stubGlobal('fetch', vi.fn())
-  Object.defineProperty(URL, 'createObjectURL', {
-    configurable: true,
-    value: vi.fn(() => {
-      return 'blob:project-transfer'
-    }),
-  })
-  Object.defineProperty(URL, 'revokeObjectURL', {configurable: true, value: vi.fn()})
-  anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 })
 
 afterEach(() => {
   document.body.innerHTML = ''
-  vi.unstubAllGlobals()
   vi.restoreAllMocks()
-  Object.defineProperty(URL, 'createObjectURL', {configurable: true, value: originalCreateObjectURL})
-  Object.defineProperty(URL, 'revokeObjectURL', {configurable: true, value: originalRevokeObjectURL})
 })
 
 describe('ArchivedProjectsTable export project action', () => {
-  test('renders full-fidelity Export Project for archived rows without CSV Export data', async () => {
+  test('renders full-fidelity Export Project as a page link for archived rows without CSV Export data', async () => {
     const {container, dispose, queryClient} = await renderArchivedProjectsTable()
 
     try {
       expect(container.textContent).toContain('Export Project')
       expect(container.textContent).not.toContain('Export data')
-    } finally {
-      dispose()
-      queryClient.clear()
-      container.remove()
-    }
-  })
-
-  test('starts an archived project transfer export from the row action', async () => {
-    const fetchMock = vi.mocked(fetch)
-    fetchMock.mockResolvedValueOnce(getZipResponse())
-    const {container, dispose, queryClient} = await renderArchivedProjectsTable()
-
-    try {
-      const exportProjectButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.trim() === 'Export Project'
-      })
-
-      exportProjectButton?.click()
-
-      await waitForCondition(() => {
-        expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:3001/api/projects/archived-project-1/export-project', {
-          credentials: 'include',
-          method: 'POST',
-        })
-        expect(anchorClickSpy).toHaveBeenCalled()
-      })
+      expect(
+        container.querySelector('a[href="/projects/archived-project-1/export-project"]')?.textContent?.trim(),
+      ).toBe('Export Project')
     } finally {
       dispose()
       queryClient.clear()

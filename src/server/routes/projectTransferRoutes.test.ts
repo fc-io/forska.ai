@@ -13,6 +13,7 @@ type SourceProjectRow = {deletePendingAt: unknown; id: string}
 const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
 const analyzeModulePath = new URL('../services/projectTransfer/projectTransferAnalyze.ts', import.meta.url).pathname
 const commitModulePath = new URL('../services/projectTransfer/projectTransferCommit.ts', import.meta.url).pathname
+const exportModulePath = new URL('../services/projectTransfer/projectTransferExport.ts', import.meta.url).pathname
 const exportPackageModulePath = new URL('../services/projectTransfer/projectTransferExportPackage.ts', import.meta.url)
   .pathname
 const dependencyResolutionModulePath = new URL(
@@ -107,6 +108,7 @@ const getBackgroundExportResult = () => {
 const routeState: {
   commitResult: unknown
   exportResult: unknown
+  exportSummary: unknown
   projectRows: SourceProjectRow[]
   queryStatements: string[]
   resolveResult: unknown
@@ -114,6 +116,13 @@ const routeState: {
 } = {
   commitResult: null,
   exportResult: getInlineExportResult(),
+  exportSummary: {
+    articleCount: 2,
+    humanJudgmentCount: 3,
+    judgmentCount: 4,
+    promptHumanJudgmentCount: 1,
+    summaryHumanJudgmentCount: 2,
+  },
   projectRows: [{deletePendingAt: null, id: 'project-1'}],
   queryStatements: [],
   resolveResult: {
@@ -138,10 +147,13 @@ const queryJsonMock = mock(async (statement: string) => {
 })
 
 const createProjectTransferExportMock = mock(
-  async (_input: {projectId: string; rawArticleProvenanceMode?: 'auto' | 'include' | 'omit'}) => {
+  async (_input: {projectId: string; rawArticleProvenanceMode?: 'include' | 'omit'}) => {
     return routeState.exportResult
   },
 )
+const getProjectTransferExportSummaryMock = mock(async (_projectId: string) => {
+  return routeState.exportSummary
+})
 
 const analyzeProjectTransferImportPackageMock = mock(async (input: {planRevision: number}) => {
   const planSummary = {
@@ -427,6 +439,10 @@ void mock.module(exportPackageModulePath, () => {
   return {createProjectTransferExport: createProjectTransferExportMock}
 })
 
+void mock.module(exportModulePath, () => {
+  return {getProjectTransferExportSummary: getProjectTransferExportSummaryMock}
+})
+
 void mock.module(analyzeModulePath, () => {
   return {analyzeProjectTransferImportPackage: analyzeProjectTransferImportPackageMock}
 })
@@ -557,6 +573,7 @@ afterEach(() => {
   createProjectTransferSessionMock.mockClear()
   createProjectTransferExportMock.mockClear()
   getProjectTransferSessionMock.mockClear()
+  getProjectTransferExportSummaryMock.mockClear()
   heartbeatProjectTransferSessionOwnerMock.mockClear()
   markProjectTransferSessionTerminalCleanupCompleteMock.mockClear()
   queryJsonMock.mockClear()
@@ -565,6 +582,13 @@ afterEach(() => {
   updateProjectTransferSessionPlanRevisionMock.mockClear()
   writeProjectTransferDependencyPlanMock.mockClear()
   routeState.exportResult = getInlineExportResult()
+  routeState.exportSummary = {
+    articleCount: 2,
+    humanJudgmentCount: 3,
+    judgmentCount: 4,
+    promptHumanJudgmentCount: 1,
+    summaryHumanJudgmentCount: 2,
+  }
   routeState.commitResult = null
   routeState.projectRows = [{deletePendingAt: null, id: 'project-1'}]
   routeState.queryStatements.length = 0
@@ -605,6 +629,28 @@ test('project transfer export route returns an inline zip with server metadata h
   expect(createProjectTransferExportMock).toHaveBeenCalledWith({projectId: 'project-1'})
 })
 
+test('project transfer export summary route returns export counts and default omit mode', async () => {
+  const app = await getProjectTransferApp()
+
+  const response = await getRouteResponse(app, '/api/projects/project-1/export-project', 'GET')
+  const body = (await response.json()) as {data: Record<string, unknown>; error: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toEqual({
+    data: {
+      articleCount: 2,
+      defaultRawArticleProvenanceMode: 'omit',
+      humanJudgmentCount: 3,
+      judgmentCount: 4,
+      promptHumanJudgmentCount: 1,
+      summaryHumanJudgmentCount: 2,
+    },
+    error: null,
+  })
+  expect(getProjectTransferExportSummaryMock).toHaveBeenCalledWith('project-1')
+  expect(createProjectTransferExportMock).not.toHaveBeenCalled()
+})
+
 test('project transfer export route forwards raw article provenance mode', async () => {
   const app = await getProjectTransferApp()
 
@@ -617,6 +663,19 @@ test('project transfer export route forwards raw article provenance mode', async
     projectId: 'project-1',
     rawArticleProvenanceMode: 'omit',
   })
+})
+
+test('project transfer export route rejects removed auto raw article provenance mode', async () => {
+  const app = await getProjectTransferApp()
+
+  const response = await getRouteResponse(app, '/api/projects/project-1/export-project', 'POST', {
+    rawArticleProvenanceMode: 'auto',
+  })
+  const body = await response.text()
+
+  expect(response.status).toBe(422)
+  expect(body).toContain('rawArticleProvenanceMode')
+  expect(createProjectTransferExportMock).not.toHaveBeenCalled()
 })
 
 test('project transfer export route returns queued JSON for large exports without package bytes', async () => {

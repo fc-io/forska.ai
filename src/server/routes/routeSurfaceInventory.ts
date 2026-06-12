@@ -404,6 +404,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     'projectTransferRoutes.ts',
     'Project export/import packages, uploaded archives, and local runtime assets.',
     [
+      ['GET', '/api/projects/:id/export-project'],
       ['POST', '/api/projects/:id/export-project'],
       ['GET', '/api/projects/export/:exportId'],
       ['GET', '/api/projects/export/:exportId/download'],

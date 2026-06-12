@@ -31,18 +31,48 @@ type ProjectTransferExportSession = ProjectTransferExportPendingSession | Projec
 type ProjectTransferExportStartResult =
   | {session: ProjectTransferExportSession; status: 'session'}
   | {status: 'downloaded'}
-type ProjectTransferRawArticleProvenanceMode = 'auto' | 'include' | 'omit'
+export type ProjectTransferRawArticleProvenanceMode = 'include' | 'omit'
+export type ProjectTransferExportSummary = {
+  articleCount: number
+  defaultRawArticleProvenanceMode: ProjectTransferRawArticleProvenanceMode
+  humanJudgmentCount: number
+  judgmentCount: number
+  promptHumanJudgmentCount: number
+  summaryHumanJudgmentCount: number
+}
 type ProjectTransferExportStartInput = {
   projectId: string
   rawArticleProvenanceMode: ProjectTransferRawArticleProvenanceMode
 }
 
-type ProjectTransferExportActionProps = {align?: 'end' | 'start'; class?: string; projectId: string}
+type ProjectTransferExportActionProps = {
+  align?: 'end' | 'start'
+  class?: string
+  projectId: string
+  showModeDetails?: boolean
+}
 
-const rawArticleProvenanceModeOptions: Array<{label: string; value: ProjectTransferRawArticleProvenanceMode}> = [
-  {label: 'Auto', value: 'auto'},
-  {label: 'Include raw', value: 'include'},
-  {label: 'Omit raw', value: 'omit'},
+export const rawArticleProvenanceModeOptions: Array<{
+  description: string
+  label: string
+  omitted: string
+  value: ProjectTransferRawArticleProvenanceMode
+}> = [
+  {
+    description:
+      'Exports the project, articles, prompts, model/provider snapshots, judgments, human judgments, reviews, and files without the large source-system JSON saved during article import.',
+    label: 'Leave out source import metadata',
+    omitted: 'Original article source JSON and article-import metadata/raw payload fields are not exported.',
+    value: 'omit',
+  },
+  {
+    description:
+      'Also exports the original source-system JSON stored on articles and article-import links. This can make the package much larger and may expose source-system details.',
+    label: 'Include source import metadata',
+    omitted:
+      'Nothing extra is omitted by this option; normal secret redaction and unsupported record warnings still apply.',
+    value: 'include',
+  },
 ]
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -251,6 +281,53 @@ export const fetchProjectTransferExportSession = async (exportId: string): Promi
   )
 }
 
+const parseProjectTransferExportSummary = (value: unknown): ProjectTransferExportSummary => {
+  if (!isRecord(value)) {
+    throw new Error('Invalid project transfer export summary response')
+  }
+
+  const articleCount = getNumberValue(value, 'articleCount')
+  const humanJudgmentCount = getNumberValue(value, 'humanJudgmentCount')
+  const judgmentCount = getNumberValue(value, 'judgmentCount')
+  const promptHumanJudgmentCount = getNumberValue(value, 'promptHumanJudgmentCount')
+  const summaryHumanJudgmentCount = getNumberValue(value, 'summaryHumanJudgmentCount')
+  const defaultRawArticleProvenanceMode = value.defaultRawArticleProvenanceMode
+  const isValidMode = defaultRawArticleProvenanceMode === 'include' || defaultRawArticleProvenanceMode === 'omit'
+
+  if (
+    articleCount === null
+    || humanJudgmentCount === null
+    || judgmentCount === null
+    || promptHumanJudgmentCount === null
+    || summaryHumanJudgmentCount === null
+    || !isValidMode
+  ) {
+    throw new Error('Invalid project transfer export summary response')
+  }
+
+  return {
+    articleCount,
+    defaultRawArticleProvenanceMode,
+    humanJudgmentCount,
+    judgmentCount,
+    promptHumanJudgmentCount,
+    summaryHumanJudgmentCount,
+  }
+}
+
+export const fetchProjectTransferExportSummary = async (projectId: string): Promise<ProjectTransferExportSummary> => {
+  const response = await fetch(getProjectTransferExportRequestUrl(projectId), {credentials: 'include', method: 'GET'})
+  const body = await readJsonResponseBody(response)
+  const error = getEnvelopeError(body)
+  const data = getEnvelopeData(body)
+
+  if (!response.ok || error !== null) {
+    throw new Error(error ?? 'Failed to fetch project transfer export summary')
+  }
+
+  return parseProjectTransferExportSummary(data)
+}
+
 const readProjectTransferExportSessionResponse = async (
   response: Response,
   errorMessage: string,
@@ -337,7 +414,7 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
   const [downloadedIds, setDownloadedIds] = createSignal<Set<string>>(new Set())
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
   const [rawArticleProvenanceMode, setRawArticleProvenanceMode] =
-    createSignal<ProjectTransferRawArticleProvenanceMode>('auto')
+    createSignal<ProjectTransferRawArticleProvenanceMode>('omit')
   const sessionId = createMemo(() => {
     return session()?.exportId ?? null
   })
@@ -397,7 +474,11 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
           : 'Export Project'
   })
   const wrapperClass = createMemo(() => {
-    return props.align === 'end' ? 'flex flex-col items-end gap-1' : 'flex flex-col items-start gap-1'
+    return props.showModeDetails
+      ? 'space-y-4'
+      : props.align === 'end'
+        ? 'flex flex-col items-end gap-1'
+        : 'flex flex-col items-start gap-1'
   })
   const startReadySessionDownload = (readySession: ProjectTransferExportReadySession) => {
     setDownloadInFlightIds((ids) => {
@@ -463,24 +544,72 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
 
   return (
     <div class={wrapperClass()}>
-      <label class="flex items-center gap-2 text-xs text-muted-foreground">
-        <span>Raw provenance</span>
-        <select
-          aria-label="Raw provenance mode"
-          class="h-7 rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-          disabled={isBusy()}
-          value={rawArticleProvenanceMode()}
-          onChange={(event) => {
-            return setRawArticleProvenanceMode(event.currentTarget.value as ProjectTransferRawArticleProvenanceMode)
-          }}
-        >
+      <Show
+        when={props.showModeDetails}
+        fallback={
+          <label class="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Source metadata</span>
+            <select
+              aria-label="Source import metadata mode"
+              class="h-7 rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              disabled={isBusy()}
+              value={rawArticleProvenanceMode()}
+              onChange={(event) => {
+                return setRawArticleProvenanceMode(event.currentTarget.value as ProjectTransferRawArticleProvenanceMode)
+              }}
+            >
+              <For each={rawArticleProvenanceModeOptions}>
+                {(option) => {
+                  return <option value={option.value}>{option.label}</option>
+                }}
+              </For>
+            </select>
+          </label>
+        }
+      >
+        <fieldset class="space-y-3">
+          <legend class="text-sm font-medium text-gray-900">Source import metadata</legend>
+          <p class="text-sm text-muted-foreground">
+            Choose whether to include the original source-system JSON saved with imported article records. The default
+            leaves it out because project transfer does not need it to recreate articles, prompts, judgments, human
+            judgments, reviews, files, or model/provider snapshots.
+          </p>
           <For each={rawArticleProvenanceModeOptions}>
             {(option) => {
-              return <option value={option.value}>{option.label}</option>
+              const selected = () => {
+                return rawArticleProvenanceMode() === option.value
+              }
+
+              return (
+                <label
+                  class={`flex cursor-pointer gap-3 rounded-lg border p-4 transition ${
+                    selected() ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white hover:bg-gray-50'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    class="mt-1"
+                    name="source-import-metadata-mode"
+                    value={option.value}
+                    checked={selected()}
+                    disabled={isBusy()}
+                    onChange={(event) => {
+                      return setRawArticleProvenanceMode(
+                        event.currentTarget.value as ProjectTransferRawArticleProvenanceMode,
+                      )
+                    }}
+                  />
+                  <span class="space-y-1">
+                    <span class="block text-sm font-medium text-gray-900">{option.label}</span>
+                    <span class="block text-sm text-muted-foreground">{option.description}</span>
+                    <span class="block text-xs font-medium text-gray-700">Not exported: {option.omitted}</span>
+                  </span>
+                </label>
+              )
             }}
           </For>
-        </select>
-      </label>
+        </fieldset>
+      </Show>
       <Button size="sm" variant="outline" class={props.class} disabled={isBusy()} onClick={handleExportProject}>
         {buttonLabel()}
       </Button>

@@ -53,7 +53,7 @@ export const projectTransferReadyDependencyStatuses = ['not_required', 'resolved
 
 export const projectTransferJudgmentConflictStatuses = ['blocked', 'clear', 'unknown'] as const
 
-export const projectTransferRawArticleProvenanceModes = ['auto', 'include', 'omit'] as const
+export const projectTransferRawArticleProvenanceModes = ['include', 'omit'] as const
 
 export const projectTransferOverlapSummaryKeys = [
   'reusedArticleCount',

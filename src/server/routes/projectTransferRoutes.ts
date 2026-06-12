@@ -34,6 +34,10 @@ import {
   writeProjectTransferDependencyPlan,
 } from '../services/projectTransfer/projectTransferDependencyResolution.ts'
 import {
+  getProjectTransferExportSummary,
+  type ProjectTransferExportSummary,
+} from '../services/projectTransfer/projectTransferExport.ts'
+import {
   createProjectTransferExport,
   type ProjectTransferExportPackageMetadata,
 } from '../services/projectTransfer/projectTransferExportPackage.ts'
@@ -47,13 +51,6 @@ import {
 import {getProjectTransferSessionRepository} from '../services/projectTransfer/projectTransferSessionRepository.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
-type ProjectTransferExportResponse = {
-  downloadUrl: string
-  expiresAt: string
-  exportId: string
-  filename: string
-  status: 'queued'
-}
 type ProjectTransferExportNonReadyStatus = 'assembling' | 'packaging' | 'queued'
 type ProjectTransferExportSessionPendingResponse = {
   exportId: string
@@ -88,6 +85,9 @@ type ProjectTransferImportSessionData = ProjectTransferSessionResponse & {
 }
 type ExportProjectRequest = {rawArticleProvenanceMode?: ProjectTransferRawArticleProvenanceMode}
 type ProjectTransferSourceProjectRow = {deletePendingAt: unknown; id: string}
+type ProjectTransferExportSummaryResponse = ProjectTransferExportSummary & {
+  defaultRawArticleProvenanceMode: ProjectTransferRawArticleProvenanceMode
+}
 type RouteSet = {status?: number | string}
 type ProjectTransferPackageHeaderMetadata = Pick<
   ProjectTransferExportReadyPayload,
@@ -98,6 +98,12 @@ const importWorkerHeartbeatIntervalMs = 15_000
 const importWorkerHeartbeatLeaseMs = 60_000
 
 export const projectTransferRouteSpecs = [
+  {
+    endpoint: 'get-export-project-summary',
+    method: 'GET',
+    path: '/api/projects/:id/export-project',
+    samplePath: '/api/projects/project-1/export-project',
+  },
   {
     endpoint: 'export-project',
     method: 'POST',
@@ -165,11 +171,11 @@ const exportParamSchema = t.Object({exportId: t.String({minLength: 1})})
 const importSessionParamSchema = t.Object({sessionId: t.String({minLength: 1})})
 const exportProjectBodySchema = t.Optional(
   t.Object(
-    {rawArticleProvenanceMode: t.Optional(t.Union([t.Literal('auto'), t.Literal('include'), t.Literal('omit')]))},
+    {rawArticleProvenanceMode: t.Optional(t.Union([t.Literal('include'), t.Literal('omit')]))},
     {additionalProperties: true},
   ),
 )
-const exportProjectRequestShape = arktype({'rawArticleProvenanceMode?': '"auto" | "include" | "omit"'})
+const exportProjectRequestShape = arktype({'rawArticleProvenanceMode?': '"include" | "omit"'})
 const createImportSessionRequestShape = arktype({
   'expiresAt?': 'string',
   'packageFingerprint?': 'string | null',
@@ -1097,7 +1103,7 @@ const startBackgroundAnalyzeJob = (params: {ownerToken: string; sessionId: strin
 const getExportSourceProjectError = async (
   set: RouteSet,
   projectId: string,
-): Promise<ProjectTransferApiResponse<ProjectTransferExportResponse> | null> => {
+): Promise<ProjectTransferApiResponse<unknown> | null> => {
   const project = await getProjectTransferExportSourceProject(projectId)
 
   if (project === null) {
@@ -1825,6 +1831,27 @@ const cancelImportSession = async (
 
 export const projectTransferRoutes = new Elysia()
   .use(withErrorHandler())
+  .get(
+    '/api/projects/:id/export-project',
+    async ({params, set}) => {
+      const sourceProjectError = await getExportSourceProjectError(set, params.id)
+
+      if (sourceProjectError !== null) {
+        return sourceProjectError
+      }
+
+      const summary = await getProjectTransferExportSummary(params.id)
+
+      return {
+        data: {
+          ...summary,
+          defaultRawArticleProvenanceMode: 'omit' as const,
+        } satisfies ProjectTransferExportSummaryResponse,
+        error: null,
+      }
+    },
+    {params: routeParamSchema},
+  )
   .post(
     '/api/projects/:id/export-project',
     async ({body, params, set}) => {

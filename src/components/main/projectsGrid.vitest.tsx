@@ -58,9 +58,7 @@ vi.mock('../../services/apiClient.ts', () => {
           export: ({exportId}: {exportId: string}) => {
             return {
               get: () => {
-                const response = mockApiState.getExportSession(exportId)
-
-                return response
+                return mockApiState.getExportSession(exportId)
               },
             }
           },
@@ -69,10 +67,6 @@ vi.mock('../../services/apiClient.ts', () => {
     },
   }
 })
-
-const originalCreateObjectURL = Reflect.get(URL, 'createObjectURL')
-const originalRevokeObjectURL = Reflect.get(URL, 'revokeObjectURL')
-let anchorClickSpy: ReturnType<typeof vi.spyOn>
 
 const getProject = (overrides: Partial<ProjectListItem> = {}): ProjectListItem => {
   return {
@@ -124,25 +118,6 @@ const getActionLabels = (container: HTMLElement) => {
   })
 }
 
-const tick = () => {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, 0)
-  })
-}
-
-const waitForCondition = async (assertion: () => void, remaining = 30): Promise<void> => {
-  try {
-    assertion()
-  } catch (error) {
-    if (remaining <= 0) {
-      throw error
-    }
-
-    await tick()
-    return waitForCondition(assertion, remaining - 1)
-  }
-}
-
 const getReadyExportData = (overrides: Partial<ReadyExportData> = {}): ReadyExportData => {
   return {
     byteLength: 8,
@@ -158,80 +133,31 @@ const getReadyExportData = (overrides: Partial<ReadyExportData> = {}): ReadyExpo
   }
 }
 
-const getQueuedExportResponse = () => {
-  return new Response(
-    JSON.stringify({
-      data: {
-        downloadUrl: '/api/projects/export/export-1/download',
-        expiresAt: '2030-01-01T00:00:00.000Z',
-        exportId: 'export-1',
-        filename: 'queued-project-transfer.zip',
-        status: 'queued',
-      },
-      error: null,
-    }),
-    {headers: {'content-type': 'application/json'}, status: 202},
-  )
-}
-
-const getZipResponse = (filename: string) => {
-  return new Response('zip-body', {
-    headers: {'content-disposition': `attachment; filename="${filename}"`, 'content-type': 'application/zip'},
-  })
-}
-
-const createDeferred = <T,>() => {
-  let resolve = (_value: T) => {}
-  const promise = new Promise<T>((resolveValue) => {
-    resolve = resolveValue
-  })
-
-  return {promise, resolve}
-}
-
 beforeEach(() => {
   document.body.innerHTML = ''
   window.history.replaceState({}, '', 'http://localhost:3000/projects')
   mockApiState.getExportSession.mockReset()
-  vi.stubGlobal('fetch', vi.fn())
-  Object.defineProperty(URL, 'createObjectURL', {
-    configurable: true,
-    value: vi.fn(() => {
-      return 'blob:project-transfer'
-    }),
-  })
-  Object.defineProperty(URL, 'revokeObjectURL', {configurable: true, value: vi.fn()})
-  anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 })
 
 afterEach(() => {
   document.body.innerHTML = ''
-  vi.unstubAllGlobals()
   vi.restoreAllMocks()
-  Object.defineProperty(URL, 'createObjectURL', {configurable: true, value: originalCreateObjectURL})
-  Object.defineProperty(URL, 'revokeObjectURL', {configurable: true, value: originalRevokeObjectURL})
 })
 
-describe('ProjectsGrid export project action', () => {
-  test('renders Export Project immediately after the existing CSV Export data action', async () => {
+describe('ProjectsGrid export project link', () => {
+  test('renders Export Project as a page link immediately after CSV Export data', async () => {
     const {container, dispose, queryClient} = await renderProjectsGrid()
 
     try {
       const labels = getActionLabels(container)
       const exportDataIndex = labels.indexOf('Export data')
-      const rawProvenanceSelect = container.querySelector<HTMLSelectElement>('select[aria-label="Raw provenance mode"]')
-      const rawProvenanceOptions = Array.from(rawProvenanceSelect?.options ?? []).map((option) => {
-        return {label: option.textContent?.trim(), value: option.value}
-      })
 
       expect(container.querySelector('a[href="/projects/project-1/export"]')?.textContent?.trim()).toBe('Export data')
+      expect(container.querySelector('a[href="/projects/project-1/export-project"]')?.textContent?.trim()).toBe(
+        'Export Project',
+      )
       expect(labels[exportDataIndex + 1]).toBe('Export Project')
-      expect(rawProvenanceSelect?.value).toBe('auto')
-      expect(rawProvenanceOptions).toEqual([
-        {label: 'Auto', value: 'auto'},
-        {label: 'Include raw', value: 'include'},
-        {label: 'Omit raw', value: 'omit'},
-      ])
+      expect(container.querySelector('select[aria-label="Source import metadata mode"]')).toBeNull()
     } finally {
       dispose()
       queryClient.clear()
@@ -269,182 +195,6 @@ describe('ProjectsGrid export project action', () => {
       filename: 'ready-project-transfer.zip',
       status: 'ready',
     })
-  })
-
-  test('downloads an inline full-fidelity export without changing the CSV export link', async () => {
-    const fetchMock = vi.mocked(fetch)
-    fetchMock.mockResolvedValueOnce(getZipResponse('project-transfer-project-1.zip'))
-    const {container, dispose, queryClient} = await renderProjectsGrid()
-
-    try {
-      const exportProjectButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.trim() === 'Export Project'
-      })
-
-      exportProjectButton?.click()
-
-      await waitForCondition(() => {
-        expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:3001/api/projects/project-1/export-project', {
-          body: JSON.stringify({rawArticleProvenanceMode: 'auto'}),
-          credentials: 'include',
-          headers: {'content-type': 'application/json'},
-          method: 'POST',
-        })
-        expect(anchorClickSpy).toHaveBeenCalled()
-        expect(container.querySelector('a[href="/projects/project-1/export"]')?.textContent?.trim()).toBe('Export data')
-      })
-    } finally {
-      dispose()
-      queryClient.clear()
-      container.remove()
-    }
-  })
-
-  test('shows preparing state for queued exports, polls JSON metadata, and downloads the ready package', async () => {
-    const fetchMock = vi.mocked(fetch)
-    const readyDeferred = createDeferred<{data: ReadyExportData; error: null}>()
-    fetchMock.mockResolvedValueOnce(getQueuedExportResponse())
-    fetchMock.mockResolvedValueOnce(getZipResponse('ready-project-transfer.zip'))
-    mockApiState.getExportSession.mockReturnValue(readyDeferred.promise)
-    const {container, dispose, queryClient} = await renderProjectsGrid()
-
-    try {
-      const rawProvenanceSelect = container.querySelector<HTMLSelectElement>('select[aria-label="Raw provenance mode"]')
-      const exportProjectButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.trim() === 'Export Project'
-      })
-
-      if (rawProvenanceSelect) {
-        rawProvenanceSelect.value = 'include'
-        rawProvenanceSelect.dispatchEvent(new Event('change', {bubbles: true}))
-      }
-      exportProjectButton?.click()
-
-      await waitForCondition(() => {
-        expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:3001/api/projects/project-1/export-project', {
-          body: JSON.stringify({rawArticleProvenanceMode: 'include'}),
-          credentials: 'include',
-          headers: {'content-type': 'application/json'},
-          method: 'POST',
-        })
-        expect(container.textContent).toContain('Preparing download...')
-        expect(mockApiState.getExportSession).toHaveBeenCalledWith('export-1')
-      })
-
-      readyDeferred.resolve({data: getReadyExportData(), error: null})
-
-      await waitForCondition(() => {
-        expect(fetchMock).toHaveBeenLastCalledWith('http://127.0.0.1:3001/api/projects/export/export-1/download', {
-          credentials: 'include',
-          method: 'GET',
-        })
-        expect(anchorClickSpy).toHaveBeenCalled()
-      })
-    } finally {
-      dispose()
-      queryClient.clear()
-      container.remove()
-    }
-  })
-
-  test('sends omit raw provenance mode when starting an export', async () => {
-    const fetchMock = vi.mocked(fetch)
-    fetchMock.mockResolvedValueOnce(getZipResponse('project-transfer-project-1.zip'))
-    const {container, dispose, queryClient} = await renderProjectsGrid()
-
-    try {
-      const rawProvenanceSelect = container.querySelector<HTMLSelectElement>('select[aria-label="Raw provenance mode"]')
-      const exportProjectButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.trim() === 'Export Project'
-      })
-
-      if (rawProvenanceSelect) {
-        rawProvenanceSelect.value = 'omit'
-        rawProvenanceSelect.dispatchEvent(new Event('change', {bubbles: true}))
-      }
-      exportProjectButton?.click()
-
-      await waitForCondition(() => {
-        expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:3001/api/projects/project-1/export-project', {
-          body: JSON.stringify({rawArticleProvenanceMode: 'omit'}),
-          credentials: 'include',
-          headers: {'content-type': 'application/json'},
-          method: 'POST',
-        })
-      })
-    } finally {
-      dispose()
-      queryClient.clear()
-      container.remove()
-    }
-  })
-
-  test('stops polling after a terminal export status failure', async () => {
-    const fetchMock = vi.mocked(fetch)
-    fetchMock.mockResolvedValueOnce(getQueuedExportResponse())
-    mockApiState.getExportSession.mockRejectedValue(new Error('Project transfer export failed'))
-    const {container, dispose, queryClient} = await renderProjectsGrid()
-
-    try {
-      const exportProjectButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.trim() === 'Export Project'
-      })
-
-      exportProjectButton?.click()
-
-      await waitForCondition(() => {
-        expect(container.textContent).toContain('Project transfer export failed')
-        expect(mockApiState.getExportSession).toHaveBeenCalledTimes(1)
-      })
-      await tick()
-
-      expect(mockApiState.getExportSession).toHaveBeenCalledTimes(1)
-      expect(container.textContent).not.toContain('Assembling package')
-      expect(container.textContent).not.toContain('Preparing download')
-    } finally {
-      dispose()
-      queryClient.clear()
-      container.remove()
-    }
-  })
-
-  test('does not immediately retry a failed ready-session download', async () => {
-    const fetchMock = vi.mocked(fetch)
-    const readyDeferred = createDeferred<{data: ReadyExportData; error: null}>()
-    fetchMock.mockResolvedValueOnce(getQueuedExportResponse())
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({data: null, error: 'Project transfer export package artifact is unavailable'}), {
-        headers: {'content-type': 'application/json'},
-        status: 410,
-      }),
-    )
-    mockApiState.getExportSession.mockReturnValue(readyDeferred.promise)
-    const {container, dispose, queryClient} = await renderProjectsGrid()
-
-    try {
-      const exportProjectButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.trim() === 'Export Project'
-      })
-
-      exportProjectButton?.click()
-
-      await waitForCondition(() => {
-        expect(mockApiState.getExportSession).toHaveBeenCalledWith('export-1')
-      })
-
-      readyDeferred.resolve({data: getReadyExportData(), error: null})
-
-      await waitForCondition(() => {
-        expect(container.textContent).toContain('Project transfer export package artifact is unavailable')
-      })
-      await tick()
-
-      expect(fetchMock).toHaveBeenCalledTimes(2)
-    } finally {
-      dispose()
-      queryClient.clear()
-      container.remove()
-    }
   })
 
   test('resolves export and download paths for browser and desktop runtimes', () => {
