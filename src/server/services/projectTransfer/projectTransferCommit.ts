@@ -4,6 +4,7 @@ import {dirname} from 'node:path'
 
 import type {ProjectTransferHistoryRecord, ProjectTransferSessionRecord} from '../../../db/schemaTypes.ts'
 import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
+import {getAppDatabaseService} from '../appDatabaseService.ts'
 import type {
   ProjectTransferImportAnalysisArtifact,
   ProjectTransferImportPlanArtifact,
@@ -44,6 +45,10 @@ import {
 } from './projectTransferDependencyResolution.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
+import {
+  type ProjectTransferOperationTableRunner,
+  withProjectTransferOperationTables,
+} from './projectTransferOperationTables.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import {
   parseProjectTransferPayload,
@@ -134,6 +139,10 @@ type ProjectTransferCommitAppTableWriteInput = RuntimePathOptions & {
   schemaVersion: number
   sessionId: string
 }
+
+type ProjectTransferCommitWriterDatabase = NonNullable<
+  Parameters<typeof writeProjectTransferCommitAppTables>[0]['database']
+>
 
 export type ProjectTransferCommitResult =
   | {error: string; status: 'error'; statusCode: number}
@@ -727,6 +736,30 @@ const getResolvedDependencyPlanArtifact = (
   return plan as ProjectTransferCommitResolvedDependencyPlanArtifact
 }
 
+const getCommitDependencyRepositories = ({
+  analyzeTargetRunner,
+  repositories,
+}: {
+  analyzeTargetRunner?: ProjectTransferAnalyzeTargetRunner
+  repositories?: ProjectTransferCommitRevalidationInput['repositories']
+}) => {
+  const dependencyRepositories = repositories?.dependencyRepositories
+
+  return dependencyRepositories?.analyzeTargetRunner === undefined && analyzeTargetRunner !== undefined
+    ? {...dependencyRepositories, analyzeTargetRunner}
+    : dependencyRepositories
+}
+
+const getCommitAnalyzeTargetRunner = ({
+  analyzeTargetRunner,
+  repositories,
+}: {
+  analyzeTargetRunner?: ProjectTransferAnalyzeTargetRunner
+  repositories?: ProjectTransferCommitRevalidationInput['repositories']
+}) => {
+  return repositories?.analyzeTargetRunner ?? analyzeTargetRunner
+}
+
 export const revalidateProjectTransferCommitPlan = async ({
   analysis,
   layout,
@@ -736,49 +769,62 @@ export const revalidateProjectTransferCommitPlan = async ({
   ...runtimeOptions
 }: ProjectTransferCommitRevalidationInput): Promise<ProjectTransferCommitRevalidationResult> => {
   const payloads = await readExtractedPayloads({...runtimeOptions, layout})
-  const freshTarget = await getProjectTransferAnalyzeTargetPlan({
-    packageFingerprint: analysis.packageFingerprint,
-    payloads,
-    runner: repositories?.analyzeTargetRunner ?? undefined,
-  })
+  const revalidate = async (analyzeTargetRunner?: ProjectTransferAnalyzeTargetRunner) => {
+    const freshTarget = await getProjectTransferAnalyzeTargetPlan({
+      packageFingerprint: analysis.packageFingerprint,
+      payloads,
+      runner: getCommitAnalyzeTargetRunner({analyzeTargetRunner, repositories}),
+    })
 
-  if (targetPlanRevalidationChanged({currentPlan: plan.targetPlan, freshPlan: freshTarget.targetPlan})) {
-    return getCommitRevalidationResult(
-      {...getPlanWithTargetRevalidation({freshTarget, plan}), planRevision: nextPlanRevision},
-      true,
-    )
-  }
-
-  const dependencyResult = await revalidateProjectTransferResolvedDependencies({
-    nextPlanRevision,
-    payloads,
-    plan: getResolvedDependencyPlanArtifact(plan),
-    repositories: repositories?.dependencyRepositories,
-    request: getDependencyResolutionRequestFromPlan(plan),
-  })
-
-  if (dependencyResult.status === 'error') {
-    return getCommitRevalidationResult(
-      {
-        ...getPlanWithDependencyRevalidationError({error: dependencyResult.error, plan}),
-        planRevision: nextPlanRevision,
-      },
-      true,
-    )
-  }
-
-  return dependencyResult.changed
-    ? getCommitRevalidationResult(
-        getPlanWithRevalidationBlocker({
-          blocker: getCommitBlocker({
-            code: 'commit_dependency_plan_stale',
-            message: 'Provider, model, judgment, or human review assumptions changed since analysis',
-          }),
-          plan: dependencyResult.plan,
-        }),
+    if (targetPlanRevalidationChanged({currentPlan: plan.targetPlan, freshPlan: freshTarget.targetPlan})) {
+      return getCommitRevalidationResult(
+        {...getPlanWithTargetRevalidation({freshTarget, plan}), planRevision: nextPlanRevision},
         true,
       )
-    : getCommitRevalidationResult(plan, false)
+    }
+
+    const dependencyResult = await revalidateProjectTransferResolvedDependencies({
+      nextPlanRevision,
+      payloads,
+      plan: getResolvedDependencyPlanArtifact(plan),
+      repositories: getCommitDependencyRepositories({analyzeTargetRunner, repositories}),
+      request: getDependencyResolutionRequestFromPlan(plan),
+    })
+
+    if (dependencyResult.status === 'error') {
+      return getCommitRevalidationResult(
+        {
+          ...getPlanWithDependencyRevalidationError({error: dependencyResult.error, plan}),
+          planRevision: nextPlanRevision,
+        },
+        true,
+      )
+    }
+
+    return dependencyResult.changed
+      ? getCommitRevalidationResult(
+          getPlanWithRevalidationBlocker({
+            blocker: getCommitBlocker({
+              code: 'commit_dependency_plan_stale',
+              message: 'Provider, model, judgment, or human review assumptions changed since analysis',
+            }),
+            plan: dependencyResult.plan,
+          }),
+          true,
+        )
+      : getCommitRevalidationResult(plan, false)
+  }
+
+  return repositories?.analyzeTargetRunner === undefined
+    ? withProjectTransferOperationTables({
+        ...runtimeOptions,
+        layout,
+        operationId: `commit_revalidation_${plan.planRevision}_${nextPlanRevision}`,
+        work: ({runner}) => {
+          return revalidate(runner)
+        },
+      })
+    : revalidate()
 }
 
 const getCommitProgress = ({
@@ -1039,6 +1085,18 @@ const getRepositorySet = (repositories?: ProjectTransferCommitRepositories) => {
   }
 }
 
+const getProjectTransferCommitOperationDatabase = (
+  tx: ProjectTransferOperationTableRunner,
+): ProjectTransferCommitWriterDatabase => {
+  return {
+    queryJson: tx.queryJson,
+    run: tx.run,
+    transaction: <T>(work: (writerTx: ProjectTransferOperationTableRunner) => Promise<T> | T) => {
+      return Promise.resolve(work(tx))
+    },
+  }
+}
+
 const runProjectTransferCommitAppTableWrites = async ({
   artifacts,
   commitId,
@@ -1052,7 +1110,7 @@ const runProjectTransferCommitAppTableWrites = async ({
   now: Date
   schemaVersion: number
   sessionId: string
-}) => {
+}): Promise<ProjectTransferCommitAppWriteResult> => {
   const stagingLoad = await measureProjectTransferPhase('stagingLoad', () => {
     return readExtractedPayloads({...runtimeOptions, layout: artifacts.layout})
   })
@@ -1062,17 +1120,32 @@ const runProjectTransferCommitAppTableWrites = async ({
   })
 
   try {
-    const appTableWrites = await measureProjectTransferPhase('appTableWrites', () => {
-      return writeProjectTransferCommitAppTables({
-        commitId,
-        now,
-        payloads,
-        plan: artifacts.plan,
-        promotion: assetPromotion.value,
-        schemaVersion,
-        sessionId,
-      })
-    })
+    const database = getAppDatabaseService()
+    const appTableWrites = await measureProjectTransferPhase(
+      'appTableWrites',
+      (): Promise<ProjectTransferCommitAppWriteResult> => {
+        return database.transaction((tx): Promise<ProjectTransferCommitAppWriteResult> => {
+          return withProjectTransferOperationTables({
+            ...runtimeOptions,
+            layout: artifacts.layout,
+            operationId: `commit_${commitId}`,
+            runner: tx,
+            work: ({runner}) => {
+              return writeProjectTransferCommitAppTables({
+                commitId,
+                database: getProjectTransferCommitOperationDatabase(runner),
+                now,
+                payloads,
+                plan: artifacts.plan,
+                promotion: assetPromotion.value,
+                schemaVersion,
+                sessionId,
+              })
+            },
+          })
+        })
+      },
+    )
     const phaseMetrics = getProjectTransferPerformanceMetrics({
       benchmark: {
         finalAssetBytes: artifacts.analysis.assetSummary.actualByteLength,

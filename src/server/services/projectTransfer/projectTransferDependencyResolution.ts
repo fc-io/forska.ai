@@ -27,6 +27,7 @@ import {
   isProjectTransferFidelityBlocker,
 } from './projectTransferFidelityValidation.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
+import {withProjectTransferOperationTables} from './projectTransferOperationTables.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import {
   normalizeProjectTransferModelVariant,
@@ -1305,13 +1306,32 @@ export const resolveProjectTransferDependencies = async (
     return {error: 'Project transfer dependency payloads are unavailable', status: 'error', statusCode: 409}
   }
 
-  const result = await revalidateProjectTransferResolvedDependencies({
-    nextPlanRevision: input.nextPlanRevision,
-    payloads,
-    plan,
-    repositories: input.repositories,
-    request: input.request,
-  })
+  const runRevalidation = (analyzeTargetRunner?: ProjectTransferAnalyzeTargetRunner) => {
+    const repositories =
+      analyzeTargetRunner === undefined
+        ? input.repositories
+        : ({...input.repositories, analyzeTargetRunner} satisfies ProjectTransferDependencyResolutionRepositories)
+
+    return revalidateProjectTransferResolvedDependencies({
+      nextPlanRevision: input.nextPlanRevision,
+      payloads,
+      plan,
+      repositories,
+      request: input.request,
+    })
+  }
+  const result =
+    input.repositories === undefined
+      ? await withProjectTransferOperationTables({
+          cwd: input.cwd,
+          envValues: input.envValues,
+          layout: input.layout,
+          operationId: `dependency_${input.request.planRevision}_${input.nextPlanRevision}`,
+          work: ({runner}) => {
+            return runRevalidation(runner)
+          },
+        })
+      : await runRevalidation()
 
   if (result.status === 'ok' && result.changed && input.deferPlanWrite !== true) {
     await writeProjectTransferDependencyPlan({...input, plan: result.plan})

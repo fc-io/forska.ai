@@ -5,6 +5,7 @@ import {dirname} from 'node:path'
 
 import {
   getProjectTransferAnalyzeTargetPlan,
+  getProjectTransferAnalyzeTargetPlanWithOperationTables,
   getProjectTransferInitialConflictCounts,
   getProjectTransferInitialOverlapCounts,
   type ProjectTransferAnalyzeTargetRunner,
@@ -1867,7 +1868,15 @@ export const analyzeProjectTransferImportPackage = async (
   })
   const packageContractBlockers = [...parsed.blockers, ...semanticBlockers]
   const targetAnalysisMeasurement = await measureProjectTransferPhase('targetAnalysis', () => {
-    return getProjectTransferAnalyzeTargetPlan({packageFingerprint, payloads: parsed.payloads, runner: input.runner})
+    return input.runner === undefined
+      ? getProjectTransferAnalyzeTargetPlanWithOperationTables({
+          cwd: input.cwd,
+          envValues: input.envValues,
+          layout: stagingLayout,
+          packageFingerprint,
+          payloads: parsed.payloads,
+        })
+      : getProjectTransferAnalyzeTargetPlan({packageFingerprint, payloads: parsed.payloads, runner: input.runner})
   })
   const targetAnalysis = targetAnalysisMeasurement.value
   const blockers = [...packageContractBlockers, ...targetAnalysis.blockers]

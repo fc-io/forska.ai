@@ -18,6 +18,10 @@ import {
   getProjectTransferStrongIdentifierComparisonKeys,
   type ProjectTransferStrongIdentifierComparisonKey,
 } from './projectTransferIdentifierNormalization.ts'
+import {
+  type ProjectTransferOperationTableRunner,
+  withProjectTransferOperationTables,
+} from './projectTransferOperationTables.ts'
 import {validateProjectTransferRuntimeAssetPath} from './projectTransferPaths.ts'
 import type {
   ProjectTransferArticlePayloadRecord,
@@ -26,6 +30,7 @@ import type {
   ProjectTransferPayloadRecord,
 } from './projectTransferPayloadSchemas.ts'
 import type {ProjectTransferPackageWarning} from './projectTransferSchemas.ts'
+import type {ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 
 export type ProjectTransferAnalyzeTargetRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 
@@ -33,6 +38,14 @@ type ProjectTransferAnalyzeTargetInput = {
   packageFingerprint: string | null
   payloads: Partial<ProjectTransferPayloadByKey>
   runner?: ProjectTransferAnalyzeTargetRunner
+}
+
+type ProjectTransferAnalyzeTargetOperationInput = Omit<ProjectTransferAnalyzeTargetInput, 'runner'> & {
+  cwd?: string
+  envValues?: Record<string, string | undefined>
+  layout: ProjectTransferImportTempLayout
+  operationId?: string
+  runner?: ProjectTransferOperationTableRunner
 }
 
 type ImportedArticleMatchInput = {
@@ -1826,4 +1839,25 @@ export const getProjectTransferAnalyzeTargetPlan = async ({
     packageWarnings: [...duplicateDetection.warnings, ...promptAnalysis.warnings, ...routePlan.warnings],
     targetPlan: {...baseTargetPlan, ...fidelityValidation.targetPlan},
   }
+}
+
+export const getProjectTransferAnalyzeTargetPlanWithOperationTables = async ({
+  cwd,
+  envValues,
+  layout,
+  operationId,
+  packageFingerprint,
+  payloads,
+  runner,
+}: ProjectTransferAnalyzeTargetOperationInput): Promise<ProjectTransferAnalyzeTargetResult> => {
+  return withProjectTransferOperationTables({
+    cwd,
+    envValues,
+    layout,
+    operationId,
+    runner,
+    work: ({runner: operationRunner}) => {
+      return getProjectTransferAnalyzeTargetPlan({packageFingerprint, payloads, runner: operationRunner})
+    },
+  })
 }
