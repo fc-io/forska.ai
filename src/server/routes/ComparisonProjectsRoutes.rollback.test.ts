@@ -587,6 +587,7 @@ const differenceFilters = [
   'human-vs-llm',
   'human-vs-llm-true-conflict',
   'llm-vs-llm',
+  'llm-vs-llm-true-difference',
   'any-disagreement',
 ] as const
 
@@ -609,6 +610,7 @@ const servingArticleDifferenceFilterPredicates = {
   'human-vs-llm-overlap': 'article.passes_difference_filter_human_vs_llm_overlap',
   'human-vs-llm-true-conflict': 'article.passes_difference_filter_human_vs_llm_true_conflict',
   'llm-vs-llm': 'article.passes_difference_filter_llm_vs_llm',
+  'llm-vs-llm-true-difference': 'article.passes_difference_filter_llm_vs_llm_true_difference',
 } satisfies Record<ComparisonProjectDifferenceFilter, string>
 
 const hasServingCellValue = (value: string | null | undefined) => {
@@ -5375,6 +5377,7 @@ test('comparison judgments serving path supports every difference filter', async
     {filter: 'human-vs-llm', titles: ['Article 1']},
     {filter: 'human-vs-llm-true-conflict', titles: ['Article 1']},
     {filter: 'llm-vs-llm', titles: ['Article 1']},
+    {filter: 'llm-vs-llm-true-difference', titles: ['Article 1']},
     {filter: 'any-disagreement', titles: ['Article 1']},
   ])
 })

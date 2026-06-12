@@ -20,7 +20,11 @@ type ComparisonProjectServingRollupBuilderRunner = {
   run: (statement: string) => Promise<void>
 }
 
-type ComparisonProjectServingRollupBuilderParams = {comparisonProjectId: string; generation: number}
+type ComparisonProjectServingRollupBuilderParams = {
+  comparisonProjectId: string
+  generation: number
+  onBatchProgress?: () => Promise<void>
+}
 
 type ComparisonProjectArticleRollupBuilderParams = ComparisonProjectServingRollupBuilderParams & {articleIds?: string[]}
 
@@ -430,11 +434,13 @@ const getComparisonProjectArticleServingInsertSql = ({
       has_human_vs_llm_difference,
       has_human_vs_llm_true_conflict,
       has_llm_vs_llm_difference,
+      has_llm_vs_llm_true_difference,
       has_any_disagreement,
       passes_difference_filter_human_vs_llm_overlap,
       passes_difference_filter_human_vs_llm,
       passes_difference_filter_human_vs_llm_true_conflict,
       passes_difference_filter_llm_vs_llm,
+      passes_difference_filter_llm_vs_llm_true_difference,
       passes_difference_filter_any_disagreement,
       passes_difference_filter_all,
       has_conflict,
@@ -549,7 +555,9 @@ const getComparisonProjectArticleServingInsertSql = ({
         COALESCE(BOOL_OR(kind = 'human' AND LOWER(answer_value) IN ('yes', 'maybe', 'no')), FALSE) AS human_has_binary_decision,
         COALESCE(BOOL_OR(kind = 'llm' AND LOWER(answer_value) IN ('yes', 'maybe', 'no')), FALSE) AS llm_has_binary_decision,
         COALESCE(BOOL_OR(LOWER(answer_value) IN ('yes', 'maybe')), FALSE) AS has_include_decision,
-        COALESCE(BOOL_OR(LOWER(answer_value) = 'no'), FALSE) AS has_exclude_decision
+        COALESCE(BOOL_OR(LOWER(answer_value) = 'no'), FALSE) AS has_exclude_decision,
+        COALESCE(BOOL_OR(kind = 'llm' AND LOWER(answer_value) IN ('yes', 'maybe')), FALSE) AS llm_has_include_decision,
+        COALESCE(BOOL_OR(kind = 'llm' AND LOWER(answer_value) = 'no'), FALSE) AS llm_has_exclude_decision
       FROM cell_answer
       GROUP BY article_id, prompt_id
     ),
@@ -568,6 +576,9 @@ const getComparisonProjectArticleServingInsertSql = ({
           AND COALESCE(prompt_answer_value_rollup.has_exclude_decision, FALSE) AS has_human_vs_llm_true_conflict,
         prompt_answer_count.llm_answered_count > 1
           AND COALESCE(prompt_answer_value_rollup.llm_min_answer_value <> prompt_answer_value_rollup.llm_max_answer_value, FALSE) AS has_llm_vs_llm_difference,
+        prompt_answer_count.llm_answered_count > 1
+          AND COALESCE(prompt_answer_value_rollup.llm_has_include_decision, FALSE)
+          AND COALESCE(prompt_answer_value_rollup.llm_has_exclude_decision, FALSE) AS has_llm_vs_llm_true_difference,
         prompt_answer_count.all_answered_count > 1
           AND COALESCE(prompt_answer_value_rollup.min_answer_value <> prompt_answer_value_rollup.max_answer_value, FALSE) AS has_any_disagreement
       FROM prompt_answer_count
@@ -582,6 +593,7 @@ const getComparisonProjectArticleServingInsertSql = ({
         COALESCE(BOOL_OR(has_human_vs_llm_difference), FALSE) AS has_human_vs_llm_difference,
         COALESCE(BOOL_OR(has_human_vs_llm_true_conflict), FALSE) AS has_human_vs_llm_true_conflict,
         COALESCE(BOOL_OR(has_llm_vs_llm_difference), FALSE) AS has_llm_vs_llm_difference,
+        COALESCE(BOOL_OR(has_llm_vs_llm_true_difference), FALSE) AS has_llm_vs_llm_true_difference,
         COALESCE(BOOL_OR(has_any_disagreement), FALSE) AS has_any_disagreement
       FROM prompt_difference
       GROUP BY article_id
@@ -636,6 +648,7 @@ const getComparisonProjectArticleServingInsertSql = ({
         COALESCE(article_difference_rollup.has_human_vs_llm_difference, FALSE) AS has_human_vs_llm_difference,
         COALESCE(article_difference_rollup.has_human_vs_llm_true_conflict, FALSE) AS has_human_vs_llm_true_conflict,
         COALESCE(article_difference_rollup.has_llm_vs_llm_difference, FALSE) AS has_llm_vs_llm_difference,
+        COALESCE(article_difference_rollup.has_llm_vs_llm_true_difference, FALSE) AS has_llm_vs_llm_true_difference,
         COALESCE(article_difference_rollup.has_any_disagreement, FALSE) AS has_any_disagreement,
         difference_filter_availability.has_human_vs_llm_filter,
         difference_filter_availability.has_llm_vs_llm_filter,
@@ -714,6 +727,7 @@ const getComparisonProjectArticleServingInsertSql = ({
       serving_article.has_human_vs_llm_difference,
       serving_article.has_human_vs_llm_true_conflict,
       serving_article.has_llm_vs_llm_difference,
+      serving_article.has_llm_vs_llm_true_difference,
       serving_article.has_any_disagreement,
       CASE
         WHEN serving_article.has_human_vs_llm_filter THEN serving_article.has_human_vs_llm_overlap
@@ -731,6 +745,10 @@ const getComparisonProjectArticleServingInsertSql = ({
         WHEN serving_article.has_llm_vs_llm_filter THEN serving_article.has_llm_vs_llm_difference
         ELSE TRUE
       END AS passes_difference_filter_llm_vs_llm,
+      CASE
+        WHEN serving_article.has_llm_vs_llm_filter THEN serving_article.has_llm_vs_llm_true_difference
+        ELSE TRUE
+      END AS passes_difference_filter_llm_vs_llm_true_difference,
       CASE
         WHEN serving_article.has_any_disagreement_filter THEN serving_article.has_any_disagreement
         ELSE TRUE
@@ -803,6 +821,7 @@ const getComparisonProjectArticleDifferenceFilterPredicateSql = (
           WHEN 'human-vs-llm' THEN ${articleAlias}.passes_difference_filter_human_vs_llm
           WHEN 'human-vs-llm-true-conflict' THEN ${articleAlias}.passes_difference_filter_human_vs_llm_true_conflict
           WHEN 'llm-vs-llm' THEN ${articleAlias}.passes_difference_filter_llm_vs_llm
+          WHEN 'llm-vs-llm-true-difference' THEN ${articleAlias}.passes_difference_filter_llm_vs_llm_true_difference
           WHEN 'any-disagreement' THEN ${articleAlias}.passes_difference_filter_any_disagreement
           ELSE ${articleAlias}.passes_difference_filter_all
         END`
@@ -939,6 +958,7 @@ const insertComparisonProjectArticleRollupBatches = async (
   }
 
   await dependencies.run(getComparisonProjectArticleServingInsertSql({...params, articleIds: batch.articleIds}))
+  await params.onBatchProgress?.()
 
   return batch.hasMore ? insertComparisonProjectArticleRollupBatches(params, dependencies, nextCursor) : undefined
 }
@@ -973,6 +993,7 @@ const getComparisonProjectFilterStatsInsertStatements = (params: ComparisonProje
 const runComparisonProjectRollupStatements = async (
   statements: readonly string[],
   dependencies: ComparisonProjectServingRollupBuilderDependencies,
+  onStatementProgress?: () => Promise<void>,
   index = 0,
 ): Promise<void> => {
   const statement = statements[index]
@@ -982,15 +1003,20 @@ const runComparisonProjectRollupStatements = async (
   }
 
   await dependencies.run(statement)
+  await onStatementProgress?.()
 
-  return runComparisonProjectRollupStatements(statements, dependencies, index + 1)
+  return runComparisonProjectRollupStatements(statements, dependencies, onStatementProgress, index + 1)
 }
 
 const insertComparisonProjectFilterStats = (
   params: ComparisonProjectServingRollupBuilderParams,
   dependencies: ComparisonProjectServingRollupBuilderDependencies = getDefaultComparisonProjectServingRollupBuilderDependencies(),
 ) => {
-  return runComparisonProjectRollupStatements(getComparisonProjectFilterStatsInsertStatements(params), dependencies)
+  return runComparisonProjectRollupStatements(
+    getComparisonProjectFilterStatsInsertStatements(params),
+    dependencies,
+    params.onBatchProgress,
+  )
 }
 
 const insertComparisonProjectServingRollups = async (

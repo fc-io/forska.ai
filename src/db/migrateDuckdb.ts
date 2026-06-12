@@ -15,6 +15,7 @@ const nonTransactionalDuckdbMigrationFiles = new Set([
   '0076_comparisonServingHumanLlmTrueConflictFilter.sql',
   '0077_comparisonServingHumanLlmOverlapFilter.sql',
   '0090_comparisonServingAnswerFilterBooleans.sql',
+  '0095_comparisonServingLlmTrueDifferenceFilter.sql',
 ])
 
 const getDuckdbMigrationFiles = (folder: string) => {

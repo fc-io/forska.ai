@@ -11,7 +11,11 @@ type ComparisonProjectServingCellBuilderRunner = {
   run: (statement: string) => Promise<void>
 }
 
-type ComparisonProjectServingCellBuilderParams = {comparisonProjectId: string; generation: number}
+type ComparisonProjectServingCellBuilderParams = {
+  comparisonProjectId: string
+  generation: number
+  onBatchProgress?: () => Promise<void>
+}
 
 type ComparisonProjectServingCellInsertParams = ComparisonProjectServingCellBuilderParams & {articleIds?: string[]}
 
@@ -974,6 +978,7 @@ const insertComparisonProjectArticleCellBatches = async (
   }
 
   await insertBatch({...params, articleIds: batch.articleIds})
+  await params.onBatchProgress?.()
 
   return batch.hasMore
     ? insertComparisonProjectArticleCellBatches(params, dependencies, modePredicateSql, insertBatch, nextCursor)

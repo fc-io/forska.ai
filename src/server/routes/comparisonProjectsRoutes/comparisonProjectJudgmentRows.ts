@@ -156,6 +156,7 @@ const comparisonProjectServingDifferenceFilterPredicates = {
   'human-vs-llm-overlap': 'article.passes_difference_filter_human_vs_llm_overlap',
   'human-vs-llm-true-conflict': 'article.passes_difference_filter_human_vs_llm_true_conflict',
   'llm-vs-llm': 'article.passes_difference_filter_llm_vs_llm',
+  'llm-vs-llm-true-difference': 'article.passes_difference_filter_llm_vs_llm_true_difference',
 } satisfies Record<ComparisonProjectDifferenceFilter, string>
 
 export const getComparisonProjectContentKey = (settings: {

@@ -21,7 +21,7 @@ test('available difference filters hide non-applicable options', () => {
       {id: 'llm:model-1:prompt-1', kind: 'llm', promptId: 'prompt-1'},
       {id: 'llm:model-2:prompt-1', kind: 'llm', promptId: 'prompt-1'},
     ]),
-  ).toEqual(['all', 'llm-vs-llm'])
+  ).toEqual(['all', 'llm-vs-llm', 'llm-vs-llm-true-difference'])
 
   expect(
     getAvailableComparisonProjectDifferenceFilters([
@@ -35,6 +35,7 @@ test('available difference filters hide non-applicable options', () => {
     'human-vs-llm',
     'human-vs-llm-true-conflict',
     'llm-vs-llm',
+    'llm-vs-llm-true-difference',
     'any-disagreement',
   ])
 })
@@ -45,6 +46,7 @@ test('difference filter labels stay user-facing', () => {
   expect(getComparisonProjectDifferenceFilterLabel('human-vs-llm')).toBe('Human vs LLM conflict')
   expect(getComparisonProjectDifferenceFilterLabel('human-vs-llm-true-conflict')).toBe('Human vs LLM true conflict')
   expect(getComparisonProjectDifferenceFilterLabel('llm-vs-llm')).toBe('LLM vs LLM differences')
+  expect(getComparisonProjectDifferenceFilterLabel('llm-vs-llm-true-difference')).toBe('LLM vs LLM true differences')
   expect(getComparisonProjectDifferenceFilterLabel('any-disagreement')).toBe('Any disagreement')
 })
 
@@ -53,10 +55,12 @@ test('selectable difference filters keep the current selection renderable', () =
     'all',
     'human-vs-llm-overlap',
   ])
-  expect(getSelectableComparisonProjectDifferenceFilters(['all', 'llm-vs-llm'] as const, 'llm-vs-llm')).toEqual([
-    'all',
-    'llm-vs-llm',
-  ])
+  expect(
+    getSelectableComparisonProjectDifferenceFilters(
+      ['all', 'llm-vs-llm', 'llm-vs-llm-true-difference'] as const,
+      'llm-vs-llm',
+    ),
+  ).toEqual(['all', 'llm-vs-llm', 'llm-vs-llm-true-difference'])
 })
 
 test('difference matching supports prompt and summary comparisons', () => {
@@ -89,6 +93,9 @@ test('difference matching supports prompt and summary comparisons', () => {
     true,
   )
   expect(getComparisonProjectHasDifferenceFilterMatch(promptCells, promptColumns, 'llm-vs-llm')).toBe(true)
+  expect(getComparisonProjectHasDifferenceFilterMatch(promptCells, promptColumns, 'llm-vs-llm-true-difference')).toBe(
+    true,
+  )
   expect(getComparisonProjectHasDifferenceFilterMatch(promptCells, promptColumns, 'any-disagreement')).toBe(true)
   expect(getComparisonProjectHasDifferenceFilterMatch(summaryCells, summaryColumns, 'human-vs-llm')).toBe(true)
   expect(getComparisonProjectHasDifferenceFilterMatch(summaryCells, summaryColumns, 'human-vs-llm-overlap')).toBe(true)
@@ -96,6 +103,9 @@ test('difference matching supports prompt and summary comparisons', () => {
     true,
   )
   expect(getComparisonProjectHasDifferenceFilterMatch(summaryCells, summaryColumns, 'llm-vs-llm')).toBe(true)
+  expect(getComparisonProjectHasDifferenceFilterMatch(summaryCells, summaryColumns, 'llm-vs-llm-true-difference')).toBe(
+    true,
+  )
   expect(getComparisonProjectHasDifferenceFilterMatch(summaryCells, summaryColumns, 'any-disagreement')).toBe(true)
 })
 
@@ -143,6 +153,28 @@ test('true conflict matching treats yes and maybe as include against no', () => 
   ).toBe(true)
 })
 
+test('llm vs llm true difference treats yes and maybe as include against no', () => {
+  const columns = [
+    {id: 'llm:model-1:summary', kind: 'llm', promptId: 'summary'},
+    {id: 'llm:model-2:summary', kind: 'llm', promptId: 'summary'},
+  ] as const
+
+  expect(
+    getComparisonProjectHasDifferenceFilterMatch(
+      {'llm:model-1:summary': 'maybe', 'llm:model-2:summary': 'yes'},
+      columns,
+      'llm-vs-llm-true-difference',
+    ),
+  ).toBe(false)
+  expect(
+    getComparisonProjectHasDifferenceFilterMatch(
+      {'llm:model-1:summary': 'maybe', 'llm:model-2:summary': 'no'},
+      columns,
+      'llm-vs-llm-true-difference',
+    ),
+  ).toBe(true)
+})
+
 test('non-applicable filters normalize back to all rows', () => {
   const columns = [
     {id: 'llm:model-1:summary', kind: 'llm', promptId: 'summary'},
@@ -150,5 +182,9 @@ test('non-applicable filters normalize back to all rows', () => {
   ] as const
 
   expect(getNormalizedComparisonProjectDifferenceFilter('llm-vs-llm', columns)).toBe('all')
+  expect(getNormalizedComparisonProjectDifferenceFilter('llm-vs-llm-true-difference', columns)).toBe('all')
   expect(getComparisonProjectHasDifferenceFilterMatch({'human:summary': 'yes'}, columns, 'llm-vs-llm')).toBe(true)
+  expect(
+    getComparisonProjectHasDifferenceFilterMatch({'human:summary': 'yes'}, columns, 'llm-vs-llm-true-difference'),
+  ).toBe(true)
 })

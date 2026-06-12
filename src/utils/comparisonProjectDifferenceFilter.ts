@@ -4,6 +4,7 @@ export const comparisonProjectDifferenceFilters = [
   'human-vs-llm',
   'human-vs-llm-true-conflict',
   'llm-vs-llm',
+  'llm-vs-llm-true-difference',
   'any-disagreement',
 ] as const
 
@@ -159,6 +160,12 @@ const getHasLlmVsLlmDifference = (promptAnswerBuckets: Map<string, PromptAnswerB
   })
 }
 
+const getHasLlmVsLlmTrueDifference = (promptAnswerBuckets: Map<string, PromptAnswerBuckets>) => {
+  return Array.from(promptAnswerBuckets.values()).some((answerBuckets) => {
+    return answerBuckets.llmAnsweredCount > 1 && answerBuckets.llmBinaryDecisions.size > 1
+  })
+}
+
 const getHasAnyDisagreement = (promptAnswerBuckets: Map<string, PromptAnswerBuckets>) => {
   return Array.from(promptAnswerBuckets.values()).some((answerBuckets) => {
     return answerBuckets.allAnsweredCount > 1 && answerBuckets.allAnswers.size > 1
@@ -182,6 +189,7 @@ export const getAvailableComparisonProjectDifferenceFilters = (
     ...(hasHumanVsLlmComparison ? (['human-vs-llm'] as const) : []),
     ...(hasHumanVsLlmComparison ? (['human-vs-llm-true-conflict'] as const) : []),
     ...(hasLlmVsLlmComparison ? (['llm-vs-llm'] as const) : []),
+    ...(hasLlmVsLlmComparison ? (['llm-vs-llm-true-difference'] as const) : []),
     ...(hasHumanVsLlmComparison && hasLlmVsLlmComparison ? (['any-disagreement'] as const) : []),
   ]
 }
@@ -208,7 +216,9 @@ export const getComparisonProjectDifferenceFilterLabel = (differenceFilter: Comp
           ? 'Human vs LLM true conflict'
           : differenceFilter === 'llm-vs-llm'
             ? 'LLM vs LLM differences'
-            : 'Any disagreement'
+            : differenceFilter === 'llm-vs-llm-true-difference'
+              ? 'LLM vs LLM true differences'
+              : 'Any disagreement'
 }
 
 export const getNormalizedComparisonProjectDifferenceFilter = (
@@ -241,7 +251,9 @@ export const getComparisonProjectHasDifferenceFilterMatch = (
         ? getHasHumanVsLlmTrueConflict(promptAnswerBuckets)
         : normalizedDifferenceFilter === 'llm-vs-llm'
           ? getHasLlmVsLlmDifference(promptAnswerBuckets)
-          : getHasAnyDisagreement(promptAnswerBuckets)
+          : normalizedDifferenceFilter === 'llm-vs-llm-true-difference'
+            ? getHasLlmVsLlmTrueDifference(promptAnswerBuckets)
+            : getHasAnyDisagreement(promptAnswerBuckets)
 }
 
 export const getComparisonProjectHasAnyConflict = (

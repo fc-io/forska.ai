@@ -593,7 +593,7 @@ const runComparisonProjectServingBuildPhase = async (params: {
   generation: number
   phase: ComparisonProjectServingProgressPhase
   run: (
-    phaseParams: {comparisonProjectId: string; generation: number},
+    phaseParams: ComparisonProjectServingRollupBuilderParams,
     runner: ComparisonProjectServingRebuildRunner,
   ) => Promise<void>
 }) => {
@@ -605,17 +605,20 @@ const runComparisonProjectServingBuildPhase = async (params: {
     throw new Error(`Comparison serving generation ${params.generation} is no longer claimed`)
   }
 
-  await params.run(phaseParams, params.dependencies.database)
+  const recordBatchProgress = async () => {
+    const counts = await getComparisonProjectServingProgressCounts(params.dependencies.database, phaseParams)
+    const isStillClaimed = await recordComparisonProjectServingProgressPhase({...params, counts})
 
-  const counts = await getComparisonProjectServingProgressCounts(params.dependencies.database, phaseParams)
+    if (!isStillClaimed) {
+      throw new Error(`Comparison serving generation ${params.generation} is no longer claimed`)
+    }
 
-  const isStillClaimed = await recordComparisonProjectServingProgressPhase({...params, counts})
-
-  if (!isStillClaimed) {
-    throw new Error(`Comparison serving generation ${params.generation} is no longer claimed`)
+    return counts
   }
 
-  return counts
+  await params.run({...phaseParams, onBatchProgress: recordBatchProgress}, params.dependencies.database)
+
+  return recordBatchProgress()
 }
 
 const stageComparisonProjectServingGeneration = async ({

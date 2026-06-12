@@ -452,6 +452,134 @@ test('comparison serving rebuild invokes bulk phases outside transactions and ke
   ).toBe(true)
 })
 
+test('comparison serving rebuild persists staged counts from batch progress callbacks', async () => {
+  const progressStatements: string[] = []
+  const countRows = [
+    {stagedArticleCount: 0, stagedCellCount: 3, stagedFilterMemberCount: 0, stagedFilterStatsCount: 0},
+    {stagedArticleCount: 0, stagedCellCount: 4, stagedFilterMemberCount: 0, stagedFilterStatsCount: 0},
+    {stagedArticleCount: 0, stagedCellCount: 4, stagedFilterMemberCount: 0, stagedFilterStatsCount: 0},
+    {stagedArticleCount: 1, stagedCellCount: 4, stagedFilterMemberCount: 0, stagedFilterStatsCount: 0},
+    {stagedArticleCount: 2, stagedCellCount: 4, stagedFilterMemberCount: 0, stagedFilterStatsCount: 2},
+  ]
+  let countIndex = 0
+  const getCountRow = () => {
+    const row = countRows[countIndex] ?? countRows[countRows.length - 1]
+    countIndex += 1
+
+    return row
+  }
+  const queryJson = async <T>(statement: string): Promise<T[]> => {
+    if (statement.includes('RETURNING CAST(serving_generation AS INTEGER) AS generation')) {
+      return [{generation: 1}] as T[]
+    }
+
+    if (statement.includes('(SELECT COUNT(*) FROM mart.comparison_article_serving')) {
+      return [getCountRow()] as T[]
+    }
+
+    if (statement.includes('RETURNING comparison_project_id AS comparisonProjectId')) {
+      if (statement.includes('serving_staged_cell_count =')) {
+        progressStatements.push(statement)
+      }
+
+      return [{comparisonProjectId: 'comparison-progress-project'}] as T[]
+    }
+
+    if (statement.includes('SELECT') && statement.includes('CAST(active_generation AS INTEGER) AS activeGeneration')) {
+      return [
+        {
+          activeGeneration: 1,
+          generationUpdatedAt: new Date('2026-06-11T00:00:00.000Z'),
+          servingCompletedAt: new Date('2026-06-11T00:00:00.000Z'),
+          servingError: null,
+          servingFailedAt: null,
+          servingGeneration: 1,
+          servingLastProgressedAt: new Date('2026-06-11T00:00:00.000Z'),
+          servingPhase: 'ready',
+          servingPhaseStartedAt: new Date('2026-06-11T00:00:00.000Z'),
+          servingStartedAt: new Date('2026-06-11T00:00:00.000Z'),
+          servingStagedArticleCount: 2,
+          servingStagedCellCount: 4,
+          servingStagedFilterMemberCount: 0,
+          servingStagedFilterStatsCount: 2,
+          servingStatus: 'ready',
+        },
+      ] as T[]
+    }
+
+    return [] as T[]
+  }
+  const run = async (_statement: string) => {}
+  const database = {
+    queryJson,
+    run,
+    transaction: async <T>(operation: (runner: {queryJson: typeof queryJson; run: typeof run}) => Promise<T>) => {
+      return operation({queryJson, run})
+    },
+  }
+  const service = getComparisonProjectServingRebuildService()
+
+  await service.rebuildComparisonProjectServing('comparison-progress-project', {
+    cellBuilder: {
+      insertPromptModeComparisonProjectCells: async (params) => {
+        await params.onBatchProgress?.()
+      },
+      insertSummaryModeComparisonProjectCells: async () => {},
+    },
+    database,
+    generationService: {
+      cleanupComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
+        const generationDependencies = dependencies ?? database
+
+        return generationDependencies.transaction(async () => {
+          return {deletedRowCount: 0, tables: []}
+        })
+      },
+      cleanupOldComparisonProjectServingGenerations: async (_comparisonProjectId, dependencies) => {
+        const generationDependencies = dependencies ?? database
+
+        return generationDependencies.transaction(async () => {
+          return {deletedRowCount: 0, tables: []}
+        })
+      },
+      createInactiveComparisonProjectServingGeneration: async () => {
+        return 1
+      },
+      promoteComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
+        const generationDependencies = dependencies ?? database
+
+        return generationDependencies.transaction(async () => {
+          return true
+        })
+      },
+    },
+    rollupBuilder: {
+      insertComparisonProjectServingRollups: async (params) => {
+        await params.onBatchProgress?.()
+        await params.onBatchProgress?.()
+      },
+    },
+  })
+
+  expect(
+    progressStatements.some((statement) => {
+      return statement.includes("serving_phase = 'prompt_cells'") && statement.includes('serving_staged_cell_count = 3')
+    }),
+  ).toBe(true)
+  expect(
+    progressStatements.some((statement) => {
+      return statement.includes("serving_phase = 'rollups'") && statement.includes('serving_staged_article_count = 1')
+    }),
+  ).toBe(true)
+  expect(
+    progressStatements.some((statement) => {
+      return (
+        statement.includes("serving_phase = 'rollups'") && statement.includes('serving_staged_filter_stats_count = 2')
+      )
+    }),
+  ).toBe(true)
+})
+
 test('comparison serving rebuild stages builds promotes and records ready status', () => {
   const result = runScript<{
     diagnosticsAfter: {

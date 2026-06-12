@@ -64,6 +64,7 @@ type ActualArticleRollup = {
   hasConflict: boolean
   hasHumanVsLlmDifference: boolean
   hasLlmVsLlmDifference: boolean
+  hasLlmVsLlmTrueDifference: boolean
   hasMultipleAnswers: boolean
   isFullyAnswered: boolean
   requiredColumnCount: number
@@ -142,6 +143,7 @@ const differenceFilters = [
   'human-vs-llm',
   'human-vs-llm-true-conflict',
   'llm-vs-llm',
+  'llm-vs-llm-true-difference',
   'any-disagreement',
 ] as const
 
@@ -589,6 +591,11 @@ const getExpectedArticleRollups = (project: FixtureProject) => {
             project.columns,
             'llm-vs-llm',
           ),
+          hasLlmVsLlmTrueDifference: getComparisonProjectHasDifferenceFilterMatch(
+            articleCells,
+            project.columns,
+            'llm-vs-llm-true-difference',
+          ),
           hasMultipleAnswers,
           isFullyAnswered: hasAllLlmColumns && hasAllHumanColumns,
           requiredColumnCount: requiredColumnIds.size,
@@ -757,6 +764,7 @@ const getRollupScript = () => {
         is_fully_answered AS isFullyAnswered,
         has_human_vs_llm_difference AS hasHumanVsLlmDifference,
         has_llm_vs_llm_difference AS hasLlmVsLlmDifference,
+        has_llm_vs_llm_true_difference AS hasLlmVsLlmTrueDifference,
         has_any_disagreement AS hasAnyDisagreement,
         has_conflict AS hasConflict
       FROM mart.comparison_article_serving
