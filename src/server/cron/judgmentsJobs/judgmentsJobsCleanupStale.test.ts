@@ -1327,3 +1327,171 @@ test('cleanupStale clears transient locked quarantine after SQLite preflight suc
     `),
   ).toEqual([{quarantineReason: null, status: 'paused', storageState: 'active'}])
 })
+
+test('cleanupStale auto resumes recoverable OOM quarantine after project mart is fresh', async () => {
+  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const timestamp = Date.now()
+  const connectionId = `cleanup-stale-oom-connection-${timestamp}`
+  const modelId = `cleanup-stale-oom-model-${timestamp}`
+  const projectId = `cleanup-stale-oom-project-${timestamp}`
+  const jobId = `cleanup-stale-oom-job-${timestamp}`
+  const oomMessage = 'Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)'
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Cleanup stale OOM recovery test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_mart_refresh_state (project_id, dirty_token, last_completed_dirty_token, refresh_status)
+    VALUES ('${projectId}', 7, 7, 'idle')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (
+      id,
+      project_id,
+      status,
+      storage_state,
+      quarantined_at,
+      quarantine_reason,
+      last_import_error_at,
+      last_import_error,
+      import_failure_count
+    ) VALUES (
+      '${jobId}',
+      '${projectId}',
+      'failed',
+      'quarantined',
+      current_timestamp,
+      ${getSqlLiteral(oomMessage)},
+      current_timestamp,
+      ${getSqlLiteral(oomMessage)},
+      3
+    )
+  `)
+
+  await service.initializeJob(jobId)
+  await service.releaseOwnedLease(jobId)
+  await judgmentsJobsCleanupStale()
+
+  expect(
+    await queryDatabase<{
+      importFailureCount: number | string
+      lastImportError: string | null
+      pauseRequestedAt: string | null
+      quarantineReason: string | null
+      status: string
+      storageState: string
+    }>(`
+      SELECT
+        import_failure_count AS importFailureCount,
+        last_import_error AS lastImportError,
+        pause_requested_at AS pauseRequestedAt,
+        quarantine_reason AS quarantineReason,
+        status,
+        storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([
+    {
+      importFailureCount: 0,
+      lastImportError: null,
+      pauseRequestedAt: null,
+      quarantineReason: null,
+      status: 'running',
+      storageState: 'active',
+    },
+  ])
+})
+
+test('cleanupStale does not auto resume recoverable OOM quarantine after explicit pause', async () => {
+  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const timestamp = Date.now()
+  const connectionId = `cleanup-stale-paused-oom-connection-${timestamp}`
+  const modelId = `cleanup-stale-paused-oom-model-${timestamp}`
+  const projectId = `cleanup-stale-paused-oom-project-${timestamp}`
+  const jobId = `cleanup-stale-paused-oom-job-${timestamp}`
+  const oomMessage = 'Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)'
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Cleanup stale paused OOM recovery test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_mart_refresh_state (project_id, dirty_token, last_completed_dirty_token, refresh_status)
+    VALUES ('${projectId}', 7, 7, 'idle')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (
+      id,
+      project_id,
+      status,
+      storage_state,
+      quarantined_at,
+      quarantine_reason,
+      last_import_error_at,
+      last_import_error,
+      import_failure_count,
+      pause_requested_at
+    ) VALUES (
+      '${jobId}',
+      '${projectId}',
+      'failed',
+      'quarantined',
+      current_timestamp,
+      ${getSqlLiteral(oomMessage)},
+      current_timestamp,
+      ${getSqlLiteral(oomMessage)},
+      3,
+      current_timestamp
+    )
+  `)
+
+  await service.initializeJob(jobId)
+  await service.releaseOwnedLease(jobId)
+  await judgmentsJobsCleanupStale()
+
+  const [job] = await queryDatabase<{
+    pauseRequestedAt: string | null
+    quarantineReason: string | null
+    status: string
+    storageState: string
+  }>(`
+    SELECT
+      pause_requested_at AS pauseRequestedAt,
+      quarantine_reason AS quarantineReason,
+      status,
+      storage_state AS storageState
+    FROM app.judgment_job
+    WHERE id = '${jobId}'
+  `)
+
+  expect(job?.pauseRequestedAt).toBeTruthy()
+  expect(job?.quarantineReason).toBe(oomMessage)
+  expect(job?.status).toBe('failed')
+  expect(job?.storageState).toBe('quarantined')
+})

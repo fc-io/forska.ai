@@ -14,9 +14,11 @@ import {abandonedSentPromptGraceMs} from './requeueAbandonedSentPrompts.ts'
 
 type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
 type ActiveRequestLeaseCloseoutProbe = {providerKey: string; requestAttemptId: string}
+type RecoverableOomQuarantinedJobRow = {id: string}
 
 const sqliteRetentionCleanupBatchSize = 1_000
 const duckdbProjectedCloseoutProbeBatchSize = 500
+const recoverableOomQuarantineRecoveryBatchSize = 3
 const sqliteCleanupTerminalStatuses = ['completed', 'paused', 'project_removed'] as const
 const transientLockedQuarantineRecoveryBatchSize = 5
 
@@ -163,6 +165,45 @@ const getMissingLocalSqliteDrainingJobIds = async () => {
       WHERE storage_state = ${getSqlLiteral('draining')}
         AND status IN (${getQuotedStringList([...sqliteCleanupTerminalStatuses]).join(', ')})
         ${localSqliteExclusion}
+    `)
+  ).map((row) => {
+    return row.id
+  })
+}
+
+const getRecoverableOomQuarantinedJobIds = async () => {
+  return (
+    await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<RecoverableOomQuarantinedJobRow>(`
+      SELECT jj.id AS id
+      FROM app.judgment_job jj
+      INNER JOIN app.project_mart_refresh_state refresh_state ON refresh_state.project_id = jj.project_id
+      WHERE jj.storage_state = ${getSqlLiteral('quarantined')}
+        AND jj.status = ${getSqlLiteral('failed')}
+        AND jj.pause_requested_at IS NULL
+        AND (
+          lower(COALESCE(jj.quarantine_reason, '')) LIKE '%out of memory%'
+          OR lower(COALESCE(jj.last_import_error, '')) LIKE '%out of memory%'
+          OR lower(COALESCE(jj.quarantine_reason, '')) LIKE '%failed to pin block%'
+          OR lower(COALESCE(jj.last_import_error, '')) LIKE '%failed to pin block%'
+        )
+        AND refresh_state.dirty_token <= refresh_state.last_completed_dirty_token
+        AND refresh_state.refresh_status = ${getSqlLiteral('idle')}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.project_mart_dirty_materialization_state materialization
+          WHERE materialization.project_id = jj.project_id
+            AND materialization.target_dirty_token <= refresh_state.dirty_token
+            AND materialization.materialization_status <> ${getSqlLiteral('completed')}
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.project_mart_dirty_refresh_article_quarantine quarantine
+          WHERE quarantine.project_id = jj.project_id
+            AND quarantine.dirty_token <= refresh_state.dirty_token
+            AND quarantine.resolved_at IS NULL
+        )
+      ORDER BY jj.quarantined_at ASC NULLS LAST, jj.updated_at ASC, jj.id ASC
+      LIMIT ${recoverableOomQuarantineRecoveryBatchSize}
     `)
   ).map((row) => {
     return row.id
@@ -331,18 +372,60 @@ const recoverTransientLockedQuarantinedJobs = async ({
   return recoverTransientLockedQuarantinedJobs({jobIds: jobIds.slice(1), serverJobId})
 }
 
+const resumeRecoveredOomQuarantinedJob = async (jobId: string): Promise<void> => {
+  await getAppDatabaseService().run(`
+    UPDATE app.judgment_job
+    SET status = ${getSqlLiteral('running')},
+        pause_requested_at = NULL,
+        updated_at = current_timestamp
+    WHERE id = ${getSqlLiteral(jobId)}
+      AND storage_state = ${getSqlLiteral('active')}
+      AND status = ${getSqlLiteral('paused')}
+      AND pause_requested_at IS NULL
+  `)
+}
+
+const recoverOomQuarantinedJobs = async ({
+  jobIds,
+  serverJobId,
+}: {
+  jobIds: string[]
+  serverJobId: string
+}): Promise<void> => {
+  const [currentJobId = ''] = jobIds
+
+  if (!currentJobId) {
+    return
+  }
+
+  const result = await runJudgmentJobRepairAction({action: 'unquarantine', claimedBy: serverJobId, jobId: currentJobId})
+
+  if (result.ok && result.changes.unquarantined) {
+    await resumeRecoveredOomQuarantinedJob(currentJobId)
+  }
+
+  return recoverOomQuarantinedJobs({jobIds: jobIds.slice(1), serverJobId})
+}
+
 export const judgmentsJobsCleanupStale = async (): Promise<void> => {
   const sixteenMinutesAgo = new Date(Date.now() - 16 * 60 * 1000)
   const serverJobId = getDefaultJudgmentServerJobId()
   const sqliteService = getJudgmentJobSqliteService()
   const sqliteJobIds = getJudgmentJobSqliteJobIds()
-  const [drainingJobIds, missingLocalSqliteDrainingJobIds, transientLockedQuarantinedJobIds] = await Promise.all([
+  const [
+    drainingJobIds,
+    missingLocalSqliteDrainingJobIds,
+    recoverableOomQuarantinedJobIds,
+    transientLockedQuarantinedJobIds,
+  ] = await Promise.all([
     getDrainingSqliteJobIds(),
     getMissingLocalSqliteDrainingJobIds(),
+    getRecoverableOomQuarantinedJobIds(),
     getTransientLockedQuarantinedSqliteJobIds(),
   ])
 
   await recoverTransientLockedQuarantinedJobs({jobIds: transientLockedQuarantinedJobIds, serverJobId})
+  await recoverOomQuarantinedJobs({jobIds: recoverableOomQuarantinedJobIds, serverJobId})
   await sqliteService.reapStaleOutboxClaims({staleBefore: sixteenMinutesAgo})
   await recoverDrainingQueueRows({jobIds: drainingJobIds, serverJobId})
   await sqliteService.pruneVisibilityAckedRetention({maxRows: sqliteRetentionCleanupBatchSize})
