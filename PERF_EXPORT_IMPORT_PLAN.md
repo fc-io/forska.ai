@@ -87,7 +87,7 @@ Expected cumulative results:
 
 - Measure before and after every implementation PR that claims a performance improvement.
 - Use the same machine, same package fixture, same target database shape, same model/provider settings, same shell env, and same app build mode for before/after runs.
-- Record package fingerprint, schema version, package counts, target database counts, target conflict shape, commit/revalidation outcome, execution mode, export raw-article provenance mode, and a benchmark-critical dependency execution signature with every result.
+- Record package fingerprint, schema version, package counts, target database counts, target conflict shape, commit/revalidation outcome, execution mode, export raw-article provenance mode, warning counts by code/scope/severity, key warning details, and a benchmark-critical dependency execution signature with every result.
 - Run each benchmark at least three times when feasible and report median plus worst run.
 - Keep raw benchmark logs or JSON output under an ignored local artifact path, and summarize results in the PR or implementation note.
 - Treat memory, writer transaction time, correctness, and rollback safety as pass/fail, not only wall-time improvements.
@@ -120,6 +120,8 @@ Required before/after fields:
 - `bytesPerSecondAfter`
 - `targetConflictShape`
 - `commitRevalidationOutcome`
+- `warningCountsByCodeScopeSeverity`
+- `warningDetailsValidated`
 - `correctnessChecksPassed`
 
 ## Phase 0: Measurement Baseline
@@ -135,6 +137,7 @@ Implementation checklist:
 - Add byte counters for upload bytes, zip bytes, expanded bytes, NDJSON bytes, asset bytes, promoted bytes, and export package bytes.
 - Add DuckDB writer transaction timing around commit and any future staging metadata writes.
 - Add peak-memory sampling when available in Bun/Node runtime APIs; if exact peak is unavailable, record sampled RSS at phase boundaries.
+- Add warning counters by code/scope/severity plus validation for warning details used by fidelity review: `sourceRowId`, `triggeringField`, `dependencyReason`, `omittedParentRef`, `rawArticleProvenanceMode`, and `nonLocalUrlPreserved` locations.
 - Add structured log events or session progress metadata for all phase timings.
 - Add benchmark runner scripts or tests that can generate or reuse fixed package fixtures.
 - Add a compact benchmark result format using the required before/after fields above.
@@ -258,6 +261,9 @@ Implementation checklist:
 - Compute route/article overlap by joining staged article-route rows to target route memberships and project scopes.
 - Compute article field fill candidates from staged article rows and matched target rows.
 - Compute judgment physical keys and review-visible keys from staged judgment rows and resolved article/prompt/model mappings.
+- Stage imported provider/model snapshot markers and dedicated snapshot fingerprints. Reuse only rows previously marked as imported snapshots when the fingerprint matches exactly; do not remap imported source providers/models onto arbitrary local provider/model rows.
+- Resolve exact imported provider/model snapshot matches during analysis to concrete target ids, and preserve `new:provider:*` and `new:model:*` virtual ids only for source snapshots that do not already exist.
+- Compute judgment, assessment, and human-review fidelity plans from those concrete or virtual imported snapshot ids so provider/model metadata, thinking/options, and content settings remain benchmark-critical inputs.
 - Compute judgment, assessment, and human-review blockers with set-based duplicate and target-conflict queries.
 - Store reviewed target plan data as versioned transfer-schema rows or a rebuilt versioned artifact.
 - Keep a compact JSON summary artifact for UI plan review.
@@ -296,9 +302,10 @@ Purpose:
 
 Implementation checklist:
 
-- Identify every table and key range that can affect import safety: projects and project scope state (`archived`, `date_from`, `date_to`), articles, identifiers, import routes, article import routes, project links, prompts, judgments, assessments, human review rows, models, provider connections, project-transfer history.
+- Identify every table and key range that can affect import safety: projects and project scope state (`archived`, `date_from`, `date_to`), articles, identifiers, import routes, article import routes, project links, prompts, judgments, assessments, human review rows, models, provider connections, imported provider/model snapshot marker JSON, imported snapshot fingerprint inputs, project-transfer history.
 - Add a small shared target-state dirty-token or version service for those safety surfaces.
 - Add a target-state coverage version that records which code version initialized token coverage and which safety surfaces are covered.
+- Include dependency fingerprint algorithm/code version in the coverage version or token set so provider/model snapshot fingerprint changes force full dependency and fidelity revalidation.
 - Store the coverage version with every analyze-time token set and reviewed plan revision.
 - Allow incremental commit revalidation only when the current coverage version exactly matches the analyze-time coverage version and every required surface has a known token.
 - Keep dirty-token updates coarse, cheap, and transactional with the write that changed the target surface.
@@ -307,6 +314,7 @@ Implementation checklist:
 - Store the analyze-time dirty-token set with the reviewed plan revision.
 - At commit, compare current dirty tokens with analyze-time dirty tokens before running detailed revalidation.
 - Fall back to full target revalidation when any relevant token is missing, unknown, stale, or not covered by shared write helpers.
+- Fall back to full dependency and fidelity revalidation when imported snapshot markers, snapshot fingerprint inputs, provider/model enabled/archive state, or dependency fingerprint code/version are missing, unknown, stale, or changed.
 - Keep detailed revalidation for changed target surfaces only when the dirty token tells us which surface changed.
 - Persist stale-plan reasons by surface: dependency, target project, target article, target prompt, target route, judgment, assessment, human review, duplicate package history.
 - Add a test inventory for every route, service, queue, cron, import, and maintenance path that writes safety surfaces.
@@ -351,6 +359,9 @@ Implementation checklist:
 - Create operation-local source-to-target id mapping tables for articles, prompts, routes, judgments, assessments, and human review rows.
 - Generate new target ids once per reviewed commit attempt, validate collisions before writes, and persist them in request-safe staging or a reviewed commit plan artifact.
 - Rebuild operation-local mapping tables from the persisted id map at commit time.
+- Rebuild provider/model snapshot resolution maps from the reviewed plan before dependent writes. Reuse exact imported snapshot matches by fingerprint and materialize only the remaining virtual imported snapshots.
+- Materialize imported provider/model snapshots as disabled rows with imported-snapshot markers and no usable provider secret reference before judgment, assessment, human-review, or project rows that depend on them are written.
+- Preserve the adjustment-plan behavior that reused imported snapshots are also disabled after import, accepting the documented shared-row tradeoff.
 - Persist and rebuild a separate asset `packagePath -> promotedPath` map for promoted assets; do not model asset promotion as relational target-id generation.
 - Begin app-table writes only after asset promotion has verified copied byte counts/checksums and produced a promoted-path map.
 - Join staged article rows with the promoted-path map before app-table writes so DB rows never point at unverified package asset paths.
@@ -460,6 +471,8 @@ Implementation checklist:
 - Stream payload assembly from DuckDB queries into deterministic NDJSON files instead of collecting large payload arrays.
 - Stream export asset collection in two steps: discover asset references while materializing article payloads under the DuckDB snapshot, then after releasing that snapshot copy asset files to package staging with bounded concurrency, compute byte counts/checksums incrementally, and preserve a stable-source verification step so assets that change during copy fail the export before manifest and fingerprint finalization.
 - Preserve current export-asset safety checks for runtime asset path validation, runtime asset URL rewriting, symlink rejection, and regular-file checks while moving to the streaming path.
+- Preserve adjustment-plan redaction behavior while streaming: recognized non-local URLs with credentials, query strings, or fragments remain byte-preserved in payloads, emit `nonLocalUrlPreserved` warnings, and do not trigger article or dependent-row omission cascades.
+- Exercise signed or credential-bearing non-local URLs through full export assembly, including asset discovery. Explicitly document or block unsupported asset-shaped fields such as `fullTextAssets` instead of letting asset discovery reinterpret preserved non-local URLs as runtime asset paths.
 - Do not store export asset bytes in JS arrays. Package entries should reference staged files or streams plus metadata.
 - Stream package creation to file for large exports and keep in-memory zip bytes only for small inline exports.
 - Extend the zip writer to accept staged files or streams so large payloads and assets are not converted back into `Uint8Array` entries.
@@ -469,6 +482,7 @@ Implementation checklist:
 - Preserve failure behavior: do not silently retry, downgrade, or mutate model/provider settings to make export succeed.
 - Add golden package tests for new schema version, payload ordering, checksums, and package fingerprints.
 - Add export tests for small inline packages and large background package-file output.
+- Add threshold-boundary export tests proving `rawArticleProvenanceMode` `auto` preflight estimates, execution mode, actual package bytes, and auto-omit warning behavior agree with `include` and `omit` fixtures.
 - Add explicit export-asset failure-path tests for symlink rejection, non-file rejection, missing assets, and source-change-during-copy.
 - Ship exporter and importer changes together for the new schema version; cross-version compatibility is not required, but same-branch export/import must work before merge.
 - Add cleanup tests for failed large exports.
@@ -477,6 +491,7 @@ Before measurement:
 
 - Measure export assembly time, package write time, peak memory, output bytes/sec, package bytes, expanded bytes, and package fingerprint cost.
 - Measure export asset read count, concurrent asset copy count, asset bytes/sec, and asset bytes resident in JS memory.
+- Measure `rawArticleProvenanceMode` impact for `auto`, `include`, and `omit`: preflight estimate bytes, execution mode, actual package bytes, warning counts/details, and import round-trip behavior.
 - Benchmark article-heavy, judgment-heavy, and asset-heavy exports.
 
 After measurement:
@@ -486,6 +501,8 @@ After measurement:
 - Verify golden package tests pass for the new schema version.
 - Verify exported packages import successfully through the same-branch new import flow.
 - Verify same-branch export/import round trips preserve counts, warnings, and dependency-resolution semantics under the new schema version.
+- Verify signed, credential-bearing, query-string, and fragment non-local URLs remain unchanged, emit `nonLocalUrlPreserved`, and do not create decision-bearing or dependent omission cascades.
+- Verify `rawArticleProvenanceMode` threshold fixtures keep preflight estimate, selected execution mode, actual package bytes, and warning output consistent.
 
 Estimated impact:
 
@@ -497,6 +514,8 @@ Acceptance criteria:
 - Large exports write package files with bounded memory.
 - Large asset-heavy exports package staged asset files or streams without materializing all asset bytes in JS.
 - Export asset validation still enforces runtime asset path validation, runtime asset URL rewriting, symlink rejection, and regular-file checks under the streaming export path.
+- Raw article provenance modes `auto`, `include`, and `omit` produce expected preflight estimates, package output, manifest warnings, and same-branch import behavior.
+- Warning output preserves code/scope/severity and key details for raw provenance, provider-secret, URL-preservation, decision-bearing omission, and dependent omission cases.
 - Export payload rows are internally consistent because they are read from one snapshot or from staged rows materialized from one snapshot.
 - Export packages are deterministic within the new schema version for payload ordering, checksums, and fingerprints.
 - Golden package tests prove the new schema version and fingerprint rules are stable.
@@ -600,13 +619,14 @@ Benchmark pass/fail rules:
 - Add and run `bun test src/server/services/projectTransfer/projectTransferAnalyzeTarget.test.ts` for Phase 2 set-based analyze changes.
 - Add and run `bun test src/server/services/projectTransfer/projectTransferDirtyTokenRevalidation.test.ts` for Phase 3 dirty-token coverage, missing-token fallback, changed-surface, and coverage-version mismatch behavior.
 - `bun test src/server/services/projectTransfer/projectTransferContracts.test.ts`
-- `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` including imported snapshot reuse by fingerprint, virtual `new:provider:*`/`new:model:*` ids, and no remapping onto arbitrary local provider/model rows.
+- Add and run `bun test src/server/services/projectTransfer/projectTransferSnapshotFingerprint.test.ts` for dependency-resolution and commit-materialization fingerprint parity over metadataJson, provider runtime config, imported markers, disabled reuse, and variant/version handling.
 - `bun test src/server/services/projectTransfer/projectTransferFidelityValidation.test.ts`
-- `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` including disabled imported provider/model snapshot materialization, exact-match snapshot reuse, and repeated-import behavior.
 - `bun test src/server/services/projectTransfer/projectTransferCommitRollback.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts`
-- `bun test src/server/services/projectTransfer/projectTransferExport.test.ts`
-- `bun test src/server/services/projectTransfer/projectTransferExportAssets.test.ts` including failure-path coverage for symlink rejection, non-file rejection, missing assets, and source-change-during-copy.
+- `bun test src/server/services/projectTransfer/projectTransferExport.test.ts` including `rawArticleProvenanceMode` `auto`/`include`/`omit`, threshold-boundary preflight estimates, execution mode, actual package bytes, manifest warning details, import round trips, and full-assembly signed/credential URL preservation.
+- `bun test src/server/services/projectTransfer/projectTransferExportAssets.test.ts` including failure-path coverage for symlink rejection, non-file rejection, missing assets, source-change-during-copy, and signed/credential non-local URLs in asset-shaped fields.
 - `bun test src/server/services/projectTransfer/projectTransferExportPackage.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferFingerprint.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferHistoryRepository.test.ts`
@@ -614,7 +634,7 @@ Benchmark pass/fail rules:
 - `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferPaths.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferPayloadSchemas.test.ts`
-- `bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts`
+- `bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts` including byte-preserved signed, credential-bearing, query-string, and fragment non-local URLs with `nonLocalUrlPreserved` warnings and no dependent omission cascade.
 - `bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts`
 - `bun test src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts`
@@ -628,15 +648,19 @@ Benchmark pass/fail rules:
 - `bun run db:mig` if target-state dirty tokens, app-scoped scratch tables, or transfer metadata migrations are added.
 - `bun test src/db/migrateDuckdb.test.ts` if project-transfer migrations are added or changed.
 - `bun run lint`
-- `bun run test:vitest -- "src/app/routes/+projects/-+import.vitest.tsx"` if import/export progress payloads or wizard behavior changes.
+- `bun run test:vitest -- "src/app/routes/+projects/-+import.vitest.tsx"` if import/export progress payloads, warning codes/details, omission-warning grouping, or wizard behavior changes.
 - `bun run test:vitest -- "src/app/routes/+projects/-+index.vitest.tsx"` if active Projects-page import/export entry-point visibility, order, or routing changes.
 - `bun run test:vitest -- "src/app/routes/+projects/+archived/archivedProjectsTable.vitest.tsx"` if export/import entry-point behavior changes for archived projects.
 - `bun test src/app/routes/+projects/importWizard/projectImportClient.test.ts` if upload headers, session URLs, or upload progress wiring changes.
 - `bun run test:vitest -- "src/components/main/projectsGrid.vitest.tsx"` if import/export progress UX or export/import entry-point behavior changes.
 - `bun run build` if shared UI, route response types, or import wizard progress changes.
 - `bun run desktop:build` if runtime asset paths, temp paths, upload/download wiring, or import/export UI paths change.
-- Browser verify: export a project, import it through `/projects/import`, resolve dependencies if needed, commit, and open the imported project.
-- Desktop verify: same flow when shared/core project-transfer server, session, polling, progress, export/import flow, runtime asset path, file upload/download, or temp-storage behavior changes.
+- Browser verify: export a project with each `rawArticleProvenanceMode`, import it through `/projects/import`, resolve dependencies if needed, commit, and open the imported project.
+- Browser verify: export a project containing signed or credential-bearing URLs and confirm the package warns with `nonLocalUrlPreserved`, preserves exact URL values, and does not create article/dependent omission cascades.
+- Browser verify: import the same package twice and confirm exact-match imported provider/model snapshots are reused by fingerprint.
+- Browser verify: import a package with judgments/human review rows and confirm analysis resolves those rows against reused or virtual imported snapshots without remapping to arbitrary local provider/model rows.
+- Browser verify: import a package with judgments/human review rows and confirm provider/model rows are imported as disabled snapshots without usable secret references.
+- Desktop verify: same flows when shared/core project-transfer server, session, polling, progress, export/import flow, runtime asset path, file upload/download, export UI, import wizard, or temp-storage behavior changes.
 
 ## Non-Goals
 
