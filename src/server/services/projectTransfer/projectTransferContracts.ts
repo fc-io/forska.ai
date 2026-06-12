@@ -5,13 +5,23 @@ import type {
 } from '../../../db/schemaTypes.ts'
 import {getJsonValue} from '../appQueryHelpers.ts'
 import {
+  projectTransferAllowedArchiveRootFilesBySchemaVersion,
+  projectTransferAllowedArchiveRootFoldersBySchemaVersion,
   projectTransferPathLimits,
   validateProjectTransferArchiveMemberPath,
   validateProjectTransferRuntimeAssetPath,
   validateProjectTransferTempWritablePath,
 } from './projectTransferPaths.ts'
 import type {ProjectTransferPerformanceMetrics} from './projectTransferPerformanceMetrics.ts'
-import type {ProjectTransferPackageWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
+import {
+  projectTransferCurrentManifestSchemaVersion,
+  type ProjectTransferPackageWarning,
+  type ProjectTransferPayloadKey,
+  projectTransferPayloadKeysBySchemaVersion,
+  projectTransferPayloadPathBySchemaVersion,
+  type ProjectTransferSchemaVersion,
+  projectTransferSchemaVNextManifestSchemaVersion,
+} from './projectTransferSchemas.ts'
 
 const projectTransferMiB = 1024 * 1024
 const projectTransferGiB = 1024 * projectTransferMiB
@@ -41,6 +51,57 @@ export const projectTransferResourceGateLimits = {
   minimumDiskHeadroomRatio: 0.1,
   writableTempRoot: 'tmp/project-transfer',
 } as const
+
+export const projectTransferSchemaVersionContracts = {
+  [projectTransferCurrentManifestSchemaVersion]: {
+    archiveRootFiles:
+      projectTransferAllowedArchiveRootFilesBySchemaVersion[projectTransferCurrentManifestSchemaVersion],
+    archiveRootFolders:
+      projectTransferAllowedArchiveRootFoldersBySchemaVersion[projectTransferCurrentManifestSchemaVersion],
+    assetPayloadKeys: ['assetManifest'],
+    canonicalPayloadKeys: projectTransferPayloadKeysBySchemaVersion[projectTransferCurrentManifestSchemaVersion],
+    fingerprintMode: 'logicalPayloads',
+    packageValidation: {
+      assetManifest: 'required',
+      payloadCompleteness: 'allSchemaPayloadsRequired',
+      rootValidation: 'schemaVersionArchiveRootAllowlist',
+    },
+    payloadPaths: projectTransferPayloadPathBySchemaVersion[projectTransferCurrentManifestSchemaVersion],
+    schemaVersion: projectTransferCurrentManifestSchemaVersion,
+  },
+  [projectTransferSchemaVNextManifestSchemaVersion]: {
+    archiveRootFiles:
+      projectTransferAllowedArchiveRootFilesBySchemaVersion[projectTransferSchemaVNextManifestSchemaVersion],
+    archiveRootFolders:
+      projectTransferAllowedArchiveRootFoldersBySchemaVersion[projectTransferSchemaVNextManifestSchemaVersion],
+    assetPayloadKeys: ['assetEntries', 'assetReferences'],
+    canonicalPayloadKeys: projectTransferPayloadKeysBySchemaVersion[projectTransferSchemaVNextManifestSchemaVersion],
+    fingerprintMode: 'stagedRowAndSingletonPayloadDigests',
+    packageValidation: {
+      assetManifest: 'notAllowed',
+      payloadCompleteness: 'allSchemaPayloadsRequired',
+      rootValidation: 'schemaVersionArchiveRootAllowlist',
+    },
+    payloadPaths: projectTransferPayloadPathBySchemaVersion[projectTransferSchemaVNextManifestSchemaVersion],
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+  },
+} as const satisfies Record<
+  ProjectTransferSchemaVersion,
+  {
+    archiveRootFiles: readonly string[]
+    archiveRootFolders: readonly string[]
+    assetPayloadKeys: readonly string[]
+    canonicalPayloadKeys: readonly string[]
+    fingerprintMode: 'logicalPayloads' | 'stagedRowAndSingletonPayloadDigests'
+    packageValidation: {
+      assetManifest: 'notAllowed' | 'required'
+      payloadCompleteness: 'allSchemaPayloadsRequired'
+      rootValidation: 'schemaVersionArchiveRootAllowlist'
+    }
+    payloadPaths: Record<string, string>
+    schemaVersion: ProjectTransferSchemaVersion
+  }
+>
 
 export const projectTransferDependencyStatuses = [
   'ambiguous',

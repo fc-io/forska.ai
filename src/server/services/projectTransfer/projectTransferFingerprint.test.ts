@@ -4,6 +4,9 @@ import {
   getProjectTransferCanonicalJson,
   getProjectTransferCanonicalNdjson,
   getProjectTransferLogicalPackageFingerprint,
+  getProjectTransferSchemaVNextLogicalPackageFingerprintFromDigests,
+  getProjectTransferSchemaVNextSingletonPayloadDigest,
+  getProjectTransferSchemaVNextStagedRowDigest,
   getProjectTransferSha256Checksum,
 } from './projectTransferFingerprint.ts'
 import {buildProjectTransferManifest, getProjectTransferManifestPayloadEntry} from './projectTransferManifest.ts'
@@ -12,6 +15,11 @@ import {
   type ProjectTransferPayloadKey,
   projectTransferPayloadKeys,
   projectTransferPayloadPathByKey,
+  projectTransferSchemaVNextManifestSchemaVersion,
+  projectTransferSchemaVNextPayloadFormatByKey,
+  type ProjectTransferSchemaVNextPayloadKey,
+  projectTransferSchemaVNextPayloadKeys,
+  projectTransferSchemaVNextPayloadPathByKey,
 } from './projectTransferSchemas.ts'
 
 const getPayloadManifestEntries = (entries: Partial<Record<ProjectTransferPayloadKey, string>>) => {
@@ -33,6 +41,27 @@ const getPayloadManifestEntries = (entries: Partial<Record<ProjectTransferPayloa
   )
 }
 
+const getSchemaVNextPayloadManifestEntries = (
+  entries: Partial<Record<ProjectTransferSchemaVNextPayloadKey, string>>,
+) => {
+  return projectTransferSchemaVNextPayloadKeys.reduce(
+    (payloads, key) => {
+      const bytes = entries[key] ?? ''
+
+      return {
+        ...payloads,
+        [key]: getProjectTransferManifestPayloadEntry({
+          bytes,
+          format: projectTransferSchemaVNextPayloadFormatByKey[key],
+          path: projectTransferSchemaVNextPayloadPathByKey[key],
+          recordCount: bytes === '' ? 0 : 1,
+        }),
+      }
+    },
+    {} as ReturnType<typeof buildProjectTransferManifest>['payloads'],
+  )
+}
+
 const getProjectSummary = (checksumSeed: string) => {
   return {
     counts: projectTransferPayloadKeys.reduce(
@@ -45,6 +74,18 @@ const getProjectSummary = (checksumSeed: string) => {
     humanJudgmentMode: 'prompt' as const,
     name: 'Source Project',
     sourceProjectId: `source-project-${checksumSeed}`,
+  }
+}
+
+const getSchemaVNextProjectSummary = (checksumSeed: string) => {
+  return {
+    ...getProjectSummary(checksumSeed),
+    counts: projectTransferSchemaVNextPayloadKeys.reduce(
+      (counts, key) => {
+        return {...counts, [key]: 0}
+      },
+      {} as Record<ProjectTransferSchemaVNextPayloadKey, number>,
+    ),
   }
 }
 
@@ -80,6 +121,19 @@ const getProvenanceIdManifest = (checksumSeed: string) => {
       reviews: `reviews-${checksumSeed}`,
     }),
     project: getProjectSummary(checksumSeed),
+    sourceAppVersion: '0.2.1',
+  })
+}
+
+const getSchemaVNextManifest = (checksumSeed: string) => {
+  return buildProjectTransferManifest({
+    exportedAt: `2026-05-21T07:00:0${checksumSeed}.000Z`,
+    payloads: getSchemaVNextPayloadManifestEntries({
+      articles: `articles-${checksumSeed}`,
+      project: `project-${checksumSeed}`,
+    }),
+    project: getSchemaVNextProjectSummary(checksumSeed),
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
     sourceAppVersion: '0.2.1',
   })
 }
@@ -339,4 +393,78 @@ test('project-transfer duplicate fingerprints change when logical package conten
   })
 
   expect(changedFingerprint).not.toBe(baseFingerprint)
+})
+
+test('schema-vNext staged row digests exclude ids and timestamps from sort keys', () => {
+  const firstDigest = getProjectTransferSchemaVNextStagedRowDigest({
+    payloadKey: 'articles',
+    row: {
+      articleTitle: 'Stable Article',
+      createdAt: '2026-05-21T07:00:00.000Z',
+      id: 'db-row-1',
+      sourceArticleId: 'source-article-1',
+      targetArticleId: 'target-article-1',
+      updatedAt: '2026-05-21T07:00:00.000Z',
+    },
+  })
+  const secondDigest = getProjectTransferSchemaVNextStagedRowDigest({
+    payloadKey: 'articles',
+    row: {
+      articleTitle: 'Stable Article',
+      createdAt: '2026-05-22T07:00:00.000Z',
+      id: 'db-row-2',
+      sourceArticleId: 'source-article-2',
+      targetArticleId: 'target-article-2',
+      updatedAt: '2026-05-22T07:00:00.000Z',
+    },
+  })
+  const changedDigest = getProjectTransferSchemaVNextStagedRowDigest({
+    payloadKey: 'articles',
+    row: {articleTitle: 'Changed Article', sourceArticleId: 'source-article-2', targetArticleId: 'target-article-2'},
+  })
+
+  expect(firstDigest.sortKey).toBe(firstDigest.digestSha256)
+  expect(secondDigest.sortKey).toBe(firstDigest.sortKey)
+  expect(changedDigest.sortKey).not.toBe(firstDigest.sortKey)
+})
+
+test('schema-vNext package fingerprints use staged row digests and singleton payload digests', () => {
+  const firstProjectPayload = {
+    createdAt: '2026-05-21T07:00:00.000Z',
+    name: 'Shared Review',
+    sourceProjectId: 'source-project-a',
+  }
+  const secondProjectPayload = {
+    createdAt: '2026-05-22T07:00:00.000Z',
+    name: 'Shared Review',
+    sourceProjectId: 'source-project-b',
+  }
+  const firstRows = [
+    {articleTitle: 'Beta', sourceArticleId: 'source-beta', targetArticleId: 'target-beta'},
+    {articleTitle: 'Alpha', sourceArticleId: 'source-alpha', targetArticleId: 'target-alpha'},
+  ]
+  const secondRows = [
+    {articleTitle: 'Alpha', sourceArticleId: 'source-alpha-reimport', targetArticleId: 'target-alpha-reimport'},
+    {articleTitle: 'Beta', sourceArticleId: 'source-beta-reimport', targetArticleId: 'target-beta-reimport'},
+  ]
+  const firstFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getSchemaVNextManifest('1'),
+    payloads: {articles: firstRows, project: firstProjectPayload},
+  })
+  const secondFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getSchemaVNextManifest('2'),
+    payloads: {articles: secondRows, project: secondProjectPayload},
+  })
+  const digestFingerprint = getProjectTransferSchemaVNextLogicalPackageFingerprintFromDigests({
+    manifest: getSchemaVNextManifest('3'),
+    rowDigests: firstRows.map((row) => {
+      return getProjectTransferSchemaVNextStagedRowDigest({payloadKey: 'articles', row})
+    }),
+    singletonPayloadDigests: [
+      getProjectTransferSchemaVNextSingletonPayloadDigest({payloadKey: 'project', value: firstProjectPayload}),
+    ],
+  })
+
+  expect(firstFingerprint).toBe(secondFingerprint)
+  expect(digestFingerprint).toBe(firstFingerprint)
 })

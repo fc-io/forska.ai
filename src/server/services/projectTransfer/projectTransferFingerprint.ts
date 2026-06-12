@@ -1,10 +1,14 @@
 import {createHash} from 'node:crypto'
 
 import {
+  getProjectTransferPayloadFormatForSchemaVersion,
+  getProjectTransferPayloadKeysForSchemaVersion,
   type ProjectTransferManifest,
+  type ProjectTransferPackagePayloadKey,
   type ProjectTransferPayloadFormat,
   type ProjectTransferPayloadKey,
   projectTransferPayloadKeys,
+  projectTransferSchemaVNextManifestSchemaVersion,
 } from './projectTransferSchemas.ts'
 
 type ProjectTransferFingerprintValue =
@@ -18,7 +22,7 @@ type ProjectTransferFingerprintValue =
 type ProjectTransferLogicalPackageFingerprintInput = {
   excludedKeys?: readonly string[]
   manifest: Pick<ProjectTransferManifest, 'payloads' | 'schemaVersion'>
-  payloads: Partial<Record<ProjectTransferPayloadKey, unknown>>
+  payloads: Partial<Record<ProjectTransferPackagePayloadKey, unknown>>
 }
 
 type ProjectTransferLegacyPackageFingerprintInput = Pick<
@@ -27,6 +31,25 @@ type ProjectTransferLegacyPackageFingerprintInput = Pick<
 >
 
 type ProjectTransferPayloadInputValue = {orderInsensitiveRecords: boolean; value: unknown}
+
+export type ProjectTransferSchemaVNextStagedRowDigest = {
+  digestSha256: string
+  payloadKey: ProjectTransferPackagePayloadKey
+  sortKey: string
+}
+
+export type ProjectTransferSchemaVNextSingletonPayloadDigest = {
+  digestSha256: string
+  payloadKey: ProjectTransferPackagePayloadKey
+}
+
+type ProjectTransferSchemaVNextLogicalPackageFingerprintDigestInput = {
+  manifest: Pick<ProjectTransferManifest, 'payloads' | 'schemaVersion'>
+  rowDigests: readonly ProjectTransferSchemaVNextStagedRowDigest[]
+  singletonPayloadDigests: readonly ProjectTransferSchemaVNextSingletonPayloadDigest[]
+}
+
+type ProjectTransferSchemaVNextLogicalPackageFingerprintPayloadInput = ProjectTransferLogicalPackageFingerprintInput
 
 type ProjectTransferCanonicalPayloadChecksumInput =
   | {format: 'json'; value: unknown}
@@ -51,12 +74,16 @@ export const projectTransferLogicalFingerprintExcludedKeys = [
   'packageFingerprint',
   'sessionId',
   'sourceProjectName',
+  'sourceRef',
   'sourceRecordHash',
   'sourceRecordKey',
+  'sortKey',
   'targetProjectName',
   'transferId',
   'updatedAt',
 ] as const
+
+const projectTransferSha256Pattern = /^[a-f0-9]{64}$/
 
 const compareStableStrings = (left: string, right: string) => {
   return left < right ? -1 : left > right ? 1 : 0
@@ -231,6 +258,99 @@ const getCanonicalPayloadValue = ({
     : getProjectTransferCanonicalJson(logicalValue)
 }
 
+const compareSchemaVNextRowDigests = (
+  left: ProjectTransferSchemaVNextStagedRowDigest,
+  right: ProjectTransferSchemaVNextStagedRowDigest,
+) => {
+  const sortKeyComparison = compareStableStrings(left.sortKey, right.sortKey)
+
+  return sortKeyComparison === 0 ? compareStableStrings(left.digestSha256, right.digestSha256) : sortKeyComparison
+}
+
+const assertSchemaVNextDigest = (digestSha256: string, label: string) => {
+  return projectTransferSha256Pattern.test(digestSha256)
+    ? undefined
+    : (() => {
+        throw new Error(`Project transfer schema-vNext fingerprint ${label} must be lowercase SHA-256 hex`)
+      })()
+}
+
+const getSchemaVNextPayloadRecords = (value: unknown): unknown[] => {
+  const payloadInputValue = getPayloadInputValue(value)
+
+  return Array.isArray(payloadInputValue.value) ? payloadInputValue.value : []
+}
+
+const getLogicalFingerprintDigest = (value: unknown, excludedKeys: Set<string>) => {
+  return getProjectTransferCanonicalJsonChecksum(getProjectTransferLogicalFingerprintValue(value, excludedKeys))
+}
+
+const getSchemaVNextSingletonDigest = ({
+  excludedKeys,
+  payloadKey,
+  value,
+}: {
+  excludedKeys: Set<string>
+  payloadKey: ProjectTransferPackagePayloadKey
+  value: unknown
+}): ProjectTransferSchemaVNextSingletonPayloadDigest => {
+  return {digestSha256: getLogicalFingerprintDigest(value, excludedKeys), payloadKey}
+}
+
+const getSchemaVNextFingerprintPayloadFromDigests = ({
+  manifest,
+  rowDigests,
+  singletonPayloadDigests,
+}: ProjectTransferSchemaVNextLogicalPackageFingerprintDigestInput) => {
+  const payloadKeys = getProjectTransferPayloadKeysForSchemaVersion(projectTransferSchemaVNextManifestSchemaVersion)
+  const rowDigestsByKey = rowDigests.reduce<
+    Map<ProjectTransferPackagePayloadKey, ProjectTransferSchemaVNextStagedRowDigest[]>
+  >((digestsByKey, rowDigest) => {
+    assertSchemaVNextDigest(rowDigest.digestSha256, `${rowDigest.payloadKey}.digestSha256`)
+    assertSchemaVNextDigest(rowDigest.sortKey, `${rowDigest.payloadKey}.sortKey`)
+
+    digestsByKey.set(rowDigest.payloadKey, [...(digestsByKey.get(rowDigest.payloadKey) ?? []), rowDigest])
+
+    return digestsByKey
+  }, new Map())
+  const singletonDigestsByKey = singletonPayloadDigests.reduce<
+    Map<ProjectTransferPackagePayloadKey, ProjectTransferSchemaVNextSingletonPayloadDigest>
+  >((digestsByKey, singletonDigest) => {
+    assertSchemaVNextDigest(singletonDigest.digestSha256, `${singletonDigest.payloadKey}.digestSha256`)
+    digestsByKey.set(singletonDigest.payloadKey, singletonDigest)
+
+    return digestsByKey
+  }, new Map())
+
+  return {
+    payloads: payloadKeys
+      .filter((key) => {
+        return manifest.payloads[key] !== undefined
+      })
+      .map((key) => {
+        const format = getProjectTransferPayloadFormatForSchemaVersion({
+          key,
+          schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+        })
+
+        return format === 'json'
+          ? {
+              digestSha256: singletonDigestsByKey.get(key)?.digestSha256 ?? getProjectTransferSha256Checksum('null'),
+              key,
+              kind: 'singleton',
+            }
+          : {
+              key,
+              kind: 'rowSet',
+              rows: [...(rowDigestsByKey.get(key) ?? [])].sort(compareSchemaVNextRowDigests).map((rowDigest) => {
+                return rowDigest.digestSha256
+              }),
+            }
+      }),
+    schemaVersion: manifest.schemaVersion,
+  }
+}
+
 export const getProjectTransferCanonicalJson = (value: unknown): string => {
   return Array.isArray(value)
     ? `[${value
@@ -289,11 +409,94 @@ export const getProjectTransferLogicalFingerprintValue = (
         : (value as ProjectTransferFingerprintValue)
 }
 
+export const getProjectTransferSchemaVNextStagedRowDigest = ({
+  excludedKeys = [],
+  payloadKey,
+  row,
+}: {
+  excludedKeys?: readonly string[]
+  payloadKey: ProjectTransferPackagePayloadKey
+  row: unknown
+}): ProjectTransferSchemaVNextStagedRowDigest => {
+  const digestSha256 = getLogicalFingerprintDigest(row, getExcludedKeySet(excludedKeys))
+
+  return {digestSha256, payloadKey, sortKey: digestSha256}
+}
+
+export const getProjectTransferSchemaVNextSingletonPayloadDigest = ({
+  excludedKeys = [],
+  payloadKey,
+  value,
+}: {
+  excludedKeys?: readonly string[]
+  payloadKey: ProjectTransferPackagePayloadKey
+  value: unknown
+}): ProjectTransferSchemaVNextSingletonPayloadDigest => {
+  return getSchemaVNextSingletonDigest({excludedKeys: getExcludedKeySet(excludedKeys), payloadKey, value})
+}
+
+export const getProjectTransferSchemaVNextLogicalPackageFingerprintPayloadFromDigests = (
+  input: ProjectTransferSchemaVNextLogicalPackageFingerprintDigestInput,
+) => {
+  return getSchemaVNextFingerprintPayloadFromDigests(input)
+}
+
+export const getProjectTransferSchemaVNextLogicalPackageFingerprintFromDigests = (
+  input: ProjectTransferSchemaVNextLogicalPackageFingerprintDigestInput,
+): string => {
+  return getProjectTransferCanonicalJsonChecksum(
+    getProjectTransferSchemaVNextLogicalPackageFingerprintPayloadFromDigests(input),
+  )
+}
+
+export const getProjectTransferSchemaVNextLogicalPackageFingerprintPayload = ({
+  excludedKeys = [],
+  manifest,
+  payloads,
+}: ProjectTransferSchemaVNextLogicalPackageFingerprintPayloadInput) => {
+  const excludedKeySet = getExcludedKeySet(excludedKeys)
+  const payloadKeys = getProjectTransferPayloadKeysForSchemaVersion(projectTransferSchemaVNextManifestSchemaVersion)
+  const rowDigests = payloadKeys.flatMap((payloadKey) => {
+    const format = getProjectTransferPayloadFormatForSchemaVersion({
+      key: payloadKey,
+      schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+    })
+
+    return format === 'json'
+      ? []
+      : getSchemaVNextPayloadRecords(payloads[payloadKey]).map((row) => {
+          const digestSha256 = getLogicalFingerprintDigest(row, excludedKeySet)
+
+          return {digestSha256, payloadKey, sortKey: digestSha256}
+        })
+  })
+  const singletonPayloadDigests = payloadKeys.flatMap((payloadKey) => {
+    const format = getProjectTransferPayloadFormatForSchemaVersion({
+      key: payloadKey,
+      schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+    })
+
+    return format === 'json'
+      ? [getSchemaVNextSingletonDigest({excludedKeys: excludedKeySet, payloadKey, value: payloads[payloadKey]})]
+      : []
+  })
+
+  return getProjectTransferSchemaVNextLogicalPackageFingerprintPayloadFromDigests({
+    manifest,
+    rowDigests,
+    singletonPayloadDigests,
+  })
+}
+
 export const getProjectTransferLogicalPackageFingerprintPayload = ({
   excludedKeys = [],
   manifest,
   payloads,
 }: ProjectTransferLogicalPackageFingerprintInput) => {
+  if (manifest.schemaVersion === projectTransferSchemaVNextManifestSchemaVersion) {
+    return getProjectTransferSchemaVNextLogicalPackageFingerprintPayload({excludedKeys, manifest, payloads})
+  }
+
   const excludedKeySet = getExcludedKeySet(excludedKeys)
 
   return {

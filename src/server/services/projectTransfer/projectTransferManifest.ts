@@ -4,7 +4,11 @@ import {
   validateProjectTransferArchiveMemberPath,
 } from './projectTransferPaths.ts'
 import {
-  isProjectTransferPayloadKey,
+  getProjectTransferPayloadFormatForSchemaVersion,
+  getProjectTransferPayloadKeysForSchemaVersion,
+  getProjectTransferPayloadPathForSchemaVersion,
+  isProjectTransferPayloadKeyForSchemaVersion,
+  isProjectTransferSchemaVersion,
   type ProjectTransferManifest,
   type ProjectTransferManifestAssetSummary,
   type ProjectTransferManifestPayload,
@@ -14,11 +18,9 @@ import {
   projectTransferManifestShape,
   type ProjectTransferManifestWarning,
   projectTransferManifestWarningShape,
+  type ProjectTransferPackagePayloadKey,
   type ProjectTransferPayloadFormat,
-  projectTransferPayloadFormatByKey,
-  type ProjectTransferPayloadKey,
-  projectTransferPayloadKeys,
-  projectTransferPayloadPathByKey,
+  type ProjectTransferSchemaVersion,
 } from './projectTransferSchemas.ts'
 
 type ProjectTransferManifestValidationResult = {ok: true; value: ProjectTransferManifest} | {error: Error; ok: false}
@@ -34,8 +36,9 @@ type BuildProjectTransferManifestInput = {
   assetSummary?: ProjectTransferManifestAssetSummary
   exportedAt: string
   packageFingerprint?: string | null
-  payloads: Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload>
+  payloads: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferManifestPayload>>
   project: ProjectTransferManifestProjectSummary
+  schemaVersion?: ProjectTransferSchemaVersion
   sourceAppVersion: string
   warnings?: readonly ProjectTransferManifestWarning[]
 }
@@ -62,23 +65,33 @@ const throwProjectTransferManifestError = (code: string, message: string): never
   throw new Error(`Project transfer manifest ${code}: ${message}`)
 }
 
-const assertSchemaVersion = (schemaVersion: number) => {
-  return schemaVersion === projectTransferManifestSchemaVersion
-    ? undefined
+const assertSchemaVersion = (schemaVersion: number): ProjectTransferSchemaVersion => {
+  return isProjectTransferSchemaVersion(schemaVersion)
+    ? schemaVersion
     : throwProjectTransferManifestError(
         'unsupported_schema_version',
         `Unsupported project transfer manifest schema version: ${schemaVersion}`,
       )
 }
 
-const assertPayloadKey = (key: string): ProjectTransferPayloadKey => {
-  return isProjectTransferPayloadKey(key)
+const assertPayloadKey = (
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: string,
+): ProjectTransferPackagePayloadKey => {
+  return isProjectTransferPayloadKeyForSchemaVersion({key, schemaVersion})
     ? key
-    : throwProjectTransferManifestError('unknown_payload_key', `Unknown payload key: ${key}`)
+    : throwProjectTransferManifestError(
+        'unknown_payload_key',
+        `Unknown payload key for schema ${schemaVersion}: ${key}`,
+      )
 }
 
-const assertManifestPayloadPath = (key: ProjectTransferPayloadKey, path: string) => {
-  const expectedPath = projectTransferPayloadPathByKey[key]
+const assertManifestPayloadPath = (
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: ProjectTransferPackagePayloadKey,
+  path: string,
+) => {
+  const expectedPath = getProjectTransferPayloadPathForSchemaVersion({key, schemaVersion})
 
   if (path !== expectedPath) {
     return throwProjectTransferManifestError(
@@ -87,7 +100,7 @@ const assertManifestPayloadPath = (key: ProjectTransferPayloadKey, path: string)
     )
   }
 
-  const pathValidation = validateProjectTransferArchiveMemberPath({pathValue: path})
+  const pathValidation = validateProjectTransferArchiveMemberPath({pathValue: path, schemaVersion})
 
   return pathValidation.ok
     ? undefined
@@ -97,8 +110,12 @@ const assertManifestPayloadPath = (key: ProjectTransferPayloadKey, path: string)
       )
 }
 
-const assertManifestPayloadFormat = (key: ProjectTransferPayloadKey, format: ProjectTransferPayloadFormat) => {
-  const expectedFormat = projectTransferPayloadFormatByKey[key]
+const assertManifestPayloadFormat = (
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: ProjectTransferPackagePayloadKey,
+  format: ProjectTransferPayloadFormat,
+) => {
+  const expectedFormat = getProjectTransferPayloadFormatForSchemaVersion({key, schemaVersion})
 
   return format === expectedFormat
     ? undefined
@@ -108,7 +125,7 @@ const assertManifestPayloadFormat = (key: ProjectTransferPayloadKey, format: Pro
       )
 }
 
-const assertChecksum = (key: ProjectTransferPayloadKey, checksumSha256: string) => {
+const assertChecksum = (key: ProjectTransferPackagePayloadKey, checksumSha256: string) => {
   return projectTransferSha256Pattern.test(checksumSha256)
     ? undefined
     : throwProjectTransferManifestError(
@@ -117,35 +134,42 @@ const assertChecksum = (key: ProjectTransferPayloadKey, checksumSha256: string) 
       )
 }
 
-const assertManifestPayload = (key: ProjectTransferPayloadKey, value: unknown): ProjectTransferManifestPayload => {
+const assertManifestPayload = (
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: ProjectTransferPackagePayloadKey,
+  value: unknown,
+): ProjectTransferManifestPayload => {
   const payload = projectTransferManifestPayloadShape.assert(value) as ProjectTransferManifestPayload
 
   assertChecksum(key, payload.checksumSha256)
-  assertManifestPayloadPath(key, payload.path)
-  assertManifestPayloadFormat(key, payload.format)
+  assertManifestPayloadPath(schemaVersion, key, payload.path)
+  assertManifestPayloadFormat(schemaVersion, key, payload.format)
 
   return payload
 }
 
-const assertManifestPayloads = (value: unknown): Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload> => {
+const assertManifestPayloads = (
+  schemaVersion: ProjectTransferSchemaVersion,
+  value: unknown,
+): Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferManifestPayload>> => {
   if (!isObjectRecord(value)) {
     return throwProjectTransferManifestError('payloads_shape', 'payloads must be an object keyed by payload name')
   }
 
   const payloads = Object.entries(value).reduce<
-    Partial<Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload>>
+    Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferManifestPayload>>
   >((payloads, [keyValue, payloadValue]) => {
-    const key = assertPayloadKey(keyValue)
+    const key = assertPayloadKey(schemaVersion, keyValue)
 
-    return {...payloads, [key]: assertManifestPayload(key, payloadValue)}
+    return {...payloads, [key]: assertManifestPayload(schemaVersion, key, payloadValue)}
   }, {})
-  const missingKey = projectTransferPayloadKeys.find((key) => {
+  const missingKey = getProjectTransferPayloadKeysForSchemaVersion(schemaVersion).find((key) => {
     return payloads[key] === undefined
   })
 
   return missingKey
     ? throwProjectTransferManifestError('missing_payload', `Manifest payloads must include ${missingKey}`)
-    : (payloads as Record<ProjectTransferPayloadKey, ProjectTransferManifestPayload>)
+    : payloads
 }
 
 const assertManifestAssetSummary = (value: unknown): ProjectTransferManifestAssetSummary | undefined => {
@@ -173,7 +197,10 @@ const assertManifestAssetSummary = (value: unknown): ProjectTransferManifestAsse
       )
 }
 
-const assertManifestProjectSummary = (value: unknown): ProjectTransferManifestProjectSummary => {
+const assertManifestProjectSummary = (
+  schemaVersion: ProjectTransferSchemaVersion,
+  value: unknown,
+): ProjectTransferManifestProjectSummary => {
   if (!isObjectRecord(value)) {
     return throwProjectTransferManifestError('project_shape', 'project summary must be an object')
   }
@@ -192,7 +219,7 @@ const assertManifestProjectSummary = (value: unknown): ProjectTransferManifestPr
     return throwProjectTransferManifestError('project_current_model_shape', 'project currentModel must be an object')
   }
 
-  const invalidCountKey = projectTransferPayloadKeys.find((key) => {
+  const invalidCountKey = getProjectTransferPayloadKeysForSchemaVersion(schemaVersion).find((key) => {
     const count = counts[key]
 
     return typeof count !== 'number' || !Number.isInteger(count) || count < 0
@@ -221,7 +248,7 @@ const assertManifestProjectSummary = (value: unknown): ProjectTransferManifestPr
   }
 
   return {
-    counts: counts as Record<ProjectTransferPayloadKey, number>,
+    counts: counts as Partial<Record<ProjectTransferPackagePayloadKey, number>>,
     currentModel: {
       modelName: typeof currentModel.modelName === 'string' ? currentModel.modelName : null,
       remoteModelId: typeof currentModel.remoteModelId === 'string' ? currentModel.remoteModelId : null,
@@ -283,7 +310,7 @@ export const assertProjectTransferManifest = (value: unknown): ProjectTransferMa
     warnings?: unknown[]
   }
 
-  assertSchemaVersion(manifest.schemaVersion)
+  const schemaVersion = assertSchemaVersion(manifest.schemaVersion)
 
   if (
     manifest.packageFingerprint !== undefined
@@ -300,9 +327,9 @@ export const assertProjectTransferManifest = (value: unknown): ProjectTransferMa
     assetSummary: assertManifestAssetSummary(manifest.assetSummary),
     exportedAt: manifest.exportedAt,
     packageFingerprint: manifest.packageFingerprint,
-    payloads: assertManifestPayloads(manifest.payloads),
-    project: assertManifestProjectSummary(manifest.project),
-    schemaVersion: projectTransferManifestSchemaVersion,
+    payloads: assertManifestPayloads(schemaVersion, manifest.payloads),
+    project: assertManifestProjectSummary(schemaVersion, manifest.project),
+    schemaVersion,
     sourceAppVersion: manifest.sourceAppVersion,
     warnings: assertManifestWarnings(manifest.warnings),
   }
@@ -323,9 +350,11 @@ export const validateProjectTransferManifest = (value: unknown): ProjectTransfer
 }
 
 export const buildProjectTransferManifest = (input: BuildProjectTransferManifestInput): ProjectTransferManifest => {
+  const schemaVersion = input.schemaVersion ?? projectTransferManifestSchemaVersion
+
   return assertProjectTransferManifest({
     ...input,
-    schemaVersion: projectTransferManifestSchemaVersion,
+    schemaVersion,
     warnings: input.warnings === undefined ? undefined : [...input.warnings],
   })
 }

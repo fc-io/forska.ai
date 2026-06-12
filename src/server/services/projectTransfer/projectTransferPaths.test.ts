@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {projectTransferResourceGateLimits} from './projectTransferContracts.ts'
 import {
+  getProjectTransferArchiveRootAllowlist,
   type ProjectTransferPathErrorCode,
   projectTransferPathLimits,
   type ProjectTransferPathValidationResult,
@@ -14,6 +15,10 @@ import {
   validateProjectTransferRuntimeAssetPath,
   validateProjectTransferRuntimeAssetPaths,
 } from './projectTransferPaths.ts'
+import {
+  projectTransferManifestSchemaVersion,
+  projectTransferSchemaVNextManifestSchemaVersion,
+} from './projectTransferSchemas.ts'
 
 const expectInvalidPath = <TValue>(
   result: ProjectTransferPathValidationResult<TValue>,
@@ -47,6 +52,30 @@ test('accepts allowlisted project transfer archive roots and asset members', () 
 
   expect(result.ok).toBe(true)
   expect(getValidatedPaths(result)).toEqual(paths)
+})
+
+test('uses schema-version-aware project transfer archive root allowlists', () => {
+  const currentAllowlist = getProjectTransferArchiveRootAllowlist(projectTransferManifestSchemaVersion)
+  const schemaVNextAllowlist = getProjectTransferArchiveRootAllowlist(projectTransferSchemaVNextManifestSchemaVersion)
+  const currentRootPayload = validateProjectTransferArchiveMemberPath({pathValue: 'articles.ndjson'})
+  const currentPayloadFolder = validateProjectTransferArchiveMemberPath({pathValue: 'payloads/articles.ndjson'})
+  const schemaVNextPayloadFolder = validateProjectTransferArchiveMemberPath({
+    pathValue: 'payloads/articles.ndjson',
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+  })
+  const schemaVNextRootPayload = validateProjectTransferArchiveMemberPath({
+    pathValue: 'articles.ndjson',
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+  })
+
+  expect(currentAllowlist.allowedRootFiles).toContain('assetManifest.json')
+  expect(currentAllowlist.allowedRootFolders).toEqual(['assets'])
+  expect(schemaVNextAllowlist.allowedRootFiles).toEqual(['manifest.json'])
+  expect(schemaVNextAllowlist.allowedRootFolders).toEqual(['assets', 'payloads'])
+  expect(currentRootPayload.ok).toBe(true)
+  expectInvalidPath(currentPayloadFolder, 'disallowed_root')
+  expect(schemaVNextPayloadFolder.ok).toBe(true)
+  expectInvalidPath(schemaVNextRootPayload, 'disallowed_root')
 })
 
 test('rejects unsafe project transfer archive member paths', () => {

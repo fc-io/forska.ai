@@ -1,5 +1,5 @@
 import type {ArticleIdentifierInput, ArticleIdentifierInputKind} from '../../../utils/articleIdentifierNormalization.ts'
-import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
+import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import {
   getProjectTransferNormalizedArticleIdentifiers,
   getProjectTransferStrongIdentifierComparisonKeys,
@@ -11,11 +11,20 @@ import {
   validateProjectTransferRuntimeAssetPath,
 } from './projectTransferPaths.ts'
 import {
+  getProjectTransferPayloadFormatForSchemaVersion,
+  getProjectTransferPayloadPathForSchemaVersion,
+  isProjectTransferPayloadKeyForSchemaVersion,
+  projectTransferManifestSchemaVersion,
+  type ProjectTransferPackagePayloadKey,
   type ProjectTransferPackageWarning,
   type ProjectTransferPayloadFormat,
   projectTransferPayloadFormatByKey,
   type ProjectTransferPayloadKey,
   projectTransferPayloadKeys,
+  type ProjectTransferSchemaVersion,
+  projectTransferSchemaVNextManifestSchemaVersion,
+  type ProjectTransferSchemaVNextPayloadKey,
+  projectTransferSchemaVNextPayloadKeys,
 } from './projectTransferSchemas.ts'
 
 type JsonRecord = Record<string, unknown>
@@ -31,6 +40,8 @@ type ProjectTransferRecordContract = {
 
 type ProjectTransferPayloadContract =
   | {container: 'assetManifest'}
+  | {container: 'schemaVNextAssetEntries'}
+  | {container: 'schemaVNextAssetReferences'}
   | {container: ProjectTransferRecordContainer; record: ProjectTransferRecordContract}
 
 export const projectTransferPayloadOmissionCodes = [
@@ -129,6 +140,35 @@ export type ProjectTransferAssetManifestEntry = JsonRecord & {
 
 export type ProjectTransferAssetManifestPayload = JsonRecord & {entries: ProjectTransferAssetManifestEntry[]}
 
+export type ProjectTransferSchemaVNextAssetEntryPayloadRecord = JsonRecord & {
+  byteLength: number
+  checksumSha256: string
+  contentType?: string | null
+  fingerprint: {checksumSha256: string; packagePath: string}
+  packagePath: string
+  sortKey: string
+}
+
+export type ProjectTransferSchemaVNextAssetReferencePayloadRecord = JsonRecord & {
+  assetPackagePath: string
+  fieldPath?: string
+  fingerprint: {
+    assetPackagePath: string
+    fieldPath?: string
+    jsonPointer?: string
+    kind: ProjectTransferAssetReferenceKind
+    payloadKey: ProjectTransferSchemaVNextPayloadKey
+    payloadPath: string
+  }
+  jsonPointer?: string
+  kind: ProjectTransferAssetReferenceKind
+  payloadKey: ProjectTransferSchemaVNextPayloadKey
+  payloadPath: string
+  sortKey: string
+  sourceArticleId?: string
+  sourceRef?: string
+}
+
 export type ProjectTransferPayloadByKey = {
   articleImportRoutes: ProjectTransferPayloadRecord[]
   articles: ProjectTransferArticlePayloadRecord[]
@@ -148,10 +188,22 @@ export type ProjectTransferPayloadByKey = {
   reviews: ProjectTransferPayloadRecord[]
 }
 
+export type ProjectTransferSchemaVNextPayloadByKey = Omit<ProjectTransferPayloadByKey, 'assetManifest'> & {
+  assetEntries: ProjectTransferSchemaVNextAssetEntryPayloadRecord[]
+  assetReferences: ProjectTransferSchemaVNextAssetReferencePayloadRecord[]
+}
+
+export type ProjectTransferPackagePayloadByKey = ProjectTransferPayloadByKey
+  & Pick<ProjectTransferSchemaVNextPayloadByKey, 'assetEntries' | 'assetReferences'>
+
 export type ProjectTransferPayload = ProjectTransferPayloadByKey[ProjectTransferPayloadKey]
 
 export type ProjectTransferPayloadValidationResult<TKey extends ProjectTransferPayloadKey> =
   | {ok: true; value: ProjectTransferPayloadByKey[TKey]}
+  | {error: Error; ok: false}
+
+export type ProjectTransferPackagePayloadValidationResult<TKey extends ProjectTransferPackagePayloadKey> =
+  | {ok: true; value: ProjectTransferPackagePayloadByKey[TKey]}
   | {error: Error; ok: false}
 
 const projectTransferSha256Pattern = /^[a-f0-9]{64}$/
@@ -855,6 +907,25 @@ const projectTransferPayloadContracts = {
 
 export const projectTransferPayloadValidatorsByKey = projectTransferPayloadContracts
 
+const {assetManifest: _currentAssetManifestPayloadContract, ...schemaVNextSharedPayloadContracts} =
+  projectTransferPayloadContracts
+
+const projectTransferSchemaVNextPayloadContracts = {
+  ...schemaVNextSharedPayloadContracts,
+  assetEntries: {container: 'schemaVNextAssetEntries'},
+  assetReferences: {container: 'schemaVNextAssetReferences'},
+} as const satisfies Record<ProjectTransferSchemaVNextPayloadKey, ProjectTransferPayloadContract>
+
+export const projectTransferPayloadValidatorsBySchemaVersion = {
+  [projectTransferManifestSchemaVersion]: projectTransferPayloadContracts,
+  [projectTransferSchemaVNextManifestSchemaVersion]: projectTransferSchemaVNextPayloadContracts,
+} as const
+
+const projectTransferPayloadContractsBySchemaVersion: Record<
+  ProjectTransferSchemaVersion,
+  Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferPayloadContract>>
+> = projectTransferPayloadValidatorsBySchemaVersion
+
 const assertProjectTransferPayloadRecord = (
   recordValue: unknown,
   contract: ProjectTransferRecordContract,
@@ -884,6 +955,189 @@ const assetReferenceKindSet = new Set<ProjectTransferAssetReferenceKind>([
   'fullTextHtml',
   'fullTextPdf',
 ])
+
+const schemaVNextAssetReferencePayloadKeySet = new Set<ProjectTransferSchemaVNextPayloadKey>(
+  projectTransferSchemaVNextPayloadKeys.filter((key) => {
+    return key !== 'assetEntries' && key !== 'assetReferences'
+  }),
+)
+
+export const getProjectTransferSchemaVNextFingerprintSortKey = (fingerprint: JsonRecord) => {
+  return getProjectTransferSha256Checksum(getProjectTransferCanonicalJson(fingerprint))
+}
+
+const assertSha256Checksum = (value: unknown, label: string) => {
+  const checksumSha256 = assertString(value, label)
+
+  return projectTransferSha256Pattern.test(checksumSha256)
+    ? checksumSha256
+    : failProjectTransferPayload(`${label} must be lowercase SHA-256 hex`)
+}
+
+const assertSchemaVNextSortKey = (value: unknown, fingerprint: JsonRecord, label: string) => {
+  const sortKey = assertSha256Checksum(value, label)
+  const expectedSortKey = getProjectTransferSchemaVNextFingerprintSortKey(fingerprint)
+
+  return sortKey === expectedSortKey
+    ? sortKey
+    : failProjectTransferPayload(`${label} must match the schema-vNext fingerprint input digest`)
+}
+
+const assertSchemaVNextFingerprint = (value: unknown, expectedFingerprint: JsonRecord, label: string): JsonRecord => {
+  const fingerprint = assertRecord(value, label)
+
+  return getProjectTransferCanonicalJson(fingerprint) === getProjectTransferCanonicalJson(expectedFingerprint)
+    ? fingerprint
+    : failProjectTransferPayload(`${label} must match schema-vNext fingerprint inputs`)
+}
+
+const assertSchemaVNextAssetPath = (pathValue: string, label: string) => {
+  const archivePathValidation = validateProjectTransferArchiveMemberPath({
+    pathValue,
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+  })
+  const runtimePathValidation = validateProjectTransferRuntimeAssetPath(pathValue)
+
+  if (!archivePathValidation.ok) {
+    return failProjectTransferPayload(`${label} ${archivePathValidation.error.message}`)
+  }
+
+  return runtimePathValidation.ok
+    ? undefined
+    : failProjectTransferPayload(`${label} ${runtimePathValidation.error.message}`)
+}
+
+const assertSchemaVNextAssetEntry = (value: unknown, index: number) => {
+  const label = `assetEntries[${index}]`
+  const asset = assertRecord(value, label)
+
+  assertFieldsPresent(asset, ['packagePath', 'byteLength', 'checksumSha256', 'fingerprint', 'sortKey'], label)
+
+  const packagePath = assertNonEmptyString(asset.packagePath, `${label}.packagePath`)
+  const checksumSha256 = assertSha256Checksum(asset.checksumSha256, `${label}.checksumSha256`)
+  const contentType = hasOwn(asset, 'contentType')
+    ? assertNullableString(asset.contentType, `${label}.contentType`)
+    : undefined
+  const fingerprint = assertSchemaVNextFingerprint(
+    asset.fingerprint,
+    {checksumSha256, packagePath},
+    `${label}.fingerprint`,
+  )
+  const sortKey = assertSchemaVNextSortKey(asset.sortKey, fingerprint, `${label}.sortKey`)
+
+  assertSchemaVNextAssetPath(packagePath, `${label}.packagePath`)
+  assertNonNegativeInteger(asset.byteLength, `${label}.byteLength`)
+
+  return {
+    ...asset,
+    ...(hasOwn(asset, 'contentType') ? {contentType} : {}),
+    checksumSha256,
+    fingerprint,
+    packagePath,
+    sortKey,
+  } as ProjectTransferSchemaVNextAssetEntryPayloadRecord
+}
+
+const assertSchemaVNextPayloadKey = (value: unknown, label: string): ProjectTransferSchemaVNextPayloadKey => {
+  const payloadKey = assertNonEmptyString(value, label)
+
+  return isProjectTransferPayloadKeyForSchemaVersion({
+    key: payloadKey,
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+  }) && schemaVNextAssetReferencePayloadKeySet.has(payloadKey as ProjectTransferSchemaVNextPayloadKey)
+    ? (payloadKey as ProjectTransferSchemaVNextPayloadKey)
+    : failProjectTransferPayload(`${label} must reference a schema-vNext non-asset payload key`)
+}
+
+const assertSchemaVNextAssetReference = (value: unknown, index: number) => {
+  const label = `assetReferences[${index}]`
+  const reference = assertRecord(value, label)
+
+  assertFieldsPresent(
+    reference,
+    ['assetPackagePath', 'fingerprint', 'kind', 'payloadKey', 'payloadPath', 'sortKey'],
+    label,
+  )
+
+  const assetPackagePath = assertNonEmptyString(reference.assetPackagePath, `${label}.assetPackagePath`)
+  const kind = assertString(reference.kind, `${label}.kind`)
+  const payloadKey = assertSchemaVNextPayloadKey(reference.payloadKey, `${label}.payloadKey`)
+  const payloadPath = assertNonEmptyString(reference.payloadPath, `${label}.payloadPath`)
+  const expectedPayloadPath = getProjectTransferPayloadPathForSchemaVersion({
+    key: payloadKey,
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+  })
+
+  if (!assetReferenceKindSet.has(kind as ProjectTransferAssetReferenceKind)) {
+    return failProjectTransferPayload(`${label}.kind must be a supported asset reference kind`)
+  }
+
+  if (payloadPath !== expectedPayloadPath) {
+    return failProjectTransferPayload(`${label}.payloadPath must match schema-vNext payload path`)
+  }
+
+  if (!hasOwn(reference, 'jsonPointer') && !hasOwn(reference, 'fieldPath')) {
+    return failProjectTransferPayload(`${label} must include jsonPointer or fieldPath`)
+  }
+
+  const jsonPointer = hasOwn(reference, 'jsonPointer')
+    ? assertNonEmptyString(reference.jsonPointer, `${label}.jsonPointer`)
+    : undefined
+  const fieldPath = hasOwn(reference, 'fieldPath')
+    ? assertNonEmptyString(reference.fieldPath, `${label}.fieldPath`)
+    : undefined
+  const fingerprint = assertSchemaVNextFingerprint(
+    reference.fingerprint,
+    {
+      assetPackagePath,
+      ...(fieldPath === undefined ? {} : {fieldPath}),
+      ...(jsonPointer === undefined ? {} : {jsonPointer}),
+      kind,
+      payloadKey,
+      payloadPath,
+    },
+    `${label}.fingerprint`,
+  )
+  const sortKey = assertSchemaVNextSortKey(reference.sortKey, fingerprint, `${label}.sortKey`)
+
+  assertSchemaVNextAssetPath(assetPackagePath, `${label}.assetPackagePath`)
+
+  if (hasOwn(reference, 'sourceArticleId')) {
+    assertNonEmptyString(reference.sourceArticleId, `${label}.sourceArticleId`)
+  }
+
+  if (hasOwn(reference, 'sourceRef')) {
+    assertNonEmptyString(reference.sourceRef, `${label}.sourceRef`)
+  }
+
+  return {
+    ...reference,
+    assetPackagePath,
+    ...(fieldPath === undefined ? {} : {fieldPath}),
+    fingerprint,
+    ...(jsonPointer === undefined ? {} : {jsonPointer}),
+    kind: kind as ProjectTransferAssetReferenceKind,
+    payloadKey,
+    payloadPath,
+    sortKey,
+  } as ProjectTransferSchemaVNextAssetReferencePayloadRecord
+}
+
+const assertProjectTransferSchemaVNextAssetEntriesPayload = (
+  value: unknown,
+): ProjectTransferSchemaVNextAssetEntryPayloadRecord[] => {
+  return assertArray(value, 'assetEntries payload').map((record, index) => {
+    return assertSchemaVNextAssetEntry(record, index)
+  })
+}
+
+const assertProjectTransferSchemaVNextAssetReferencesPayload = (
+  value: unknown,
+): ProjectTransferSchemaVNextAssetReferencePayloadRecord[] => {
+  return assertArray(value, 'assetReferences payload').map((record, index) => {
+    return assertSchemaVNextAssetReference(record, index)
+  })
+}
 
 const assertAssetReference = (value: unknown, index: number, referenceIndex: number) => {
   const label = `assetManifest.entries[${index}].references[${referenceIndex}]`
@@ -977,9 +1231,35 @@ const assertProjectTransferPayloadByContract = (key: ProjectTransferPayloadKey, 
 
   return contract.container === 'assetManifest'
     ? assertProjectTransferAssetManifestPayload(value)
-    : contract.container === 'record'
-      ? assertProjectTransferPayloadRecord(value, contract.record, key)
-      : assertProjectTransferRecordSetPayload(value, contract.record, key)
+    : contract.container === 'schemaVNextAssetEntries'
+      ? assertProjectTransferSchemaVNextAssetEntriesPayload(value)
+      : contract.container === 'schemaVNextAssetReferences'
+        ? assertProjectTransferSchemaVNextAssetReferencesPayload(value)
+        : contract.container === 'record'
+          ? assertProjectTransferPayloadRecord(value, contract.record, key)
+          : assertProjectTransferRecordSetPayload(value, contract.record, key)
+}
+
+const assertProjectTransferPayloadBySchemaVersionContract = (
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: ProjectTransferPackagePayloadKey,
+  value: unknown,
+) => {
+  const contract = projectTransferPayloadContractsBySchemaVersion[schemaVersion][key]
+
+  if (contract === undefined) {
+    return failProjectTransferPayload(`schema ${schemaVersion} does not allow payload key ${key}`)
+  }
+
+  return contract.container === 'assetManifest'
+    ? assertProjectTransferAssetManifestPayload(value)
+    : contract.container === 'schemaVNextAssetEntries'
+      ? assertProjectTransferSchemaVNextAssetEntriesPayload(value)
+      : contract.container === 'schemaVNextAssetReferences'
+        ? assertProjectTransferSchemaVNextAssetReferencesPayload(value)
+        : contract.container === 'record'
+          ? assertProjectTransferPayloadRecord(value, contract.record, key)
+          : assertProjectTransferRecordSetPayload(value, contract.record, key)
 }
 
 export const assertProjectTransferPayload = <TKey extends ProjectTransferPayloadKey>(
@@ -989,12 +1269,36 @@ export const assertProjectTransferPayload = <TKey extends ProjectTransferPayload
   return assertProjectTransferPayloadByContract(key, value) as ProjectTransferPayloadByKey[TKey]
 }
 
+export const assertProjectTransferPayloadForSchemaVersion = <TKey extends ProjectTransferPackagePayloadKey>(
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: TKey,
+  value: unknown,
+): ProjectTransferPackagePayloadByKey[TKey] => {
+  return assertProjectTransferPayloadBySchemaVersionContract(
+    schemaVersion,
+    key,
+    value,
+  ) as ProjectTransferPackagePayloadByKey[TKey]
+}
+
 export const validateProjectTransferPayload = <TKey extends ProjectTransferPayloadKey>(
   key: TKey,
   value: unknown,
 ): ProjectTransferPayloadValidationResult<TKey> => {
   try {
     return {ok: true, value: assertProjectTransferPayload(key, value)}
+  } catch (error) {
+    return {error: error instanceof Error ? error : new Error(String(error)), ok: false}
+  }
+}
+
+export const validateProjectTransferPayloadForSchemaVersion = <TKey extends ProjectTransferPackagePayloadKey>(
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: TKey,
+  value: unknown,
+): ProjectTransferPackagePayloadValidationResult<TKey> => {
+  try {
+    return {ok: true, value: assertProjectTransferPayloadForSchemaVersion(schemaVersion, key, value)}
   } catch (error) {
     return {error: error instanceof Error ? error : new Error(String(error)), ok: false}
   }
@@ -1028,6 +1332,23 @@ export const parseProjectTransferPayload = <TKey extends ProjectTransferPayloadK
       : (JSON.parse(textValue) as unknown)
 
   return assertProjectTransferPayload(key, parsed)
+}
+
+export const parseProjectTransferPayloadForSchemaVersion = <TKey extends ProjectTransferPackagePayloadKey>(
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: TKey,
+  value: string | Uint8Array,
+): ProjectTransferPackagePayloadByKey[TKey] => {
+  const textValue = getTextValue(value)
+  const format = getProjectTransferPayloadFormatForSchemaVersion({key, schemaVersion})
+
+  if (format === undefined) {
+    return failProjectTransferPayload(`schema ${schemaVersion} does not allow payload key ${key}`)
+  }
+
+  const parsed: unknown = format === 'ndjson' ? parseNdjsonPayload(textValue) : (JSON.parse(textValue) as unknown)
+
+  return assertProjectTransferPayloadForSchemaVersion(schemaVersion, key, parsed)
 }
 
 const serializeNdjsonPayload = (records: unknown[]) => {
@@ -1074,6 +1395,24 @@ export const serializeProjectTransferPayload = <TKey extends ProjectTransferPayl
   const payload = assertProjectTransferPayload(key, value)
   const packagePayload = getPackageRecordWithoutInternalAnnotations(payload)
   const format: ProjectTransferPayloadFormat = projectTransferPayloadFormatByKey[key]
+
+  return format === 'ndjson' && Array.isArray(packagePayload)
+    ? serializeNdjsonPayload(packagePayload)
+    : getProjectTransferCanonicalJson(packagePayload)
+}
+
+export const serializeProjectTransferPayloadForSchemaVersion = <TKey extends ProjectTransferPackagePayloadKey>(
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: TKey,
+  value: unknown,
+): string => {
+  const payload = assertProjectTransferPayloadForSchemaVersion(schemaVersion, key, value)
+  const packagePayload = getPackageRecordWithoutInternalAnnotations(payload)
+  const format = getProjectTransferPayloadFormatForSchemaVersion({key, schemaVersion})
+
+  if (format === undefined) {
+    return failProjectTransferPayload(`schema ${schemaVersion} does not allow payload key ${key}`)
+  }
 
   return format === 'ndjson' && Array.isArray(packagePayload)
     ? serializeNdjsonPayload(packagePayload)

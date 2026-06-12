@@ -15,12 +15,17 @@ import {
   type ProjectTransferResourceGateInput,
   projectTransferResourceGateLimits,
   type ProjectTransferRuntimeEvent,
+  projectTransferSchemaVersionContracts,
   validateProjectTransferDependencyStatuses,
   validateProjectTransferPlanReadyToCommit,
   validateProjectTransferProgressUpdate,
   validateProjectTransferReadyDependencyStatuses,
   validateProjectTransferResourceGates,
 } from './projectTransferContracts.ts'
+import {
+  projectTransferManifestSchemaVersion,
+  projectTransferSchemaVNextManifestSchemaVersion,
+} from './projectTransferSchemas.ts'
 
 const projectTransferMiB = 1024 * 1024
 const projectTransferGiB = 1024 * projectTransferMiB
@@ -194,6 +199,27 @@ test('locks project-transfer resource gates for temp roots and disk headroom wit
   expect(getResourceGateError({resourcePaths: [{kind: 'archive_member', pathValue: '../project.json'}]})).toContain(
     'traversal',
   )
+})
+
+test('locks current and schema-vNext transfer package contracts', () => {
+  const currentContract = projectTransferSchemaVersionContracts[projectTransferManifestSchemaVersion]
+  const schemaVNextContract = projectTransferSchemaVersionContracts[projectTransferSchemaVNextManifestSchemaVersion]
+
+  expect(currentContract.payloadPaths.project).toBe('project.json')
+  expect(currentContract.payloadPaths.assetManifest).toBe('assetManifest.json')
+  expect(currentContract.archiveRootFiles).toContain('assetManifest.json')
+  expect(currentContract.archiveRootFolders).toEqual(['assets'])
+  expect(currentContract.assetPayloadKeys).toEqual(['assetManifest'])
+  expect(currentContract.fingerprintMode).toBe('logicalPayloads')
+  expect(currentContract.packageValidation.assetManifest).toBe('required')
+  expect(schemaVNextContract.payloadPaths.project).toBe('payloads/project.json')
+  expect(schemaVNextContract.payloadPaths.assetEntries).toBe('payloads/assetEntries.ndjson')
+  expect(schemaVNextContract.payloadPaths.assetReferences).toBe('payloads/assetReferences.ndjson')
+  expect(schemaVNextContract.archiveRootFiles).toEqual(['manifest.json'])
+  expect(schemaVNextContract.archiveRootFolders).toEqual(['assets', 'payloads'])
+  expect(schemaVNextContract.assetPayloadKeys).toEqual(['assetEntries', 'assetReferences'])
+  expect(schemaVNextContract.fingerprintMode).toBe('stagedRowAndSingletonPayloadDigests')
+  expect(schemaVNextContract.packageValidation.assetManifest).toBe('notAllowed')
 })
 
 test('validates dependency statuses and ready dependency statuses separately', () => {

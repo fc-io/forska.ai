@@ -1,6 +1,12 @@
 import {posix, win32} from 'node:path'
 
 import {resolveRuntimeFilePath, resolveRuntimeWritablePath} from '../../utils/runtimeWritablePath.ts'
+import {
+  projectTransferCurrentManifestSchemaVersion,
+  projectTransferManifestSchemaVersion,
+  type ProjectTransferSchemaVersion,
+  projectTransferSchemaVNextManifestSchemaVersion,
+} from './projectTransferSchemas.ts'
 
 type RuntimePathOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
 
@@ -35,6 +41,7 @@ export type ProjectTransferValidatedPathWithRoot = ProjectTransferValidatedPath 
 type ProjectTransferArchiveMemberPathOptions = {
   allowedRootFiles?: readonly string[]
   allowedRootFolders?: readonly string[]
+  schemaVersion?: ProjectTransferSchemaVersion
 }
 
 type ProjectTransferArchiveMemberPathsOptions = ProjectTransferArchiveMemberPathOptions & {paths: readonly string[]}
@@ -65,6 +72,8 @@ const projectTransferPackageRootFiles = [
 ] as const
 
 const projectTransferPackageRootFolders = ['assets'] as const
+const projectTransferSchemaVNextPackageRootFiles = ['manifest.json'] as const
+const projectTransferSchemaVNextPackageRootFolders = ['assets', 'payloads'] as const
 const projectTransferTempRoot = 'tmp/project-transfer'
 const projectTransferPromotionAssetRoot = 'assets/project-transfer'
 
@@ -273,29 +282,55 @@ export const projectTransferAllowedArchiveRootFiles = projectTransferPackageRoot
 
 export const projectTransferAllowedArchiveRootFolders = projectTransferPackageRootFolders
 
+export const projectTransferAllowedArchiveRootFilesBySchemaVersion = {
+  [projectTransferCurrentManifestSchemaVersion]: projectTransferPackageRootFiles,
+  [projectTransferSchemaVNextManifestSchemaVersion]: projectTransferSchemaVNextPackageRootFiles,
+} as const satisfies Record<ProjectTransferSchemaVersion, readonly string[]>
+
+export const projectTransferAllowedArchiveRootFoldersBySchemaVersion = {
+  [projectTransferCurrentManifestSchemaVersion]: projectTransferPackageRootFolders,
+  [projectTransferSchemaVNextManifestSchemaVersion]: projectTransferSchemaVNextPackageRootFolders,
+} as const satisfies Record<ProjectTransferSchemaVersion, readonly string[]>
+
+export const getProjectTransferArchiveRootAllowlist = (
+  schemaVersion: ProjectTransferSchemaVersion = projectTransferManifestSchemaVersion,
+) => {
+  return {
+    allowedRootFiles: projectTransferAllowedArchiveRootFilesBySchemaVersion[schemaVersion],
+    allowedRootFolders: projectTransferAllowedArchiveRootFoldersBySchemaVersion[schemaVersion],
+  }
+}
+
 export const validateProjectTransferArchiveMemberPath = ({
-  allowedRootFiles = projectTransferPackageRootFiles,
-  allowedRootFolders = projectTransferPackageRootFolders,
+  allowedRootFiles,
+  allowedRootFolders,
   pathValue,
+  schemaVersion = projectTransferManifestSchemaVersion,
 }: ProjectTransferArchiveMemberPathOptions & {
   pathValue: string
 }): ProjectTransferPathValidationResult<ProjectTransferValidatedPathWithRoot> => {
+  const rootAllowlist = getProjectTransferArchiveRootAllowlist(schemaVersion)
   const relativePath = validateProjectTransferRelativePath(pathValue)
 
   return relativePath.ok
-    ? validateProjectTransferPathRoot(relativePath.value, allowedRootFiles, allowedRootFolders)
+    ? validateProjectTransferPathRoot(
+        relativePath.value,
+        allowedRootFiles ?? rootAllowlist.allowedRootFiles,
+        allowedRootFolders ?? rootAllowlist.allowedRootFolders,
+      )
     : relativePath
 }
 
 export const validateProjectTransferArchiveMemberPaths = ({
-  allowedRootFiles = projectTransferPackageRootFiles,
-  allowedRootFolders = projectTransferPackageRootFolders,
+  allowedRootFiles,
+  allowedRootFolders,
   paths,
+  schemaVersion = projectTransferManifestSchemaVersion,
 }: ProjectTransferArchiveMemberPathsOptions): ProjectTransferPathValidationResult<
   ProjectTransferValidatedPathWithRoot[]
 > => {
   return validateProjectTransferPathList(paths, (pathValue) => {
-    return validateProjectTransferArchiveMemberPath({allowedRootFiles, allowedRootFolders, pathValue})
+    return validateProjectTransferArchiveMemberPath({allowedRootFiles, allowedRootFolders, pathValue, schemaVersion})
   })
 }
 
@@ -351,9 +386,16 @@ export const resolveProjectTransferTempWritablePath = ({
 export const resolveProjectTransferArchiveMemberWritablePath = ({
   archiveMemberPath,
   extractionRootPath,
+  schemaVersion,
   ...runtimeOptions
-}: RuntimePathOptions & {archiveMemberPath: string; extractionRootPath: string}) => {
-  assertProjectTransferPathResult(validateProjectTransferArchiveMemberPath({pathValue: archiveMemberPath}))
+}: RuntimePathOptions & {
+  archiveMemberPath: string
+  extractionRootPath: string
+  schemaVersion?: ProjectTransferSchemaVersion
+}) => {
+  assertProjectTransferPathResult(
+    validateProjectTransferArchiveMemberPath({pathValue: archiveMemberPath, schemaVersion}),
+  )
   assertProjectTransferPathResult(validateProjectTransferWritablePath(extractionRootPath, [projectTransferTempRoot]))
 
   const pathValue = `${extractionRootPath}/${archiveMemberPath}`

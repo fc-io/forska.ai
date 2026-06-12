@@ -13,6 +13,11 @@ import {
   type ProjectTransferPayloadKey,
   projectTransferPayloadKeys,
   projectTransferPayloadPathByKey,
+  projectTransferSchemaVNextManifestSchemaVersion,
+  projectTransferSchemaVNextPayloadFormatByKey,
+  type ProjectTransferSchemaVNextPayloadKey,
+  projectTransferSchemaVNextPayloadKeys,
+  projectTransferSchemaVNextPayloadPathByKey,
 } from './projectTransferSchemas.ts'
 
 const validProjectBytes = '{"name":"Project transfer source"}'
@@ -39,6 +44,37 @@ const getPayloads = () => {
   )
 }
 
+const getSchemaVNextPayloadBytes = (key: ProjectTransferSchemaVNextPayloadKey) => {
+  return key === 'project'
+    ? validProjectBytes
+    : key === 'articles'
+      ? validArticlesBytes
+      : key === 'assetEntries'
+        ? '{"packagePath":"assets/project-transfer/session-1/article.pdf"}\n'
+        : key === 'assetReferences'
+          ? '{"assetPackagePath":"assets/project-transfer/session-1/article.pdf"}\n'
+          : ''
+}
+
+const getSchemaVNextPayloads = () => {
+  return projectTransferSchemaVNextPayloadKeys.reduce(
+    (payloads, key) => {
+      const bytes = getSchemaVNextPayloadBytes(key)
+
+      return {
+        ...payloads,
+        [key]: getProjectTransferManifestPayloadEntry({
+          bytes,
+          format: projectTransferSchemaVNextPayloadFormatByKey[key],
+          path: projectTransferSchemaVNextPayloadPathByKey[key],
+          recordCount: bytes === '' ? 0 : 1,
+        }),
+      }
+    },
+    {} as ReturnType<typeof buildProjectTransferManifest>['payloads'],
+  )
+}
+
 const getProjectSummary = () => {
   return {
     counts: projectTransferPayloadKeys.reduce(
@@ -51,6 +87,18 @@ const getProjectSummary = () => {
     humanJudgmentMode: 'prompt' as const,
     name: 'Project transfer source',
     sourceProjectId: 'source-project-id',
+  }
+}
+
+const getSchemaVNextProjectSummary = () => {
+  return {
+    ...getProjectSummary(),
+    counts: projectTransferSchemaVNextPayloadKeys.reduce(
+      (counts, key) => {
+        return {...counts, [key]: key === 'project' || key === 'articles' ? 1 : 0}
+      },
+      {} as Record<ProjectTransferSchemaVNextPayloadKey, number>,
+    ),
   }
 }
 
@@ -74,6 +122,17 @@ const getValidManifest = () => {
   })
 }
 
+const getValidSchemaVNextManifest = () => {
+  return buildProjectTransferManifest({
+    assetSummary: {byteLength: 11, entryCount: 1},
+    exportedAt: '2026-05-21T07:00:00.000Z',
+    payloads: getSchemaVNextPayloads(),
+    project: getSchemaVNextProjectSummary(),
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+    sourceAppVersion: '0.2.1',
+  })
+}
+
 test('validates project-transfer manifest payload contracts with camelCase package keys', () => {
   const manifest = parseProjectTransferManifestJson(JSON.stringify(getValidManifest()))
 
@@ -91,13 +150,16 @@ test('rejects unsupported project-transfer manifest schema versions', () => {
   const manifest = getValidManifest()
   const validation = validateProjectTransferManifest({
     ...manifest,
-    schemaVersion: projectTransferManifestSchemaVersion + 1,
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion + 1,
   })
 
   expect(validation.ok).toBe(false)
   expect(() => {
-    return assertProjectTransferManifest({...manifest, schemaVersion: projectTransferManifestSchemaVersion + 1})
-  }).toThrow('Unsupported project transfer manifest schema version: 2')
+    return assertProjectTransferManifest({
+      ...manifest,
+      schemaVersion: projectTransferSchemaVNextManifestSchemaVersion + 1,
+    })
+  }).toThrow('Unsupported project transfer manifest schema version: 3')
 })
 
 test('rejects non-camelCase or mismatched manifest payload references', () => {
@@ -114,7 +176,7 @@ test('rejects non-camelCase or mismatched manifest payload references', () => {
       ...manifest,
       payloads: {...manifest.payloads, provider_connections: providerConnectionEntry},
     })
-  }).toThrow('Unknown payload key: provider_connections')
+  }).toThrow('Unknown payload key for schema 1: provider_connections')
 
   expect(() => {
     return assertProjectTransferManifest({
@@ -122,4 +184,46 @@ test('rejects non-camelCase or mismatched manifest payload references', () => {
       payloads: {...manifest.payloads, project: {...manifest.payloads.project, path: 'projects.json'}},
     })
   }).toThrow('Payload project must reference project.json')
+})
+
+test('validates schema-vNext manifest payload paths and explicit asset payload entries', () => {
+  const manifest = parseProjectTransferManifestJson(JSON.stringify(getValidSchemaVNextManifest()))
+  const assetEntries = manifest.payloads.assetEntries
+  const assetReferences = manifest.payloads.assetReferences
+
+  expect(manifest.schemaVersion).toBe(projectTransferSchemaVNextManifestSchemaVersion)
+  expect(manifest.payloads.assetManifest).toBeUndefined()
+  expect(assetEntries?.path).toBe('payloads/assetEntries.ndjson')
+  expect(assetEntries?.format).toBe('ndjson')
+  expect(assetEntries?.recordCount).toBe(1)
+  expect(assetEntries?.byteLength).toBeGreaterThan(0)
+  expect(assetEntries?.checksumSha256).toMatch(/^[a-f0-9]{64}$/)
+  expect(assetReferences?.path).toBe('payloads/assetReferences.ndjson')
+  expect(assetReferences?.recordCount).toBe(1)
+})
+
+test('rejects current-schema assetManifest and root payload paths in schema-vNext manifests', () => {
+  const manifest = getValidSchemaVNextManifest()
+
+  expect(() => {
+    return assertProjectTransferManifest({
+      ...manifest,
+      payloads: {
+        ...manifest.payloads,
+        assetManifest: getProjectTransferManifestPayloadEntry({
+          bytes: '{"entries":[]}',
+          format: 'json',
+          path: 'assetManifest.json',
+          recordCount: 0,
+        }),
+      },
+    })
+  }).toThrow('Unknown payload key for schema 2: assetManifest')
+
+  expect(() => {
+    return assertProjectTransferManifest({
+      ...manifest,
+      payloads: {...manifest.payloads, articles: {...manifest.payloads.articles, path: 'articles.ndjson'}},
+    })
+  }).toThrow('Payload articles must reference payloads/articles.ndjson')
 })

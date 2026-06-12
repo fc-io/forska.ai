@@ -2,8 +2,10 @@ import {expect, test} from 'bun:test'
 
 import {
   getProjectTransferPayloadFixture,
+  getProjectTransferSchemaVNextFingerprintSortKey,
   normalizeProjectTransferModelVariant,
   parseProjectTransferPayload,
+  parseProjectTransferPayloadForSchemaVersion,
   projectTransferPayloadFixtures,
   projectTransferPayloadOmissionCodes,
   projectTransferPayloadRedactionCodes,
@@ -11,13 +13,15 @@ import {
   projectTransferPayloadValidatorsByKey,
   projectTransferPayloadWarningCodes,
   serializeProjectTransferPayload,
+  serializeProjectTransferPayloadForSchemaVersion,
   validateProjectTransferPayload,
+  validateProjectTransferPayloadForSchemaVersion,
 } from './projectTransferPayloadSchemas.ts'
 import type {ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
-import {projectTransferPayloadKeys} from './projectTransferSchemas.ts'
+import {projectTransferPayloadKeys, projectTransferSchemaVNextManifestSchemaVersion} from './projectTransferSchemas.ts'
 
 const getValidationError = <TKey extends ProjectTransferPayloadKey>(
-  result: ProjectTransferPayloadValidationResult<TKey>,
+  result: ProjectTransferPayloadValidationResult<TKey> | {error: Error; ok: false} | {ok: true; value: unknown},
 ) => {
   return result.ok ? null : result.error.message
 }
@@ -30,6 +34,41 @@ const getOnlyRecord = <TRecord>(records: TRecord[]) => {
   }
 
   return record
+}
+
+const getSchemaVNextAssetEntryFixture = () => {
+  const fingerprint = {checksumSha256: 'a'.repeat(64), packagePath: 'assets/project-transfer/session-1/article-1.pdf'}
+
+  return {
+    byteLength: 11,
+    checksumSha256: fingerprint.checksumSha256,
+    contentType: 'application/pdf',
+    fingerprint,
+    packagePath: fingerprint.packagePath,
+    sortKey: getProjectTransferSchemaVNextFingerprintSortKey(fingerprint),
+  }
+}
+
+const getSchemaVNextAssetReferenceFixture = () => {
+  const fingerprint = {
+    assetPackagePath: 'assets/project-transfer/session-1/article-1.pdf',
+    jsonPointer: '/0/fullTextPdf',
+    kind: 'fullTextPdf' as const,
+    payloadKey: 'articles' as const,
+    payloadPath: 'payloads/articles.ndjson',
+  }
+
+  return {
+    assetPackagePath: fingerprint.assetPackagePath,
+    fingerprint,
+    jsonPointer: fingerprint.jsonPointer,
+    kind: fingerprint.kind,
+    payloadKey: fingerprint.payloadKey,
+    payloadPath: fingerprint.payloadPath,
+    sortKey: getProjectTransferSchemaVNextFingerprintSortKey(fingerprint),
+    sourceArticleId: 'source-article-1',
+    sourceRef: 'article:source-article-1',
+  }
 }
 
 test('validates and round-trips every manifest-declared payload fixture', () => {
@@ -251,6 +290,71 @@ test('rejects invalid asset package paths and checksum signatures', () => {
   expect(getValidationError(invalidPathResult)).toContain('Project transfer path contains traversal')
   expect(getValidationError(invalidChecksumResult)).toContain('checksumSha256 must be lowercase SHA-256 hex')
   expect(getValidationError(oldEnvelopeResult)).toContain('assetManifest payload must use top-level entries only')
+})
+
+test('validates schema-vNext asset-entry and asset-reference payload contracts', () => {
+  const assetEntry = getSchemaVNextAssetEntryFixture()
+  const assetReference = getSchemaVNextAssetReferenceFixture()
+  const assetEntriesResult = validateProjectTransferPayloadForSchemaVersion(
+    projectTransferSchemaVNextManifestSchemaVersion,
+    'assetEntries',
+    [assetEntry],
+  )
+  const assetReferencesResult = validateProjectTransferPayloadForSchemaVersion(
+    projectTransferSchemaVNextManifestSchemaVersion,
+    'assetReferences',
+    [assetReference],
+  )
+  const serializedAssetEntries = serializeProjectTransferPayloadForSchemaVersion(
+    projectTransferSchemaVNextManifestSchemaVersion,
+    'assetEntries',
+    [assetEntry],
+  )
+  const parsedAssetEntries = parseProjectTransferPayloadForSchemaVersion(
+    projectTransferSchemaVNextManifestSchemaVersion,
+    'assetEntries',
+    serializedAssetEntries,
+  )
+  const currentAssetManifestResult = validateProjectTransferPayloadForSchemaVersion(
+    projectTransferSchemaVNextManifestSchemaVersion,
+    'assetManifest',
+    projectTransferPayloadFixtures.assetManifest,
+  )
+
+  expect(assetEntriesResult.ok).toBe(true)
+  expect(assetReferencesResult.ok).toBe(true)
+  expect(parsedAssetEntries).toEqual([assetEntry])
+  expect(getValidationError(currentAssetManifestResult)).toContain('schema 2 does not allow payload key assetManifest')
+})
+
+test('rejects schema-vNext asset sort keys that are not derived from fingerprint inputs', () => {
+  const assetReference = getSchemaVNextAssetReferenceFixture()
+  const sourceIdChangedReference = {
+    ...assetReference,
+    sourceArticleId: 'source-article-2',
+    sourceRef: 'article:source-article-2',
+  }
+  const invalidSortKeyResult = validateProjectTransferPayloadForSchemaVersion(
+    projectTransferSchemaVNextManifestSchemaVersion,
+    'assetReferences',
+    [
+      {
+        ...assetReference,
+        sortKey: getProjectTransferSchemaVNextFingerprintSortKey({
+          ...assetReference.fingerprint,
+          sourceArticleId: 'source-article-1',
+        }),
+      },
+    ],
+  )
+
+  expect(sourceIdChangedReference.sortKey).toBe(assetReference.sortKey)
+  expect(
+    validateProjectTransferPayloadForSchemaVersion(projectTransferSchemaVNextManifestSchemaVersion, 'assetReferences', [
+      sourceIdChangedReference,
+    ]).ok,
+  ).toBe(true)
+  expect(getValidationError(invalidSortKeyResult)).toContain('must match the schema-vNext fingerprint input digest')
 })
 
 test('serializes internal payload annotations into package warnings', () => {
