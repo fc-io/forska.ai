@@ -2633,19 +2633,61 @@ test('getUnassessedPairsFromDuckdb derives raw summary priority from non-empty p
   })
 
   const rawArticleQuery = duckdbRunnerMockRef.current.queries[4] ?? ''
+  const plainRawArticleQuery = duckdbRunnerMockRef.current.queries[5] ?? ''
 
   expect(result.nextCursor).toEqual({
     lastArticleId: 'article-1',
     lastDate: new Date('2024-01-02T00:00:00.000Z'),
     priorityBucket: 1,
   })
-  expect(rawArticleQuery).toContain('LEFT JOIN app.judgment_human_summary human_summary_priority')
-  expect(rawArticleQuery).toContain("ON human_summary_priority.project_id = 'project-1'")
+  expect(rawArticleQuery).toContain('summary_article_candidate AS')
+  expect(rawArticleQuery).toContain('FROM app.judgment_human_summary human_summary_priority')
+  expect(rawArticleQuery).toContain("human_summary_priority.project_id = 'project-1'")
   expect(rawArticleQuery).toContain("AND NULLIF(TRIM(COALESCE(human_summary_priority.answer, '')), '') IS NOT NULL")
-  expect(rawArticleQuery).toContain('CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END < 1')
-  expect(rawArticleQuery).toContain(
-    'ORDER BY CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END DESC',
-  )
+  expect(rawArticleQuery).toContain('CAST(1 AS INTEGER) AS priority_bucket')
+  expect(rawArticleQuery).toContain("human_summary_priority.article_id < 'article-2'")
+  expect(rawArticleQuery).toContain('ORDER BY human_summary_priority.article_id DESC')
+  expect(rawArticleQuery).not.toContain('LEFT JOIN app.judgment_human_summary human_summary_priority')
+  expect(rawArticleQuery).not.toContain('CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END')
+  expect(rawArticleQuery).not.toContain("date_trunc('millisecond'")
+  expect(plainRawArticleQuery).toContain('CAST(0 AS INTEGER) AS priority_bucket')
+  expect(plainRawArticleQuery).toContain('NOT EXISTS (')
+  expect(plainRawArticleQuery).toContain('FROM app.judgment_human_summary human_summary_priority')
+  expect(plainRawArticleQuery).not.toContain("dirty_article.id < 'article-2'")
+})
+
+test('getUnassessedPairsFromDuckdb skips raw summary plain bucket when priority bucket fills the window', async () => {
+  const priorityRows = Array.from({length: 101}, (_value, index) => {
+    return {...getDuckdbScopedActivityArticleRow(`article-${index + 1}`), priorityBucket: 1}
+  })
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1', 'summary'),
+    getScopeRouteRows(),
+    [],
+    priorityRows,
+    [],
+  ])
+
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+  await getUnassessedPairsFromDuckdb({projectId: 'project-1', jobId: 'job-1', numberOfPromptsToGet: 10, cursor: null})
+
+  const rawArticleQuery = duckdbRunnerMockRef.current.queries[4] ?? ''
+  const judgmentQuery = duckdbRunnerMockRef.current.queries[5] ?? ''
+
+  expect(rawArticleQuery).toContain('summary_article_candidate AS')
+  expect(rawArticleQuery).toContain('CAST(1 AS INTEGER) AS priority_bucket')
+  expect(rawArticleQuery).toContain('FROM app.judgment_human_summary human_summary_priority')
+  expect(rawArticleQuery).toContain('ORDER BY human_summary_priority.article_id DESC')
+  expect(rawArticleQuery).not.toContain("date_trunc('millisecond'")
+  expect(judgmentQuery).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries).toHaveLength(6)
+  expect(
+    duckdbRunnerMockRef.current.queries.some((query, index) => {
+      return index > 4 && query.includes('CAST(0 AS INTEGER) AS priority_bucket')
+    }),
+  ).toBe(false)
 })
 
 test('getUnassessedPairsFromDuckdb keeps raw summary priority article-level with prompt order unchanged', async () => {
@@ -2665,6 +2707,8 @@ test('getUnassessedPairsFromDuckdb keeps raw summary priority article-level with
         }),
         priorityBucket: 1,
       },
+    ],
+    [
       {
         ...getDuckdbScopedArticleRow({
           id: 'article-plain',
@@ -2742,6 +2786,8 @@ test('getUnassessedPairsFromDuckdb keeps serving and raw summary prompt order al
         }),
         priorityBucket: 1,
       },
+    ],
+    [
       {
         ...getDuckdbScopedArticleRow({
           id: 'article-plain',
@@ -2809,6 +2855,8 @@ test('getUnassessedPairsFromDuckdb keeps serving and raw summary fallback aligne
         }),
         priorityBucket: 1,
       },
+    ],
+    [
       {
         ...getDuckdbScopedArticleRow({
           id: 'article-plain-fresher',
@@ -2893,6 +2941,8 @@ test('getUnassessedPairsFromDuckdb ignores blank null and cross-project summary 
         }),
         priorityBucket: 1,
       },
+    ],
+    [
       {
         ...getDuckdbScopedArticleRow({
           id: 'article-summary-null',
@@ -2929,6 +2979,7 @@ test('getUnassessedPairsFromDuckdb ignores blank null and cross-project summary 
   })
 
   const rawArticleQuery = duckdbRunnerMockRef.current.queries[4] ?? ''
+  const plainRawArticleQuery = duckdbRunnerMockRef.current.queries[5] ?? ''
 
   expect(result.promptEntries).toEqual([
     {articleId: 'article-summary-valid', promptId: 'prompt-1'},
@@ -2936,11 +2987,17 @@ test('getUnassessedPairsFromDuckdb ignores blank null and cross-project summary 
     {articleId: 'article-summary-null', promptId: 'prompt-1'},
     {articleId: 'article-summary-null', promptId: 'prompt-2'},
   ])
-  expect(rawArticleQuery).toContain("ON human_summary_priority.project_id = 'project-1'")
+  expect(rawArticleQuery).toContain('summary_article_candidate AS')
+  expect(rawArticleQuery).toContain('FROM app.judgment_human_summary human_summary_priority')
+  expect(rawArticleQuery).toContain("human_summary_priority.project_id = 'project-1'")
   expect(rawArticleQuery).toContain("AND NULLIF(TRIM(COALESCE(human_summary_priority.answer, '')), '') IS NOT NULL")
-  expect(rawArticleQuery).toContain(
-    'ORDER BY CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END DESC',
-  )
+  expect(rawArticleQuery).toContain('CAST(1 AS INTEGER) AS priority_bucket')
+  expect(rawArticleQuery).toContain('ORDER BY human_summary_priority.article_id DESC')
+  expect(rawArticleQuery).not.toContain("date_trunc('millisecond'")
+  expect(plainRawArticleQuery).toContain('CAST(0 AS INTEGER) AS priority_bucket')
+  expect(plainRawArticleQuery).toContain('NOT EXISTS (')
+  expect(rawArticleQuery).not.toContain('LEFT JOIN app.judgment_human_summary human_summary_priority')
+  expect(rawArticleQuery).not.toContain('CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END')
 })
 
 test('getDatabaseBasedFiltersFromDuckdb keeps values aligned across prompt answer fact and raw fallback paths', async () => {

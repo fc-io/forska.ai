@@ -1553,21 +1553,22 @@ const getDuckdbScopeArticleActivityTimestampExpression = (rowAlias: string) => {
   return `COALESCE(${rowAlias}.article_updated_at, ${rowAlias}.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')`
 }
 
-const getDuckdbUnassessedPairsPriorityJoinClause = (scope: ProjectOlapScope, articleIdExpression: string) => {
-  return scope.humanJudgmentMode === 'summary'
-    ? `
-      LEFT JOIN app.judgment_human_summary human_summary_priority
-        ON human_summary_priority.project_id = ${getDuckdbSqlString(scope.projectId)}
-       AND human_summary_priority.article_id = ${articleIdExpression}
-       AND NULLIF(TRIM(COALESCE(human_summary_priority.answer, '')), '') IS NOT NULL
-    `
-    : ''
+const getDuckdbUnassessedPairsPriorityBucketExpression = () => {
+  return 'CAST(0 AS INTEGER)'
 }
 
-const getDuckdbUnassessedPairsPriorityBucketExpression = (scope: ProjectOlapScope) => {
-  return scope.humanJudgmentMode === 'summary'
-    ? 'CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END'
-    : 'CAST(0 AS INTEGER)'
+const getDuckdbUnassessedPairsHumanSummaryAnswerWhereClause = (scope: ProjectOlapScope, alias: string) => {
+  return `${alias}.project_id = ${getDuckdbSqlString(scope.projectId)}
+       AND NULLIF(TRIM(COALESCE(${alias}.answer, '')), '') IS NOT NULL`
+}
+
+const getDuckdbUnassessedPairsHumanSummaryNotExistsSql = (scope: ProjectOlapScope, articleIdExpression: string) => {
+  return `NOT EXISTS (
+    SELECT 1
+    FROM app.judgment_human_summary human_summary_priority
+    WHERE human_summary_priority.article_id = ${articleIdExpression}
+      AND ${getDuckdbUnassessedPairsHumanSummaryAnswerWhereClause(scope, 'human_summary_priority')}
+  )`
 }
 
 const getDuckdbServingUnassessedPairsPriorityBucketExpression = (scope: ProjectOlapScope) => {
@@ -1604,12 +1605,68 @@ const getDuckdbUnassessedPairsCursorActivityExpression = (activityExpression: st
   return `date_trunc('millisecond', ${activityExpression})`
 }
 
+const getDuckdbUnassessedPairsActivityCursorWhereClause = (params: {
+  activityExpression: string
+  articleIdExpression: string
+  cursor: UnassessedPairsCursor
+}) => {
+  const cursorActivityExpression = getDuckdbUnassessedPairsCursorActivityExpression(params.activityExpression)
+
+  return `(
+    ${cursorActivityExpression} < ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
+    OR (
+      ${cursorActivityExpression} = ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
+      AND ${params.articleIdExpression} < ${getDuckdbSqlString(params.cursor.lastArticleId)}
+    )
+  )`
+}
+
+const getDuckdbUnassessedPairsPriorityBucketCursorWhereClause = (params: {
+  activityExpression: string
+  articleIdExpression: string
+  cursor: UnassessedPairsCursor | null
+  priorityBucket: number
+}) => {
+  const cursor = getUnassessedPairsCursor(params.cursor)
+
+  return !cursor
+    ? null
+    : params.priorityBucket > cursor.priorityBucket
+      ? 'FALSE'
+      : params.priorityBucket < cursor.priorityBucket
+        ? null
+        : getDuckdbUnassessedPairsActivityCursorWhereClause({...params, cursor})
+}
+
+const getDuckdbUnassessedPairsPriorityBucketArticleIdCursorWhereClause = (params: {
+  articleIdExpression: string
+  cursor: UnassessedPairsCursor | null
+  priorityBucket: number
+}) => {
+  const cursor = getUnassessedPairsCursor(params.cursor)
+
+  return !cursor
+    ? null
+    : params.priorityBucket > cursor.priorityBucket
+      ? 'FALSE'
+      : params.priorityBucket < cursor.priorityBucket
+        ? null
+        : `${params.articleIdExpression} < ${getDuckdbSqlString(cursor.lastArticleId)}`
+}
+
 const getDuckdbUnassessedPairsOrderByClause = (params: {
   activityExpression: string
   articleIdExpression: string
   priorityBucketExpression: string
 }) => {
   return `${params.priorityBucketExpression} DESC, ${getDuckdbUnassessedPairsCursorActivityExpression(params.activityExpression)} DESC, ${params.articleIdExpression} DESC`
+}
+
+const getDuckdbUnassessedPairsArticleIdOrderByClause = (params: {
+  articleIdExpression: string
+  priorityBucketExpression: string
+}) => {
+  return `${params.priorityBucketExpression} DESC, ${params.articleIdExpression} DESC`
 }
 
 const getCreatedSortMs = (article: ScopedArticleRow) => {
@@ -2070,7 +2127,7 @@ const getScopedActivitySourceWhereClause = (parts: Array<string | null>) => {
     .join(' AND ')
 }
 
-const getDuckdbScopedActivityArticleCandidatesCteSql = (params: {
+const getDuckdbPromptScopedActivityArticleCandidatesCteSql = (params: {
   cursor: UnassessedPairsCursor | null
   limit: number
   scope: ProjectOlapScope
@@ -2079,12 +2136,10 @@ const getDuckdbScopedActivityArticleCandidatesCteSql = (params: {
   const branchLimit = Math.max(1, Math.trunc(params.limit)) + 1
   const dirtyActivityExpression = getDuckdbScopeArticleActivityTimestampExpression('dirty_article')
   const dirtyArticleIdExpression = 'dirty_article.id'
-  const dirtyPriorityJoinClause = getDuckdbUnassessedPairsPriorityJoinClause(params.scope, dirtyArticleIdExpression)
-  const dirtyPriorityBucketExpression = getDuckdbUnassessedPairsPriorityBucketExpression(params.scope)
+  const dirtyPriorityBucketExpression = getDuckdbUnassessedPairsPriorityBucketExpression()
   const scopeActivityExpression = getDuckdbScopeArticleActivityTimestampExpression('scope_article')
   const scopeArticleIdExpression = 'scope_article.article_id'
-  const scopePriorityJoinClause = getDuckdbUnassessedPairsPriorityJoinClause(params.scope, scopeArticleIdExpression)
-  const scopePriorityBucketExpression = getDuckdbUnassessedPairsPriorityBucketExpression(params.scope)
+  const scopePriorityBucketExpression = getDuckdbUnassessedPairsPriorityBucketExpression()
   const dirtyCursorClause = getScopedActivitySourceCursorClause({
     activityExpression: dirtyActivityExpression,
     articleIdExpression: dirtyArticleIdExpression,
@@ -2120,7 +2175,6 @@ const getDuckdbScopedActivityArticleCandidatesCteSql = (params: {
       INNER JOIN app.project_mart_refresh_article_state article_state
         ON article_state.project_id = refresh_state.project_id
       INNER JOIN app.article dirty_article ON dirty_article.id = article_state.article_id
-      ${dirtyPriorityJoinClause}
       WHERE ${getScopedActivitySourceWhereClause([
         ...getScopedActivityDirtyArticleWhereParts(params.scope, params.search),
         dirtyCursorClause,
@@ -2138,7 +2192,6 @@ const getDuckdbScopedActivityArticleCandidatesCteSql = (params: {
         scope_article.article_updated_at AS article_updated_at,
         ${scopePriorityBucketExpression} AS priority_bucket
       FROM mart.project_scope_article scope_article
-      ${scopePriorityJoinClause}
       WHERE ${getScopedActivitySourceWhereClause([
         ...getScopedActivityProjectScopeWhereParts(params.scope, params.search),
         `NOT ${getScopedActivityDirtyArticleStateExistsSql(params.scope, scopeArticleIdExpression)}`,
@@ -2155,23 +2208,421 @@ const getDuckdbScopedActivityArticleCandidatesCteSql = (params: {
   )`
 }
 
+const getDuckdbSummaryScopedActivityDirtyArticleCandidateSql = (params: {
+  cursor: UnassessedPairsCursor | null
+  limit: number
+  priorityBucket: 0 | 1
+  scope: ProjectOlapScope
+  search?: string | null
+}) => {
+  const activityExpression = getDuckdbScopeArticleActivityTimestampExpression('dirty_article')
+  const articleIdExpression = 'dirty_article.id'
+  const priorityBucketExpression = `CAST(${params.priorityBucket} AS INTEGER)`
+  const fromClause =
+    params.priorityBucket === 1
+      ? `FROM app.judgment_human_summary human_summary_priority
+      INNER JOIN app.project_mart_refresh_state refresh_state
+        ON refresh_state.project_id = human_summary_priority.project_id
+      INNER JOIN app.project_mart_refresh_article_state article_state
+        ON article_state.project_id = human_summary_priority.project_id
+       AND article_state.article_id = human_summary_priority.article_id
+      INNER JOIN app.article dirty_article ON dirty_article.id = human_summary_priority.article_id`
+      : `FROM app.project_mart_refresh_state refresh_state
+      INNER JOIN app.project_mart_refresh_article_state article_state
+        ON article_state.project_id = refresh_state.project_id
+      INNER JOIN app.article dirty_article ON dirty_article.id = article_state.article_id`
+  const priorityWhereClause =
+    params.priorityBucket === 1
+      ? getDuckdbUnassessedPairsHumanSummaryAnswerWhereClause(params.scope, 'human_summary_priority')
+      : getDuckdbUnassessedPairsHumanSummaryNotExistsSql(params.scope, articleIdExpression)
+  const cursorClause = getDuckdbUnassessedPairsPriorityBucketCursorWhereClause({
+    activityExpression,
+    articleIdExpression,
+    cursor: params.cursor,
+    priorityBucket: params.priorityBucket,
+  })
+
+  return `SELECT *
+    FROM (
+      SELECT
+        dirty_article.id AS article_id,
+        dirty_article.article_created_at AS article_created_at,
+        dirty_article.article_updated_at AS article_updated_at,
+        ${priorityBucketExpression} AS priority_bucket
+      ${fromClause}
+      WHERE ${getScopedActivitySourceWhereClause([
+        ...getScopedActivityDirtyArticleWhereParts(params.scope, params.search),
+        priorityWhereClause,
+        cursorClause,
+      ])}
+      ORDER BY ${getDuckdbUnassessedPairsOrderByClause({
+        activityExpression,
+        articleIdExpression,
+        priorityBucketExpression,
+      })}
+      LIMIT ${params.limit}
+    )`
+}
+
+const getDuckdbSummaryScopedActivityScopeArticleCandidateSql = (params: {
+  cursor: UnassessedPairsCursor | null
+  limit: number
+  priorityBucket: 0 | 1
+  scope: ProjectOlapScope
+  search?: string | null
+}) => {
+  const activityExpression = getDuckdbScopeArticleActivityTimestampExpression('scope_article')
+  const articleIdExpression = 'scope_article.article_id'
+  const priorityBucketExpression = `CAST(${params.priorityBucket} AS INTEGER)`
+  const fromClause =
+    params.priorityBucket === 1
+      ? `FROM app.judgment_human_summary human_summary_priority
+      INNER JOIN mart.project_scope_article scope_article
+        ON scope_article.project_id = human_summary_priority.project_id
+       AND scope_article.article_id = human_summary_priority.article_id`
+      : 'FROM mart.project_scope_article scope_article'
+  const priorityWhereClause =
+    params.priorityBucket === 1
+      ? getDuckdbUnassessedPairsHumanSummaryAnswerWhereClause(params.scope, 'human_summary_priority')
+      : getDuckdbUnassessedPairsHumanSummaryNotExistsSql(params.scope, articleIdExpression)
+  const cursorClause = getDuckdbUnassessedPairsPriorityBucketCursorWhereClause({
+    activityExpression,
+    articleIdExpression,
+    cursor: params.cursor,
+    priorityBucket: params.priorityBucket,
+  })
+
+  return `SELECT *
+    FROM (
+      SELECT
+        scope_article.article_id AS article_id,
+        scope_article.article_created_at AS article_created_at,
+        scope_article.article_updated_at AS article_updated_at,
+        ${priorityBucketExpression} AS priority_bucket
+      ${fromClause}
+      WHERE ${getScopedActivitySourceWhereClause([
+        ...getScopedActivityProjectScopeWhereParts(params.scope, params.search),
+        `NOT ${getScopedActivityDirtyArticleStateExistsSql(params.scope, articleIdExpression)}`,
+        priorityWhereClause,
+        cursorClause,
+      ])}
+      ORDER BY ${getDuckdbUnassessedPairsOrderByClause({
+        activityExpression,
+        articleIdExpression,
+        priorityBucketExpression,
+      })}
+      LIMIT ${params.limit}
+    )`
+}
+
+const getDuckdbSummaryScopedActivityArticleCandidatesCteSql = (params: {
+  cursor: UnassessedPairsCursor | null
+  limit: number
+  priorityBucket: 0 | 1
+  scope: ProjectOlapScope
+  search?: string | null
+}) => {
+  const branchLimit = Math.max(1, Math.trunc(params.limit))
+
+  return `WITH dirty_scope_candidate AS (
+    ${getDuckdbSummaryScopedActivityDirtyArticleCandidateSql({...params, limit: branchLimit})}
+  ),
+  scope_article_candidate AS (
+    ${getDuckdbSummaryScopedActivityScopeArticleCandidateSql({...params, limit: branchLimit})}
+  ),
+  scoped_activity_article_candidate AS (
+    SELECT * FROM dirty_scope_candidate
+    UNION ALL
+    SELECT * FROM scope_article_candidate
+  )`
+}
+
+const getDuckdbSummaryArticleIdCandidateCteSql = (params: {
+  cursor: UnassessedPairsCursor | null
+  limit: number
+  priorityBucket: 0 | 1
+  scope: ProjectOlapScope
+}) => {
+  const sourceLimit = Math.min(20_000, Math.max(params.limit * 50, params.limit))
+  const cursorClause = getDuckdbUnassessedPairsPriorityBucketArticleIdCursorWhereClause({
+    articleIdExpression: 'human_summary_priority.article_id',
+    cursor: params.cursor,
+    priorityBucket: params.priorityBucket,
+  })
+
+  return params.priorityBucket === 1
+    ? `summary_article_candidate AS (
+      SELECT human_summary_priority.article_id AS article_id
+      FROM app.judgment_human_summary human_summary_priority
+      WHERE ${getScopedActivitySourceWhereClause([
+        getDuckdbUnassessedPairsHumanSummaryAnswerWhereClause(params.scope, 'human_summary_priority'),
+        cursorClause,
+      ])}
+      ORDER BY human_summary_priority.article_id DESC
+      LIMIT ${sourceLimit}
+    )`
+    : null
+}
+
+const getDuckdbSummaryArticleIdDirtyArticleCandidateSql = (params: {
+  cursor: UnassessedPairsCursor | null
+  limit: number
+  priorityBucket: 0 | 1
+  scope: ProjectOlapScope
+  search?: string | null
+}) => {
+  const articleIdExpression = 'dirty_article.id'
+  const priorityBucketExpression = `CAST(${params.priorityBucket} AS INTEGER)`
+  const fromClause =
+    params.priorityBucket === 1
+      ? `FROM summary_article_candidate summary_article
+      INNER JOIN app.project_mart_refresh_state refresh_state
+        ON refresh_state.project_id = ${getDuckdbSqlString(params.scope.projectId)}
+      INNER JOIN app.project_mart_refresh_article_state article_state
+        ON article_state.project_id = refresh_state.project_id
+       AND article_state.article_id = summary_article.article_id
+      INNER JOIN app.article dirty_article ON dirty_article.id = summary_article.article_id`
+      : `FROM app.project_mart_refresh_state refresh_state
+      INNER JOIN app.project_mart_refresh_article_state article_state
+        ON article_state.project_id = refresh_state.project_id
+      INNER JOIN app.article dirty_article ON dirty_article.id = article_state.article_id`
+  const priorityWhereClause =
+    params.priorityBucket === 1
+      ? null
+      : getDuckdbUnassessedPairsHumanSummaryNotExistsSql(params.scope, articleIdExpression)
+  const cursorClause =
+    params.priorityBucket === 1
+      ? null
+      : getDuckdbUnassessedPairsPriorityBucketArticleIdCursorWhereClause({
+          articleIdExpression,
+          cursor: params.cursor,
+          priorityBucket: params.priorityBucket,
+        })
+
+  return `SELECT *
+    FROM (
+      SELECT
+        dirty_article.id AS article_id,
+        dirty_article.article_created_at AS article_created_at,
+        dirty_article.article_updated_at AS article_updated_at,
+        ${priorityBucketExpression} AS priority_bucket
+      ${fromClause}
+      WHERE ${getScopedActivitySourceWhereClause([
+        ...getScopedActivityDirtyArticleWhereParts(params.scope, params.search),
+        priorityWhereClause,
+        cursorClause,
+      ])}
+      ORDER BY ${getDuckdbUnassessedPairsArticleIdOrderByClause({articleIdExpression, priorityBucketExpression})}
+      LIMIT ${params.limit}
+    )`
+}
+
+const getDuckdbSummaryArticleIdScopeArticleCandidateSql = (params: {
+  cursor: UnassessedPairsCursor | null
+  limit: number
+  priorityBucket: 0 | 1
+  scope: ProjectOlapScope
+  search?: string | null
+}) => {
+  const articleIdExpression = 'scope_article.article_id'
+  const priorityBucketExpression = `CAST(${params.priorityBucket} AS INTEGER)`
+  const fromClause =
+    params.priorityBucket === 1
+      ? `FROM summary_article_candidate summary_article
+      INNER JOIN mart.project_scope_article scope_article
+        ON scope_article.project_id = ${getDuckdbSqlString(params.scope.projectId)}
+       AND scope_article.article_id = summary_article.article_id`
+      : 'FROM mart.project_scope_article scope_article'
+  const priorityWhereClause =
+    params.priorityBucket === 1
+      ? null
+      : getDuckdbUnassessedPairsHumanSummaryNotExistsSql(params.scope, articleIdExpression)
+  const cursorClause =
+    params.priorityBucket === 1
+      ? null
+      : getDuckdbUnassessedPairsPriorityBucketArticleIdCursorWhereClause({
+          articleIdExpression,
+          cursor: params.cursor,
+          priorityBucket: params.priorityBucket,
+        })
+
+  return `SELECT *
+    FROM (
+      SELECT
+        scope_article.article_id AS article_id,
+        scope_article.article_created_at AS article_created_at,
+        scope_article.article_updated_at AS article_updated_at,
+        ${priorityBucketExpression} AS priority_bucket
+      ${fromClause}
+      WHERE ${getScopedActivitySourceWhereClause([
+        ...getScopedActivityProjectScopeWhereParts(params.scope, params.search),
+        `NOT ${getScopedActivityDirtyArticleStateExistsSql(params.scope, articleIdExpression)}`,
+        priorityWhereClause,
+        cursorClause,
+      ])}
+      ORDER BY ${getDuckdbUnassessedPairsArticleIdOrderByClause({articleIdExpression, priorityBucketExpression})}
+      LIMIT ${params.limit}
+    )`
+}
+
+const getDuckdbSummaryArticleIdCandidatesCteSql = (params: {
+  cursor: UnassessedPairsCursor | null
+  limit: number
+  priorityBucket: 0 | 1
+  scope: ProjectOlapScope
+  search?: string | null
+}) => {
+  const branchLimit = Math.max(1, Math.trunc(params.limit))
+  const summaryArticleCandidateCteSql = getDuckdbSummaryArticleIdCandidateCteSql({...params, limit: branchLimit})
+  const cteSections = [
+    summaryArticleCandidateCteSql,
+    `dirty_scope_candidate AS (
+    ${getDuckdbSummaryArticleIdDirtyArticleCandidateSql({...params, limit: branchLimit})}
+  )`,
+    `scope_article_candidate AS (
+    ${getDuckdbSummaryArticleIdScopeArticleCandidateSql({...params, limit: branchLimit})}
+  )`,
+    `scoped_activity_article_candidate AS (
+    SELECT * FROM dirty_scope_candidate
+    UNION ALL
+    SELECT * FROM scope_article_candidate
+  )`,
+  ].filter((section): section is string => {
+    return section !== null
+  })
+
+  return `WITH ${cteSections.join(',\n  ')}`
+}
+
+const getDuckdbScopedActivityArticleCandidatesCteSql = (params: {
+  cursor: UnassessedPairsCursor | null
+  limit: number
+  scope: ProjectOlapScope
+  search?: string | null
+}) => {
+  return getDuckdbPromptScopedActivityArticleCandidatesCteSql(params)
+}
+
+type ScopedActivityArticleWindowQueryRow = {
+  id: string
+  createdAt: unknown
+  articleCreatedAt: unknown
+  articleUpdatedAt: unknown
+  priorityBucket: number
+}
+
+const getScopedActivityArticleWindowRows = (rows: ScopedActivityArticleWindowQueryRow[]) => {
+  return rows.map((row) => {
+    return {
+      id: row.id,
+      createdAt: getDuckdbDateValue(row.createdAt) ?? new Date(0),
+      articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
+      articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+      priorityBucket: Number(row.priorityBucket ?? 0),
+    }
+  })
+}
+
+const getScopedActivitySummaryPriorityBuckets = (cursor: UnassessedPairsCursor | null): Array<0 | 1> => {
+  const normalizedCursor = getUnassessedPairsCursor(cursor)
+
+  return normalizedCursor?.priorityBucket === 0 ? [0] : [1, 0]
+}
+
+const getScopedActivitySummaryArticleWindowRows = async (params: {
+  cursor: UnassessedPairsCursor | null
+  limit: number
+  orderBy: 'activity' | 'articleId'
+  priorityBucket: 0 | 1
+  scope: ProjectOlapScope
+  search?: string | null
+}) => {
+  const activityExpression = getDuckdbScopeArticleActivityTimestampExpression('candidate')
+  const priorityBucketExpression = 'candidate.priority_bucket'
+  const candidatesCteSql =
+    params.orderBy === 'articleId'
+      ? getDuckdbSummaryArticleIdCandidatesCteSql(params)
+      : getDuckdbSummaryScopedActivityArticleCandidatesCteSql(params)
+  const orderByClause =
+    params.orderBy === 'articleId'
+      ? getDuckdbUnassessedPairsArticleIdOrderByClause({
+          articleIdExpression: 'candidate.article_id',
+          priorityBucketExpression,
+        })
+      : getDuckdbUnassessedPairsOrderByClause({
+          activityExpression,
+          articleIdExpression: 'candidate.article_id',
+          priorityBucketExpression,
+        })
+
+  const rows = await runDuckdbJsonQuery<ScopedActivityArticleWindowQueryRow>(`
+    ${candidatesCteSql}
+    SELECT
+      candidate.article_id AS id,
+      ${activityExpression} AS createdAt,
+      candidate.article_created_at AS articleCreatedAt,
+      candidate.article_updated_at AS articleUpdatedAt,
+      ${priorityBucketExpression} AS priorityBucket
+    FROM scoped_activity_article_candidate candidate
+    ORDER BY ${orderByClause}
+    LIMIT ${params.limit}
+  `)
+
+  return getScopedActivityArticleWindowRows(rows)
+}
+
+const getScopedActivitySummaryArticleWindow = async (params: {
+  scope: ProjectOlapScope
+  cursor: UnassessedPairsCursor | null
+  limit: number
+  orderBy: 'activity' | 'articleId'
+  search?: string | null
+}): Promise<{hasMore: boolean; rows: ScopedActivityArticleWindowRow[]}> => {
+  const normalizedLimit = Math.max(1, Math.trunc(params.limit))
+  const requestedRows = normalizedLimit + 1
+
+  const collectRows = async (
+    priorityBuckets: Array<0 | 1>,
+    rows: ScopedActivityArticleWindowRow[],
+  ): Promise<ScopedActivityArticleWindowRow[]> => {
+    const [priorityBucket, ...remainingPriorityBuckets] = priorityBuckets
+    const remainingRows = requestedRows - rows.length
+
+    if (priorityBucket === undefined || remainingRows <= 0) {
+      return rows
+    }
+
+    const bucketRows = await getScopedActivitySummaryArticleWindowRows({
+      ...params,
+      limit: remainingRows,
+      priorityBucket,
+    })
+
+    return collectRows(remainingPriorityBuckets, [...rows, ...bucketRows])
+  }
+
+  const rows = await collectRows(getScopedActivitySummaryPriorityBuckets(params.cursor), [])
+  const hasMore = rows.length > normalizedLimit
+
+  return {hasMore, rows: rows.slice(0, normalizedLimit)}
+}
+
 const getScopedActivityArticleWindow = async (params: {
   scope: ProjectOlapScope
   cursor: UnassessedPairsCursor | null
   limit: number
+  orderBy?: 'activity' | 'articleId'
   search?: string | null
 }): Promise<{hasMore: boolean; rows: ScopedActivityArticleWindowRow[]}> => {
   const normalizedLimit = Math.max(1, Math.trunc(params.limit))
+  if (params.scope.humanJudgmentMode === 'summary') {
+    return getScopedActivitySummaryArticleWindow({...params, orderBy: params.orderBy ?? 'activity'})
+  }
+
   const activityExpression = getDuckdbScopeArticleActivityTimestampExpression('candidate')
   const priorityBucketExpression = 'candidate.priority_bucket'
 
-  const rows = await runDuckdbJsonQuery<{
-    id: string
-    createdAt: unknown
-    articleCreatedAt: unknown
-    articleUpdatedAt: unknown
-    priorityBucket: number
-  }>(`
+  const rows = await runDuckdbJsonQuery<ScopedActivityArticleWindowQueryRow>(`
     ${getDuckdbScopedActivityArticleCandidatesCteSql({
       cursor: params.cursor,
       limit: normalizedLimit,
@@ -2194,18 +2645,7 @@ const getScopedActivityArticleWindow = async (params: {
   `)
   const hasMore = rows.length > normalizedLimit
 
-  return {
-    hasMore,
-    rows: rows.slice(0, normalizedLimit).map((row) => {
-      return {
-        id: row.id,
-        createdAt: getDuckdbDateValue(row.createdAt) ?? new Date(0),
-        articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
-        articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
-        priorityBucket: Number(row.priorityBucket ?? 0),
-      }
-    }),
-  }
+  return {hasMore, rows: getScopedActivityArticleWindowRows(rows.slice(0, normalizedLimit))}
 }
 
 const getLlmJudgmentRows = async (scope: ProjectOlapScope, articleIds: string[]): Promise<OlapJudgmentRow[]> => {
@@ -2567,6 +3007,7 @@ const getRawUnassessedCandidateRows = async (params: {
       scope: params.scope,
       cursor,
       limit: Math.min(rawUnassessedArticleWindowSize, remainingLimit),
+      orderBy: 'articleId',
     })
     const articleWindowMs = Date.now() - articleWindowStartedAtMs
     const judgmentQueryStartedAtMs = Date.now()
