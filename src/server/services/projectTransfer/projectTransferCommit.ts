@@ -1215,11 +1215,12 @@ const runProjectTransferCommitAppTableWrites = async ({
             layout: artifacts.layout,
             operationId: `commit_${commitId}`,
             runner: tx,
-            work: ({runner}) => {
+            work: ({runner, tables}) => {
               return writeProjectTransferCommitAppTables({
                 commitId,
                 database: getProjectTransferCommitOperationDatabase(runner),
                 now,
+                operationTables: tables,
                 payloads,
                 plan: planWithCommitIdMaps,
                 promotion: assetPromotion.value,

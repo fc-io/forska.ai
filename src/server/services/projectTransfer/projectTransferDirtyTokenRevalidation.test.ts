@@ -289,3 +289,203 @@ test('project transfer target-state service stores coverage and advances known a
   expect(result.promptToken).toBe(1)
   expect(result.globalUnknownToken).toBe(1)
 })
+
+test('project transfer set-based commit advances dirty tokens for touched write surfaces', () => {
+  const result = runDirtyTokenServiceScript<{
+    articleIdentifierToken: number | null
+    articleToken: number | null
+    projectArticleToken: number | null
+    projectToken: number | null
+    projectTransferHistoryToken: number | null
+  }>(`
+    const [{writeProjectTransferCommitAppTables}, {getProjectTransferOperationTableNames}] = await Promise.all([
+      import('./src/server/services/projectTransfer/projectTransferCommitWriter.ts'),
+      import('./src/server/services/projectTransfer/projectTransferOperationTables.ts'),
+    ])
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+
+    const escapeSql = (value) => String(value).replaceAll("'", "''")
+    const jsonLiteral = (value) => "CAST('" + escapeSql(JSON.stringify(value)) + "' AS JSON)"
+    const operationDatabase = (tx) => ({
+      queryJson: tx.queryJson,
+      run: tx.run,
+      transaction: (work) => Promise.resolve(work(tx)),
+    })
+    const createOperationPayloadTable = (tx, tableName, rows) => {
+      return tx.run(\`
+        CREATE TEMP TABLE \${tableName} AS
+        SELECT
+          row_number() OVER () - 1 AS row_index,
+          row_json AS payload_json
+        FROM UNNEST(json_extract(\${jsonLiteral(rows)}, '$[*]')) AS rows(row_json)
+      \`)
+    }
+    const now = new Date('2026-06-12T11:00:00.000Z')
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const article = {
+      articleId: 'legacy-dirty-token-article',
+      articleTitle: 'Dirty Token Article',
+      doi: '10.1000/dirty-token-article',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-dirty-token-article'},
+      signature: {identifierKeys: ['doi:10.1000/dirty-token-article'], title: 'Dirty Token Article'},
+      sourceArticleId: 'source-dirty-token-article',
+    }
+    const projectArticle = {
+      provenance: {sourceArticleId: 'source-dirty-token-article', sourceProjectId: 'source-project'},
+      signature: {},
+      sourceArticleId: 'source-dirty-token-article',
+      sourceProjectArticleId: 'source-project-article-dirty-token',
+      sourceProjectId: 'source-project',
+    }
+    const project = {
+      dateFrom: null,
+      dateTo: null,
+      description: 'Dirty token project',
+      modelSignature: {name: 'Model Signature'},
+      name: 'Dirty Token Project',
+      provenance: {sourceProjectId: 'source-project'},
+      settings,
+      signature: {modelSignature: {name: 'Model Signature'}, name: 'Dirty Token Project', settings},
+      sourceProjectId: 'source-project',
+    }
+    const model = {
+      modelName: 'target-model-name',
+      name: 'target-model-name',
+      provenance: {sourceModelId: 'source-model', sourceProviderConnectionId: 'source-provider'},
+      remoteModelId: 'target-remote',
+      signature: {name: 'Model Signature'},
+      sourceModelId: 'source-model',
+      sourceProviderConnectionId: 'source-provider',
+      variant: null,
+      version: null,
+    }
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'create',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: ['doi:10.1000/dirty-token-article'],
+          packageArticleId: 'legacy-dirty-token-article',
+          selectedTargetArticleId: null,
+          sourceArticleId: 'source-dirty-token-article',
+        },
+      ],
+      articleRoutePlan: [],
+      articleUpdatePlan: [],
+      assetPromotionPlan: [],
+      duplicateImportMatches: [],
+      projectPromptPlan: [],
+      projectRoutePlan: [],
+      promptPlan: [],
+    }
+    const plan = {
+      blockers: [],
+      canCommit: true,
+      dependencyResolution: {
+        modelTargetBySourceId: {'source-model': 'target-model'},
+        providerTargetBySourceId: {'source-provider': 'target-provider'},
+      },
+      packageCounts: {
+        articleImportRoutes: 0,
+        assetManifest: 0,
+        articles: 1,
+        humanJudgmentSummaries: 0,
+        humanJudgments: 0,
+        importRoutes: 0,
+        judgmentAssessments: 0,
+        judgments: 0,
+        models: 1,
+        project: 1,
+        projectArticles: 1,
+        projectImportRoutes: 0,
+        projectPrompts: 0,
+        prompts: 0,
+        providerConnections: 0,
+        reviews: 0,
+      },
+      packageFingerprint: 'fingerprint-dirty-token-commit',
+      packageWarnings: [],
+      planRevision: 1,
+      resolutionKinds: {},
+      summary: {
+        blockerCount: 0,
+        conflictCounts: {
+          articleConflictCount: 0,
+          humanReviewFidelityConflictCount: 0,
+          judgmentConflictCount: 0,
+          packageContractConflictCount: 0,
+          projectPromptConflictCount: 0,
+        },
+        dependencyStatuses: {},
+        judgmentConflictStatus: 'clear',
+        overlapCounts: {
+          currentReviewRowsSignatureHumanReviewCount: 0,
+          currentReviewRowsSignatureJudgmentCount: 0,
+          dirtiedExistingProjectCount: 0,
+          duplicateImportMatchCount: 0,
+          newArticleCount: 1,
+          omittedArticleRouteLinkCount: 0,
+          omittedRouteLinkCount: 0,
+          reusedArticleAssetPromotionCount: 0,
+          reusedArticleCount: 0,
+          reusedArticleFieldFillCount: 0,
+          reusedArticleUpdateCount: 0,
+          reusedJudgmentCount: 0,
+          routeArticleSnapshotLinkCount: 0,
+          snapshotVerifiedJudgmentCount: 0,
+          storedSignatureHumanReviewCount: 0,
+          storedSignatureJudgmentCount: 0,
+        },
+        warningCount: 0,
+      },
+      targetPlan,
+    }
+    const payloads = {articles: [article], models: [model], project, projectArticles: [projectArticle]}
+    const promotion = {
+      articleCreates: [{article, sourceArticleId: 'source-dirty-token-article'}],
+      articleFieldFills: [],
+      manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-dirty-token-commit', updatedAt: now.toISOString()},
+      promotionPathByPackagePath: {},
+    }
+    const operationTables = getProjectTransferOperationTableNames('commit_dirty_token_writer')
+
+    await database.transaction(async (tx) => {
+      await createOperationPayloadTable(tx, operationTables.tableNames.articles, [article])
+      await createOperationPayloadTable(tx, operationTables.tableNames.articleImportRoutes, [])
+      await createOperationPayloadTable(tx, operationTables.tableNames.projectArticles, [projectArticle])
+
+      await writeProjectTransferCommitAppTables({
+        commitId: 'commit-dirty-token-writer',
+        database: operationDatabase(tx),
+        now,
+        operationTables,
+        payloads,
+        plan,
+        promotion,
+        schemaVersion: 1,
+        sessionId: 'session-dirty-token-commit',
+      })
+    })
+
+    const snapshot = await service.getTargetStateDirtyTokenSnapshot()
+
+    console.log(JSON.stringify({
+      articleIdentifierToken: snapshot.tokens.articleIdentifier ?? null,
+      articleToken: snapshot.tokens.article ?? null,
+      projectArticleToken: snapshot.tokens.projectArticle ?? null,
+      projectToken: snapshot.tokens.project ?? null,
+      projectTransferHistoryToken: snapshot.tokens.projectTransferHistory ?? null,
+    }))
+  `)
+
+  expect(result).toEqual({
+    articleIdentifierToken: 1,
+    articleToken: 1,
+    projectArticleToken: 1,
+    projectToken: 1,
+    projectTransferHistoryToken: 1,
+  })
+})

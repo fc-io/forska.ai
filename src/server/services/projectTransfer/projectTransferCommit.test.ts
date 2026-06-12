@@ -115,7 +115,7 @@ const runCommitWriterScript = <TResult>(body: string) => {
       'bun',
       '-e',
       `
-        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {computePromptContentHash}, {writeProjectTransferCommitAppTables}, {getProjectTransferPlanWithCommitIdMaps}] = await Promise.all([
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {computePromptContentHash}, {writeProjectTransferCommitAppTables}, {getProjectTransferPlanWithCommitIdMaps}, {getProjectTransferOperationTableNames}] = await Promise.all([
           import('./src/db/migrateDuckdb.ts'),
           import('./src/server/services/appDatabaseService.ts'),
           import('./src/server/utils/duckdbService.ts'),
@@ -123,6 +123,7 @@ const runCommitWriterScript = <TResult>(body: string) => {
           import('./src/server/utils/computePromptContentHash.ts'),
           import('./src/server/services/projectTransfer/projectTransferCommitWriter.ts'),
           import('./src/server/services/projectTransfer/projectTransferCommitIdMaps.ts'),
+          import('./src/server/services/projectTransfer/projectTransferOperationTables.ts'),
         ])
 
         resetDuckdbServiceForTests()
@@ -1485,6 +1486,206 @@ test('project transfer commit writer creates project rows and preserves safe pac
   expect(result.warningCodes).toContain('targetArticleImportRouteOmitted')
 })
 
+test('project transfer commit writer consumes same-connection operation tables for set-based article writes', () => {
+  const result = runCommitWriterScript<{
+    articleImportRouteRow: {articleId: string; sourceRecordKey: string}
+    createdArticle: {articleId: string | null; articleSummary: string | null; articleTitle: string}
+    identifierRows: Array<{articleId: string; normalizedValue: string}>
+    projectArticleCount: number
+    projectImportRouteCount: number
+    reusedArticle: {articleSummary: string | null}
+    targetArticleId: string
+  }>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    await database.run("INSERT INTO app.import_route (id, route, name, active) VALUES ('target-route', 'covidence:set-based', 'Set Based Route', TRUE)")
+    await database.run("INSERT INTO app.article (id, article_title, article_summary) VALUES ('reuse-set-based-article', 'Reuse Set Based Article', NULL)")
+
+    const escapeSql = (value) => String(value).replaceAll("'", "''")
+    const jsonLiteral = (value) => "CAST('" + escapeSql(JSON.stringify(value)) + "' AS JSON)"
+    const operationDatabase = (tx) => ({
+      queryJson: tx.queryJson,
+      run: tx.run,
+      transaction: (work) => Promise.resolve(work(tx)),
+    })
+    const createOperationPayloadTable = (tx, tableName, rows) => {
+      return tx.run(\`
+        CREATE TEMP TABLE \${tableName} AS
+        SELECT
+          row_number() OVER () - 1 AS row_index,
+          row_json AS payload_json
+        FROM UNNEST(json_extract(\${jsonLiteral(rows)}, '$[*]')) AS rows(row_json)
+      \`)
+    }
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const newArticle = {
+      articleId: 'legacy-set-based-new',
+      articleTitle: 'Set Based New Article',
+      doi: '10.1000/set-based-new',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-set-based-new'},
+      signature: {identifierKeys: ['doi:10.1000/set-based-new'], title: 'Set Based New Article'},
+      sourceArticleId: 'source-set-based-new',
+    }
+    const reusedArticle = {
+      articleTitle: 'Reuse Set Based Article',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-set-based-reuse'},
+      signature: {identifierKeys: [], title: 'Reuse Set Based Article'},
+      sourceArticleId: 'source-set-based-reuse',
+    }
+    const payloadArticleRoute = {
+      externalArticleId: 'EXT-memory',
+      importMetadata: {route: 'memory'},
+      matchMetadata: null,
+      provenance: {sourceArticleId: 'source-set-based-new', sourceImportRouteId: 'source-route'},
+      rawPayload: {raw: 'memory'},
+      signature: {},
+      sourceArticleId: 'source-set-based-new',
+      sourceArticleImportRouteId: 'source-air-set-based',
+      sourceImportRouteId: 'source-route',
+      sourceRecordHash: 'memory-hash',
+      sourceRecordKey: 'memory-key',
+    }
+    const stagedArticleRoute = {
+      ...payloadArticleRoute,
+      externalArticleId: 'EXT-staged',
+      importMetadata: {route: 'staged'},
+      rawPayload: {raw: 'staged'},
+      sourceRecordHash: 'staged-hash',
+      sourceRecordKey: 'staged-key',
+    }
+    const projectArticle = {
+      provenance: {sourceArticleId: 'source-set-based-new', sourceProjectId: 'source-project'},
+      signature: {},
+      sourceArticleId: 'source-set-based-new',
+      sourceProjectArticleId: 'source-project-article-set-based',
+      sourceProjectId: 'source-project',
+    }
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'create',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: ['doi:10.1000/set-based-new'],
+          packageArticleId: 'legacy-set-based-new',
+          selectedTargetArticleId: null,
+          sourceArticleId: 'source-set-based-new',
+        },
+        {
+          action: 'reuse',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: [],
+          packageArticleId: null,
+          selectedTargetArticleId: 'reuse-set-based-article',
+          sourceArticleId: 'source-set-based-reuse',
+        },
+      ],
+      articleRoutePlan: [
+        {
+          action: 'write',
+          sourceArticleId: 'source-set-based-new',
+          sourceArticleImportRouteId: 'source-air-set-based',
+          sourceImportRouteId: 'source-route',
+          snapshotProjectArticleLink: false,
+          targetArticleId: null,
+          targetImportRouteId: 'target-route',
+          unsafeProjectIds: [],
+        },
+      ],
+      articleUpdatePlan: [
+        {
+          activeDirtiedProjectIds: [],
+          archivedReferencingProjectCount: 0,
+          dateExpansionBlockers: [],
+          fieldFills: [{assetDriven: false, assetPaths: [], field: 'articleSummary', value: 'Set based filled summary'}],
+          sourceArticleId: 'source-set-based-reuse',
+          targetArticleId: 'reuse-set-based-article',
+        },
+      ],
+      projectRoutePlan: [
+        {
+          action: 'link',
+          dateBoundedOutsideExportedArticleCount: 0,
+          dateBoundedRouteArticleCount: 1,
+          outsideExportedArticleCount: 0,
+          sourceImportRouteId: 'source-route',
+          sourceProjectImportRouteId: 'source-project-route-set-based',
+          targetImportRouteId: 'target-route',
+        },
+      ],
+    }
+    const payloads = {
+      articleImportRoutes: [payloadArticleRoute],
+      articles: [newArticle, reusedArticle],
+      models: [getModelPayload()],
+      project: getProjectPayload(settings),
+      projectArticles: [projectArticle],
+    }
+    const promotion = {
+      articleCreates: [{article: newArticle, sourceArticleId: 'source-set-based-new'}],
+      articleFieldFills: [
+        {
+          field: 'articleSummary',
+          sourceArticleId: 'source-set-based-reuse',
+          targetArticleId: 'reuse-set-based-article',
+          value: 'Set based filled summary',
+        },
+      ],
+      manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-set-based-writer', updatedAt: now.toISOString()},
+      promotionPathByPackagePath: {},
+    }
+    const operationTables = getProjectTransferOperationTableNames('commit_set_based_writer')
+    const writeResult = await database.transaction(async (tx) => {
+      await createOperationPayloadTable(tx, operationTables.tableNames.articles, [newArticle, reusedArticle])
+      await createOperationPayloadTable(tx, operationTables.tableNames.articleImportRoutes, [stagedArticleRoute])
+      await createOperationPayloadTable(tx, operationTables.tableNames.projectArticles, [projectArticle])
+
+      return writeProjectTransferCommitAppTables({
+        commitId: 'commit-set-based-writer',
+        database: operationDatabase(tx),
+        now,
+        operationTables,
+        payloads,
+        plan: getBasePlan(targetPlan, dependencyResolution),
+        promotion,
+        schemaVersion: 1,
+        sessionId: 'session-set-based-writer',
+      })
+    })
+    const targetArticleId = writeResult.articleIdBySourceId['source-set-based-new']
+    const [createdArticle] = await database.queryJson("SELECT article_id AS articleId, article_title AS articleTitle, article_summary AS articleSummary FROM app.article WHERE id = '" + targetArticleId + "'")
+    const [reusedArticleRow] = await database.queryJson("SELECT article_summary AS articleSummary FROM app.article WHERE id = 'reuse-set-based-article'")
+    const [articleImportRouteRow] = await database.queryJson("SELECT article_id AS articleId, source_record_key AS sourceRecordKey FROM app.article_import_route WHERE import_route_id = 'target-route'")
+    const [projectArticleCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project_article WHERE project_id = '" + writeResult.projectId + "'")
+    const [projectImportRouteCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project_import_route WHERE project_id = '" + writeResult.projectId + "'")
+    const identifierRows = await database.queryJson("SELECT article_id AS articleId, normalized_value AS normalizedValue FROM app.article_identifier ORDER BY normalized_value ASC")
+
+    console.log(JSON.stringify({
+      articleImportRouteRow,
+      createdArticle,
+      identifierRows,
+      projectArticleCount: projectArticleCount.count,
+      projectImportRouteCount: projectImportRouteCount.count,
+      reusedArticle: reusedArticleRow,
+      targetArticleId,
+    }))
+  `)
+
+  expect(result.createdArticle).toEqual({
+    articleId: 'legacy-set-based-new',
+    articleSummary: null,
+    articleTitle: 'Set Based New Article',
+  })
+  expect(result.reusedArticle.articleSummary).toBe('Set based filled summary')
+  expect(result.articleImportRouteRow).toEqual({articleId: result.targetArticleId, sourceRecordKey: 'staged-key'})
+  expect(result.projectArticleCount).toBe(1)
+  expect(result.projectImportRouteCount).toBe(1)
+  expect(result.identifierRows).toEqual([{articleId: result.targetArticleId, normalizedValue: '10.1000/set-based-new'}])
+})
+
 test('project transfer commit writer materializes imported provider and model dependencies', () => {
   const result = runCommitWriterScript<{
     commitMaps: {modelId: string | null; projectId: string | null; providerConnectionId: string | null}
@@ -1969,6 +2170,93 @@ test('project transfer commit writer aborts article identifier races after inser
 
   expect(result.errorMessage).toContain(
     'article identifier doi:10.1000/identifier-race for source-identifier-race is no longer available',
+  )
+  expect(result.projectCount).toBe(0)
+  expect(result.newArticleCount).toBe(0)
+})
+
+test('project transfer commit writer validates set-based article identifier conflicts against target articles', () => {
+  const result = runCommitWriterScript<{errorMessage: string | null; newArticleCount: number; projectCount: number}>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    await database.run("INSERT INTO app.article (id, article_id, article_title) VALUES ('existing-set-based-identifier-article', 'legacy-existing-set-based-identifier', 'Existing Set Based Identifier')")
+    await database.run("INSERT INTO app.article_identifier (id, article_id, kind, normalized_value, source, is_primary, created_at, updated_at) VALUES ('existing-set-based-identifier', 'existing-set-based-identifier-article', 'doi', '10.1000/set-based-identifier-race', 'article_identifier', TRUE, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')")
+    const escapeSql = (value) => String(value).replaceAll("'", "''")
+    const jsonLiteral = (value) => "CAST('" + escapeSql(JSON.stringify(value)) + "' AS JSON)"
+    const operationDatabase = (tx) => ({
+      queryJson: tx.queryJson,
+      run: tx.run,
+      transaction: (work) => Promise.resolve(work(tx)),
+    })
+    const createOperationPayloadTable = (tx, tableName, rows) => {
+      return tx.run(\`
+        CREATE TEMP TABLE \${tableName} AS
+        SELECT
+          row_number() OVER () - 1 AS row_index,
+          row_json AS payload_json
+        FROM UNNEST(json_extract(\${jsonLiteral(rows)}, '$[*]')) AS rows(row_json)
+      \`)
+    }
+    const settings = {humanJudgmentMode: null, useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const article = {
+      articleId: 'legacy-new-set-based-identifier-race',
+      articleTitle: 'Package Set Based Identifier Race',
+      doi: '10.1000/set-based-identifier-race',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-set-based-identifier-race'},
+      signature: {identifierKeys: ['doi:10.1000/set-based-identifier-race'], title: 'Package Set Based Identifier Race'},
+      sourceArticleId: 'source-set-based-identifier-race',
+    }
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'create',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: ['doi:10.1000/set-based-identifier-race'],
+          packageArticleId: 'legacy-new-set-based-identifier-race',
+          selectedTargetArticleId: null,
+          sourceArticleId: 'source-set-based-identifier-race',
+        },
+      ],
+    }
+    const operationTables = getProjectTransferOperationTableNames('commit_set_based_identifier_race')
+    const errorMessage = await catchMessage(() => {
+      return database.transaction(async (tx) => {
+        await createOperationPayloadTable(tx, operationTables.tableNames.articles, [article])
+        await createOperationPayloadTable(tx, operationTables.tableNames.articleImportRoutes, [])
+        await createOperationPayloadTable(tx, operationTables.tableNames.projectArticles, [])
+
+        return writeProjectTransferCommitAppTables({
+          commitId: 'commit-set-based-identifier-race',
+          database: operationDatabase(tx),
+          now,
+          operationTables,
+          payloads: {
+            articles: [article],
+            models: [getModelPayload()],
+            project: getProjectPayload(settings),
+          },
+          plan: getBasePlan(targetPlan, dependencyResolution),
+          promotion: {
+            articleCreates: [{article, sourceArticleId: 'source-set-based-identifier-race'}],
+            articleFieldFills: [],
+            manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-set-based-identifier-race', updatedAt: now.toISOString()},
+            promotionPathByPackagePath: {},
+          },
+          schemaVersion: 1,
+          sessionId: 'session-set-based-identifier-race',
+        })
+      })
+    })
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+    const [newArticleCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.article WHERE article_id = 'legacy-new-set-based-identifier-race'")
+
+    console.log(JSON.stringify({errorMessage, newArticleCount: newArticleCount.count, projectCount: projectCount.count}))
+  `)
+
+  expect(result.errorMessage).toContain(
+    'article identifier doi:10.1000/set-based-identifier-race for source-set-based-identifier-race is no longer available',
   )
   expect(result.projectCount).toBe(0)
   expect(result.newArticleCount).toBe(0)

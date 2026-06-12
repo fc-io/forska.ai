@@ -20,12 +20,14 @@ import {
   getProjectTransferPromptContentHashBySourceId,
   loadProjectTransferCommitIdMapTables,
   type ProjectTransferCommitIdMaps,
+  type ProjectTransferCommitIdMapTableSet,
 } from './projectTransferCommitIdMaps.ts'
 import type {ProjectTransferCommitPromotionResult} from './projectTransferCommitRollback.ts'
 import type {ProjectTransferImportCompletionPayload} from './projectTransferContracts.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
 import {getProjectTransferNormalizedArticleIdentifiers} from './projectTransferIdentifierNormalization.ts'
+import type {ProjectTransferOperationTableSet} from './projectTransferOperationTables.ts'
 import type {
   ProjectTransferArticlePayloadRecord,
   ProjectTransferPayloadByKey,
@@ -61,6 +63,7 @@ export type ProjectTransferCommitWriterInput = {
   commitId: string
   database?: ProjectTransferCommitWriterDatabase
   now?: Date
+  operationTables?: ProjectTransferOperationTableSet
   payloads: Partial<ProjectTransferPayloadByKey>
   plan: ProjectTransferImportPlanArtifact
   promotion: ProjectTransferCommitPromotionResult
@@ -143,6 +146,14 @@ type ArticleIdentifierCommitRow = {
   identifier: ReturnType<typeof getProjectTransferNormalizedArticleIdentifiers>['strongIdentifiers'][number]
   isPrimary: boolean
   sourceArticleId: string
+}
+type ArticleIdentifierStageRow = {
+  isPrimary: boolean
+  kind: string
+  normalizedValue: string
+  source: string
+  sourceArticleId: string
+  sourceKey: string
 }
 type ArticleIdentifierTargetRow = {articleId: string; kind: string; normalizedValue: string}
 type ArticleRoutePlanEntry = ProjectTransferTargetPlan['articleRoutePlan'][number]
@@ -247,6 +258,21 @@ type ReviewCommitRow = {
   updatedAt: Date
 }
 
+type ProjectTransferCommitWriterTempTableSet = {
+  articleCreates: string
+  articleFieldFills: string
+  articleIdentifiers: string
+  articleRoutePlan: string
+  projectArticleSources: string
+  projectRoutePlan: string
+}
+
+type ProjectTransferCommitWriterSetBasedContext = {
+  commitIdMapTables: ProjectTransferCommitIdMapTableSet
+  operationTables: ProjectTransferOperationTableSet
+  tempTables: ProjectTransferCommitWriterTempTableSet
+}
+
 const articleColumnByPayloadField = {
   articleAuthors: 'article_authors',
   articleCreatedAt: 'article_created_at',
@@ -290,6 +316,11 @@ const articleJsonFields = new Set<ArticleField>([
 const articleArrayFields = new Set<ArticleField>(['articleAuthors'])
 const articleDateFields = new Set<ArticleField>(['articleCreatedAt', 'articleUpdatedAt', 'fullTextFetchedAt'])
 const articleNumberFields = new Set<ArticleField>(['articleVersion', 'fullTextCharCount', 'fullTextConversionAttempts'])
+const articleNumberSqlTypeByField: Partial<Record<ArticleField, string>> = {
+  articleVersion: 'INTEGER',
+  fullTextCharCount: 'BIGINT',
+  fullTextConversionAttempts: 'INTEGER',
+}
 const articleStringFields = new Set<ArticleField>(
   Object.keys(articleColumnByPayloadField).filter((field) => {
     return (
@@ -309,6 +340,14 @@ const articleFieldSelectSql = Object.entries(articleColumnByPayloadField)
   .join(',\n')
 const commitWriterInsertBatchSize = 500
 const importedSnapshotMarker = 'projectTransferImportedSnapshot'
+const commitWriterSetBasedTableSuffixes = [
+  'articleCreates',
+  'articleFieldFills',
+  'articleIdentifiers',
+  'articleRoutePlan',
+  'projectArticleSources',
+  'projectRoutePlan',
+] as const satisfies readonly (keyof ProjectTransferCommitWriterTempTableSet)[]
 const projectTransferCommitWriteDirtyTokenSurfaces = [
   'project',
   'article',
@@ -331,6 +370,90 @@ const projectTransferCommitWriteDirtyTokenSurfaces = [
 
 const failCommitWriter = (message: string): never => {
   throw new Error(`Project transfer commit writer: ${message}`)
+}
+
+const getSafeOperationId = (value: string) => {
+  const identifier = value.replaceAll('-', '_').replace(/[^A-Za-z0-9_]/g, '_')
+
+  return identifier === '' ? 'commit_writer' : identifier
+}
+
+const getCommitWriterTempTableName = ({
+  operationId,
+  suffix,
+}: {
+  operationId: string
+  suffix: keyof ProjectTransferCommitWriterTempTableSet
+}) => {
+  return `temp_project_transfer_${getSafeOperationId(operationId)}_commit_${suffix.replace(/[A-Z]/g, (match) => {
+    return `_${match.toLowerCase()}`
+  })}`
+}
+
+const getCommitWriterTempTables = (operationId: string): ProjectTransferCommitWriterTempTableSet => {
+  return commitWriterSetBasedTableSuffixes.reduce<ProjectTransferCommitWriterTempTableSet>((tables, suffix) => {
+    return {...tables, [suffix]: getCommitWriterTempTableName({operationId, suffix})}
+  }, {} as ProjectTransferCommitWriterTempTableSet)
+}
+
+const getJsonArrayRowsSourceSql = (rows: readonly unknown[]) => {
+  return rows.length === 0
+    ? `(SELECT CAST(NULL AS JSON) AS row_json WHERE FALSE) AS rows`
+    : `UNNEST(json_extract(CAST(${getSqlLiteral(JSON.stringify(rows))} AS JSON), '$[*]')) AS rows(row_json)`
+}
+
+const getJsonStringFieldSql = (jsonExpression: string, field: string) => {
+  return `json_extract_string(${jsonExpression}, '$.${field}')`
+}
+
+const getNullableJsonStringFieldSql = (jsonExpression: string, field: string) => {
+  const valueSql = getJsonStringFieldSql(jsonExpression, field)
+
+  return `CASE WHEN trim(COALESCE(${valueSql}, '')) = '' THEN NULL ELSE ${valueSql} END`
+}
+
+const getArticleJsonFieldSql = (jsonExpression: string, field: ArticleField) => {
+  return field === 'articleTitle'
+    ? getJsonStringFieldSql(jsonExpression, field)
+    : articleJsonFields.has(field)
+      ? `json_extract(${jsonExpression}, '$.${field}')`
+      : articleArrayFields.has(field)
+        ? `json_extract(${jsonExpression}, '$.${field}')::VARCHAR[]`
+        : articleDateFields.has(field)
+          ? `TRY_CAST(${getJsonStringFieldSql(jsonExpression, field)} AS TIMESTAMPTZ)`
+          : articleNumberFields.has(field)
+            ? `TRY_CAST(${getJsonStringFieldSql(jsonExpression, field)} AS ${articleNumberSqlTypeByField[field] ?? 'DOUBLE'})`
+            : getNullableJsonStringFieldSql(jsonExpression, field)
+}
+
+const getArticleFillValueSql = (field: ArticleField) => {
+  return articleJsonFields.has(field)
+    ? 'fill.value_json'
+    : articleArrayFields.has(field)
+      ? 'fill.value_json::VARCHAR[]'
+      : articleDateFields.has(field)
+        ? "TRY_CAST(json_extract_string(fill.value_json, '$') AS TIMESTAMPTZ)"
+        : articleNumberFields.has(field)
+          ? `TRY_CAST(json_extract_string(fill.value_json, '$') AS ${articleNumberSqlTypeByField[field] ?? 'DOUBLE'})`
+          : "json_extract_string(fill.value_json, '$')"
+}
+
+const getMissingTargetArticleValueSql = ({alias, field}: {alias: string; field: ArticleField}) => {
+  const column = articleColumnByPayloadField[field]
+
+  return articleJsonFields.has(field)
+    ? `${alias}.${column} IS NULL`
+    : articleArrayFields.has(field)
+      ? `(${alias}.${column} IS NULL OR COALESCE(array_length(${alias}.${column}), 0) = 0)`
+      : articleStringFields.has(field)
+        ? `(${alias}.${column} IS NULL OR trim(${alias}.${column}) = '')`
+        : `${alias}.${column} IS NULL`
+}
+
+const getTableCount = async ({sql, tx}: {sql: string; tx: ProjectTransferCommitWriterTx}) => {
+  const [row] = await tx.queryJson<{count: number}>(`SELECT COUNT(*)::INTEGER AS count FROM (${sql}) counted`)
+
+  return row?.count ?? 0
 }
 
 const getValueChunks = <TValue>(values: readonly TValue[], chunkSize = commitWriterInsertBatchSize): TValue[][] => {
@@ -1562,37 +1685,89 @@ const assertNoArticleIdConflicts = async ({
   return conflict ? failCommitWriter(`target article_id already exists: ${conflict.articleId}`) : undefined
 }
 
+const insertCreatedArticlesSetBased = async ({
+  context,
+  now,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const expectedCount = await getTableCount({
+    sql: `SELECT source_article_id FROM ${context.tempTables.articleCreates}`,
+    tx,
+  })
+
+  if (expectedCount === 0) {
+    return undefined
+  }
+
+  const insertedRows = await tx.queryJson<{id: string}>(`
+    INSERT INTO app.article (
+      id,
+      ${Object.values(articleColumnByPayloadField).join(',\n')},
+      created_at,
+      updated_at
+    )
+    SELECT
+      article_map.target_id,
+      ${Object.keys(articleColumnByPayloadField)
+        .map((field) => {
+          return getArticleJsonFieldSql('create_row.article_json', field as ArticleField)
+        })
+        .join(',\n')},
+      ${getTimestampLiteral(now)},
+      ${getTimestampLiteral(now)}
+    FROM ${context.tempTables.articleCreates} create_row
+    INNER JOIN ${context.operationTables.tableNames.articles} staged_article
+      ON ${getJsonStringFieldSql('staged_article.payload_json', 'sourceArticleId')} = create_row.source_article_id
+    INNER JOIN ${context.commitIdMapTables.idMap} article_map
+      ON article_map.map_kind = 'article'
+      AND article_map.source_id = create_row.source_article_id
+    RETURNING id
+  `)
+
+  return insertedRows.length === expectedCount
+    ? undefined
+    : failCommitWriter(`created article insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+}
+
 const insertCreatedArticles = async ({
   articleIdBySourceId,
+  context,
   now,
   promotion,
   tx,
 }: {
   articleIdBySourceId: Record<string, string>
+  context: ProjectTransferCommitWriterSetBasedContext | null
   now: Date
   promotion: ProjectTransferCommitPromotionResult
   tx: ProjectTransferCommitWriterTx
 }) => {
-  return promotion.articleCreates.length === 0
-    ? undefined
-    : runChunks(promotion.articleCreates, (articleChunk) => {
-        return tx.run(`
-        INSERT INTO app.article (
-          id,
-          ${Object.values(articleColumnByPayloadField).join(',\n')},
-          created_at,
-          updated_at
-        ) VALUES ${articleChunk
-          .map((entry) => {
-            const articleId = articleIdBySourceId[entry.sourceArticleId]
+  return context !== null
+    ? insertCreatedArticlesSetBased({context, now, tx})
+    : promotion.articleCreates.length === 0
+      ? undefined
+      : runChunks(promotion.articleCreates, (articleChunk) => {
+          return tx.run(`
+          INSERT INTO app.article (
+            id,
+            ${Object.values(articleColumnByPayloadField).join(',\n')},
+            created_at,
+            updated_at
+          ) VALUES ${articleChunk
+            .map((entry) => {
+              const articleId = articleIdBySourceId[entry.sourceArticleId]
 
-            return articleId === undefined
-              ? failCommitWriter(`missing target article id for ${entry.sourceArticleId}`)
-              : getCreatedArticleValuesSql({article: entry.article, articleId, now})
-          })
-          .join(', ')}
-      `)
-      })
+              return articleId === undefined
+                ? failCommitWriter(`missing target article id for ${entry.sourceArticleId}`)
+                : getCreatedArticleValuesSql({article: entry.article, articleId, now})
+            })
+            .join(', ')}
+        `)
+        })
 }
 
 const getFillTargetArticleRows = async ({
@@ -1661,17 +1836,160 @@ const assertArticleFieldFillsStillMissing = ({
   })
 }
 
+const assertArticleFieldFillStageRowsCommitSafe = async ({
+  context,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const [unsupported] = await tx.queryJson<{field: string}>(`
+    SELECT field
+    FROM ${context.tempTables.articleFieldFills}
+    WHERE field NOT IN (${getQuotedStringList(Object.keys(articleColumnByPayloadField)).join(', ')})
+    ORDER BY field ASC
+    LIMIT 1
+  `)
+  const [duplicate] = await tx.queryJson<{field: string; targetArticleId: string}>(`
+    SELECT target_article_id AS targetArticleId, field
+    FROM ${context.tempTables.articleFieldFills}
+    GROUP BY target_article_id, field
+    HAVING COUNT(*) > 1
+    ORDER BY target_article_id ASC, field ASC
+    LIMIT 1
+  `)
+
+  if (unsupported) {
+    return failCommitWriter(`unsupported article field fill ${unsupported.field}`)
+  }
+
+  return duplicate
+    ? failCommitWriter(`duplicate article field fill after remap: ${duplicate.targetArticleId}:${duplicate.field}`)
+    : undefined
+}
+
+const getArticleFieldFillCounts = async ({
+  context,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rows = await tx.queryJson<{count: number; field: string}>(`
+    SELECT field, COUNT(*)::INTEGER AS count
+    FROM ${context.tempTables.articleFieldFills}
+    GROUP BY field
+    ORDER BY field ASC
+  `)
+
+  return rows.reduce<Record<string, number>>((mapped, row) => {
+    return {...mapped, [row.field]: row.count}
+  }, {})
+}
+
+const getInvalidArticleFieldFillRow = async ({
+  context,
+  field,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  field: ArticleField
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const [row] = await tx.queryJson<{field: string; targetArticleId: string}>(`
+    SELECT fill.target_article_id AS targetArticleId, fill.field
+    FROM ${context.tempTables.articleFieldFills} fill
+    LEFT JOIN app.article article ON article.id = fill.target_article_id
+    WHERE fill.field = ${getSqlLiteral(field)}
+      AND (
+        article.id IS NULL
+        OR NOT (${getMissingTargetArticleValueSql({alias: 'article', field})})
+      )
+    ORDER BY fill.target_article_id ASC
+    LIMIT 1
+  `)
+
+  return row ?? null
+}
+
+const updateReusedArticleFieldSetBased = async ({
+  context,
+  expectedCount,
+  field,
+  now,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  expectedCount: number
+  field: ArticleField
+  now: Date
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  if (expectedCount === 0) {
+    return undefined
+  }
+
+  const column = articleColumnByPayloadField[field]
+  const updatedRows = await tx.queryJson<{id: string}>(`
+    UPDATE app.article AS article
+    SET
+      ${column} = ${getArticleFillValueSql(field)},
+      updated_at = ${getTimestampLiteral(now)}
+    FROM ${context.tempTables.articleFieldFills} fill
+    WHERE fill.field = ${getSqlLiteral(field)}
+      AND article.id = fill.target_article_id
+      AND ${getMissingTargetArticleValueSql({alias: 'article', field})}
+    RETURNING article.id
+  `)
+
+  if (updatedRows.length === expectedCount) {
+    return undefined
+  }
+
+  const invalid = await getInvalidArticleFieldFillRow({context, field, tx})
+
+  return invalid === null
+    ? failCommitWriter(`article field ${field} update wrote ${updatedRows.length} of ${expectedCount} staged rows`)
+    : failCommitWriter(`target article ${invalid.targetArticleId} field ${field} is no longer missing`)
+}
+
+const updateReusedArticlesSetBased = async ({
+  context,
+  now,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await assertArticleFieldFillStageRowsCommitSafe({context, tx})
+
+  const counts = await getArticleFieldFillCounts({context, tx})
+
+  return (Object.keys(articleColumnByPayloadField) as ArticleField[]).reduce<Promise<void>>(async (previous, field) => {
+    await previous
+
+    return updateReusedArticleFieldSetBased({context, expectedCount: counts[field] ?? 0, field, now, tx})
+  }, Promise.resolve())
+}
+
 const updateReusedArticles = async ({
+  context,
   now,
   promotion,
   targetArticleById,
   tx,
 }: {
+  context: ProjectTransferCommitWriterSetBasedContext | null
   now: Date
   promotion: ProjectTransferCommitPromotionResult
   targetArticleById: Record<string, TargetArticleFieldRow>
   tx: ProjectTransferCommitWriterTx
 }) => {
+  if (context !== null) {
+    return updateReusedArticlesSetBased({context, now, tx})
+  }
+
   const fillsByArticleId = promotion.articleFieldFills.reduce<Record<string, typeof promotion.articleFieldFills>>(
     (mapped, fill) => {
       return {...mapped, [fill.targetArticleId]: [...(mapped[fill.targetArticleId] ?? []), fill]}
@@ -1755,6 +2073,232 @@ const getArticleIdentifierCommitRows = ({
   })
 }
 
+const getArticleIdentifierStageRows = ({
+  articleMatches,
+  articles,
+}: {
+  articleMatches: readonly ArticleMatchPlan[]
+  articles: readonly ProjectTransferArticlePayloadRecord[]
+}): ArticleIdentifierStageRow[] => {
+  const articleActionBySourceId = getArticleActionBySourceId(articleMatches)
+
+  return articles.flatMap((article) => {
+    const action = articleActionBySourceId[article.sourceArticleId]
+    const normalized = getProjectTransferNormalizedArticleIdentifiers(article)
+
+    if (action === undefined) {
+      return failCommitWriter(`article identifier source ${article.sourceArticleId} has no article match plan`)
+    }
+
+    return normalized.strongIdentifiers.map((identifier, index) => {
+      return {
+        isPrimary: index === 0,
+        kind: identifier.kind,
+        normalizedValue: identifier.normalizedValue,
+        source: identifier.evidence[0]?.source ?? 'project_transfer',
+        sourceArticleId: article.sourceArticleId,
+        sourceKey: getProjectTransferCanonicalJson({
+          kind: identifier.kind,
+          normalizedValue: identifier.normalizedValue,
+          sourceArticleId: article.sourceArticleId,
+        }),
+      }
+    })
+  })
+}
+
+const getArticleCreateStageRows = (promotion: ProjectTransferCommitPromotionResult) => {
+  return promotion.articleCreates.map((entry) => {
+    return {article: entry.article, sourceArticleId: entry.sourceArticleId}
+  })
+}
+
+const getArticleFieldFillStageRows = (promotion: ProjectTransferCommitPromotionResult) => {
+  return promotion.articleFieldFills.map((fill) => {
+    return {
+      field: fill.field,
+      sourceArticleId: fill.sourceArticleId,
+      targetArticleId: fill.targetArticleId,
+      value: fill.value ?? null,
+    }
+  })
+}
+
+const getCreateArticleCreatesTableSql = ({
+  rows,
+  tableName,
+}: {
+  rows: readonly ReturnType<typeof getArticleCreateStageRows>[number][]
+  tableName: string
+}) => {
+  return `
+    CREATE TEMP TABLE ${tableName} AS
+    SELECT
+      ${getJsonStringFieldSql('row_json', 'sourceArticleId')} AS source_article_id,
+      json_extract(row_json, '$.article') AS article_json
+    FROM ${getJsonArrayRowsSourceSql(rows)}
+  `
+}
+
+const getCreateArticleFieldFillsTableSql = ({
+  rows,
+  tableName,
+}: {
+  rows: readonly ReturnType<typeof getArticleFieldFillStageRows>[number][]
+  tableName: string
+}) => {
+  return `
+    CREATE TEMP TABLE ${tableName} AS
+    SELECT
+      ${getJsonStringFieldSql('row_json', 'sourceArticleId')} AS source_article_id,
+      ${getJsonStringFieldSql('row_json', 'targetArticleId')} AS target_article_id,
+      ${getJsonStringFieldSql('row_json', 'field')} AS field,
+      json_extract(row_json, '$.value') AS value_json
+    FROM ${getJsonArrayRowsSourceSql(rows)}
+  `
+}
+
+const getCreateArticleIdentifiersTableSql = ({
+  rows,
+  tableName,
+}: {
+  rows: readonly ArticleIdentifierStageRow[]
+  tableName: string
+}) => {
+  return `
+    CREATE TEMP TABLE ${tableName} AS
+    SELECT
+      ${getJsonStringFieldSql('row_json', 'sourceArticleId')} AS source_article_id,
+      ${getJsonStringFieldSql('row_json', 'sourceKey')} AS source_key,
+      ${getJsonStringFieldSql('row_json', 'kind')} AS kind,
+      ${getJsonStringFieldSql('row_json', 'normalizedValue')} AS normalized_value,
+      ${getJsonStringFieldSql('row_json', 'source')} AS source,
+      COALESCE(TRY_CAST(${getJsonStringFieldSql('row_json', 'isPrimary')} AS BOOLEAN), FALSE) AS is_primary
+    FROM ${getJsonArrayRowsSourceSql(rows)}
+  `
+}
+
+const getCreateProjectRoutePlanTableSql = ({
+  rows,
+  tableName,
+}: {
+  rows: readonly ProjectRoutePlanEntry[]
+  tableName: string
+}) => {
+  return `
+    CREATE TEMP TABLE ${tableName} AS
+    SELECT
+      ${getJsonStringFieldSql('row_json', 'action')} AS action,
+      ${getJsonStringFieldSql('row_json', 'sourceImportRouteId')} AS source_import_route_id,
+      ${getJsonStringFieldSql('row_json', 'sourceProjectImportRouteId')} AS source_project_import_route_id,
+      ${getJsonStringFieldSql('row_json', 'targetImportRouteId')} AS target_import_route_id
+    FROM ${getJsonArrayRowsSourceSql(rows)}
+  `
+}
+
+const getCreateArticleRoutePlanTableSql = ({
+  rows,
+  tableName,
+}: {
+  rows: readonly ArticleRoutePlanEntry[]
+  tableName: string
+}) => {
+  return `
+    CREATE TEMP TABLE ${tableName} AS
+    SELECT
+      ${getJsonStringFieldSql('row_json', 'action')} AS action,
+      COALESCE(TRY_CAST(${getJsonStringFieldSql('row_json', 'snapshotProjectArticleLink')} AS BOOLEAN), FALSE) AS snapshot_project_article_link,
+      ${getJsonStringFieldSql('row_json', 'sourceArticleId')} AS source_article_id,
+      ${getJsonStringFieldSql('row_json', 'sourceArticleImportRouteId')} AS source_article_import_route_id,
+      ${getJsonStringFieldSql('row_json', 'sourceImportRouteId')} AS source_import_route_id,
+      ${getJsonStringFieldSql('row_json', 'targetImportRouteId')} AS target_import_route_id
+    FROM ${getJsonArrayRowsSourceSql(rows)}
+  `
+}
+
+const getCreateProjectArticleSourcesTableSql = ({
+  articleRoutePlanTable,
+  operationTables,
+  tableName,
+}: {
+  articleRoutePlanTable: string
+  operationTables: ProjectTransferOperationTableSet
+  tableName: string
+}) => {
+  return `
+    CREATE TEMP TABLE ${tableName} AS
+    SELECT DISTINCT source_article_id
+    FROM (
+      SELECT ${getJsonStringFieldSql('payload_json', 'sourceArticleId')} AS source_article_id
+      FROM ${operationTables.tableNames.projectArticles}
+      UNION ALL
+      SELECT source_article_id
+      FROM ${articleRoutePlanTable}
+      WHERE snapshot_project_article_link = TRUE
+    ) source_rows
+    WHERE source_article_id IS NOT NULL
+      AND trim(source_article_id) <> ''
+  `
+}
+
+const loadProjectTransferCommitWriterTempTables = async ({
+  articles,
+  operationTables,
+  plan,
+  promotion,
+  tables,
+  tx,
+}: {
+  articles: readonly ProjectTransferArticlePayloadRecord[]
+  operationTables: ProjectTransferOperationTableSet
+  plan: ProjectTransferImportPlanArtifact
+  promotion: ProjectTransferCommitPromotionResult
+  tables: ProjectTransferCommitWriterTempTableSet
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const articleCreates = getArticleCreateStageRows(promotion)
+  const articleFieldFills = getArticleFieldFillStageRows(promotion)
+  const articleIdentifiers = getArticleIdentifierStageRows({articleMatches: plan.targetPlan.articleMatches, articles})
+
+  await tx.run(
+    commitWriterSetBasedTableSuffixes
+      .map((suffix) => {
+        return `DROP TABLE IF EXISTS ${tables[suffix]}`
+      })
+      .join(';\n'),
+  )
+  await tx.run(`
+    ${getCreateArticleCreatesTableSql({rows: articleCreates, tableName: tables.articleCreates})};
+    ${getCreateArticleFieldFillsTableSql({rows: articleFieldFills, tableName: tables.articleFieldFills})};
+    ${getCreateArticleIdentifiersTableSql({rows: articleIdentifiers, tableName: tables.articleIdentifiers})};
+    ${getCreateProjectRoutePlanTableSql({rows: plan.targetPlan.projectRoutePlan, tableName: tables.projectRoutePlan})};
+    ${getCreateArticleRoutePlanTableSql({rows: plan.targetPlan.articleRoutePlan, tableName: tables.articleRoutePlan})};
+    ${getCreateProjectArticleSourcesTableSql({
+      articleRoutePlanTable: tables.articleRoutePlan,
+      operationTables,
+      tableName: tables.projectArticleSources,
+    })}
+  `)
+
+  return tables
+}
+
+const dropProjectTransferCommitWriterTempTables = async ({
+  tables,
+  tx,
+}: {
+  tables: ProjectTransferCommitWriterTempTableSet
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await tx.run(
+    commitWriterSetBasedTableSuffixes
+      .map((suffix) => {
+        return `DROP TABLE IF EXISTS ${tables[suffix]}`
+      })
+      .join(';\n'),
+  )
+}
+
 const getArticleIdentifierKey = (row: Pick<ArticleIdentifierCommitRow, 'identifier'>) => {
   return `${row.identifier.kind}\0${row.identifier.normalizedValue}`
 }
@@ -1817,11 +2361,120 @@ const assertArticleIdentifierRowsCommitted = async ({
     : undefined
 }
 
+const getSetBasedArticleIdentifierJoinSql = (context: ProjectTransferCommitWriterSetBasedContext) => {
+  return `
+    FROM ${context.tempTables.articleIdentifiers} identifier
+    INNER JOIN ${context.operationTables.tableNames.articles} staged_article
+      ON ${getJsonStringFieldSql('staged_article.payload_json', 'sourceArticleId')} = identifier.source_article_id
+    INNER JOIN ${context.commitIdMapTables.idMap} article_map
+      ON article_map.map_kind = 'article'
+      AND article_map.source_id = identifier.source_article_id
+    INNER JOIN ${context.commitIdMapTables.idMap} identifier_map
+      ON identifier_map.map_kind = 'articleIdentifier'
+      AND identifier_map.source_id = identifier.source_key
+  `
+}
+
+const assertArticleIdentifierStageRowsMapped = async ({
+  context,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const expectedCount = await getTableCount({
+    sql: `SELECT source_key FROM ${context.tempTables.articleIdentifiers}`,
+    tx,
+  })
+  const mappedCount = await getTableCount({
+    sql: `SELECT identifier.source_key ${getSetBasedArticleIdentifierJoinSql(context)}`,
+    tx,
+  })
+
+  return expectedCount === mappedCount
+    ? expectedCount
+    : failCommitWriter(`article identifier stage rows mapped ${mappedCount} of ${expectedCount} staged rows`)
+}
+
+const assertSetBasedArticleIdentifierRowsCommitted = async ({
+  context,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const [conflict] = await tx.queryJson<{kind: string; normalizedValue: string; sourceArticleId: string}>(`
+    SELECT
+      identifier.kind,
+      identifier.normalized_value AS normalizedValue,
+      identifier.source_article_id AS sourceArticleId
+    ${getSetBasedArticleIdentifierJoinSql(context)}
+    LEFT JOIN app.article_identifier target_identifier
+      ON target_identifier.kind = identifier.kind
+      AND target_identifier.normalized_value = identifier.normalized_value
+    WHERE target_identifier.article_id IS NULL
+      OR target_identifier.article_id <> article_map.target_id
+    ORDER BY identifier.kind ASC, identifier.normalized_value ASC, identifier.source_article_id ASC
+    LIMIT 1
+  `)
+
+  return conflict
+    ? failCommitWriter(
+        `article identifier ${conflict.kind}:${conflict.normalizedValue} for ${conflict.sourceArticleId} is no longer available`,
+      )
+    : undefined
+}
+
+const insertArticleIdentifiersSetBased = async ({
+  context,
+  now,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const expectedCount = await assertArticleIdentifierStageRowsMapped({context, tx})
+
+  if (expectedCount === 0) {
+    return undefined
+  }
+
+  await tx.run(`
+    INSERT INTO app.article_identifier (
+      id,
+      article_id,
+      kind,
+      normalized_value,
+      source,
+      provenance,
+      is_primary,
+      created_at,
+      updated_at
+    )
+    SELECT
+      identifier_map.target_id,
+      article_map.target_id,
+      identifier.kind,
+      identifier.normalized_value,
+      identifier.source,
+      json_object('commit', TRUE, 'sourceArticleId', identifier.source_article_id),
+      identifier.is_primary,
+      ${getTimestampLiteral(now)},
+      ${getTimestampLiteral(now)}
+    ${getSetBasedArticleIdentifierJoinSql(context)}
+    ON CONFLICT(kind, normalized_value) DO NOTHING
+  `)
+
+  return assertSetBasedArticleIdentifierRowsCommitted({context, tx})
+}
+
 const insertArticleIdentifiers = async ({
   articleIdBySourceId,
   articleMatches,
   articles,
   commitIdMaps,
+  context,
   now,
   tx,
 }: {
@@ -1829,9 +2482,14 @@ const insertArticleIdentifiers = async ({
   articleMatches: readonly ArticleMatchPlan[]
   articles: readonly ProjectTransferArticlePayloadRecord[]
   commitIdMaps: ProjectTransferCommitIdMaps
+  context: ProjectTransferCommitWriterSetBasedContext | null
   now: Date
   tx: ProjectTransferCommitWriterTx
 }) => {
+  if (context !== null) {
+    return insertArticleIdentifiersSetBased({context, now, tx})
+  }
+
   const rows = getArticleIdentifierCommitRows({articleIdBySourceId, articleMatches, articles, commitIdMaps})
 
   if (rows.length === 0) {
@@ -1955,15 +2613,154 @@ const assertNoExistingArticleRouteRows = async ({
     : undefined
 }
 
+const getSetBasedArticleImportRouteRowsSql = (context: ProjectTransferCommitWriterSetBasedContext) => {
+  return `
+    SELECT
+      article_route_map.target_id AS id,
+      article_map.target_id AS article_id,
+      route_map.target_id AS import_route_id,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'externalArticleId')} AS external_article_id,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'sourceKind')} AS source_kind,
+      json_extract(payload.payload_json, '$.importMetadata') AS import_metadata,
+      json_extract(payload.payload_json, '$.matchMetadata') AS match_metadata,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'importRunId')} AS import_run_id,
+      ${getJsonStringFieldSql('payload.payload_json', 'sourceRecordKey')} AS source_record_key,
+      ${getJsonStringFieldSql('payload.payload_json', 'sourceRecordHash')} AS source_record_hash,
+      json_extract(payload.payload_json, '$.rawPayload') AS raw_payload
+    FROM ${context.tempTables.articleRoutePlan} plan
+    INNER JOIN ${context.operationTables.tableNames.articleImportRoutes} payload
+      ON ${getJsonStringFieldSql('payload.payload_json', 'sourceArticleImportRouteId')} = plan.source_article_import_route_id
+    INNER JOIN ${context.commitIdMapTables.idMap} article_route_map
+      ON article_route_map.map_kind = 'articleImportRoute'
+      AND article_route_map.source_id = plan.source_article_import_route_id
+    INNER JOIN ${context.commitIdMapTables.idMap} article_map
+      ON article_map.map_kind = 'article'
+      AND article_map.source_id = plan.source_article_id
+    INNER JOIN ${context.commitIdMapTables.idMap} route_map
+      ON route_map.map_kind = 'route'
+      AND route_map.source_id = plan.source_import_route_id
+      AND route_map.target_id = plan.target_import_route_id
+    WHERE plan.action = 'write'
+      AND plan.target_import_route_id IS NOT NULL
+  `
+}
+
+const assertSetBasedArticleImportRouteRowsCommitSafe = async ({
+  context,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rowsSql = getSetBasedArticleImportRouteRowsSql(context)
+  const expectedCount = await getTableCount({
+    sql: `
+      SELECT source_article_import_route_id
+      FROM ${context.tempTables.articleRoutePlan}
+      WHERE action = 'write'
+        AND target_import_route_id IS NOT NULL
+    `,
+    tx,
+  })
+  const mappedCount = await getTableCount({sql: rowsSql, tx})
+  const [duplicate] = await tx.queryJson<{articleId: string; importRouteId: string}>(`
+    SELECT article_id AS articleId, import_route_id AS importRouteId
+    FROM (${rowsSql}) rows
+    GROUP BY article_id, import_route_id
+    HAVING COUNT(*) > 1
+    ORDER BY article_id ASC, import_route_id ASC
+    LIMIT 1
+  `)
+  const [existing] = await tx.queryJson<{articleId: string; importRouteId: string}>(`
+    SELECT rows.article_id AS articleId, rows.import_route_id AS importRouteId
+    FROM (${rowsSql}) rows
+    INNER JOIN app.article_import_route existing
+      ON existing.article_id = rows.article_id
+      AND existing.import_route_id = rows.import_route_id
+    ORDER BY rows.article_id ASC, rows.import_route_id ASC
+    LIMIT 1
+  `)
+
+  if (mappedCount !== expectedCount) {
+    return failCommitWriter(`article_import_route rows mapped ${mappedCount} of ${expectedCount} staged plan rows`)
+  }
+
+  if (duplicate) {
+    return failCommitWriter(
+      `duplicate article_import_route after remap: ${duplicate.articleId}\u0000${duplicate.importRouteId}`,
+    )
+  }
+
+  return existing
+    ? failCommitWriter(
+        `target article_import_route already has remapped key ${existing.articleId}:${existing.importRouteId}`,
+      )
+    : expectedCount
+}
+
+const insertArticleImportRoutesSetBased = async ({
+  context,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const expectedCount = await assertSetBasedArticleImportRouteRowsCommitSafe({context, tx})
+
+  if (expectedCount === 0) {
+    return undefined
+  }
+
+  const insertedRows = await tx.queryJson<{id: string}>(`
+    INSERT INTO app.article_import_route (
+      id,
+      article_id,
+      import_route_id,
+      external_article_id,
+      source_kind,
+      import_metadata,
+      match_metadata,
+      import_run_id,
+      source_record_key,
+      source_record_hash,
+      raw_payload
+    )
+    SELECT
+      id,
+      article_id,
+      import_route_id,
+      external_article_id,
+      source_kind,
+      import_metadata,
+      match_metadata,
+      import_run_id,
+      source_record_key,
+      source_record_hash,
+      raw_payload
+    FROM (${getSetBasedArticleImportRouteRowsSql(context)}) rows
+    RETURNING id
+  `)
+
+  return insertedRows.length === expectedCount
+    ? undefined
+    : failCommitWriter(`article_import_route insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+}
+
 const insertArticleImportRoutes = async ({
   commitIdMaps,
+  context,
   rows,
   tx,
 }: {
   commitIdMaps: ProjectTransferCommitIdMaps
+  context: ProjectTransferCommitWriterSetBasedContext | null
   rows: readonly ReturnType<typeof getArticleImportRouteRows>[number][]
   tx: ProjectTransferCommitWriterTx
 }) => {
+  if (context !== null) {
+    return insertArticleImportRoutesSetBased({context, tx})
+  }
+
   await assertNoExistingArticleRouteRows({rows, tx})
 
   return rows.length === 0
@@ -2009,17 +2806,115 @@ const insertArticleImportRoutes = async ({
       })
 }
 
+const getSetBasedProjectImportRouteRowsSql = ({
+  context,
+  projectId,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  projectId: string
+}) => {
+  return `
+    SELECT
+      project_route_map.target_id AS id,
+      ${getSqlLiteral(projectId)} AS project_id,
+      route_map.target_id AS import_route_id
+    FROM ${context.tempTables.projectRoutePlan} plan
+    INNER JOIN ${context.commitIdMapTables.idMap} project_route_map
+      ON project_route_map.map_kind = 'projectImportRoute'
+      AND project_route_map.source_id = plan.source_project_import_route_id
+    INNER JOIN ${context.commitIdMapTables.idMap} route_map
+      ON route_map.map_kind = 'route'
+      AND route_map.source_id = plan.source_import_route_id
+      AND route_map.target_id = plan.target_import_route_id
+    WHERE plan.action = 'link'
+      AND plan.target_import_route_id IS NOT NULL
+  `
+}
+
+const assertSetBasedProjectImportRouteRowsCommitSafe = async ({
+  context,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rowsSql = getSetBasedProjectImportRouteRowsSql({context, projectId})
+  const expectedCount = await getTableCount({
+    sql: `
+      SELECT source_project_import_route_id
+      FROM ${context.tempTables.projectRoutePlan}
+      WHERE action = 'link'
+        AND target_import_route_id IS NOT NULL
+    `,
+    tx,
+  })
+  const mappedCount = await getTableCount({sql: rowsSql, tx})
+  const [duplicate] = await tx.queryJson<{importRouteId: string; projectId: string}>(`
+    SELECT project_id AS projectId, import_route_id AS importRouteId
+    FROM (${rowsSql}) rows
+    GROUP BY project_id, import_route_id
+    HAVING COUNT(*) > 1
+    ORDER BY project_id ASC, import_route_id ASC
+    LIMIT 1
+  `)
+
+  if (mappedCount !== expectedCount) {
+    return failCommitWriter(`project_import_route rows mapped ${mappedCount} of ${expectedCount} staged plan rows`)
+  }
+
+  return duplicate
+    ? failCommitWriter(
+        `duplicate project_import_route after remap: ${duplicate.projectId}\u0000${duplicate.importRouteId}`,
+      )
+    : expectedCount
+}
+
+const insertProjectImportRoutesSetBased = async ({
+  context,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const expectedCount = await assertSetBasedProjectImportRouteRowsCommitSafe({context, projectId, tx})
+
+  if (expectedCount === 0) {
+    return undefined
+  }
+
+  const insertedRows = await tx.queryJson<{id: string}>(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    SELECT id, project_id, import_route_id
+    FROM (${getSetBasedProjectImportRouteRowsSql({context, projectId})}) rows
+    RETURNING id
+  `)
+
+  return insertedRows.length === expectedCount
+    ? undefined
+    : failCommitWriter(`project_import_route insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+}
+
 const insertProjectImportRoutes = async ({
   commitIdMaps,
+  context,
   projectId,
   projectRoutePlan,
   tx,
 }: {
   commitIdMaps: ProjectTransferCommitIdMaps
+  context: ProjectTransferCommitWriterSetBasedContext | null
   projectId: string
   projectRoutePlan: readonly ProjectRoutePlanEntry[]
   tx: ProjectTransferCommitWriterTx
 }) => {
+  if (context !== null) {
+    return insertProjectImportRoutesSetBased({context, projectId, tx})
+  }
+
   const rows = projectRoutePlan
     .filter((entry) => {
       return entry.action === 'link' && entry.targetImportRouteId !== null
@@ -2082,10 +2977,94 @@ const getProjectArticleSourceIds = ({
   return [...new Set([...directSources, ...snapshotSources])]
 }
 
+const getSetBasedProjectArticleRowsSql = ({
+  context,
+  projectId,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  projectId: string
+}) => {
+  return `
+    SELECT
+      project_article_map.target_id AS id,
+      ${getSqlLiteral(projectId)} AS project_id,
+      article_map.target_id AS article_id,
+      NULL AS imported_from_project_id
+    FROM ${context.tempTables.projectArticleSources} source_row
+    INNER JOIN ${context.commitIdMapTables.idMap} project_article_map
+      ON project_article_map.map_kind = 'projectArticle'
+      AND project_article_map.source_id = source_row.source_article_id
+    INNER JOIN ${context.commitIdMapTables.idMap} article_map
+      ON article_map.map_kind = 'article'
+      AND article_map.source_id = source_row.source_article_id
+  `
+}
+
+const assertSetBasedProjectArticleRowsCommitSafe = async ({
+  context,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rowsSql = getSetBasedProjectArticleRowsSql({context, projectId})
+  const expectedCount = await getTableCount({
+    sql: `SELECT source_article_id FROM ${context.tempTables.projectArticleSources}`,
+    tx,
+  })
+  const mappedCount = await getTableCount({sql: rowsSql, tx})
+  const [duplicate] = await tx.queryJson<{articleId: string; projectId: string}>(`
+    SELECT project_id AS projectId, article_id AS articleId
+    FROM (${rowsSql}) rows
+    GROUP BY project_id, article_id
+    HAVING COUNT(*) > 1
+    ORDER BY project_id ASC, article_id ASC
+    LIMIT 1
+  `)
+
+  if (mappedCount !== expectedCount) {
+    return failCommitWriter(`project_article rows mapped ${mappedCount} of ${expectedCount} staged rows`)
+  }
+
+  return duplicate
+    ? failCommitWriter(`duplicate project_article after remap: ${duplicate.projectId}\u0000${duplicate.articleId}`)
+    : expectedCount
+}
+
+const insertProjectArticlesSetBased = async ({
+  context,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const expectedCount = await assertSetBasedProjectArticleRowsCommitSafe({context, projectId, tx})
+
+  if (expectedCount === 0) {
+    return undefined
+  }
+
+  const insertedRows = await tx.queryJson<{id: string}>(`
+    INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
+    SELECT id, project_id, article_id, imported_from_project_id
+    FROM (${getSetBasedProjectArticleRowsSql({context, projectId})}) rows
+    RETURNING id
+  `)
+
+  return insertedRows.length === expectedCount
+    ? undefined
+    : failCommitWriter(`project_article insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+}
+
 const insertProjectArticles = async ({
   articleIdBySourceId,
   articleRoutePlan,
   commitIdMaps,
+  context,
   projectArticles,
   projectId,
   tx,
@@ -2093,10 +3072,15 @@ const insertProjectArticles = async ({
   articleIdBySourceId: Record<string, string>
   articleRoutePlan: readonly ArticleRoutePlanEntry[]
   commitIdMaps: ProjectTransferCommitIdMaps
+  context: ProjectTransferCommitWriterSetBasedContext | null
   projectArticles: readonly ProjectTransferPayloadRecord[]
   projectId: string
   tx: ProjectTransferCommitWriterTx
 }) => {
+  if (context !== null) {
+    return insertProjectArticlesSetBased({context, projectId, tx})
+  }
+
   const rows = getProjectArticleSourceIds({articleRoutePlan, projectArticles}).map((sourceArticleId) => {
     const articleId = articleIdBySourceId[sourceArticleId]
 
@@ -3528,6 +4512,7 @@ const insertReviewRows = async ({rows, tx}: {rows: readonly ReviewCommitRow[]; t
 const writeProjectTransferCommitAppTablesTx = async ({
   commitId,
   now,
+  operationTables,
   payloads,
   plan,
   promotion,
@@ -3576,8 +4561,25 @@ const writeProjectTransferCommitAppTablesTx = async ({
     operationId: commitId,
     runner: tx,
   })
+  const commitWriterTempTables =
+    operationTables === undefined ? null : getCommitWriterTempTables(operationTables.operationId)
 
   try {
+    if (operationTables !== undefined && commitWriterTempTables !== null) {
+      await loadProjectTransferCommitWriterTempTables({
+        articles,
+        operationTables,
+        plan: materializedPlan,
+        promotion,
+        tables: commitWriterTempTables,
+        tx,
+      })
+    }
+
+    const setBasedContext =
+      operationTables === undefined || commitWriterTempTables === null
+        ? null
+        : {commitIdMapTables, operationTables, tempTables: commitWriterTempTables}
     const judgmentPlan = getRequiredPlanEntries(
       materializedPlan.targetPlan.judgmentPlan,
       'judgment plan',
@@ -3645,20 +4647,22 @@ const writeProjectTransferCommitAppTablesTx = async ({
 
     await assertNoArticleIdConflicts({articles, matches: materializedPlan.targetPlan.articleMatches, tx})
     await insertProjectPromptRows(tx, projectPromptRows, materializedPlan.commitIdMaps)
-    await insertCreatedArticles({articleIdBySourceId, now: importedAt, promotion, tx})
+    await insertCreatedArticles({articleIdBySourceId, context: setBasedContext, now: importedAt, promotion, tx})
     const targetArticleById = await getFillTargetArticleRows({promotion, tx})
-    await updateReusedArticles({now: importedAt, promotion, targetArticleById, tx})
+    await updateReusedArticles({context: setBasedContext, now: importedAt, promotion, targetArticleById, tx})
     await markUpdatedReusedArticlesDirty({promotion, tx})
     await insertArticleIdentifiers({
       articleIdBySourceId,
       articleMatches: materializedPlan.targetPlan.articleMatches,
       articles,
       commitIdMaps: materializedPlan.commitIdMaps,
+      context: setBasedContext,
       now: importedAt,
       tx,
     })
     await insertProjectImportRoutes({
       commitIdMaps: materializedPlan.commitIdMaps,
+      context: setBasedContext,
       projectId: createdProject.id,
       projectRoutePlan: materializedPlan.targetPlan.projectRoutePlan,
       tx,
@@ -3670,11 +4674,17 @@ const writeProjectTransferCommitAppTablesTx = async ({
       articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
       routeIdBySourceId,
     })
-    await insertArticleImportRoutes({commitIdMaps: materializedPlan.commitIdMaps, rows: articleImportRouteRows, tx})
+    await insertArticleImportRoutes({
+      commitIdMaps: materializedPlan.commitIdMaps,
+      context: setBasedContext,
+      rows: articleImportRouteRows,
+      tx,
+    })
     await insertProjectArticles({
       articleIdBySourceId,
       articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
       commitIdMaps: materializedPlan.commitIdMaps,
+      context: setBasedContext,
       projectArticles,
       projectId: createdProject.id,
       tx,
@@ -3799,6 +4809,11 @@ const writeProjectTransferCommitAppTablesTx = async ({
       routeIdBySourceId,
     }
   } finally {
+    if (commitWriterTempTables !== null) {
+      await dropProjectTransferCommitWriterTempTables({tables: commitWriterTempTables, tx}).catch(() => {
+        return undefined
+      })
+    }
     await dropProjectTransferCommitIdMapTables({runner: tx, tables: commitIdMapTables})
   }
 }
