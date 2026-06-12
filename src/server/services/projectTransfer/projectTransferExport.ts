@@ -20,7 +20,6 @@ import {
   type ProjectTransferRawArticleProvenanceMode,
 } from './projectTransferContracts.ts'
 import {
-  filterProjectTransferExportAssetCollectionByArticles,
   getProjectTransferExportAssetByteEstimateForArticles,
   getProjectTransferExportAssetCollectionForArticles,
   type ProjectTransferExportAssetArticle,
@@ -41,7 +40,6 @@ import {
   type ProjectTransferPayloadWarning,
   serializeProjectTransferPayload,
 } from './projectTransferPayloadSchemas.ts'
-import {redactProjectTransferPayloads} from './projectTransferRedaction.ts'
 import type {ProjectTransferManifestWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
 import {projectTransferPayloadKeys} from './projectTransferSchemas.ts'
 
@@ -1549,21 +1547,6 @@ const getProjectTransferExportArticleWarnings = (articles: ProjectTransferExport
   })
 }
 
-const isUnsafeProjectTransferArticleRoute = (value: string | null) => {
-  return (
-    value !== null
-    && (value.includes('/api/runtime-asset')
-      || value.includes('tmp/project-transfer')
-      || /^\/(?!\/)/.test(value)
-      || /^[A-Za-z]:[\\/]/.test(value)
-      || value.startsWith('file://'))
-  )
-}
-
-const getPortableProjectTransferArticleRoute = (value: string | null) => {
-  return isUnsafeProjectTransferArticleRoute(value) ? null : value
-}
-
 const getProjectTransferExportPromptSignature = (
   row: Pick<ProjectTransferExportProjectPromptRow, 'contentHash' | 'originalText'>,
 ) => {
@@ -1930,7 +1913,7 @@ const getProjectTransferExportArticlePayloadRecord = (
     fullTextPdf: row.fullTextPdf,
     fullTextSource: row.fullTextSource,
     identifierInputs,
-    importRoute: getPortableProjectTransferArticleRoute(row.importRoute),
+    importRoute: row.importRoute,
     medrxivId: row.medrxivId,
     originalData: getJsonValue(row.originalData),
     provenance: {sourceArticleId},
@@ -1940,7 +1923,7 @@ const getProjectTransferExportArticlePayloadRecord = (
     scopedRawPayload: getJsonValue(row.scopedRawPayload),
     selectedExternalArticleId: row.selectedExternalArticleId,
     selectedImportRecordId: row.selectedImportRecordId,
-    selectedImportRoute: getPortableProjectTransferArticleRoute(row.selectedImportRoute),
+    selectedImportRoute: row.selectedImportRoute,
     selectedImportRouteId: row.selectedImportRouteId,
     selectedSourceKind: row.selectedSourceKind,
     selectedSourceRecordHash: row.selectedSourceRecordHash,
@@ -3168,24 +3151,12 @@ export const getProjectTransferExportPayloads = async (
     providerConnections: getProjectTransferExportProviderConnectionsPayloadFromContext(contextWithAssets),
     reviews: getProjectTransferExportReviewsPayloadFromContext(contextWithAssets),
   } satisfies ProjectTransferPayloadByKey
-  const redacted = redactProjectTransferPayloads(payloads)
-  const filteredAssetCollection = filterProjectTransferExportAssetCollectionByArticles({
-    articles: redacted.payloads.articles,
-    assetEntries: assetCollection.assetEntries,
-    assetManifest: redacted.payloads.assetManifest,
-  })
-  const redactedPayloads = {
-    ...redacted.payloads,
-    assetManifest: assertProjectTransferPayload('assetManifest', filteredAssetCollection.assetManifest),
-  }
-
   return {
-    assetEntries: filteredAssetCollection.assetEntries,
-    payloads: redactedPayloads,
+    assetEntries: assetCollection.assetEntries,
+    payloads,
     warnings: [
       ...contextWithAssets.warnings,
       ...getProjectTransferExportCurrentReviewRowsSignatureWarnings(contextWithAssets),
-      ...redacted.warnings,
     ],
   }
 }

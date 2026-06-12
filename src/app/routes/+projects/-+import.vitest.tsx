@@ -509,7 +509,7 @@ describe('project import route', () => {
   })
 
   test('renders omission warning context and keeps distinct rows distinguishable', async () => {
-    const decisionMessage = 'Decision payload row was omitted because a field could not be safely exported.'
+    const decisionMessage = 'Payload row was omitted by export policy.'
     const dependentMessage = 'Dependent payload row was omitted because its parent row was omitted.'
 
     mockState.sessionQueryResult = {
@@ -519,22 +519,22 @@ describe('project import route', () => {
           ...getSession().planSummary,
           packageWarnings: [
             {
-              code: 'decisionPayloadRowOmitted',
+              code: 'payloadOmitted',
               details: {reason: 'runtimePathRedacted', sourceRowId: 'article-1', triggeringField: 'articleTitle'},
               message: decisionMessage,
             },
             {
-              code: 'decisionPayloadRowOmitted',
+              code: 'payloadOmitted',
               details: {reason: 'runtimePathRedacted', sourceRowId: 'article-1', triggeringField: 'articleTitle'},
               message: decisionMessage,
             },
             {
-              code: 'decisionPayloadRowOmitted',
+              code: 'payloadOmitted',
               details: {reason: 'providerSecretRedacted', sourceRowId: 'article-2', triggeringField: 'abstract'},
               message: decisionMessage,
             },
             {
-              code: 'dependentPayloadRowOmitted',
+              code: 'route_omitted',
               details: {dependencyReason: 'sourceArticle', omittedParentRef: 'article-1', reason: 'sourceArticle'},
               message: dependentMessage,
             },

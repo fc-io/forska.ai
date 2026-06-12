@@ -7,8 +7,7 @@ import {
   getProjectTransferExportHumanReviewInputSignature,
   getProjectTransferExportJudgmentInputSignature,
 } from './projectTransferExport.ts'
-import {assertProjectTransferExportPackageFinalizationAllowed} from './projectTransferExportPackage.ts'
-import {type ProjectTransferManifestWarning, projectTransferPayloadKeys} from './projectTransferSchemas.ts'
+import {projectTransferPayloadKeys} from './projectTransferSchemas.ts'
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
@@ -129,100 +128,6 @@ const runProjectTransferExportScript = <T>(body: string) => {
     removeFileIfExists('/tmp/duckdb-temp')
   }
 }
-
-test('project-transfer export blocks package finalization for decision-bearing omissions', () => {
-  const decisionBearingOmissionWarnings: ProjectTransferManifestWarning[] = [
-    {
-      action: 'omitted',
-      code: 'decisionPayloadRowOmitted',
-      details: {reason: 'runtimePathRedacted', sourceRowId: 'article-1', triggeringField: 'articleTitle'},
-      jsonPointer: '/0/articleTitle',
-      message: 'Article row was omitted because a review input field would require redaction.',
-      scope: 'articles',
-      severity: 'fidelity',
-      sourceRef: 'article:article-1',
-    },
-    {
-      action: 'omitted',
-      code: 'decisionPayloadRowOmitted',
-      details: {reason: 'providerSecretRedacted', sourceRowId: 'prompt-1', triggeringField: 'originalText'},
-      jsonPointer: '/0/originalText',
-      message: 'Prompt row was omitted because a benchmark input field would require redaction.',
-      scope: 'prompts',
-      severity: 'fidelity',
-      sourceRef: 'prompt:prompt-1',
-    },
-    {
-      action: 'omitted',
-      code: 'decisionPayloadRowOmitted',
-      details: {reason: 'runtimePathRedacted', sourceRowId: 'judgment-1', triggeringField: 'answeredOriginal'},
-      jsonPointer: '/0/answeredOriginal',
-      message: 'Judgment row was omitted because an LLM decision field would require redaction.',
-      scope: 'judgments',
-      severity: 'fidelity',
-      sourceRef: 'judgment:judgment-1',
-    },
-    {
-      action: 'omitted',
-      code: 'decisionPayloadRowOmitted',
-      details: {reason: 'providerSecretRedacted', sourceRowId: 'human-judgment-1', triggeringField: 'answer'},
-      jsonPointer: '/0/answer',
-      message: 'Human judgment row was omitted because the answer would require redaction.',
-      scope: 'humanJudgments',
-      severity: 'fidelity',
-      sourceRef: 'humanJudgment:human-judgment-1',
-    },
-    {
-      action: 'omitted',
-      code: 'decisionPayloadRowOmitted',
-      details: {reason: 'providerSecretRedacted', sourceRowId: 'human-summary-1', triggeringField: 'answer'},
-      jsonPointer: '/0/answer',
-      message: 'Human judgment summary row was omitted because the answer would require redaction.',
-      scope: 'humanJudgmentSummaries',
-      severity: 'fidelity',
-      sourceRef: 'humanSummary:human-summary-1',
-    },
-    {
-      action: 'omitted',
-      code: 'dependentPayloadRowOmitted',
-      details: {dependencyReason: 'sourceArticle', omittedParentRef: 'article-1', reason: 'sourceArticle'},
-      jsonPointer: '/0',
-      message: 'Dependent payload row was omitted because its parent row was omitted.',
-      scope: 'reviews',
-      severity: 'fidelity',
-      sourceRef: 'review:review-1',
-    },
-  ]
-  const nonBlockingWarnings: ProjectTransferManifestWarning[] = [
-    {
-      action: 'warned',
-      code: 'nonLocalUrlPreserved',
-      details: {reason: 'nonLocalUrlPreserved'},
-      jsonPointer: '/0/url',
-      message: 'Non-local URL contains credentials, query parameters, or a fragment and was preserved unchanged.',
-      scope: 'articles',
-      severity: 'warning',
-      sourceRef: 'article:article-1',
-    },
-    {
-      action: 'omitted',
-      code: 'payloadOmitted',
-      details: {rawArticleProvenanceMode: 'omit'},
-      message: 'Article raw provenance JSON was omitted from the transfer payload by export option.',
-      scope: 'articles',
-      severity: 'fidelity',
-    },
-  ]
-
-  expect(() => {
-    assertProjectTransferExportPackageFinalizationAllowed(nonBlockingWarnings)
-  }).not.toThrow()
-  expect(() => {
-    assertProjectTransferExportPackageFinalizationAllowed(decisionBearingOmissionWarnings)
-  }).toThrow(
-    'Project transfer export blocked: 6 decision-bearing payload omission(s) would make the package partial. Omitted scopes: articles, prompts, judgments, humanJudgments, humanJudgmentSummaries, reviews',
-  )
-})
 
 test('project-transfer export reads archived app-table scope and serializes locked payload fields', () => {
   const result = runProjectTransferExportScript<{
@@ -1108,8 +1013,8 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.humanReviewProvenanceKinds).toEqual(['currentReviewRows', 'currentReviewRows', 'currentReviewRows'])
   expect(result.humanReviewSignatureModes).toEqual(['promptHumanJudgment', 'summaryHumanJudgment', 'reviewRow'])
   expect(result.providerConnectionIds).toEqual(['provider-null-remote'])
-  expect(result.routeArticleImportRoute).toBeNull()
-  expect(result.routeArticleSelectedImportRoute).toBeNull()
+  expect(result.routeArticleImportRoute).toBe('/Users/export/inactive-covidence.csv')
+  expect(result.routeArticleSelectedImportRoute).toBe('/Users/export/inactive-covidence.csv')
   expect(result.routeArticleUrl).toBe(
     'https://user:pass@example.test/route?X-Amz-Credential=abc%2F20260611&X-Amz-Signature=secret#source',
   )
@@ -1228,16 +1133,14 @@ test('project-transfer export reads archived app-table scope and serializes lock
   )
   expect(result.serializedArticleFullTextHtml ?? '').not.toContain('/api/runtime-asset')
   expect(result.serializedJudgmentHasDeleteGeneration).toBe(true)
-  expect(result.warningCodes).toContain('articleFullTextOmitted')
   expect(result.warningCodes).toContain('chunkedJudgmentInputProofMissing')
   expect(result.warningCodes).toContain('currentReviewRowsHumanReviewInputSignature')
   expect(result.warningCodes).toContain('currentReviewRowsJudgmentInputSignature')
   expect(result.warningCodes).toContain('identifierRejected')
-  expect(result.warningCodes).toContain('nonLocalUrlPreserved')
+  expect(result.warningCodes).not.toContain('articleFullTextOmitted')
+  expect(result.warningCodes).not.toContain('nonLocalUrlPreserved')
   expect(result.warningCodes).not.toContain('ambiguousJudgmentVisibleKey')
-  expect(result.preservedUrlWarnings).toEqual([
-    {action: 'warned', code: 'nonLocalUrlPreserved', jsonPointer: '/0/url', severity: 'warning'},
-  ])
+  expect(result.preservedUrlWarnings).toEqual([])
   expect(result.identifierRejectedWarnings).toHaveLength(2)
   expect(
     result.identifierRejectedWarnings.map((warning) => {

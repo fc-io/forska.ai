@@ -80,6 +80,7 @@ test('locks project settings and warning, omission, and redaction code fixtures'
     'freeFormValueRedacted',
     'identifierConflict',
     'identifierRejected',
+    'nonLocalUrlPreserved',
     'payloadOmitted',
     'projectSettingUnsupported',
     'providerConfigValueRedacted',
@@ -250,4 +251,46 @@ test('rejects invalid asset package paths and checksum signatures', () => {
   expect(getValidationError(invalidPathResult)).toContain('Project transfer path contains traversal')
   expect(getValidationError(invalidChecksumResult)).toContain('checksumSha256 must be lowercase SHA-256 hex')
   expect(getValidationError(oldEnvelopeResult)).toContain('assetManifest payload must use top-level entries only')
+})
+
+test('serializes internal payload annotations into package warnings', () => {
+  const article = getOnlyRecord(getProjectTransferPayloadFixture('articles'))
+  const annotatedArticle = {
+    ...article,
+    omissions: [
+      {
+        action: 'omitted',
+        code: 'articleFullTextOmitted' as const,
+        jsonPointer: '/fullText',
+        message: 'Article full text was omitted from the package payload.',
+        scope: 'articles',
+        severity: 'info' as const,
+      },
+    ],
+    redactions: [
+      {
+        action: 'redacted',
+        code: 'runtimeAssetPathRedacted' as const,
+        jsonPointer: '/fullTextPdf',
+        message: 'Runtime asset path was redacted from the package payload.',
+        scope: 'articles',
+        severity: 'warning' as const,
+      },
+    ],
+  }
+  const [serializedArticle] = serializeProjectTransferPayload('articles', [annotatedArticle])
+    .trim()
+    .split('\n')
+    .map((line) => {
+      return JSON.parse(line) as Record<string, unknown>
+    })
+
+  expect(serializedArticle?.omissions).toBeUndefined()
+  expect(serializedArticle?.redactions).toBeUndefined()
+  expect(serializedArticle?.warnings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({code: 'articleFullTextOmitted', scope: 'articles'}),
+      expect.objectContaining({code: 'runtimeAssetPathRedacted', scope: 'articles'}),
+    ]),
+  )
 })
