@@ -227,6 +227,7 @@ export const verifyProjectTransferStagingRevision = async ({
     packageFingerprint: plan.packageFingerprint,
     path: layout.stagingRootPath,
     planRevision: plan.planRevision,
+    stagedPackage: analysis.stagedPackage,
     stagingRevision: layout.stagingRevision,
     warningCount: plan.summary.warningCount,
   }

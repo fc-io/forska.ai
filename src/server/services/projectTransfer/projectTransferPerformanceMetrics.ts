@@ -60,7 +60,7 @@ export type ProjectTransferPerformanceMetrics = {
   duckdb: {spillBytes: ProjectTransferMetricValue; writerTransactionMs: ProjectTransferMetricValue}
   memory: {sampledPeakBytes: ProjectTransferMetricValue}
   operation: ProjectTransferPerformanceOperation
-  parser: {usesStreamingParser: false}
+  parser: {usesStreamingParser: boolean}
   phases: Record<ProjectTransferPerformancePhase, ProjectTransferPerformancePhaseTiming>
   rows: Record<ProjectTransferPerformanceRowCounterKey, ProjectTransferMetricValue>
   version: 1
@@ -81,6 +81,7 @@ type ProjectTransferPerformanceMetricInput = {
   phases?: Partial<Record<ProjectTransferPerformancePhase, ProjectTransferPerformancePhaseTiming>>
   rows?: Partial<Record<ProjectTransferPerformanceRowCounterKey, ProjectTransferMetricValue | null | undefined>>
   sampledPeakMemoryBytes?: ProjectTransferMetricValue | null
+  usesStreamingParser?: boolean
   warnings?: readonly ProjectTransferPackageWarning[]
   writerTransactionMs?: ProjectTransferMetricValue | null
 }
@@ -340,6 +341,7 @@ export const getProjectTransferPerformanceMetrics = ({
   phases,
   rows,
   sampledPeakMemoryBytes,
+  usesStreamingParser = false,
   warnings = [],
   writerTransactionMs,
 }: ProjectTransferPerformanceMetricInput): ProjectTransferPerformanceMetrics => {
@@ -371,7 +373,7 @@ export const getProjectTransferPerformanceMetrics = ({
     duckdb: {spillBytes: duckdbSpillMetric, writerTransactionMs: writerTransactionMetric},
     memory: {sampledPeakBytes},
     operation,
-    parser: {usesStreamingParser: false},
+    parser: {usesStreamingParser},
     phases: phaseTimings,
     rows: rowCounters,
     version: 1,
@@ -432,6 +434,7 @@ export const mergeProjectTransferPerformanceMetrics = (
     bytes,
     duckdb: {spillBytes, writerTransactionMs},
     memory: {sampledPeakBytes},
+    parser: {usesStreamingParser: left.parser.usesStreamingParser || right.parser.usesStreamingParser},
     phases,
     rows,
     warnings: right.warnings.total > 0 ? right.warnings : left.warnings,

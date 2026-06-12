@@ -206,6 +206,12 @@ export type ProjectTransferPackagePayloadValidationResult<TKey extends ProjectTr
   | {ok: true; value: ProjectTransferPackagePayloadByKey[TKey]}
   | {error: Error; ok: false}
 
+export type ProjectTransferPayloadRowValidationResult =
+  | {ok: true; value: ProjectTransferPayloadRecord}
+  | {error: Error; ok: false}
+
+export type ProjectTransferPackagePayloadRowValidationResult = {ok: true; value: JsonRecord} | {error: Error; ok: false}
+
 const projectTransferSha256Pattern = /^[a-f0-9]{64}$/
 const articleIdentifierInputKindSet = new Set<ArticleIdentifierInputKind>([
   'arxiv',
@@ -1262,11 +1268,47 @@ const assertProjectTransferPayloadBySchemaVersionContract = (
           : assertProjectTransferRecordSetPayload(value, contract.record, key)
 }
 
+const assertProjectTransferPayloadRowByContract = (
+  key: ProjectTransferPackagePayloadKey,
+  value: unknown,
+  contract: ProjectTransferPayloadContract,
+  index: number,
+) => {
+  return contract.container === 'schemaVNextAssetEntries'
+    ? assertSchemaVNextAssetEntry(value, index)
+    : contract.container === 'schemaVNextAssetReferences'
+      ? assertSchemaVNextAssetReference(value, index)
+      : contract.container === 'recordSet'
+        ? assertProjectTransferPayloadRecord(value, contract.record, `${key}[${index}]`)
+        : failProjectTransferPayload(`${key} is not an NDJSON row payload`)
+}
+
+const assertProjectTransferPayloadRowBySchemaVersionContract = (
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: ProjectTransferPackagePayloadKey,
+  value: unknown,
+  index: number,
+) => {
+  const contract = projectTransferPayloadContractsBySchemaVersion[schemaVersion][key]
+
+  return contract === undefined
+    ? failProjectTransferPayload(`schema ${schemaVersion} does not allow payload key ${key}`)
+    : assertProjectTransferPayloadRowByContract(key, value, contract, index)
+}
+
 export const assertProjectTransferPayload = <TKey extends ProjectTransferPayloadKey>(
   key: TKey,
   value: unknown,
 ): ProjectTransferPayloadByKey[TKey] => {
   return assertProjectTransferPayloadByContract(key, value) as ProjectTransferPayloadByKey[TKey]
+}
+
+export const assertProjectTransferPayloadRow = <TKey extends ProjectTransferPayloadKey>(
+  key: TKey,
+  value: unknown,
+  index: number,
+): ProjectTransferPayloadRecord => {
+  return assertProjectTransferPayloadRowByContract(key, value, projectTransferPayloadContracts[key], index)
 }
 
 export const assertProjectTransferPayloadForSchemaVersion = <TKey extends ProjectTransferPackagePayloadKey>(
@@ -1281,12 +1323,33 @@ export const assertProjectTransferPayloadForSchemaVersion = <TKey extends Projec
   ) as ProjectTransferPackagePayloadByKey[TKey]
 }
 
+export const assertProjectTransferPayloadRowForSchemaVersion = <TKey extends ProjectTransferPackagePayloadKey>(
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: TKey,
+  value: unknown,
+  index: number,
+): JsonRecord => {
+  return assertProjectTransferPayloadRowBySchemaVersionContract(schemaVersion, key, value, index)
+}
+
 export const validateProjectTransferPayload = <TKey extends ProjectTransferPayloadKey>(
   key: TKey,
   value: unknown,
 ): ProjectTransferPayloadValidationResult<TKey> => {
   try {
     return {ok: true, value: assertProjectTransferPayload(key, value)}
+  } catch (error) {
+    return {error: error instanceof Error ? error : new Error(String(error)), ok: false}
+  }
+}
+
+export const validateProjectTransferPayloadRow = <TKey extends ProjectTransferPayloadKey>(
+  key: TKey,
+  value: unknown,
+  index: number,
+): ProjectTransferPayloadRowValidationResult => {
+  try {
+    return {ok: true, value: assertProjectTransferPayloadRow(key, value, index)}
   } catch (error) {
     return {error: error instanceof Error ? error : new Error(String(error)), ok: false}
   }
@@ -1304,17 +1367,41 @@ export const validateProjectTransferPayloadForSchemaVersion = <TKey extends Proj
   }
 }
 
+export const validateProjectTransferPayloadRowForSchemaVersion = <TKey extends ProjectTransferPackagePayloadKey>(
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: TKey,
+  value: unknown,
+  index: number,
+): ProjectTransferPackagePayloadRowValidationResult => {
+  try {
+    return {ok: true, value: assertProjectTransferPayloadRowForSchemaVersion(schemaVersion, key, value, index)}
+  } catch (error) {
+    return {error: error instanceof Error ? error : new Error(String(error)), ok: false}
+  }
+}
+
+const appendParsedNdjsonLine = (records: unknown[], line: string) => {
+  if (line.trim() === '') {
+    return records
+  }
+
+  records.push(JSON.parse(line) as unknown)
+
+  return records
+}
+
 const parseNdjsonPayload = (textValue: string) => {
-  return textValue.trim() === ''
-    ? []
-    : textValue
-        .split('\n')
-        .filter((line) => {
-          return line.trim() !== ''
-        })
-        .map((line) => {
-          return JSON.parse(line) as unknown
-        })
+  const records: unknown[] = []
+  let remaining = textValue
+  let newlineIndex = remaining.indexOf('\n')
+
+  while (newlineIndex !== -1) {
+    appendParsedNdjsonLine(records, remaining.slice(0, newlineIndex))
+    remaining = remaining.slice(newlineIndex + 1)
+    newlineIndex = remaining.indexOf('\n')
+  }
+
+  return appendParsedNdjsonLine(records, remaining)
 }
 
 const getTextValue = (value: string | Uint8Array) => {
@@ -1399,6 +1486,16 @@ export const serializeProjectTransferPayload = <TKey extends ProjectTransferPayl
   return format === 'ndjson' && Array.isArray(packagePayload)
     ? serializeNdjsonPayload(packagePayload)
     : getProjectTransferCanonicalJson(packagePayload)
+}
+
+export const serializeProjectTransferPayloadNdjsonRow = <TKey extends ProjectTransferPayloadKey>(
+  key: TKey,
+  value: unknown,
+  index: number,
+): string => {
+  const row = assertProjectTransferPayloadRow(key, value, index)
+
+  return JSON.stringify(getPackageRecordWithoutInternalAnnotations(row))
 }
 
 export const serializeProjectTransferPayloadForSchemaVersion = <TKey extends ProjectTransferPackagePayloadKey>(

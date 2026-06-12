@@ -38,6 +38,10 @@ import {
 type PackageOverride = {
   manifest?: (manifest: ProjectTransferManifest) => ProjectTransferManifest
   payloads?: (payloads: ProjectTransferPayloadByKey) => ProjectTransferPayloadByKey
+  serializedPayloads?: (
+    serializedPayloads: Record<ProjectTransferPayloadKey, string>,
+    payloads: ProjectTransferPayloadByKey,
+  ) => Record<ProjectTransferPayloadKey, string>
 }
 
 const textEncoder = new TextEncoder()
@@ -247,16 +251,21 @@ const writeAnalyzeUpload = async ({
   cwd,
   manifestOverride,
   payloadOverride,
+  serializedPayloadOverride,
   useZipModule = true,
 }: {
   cwd: string
   manifestOverride?: PackageOverride['manifest']
   payloadOverride?: PackageOverride['payloads']
+  serializedPayloadOverride?: PackageOverride['serializedPayloads']
   useZipModule?: boolean
 }) => {
   const layout = getProjectTransferImportTempLayout(sessionId)
   const payloads = getFixturePayloads(payloadOverride)
-  const serializedPayloads = getSerializedPayloads(payloads)
+  const defaultSerializedPayloads = getSerializedPayloads(payloads)
+  const serializedPayloads = serializedPayloadOverride
+    ? serializedPayloadOverride(defaultSerializedPayloads, payloads)
+    : defaultSerializedPayloads
   const manifest = getManifest({manifestOverride, payloads, serializedPayloads})
   const zipModule = useZipModule ? getFakeZipModule() : undefined
   const entries = [
@@ -492,8 +501,10 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
     })
     const analysisPath = join(cwd, layout.analysisPath)
     const planPath = join(cwd, layout.planPath)
+    const extractedArticlesPath = join(cwd, layout.extractedPath, projectTransferPayloadPathByKey.articles)
     const extractedAssetPath = join(cwd, layout.extractedPath, 'assets/project-transfer/session-1/article-1.pdf')
     const planArtifact = JSON.parse(await readFile(planPath, 'utf8')) as {canCommit: boolean; planRevision: number}
+    const extractedArticlesBytes = new Uint8Array(await readFile(extractedArticlesPath))
 
     expect(result.planSummary.blockerCount).toBe(0)
     expect(result.planSummary.conflictCounts.packageContractConflictCount).toBe(0)
@@ -507,6 +518,15 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
     })
     expect(result.planSummary.judgmentConflictStatus).toBe('unknown')
     expect(result.analysis.payloads.articles.actualRecordCount).toBe(1)
+    expect(result.analysis.stagedPackage?.rowCounts.articles).toBe(1)
+    expect(result.analysis.stagedPackage?.canonicalPayloadChecksums.articles).toBe(
+      getProjectTransferSha256Checksum(extractedArticlesBytes),
+    )
+    expect(result.staging.stagedPackage?.sourceProject).toMatchObject({
+      name: 'Fixture Project',
+      schemaVersion: 1,
+      sourceProjectId: 'source-project-1',
+    })
     expect(planArtifact).toMatchObject({canCommit: false, planRevision: 1})
     expect(existsSync(analysisPath)).toBe(true)
     expect(existsSync(extractedAssetPath)).toBe(true)
@@ -790,6 +810,46 @@ test('exposes package-contract blockers with non-wizard resolution kinds', async
       resolutionKind: 'requires_new_package_or_target_changes',
     })
     expect(result.plan.resolutionKinds.project_summary_count_mismatch).toBe('requires_new_package_or_target_changes')
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('records streamed NDJSON row validation failures as package-contract blockers', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({
+      cwd,
+      serializedPayloadOverride: (serializedPayloads) => {
+        return {...serializedPayloads, articles: '{"sourceArticleId":"","articleTitle":""}\n'}
+      },
+    })
+    const result = await analyzeProjectTransferImportPackage({
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      layout,
+      planRevision: 8,
+      runner: getEmptyAnalyzeTargetRunner(),
+      uploadMetadata,
+      zipModule,
+    })
+    const blockerCodes = result.planSummary.blockers.map((blocker) => {
+      return blocker.code
+    })
+    const extractedArticlesText = await readFile(
+      join(cwd, layout.extractedPath, projectTransferPayloadPathByKey.articles),
+      'utf8',
+    )
+
+    expect(blockerCodes).toContain('payload_row_contract_invalid')
+    expect(result.planSummary.conflictCounts.packageContractConflictCount).toBeGreaterThan(0)
+    expect(result.planSummary.blockerCount).toBeGreaterThan(0)
+    expect(result.plan.canCommit).toBe(false)
+    expect(result.analysis.payloads.articles.actualRecordCount).toBe(0)
+    expect(result.analysis.stagedPackage?.payloads.articles?.invalidRecordCount).toBe(1)
+    expect(result.analysis.stagedPackage?.rowCounts.articles).toBe(0)
+    expect(extractedArticlesText).toBe('')
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

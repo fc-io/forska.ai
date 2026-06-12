@@ -169,8 +169,47 @@ export type ProjectTransferStagingProgressPayload = {
   path?: string
   planRevision?: number
   publishedAt?: string
+  stagedPackage?: ProjectTransferStagedPackageMetadata
   stagingRevision: number
   warningCount?: number
+}
+
+export type ProjectTransferStagedPackageSourceProjectMetadata = {
+  exportedAt: string
+  humanJudgmentMode: 'prompt' | 'summary'
+  name: string
+  schemaVersion: number
+  sourceAppVersion: string
+  sourceProjectId: string
+}
+
+export type ProjectTransferStagedPayloadMetadata = {
+  archiveByteLength: number | null
+  archiveChecksumSha256: string | null
+  canonicalByteLength: number | null
+  canonicalChecksumSha256: string | null
+  invalidRecordCount: number
+  logicalDigestSha256: string | null
+  recordCount: number | null
+}
+
+export type ProjectTransferStagedPackageMetadata = {
+  archiveAssetBytes: number
+  archiveEntryByteCounts: Record<string, number>
+  archiveEntryChecksums: Record<string, string>
+  canonicalPayloadByteCounts: Record<string, number>
+  canonicalPayloadChecksums: Record<string, string>
+  declaredAssetBytes: number
+  logicalPayloadDigests: Record<string, string>
+  packageFingerprintInputs: {
+    checksumSha256: string
+    fingerprintMode: 'logicalPayloads' | 'stagedRowAndSingletonPayloadDigests'
+    payloadDigests: Record<string, string>
+    schemaVersion: number
+  }
+  payloads: Record<string, ProjectTransferStagedPayloadMetadata>
+  rowCounts: Record<string, number>
+  sourceProject: ProjectTransferStagedPackageSourceProjectMetadata
 }
 
 export type ProjectTransferProgressPayload = {
