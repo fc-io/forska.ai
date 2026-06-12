@@ -41,7 +41,7 @@ const comparisonArticleServingTable = 'mart.comparison_article_serving'
 const comparisonCellServingTable = 'mart.comparison_cell_serving'
 const comparisonFilterStatsTable = 'mart.comparison_filter_stats'
 const comparisonScopedImportAlias = 'selected_import'
-const comparisonProjectServingArticleRollupBatchSize = 1000
+const comparisonProjectServingArticleRollupBatchSize = 100
 const chineseArticleCategory = 'chinese'
 const nonChineseArticleCategory = 'non_chinese'
 const cjkHanScriptPattern = '\\p{Han}'
@@ -485,16 +485,6 @@ const getComparisonProjectArticleServingInsertSql = ({
       WHERE cell.comparison_project_id = ${comparisonProjectLiteral}
         AND cell.generation = ${generationLiteral}
     ),
-    article_cell_rollup AS (
-      SELECT
-        article_id,
-        CAST(COUNT(DISTINCT prompt_id) AS INTEGER) AS answered_prompt_count,
-        CAST(COUNT(DISTINCT column_id) AS INTEGER) AS answered_column_count,
-        CAST(COUNT(DISTINCT column_id) FILTER (WHERE kind = 'llm') AS INTEGER) AS answered_llm_column_count,
-        CAST(COUNT(DISTINCT column_id) FILTER (WHERE kind = 'human') AS INTEGER) AS answered_human_column_count
-      FROM article_cell
-      GROUP BY article_id
-    ),
     cell_answer AS (
       SELECT
         article_cell.article_id,
@@ -508,6 +498,34 @@ const getComparisonProjectArticleServingInsertSql = ({
         AND ARRAY_LENGTH(article_cell.normalized_answers) > 0
         AND NULLIF(TRIM(answer.answer_value), '') IS NOT NULL
     ),
+    prompt_answer_count AS (
+      SELECT
+        article_id,
+        prompt_id,
+        COUNT(*) AS all_answered_count,
+        SUM(CASE WHEN kind = 'human' THEN 1 ELSE 0 END) AS human_answered_count,
+        SUM(CASE WHEN kind = 'llm' THEN 1 ELSE 0 END) AS llm_answered_count
+      FROM article_cell
+      GROUP BY article_id, prompt_id
+    ),
+    article_prompt_rollup AS (
+      SELECT
+        article_id,
+        COUNT(*) AS answered_prompt_count
+      FROM prompt_answer_count
+      GROUP BY article_id
+    ),
+    article_cell_rollup AS (
+      SELECT
+        article_cell.article_id,
+        CAST(COALESCE(article_prompt_rollup.answered_prompt_count, 0) AS INTEGER) AS answered_prompt_count,
+        CAST(COUNT(*) AS INTEGER) AS answered_column_count,
+        CAST(SUM(CASE WHEN article_cell.kind = 'llm' THEN 1 ELSE 0 END) AS INTEGER) AS answered_llm_column_count,
+        CAST(SUM(CASE WHEN article_cell.kind = 'human' THEN 1 ELSE 0 END) AS INTEGER) AS answered_human_column_count
+      FROM article_cell
+      LEFT JOIN article_prompt_rollup ON article_prompt_rollup.article_id = article_cell.article_id
+      GROUP BY article_cell.article_id, article_prompt_rollup.answered_prompt_count
+    ),
     article_answer_value_rollup AS (
       SELECT
         article_id,
@@ -520,38 +538,18 @@ const getComparisonProjectArticleServingInsertSql = ({
       FROM cell_answer
       GROUP BY article_id
     ),
-    prompt_answer_count AS (
+    prompt_answer_value_rollup AS (
       SELECT
         article_id,
         prompt_id,
-        COUNT(DISTINCT column_id) AS all_answered_count,
-        COUNT(DISTINCT column_id) FILTER (WHERE kind = 'human') AS human_answered_count,
-        COUNT(DISTINCT column_id) FILTER (WHERE kind = 'llm') AS llm_answered_count
-      FROM article_cell
-      GROUP BY article_id, prompt_id
-    ),
-    prompt_answer_value_count AS (
-      SELECT
-        article_id,
-        prompt_id,
-        COUNT(DISTINCT answer_value) AS all_answer_count,
-        COUNT(DISTINCT answer_value) FILTER (WHERE kind = 'human') AS human_answer_count,
-        COUNT(DISTINCT answer_value) FILTER (WHERE kind = 'llm') AS llm_answer_count,
-        COUNT(DISTINCT CASE
-          WHEN kind = 'human' AND LOWER(answer_value) IN ('yes', 'maybe') THEN 'include'
-          WHEN kind = 'human' AND LOWER(answer_value) = 'no' THEN 'exclude'
-          ELSE NULL
-        END) AS human_binary_decision_count,
-        COUNT(DISTINCT CASE
-          WHEN kind = 'llm' AND LOWER(answer_value) IN ('yes', 'maybe') THEN 'include'
-          WHEN kind = 'llm' AND LOWER(answer_value) = 'no' THEN 'exclude'
-          ELSE NULL
-        END) AS llm_binary_decision_count,
-        COUNT(DISTINCT CASE
-          WHEN LOWER(answer_value) IN ('yes', 'maybe') THEN 'include'
-          WHEN LOWER(answer_value) = 'no' THEN 'exclude'
-          ELSE NULL
-        END) AS all_binary_decision_count
+        MIN(answer_value) AS min_answer_value,
+        MAX(answer_value) AS max_answer_value,
+        MIN(answer_value) FILTER (WHERE kind = 'llm') AS llm_min_answer_value,
+        MAX(answer_value) FILTER (WHERE kind = 'llm') AS llm_max_answer_value,
+        COALESCE(BOOL_OR(kind = 'human' AND LOWER(answer_value) IN ('yes', 'maybe', 'no')), FALSE) AS human_has_binary_decision,
+        COALESCE(BOOL_OR(kind = 'llm' AND LOWER(answer_value) IN ('yes', 'maybe', 'no')), FALSE) AS llm_has_binary_decision,
+        COALESCE(BOOL_OR(LOWER(answer_value) IN ('yes', 'maybe')), FALSE) AS has_include_decision,
+        COALESCE(BOOL_OR(LOWER(answer_value) = 'no'), FALSE) AS has_exclude_decision
       FROM cell_answer
       GROUP BY article_id, prompt_id
     ),
@@ -563,18 +561,19 @@ const getComparisonProjectArticleServingInsertSql = ({
           AND prompt_answer_count.llm_answered_count > 0 AS has_human_vs_llm_overlap,
         prompt_answer_count.human_answered_count > 0
           AND prompt_answer_count.llm_answered_count > 0
-          AND COALESCE(prompt_answer_value_count.all_answer_count, 0) > 1 AS has_human_vs_llm_difference,
-        COALESCE(prompt_answer_value_count.human_binary_decision_count, 0) > 0
-          AND COALESCE(prompt_answer_value_count.llm_binary_decision_count, 0) > 0
-          AND COALESCE(prompt_answer_value_count.all_binary_decision_count, 0) > 1 AS has_human_vs_llm_true_conflict,
+          AND COALESCE(prompt_answer_value_rollup.min_answer_value <> prompt_answer_value_rollup.max_answer_value, FALSE) AS has_human_vs_llm_difference,
+        COALESCE(prompt_answer_value_rollup.human_has_binary_decision, FALSE)
+          AND COALESCE(prompt_answer_value_rollup.llm_has_binary_decision, FALSE)
+          AND COALESCE(prompt_answer_value_rollup.has_include_decision, FALSE)
+          AND COALESCE(prompt_answer_value_rollup.has_exclude_decision, FALSE) AS has_human_vs_llm_true_conflict,
         prompt_answer_count.llm_answered_count > 1
-          AND COALESCE(prompt_answer_value_count.llm_answer_count, 0) > 1 AS has_llm_vs_llm_difference,
+          AND COALESCE(prompt_answer_value_rollup.llm_min_answer_value <> prompt_answer_value_rollup.llm_max_answer_value, FALSE) AS has_llm_vs_llm_difference,
         prompt_answer_count.all_answered_count > 1
-          AND COALESCE(prompt_answer_value_count.all_answer_count, 0) > 1 AS has_any_disagreement
+          AND COALESCE(prompt_answer_value_rollup.min_answer_value <> prompt_answer_value_rollup.max_answer_value, FALSE) AS has_any_disagreement
       FROM prompt_answer_count
-      LEFT JOIN prompt_answer_value_count
-        ON prompt_answer_value_count.article_id = prompt_answer_count.article_id
-       AND prompt_answer_value_count.prompt_id = prompt_answer_count.prompt_id
+      LEFT JOIN prompt_answer_value_rollup
+        ON prompt_answer_value_rollup.article_id = prompt_answer_count.article_id
+       AND prompt_answer_value_rollup.prompt_id = prompt_answer_count.prompt_id
     ),
     article_difference_rollup AS (
       SELECT

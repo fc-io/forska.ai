@@ -1472,10 +1472,10 @@ test('article rollup inserts are batched by article id', async () => {
   const statements: string[] = []
   const queryStatements: string[] = []
   const builder = getComparisonProjectServingRollupBuilder()
-  const firstRows = Array.from({length: 1001}, (_, index) => {
+  const firstRows = Array.from({length: 101}, (_, index) => {
     return {articleId: `article-${String(index).padStart(4, '0')}`}
   })
-  const secondRows = [{articleId: 'article-1000'}]
+  const secondRows = [{articleId: 'article-0100'}]
   const queryResults = [firstRows, secondRows]
 
   await builder.insertComparisonProjectArticleRollups(
@@ -1508,9 +1508,9 @@ test('article rollup inserts are batched by article id', async () => {
     'INNER JOIN app.article_import_route air ON air.import_route_id = cpir.import_route_id',
   )
   expect(batchQueryStatements[0]).not.toContain('\n    scoped_article AS (')
-  expect(batchQueryStatements[1]).toContain("AND pa.article_id > 'article-0999'")
-  expect(batchQueryStatements[1]).toContain("AND air.article_id > 'article-0999'")
-  expect(batchQueryStatements[1]).toContain("AND cell.article_id > 'article-0999'")
+  expect(batchQueryStatements[1]).toContain("AND pa.article_id > 'article-0099'")
+  expect(batchQueryStatements[1]).toContain("AND air.article_id > 'article-0099'")
+  expect(batchQueryStatements[1]).toContain("AND cell.article_id > 'article-0099'")
   expect(
     statements.some((statement) => {
       return statement.includes('comparison_serving_generation_required_column_config')
@@ -1518,9 +1518,11 @@ test('article rollup inserts are batched by article id', async () => {
   ).toBe(true)
   expect(articleInsertStatements).toHaveLength(2)
   expect(articleInsertStatements[0]).toContain("('article-0000')")
-  expect(articleInsertStatements[0]).not.toContain("('article-1000')")
-  expect(articleInsertStatements[1]).toContain("('article-1000')")
+  expect(articleInsertStatements[0]).not.toContain("('article-0100')")
+  expect(articleInsertStatements[1]).toContain("('article-0100')")
   expect(articleInsertStatements[0]).toContain('INNER JOIN article_batch ON article_batch.article_id = cell.article_id')
+  expect(articleInsertStatements[0]).not.toContain('COUNT(DISTINCT')
+  expect(articleInsertStatements[0]).toContain('MIN(answer_value) AS min_answer_value')
 })
 
 test('filter stats inserts are split by filter combination', async () => {
