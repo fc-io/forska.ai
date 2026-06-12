@@ -44,6 +44,12 @@ bun run db:duck:request-review-serving-large-rebuild
 - Never silently retry, downgrade, override, or work around those settings unless the user explicitly asks for that behavior.
 - If a request fails under the configured settings, preserve that failure and surface it; do not mutate the execution profile to chase a success.
 
+## OOM Errors
+
+- When fixing any out-of-memory issue, add an entry to `OOM_ERRORS.md` in the same change.
+- Keep each entry short: include the error excerpt, affected job/query/command, likely cause, fix, and verification.
+- This includes DuckDB OOMs like `Out of Memory Error: failed to pin block` from cron jobs, queues, marts, or large queries.
+
 ## Web And Desktop
 
 - Desktop support is additive. Do not break the normal browser flow while adding or changing desktop behavior.
