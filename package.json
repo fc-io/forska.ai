@@ -22,6 +22,7 @@
     "test:playwright": "bunx playwright test",
     "lint": "bunx eslint src",
     "lint:fix": "bunx eslint src --fix",
+    "dev:start": "bun run dev:app & bun run dev:server",
     "dev:app": "bun scripts/runWithRuntimeProfile.ts --profile primary --mode app",
     "dev:server": "bun scripts/runWithRuntimeProfile.ts --profile primary --mode stacked-server",
     "dev:server:bun-watch": "BUN_CONFIG_MAX_HTTP_REQUESTS=2048 bun run --watch src/server/index.ts",
