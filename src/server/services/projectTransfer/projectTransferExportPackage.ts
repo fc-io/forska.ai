@@ -25,7 +25,11 @@ import {
   type ProjectTransferExportStagedPayloadAssembly,
   stageProjectTransferExportPayloadRows,
 } from './projectTransferExport.ts'
-import {getProjectTransferCanonicalJson, getProjectTransferPackageFingerprint} from './projectTransferFingerprint.ts'
+import {
+  getProjectTransferCanonicalJson,
+  getProjectTransferPackageFingerprint,
+  getProjectTransferSha256Checksum,
+} from './projectTransferFingerprint.ts'
 import {buildProjectTransferManifest} from './projectTransferManifest.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import {parseProjectTransferPayload, type ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
@@ -49,7 +53,9 @@ import {
 } from './projectTransferSession.ts'
 import {getProjectTransferSessionRepository} from './projectTransferSessionRepository.ts'
 import {
+  getProjectTransferZipCrc32Digest,
   type ProjectTransferZipEntryInput,
+  type ProjectTransferZipEntryMetadata,
   type ProjectTransferZipJsModule,
   type ProjectTransferZipWrittenFilePackage,
   writeProjectTransferZipPackageToFile,
@@ -403,13 +409,35 @@ const getManifestWithFingerprint = async ({
   return buildManifest({assetBytes, assembly, exportedAt, packageFingerprint, payloadFiles})
 }
 
+const getZipEntryMetadata = ({
+  byteLength,
+  checksumSha256,
+  crc32,
+}: {
+  byteLength: number
+  checksumSha256: string
+  crc32: number
+}): ProjectTransferZipEntryMetadata => {
+  return {checksumSha256, crc32, uncompressedSize: byteLength}
+}
+
+const getBytesZipEntryMetadata = (bytes: Uint8Array): ProjectTransferZipEntryMetadata => {
+  return {
+    checksumSha256: getProjectTransferSha256Checksum(bytes),
+    crc32: getProjectTransferZipCrc32Digest(bytes),
+    uncompressedSize: bytes.byteLength,
+  }
+}
+
 const getAssetPackageEntry = (entry: ProjectTransferExportStagedPayloadAssembly['assetEntries'][number]) => {
+  const metadata = getZipEntryMetadata(entry)
+
   if (entry.bytes) {
-    return {bytes: entry.bytes, path: entry.path} satisfies ProjectTransferZipEntryInput
+    return {bytes: entry.bytes, metadata, path: entry.path} satisfies ProjectTransferZipEntryInput
   }
 
   if (entry.filePath) {
-    return {filePath: entry.filePath, path: entry.path} satisfies ProjectTransferZipEntryInput
+    return {filePath: entry.filePath, metadata, path: entry.path} satisfies ProjectTransferZipEntryInput
   }
 
   throw new Error(`Project transfer export asset entry is missing bytes and file path: ${entry.path}`)
@@ -422,10 +450,18 @@ const getPackageEntries = ({
   assembly: ProjectTransferExportStagedPayloadAssembly
   manifest: ProjectTransferManifest
 }): ProjectTransferZipEntryInput[] => {
+  const manifestBytes = new TextEncoder().encode(getProjectTransferCanonicalJson(manifest))
+
   return [
-    {bytes: getProjectTransferCanonicalJson(manifest), path: manifestPath},
+    {bytes: manifestBytes, metadata: getBytesZipEntryMetadata(manifestBytes), path: manifestPath},
     ...projectTransferPayloadKeys.map((key) => {
-      return {filePath: assembly.payloadFiles[key].filePath, path: projectTransferPayloadPathByKey[key]}
+      const payloadFile = assembly.payloadFiles[key]
+
+      return {
+        filePath: payloadFile.filePath,
+        metadata: getZipEntryMetadata(payloadFile),
+        path: projectTransferPayloadPathByKey[key],
+      }
     }),
     ...assembly.assetEntries.map((entry) => {
       return getAssetPackageEntry(entry)

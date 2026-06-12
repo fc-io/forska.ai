@@ -56,7 +56,12 @@ import {
   type ProjectTransferTargetStateSafetySurface,
   projectTransferTargetStateSafetySurfaces,
 } from '../src/server/services/projectTransfer/projectTransferTargetStateDirtyTokenService.ts'
-import {writeProjectTransferZipPackage} from '../src/server/services/projectTransfer/projectTransferZip.ts'
+import {
+  getProjectTransferZipCrc32Digest,
+  type ProjectTransferZipEntryInput,
+  writeProjectTransferZipPackage,
+  writeProjectTransferZipPackageToFile,
+} from '../src/server/services/projectTransfer/projectTransferZip.ts'
 
 type ProjectTransferBenchmarkFixture =
   | 'article-heavy-export'
@@ -284,6 +289,14 @@ const getAssetHeavyBenchmarkBytes = (index: number) => {
   bytes.fill((index % 251) + 1)
 
   return bytes
+}
+
+const getBenchmarkZipEntryMetadata = (bytes: Uint8Array) => {
+  return {
+    checksumSha256: getProjectTransferSha256Checksum(bytes),
+    crc32: getProjectTransferZipCrc32Digest(bytes),
+    uncompressedSize: bytes.byteLength,
+  }
 }
 
 const getAssetHeavyPromotionAssets = () => {
@@ -651,6 +664,31 @@ const writeAssetHeavyExportArtifacts = async ({cwd}: {cwd: string}) => {
   return {assets, references: getAssetHeavyExportReferences(assets)}
 }
 
+const getAssetHeavyExportPackageAssetEntry = (
+  asset: Awaited<ReturnType<typeof getProjectTransferExportAssetCollectionForReferences>>['assetEntries'][number],
+): ProjectTransferZipEntryInput => {
+  if (!asset.filePath) {
+    throw new Error(`Project transfer benchmark export asset is missing a staged file path: ${asset.path}`)
+  }
+
+  return {
+    filePath: asset.filePath,
+    metadata: {checksumSha256: asset.checksumSha256, crc32: asset.crc32, uncompressedSize: asset.byteLength},
+    path: asset.path,
+  }
+}
+
+const getAssetHeavyExportPackageEntries = (
+  collection: Awaited<ReturnType<typeof getProjectTransferExportAssetCollectionForReferences>>,
+) => {
+  const manifestBytes = textEncoder.encode(JSON.stringify({fixture: 'asset-heavy-export', schemaVersion: 1}))
+
+  return [
+    {bytes: manifestBytes, metadata: getBenchmarkZipEntryMetadata(manifestBytes), path: 'manifest.json'},
+    ...collection.assetEntries.map(getAssetHeavyExportPackageAssetEntry),
+  ] satisfies ProjectTransferZipEntryInput[]
+}
+
 const writeAssetHeavyPromotionArtifacts = async ({cwd}: {cwd: string}) => {
   const layout = getProjectTransferImportTempLayout(benchmarkSessionId)
   const assets = getAssetHeavyPromotionAssets()
@@ -692,9 +730,7 @@ const getBenchmarkRatePerSecond = ({
     : projectTransferMetricUnavailable
 }
 
-const getBenchmarkMetricTotal = (
-  values: readonly (number | typeof projectTransferMetricUnavailable)[],
-) => {
+const getBenchmarkMetricTotal = (values: readonly (number | typeof projectTransferMetricUnavailable)[]) => {
   const knownValues = values.filter((value): value is number => {
     return typeof value === 'number'
   })
@@ -735,10 +771,7 @@ const runAssetHeavyPromotionBenchmark = async () => {
 
     return getProjectTransferPerformanceMetrics({
       benchmark: {
-        bytesPerSecond: getBenchmarkRatePerSecond({
-          durationMs: promotion.timing.durationMs,
-          value: assetByteLength,
-        }),
+        bytesPerSecond: getBenchmarkRatePerSecond({durationMs: promotion.timing.durationMs, value: assetByteLength}),
         correctnessChecks: {
           assetPromotionReadCount: promotion.value.metrics?.assetReadCount ?? projectTransferMetricUnavailable,
           boundedConcurrency: promotion.value.metrics?.boundedConcurrency ?? projectTransferMetricUnavailable,
@@ -754,10 +787,7 @@ const runAssetHeavyPromotionBenchmark = async () => {
         temporaryDiskBytes: assetByteLength * 2,
         wallTimeMs: getBenchmarkMetricTotal([promotion.timing.durationMs, cleanup.timing.durationMs]),
       },
-      bytes: {
-        assetBytes: assetByteLength,
-        assetPromotionBytes: assetByteLength,
-      },
+      bytes: {assetBytes: assetByteLength, assetPromotionBytes: assetByteLength},
       operation: 'import',
       phases: {assetPromotion: promotion.timing, cleanup: cleanup.timing},
       rows: getProjectTransferPerformanceRowCountersFromPayloads(payloads),
@@ -780,35 +810,50 @@ const runAssetHeavyExportBenchmark = async () => {
         stagingRootPath,
       })
     })
+    const packageOutputPath = join(cwd, 'tmp/project-transfer/asset-heavy-export.zip')
+    const packageWrite = await measureProjectTransferPhase('exportPackageWrite', () => {
+      return writeProjectTransferZipPackageToFile({
+        entries: getAssetHeavyExportPackageEntries(collection.value),
+        outputPath: packageOutputPath,
+      })
+    })
     const assetByteLength = collection.value.assetEntries.reduce((total, asset) => {
       return total + asset.byteLength
     }, 0)
+    const wallTimeMs = getBenchmarkMetricTotal([collection.timing.durationMs, packageWrite.timing.durationMs])
 
     return getProjectTransferPerformanceMetrics({
       benchmark: {
         bytesPerSecond: getBenchmarkRatePerSecond({
-          durationMs: collection.timing.durationMs,
-          value: assetByteLength,
+          durationMs: packageWrite.timing.durationMs,
+          value: packageWrite.value.byteLength,
         }),
         correctnessChecks: {
+          assetCopyBytesPerSecond: getBenchmarkRatePerSecond({
+            durationMs: collection.timing.durationMs,
+            value: assetByteLength,
+          }),
           boundedConcurrency: assetHeavyPromotionConcurrency,
           copiedAssetCount: collection.value.assetEntries.length,
+          packageChecksumSha256: packageWrite.value.checksumSha256,
           sourceAssetCount: assets.length,
           stagedManifestEntryCount: collection.value.assetManifest.entries.length,
+          zipEntryCount: packageWrite.value.entries.length,
         },
         finalAssetBytes: assetByteLength,
         packageFingerprint: 'asset-heavy-export',
-        peakMemoryBytes: collection.timing.sampledPeakMemoryBytes,
+        peakMemoryBytes: packageWrite.timing.sampledPeakMemoryBytes,
         schemaVersion: 1,
-        temporaryDiskBytes: assetByteLength,
-        wallTimeMs: collection.timing.durationMs,
+        temporaryDiskBytes: assetByteLength + packageWrite.value.byteLength,
+        wallTimeMs,
       },
       bytes: {
         assetBytes: assetByteLength,
         exportAssetCopyBytes: assetByteLength,
+        packageBytes: packageWrite.value.byteLength,
       },
       operation: 'export',
-      phases: {exportAssembly: collection.timing},
+      phases: {exportAssembly: collection.timing, exportPackageWrite: packageWrite.timing},
       rows: {assetEntries: collection.value.assetEntries.length, assetReferences: references.length},
     })
   } finally {

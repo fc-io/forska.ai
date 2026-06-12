@@ -58,6 +58,12 @@ import {
   projectTransferPayloadKeys,
   projectTransferPayloadPathByKey,
 } from './projectTransferSchemas.ts'
+import {
+  getProjectTransferZipCrc32Digest,
+  getProjectTransferZipFinalCrc32,
+  getProjectTransferZipInitialCrc32,
+  getProjectTransferZipUpdatedCrc32,
+} from './projectTransferZip.ts'
 
 type ProjectTransferExportQueryOptions = {
   articleRawJsonOmissionThresholdChars?: number
@@ -365,6 +371,7 @@ export type ProjectTransferExportPayloadAssembly = {
 export type ProjectTransferExportStagedPayloadFile = {
   byteLength: number
   checksumSha256: string
+  crc32: number
   filePath: string
   format: ProjectTransferPayloadFormat
   path: string
@@ -563,13 +570,14 @@ const getStagedPayloadFilePath = (rootPath: string, key: ProjectTransferPayloadK
 
 const writeStagedPayloadBytes = async (
   stream: WriteStream,
-  state: {byteLength: number; hash: ReturnType<typeof createHash>},
+  state: {byteLength: number; crc32: number; hash: ReturnType<typeof createHash>},
   text: string,
 ) => {
   const bytes = textEncoder.encode(text)
 
   state.hash.update(bytes)
   state.byteLength += bytes.byteLength
+  state.crc32 = getProjectTransferZipUpdatedCrc32(bytes, state.crc32)
 
   if (!stream.write(bytes)) {
     await once(stream, 'drain')
@@ -599,7 +607,7 @@ const writeStagedPayloadNdjsonFile = async <TKey extends ProjectTransferPayloadK
   records: unknown[]
 }) => {
   const stream = createWriteStream(filePath)
-  const state = {byteLength: 0, hash: createHash('sha256')}
+  const state = {byteLength: 0, crc32: getProjectTransferZipInitialCrc32(), hash: createHash('sha256')}
 
   try {
     await records.reduce<Promise<void>>(async (previous, record, index) => {
@@ -615,6 +623,7 @@ const writeStagedPayloadNdjsonFile = async <TKey extends ProjectTransferPayloadK
   return {
     byteLength: state.byteLength,
     checksumSha256: state.hash.digest('hex'),
+    crc32: getProjectTransferZipFinalCrc32(state.crc32),
     filePath,
     format: 'ndjson' as const,
     path: projectTransferPayloadPathByKey[key],
@@ -639,6 +648,7 @@ const writeStagedPayloadJsonFile = async <TKey extends ProjectTransferPayloadKey
   return {
     byteLength: bytes.byteLength,
     checksumSha256: getProjectTransferSha256Checksum(bytes),
+    crc32: getProjectTransferZipCrc32Digest(bytes),
     filePath,
     format: 'json' as const,
     path: projectTransferPayloadPathByKey[key],

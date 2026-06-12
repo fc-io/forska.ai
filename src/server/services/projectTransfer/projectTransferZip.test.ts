@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto'
-import {mkdtemp, readFile, rm} from 'node:fs/promises'
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -7,6 +7,7 @@ import {expect, test} from 'bun:test'
 
 import {projectTransferPathLimits} from './projectTransferPaths.ts'
 import {
+  getProjectTransferZipCrc32Digest,
   type ProjectTransferZipJsEntry,
   type ProjectTransferZipJsModule,
   type ProjectTransferZipJsUint8ArrayWriter,
@@ -34,6 +35,14 @@ const getBytes = (value: string) => {
 
 const getSha256Digest = (bytes: Uint8Array) => {
   return createHash('sha256').update(bytes).digest('hex')
+}
+
+const getZipEntryMetadata = (bytes: Uint8Array) => {
+  return {
+    checksumSha256: getSha256Digest(bytes),
+    crc32: getProjectTransferZipCrc32Digest(bytes),
+    uncompressedSize: bytes.byteLength,
+  }
 }
 
 const getErrorMessage = (error: unknown) => {
@@ -261,6 +270,85 @@ test('writes a project-transfer package directly to a file without returning arc
   } finally {
     await rm(rootPath, {force: true, recursive: true})
   }
+})
+
+test('writes staged file and stream entries with precomputed metadata and central-directory headers', async () => {
+  const rootPath = await mkdtemp(join(tmpdir(), `f2-project-transfer-zip-stream-${process.pid}-`))
+  const outputPath = join(rootPath, 'export.zip')
+  const stagedFilePath = join(rootPath, 'staged-article.txt')
+  const manifestBytes = getBytes('{"schemaVersion":1}')
+  const stagedFileBytes = getBytes('staged-file-entry')
+  const streamedBytes = getBytes('streamed-entry')
+
+  try {
+    await writeFile(stagedFilePath, stagedFileBytes)
+
+    const result = await writeProjectTransferZipPackageToFile({
+      entries: [
+        {bytes: manifestBytes, metadata: getZipEntryMetadata(manifestBytes), path: 'manifest.json'},
+        {
+          filePath: stagedFilePath,
+          metadata: getZipEntryMetadata(stagedFileBytes),
+          path: 'assets/articles/article-1.txt',
+        },
+        {
+          metadata: getZipEntryMetadata(streamedBytes),
+          path: 'assets/article-pdfs/article-1.pdf',
+          stream: () => {
+            return [getBytes('streamed-'), getBytes('entry')]
+          },
+        },
+      ],
+      outputPath,
+    })
+    const archiveBytes = new Uint8Array(await readFile(outputPath))
+    const read = await readProjectTransferZipPackage({bytes: archiveBytes})
+    const entriesByPath = new Map(
+      read.entries.map((entry) => {
+        return [entry.path, entry]
+      }),
+    )
+    const streamedEntry = entriesByPath.get('assets/article-pdfs/article-1.pdf')
+    const stagedFileEntry = entriesByPath.get('assets/articles/article-1.txt')
+
+    expect(result.byteLength).toBe(archiveBytes.byteLength)
+    expect(result.checksumSha256).toBe(getSha256Digest(archiveBytes))
+    expect(stagedFileEntry).toMatchObject({
+      advisoryCrc32: getProjectTransferZipCrc32Digest(stagedFileBytes),
+      advisoryUncompressedSize: stagedFileBytes.byteLength,
+      checksumSha256: getSha256Digest(stagedFileBytes),
+      compressedSize: stagedFileBytes.byteLength,
+      uncompressedSize: stagedFileBytes.byteLength,
+    })
+    expect(streamedEntry).toMatchObject({
+      advisoryCrc32: getProjectTransferZipCrc32Digest(streamedBytes),
+      advisoryUncompressedSize: streamedBytes.byteLength,
+      checksumSha256: getSha256Digest(streamedBytes),
+      compressedSize: streamedBytes.byteLength,
+      uncompressedSize: streamedBytes.byteLength,
+    })
+    expect(streamedEntry?.bytes).toEqual(streamedBytes)
+  } finally {
+    await rm(rootPath, {force: true, recursive: true})
+  }
+})
+
+test('rejects stream entries when precomputed metadata does not match written bytes', async () => {
+  await expectPromiseToRejectWithMessage(
+    writeProjectTransferZipPackage({
+      entries: [
+        {bytes: '{"schemaVersion":1}', path: 'manifest.json'},
+        {
+          metadata: getZipEntryMetadata(getBytes('expected')),
+          path: 'assets/article-pdfs/article-1.pdf',
+          stream: () => {
+            return [getBytes('actual')]
+          },
+        },
+      ],
+    }),
+    'Project transfer zip entry_metadata_mismatch',
+  )
 })
 
 test('reads and writes project-transfer packages without the optional zip module', async () => {

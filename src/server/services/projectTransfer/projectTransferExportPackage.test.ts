@@ -18,6 +18,7 @@ import {
   projectTransferPayloadPathByKey,
 } from './projectTransferSchemas.ts'
 import {getProjectTransferExportTempLayout} from './projectTransferSession.ts'
+import {getProjectTransferZipCrc32Digest} from './projectTransferZip.ts'
 
 const exportModulePath = new URL('./projectTransferExport.ts', import.meta.url).pathname
 const sessionRepositoryModulePath = new URL('./projectTransferSessionRepository.ts', import.meta.url).pathname
@@ -36,6 +37,7 @@ type PersistProjectTransferSessionExportReadyMockParams = {
 type ProjectTransferExportPackageTestPayloadFile = {
   byteLength: number
   checksumSha256: string
+  crc32: number
   filePath: string
   format: (typeof projectTransferPayloadFormatByKey)[(typeof projectTransferPayloadKeys)[number]]
   path: string
@@ -118,6 +120,7 @@ const writeStagedPayloadFiles = (rootPath: string, payloads: ProjectTransferPayl
         [key]: {
           byteLength: bytes.byteLength,
           checksumSha256: createHash('sha256').update(bytes).digest('hex'),
+          crc32: getProjectTransferZipCrc32Digest(bytes),
           filePath,
           format: projectTransferPayloadFormatByKey[key],
           path,
@@ -256,6 +259,7 @@ const getSha256Digest = (bytes: Uint8Array) => {
 }
 
 const getPayloadAssembly = (): ProjectTransferExportPayloadAssembly => {
+  const assetBytes = new Uint8Array([1, 2])
   const payloads = {
     articleImportRoutes: [],
     articles: [],
@@ -300,7 +304,15 @@ const getPayloadAssembly = (): ProjectTransferExportPayloadAssembly => {
   } as ProjectTransferPayloadByKey
 
   return {
-    assetEntries: [{byteLength: 2, bytes: new Uint8Array([1, 2]), path: 'assets/project-transfer-test/large.bin'}],
+    assetEntries: [
+      {
+        byteLength: assetBytes.byteLength,
+        bytes: assetBytes,
+        checksumSha256: getSha256Digest(assetBytes),
+        crc32: getProjectTransferZipCrc32Digest(assetBytes),
+        path: 'assets/project-transfer-test/large.bin',
+      },
+    ],
     payloads,
     warnings: [],
   }

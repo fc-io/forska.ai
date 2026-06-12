@@ -17,6 +17,11 @@ import {
   type ProjectTransferAssetReferenceKind,
 } from './projectTransferPayloadSchemas.ts'
 import {projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
+import {
+  getProjectTransferZipFinalCrc32,
+  getProjectTransferZipInitialCrc32,
+  getProjectTransferZipUpdatedCrc32,
+} from './projectTransferZip.ts'
 
 type JsonRecord = Record<string, unknown>
 type RuntimePathOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
@@ -27,7 +32,14 @@ export type ProjectTransferExportAssetArticle = ProjectTransferArticlePayloadRec
   fullTextPdf?: unknown
 }
 
-export type ProjectTransferExportAssetEntry = {byteLength: number; bytes?: Uint8Array; filePath?: string; path: string}
+export type ProjectTransferExportAssetEntry = {
+  byteLength: number
+  bytes?: Uint8Array
+  checksumSha256: string
+  crc32: number
+  filePath?: string
+  path: string
+}
 export type ProjectTransferExportAssetReferenceInput = AssetReferenceInput
 
 type ProjectTransferExportAssetCollection = {
@@ -582,7 +594,7 @@ const getStagedAssetFilePath = (stagingRootPath: string, packagePath: string) =>
 
 const streamRuntimeAssetFile = async ({absolutePath, targetPath}: {absolutePath: string; targetPath?: string}) => {
   const hash = createHash('sha256')
-  const state = {byteLength: 0}
+  const state = {byteLength: 0, crc32: getProjectTransferZipInitialCrc32()}
   const writeStream = targetPath ? createWriteStream(targetPath) : null
 
   try {
@@ -591,12 +603,17 @@ const streamRuntimeAssetFile = async ({absolutePath, targetPath}: {absolutePath:
 
       hash.update(bytes)
       state.byteLength += bytes.byteLength
+      state.crc32 = getProjectTransferZipUpdatedCrc32(bytes, state.crc32)
       await (writeStream ? writeStreamBytes(writeStream, bytes) : Promise.resolve())
     }
 
     await (writeStream ? closeAssetWriteStream(writeStream) : Promise.resolve())
 
-    return {byteLength: state.byteLength, checksumSha256: hash.digest('hex')}
+    return {
+      byteLength: state.byteLength,
+      checksumSha256: hash.digest('hex'),
+      crc32: getProjectTransferZipFinalCrc32(state.crc32),
+    }
   } catch (error) {
     writeStream?.destroy()
     await (targetPath ? rm(targetPath, {force: true}) : Promise.resolve())
@@ -672,6 +689,7 @@ const getCopiedAssetFile = async ({
     byteLength: copied.byteLength,
     checksumSha256: copied.checksumSha256,
     contentType: sourceFile.contentType,
+    crc32: copied.crc32,
     filePath: targetPath,
     packagePath: pathValue,
   }
@@ -705,7 +723,13 @@ const getAssetManifestEntry = async (
   }
 
   return {
-    assetEntry: {byteLength: file.byteLength, filePath: file.filePath, path: file.packagePath},
+    assetEntry: {
+      byteLength: file.byteLength,
+      checksumSha256: file.checksumSha256,
+      crc32: file.crc32,
+      filePath: file.filePath,
+      path: file.packagePath,
+    },
     manifestEntry: file.contentType ? {...baseManifestEntry, contentType: file.contentType} : baseManifestEntry,
   }
 }

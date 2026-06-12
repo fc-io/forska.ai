@@ -40,9 +40,36 @@ export type ProjectTransferZipJsModule = {
   }
 }
 
+export type ProjectTransferZipEntryMetadata = {checksumSha256: string; crc32: number; uncompressedSize: number}
+
+type ProjectTransferZipEntryStream = AsyncIterable<unknown> | Iterable<unknown>
+type ProjectTransferZipEntryStreamFactory = () => Promise<ProjectTransferZipEntryStream> | ProjectTransferZipEntryStream
+
 export type ProjectTransferZipEntryInput =
-  | {bytes: string | Uint8Array; filePath?: never; lastModifiedAt?: Date; path: string}
-  | {bytes?: never; filePath: string; lastModifiedAt?: Date; path: string}
+  | {
+      bytes: string | Uint8Array
+      filePath?: never
+      lastModifiedAt?: Date
+      metadata?: ProjectTransferZipEntryMetadata
+      path: string
+      stream?: never
+    }
+  | {
+      bytes?: never
+      filePath: string
+      lastModifiedAt?: Date
+      metadata?: ProjectTransferZipEntryMetadata
+      path: string
+      stream?: never
+    }
+  | {
+      bytes?: never
+      filePath?: never
+      lastModifiedAt?: Date
+      metadata: ProjectTransferZipEntryMetadata
+      path: string
+      stream: ProjectTransferZipEntryStreamFactory
+    }
 
 export type ProjectTransferZipEntryDigest = {
   advisoryCompressedSize: number | null
@@ -111,7 +138,7 @@ type ProjectTransferZipCentralDirectoryEntry = {
 
 type ProjectTransferZipEnd = {centralDirectoryOffset: number; centralDirectorySize: number; entryCount: number}
 
-type ProjectTransferZipEntrySource = {byteLength: number; bytes?: Uint8Array; checksumSha256: string; crc32: number}
+type ProjectTransferZipEntrySource = ProjectTransferZipEntryMetadata & {bytes?: Uint8Array}
 
 const projectTransferManifestPath = 'manifest.json'
 const projectTransferZipDefaultLastModifiedAt = new Date('1980-01-01T00:00:00.000Z')
@@ -274,57 +301,209 @@ const getSha256Digest = (bytes: Uint8Array) => {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
-const readProjectTransferZipInputBytes = async (entry: ProjectTransferZipEntryInput) => {
-  return entry.filePath ? new Uint8Array(await readFile(entry.filePath)) : getBytes(entry.bytes)
+const isProjectTransferZipFileInput = (
+  entry: ProjectTransferZipEntryInput,
+): entry is Extract<ProjectTransferZipEntryInput, {filePath: string}> => {
+  return 'filePath' in entry && typeof entry.filePath === 'string'
+}
+
+const isProjectTransferZipStreamInput = (
+  entry: ProjectTransferZipEntryInput,
+): entry is Extract<ProjectTransferZipEntryInput, {stream: ProjectTransferZipEntryStreamFactory}> => {
+  return 'stream' in entry && typeof entry.stream === 'function'
 }
 
 const getProjectTransferZipBytesSource = (bytes: Uint8Array): ProjectTransferZipEntrySource => {
-  return {byteLength: bytes.byteLength, bytes, checksumSha256: getSha256Digest(bytes), crc32: getCrc32Digest(bytes)}
+  return {
+    bytes,
+    checksumSha256: getSha256Digest(bytes),
+    crc32: getProjectTransferZipCrc32Digest(bytes),
+    uncompressedSize: bytes.byteLength,
+  }
 }
 
 const getProjectTransferZipFileSource = async (filePath: string): Promise<ProjectTransferZipEntrySource> => {
   const hash = createHash('sha256')
-  const state = {byteLength: 0, crc32: 0xffffffff}
+  const state = {crc32: getProjectTransferZipInitialCrc32(), uncompressedSize: 0}
 
   for await (const chunk of createReadStream(filePath)) {
     const bytes = getProjectTransferZipEntryBytes(chunk)
 
     if (bytes) {
       hash.update(bytes)
-      state.byteLength += bytes.byteLength
-      state.crc32 = getUpdatedCrc32(bytes, state.crc32)
+      state.uncompressedSize += bytes.byteLength
+      state.crc32 = getProjectTransferZipUpdatedCrc32(bytes, state.crc32)
     }
   }
 
-  return {byteLength: state.byteLength, checksumSha256: hash.digest('hex'), crc32: (state.crc32 ^ 0xffffffff) >>> 0}
+  return {
+    checksumSha256: hash.digest('hex'),
+    crc32: getProjectTransferZipFinalCrc32(state.crc32),
+    uncompressedSize: state.uncompressedSize,
+  }
 }
 
-const getProjectTransferZipEntrySource = async (
+const assertProjectTransferZipEntrySourceMetadata = (entry: ProjectTransferZipEntryInput) => {
+  const metadata = entry.metadata
+
+  if (!metadata) {
+    return undefined
+  }
+
+  if (!Number.isSafeInteger(metadata.uncompressedSize) || metadata.uncompressedSize < 0) {
+    return throwProjectTransferZipError('entry_metadata', `Invalid uncompressed size for ${entry.path}`)
+  }
+
+  if (!Number.isInteger(metadata.crc32) || metadata.crc32 < 0 || metadata.crc32 > zipUint32Max) {
+    return throwProjectTransferZipError('entry_metadata', `Invalid CRC32 for ${entry.path}`)
+  }
+
+  return /^[a-f0-9]{64}$/.test(metadata.checksumSha256)
+    ? undefined
+    : throwProjectTransferZipError('entry_metadata', `Invalid checksum for ${entry.path}`)
+}
+
+const getProjectTransferZipEntrySourceMetadata = async (
   entry: ProjectTransferZipEntryInput,
-): Promise<ProjectTransferZipEntrySource> => {
-  return entry.filePath
+): Promise<ProjectTransferZipEntryMetadata> => {
+  assertProjectTransferZipEntrySourceMetadata(entry)
+
+  if (entry.metadata) {
+    return entry.metadata
+  }
+
+  return isProjectTransferZipFileInput(entry)
     ? getProjectTransferZipFileSource(entry.filePath)
     : getProjectTransferZipBytesSource(getBytes(entry.bytes))
 }
 
-const writeProjectTransferZipFileSourceToOutput = async (filePath: string, output: ProjectTransferZipOutput) => {
-  for await (const chunk of createReadStream(filePath)) {
-    const bytes = getProjectTransferZipEntryBytes(chunk)
+const getProjectTransferZipSourceChunkBytes = (value: unknown) => {
+  const bytes = getProjectTransferZipEntryBytes(value)
 
-    if (bytes) {
-      await output.writeBytes(bytes)
+  return bytes ?? (typeof value === 'string' ? getBytes(value) : null)
+}
+
+const readProjectTransferZipEntrySourceBytes = async (source: ProjectTransferZipEntryStream) => {
+  const chunks: Uint8Array[] = []
+  const state = {uncompressedSize: 0}
+
+  for await (const chunk of source) {
+    const bytes = getProjectTransferZipSourceChunkBytes(chunk)
+
+    if (!bytes) {
+      return throwProjectTransferZipError('entry_data', 'Entry stream emitted unsupported data')
     }
+
+    chunks.push(bytes)
+    state.uncompressedSize += bytes.byteLength
   }
+
+  return new Uint8Array(
+    Buffer.concat(
+      chunks.map((chunk) => {
+        return Buffer.from(chunk)
+      }),
+      state.uncompressedSize,
+    ),
+  )
+}
+
+const readProjectTransferZipInputBytes = async (entry: ProjectTransferZipEntryInput) => {
+  if (isProjectTransferZipFileInput(entry)) {
+    return new Uint8Array(await readFile(entry.filePath))
+  }
+
+  return isProjectTransferZipStreamInput(entry)
+    ? readProjectTransferZipEntrySourceBytes(await entry.stream())
+    : getBytes(entry.bytes)
+}
+
+const getProjectTransferZipEntryWriteState = () => {
+  return {hash: createHash('sha256'), crc32: getProjectTransferZipInitialCrc32(), uncompressedSize: 0}
+}
+
+const updateProjectTransferZipEntryWriteState = (
+  state: ReturnType<typeof getProjectTransferZipEntryWriteState>,
+  bytes: Uint8Array,
+) => {
+  state.hash.update(bytes)
+  state.crc32 = getProjectTransferZipUpdatedCrc32(bytes, state.crc32)
+  state.uncompressedSize += bytes.byteLength
+
+  return state
+}
+
+const getProjectTransferZipEntryWrittenMetadata = (state: ReturnType<typeof getProjectTransferZipEntryWriteState>) => {
+  return {
+    checksumSha256: state.hash.digest('hex'),
+    crc32: getProjectTransferZipFinalCrc32(state.crc32),
+    uncompressedSize: state.uncompressedSize,
+  }
+}
+
+const assertProjectTransferZipWrittenMetadata = ({
+  expected,
+  path,
+  written,
+}: {
+  expected: ProjectTransferZipEntryMetadata
+  path: string
+  written: ProjectTransferZipEntryMetadata
+}) => {
+  return expected.uncompressedSize === written.uncompressedSize
+    && expected.crc32 === written.crc32
+    && expected.checksumSha256 === written.checksumSha256
+    ? undefined
+    : throwProjectTransferZipError('entry_metadata_mismatch', `Entry metadata does not match written bytes for ${path}`)
+}
+
+const writeProjectTransferZipSourceBytesToOutput = async (
+  bytes: Uint8Array,
+  output: ProjectTransferZipOutput,
+  state: ReturnType<typeof getProjectTransferZipEntryWriteState>,
+) => {
+  updateProjectTransferZipEntryWriteState(state, bytes)
+  await output.writeBytes(bytes)
+}
+
+const writeProjectTransferZipIterableSourceToOutput = async (
+  source: ProjectTransferZipEntryStream,
+  output: ProjectTransferZipOutput,
+  state: ReturnType<typeof getProjectTransferZipEntryWriteState>,
+) => {
+  for await (const chunk of source) {
+    const bytes = getProjectTransferZipSourceChunkBytes(chunk)
+
+    if (!bytes) {
+      return throwProjectTransferZipError('entry_data', 'Entry stream emitted unsupported data')
+    }
+
+    await writeProjectTransferZipSourceBytesToOutput(bytes, output, state)
+  }
+
+  return undefined
 }
 
 const writeProjectTransferZipEntrySourceToOutput = async (
   entry: ProjectTransferZipEntryInput,
-  source: ProjectTransferZipEntrySource,
+  metadata: ProjectTransferZipEntryMetadata,
   output: ProjectTransferZipOutput,
 ) => {
-  return entry.filePath
-    ? writeProjectTransferZipFileSourceToOutput(entry.filePath, output)
-    : output.writeBytes(source.bytes ?? new Uint8Array())
+  const state = getProjectTransferZipEntryWriteState()
+
+  if (isProjectTransferZipFileInput(entry)) {
+    await writeProjectTransferZipIterableSourceToOutput(createReadStream(entry.filePath), output, state)
+  } else if (isProjectTransferZipStreamInput(entry)) {
+    await writeProjectTransferZipIterableSourceToOutput(await entry.stream(), output, state)
+  } else {
+    await writeProjectTransferZipSourceBytesToOutput(getBytes(entry.bytes), output, state)
+  }
+
+  const written = getProjectTransferZipEntryWrittenMetadata(state)
+
+  assertProjectTransferZipWrittenMetadata({expected: metadata, path: entry.path, written})
+
+  return written
 }
 
 const getCrc32Table = () => {
@@ -339,14 +518,22 @@ const getCrc32Table = () => {
 
 const crc32Table = getCrc32Table()
 
-const getCrc32Digest = (bytes: Uint8Array) => {
-  return (getUpdatedCrc32(bytes, 0xffffffff) ^ 0xffffffff) >>> 0
+export const getProjectTransferZipInitialCrc32 = () => {
+  return 0xffffffff
 }
 
-const getUpdatedCrc32 = (bytes: Uint8Array, previousCrc: number) => {
+export const getProjectTransferZipFinalCrc32 = (crc32: number) => {
+  return (crc32 ^ 0xffffffff) >>> 0
+}
+
+export const getProjectTransferZipUpdatedCrc32 = (bytes: Uint8Array, previousCrc: number) => {
   return bytes.reduce((crc, byte) => {
     return (crc >>> 8) ^ (crc32Table[(crc ^ byte) & 0xff] ?? 0)
   }, previousCrc)
+}
+
+export const getProjectTransferZipCrc32Digest = (bytes: Uint8Array) => {
+  return getProjectTransferZipFinalCrc32(getProjectTransferZipUpdatedCrc32(bytes, getProjectTransferZipInitialCrc32()))
 }
 
 const getNumberZip32 = (value: number) => {
@@ -615,29 +802,33 @@ const writeProjectTransferZipEntriesToOutput = async (
 ) => {
   return entries.reduce<Promise<ProjectTransferZipFileEntry[]>>(async (previousEntries, entry) => {
     const currentEntries = await previousEntries
-    const source = await getProjectTransferZipEntrySource(entry)
+    const metadata = await getProjectTransferZipEntrySourceMetadata(entry)
     const filenameBytes = new TextEncoder().encode(entry.path)
     const localHeaderOffset = output.getByteLength()
-    const {extraField, header} = getZipLocalFileHeader({crc32: source.crc32, filenameBytes, size: source.byteLength})
+    const {extraField, header} = getZipLocalFileHeader({
+      crc32: metadata.crc32,
+      filenameBytes,
+      size: metadata.uncompressedSize,
+    })
 
     await output.writeBytes(header)
     await output.writeBytes(filenameBytes)
     await output.writeBytes(extraField)
-    await writeProjectTransferZipEntrySourceToOutput(entry, source, output)
+    const written = await writeProjectTransferZipEntrySourceToOutput(entry, metadata, output)
 
     return [
       ...currentEntries,
       {
-        advisoryCompressedSize: source.byteLength,
-        advisoryCrc32: source.crc32,
-        advisoryUncompressedSize: source.byteLength,
-        checksumSha256: source.checksumSha256,
-        compressedSize: source.byteLength,
+        advisoryCompressedSize: written.uncompressedSize,
+        advisoryCrc32: written.crc32,
+        advisoryUncompressedSize: written.uncompressedSize,
+        checksumSha256: written.checksumSha256,
+        compressedSize: written.uncompressedSize,
         filenameBytes,
         localHeaderOffset,
         path: entry.path,
-        uncompressedSize: source.byteLength,
-        zip64: source.byteLength > zipUint32Max || localHeaderOffset > zipUint32Max,
+        uncompressedSize: written.uncompressedSize,
+        zip64: written.uncompressedSize > zipUint32Max || localHeaderOffset > zipUint32Max,
       },
     ]
   }, Promise.resolve([]))
@@ -1152,7 +1343,7 @@ const readProjectTransferZipCentralDirectoryEntryBytes = (
     return throwProjectTransferZipError('size_mismatch', `Uncompressed size does not match metadata for ${entry.path}`)
   }
 
-  if (getCrc32Digest(entryBytes) !== entry.signature) {
+  if (getProjectTransferZipCrc32Digest(entryBytes) !== entry.signature) {
     return throwProjectTransferZipError('crc32_mismatch', `CRC32 does not match metadata for ${entry.path}`)
   }
 
