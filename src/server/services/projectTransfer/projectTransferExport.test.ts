@@ -2,6 +2,7 @@ import {rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
+import {projectTransferRawArticleProvenanceModes} from './projectTransferContracts.ts'
 import {
   assertProjectTransferExportModelDependencies,
   getProjectTransferExportHumanReviewInputSignature,
@@ -177,8 +178,11 @@ test('project-transfer export reads archived app-table scope and serializes lock
     packageExecutionMode: string
     packageFingerprint: string | null
     packageFingerprintMatchesAnalyze: boolean
+    packageFingerprintMatchesStagedPayloads: boolean
     packageHasAllPayloadFiles: boolean
     packageHasManifest: boolean
+    packageHumanPostRewriteHtmlDigest: string | null
+    packageJudgmentPostRewriteHtmlDigest: string | null
     packageManifestAssetSummary: {byteLength: number; entryCount: number} | undefined
     packageManifestExportedAt: string | undefined
     packageManifestPayloadKeys: string[]
@@ -190,9 +194,15 @@ test('project-transfer export reads archived app-table scope and serializes lock
     }
     packageManifestSourceAppVersion: string | undefined
     packageMetadataHasTempPath: boolean
+    packagePostRewriteHtmlDigest: string
     packagePayloadJsonCollectionIsArray: boolean
+    packageRawRuntimeHtmlDigest: string
+    packageReviewPostRewriteHtmlDigest: string | null
+    packageAssessmentArticleSignatureMatchesPackageArticle: boolean
     packageZipEntryPaths: string[]
     preflightEstimate: {assetBytes: number; packageBytes: number}
+    preflightIncludeEstimate: {assetBytes: number; packageBytes: number}
+    preflightOmitEstimate: {assetBytes: number; packageBytes: number}
     modelDescriptors: Array<{
       displayName: string | null
       modelName: string | null
@@ -213,6 +223,12 @@ test('project-transfer export reads archived app-table scope and serializes lock
     rawIncludedArticleImportRouteRawPayload: unknown
     rawIncludedArticleOriginalData: unknown
     rawIncludedWarning: unknown
+    rawPackageIncludeExecutionMode: string
+    rawPackageIncludeOriginalData: unknown
+    rawPackageIncludeWarning: unknown
+    rawPackageOmitExecutionMode: string
+    rawPackageOmitOriginalData: unknown
+    rawPackageOmitWarning: unknown
     rawOmittedArticleImportRouteImportMetadata: unknown
     rawOmittedArticleImportRouteRawPayload: unknown
     rawOmittedArticleOriginalData: unknown
@@ -837,16 +853,33 @@ test('project-transfer export reads archived app-table scope and serializes lock
     const invalidFulltextMessage = await catchMessage(() => getProjectTransferExportPayloads('project-invalid-fulltext'))
     const missingProviderMessage = await catchMessage(() => getProjectTransferExportPayloads('project-missing-provider'))
     const preflightEstimate = await getProjectTransferExportPreflightEstimate('project-archived-export')
+    const preflightIncludeEstimate = await getProjectTransferExportPreflightEstimate('project-archived-export', {
+      rawArticleProvenanceMode: 'include',
+    })
+    const preflightOmitEstimate = await getProjectTransferExportPreflightEstimate('project-archived-export', {
+      rawArticleProvenanceMode: 'omit',
+    })
     const exportSummary = await getProjectTransferExportSummary('project-archived-export')
     const packageLayout = getProjectTransferExportTempLayout('export-package-test')
+    const packageIncludeLayout = getProjectTransferExportTempLayout('export-package-include-test')
     const fakeZip = getFakeZipModule()
     const packageBuild = await buildExportPackage({
       exportedAt: new Date('2026-05-24T08:00:00.000Z'),
       expiresAt: new Date('2026-05-25T08:00:00.000Z'),
       layout: packageLayout,
       projectId: 'project-archived-export',
+      rawArticleProvenanceMode: 'omit',
       sessionId: 'export-package-test',
       zipModule: fakeZip.zipModule,
+    })
+    const packageIncludeBuild = await buildExportPackage({
+      exportedAt: new Date('2026-05-24T08:00:00.000Z'),
+      expiresAt: new Date('2026-05-25T08:00:00.000Z'),
+      layout: packageIncludeLayout,
+      projectId: 'project-archived-export',
+      rawArticleProvenanceMode: 'include',
+      sessionId: 'export-package-include-test',
+      zipModule: getFakeZipModule().zipModule,
     })
     const packageBytes = packageBuild.packageBytes ?? new Uint8Array()
     const packageZipEntryPaths = [
@@ -861,6 +894,30 @@ test('project-transfer export reads archived app-table scope and serializes lock
     const packageManifest = packageBuild.manifest
     const payloadFilePathSet = new Set(packageZipEntryPaths)
     const packagePayloadJsonCollection = JSON.parse(packageBuild.serializedPayloads.providerConnections)
+    const [packageSerializedArticle] = packageBuild.serializedPayloads.articles.trim().split('\\n').map((line) => JSON.parse(line))
+    const [packageIncludeSerializedArticle] = packageIncludeBuild.serializedPayloads.articles
+      .trim()
+      .split('\\n')
+      .map((line) => JSON.parse(line))
+    const packageRouteArticle = packageBuild.payloads.articles.find((article) => {
+      return article.sourceArticleId === 'article-route-in'
+    })
+    const packageJudgment = packageBuild.payloads.judgments.find((judgment) => {
+      return judgment.sourceJudgmentId === 'judgment-export'
+    })
+    const packageHumanJudgment = packageBuild.payloads.humanJudgments.find((judgment) => {
+      return judgment.sourceHumanJudgmentId === 'human-disabled'
+    })
+    const packageReview = packageBuild.payloads.reviews.find((review) => {
+      return review.sourceReviewId === 'review-archived'
+    })
+    const packageAssessment = packageBuild.payloads.judgmentAssessments.find((assessment) => {
+      return assessment.sourceJudgmentAssessmentId === 'assessment-export'
+    })
+    const packagePostRewriteHtmlDigest = getProjectTransferSha256Checksum(packageSerializedArticle.fullTextHtml ?? '')
+    const packageRawRuntimeHtmlDigest = getProjectTransferSha256Checksum(
+      '<p>full text</p><img src="/api/runtime-asset?path=assets/project-transfer-export-test/html-image.png">',
+    )
 
     console.log(JSON.stringify({
       articleIds: archived.payloads.articles.map((article) => article.sourceArticleId),
@@ -909,10 +966,15 @@ test('project-transfer export reads archived app-table scope and serializes lock
       packageFingerprintMatchesAnalyze:
         (packageBuild.manifest.packageFingerprint ?? null)
         === getProjectTransferPackageFingerprint({manifest: packageBuild.manifest, payloads: archived.payloads}),
+      packageFingerprintMatchesStagedPayloads:
+        (packageBuild.manifest.packageFingerprint ?? null)
+        === getProjectTransferPackageFingerprint({manifest: packageBuild.manifest, payloads: packageBuild.payloads}),
       packageHasAllPayloadFiles: projectTransferPayloadKeys.every((key) => {
         return payloadFilePathSet.has(packageBuild.manifest.payloads[key].path)
       }),
       packageHasManifest: packageZipEntryPaths.includes('manifest.json'),
+      packageHumanPostRewriteHtmlDigest: packageHumanJudgment?.humanReviewInputSignature?.article?.fullTextHtmlDigest ?? null,
+      packageJudgmentPostRewriteHtmlDigest: packageJudgment?.judgmentInputSignature?.article?.fullTextHtmlDigest ?? null,
       packageManifestAssetSummary: packageBuild.manifest.assetSummary,
       packageManifestExportedAt: packageManifest.exportedAt,
       packageManifestPayloadKeys: Object.keys(packageManifest.payloads).sort(),
@@ -924,9 +986,17 @@ test('project-transfer export reads archived app-table scope and serializes lock
       },
       packageManifestSourceAppVersion: packageManifest.sourceAppVersion,
       packageMetadataHasTempPath: JSON.stringify(packageBuild.metadata).includes('tmp/project-transfer'),
+      packagePostRewriteHtmlDigest,
       packagePayloadJsonCollectionIsArray: Array.isArray(packagePayloadJsonCollection),
+      packageRawRuntimeHtmlDigest,
+      packageReviewPostRewriteHtmlDigest: packageReview?.humanReviewInputSignature?.article?.fullTextHtmlDigest ?? null,
+      packageAssessmentArticleSignatureMatchesPackageArticle:
+        JSON.stringify(packageAssessment?.signature?.judgmentSignature?.articleSignature ?? null)
+        === JSON.stringify(packageRouteArticle?.signature ?? null),
       packageZipEntryPaths,
       preflightEstimate,
+      preflightIncludeEstimate,
+      preflightOmitEstimate,
       modelDescriptors: archived.payloads.models.map((model) => {
         return {
           displayName: model.displayName,
@@ -951,6 +1021,16 @@ test('project-transfer export reads archived app-table scope and serializes lock
       rawIncludedArticleImportRouteImportMetadata: rawIncludedArticleImportRoute?.importMetadata ?? null,
       rawIncludedArticleImportRouteRawPayload: rawIncludedArticleImportRoute?.rawPayload ?? null,
       rawIncludedWarning: rawIncluded.warnings.find((warning) => warning.code === 'payloadOmitted' && warning.scope === 'articles') ?? null,
+      rawPackageIncludeExecutionMode: packageIncludeBuild.executionMode,
+      rawPackageIncludeOriginalData: packageIncludeSerializedArticle.originalData,
+      rawPackageIncludeWarning: packageIncludeBuild.manifest.warnings?.find((warning) => {
+        return warning.code === 'payloadOmitted' && warning.scope === 'articles'
+      }) ?? null,
+      rawPackageOmitExecutionMode: packageBuild.executionMode,
+      rawPackageOmitOriginalData: packageSerializedArticle.originalData,
+      rawPackageOmitWarning: packageBuild.manifest.warnings?.find((warning) => {
+        return warning.code === 'payloadOmitted' && warning.scope === 'articles'
+      }) ?? null,
       rawForcedOmittedArticleOriginalData: rawForcedOmittedArticle?.originalData ?? null,
       rawForcedOmittedWarning: rawForcedOmitted.warnings.find((warning) => {
         return warning.code === 'payloadOmitted' && warning.scope === 'articles'
@@ -1070,6 +1150,12 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.packageHasManifest).toBe(true)
   expect(result.packageHasAllPayloadFiles).toBe(true)
   expect(result.packageFingerprintMatchesAnalyze).toBe(true)
+  expect(result.packageFingerprintMatchesStagedPayloads).toBe(true)
+  expect(result.packageJudgmentPostRewriteHtmlDigest).toBe(result.packagePostRewriteHtmlDigest)
+  expect(result.packageHumanPostRewriteHtmlDigest).toBe(result.packagePostRewriteHtmlDigest)
+  expect(result.packageReviewPostRewriteHtmlDigest).toBe(result.packagePostRewriteHtmlDigest)
+  expect(result.packageJudgmentPostRewriteHtmlDigest).not.toBe(result.packageRawRuntimeHtmlDigest)
+  expect(result.packageAssessmentArticleSignatureMatchesPackageArticle).toBe(true)
   expect(result.packageManifestPayloadKeys).toEqual([...projectTransferPayloadKeys].sort())
   expect(result.packageManifestExportedAt).toBe('2026-05-24T08:00:00.000Z')
   expect(result.packageManifestSourceAppVersion).toMatch(/^\d+\.\d+\.\d+/)
@@ -1086,6 +1172,15 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.packagePayloadJsonCollectionIsArray).toBe(true)
   expect(result.preflightEstimate.assetBytes).toBe(49)
   expect(result.preflightEstimate.packageBytes).toBeGreaterThan(result.preflightEstimate.assetBytes)
+  expect(result.preflightIncludeEstimate.packageBytes).toBeGreaterThan(result.preflightOmitEstimate.packageBytes)
+  expect(result.rawPackageOmitExecutionMode).toBe('inline')
+  expect(result.rawPackageIncludeExecutionMode).toBe('inline')
+  expect(result.rawPackageOmitOriginalData).toBeNull()
+  expect(result.rawPackageIncludeOriginalData).toEqual({raw: 'route'})
+  expect(result.rawPackageOmitWarning).toMatchObject({details: {rawArticleProvenanceMode: 'omit'}})
+  expect(result.rawPackageIncludeWarning).toBeNull()
+  expect(projectTransferRawArticleProvenanceModes).toEqual(['include', 'omit'])
+  expect(projectTransferRawArticleProvenanceModes).not.toContain('auto')
   expect(result.packageZipEntryPaths).toContain('manifest.json')
   expect(result.packageZipEntryPaths).toContain('providerConnections.json')
   expect(

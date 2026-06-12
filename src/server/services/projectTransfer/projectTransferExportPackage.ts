@@ -28,7 +28,7 @@ import {
 import {getProjectTransferCanonicalJson, getProjectTransferPackageFingerprint} from './projectTransferFingerprint.ts'
 import {buildProjectTransferManifest} from './projectTransferManifest.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
-import type {ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
+import {parseProjectTransferPayload, type ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
 import {
   getProjectTransferPerformanceMetrics,
   getProjectTransferPerformanceRowCountersFromPayloads,
@@ -319,6 +319,26 @@ const readSerializedPayloadsFromStagedFiles = async (
   )
 }
 
+const readPayloadsFromStagedFiles = async (
+  payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles'],
+) => {
+  return projectTransferPayloadKeys.reduce<Promise<Partial<ProjectTransferPayloadByKey>>>(
+    async (previousPayloads, key) => {
+      const payloads = await previousPayloads
+      const bytes = await readFile(payloadFiles[key].filePath)
+
+      return {...payloads, [key]: parseProjectTransferPayload(key, bytes)}
+    },
+    Promise.resolve({}),
+  )
+}
+
+const getPayloadsFromStagedFiles = async (
+  payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles'],
+): Promise<ProjectTransferPayloadByKey> => {
+  return (await readPayloadsFromStagedFiles(payloadFiles)) as ProjectTransferPayloadByKey
+}
+
 const getCurrentModelSummary = (payloads: ProjectTransferPayloadByKey) => {
   const projectModelSignature = getProjectTransferCanonicalJson(payloads.project.modelSignature)
   const model = payloads.models.find((entry) => {
@@ -362,7 +382,7 @@ const buildManifest = ({
   })
 }
 
-const getManifestWithFingerprint = ({
+const getManifestWithFingerprint = async ({
   assetBytes,
   assembly,
   exportedAt,
@@ -374,9 +394,10 @@ const getManifestWithFingerprint = ({
   payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles']
 }) => {
   const unsignedManifest = buildManifest({assetBytes, assembly, exportedAt, payloadFiles})
+  const stagedPayloads = await getPayloadsFromStagedFiles(payloadFiles)
   const packageFingerprint = getProjectTransferPackageFingerprint({
     manifest: unsignedManifest,
-    payloads: assembly.payloads,
+    payloads: stagedPayloads,
   })
 
   return buildManifest({assetBytes, assembly, exportedAt, packageFingerprint, payloadFiles})
@@ -868,11 +889,8 @@ export const buildProjectTransferExportPackage = async (
         const assetBytes = assembly.assetEntries.reduce((total, entry) => {
           return total + entry.byteLength
         }, 0)
-        const manifest = getManifestWithFingerprint({
-          assetBytes,
-          assembly,
-          exportedAt,
-          payloadFiles: assembly.payloadFiles,
+        const manifest = yield* Effect.promise(() => {
+          return getManifestWithFingerprint({assetBytes, assembly, exportedAt, payloadFiles: assembly.payloadFiles})
         })
         const entries = getPackageEntries({assembly, manifest})
         const packageOutputPath = input.packageOutputPath ?? join(buildPath, projectTransferExportArtifacts.package)

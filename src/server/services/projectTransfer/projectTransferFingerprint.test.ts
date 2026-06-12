@@ -10,6 +10,7 @@ import {
   getProjectTransferSha256Checksum,
 } from './projectTransferFingerprint.ts'
 import {buildProjectTransferManifest, getProjectTransferManifestPayloadEntry} from './projectTransferManifest.ts'
+import {getProjectTransferSchemaVNextFingerprintSortKey} from './projectTransferPayloadSchemas.ts'
 import {
   projectTransferPayloadFormatByKey,
   type ProjectTransferPayloadKey,
@@ -131,6 +132,21 @@ const getSchemaVNextManifest = (checksumSeed: string) => {
     payloads: getSchemaVNextPayloadManifestEntries({
       articles: `articles-${checksumSeed}`,
       project: `project-${checksumSeed}`,
+    }),
+    project: getSchemaVNextProjectSummary(checksumSeed),
+    schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
+    sourceAppVersion: '0.2.1',
+  })
+}
+
+const getSchemaVNextAssetManifest = (checksumSeed: string) => {
+  return buildProjectTransferManifest({
+    exportedAt: `2026-05-21T07:10:0${checksumSeed}.000Z`,
+    payloads: getSchemaVNextPayloadManifestEntries({
+      articles: `articles-with-assets-${checksumSeed}`,
+      assetEntries: `asset-entries-${checksumSeed}`,
+      assetReferences: `asset-references-${checksumSeed}`,
+      project: `project-with-assets-${checksumSeed}`,
     }),
     project: getSchemaVNextProjectSummary(checksumSeed),
     schemaVersion: projectTransferSchemaVNextManifestSchemaVersion,
@@ -291,6 +307,86 @@ const getAssetManifestPayload = (checksumSha256: string, byteLength = 11) => {
         ],
       },
     ],
+  }
+}
+
+const getSchemaVNextAssetEntryPayload = (checksumSha256: string, byteLength = 11) => {
+  const fingerprint = {checksumSha256, packagePath: 'assets/article-pdfs/article-1.pdf'}
+
+  return {
+    byteLength,
+    checksumSha256,
+    contentType: 'application/pdf',
+    fingerprint,
+    packagePath: fingerprint.packagePath,
+    sortKey: getProjectTransferSchemaVNextFingerprintSortKey(fingerprint),
+  }
+}
+
+const getSchemaVNextAssetReferencePayload = (sourceArticleId: string) => {
+  const fingerprint = {
+    assetPackagePath: 'assets/article-pdfs/article-1.pdf',
+    fieldPath: 'articles[0].fullTextPdf',
+    jsonPointer: '/0/fullTextPdf',
+    kind: 'fullTextPdf',
+    payloadKey: 'articles',
+    payloadPath: projectTransferSchemaVNextPayloadPathByKey.articles,
+  }
+
+  return {
+    assetPackagePath: fingerprint.assetPackagePath,
+    fieldPath: fingerprint.fieldPath,
+    fingerprint,
+    jsonPointer: fingerprint.jsonPointer,
+    kind: fingerprint.kind,
+    payloadKey: fingerprint.payloadKey,
+    payloadPath: fingerprint.payloadPath,
+    sortKey: getProjectTransferSchemaVNextFingerprintSortKey(fingerprint),
+    sourceArticleId,
+    sourceRef: `article:${sourceArticleId}`,
+  }
+}
+
+const getModelPayload = ({
+  sourceModelId,
+  variant,
+  version,
+}: {
+  sourceModelId: string
+  variant: string
+  version: string
+}) => {
+  const providerConnectionSignature = {
+    authMode: 'apiKey',
+    baseURL: null,
+    configSignature: {region: 'us-east-1'},
+    providerKind: 'codex',
+  }
+  const signature = {
+    displayName: 'Codex Thinking',
+    modelName: 'codex-thinking',
+    name: 'Codex Thinking',
+    providerConnectionSignature,
+    remoteModelId: 'codex-thinking',
+    variant,
+    version,
+  }
+
+  return {
+    displayName: 'Codex Thinking',
+    enabled: true,
+    metadataJson: {options: {thinking: variant}},
+    modelName: 'codex-thinking',
+    name: 'Codex Thinking',
+    provenance: {sourceModelId, sourceProviderConnectionId: `provider-${sourceModelId}`},
+    remoteModelId: 'codex-thinking',
+    signature,
+    source: 'manual',
+    sourceModelId,
+    sourceProviderConnectionId: `provider-${sourceModelId}`,
+    updatedAt: '2026-05-21T07:00:00.000Z',
+    variant,
+    version,
   }
 }
 
@@ -467,4 +563,95 @@ test('schema-vNext package fingerprints use staged row digests and singleton pay
 
   expect(firstFingerprint).toBe(secondFingerprint)
   expect(digestFingerprint).toBe(firstFingerprint)
+})
+
+test('schema-vNext package fingerprints include asset-entry and asset-reference logical digests', () => {
+  const projectPayload = {
+    name: 'Asset Review',
+    settings: {useAbstract: true, useFulltext: true, useFulltextNoImages: false, useTitle: true},
+    sourceProjectId: 'source-project-assets',
+  }
+  const articles = [
+    {
+      articleTitle: 'Asset Article',
+      fullTextPdf: 'assets/article-pdfs/article-1.pdf',
+      sourceArticleId: 'source-article-assets-a',
+    },
+  ]
+  const logicallyEquivalentArticles = [
+    {
+      articleTitle: 'Asset Article',
+      fullTextPdf: 'assets/article-pdfs/article-1.pdf',
+      sourceArticleId: 'source-article-assets-b',
+    },
+  ]
+  const assetEntries = [getSchemaVNextAssetEntryPayload('a'.repeat(64))]
+  const byteLengthChangedAssetEntries = [getSchemaVNextAssetEntryPayload('a'.repeat(64), 12)]
+  const checksumChangedAssetEntries = [getSchemaVNextAssetEntryPayload('b'.repeat(64))]
+  const assetReferences = [getSchemaVNextAssetReferencePayload('source-article-assets-a')]
+  const remappedAssetReferences = [getSchemaVNextAssetReferencePayload('source-article-assets-b')]
+  const firstPayloads = {articles, assetEntries, assetReferences, project: projectPayload}
+  const firstFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getSchemaVNextAssetManifest('1'),
+    payloads: firstPayloads,
+  })
+  const equivalentFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getSchemaVNextAssetManifest('2'),
+    payloads: {
+      articles: logicallyEquivalentArticles,
+      assetEntries: byteLengthChangedAssetEntries,
+      assetReferences: remappedAssetReferences,
+      project: {...projectPayload, sourceProjectId: 'source-project-assets-remapped'},
+    },
+  })
+  const checksumChangedFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getSchemaVNextAssetManifest('3'),
+    payloads: {...firstPayloads, assetEntries: checksumChangedAssetEntries},
+  })
+  const digestFingerprint = getProjectTransferSchemaVNextLogicalPackageFingerprintFromDigests({
+    manifest: getSchemaVNextAssetManifest('4'),
+    rowDigests: [
+      ...articles.map((row) => {
+        return getProjectTransferSchemaVNextStagedRowDigest({payloadKey: 'articles', row})
+      }),
+      ...assetEntries.map((row) => {
+        return getProjectTransferSchemaVNextStagedRowDigest({payloadKey: 'assetEntries', row})
+      }),
+      ...assetReferences.map((row) => {
+        return getProjectTransferSchemaVNextStagedRowDigest({payloadKey: 'assetReferences', row})
+      }),
+    ],
+    singletonPayloadDigests: [
+      getProjectTransferSchemaVNextSingletonPayloadDigest({payloadKey: 'project', value: projectPayload}),
+    ],
+  })
+
+  expect(firstFingerprint).toBe(equivalentFingerprint)
+  expect(digestFingerprint).toBe(firstFingerprint)
+  expect(checksumChangedFingerprint).not.toBe(firstFingerprint)
+  expect(firstFingerprint).toBe('75bbfa0608010474d4edcd3a7a9d9bfe6b46341a9c515e160760969f27f5c1f7')
+})
+
+test('project-transfer model fingerprints preserve variant and version parity', () => {
+  const firstFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getManifest('1'),
+    payloads: {models: [getModelPayload({sourceModelId: 'source-model-a', variant: 'medium', version: '2026-06-01'})]},
+  })
+  const remappedFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getManifest('2'),
+    payloads: {models: [getModelPayload({sourceModelId: 'source-model-b', variant: 'medium', version: '2026-06-01'})]},
+  })
+  const variantChangedFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getManifest('3'),
+    payloads: {models: [getModelPayload({sourceModelId: 'source-model-a', variant: 'high', version: '2026-06-01'})]},
+  })
+  const versionChangedFingerprint = getProjectTransferLogicalPackageFingerprint({
+    manifest: getManifest('4'),
+    payloads: {models: [getModelPayload({sourceModelId: 'source-model-a', variant: 'medium', version: '2026-06-02'})]},
+  })
+
+  expect(firstFingerprint).toBe(remappedFingerprint)
+  expect(variantChangedFingerprint).not.toBe(firstFingerprint)
+  expect(versionChangedFingerprint).not.toBe(firstFingerprint)
+  expect(firstFingerprint).toBe('f99e9ec6104ea92aeddf3e86bf48f117c4bdf28163a8653f566d6c07bc557392')
 })
