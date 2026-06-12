@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto'
-import {mkdtempSync, readFileSync, rmSync} from 'node:fs'
+import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
-import {join} from 'node:path'
+import {dirname, join} from 'node:path'
 
 import {afterAll, beforeEach, expect, mock, test} from 'bun:test'
 
@@ -12,7 +12,11 @@ import type {
   ProjectTransferExportSerializedPayloads,
 } from './projectTransferExport.ts'
 import type {ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
-import {projectTransferPayloadKeys} from './projectTransferSchemas.ts'
+import {
+  projectTransferPayloadFormatByKey,
+  projectTransferPayloadKeys,
+  projectTransferPayloadPathByKey,
+} from './projectTransferSchemas.ts'
 import {getProjectTransferExportTempLayout} from './projectTransferSession.ts'
 
 const exportModulePath = new URL('./projectTransferExport.ts', import.meta.url).pathname
@@ -28,6 +32,21 @@ type CreateProjectTransferSessionMockParams = {
 }
 type PersistProjectTransferSessionExportReadyMockParams = {
   completionPayload: {byteLength: number; checksumSha256: string; status: 'ready'}
+}
+type ProjectTransferExportPackageTestPayloadFile = {
+  byteLength: number
+  checksumSha256: string
+  filePath: string
+  format: (typeof projectTransferPayloadFormatByKey)[(typeof projectTransferPayloadKeys)[number]]
+  path: string
+  recordCount: number
+}
+type ProjectTransferExportPackageTestStagedRows = {
+  assetEntries: ProjectTransferExportPayloadAssembly['assetEntries']
+  assetReferences: []
+  payloadFiles: Record<string, ProjectTransferExportPackageTestPayloadFile>
+  payloads: ProjectTransferPayloadByKey
+  warnings: ProjectTransferExportPayloadAssembly['warnings']
 }
 
 const now = new Date('2026-05-24T08:00:00.000Z')
@@ -51,17 +70,94 @@ const sessionRecord: ProjectTransferSessionRecord = {
   updatedAt: now,
 }
 
-const getProjectTransferExportPayloadsMock = mock(async () => {
+const getProjectTransferExportPayloadsMock = mock(async (): Promise<ProjectTransferExportPayloadAssembly> => {
   throw new Error('Payload assembly should run in the export worker only')
 })
 const getProjectTransferExportPreflightEstimateMock = mock(async () => {
-  return {assetBytes: projectTransferExecutionThresholds.exportInlineAssetBytes + 1, packageBytes: 0}
+  return {
+    assetBytes: projectTransferExecutionThresholds.exportInlineAssetBytes + 1,
+    packageBytes: 0,
+    stagedPayloadBytes: 0,
+  }
 })
 const serializeProjectTransferExportPayloadsMock = mock(() => {
   return projectTransferPayloadKeys.reduce<ProjectTransferExportSerializedPayloads>((payloads, key) => {
     return {...payloads, [key]: key.endsWith('s') ? '' : '{}'}
   }, {} as ProjectTransferExportSerializedPayloads)
 })
+const getStagedPayloadString = (
+  key: (typeof projectTransferPayloadKeys)[number],
+  payloads: ProjectTransferPayloadByKey,
+) => {
+  const payload = payloads[key]
+
+  return projectTransferPayloadFormatByKey[key] === 'ndjson' && Array.isArray(payload)
+    ? payload.length === 0
+      ? ''
+      : `${payload
+          .map((record) => {
+            return JSON.stringify(record)
+          })
+          .join('\n')}\n`
+    : JSON.stringify(payload)
+}
+const writeStagedPayloadFiles = (rootPath: string, payloads: ProjectTransferPayloadByKey) => {
+  return projectTransferPayloadKeys.reduce<Record<string, ProjectTransferExportPackageTestPayloadFile>>(
+    (files, key) => {
+      const payload = payloads[key]
+      const path = projectTransferPayloadPathByKey[key]
+      const filePath = join(rootPath, path)
+      const value = getStagedPayloadString(key, payloads)
+      const bytes = textEncoder.encode(value)
+
+      mkdirSync(dirname(filePath), {recursive: true})
+      writeFileSync(filePath, bytes)
+
+      return {
+        ...files,
+        [key]: {
+          byteLength: bytes.byteLength,
+          checksumSha256: createHash('sha256').update(bytes).digest('hex'),
+          filePath,
+          format: projectTransferPayloadFormatByKey[key],
+          path,
+          recordCount:
+            key === 'project'
+              ? 1
+              : key === 'assetManifest'
+                ? payloads.assetManifest.entries.length
+                : Array.isArray(payload)
+                  ? payload.length
+                  : 0,
+        },
+      }
+    },
+    {},
+  )
+}
+const stageProjectTransferExportPayloadRowsMock = mock(
+  async ({rootPath}: {rootPath: string}): Promise<ProjectTransferExportPackageTestStagedRows> => {
+    const assembly = await getProjectTransferExportPayloadsMock()
+
+    return {
+      assetEntries: assembly.assetEntries,
+      assetReferences: [],
+      payloadFiles: writeStagedPayloadFiles(rootPath, assembly.payloads),
+      payloads: assembly.payloads,
+      warnings: assembly.warnings,
+    }
+  },
+)
+const completeProjectTransferExportStagedPayloadsMock = mock(
+  async ({stagedRows}: {stagedRows: ProjectTransferExportPackageTestStagedRows}) => {
+    return {
+      assetEntries: stagedRows.assetEntries,
+      payloadFiles: stagedRows.payloadFiles,
+      payloads: stagedRows.payloads,
+      warnings: stagedRows.warnings,
+    }
+  },
+)
 const createProjectTransferSessionMock = mock(async (_params: CreateProjectTransferSessionMockParams) => {
   return sessionRecord
 })
@@ -85,9 +181,11 @@ const failProjectTransferSessionExportMock = mock(async () => {
 
 void mock.module(exportModulePath, () => {
   return {
+    completeProjectTransferExportStagedPayloads: completeProjectTransferExportStagedPayloadsMock,
     getProjectTransferExportPayloads: getProjectTransferExportPayloadsMock,
     getProjectTransferExportPreflightEstimate: getProjectTransferExportPreflightEstimateMock,
     serializeProjectTransferExportPayloads: serializeProjectTransferExportPayloadsMock,
+    stageProjectTransferExportPayloadRows: stageProjectTransferExportPayloadRowsMock,
   }
 })
 
@@ -184,7 +282,7 @@ const getPayloadAssembly = (): ProjectTransferExportPayloadAssembly => {
   } as ProjectTransferPayloadByKey
 
   return {
-    assetEntries: [{bytes: new Uint8Array([1, 2]), path: 'assets/project-transfer-test/large.bin'}],
+    assetEntries: [{byteLength: 2, bytes: new Uint8Array([1, 2]), path: 'assets/project-transfer-test/large.bin'}],
     payloads,
     warnings: [],
   }

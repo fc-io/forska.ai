@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto'
+import {createReadStream} from 'node:fs'
 import {lstat} from 'node:fs/promises'
 import {posix, win32} from 'node:path'
 
@@ -24,7 +26,8 @@ export type ProjectTransferExportAssetArticle = ProjectTransferArticlePayloadRec
   fullTextPdf?: unknown
 }
 
-export type ProjectTransferExportAssetEntry = {bytes: Uint8Array; path: string}
+export type ProjectTransferExportAssetEntry = {byteLength: number; bytes?: Uint8Array; filePath?: string; path: string}
+export type ProjectTransferExportAssetReferenceInput = AssetReferenceInput
 
 type ProjectTransferExportAssetCollection = {
   assetEntries: ProjectTransferExportAssetEntry[]
@@ -33,6 +36,11 @@ type ProjectTransferExportAssetCollection = {
 
 type ProjectTransferExportArticleAssetCollection = ProjectTransferExportAssetCollection & {
   articles: ProjectTransferExportAssetArticle[]
+}
+
+type ProjectTransferExportArticleAssetReferenceCollection = {
+  articles: ProjectTransferExportAssetArticle[]
+  references: ProjectTransferExportAssetReferenceInput[]
 }
 
 type AssetReferenceInput = {
@@ -60,6 +68,7 @@ type HtmlRewriteResult = {references: HtmlAttributeAssetReference[]; value: stri
 const htmlAssetAttributePattern = /\b(src|href)(\s*=\s*)("([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi
 const runtimeAssetUrlPath = '/api/runtime-asset'
 const localPathPattern = /^(\/Users\/|\/home\/|\/private\/|\/tmp\/|\/var\/folders\/|[A-Za-z]:\\)/
+const textEncoder = new TextEncoder()
 
 const isRecord = (value: unknown): value is JsonRecord => {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -458,7 +467,19 @@ export const getProjectTransferExportAssetByteEstimateForArticles = async (
   }, 0)
 }
 
-const readAssetFile = async (pathValue: string) => {
+const getFileChecksumSha256 = async (filePath: string) => {
+  const hash = createHash('sha256')
+
+  for await (const chunk of createReadStream(filePath)) {
+    const bytes = chunk instanceof Uint8Array ? chunk : textEncoder.encode(String(chunk))
+
+    hash.update(bytes)
+  }
+
+  return hash.digest('hex')
+}
+
+const readAssetFile = async (pathValue: string, readBytes: boolean) => {
   const absolutePath = resolveProjectTransferPersistedRuntimeAssetPath({pathValue})
   const assetFile = globalThis.Bun.file(absolutePath)
   const exists = await assetFile.exists()
@@ -477,22 +498,25 @@ const readAssetFile = async (pathValue: string) => {
     return getProjectTransferExportAssetError(`runtime asset is not a regular file ${pathValue}`)
   }
 
-  const firstBytes = new Uint8Array(await assetFile.arrayBuffer())
+  const checksumSha256 = readBytes
+    ? getProjectTransferSha256Checksum(new Uint8Array(await assetFile.arrayBuffer()))
+    : await getFileChecksumSha256(absolutePath)
   const secondFile = globalThis.Bun.file(absolutePath)
-  const secondBytes = new Uint8Array(await secondFile.arrayBuffer())
+  const bytes = readBytes ? new Uint8Array(await secondFile.arrayBuffer()) : undefined
+  const byteLength = bytes?.byteLength ?? before.size
   const after = await lstat(absolutePath)
-  const checksumSha256 = getProjectTransferSha256Checksum(secondBytes)
-  const firstChecksumSha256 = getProjectTransferSha256Checksum(firstBytes)
+  const secondChecksumSha256 = bytes ? getProjectTransferSha256Checksum(bytes) : checksumSha256
 
-  if (before.size !== after.size || before.size !== secondBytes.byteLength || firstChecksumSha256 !== checksumSha256) {
+  if (before.size !== after.size || before.size !== byteLength || secondChecksumSha256 !== checksumSha256) {
     return getProjectTransferExportAssetError(`runtime asset changed while being copied ${pathValue}`)
   }
 
   return {
-    byteLength: secondBytes.byteLength,
-    bytes: secondBytes,
+    byteLength,
+    bytes,
     checksumSha256,
-    contentType: secondFile.type || null,
+    contentType: secondFile.type || assetFile.type || null,
+    filePath: absolutePath,
     packagePath: pathValue,
   }
 }
@@ -510,8 +534,9 @@ const getReferencesByAssetPath = (references: AssetReferenceInput[]) => {
 const getAssetManifestEntry = async (
   packagePath: string,
   references: ProjectTransferAssetReference[],
+  readBytes: boolean,
 ): Promise<{assetEntry: ProjectTransferExportAssetEntry; manifestEntry: ProjectTransferAssetManifestEntry}> => {
-  const file = await readAssetFile(packagePath)
+  const file = await readAssetFile(packagePath, readBytes)
   const baseManifestEntry = {
     byteLength: file.byteLength,
     checksumSha256: file.checksumSha256,
@@ -520,17 +545,21 @@ const getAssetManifestEntry = async (
   }
 
   return {
-    assetEntry: {bytes: file.bytes, path: file.packagePath},
+    assetEntry:
+      file.bytes === undefined
+        ? {byteLength: file.byteLength, filePath: file.filePath, path: file.packagePath}
+        : {byteLength: file.byteLength, bytes: file.bytes, filePath: file.filePath, path: file.packagePath},
     manifestEntry: file.contentType ? {...baseManifestEntry, contentType: file.contentType} : baseManifestEntry,
   }
 }
 
-const getAssetManifestEntries = async (references: AssetReferenceInput[]) => {
+const getAssetManifestEntries = async (references: AssetReferenceInput[], options: {readBytes?: boolean} = {}) => {
   const referencesByAssetPath = getReferencesByAssetPath(references)
   const packagePaths = [...referencesByAssetPath.keys()].sort()
+  const readBytes = options.readBytes ?? true
   const entries = await Promise.all(
     packagePaths.map((packagePath) => {
-      return getAssetManifestEntry(packagePath, referencesByAssetPath.get(packagePath) ?? [])
+      return getAssetManifestEntry(packagePath, referencesByAssetPath.get(packagePath) ?? [], readBytes)
     }),
   )
 
@@ -550,22 +579,35 @@ export const getEmptyProjectTransferAssetManifestPayload = (): ProjectTransferAs
   return {entries: []}
 }
 
-export const getProjectTransferExportAssetCollectionForArticles = async (
+export const getProjectTransferExportAssetReferenceCollectionForArticles = (
   articles: ProjectTransferArticlePayloadRecord[],
-): Promise<ProjectTransferExportArticleAssetCollection> => {
+): ProjectTransferExportArticleAssetReferenceCollection => {
   const articleReferences = articles.map((article, articleIndex) => {
     return getArticleAssetReferences(article as ProjectTransferExportAssetArticle, articleIndex)
   })
-  const assetCollection = await getAssetManifestEntries(
-    articleReferences.flatMap((entry) => {
-      return entry.references
-    }),
-  )
 
   return {
-    ...assetCollection,
     articles: articleReferences.map((entry) => {
       return entry.article
     }),
+    references: articleReferences.flatMap((entry) => {
+      return entry.references
+    }),
   }
+}
+
+export const getProjectTransferExportAssetCollectionForReferences = async (
+  references: ProjectTransferExportAssetReferenceInput[],
+  options: {readBytes?: boolean} = {},
+): Promise<ProjectTransferExportAssetCollection> => {
+  return getAssetManifestEntries(references, options)
+}
+
+export const getProjectTransferExportAssetCollectionForArticles = async (
+  articles: ProjectTransferArticlePayloadRecord[],
+): Promise<ProjectTransferExportArticleAssetCollection> => {
+  const articleReferences = getProjectTransferExportAssetReferenceCollectionForArticles(articles)
+  const assetCollection = await getAssetManifestEntries(articleReferences.references, {readBytes: true})
+
+  return {...assetCollection, articles: articleReferences.articles}
 }

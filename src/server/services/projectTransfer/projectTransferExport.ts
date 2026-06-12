@@ -1,3 +1,9 @@
+import {createHash} from 'node:crypto'
+import {once} from 'node:events'
+import {createWriteStream, type WriteStream} from 'node:fs'
+import {mkdir} from 'node:fs/promises'
+import {dirname, join} from 'node:path'
+
 import {MAX_COMPLETION_TOKENS} from '../../../agent/judge.ts'
 import {
   getSinglePromptEvidenceSystemPromptForArticle,
@@ -15,15 +21,16 @@ import {processFulltextForLLM} from '../../utils/fulltextProcessing.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getDateValue, getJsonValue, getSqlLiteral} from '../appQueryHelpers.ts'
 import type {AppQueryDatabaseService} from '../appQueryServiceCore.ts'
+import {type ProjectTransferRawArticleProvenanceMode} from './projectTransferContracts.ts'
 import {
-  projectTransferExecutionThresholds,
-  type ProjectTransferRawArticleProvenanceMode,
-} from './projectTransferContracts.ts'
-import {
+  getEmptyProjectTransferAssetManifestPayload,
   getProjectTransferExportAssetByteEstimateForArticles,
   getProjectTransferExportAssetCollectionForArticles,
+  getProjectTransferExportAssetCollectionForReferences,
+  getProjectTransferExportAssetReferenceCollectionForArticles,
   type ProjectTransferExportAssetArticle,
   type ProjectTransferExportAssetEntry,
+  type ProjectTransferExportAssetReferenceInput,
 } from './projectTransferExportAssets.ts'
 import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import type {ProjectTransferArticleIdentifierSource} from './projectTransferIdentifierNormalization.ts'
@@ -39,9 +46,18 @@ import {
   type ProjectTransferPayloadRecord,
   type ProjectTransferPayloadWarning,
   serializeProjectTransferPayload,
+  serializeProjectTransferPayloadNdjsonRow,
 } from './projectTransferPayloadSchemas.ts'
-import type {ProjectTransferManifestWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
-import {projectTransferPayloadKeys} from './projectTransferSchemas.ts'
+import type {
+  ProjectTransferManifestWarning,
+  ProjectTransferPayloadFormat,
+  ProjectTransferPayloadKey,
+} from './projectTransferSchemas.ts'
+import {
+  projectTransferPayloadFormatByKey,
+  projectTransferPayloadKeys,
+  projectTransferPayloadPathByKey,
+} from './projectTransferSchemas.ts'
 
 type ProjectTransferExportQueryOptions = {
   articleRawJsonOmissionThresholdChars?: number
@@ -344,9 +360,33 @@ export type ProjectTransferExportPayloadAssembly = {
   warnings: ProjectTransferManifestWarning[]
 }
 
+export type ProjectTransferExportStagedPayloadFile = {
+  byteLength: number
+  checksumSha256: string
+  filePath: string
+  format: ProjectTransferPayloadFormat
+  path: string
+  recordCount: number
+}
+
+export type ProjectTransferExportStagedPayloadRows = {
+  assetReferences: ProjectTransferExportAssetReferenceInput[]
+  payloadFiles: Partial<Record<ProjectTransferPayloadKey, ProjectTransferExportStagedPayloadFile>>
+  payloads: ProjectTransferPayloadByKey
+  warnings: ProjectTransferManifestWarning[]
+}
+
+export type ProjectTransferExportStagedPayloadAssembly = ProjectTransferExportPayloadAssembly & {
+  payloadFiles: Record<ProjectTransferPayloadKey, ProjectTransferExportStagedPayloadFile>
+}
+
 export type ProjectTransferExportSerializedPayloads = Record<ProjectTransferPayloadKey, string>
 
-export type ProjectTransferExportPreflightEstimate = {assetBytes: number; packageBytes: number}
+export type ProjectTransferExportPreflightEstimate = {
+  assetBytes: number
+  packageBytes: number
+  stagedPayloadBytes: number
+}
 export type ProjectTransferExportSummary = {
   articleCount: number
   humanJudgmentCount: number
@@ -405,6 +445,7 @@ const singlePromptEvidenceOutputSchema = {
 const reviewedSectionContractVersion = 1 as const
 const articleRawJsonOmissionThresholdChars = 64 * 1024 * 1024
 const defaultRawArticleProvenanceMode: ProjectTransferRawArticleProvenanceMode = 'omit'
+const textEncoder = new TextEncoder()
 const rawArticleProvenanceFields = [
   'canonicalOriginalData',
   'canonicalSourceMetadata',
@@ -499,6 +540,147 @@ const getRowsByMany = <TRow>(rows: TRow[], getKey: (row: TRow) => string) => {
 
     return {...rowMap, [key]: [...existingRows, row]}
   }, {})
+}
+
+const getProjectTransferExportPayloadRecordCount = <TKey extends ProjectTransferPayloadKey>(
+  key: TKey,
+  payload: ProjectTransferPayloadByKey[TKey],
+) => {
+  return key === 'project'
+    ? 1
+    : key === 'assetManifest'
+      ? (payload as ProjectTransferPayloadByKey['assetManifest']).entries.length
+      : Array.isArray(payload)
+        ? payload.length
+        : 0
+}
+
+const getStagedPayloadFilePath = (rootPath: string, key: ProjectTransferPayloadKey) => {
+  return join(rootPath, projectTransferPayloadPathByKey[key])
+}
+
+const writeStagedPayloadBytes = async (
+  stream: WriteStream,
+  state: {byteLength: number; hash: ReturnType<typeof createHash>},
+  text: string,
+) => {
+  const bytes = textEncoder.encode(text)
+
+  state.hash.update(bytes)
+  state.byteLength += bytes.byteLength
+
+  if (!stream.write(bytes)) {
+    await once(stream, 'drain')
+  }
+}
+
+const closeStagedPayloadStream = async (stream: WriteStream) => {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      reject(error)
+    }
+    stream.once('error', onError)
+    stream.end(() => {
+      stream.off('error', onError)
+      resolve()
+    })
+  })
+}
+
+const writeStagedPayloadNdjsonFile = async <TKey extends ProjectTransferPayloadKey>({
+  filePath,
+  key,
+  records,
+}: {
+  filePath: string
+  key: TKey
+  records: unknown[]
+}) => {
+  const stream = createWriteStream(filePath)
+  const state = {byteLength: 0, hash: createHash('sha256')}
+
+  try {
+    await records.reduce<Promise<void>>(async (previous, record, index) => {
+      await previous
+      await writeStagedPayloadBytes(stream, state, `${serializeProjectTransferPayloadNdjsonRow(key, record, index)}\n`)
+    }, Promise.resolve())
+    await closeStagedPayloadStream(stream)
+  } catch (error) {
+    stream.destroy()
+    throw error
+  }
+
+  return {
+    byteLength: state.byteLength,
+    checksumSha256: state.hash.digest('hex'),
+    filePath,
+    format: 'ndjson' as const,
+    path: projectTransferPayloadPathByKey[key],
+    recordCount: records.length,
+  }
+}
+
+const writeStagedPayloadJsonFile = async <TKey extends ProjectTransferPayloadKey>({
+  filePath,
+  key,
+  payload,
+}: {
+  filePath: string
+  key: TKey
+  payload: ProjectTransferPayloadByKey[TKey]
+}) => {
+  const serialized = serializeProjectTransferPayload(key, payload)
+  const bytes = textEncoder.encode(serialized)
+
+  await globalThis.Bun.write(filePath, bytes)
+
+  return {
+    byteLength: bytes.byteLength,
+    checksumSha256: getProjectTransferSha256Checksum(bytes),
+    filePath,
+    format: 'json' as const,
+    path: projectTransferPayloadPathByKey[key],
+    recordCount: getProjectTransferExportPayloadRecordCount(key, payload),
+  }
+}
+
+const writeProjectTransferExportStagedPayloadFile = async <TKey extends ProjectTransferPayloadKey>({
+  key,
+  payload,
+  rootPath,
+}: {
+  key: TKey
+  payload: ProjectTransferPayloadByKey[TKey]
+  rootPath: string
+}): Promise<ProjectTransferExportStagedPayloadFile> => {
+  const filePath = getStagedPayloadFilePath(rootPath, key)
+  const format = projectTransferPayloadFormatByKey[key]
+
+  await mkdir(dirname(filePath), {recursive: true})
+
+  return format === 'ndjson' && Array.isArray(payload)
+    ? writeStagedPayloadNdjsonFile({filePath, key, records: payload})
+    : writeStagedPayloadJsonFile({filePath, key, payload})
+}
+
+const writeProjectTransferExportStagedPayloadFiles = async ({
+  keys,
+  payloads,
+  rootPath,
+}: {
+  keys: ProjectTransferPayloadKey[]
+  payloads: ProjectTransferPayloadByKey
+  rootPath: string
+}) => {
+  return keys.reduce<Promise<Partial<Record<ProjectTransferPayloadKey, ProjectTransferExportStagedPayloadFile>>>>(
+    async (previousFiles, key) => {
+      const files = await previousFiles
+      const file = await writeProjectTransferExportStagedPayloadFile({key, payload: payloads[key], rootPath})
+
+      return {...files, [key]: file}
+    },
+    Promise.resolve({}),
+  )
 }
 
 const getProjectTransferExportEstimateTextLengthSql = (expression: string) => {
@@ -2987,9 +3169,22 @@ const getProjectTransferExportEstimatedPackageBytes = ({
   rowCount: number
 }) => {
   const manifestAndZipOverheadBytes = 1024 * 1024
+
+  return (
+    getProjectTransferExportEstimatedStagedPayloadBytes({estimatedPayloadChars, rowCount}) + manifestAndZipOverheadBytes
+  )
+}
+
+const getProjectTransferExportEstimatedStagedPayloadBytes = ({
+  estimatedPayloadChars,
+  rowCount,
+}: {
+  estimatedPayloadChars: number
+  rowCount: number
+}) => {
   const rowOverheadBytes = rowCount * 1024
 
-  return Math.ceil((estimatedPayloadChars + rowOverheadBytes + manifestAndZipOverheadBytes) * 4)
+  return Math.ceil((estimatedPayloadChars + rowOverheadBytes) * 4)
 }
 
 const getProjectTransferExportEstimateNumber = (value: number | null | undefined) => {
@@ -3006,18 +3201,19 @@ export const getProjectTransferExportPreflightEstimate = async (
   const packageEstimate = await getProjectTransferExportPreflightPackageEstimate(projectId, database, {
     rawArticleProvenanceMode: options.rawArticleProvenanceMode,
   })
+  const stagedPayloadBytes = getProjectTransferExportEstimatedStagedPayloadBytes({
+    estimatedPayloadChars: getProjectTransferExportEstimateNumber(packageEstimate.estimatedPayloadChars),
+    rowCount: getProjectTransferExportEstimateNumber(packageEstimate.rowCount),
+  })
   const packageBytes = getProjectTransferExportEstimatedPackageBytes({
     estimatedPayloadChars: getProjectTransferExportEstimateNumber(packageEstimate.estimatedPayloadChars),
     rowCount: getProjectTransferExportEstimateNumber(packageEstimate.rowCount),
   })
-  const assetBytes =
-    packageBytes > projectTransferExecutionThresholds.exportInlinePackageBytes
-      ? 0
-      : await getProjectTransferExportAssetByteEstimateForArticles(
-          await getProjectTransferExportPreflightAssetArticles(projectId, database),
-        )
+  const assetBytes = await getProjectTransferExportAssetByteEstimateForArticles(
+    await getProjectTransferExportPreflightAssetArticles(projectId, database),
+  )
 
-  return {assetBytes, packageBytes}
+  return {assetBytes, packageBytes, stagedPayloadBytes}
 }
 
 export const getProjectTransferExportSummary = async (
@@ -3198,6 +3394,34 @@ export const getProjectTransferExportModelsPayload = async (
   return getProjectTransferExportModelsPayloadFromContext(await getProjectTransferExportContext(projectId, options))
 }
 
+const getProjectTransferExportPayloadsFromContext = (
+  context: ProjectTransferExportContext,
+  assetManifest: ProjectTransferPayloadByKey['assetManifest'],
+) => {
+  return {
+    articleImportRoutes: getProjectTransferExportArticleImportRoutesPayloadFromContext(context),
+    articles: assertProjectTransferPayload('articles', context.articleRows),
+    assetManifest: assertProjectTransferPayload('assetManifest', assetManifest),
+    humanJudgmentSummaries: getProjectTransferExportHumanJudgmentSummariesPayloadFromContext(context),
+    humanJudgments: getProjectTransferExportHumanJudgmentsPayloadFromContext(context),
+    importRoutes: getProjectTransferExportImportRoutesPayloadFromContext(context),
+    judgmentAssessments: getProjectTransferExportJudgmentAssessmentsPayloadFromContext(context),
+    judgments: getProjectTransferExportJudgmentsPayloadFromContext(context),
+    models: getProjectTransferExportModelsPayloadFromContext(context),
+    project: getProjectTransferExportProjectPayloadFromContext(context),
+    projectArticles: getProjectTransferExportProjectArticlesPayloadFromContext(context),
+    projectImportRoutes: getProjectTransferExportProjectImportRoutesPayloadFromContext(context),
+    projectPrompts: getProjectTransferExportProjectPromptsPayloadFromContext(context),
+    prompts: getProjectTransferExportPromptsPayloadFromContext(context),
+    providerConnections: getProjectTransferExportProviderConnectionsPayloadFromContext(context),
+    reviews: getProjectTransferExportReviewsPayloadFromContext(context),
+  } satisfies ProjectTransferPayloadByKey
+}
+
+const getProjectTransferExportWarningsFromContext = (context: ProjectTransferExportContext) => {
+  return [...context.warnings, ...getProjectTransferExportCurrentReviewRowsSignatureWarnings(context)]
+}
+
 export const getProjectTransferExportPayloads = async (
   projectId: string,
   options: ProjectTransferExportQueryOptions = {},
@@ -3205,31 +3429,71 @@ export const getProjectTransferExportPayloads = async (
   const context = await getProjectTransferExportContext(projectId, options)
   const assetCollection = await getProjectTransferExportAssetCollectionForArticles(context.articleRows)
   const contextWithAssets = {...context, articleRows: assetCollection.articles}
-  const payloads = {
-    articleImportRoutes: getProjectTransferExportArticleImportRoutesPayloadFromContext(contextWithAssets),
-    articles: assertProjectTransferPayload('articles', contextWithAssets.articleRows),
-    assetManifest: assertProjectTransferPayload('assetManifest', assetCollection.assetManifest),
-    humanJudgmentSummaries: getProjectTransferExportHumanJudgmentSummariesPayloadFromContext(contextWithAssets),
-    humanJudgments: getProjectTransferExportHumanJudgmentsPayloadFromContext(contextWithAssets),
-    importRoutes: getProjectTransferExportImportRoutesPayloadFromContext(contextWithAssets),
-    judgmentAssessments: getProjectTransferExportJudgmentAssessmentsPayloadFromContext(contextWithAssets),
-    judgments: getProjectTransferExportJudgmentsPayloadFromContext(contextWithAssets),
-    models: getProjectTransferExportModelsPayloadFromContext(contextWithAssets),
-    project: getProjectTransferExportProjectPayloadFromContext(contextWithAssets),
-    projectArticles: getProjectTransferExportProjectArticlesPayloadFromContext(contextWithAssets),
-    projectImportRoutes: getProjectTransferExportProjectImportRoutesPayloadFromContext(contextWithAssets),
-    projectPrompts: getProjectTransferExportProjectPromptsPayloadFromContext(contextWithAssets),
-    prompts: getProjectTransferExportPromptsPayloadFromContext(contextWithAssets),
-    providerConnections: getProjectTransferExportProviderConnectionsPayloadFromContext(contextWithAssets),
-    reviews: getProjectTransferExportReviewsPayloadFromContext(contextWithAssets),
-  } satisfies ProjectTransferPayloadByKey
+
   return {
     assetEntries: assetCollection.assetEntries,
+    payloads: getProjectTransferExportPayloadsFromContext(contextWithAssets, assetCollection.assetManifest),
+    warnings: getProjectTransferExportWarningsFromContext(contextWithAssets),
+  }
+}
+
+export const stageProjectTransferExportPayloadRows = async ({
+  projectId,
+  rootPath,
+  ...options
+}: ProjectTransferExportQueryOptions & {
+  projectId: string
+  rootPath: string
+}): Promise<ProjectTransferExportStagedPayloadRows> => {
+  const context = await getProjectTransferExportContext(projectId, options)
+  const assetReferences = getProjectTransferExportAssetReferenceCollectionForArticles(context.articleRows)
+  const contextWithAssets = {...context, articleRows: assetReferences.articles}
+  const payloads = getProjectTransferExportPayloadsFromContext(
+    contextWithAssets,
+    getEmptyProjectTransferAssetManifestPayload(),
+  )
+  const payloadFiles = await writeProjectTransferExportStagedPayloadFiles({
+    keys: projectTransferPayloadKeys.filter((key) => {
+      return key !== 'assetManifest'
+    }),
     payloads,
-    warnings: [
-      ...contextWithAssets.warnings,
-      ...getProjectTransferExportCurrentReviewRowsSignatureWarnings(contextWithAssets),
-    ],
+    rootPath,
+  })
+
+  return {
+    assetReferences: assetReferences.references,
+    payloadFiles,
+    payloads,
+    warnings: getProjectTransferExportWarningsFromContext(contextWithAssets),
+  }
+}
+
+export const completeProjectTransferExportStagedPayloads = async ({
+  rootPath,
+  stagedRows,
+}: {
+  rootPath: string
+  stagedRows: ProjectTransferExportStagedPayloadRows
+}): Promise<ProjectTransferExportStagedPayloadAssembly> => {
+  const assetCollection = await getProjectTransferExportAssetCollectionForReferences(stagedRows.assetReferences, {
+    readBytes: false,
+  })
+  const payloads = {
+    ...stagedRows.payloads,
+    assetManifest: assertProjectTransferPayload('assetManifest', assetCollection.assetManifest),
+  }
+  const assetManifestFile = await writeProjectTransferExportStagedPayloadFile({
+    key: 'assetManifest',
+    payload: payloads.assetManifest,
+    rootPath,
+  })
+  const payloadFiles = {...stagedRows.payloadFiles, assetManifest: assetManifestFile}
+
+  return {
+    assetEntries: assetCollection.assetEntries,
+    payloadFiles: payloadFiles as Record<ProjectTransferPayloadKey, ProjectTransferExportStagedPayloadFile>,
+    payloads,
+    warnings: stagedRows.warnings,
   }
 }
 

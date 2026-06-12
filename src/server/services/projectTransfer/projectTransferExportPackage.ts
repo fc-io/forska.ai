@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto'
-import {mkdir, readFile, rm} from 'node:fs/promises'
+import {mkdir, readFile, rm, statfs} from 'node:fs/promises'
 import {dirname, join} from 'node:path'
 
 import {Effect} from 'effect'
@@ -14,17 +14,19 @@ import {
   type ProjectTransferExportReadyPayload,
   type ProjectTransferProgressPayload,
   type ProjectTransferRawArticleProvenanceMode,
+  projectTransferResourceGateLimits,
   type ProjectTransferRuntimeEvent,
+  validateProjectTransferResourceGates,
 } from './projectTransferContracts.ts'
 import {
-  getProjectTransferExportPayloads,
+  completeProjectTransferExportStagedPayloads,
   getProjectTransferExportPreflightEstimate,
-  type ProjectTransferExportPayloadAssembly,
   type ProjectTransferExportSerializedPayloads,
-  serializeProjectTransferExportPayloads,
+  type ProjectTransferExportStagedPayloadAssembly,
+  stageProjectTransferExportPayloadRows,
 } from './projectTransferExport.ts'
 import {getProjectTransferCanonicalJson, getProjectTransferPackageFingerprint} from './projectTransferFingerprint.ts'
-import {buildProjectTransferManifest, getProjectTransferManifestPayloadEntry} from './projectTransferManifest.ts'
+import {buildProjectTransferManifest} from './projectTransferManifest.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import type {ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
 import {
@@ -35,7 +37,7 @@ import {
 } from './projectTransferPerformanceMetrics.ts'
 import {
   type ProjectTransferManifest,
-  projectTransferPayloadFormatByKey,
+  type ProjectTransferManifestPayload,
   type ProjectTransferPayloadKey,
   projectTransferPayloadKeys,
   projectTransferPayloadPathByKey,
@@ -47,12 +49,17 @@ import {
 } from './projectTransferSession.ts'
 import {getProjectTransferSessionRepository} from './projectTransferSessionRepository.ts'
 import {
+  type ProjectTransferZipEntryInput,
   type ProjectTransferZipJsModule,
   type ProjectTransferZipWrittenFilePackage,
   writeProjectTransferZipPackageToFile,
 } from './projectTransferZip.ts'
 
-type ProjectTransferExportRuntimeOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
+type ProjectTransferExportRuntimeOptions = {
+  availableDiskBytes?: number
+  cwd?: string
+  envValues?: Record<string, string | undefined>
+}
 
 type ProjectTransferExportPackageBuildInput = ProjectTransferExportRuntimeOptions & {
   database?: ReturnType<typeof getAppDatabaseService>
@@ -110,6 +117,7 @@ export type ProjectTransferExportPackageBuild = {
   metadata: ProjectTransferExportPackageMetadata
   packageBytes: Uint8Array | null
   packagePath: string | null
+  payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles']
   performanceMetrics: ProjectTransferPerformanceMetrics
   payloads: ProjectTransferPayloadByKey
   serializedPayloads: ProjectTransferExportSerializedPayloads
@@ -132,7 +140,6 @@ export type ProjectTransferExportCreationResult =
 const manifestPath = 'manifest.json'
 const defaultExportSessionTtlMs = 24 * 60 * 60 * 1000
 const exportWorkerHeartbeatIntervalMs = 60_000
-const textEncoder = new TextEncoder()
 
 const getNow = (now?: Date) => {
   return now ?? new Date()
@@ -162,6 +169,86 @@ const getDownloadUrl = (sessionId: string) => {
   return `/api/projects/export/${encodeURIComponent(sessionId)}/download`
 }
 
+const getAvailableDiskBytes = async (pathValue: string) => {
+  const stats = await statfs(pathValue)
+
+  return Number(stats.bavail) * Number(stats.bsize)
+}
+
+const getExportDiskGateTargetWriteBytes = ({
+  assetBytes,
+  packageBytes,
+  stagedPayloadBytes,
+}: {
+  assetBytes: number
+  packageBytes: number
+  stagedPayloadBytes: number
+}) => {
+  return assetBytes + packageBytes + stagedPayloadBytes
+}
+
+const getExportResourcePaths = () => {
+  return [
+    {kind: 'archive_member' as const, pathValue: manifestPath},
+    ...projectTransferPayloadKeys.map((key) => {
+      return {kind: 'archive_member' as const, pathValue: projectTransferPayloadPathByKey[key]}
+    }),
+  ]
+}
+
+const assertProjectTransferExportDiskGate = ({
+  availableDiskBytes,
+  estimate,
+  phase,
+  tempRootPath,
+}: {
+  availableDiskBytes: number
+  estimate: {assetBytes: number; packageBytes: number; stagedPayloadBytes?: number}
+  phase: 'export_preflight' | 'export_start'
+  tempRootPath: string
+}) => {
+  const targetWriteBytes = getExportDiskGateTargetWriteBytes({
+    assetBytes: estimate.assetBytes,
+    packageBytes: estimate.packageBytes,
+    stagedPayloadBytes: estimate.stagedPayloadBytes ?? estimate.packageBytes,
+  })
+  const validation = validateProjectTransferResourceGates({
+    archiveInodeCount: projectTransferPayloadKeys.length + 1,
+    archiveMemberCount: projectTransferPayloadKeys.length + 1,
+    availableDiskBytes,
+    expandedBytes: estimate.stagedPayloadBytes ?? estimate.packageBytes,
+    fileBytes: Math.max(estimate.packageBytes, estimate.assetBytes, estimate.stagedPayloadBytes ?? 0),
+    ndjsonLineBytes: projectTransferResourceGateLimits.maxNdjsonLineBytes,
+    resourcePaths: getExportResourcePaths(),
+    targetWriteBytes,
+    tempRootPath,
+    usesStreamingParser: true,
+    zipBytes: estimate.packageBytes,
+  })
+
+  if (!validation.ok) {
+    throw new Error(`Project transfer ${phase} resource gate: ${validation.error}`)
+  }
+}
+
+const assertProjectTransferExportDiskGateForPath = async ({
+  estimate,
+  input,
+  phase,
+  resolvedPath,
+  tempRootPath,
+}: {
+  estimate: {assetBytes: number; packageBytes: number; stagedPayloadBytes?: number}
+  input: ProjectTransferExportRuntimeOptions
+  phase: 'export_preflight' | 'export_start'
+  resolvedPath: string
+  tempRootPath: string
+}) => {
+  const availableDiskBytes = input.availableDiskBytes ?? (await getAvailableDiskBytes(resolvedPath))
+
+  return assertProjectTransferExportDiskGate({availableDiskBytes, estimate, phase, tempRootPath})
+}
+
 const getPayloadRecordCount = <TKey extends ProjectTransferPayloadKey>(
   key: TKey,
   payload: ProjectTransferPayloadByKey[TKey],
@@ -175,22 +262,22 @@ const getPayloadRecordCount = <TKey extends ProjectTransferPayloadKey>(
         : 0
 }
 
-const getPayloadManifestEntries = (
-  serializedPayloads: ProjectTransferExportSerializedPayloads,
-  payloads: ProjectTransferPayloadByKey,
-) => {
+const getPayloadManifestEntries = (payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles']) => {
   return projectTransferPayloadKeys.reduce<
     Record<ProjectTransferPayloadKey, ProjectTransferManifest['payloads'][ProjectTransferPayloadKey]>
   >(
     (entries, key) => {
+      const file = payloadFiles[key]
+
       return {
         ...entries,
-        [key]: getProjectTransferManifestPayloadEntry({
-          bytes: serializedPayloads[key],
-          format: projectTransferPayloadFormatByKey[key],
-          path: projectTransferPayloadPathByKey[key],
-          recordCount: getPayloadRecordCount(key, payloads[key]),
-        }),
+        [key]: {
+          byteLength: file.byteLength,
+          checksumSha256: file.checksumSha256,
+          format: file.format,
+          path: file.path,
+          recordCount: file.recordCount,
+        } satisfies ProjectTransferManifestPayload,
       }
     },
     {} as Record<ProjectTransferPayloadKey, ProjectTransferManifest['payloads'][ProjectTransferPayloadKey]>,
@@ -206,10 +293,30 @@ const getPayloadCounts = (payloads: ProjectTransferPayloadByKey) => {
   )
 }
 
-const getSerializedPayloadByteCounters = (serializedPayloads: ProjectTransferExportSerializedPayloads) => {
+const getStagedPayloadByteCounters = (payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles']) => {
   return projectTransferPayloadKeys.reduce<Record<string, number>>((counters, key) => {
-    return {...counters, [`payload.${key}`]: textEncoder.encode(serializedPayloads[key]).byteLength}
+    return {...counters, [`payload.${key}`]: payloadFiles[key].byteLength}
   }, {})
+}
+
+const getEmptySerializedPayloads = () => {
+  return projectTransferPayloadKeys.reduce<ProjectTransferExportSerializedPayloads>((payloads, key) => {
+    return {...payloads, [key]: ''}
+  }, {} as ProjectTransferExportSerializedPayloads)
+}
+
+const readSerializedPayloadsFromStagedFiles = async (
+  payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles'],
+) => {
+  return projectTransferPayloadKeys.reduce<Promise<ProjectTransferExportSerializedPayloads>>(
+    async (previousPayloads, key) => {
+      const payloads = await previousPayloads
+      const value = await readFile(payloadFiles[key].filePath, 'utf8')
+
+      return {...payloads, [key]: value}
+    },
+    Promise.resolve({} as ProjectTransferExportSerializedPayloads),
+  )
 }
 
 const getCurrentModelSummary = (payloads: ProjectTransferPayloadByKey) => {
@@ -230,19 +337,19 @@ const buildManifest = ({
   assembly,
   exportedAt,
   packageFingerprint = null,
-  serializedPayloads,
+  payloadFiles,
 }: {
   assetBytes: number
-  assembly: ProjectTransferExportPayloadAssembly
+  assembly: ProjectTransferExportStagedPayloadAssembly
   exportedAt: Date
   packageFingerprint?: string | null
-  serializedPayloads: ProjectTransferExportSerializedPayloads
+  payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles']
 }) => {
   return buildProjectTransferManifest({
     assetSummary: {byteLength: assetBytes, entryCount: assembly.assetEntries.length},
     exportedAt: exportedAt.toISOString(),
     packageFingerprint,
-    payloads: getPayloadManifestEntries(serializedPayloads, assembly.payloads),
+    payloads: getPayloadManifestEntries(payloadFiles),
     project: {
       counts: getPayloadCounts(assembly.payloads),
       currentModel: getCurrentModelSummary(assembly.payloads),
@@ -259,38 +366,48 @@ const getManifestWithFingerprint = ({
   assetBytes,
   assembly,
   exportedAt,
-  serializedPayloads,
+  payloadFiles,
 }: {
   assetBytes: number
-  assembly: ProjectTransferExportPayloadAssembly
+  assembly: ProjectTransferExportStagedPayloadAssembly
   exportedAt: Date
-  serializedPayloads: ProjectTransferExportSerializedPayloads
+  payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles']
 }) => {
-  const unsignedManifest = buildManifest({assetBytes, assembly, exportedAt, serializedPayloads})
+  const unsignedManifest = buildManifest({assetBytes, assembly, exportedAt, payloadFiles})
   const packageFingerprint = getProjectTransferPackageFingerprint({
     manifest: unsignedManifest,
     payloads: assembly.payloads,
   })
 
-  return buildManifest({assetBytes, assembly, exportedAt, packageFingerprint, serializedPayloads})
+  return buildManifest({assetBytes, assembly, exportedAt, packageFingerprint, payloadFiles})
+}
+
+const getAssetPackageEntry = (entry: ProjectTransferExportStagedPayloadAssembly['assetEntries'][number]) => {
+  if (entry.bytes) {
+    return {bytes: entry.bytes, path: entry.path} satisfies ProjectTransferZipEntryInput
+  }
+
+  if (entry.filePath) {
+    return {filePath: entry.filePath, path: entry.path} satisfies ProjectTransferZipEntryInput
+  }
+
+  throw new Error(`Project transfer export asset entry is missing bytes and file path: ${entry.path}`)
 }
 
 const getPackageEntries = ({
   manifest,
-  serializedPayloads,
   assembly,
 }: {
-  assembly: ProjectTransferExportPayloadAssembly
+  assembly: ProjectTransferExportStagedPayloadAssembly
   manifest: ProjectTransferManifest
-  serializedPayloads: ProjectTransferExportSerializedPayloads
-}) => {
+}): ProjectTransferZipEntryInput[] => {
   return [
     {bytes: getProjectTransferCanonicalJson(manifest), path: manifestPath},
     ...projectTransferPayloadKeys.map((key) => {
-      return {bytes: serializedPayloads[key], path: projectTransferPayloadPathByKey[key]}
+      return {filePath: assembly.payloadFiles[key].filePath, path: projectTransferPayloadPathByKey[key]}
     }),
     ...assembly.assetEntries.map((entry) => {
-      return {bytes: entry.bytes, path: entry.path}
+      return getAssetPackageEntry(entry)
     }),
   ]
 }
@@ -307,6 +424,70 @@ const writeProjectTransferExportZipPackage = async ({
   const writtenPackage = await writeProjectTransferZipPackageToFile({entries, outputPath})
 
   return {...writtenPackage, bytes: readBytes ? new Uint8Array(await readFile(outputPath)) : null}
+}
+
+const getWrittenPackageEntryByPath = (packageArchive: ProjectTransferExportWrittenPackage) => {
+  return packageArchive.entries.reduce<Map<string, ProjectTransferExportWrittenPackage['entries'][number]>>(
+    (entryMap, entry) => {
+      entryMap.set(entry.path, entry)
+
+      return entryMap
+    },
+    new Map(),
+  )
+}
+
+const assertWrittenPackageEntry = ({
+  byteLength,
+  checksumSha256,
+  entryByPath,
+  path,
+}: {
+  byteLength: number
+  checksumSha256: string
+  entryByPath: Map<string, ProjectTransferExportWrittenPackage['entries'][number]>
+  path: string
+}) => {
+  const entry = entryByPath.get(path)
+
+  if (!entry) {
+    throw new Error(`Project transfer export package is missing staged entry ${path}`)
+  }
+
+  if (entry.uncompressedSize !== byteLength || entry.checksumSha256 !== checksumSha256) {
+    throw new Error(`Project transfer export package staged entry changed while writing ${path}`)
+  }
+}
+
+const assertWrittenProjectTransferExportPackage = ({
+  assembly,
+  manifest,
+  packageArchive,
+}: {
+  assembly: ProjectTransferExportStagedPayloadAssembly
+  manifest: ProjectTransferManifest
+  packageArchive: ProjectTransferExportWrittenPackage
+}) => {
+  const entryByPath = getWrittenPackageEntryByPath(packageArchive)
+
+  projectTransferPayloadKeys.map((key) => {
+    const payload = manifest.payloads[key]
+
+    return assertWrittenPackageEntry({
+      byteLength: payload.byteLength,
+      checksumSha256: payload.checksumSha256,
+      entryByPath,
+      path: payload.path,
+    })
+  })
+  assembly.payloads.assetManifest.entries.map((entry) => {
+    return assertWrittenPackageEntry({
+      byteLength: entry.byteLength,
+      checksumSha256: entry.checksumSha256,
+      entryByPath,
+      path: entry.packagePath,
+    })
+  })
 }
 
 const getErrorLogAttrs = (error: unknown) => {
@@ -357,25 +538,6 @@ const runProjectTransferExportHeartbeatOperation = async <TValue>({
   return operation().finally(() => {
     clearInterval(interval)
   })
-}
-
-const writeBuildEntry = async (rootPath: string, pathValue: string, bytes: string | Uint8Array) => {
-  const filePath = join(rootPath, pathValue)
-  await mkdir(dirname(filePath), {recursive: true})
-  await globalThis.Bun.write(filePath, bytes)
-}
-
-const writeBuildEntries = async ({
-  entries,
-  rootPath,
-}: {
-  entries: Array<{bytes: string | Uint8Array; path: string}>
-  rootPath: string
-}) => {
-  await entries.reduce<Promise<void>>(async (previous, entry) => {
-    await previous
-    await writeBuildEntry(rootPath, entry.path, entry.bytes)
-  }, Promise.resolve())
 }
 
 const writeExportProgressFile = async ({
@@ -668,33 +830,50 @@ export const buildProjectTransferExportPackage = async (
               heartbeat: input.heartbeat,
               operation: async () => {
                 const database = input.database ?? getAppDatabaseService()
+                const estimate = await getProjectTransferExportPreflightEstimate(input.projectId, {
+                  database,
+                  rawArticleProvenanceMode: input.rawArticleProvenanceMode,
+                })
 
-                return database.transaction((runner) => {
-                  return getProjectTransferExportPayloads(input.projectId, {
+                await assertProjectTransferExportDiskGateForPath({
+                  estimate,
+                  input,
+                  phase: 'export_start',
+                  resolvedPath: buildPath,
+                  tempRootPath: input.layout.rootPath,
+                })
+                const stagedRows = (await database.transaction((runner) => {
+                  return stageProjectTransferExportPayloadRows({
                     database: runner,
+                    projectId: input.projectId,
                     rawArticleProvenanceMode: input.rawArticleProvenanceMode,
+                    rootPath: buildPath,
                   })
-                }) as Promise<ProjectTransferExportPayloadAssembly>
+                })) as Awaited<ReturnType<typeof stageProjectTransferExportPayloadRows>>
+
+                return completeProjectTransferExportStagedPayloads({rootPath: buildPath, stagedRows})
               },
               sessionId: input.sessionId,
             })
           })
         })
         const assembly = assemblyMeasurement.value
-        const serializedPayloads = serializeProjectTransferExportPayloads(assembly.payloads)
         const assetBytes = assembly.assetEntries.reduce((total, entry) => {
-          return total + entry.bytes.byteLength
+          return total + entry.byteLength
         }, 0)
-        const manifest = getManifestWithFingerprint({assetBytes, assembly, exportedAt, serializedPayloads})
-        const entries = getPackageEntries({assembly, manifest, serializedPayloads})
+        const manifest = getManifestWithFingerprint({
+          assetBytes,
+          assembly,
+          exportedAt,
+          payloadFiles: assembly.payloadFiles,
+        })
+        const entries = getPackageEntries({assembly, manifest})
         const packageOutputPath = input.packageOutputPath ?? join(buildPath, projectTransferExportArtifacts.package)
         const packageWriteMeasurement = yield* Effect.promise(() => {
           return measureProjectTransferPhase('exportPackageWrite', () => {
             return runProjectTransferExportHeartbeatOperation({
               heartbeat: input.heartbeat,
               operation: async () => {
-                await writeBuildEntries({entries, rootPath: buildPath})
-
                 return writeProjectTransferExportZipPackage({
                   entries,
                   outputPath: packageOutputPath,
@@ -707,6 +886,14 @@ export const buildProjectTransferExportPackage = async (
         })
         const packageArchive = packageWriteMeasurement.value
         const packageFingerprint = manifest.packageFingerprint ?? ''
+
+        assertWrittenProjectTransferExportPackage({assembly, manifest, packageArchive})
+
+        const serializedPayloads = yield* Effect.promise(() => {
+          return input.packageOutputPath === undefined
+            ? readSerializedPayloadsFromStagedFiles(assembly.payloadFiles)
+            : Promise.resolve(getEmptySerializedPayloads())
+        })
         const metadata = {
           byteLength: packageArchive.byteLength,
           checksumSha256: packageArchive.checksumSha256,
@@ -726,11 +913,12 @@ export const buildProjectTransferExportPackage = async (
           bytes: {
             assetBytes,
             packageBytes: metadata.byteLength,
-            ...getSerializedPayloadByteCounters(serializedPayloads),
+            ...getStagedPayloadByteCounters(assembly.payloadFiles),
           },
           operation: 'export',
           phases: {exportAssembly: assemblyMeasurement.timing, exportPackageWrite: packageWriteMeasurement.timing},
           rows: getProjectTransferPerformanceRowCountersFromPayloads(assembly.payloads),
+          usesStreamingParser: true,
           warnings: assembly.warnings,
         })
 
@@ -741,6 +929,7 @@ export const buildProjectTransferExportPackage = async (
           metadata,
           packageBytes: packageArchive.bytes,
           packagePath: input.packageOutputPath ?? null,
+          payloadFiles: assembly.payloadFiles,
           performanceMetrics,
           payloads: assembly.payloads,
           serializedPayloads,
@@ -893,6 +1082,18 @@ export const createProjectTransferExport = async (
     database: input.database,
     rawArticleProvenanceMode: input.rawArticleProvenanceMode,
   })
+  const resolvedRootPath = resolveProjectTransferTempWritablePath({...input, pathValue: layout.rootPath})
+  const resolvedRootParentPath = dirname(resolvedRootPath)
+
+  await mkdir(resolvedRootParentPath, {recursive: true})
+  await assertProjectTransferExportDiskGateForPath({
+    estimate: preflight,
+    input,
+    phase: 'export_preflight',
+    resolvedPath: resolvedRootParentPath,
+    tempRootPath: layout.rootPath,
+  })
+
   const preflightExecutionMode = getProjectTransferExportExecutionMode(preflight)
 
   if (preflightExecutionMode === 'background') {
