@@ -746,6 +746,31 @@ test('comparison serving stale marker preserves active generation and clears tar
   expect(result.statusRow.servingStatus).toBe('stale')
 })
 
+test('comparison serving rebuild skips archived comparison projects without creating status rows', () => {
+  const result = runScript<{
+    rebuildResult: {generation: number | null; skipped?: boolean; status: {servingStatus: string}}
+    rows: GenerationRow[]
+    statusRow: StatusRow | null
+  }>(`
+    await database.run(
+      \`UPDATE app.comparison_project SET archived = TRUE WHERE id = '\${comparisonProjectId}'\`,
+    )
+
+    const rebuildResult = await service.rebuildComparisonProjectServing(comparisonProjectId)
+    const rows = await getGenerationRows()
+    const statusRow = await getStatusRow()
+
+    console.log(JSON.stringify({rebuildResult, rows, statusRow}))
+    await database.close()
+  `)
+
+  expect(result.rebuildResult.generation).toBeNull()
+  expect(result.rebuildResult.skipped).toBe(true)
+  expect(result.rebuildResult.status.servingStatus).toBe('missing')
+  expect(result.rows).toEqual([])
+  expect(result.statusRow).toBeNull()
+})
+
 test('comparison serving rebuild treats stale promotion as failed', () => {
   const result = runScript<{failureText: string; rows: GenerationRow[]; statusRow: StatusRow}>(`
     await service.rebuildComparisonProjectServing(comparisonProjectId)

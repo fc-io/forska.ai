@@ -24,6 +24,7 @@ import {getProviderModelMetadataOptions} from '../providers/providerModelMetadat
 import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
+import {getComparisonProjectServingGenerationService} from '../services/comparisonProjectServingGenerationService.ts'
 import {
   type ComparisonProjectServingProgress,
   type ComparisonProjectServingStatusRow,
@@ -316,6 +317,7 @@ const judgmentTable = 'app.judgment'
 const judgmentHumanTable = 'app.judgment_human'
 const judgmentHumanSummaryTable = 'app.judgment_human_summary'
 const appDatabaseService = getAppDatabaseService()
+const comparisonProjectServingGenerationService = getComparisonProjectServingGenerationService()
 const comparisonProjectServingRebuildService = getComparisonProjectServingRebuildService()
 const {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} = appQueryHelpers
 const summaryPromptId = 'summary'
@@ -342,6 +344,33 @@ const getComparisonProjectServingUpdatedAt = (status: ComparisonProjectServingSt
   return (
     status.generationUpdatedAt ?? status.servingCompletedAt ?? status.servingFailedAt ?? status.servingStartedAt ?? null
   )
+}
+
+const getEmptyComparisonProjectServingProgress = (): ComparisonProjectServingProgress => {
+  return {
+    completedAt: null,
+    failedAt: null,
+    generation: null,
+    lastError: null,
+    lastProgressedAt: null,
+    phase: null,
+    phaseStartedAt: null,
+    stagedArticleCount: 0,
+    stagedCellCount: 0,
+    stagedFilterMemberCount: 0,
+    stagedFilterStatsCount: 0,
+    startedAt: null,
+  }
+}
+
+const getArchivedComparisonProjectServingMetadata = () => {
+  return {
+    activeGeneration: null,
+    isServingReady: false,
+    servingProgress: getEmptyComparisonProjectServingProgress(),
+    servingStatus: 'missing' as const,
+    servingUpdatedAt: null,
+  }
 }
 
 const getComparisonProjectServingMetadataStatus = (
@@ -401,8 +430,15 @@ const queueComparisonProjectServingRebuild = (comparisonProjectId: string) => {
 }
 
 const queueUnavailableComparisonProjectServingRebuild = (
-  comparisonProject: Pick<ComparisonProjectScope, 'activeGeneration' | 'id' | 'servingProgress' | 'servingStatus'>,
+  comparisonProject: Pick<
+    ComparisonProjectScope,
+    'activeGeneration' | 'archived' | 'id' | 'servingProgress' | 'servingStatus'
+  >,
 ) => {
+  if (comparisonProject.archived) {
+    return
+  }
+
   const latestProgressedAt =
     comparisonProject.servingProgress.lastProgressedAt ?? comparisonProject.servingProgress.startedAt
   const isMissingWithoutStartedBuild =
@@ -440,6 +476,15 @@ const queueUnavailableComparisonProjectServingRebuild = (
 const markComparisonProjectServingStaleAndQueueRebuild = async (comparisonProjectId: string) => {
   await comparisonProjectServingRebuildService.markComparisonProjectServingStale(comparisonProjectId)
   queueComparisonProjectServingRebuild(comparisonProjectId)
+}
+
+const getComparisonProjectServingGenerationTxDependencies = (tx: AppTx) => {
+  return {
+    queryJson: tx.queryJson,
+    transaction: <T>(operation: (runner: Pick<AppTx, 'queryJson' | 'run'>) => Promise<T>) => {
+      return operation(tx)
+    },
+  }
 }
 
 const getStringArrayRowValue = <TRow extends Record<string, unknown>>(row: TRow, key: keyof TRow) => {
@@ -1209,23 +1254,6 @@ const getComparisonProjectSourceSummaryPromptConfigsFromSources = (
       }
     })
   })
-}
-
-const getEmptyComparisonProjectServingProgress = (): ComparisonProjectServingProgress => {
-  return {
-    completedAt: null,
-    failedAt: null,
-    generation: null,
-    lastError: null,
-    lastProgressedAt: null,
-    phase: null,
-    phaseStartedAt: null,
-    stagedArticleCount: 0,
-    stagedCellCount: 0,
-    stagedFilterMemberCount: 0,
-    stagedFilterStatsCount: 0,
-    startedAt: null,
-  }
 }
 
 const getCreateFromProjectImportScope = async (params: {
@@ -2361,8 +2389,14 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
       FROM ${comparisonProjectSourceProjectTable}
       WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
     `),
-    comparisonProjectServingRebuildService.getComparisonProjectServingStatus(comparisonProjectId),
+    normalizedComparisonProjectRow.archived
+      ? Promise.resolve(null)
+      : comparisonProjectServingRebuildService.getComparisonProjectServingStatus(comparisonProjectId),
   ])
+  const servingMetadata =
+    servingStatus === null
+      ? getArchivedComparisonProjectServingMetadata()
+      : getComparisonProjectServingMetadata(servingStatus)
 
   const promptConfigs = promptRows.map<ComparisonProjectPromptConfig>((promptRow, index) => {
     const order = promptRow.order ?? index
@@ -2427,7 +2461,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
 
   return {
     ...normalizedComparisonProjectRow,
-    ...getComparisonProjectServingMetadata(servingStatus),
+    ...servingMetadata,
     sourceProjectIds,
     useImportRoutesForScope,
     summarySourceProject,
@@ -3343,7 +3377,7 @@ const getComparisonProjectExportResponse = (
       try {
         controller.enqueue(getComparisonProjectCsvLine(headers))
 
-        if (scope.prompts.length > 0 && orderedColumns.length > 0) {
+        if (!scope.archived && scope.prompts.length > 0 && orderedColumns.length > 0) {
           await forEachComparisonProjectServingJudgmentRowBatch({
             comparisonProjectId: scope.id,
             differenceFilter: normalizedDifferenceFilter,
@@ -3377,7 +3411,7 @@ const getComparisonProjectJudgmentsPage = async (
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
 ) => {
-  if (scope.prompts.length === 0 || scope.columns.length === 0) {
+  if (scope.archived || scope.prompts.length === 0 || scope.columns.length === 0) {
     return {
       activeGeneration: scope.activeGeneration,
       data: [],
@@ -3438,7 +3472,7 @@ const getComparisonProjectJudgmentsCount = async (
   rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
 ) => {
-  if (scope.prompts.length === 0 || scope.columns.length === 0) {
+  if (scope.archived || scope.prompts.length === 0 || scope.columns.length === 0) {
     return {
       activeGeneration: scope.activeGeneration,
       isServingReady: scope.isServingReady,
@@ -3473,6 +3507,18 @@ const getComparisonProjectJudgmentsCount = async (
 const getComparisonProjectStatsResponse = async (
   scope: ComparisonProjectScope,
 ): Promise<ComparisonProjectStatsResponse> => {
+  if (scope.archived) {
+    return {
+      activeGeneration: scope.activeGeneration,
+      additionalProjectStats: {conflictResolutionAnswerComparisons: [], resolvedTruthComparisons: []},
+      categoryBreakdowns: [],
+      comparisons: [],
+      isServingReady: scope.isServingReady,
+      servingStatus: scope.servingStatus,
+      servingUpdatedAt: scope.servingUpdatedAt,
+    }
+  }
+
   const statsParams = {
     allowConflictResolution: scope.allowConflictResolution,
     columns: scope.columns,
@@ -4493,10 +4539,21 @@ export const comparisonProjectsRoutes = new Elysia()
   .delete('/api/comparison-projects/:id', async (context) => {
     const {params, set} = context
     const archivedComparisonProject = await appDatabaseService.transaction(async (tx) => {
-      return updateComparisonProjectTx(tx, {
+      const comparisonProject = await updateComparisonProjectTx(tx, {
         comparisonProjectId: params.id,
         setParts: ['archived = TRUE', 'updated_at = current_timestamp'],
       })
+
+      if (!comparisonProject) {
+        return null
+      }
+
+      await comparisonProjectServingGenerationService.cleanupComparisonProjectServing(
+        params.id,
+        getComparisonProjectServingGenerationTxDependencies(tx),
+      )
+
+      return comparisonProject
     })
 
     if (!archivedComparisonProject) {

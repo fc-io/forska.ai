@@ -112,6 +112,7 @@ type ComparisonProjectServingStatusRecordRow = {
 }
 
 const comparisonProjectServingGenerationTable = 'app.comparison_project_serving_generation'
+const comparisonProjectTable = 'app.comparison_project'
 const comparisonProjectServingRebuildClaimTimeoutMs = 15 * 60 * 1000
 const emptyComparisonProjectServingCleanupResult = {deletedRowCount: 0, tables: []}
 const comparisonProjectServingStatuses = new Set<ComparisonProjectServingStatus>([
@@ -233,11 +234,15 @@ const ensureComparisonProjectServingStatusRow = async (
       comparison_project_id,
       active_generation,
       generation_updated_at
-    ) VALUES (
-      ${getSqlLiteral(comparisonProjectId)},
+    )
+    SELECT
+      project.id,
       0,
       current_timestamp
-    ) ON CONFLICT(comparison_project_id) DO NOTHING
+    FROM ${comparisonProjectTable} project
+    WHERE project.id = ${getSqlLiteral(comparisonProjectId)}
+      AND project.archived = FALSE
+    ON CONFLICT(comparison_project_id) DO NOTHING
   `)
 }
 
@@ -253,20 +258,25 @@ const ensureComparisonProjectServingStatusRows = async (
   }
 
   await runner.run(`
+    WITH requested_comparison_project(comparison_project_id) AS (
+      VALUES ${uniqueComparisonProjectIds
+        .map((comparisonProjectId) => {
+          return `(${getSqlLiteral(comparisonProjectId)})`
+        })
+        .join(', ')}
+    )
     INSERT INTO ${comparisonProjectServingGenerationTable} (
       comparison_project_id,
       active_generation,
       generation_updated_at
     )
     SELECT
-      row_value.comparison_project_id,
+      project.id,
       0,
       ${getTimestampLiteral(now)}
-    FROM (VALUES ${uniqueComparisonProjectIds
-      .map((comparisonProjectId) => {
-        return `(${getSqlLiteral(comparisonProjectId)})`
-      })
-      .join(', ')}) AS row_value(comparison_project_id)
+    FROM ${comparisonProjectTable} project
+    INNER JOIN requested_comparison_project requested ON requested.comparison_project_id = project.id
+    WHERE project.archived = FALSE
     ON CONFLICT(comparison_project_id) DO NOTHING
   `)
 }
@@ -303,6 +313,12 @@ const claimComparisonProjectServingRebuild = async ({
         serving_staged_filter_stats_count = 0,
         generation_updated_at = ${getTimestampLiteral(now)}
       WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+        AND EXISTS (
+          SELECT 1
+          FROM ${comparisonProjectTable} project
+          WHERE project.id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+            AND project.archived = FALSE
+        )
         AND (
           COALESCE(serving_status, 'missing') <> 'refreshing'
           OR serving_generation IS NULL
@@ -426,6 +442,12 @@ const recordComparisonProjectServingStale = async ({
       serving_staged_filter_stats_count = 0,
       generation_updated_at = ${getTimestampLiteral(now)}
     WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+      AND EXISTS (
+        SELECT 1
+        FROM ${comparisonProjectTable} project
+        WHERE project.id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+          AND project.archived = FALSE
+      )
   `)
 }
 
@@ -466,6 +488,12 @@ const recordComparisonProjectsServingStale = async ({
       serving_staged_filter_stats_count = 0,
       generation_updated_at = ${getTimestampLiteral(now)}
     WHERE comparison_project_id IN (${getQuotedStringList(uniqueComparisonProjectIds).join(', ')})
+      AND EXISTS (
+        SELECT 1
+        FROM ${comparisonProjectTable} project
+        WHERE project.id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+          AND project.archived = FALSE
+      )
   `)
 }
 

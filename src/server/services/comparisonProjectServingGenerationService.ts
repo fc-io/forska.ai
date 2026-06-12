@@ -11,11 +11,14 @@ type ComparisonProjectServingGenerationDependencies = {
   transaction: <T>(operation: (runner: ComparisonProjectServingGenerationRunner) => Promise<T>) => Promise<T>
 }
 
-type ComparisonProjectServingGenerationCleanupTableName =
+type ComparisonProjectServingGenerationMartCleanupTableName =
   | 'mart.comparison_article_serving'
   | 'mart.comparison_cell_serving'
   | 'mart.comparison_filter_member'
   | 'mart.comparison_filter_stats'
+type ComparisonProjectServingGenerationCleanupTableName =
+  | ComparisonProjectServingGenerationMartCleanupTableName
+  | 'app.comparison_project_serving_generation'
 
 type ComparisonProjectServingGenerationCleanupResult = {
   deletedRowCount: number
@@ -23,7 +26,7 @@ type ComparisonProjectServingGenerationCleanupResult = {
 }
 
 const comparisonProjectServingGenerationTable = 'app.comparison_project_serving_generation'
-const comparisonProjectServingGenerationCleanupTableNames: ComparisonProjectServingGenerationCleanupTableName[] = [
+const comparisonProjectServingGenerationCleanupTableNames: ComparisonProjectServingGenerationMartCleanupTableName[] = [
   'mart.comparison_cell_serving',
   'mart.comparison_filter_member',
   'mart.comparison_filter_stats',
@@ -76,7 +79,7 @@ const getComparisonProjectServingGenerationDeleteSql = ({
 }: {
   comparisonProjectId: string
   generation: number
-  tableName: ComparisonProjectServingGenerationCleanupTableName
+  tableName: ComparisonProjectServingGenerationMartCleanupTableName
 }) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getSqlLiteral(generation)
@@ -100,7 +103,7 @@ const getOldComparisonProjectServingGenerationsDeleteSql = ({
   tableName,
 }: {
   comparisonProjectId: string
-  tableName: ComparisonProjectServingGenerationCleanupTableName
+  tableName: ComparisonProjectServingGenerationMartCleanupTableName
 }) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
 
@@ -123,7 +126,7 @@ const deleteComparisonProjectServingGenerationRows = async ({
   getDeleteSql,
   runner,
 }: {
-  getDeleteSql: (tableName: ComparisonProjectServingGenerationCleanupTableName) => string
+  getDeleteSql: (tableName: ComparisonProjectServingGenerationMartCleanupTableName) => string
   runner: ComparisonProjectServingGenerationRunner
 }): Promise<ComparisonProjectServingGenerationCleanupResult> => {
   const tables = await comparisonProjectServingGenerationCleanupTableNames.reduce<
@@ -140,6 +143,28 @@ const deleteComparisonProjectServingGenerationRows = async ({
   }, 0)
 
   return {deletedRowCount, tables}
+}
+
+const getAllComparisonProjectServingRowsDeleteSql = ({
+  comparisonProjectId,
+  tableName,
+}: {
+  comparisonProjectId: string
+  tableName: ComparisonProjectServingGenerationMartCleanupTableName
+}) => {
+  return `
+    DELETE FROM ${tableName}
+    WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+    RETURNING comparison_project_id AS comparisonProjectId
+  `
+}
+
+const getComparisonProjectServingStatusRowDeleteSql = (comparisonProjectId: string) => {
+  return `
+    DELETE FROM ${comparisonProjectServingGenerationTable}
+    WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+    RETURNING comparison_project_id AS comparisonProjectId
+  `
 }
 
 const getActiveComparisonProjectServingGeneration = async (
@@ -252,7 +277,34 @@ const cleanupOldComparisonProjectServingGenerations = async (
   })
 }
 
+const cleanupComparisonProjectServing = async (
+  comparisonProjectId: string,
+  dependencies: ComparisonProjectServingGenerationDependencies = getDefaultComparisonProjectServingGenerationDependencies(),
+) => {
+  return dependencies.transaction(async (runner) => {
+    const servingRowsCleanupResult = await deleteComparisonProjectServingGenerationRows({
+      getDeleteSql: (tableName) => {
+        return getAllComparisonProjectServingRowsDeleteSql({comparisonProjectId, tableName})
+      },
+      runner,
+    })
+    const generationRows = await runner.queryJson<{comparisonProjectId: string}>(
+      getComparisonProjectServingStatusRowDeleteSql(comparisonProjectId),
+    )
+    const generationTable = {
+      deletedRowCount: generationRows.length,
+      tableName: comparisonProjectServingGenerationTable,
+    } satisfies {deletedRowCount: number; tableName: ComparisonProjectServingGenerationCleanupTableName}
+
+    return {
+      deletedRowCount: servingRowsCleanupResult.deletedRowCount + generationTable.deletedRowCount,
+      tables: [...servingRowsCleanupResult.tables, generationTable],
+    }
+  })
+}
+
 const comparisonProjectServingGenerationService = {
+  cleanupComparisonProjectServing,
   cleanupComparisonProjectServingGeneration,
   cleanupOldComparisonProjectServingGenerations,
   createInactiveComparisonProjectServingGeneration,

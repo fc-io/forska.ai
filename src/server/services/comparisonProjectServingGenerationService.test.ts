@@ -364,6 +364,57 @@ test('comparison serving explicit cleanup refuses the active generation', () => 
   ])
 })
 
+test('comparison serving full cleanup removes mart rows and the generation status row', () => {
+  const result = runScript<{
+    activeAfterCleanup: number | null
+    cleanupResult: {deletedRowCount: number}
+    generationRowsAfterCleanup: Array<{comparisonProjectId: string}>
+    rowsAfterCleanup: Array<{generation: string; rowCount: string; tableName: string}>
+    rowsBeforeCleanup: Array<{generation: string; rowCount: string; tableName: string}>
+  }>(`
+    await database.run(\`
+      INSERT INTO app.comparison_project_serving_generation (comparison_project_id, active_generation)
+      VALUES ('\${comparisonProjectId}', 1)
+    \`)
+    await insertComparisonServingRows(1)
+    await insertComparisonServingRows(2)
+
+    const rowsBeforeCleanup = await getGenerationRows()
+    const cleanupResult = await service.cleanupComparisonProjectServing(comparisonProjectId)
+    const rowsAfterCleanup = await getGenerationRows()
+    const activeAfterCleanup = await service.getActiveComparisonProjectServingGeneration(comparisonProjectId)
+    const generationRowsAfterCleanup = await database.queryJson(\`
+      SELECT comparison_project_id AS comparisonProjectId
+      FROM app.comparison_project_serving_generation
+      WHERE comparison_project_id = '\${comparisonProjectId}'
+    \`)
+
+    console.log(JSON.stringify({
+      activeAfterCleanup,
+      cleanupResult,
+      generationRowsAfterCleanup,
+      rowsAfterCleanup,
+      rowsBeforeCleanup,
+    }))
+    await database.close()
+  `)
+
+  expect(result.cleanupResult.deletedRowCount).toBe(9)
+  expect(result.activeAfterCleanup).toBeNull()
+  expect(result.generationRowsAfterCleanup).toEqual([])
+  expect(result.rowsBeforeCleanup).toEqual([
+    {generation: '1', rowCount: '1', tableName: 'article'},
+    {generation: '2', rowCount: '1', tableName: 'article'},
+    {generation: '1', rowCount: '1', tableName: 'cell'},
+    {generation: '2', rowCount: '1', tableName: 'cell'},
+    {generation: '1', rowCount: '1', tableName: 'member'},
+    {generation: '2', rowCount: '1', tableName: 'member'},
+    {generation: '1', rowCount: '1', tableName: 'stats'},
+    {generation: '2', rowCount: '1', tableName: 'stats'},
+  ])
+  expect(result.rowsAfterCleanup).toEqual([])
+})
+
 test('failed comparison serving rebuild path preserves the last active generation', () => {
   const result = runScript<{
     activeAfterCleanup: number | null

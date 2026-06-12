@@ -22,6 +22,10 @@ const comparisonProjectServingRebuildServiceModulePath = new URL(
   '../services/comparisonProjectServingRebuildService.ts',
   import.meta.url,
 ).pathname
+const comparisonProjectServingGenerationServiceModulePath = new URL(
+  '../services/comparisonProjectServingGenerationService.ts',
+  import.meta.url,
+).pathname
 const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).pathname
 
 type MockServingStatus = {
@@ -115,6 +119,7 @@ type MockDatabaseState = {
     modelIds: string[]
     summarySourceProjectId: string | null
   }
+  cleanedServingProjectIds: string[]
   createdComparisonProjectIds: string[]
   conflictResolutionImportSourceRows: MockConflictResolutionImportSourceRow[]
   conflictResolutionRows: Array<{
@@ -1947,6 +1952,20 @@ const registerModuleMocks = () => {
     }
   })
 
+  void mock.module(comparisonProjectServingGenerationServiceModulePath, () => {
+    return {
+      getComparisonProjectServingGenerationService: () => {
+        return {
+          cleanupComparisonProjectServing: async (comparisonProjectId: string) => {
+            getMockDatabaseState().cleanedServingProjectIds.push(comparisonProjectId)
+
+            return {deletedRowCount: 0, tables: []}
+          },
+        }
+      },
+    }
+  })
+
   void mock.module(appDatabaseServiceModulePath, () => {
     return {
       getAppDatabaseService: () => {
@@ -2031,6 +2050,14 @@ const registerModuleMocks = () => {
 
                   if (statement.includes('allow_conflict_resolution = FALSE')) {
                     pendingComparisonProject.allowConflictResolution = false
+                  }
+
+                  if (statement.includes('archived = TRUE')) {
+                    pendingComparisonProject.archived = true
+                  }
+
+                  if (statement.includes('archived = FALSE')) {
+                    pendingComparisonProject.archived = false
                   }
 
                   if (statement.includes("human_judgment_mode = 'prompt'")) {
@@ -2180,6 +2207,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
       modelIds: ['model-1'],
       summarySourceProjectId: null,
     },
+    cleanedServingProjectIds: [],
     createdComparisonProjectIds: [],
     conflictResolutionRows: [],
     conflictResolutionImportSourceRows: [],
@@ -4657,6 +4685,78 @@ test('comparison project metadata queues a rebuild when serving failed before ro
   expect(state.staleServingIds).toEqual([])
 })
 
+test('archived comparison project reads expose no serving data and do not queue rebuilds', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      archived: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const metadataResponse = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1'),
+  )
+  const statsResponse = await getComparisonProjectStats(app)
+  const judgmentsResponse = await postComparisonProjectJudgments(app, {
+    differenceFilter: 'all',
+    limit: '50',
+    rowFilter: 'all',
+  })
+  const countResponse = await postComparisonProjectJudgmentsCount(app, {
+    differenceFilter: 'all',
+    limit: '50',
+    rowFilter: 'all',
+  })
+  const metadataBody = (await metadataResponse.json()) as {
+    data: {
+      activeGeneration: number | null
+      isServingReady: boolean
+      servingStatus: string
+      servingUpdatedAt: string | null
+    }
+  }
+  const statsBody = (await statsResponse.json()) as {data: {comparisons: unknown[]; servingStatus: string}}
+  const judgmentsBody = (await judgmentsResponse.json()) as {
+    data: {data: unknown[]; servingStatus: string; totalCount: number | null; totalPages: number | null}
+  }
+  const countBody = (await countResponse.json()) as {
+    data: {servingStatus: string; totalCount: number; totalPages: number}
+  }
+  const state = getMockDatabaseState()
+
+  expect(metadataResponse.status).toBe(200)
+  expect(statsResponse.status).toBe(200)
+  expect(judgmentsResponse.status).toBe(200)
+  expect(countResponse.status).toBe(200)
+  expect(metadataBody.data).toMatchObject({
+    activeGeneration: null,
+    isServingReady: false,
+    servingStatus: 'missing',
+    servingUpdatedAt: null,
+  })
+  expect(statsBody.data).toMatchObject({comparisons: [], servingStatus: 'missing'})
+  expect(judgmentsBody.data).toMatchObject({data: [], servingStatus: 'missing', totalCount: null, totalPages: null})
+  expect(countBody.data).toMatchObject({servingStatus: 'missing', totalCount: 0, totalPages: 0})
+  expect(state.queuedServingRebuildIds).toEqual([])
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_')
+    }),
+  ).toBe(false)
+})
+
 test('comparison project create and update mark serving stale and queue rebuilds', async () => {
   mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false, promptLinks: []}
 
@@ -4724,6 +4824,23 @@ test('comparison project create and update mark serving stale and queue rebuilds
     'comparison-project-created',
     'comparison-project-1',
   ])
+})
+
+test('comparison project archive cleans serving materialization state', async () => {
+  mockDatabaseStateRef.current = {...createMockDatabaseStateWithReadyServing(), failPromptInsert: false}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1', {method: 'DELETE'}),
+  )
+  const body = (await response.json()) as {success: boolean}
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.success).toBe(true)
+  expect(state.cleanedServingProjectIds).toEqual(['comparison-project-1'])
+  expect(state.lastUpdateStatement).toContain('archived = TRUE')
 })
 
 test('comparison stats endpoint returns serving metadata and conflict counts from serving cells', async () => {
@@ -6143,7 +6260,7 @@ test('summary comparison project export streams synthetic summary csv columns', 
   ])
 })
 
-test('comparison project export allows archived projects without writes', async () => {
+test('comparison project export returns headers only for archived projects without writes', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseStateWithReadyServing(),
     comparisonProject: {
@@ -6168,15 +6285,16 @@ test('comparison project export allows archived projects without writes', async 
   const state = getMockDatabaseState()
 
   expect(response.status).toBe(200)
-  expect(csv).toContain('Article 1,Article 1 summary,2026-03-30T00:00:00.000Z')
+  expect(csv).not.toContain('Article 1,Article 1 summary,2026-03-30T00:00:00.000Z')
+  expect(csv.trim().split('\n')).toHaveLength(1)
   expect(csv.trim().split('\n')[0]?.split(',').slice(0, 3)).toEqual(['Title', 'Abstract/Summary', 'Date added'])
-  expect(csv.trim().split('\n')[1]?.split(',').slice(0, 3)).toEqual([
-    'Article 1',
-    'Article 1 summary',
-    '2026-03-30T00:00:00.000Z',
-  ])
   expect(state.transactionCalls).toBe(0)
   expect(state.rootRunStatements).toEqual([])
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM mart.comparison_')
+    }),
+  ).toBe(false)
 })
 
 test('summary comparison judgments use synthetic summary columns and derived cells', async () => {
