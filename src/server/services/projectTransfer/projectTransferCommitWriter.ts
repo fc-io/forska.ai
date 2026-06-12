@@ -263,6 +263,9 @@ type ProjectTransferCommitWriterTempTableSet = {
   articleFieldFills: string
   articleIdentifiers: string
   articleRoutePlan: string
+  humanReviewPlan: string
+  judgmentAssessmentPlan: string
+  judgmentPlan: string
   projectArticleSources: string
   projectRoutePlan: string
 }
@@ -345,6 +348,9 @@ const commitWriterSetBasedTableSuffixes = [
   'articleFieldFills',
   'articleIdentifiers',
   'articleRoutePlan',
+  'humanReviewPlan',
+  'judgmentAssessmentPlan',
+  'judgmentPlan',
   'projectArticleSources',
   'projectRoutePlan',
 ] as const satisfies readonly (keyof ProjectTransferCommitWriterTempTableSet)[]
@@ -410,6 +416,44 @@ const getNullableJsonStringFieldSql = (jsonExpression: string, field: string) =>
   const valueSql = getJsonStringFieldSql(jsonExpression, field)
 
   return `CASE WHEN trim(COALESCE(${valueSql}, '')) = '' THEN NULL ELSE ${valueSql} END`
+}
+
+const getJsonStringPathSql = (jsonExpression: string, path: string) => {
+  return `json_extract_string(${jsonExpression}, '${path}')`
+}
+
+const getNullableJsonStringPathSql = (jsonExpression: string, path: string) => {
+  const valueSql = getJsonStringPathSql(jsonExpression, path)
+
+  return `CASE WHEN trim(COALESCE(${valueSql}, '')) = '' THEN NULL ELSE ${valueSql} END`
+}
+
+const getJsonBooleanPathSql = (jsonExpression: string, path: string, defaultValue: boolean) => {
+  return `COALESCE(TRY_CAST(${getJsonStringPathSql(jsonExpression, path)} AS BOOLEAN), ${getSqlLiteral(defaultValue)})`
+}
+
+const getJsonIntegerFieldSql = (jsonExpression: string, field: string, defaultValue: number) => {
+  return `COALESCE(TRY_CAST(${getJsonStringFieldSql(jsonExpression, field)} AS INTEGER), ${getSqlLiteral(defaultValue)})`
+}
+
+const getJsonBigIntFieldSql = (jsonExpression: string, field: string, defaultValue: number) => {
+  return `COALESCE(TRY_CAST(${getJsonStringFieldSql(jsonExpression, field)} AS BIGINT), ${getSqlLiteral(defaultValue)})`
+}
+
+const getJsonTimestampFieldSql = (jsonExpression: string, field: string, defaultValue: Date) => {
+  return `COALESCE(TRY_CAST(${getJsonStringFieldSql(jsonExpression, field)} AS TIMESTAMPTZ), ${getTimestampLiteral(defaultValue)})`
+}
+
+const getJsonStringArrayFieldSql = (jsonExpression: string, field: string) => {
+  return `COALESCE(json_extract(${jsonExpression}, '$.${field}')::VARCHAR[], []::VARCHAR[])`
+}
+
+const getJsonArrayFieldSql = (jsonExpression: string, field: string) => {
+  return `COALESCE(json_extract(${jsonExpression}, '$.${field}'), CAST('[]' AS JSON))`
+}
+
+const getPlannedTargetMatchesSql = ({actualSql, plannedSql}: {actualSql: string; plannedSql: string}) => {
+  return `(${plannedSql} IS NULL OR starts_with(${plannedSql}, 'new:') OR ${plannedSql} = ${actualSql})`
 }
 
 const getArticleJsonFieldSql = (jsonExpression: string, field: ArticleField) => {
@@ -2216,6 +2260,58 @@ const getCreateArticleRoutePlanTableSql = ({
   `
 }
 
+const getCreateJudgmentPlanTableSql = ({rows, tableName}: {rows: readonly JudgmentPlanEntry[]; tableName: string}) => {
+  return `
+    CREATE TEMP TABLE ${tableName} AS
+    SELECT
+      ${getJsonStringFieldSql('row_json', 'action')} AS action,
+      ${getJsonStringFieldSql('row_json', 'sourceJudgmentId')} AS source_judgment_id,
+      ${getJsonStringFieldSql('row_json', 'targetArticleId')} AS target_article_id,
+      ${getJsonStringFieldSql('row_json', 'targetJudgmentId')} AS target_judgment_id,
+      ${getJsonStringFieldSql('row_json', 'targetModelId')} AS target_model_id,
+      ${getJsonStringFieldSql('row_json', 'targetPromptId')} AS target_prompt_id
+    FROM ${getJsonArrayRowsSourceSql(rows)}
+  `
+}
+
+const getCreateJudgmentAssessmentPlanTableSql = ({
+  rows,
+  tableName,
+}: {
+  rows: readonly JudgmentAssessmentPlanEntry[]
+  tableName: string
+}) => {
+  return `
+    CREATE TEMP TABLE ${tableName} AS
+    SELECT
+      ${getJsonStringFieldSql('row_json', 'action')} AS action,
+      ${getJsonStringFieldSql('row_json', 'sourceJudgmentAssessmentId')} AS source_judgment_assessment_id,
+      ${getJsonStringFieldSql('row_json', 'sourceJudgmentId')} AS source_judgment_id,
+      ${getJsonStringFieldSql('row_json', 'targetAssessmentId')} AS target_assessment_id,
+      ${getJsonStringFieldSql('row_json', 'targetJudgmentId')} AS target_judgment_id
+    FROM ${getJsonArrayRowsSourceSql(rows)}
+  `
+}
+
+const getCreateHumanReviewPlanTableSql = ({
+  rows,
+  tableName,
+}: {
+  rows: readonly HumanReviewPlanEntry[]
+  tableName: string
+}) => {
+  return `
+    CREATE TEMP TABLE ${tableName} AS
+    SELECT
+      ${getJsonStringFieldSql('row_json', 'action')} AS action,
+      ${getJsonStringFieldSql('row_json', 'kind')} AS kind,
+      ${getJsonStringFieldSql('row_json', 'sourceId')} AS source_id,
+      ${getJsonStringFieldSql('row_json', 'targetArticleId')} AS target_article_id,
+      ${getJsonStringFieldSql('row_json', 'targetPromptId')} AS target_prompt_id
+    FROM ${getJsonArrayRowsSourceSql(rows)}
+  `
+}
+
 const getCreateProjectArticleSourcesTableSql = ({
   articleRoutePlanTable,
   operationTables,
@@ -2273,6 +2369,12 @@ const loadProjectTransferCommitWriterTempTables = async ({
     ${getCreateArticleIdentifiersTableSql({rows: articleIdentifiers, tableName: tables.articleIdentifiers})};
     ${getCreateProjectRoutePlanTableSql({rows: plan.targetPlan.projectRoutePlan, tableName: tables.projectRoutePlan})};
     ${getCreateArticleRoutePlanTableSql({rows: plan.targetPlan.articleRoutePlan, tableName: tables.articleRoutePlan})};
+    ${getCreateJudgmentPlanTableSql({rows: plan.targetPlan.judgmentPlan ?? [], tableName: tables.judgmentPlan})};
+    ${getCreateJudgmentAssessmentPlanTableSql({
+      rows: plan.targetPlan.judgmentAssessmentPlan ?? [],
+      tableName: tables.judgmentAssessmentPlan,
+    })};
+    ${getCreateHumanReviewPlanTableSql({rows: plan.targetPlan.humanReviewPlan ?? [], tableName: tables.humanReviewPlan})};
     ${getCreateProjectArticleSourcesTableSql({
       articleRoutePlanTable: tables.articleRoutePlan,
       operationTables,
@@ -3726,15 +3828,429 @@ const assertJudgmentTargetsCommitSafe = async ({
   })
 }
 
+const getSetBasedJudgmentRowsSql = ({
+  context,
+  now,
+  projectId,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+}) => {
+  return `
+    SELECT
+      plan.action,
+      judgment_map.target_id AS id,
+      plan.source_judgment_id,
+      article_map.target_id AS article_id,
+      prompt_map.target_id AS prompt_id,
+      model_map.target_id AS model_id,
+      plan.target_article_id,
+      plan.target_judgment_id,
+      plan.target_model_id,
+      plan.target_prompt_id,
+      ${getSqlLiteral(projectId)} AS project_id,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'snapshotProjectModelName')} AS snapshot_project_model_name,
+      ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useTitle', true)} AS use_title,
+      ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useAbstract', true)} AS use_abstract,
+      ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useFulltext', false)} AS use_fulltext,
+      ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useFulltextNoImages', false)} AS use_fulltext_no_images,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'chunkingStrategy')} AS chunking_strategy,
+      ${getJsonBooleanPathSql('payload.payload_json', '$.isAnswered', false)} AS is_answered,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'answeredOriginal')} AS answered_original,
+      ${getJsonStringArrayFieldSql('payload.payload_json', 'answeredOriginalAsArray')} AS answered_original_as_array,
+      ${getJsonIntegerFieldSql('payload.payload_json', 'confidenceOriginal', 50)} AS confidence_original,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'explanation')} AS explanation,
+      ${getJsonArrayFieldSql('payload.payload_json', 'quotes')} AS quotes,
+      ${getJsonBigIntFieldSql('payload.payload_json', 'deleteGeneration', 0)} AS delete_generation,
+      ${getJsonTimestampFieldSql('payload.payload_json', 'createdAt', now)} AS created_at,
+      ${getJsonTimestampFieldSql('payload.payload_json', 'updatedAt', now)} AS updated_at
+    FROM ${context.tempTables.judgmentPlan} plan
+    INNER JOIN ${context.operationTables.tableNames.judgments} payload
+      ON ${getJsonStringFieldSql('payload.payload_json', 'sourceJudgmentId')} = plan.source_judgment_id
+    INNER JOIN ${context.commitIdMapTables.idMap} judgment_map
+      ON judgment_map.map_kind = 'judgment'
+      AND judgment_map.source_id = plan.source_judgment_id
+    INNER JOIN ${context.commitIdMapTables.idMap} article_map
+      ON article_map.map_kind = 'article'
+      AND article_map.source_id = ${getJsonStringFieldSql('payload.payload_json', 'sourceArticleId')}
+    INNER JOIN ${context.commitIdMapTables.idMap} prompt_map
+      ON prompt_map.map_kind = 'prompt'
+      AND prompt_map.source_id = ${getJsonStringFieldSql('payload.payload_json', 'sourcePromptId')}
+    INNER JOIN ${context.commitIdMapTables.idMap} model_map
+      ON model_map.map_kind = 'model'
+      AND model_map.source_id = ${getJsonStringFieldSql('payload.payload_json', 'sourceModelId')}
+    WHERE plan.action IN ('insert', 'reuse')
+  `
+}
+
+const assertSetBasedJudgmentPlanRowsCommitSafe = async ({
+  context,
+  now,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rowsSql = getSetBasedJudgmentRowsSql({context, now, projectId})
+  const [invalidAction] = await tx.queryJson<{action: string | null; sourceJudgmentId: string}>(`
+    SELECT source_judgment_id AS sourceJudgmentId, action
+    FROM ${context.tempTables.judgmentPlan}
+    WHERE action NOT IN ('insert', 'reuse')
+    ORDER BY source_judgment_id ASC
+    LIMIT 1
+  `)
+  const [extraPlan] = await tx.queryJson<{sourceJudgmentId: string}>(`
+    SELECT plan.source_judgment_id AS sourceJudgmentId
+    FROM ${context.tempTables.judgmentPlan} plan
+    LEFT JOIN ${context.operationTables.tableNames.judgments} payload
+      ON ${getJsonStringFieldSql('payload.payload_json', 'sourceJudgmentId')} = plan.source_judgment_id
+    WHERE payload.row_index IS NULL
+    ORDER BY plan.source_judgment_id ASC
+    LIMIT 1
+  `)
+  const [missingPlan] = await tx.queryJson<{sourceJudgmentId: string}>(`
+    SELECT ${getJsonStringFieldSql('payload.payload_json', 'sourceJudgmentId')} AS sourceJudgmentId
+    FROM ${context.operationTables.tableNames.judgments} payload
+    LEFT JOIN ${context.tempTables.judgmentPlan} plan
+      ON plan.source_judgment_id = ${getJsonStringFieldSql('payload.payload_json', 'sourceJudgmentId')}
+    WHERE plan.source_judgment_id IS NULL
+    ORDER BY sourceJudgmentId ASC
+    LIMIT 1
+  `)
+  const expectedCount = await getTableCount({
+    sql: `SELECT row_index FROM ${context.operationTables.tableNames.judgments}`,
+    tx,
+  })
+  const mappedCount = await getTableCount({sql: rowsSql, tx})
+  const [unanswered] = await tx.queryJson<{sourceJudgmentId: string}>(`
+    SELECT ${getJsonStringFieldSql('payload.payload_json', 'sourceJudgmentId')} AS sourceJudgmentId
+    FROM ${context.operationTables.tableNames.judgments} payload
+    WHERE ${getJsonBooleanPathSql('payload.payload_json', '$.isAnswered', false)} <> TRUE
+    ORDER BY sourceJudgmentId ASC
+    LIMIT 1
+  `)
+  const [targetMismatch] = await tx.queryJson<{sourceJudgmentId: string}>(`
+    SELECT rows.source_judgment_id AS sourceJudgmentId
+    FROM (${rowsSql}) rows
+    WHERE NOT ${getPlannedTargetMatchesSql({actualSql: 'rows.article_id', plannedSql: 'rows.target_article_id'})}
+      OR NOT ${getPlannedTargetMatchesSql({actualSql: 'rows.prompt_id', plannedSql: 'rows.target_prompt_id'})}
+      OR NOT ${getPlannedTargetMatchesSql({actualSql: 'rows.model_id', plannedSql: 'rows.target_model_id'})}
+      OR NOT ${getPlannedTargetMatchesSql({actualSql: 'rows.id', plannedSql: 'rows.target_judgment_id'})}
+    ORDER BY rows.source_judgment_id ASC
+    LIMIT 1
+  `)
+
+  if (invalidAction) {
+    return failCommitWriter(`judgment ${invalidAction.sourceJudgmentId} is not commit-safe`)
+  }
+
+  if (extraPlan) {
+    return failCommitWriter(`judgment plan references missing payload ${extraPlan.sourceJudgmentId}`)
+  }
+
+  if (missingPlan) {
+    return failCommitWriter(`missing judgment plan for ${missingPlan.sourceJudgmentId}`)
+  }
+
+  if (mappedCount !== expectedCount) {
+    return failCommitWriter(`judgment rows mapped ${mappedCount} of ${expectedCount} staged rows`)
+  }
+
+  if (unanswered) {
+    return failCommitWriter(`judgment ${unanswered.sourceJudgmentId} is not answered`)
+  }
+
+  return targetMismatch
+    ? failCommitWriter(`judgment ${targetMismatch.sourceJudgmentId} plan target no longer matches final target`)
+    : expectedCount
+}
+
+const assertSetBasedJudgmentRowsDoNotDuplicate = async ({
+  context,
+  now,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rowsSql = getSetBasedJudgmentRowsSql({context, now, projectId})
+  const [physicalDuplicate] = await tx.queryJson<{sourceJudgmentId: string}>(`
+    SELECT MIN(source_judgment_id) AS sourceJudgmentId
+    FROM (${rowsSql}) rows
+    GROUP BY
+      article_id,
+      prompt_id,
+      model_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      delete_generation
+    HAVING COUNT(*) > 1
+    ORDER BY sourceJudgmentId ASC
+    LIMIT 1
+  `)
+  const [visibleDuplicate] = await tx.queryJson<{sourceJudgmentId: string}>(`
+    SELECT MIN(source_judgment_id) AS sourceJudgmentId
+    FROM (${rowsSql}) rows
+    GROUP BY
+      article_id,
+      prompt_id,
+      model_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images
+    HAVING COUNT(*) > 1
+    ORDER BY sourceJudgmentId ASC
+    LIMIT 1
+  `)
+
+  if (physicalDuplicate) {
+    return failCommitWriter(`duplicate judgment physical key after remap: ${physicalDuplicate.sourceJudgmentId}`)
+  }
+
+  return visibleDuplicate
+    ? failCommitWriter(`duplicate judgment active review-visible key after remap: ${visibleDuplicate.sourceJudgmentId}`)
+    : undefined
+}
+
+const assertSetBasedJudgmentTargetsCommitSafe = async ({
+  context,
+  now,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rowsSql = getSetBasedJudgmentRowsSql({context, now, projectId})
+  await assertSetBasedJudgmentRowsDoNotDuplicate({context, now, projectId, tx})
+
+  const [physicalConflict] = await tx.queryJson<{sourceJudgmentId: string}>(`
+    SELECT rows.source_judgment_id AS sourceJudgmentId
+    FROM (${rowsSql}) rows
+    INNER JOIN app.judgment target
+      ON target.deleted_at IS NULL
+      AND target.article_id = rows.article_id
+      AND target.prompt_id = rows.prompt_id
+      AND target.model_id = rows.model_id
+      AND target.use_title = rows.use_title
+      AND target.use_abstract = rows.use_abstract
+      AND target.use_fulltext = rows.use_fulltext
+      AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+      AND target.delete_generation = rows.delete_generation
+    WHERE rows.action = 'insert'
+    ORDER BY rows.source_judgment_id ASC
+    LIMIT 1
+  `)
+  const [visibleConflict] = await tx.queryJson<{sourceJudgmentId: string}>(`
+    SELECT rows.source_judgment_id AS sourceJudgmentId
+    FROM (${rowsSql}) rows
+    INNER JOIN app.judgment target
+      ON target.deleted_at IS NULL
+      AND target.article_id = rows.article_id
+      AND target.prompt_id = rows.prompt_id
+      AND target.model_id = rows.model_id
+      AND target.use_title = rows.use_title
+      AND target.use_abstract = rows.use_abstract
+      AND target.use_fulltext = rows.use_fulltext
+      AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+    WHERE rows.action = 'insert'
+    ORDER BY rows.source_judgment_id ASC
+    LIMIT 1
+  `)
+  const [missingReuse] = await tx.queryJson<{id: string; sourceJudgmentId: string}>(`
+    SELECT rows.id, rows.source_judgment_id AS sourceJudgmentId
+    FROM (${rowsSql}) rows
+    LEFT JOIN app.judgment target
+      ON target.id = rows.id
+      AND target.deleted_at IS NULL
+      AND target.article_id = rows.article_id
+      AND target.prompt_id = rows.prompt_id
+      AND target.model_id = rows.model_id
+      AND target.use_title = rows.use_title
+      AND target.use_abstract = rows.use_abstract
+      AND target.use_fulltext = rows.use_fulltext
+      AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+      AND target.delete_generation = rows.delete_generation
+    WHERE rows.action = 'reuse'
+      AND target.id IS NULL
+    ORDER BY rows.source_judgment_id ASC
+    LIMIT 1
+  `)
+  const [extraVisibleReuse] = await tx.queryJson<{sourceJudgmentId: string}>(`
+    SELECT rows.source_judgment_id AS sourceJudgmentId
+    FROM (${rowsSql}) rows
+    INNER JOIN app.judgment target
+      ON target.deleted_at IS NULL
+      AND target.article_id = rows.article_id
+      AND target.prompt_id = rows.prompt_id
+      AND target.model_id = rows.model_id
+      AND target.use_title = rows.use_title
+      AND target.use_abstract = rows.use_abstract
+      AND target.use_fulltext = rows.use_fulltext
+      AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+      AND target.id <> rows.id
+    WHERE rows.action = 'reuse'
+    ORDER BY rows.source_judgment_id ASC
+    LIMIT 1
+  `)
+  const [mismatchedReuse] = await tx.queryJson<{id: string; sourceJudgmentId: string}>(`
+    SELECT rows.id, rows.source_judgment_id AS sourceJudgmentId
+    FROM (${rowsSql}) rows
+    INNER JOIN app.judgment target
+      ON target.id = rows.id
+    WHERE rows.action = 'reuse'
+      AND (
+        COALESCE(target.is_answered, FALSE) <> TRUE
+        OR target.answered_original IS DISTINCT FROM rows.answered_original
+        OR COALESCE(target.answered_original_as_array, []::VARCHAR[]) IS DISTINCT FROM rows.answered_original_as_array
+        OR COALESCE(target.confidence_original, 50) <> rows.confidence_original
+        OR target.explanation IS DISTINCT FROM rows.explanation
+        OR CAST(COALESCE(target.quotes, CAST('[]' AS JSON)) AS VARCHAR) <> CAST(rows.quotes AS VARCHAR)
+      )
+    ORDER BY rows.source_judgment_id ASC
+    LIMIT 1
+  `)
+
+  if (physicalConflict) {
+    return failCommitWriter(`target judgment physical key already exists for ${physicalConflict.sourceJudgmentId}`)
+  }
+
+  if (visibleConflict) {
+    return failCommitWriter(`target judgment review-visible key already exists for ${visibleConflict.sourceJudgmentId}`)
+  }
+
+  if (missingReuse) {
+    return failCommitWriter(
+      `reused target judgment ${missingReuse.id} is missing or no longer matches ${missingReuse.sourceJudgmentId}`,
+    )
+  }
+
+  if (extraVisibleReuse) {
+    return failCommitWriter(
+      `reused judgment ${extraVisibleReuse.sourceJudgmentId} has an active review-visible conflict`,
+    )
+  }
+
+  return mismatchedReuse
+    ? failCommitWriter(
+        `reused target judgment ${mismatchedReuse.id} is not equivalent to ${mismatchedReuse.sourceJudgmentId}`,
+      )
+    : undefined
+}
+
+const insertJudgmentRowsSetBased = async ({
+  context,
+  now,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const expectedCount = await assertSetBasedJudgmentPlanRowsCommitSafe({context, now, projectId, tx})
+
+  if (expectedCount === 0) {
+    return undefined
+  }
+
+  await assertSetBasedJudgmentTargetsCommitSafe({context, now, projectId, tx})
+
+  const rowsSql = getSetBasedJudgmentRowsSql({context, now, projectId})
+  const expectedInsertCount = await getTableCount({sql: `SELECT id FROM (${rowsSql}) rows WHERE action = 'insert'`, tx})
+
+  if (expectedInsertCount === 0) {
+    return undefined
+  }
+
+  const insertedRows = await tx.queryJson<{id: string}>(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      snapshot_project_id,
+      snapshot_project_model_name,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      chunking_strategy,
+      is_answered,
+      answered_original,
+      answered_original_as_array,
+      confidence_original,
+      explanation,
+      quotes,
+      delete_generation,
+      deleted_at,
+      created_at,
+      updated_at
+    )
+    SELECT
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      project_id,
+      snapshot_project_model_name,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      chunking_strategy,
+      TRUE,
+      answered_original,
+      answered_original_as_array,
+      confidence_original,
+      explanation,
+      quotes,
+      delete_generation,
+      NULL,
+      created_at,
+      updated_at
+    FROM (${rowsSql}) rows
+    WHERE action = 'insert'
+    RETURNING id
+  `)
+
+  return insertedRows.length === expectedInsertCount
+    ? undefined
+    : failCommitWriter(`judgment insert wrote ${insertedRows.length} of ${expectedInsertCount} staged rows`)
+}
+
 const insertJudgmentRows = async ({
+  context,
+  now,
   projectId,
   rows,
   tx,
 }: {
+  context: ProjectTransferCommitWriterSetBasedContext | null
+  now: Date
   projectId: string
   rows: readonly JudgmentCommitRow[]
   tx: ProjectTransferCommitWriterTx
 }) => {
+  if (context !== null) {
+    return rows.length === 0 ? undefined : insertJudgmentRowsSetBased({context, now, projectId, tx})
+  }
+
   await assertJudgmentTargetsCommitSafe({rows, tx})
 
   const insertRows = rows.filter((row) => {
@@ -3971,15 +4487,306 @@ const assertJudgmentAssessmentTargetsCommitSafe = async ({
   })
 }
 
+const getSetBasedJudgmentAssessmentRowsSql = ({
+  context,
+  now,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+}) => {
+  return `
+    SELECT
+      plan.action,
+      assessment_map.target_id AS id,
+      judgment_map.target_id AS judgment_id,
+      plan.source_judgment_assessment_id,
+      plan.source_judgment_id,
+      plan.target_assessment_id,
+      plan.target_judgment_id,
+      ${getJsonBooleanPathSql('payload.payload_json', '$.assessmentIsCorrect', false)} AS assessment_is_correct,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'assessmentComment')} AS assessment_comment,
+      ${getJsonTimestampFieldSql('payload.payload_json', 'createdAt', now)} AS created_at,
+      ${getJsonTimestampFieldSql('payload.payload_json', 'updatedAt', now)} AS updated_at
+    FROM ${context.tempTables.judgmentAssessmentPlan} plan
+    INNER JOIN ${context.operationTables.tableNames.judgmentAssessments} payload
+      ON ${getJsonStringFieldSql('payload.payload_json', 'sourceJudgmentAssessmentId')}
+        = plan.source_judgment_assessment_id
+    INNER JOIN ${context.commitIdMapTables.idMap} assessment_map
+      ON assessment_map.map_kind = 'judgmentAssessment'
+      AND assessment_map.source_id = plan.source_judgment_assessment_id
+    INNER JOIN ${context.commitIdMapTables.idMap} judgment_map
+      ON judgment_map.map_kind = 'judgment'
+      AND judgment_map.source_id = plan.source_judgment_id
+    WHERE plan.action IN ('insert', 'reuse')
+  `
+}
+
+const getSetBasedJudgmentTargetIdsSql = ({
+  context,
+  now,
+  projectId,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+}) => {
+  return `SELECT id AS judgment_id FROM (${getSetBasedJudgmentRowsSql({context, now, projectId})}) rows`
+}
+
+const assertSetBasedJudgmentAssessmentPlanRowsCommitSafe = async ({
+  context,
+  now,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rowsSql = getSetBasedJudgmentAssessmentRowsSql({context, now})
+  const [invalidAction] = await tx.queryJson<{sourceJudgmentAssessmentId: string}>(`
+    SELECT source_judgment_assessment_id AS sourceJudgmentAssessmentId
+    FROM ${context.tempTables.judgmentAssessmentPlan}
+    WHERE action NOT IN ('insert', 'reuse')
+    ORDER BY source_judgment_assessment_id ASC
+    LIMIT 1
+  `)
+  const [extraPlan] = await tx.queryJson<{sourceJudgmentAssessmentId: string}>(`
+    SELECT plan.source_judgment_assessment_id AS sourceJudgmentAssessmentId
+    FROM ${context.tempTables.judgmentAssessmentPlan} plan
+    LEFT JOIN ${context.operationTables.tableNames.judgmentAssessments} payload
+      ON ${getJsonStringFieldSql('payload.payload_json', 'sourceJudgmentAssessmentId')}
+        = plan.source_judgment_assessment_id
+    WHERE payload.row_index IS NULL
+    ORDER BY plan.source_judgment_assessment_id ASC
+    LIMIT 1
+  `)
+  const [missingPlan] = await tx.queryJson<{sourceJudgmentAssessmentId: string}>(`
+    SELECT ${getJsonStringFieldSql('payload.payload_json', 'sourceJudgmentAssessmentId')} AS sourceJudgmentAssessmentId
+    FROM ${context.operationTables.tableNames.judgmentAssessments} payload
+    LEFT JOIN ${context.tempTables.judgmentAssessmentPlan} plan
+      ON plan.source_judgment_assessment_id = ${getJsonStringFieldSql('payload.payload_json', 'sourceJudgmentAssessmentId')}
+    WHERE plan.source_judgment_assessment_id IS NULL
+    ORDER BY sourceJudgmentAssessmentId ASC
+    LIMIT 1
+  `)
+  const expectedCount = await getTableCount({
+    sql: `SELECT row_index FROM ${context.operationTables.tableNames.judgmentAssessments}`,
+    tx,
+  })
+  const mappedCount = await getTableCount({sql: rowsSql, tx})
+  const [targetMismatch] = await tx.queryJson<{sourceJudgmentAssessmentId: string}>(`
+    SELECT rows.source_judgment_assessment_id AS sourceJudgmentAssessmentId
+    FROM (${rowsSql}) rows
+    WHERE NOT ${getPlannedTargetMatchesSql({actualSql: 'rows.judgment_id', plannedSql: 'rows.target_judgment_id'})}
+      OR NOT ${getPlannedTargetMatchesSql({actualSql: 'rows.id', plannedSql: 'rows.target_assessment_id'})}
+    ORDER BY rows.source_judgment_assessment_id ASC
+    LIMIT 1
+  `)
+
+  if (invalidAction) {
+    return failCommitWriter(`judgment assessment ${invalidAction.sourceJudgmentAssessmentId} is not commit-safe`)
+  }
+
+  if (extraPlan) {
+    return failCommitWriter(
+      `judgment assessment plan references missing payload ${extraPlan.sourceJudgmentAssessmentId}`,
+    )
+  }
+
+  if (missingPlan) {
+    return failCommitWriter(`missing judgment assessment plan for ${missingPlan.sourceJudgmentAssessmentId}`)
+  }
+
+  if (mappedCount !== expectedCount) {
+    return failCommitWriter(`judgment assessment rows mapped ${mappedCount} of ${expectedCount} staged rows`)
+  }
+
+  return targetMismatch
+    ? failCommitWriter(
+        `judgment assessment ${targetMismatch.sourceJudgmentAssessmentId} plan target no longer matches final target`,
+      )
+    : expectedCount
+}
+
+const assertSetBasedJudgmentAssessmentTargetsCommitSafe = async ({
+  context,
+  now,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rowsSql = getSetBasedJudgmentAssessmentRowsSql({context, now})
+  const judgmentIdsSql = getSetBasedJudgmentTargetIdsSql({context, now, projectId})
+  const [duplicate] = await tx.queryJson<{judgmentId: string}>(`
+    SELECT judgment_id AS judgmentId
+    FROM (${rowsSql}) rows
+    GROUP BY judgment_id
+    HAVING COUNT(*) > 1
+    ORDER BY judgment_id ASC
+    LIMIT 1
+  `)
+  const [extraTarget] = await tx.queryJson<{judgmentId: string}>(`
+    SELECT target.judgment_id AS judgmentId
+    FROM (${judgmentIdsSql}) judgment_ids
+    INNER JOIN app.judgment_assessment target
+      ON target.judgment_id = judgment_ids.judgment_id
+    LEFT JOIN (${rowsSql}) rows
+      ON rows.judgment_id = target.judgment_id
+    WHERE rows.judgment_id IS NULL
+    ORDER BY target.judgment_id ASC
+    LIMIT 1
+  `)
+  const [insertConflict] = await tx.queryJson<{judgmentId: string}>(`
+    SELECT rows.judgment_id AS judgmentId
+    FROM (${rowsSql}) rows
+    INNER JOIN app.judgment_assessment target
+      ON target.judgment_id = rows.judgment_id
+    WHERE rows.action = 'insert'
+    ORDER BY rows.judgment_id ASC
+    LIMIT 1
+  `)
+  const [missingReuse] = await tx.queryJson<{id: string; sourceJudgmentAssessmentId: string}>(`
+    SELECT rows.id, rows.source_judgment_assessment_id AS sourceJudgmentAssessmentId
+    FROM (${rowsSql}) rows
+    LEFT JOIN app.judgment_assessment target
+      ON target.judgment_id = rows.judgment_id
+    WHERE rows.action = 'reuse'
+      AND target.id IS NULL
+    ORDER BY rows.source_judgment_assessment_id ASC
+    LIMIT 1
+  `)
+  const [wrongReuseTarget] = await tx.queryJson<{id: string; judgmentId: string}>(`
+    SELECT rows.id, rows.judgment_id AS judgmentId
+    FROM (${rowsSql}) rows
+    INNER JOIN app.judgment_assessment target
+      ON target.judgment_id = rows.judgment_id
+    WHERE rows.action = 'reuse'
+      AND target.id <> rows.id
+    ORDER BY rows.judgment_id ASC
+    LIMIT 1
+  `)
+  const [mismatchedReuse] = await tx.queryJson<{id: string; sourceJudgmentAssessmentId: string}>(`
+    SELECT rows.id, rows.source_judgment_assessment_id AS sourceJudgmentAssessmentId
+    FROM (${rowsSql}) rows
+    INNER JOIN app.judgment_assessment target
+      ON target.id = rows.id
+    WHERE rows.action = 'reuse'
+      AND (
+        COALESCE(target.assessment_is_correct, FALSE) <> rows.assessment_is_correct
+        OR target.assessment_comment IS DISTINCT FROM rows.assessment_comment
+      )
+    ORDER BY rows.source_judgment_assessment_id ASC
+    LIMIT 1
+  `)
+
+  if (duplicate) {
+    return failCommitWriter(`duplicate judgment_assessment after remap: ${duplicate.judgmentId}`)
+  }
+
+  if (extraTarget) {
+    return failCommitWriter(`target judgment ${extraTarget.judgmentId} has assessment state missing from package`)
+  }
+
+  if (insertConflict) {
+    return failCommitWriter(`target judgment ${insertConflict.judgmentId} already has assessment state`)
+  }
+
+  if (missingReuse) {
+    return failCommitWriter(
+      `reused assessment ${missingReuse.id} is missing for ${missingReuse.sourceJudgmentAssessmentId}`,
+    )
+  }
+
+  if (wrongReuseTarget) {
+    return failCommitWriter(
+      `reused assessment ${wrongReuseTarget.id} no longer points at ${wrongReuseTarget.judgmentId}`,
+    )
+  }
+
+  return mismatchedReuse
+    ? failCommitWriter(
+        `reused assessment ${mismatchedReuse.id} is not equivalent to ${mismatchedReuse.sourceJudgmentAssessmentId}`,
+      )
+    : undefined
+}
+
+const insertJudgmentAssessmentRowsSetBased = async ({
+  context,
+  now,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const expectedCount = await assertSetBasedJudgmentAssessmentPlanRowsCommitSafe({context, now, tx})
+
+  await assertSetBasedJudgmentAssessmentTargetsCommitSafe({context, now, projectId, tx})
+
+  if (expectedCount === 0) {
+    return undefined
+  }
+
+  const rowsSql = getSetBasedJudgmentAssessmentRowsSql({context, now})
+  const expectedInsertCount = await getTableCount({sql: `SELECT id FROM (${rowsSql}) rows WHERE action = 'insert'`, tx})
+
+  if (expectedInsertCount === 0) {
+    return undefined
+  }
+
+  const insertedRows = await tx.queryJson<{id: string}>(`
+    INSERT INTO app.judgment_assessment (
+      id,
+      judgment_id,
+      assessment_is_correct,
+      assessment_comment,
+      created_at,
+      updated_at
+    )
+    SELECT
+      id,
+      judgment_id,
+      assessment_is_correct,
+      assessment_comment,
+      created_at,
+      updated_at
+    FROM (${rowsSql}) rows
+    WHERE action = 'insert'
+    RETURNING id
+  `)
+
+  return insertedRows.length === expectedInsertCount
+    ? undefined
+    : failCommitWriter(`judgment assessment insert wrote ${insertedRows.length} of ${expectedInsertCount} staged rows`)
+}
+
 const insertJudgmentAssessmentRows = async ({
   allJudgmentIds,
+  context,
+  now,
+  projectId,
   rows,
   tx,
 }: {
   allJudgmentIds: readonly string[]
+  context: ProjectTransferCommitWriterSetBasedContext | null
+  now: Date
+  projectId: string
   rows: readonly JudgmentAssessmentCommitRow[]
   tx: ProjectTransferCommitWriterTx
 }) => {
+  if (context !== null) {
+    return allJudgmentIds.length === 0 && rows.length === 0
+      ? undefined
+      : insertJudgmentAssessmentRowsSetBased({context, now, projectId, tx})
+  }
+
   await assertJudgmentAssessmentTargetsCommitSafe({allJudgmentIds, rows, tx})
 
   const insertRows = rows.filter((row) => {
@@ -4349,13 +5156,517 @@ const assertNoExistingReviews = async ({
     : undefined
 }
 
+const assertSetBasedHumanReviewPlanRowsCommitSafe = async ({
+  context,
+  kind,
+  payloadTableName,
+  rowsSql,
+  sourceField,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  kind: HumanReviewPlanEntry['kind']
+  payloadTableName: string
+  rowsSql: string
+  sourceField: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const [invalidAction] = await tx.queryJson<{sourceId: string}>(`
+    SELECT source_id AS sourceId
+    FROM ${context.tempTables.humanReviewPlan}
+    WHERE kind = ${getSqlLiteral(kind)}
+      AND action <> 'insert'
+    ORDER BY source_id ASC
+    LIMIT 1
+  `)
+  const [extraPlan] = await tx.queryJson<{sourceId: string}>(`
+    SELECT plan.source_id AS sourceId
+    FROM ${context.tempTables.humanReviewPlan} plan
+    LEFT JOIN ${payloadTableName} payload
+      ON ${getJsonStringFieldSql('payload.payload_json', sourceField)} = plan.source_id
+    WHERE plan.kind = ${getSqlLiteral(kind)}
+      AND payload.row_index IS NULL
+    ORDER BY plan.source_id ASC
+    LIMIT 1
+  `)
+  const [missingPlan] = await tx.queryJson<{sourceId: string}>(`
+    SELECT ${getJsonStringFieldSql('payload.payload_json', sourceField)} AS sourceId
+    FROM ${payloadTableName} payload
+    LEFT JOIN ${context.tempTables.humanReviewPlan} plan
+      ON plan.kind = ${getSqlLiteral(kind)}
+      AND plan.source_id = ${getJsonStringFieldSql('payload.payload_json', sourceField)}
+    WHERE plan.source_id IS NULL
+    ORDER BY sourceId ASC
+    LIMIT 1
+  `)
+  const expectedCount = await getTableCount({sql: `SELECT row_index FROM ${payloadTableName}`, tx})
+  const mappedCount = await getTableCount({sql: rowsSql, tx})
+
+  if (invalidAction) {
+    return failCommitWriter(`${kind} ${invalidAction.sourceId} is not commit-safe`)
+  }
+
+  if (extraPlan) {
+    return failCommitWriter(`${kind} plan references missing payload ${extraPlan.sourceId}`)
+  }
+
+  if (missingPlan) {
+    return failCommitWriter(`missing ${kind} plan for ${missingPlan.sourceId}`)
+  }
+
+  return mappedCount === expectedCount
+    ? expectedCount
+    : failCommitWriter(`${kind} rows mapped ${mappedCount} of ${expectedCount} staged rows`)
+}
+
+const getSetBasedHumanJudgmentRowsSql = ({
+  context,
+  now,
+  projectId,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+}) => {
+  return `
+    SELECT
+      human_map.target_id AS id,
+      plan.source_id AS source_id,
+      ${getSqlLiteral(projectId)} AS project_id,
+      article_map.target_id AS article_id,
+      prompt_map.target_id AS prompt_id,
+      plan.target_article_id,
+      plan.target_prompt_id,
+      ${getJsonBooleanPathSql('payload.payload_json', '$.isAnswered', false)} AS is_answered,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'answer')} AS answer,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'comment')} AS comment,
+      ${getJsonTimestampFieldSql('payload.payload_json', 'createdAt', now)} AS created_at,
+      ${getJsonTimestampFieldSql('payload.payload_json', 'updatedAt', now)} AS updated_at
+    FROM ${context.tempTables.humanReviewPlan} plan
+    INNER JOIN ${context.operationTables.tableNames.humanJudgments} payload
+      ON ${getJsonStringFieldSql('payload.payload_json', 'sourceHumanJudgmentId')} = plan.source_id
+    INNER JOIN ${context.commitIdMapTables.idMap} human_map
+      ON human_map.map_kind = 'humanJudgment'
+      AND human_map.source_id = plan.source_id
+    INNER JOIN ${context.commitIdMapTables.idMap} article_map
+      ON article_map.map_kind = 'article'
+      AND article_map.source_id = ${getJsonStringFieldSql('payload.payload_json', 'sourceArticleId')}
+    INNER JOIN ${context.commitIdMapTables.idMap} prompt_map
+      ON prompt_map.map_kind = 'prompt'
+      AND prompt_map.source_id = ${getJsonStringFieldSql('payload.payload_json', 'sourcePromptId')}
+    WHERE plan.kind = 'humanJudgment'
+      AND plan.action = 'insert'
+  `
+}
+
+const insertHumanJudgmentRowsSetBased = async ({
+  context,
+  now,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rowsSql = getSetBasedHumanJudgmentRowsSql({context, now, projectId})
+  const expectedCount = await assertSetBasedHumanReviewPlanRowsCommitSafe({
+    context,
+    kind: 'humanJudgment',
+    payloadTableName: context.operationTables.tableNames.humanJudgments,
+    rowsSql,
+    sourceField: 'sourceHumanJudgmentId',
+    tx,
+  })
+  const [targetMismatch] = await tx.queryJson<{sourceId: string}>(`
+    SELECT rows.source_id AS sourceId
+    FROM (${rowsSql}) rows
+    WHERE NOT ${getPlannedTargetMatchesSql({actualSql: 'rows.article_id', plannedSql: 'rows.target_article_id'})}
+      OR NOT ${getPlannedTargetMatchesSql({actualSql: 'rows.prompt_id', plannedSql: 'rows.target_prompt_id'})}
+    ORDER BY rows.source_id ASC
+    LIMIT 1
+  `)
+  const [duplicate] = await tx.queryJson<{articleId: string; projectId: string; promptId: string}>(`
+    SELECT project_id AS projectId, article_id AS articleId, prompt_id AS promptId
+    FROM (${rowsSql}) rows
+    GROUP BY project_id, article_id, prompt_id
+    HAVING COUNT(*) > 1
+    ORDER BY project_id ASC, article_id ASC, prompt_id ASC
+    LIMIT 1
+  `)
+
+  if (targetMismatch) {
+    return failCommitWriter(`humanJudgment ${targetMismatch.sourceId} plan target no longer matches final target`)
+  }
+
+  if (duplicate) {
+    return failCommitWriter(
+      `duplicate judgment_human after remap: ${duplicate.projectId}\u0000${duplicate.articleId}\u0000${duplicate.promptId}`,
+    )
+  }
+
+  if (expectedCount === 0) {
+    return undefined
+  }
+
+  const insertedRows = await tx.queryJson<{id: string}>(`
+    INSERT INTO app.judgment_human (
+      id,
+      project_id,
+      article_id,
+      prompt_id,
+      is_answered,
+      answer,
+      "comment",
+      created_at,
+      updated_at
+    )
+    SELECT
+      id,
+      project_id,
+      article_id,
+      prompt_id,
+      is_answered,
+      answer,
+      comment,
+      created_at,
+      updated_at
+    FROM (${rowsSql}) rows
+    RETURNING id
+  `)
+
+  return insertedRows.length === expectedCount
+    ? undefined
+    : failCommitWriter(`human judgment insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+}
+
+const getSetBasedHumanSummaryRowsSql = ({
+  context,
+  now,
+  projectId,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+}) => {
+  return `
+    SELECT
+      summary_map.target_id AS id,
+      plan.source_id AS source_id,
+      ${getSqlLiteral(projectId)} AS project_id,
+      article_map.target_id AS article_id,
+      plan.target_article_id,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'answer')} AS answer,
+      ${getJsonStringFieldSql('payload.payload_json', 'origin')} AS origin,
+      ${getJsonTimestampFieldSql('payload.payload_json', 'createdAt', now)} AS created_at,
+      ${getJsonTimestampFieldSql('payload.payload_json', 'updatedAt', now)} AS updated_at
+    FROM ${context.tempTables.humanReviewPlan} plan
+    INNER JOIN ${context.operationTables.tableNames.humanJudgmentSummaries} payload
+      ON ${getJsonStringFieldSql('payload.payload_json', 'sourceHumanJudgmentSummaryId')} = plan.source_id
+    INNER JOIN ${context.commitIdMapTables.idMap} summary_map
+      ON summary_map.map_kind = 'humanJudgmentSummary'
+      AND summary_map.source_id = plan.source_id
+    INNER JOIN ${context.commitIdMapTables.idMap} article_map
+      ON article_map.map_kind = 'article'
+      AND article_map.source_id = ${getJsonStringFieldSql('payload.payload_json', 'sourceArticleId')}
+    WHERE plan.kind = 'humanJudgmentSummary'
+      AND plan.action = 'insert'
+  `
+}
+
+const insertHumanJudgmentSummaryRowsSetBased = async ({
+  context,
+  now,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rowsSql = getSetBasedHumanSummaryRowsSql({context, now, projectId})
+  const expectedCount = await assertSetBasedHumanReviewPlanRowsCommitSafe({
+    context,
+    kind: 'humanJudgmentSummary',
+    payloadTableName: context.operationTables.tableNames.humanJudgmentSummaries,
+    rowsSql,
+    sourceField: 'sourceHumanJudgmentSummaryId',
+    tx,
+  })
+  const [targetMismatch] = await tx.queryJson<{sourceId: string}>(`
+    SELECT rows.source_id AS sourceId
+    FROM (${rowsSql}) rows
+    WHERE NOT ${getPlannedTargetMatchesSql({actualSql: 'rows.article_id', plannedSql: 'rows.target_article_id'})}
+    ORDER BY rows.source_id ASC
+    LIMIT 1
+  `)
+  const [duplicate] = await tx.queryJson<{articleId: string; projectId: string}>(`
+    SELECT project_id AS projectId, article_id AS articleId
+    FROM (${rowsSql}) rows
+    GROUP BY project_id, article_id
+    HAVING COUNT(*) > 1
+    ORDER BY project_id ASC, article_id ASC
+    LIMIT 1
+  `)
+  const [existing] = await tx.queryJson<{articleId: string; projectId: string}>(`
+    SELECT rows.project_id AS projectId, rows.article_id AS articleId
+    FROM (${rowsSql}) rows
+    INNER JOIN app.judgment_human_summary existing
+      ON existing.project_id = rows.project_id
+      AND existing.article_id = rows.article_id
+    ORDER BY rows.project_id ASC, rows.article_id ASC
+    LIMIT 1
+  `)
+
+  if (targetMismatch) {
+    return failCommitWriter(
+      `humanJudgmentSummary ${targetMismatch.sourceId} plan target no longer matches final target`,
+    )
+  }
+
+  if (duplicate) {
+    return failCommitWriter(
+      `duplicate judgment_human_summary after remap: ${duplicate.projectId}\u0000${duplicate.articleId}`,
+    )
+  }
+
+  if (existing) {
+    return failCommitWriter(
+      `target judgment_human_summary already has remapped key ${existing.projectId}:${existing.articleId}`,
+    )
+  }
+
+  if (expectedCount === 0) {
+    return undefined
+  }
+
+  const insertedRows = await tx.queryJson<{id: string}>(`
+    INSERT INTO app.judgment_human_summary (
+      id,
+      project_id,
+      article_id,
+      answer,
+      origin,
+      created_at,
+      updated_at
+    )
+    SELECT
+      id,
+      project_id,
+      article_id,
+      answer,
+      origin,
+      created_at,
+      updated_at
+    FROM (${rowsSql}) rows
+    RETURNING id
+  `)
+
+  return insertedRows.length === expectedCount
+    ? undefined
+    : failCommitWriter(`human judgment summary insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+}
+
+const getReviewSectionReviewedSql = (section: (typeof reviewSectionNames)[number]) => {
+  return getJsonBooleanPathSql('payload.payload_json', `$.sections.${section}.reviewed`, false)
+}
+
+const getReviewSectionCommentSql = (section: (typeof reviewSectionNames)[number]) => {
+  return getNullableJsonStringPathSql('payload.payload_json', `$.sections.${section}.comment`)
+}
+
+const getSetBasedReviewRowsSql = ({
+  context,
+  now,
+  projectId,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+}) => {
+  return `
+    SELECT
+      review_map.target_id AS id,
+      plan.source_id AS source_id,
+      ${getSqlLiteral(projectId)} AS project_id,
+      article_map.target_id AS article_id,
+      plan.target_article_id,
+      ${getJsonBooleanPathSql('payload.payload_json', '$.opened', false)} AS opened,
+      ${getReviewSectionReviewedSql('title')} AS reviewed_title,
+      ${getReviewSectionCommentSql('title')} AS reviewed_title_comment,
+      ${getReviewSectionReviewedSql('abstract')} AS reviewed_abstract,
+      ${getReviewSectionCommentSql('abstract')} AS reviewed_abstract_comment,
+      ${getReviewSectionReviewedSql('intro')} AS reviewed_intro,
+      ${getReviewSectionCommentSql('intro')} AS reviewed_intro_comment,
+      ${getReviewSectionReviewedSql('method')} AS reviewed_method,
+      ${getReviewSectionCommentSql('method')} AS reviewed_method_comment,
+      ${getReviewSectionReviewedSql('results')} AS reviewed_results,
+      ${getReviewSectionCommentSql('results')} AS reviewed_results_comment,
+      ${getReviewSectionReviewedSql('discussion')} AS reviewed_discussion,
+      ${getReviewSectionCommentSql('discussion')} AS reviewed_discussion_comment,
+      ${getReviewSectionReviewedSql('conclusion')} AS reviewed_conclusion,
+      ${getReviewSectionCommentSql('conclusion')} AS reviewed_conclusion_comment,
+      ${getReviewSectionReviewedSql('appendix')} AS reviewed_appendix,
+      ${getReviewSectionCommentSql('appendix')} AS reviewed_appendix_comment,
+      ${getReviewSectionReviewedSql('other')} AS reviewed_other,
+      ${getReviewSectionCommentSql('other')} AS reviewed_other_comment,
+      ${getJsonTimestampFieldSql('payload.payload_json', 'createdAt', now)} AS created_at,
+      ${getJsonTimestampFieldSql('payload.payload_json', 'updatedAt', now)} AS updated_at
+    FROM ${context.tempTables.humanReviewPlan} plan
+    INNER JOIN ${context.operationTables.tableNames.reviews} payload
+      ON ${getJsonStringFieldSql('payload.payload_json', 'sourceReviewId')} = plan.source_id
+    INNER JOIN ${context.commitIdMapTables.idMap} review_map
+      ON review_map.map_kind = 'review'
+      AND review_map.source_id = plan.source_id
+    INNER JOIN ${context.commitIdMapTables.idMap} article_map
+      ON article_map.map_kind = 'article'
+      AND article_map.source_id = ${getJsonStringFieldSql('payload.payload_json', 'sourceArticleId')}
+    WHERE plan.kind = 'review'
+      AND plan.action = 'insert'
+  `
+}
+
+const insertReviewRowsSetBased = async ({
+  context,
+  now,
+  projectId,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  now: Date
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rowsSql = getSetBasedReviewRowsSql({context, now, projectId})
+  const expectedCount = await assertSetBasedHumanReviewPlanRowsCommitSafe({
+    context,
+    kind: 'review',
+    payloadTableName: context.operationTables.tableNames.reviews,
+    rowsSql,
+    sourceField: 'sourceReviewId',
+    tx,
+  })
+  const [targetMismatch] = await tx.queryJson<{sourceId: string}>(`
+    SELECT rows.source_id AS sourceId
+    FROM (${rowsSql}) rows
+    WHERE NOT ${getPlannedTargetMatchesSql({actualSql: 'rows.article_id', plannedSql: 'rows.target_article_id'})}
+    ORDER BY rows.source_id ASC
+    LIMIT 1
+  `)
+  const [duplicate] = await tx.queryJson<{articleId: string; projectId: string}>(`
+    SELECT project_id AS projectId, article_id AS articleId
+    FROM (${rowsSql}) rows
+    GROUP BY project_id, article_id
+    HAVING COUNT(*) > 1
+    ORDER BY project_id ASC, article_id ASC
+    LIMIT 1
+  `)
+  const [existing] = await tx.queryJson<{articleId: string; projectId: string}>(`
+    SELECT rows.project_id AS projectId, rows.article_id AS articleId
+    FROM (${rowsSql}) rows
+    INNER JOIN app.review existing
+      ON existing.project_id = rows.project_id
+      AND existing.article_id = rows.article_id
+    ORDER BY rows.project_id ASC, rows.article_id ASC
+    LIMIT 1
+  `)
+
+  if (targetMismatch) {
+    return failCommitWriter(`review ${targetMismatch.sourceId} plan target no longer matches final target`)
+  }
+
+  if (duplicate) {
+    return failCommitWriter(`duplicate review after remap: ${duplicate.projectId}\u0000${duplicate.articleId}`)
+  }
+
+  if (existing) {
+    return failCommitWriter(`target review already has remapped key ${existing.projectId}:${existing.articleId}`)
+  }
+
+  if (expectedCount === 0) {
+    return undefined
+  }
+
+  const insertedRows = await tx.queryJson<{id: string}>(`
+    INSERT INTO app.review (
+      id,
+      project_id,
+      article_id,
+      opened,
+      reviewed_title,
+      reviewed_title_comment,
+      reviewed_abstract,
+      reviewed_abstract_comment,
+      reviewed_intro,
+      reviewed_intro_comment,
+      reviewed_method,
+      reviewed_method_comment,
+      reviewed_results,
+      reviewed_results_comment,
+      reviewed_discussion,
+      reviewed_discussion_comment,
+      reviewed_conclusion,
+      reviewed_conclusion_comment,
+      reviewed_appendix,
+      reviewed_appendix_comment,
+      reviewed_other,
+      reviewed_other_comment,
+      created_at,
+      updated_at
+    )
+    SELECT
+      id,
+      project_id,
+      article_id,
+      opened,
+      reviewed_title,
+      reviewed_title_comment,
+      reviewed_abstract,
+      reviewed_abstract_comment,
+      reviewed_intro,
+      reviewed_intro_comment,
+      reviewed_method,
+      reviewed_method_comment,
+      reviewed_results,
+      reviewed_results_comment,
+      reviewed_discussion,
+      reviewed_discussion_comment,
+      reviewed_conclusion,
+      reviewed_conclusion_comment,
+      reviewed_appendix,
+      reviewed_appendix_comment,
+      reviewed_other,
+      reviewed_other_comment,
+      created_at,
+      updated_at
+    FROM (${rowsSql}) rows
+    RETURNING id
+  `)
+
+  return insertedRows.length === expectedCount
+    ? undefined
+    : failCommitWriter(`review insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+}
+
 const insertHumanJudgmentRows = async ({
+  context,
+  now,
+  projectId,
   rows,
   tx,
 }: {
+  context: ProjectTransferCommitWriterSetBasedContext | null
+  now: Date
+  projectId: string
   rows: readonly HumanJudgmentCommitRow[]
   tx: ProjectTransferCommitWriterTx
 }) => {
+  if (context !== null) {
+    return rows.length === 0 ? undefined : insertHumanJudgmentRowsSetBased({context, now, projectId, tx})
+  }
+
   assertNoDuplicateHumanJudgmentRows(rows)
 
   return rows.length === 0
@@ -4392,12 +5703,22 @@ const insertHumanJudgmentRows = async ({
 }
 
 const insertHumanJudgmentSummaryRows = async ({
+  context,
+  now,
+  projectId,
   rows,
   tx,
 }: {
+  context: ProjectTransferCommitWriterSetBasedContext | null
+  now: Date
+  projectId: string
   rows: readonly HumanJudgmentSummaryCommitRow[]
   tx: ProjectTransferCommitWriterTx
 }) => {
+  if (context !== null) {
+    return rows.length === 0 ? undefined : insertHumanJudgmentSummaryRowsSetBased({context, now, projectId, tx})
+  }
+
   await assertNoExistingHumanSummaries({rows, tx})
 
   return rows.length === 0
@@ -4433,7 +5754,23 @@ const getReviewSection = (row: ReviewCommitRow, section: (typeof reviewSectionNa
   return row.sections[section] ?? {comment: null, reviewed: false}
 }
 
-const insertReviewRows = async ({rows, tx}: {rows: readonly ReviewCommitRow[]; tx: ProjectTransferCommitWriterTx}) => {
+const insertReviewRows = async ({
+  context,
+  now,
+  projectId,
+  rows,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext | null
+  now: Date
+  projectId: string
+  rows: readonly ReviewCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  if (context !== null) {
+    return rows.length === 0 ? undefined : insertReviewRowsSetBased({context, now, projectId, tx})
+  }
+
   await assertNoExistingReviews({rows, tx})
 
   return rows.length === 0
@@ -4699,7 +6036,13 @@ const writeProjectTransferCommitAppTablesTx = async ({
       plan: materializedPlan,
       promptIdBySourceId,
     })
-    await insertJudgmentRows({projectId: createdProject.id, rows: judgmentRows, tx})
+    await insertJudgmentRows({
+      context: setBasedContext,
+      now: importedAt,
+      projectId: createdProject.id,
+      rows: judgmentRows,
+      tx,
+    })
     const judgmentIdBySourceId = getJudgmentIdBySourceId(judgmentRows)
     const judgmentAssessmentRows = getJudgmentAssessmentRows({
       assessmentPlan: judgmentAssessmentPlan,
@@ -4710,6 +6053,9 @@ const writeProjectTransferCommitAppTablesTx = async ({
     })
     await insertJudgmentAssessmentRows({
       allJudgmentIds: Object.values(judgmentIdBySourceId),
+      context: setBasedContext,
+      now: importedAt,
+      projectId: createdProject.id,
       rows: judgmentAssessmentRows,
       tx,
     })
@@ -4739,9 +6085,27 @@ const writeProjectTransferCommitAppTablesTx = async ({
       projectId: createdProject.id,
       reviews,
     })
-    await insertHumanJudgmentRows({rows: humanJudgmentRows, tx})
-    await insertHumanJudgmentSummaryRows({rows: humanSummaryRows, tx})
-    await insertReviewRows({rows: reviewRows, tx})
+    await insertHumanJudgmentRows({
+      context: setBasedContext,
+      now: importedAt,
+      projectId: createdProject.id,
+      rows: humanJudgmentRows,
+      tx,
+    })
+    await insertHumanJudgmentSummaryRows({
+      context: setBasedContext,
+      now: importedAt,
+      projectId: createdProject.id,
+      rows: humanSummaryRows,
+      tx,
+    })
+    await insertReviewRows({
+      context: setBasedContext,
+      now: importedAt,
+      projectId: createdProject.id,
+      rows: reviewRows,
+      tx,
+    })
     const importWarnings = getCommitImportWarnings({
       articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
       judgmentPlan,

@@ -2397,6 +2397,22 @@ test('project transfer commit writer writes judgment assessment and human review
     await database.run("INSERT INTO app.article (id, article_title) VALUES ('reuse-decision-article', 'Reusable Decision Article')")
     await database.run("INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, snapshot_project_id, snapshot_project_model_name, use_title, use_abstract, use_fulltext, use_fulltext_no_images, is_answered, answered_original, answered_original_as_array, confidence_original, explanation, quotes, delete_generation, deleted_at, created_at, updated_at) VALUES ('target-judgment-reuse', 'reuse-decision-article', 'target-prompt', 'target-model', 'existing-project', 'existing-snapshot-project', 'target-existing-label', TRUE, TRUE, FALSE, FALSE, TRUE, 'reuse-answer', ['reuse-answer'], 77, 'reuse-answer explanation', CAST('[{\\"quote\\":\\"reuse-answer quote\\"}]' AS JSON), 0, NULL, TIMESTAMPTZ '2026-05-01T00:00:00.000Z', TIMESTAMPTZ '2026-05-01T00:00:00.000Z')")
     await database.run("INSERT INTO app.judgment_assessment (id, judgment_id, assessment_is_correct, assessment_comment, created_at, updated_at) VALUES ('target-assessment-reuse', 'target-judgment-reuse', TRUE, 'Reused assessment', TIMESTAMPTZ '2026-05-01T00:00:00.000Z', TIMESTAMPTZ '2026-05-01T00:00:00.000Z')")
+    const escapeSql = (value) => String(value).replaceAll("'", "''")
+    const jsonLiteral = (value) => "CAST('" + escapeSql(JSON.stringify(value)) + "' AS JSON)"
+    const operationDatabase = (tx) => ({
+      queryJson: tx.queryJson,
+      run: tx.run,
+      transaction: (work) => Promise.resolve(work(tx)),
+    })
+    const createOperationPayloadTable = (tx, tableName, rows) => {
+      return tx.run(\`
+        CREATE TEMP TABLE \${tableName} AS
+        SELECT
+          row_number() OVER () - 1 AS row_index,
+          row_json AS payload_json
+        FROM UNNEST(json_extract(\${jsonLiteral(rows)}, '$[*]')) AS rows(row_json)
+      \`)
+    }
 
     const settings = {
       humanJudgmentMode: 'prompt',
@@ -2466,6 +2482,67 @@ test('project transfer commit writer writes judgment assessment and human review
       sourcePromptId: 'source-prompt-decision',
       updatedAt: '2026-05-03T00:00:00.000Z',
     })
+    const newJudgmentPayload = getJudgmentPayload('source-judgment-new', 'source-decision-new', 'new-answer', null, 'exported-new-label')
+    const reusedJudgmentPayload = getJudgmentPayload('source-judgment-reuse', 'source-decision-reuse', 'reuse-answer', 77, 'exported-reuse-label')
+    const stagedNewJudgmentPayload = {
+      ...newJudgmentPayload,
+      answeredOriginal: 'new-answer-staged',
+      answeredOriginalAsArray: ['new-answer-staged'],
+      explanation: 'new-answer-staged explanation',
+      quotes: [{quote: 'new-answer-staged quote'}],
+    }
+    const newAssessmentPayload = {
+      assessmentComment: 'New assessment',
+      assessmentIsCorrect: false,
+      provenance: {sourceJudgmentId: 'source-judgment-new'},
+      signature: {},
+      sourceJudgmentAssessmentId: 'source-assessment-new',
+      sourceJudgmentId: 'source-judgment-new',
+    }
+    const stagedNewAssessmentPayload = {...newAssessmentPayload, assessmentIsCorrect: true}
+    const reusedAssessmentPayload = {
+      assessmentComment: 'Reused assessment',
+      assessmentIsCorrect: true,
+      provenance: {sourceJudgmentId: 'source-judgment-reuse'},
+      signature: {},
+      sourceJudgmentAssessmentId: 'source-assessment-reuse',
+      sourceJudgmentId: 'source-judgment-reuse',
+    }
+    const humanSummaryPayload = {
+      answer: 'yes',
+      humanReviewInputSignature: {article: 'source-decision-new'},
+      humanReviewInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+      origin: 'manual_override',
+      provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: null},
+      signature: {},
+      sourceArticleId: 'source-decision-new',
+      sourceHumanJudgmentSummaryId: 'source-human-summary',
+      sourceProjectId: 'source-project',
+    }
+    const humanJudgmentPayload = {
+      answer: 'include',
+      comment: 'Human comment',
+      humanReviewInputSignature: {article: 'source-decision-new', prompt: 'decision'},
+      humanReviewInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+      isAnswered: true,
+      provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: null, sourcePromptId: 'source-prompt-decision'},
+      signature: {},
+      sourceArticleId: 'source-decision-new',
+      sourceHumanJudgmentId: 'source-human-judgment',
+      sourceProjectId: 'source-project',
+      sourcePromptId: 'source-prompt-decision',
+    }
+    const reviewPayload = {
+      humanReviewInputSignature: {article: 'source-decision-new', sections: {title: true}},
+      humanReviewInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+      opened: true,
+      provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: null},
+      sections: {title: {comment: 'Reviewed title', reviewed: true}},
+      signature: {},
+      sourceArticleId: 'source-decision-new',
+      sourceProjectId: 'source-project',
+      sourceReviewId: 'source-review',
+    }
     const targetPlan = {
       articleMatches: [
         {
@@ -2609,97 +2686,55 @@ test('project transfer commit writer writes judgment assessment and human review
     const plan = getBasePlan(targetPlan, dependencyResolution)
     plan.packageWarnings = packageWarnings
     plan.summary = {...plan.summary, packageWarnings, warningCount: packageWarnings.length}
-    const writeResult = await writeProjectTransferCommitAppTables({
-      commitId: 'commit-decision-writer',
-      now,
-      payloads: {
-        articles: [newArticle, reusedArticle],
-        humanJudgmentSummaries: [
-          {
-            answer: 'yes',
-            humanReviewInputSignature: {article: 'source-decision-new'},
-            humanReviewInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
-            origin: 'manual_override',
-            provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: null},
-            signature: {},
-            sourceArticleId: 'source-decision-new',
-            sourceHumanJudgmentSummaryId: 'source-human-summary',
-            sourceProjectId: 'source-project',
-          },
-        ],
-        humanJudgments: [
-          {
-            answer: 'include',
-            comment: 'Human comment',
-            humanReviewInputSignature: {article: 'source-decision-new', prompt: 'decision'},
-            humanReviewInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
-            isAnswered: true,
-            provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: null, sourcePromptId: 'source-prompt-decision'},
-            signature: {},
-            sourceArticleId: 'source-decision-new',
-            sourceHumanJudgmentId: 'source-human-judgment',
-            sourceProjectId: 'source-project',
-            sourcePromptId: 'source-prompt-decision',
-          },
-        ],
-        judgmentAssessments: [
-          {
-            assessmentComment: 'New assessment',
-            assessmentIsCorrect: false,
-            provenance: {sourceJudgmentId: 'source-judgment-new'},
-            signature: {},
-            sourceJudgmentAssessmentId: 'source-assessment-new',
-            sourceJudgmentId: 'source-judgment-new',
-          },
-          {
-            assessmentComment: 'Reused assessment',
-            assessmentIsCorrect: true,
-            provenance: {sourceJudgmentId: 'source-judgment-reuse'},
-            signature: {},
-            sourceJudgmentAssessmentId: 'source-assessment-reuse',
-            sourceJudgmentId: 'source-judgment-reuse',
-          },
-        ],
-        judgments: [
-          getJudgmentPayload('source-judgment-new', 'source-decision-new', 'new-answer', null, 'exported-new-label'),
-          getJudgmentPayload('source-judgment-reuse', 'source-decision-reuse', 'reuse-answer', 77, 'exported-reuse-label'),
-        ],
-        models: [getModelPayload()],
-        project: getProjectPayload(settings),
-        projectArticles: [
-          {
-            provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: 'source-project'},
-            signature: {},
-            sourceArticleId: 'source-decision-new',
-            sourceProjectArticleId: 'source-project-article-decision',
-            sourceProjectId: 'source-project',
-          },
-        ],
-        projectPrompts: [projectPromptPayload],
-        prompts: [promptPayload],
-        reviews: [
-          {
-            humanReviewInputSignature: {article: 'source-decision-new', sections: {title: true}},
-            humanReviewInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
-            opened: true,
-            provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: null},
-            sections: {title: {comment: 'Reviewed title', reviewed: true}},
-            signature: {},
-            sourceArticleId: 'source-decision-new',
-            sourceProjectId: 'source-project',
-            sourceReviewId: 'source-review',
-          },
-        ],
-      },
-      plan,
-      promotion: {
-        articleCreates: [{article: newArticle, sourceArticleId: 'source-decision-new'}],
-        articleFieldFills: [],
-        manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-decision-writer', updatedAt: now.toISOString()},
-        promotionPathByPackagePath: {},
-      },
-      schemaVersion: 1,
-      sessionId: 'session-decision-writer',
+    const payloads = {
+      articles: [newArticle, reusedArticle],
+      humanJudgmentSummaries: [humanSummaryPayload],
+      humanJudgments: [humanJudgmentPayload],
+      judgmentAssessments: [newAssessmentPayload, reusedAssessmentPayload],
+      judgments: [newJudgmentPayload, reusedJudgmentPayload],
+      models: [getModelPayload()],
+      project: getProjectPayload(settings),
+      projectArticles: [
+        {
+          provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: 'source-project'},
+          signature: {},
+          sourceArticleId: 'source-decision-new',
+          sourceProjectArticleId: 'source-project-article-decision',
+          sourceProjectId: 'source-project',
+        },
+      ],
+      projectPrompts: [projectPromptPayload],
+      prompts: [promptPayload],
+      reviews: [reviewPayload],
+    }
+    const promotion = {
+      articleCreates: [{article: newArticle, sourceArticleId: 'source-decision-new'}],
+      articleFieldFills: [],
+      manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-decision-writer', updatedAt: now.toISOString()},
+      promotionPathByPackagePath: {},
+    }
+    const operationTables = getProjectTransferOperationTableNames('commit_decision_writer')
+    const writeResult = await database.transaction(async (tx) => {
+      await createOperationPayloadTable(tx, operationTables.tableNames.articles, [newArticle, reusedArticle])
+      await createOperationPayloadTable(tx, operationTables.tableNames.articleImportRoutes, [])
+      await createOperationPayloadTable(tx, operationTables.tableNames.projectArticles, payloads.projectArticles)
+      await createOperationPayloadTable(tx, operationTables.tableNames.judgments, [stagedNewJudgmentPayload, reusedJudgmentPayload])
+      await createOperationPayloadTable(tx, operationTables.tableNames.judgmentAssessments, [stagedNewAssessmentPayload, reusedAssessmentPayload])
+      await createOperationPayloadTable(tx, operationTables.tableNames.humanJudgments, [{...humanJudgmentPayload, answer: 'exclude-staged'}])
+      await createOperationPayloadTable(tx, operationTables.tableNames.humanJudgmentSummaries, [{...humanSummaryPayload, answer: 'maybe'}])
+      await createOperationPayloadTable(tx, operationTables.tableNames.reviews, [{...reviewPayload, sections: {title: {comment: 'Reviewed title staged', reviewed: true}}}])
+
+      return writeProjectTransferCommitAppTables({
+        commitId: 'commit-decision-writer',
+        database: operationDatabase(tx),
+        now,
+        operationTables,
+        payloads,
+        plan,
+        promotion,
+        schemaVersion: 1,
+        sessionId: 'session-decision-writer',
+      })
     })
     const targetNewArticleId = writeResult.articleIdBySourceId['source-decision-new']
     const [newJudgmentRow] = await database.queryJson("SELECT id, article_id AS articleId, project_id AS projectId, snapshot_project_id AS snapshotProjectId, snapshot_project_model_name AS snapshotProjectModelName, is_answered AS isAnswered, answered_original AS answeredOriginal, confidence_original AS confidenceOriginal, delete_generation::INTEGER AS deleteGeneration, deleted_at AS deletedAt FROM app.judgment WHERE article_id = '" + targetNewArticleId + "'")
@@ -2725,7 +2760,7 @@ test('project transfer commit writer writes judgment assessment and human review
   `)
 
   expect(result.newJudgmentRow).toMatchObject({
-    answeredOriginal: 'new-answer',
+    answeredOriginal: 'new-answer-staged',
     confidenceOriginal: 50,
     deleteGeneration: 0,
     deletedAt: null,
@@ -2735,16 +2770,16 @@ test('project transfer commit writer writes judgment assessment and human review
     snapshotProjectModelName: 'exported-new-label',
   })
   expect(result.reusedJudgmentRow.snapshotProjectModelName).toBe('target-existing-label')
-  expect(result.newAssessmentRow).toMatchObject({assessmentIsCorrect: false, judgmentId: result.newJudgmentRow.id})
+  expect(result.newAssessmentRow).toMatchObject({assessmentIsCorrect: true, judgmentId: result.newJudgmentRow.id})
   expect(result.reusedAssessmentCount).toBe(1)
   expect(result.humanJudgmentRow).toMatchObject({
-    answer: 'include',
+    answer: 'exclude-staged',
     articleId: result.targetNewArticleId,
     projectId: result.targetProjectId,
     promptId: 'target-prompt',
   })
   expect(result.humanSummaryRow).toMatchObject({
-    answer: 'yes',
+    answer: 'maybe',
     articleId: result.targetNewArticleId,
     origin: 'manual_override',
     projectId: result.targetProjectId,
@@ -2754,11 +2789,263 @@ test('project transfer commit writer writes judgment assessment and human review
     opened: true,
     projectId: result.targetProjectId,
     reviewedTitle: true,
-    reviewedTitleComment: 'Reviewed title',
+    reviewedTitleComment: 'Reviewed title staged',
   })
   expect(result.warningCodes).toContain('currentReviewRowsJudgmentInputSignature')
   expect(result.warningCodes).toContain('providerModelDependencyNote')
   expect(result.warningCodes).toContain('equivalentTargetJudgmentReused')
+})
+
+test('project transfer commit writer rolls back partial set-based judgment writes on human review failure', () => {
+  const result = runCommitWriterScript<{
+    articleCount: number
+    assessmentCount: number
+    errorMessage: string | null
+    judgmentCount: number
+    projectCount: number
+  }>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const promptHash = computePromptContentHash('Rollback prompt?', null, 'Rollback', 'system')
+    await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('target-rollback-prompt', 'Rollback prompt?', NULL, 'Rollback', 'system', '" + promptHash + "', FALSE)")
+    const escapeSql = (value) => String(value).replaceAll("'", "''")
+    const jsonLiteral = (value) => "CAST('" + escapeSql(JSON.stringify(value)) + "' AS JSON)"
+    const operationDatabase = (tx) => ({
+      queryJson: tx.queryJson,
+      run: tx.run,
+      transaction: (work) => Promise.resolve(work(tx)),
+    })
+    const createOperationPayloadTable = (tx, tableName, rows) => {
+      return tx.run(\`
+        CREATE TEMP TABLE \${tableName} AS
+        SELECT
+          row_number() OVER () - 1 AS row_index,
+          row_json AS payload_json
+        FROM UNNEST(json_extract(\${jsonLiteral(rows)}, '$[*]')) AS rows(row_json)
+      \`)
+    }
+    const settings = {humanJudgmentMode: 'summary', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const article = {
+      articleId: 'legacy-rollback-article',
+      articleTitle: 'Rollback Article',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-rollback-article'},
+      signature: {identifierKeys: [], title: 'Rollback Article'},
+      sourceArticleId: 'source-rollback-article',
+    }
+    const promptPayload = {
+      archived: false,
+      contentHash: promptHash,
+      originalText: 'Rollback prompt?',
+      promptHeading: 'Rollback',
+      provenance: {sourcePromptId: 'source-rollback-prompt'},
+      signature: {contentHash: promptHash},
+      sourcePromptId: 'source-rollback-prompt',
+      transformedText: null,
+      type: 'system',
+    }
+    const projectPromptPayload = {
+      archived: false,
+      enabled: true,
+      order: 0,
+      provenance: {sourceProjectId: 'source-project', sourcePromptId: 'source-rollback-prompt'},
+      signature: {},
+      sourceProjectId: 'source-project',
+      sourceProjectPromptId: 'source-rollback-project-prompt',
+      sourcePromptId: 'source-rollback-prompt',
+    }
+    const projectArticle = {
+      provenance: {sourceArticleId: 'source-rollback-article', sourceProjectId: 'source-project'},
+      signature: {},
+      sourceArticleId: 'source-rollback-article',
+      sourceProjectArticleId: 'source-rollback-project-article',
+      sourceProjectId: 'source-project',
+    }
+    const judgment = {
+      answeredOriginal: 'rollback-answer',
+      answeredOriginalAsArray: ['rollback-answer'],
+      chunkingStrategy: null,
+      confidenceOriginal: 50,
+      contentSettings: settings,
+      createdAt: '2026-05-02T00:00:00.000Z',
+      deleteGeneration: 0,
+      explanation: 'Rollback explanation',
+      isAnswered: true,
+      judgmentInputSignature: {article: 'source-rollback-article', prompt: 'rollback'},
+      judgmentInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+      provenance: {sourceArticleId: 'source-rollback-article', sourceModelId: 'source-model', sourcePromptId: 'source-rollback-prompt'},
+      quotes: [{quote: 'rollback quote'}],
+      signature: {},
+      snapshotProjectModelName: 'rollback model',
+      sourceArticleId: 'source-rollback-article',
+      sourceJudgmentId: 'source-rollback-judgment',
+      sourceModelId: 'source-model',
+      sourceProjectId: 'source-project',
+      sourcePromptId: 'source-rollback-prompt',
+      updatedAt: '2026-05-03T00:00:00.000Z',
+    }
+    const assessment = {
+      assessmentComment: 'Rollback assessment',
+      assessmentIsCorrect: true,
+      provenance: {sourceJudgmentId: 'source-rollback-judgment'},
+      signature: {},
+      sourceJudgmentAssessmentId: 'source-rollback-assessment',
+      sourceJudgmentId: 'source-rollback-judgment',
+    }
+    const summaryA = {
+      answer: 'yes',
+      humanReviewInputSignature: {article: 'source-rollback-article'},
+      humanReviewInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+      origin: 'manual_override',
+      provenance: {sourceArticleId: 'source-rollback-article', sourceProjectId: 'source-project'},
+      signature: {},
+      sourceArticleId: 'source-rollback-article',
+      sourceHumanJudgmentSummaryId: 'source-rollback-summary-a',
+      sourceProjectId: 'source-project',
+    }
+    const summaryB = {...summaryA, answer: 'no', sourceHumanJudgmentSummaryId: 'source-rollback-summary-b'}
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'create',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: [],
+          packageArticleId: 'legacy-rollback-article',
+          selectedTargetArticleId: null,
+          sourceArticleId: 'source-rollback-article',
+        },
+      ],
+      judgmentAssessmentPlan: [
+        {
+          action: 'insert',
+          conflictCodes: [],
+          sourceJudgmentAssessmentId: 'source-rollback-assessment',
+          sourceJudgmentId: 'source-rollback-judgment',
+          targetAssessmentId: null,
+          targetJudgmentId: 'new:judgment:source-rollback-judgment',
+        },
+      ],
+      judgmentPlan: [
+        {
+          action: 'insert',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          physicalKey: 'rollback-physical',
+          provenanceKind: 'currentReviewRows',
+          reviewVisibleKey: 'rollback-visible',
+          sourceJudgmentId: 'source-rollback-judgment',
+          targetArticleId: 'new:article:source-rollback-article',
+          targetJudgmentId: 'new:judgment:source-rollback-judgment',
+          targetModelId: 'target-model',
+          targetPromptId: 'target-rollback-prompt',
+        },
+      ],
+      humanReviewPlan: [
+        {
+          action: 'insert',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          kind: 'humanJudgmentSummary',
+          provenanceKind: 'currentReviewRows',
+          sourceId: 'source-rollback-summary-a',
+          targetArticleId: 'new:article:source-rollback-article',
+          targetPromptId: null,
+          uniqueKey: 'summary-a',
+        },
+        {
+          action: 'insert',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          kind: 'humanJudgmentSummary',
+          provenanceKind: 'currentReviewRows',
+          sourceId: 'source-rollback-summary-b',
+          targetArticleId: 'new:article:source-rollback-article',
+          targetPromptId: null,
+          uniqueKey: 'summary-b',
+        },
+      ],
+      projectPromptPlan: [
+        {
+          enabled: true,
+          metadata: {archived: false},
+          order: 0,
+          sourceProjectPromptId: 'source-rollback-project-prompt',
+          sourcePromptId: 'source-rollback-prompt',
+          targetPromptId: 'target-rollback-prompt',
+        },
+      ],
+      promptPlan: [
+        {
+          action: 'reuse',
+          computedContentHash: promptHash,
+          packageContentHash: promptHash,
+          sourcePromptId: 'source-rollback-prompt',
+          targetPromptId: 'target-rollback-prompt',
+        },
+      ],
+    }
+    const payloads = {
+      articles: [article],
+      humanJudgmentSummaries: [summaryA, summaryB],
+      judgmentAssessments: [assessment],
+      judgments: [judgment],
+      models: [getModelPayload()],
+      project: getProjectPayload(settings),
+      projectArticles: [projectArticle],
+      projectPrompts: [projectPromptPayload],
+      prompts: [promptPayload],
+    }
+    const promotion = {
+      articleCreates: [{article, sourceArticleId: 'source-rollback-article'}],
+      articleFieldFills: [],
+      manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-set-based-rollback', updatedAt: now.toISOString()},
+      promotionPathByPackagePath: {},
+    }
+    const operationTables = getProjectTransferOperationTableNames('commit_set_based_rollback')
+    const errorMessage = await catchMessage(() => {
+      return database.transaction(async (tx) => {
+        await createOperationPayloadTable(tx, operationTables.tableNames.articles, [article])
+        await createOperationPayloadTable(tx, operationTables.tableNames.articleImportRoutes, [])
+        await createOperationPayloadTable(tx, operationTables.tableNames.projectArticles, [projectArticle])
+        await createOperationPayloadTable(tx, operationTables.tableNames.judgments, [judgment])
+        await createOperationPayloadTable(tx, operationTables.tableNames.judgmentAssessments, [assessment])
+        await createOperationPayloadTable(tx, operationTables.tableNames.humanJudgmentSummaries, [summaryA, summaryB])
+        await createOperationPayloadTable(tx, operationTables.tableNames.humanJudgments, [])
+        await createOperationPayloadTable(tx, operationTables.tableNames.reviews, [])
+
+        return writeProjectTransferCommitAppTables({
+          commitId: 'commit-set-based-rollback',
+          database: operationDatabase(tx),
+          now,
+          operationTables,
+          payloads,
+          plan: getBasePlan(targetPlan, dependencyResolution),
+          promotion,
+          schemaVersion: 1,
+          sessionId: 'session-set-based-rollback',
+        })
+      })
+    })
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+    const [articleCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.article WHERE article_id = 'legacy-rollback-article'")
+    const [judgmentCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.judgment WHERE answered_original = 'rollback-answer'")
+    const [assessmentCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.judgment_assessment WHERE assessment_comment = 'Rollback assessment'")
+
+    console.log(JSON.stringify({
+      articleCount: articleCount.count,
+      assessmentCount: assessmentCount.count,
+      errorMessage,
+      judgmentCount: judgmentCount.count,
+      projectCount: projectCount.count,
+    }))
+  `)
+
+  expect(result.errorMessage).toContain('duplicate judgment_human_summary after remap')
+  expect(result.projectCount).toBe(0)
+  expect(result.articleCount).toBe(0)
+  expect(result.judgmentCount).toBe(0)
+  expect(result.assessmentCount).toBe(0)
 })
 
 test('project transfer commit writer blocks active judgment review-visible conflicts before insert', () => {
