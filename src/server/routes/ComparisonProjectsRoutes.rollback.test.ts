@@ -3231,8 +3231,8 @@ test('comparison project conflict resolution import analyze returns row details 
     skippedConflicting: 0,
     skippedExisting: 1,
     skippedInvalidValue: 1,
-    skippedNoTargetMatch: 0,
-    skippedNoUsableKey: 1,
+    skippedNoTargetMatch: 1,
+    skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 1,
   })
@@ -3271,9 +3271,9 @@ test('comparison project conflict resolution import analyze returns row details 
       targetArticleIds: [],
     },
     {
-      matchKey: null,
-      matchKind: null,
-      reason: 'no-usable-key',
+      matchKey: 'no key source',
+      matchKind: 'title',
+      reason: 'no-target-match',
       sourceResolutionId: 'source-resolution-no-key',
       targetArticleId: null,
       targetArticleIds: [],

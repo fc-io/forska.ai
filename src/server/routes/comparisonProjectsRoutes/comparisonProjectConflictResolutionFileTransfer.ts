@@ -9,6 +9,7 @@ export type ComparisonProjectConflictResolutionTransferIdentifierKind = 'arxiv' 
 export type ComparisonProjectConflictResolutionTransferMatchKind =
   | ComparisonProjectConflictResolutionTransferIdentifierKind
   | 'id-title'
+  | 'title'
 
 export type ComparisonProjectConflictResolutionTransferSourceRow = {
   arxivId?: string | null
@@ -46,8 +47,8 @@ export type ComparisonProjectConflictResolutionTransferResolutionV1 = {
 }
 
 export type ComparisonProjectConflictResolutionTransferRowV1 = {
-  sourceResolutionId: string
-  sourceArticleRowId: string
+  sourceResolutionId: string | null
+  sourceArticleRowId: string | null
   externalArticleId: string | null
   title: string | null
   doi?: string | null
@@ -91,8 +92,8 @@ const TransferIdentifier = arktype({
 })
 const TransferResolution = arktype({mode: TransferResolutionMode, value: 'string', label: 'string'})
 const TransferRow = arktype({
-  sourceResolutionId: 'string',
-  sourceArticleRowId: 'string',
+  sourceResolutionId: 'string | null',
+  sourceArticleRowId: 'string | null',
   externalArticleId: 'string | null',
   title: 'string | null',
   'doi?': 'string | null',
@@ -170,6 +171,10 @@ export const getComparisonProjectConflictResolutionTransferIdTitleKey = (params:
   const title = normalizeComparisonProjectConflictResolutionTransferTitle(params.title)
 
   return externalArticleId && title ? `${externalArticleId}${idTitleKeySeparator}${title}` : null
+}
+
+export const getComparisonProjectConflictResolutionTransferTitleKey = (params: {title?: string | null}) => {
+  return normalizeComparisonProjectConflictResolutionTransferTitle(params.title)
 }
 
 const getComparisonProjectConflictResolutionTransferIdentifierKind = (value: string | null | undefined) => {
@@ -314,8 +319,13 @@ export const getComparisonProjectConflictResolutionTransferMatchKeys = (
     },
   )
   const idTitleKey = getComparisonProjectConflictResolutionTransferIdTitleKey(row)
+  const titleKey = getComparisonProjectConflictResolutionTransferTitleKey(row)
 
-  return idTitleKey ? [...identifierMatchKeys, {kind: 'id-title', value: idTitleKey}] : identifierMatchKeys
+  return idTitleKey
+    ? [...identifierMatchKeys, {kind: 'id-title', value: idTitleKey}]
+    : titleKey
+      ? [...identifierMatchKeys, {kind: 'title', value: titleKey}]
+      : identifierMatchKeys
 }
 
 export const getComparisonProjectConflictResolutionTransferFilename = (comparisonProjectId: string) => {

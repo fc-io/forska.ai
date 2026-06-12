@@ -165,7 +165,7 @@ test('normalizes DOI identifiers for portable matching', () => {
   ])
 })
 
-test('does not treat title-only rows or source article row ids as portable match keys', () => {
+test('treats title-only rows as portable match keys without using source article row ids', () => {
   const row = getTransferRow({
     sourceArticleRowId: 'external-1',
     externalArticleId: null,
@@ -173,5 +173,7 @@ test('does not treat title-only rows or source article row ids as portable match
     identifiers: [],
   })
 
-  expect(getComparisonProjectConflictResolutionTransferMatchKeys(row)).toEqual([])
+  expect(getComparisonProjectConflictResolutionTransferMatchKeys(row)).toEqual([
+    {kind: 'title', value: 'article title'},
+  ])
 })

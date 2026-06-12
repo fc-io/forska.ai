@@ -1,0 +1,804 @@
+{
+  "format": "forska.comparisonProject.conflictResolution.transfer",
+  "version": 1,
+  "exportedAt": "2026-06-12T12:13:51.571Z",
+  "source": {
+    "comparisonProjectId": "titles-resolution-only",
+    "comparisonProjectName": "Titles resolution only",
+    "comparisonProjectDescription": null
+  },
+  "rows": [
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "2011～2012年某院抗菌药物的应用情况对比分析",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "A Prospective, Randomized Clinical Trial to Treat Intra-abdominal Infection Preventively After Pancreatic Surgery Based on Serum Lactate Changes",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "A randomized trial to compare procalcitonin and C-reactive protein in assessing severity of sepsis and in guiding antibacterial therapy in Egyptian critically ill patients",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "An Effectiveness Trial Examining the Addition of Zinc to the Current Case Management Package of Diarrhoea in a Primary Health Care Setting. Phase I",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Antimicrobial stewardship program in a developing country: the epidemiological barrier: [letter to the editor]",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Audit and feedback: effects on professional obstetrical practice and healthcare outcomes in a university hospital.",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Brief educational interventions to improve performance on novel quality metrics in ambulatory settings in Kenya: A multi-site pre-post effectiveness trial.",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Clinical Impact of a Multiplex Rapid Diagnostic Pneumonia Panel Testing in Critically-ill Patients with Severe Hospital-acquired Pneumonia, Ventilator-associated Pneumonia and Community-acquired Pneumonia with High Risk of Multidrug Resistant Pathogen",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Clinical pharmacist-initiated assessment and amelioration of appropriate antibiotic use in surgical units at a South Indian tertiary care hospital - A handshake approach.",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Cost-effectiveness of antimicrobial stewardship programs in Indian tertiary care hospitals: A Markov model analysis comparing ASP and non-ASP intervention scenarios",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Diagnostic Performance and Impact of a Multiplex PCR Pneumonia Panel on the Early Adaptation of Antimicrobial Therapy in ICU Patients With Severe Pneumonia. A Prospective Multicentric Observational Study",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Educational interventions on reducing antibiotic over-prescribing among children with upper respiratory infections (URIs): a clustered randomized controlled trial in rural Guangxi, China",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Effect of Continuous Evidence-based Feed Back to Increase Appropriate Use of Antibiotics",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Effect of Single-Dose Antibiotic Prophylaxis versus Conventional Antibiotic Therapy in Surgery: A Randomized Controlled Trial in a Public Teaching Hospital",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Effect of adopting integrated management of childhood illness guidelines on drug use at a primary health care center: a case study from Egypt",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Enhancing quality of health care delivered to under 5 children in Kibra informal settlement of Nairobi, Kenya, by using mHealth platform with electronic clinical decision support system.",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Impact of an Antimicrobial Stewardship Intervention on Within- and Between-Patient Daptomycin Resistance Evolution in Vancomycin-Resistant Enterococcus faecium.",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Introduction of Nitrofurantoin in Place of Ciprofloxacin in Patients of Uncomplicated Urinary Tract Infection: a Controlled Clinical Trial to Establish the Relationship Between Revival and Associated Shift in Sensitivity Pattern of the Causative Microbes",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Optimization of Antimicrobial Therapy in Chronic Kidney Disease Patients with Bacteremia: A Pragmatic Approach - NIL",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Optimizing the Management of Pediatric Acute Diarrhoeal Disease in Botswana",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Post-Operative Antibiotic Efficacy in Clean Contaminated Head and Neck Surgery: A Randomized Controlled Trial",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Reducing Antimicrobial Overuse Through Targeted Therapy for Patients With Community-Acquired Pneumonia",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Tackling antimicrobial resistance: developing and implementing antimicrobial stewardship interventions in four African commonwealth countries through a health partnership model.",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "The Potential Effects of Implementing an Antibiotic Stewardship Program by Integrating It with Medication Therapy Service in a Low-Income Serving Clinic - A Single-Center Experience.",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "The effect of limiting antimicrobial therapy duration on antimicrobial resistance in the critical care setting.",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "The impact of policy guidelines on hospital antibiotic use over a decade: A segmented time series analysis",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Trends in Antimicrobial Consumption in Tertiary Care Hospitals in Costa Rica from 2017 to 2021: A Comparative Analysis of Defined Daily Doses per 100 Bed Days and per 100 Discharges.",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Use of monitoring indicators in hospital management of antimicrobials.",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Use of surgical antibiotic prophylaxis and the prevalence and risk factors associated with surgical site infection in a tertiary hospital in Malaysia.",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "Prospective Multicenter Randomized 3 Phase Study Evaluating the Role of Prolonged Antibiotic Prophylaxis as a Measure to Reduce the Incidence of Postoperative Complications After Radical Cystectomy With ERAS Protocol",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "剖宫产围手术期预防应用抗生素的干预对照研究",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "剖宫产术术后应用抗生素时间的效果分析",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "基层医院抗菌药物不合理应用的分析",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "子宫全切术预防性应用抗生素两种方法的比较",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "no",
+        "label": "no"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "我院普外科三种清洁手术围术期预防性应用抗菌药物情况分析",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "我院限制门急诊抗菌药物处方权限的实践和体会",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "抗菌药物不合理应用分析及药学监护效果探讨",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "抗菌药物在儿科临床治疗中的合理应用",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "抗菌药物管理（AMS）协作干预促进白内障手术围手术期合理使用抗菌药物的效果",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "探究抗菌药物在儿科临床治疗中的合理应用",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "肺部感染评分在老年重症肺炎患者抗菌药物选择中的应用效果",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "肺部感染评分对老年重症肺炎患者抗菌药物选择的干预及对预后的影响",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "降钙素原动态监测对社区获得性肺炎抗菌药物应用的指导价值",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    },
+    {
+      "sourceResolutionId": null,
+      "sourceArticleRowId": null,
+      "externalArticleId": null,
+      "title": "髋关节置换术围手术期抗菌药物预防使用干预前后对比研究",
+      "doi": null,
+      "pubmedId": null,
+      "arxivId": null,
+      "biorxivId": null,
+      "medrxivId": null,
+      "url": null,
+      "identifiers": [],
+      "resolution": {
+        "mode": "summary",
+        "value": "yes",
+        "label": "yes"
+      }
+    }
+  ]
+}

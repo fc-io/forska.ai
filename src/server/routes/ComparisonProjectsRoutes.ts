@@ -64,6 +64,8 @@ import {
   getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
+  getComparisonProjectConflictResolutionImportTitleKey,
+  getComparisonProjectConflictResolutionImportTitleTargetArticlesSql,
   mergeComparisonProjectConflictResolutionImportTargetArticleRows,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts'
 import {
@@ -1410,6 +1412,20 @@ const getConflictResolutionImportIdTitleKeys = (
   )
 }
 
+const getConflictResolutionImportTitleKeys = (
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[],
+) => {
+  return getUniqueStringValues(
+    sourceRows
+      .flatMap((row) => {
+        return getComparisonProjectConflictResolutionImportIdTitleKey(row)
+          ? []
+          : [getComparisonProjectConflictResolutionImportTitleKey(row) ?? '']
+      })
+      .filter(Boolean),
+  )
+}
+
 const getConflictResolutionImportSourceArticleIds = (
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[],
 ) => {
@@ -1465,6 +1481,7 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
   })
   const identifierKeys = getConflictResolutionImportIdentifierKeys(unmatchedSourceRows)
   const idTitleKeys = getConflictResolutionImportIdTitleKeys(unmatchedSourceRows)
+  const titleKeys = getConflictResolutionImportTitleKeys(unmatchedSourceRows)
   const identifierTargetRows =
     identifierKeys.length > 0
       ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
@@ -1487,11 +1504,23 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
           }),
         )
       : []
+  const titleTargetRows =
+    titleKeys.length > 0
+      ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
+          getComparisonProjectConflictResolutionImportTitleTargetArticlesSql({
+            articleIdentifierTable,
+            articleScopeConditions,
+            articleTable,
+            titleKeys,
+          }),
+        )
+      : []
 
   return mergeComparisonProjectConflictResolutionImportTargetArticleRows([
     ...articleIdTargetRows,
     ...identifierTargetRows,
     ...idTitleTargetRows,
+    ...titleTargetRows,
   ])
 }
 

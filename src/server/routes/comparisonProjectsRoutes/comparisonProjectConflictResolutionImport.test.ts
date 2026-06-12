@@ -21,6 +21,8 @@ import {
   getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
+  getComparisonProjectConflictResolutionImportTitleKey,
+  getComparisonProjectConflictResolutionImportTitleTargetArticlesSql,
   mergeComparisonProjectConflictResolutionImportTargetArticleRows,
   normalizeComparisonProjectConflictResolutionImportDoi,
   normalizeComparisonProjectConflictResolutionImportExternalArticleId,
@@ -183,8 +185,16 @@ test('target article queries are constrained by selected normalized matching key
     articleTable: 'app.article',
     idTitleKeys: [idTitleKey ?? ''],
   })
+  const titleKey = getComparisonProjectConflictResolutionImportTitleKey({title: ' A   Multi\nLine   Title '})
+  const titleSql = getComparisonProjectConflictResolutionImportTitleTargetArticlesSql({
+    articleIdentifierTable: 'app.article_identifier',
+    articleScopeConditions: ['EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)'],
+    articleTable: 'app.article',
+    titleKeys: [titleKey ?? ''],
+  })
 
   expect(idTitleKey).toBe('external-1\u001Fa multi line title')
+  expect(titleKey).toBe('a multi line title')
   expect(doiSql).toContain('doi_identifier.normalized_value IN (')
   expect(doiSql).toContain('10.1000/example')
   expect(doiSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
@@ -212,6 +222,11 @@ test('target article queries are constrained by selected normalized matching key
   expect(idTitleSql).toContain('strong_identifier.normalizedValue')
   expect(idTitleSql).toContain(idTitleKey ?? '')
   expect(idTitleSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
+  expect(titleSql).toContain('regexp_replace(LOWER(TRIM(COALESCE(a.article_title')
+  expect(titleSql).toContain('doi_identifier.doi AS doi')
+  expect(titleSql).toContain('strong_identifier.normalizedValue')
+  expect(titleSql).toContain(titleKey ?? '')
+  expect(titleSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
 })
 
 test('target article query rows merge DOI and id-title metadata by article id', () => {
@@ -388,6 +403,41 @@ test('adapts exported transfer rows into import planner source rows', () => {
   ])
 })
 
+test('adapts transfer rows with null source ids into generated import source ids', () => {
+  const rows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact({
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: comparisonProjectConflictResolutionTransferVersion,
+    exportedAt: '2026-06-10T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [
+      {
+        sourceResolutionId: null,
+        sourceArticleRowId: null,
+        externalArticleId: null,
+        title: 'Title only source',
+        identifiers: [],
+        resolution: {mode: 'summary', value: 'yes', label: 'Yes'},
+      },
+    ],
+  })
+
+  expect(rows).toMatchObject([
+    {
+      externalArticleId: null,
+      sourceArticleId: 'source-comparison-project-file:transfer-row-000001:article',
+      sourceArticleTitle: 'Title only source',
+      sourceExternalArticleId: null,
+      sourceResolutionId: 'source-comparison-project-file:transfer-row-000001:resolution',
+      sourceRowId: 'source-comparison-project-file:transfer-row-000001:resolution',
+      title: 'Title only source',
+    },
+  ])
+})
+
 test('analyzes transfer artifact rows with stable importable and skipped details', () => {
   const artifact = {
     format: comparisonProjectConflictResolutionTransferFormat,
@@ -492,8 +542,8 @@ test('analyzes transfer artifact rows with stable importable and skipped details
     skippedConflicting: 0,
     skippedExisting: 1,
     skippedInvalidValue: 1,
-    skippedNoTargetMatch: 0,
-    skippedNoUsableKey: 1,
+    skippedNoTargetMatch: 1,
+    skippedNoUsableKey: 0,
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 1,
   })
@@ -535,9 +585,9 @@ test('analyzes transfer artifact rows with stable importable and skipped details
       targetArticleIds: [],
     },
     {
-      matchKey: null,
-      matchKind: null,
-      reason: 'no-usable-key',
+      matchKey: 'no key source',
+      matchKind: 'title',
+      reason: 'no-target-match',
       sourceResolutionId: 'source-resolution-no-key',
       targetArticleId: null,
       targetArticleIds: [],
@@ -791,6 +841,48 @@ test('import plan matches articles by normalized external ID and title', () => {
       resolutionValue: 'yes',
       sourceRows: [{matchKind: 'id-title', sourceRowId: 'source-row-1'}],
       targetArticleId: 'target-article-1',
+    },
+  ])
+})
+
+test('import plan matches title-only source rows by exact normalized title', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({doi: null, externalArticleId: null, sourceExternalArticleId: null, title: ' A Shared Title '}),
+    ],
+    targetArticles: [getTargetArticle({doi: null, externalArticleId: 'target-ext-1', title: 'a  shared\ntitle'})],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [{matchKey: 'a shared title', matchKind: 'title', sourceRowId: 'source-row-1'}],
+      targetArticleId: 'target-article-1',
+    },
+  ])
+})
+
+test('import plan skips ambiguous title-only target matches', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: null, externalArticleId: null, sourceExternalArticleId: null, title: 'Shared'})],
+    targetArticles: [
+      getTargetArticle({articleId: 'target-a', doi: null, externalArticleId: 'target-a-ext', title: 'Shared'}),
+      getTargetArticle({articleId: 'target-b', doi: null, externalArticleId: 'target-b-ext', title: ' Shared '}),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts({ambiguousTarget: 1}))
+  expect(plan.skippedRows).toEqual([{reason: 'ambiguous-target-match', sourceRowId: 'source-row-1'}])
+  expect(plan.warnings).toMatchObject([
+    {
+      code: 'ambiguous-target-match',
+      matchKey: 'shared',
+      matchKind: 'title',
+      targetArticles: [{articleId: 'target-a'}, {articleId: 'target-b'}],
     },
   ])
 })
@@ -1337,7 +1429,7 @@ test('import plan ignores invalid resolution values on skipped source rows', () 
 
 test('import plan skips source rows without a usable matching key', () => {
   const plan = getPlan({
-    sourceRows: [getSourceRow({doi: null, externalArticleId: ' ', title: 'Title only'})],
+    sourceRows: [getSourceRow({doi: null, externalArticleId: ' ', sourceExternalArticleId: null, title: ' '})],
     targetArticles: [getTargetArticle()],
   })
 
