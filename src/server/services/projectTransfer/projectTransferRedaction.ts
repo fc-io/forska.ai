@@ -36,6 +36,8 @@ const localPathPattern = /(^|[\s"'(=:])((\/Users\/|\/home\/|\/private\/|\/tmp\/|
 const secretPattern =
   /(api[_-]?key|secret|password|passwd|token|bearer)\s*[:=]\s*\S+|sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}/i
 const urlProtocolPattern = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
+const embeddedUrlPattern = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>"'`]+/g
+const trailingUrlPunctuationPattern = /[),.;\]}]+$/
 const privateHostnamePattern = /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/
 const fullTextDerivedArticleFields = [
   'fullText',
@@ -111,6 +113,20 @@ const getUrlValue = (value: string) => {
   return urlProtocolPattern.test(value.trim()) ? parseUrlValue(value) : null
 }
 
+const normalizeUrlCandidate = (value: string) => {
+  return value.replace(trailingUrlPunctuationPattern, '')
+}
+
+const getEmbeddedUrlValues = (value: string) => {
+  return Array.from(value.matchAll(embeddedUrlPattern))
+    .map((match) => {
+      return parseUrlValue(normalizeUrlCandidate(match[0] ?? ''))
+    })
+    .filter((url): url is URL => {
+      return url !== null
+    })
+}
+
 const isPrivateHostname = (hostname: string) => {
   const normalized = hostname.toLowerCase()
 
@@ -123,11 +139,36 @@ const isPrivateHostname = (hostname: string) => {
   )
 }
 
+const isLocalUrlValue = (url: URL) => {
+  return url.protocol === 'file:' || isPrivateHostname(url.hostname)
+}
+
+const hasUnsafeUrlParts = (url: URL) => {
+  return url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== ''
+}
+
+const getUrlValues = (value: string) => {
+  const fullUrl = getUrlValue(value)
+
+  return fullUrl === null ? getEmbeddedUrlValues(value) : [fullUrl]
+}
+
+const getValueWithoutNonLocalUrls = (value: string) => {
+  return value.replace(embeddedUrlPattern, (candidate) => {
+    const url = parseUrlValue(normalizeUrlCandidate(candidate))
+
+    return url !== null && !isLocalUrlValue(url) ? '' : candidate
+  })
+}
+
 const getStringRedactionMatch = (value: string): RedactionMatch | null => {
-  const url = getUrlValue(value)
-  const isLocalUrl = url && (url.protocol === 'file:' || isPrivateHostname(url.hostname))
-  const hasUnsafeUrlParts = url && (url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '')
+  const urlValues = getUrlValues(value)
+  const isLocalUrl = urlValues.some(isLocalUrlValue)
+  const hasUnsafeNonLocalUrlParts = urlValues.some((url) => {
+    return !isLocalUrlValue(url) && hasUnsafeUrlParts(url)
+  })
   const hasLocalPath = fileUrlPattern.test(value) || localPathPattern.test(value)
+  const valueWithoutNonLocalUrls = getValueWithoutNonLocalUrls(value)
 
   return isLocalUrl
     ? {
@@ -136,7 +177,7 @@ const getStringRedactionMatch = (value: string): RedactionMatch | null => {
         placeholder: redactedUrlPlaceholder,
         redacts: true,
       }
-    : hasUnsafeUrlParts
+    : hasUnsafeNonLocalUrlParts
       ? {
           code: 'nonLocalUrlPreserved',
           message: 'Non-local URL contains credentials, query parameters, or a fragment and was preserved unchanged.',
@@ -150,7 +191,7 @@ const getStringRedactionMatch = (value: string): RedactionMatch | null => {
             placeholder: redactedLocalPathPlaceholder,
             redacts: true,
           }
-        : secretPattern.test(value)
+        : secretPattern.test(valueWithoutNonLocalUrls)
           ? {
               code: 'providerSecretRedacted',
               message: 'Secret-like value was redacted from the package payload.',
@@ -541,6 +582,9 @@ const redactArticleRecord = (
         return redactStringField(recordValue, field, context)
       }
     }),
+    (recordValue) => {
+      return redactStringField(recordValue, 'articleTitle', context, true)
+    },
     (recordValue) => {
       return redactStringField(recordValue, 'articleSummary', context)
     },

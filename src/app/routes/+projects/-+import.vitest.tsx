@@ -641,15 +641,7 @@ describe('project import route', () => {
     }
   })
 
-  test('materializes models with the selected provider connection', async () => {
-    const secondConnection = {
-      ...mockState.providerConnectionsQueryResult.data.connections[0],
-      id: 'provider-target-2',
-      label: 'Second Target Provider',
-      models: [],
-    }
-    const originalConnections = mockState.providerConnectionsQueryResult.data.connections
-    mockState.providerConnectionsQueryResult.data.connections = [...originalConnections, secondConnection]
+  test('does not expose manual provider or model remapping controls', async () => {
     mockState.sessionQueryResult = {
       ...mockState.sessionQueryResult,
       data: getSession({
@@ -663,57 +655,12 @@ describe('project import route', () => {
     const {container, dispose} = await renderImportWizard()
 
     try {
-      const providerSelect = Array.from(container.querySelectorAll('label'))
-        .find((label) => {
-          return label.textContent?.includes('Existing enabled target connection')
-        })
-        ?.querySelector('select')
-      const remoteModelInput = container.querySelector('input[placeholder="Remote model id"]')
-      const materializeButton = Array.from(container.querySelectorAll('button')).find((button) => {
-        return button.textContent?.includes('Materialize model')
-      })
-
-      if (providerSelect instanceof HTMLSelectElement) {
-        providerSelect.value = 'provider-target-2'
-        providerSelect.dispatchEvent(new Event('change', {bubbles: true}))
-      }
-      if (remoteModelInput instanceof HTMLInputElement) {
-        remoteModelInput.value = 'remote-model-2'
-        remoteModelInput.dispatchEvent(new Event('input', {bubbles: true}))
-      }
-
-      materializeButton?.click()
-      await Promise.resolve()
-      await Promise.resolve()
-
-      expect(mockState.manualProviderModelInputs[0]).toMatchObject({
-        id: 'provider-target-2',
-        remoteModelId: 'remote-model-2',
-      })
-      expect(
-        mockState.resolveInputs.find((input) => {
-          return typeof input === 'object' && input !== null && 'materializedModels' in input
-        }),
-      ).toMatchObject({
-        materializedModels: [
-          {
-            sourceModelId: 'model-source-1',
-            targetModelId: 'materialized-model-1',
-            targetProviderConnectionId: 'provider-target-2',
-          },
-        ],
-        modelMaterializationRequests: [
-          {
-            remoteModelId: 'remote-model-2',
-            sourceModelId: 'model-source-1',
-            targetProviderConnectionId: 'provider-target-2',
-          },
-        ],
-        planRevision: 2,
-        sessionId: 'session-1',
-      })
+      expect(container.textContent).toContain('Provider and model dependencies resolve to imported source snapshots.')
+      expect(container.textContent).not.toContain('Existing enabled target connection')
+      expect(container.textContent).not.toContain('Existing enabled target model')
+      expect(container.textContent).not.toContain('Materialize model')
+      expect(mockState.manualProviderModelInputs).toEqual([])
     } finally {
-      mockState.providerConnectionsQueryResult.data.connections = originalConnections
       dispose()
       container.remove()
     }
@@ -736,7 +683,6 @@ describe('project import route', () => {
       await Promise.resolve()
 
       expect(mockState.resolveInputs[0]).toEqual({autoResolve: true, planRevision: 2, sessionId: 'session-1'})
-      expect(mockState.providerConnectionsQueryResult.refetch).toHaveBeenCalled()
       expect(container.textContent).toContain('Dependency plan updated.')
     } finally {
       dispose()

@@ -1496,9 +1496,11 @@ test('project transfer commit writer materializes imported provider and model de
 test('project transfer commit writer reuses imported provider and model snapshots by marker and fingerprint', () => {
   const result = runCommitWriterScript<{
     modelCount: number
+    modelEnabledValues: boolean[]
     modelIds: string[]
     projectModelIds: string[]
     providerCount: number
+    providerEnabledValues: boolean[]
     providerIds: string[]
   }>(`
     const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
@@ -1538,6 +1540,8 @@ test('project transfer commit writer reuses imported provider and model snapshot
       schemaVersion: 1,
       sessionId: 'session-reused-provider-model-1',
     })
+    await database.run("UPDATE app.provider_connection SET enabled = TRUE WHERE json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') = 'source-provider'")
+    await database.run("UPDATE app.model SET enabled = TRUE WHERE json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') = 'source-model'")
     const secondWrite = await writeProjectTransferCommitAppTables({
       commitId: 'commit-reused-provider-model-2',
       now,
@@ -1547,21 +1551,25 @@ test('project transfer commit writer reuses imported provider and model snapshot
       schemaVersion: 1,
       sessionId: 'session-reused-provider-model-2',
     })
-    const providerRows = await database.queryJson("SELECT id FROM app.provider_connection WHERE json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') = 'source-provider' ORDER BY id ASC")
-    const modelRows = await database.queryJson("SELECT id FROM app.model WHERE json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') = 'source-model' ORDER BY id ASC")
+    const providerRows = await database.queryJson("SELECT id, enabled FROM app.provider_connection WHERE json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') = 'source-provider' ORDER BY id ASC")
+    const modelRows = await database.queryJson("SELECT id, COALESCE(enabled, TRUE) AS enabled FROM app.model WHERE json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') = 'source-model' ORDER BY id ASC")
     const projectRows = await database.queryJson("SELECT id, model_id AS modelId FROM app.project WHERE id IN ('" + firstWrite.projectId + "', '" + secondWrite.projectId + "') ORDER BY id ASC")
 
     console.log(JSON.stringify({
       modelCount: modelRows.length,
+      modelEnabledValues: modelRows.map((row) => row.enabled),
       modelIds: modelRows.map((row) => row.id),
       projectModelIds: projectRows.map((row) => row.modelId),
       providerCount: providerRows.length,
+      providerEnabledValues: providerRows.map((row) => row.enabled),
       providerIds: providerRows.map((row) => row.id),
     }))
   `)
 
   expect(result.providerCount).toBe(1)
   expect(result.modelCount).toBe(1)
+  expect(result.providerEnabledValues).toEqual([false])
+  expect(result.modelEnabledValues).toEqual([false])
   expect(result.projectModelIds).toEqual([result.modelIds[0], result.modelIds[0]])
 })
 

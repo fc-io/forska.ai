@@ -173,6 +173,33 @@ test('project-transfer redaction preserves URL-only article decision fields with
   ).toBe(true)
 })
 
+test('project-transfer redaction preserves embedded non-local signed URLs in decision fields', () => {
+  const payloads = getPayloads()
+  const title = 'See signed source https://example.test/review-title?token=secret-value#title before screening'
+
+  payloads.articles[0] = {...payloads.articles[0], articleTitle: title}
+
+  const redacted = redactProjectTransferPayloads(payloads)
+
+  expect(redacted.payloads.articles).toHaveLength(1)
+  expect(redacted.payloads.articles[0]?.articleTitle).toBe(title)
+  expect(
+    redacted.warnings.some((warning) => {
+      return warning.code === 'decisionPayloadRowOmitted'
+    }),
+  ).toBe(false)
+  expect(
+    redacted.warnings.some((warning) => {
+      return warning.code === 'providerSecretRedacted' && warning.jsonPointer === '/0/articleTitle'
+    }),
+  ).toBe(false)
+  expect(
+    redacted.warnings.some((warning) => {
+      return warning.code === 'nonLocalUrlPreserved' && warning.jsonPointer === '/0/articleTitle'
+    }),
+  ).toBe(true)
+})
+
 test('project-transfer redaction omits decision-bearing rows instead of sanitizing decisions in place', () => {
   const payloads = getPayloads()
 

@@ -510,6 +510,20 @@ const getReusableImportedProviderConnectionId = async ({
   return matchingRows.length === 1 ? (matchingRows[0]?.id ?? null) : null
 }
 
+const disableImportedProviderConnectionSnapshot = async ({
+  providerConnectionId,
+  tx,
+}: {
+  providerConnectionId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await tx.run(`
+    UPDATE app.provider_connection
+    SET enabled = FALSE
+    WHERE id = ${getSqlLiteral(providerConnectionId)}
+  `)
+}
+
 const getReusableImportedModelId = async ({
   importedModel,
   importedProvider,
@@ -558,6 +572,14 @@ const getReusableImportedModelId = async ({
   }
 
   return matchingRows.length === 1 ? (matchingRows[0]?.id ?? null) : null
+}
+
+const disableImportedModelSnapshot = async ({modelId, tx}: {modelId: string; tx: ProjectTransferCommitWriterTx}) => {
+  await tx.run(`
+    UPDATE app.model
+    SET enabled = FALSE
+    WHERE id = ${getSqlLiteral(modelId)}
+  `)
 }
 
 const getNullableDateLiteral = (value: unknown) => {
@@ -708,6 +730,8 @@ const getMaterializedProviderTargetBySourceId = async ({
     const existingProviderConnectionId = await getReusableImportedProviderConnectionId({importedProvider, tx})
 
     if (existingProviderConnectionId !== null) {
+      await disableImportedProviderConnectionSnapshot({providerConnectionId: existingProviderConnectionId, tx})
+
       return {...mapped, [sourceProviderConnectionId]: existingProviderConnectionId}
     }
 
@@ -785,6 +809,8 @@ const getMaterializedModelTargetBySourceId = async ({
     })
 
     if (existingModelId !== null) {
+      await disableImportedModelSnapshot({modelId: existingModelId, tx})
+
       return {...mapped, [sourceModelId]: existingModelId}
     }
 

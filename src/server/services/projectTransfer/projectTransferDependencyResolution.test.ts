@@ -318,6 +318,8 @@ test('project transfer dependency resolution auto-resolves exact imported provid
 
   try {
     const payloads = getProjectTransferPayloadFixtureMap()
+    const targetModel = getTargetModel({enabled: false})
+    const targetConnection = getTargetConnection({enabled: false}, [targetModel])
     const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
 
     const result = await resolveProjectTransferDependencies({
@@ -326,7 +328,7 @@ test('project transfer dependency resolution auto-resolves exact imported provid
       nextPlanRevision: 2,
       repositories: {
         listProviderConnections: async () => {
-          return [getTargetConnection()]
+          return [targetConnection]
         },
       },
       request: {planRevision: 1},
@@ -501,7 +503,7 @@ test('project transfer dependency resolution inserts imported judgments when pro
   }
 })
 
-test('project transfer dependency resolution rejects virtual selectable target model ids', async () => {
+test('project transfer dependency resolution ignores virtual selectable target model ids', async () => {
   const cwd = getRuntimeRoot()
 
   try {
@@ -526,18 +528,16 @@ test('project transfer dependency resolution rejects virtual selectable target m
       },
     })
 
-    expect(result).toMatchObject({
-      error:
-        'Target model anthropic:claude-sonnet-4-6:high is a virtual selectable model id and must be materialized first',
-      status: 'error',
-      statusCode: 400,
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
+      'model-1': 'target-model-1',
     })
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
 })
 
-test('project transfer dependency resolution rejects an archived chosen provider connection', async () => {
+test('project transfer dependency resolution ignores archived local provider selections', async () => {
   const cwd = getRuntimeRoot()
 
   try {
@@ -564,17 +564,16 @@ test('project transfer dependency resolution rejects an archived chosen provider
       },
     })
 
-    expect(result).toMatchObject({
-      error: 'Target provider connection target-provider-1 is archived',
-      status: 'error',
-      statusCode: 400,
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.providerTargetBySourceId : {}).toEqual({
+      'provider-connection-1': 'new:provider:provider-connection-1',
     })
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
 })
 
-test('project transfer dependency resolution rejects materialized model handoffs that are not selectable', async () => {
+test('project transfer dependency resolution accepts disabled imported snapshot handoffs', async () => {
   const cwd = getRuntimeRoot()
 
   try {
@@ -603,10 +602,9 @@ test('project transfer dependency resolution rejects materialized model handoffs
       },
     })
 
-    expect(result).toMatchObject({
-      error: 'Target model target-model-1 is not selectable',
-      status: 'error',
-      statusCode: 400,
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
+      'model-1': 'target-model-1',
     })
   } finally {
     rmSync(cwd, {force: true, recursive: true})
@@ -703,10 +701,16 @@ test('project transfer dependency resolution ignores unmarked local provider and
 
     expect(result.status).toBe('ok')
     expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
-      'model:model-1': 'blocked',
-      'provider:provider-connection-1': 'blocked',
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
     })
-    expect(result.status === 'ok' ? result.plan.canCommit : true).toBe(false)
+    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.providerTargetBySourceId : {}).toEqual({
+      'provider-connection-1': 'new:provider:provider-connection-1',
+    })
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
+      'model-1': 'new:model:model-1',
+    })
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
@@ -761,17 +765,19 @@ test('project transfer dependency resolution blocks snapshot reuse when imported
 
       expect(result.status).toBe('ok')
       expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
-        'model:model-1': 'blocked',
+        'model:model-1': 'resolved',
         'provider:provider-connection-1': 'resolved',
       })
-      expect(result.status === 'ok' ? result.plan.canCommit : true).toBe(false)
+      expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
+        'model-1': 'new:model:model-1',
+      })
     } finally {
       rmSync(cwd, {force: true, recursive: true})
     }
   }, Promise.resolve())
 })
 
-test('project transfer dependency resolution keeps Codex materialization unresolved until the model is visible on a live connection', async () => {
+test('project transfer dependency resolution plans Codex imports as snapshots without visible live models', async () => {
   const cwd = getRuntimeRoot()
 
   try {
@@ -823,10 +829,13 @@ test('project transfer dependency resolution keeps Codex materialization unresol
 
     expect(result.status).toBe('ok')
     expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
-      'model:model-1': 'missing',
+      'model:model-1': 'resolved',
       'provider:provider-connection-1': 'resolved',
     })
-    expect(result.status === 'ok' ? result.plan.canCommit : true).toBe(false)
+    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
+      'model-1': 'new:model:model-1',
+    })
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
@@ -1000,7 +1009,7 @@ test('project transfer dependency resolution auto-resolves Codex dependencies to
   }
 })
 
-test('project transfer dependency resolution re-enables stale mapped Codex dependencies before validation', async () => {
+test('project transfer dependency resolution reuses disabled stale mapped Codex snapshots without enabling them', async () => {
   const cwd = getRuntimeRoot()
 
   try {
@@ -1083,13 +1092,13 @@ test('project transfer dependency resolution re-enables stale mapped Codex depen
       'provider:provider-connection-1': 'resolved',
     })
     expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
-    expect(ensured).toBe(true)
+    expect(ensured).toBe(false)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
 })
 
-test('project transfer dependency resolution only accepts non-equivalent substitutes without imported judgment references', async () => {
+test('project transfer dependency resolution ignores non-equivalent substitutes without imported judgment references', async () => {
   const cwd = getRuntimeRoot()
 
   try {
@@ -1128,6 +1137,9 @@ test('project transfer dependency resolution only accepts non-equivalent substit
     expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
       'model:model-1': 'resolved',
       'provider:provider-connection-1': 'resolved',
+    })
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
+      'model-1': 'new:model:model-1',
     })
   } finally {
     rmSync(cwd, {force: true, recursive: true})
@@ -1182,8 +1194,11 @@ test('project transfer dependency resolution revokes stale substitute approvals'
 
     expect(result.status).toBe('ok')
     expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
-      'model:model-1': 'blocked',
+      'model:model-1': 'resolved',
       'provider:provider-connection-1': 'resolved',
+    })
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
+      'model-1': 'new:model:model-1',
     })
     expect(persistedPlan.dependencyResolution.acceptedSubstituteModelSourceIds).toEqual([])
   } finally {
