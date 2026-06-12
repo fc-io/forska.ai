@@ -1,0 +1,450 @@
+{
+  "name": "Export And Import Performance Plan",
+  "description": "Make project transfer import and export scale to large projects without high memory pressure, long DuckDB writer occupancy, or opaque progress.",
+  "branchName": "ralph/export-import-performance",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add transfer performance instrumentation",
+      "description": "As a maintainer, I want project-transfer import and export phases instrumented so performance changes can be measured before architecture changes land.",
+      "acceptanceCriteria": [
+        "Add phase timing for upload, zip scan, payload parse, staging/load, target analysis, dependency resolution, revalidation, asset promotion, app-table writes, history write, cleanup, export assembly, and export package write.",
+        "Record row counters keyed by the active `projectTransferPayloadKeys` surface, including current-schema payload keys before cutover and first-class asset-entry/reference counters after schema-vNext.",
+        "Record byte counters, sampled peak memory, DuckDB writer transaction timing, warning counts by code/scope/severity, and the required before/after benchmark fields from the plan.",
+        "Mark missing metrics as `unavailable`, never `0`, and keep `usesStreamingParser` false until upload, zip entry, and NDJSON parsing are actually streaming.",
+        "Add or update a benchmark runner entrypoint `bun run bench:project-transfer` with fixture selection and machine-readable output.",
+        "`bun test src/server/routes/projectTransferRoutes.test.ts` passes if route progress payloads change.",
+        "`bun run lint` passes."
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Add schema-vNext transfer contracts",
+      "description": "As an implementer, I need schema-vNext payload, manifest, path, and fingerprint contracts so streaming import and export share one deterministic package format.",
+      "acceptanceCriteria": [
+        "Add one new transfer `schemaVersion` for the streaming cutover and bind payload paths, manifest validation, archive root allowlists, canonical ordering, package-validation semantics, and fingerprint rules to that schema version.",
+        "Represent schema-vNext asset entries and asset references as explicit package payloads with payload paths, manifest entries, row counts, byte counts, checksums, and fingerprint inputs.",
+        "Keep current-schema packages on current root files and `assetManifest.json` behavior until the schema-vNext importer and exporter ship together or remain behind the same cutover branch/flag.",
+        "Compute schema-vNext logical fingerprints from staged row digests and singleton payload digests, proving source ids, target ids, DB ids, timestamps, and other excluded fields cannot affect row ordering through `sortKey`.",
+        "`bun test src/server/services/projectTransfer/projectTransferContracts.test.ts` passes.",
+        "`bun test src/server/services/projectTransfer/projectTransferManifest.test.ts` passes with schema-vNext asset-entry/reference manifest coverage.",
+        "`bun test src/server/services/projectTransfer/projectTransferPaths.test.ts` passes with schema-version-aware archive root allowlists.",
+        "`bun test src/server/services/projectTransfer/projectTransferPayloadSchemas.test.ts` passes with schema-vNext asset-entry/reference payload contracts.",
+        "`bun test src/server/services/projectTransfer/projectTransferFingerprint.test.ts` passes with row-order exclusion coverage.",
+        "`bun run lint` passes."
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Add request-safe staging lifecycle",
+      "description": "As an importer, I want staged package rows to survive normal request gaps without relying on connection-local temp tables or partial files.",
+      "acceptanceCriteria": [
+        "Create a transfer staging abstraction keyed by session id and `stagingRevision`, with temp-root files or app-scoped scratch as the cross-request source of truth.",
+        "Write each staging revision under a non-current path, verify counts/checksums/blockers/plan artifacts, then atomically publish the current `stagingRevision`.",
+        "Require dependency resolution and commit to reject requests whose reviewed plan points at a non-current `stagingRevision`, while allowing later plan revisions to reuse the same staged package rows.",
+        "Add deterministic cleanup for cancel, failure, expiry, successful commit, and startup cleanup after checking writer ownership, session state, and owner lease.",
+        "Lost staged state fails or expires the session clearly and never allows partial commit.",
+        "`bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts` passes with stale `stagingRevision` cleanup coverage.",
+        "`bun test src/server/services/projectTransfer/projectTransferSessionRepository.test.ts` passes with atomic current-`stagingRevision` publish and reviewed-plan staging validation.",
+        "`bun run lint` passes."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Stream import package scan into staging",
+      "description": "As an importer, I want upload artifacts, archive entries, and NDJSON rows loaded into staging without materializing full package payloads in JavaScript arrays.",
+      "acceptanceCriteria": [
+        "Stream NDJSON payloads into staging without `decode(...).split('\\n').map(JSON.parse)` and validate per-row payload shape while streaming.",
+        "Write staged validation failures as blocker records, include them in the plan summary, and block commit while any package-contract blocker remains unresolved.",
+        "Track staged row counts, byte counts, checksums, logical digests, package fingerprint inputs, source project metadata, and asset bytes as rows are loaded.",
+        "Extend import-side resource gates so disk headroom budgets staged payload files, canonical row bytes, digests, manifests, and temporary spill before staging starts.",
+        "Pre-cutover staging validates current schema/fingerprint behavior; schema-vNext validation only activates with the matching exporter/importer cutover.",
+        "`bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts` passes.",
+        "`bun test src/server/services/projectTransfer/projectTransferZip.test.ts` passes if archive scanning behavior changes.",
+        "Run `bun run bench:project-transfer -- --fixture=article-heavy-package` and record parse/load memory and rows/sec before/after.",
+        "`bun run lint` passes."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Add operation-local table loading",
+      "description": "As an implementer, I need staged rows loaded into operation-local DuckDB tables safely so analyze, dependency resolution, and commit can use joins without cross-request temp-table assumptions.",
+      "acceptanceCriteria": [
+        "Rebuild operation-local DuckDB tables from persisted staged files at the start of analyze, dependency revalidation, and commit when needed.",
+        "Execute multi-statement work that depends on operation-local tables on the same helper-managed operation connection, or use app-scoped scratch tables keyed by operation id or commit id.",
+        "Use per-operation temp-table names plus guaranteed teardown, or add any dedicated connection mode through the shared DuckDB service/helper layer rather than ad hoc connection management.",
+        "Add indexes, sort order, or `ANALYZE` calls for operation-local tables only when query plans need them.",
+        "If app-scoped scratch tables or transfer metadata migrations are added, `bun run db:mig` passes.",
+        "If migrations are added or changed, `bun test src/db/migrateDuckdb.test.ts` passes.",
+        "`bun test src/server/services/projectTransfer/projectTransferAnalyzeTarget.test.ts` passes with same-operation connection coverage for temp tables.",
+        "`bun run lint` passes."
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Implement set-based article and route analysis",
+      "description": "As an importer, I want article, prompt, and route matching computed with DuckDB joins so target analysis scales linearly instead of building giant SQL strings.",
+      "acceptanceCriteria": [
+        "Replace article id and identifier `IN (...)` or `OR` predicates with joins from staged article ids and normalized strong identifiers to `app.article` and `app.article_identifier`.",
+        "Compute article match actions, route availability, route/article overlap, and article field-fill candidates in SQL or operation-local plan tables.",
+        "Compute prompt matches by joining recomputed staged prompt content hashes to `app.prompt`; use package-declared hashes only for mismatch warnings, not reuse decisions.",
+        "Remove plan shapes that store full duplicate target row payloads unless the UI explicitly needs them.",
+        "`bun test src/server/services/projectTransfer/projectTransferAnalyzeTarget.test.ts` passes with recomputed prompt-content-hash, normalized strong article identifier, and staged blocker coverage.",
+        "`bun test src/server/services/projectTransfer/projectTransferIdentifierNormalization.test.ts` passes.",
+        "`bun test src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts` passes.",
+        "Run `bun run bench:project-transfer -- --fixture=conflict-heavy-package` and record target-analysis SQL size and wall time before/after.",
+        "`bun run lint` passes."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Implement staged dependency and fidelity planning",
+      "description": "As an importer, I want provider/model dependency and fidelity planning to use staged rows and exact imported snapshot fingerprints so benchmark-critical settings are preserved.",
+      "acceptanceCriteria": [
+        "Stage imported provider/model snapshot markers and dedicated snapshot fingerprints, reusing only rows previously marked as imported snapshots when fingerprints match exactly.",
+        "Preserve model `variant` and `version` as separate staged fields and snapshot-fingerprint inputs throughout analysis, dependency resolution, reviewed plans, and commit materialization.",
+        "Compute judgment, assessment, and human-review fidelity plans from concrete or virtual imported snapshot ids without remapping source providers/models onto arbitrary local rows.",
+        "Change dependency resolution to read staged provider, model, judgment, assessment, and human-review rows instead of reparsing extracted payload files into full arrays.",
+        "Ensure dependency resolution and commit read exactly the reviewed plan revision.",
+        "`bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts` passes with imported snapshot reuse and virtual id coverage.",
+        "`bun test src/server/services/projectTransfer/projectTransferSnapshotFingerprint.test.ts` passes with provider runtime config, imported marker, disabled reuse, and variant/version handling.",
+        "`bun test src/server/services/projectTransfer/projectTransferFidelityValidation.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Add target-state dirty token coverage",
+      "description": "As an importer, I need target-state dirty tokens and coverage metadata so commit can skip full revalidation only when every safety surface is known unchanged.",
+      "acceptanceCriteria": [
+        "Add a shared target-state dirty-token or version service for projects, articles, identifiers, import routes, project links, prompts, judgments, assessments, human review rows, models, provider connections, imported snapshot markers, snapshot fingerprint inputs, and project-transfer history.",
+        "Store a target-state coverage version that records which code version initialized token coverage, which safety surfaces are covered, and the dependency fingerprint algorithm/code version.",
+        "Update dirty tokens transactionally through shared write helpers inside existing write paths; direct maintenance scripts must update tokens transactionally or advance a global unknown token.",
+        "Incremental revalidation remains disabled by default until coverage is initialized for every safety surface.",
+        "If target-state dirty-token migrations are added, `bun run db:mig` passes.",
+        "If migrations are added or changed, `bun test src/db/migrateDuckdb.test.ts` passes.",
+        "`bun test src/server/services/projectTransfer/projectTransferDirtyTokenRevalidation.test.ts` passes with missing-token fallback and coverage-version behavior.",
+        "`bun run lint` passes."
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-007"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Implement incremental commit revalidation",
+      "description": "As an importer, I want commit to skip full target analysis when the reviewed plan's dirty-token coverage proves the target state is unchanged.",
+      "acceptanceCriteria": [
+        "Store analyze-time coverage version and dirty-token set with every reviewed plan revision.",
+        "At commit, compare current dirty tokens with analyze-time tokens before detailed revalidation and fall back to full target revalidation on any missing, unknown, stale, or uncovered token.",
+        "Fall back to full dependency and fidelity revalidation when imported snapshot markers, snapshot fingerprint inputs, provider/model enabled/archive state, or dependency fingerprint code/version are missing, unknown, stale, or changed.",
+        "Persist stale-plan reasons by surface: dependency, target project, target article, target prompt, target route, judgment, assessment, human review, and duplicate package history.",
+        "`bun test src/server/services/projectTransfer/projectTransferDirtyTokenRevalidation.test.ts` passes with changed-surface, coverage-version mismatch, and full-revalidation fallback coverage.",
+        "`bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes if commit revalidation behavior changes.",
+        "Run `bun run bench:project-transfer -- --fixture=reuse-heavy-package` and record unchanged-target revalidation time before/after.",
+        "`bun run lint` passes."
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-008"
+      ]
+    },
+    {
+      "id": "US-010",
+      "title": "Add commit id maps and snapshot materialization",
+      "description": "As an importer, I need reviewed commit plans to materialize stable target ids and imported provider/model snapshots before set-based writes consume them.",
+      "acceptanceCriteria": [
+        "Generate new target ids once per reviewed commit attempt, validate collisions before writes, and persist source-to-target id maps in request-safe staging or a reviewed commit plan artifact.",
+        "Rebuild operation-local id mapping tables from persisted maps at commit time on the same DuckDB connection used by dependent writes.",
+        "Materialize imported provider/model snapshots as disabled rows with imported-snapshot markers and no usable provider secret reference before dependent judgment, assessment, human-review, or project rows are written.",
+        "Reuse exact imported snapshot matches by fingerprint and materialize only remaining virtual `new:provider:*` and `new:model:*` snapshots.",
+        "Persist source model `version` in imported snapshot marker/fingerprint metadata instead of folding it into `variant` when no dedicated app-table version column exists.",
+        "`bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes with disabled snapshot materialization, exact-match reuse, repeated-import behavior, and separate `variant`/`version` preservation.",
+        "`bun test src/server/services/projectTransfer/projectTransferSnapshotFingerprint.test.ts` passes with dependency-resolution and commit-materialization parity.",
+        "`bun run lint` passes."
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-009"
+      ]
+    },
+    {
+      "id": "US-011",
+      "title": "Convert article and route commit writes",
+      "description": "As an importer, I want article, identifier, route, and project-link commit writes to use set-based SQL so large imports avoid sequential literal insert batches.",
+      "acceptanceCriteria": [
+        "Convert created-article inserts to `INSERT ... SELECT` from staged article rows and target id maps.",
+        "Convert reused-article field-fill updates to set-based `UPDATE ... FROM` statements from staged update-plan rows and the promoted-path map, with affected-row count validation.",
+        "Convert article identifier inserts from staged normalized strong identifiers and prove every skipped `ON CONFLICT DO NOTHING` row belongs to the intended target article.",
+        "Convert article import route, project import route, and project article inserts to set-based writes from staged plan rows.",
+        "Advance target-state dirty tokens transactionally inside the same set-based commit transaction for every safety surface these writes touch.",
+        "`bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes with same-connection operation-local table consumption and normalized strong identifier conflict validation.",
+        "`bun test src/server/services/projectTransfer/projectTransferDirtyTokenRevalidation.test.ts` passes with set-based commit dirty-token advancement coverage.",
+        "Run `bun run bench:project-transfer -- --fixture=article-heavy-package` and record commit rows/sec and writer transaction duration before/after.",
+        "`bun run lint` passes."
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-010"
+      ]
+    },
+    {
+      "id": "US-012",
+      "title": "Convert judgment and review commit writes",
+      "description": "As an importer, I want judgment, assessment, human judgment, summary, and review writes to be set-based while preserving fidelity, rollback, and history semantics.",
+      "acceptanceCriteria": [
+        "Convert judgment inserts to set-based writes from staged judgment rows joined to article, prompt, and model maps.",
+        "Convert judgment assessment inserts to set-based writes from staged assessment rows joined to judgment maps.",
+        "Convert human judgment, human summary, and review inserts to set-based writes from staged human-review plan rows.",
+        "Keep count/key validation for `ON CONFLICT DO NOTHING` paths and remove only post-insert scans fully proven by constraints and insert result counts.",
+        "Preserve one commit transaction, rollback, history rows, dirty-project marking, completion payload semantics, and failure tests proving partial set-based writes roll back cleanly.",
+        "`bun test src/server/services/projectTransfer/projectTransferCommit.test.ts` passes for judgment, assessment, and human-review set-based writes.",
+        "`bun test src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts` passes.",
+        "Run `bun run bench:project-transfer -- --fixture=judgment-heavy-package` and record commit rows/sec and writer transaction duration before/after.",
+        "`bun run lint` passes."
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-011"
+      ]
+    },
+    {
+      "id": "US-013",
+      "title": "Stream asset promotion with rollback safety",
+      "description": "As an importer, I want asset promotion to stream copies with bounded concurrency and persisted rollback state so asset-heavy imports do not reread entire files repeatedly.",
+      "acceptanceCriteria": [
+        "Replace whole-file asset reads with stream copy and incremental checksum, and avoid rereading promoted assets when the copy path already verified byte count and checksum.",
+        "Keep asset promotion before app-table writes and fail before any DB write when required asset copies cannot be verified.",
+        "Persist session-scoped promotion status with each asset recorded pending before copy and copied only after byte count/checksum verification.",
+        "Serialize concurrent promotion-state updates through one manifest writer, append-only log, or atomic per-asset state files so pending/copied rollback state cannot be lost.",
+        "Keep promoted asset paths session-owned and preserve path traversal, symlink, declared reference, and runtime asset URL rewriting safety checks.",
+        "`bun test src/server/services/projectTransfer/projectTransferCommitRollback.test.ts` passes with bounded-concurrency manifest coverage.",
+        "`bun test src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts` passes.",
+        "Run `bun run bench:project-transfer -- --fixture=asset-heavy-package` and record asset bytes/sec, peak memory, asset read count, and rollback cleanup time before/after.",
+        "Browser verify imported asset paths and full-text HTML render after import.",
+        "Desktop verify imported runtime asset rendering if runtime asset paths or temp paths change.",
+        "`bun run lint` passes."
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-012"
+      ]
+    },
+    {
+      "id": "US-014",
+      "title": "Stage export payloads from one snapshot",
+      "description": "As an exporter, I want large export payloads materialized into deterministic staged files from one consistent source snapshot without holding DB rows in memory.",
+      "acceptanceCriteria": [
+        "Add export disk-headroom gates at preflight and export-start using estimated staged payload bytes, asset bytes, and package bytes.",
+        "Run export assembly against one consistent DuckDB snapshot and materialize export rows plus asset references/paths into request-safe staged files before releasing it.",
+        "Do not hold a DuckDB transaction open across asset copy or package streaming.",
+        "Stream payload assembly from DuckDB queries into deterministic NDJSON files instead of collecting large payload arrays.",
+        "Keep small inline package output and large background package-file output paths available.",
+        "`bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes for small inline packages, large background package-file output, and snapshot-consistent payload rows.",
+        "`bun test src/server/services/projectTransfer/projectTransferExportPackage.test.ts` passes if package staging changes.",
+        "Run `bun run bench:project-transfer -- --fixture=article-heavy-export` and record export assembly time and peak memory before/after.",
+        "`bun run lint` passes."
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-015",
+      "title": "Stream export asset collection",
+      "description": "As an exporter, I want runtime asset references discovered and copied into package staging with bounded memory while preserving current external URL behavior.",
+      "acceptanceCriteria": [
+        "Discover asset references while materializing article payloads under the DuckDB snapshot, then copy asset files after the snapshot with bounded concurrency.",
+        "Compute asset byte counts/checksums incrementally and preserve stable-source verification so assets that change during copy fail export before manifest and fingerprint finalization.",
+        "Preserve runtime asset path validation, runtime asset URL rewriting, symlink rejection, regular-file checks, and source-change-during-copy failure behavior.",
+        "Define and enforce a field-specific URL policy matrix for `fullTextHtml`, `fullTextPdf`, and `fullTextAssets`; preserved non-local URLs must never be reinterpreted as runtime asset paths.",
+        "Preserve current no-warning external URL behavior unless a separate correctness change intentionally reintroduces `nonLocalUrlPreserved` warnings.",
+        "`bun test src/server/services/projectTransfer/projectTransferExportAssets.test.ts` passes with field-specific URL policy and signed/credential non-local URL coverage.",
+        "Add and run `bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts` if redaction or external-URL behavior changes.",
+        "Run `bun run bench:project-transfer -- --fixture=asset-heavy-export` and record asset bytes/sec and JS memory before/after.",
+        "`bun run lint` passes."
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-014"
+      ]
+    },
+    {
+      "id": "US-016",
+      "title": "Finalize export signatures and fingerprints",
+      "description": "As an exporter, I want payload signatures, checksums, and fingerprints computed from final staged package bytes so same-branch import fidelity matches export output.",
+      "acceptanceCriteria": [
+        "Build judgment, assessment, human-review, and review payload signatures from staged article payloads after runtime asset rewriting, not from pre-rewrite DB article rows.",
+        "Preserve benchmark-critical model, provider, thinking, content-setting, judgment, `variant`, and `version` settings exactly without retries, downgrades, or setting mutation.",
+        "Compute package checksums and fingerprints from staged payload files, staged asset metadata, and streaming logical digest inputs.",
+        "Support `rawArticleProvenanceMode` `include` and `omit` preflight estimates, execution mode, package output, manifest warnings, and same-branch import behavior without reintroducing `auto`.",
+        "Add golden package/fingerprint tests for schema-vNext, asset-entry/reference payloads, and model `variant`/`version` fingerprint parity.",
+        "`bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes with post-rewrite article-dependent signatures and raw provenance include/omit coverage.",
+        "`bun test src/server/services/projectTransfer/projectTransferFingerprint.test.ts` passes.",
+        "`bun test src/server/services/projectTransfer/projectTransferManifest.test.ts` passes if checksum or manifest metadata changes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-015",
+        "US-007"
+      ]
+    },
+    {
+      "id": "US-017",
+      "title": "Stream zip package writing",
+      "description": "As an exporter, I want package zips written from staged files or streams with valid headers so large exports do not re-materialize every entry as `Uint8Array`.",
+      "acceptanceCriteria": [
+        "Extend the zip writer to accept staged files or streams for large payloads and assets.",
+        "For streamed entries, either precompute CRC32 and uncompressed size during staging and write correct local headers, or implement ZIP data descriptors correctly.",
+        "Persist per-entry CRC32, uncompressed size, content checksum, and package path metadata when using precomputed headers so package writing does not reread large entries solely for header values.",
+        "Keep package-level byte counts and checksums based on bytes actually written, not advisory archive metadata.",
+        "`bun test src/server/services/projectTransfer/projectTransferZip.test.ts` passes with streamed file/stream entries, staged CRC32/uncompressed-size metadata, correct central-directory metadata, and package checksum coverage.",
+        "`bun test src/server/services/projectTransfer/projectTransferExportPackage.test.ts` passes.",
+        "Run `bun run bench:project-transfer -- --fixture=asset-heavy-export` and record package write bytes/sec and peak memory before/after.",
+        "`bun run lint` passes."
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-016"
+      ]
+    },
+    {
+      "id": "US-018",
+      "title": "Ship same-branch schema cutover",
+      "description": "As a project-transfer user, I want schema-vNext export and import to ship together so packages created by the branch import successfully while unsupported old packages fail clearly.",
+      "acceptanceCriteria": [
+        "Wire schema-vNext exporter and importer changes together; do not merge an importer-only external schema break.",
+        "Reject old transfer schema versions and old package fingerprints after the streaming cutover with clear unsupported-schema or unsupported-fingerprint errors.",
+        "Same-branch export/import round trips preserve counts, warnings, dependency-resolution semantics, package checksums, and fingerprint semantics under the new schema version.",
+        "Export/import round trips cover `rawArticleProvenanceMode` `include` and `omit`, signed/credential URLs, imported snapshot reuse, disabled imported provider/model snapshots, judgments, assessments, and human review rows.",
+        "Add and run unsupported old-schema and old-fingerprint import rejection tests for the streaming cutover.",
+        "Add and run same-branch export/import tests for the new transfer schema version.",
+        "`bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts` passes.",
+        "`bun test src/server/services/projectTransfer/projectTransferExport.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-013",
+        "US-017"
+      ]
+    },
+    {
+      "id": "US-019",
+      "title": "Add import export progress UX",
+      "description": "As a user, I want long-running import and export sessions to show truthful phase, row, and byte progress in browser and desktop flows.",
+      "acceptanceCriteria": [
+        "Expose progress phases for upload, package scan, staging load, fingerprint validation, analyze, dependency resolution, revalidation, asset promotion, commit, cleanup, export assembly, export asset staging, and export package write.",
+        "Show row progress only when row totals are reliable, byte progress only when byte totals are reliable, and avoid fake precision when total work is unknown.",
+        "Include stale-plan reason details in the plan review UI when commit revalidation reopens a plan.",
+        "Keep `/projects/import` and export entry points working in browser and desktop without suspending root layouts or replacing the whole page with spinners.",
+        "`bun test src/server/routes/projectTransferRoutes.test.ts` passes.",
+        "`bun run test:vitest -- src/app/routes/+projects/-+import.vitest.tsx` passes if import/export progress payloads, warning grouping, or wizard behavior changes.",
+        "`bun test src/app/routes/+projects/importWizard/projectImportClient.test.ts` passes if upload headers, session URLs, or upload progress wiring changes.",
+        "`bun run test:vitest -- src/components/main/projectsGrid.vitest.tsx` passes if import/export progress UX or entry-point behavior changes.",
+        "`bun run build` passes if shared UI, route response types, or import wizard progress changes.",
+        "`bun run desktop:build` passes if runtime asset paths, temp paths, upload/download wiring, or import/export UI paths change.",
+        "Browser verify import and export flows show useful phase progress and complete successfully.",
+        "Desktop verify the same flows when shared/core session, polling, progress, file upload/download, or temp-storage behavior changes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-018",
+        "US-009"
+      ]
+    },
+    {
+      "id": "US-020",
+      "title": "Run final benchmark matrix",
+      "description": "As a maintainer, I want the completed import/export performance work benchmarked across representative package shapes so correctness, memory, and writer occupancy improvements are documented.",
+      "acceptanceCriteria": [
+        "Run the benchmark matrix for small inline, article-heavy, judgment-heavy, asset-heavy, reuse-heavy, conflict-heavy, and large export package shapes.",
+        "Record before/after median and worst-run results for wall time, phase times, rows/sec, bytes/sec, peak memory, DuckDB spill, writer transaction duration, temporary disk bytes, final asset bytes, conflict shape, revalidation outcome, warning counts/details, and correctness checks.",
+        "Include the small inline package fixture for every shared/core import or export path change and confirm small-package latency does not regress more than 5% unless explicitly justified.",
+        "Confirm large package rows/sec or bytes/sec improves at least 10% for the targeted bottleneck phase, or document correctness, memory, or writer-duration improvement as the explicit win.",
+        "Confirm JS heap growth is bounded by active batch size plus asset copy buffers and DuckDB writer transaction duration does not increase for commit-writer changes.",
+        "Attach benchmark results to the implementation note or PR, including package fingerprint, schema version, raw article provenance mode when applicable, dependency execution signature, and warning details validation.",
+        "`bun run bench:project-transfer -- --fixture=small-inline-package` passes and reports machine-readable output.",
+        "`bun run bench:project-transfer -- --fixture=article-heavy-package` passes and reports machine-readable output.",
+        "`bun run bench:project-transfer -- --fixture=judgment-heavy-package` passes and reports machine-readable output.",
+        "`bun run bench:project-transfer -- --fixture=asset-heavy-package` passes and reports machine-readable output.",
+        "`bun run lint` passes."
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-019"
+      ]
+    }
+  ]
+}
