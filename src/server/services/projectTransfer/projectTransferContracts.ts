@@ -618,10 +618,24 @@ const validateTempRoot = (tempRootPath: string): ProjectTransferValidationResult
       }
 }
 
+const getProjectTransferCutoverArchiveRootAllowlist = () => {
+  return {
+    allowedRootFiles: [
+      ...projectTransferAllowedArchiveRootFilesBySchemaVersion[projectTransferCurrentManifestSchemaVersion],
+      ...projectTransferAllowedArchiveRootFilesBySchemaVersion[projectTransferSchemaVNextManifestSchemaVersion],
+    ],
+    allowedRootFolders: [
+      ...projectTransferAllowedArchiveRootFoldersBySchemaVersion[projectTransferCurrentManifestSchemaVersion],
+      ...projectTransferAllowedArchiveRootFoldersBySchemaVersion[projectTransferSchemaVNextManifestSchemaVersion],
+    ],
+  }
+}
+
 const getPathValidationMessage = (path: ProjectTransferResourcePath) => {
+  const archiveRootAllowlist = getProjectTransferCutoverArchiveRootAllowlist()
   const validation =
     path.kind === 'archive_member'
-      ? validateProjectTransferArchiveMemberPath({pathValue: path.pathValue})
+      ? validateProjectTransferArchiveMemberPath({...archiveRootAllowlist, pathValue: path.pathValue})
       : validateProjectTransferRuntimeAssetPath(path.pathValue)
 
   return validation.ok ? null : validation.error.message

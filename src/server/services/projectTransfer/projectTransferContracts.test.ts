@@ -23,6 +23,7 @@ import {
   validateProjectTransferResourceGates,
 } from './projectTransferContracts.ts'
 import {
+  projectTransferCurrentManifestSchemaVersion,
   projectTransferManifestSchemaVersion,
   projectTransferSchemaVNextManifestSchemaVersion,
 } from './projectTransferSchemas.ts'
@@ -201,17 +202,20 @@ test('locks project-transfer resource gates for temp roots and disk headroom wit
   )
 })
 
-test('locks current and schema-vNext transfer package contracts', () => {
+test('locks legacy and current schema-vNext transfer package contracts', () => {
+  const legacyContract = projectTransferSchemaVersionContracts[projectTransferCurrentManifestSchemaVersion]
   const currentContract = projectTransferSchemaVersionContracts[projectTransferManifestSchemaVersion]
   const schemaVNextContract = projectTransferSchemaVersionContracts[projectTransferSchemaVNextManifestSchemaVersion]
 
-  expect(currentContract.payloadPaths.project).toBe('project.json')
-  expect(currentContract.payloadPaths.assetManifest).toBe('assetManifest.json')
-  expect(currentContract.archiveRootFiles).toContain('assetManifest.json')
-  expect(currentContract.archiveRootFolders).toEqual(['assets'])
-  expect(currentContract.assetPayloadKeys).toEqual(['assetManifest'])
-  expect(currentContract.fingerprintMode).toBe('logicalPayloads')
-  expect(currentContract.packageValidation.assetManifest).toBe('required')
+  expect(projectTransferManifestSchemaVersion).toBe(projectTransferSchemaVNextManifestSchemaVersion)
+  expect(legacyContract.payloadPaths.project).toBe('project.json')
+  expect(legacyContract.payloadPaths.assetManifest).toBe('assetManifest.json')
+  expect(legacyContract.archiveRootFiles).toContain('assetManifest.json')
+  expect(legacyContract.archiveRootFolders).toEqual(['assets'])
+  expect(legacyContract.assetPayloadKeys).toEqual(['assetManifest'])
+  expect(legacyContract.fingerprintMode).toBe('logicalPayloads')
+  expect(legacyContract.packageValidation.assetManifest).toBe('required')
+  expect(currentContract).toBe(schemaVNextContract)
   expect(schemaVNextContract.payloadPaths.project).toBe('payloads/project.json')
   expect(schemaVNextContract.payloadPaths.assetEntries).toBe('payloads/assetEntries.ndjson')
   expect(schemaVNextContract.payloadPaths.assetReferences).toBe('payloads/assetReferences.ndjson')

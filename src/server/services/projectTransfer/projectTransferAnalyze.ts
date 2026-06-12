@@ -40,15 +40,19 @@ import {
 } from './projectTransferPaths.ts'
 import {
   assertProjectTransferPayload,
-  parseProjectTransferPayload,
+  parseProjectTransferPayloadForSchemaVersion,
   type ProjectTransferAssetManifestEntry,
   type ProjectTransferAssetReference,
+  type ProjectTransferPackagePayloadByKey,
   type ProjectTransferPayload,
   type ProjectTransferPayloadByKey,
   type ProjectTransferPayloadRecord,
+  type ProjectTransferSchemaVNextAssetEntryPayloadRecord,
+  type ProjectTransferSchemaVNextAssetReferencePayloadRecord,
   serializeProjectTransferPayload,
+  serializeProjectTransferPayloadForSchemaVersion,
   serializeProjectTransferPayloadNdjsonRow,
-  validateProjectTransferPayloadRow,
+  validateProjectTransferPayloadRowForSchemaVersion,
 } from './projectTransferPayloadSchemas.ts'
 import {
   getProjectTransferPerformanceMetrics,
@@ -60,9 +64,14 @@ import {
   type ProjectTransferPerformancePhaseTiming,
 } from './projectTransferPerformanceMetrics.ts'
 import {
+  getProjectTransferPayloadFormatForSchemaVersion,
+  getProjectTransferPayloadKeysForSchemaVersion,
+  getProjectTransferPayloadPathForSchemaVersion,
   projectTransferCurrentManifestSchemaVersion,
   type ProjectTransferManifest,
   type ProjectTransferManifestPayload,
+  projectTransferManifestSchemaVersion,
+  type ProjectTransferPackagePayloadKey,
   type ProjectTransferPackageWarning,
   projectTransferPayloadFormatByKey,
   type ProjectTransferPayloadKey,
@@ -157,7 +166,7 @@ type JsonMetrics = {depth: number; memberCount: number}
 type ProjectTransferStagedPayloadParse = {
   blockers: ProjectTransferPlanBlocker[]
   metadata: ProjectTransferStagedPayloadMetadata
-  payload: ProjectTransferPayload
+  payload: unknown
   warnings: ProjectTransferPackageWarning[]
 }
 
@@ -423,6 +432,16 @@ const getPayloadRecordCount = (key: ProjectTransferPayloadKey, payload: ProjectT
           : 0
 }
 
+const getPackagePayloadRecordCount = (key: ProjectTransferPackagePayloadKey, payload: unknown) => {
+  return payload === null || payload === undefined
+    ? null
+    : key === 'project'
+      ? 1
+      : Array.isArray(payload)
+        ? payload.length
+        : 0
+}
+
 const getCompletePayloadCounts = (
   payloads: Partial<ProjectTransferPayloadByKey>,
   manifest: ProjectTransferManifest,
@@ -432,9 +451,27 @@ const getCompletePayloadCounts = (
       const payload: ProjectTransferPayload | null = payloads[key] ?? null
       const count = getPayloadRecordCount(key, payload)
 
-      return {...counts, [key]: count ?? manifest.payloads[key].recordCount}
+      return {...counts, [key]: count ?? manifest.payloads[key]?.recordCount ?? 0}
     },
     {} as Record<ProjectTransferPayloadKey, number>,
+  )
+}
+
+const getCompletePackagePayloadCounts = ({
+  manifest,
+  packagePayloads,
+}: {
+  manifest: ProjectTransferManifest
+  packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
+}) => {
+  return getProjectTransferPayloadKeysForSchemaVersion(manifest.schemaVersion).reduce<Record<string, number>>(
+    (counts, key) => {
+      const payload = packagePayloads[key]
+      const count = getPackagePayloadRecordCount(key, payload)
+
+      return {...counts, [key]: count ?? manifest.payloads[key]?.recordCount ?? 0}
+    },
+    {},
   )
 }
 
@@ -509,6 +546,7 @@ const getResolvedPayloadArtifactPath = ({
     ...runtimeOptions,
     archiveMemberPath: projectTransferPayloadPathByKey[key],
     extractionRootPath,
+    schemaVersion: projectTransferCurrentManifestSchemaVersion,
   })
 }
 
@@ -545,14 +583,14 @@ const getStagedNdjsonBlocker = ({
   message,
 }: {
   code: string
-  key: ProjectTransferPayloadKey
+  key: ProjectTransferPackagePayloadKey
   lineNumber: number
   message: string
 }) => {
   return getPlanBlocker({code, message: `${key}[${lineNumber}] ${message}`, scope: `${key}[${lineNumber}]`})
 }
 
-const sanitizeStreamedNdjsonRecord = (key: ProjectTransferPayloadKey, record: ProjectTransferPayloadRecord) => {
+const getNormalizedStreamedNdjsonRecord = (key: ProjectTransferPackagePayloadKey, record: Record<string, unknown>) => {
   return key === 'articles' ? sanitizeLegacyArticlePayload(record) : record
 }
 
@@ -560,11 +598,13 @@ const getStreamedNdjsonLineValue = ({
   key,
   line,
   lineNumber,
+  schemaVersion,
 }: {
-  key: ProjectTransferPayloadKey
+  key: ProjectTransferPackagePayloadKey
   line: string
   lineNumber: number
-}): {blocker: ProjectTransferPlanBlocker; ok: false} | {ok: true; value: ProjectTransferPayloadRecord} | null => {
+  schemaVersion: ProjectTransferManifest['schemaVersion']
+}): {blocker: ProjectTransferPlanBlocker; ok: false} | {ok: true; value: Record<string, unknown>} | null => {
   if (line.trim() === '') {
     return null
   }
@@ -583,10 +623,10 @@ const getStreamedNdjsonLineValue = ({
     }
   }
 
-  const validated = validateProjectTransferPayloadRow(key, parsed.value, lineNumber)
+  const validated = validateProjectTransferPayloadRowForSchemaVersion(schemaVersion, key, parsed.value, lineNumber)
 
   return validated.ok
-    ? {ok: true, value: sanitizeStreamedNdjsonRecord(key, validated.value)}
+    ? {ok: true, value: getNormalizedStreamedNdjsonRecord(key, validated.value)}
     : {
         blocker: getStagedNdjsonBlocker({
           code: 'payload_row_contract_invalid',
@@ -599,6 +639,7 @@ const getStreamedNdjsonLineValue = ({
 }
 
 const appendStagedNdjsonLine = async ({
+  artifactKey,
   hash,
   key,
   lineNumber,
@@ -606,14 +647,15 @@ const appendStagedNdjsonLine = async ({
   stream,
   value,
 }: {
+  artifactKey: ProjectTransferPayloadKey
   hash: ReturnType<typeof createHash>
-  key: ProjectTransferPayloadKey
+  key: ProjectTransferPackagePayloadKey
   lineNumber: number
   state: ProjectTransferNdjsonStreamState
   stream: WriteStream
-  value: ProjectTransferPayloadRecord
+  value: Record<string, unknown>
 }) => {
-  const serializedLine = `${serializeProjectTransferPayloadNdjsonRow(key, value, lineNumber)}\n`
+  const serializedLine = `${serializeProjectTransferPayloadNdjsonRow(artifactKey, value, lineNumber)}\n`
   const lineBytes = textEncoder.encode(serializedLine)
 
   await writeTextToStream(stream, serializedLine)
@@ -628,19 +670,23 @@ const appendStagedNdjsonLine = async ({
 }
 
 const processStagedNdjsonLine = async ({
+  artifactKey,
   hash,
   key,
   line,
+  schemaVersion,
   state,
   stream,
 }: {
+  artifactKey: ProjectTransferPayloadKey
   hash: ReturnType<typeof createHash>
-  key: ProjectTransferPayloadKey
+  key: ProjectTransferPackagePayloadKey
   line: string
+  schemaVersion: ProjectTransferManifest['schemaVersion']
   state: ProjectTransferNdjsonStreamState
   stream: WriteStream
 }) => {
-  const lineValue = getStreamedNdjsonLineValue({key, line, lineNumber: state.lineNumber})
+  const lineValue = getStreamedNdjsonLineValue({key, line, lineNumber: state.lineNumber, schemaVersion})
 
   if (lineValue === null) {
     return state
@@ -656,18 +702,22 @@ const processStagedNdjsonLine = async ({
     return state
   }
 
-  return appendStagedNdjsonLine({hash, key, lineNumber, state, stream, value: lineValue.value})
+  return appendStagedNdjsonLine({artifactKey, hash, key, lineNumber, state, stream, value: lineValue.value})
 }
 
 const processStagedNdjsonText = async ({
+  artifactKey,
   hash,
   key,
+  schemaVersion,
   state,
   stream,
   text,
 }: {
+  artifactKey: ProjectTransferPayloadKey
   hash: ReturnType<typeof createHash>
-  key: ProjectTransferPayloadKey
+  key: ProjectTransferPackagePayloadKey
+  schemaVersion: ProjectTransferManifest['schemaVersion']
   state: ProjectTransferNdjsonStreamState
   stream: WriteStream
   text: string
@@ -679,9 +729,11 @@ const processStagedNdjsonText = async ({
   while (newlineIndex !== -1) {
     nextState.carry = ''
     nextState = await processStagedNdjsonLine({
+      artifactKey,
       hash,
       key,
       line: remaining.slice(0, newlineIndex),
+      schemaVersion,
       state: nextState,
       stream,
     })
@@ -695,17 +747,21 @@ const processStagedNdjsonText = async ({
 }
 
 const parseAndStageNdjsonPayloadEntry = async ({
+  artifactKey,
   entry,
   extractionRootPath,
   key,
   runtimeOptions,
+  schemaVersion,
 }: {
+  artifactKey: ProjectTransferPayloadKey
   entry: ProjectTransferZipReadEntry
   extractionRootPath: string
-  key: ProjectTransferPayloadKey
+  key: ProjectTransferPackagePayloadKey
   runtimeOptions: ProjectTransferAnalyzeRuntimeOptions
+  schemaVersion: ProjectTransferManifest['schemaVersion']
 }): Promise<ProjectTransferStagedPayloadParse> => {
-  const resolvedPath = getResolvedPayloadArtifactPath({extractionRootPath, key, runtimeOptions})
+  const resolvedPath = getResolvedPayloadArtifactPath({extractionRootPath, key: artifactKey, runtimeOptions})
   await mkdir(dirname(resolvedPath), {recursive: true})
 
   const stream = createWriteStream(resolvedPath)
@@ -725,13 +781,23 @@ const parseAndStageNdjsonPayloadEntry = async ({
     async (statePromise, chunk) => {
       const state = await statePromise
 
-      return processStagedNdjsonText({hash, key, state, stream, text: decoder.decode(chunk, {stream: true})})
+      return processStagedNdjsonText({
+        artifactKey,
+        hash,
+        key,
+        schemaVersion,
+        state,
+        stream,
+        text: decoder.decode(chunk, {stream: true}),
+      })
     },
     Promise.resolve(initialState),
   )
   const afterFinalDecode = await processStagedNdjsonText({
+    artifactKey,
     hash,
     key,
+    schemaVersion,
     state: afterChunks,
     stream,
     text: decoder.decode(),
@@ -740,16 +806,18 @@ const parseAndStageNdjsonPayloadEntry = async ({
     afterFinalDecode.carry === ''
       ? afterFinalDecode
       : await processStagedNdjsonLine({
+          artifactKey,
           hash,
           key,
           line: afterFinalDecode.carry,
+          schemaVersion,
           state: {...afterFinalDecode, carry: ''},
           stream,
         })
 
   await closeWriteStream(stream)
 
-  const payload = assertProjectTransferPayload(key, completedState.records)
+  const payload = assertProjectTransferPayload(artifactKey, completedState.records)
 
   return {
     blockers: completedState.blockers,
@@ -768,19 +836,160 @@ const parseAndStageNdjsonPayloadEntry = async ({
 }
 
 const parseAndStageJsonPayloadEntry = async ({
+  artifactKey,
   entry,
   extractionRootPath,
   key,
   runtimeOptions,
+  schemaVersion,
 }: {
+  artifactKey: ProjectTransferPayloadKey
   entry: ProjectTransferZipReadEntry
   extractionRootPath: string
-  key: ProjectTransferPayloadKey
+  key: ProjectTransferPackagePayloadKey
   runtimeOptions: ProjectTransferAnalyzeRuntimeOptions
+  schemaVersion: ProjectTransferManifest['schemaVersion']
 }): Promise<ProjectTransferStagedPayloadParse> => {
-  const payload = sanitizeLegacyPayloads({[key]: parseProjectTransferPayload(key, entry.bytes)})[
-    key
-  ] as ProjectTransferPayload
+  const packagePayload = parseProjectTransferPayloadForSchemaVersion(schemaVersion, key, entry.bytes)
+  const payload = sanitizeLegacyPayloads({[artifactKey]: packagePayload})[artifactKey] as ProjectTransferPayload
+  const serializedPayload = serializeProjectTransferPayload(artifactKey, payload as never)
+  const serializedBytes = textEncoder.encode(serializedPayload)
+  const resolvedPath = getResolvedPayloadArtifactPath({extractionRootPath, key: artifactKey, runtimeOptions})
+
+  await mkdir(dirname(resolvedPath), {recursive: true})
+  await globalThis.Bun.write(resolvedPath, serializedPayload)
+
+  return {
+    blockers: getInternalAnnotationBlockers(artifactKey, payload),
+    metadata: {
+      archiveByteLength: entry.uncompressedSize,
+      archiveChecksumSha256: entry.checksumSha256,
+      canonicalByteLength: serializedBytes.byteLength,
+      canonicalChecksumSha256: getProjectTransferSha256Checksum(serializedBytes),
+      invalidRecordCount: 0,
+      logicalDigestSha256: null,
+      recordCount: getPayloadRecordCount(artifactKey, payload),
+    },
+    payload,
+    warnings: getPackageWarningsFromPayload(payload),
+  }
+}
+
+const parseAndStagePayloadEntry = (input: {
+  artifactKey: ProjectTransferPayloadKey
+  entry: ProjectTransferZipReadEntry
+  extractionRootPath: string
+  key: ProjectTransferPackagePayloadKey
+  runtimeOptions: ProjectTransferAnalyzeRuntimeOptions
+  schemaVersion: ProjectTransferManifest['schemaVersion']
+}) => {
+  const format = getProjectTransferPayloadFormatForSchemaVersion({key: input.key, schemaVersion: input.schemaVersion})
+
+  return format === 'ndjson' ? parseAndStageNdjsonPayloadEntry(input) : parseAndStageJsonPayloadEntry(input)
+}
+
+const parsePackageOnlyPayloadEntry = ({
+  entry,
+  key,
+  schemaVersion,
+}: {
+  entry: ProjectTransferZipReadEntry
+  key: ProjectTransferPackagePayloadKey
+  schemaVersion: ProjectTransferManifest['schemaVersion']
+}): ProjectTransferStagedPayloadParse => {
+  const payload = parseProjectTransferPayloadForSchemaVersion(schemaVersion, key, entry.bytes)
+  const serializedPayload = serializeProjectTransferPayloadForSchemaVersion(schemaVersion, key, payload)
+  const serializedBytes = textEncoder.encode(serializedPayload)
+
+  return {
+    blockers: [],
+    metadata: {
+      archiveByteLength: entry.uncompressedSize,
+      archiveChecksumSha256: entry.checksumSha256,
+      canonicalByteLength: serializedBytes.byteLength,
+      canonicalChecksumSha256: getProjectTransferSha256Checksum(serializedBytes),
+      invalidRecordCount: 0,
+      logicalDigestSha256: null,
+      recordCount: getPackagePayloadRecordCount(key, payload),
+    },
+    payload,
+    warnings: [],
+  }
+}
+
+const getCurrentPayloadKeyForPackageKey = (key: ProjectTransferPackagePayloadKey): ProjectTransferPayloadKey | null => {
+  return key === 'assetEntries' || key === 'assetReferences' ? null : key
+}
+
+const getLegacyPayloadPathForSchemaVNextPayloadKey = (key: ProjectTransferPackagePayloadKey) => {
+  const currentKey = getCurrentPayloadKeyForPackageKey(key)
+
+  return currentKey === null ? null : projectTransferPayloadPathByKey[currentKey]
+}
+
+const getAssetReferenceFromSchemaVNextReference = (
+  reference: ProjectTransferSchemaVNextAssetReferencePayloadRecord,
+): ProjectTransferAssetReference => {
+  const payloadFile = getLegacyPayloadPathForSchemaVNextPayloadKey(reference.payloadKey)
+
+  if (payloadFile === null) {
+    return failProjectTransferAnalyze(
+      'asset_reference_payload',
+      `${reference.assetPackagePath} references unsupported payload key ${reference.payloadKey}`,
+    )
+  }
+
+  return {
+    ...(reference.fieldPath === undefined ? {} : {fieldPath: reference.fieldPath}),
+    ...(reference.jsonPointer === undefined ? {} : {jsonPointer: reference.jsonPointer}),
+    kind: reference.kind,
+    payloadFile,
+    ...(reference.sourceArticleId === undefined ? {} : {sourceArticleId: reference.sourceArticleId}),
+    sourceRef: reference.sourceRef ?? reference.sourceArticleId ?? reference.assetPackagePath,
+  }
+}
+
+const getAssetManifestFromSchemaVNextPayloads = ({
+  assetEntries,
+  assetReferences,
+}: {
+  assetEntries: ProjectTransferSchemaVNextAssetEntryPayloadRecord[]
+  assetReferences: ProjectTransferSchemaVNextAssetReferencePayloadRecord[]
+}) => {
+  const referencesByAssetPath = assetReferences.reduce<Map<string, ProjectTransferAssetReference[]>>(
+    (referenceMap, reference) => {
+      const existing = referenceMap.get(reference.assetPackagePath) ?? []
+
+      referenceMap.set(reference.assetPackagePath, [...existing, getAssetReferenceFromSchemaVNextReference(reference)])
+
+      return referenceMap
+    },
+    new Map(),
+  )
+  const entries = assetEntries.map((entry) => {
+    return {
+      ...(entry.contentType === undefined ? {} : {contentType: entry.contentType}),
+      byteLength: entry.byteLength,
+      checksumSha256: entry.checksumSha256,
+      packagePath: entry.packagePath,
+      references: referencesByAssetPath.get(entry.packagePath) ?? [],
+    }
+  })
+
+  return assertProjectTransferPayload('assetManifest', {entries})
+}
+
+const stageNormalizedPayloadArtifact = async ({
+  extractionRootPath,
+  key,
+  payload,
+  runtimeOptions,
+}: {
+  extractionRootPath: string
+  key: ProjectTransferPayloadKey
+  payload: ProjectTransferPayload
+  runtimeOptions: ProjectTransferAnalyzeRuntimeOptions
+}): Promise<ProjectTransferStagedPayloadMetadata> => {
   const serializedPayload = serializeProjectTransferPayload(key, payload as never)
   const serializedBytes = textEncoder.encode(serializedPayload)
   const resolvedPath = getResolvedPayloadArtifactPath({extractionRootPath, key, runtimeOptions})
@@ -789,30 +998,14 @@ const parseAndStageJsonPayloadEntry = async ({
   await globalThis.Bun.write(resolvedPath, serializedPayload)
 
   return {
-    blockers: getInternalAnnotationBlockers(key, payload),
-    metadata: {
-      archiveByteLength: entry.uncompressedSize,
-      archiveChecksumSha256: entry.checksumSha256,
-      canonicalByteLength: serializedBytes.byteLength,
-      canonicalChecksumSha256: getProjectTransferSha256Checksum(serializedBytes),
-      invalidRecordCount: 0,
-      logicalDigestSha256: null,
-      recordCount: getPayloadRecordCount(key, payload),
-    },
-    payload,
-    warnings: getPackageWarningsFromPayload(payload),
+    archiveByteLength: null,
+    archiveChecksumSha256: null,
+    canonicalByteLength: serializedBytes.byteLength,
+    canonicalChecksumSha256: getProjectTransferSha256Checksum(serializedBytes),
+    invalidRecordCount: 0,
+    logicalDigestSha256: null,
+    recordCount: getPayloadRecordCount(key, payload),
   }
-}
-
-const parseAndStagePayloadEntry = (input: {
-  entry: ProjectTransferZipReadEntry
-  extractionRootPath: string
-  key: ProjectTransferPayloadKey
-  runtimeOptions: ProjectTransferAnalyzeRuntimeOptions
-}) => {
-  return projectTransferPayloadFormatByKey[input.key] === 'ndjson'
-    ? parseAndStageNdjsonPayloadEntry(input)
-    : parseAndStageJsonPayloadEntry(input)
 }
 
 const assertPayloadChecksum = ({
@@ -842,107 +1035,189 @@ const parsePayloads = ({
   manifest: ProjectTransferManifest
   runtimeOptions: ProjectTransferAnalyzeRuntimeOptions
 }) => {
-  return projectTransferPayloadKeys.reduce<
-    Promise<{
-      blockers: ProjectTransferPlanBlocker[]
-      payloadAnalysis: Partial<Record<ProjectTransferPayloadKey, ProjectTransferPayloadAnalysis>>
-      payloads: Partial<ProjectTransferPayloadByKey>
-      stagedPayloads: Partial<Record<ProjectTransferPayloadKey, ProjectTransferStagedPayloadMetadata>>
-      warnings: ProjectTransferPackageWarning[]
-    }>
-  >(
-    async (statePromise, key) => {
-      const state = await statePromise
-      const manifestPayload = manifest.payloads[key]
-      const entry = entriesByPath.get(manifestPayload.path) ?? null
+  const packageKeys = getProjectTransferPayloadKeysForSchemaVersion(manifest.schemaVersion)
 
-      if (entry === null) {
+  return packageKeys
+    .reduce<
+      Promise<{
+        blockers: ProjectTransferPlanBlocker[]
+        packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
+        packageStagedPayloads: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferStagedPayloadMetadata>>
+        payloadAnalysis: Partial<Record<ProjectTransferPayloadKey, ProjectTransferPayloadAnalysis>>
+        payloads: Partial<ProjectTransferPayloadByKey>
+        stagedPayloads: Partial<Record<ProjectTransferPayloadKey, ProjectTransferStagedPayloadMetadata>>
+        warnings: ProjectTransferPackageWarning[]
+      }>
+    >(
+      async (statePromise, key) => {
+        const state = await statePromise
+        const manifestPayload = manifest.payloads[key]
+        const entry = entriesByPath.get(manifestPayload.path) ?? null
+        const artifactKey = getCurrentPayloadKeyForPackageKey(key)
+
+        if (entry === null) {
+          return {
+            ...state,
+            blockers: [
+              ...state.blockers,
+              getPlanBlocker({
+                code: 'missing_payload_file',
+                message: `${manifestPayload.path} is missing from the package archive`,
+                scope: key,
+              }),
+            ],
+            ...(artifactKey === null
+              ? {
+                  packageStagedPayloads: {
+                    ...state.packageStagedPayloads,
+                    [key]: {
+                      archiveByteLength: null,
+                      archiveChecksumSha256: null,
+                      canonicalByteLength: null,
+                      canonicalChecksumSha256: null,
+                      invalidRecordCount: 0,
+                      logicalDigestSha256: null,
+                      recordCount: null,
+                    },
+                  },
+                }
+              : {
+                  payloadAnalysis: {
+                    ...state.payloadAnalysis,
+                    [artifactKey]: {
+                      ...manifestPayload,
+                      actualByteLength: null,
+                      actualChecksumSha256: null,
+                      actualRecordCount: null,
+                      key: artifactKey,
+                    },
+                  },
+                  stagedPayloads: {
+                    ...state.stagedPayloads,
+                    [artifactKey]: {
+                      archiveByteLength: null,
+                      archiveChecksumSha256: null,
+                      canonicalByteLength: null,
+                      canonicalChecksumSha256: null,
+                      invalidRecordCount: 0,
+                      logicalDigestSha256: null,
+                      recordCount: null,
+                    },
+                  },
+                }),
+          }
+        }
+
+        assertPayloadChecksum({entry, manifestPayload, scope: key})
+
+        const stagedPayload =
+          artifactKey === null
+            ? parsePackageOnlyPayloadEntry({entry, key, schemaVersion: manifest.schemaVersion})
+            : await parseAndStagePayloadEntry({
+                artifactKey,
+                entry,
+                extractionRootPath,
+                key,
+                runtimeOptions,
+                schemaVersion: manifest.schemaVersion,
+              })
+        const payload = stagedPayload.payload
+        const recordCount = stagedPayload.metadata.recordCount
+        const byteLengthBlocker =
+          entry.uncompressedSize === manifestPayload.byteLength
+            ? []
+            : [
+                getPlanBlocker({
+                  code: 'payload_byte_length_mismatch',
+                  message: `${key} byteLength is ${entry.uncompressedSize}, expected ${manifestPayload.byteLength}`,
+                  scope: key,
+                }),
+              ]
+        const recordCountBlocker =
+          recordCount === manifestPayload.recordCount
+            ? []
+            : [
+                getPlanBlocker({
+                  code: 'payload_record_count_mismatch',
+                  message: `${key} recordCount is ${recordCount}, expected ${manifestPayload.recordCount}`,
+                  scope: key,
+                }),
+              ]
+
         return {
-          ...state,
-          blockers: [
-            ...state.blockers,
-            getPlanBlocker({
-              code: 'missing_payload_file',
-              message: `${manifestPayload.path} is missing from the package archive`,
-              scope: key,
-            }),
-          ],
+          blockers: [...state.blockers, ...stagedPayload.blockers, ...byteLengthBlocker, ...recordCountBlocker],
+          packagePayloads: {...state.packagePayloads, [key]: payload},
+          packageStagedPayloads: {...state.packageStagedPayloads, [key]: stagedPayload.metadata},
           payloadAnalysis: {
             ...state.payloadAnalysis,
-            [key]: {
-              ...manifestPayload,
-              actualByteLength: null,
-              actualChecksumSha256: null,
-              actualRecordCount: null,
-              key,
-            },
+            ...(artifactKey === null
+              ? {}
+              : {
+                  [artifactKey]: {
+                    ...manifestPayload,
+                    actualByteLength: entry.uncompressedSize,
+                    actualChecksumSha256: entry.checksumSha256,
+                    actualRecordCount: recordCount,
+                    key: artifactKey,
+                  },
+                }),
+          },
+          payloads: {
+            ...state.payloads,
+            ...(artifactKey === null ? {} : {[artifactKey]: payload as ProjectTransferPayload}),
           },
           stagedPayloads: {
             ...state.stagedPayloads,
-            [key]: {
-              archiveByteLength: null,
-              archiveChecksumSha256: null,
-              canonicalByteLength: null,
-              canonicalChecksumSha256: null,
-              invalidRecordCount: 0,
-              logicalDigestSha256: null,
-              recordCount: null,
-            },
+            ...(artifactKey === null ? {} : {[artifactKey]: stagedPayload.metadata}),
           },
+          warnings: [...state.warnings, ...stagedPayload.warnings],
         }
+      },
+      Promise.resolve({
+        blockers: [],
+        packagePayloads: {},
+        packageStagedPayloads: {},
+        payloadAnalysis: {},
+        payloads: {},
+        stagedPayloads: {},
+        warnings: manifest.warnings ?? [],
+      }),
+    )
+    .then(async (state) => {
+      if (manifest.schemaVersion !== projectTransferSchemaVNextManifestSchemaVersion) {
+        return state
       }
 
-      assertPayloadChecksum({entry, manifestPayload, scope: key})
-
-      const stagedPayload = await parseAndStagePayloadEntry({entry, extractionRootPath, key, runtimeOptions})
-      const payload = stagedPayload.payload
-      const recordCount = stagedPayload.metadata.recordCount
-      const byteLengthBlocker =
-        entry.uncompressedSize === manifestPayload.byteLength
-          ? []
-          : [
-              getPlanBlocker({
-                code: 'payload_byte_length_mismatch',
-                message: `${key} byteLength is ${entry.uncompressedSize}, expected ${manifestPayload.byteLength}`,
-                scope: key,
-              }),
-            ]
-      const recordCountBlocker =
-        recordCount === manifestPayload.recordCount
-          ? []
-          : [
-              getPlanBlocker({
-                code: 'payload_record_count_mismatch',
-                message: `${key} recordCount is ${recordCount}, expected ${manifestPayload.recordCount}`,
-                scope: key,
-              }),
-            ]
+      const assetEntries = state.packagePayloads.assetEntries ?? []
+      const assetReferences = state.packagePayloads.assetReferences ?? []
+      const assetManifest = getAssetManifestFromSchemaVNextPayloads({assetEntries, assetReferences})
+      const assetManifestMetadata = await stageNormalizedPayloadArtifact({
+        extractionRootPath,
+        key: 'assetManifest',
+        payload: assetManifest,
+        runtimeOptions,
+      })
 
       return {
-        blockers: [...state.blockers, ...stagedPayload.blockers, ...byteLengthBlocker, ...recordCountBlocker],
+        ...state,
         payloadAnalysis: {
           ...state.payloadAnalysis,
-          [key]: {
-            ...manifestPayload,
-            actualByteLength: entry.uncompressedSize,
-            actualChecksumSha256: entry.checksumSha256,
-            actualRecordCount: recordCount,
-            key,
+          assetManifest: {
+            byteLength: assetManifestMetadata.canonicalByteLength ?? 0,
+            checksumSha256: assetManifestMetadata.canonicalChecksumSha256 ?? '',
+            format: 'json',
+            path: projectTransferPayloadPathByKey.assetManifest,
+            recordCount: assetManifest.entries.length,
+            actualByteLength: assetManifestMetadata.canonicalByteLength,
+            actualChecksumSha256: assetManifestMetadata.canonicalChecksumSha256,
+            actualRecordCount: assetManifest.entries.length,
+            key: 'assetManifest',
           },
         },
-        payloads: {...state.payloads, [key]: payload},
-        stagedPayloads: {...state.stagedPayloads, [key]: stagedPayload.metadata},
-        warnings: [...state.warnings, ...stagedPayload.warnings],
+        payloads: {...state.payloads, assetManifest},
+        stagedPayloads: {...state.stagedPayloads, assetManifest: assetManifestMetadata},
       }
-    },
-    Promise.resolve({
-      blockers: [],
-      payloadAnalysis: {},
-      payloads: {},
-      stagedPayloads: {},
-      warnings: manifest.warnings ?? [],
-    }),
-  )
+    })
 }
 
 const getPayloadAnalysisRecord = (
@@ -971,14 +1246,16 @@ const getPayloadAnalysisRecord = (
 
 const getProjectSummaryBlockers = ({
   manifest,
+  packagePayloads,
   payloads,
 }: {
   manifest: ProjectTransferManifest
+  packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
   payloads: Partial<ProjectTransferPayloadByKey>
 }) => {
   const project = payloads.project ?? null
-  const counts = getCompletePayloadCounts(payloads, manifest)
-  const countBlockers = projectTransferPayloadKeys
+  const counts = getCompletePackagePayloadCounts({manifest, packagePayloads})
+  const countBlockers = getProjectTransferPayloadKeysForSchemaVersion(manifest.schemaVersion)
     .filter((key) => {
       return manifest.project.counts[key] !== counts[key]
     })
@@ -1062,12 +1339,19 @@ const getCurrentModelBlockers = ({
     })
 }
 
-const getPayloadPathSet = () => {
-  return new Set(
-    projectTransferPayloadKeys.map((key) => {
-      return projectTransferPayloadPathByKey[key]
-    }),
-  )
+const getPayloadPathSet = (
+  schemaVersion: ProjectTransferManifest['schemaVersion'] = projectTransferManifestSchemaVersion,
+) => {
+  const currentPayloadPaths = projectTransferPayloadKeys.map((key) => {
+    return projectTransferPayloadPathByKey[key]
+  })
+  const schemaPayloadPaths = getProjectTransferPayloadKeysForSchemaVersion(schemaVersion).flatMap((key) => {
+    const path = getProjectTransferPayloadPathForSchemaVersion({key, schemaVersion})
+
+    return path === undefined ? [] : [path]
+  })
+
+  return new Set([...currentPayloadPaths, ...schemaPayloadPaths])
 }
 
 const getAssetManifest = (payloads: Partial<ProjectTransferPayloadByKey>) => {
@@ -1257,12 +1541,14 @@ const getPackageFingerprintBlockers = ({
   }
 
   return computedPackageFingerprint === manifest.packageFingerprint
-    || legacyPackageFingerprint === manifest.packageFingerprint
     ? []
     : [
         getPlanBlocker({
-          code: 'package_fingerprint_mismatch',
-          message: 'manifest packageFingerprint does not match the analyzed package fingerprint',
+          code: 'unsupported_package_fingerprint',
+          message:
+            legacyPackageFingerprint === manifest.packageFingerprint
+              ? 'manifest packageFingerprint uses an unsupported pre-cutover fingerprint format'
+              : 'manifest packageFingerprint does not match the supported package fingerprint',
           scope: 'manifest.packageFingerprint',
         }),
       ]
@@ -1270,16 +1556,16 @@ const getPackageFingerprintBlockers = ({
 
 const getComputedPackageFingerprint = ({
   manifest,
-  payloads,
+  packagePayloads,
 }: {
   manifest: ProjectTransferManifest
-  payloads: Partial<ProjectTransferPayloadByKey>
+  packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
 }) => {
-  const hasEveryPayload = projectTransferPayloadKeys.every((key) => {
-    return payloads[key] !== undefined
+  const hasEveryPayload = getProjectTransferPayloadKeysForSchemaVersion(manifest.schemaVersion).every((key) => {
+    return packagePayloads[key] !== undefined
   })
 
-  return hasEveryPayload ? getProjectTransferPackageFingerprint({manifest, payloads}) : null
+  return hasEveryPayload ? getProjectTransferPackageFingerprint({manifest, payloads: packagePayloads}) : null
 }
 
 const getSemanticBlockers = ({
@@ -1287,16 +1573,18 @@ const getSemanticBlockers = ({
   computedPackageFingerprint,
   legacyPackageFingerprint,
   manifest,
+  packagePayloads,
   payloads,
 }: {
   archiveEntries: readonly ProjectTransferZipReadEntry[]
   computedPackageFingerprint: string | null
   legacyPackageFingerprint: string | null
   manifest: ProjectTransferManifest
+  packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
   payloads: Partial<ProjectTransferPayloadByKey>
 }) => {
   return [
-    ...getProjectSummaryBlockers({manifest, payloads}),
+    ...getProjectSummaryBlockers({manifest, packagePayloads, payloads}),
     ...getCurrentModelBlockers({manifest, payloads}),
     ...getAssetBlockers({archiveEntries, manifest, payloads}),
     ...getPackageFingerprintBlockers({computedPackageFingerprint, legacyPackageFingerprint, manifest}),
@@ -1505,7 +1793,7 @@ const assertJsonMetricsResourceGate = ({
 }
 
 const getManifestPayloadByteTotal = (manifest: ProjectTransferManifest) => {
-  return projectTransferPayloadKeys.reduce((total, key) => {
+  return getProjectTransferPayloadKeysForSchemaVersion(manifest.schemaVersion).reduce((total, key) => {
     return total + (manifest.payloads[key]?.byteLength ?? 0)
   }, 0)
 }
@@ -1520,7 +1808,8 @@ const getStagingResourceBudgetBytes = ({
   manifest: ProjectTransferManifest
 }) => {
   const payloadBytes = getManifestPayloadByteTotal(manifest)
-  const metadataBytes = projectTransferPayloadKeys.length * 256 + archiveMemberCount * 128
+  const metadataBytes =
+    getProjectTransferPayloadKeysForSchemaVersion(manifest.schemaVersion).length * 256 + archiveMemberCount * 128
 
   return expandedBytes + payloadBytes + metadataBytes
 }
@@ -1565,11 +1854,11 @@ const assertStagingResourceGate = ({
 }
 
 const assertActiveImportSchema = (manifest: ProjectTransferManifest) => {
-  return manifest.schemaVersion === projectTransferCurrentManifestSchemaVersion
+  return manifest.schemaVersion === projectTransferManifestSchemaVersion
     ? undefined
     : failProjectTransferAnalyze(
         'unsupported_schema_version',
-        `schema ${projectTransferSchemaVNextManifestSchemaVersion} import is disabled until exporter/importer cutover`,
+        `schema ${manifest.schemaVersion} import is unsupported after project-transfer schema ${projectTransferManifestSchemaVersion} cutover`,
       )
 }
 
@@ -1586,10 +1875,11 @@ const getArchiveEntryChecksums = (entries: readonly ProjectTransferZipReadEntry[
 }
 
 const getMetadataNumberRecord = (
-  stagedPayloads: Partial<Record<ProjectTransferPayloadKey, ProjectTransferStagedPayloadMetadata>>,
+  schemaVersion: ProjectTransferManifest['schemaVersion'],
+  stagedPayloads: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferStagedPayloadMetadata>>,
   field: keyof Pick<ProjectTransferStagedPayloadMetadata, 'canonicalByteLength' | 'recordCount'>,
 ) => {
-  return projectTransferPayloadKeys.reduce<Record<string, number>>((counts, key) => {
+  return getProjectTransferPayloadKeysForSchemaVersion(schemaVersion).reduce<Record<string, number>>((counts, key) => {
     const value = stagedPayloads[key]?.[field]
 
     return typeof value === 'number' ? {...counts, [key]: value} : counts
@@ -1597,14 +1887,18 @@ const getMetadataNumberRecord = (
 }
 
 const getMetadataStringRecord = (
-  stagedPayloads: Partial<Record<ProjectTransferPayloadKey, ProjectTransferStagedPayloadMetadata>>,
+  schemaVersion: ProjectTransferManifest['schemaVersion'],
+  stagedPayloads: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferStagedPayloadMetadata>>,
   field: keyof Pick<ProjectTransferStagedPayloadMetadata, 'canonicalChecksumSha256' | 'logicalDigestSha256'>,
 ) => {
-  return projectTransferPayloadKeys.reduce<Record<string, string>>((checksums, key) => {
-    const value = stagedPayloads[key]?.[field]
+  return getProjectTransferPayloadKeysForSchemaVersion(schemaVersion).reduce<Record<string, string>>(
+    (checksums, key) => {
+      const value = stagedPayloads[key]?.[field]
 
-    return typeof value === 'string' ? {...checksums, [key]: value} : checksums
-  }, {})
+      return typeof value === 'string' ? {...checksums, [key]: value} : checksums
+    },
+    {},
+  )
 }
 
 const getLogicalPayloadDigest = ({
@@ -1612,9 +1906,9 @@ const getLogicalPayloadDigest = ({
   manifest,
   payload,
 }: {
-  key: ProjectTransferPayloadKey
+  key: ProjectTransferPackagePayloadKey
   manifest: ProjectTransferManifest
-  payload: ProjectTransferPayload
+  payload: unknown
 }) => {
   const logicalPayload = getProjectTransferLogicalFingerprintValue(payload)
 
@@ -1625,18 +1919,23 @@ const getLogicalPayloadDigest = ({
 
 const getStagedPayloadsWithLogicalDigests = ({
   manifest,
+  packagePayloads,
+  packageStagedPayloads,
   payloads,
   stagedPayloads,
 }: {
   manifest: ProjectTransferManifest
+  packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
+  packageStagedPayloads: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferStagedPayloadMetadata>>
   payloads: Partial<ProjectTransferPayloadByKey>
   stagedPayloads: Partial<Record<ProjectTransferPayloadKey, ProjectTransferStagedPayloadMetadata>>
 }) => {
-  return projectTransferPayloadKeys.reduce<
-    Partial<Record<ProjectTransferPayloadKey, ProjectTransferStagedPayloadMetadata>>
+  return getProjectTransferPayloadKeysForSchemaVersion(manifest.schemaVersion).reduce<
+    Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferStagedPayloadMetadata>>
   >((metadata, key) => {
-    const stagedPayload = stagedPayloads[key]
-    const payload = payloads[key]
+    const currentKey = getCurrentPayloadKeyForPackageKey(key)
+    const stagedPayload = packageStagedPayloads[key] ?? (currentKey === null ? undefined : stagedPayloads[currentKey])
+    const payload = packagePayloads[key] ?? (currentKey === null ? undefined : payloads[currentKey])
 
     return stagedPayload === undefined || payload === undefined
       ? metadata
@@ -1647,17 +1946,20 @@ const getStagedPayloadsWithLogicalDigests = ({
 const getPackageFingerprintInputMetadata = ({
   manifest,
   payloadDigests,
-  payloads,
+  packagePayloads,
 }: {
   manifest: ProjectTransferManifest
   payloadDigests: Record<string, string>
-  payloads: Partial<ProjectTransferPayloadByKey>
+  packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
 }): ProjectTransferStagedPackageMetadata['packageFingerprintInputs'] => {
-  const fingerprintInputs = getProjectTransferLogicalPackageFingerprintPayload({manifest, payloads})
+  const fingerprintInputs = getProjectTransferLogicalPackageFingerprintPayload({manifest, payloads: packagePayloads})
 
   return {
     checksumSha256: getProjectTransferSha256Checksum(getProjectTransferCanonicalJson(fingerprintInputs)),
-    fingerprintMode: 'logicalPayloads',
+    fingerprintMode:
+      manifest.schemaVersion === projectTransferSchemaVNextManifestSchemaVersion
+        ? 'stagedRowAndSingletonPayloadDigests'
+        : 'logicalPayloads',
     payloadDigests,
     schemaVersion: manifest.schemaVersion,
   }
@@ -1667,17 +1969,31 @@ const getStagedPackageMetadata = ({
   archiveEntries,
   assetManifest,
   manifest,
+  packagePayloads,
+  packageStagedPayloads,
   payloads,
   stagedPayloads,
 }: {
   archiveEntries: readonly ProjectTransferZipReadEntry[]
   assetManifest: ProjectTransferPayloadByKey['assetManifest']
   manifest: ProjectTransferManifest
+  packagePayloads: Partial<ProjectTransferPackagePayloadByKey>
+  packageStagedPayloads: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferStagedPayloadMetadata>>
   payloads: Partial<ProjectTransferPayloadByKey>
   stagedPayloads: Partial<Record<ProjectTransferPayloadKey, ProjectTransferStagedPayloadMetadata>>
 }): ProjectTransferStagedPackageMetadata => {
-  const stagedPayloadsWithDigests = getStagedPayloadsWithLogicalDigests({manifest, payloads, stagedPayloads})
-  const payloadDigests = getMetadataStringRecord(stagedPayloadsWithDigests, 'logicalDigestSha256')
+  const stagedPayloadsWithDigests = getStagedPayloadsWithLogicalDigests({
+    manifest,
+    packagePayloads,
+    packageStagedPayloads,
+    payloads,
+    stagedPayloads,
+  })
+  const payloadDigests = getMetadataStringRecord(
+    manifest.schemaVersion,
+    stagedPayloadsWithDigests,
+    'logicalDigestSha256',
+  )
   const archiveAssetEntries = getArchiveAssetEntries(archiveEntries)
 
   return {
@@ -1688,17 +2004,25 @@ const getStagedPackageMetadata = ({
     ),
     archiveEntryByteCounts: getArchiveEntryByteCounts(archiveEntries),
     archiveEntryChecksums: getArchiveEntryChecksums(archiveEntries),
-    canonicalPayloadByteCounts: getMetadataNumberRecord(stagedPayloadsWithDigests, 'canonicalByteLength'),
-    canonicalPayloadChecksums: getMetadataStringRecord(stagedPayloadsWithDigests, 'canonicalChecksumSha256'),
+    canonicalPayloadByteCounts: getMetadataNumberRecord(
+      manifest.schemaVersion,
+      stagedPayloadsWithDigests,
+      'canonicalByteLength',
+    ),
+    canonicalPayloadChecksums: getMetadataStringRecord(
+      manifest.schemaVersion,
+      stagedPayloadsWithDigests,
+      'canonicalChecksumSha256',
+    ),
     declaredAssetBytes: sumNumbers(
       assetManifest.entries.map((entry) => {
         return entry.byteLength
       }),
     ),
     logicalPayloadDigests: payloadDigests,
-    packageFingerprintInputs: getPackageFingerprintInputMetadata({manifest, payloadDigests, payloads}),
+    packageFingerprintInputs: getPackageFingerprintInputMetadata({manifest, packagePayloads, payloadDigests}),
     payloads: stagedPayloadsWithDigests as Record<string, ProjectTransferStagedPayloadMetadata>,
-    rowCounts: getMetadataNumberRecord(stagedPayloadsWithDigests, 'recordCount'),
+    rowCounts: getMetadataNumberRecord(manifest.schemaVersion, stagedPayloadsWithDigests, 'recordCount'),
     sourceProject: {
       exportedAt: manifest.exportedAt,
       humanJudgmentMode: manifest.project.humanJudgmentMode,
@@ -1875,8 +2199,11 @@ export const analyzeProjectTransferImportPackage = async (
     return parsePayloads({entriesByPath, extractionRootPath: stagingLayout.extractedPath, manifest, runtimeOptions})
   })
   const parsed = parsedMeasurement.value
-  const computedPackageFingerprint = getComputedPackageFingerprint({manifest, payloads: parsed.payloads})
-  const legacyPackageFingerprint = getProjectTransferLegacyPackageFingerprint(manifest)
+  const computedPackageFingerprint = getComputedPackageFingerprint({manifest, packagePayloads: parsed.packagePayloads})
+  const legacyPackageFingerprint =
+    manifest.schemaVersion === projectTransferCurrentManifestSchemaVersion
+      ? getProjectTransferLegacyPackageFingerprint(manifest)
+      : null
   const packageFingerprint = computedPackageFingerprint ?? manifest.packageFingerprint ?? null
   const packageCounts = getCompletePayloadCounts(parsed.payloads, manifest)
   const semanticBlockers = getSemanticBlockers({
@@ -1884,6 +2211,7 @@ export const analyzeProjectTransferImportPackage = async (
     computedPackageFingerprint,
     legacyPackageFingerprint,
     manifest,
+    packagePayloads: parsed.packagePayloads,
     payloads: parsed.payloads,
   })
   const packageContractBlockers = [...parsed.blockers, ...semanticBlockers]
@@ -1952,6 +2280,8 @@ export const analyzeProjectTransferImportPackage = async (
     archiveEntries: zipPackage.entries,
     assetManifest,
     manifest,
+    packagePayloads: parsed.packagePayloads,
+    packageStagedPayloads: parsed.packageStagedPayloads,
     payloads: parsed.payloads,
     stagedPayloads: parsed.stagedPayloads,
   })

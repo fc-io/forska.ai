@@ -2,7 +2,7 @@ import {type as arktype} from 'arktype'
 
 export const projectTransferCurrentManifestSchemaVersion = 1 as const
 export const projectTransferSchemaVNextManifestSchemaVersion = 2 as const
-export const projectTransferManifestSchemaVersion = projectTransferCurrentManifestSchemaVersion
+export const projectTransferManifestSchemaVersion = projectTransferSchemaVNextManifestSchemaVersion
 export const projectTransferSupportedManifestSchemaVersions = [
   projectTransferCurrentManifestSchemaVersion,
   projectTransferSchemaVNextManifestSchemaVersion,

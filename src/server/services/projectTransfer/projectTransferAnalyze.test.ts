@@ -10,23 +10,30 @@ import {analyzeProjectTransferImportPackage} from './projectTransferAnalyze.ts'
 import type {ProjectTransferAnalyzeTargetRunner} from './projectTransferAnalyzeTarget.ts'
 import {
   getProjectTransferCanonicalJson,
-  getProjectTransferLegacyPackageFingerprint,
   getProjectTransferPackageFingerprint,
   getProjectTransferSha256Checksum,
 } from './projectTransferFingerprint.ts'
 import {buildProjectTransferManifest, getProjectTransferManifestPayloadEntry} from './projectTransferManifest.ts'
 import {
   getProjectTransferPayloadFixtureMap,
+  getProjectTransferSchemaVNextFingerprintSortKey,
   type ProjectTransferPayload,
   type ProjectTransferPayloadByKey,
   serializeProjectTransferPayload,
+  serializeProjectTransferPayloadForSchemaVersion,
 } from './projectTransferPayloadSchemas.ts'
 import {
+  getProjectTransferPayloadFormatForSchemaVersion,
+  getProjectTransferPayloadPathForSchemaVersion,
+  projectTransferCurrentManifestSchemaVersion,
   type ProjectTransferManifest,
+  projectTransferManifestSchemaVersion,
+  type ProjectTransferPackagePayloadKey,
   projectTransferPayloadFormatByKey,
   type ProjectTransferPayloadKey,
   projectTransferPayloadKeys,
   projectTransferPayloadPathByKey,
+  projectTransferSchemaVNextPayloadKeys,
 } from './projectTransferSchemas.ts'
 import {getProjectTransferImportTempLayout} from './projectTransferSession.ts'
 import {
@@ -39,9 +46,9 @@ type PackageOverride = {
   manifest?: (manifest: ProjectTransferManifest) => ProjectTransferManifest
   payloads?: (payloads: ProjectTransferPayloadByKey) => ProjectTransferPayloadByKey
   serializedPayloads?: (
-    serializedPayloads: Record<ProjectTransferPayloadKey, string>,
+    serializedPayloads: Record<ProjectTransferPackagePayloadKey, string>,
     payloads: ProjectTransferPayloadByKey,
-  ) => Record<ProjectTransferPayloadKey, string>
+  ) => Record<ProjectTransferPackagePayloadKey, string>
 }
 
 const textEncoder = new TextEncoder()
@@ -179,30 +186,117 @@ const getFixturePayloads = (override?: PackageOverride['payloads']) => {
   return override ? override(withAssetChecksum) : withAssetChecksum
 }
 
-const getSerializedPayloads = (payloads: ProjectTransferPayloadByKey) => {
-  return projectTransferPayloadKeys.reduce<Record<ProjectTransferPayloadKey, string>>(
+const getSchemaVNextAssetEntryPayload = (entry: ProjectTransferPayloadByKey['assetManifest']['entries'][number]) => {
+  const fingerprint = {checksumSha256: entry.checksumSha256, packagePath: entry.packagePath}
+
+  return {
+    ...(entry.contentType === undefined ? {} : {contentType: entry.contentType}),
+    byteLength: entry.byteLength,
+    checksumSha256: entry.checksumSha256,
+    fingerprint,
+    packagePath: entry.packagePath,
+    sortKey: getProjectTransferSchemaVNextFingerprintSortKey(fingerprint),
+  }
+}
+
+const getSchemaVNextAssetReferencePayload = ({
+  assetPackagePath,
+  reference,
+}: {
+  assetPackagePath: string
+  reference: ProjectTransferPayloadByKey['assetManifest']['entries'][number]['references'][number]
+}) => {
+  const payloadKey = 'articles'
+  const payloadPath = getProjectTransferPayloadPathForSchemaVersion({
+    key: payloadKey,
+    schemaVersion: projectTransferManifestSchemaVersion,
+  })
+
+  if (payloadPath === undefined) {
+    throw new Error('Expected schema-vNext articles payload path')
+  }
+
+  const fingerprint = {
+    assetPackagePath,
+    ...(reference.fieldPath === undefined ? {} : {fieldPath: reference.fieldPath}),
+    ...(reference.jsonPointer === undefined ? {} : {jsonPointer: reference.jsonPointer}),
+    kind: reference.kind,
+    payloadKey,
+    payloadPath,
+  }
+
+  return {
+    assetPackagePath,
+    ...(reference.fieldPath === undefined ? {} : {fieldPath: reference.fieldPath}),
+    fingerprint,
+    ...(reference.jsonPointer === undefined ? {} : {jsonPointer: reference.jsonPointer}),
+    kind: reference.kind,
+    payloadKey,
+    payloadPath,
+    sortKey: getProjectTransferSchemaVNextFingerprintSortKey(fingerprint),
+    ...(reference.sourceArticleId === undefined ? {} : {sourceArticleId: reference.sourceArticleId}),
+    ...(reference.sourceRef === undefined ? {} : {sourceRef: reference.sourceRef}),
+  }
+}
+
+const getPackagePayloads = (payloads: ProjectTransferPayloadByKey) => {
+  return {
+    ...payloads,
+    assetEntries: payloads.assetManifest.entries.map(getSchemaVNextAssetEntryPayload),
+    assetReferences: payloads.assetManifest.entries.flatMap((entry) => {
+      return entry.references.map((reference) => {
+        return getSchemaVNextAssetReferencePayload({assetPackagePath: entry.packagePath, reference})
+      })
+    }),
+  }
+}
+
+const getPackagePayloadRecordCount = (key: ProjectTransferPackagePayloadKey, payload: unknown) => {
+  return key === 'project' ? 1 : Array.isArray(payload) ? payload.length : 0
+}
+
+const getSerializedPayloads = (payloads: ReturnType<typeof getPackagePayloads>) => {
+  return projectTransferSchemaVNextPayloadKeys.reduce<Record<ProjectTransferPackagePayloadKey, string>>(
     (serialized, key) => {
-      return {...serialized, [key]: serializeProjectTransferPayload(key, payloads[key])}
+      return {
+        ...serialized,
+        [key]: serializeProjectTransferPayloadForSchemaVersion(
+          projectTransferManifestSchemaVersion,
+          key,
+          payloads[key],
+        ),
+      }
     },
-    {} as Record<ProjectTransferPayloadKey, string>,
+    {} as Record<ProjectTransferPackagePayloadKey, string>,
   )
 }
 
 const getManifestPayloads = (
-  serializedPayloads: Record<ProjectTransferPayloadKey, string>,
-  payloads: ProjectTransferPayloadByKey,
+  serializedPayloads: Record<ProjectTransferPackagePayloadKey, string>,
+  payloads: ReturnType<typeof getPackagePayloads>,
 ) => {
-  return projectTransferPayloadKeys.reduce<ProjectTransferManifest['payloads']>(
+  return projectTransferSchemaVNextPayloadKeys.reduce<ProjectTransferManifest['payloads']>(
     (manifestPayloads, key) => {
-      const payload: ProjectTransferPayload = payloads[key]
+      const format = getProjectTransferPayloadFormatForSchemaVersion({
+        key,
+        schemaVersion: projectTransferManifestSchemaVersion,
+      })
+      const path = getProjectTransferPayloadPathForSchemaVersion({
+        key,
+        schemaVersion: projectTransferManifestSchemaVersion,
+      })
+
+      if (format === undefined || path === undefined) {
+        throw new Error(`Expected schema-vNext payload contract for ${key}`)
+      }
 
       return {
         ...manifestPayloads,
         [key]: getProjectTransferManifestPayloadEntry({
           bytes: serializedPayloads[key],
-          format: projectTransferPayloadFormatByKey[key],
-          path: projectTransferPayloadPathByKey[key],
-          recordCount: getPayloadRecordCount(key, payload),
+          format,
+          path,
+          recordCount: getPackagePayloadRecordCount(key, payloads[key]),
         }),
       }
     },
@@ -217,20 +311,19 @@ const getManifest = ({
 }: {
   manifestOverride?: PackageOverride['manifest']
   payloads: ProjectTransferPayloadByKey
-  serializedPayloads: Record<ProjectTransferPayloadKey, string>
+  serializedPayloads: Record<ProjectTransferPackagePayloadKey, string>
 }) => {
+  const packagePayloads = getPackagePayloads(payloads)
   const manifestInput = {
     assetSummary: {byteLength: assetBytes.byteLength, entryCount: payloads.assetManifest.entries.length},
     exportedAt: '2026-05-26T09:00:00.000Z',
-    payloads: getManifestPayloads(serializedPayloads, payloads),
+    payloads: getManifestPayloads(serializedPayloads, packagePayloads),
     project: {
-      counts: projectTransferPayloadKeys.reduce<Record<ProjectTransferPayloadKey, number>>(
+      counts: projectTransferSchemaVNextPayloadKeys.reduce<Record<ProjectTransferPackagePayloadKey, number>>(
         (counts, key) => {
-          const payload: ProjectTransferPayload = payloads[key]
-
-          return {...counts, [key]: getPayloadRecordCount(key, payload)}
+          return {...counts, [key]: getPackagePayloadRecordCount(key, packagePayloads[key])}
         },
-        {} as Record<ProjectTransferPayloadKey, number>,
+        {} as Record<ProjectTransferPackagePayloadKey, number>,
       ),
       currentModel: {modelName: 'gpt-5.4', remoteModelId: 'gpt-5.4', sourceModelId: 'model-1'},
       humanJudgmentMode: payloads.project.settings.humanJudgmentMode,
@@ -241,7 +334,10 @@ const getManifest = ({
     warnings: [],
   }
   const unsignedManifest = buildProjectTransferManifest(manifestInput)
-  const packageFingerprint = getProjectTransferPackageFingerprint({manifest: unsignedManifest, payloads})
+  const packageFingerprint = getProjectTransferPackageFingerprint({
+    manifest: unsignedManifest,
+    payloads: packagePayloads,
+  })
   const manifest = buildProjectTransferManifest({...manifestInput, packageFingerprint})
 
   return manifestOverride ? manifestOverride(manifest) : manifest
@@ -262,7 +358,8 @@ const writeAnalyzeUpload = async ({
 }) => {
   const layout = getProjectTransferImportTempLayout(sessionId)
   const payloads = getFixturePayloads(payloadOverride)
-  const defaultSerializedPayloads = getSerializedPayloads(payloads)
+  const packagePayloads = getPackagePayloads(payloads)
+  const defaultSerializedPayloads = getSerializedPayloads(packagePayloads)
   const serializedPayloads = serializedPayloadOverride
     ? serializedPayloadOverride(defaultSerializedPayloads, payloads)
     : defaultSerializedPayloads
@@ -270,8 +367,17 @@ const writeAnalyzeUpload = async ({
   const zipModule = useZipModule ? getFakeZipModule() : undefined
   const entries = [
     {bytes: getProjectTransferCanonicalJson(manifest), path: 'manifest.json'},
-    ...projectTransferPayloadKeys.map((key) => {
-      return {bytes: serializedPayloads[key], path: projectTransferPayloadPathByKey[key]}
+    ...projectTransferSchemaVNextPayloadKeys.map((key) => {
+      const path = getProjectTransferPayloadPathForSchemaVersion({
+        key,
+        schemaVersion: projectTransferManifestSchemaVersion,
+      })
+
+      if (path === undefined) {
+        throw new Error(`Expected schema-vNext payload path for ${key}`)
+      }
+
+      return {bytes: serializedPayloads[key], path}
     }),
     {
       bytes: assetBytes,
@@ -524,7 +630,7 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
     )
     expect(result.staging.stagedPackage?.sourceProject).toMatchObject({
       name: 'Fixture Project',
-      schemaVersion: 1,
+      schemaVersion: 2,
       sourceProjectId: 'source-project-1',
     })
     expect(planArtifact).toMatchObject({canCommit: false, planRevision: 1})
@@ -535,14 +641,106 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
   }
 })
 
-test('analyzes a legacy export package by accepting the legacy fingerprint and sanitizing article route paths', async () => {
+test('rejects schema-1 project-transfer packages after schema-vNext cutover', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const layout = getProjectTransferImportTempLayout(sessionId)
+    const payloads = getFixturePayloads()
+    const serializedPayloads = projectTransferPayloadKeys.reduce<Record<ProjectTransferPayloadKey, string>>(
+      (serialized, key) => {
+        return {...serialized, [key]: serializeProjectTransferPayload(key, payloads[key])}
+      },
+      {} as Record<ProjectTransferPayloadKey, string>,
+    )
+    const manifestInput = {
+      assetSummary: {byteLength: assetBytes.byteLength, entryCount: payloads.assetManifest.entries.length},
+      exportedAt: '2026-05-26T09:00:00.000Z',
+      payloads: projectTransferPayloadKeys.reduce<ProjectTransferManifest['payloads']>(
+        (manifestPayloads, key) => {
+          return {
+            ...manifestPayloads,
+            [key]: getProjectTransferManifestPayloadEntry({
+              bytes: serializedPayloads[key],
+              format: projectTransferPayloadFormatByKey[key],
+              path: projectTransferPayloadPathByKey[key],
+              recordCount: getPayloadRecordCount(key, payloads[key]),
+            }),
+          }
+        },
+        {} as ProjectTransferManifest['payloads'],
+      ),
+      project: {
+        counts: projectTransferPayloadKeys.reduce<Record<ProjectTransferPayloadKey, number>>(
+          (counts, key) => {
+            return {...counts, [key]: getPayloadRecordCount(key, payloads[key])}
+          },
+          {} as Record<ProjectTransferPayloadKey, number>,
+        ),
+        currentModel: {modelName: 'gpt-5.4', remoteModelId: 'gpt-5.4', sourceModelId: 'model-1'},
+        humanJudgmentMode: payloads.project.settings.humanJudgmentMode,
+        name: payloads.project.name,
+        sourceProjectId: payloads.project.sourceProjectId,
+      },
+      schemaVersion: projectTransferCurrentManifestSchemaVersion,
+      sourceAppVersion: '0.2.1',
+      warnings: [],
+    }
+    const unsignedManifest = buildProjectTransferManifest(manifestInput)
+    const manifest = buildProjectTransferManifest({
+      ...manifestInput,
+      packageFingerprint: getProjectTransferPackageFingerprint({manifest: unsignedManifest, payloads}),
+    })
+    const zipModule = getFakeZipModule()
+    const zipEntries = [
+      {bytes: getProjectTransferCanonicalJson(manifest), path: 'manifest.json'},
+      ...projectTransferPayloadKeys.map((key) => {
+        return {bytes: serializedPayloads[key], path: projectTransferPayloadPathByKey[key]}
+      }),
+    ]
+    const zipBytes = textEncoder.encode(
+      JSON.stringify(
+        zipEntries.map((entry) => {
+          return {bytes: Buffer.from(entry.bytes).toString('base64'), path: entry.path}
+        }),
+      ),
+    )
+    const uploadPath = join(cwd, layout.uploadPath)
+
+    await mkdir(dirname(uploadPath), {recursive: true})
+    await globalThis.Bun.write(uploadPath, zipBytes)
+
+    const message = await getRejectedMessage(
+      analyzeProjectTransferImportPackage({
+        availableDiskBytes: 10_000_000_000,
+        cwd,
+        layout,
+        planRevision: 1,
+        runner: getEmptyAnalyzeTargetRunner(),
+        uploadMetadata: {
+          byteLength: zipBytes.byteLength,
+          checksumSha256: getProjectTransferSha256Checksum(zipBytes),
+          fileName: 'legacy-upload.zip',
+        },
+        zipModule,
+      }),
+    )
+
+    expect(message).toContain('unsupported_schema_version')
+    expect(message).toContain('schema 1 import is unsupported')
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('rejects unsupported package fingerprints while sanitizing article route paths', async () => {
   const cwd = getRuntimeRoot()
 
   try {
     const {layout, manifest, uploadMetadata, zipModule} = await writeAnalyzeUpload({
       cwd,
       manifestOverride: (currentManifest) => {
-        return {...currentManifest, packageFingerprint: getProjectTransferLegacyPackageFingerprint(currentManifest)}
+        return {...currentManifest, packageFingerprint: getProjectTransferSha256Checksum('legacy-fingerprint')}
       },
       payloadOverride: (payloads) => {
         return {
@@ -575,7 +773,7 @@ test('analyzes a legacy export package by accepting the legacy fingerprint and s
     })
 
     expect(manifest.packageFingerprint).not.toBe(result.packageFingerprint)
-    expect(blockerCodes).not.toContain('package_fingerprint_mismatch')
+    expect(blockerCodes).toContain('unsupported_package_fingerprint')
     expect(blockerCodes).not.toContain('article_absolute_path_reference')
     expect(extractedArticlesText).toContain('"importRoute":null')
     expect(extractedArticlesText).toContain('"selectedImportRoute":null')

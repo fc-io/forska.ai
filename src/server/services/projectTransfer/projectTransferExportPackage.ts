@@ -23,6 +23,7 @@ import {
   getProjectTransferExportPreflightEstimate,
   type ProjectTransferExportSerializedPayloads,
   type ProjectTransferExportStagedPayloadAssembly,
+  serializeProjectTransferExportPayloads,
   stageProjectTransferExportPayloadRows,
 } from './projectTransferExport.ts'
 import {
@@ -32,7 +33,11 @@ import {
 } from './projectTransferFingerprint.ts'
 import {buildProjectTransferManifest} from './projectTransferManifest.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
-import {parseProjectTransferPayload, type ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
+import {
+  parseProjectTransferPayloadForSchemaVersion,
+  type ProjectTransferPackagePayloadByKey,
+  type ProjectTransferPayloadByKey,
+} from './projectTransferPayloadSchemas.ts'
 import {
   getProjectTransferPerformanceMetrics,
   getProjectTransferPerformanceRowCountersFromPayloads,
@@ -40,11 +45,13 @@ import {
   type ProjectTransferPerformanceMetrics,
 } from './projectTransferPerformanceMetrics.ts'
 import {
+  getProjectTransferPayloadPathForSchemaVersion,
   type ProjectTransferManifest,
   type ProjectTransferManifestPayload,
-  type ProjectTransferPayloadKey,
+  projectTransferManifestSchemaVersion,
+  type ProjectTransferPackagePayloadKey,
   projectTransferPayloadKeys,
-  projectTransferPayloadPathByKey,
+  projectTransferSchemaVNextPayloadKeys,
 } from './projectTransferSchemas.ts'
 import {
   getProjectTransferExportTempLayout,
@@ -122,6 +129,7 @@ export type ProjectTransferExportPackageBuild = {
   manifest: ProjectTransferManifest
   metadata: ProjectTransferExportPackageMetadata
   packageBytes: Uint8Array | null
+  packagePayloads: ProjectTransferPackagePayloadByKey
   packagePath: string | null
   payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles']
   performanceMetrics: ProjectTransferPerformanceMetrics
@@ -146,6 +154,10 @@ export type ProjectTransferExportCreationResult =
 const manifestPath = 'manifest.json'
 const defaultExportSessionTtlMs = 24 * 60 * 60 * 1000
 const exportWorkerHeartbeatIntervalMs = 60_000
+
+const getProjectTransferExportPayloadKeys = (): ProjectTransferPackagePayloadKey[] => {
+  return projectTransferSchemaVNextPayloadKeys
+}
 
 const getNow = (now?: Date) => {
   return now ?? new Date()
@@ -196,8 +208,17 @@ const getExportDiskGateTargetWriteBytes = ({
 const getExportResourcePaths = () => {
   return [
     {kind: 'archive_member' as const, pathValue: manifestPath},
-    ...projectTransferPayloadKeys.map((key) => {
-      return {kind: 'archive_member' as const, pathValue: projectTransferPayloadPathByKey[key]}
+    ...getProjectTransferExportPayloadKeys().map((key) => {
+      const pathValue = getProjectTransferPayloadPathForSchemaVersion({
+        key,
+        schemaVersion: projectTransferManifestSchemaVersion,
+      })
+
+      if (pathValue === undefined) {
+        throw new Error(`Project transfer export schema ${projectTransferManifestSchemaVersion} does not allow ${key}`)
+      }
+
+      return {kind: 'archive_member' as const, pathValue}
     }),
   ]
 }
@@ -219,8 +240,8 @@ const assertProjectTransferExportDiskGate = ({
     stagedPayloadBytes: estimate.stagedPayloadBytes ?? estimate.packageBytes,
   })
   const validation = validateProjectTransferResourceGates({
-    archiveInodeCount: projectTransferPayloadKeys.length + 1,
-    archiveMemberCount: projectTransferPayloadKeys.length + 1,
+    archiveInodeCount: getProjectTransferExportPayloadKeys().length + 1,
+    archiveMemberCount: getProjectTransferExportPayloadKeys().length + 1,
     availableDiskBytes,
     expandedBytes: estimate.stagedPayloadBytes ?? estimate.packageBytes,
     fileBytes: Math.max(estimate.packageBytes, estimate.assetBytes, estimate.stagedPayloadBytes ?? 0),
@@ -255,9 +276,9 @@ const assertProjectTransferExportDiskGateForPath = async ({
   return assertProjectTransferExportDiskGate({availableDiskBytes, estimate, phase, tempRootPath})
 }
 
-const getPayloadRecordCount = <TKey extends ProjectTransferPayloadKey>(
+const getPayloadRecordCount = <TKey extends ProjectTransferPackagePayloadKey>(
   key: TKey,
-  payload: ProjectTransferPayloadByKey[TKey],
+  payload: ProjectTransferPackagePayloadByKey[TKey],
 ) => {
   return key === 'project'
     ? 1
@@ -269,8 +290,8 @@ const getPayloadRecordCount = <TKey extends ProjectTransferPayloadKey>(
 }
 
 const getPayloadManifestEntries = (payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles']) => {
-  return projectTransferPayloadKeys.reduce<
-    Record<ProjectTransferPayloadKey, ProjectTransferManifest['payloads'][ProjectTransferPayloadKey]>
+  return getProjectTransferExportPayloadKeys().reduce<
+    Record<ProjectTransferPackagePayloadKey, ProjectTransferManifest['payloads'][ProjectTransferPackagePayloadKey]>
   >(
     (entries, key) => {
       const file = payloadFiles[key]
@@ -286,21 +307,24 @@ const getPayloadManifestEntries = (payloadFiles: ProjectTransferExportStagedPayl
         } satisfies ProjectTransferManifestPayload,
       }
     },
-    {} as Record<ProjectTransferPayloadKey, ProjectTransferManifest['payloads'][ProjectTransferPayloadKey]>,
+    {} as Record<
+      ProjectTransferPackagePayloadKey,
+      ProjectTransferManifest['payloads'][ProjectTransferPackagePayloadKey]
+    >,
   )
 }
 
-const getPayloadCounts = (payloads: ProjectTransferPayloadByKey) => {
-  return projectTransferPayloadKeys.reduce<Record<ProjectTransferPayloadKey, number>>(
+const getPayloadCounts = (payloads: ProjectTransferPackagePayloadByKey) => {
+  return getProjectTransferExportPayloadKeys().reduce<Record<ProjectTransferPackagePayloadKey, number>>(
     (counts, key) => {
       return {...counts, [key]: getPayloadRecordCount(key, payloads[key])}
     },
-    {} as Record<ProjectTransferPayloadKey, number>,
+    {} as Record<ProjectTransferPackagePayloadKey, number>,
   )
 }
 
 const getStagedPayloadByteCounters = (payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles']) => {
-  return projectTransferPayloadKeys.reduce<Record<string, number>>((counters, key) => {
+  return getProjectTransferExportPayloadKeys().reduce<Record<string, number>>((counters, key) => {
     return {...counters, [`payload.${key}`]: payloadFiles[key].byteLength}
   }, {})
 }
@@ -311,29 +335,18 @@ const getEmptySerializedPayloads = () => {
   }, {} as ProjectTransferExportSerializedPayloads)
 }
 
-const readSerializedPayloadsFromStagedFiles = async (
-  payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles'],
-) => {
-  return projectTransferPayloadKeys.reduce<Promise<ProjectTransferExportSerializedPayloads>>(
-    async (previousPayloads, key) => {
-      const payloads = await previousPayloads
-      const value = await readFile(payloadFiles[key].filePath, 'utf8')
-
-      return {...payloads, [key]: value}
-    },
-    Promise.resolve({} as ProjectTransferExportSerializedPayloads),
-  )
-}
-
 const readPayloadsFromStagedFiles = async (
   payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles'],
 ) => {
-  return projectTransferPayloadKeys.reduce<Promise<Partial<ProjectTransferPayloadByKey>>>(
+  return getProjectTransferExportPayloadKeys().reduce<Promise<Partial<ProjectTransferPackagePayloadByKey>>>(
     async (previousPayloads, key) => {
       const payloads = await previousPayloads
       const bytes = await readFile(payloadFiles[key].filePath)
 
-      return {...payloads, [key]: parseProjectTransferPayload(key, bytes)}
+      return {
+        ...payloads,
+        [key]: parseProjectTransferPayloadForSchemaVersion(projectTransferManifestSchemaVersion, key, bytes),
+      }
     },
     Promise.resolve({}),
   )
@@ -341,8 +354,8 @@ const readPayloadsFromStagedFiles = async (
 
 const getPayloadsFromStagedFiles = async (
   payloadFiles: ProjectTransferExportStagedPayloadAssembly['payloadFiles'],
-): Promise<ProjectTransferPayloadByKey> => {
-  return (await readPayloadsFromStagedFiles(payloadFiles)) as ProjectTransferPayloadByKey
+): Promise<ProjectTransferPackagePayloadByKey> => {
+  return (await readPayloadsFromStagedFiles(payloadFiles)) as ProjectTransferPackagePayloadByKey
 }
 
 const getCurrentModelSummary = (payloads: ProjectTransferPayloadByKey) => {
@@ -377,7 +390,7 @@ const buildManifest = ({
     packageFingerprint,
     payloads: getPayloadManifestEntries(payloadFiles),
     project: {
-      counts: getPayloadCounts(assembly.payloads),
+      counts: getPayloadCounts(assembly.packagePayloads),
       currentModel: getCurrentModelSummary(assembly.payloads),
       humanJudgmentMode: assembly.payloads.project.settings.humanJudgmentMode,
       name: assembly.payloads.project.name,
@@ -454,14 +467,10 @@ const getPackageEntries = ({
 
   return [
     {bytes: manifestBytes, metadata: getBytesZipEntryMetadata(manifestBytes), path: manifestPath},
-    ...projectTransferPayloadKeys.map((key) => {
+    ...getProjectTransferExportPayloadKeys().map((key) => {
       const payloadFile = assembly.payloadFiles[key]
 
-      return {
-        filePath: payloadFile.filePath,
-        metadata: getZipEntryMetadata(payloadFile),
-        path: projectTransferPayloadPathByKey[key],
-      }
+      return {filePath: payloadFile.filePath, metadata: getZipEntryMetadata(payloadFile), path: payloadFile.path}
     }),
     ...assembly.assetEntries.map((entry) => {
       return getAssetPackageEntry(entry)
@@ -527,7 +536,7 @@ const assertWrittenProjectTransferExportPackage = ({
 }) => {
   const entryByPath = getWrittenPackageEntryByPath(packageArchive)
 
-  projectTransferPayloadKeys.map((key) => {
+  getProjectTransferExportPayloadKeys().map((key) => {
     const payload = manifest.payloads[key]
 
     return assertWrittenPackageEntry({
@@ -952,7 +961,7 @@ export const buildProjectTransferExportPackage = async (
 
         const serializedPayloads = yield* Effect.promise(() => {
           return input.packageOutputPath === undefined
-            ? readSerializedPayloadsFromStagedFiles(assembly.payloadFiles)
+            ? Promise.resolve(serializeProjectTransferExportPayloads(assembly.payloads))
             : Promise.resolve(getEmptySerializedPayloads())
         })
         const metadata = {
@@ -989,6 +998,7 @@ export const buildProjectTransferExportPackage = async (
           manifest,
           metadata,
           packageBytes: packageArchive.bytes,
+          packagePayloads: assembly.packagePayloads,
           packagePath: input.packageOutputPath ?? null,
           payloadFiles: assembly.payloadFiles,
           performanceMetrics,

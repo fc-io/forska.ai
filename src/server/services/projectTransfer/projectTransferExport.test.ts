@@ -8,7 +8,7 @@ import {
   getProjectTransferExportHumanReviewInputSignature,
   getProjectTransferExportJudgmentInputSignature,
 } from './projectTransferExport.ts'
-import {projectTransferPayloadKeys} from './projectTransferSchemas.ts'
+import {projectTransferPayloadKeys, projectTransferSchemaVNextPayloadKeys} from './projectTransferSchemas.ts'
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
@@ -34,13 +34,13 @@ const getProjectTransferExportScript = (body: string) => {
     const {
       getProjectTransferExportPreflightEstimate,
       getProjectTransferExportPayloads,
+      getProjectTransferExportPayloadKeys,
       getProjectTransferExportSourceProjectSettings,
       getProjectTransferExportSummary,
       serializeProjectTransferExportPayloads,
     } = await import('./src/server/services/projectTransfer/projectTransferExport.ts')
     const {buildProjectTransferExportPackage: buildExportPackage} = await import('./src/server/services/projectTransfer/projectTransferExportPackage.ts')
     const {getProjectTransferPackageFingerprint, getProjectTransferSha256Checksum} = await import('./src/server/services/projectTransfer/projectTransferFingerprint.ts')
-    const {projectTransferPayloadKeys} = await import('./src/server/services/projectTransfer/projectTransferSchemas.ts')
     const {getProjectTransferExportTempLayout} = await import('./src/server/services/projectTransfer/projectTransferSession.ts')
 
     await migrateDuckdb()
@@ -965,11 +965,11 @@ test('project-transfer export reads archived app-table scope and serializes lock
       packageFingerprint: packageBuild.manifest.packageFingerprint ?? null,
       packageFingerprintMatchesAnalyze:
         (packageBuild.manifest.packageFingerprint ?? null)
-        === getProjectTransferPackageFingerprint({manifest: packageBuild.manifest, payloads: archived.payloads}),
+        === getProjectTransferPackageFingerprint({manifest: packageBuild.manifest, payloads: packageBuild.packagePayloads}),
       packageFingerprintMatchesStagedPayloads:
         (packageBuild.manifest.packageFingerprint ?? null)
-        === getProjectTransferPackageFingerprint({manifest: packageBuild.manifest, payloads: packageBuild.payloads}),
-      packageHasAllPayloadFiles: projectTransferPayloadKeys.every((key) => {
+        === getProjectTransferPackageFingerprint({manifest: packageBuild.manifest, payloads: packageBuild.packagePayloads}),
+      packageHasAllPayloadFiles: getProjectTransferExportPayloadKeys().every((key) => {
         return payloadFilePathSet.has(packageBuild.manifest.payloads[key].path)
       }),
       packageHasManifest: packageZipEntryPaths.includes('manifest.json'),
@@ -1156,7 +1156,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.packageReviewPostRewriteHtmlDigest).toBe(result.packagePostRewriteHtmlDigest)
   expect(result.packageJudgmentPostRewriteHtmlDigest).not.toBe(result.packageRawRuntimeHtmlDigest)
   expect(result.packageAssessmentArticleSignatureMatchesPackageArticle).toBe(true)
-  expect(result.packageManifestPayloadKeys).toEqual([...projectTransferPayloadKeys].sort())
+  expect(result.packageManifestPayloadKeys).toEqual([...projectTransferSchemaVNextPayloadKeys].sort())
   expect(result.packageManifestExportedAt).toBe('2026-05-24T08:00:00.000Z')
   expect(result.packageManifestSourceAppVersion).toMatch(/^\d+\.\d+\.\d+/)
   expect(result.packageManifestProject).toEqual({
@@ -1182,7 +1182,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(projectTransferRawArticleProvenanceModes).toEqual(['include', 'omit'])
   expect(projectTransferRawArticleProvenanceModes).not.toContain('auto')
   expect(result.packageZipEntryPaths).toContain('manifest.json')
-  expect(result.packageZipEntryPaths).toContain('providerConnections.json')
+  expect(result.packageZipEntryPaths).toContain('payloads/providerConnections.ndjson')
   expect(
     result.assetManifestEntries.map((entry) => {
       return entry.packagePath

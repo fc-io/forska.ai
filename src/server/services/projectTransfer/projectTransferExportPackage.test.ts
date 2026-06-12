@@ -11,11 +11,20 @@ import type {
   ProjectTransferExportPayloadAssembly,
   ProjectTransferExportSerializedPayloads,
 } from './projectTransferExport.ts'
-import type {ProjectTransferPayloadByKey} from './projectTransferPayloadSchemas.ts'
 import {
-  projectTransferPayloadFormatByKey,
+  getProjectTransferSchemaVNextFingerprintSortKey,
+  type ProjectTransferPackagePayloadByKey,
+  type ProjectTransferPayloadByKey,
+  serializeProjectTransferPayloadForSchemaVersion,
+} from './projectTransferPayloadSchemas.ts'
+import {
+  getProjectTransferPayloadFormatForSchemaVersion,
+  getProjectTransferPayloadPathForSchemaVersion,
+  projectTransferManifestSchemaVersion,
+  type ProjectTransferPackagePayloadKey,
+  type ProjectTransferPayloadFormat,
   projectTransferPayloadKeys,
-  projectTransferPayloadPathByKey,
+  projectTransferSchemaVNextPayloadKeys,
 } from './projectTransferSchemas.ts'
 import {getProjectTransferExportTempLayout} from './projectTransferSession.ts'
 import {getProjectTransferZipCrc32Digest} from './projectTransferZip.ts'
@@ -39,13 +48,14 @@ type ProjectTransferExportPackageTestPayloadFile = {
   checksumSha256: string
   crc32: number
   filePath: string
-  format: (typeof projectTransferPayloadFormatByKey)[(typeof projectTransferPayloadKeys)[number]]
+  format: ProjectTransferPayloadFormat
   path: string
   recordCount: number
 }
 type ProjectTransferExportPackageTestStagedRows = {
   assetEntries: ProjectTransferExportPayloadAssembly['assetEntries']
   assetReferences: []
+  packagePayloads: ProjectTransferPackagePayloadByKey
   payloadFiles: Record<string, ProjectTransferExportPackageTestPayloadFile>
   payloads: ProjectTransferPayloadByKey
   warnings: ProjectTransferExportPayloadAssembly['warnings']
@@ -88,26 +98,31 @@ const serializeProjectTransferExportPayloadsMock = mock(() => {
   }, {} as ProjectTransferExportSerializedPayloads)
 })
 const getStagedPayloadString = (
-  key: (typeof projectTransferPayloadKeys)[number],
-  payloads: ProjectTransferPayloadByKey,
+  key: ProjectTransferPackagePayloadKey,
+  payloads: ProjectTransferPackagePayloadByKey,
 ) => {
-  const payload = payloads[key]
-
-  return projectTransferPayloadFormatByKey[key] === 'ndjson' && Array.isArray(payload)
-    ? payload.length === 0
-      ? ''
-      : `${payload
-          .map((record) => {
-            return JSON.stringify(record)
-          })
-          .join('\n')}\n`
-    : JSON.stringify(payload)
+  return serializeProjectTransferPayloadForSchemaVersion(projectTransferManifestSchemaVersion, key, payloads[key])
 }
-const writeStagedPayloadFiles = (rootPath: string, payloads: ProjectTransferPayloadByKey) => {
-  return projectTransferPayloadKeys.reduce<Record<string, ProjectTransferExportPackageTestPayloadFile>>(
+const getPackagePayloadRecordCount = (key: ProjectTransferPackagePayloadKey, payload: unknown) => {
+  return key === 'project' ? 1 : Array.isArray(payload) ? payload.length : 0
+}
+const writeStagedPayloadFiles = (rootPath: string, payloads: ProjectTransferPackagePayloadByKey) => {
+  return projectTransferSchemaVNextPayloadKeys.reduce<Record<string, ProjectTransferExportPackageTestPayloadFile>>(
     (files, key) => {
       const payload = payloads[key]
-      const path = projectTransferPayloadPathByKey[key]
+      const path = getProjectTransferPayloadPathForSchemaVersion({
+        key,
+        schemaVersion: projectTransferManifestSchemaVersion,
+      })
+      const format = getProjectTransferPayloadFormatForSchemaVersion({
+        key,
+        schemaVersion: projectTransferManifestSchemaVersion,
+      })
+
+      if (path === undefined || format === undefined) {
+        throw new Error(`Expected schema-vNext payload contract for ${key}`)
+      }
+
       const filePath = join(rootPath, path)
       const value = getStagedPayloadString(key, payloads)
       const bytes = textEncoder.encode(value)
@@ -122,30 +137,44 @@ const writeStagedPayloadFiles = (rootPath: string, payloads: ProjectTransferPayl
           checksumSha256: createHash('sha256').update(bytes).digest('hex'),
           crc32: getProjectTransferZipCrc32Digest(bytes),
           filePath,
-          format: projectTransferPayloadFormatByKey[key],
+          format,
           path,
-          recordCount:
-            key === 'project'
-              ? 1
-              : key === 'assetManifest'
-                ? payloads.assetManifest.entries.length
-                : Array.isArray(payload)
-                  ? payload.length
-                  : 0,
+          recordCount: getPackagePayloadRecordCount(key, payload),
         },
       }
     },
     {},
   )
 }
+const getProjectTransferExportPackagePayloads = (
+  assembly: ProjectTransferExportPayloadAssembly,
+): ProjectTransferPackagePayloadByKey => {
+  return {
+    ...assembly.payloads,
+    assetEntries: assembly.assetEntries.map((entry) => {
+      const fingerprint = {checksumSha256: entry.checksumSha256, packagePath: entry.path}
+
+      return {
+        byteLength: entry.byteLength,
+        checksumSha256: entry.checksumSha256,
+        fingerprint,
+        packagePath: entry.path,
+        sortKey: getProjectTransferSchemaVNextFingerprintSortKey(fingerprint),
+      }
+    }),
+    assetReferences: [],
+  }
+}
 const stageProjectTransferExportPayloadRowsMock = mock(
   async ({rootPath}: {rootPath: string}): Promise<ProjectTransferExportPackageTestStagedRows> => {
     const assembly = await getProjectTransferExportPayloadsMock()
+    const packagePayloads = getProjectTransferExportPackagePayloads(assembly)
 
     return {
       assetEntries: assembly.assetEntries,
       assetReferences: [],
-      payloadFiles: writeStagedPayloadFiles(rootPath, assembly.payloads),
+      packagePayloads,
+      payloadFiles: writeStagedPayloadFiles(rootPath, packagePayloads),
       payloads: assembly.payloads,
       warnings: assembly.warnings,
     }
@@ -155,6 +184,7 @@ const completeProjectTransferExportStagedPayloadsMock = mock(
   async ({stagedRows}: {stagedRows: ProjectTransferExportPackageTestStagedRows}) => {
     return {
       assetEntries: stagedRows.assetEntries,
+      packagePayloads: stagedRows.packagePayloads,
       payloadFiles: stagedRows.payloadFiles,
       payloads: stagedRows.payloads,
       warnings: stagedRows.warnings,

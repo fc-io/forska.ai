@@ -8,7 +8,7 @@ import {
   validateProjectTransferManifest,
 } from './projectTransferManifest.ts'
 import {
-  projectTransferManifestSchemaVersion,
+  projectTransferCurrentManifestSchemaVersion,
   projectTransferPayloadFormatByKey,
   type ProjectTransferPayloadKey,
   projectTransferPayloadKeys,
@@ -108,6 +108,7 @@ const getValidManifest = () => {
     exportedAt: '2026-05-21T07:00:00.000Z',
     payloads: getPayloads(),
     project: getProjectSummary(),
+    schemaVersion: projectTransferCurrentManifestSchemaVersion,
     sourceAppVersion: '0.2.1',
     warnings: [
       {
@@ -136,7 +137,7 @@ const getValidSchemaVNextManifest = () => {
 test('validates project-transfer manifest payload contracts with camelCase package keys', () => {
   const manifest = parseProjectTransferManifestJson(JSON.stringify(getValidManifest()))
 
-  expect(manifest.schemaVersion).toBe(projectTransferManifestSchemaVersion)
+  expect(manifest.schemaVersion).toBe(projectTransferCurrentManifestSchemaVersion)
   expect(manifest.exportedAt).toBe('2026-05-21T07:00:00.000Z')
   expect(manifest.sourceAppVersion).toBe('0.2.1')
   expect(manifest.project.sourceProjectId).toBe('source-project-id')

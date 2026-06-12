@@ -40,23 +40,33 @@ import {
 } from './projectTransferIdentifierNormalization.ts'
 import {
   assertProjectTransferPayload,
+  getProjectTransferSchemaVNextFingerprintSortKey,
   normalizeProjectTransferModelVariant,
   type ProjectTransferContentSettings,
+  type ProjectTransferPackagePayloadByKey,
   type ProjectTransferPayloadByKey,
   type ProjectTransferPayloadRecord,
   type ProjectTransferPayloadWarning,
+  type ProjectTransferSchemaVNextAssetEntryPayloadRecord,
+  type ProjectTransferSchemaVNextAssetReferencePayloadRecord,
   serializeProjectTransferPayload,
-  serializeProjectTransferPayloadNdjsonRow,
+  serializeProjectTransferPayloadForSchemaVersion,
+  serializeProjectTransferPayloadNdjsonRowForSchemaVersion,
 } from './projectTransferPayloadSchemas.ts'
 import type {
   ProjectTransferManifestWarning,
+  ProjectTransferPackagePayloadKey,
   ProjectTransferPayloadFormat,
   ProjectTransferPayloadKey,
+  ProjectTransferSchemaVNextPayloadKey,
 } from './projectTransferSchemas.ts'
 import {
-  projectTransferPayloadFormatByKey,
+  getProjectTransferPayloadFormatForSchemaVersion,
+  getProjectTransferPayloadPathForSchemaVersion,
+  projectTransferManifestSchemaVersion,
   projectTransferPayloadKeys,
   projectTransferPayloadPathByKey,
+  projectTransferSchemaVNextPayloadKeys,
 } from './projectTransferSchemas.ts'
 import {
   getProjectTransferZipCrc32Digest,
@@ -380,13 +390,14 @@ export type ProjectTransferExportStagedPayloadFile = {
 
 export type ProjectTransferExportStagedPayloadRows = {
   assetReferences: ProjectTransferExportAssetReferenceInput[]
-  payloadFiles: Partial<Record<ProjectTransferPayloadKey, ProjectTransferExportStagedPayloadFile>>
+  payloadFiles: Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferExportStagedPayloadFile>>
   payloads: ProjectTransferPayloadByKey
   warnings: ProjectTransferManifestWarning[]
 }
 
 export type ProjectTransferExportStagedPayloadAssembly = ProjectTransferExportPayloadAssembly & {
-  payloadFiles: Record<ProjectTransferPayloadKey, ProjectTransferExportStagedPayloadFile>
+  packagePayloads: ProjectTransferPackagePayloadByKey
+  payloadFiles: Record<ProjectTransferPackagePayloadKey, ProjectTransferExportStagedPayloadFile>
 }
 
 export type ProjectTransferExportSerializedPayloads = Record<ProjectTransferPayloadKey, string>
@@ -551,9 +562,9 @@ const getRowsByMany = <TRow>(rows: TRow[], getKey: (row: TRow) => string) => {
   }, {})
 }
 
-const getProjectTransferExportPayloadRecordCount = <TKey extends ProjectTransferPayloadKey>(
+const getProjectTransferExportPayloadRecordCount = <TKey extends ProjectTransferPackagePayloadKey>(
   key: TKey,
-  payload: ProjectTransferPayloadByKey[TKey],
+  payload: ProjectTransferPackagePayloadByKey[TKey],
 ) => {
   return key === 'project'
     ? 1
@@ -564,8 +575,14 @@ const getProjectTransferExportPayloadRecordCount = <TKey extends ProjectTransfer
         : 0
 }
 
-const getStagedPayloadFilePath = (rootPath: string, key: ProjectTransferPayloadKey) => {
-  return join(rootPath, projectTransferPayloadPathByKey[key])
+const getStagedPayloadFilePath = (rootPath: string, key: ProjectTransferPackagePayloadKey) => {
+  const path = getProjectTransferPayloadPathForSchemaVersion({key, schemaVersion: projectTransferManifestSchemaVersion})
+
+  if (path === undefined) {
+    throw new Error(`Project transfer export schema ${projectTransferManifestSchemaVersion} does not allow ${key}`)
+  }
+
+  return join(rootPath, path)
 }
 
 const writeStagedPayloadBytes = async (
@@ -597,13 +614,15 @@ const closeStagedPayloadStream = async (stream: WriteStream) => {
   })
 }
 
-const writeStagedPayloadNdjsonFile = async <TKey extends ProjectTransferPayloadKey>({
+const writeStagedPayloadNdjsonFile = async <TKey extends ProjectTransferPackagePayloadKey>({
   filePath,
   key,
+  path,
   records,
 }: {
   filePath: string
   key: TKey
+  path: string
   records: unknown[]
 }) => {
   const stream = createWriteStream(filePath)
@@ -612,7 +631,16 @@ const writeStagedPayloadNdjsonFile = async <TKey extends ProjectTransferPayloadK
   try {
     await records.reduce<Promise<void>>(async (previous, record, index) => {
       await previous
-      await writeStagedPayloadBytes(stream, state, `${serializeProjectTransferPayloadNdjsonRow(key, record, index)}\n`)
+      await writeStagedPayloadBytes(
+        stream,
+        state,
+        `${serializeProjectTransferPayloadNdjsonRowForSchemaVersion(
+          projectTransferManifestSchemaVersion,
+          key,
+          record,
+          index,
+        )}\n`,
+      )
     }, Promise.resolve())
     await closeStagedPayloadStream(stream)
   } catch (error) {
@@ -626,21 +654,23 @@ const writeStagedPayloadNdjsonFile = async <TKey extends ProjectTransferPayloadK
     crc32: getProjectTransferZipFinalCrc32(state.crc32),
     filePath,
     format: 'ndjson' as const,
-    path: projectTransferPayloadPathByKey[key],
+    path,
     recordCount: records.length,
   }
 }
 
-const writeStagedPayloadJsonFile = async <TKey extends ProjectTransferPayloadKey>({
+const writeStagedPayloadJsonFile = async <TKey extends ProjectTransferPackagePayloadKey>({
   filePath,
   key,
+  path,
   payload,
 }: {
   filePath: string
   key: TKey
-  payload: ProjectTransferPayloadByKey[TKey]
+  path: string
+  payload: ProjectTransferPackagePayloadByKey[TKey]
 }) => {
-  const serialized = serializeProjectTransferPayload(key, payload)
+  const serialized = serializeProjectTransferPayloadForSchemaVersion(projectTransferManifestSchemaVersion, key, payload)
   const bytes = textEncoder.encode(serialized)
 
   await globalThis.Bun.write(filePath, bytes)
@@ -651,28 +681,36 @@ const writeStagedPayloadJsonFile = async <TKey extends ProjectTransferPayloadKey
     crc32: getProjectTransferZipCrc32Digest(bytes),
     filePath,
     format: 'json' as const,
-    path: projectTransferPayloadPathByKey[key],
+    path,
     recordCount: getProjectTransferExportPayloadRecordCount(key, payload),
   }
 }
 
-const writeProjectTransferExportStagedPayloadFile = async <TKey extends ProjectTransferPayloadKey>({
+const writeProjectTransferExportStagedPayloadFile = async <TKey extends ProjectTransferPackagePayloadKey>({
   key,
   payload,
   rootPath,
 }: {
   key: TKey
-  payload: ProjectTransferPayloadByKey[TKey]
+  payload: ProjectTransferPackagePayloadByKey[TKey]
   rootPath: string
 }): Promise<ProjectTransferExportStagedPayloadFile> => {
   const filePath = getStagedPayloadFilePath(rootPath, key)
-  const format = projectTransferPayloadFormatByKey[key]
+  const format = getProjectTransferPayloadFormatForSchemaVersion({
+    key,
+    schemaVersion: projectTransferManifestSchemaVersion,
+  })
+  const path = getProjectTransferPayloadPathForSchemaVersion({key, schemaVersion: projectTransferManifestSchemaVersion})
+
+  if (format === undefined || path === undefined) {
+    throw new Error(`Project transfer export schema ${projectTransferManifestSchemaVersion} does not allow ${key}`)
+  }
 
   await mkdir(dirname(filePath), {recursive: true})
 
   return format === 'ndjson' && Array.isArray(payload)
-    ? writeStagedPayloadNdjsonFile({filePath, key, records: payload})
-    : writeStagedPayloadJsonFile({filePath, key, payload})
+    ? writeStagedPayloadNdjsonFile({filePath, key, path, records: payload})
+    : writeStagedPayloadJsonFile({filePath, key, path, payload})
 }
 
 const writeProjectTransferExportStagedPayloadFiles = async ({
@@ -680,19 +718,18 @@ const writeProjectTransferExportStagedPayloadFiles = async ({
   payloads,
   rootPath,
 }: {
-  keys: ProjectTransferPayloadKey[]
-  payloads: ProjectTransferPayloadByKey
+  keys: ProjectTransferPackagePayloadKey[]
+  payloads: ProjectTransferPackagePayloadByKey
   rootPath: string
 }) => {
-  return keys.reduce<Promise<Partial<Record<ProjectTransferPayloadKey, ProjectTransferExportStagedPayloadFile>>>>(
-    async (previousFiles, key) => {
-      const files = await previousFiles
-      const file = await writeProjectTransferExportStagedPayloadFile({key, payload: payloads[key], rootPath})
+  return keys.reduce<
+    Promise<Partial<Record<ProjectTransferPackagePayloadKey, ProjectTransferExportStagedPayloadFile>>>
+  >(async (previousFiles, key) => {
+    const files = await previousFiles
+    const file = await writeProjectTransferExportStagedPayloadFile({key, payload: payloads[key], rootPath})
 
-      return {...files, [key]: file}
-    },
-    Promise.resolve({}),
-  )
+    return {...files, [key]: file}
+  }, Promise.resolve({}))
 }
 
 const getProjectTransferExportEstimateTextLengthSql = (expression: string) => {
@@ -3435,6 +3472,106 @@ const getProjectTransferExportWarningsFromContext = (context: ProjectTransferExp
   return [...context.warnings, ...getProjectTransferExportCurrentReviewRowsSignatureWarnings(context)]
 }
 
+const getSchemaVNextAssetEntryPayload = (
+  entry: ProjectTransferPayloadByKey['assetManifest']['entries'][number],
+): ProjectTransferSchemaVNextAssetEntryPayloadRecord => {
+  const fingerprint = {checksumSha256: entry.checksumSha256, packagePath: entry.packagePath}
+  const contentType = entry.contentType === undefined ? {} : {contentType: entry.contentType}
+
+  return {
+    ...contentType,
+    byteLength: entry.byteLength,
+    checksumSha256: entry.checksumSha256,
+    fingerprint,
+    packagePath: entry.packagePath,
+    sortKey: getProjectTransferSchemaVNextFingerprintSortKey(fingerprint),
+  }
+}
+
+const getSchemaVNextPayloadKeyByCurrentPayloadPath = (payloadFile: string): ProjectTransferSchemaVNextPayloadKey => {
+  const key = projectTransferPayloadKeys.find((payloadKey) => {
+    return projectTransferPayloadPathByKey[payloadKey] === payloadFile
+  })
+
+  if (key === undefined || key === 'assetManifest') {
+    throw new Error(`Project transfer export asset reference has unsupported payload file: ${payloadFile}`)
+  }
+
+  return key as ProjectTransferSchemaVNextPayloadKey
+}
+
+const getSchemaVNextAssetReferencePayload = ({
+  assetPackagePath,
+  reference,
+}: {
+  assetPackagePath: string
+  reference: ProjectTransferPayloadByKey['assetManifest']['entries'][number]['references'][number]
+}): ProjectTransferSchemaVNextAssetReferencePayloadRecord => {
+  const payloadKey = getSchemaVNextPayloadKeyByCurrentPayloadPath(reference.payloadFile)
+  const payloadPath = getProjectTransferPayloadPathForSchemaVersion({
+    key: payloadKey,
+    schemaVersion: projectTransferManifestSchemaVersion,
+  })
+
+  if (payloadPath === undefined) {
+    throw new Error(
+      `Project transfer export schema ${projectTransferManifestSchemaVersion} does not allow ${payloadKey}`,
+    )
+  }
+
+  const fingerprint = {
+    assetPackagePath,
+    ...(reference.fieldPath === undefined ? {} : {fieldPath: reference.fieldPath}),
+    ...(reference.jsonPointer === undefined ? {} : {jsonPointer: reference.jsonPointer}),
+    kind: reference.kind,
+    payloadKey,
+    payloadPath,
+  }
+
+  return {
+    assetPackagePath,
+    ...(reference.fieldPath === undefined ? {} : {fieldPath: reference.fieldPath}),
+    fingerprint,
+    ...(reference.jsonPointer === undefined ? {} : {jsonPointer: reference.jsonPointer}),
+    kind: reference.kind,
+    payloadKey,
+    payloadPath,
+    sortKey: getProjectTransferSchemaVNextFingerprintSortKey(fingerprint),
+    ...(reference.sourceArticleId === undefined ? {} : {sourceArticleId: reference.sourceArticleId}),
+    ...(reference.sourceRef === undefined ? {} : {sourceRef: reference.sourceRef}),
+  }
+}
+
+const getSchemaVNextAssetReferencePayloads = (
+  assetManifest: ProjectTransferPayloadByKey['assetManifest'],
+): ProjectTransferSchemaVNextAssetReferencePayloadRecord[] => {
+  return assetManifest.entries.flatMap((entry) => {
+    return entry.references.map((reference) => {
+      return getSchemaVNextAssetReferencePayload({assetPackagePath: entry.packagePath, reference})
+    })
+  })
+}
+
+const getProjectTransferExportPackagePayloads = (
+  payloads: ProjectTransferPayloadByKey,
+): ProjectTransferPackagePayloadByKey => {
+  return {
+    ...payloads,
+    assetEntries: payloads.assetManifest.entries.map(getSchemaVNextAssetEntryPayload),
+    assetReferences: getSchemaVNextAssetReferencePayloads(payloads.assetManifest),
+  }
+}
+
+const getProjectTransferExportPackagePayloadKeys = (): ProjectTransferPackagePayloadKey[] => {
+  return projectTransferSchemaVNextPayloadKeys
+}
+
+const getProjectTransferExportPreAssetPackagePayloadKeys = (): ProjectTransferPackagePayloadKey[] => {
+  return getProjectTransferExportPackagePayloadKeys().filter((key) => {
+    return key !== 'assetEntries' && key !== 'assetReferences'
+  })
+}
+
 export const getProjectTransferExportPayloads = async (
   projectId: string,
   options: ProjectTransferExportQueryOptions = {},
@@ -3468,11 +3605,10 @@ export const stageProjectTransferExportPayloadRows = async ({
     contextWithAssets,
     getEmptyProjectTransferAssetManifestPayload(),
   )
+  const packagePayloads = getProjectTransferExportPackagePayloads(payloads)
   const payloadFiles = await writeProjectTransferExportStagedPayloadFiles({
-    keys: projectTransferPayloadKeys.filter((key) => {
-      return key !== 'assetManifest'
-    }),
-    payloads,
+    keys: getProjectTransferExportPreAssetPackagePayloadKeys(),
+    payloads: packagePayloads,
     rootPath,
   })
 
@@ -3505,16 +3641,27 @@ export const completeProjectTransferExportStagedPayloads = async ({
     ...stagedRows.payloads,
     assetManifest: assertProjectTransferPayload('assetManifest', assetCollection.assetManifest),
   }
-  const assetManifestFile = await writeProjectTransferExportStagedPayloadFile({
-    key: 'assetManifest',
-    payload: payloads.assetManifest,
+  const packagePayloads = getProjectTransferExportPackagePayloads(payloads)
+  const assetEntriesFile = await writeProjectTransferExportStagedPayloadFile({
+    key: 'assetEntries',
+    payload: packagePayloads.assetEntries,
     rootPath,
   })
-  const payloadFiles = {...stagedRows.payloadFiles, assetManifest: assetManifestFile}
+  const assetReferencesFile = await writeProjectTransferExportStagedPayloadFile({
+    key: 'assetReferences',
+    payload: packagePayloads.assetReferences,
+    rootPath,
+  })
+  const payloadFiles = {
+    ...stagedRows.payloadFiles,
+    assetEntries: assetEntriesFile,
+    assetReferences: assetReferencesFile,
+  }
 
   return {
     assetEntries: assetCollection.assetEntries,
-    payloadFiles: payloadFiles as Record<ProjectTransferPayloadKey, ProjectTransferExportStagedPayloadFile>,
+    packagePayloads,
+    payloadFiles: payloadFiles as Record<ProjectTransferPackagePayloadKey, ProjectTransferExportStagedPayloadFile>,
     payloads,
     warnings: stagedRows.warnings,
   }
@@ -3536,5 +3683,5 @@ export const serializeProjectTransferExportPayloads = (
 }
 
 export const getProjectTransferExportPayloadKeys = () => {
-  return [...projectTransferPayloadKeys]
+  return [...getProjectTransferExportPackagePayloadKeys()]
 }

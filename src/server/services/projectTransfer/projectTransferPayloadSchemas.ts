@@ -14,7 +14,7 @@ import {
   getProjectTransferPayloadFormatForSchemaVersion,
   getProjectTransferPayloadPathForSchemaVersion,
   isProjectTransferPayloadKeyForSchemaVersion,
-  projectTransferManifestSchemaVersion,
+  projectTransferCurrentManifestSchemaVersion,
   type ProjectTransferPackagePayloadKey,
   type ProjectTransferPackageWarning,
   type ProjectTransferPayloadFormat,
@@ -923,7 +923,7 @@ const projectTransferSchemaVNextPayloadContracts = {
 } as const satisfies Record<ProjectTransferSchemaVNextPayloadKey, ProjectTransferPayloadContract>
 
 export const projectTransferPayloadValidatorsBySchemaVersion = {
-  [projectTransferManifestSchemaVersion]: projectTransferPayloadContracts,
+  [projectTransferCurrentManifestSchemaVersion]: projectTransferPayloadContracts,
   [projectTransferSchemaVNextManifestSchemaVersion]: projectTransferSchemaVNextPayloadContracts,
 } as const
 
@@ -1150,7 +1150,10 @@ const assertAssetReference = (value: unknown, index: number, referenceIndex: num
   const reference = assertRecord(value, label)
   const kind = assertString(reference.kind, `${label}.kind`)
   const payloadFile = assertNonEmptyString(reference.payloadFile, `${label}.payloadFile`)
-  const payloadPathValidation = validateProjectTransferArchiveMemberPath({pathValue: payloadFile})
+  const payloadPathValidation = validateProjectTransferArchiveMemberPath({
+    pathValue: payloadFile,
+    schemaVersion: projectTransferCurrentManifestSchemaVersion,
+  })
 
   if (!assetReferenceKindSet.has(kind as ProjectTransferAssetReferenceKind)) {
     return failProjectTransferPayload(`${label}.kind must be a supported asset reference kind`)
@@ -1188,7 +1191,10 @@ const assertAssetEntry = (value: unknown, index: number) => {
   assertFieldsPresent(asset, ['packagePath', 'byteLength', 'checksumSha256', 'references'], label)
 
   const packagePath = assertNonEmptyString(asset.packagePath, `${label}.packagePath`)
-  const archivePathValidation = validateProjectTransferArchiveMemberPath({pathValue: packagePath})
+  const archivePathValidation = validateProjectTransferArchiveMemberPath({
+    pathValue: packagePath,
+    schemaVersion: projectTransferCurrentManifestSchemaVersion,
+  })
   const runtimePathValidation = validateProjectTransferRuntimeAssetPath(packagePath)
 
   if (!archivePathValidation.ok) {
@@ -1494,6 +1500,17 @@ export const serializeProjectTransferPayloadNdjsonRow = <TKey extends ProjectTra
   index: number,
 ): string => {
   const row = assertProjectTransferPayloadRow(key, value, index)
+
+  return JSON.stringify(getPackageRecordWithoutInternalAnnotations(row))
+}
+
+export const serializeProjectTransferPayloadNdjsonRowForSchemaVersion = <TKey extends ProjectTransferPackagePayloadKey>(
+  schemaVersion: ProjectTransferSchemaVersion,
+  key: TKey,
+  value: unknown,
+  index: number,
+): string => {
+  const row = assertProjectTransferPayloadRowForSchemaVersion(schemaVersion, key, value, index)
 
   return JSON.stringify(getPackageRecordWithoutInternalAnnotations(row))
 }

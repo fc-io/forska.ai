@@ -6,9 +6,15 @@ import {dirname} from 'node:path'
 import {inflateRawSync} from 'node:zlib'
 
 import {
+  projectTransferAllowedArchiveRootFilesBySchemaVersion,
+  projectTransferAllowedArchiveRootFoldersBySchemaVersion,
   type ProjectTransferPathValidationError,
   validateProjectTransferArchiveMemberPaths,
 } from './projectTransferPaths.ts'
+import {
+  projectTransferCurrentManifestSchemaVersion,
+  projectTransferSchemaVNextManifestSchemaVersion,
+} from './projectTransferSchemas.ts'
 
 export type ProjectTransferZipJsEntry = {
   compressedSize?: number
@@ -240,7 +246,17 @@ const getProjectTransferZipBytesSlice = (bytes: Uint8Array, offset: number, size
 }
 
 const assertProjectTransferZipPaths = (paths: readonly string[]) => {
-  const pathResult = validateProjectTransferArchiveMemberPaths({paths})
+  const pathResult = validateProjectTransferArchiveMemberPaths({
+    allowedRootFiles: [
+      ...projectTransferAllowedArchiveRootFilesBySchemaVersion[projectTransferCurrentManifestSchemaVersion],
+      ...projectTransferAllowedArchiveRootFilesBySchemaVersion[projectTransferSchemaVNextManifestSchemaVersion],
+    ],
+    allowedRootFolders: [
+      ...projectTransferAllowedArchiveRootFoldersBySchemaVersion[projectTransferCurrentManifestSchemaVersion],
+      ...projectTransferAllowedArchiveRootFoldersBySchemaVersion[projectTransferSchemaVNextManifestSchemaVersion],
+    ],
+    paths,
+  })
 
   if (!pathResult.ok) {
     return throwProjectTransferZipError(`path_${pathResult.error.code}`, getPathErrorMessage(pathResult.error))
