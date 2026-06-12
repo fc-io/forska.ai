@@ -80,6 +80,7 @@ type ProjectTransferExportPackageBuildInput = ProjectTransferExportRuntimeOption
   exportedAt?: Date
   heartbeat?: () => Promise<unknown>
   layout: ProjectTransferExportTempLayout
+  onProgress?: (progress: ProjectTransferProgressPayload) => Promise<void> | void
   packageOutputPath?: string
   projectId: string
   rawArticleProvenanceMode?: ProjectTransferRawArticleProvenanceMode
@@ -704,10 +705,14 @@ const getReadyExportPayload = (build: ProjectTransferExportPackageBuild): Projec
   return {status: 'ready', ...build.metadata}
 }
 
-const getProjectTransferExportBuildRowCount = (build: ProjectTransferExportPackageBuild) => {
-  return Object.values(build.manifest.project.counts).reduce((total, count) => {
+const getProjectTransferExportManifestRowCount = (manifest: ProjectTransferManifest) => {
+  return Object.values(manifest.project.counts).reduce((total, count) => {
     return total + count
   }, 0)
+}
+
+const getProjectTransferExportBuildRowCount = (build: ProjectTransferExportPackageBuild) => {
+  return getProjectTransferExportManifestRowCount(build.manifest)
 }
 
 const getReadyProgress = ({
@@ -719,14 +724,14 @@ const getReadyProgress = ({
   expiresAt: Date
   startedAt: Date
 }) => {
-  const bytesTotal = build.metadata.byteLength + build.assetBytes
+  const bytesTotal = build.metadata.byteLength
   const rowCount = getProjectTransferExportBuildRowCount(build)
 
   return getProgress({
     bytesProcessed: bytesTotal,
     bytesTotal,
     expiresAt,
-    phase: 'export_package',
+    phase: 'export_package_write',
     performanceMetrics: build.performanceMetrics,
     rowCountProcessed: rowCount,
     rowCountTotal: rowCount,
@@ -779,49 +784,86 @@ const startDetachedProjectTransferExportSession = (input: RunProjectTransferExpo
 }
 
 const getProgress = ({
-  bytesProcessed,
-  bytesTotal,
+  bytesProcessed = null,
+  bytesTotal = null,
   expiresAt,
   phase,
   performanceMetrics,
-  rowCountProcessed,
-  rowCountTotal,
+  rowCountProcessed = null,
+  rowCountTotal = null,
   startedAt,
   status,
   warningCount,
 }: {
-  bytesProcessed: number
-  bytesTotal: number
+  bytesProcessed?: number | null
+  bytesTotal?: number | null
   expiresAt: Date
-  phase: 'export_assembly' | 'export_package'
+  phase: ProjectTransferProgressPayload['phase']
   performanceMetrics?: ProjectTransferPerformanceMetrics
-  rowCountProcessed: number
-  rowCountTotal: number
+  rowCountProcessed?: number | null
+  rowCountTotal?: number | null
   startedAt: Date
   status: 'completed' | 'failed' | 'pending' | 'running'
   warningCount: number
 }): ProjectTransferProgressPayload => {
-  const percent = bytesTotal === 0 ? 100 : Math.min(100, Math.floor((bytesProcessed / bytesTotal) * 100))
+  const percent =
+    bytesProcessed !== null && bytesTotal !== null && bytesTotal > 0
+      ? Math.min(100, Math.floor((bytesProcessed / bytesTotal) * 100))
+      : null
   const updatedAt = new Date().toISOString()
 
   return {
-    bytesProcessed,
-    bytesTotal,
-    completedBytes: bytesProcessed,
-    completedRows: rowCountProcessed,
+    ...(bytesProcessed === null ? {} : {bytesProcessed, completedBytes: bytesProcessed}),
+    ...(bytesTotal === null ? {} : {bytesTotal, totalBytes: bytesTotal}),
     expiresAt: expiresAt.toISOString(),
     performanceMetrics,
-    percent,
+    ...(percent === null ? {} : {percent}),
     phase,
-    rowCountProcessed,
-    rowCountTotal,
+    ...(rowCountProcessed === null ? {} : {completedRows: rowCountProcessed, rowCountProcessed}),
+    ...(rowCountTotal === null ? {} : {rowCountTotal, totalRows: rowCountTotal}),
     startedAt: startedAt.toISOString(),
     status,
-    totalBytes: bytesTotal,
-    totalRows: rowCountTotal,
     updatedAt,
     warningCount,
   }
+}
+
+const publishExportBuildProgress = async ({
+  bytesProcessed,
+  bytesTotal,
+  expiresAt,
+  input,
+  phase,
+  rowCountProcessed,
+  rowCountTotal,
+  startedAt,
+  status,
+  warningCount = 0,
+}: {
+  bytesProcessed?: number | null
+  bytesTotal?: number | null
+  expiresAt: Date
+  input: ProjectTransferExportPackageBuildInput
+  phase: ProjectTransferProgressPayload['phase']
+  rowCountProcessed?: number | null
+  rowCountTotal?: number | null
+  startedAt: Date
+  status: ProjectTransferProgressPayload['status']
+  warningCount?: number
+}) => {
+  await input.onProgress?.(
+    getProgress({
+      bytesProcessed,
+      bytesTotal,
+      expiresAt,
+      phase,
+      rowCountProcessed,
+      rowCountTotal,
+      startedAt,
+      status,
+      warningCount,
+    }),
+  )
 }
 
 export const writeProjectTransferExportRuntimeEvent = ({
@@ -918,6 +960,14 @@ export const buildProjectTransferExportPackage = async (
                     rootPath: buildPath,
                   })
                 })) as Awaited<ReturnType<typeof stageProjectTransferExportPayloadRows>>
+                await publishExportBuildProgress({
+                  expiresAt,
+                  input,
+                  phase: 'export_asset_staging',
+                  startedAt: exportedAt,
+                  status: 'running',
+                  warningCount: stagedRows.warnings.length,
+                })
 
                 return completeProjectTransferExportStagedPayloads({
                   cwd: input.cwd,
@@ -934,11 +984,33 @@ export const buildProjectTransferExportPackage = async (
         const assetBytes = assembly.assetEntries.reduce((total, entry) => {
           return total + entry.byteLength
         }, 0)
+        yield* Effect.promise(() => {
+          return publishExportBuildProgress({
+            bytesProcessed: assetBytes,
+            bytesTotal: assetBytes,
+            expiresAt,
+            input,
+            phase: 'export_asset_staging',
+            startedAt: exportedAt,
+            status: 'completed',
+            warningCount: assembly.warnings.length,
+          })
+        })
         const manifest = yield* Effect.promise(() => {
           return getManifestWithFingerprint({assetBytes, assembly, exportedAt, payloadFiles: assembly.payloadFiles})
         })
         const entries = getPackageEntries({assembly, manifest})
         const packageOutputPath = input.packageOutputPath ?? join(buildPath, projectTransferExportArtifacts.package)
+        yield* Effect.promise(() => {
+          return publishExportBuildProgress({
+            expiresAt,
+            input,
+            phase: 'export_package_write',
+            startedAt: exportedAt,
+            status: 'running',
+            warningCount: assembly.warnings.length,
+          })
+        })
         const packageWriteMeasurement = yield* Effect.promise(() => {
           return measureProjectTransferPhase('exportPackageWrite', () => {
             return runProjectTransferExportHeartbeatOperation({
@@ -956,6 +1028,22 @@ export const buildProjectTransferExportPackage = async (
         })
         const packageArchive = packageWriteMeasurement.value
         const packageFingerprint = manifest.packageFingerprint ?? ''
+        const rowCount = getProjectTransferExportManifestRowCount(manifest)
+
+        yield* Effect.promise(() => {
+          return publishExportBuildProgress({
+            bytesProcessed: packageArchive.byteLength,
+            bytesTotal: packageArchive.byteLength,
+            expiresAt,
+            input,
+            phase: 'export_package_write',
+            rowCountProcessed: rowCount,
+            rowCountTotal: rowCount,
+            startedAt: exportedAt,
+            status: 'completed',
+            warningCount: assembly.warnings.length,
+          })
+        })
 
         assertWrittenProjectTransferExportPackage({assembly, manifest, packageArchive})
 
@@ -1017,12 +1105,8 @@ export const runProjectTransferExportSession = async (input: RunProjectTransferE
   const repository = getProjectTransferSessionRepository()
   const expiresAt = input.expiresAt ?? getDefaultExpiresAt(startedAt)
   const pendingProgress = getProgress({
-    bytesProcessed: 0,
-    bytesTotal: 0,
     expiresAt,
     phase: 'export_assembly',
-    rowCountProcessed: 0,
-    rowCountTotal: 0,
     startedAt,
     status: 'running',
     warningCount: 0,
@@ -1042,6 +1126,19 @@ export const runProjectTransferExportSession = async (input: RunProjectTransferE
   writeProjectTransferExportRuntimeEvent({progress: pendingProgress, sessionId: input.sessionId, state: 'assembling'})
 
   try {
+    const publishSessionProgress = async (progress: ProjectTransferProgressPayload) => {
+      const session = await repository.heartbeatProjectTransferExportSessionOwner({
+        ownerToken,
+        progress,
+        sessionId: input.sessionId,
+      })
+
+      if (session === null) {
+        throw new Error(`Project transfer export session ownership was lost: ${input.sessionId}`)
+      }
+
+      writeProjectTransferExportRuntimeEvent({progress, sessionId: input.sessionId, state: session.state})
+    }
     const heartbeat = async () => {
       const session = await repository.heartbeatProjectTransferExportSessionOwner({
         ownerToken,
@@ -1059,19 +1156,20 @@ export const runProjectTransferExportSession = async (input: RunProjectTransferE
       expiresAt,
       heartbeat,
       layout,
+      onProgress: publishSessionProgress,
       packageOutputPath: resolveProjectTransferTempWritablePath({...input, pathValue: layout.packagePath}),
       sessionId: input.sessionId,
     })
     const packagingProgress = getProgress({
-      bytesProcessed: build.assetBytes,
-      bytesTotal: build.metadata.byteLength + build.assetBytes,
+      bytesProcessed: build.metadata.byteLength,
+      bytesTotal: build.metadata.byteLength,
       expiresAt,
-      phase: 'export_package',
+      phase: 'export_package_write',
       performanceMetrics: build.performanceMetrics,
-      rowCountProcessed: 0,
-      rowCountTotal: 0,
+      rowCountProcessed: getProjectTransferExportBuildRowCount(build),
+      rowCountTotal: getProjectTransferExportBuildRowCount(build),
       startedAt,
-      status: 'running',
+      status: 'completed',
       warningCount: build.manifest.warnings?.length ?? 0,
     })
     const packageClaim = await repository.claimProjectTransferExportSessionOwner({

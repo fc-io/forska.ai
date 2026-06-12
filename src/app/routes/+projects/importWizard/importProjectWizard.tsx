@@ -13,6 +13,7 @@ import {
   type ProjectImportPackageWarning,
   type ProjectImportPlanArtifact,
   type ProjectImportPlanSummary,
+  type ProjectImportProgress,
   type ProjectImportResolveDependenciesRequest,
   type ProjectImportSession,
   projectImportSessionQueryKey,
@@ -303,8 +304,70 @@ const shouldPollSession = (session: ProjectImportSession | undefined) => {
 const getSessionPhaseLabel = (session: ProjectImportSession | null) => {
   const phase = session?.progress?.phase ?? session?.state ?? 'not started'
   const status = session?.progress?.status ?? 'pending'
+  const phaseLabel = formatLabel(phase)
+  const statusLabel = formatLabel(status)
 
-  return `${formatLabel(phase)} (${formatLabel(status)})`
+  return `${phaseLabel.charAt(0).toUpperCase()}${phaseLabel.slice(1)} (${statusLabel})`
+}
+
+const hasNumber = (value: number | null | undefined): value is number => {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+const getProgressByteValues = (progress: ProjectImportProgress | null | undefined) => {
+  const processed = progress?.bytesProcessed ?? progress?.completedBytes ?? null
+  const total = progress?.bytesTotal ?? progress?.totalBytes ?? null
+
+  return hasNumber(processed) && hasNumber(total) ? {processed, total} : null
+}
+
+const getProgressRowValues = (progress: ProjectImportProgress | null | undefined) => {
+  const processed = progress?.rowCountProcessed ?? progress?.completedRows ?? null
+  const total = progress?.rowCountTotal ?? progress?.totalRows ?? null
+
+  return hasNumber(processed) && hasNumber(total) ? {processed, total} : null
+}
+
+const getProgressDetailRows = (session: ProjectImportSession | null, uploadPercent: number | null) => {
+  const progress = session?.progress
+  const byteValues = getProgressByteValues(progress)
+  const rowValues = getProgressRowValues(progress)
+  const upload = session?.upload
+  const uploadLabel =
+    upload === null || upload === undefined
+      ? uploadPercent === null
+        ? 'Awaiting package'
+        : `${formatCount(uploadPercent)}%`
+      : `${upload.fileName} (${formatBytes(upload.byteLength)})`
+  const baseRows = [
+    {label: 'Upload', value: uploadLabel},
+    {label: 'Plan revision', value: formatCount(session?.planRevision ?? 0)},
+  ]
+  const byteRow =
+    byteValues === null
+      ? []
+      : [{label: 'Bytes', value: `${formatBytes(byteValues.processed)} of ${formatBytes(byteValues.total)}`}]
+  const rowRow =
+    rowValues === null
+      ? []
+      : [{label: 'Rows', value: `${formatCount(rowValues.processed)} of ${formatCount(rowValues.total)}`}]
+  const warningRow = hasNumber(progress?.warningCount)
+    ? [{label: 'Warnings', value: formatCount(progress?.warningCount)}]
+    : []
+
+  return [...baseRows, ...byteRow, ...rowRow, ...warningRow]
+}
+
+const getStalePlanReasonEntries = (session: ProjectImportSession | null) => {
+  const reasons = session?.planSummary?.stalePlanReasons ?? session?.plan?.stalePlanReasons ?? {}
+
+  return Object.entries(reasons).flatMap(([surface, entries]) => {
+    return (entries ?? []).map((entry) => {
+      const surfaces = entry.targetStateSurfaces.length > 0 ? entry.targetStateSurfaces.join(', ') : 'target state'
+
+      return {reason: entry.reason, surface, surfaces}
+    })
+  })
 }
 
 const getCommitUnavailableReason = (session: ProjectImportSession | null) => {
@@ -355,6 +418,9 @@ const ProgressPanel = (props: {session: ProjectImportSession | null; uploadPerce
   const percent = createMemo(() => {
     return getProgressPercent(props.session, props.uploadPercent)
   })
+  const detailRows = createMemo(() => {
+    return getProgressDetailRows(props.session, props.uploadPercent)
+  })
 
   return (
     <section class="rounded-lg border border-gray-200 bg-white p-4">
@@ -369,34 +435,30 @@ const ProgressPanel = (props: {session: ProjectImportSession | null; uploadPerce
           }}
         </Show>
       </div>
-      <div class="mt-4 h-2 overflow-hidden rounded-full bg-gray-100">
-        <div
-          class="h-full rounded-full bg-blue-600 transition-all"
-          style={{width: `${Math.max(0, Math.min(100, percent() ?? 0))}%`}}
-        />
-      </div>
+      <Show
+        when={percent() !== null}
+        fallback={<p class="mt-4 text-sm text-gray-500">No determinate percentage for this phase.</p>}
+      >
+        <div class="mt-4 space-y-2">
+          <div class="h-2 overflow-hidden rounded-full bg-gray-100">
+            <div
+              class="h-full rounded-full bg-blue-600 transition-all"
+              style={{width: `${Math.max(0, Math.min(100, percent() ?? 0))}%`}}
+            />
+          </div>
+          <p class="text-xs text-gray-500">{formatCount(percent())}%</p>
+        </div>
+      </Show>
       <div class="mt-3 grid gap-3 text-sm text-gray-700 md:grid-cols-3">
-        <div>
-          <span class="font-medium text-gray-900">Upload:</span>{' '}
-          <Show when={props.session?.upload} fallback="Awaiting package">
-            {(upload) => {
-              return `${upload().fileName} (${formatBytes(upload().byteLength)})`
-            }}
-          </Show>
-        </div>
-        <div>
-          <span class="font-medium text-gray-900">Extract/analyze:</span>{' '}
-          <Show when={props.session?.progress} fallback="Not started">
-            {(progress) => {
-              return progress().phase === 'extract' || progress().phase === 'analyze'
-                ? formatLabel(progress().status)
-                : 'Waiting'
-            }}
-          </Show>
-        </div>
-        <div>
-          <span class="font-medium text-gray-900">Plan revision:</span> {props.session?.planRevision ?? 0}
-        </div>
+        <For each={detailRows()}>
+          {(row) => {
+            return (
+              <div>
+                <span class="font-medium text-gray-900">{row.label}:</span> {row.value}
+              </div>
+            )
+          }}
+        </For>
       </div>
     </section>
   )
@@ -467,6 +529,32 @@ const PackageReviewPanel = (props: {session: ProjectImportSession | null}) => {
         </div>
       </div>
     </section>
+  )
+}
+
+const StalePlanReasonsPanel = (props: {session: ProjectImportSession | null}) => {
+  const entries = createMemo(() => {
+    return getStalePlanReasonEntries(props.session)
+  })
+
+  return (
+    <Show when={props.session?.stalePlan && entries().length > 0}>
+      <section class="rounded-lg border border-amber-200 bg-amber-50 p-4">
+        <h2 class="text-base font-semibold text-amber-950">Plan revalidation details</h2>
+        <ul class="mt-3 space-y-2 text-sm text-amber-900">
+          <For each={entries()}>
+            {(entry) => {
+              return (
+                <li class="rounded-md border border-amber-200 bg-white/70 px-3 py-2">
+                  <span class="font-medium">{formatLabel(entry.surface)}:</span> {formatLabel(entry.reason)}
+                  <span class="block text-xs text-amber-800">Surfaces: {entry.surfaces}</span>
+                </li>
+              )
+            }}
+          </For>
+        </ul>
+      </section>
+    </Show>
   )
 }
 
@@ -1035,6 +1123,7 @@ export const ImportProjectWizard = () => {
 
             <ProgressPanel session={currentSession()} uploadPercent={uploadPercent()} />
             <PackageReviewPanel session={currentSession()} />
+            <StalePlanReasonsPanel session={currentSession()} />
             <PostImportWarningsPanel session={currentSession()} />
             <SummaryTable fields={overlapSummaryFields} title="Overlap summary" values={planSummary()?.overlapCounts} />
             <SummaryTable

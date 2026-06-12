@@ -16,6 +16,7 @@ import {
   type ProjectTransferDependencyStatus,
   type ProjectTransferPlanBlocker,
   type ProjectTransferPlanSummary,
+  type ProjectTransferProgressPayload,
   type ProjectTransferStagedPackageMetadata,
   type ProjectTransferStagedPayloadMetadata,
   type ProjectTransferStagingProgressPayload,
@@ -155,6 +156,7 @@ export type ProjectTransferImportAnalyzeResult = {
 type ProjectTransferImportAnalyzeInput = ProjectTransferAnalyzeRuntimeOptions & {
   availableDiskBytes?: number
   layout: ProjectTransferImportTempLayout
+  onProgress?: (progress: ProjectTransferProgressPayload) => Promise<void> | void
   planRevision: number
   runner?: ProjectTransferAnalyzeTargetRunner
   uploadMetadata?: ProjectTransferUploadMetadataPayload | null
@@ -2100,6 +2102,57 @@ const getImportAnalysisPerformanceMetrics = ({
   })
 }
 
+const getProgressPercent = (processed: number | null, total: number | null) => {
+  return processed !== null && total !== null && total > 0 ? Math.min(100, Math.floor((processed / total) * 100)) : null
+}
+
+const publishImportAnalyzeProgress = async ({
+  bytesProcessed = null,
+  bytesTotal = null,
+  input,
+  message,
+  phase,
+  rowCountProcessed = null,
+  rowCountTotal = null,
+  status,
+  warningCount = null,
+}: {
+  bytesProcessed?: number | null
+  bytesTotal?: number | null
+  input: ProjectTransferImportAnalyzeInput
+  message?: string | null
+  phase: ProjectTransferProgressPayload['phase']
+  rowCountProcessed?: number | null
+  rowCountTotal?: number | null
+  status: ProjectTransferProgressPayload['status']
+  warningCount?: number | null
+}) => {
+  const now = new Date().toISOString()
+  const percent = getProgressPercent(bytesProcessed, bytesTotal)
+  const progress = {
+    ...(bytesProcessed === null ? {} : {bytesProcessed, completedBytes: bytesProcessed}),
+    ...(bytesTotal === null ? {} : {bytesTotal, totalBytes: bytesTotal}),
+    ...(message === undefined ? {} : {message}),
+    ...(percent === null ? {} : {percent}),
+    phase,
+    planRevision: input.planRevision,
+    ...(rowCountProcessed === null ? {} : {completedRows: rowCountProcessed, rowCountProcessed}),
+    ...(rowCountTotal === null ? {} : {rowCountTotal, totalRows: rowCountTotal}),
+    status,
+    updatedAt: now,
+    uploadMetadata: input.uploadMetadata ?? null,
+    ...(warningCount === null ? {} : {warningCount}),
+  } satisfies ProjectTransferProgressPayload
+
+  await input.onProgress?.(progress)
+}
+
+const getPackageRowCount = (packageCounts: Record<ProjectTransferPayloadKey, number>) => {
+  return Object.values(packageCounts).reduce((total, count) => {
+    return total + count
+  }, 0)
+}
+
 export const analyzeProjectTransferImportPackage = async (
   input: ProjectTransferImportAnalyzeInput,
 ): Promise<ProjectTransferImportAnalyzeResult> => {
@@ -2126,6 +2179,14 @@ export const analyzeProjectTransferImportPackage = async (
     'pre_extract',
   )
 
+  await publishImportAnalyzeProgress({
+    bytesProcessed: 0,
+    bytesTotal: packageBytes.byteLength,
+    input,
+    message: 'Scanning package archive',
+    phase: 'package_scan',
+    status: 'running',
+  })
   const zipScan = await measureProjectTransferPhase('zipScan', () => {
     return readProjectTransferZipPackage({
       beforeReadEntries: (entries) => {
@@ -2139,6 +2200,14 @@ export const analyzeProjectTransferImportPackage = async (
       bytes: packageBytes,
       zipModule: input.zipModule,
     })
+  })
+  await publishImportAnalyzeProgress({
+    bytesProcessed: packageBytes.byteLength,
+    bytesTotal: packageBytes.byteLength,
+    input,
+    message: 'Package archive scan completed',
+    phase: 'package_scan',
+    status: 'completed',
   })
   const zipPackage = zipScan.value
   const expandedBytes = sumNumbers(
@@ -2187,6 +2256,14 @@ export const analyzeProjectTransferImportPackage = async (
     zipBytes: packageBytes.byteLength,
   })
 
+  await publishImportAnalyzeProgress({
+    bytesProcessed: 0,
+    bytesTotal: expandedBytes,
+    input,
+    message: 'Loading package rows into staging',
+    phase: 'staging_load',
+    status: 'running',
+  })
   const stagingLoad = await measureProjectTransferPhase('stagingLoad', async () => {
     return writeExtractedEntries({
       entries: zipPackage.entries,
@@ -2199,6 +2276,20 @@ export const analyzeProjectTransferImportPackage = async (
     return parsePayloads({entriesByPath, extractionRootPath: stagingLayout.extractedPath, manifest, runtimeOptions})
   })
   const parsed = parsedMeasurement.value
+  await publishImportAnalyzeProgress({
+    bytesProcessed: expandedBytes,
+    bytesTotal: expandedBytes,
+    input,
+    message: 'Package staging load completed',
+    phase: 'staging_load',
+    status: 'completed',
+  })
+  await publishImportAnalyzeProgress({
+    input,
+    message: 'Validating package fingerprint',
+    phase: 'fingerprint_validation',
+    status: 'running',
+  })
   const computedPackageFingerprint = getComputedPackageFingerprint({manifest, packagePayloads: parsed.packagePayloads})
   const legacyPackageFingerprint =
     manifest.schemaVersion === projectTransferCurrentManifestSchemaVersion
@@ -2215,6 +2306,23 @@ export const analyzeProjectTransferImportPackage = async (
     payloads: parsed.payloads,
   })
   const packageContractBlockers = [...parsed.blockers, ...semanticBlockers]
+  await publishImportAnalyzeProgress({
+    input,
+    message: 'Package fingerprint validation completed',
+    phase: 'fingerprint_validation',
+    status: 'completed',
+    warningCount: parsed.warnings.length,
+  })
+  const packageRowCount = getPackageRowCount(packageCounts)
+  await publishImportAnalyzeProgress({
+    input,
+    message: 'Analyzing target project state',
+    phase: 'analyze',
+    rowCountProcessed: 0,
+    rowCountTotal: packageRowCount,
+    status: 'running',
+    warningCount: parsed.warnings.length,
+  })
   const targetAnalysisMeasurement = await measureProjectTransferPhase('targetAnalysis', () => {
     return input.runner === undefined
       ? getProjectTransferAnalyzeTargetPlanWithOperationTables({
@@ -2227,6 +2335,15 @@ export const analyzeProjectTransferImportPackage = async (
       : getProjectTransferAnalyzeTargetPlan({packageFingerprint, payloads: parsed.payloads, runner: input.runner})
   })
   const targetAnalysis = targetAnalysisMeasurement.value
+  await publishImportAnalyzeProgress({
+    input,
+    message: 'Target project analysis completed',
+    phase: 'analyze',
+    rowCountProcessed: packageRowCount,
+    rowCountTotal: packageRowCount,
+    status: 'completed',
+    warningCount: parsed.warnings.length + targetAnalysis.packageWarnings.length,
+  })
   const targetState = await getTargetStateDirtyTokenSnapshotForPlan(input.runner)
   const blockers = [...packageContractBlockers, ...targetAnalysis.blockers]
   const packageWarnings = [...parsed.warnings, ...targetAnalysis.packageWarnings]

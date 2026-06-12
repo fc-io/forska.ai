@@ -54,8 +54,13 @@ export type ProjectImportPlanSummary = {
   packageCounts?: Record<string, number>
   packageFingerprint?: string | null
   packageWarnings?: ProjectImportPackageWarning[]
+  stalePlanReasons?: ProjectImportStalePlanReasons
   warningCount: number
 }
+
+export type ProjectImportStalePlanReason = {reason: string; targetStateSurfaces: string[]}
+
+export type ProjectImportStalePlanReasons = Record<string, ProjectImportStalePlanReason[] | undefined>
 
 export type ProjectImportPackageWarning = {
   action?: string
@@ -110,6 +115,7 @@ export type ProjectImportPlanArtifact = {
   packageWarnings: ProjectImportPackageWarning[]
   planRevision: number
   resolutionKinds: Record<string, ProjectImportPlanBlocker['resolutionKind']>
+  stalePlanReasons?: ProjectImportStalePlanReasons
   summary: ProjectImportPlanSummary
   targetPlan: ProjectImportTargetPlan
 }

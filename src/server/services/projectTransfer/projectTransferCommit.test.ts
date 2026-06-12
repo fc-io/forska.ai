@@ -650,12 +650,12 @@ test('project transfer commit loads frozen artifacts and claims with server gene
       commitId: 'commit-generated',
       nextOwnerToken: 'owner-generated',
       nextState: 'committing',
-      progress: {percent: 0, phase: 'commit', planRevision: 1, status: 'running'},
+      progress: {phase: 'revalidation', planRevision: 1, status: 'running'},
     })
     expect(fake.calls.transition[1]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
       nextState: 'committing',
-      progress: {phase: 'commit', status: 'running'},
+      progress: {percent: 0, phase: 'asset_promotion', status: 'running'},
     })
     expect(fake.calls.transition[2]).toMatchObject({
       expectedOwnerToken: 'owner-generated',

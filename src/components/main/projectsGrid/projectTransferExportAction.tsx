@@ -7,7 +7,19 @@ import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 import {Button} from '../../ui/button'
 
 type ProjectTransferExportPendingStatus = 'assembling' | 'packaging' | 'queued'
-type ProjectTransferExportProgress = Record<string, unknown> & {percent?: number | null}
+type ProjectTransferExportProgress = Record<string, unknown> & {
+  bytesProcessed?: number | null
+  bytesTotal?: number | null
+  completedBytes?: number | null
+  completedRows?: number | null
+  percent?: number | null
+  phase?: string | null
+  rowCountProcessed?: number | null
+  rowCountTotal?: number | null
+  status?: string | null
+  totalBytes?: number | null
+  totalRows?: number | null
+}
 type ProjectTransferExportPendingSession = {
   downloadUrl?: string
   expiresAt: string
@@ -99,6 +111,30 @@ const getNumberValue = (record: Record<string, unknown>, key: string) => {
   const value = record[key]
 
   return typeof value === 'number' ? value : null
+}
+
+const hasNumber = (value: number | null | undefined): value is number => {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+const formatCount = (value: number) => {
+  return new Intl.NumberFormat().format(value)
+}
+
+const formatBytes = (value: number) => {
+  const units = ['B', 'KB', 'MB', 'GB']
+  const unitIndex = value >= 1024 * 1024 * 1024 ? 3 : value >= 1024 * 1024 ? 2 : value >= 1024 ? 1 : 0
+  const divisor = unitIndex === 0 ? 1 : 1024 ** unitIndex
+
+  return `${(value / divisor).toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
+}
+
+const formatLabel = (value: string) => {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_:-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 const getRecordKeys = (value: unknown) => {
@@ -382,19 +418,46 @@ const downloadProjectTransferPackageFromSession = async (
   return readProjectTransferExportSessionResponse(response, 'Failed to download project transfer export')
 }
 
-const getSessionMessagePrefix = (status: ProjectTransferExportSession['status']) => {
-  return status === 'assembling'
-    ? 'Assembling package'
-    : status === 'packaging'
-      ? 'Packaging download'
-      : 'Preparing download'
+const getProgressByteValues = (progress: ProjectTransferExportProgress | null | undefined) => {
+  const processed = progress?.bytesProcessed ?? progress?.completedBytes ?? null
+  const total = progress?.bytesTotal ?? progress?.totalBytes ?? null
+
+  return hasNumber(processed) && hasNumber(total) ? {processed, total} : null
+}
+
+const getProgressRowValues = (progress: ProjectTransferExportProgress | null | undefined) => {
+  const processed = progress?.rowCountProcessed ?? progress?.completedRows ?? null
+  const total = progress?.rowCountTotal ?? progress?.totalRows ?? null
+
+  return hasNumber(processed) && hasNumber(total) ? {processed, total} : null
+}
+
+const getExportFallbackPhase = (status: ProjectTransferExportSession['status']) => {
+  return status === 'assembling' ? 'export_assembly' : status === 'packaging' ? 'export_package_write' : status
 }
 
 const getSessionStatusMessage = (session: ProjectTransferExportSession | null) => {
-  const percent = typeof session?.progress?.percent === 'number' ? Math.round(session.progress.percent) : null
-  const prefix = session ? getSessionMessagePrefix(session.status) : null
+  if (session === null) {
+    return null
+  }
 
-  return prefix === null ? null : percent === null ? `${prefix}...` : `${prefix} (${percent}%)...`
+  const progress = session.progress
+  const phase = formatLabel(progress?.phase ?? getExportFallbackPhase(session.status))
+  const status = progress?.status === undefined || progress.status === null ? session.status : progress.status
+  const percent = hasNumber(progress?.percent) ? `${Math.round(progress.percent)}%` : null
+  const byteValues = getProgressByteValues(progress)
+  const rowValues = getProgressRowValues(progress)
+  const byteLabel =
+    byteValues === null ? null : `${formatBytes(byteValues.processed)} of ${formatBytes(byteValues.total)}`
+  const rowLabel =
+    rowValues === null ? null : `${formatCount(rowValues.processed)} of ${formatCount(rowValues.total)} rows`
+  const details = [percent, byteLabel, rowLabel].filter((value): value is string => {
+    return value !== null
+  })
+
+  return details.length > 0
+    ? `${phase} (${formatLabel(status)}): ${details.join(', ')}`
+    : `${phase} (${formatLabel(status)})`
 }
 
 const addExportId = (ids: Set<string>, exportId: string) => {
@@ -616,7 +679,10 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
       <Show when={statusMessage()}>
         {(message) => {
           return (
-            <span role="status" class="max-w-40 text-xs text-muted-foreground">
+            <span
+              role="status"
+              class={props.showModeDetails ? 'text-xs text-muted-foreground' : 'max-w-56 text-xs text-muted-foreground'}
+            >
               {message()}
             </span>
           )

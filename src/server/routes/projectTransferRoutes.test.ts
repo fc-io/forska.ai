@@ -1344,11 +1344,8 @@ test('project transfer commit returns background and stale sessions through the 
     ownerToken: 'owner-background',
     planRevision: 3,
     progressJson: {
-      percent: 0,
-      phase: 'commit',
+      phase: 'revalidation',
       planRevision: 3,
-      rowCountProcessed: 0,
-      rowCountTotal: 25_000,
       status: 'running',
       updatedAt: '2030-01-01T00:00:00.000Z',
       warningCount: 1,
@@ -1413,7 +1410,7 @@ test('project transfer commit returns background and stale sessions through the 
 
   expect(backgroundResponse.status).toBe(202)
   expect(backgroundBody).toMatchObject({
-    data: {executionMode: 'background', progress: {phase: 'commit', planRevision: 3}, state: 'committing'},
+    data: {executionMode: 'background', progress: {phase: 'revalidation', planRevision: 3}, state: 'committing'},
     error: null,
   })
   expect(staleResponse.status).toBe(200)

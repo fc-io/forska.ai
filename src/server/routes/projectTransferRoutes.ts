@@ -892,23 +892,78 @@ const getAnalyzeProgress = ({
 }: {
   now: Date
   performanceMetrics?: ProjectTransferPerformanceMetrics
-  phase: 'analyze' | 'extract'
+  phase: 'analyze' | 'extract' | 'package_scan'
   status: ProjectTransferProgressPayload['status']
   upload: ProjectTransferUploadMetadataPayload | null
 }): ProjectTransferProgressPayload => {
-  const byteLength = upload?.byteLength ?? 0
+  const byteLength = upload?.byteLength ?? null
+  const isPackageScan = phase === 'package_scan' && byteLength !== null
 
   return {
-    bytesProcessed: byteLength,
-    bytesTotal: byteLength,
-    completedBytes: byteLength,
+    ...(isPackageScan ? {bytesProcessed: status === 'completed' ? byteLength : 0, bytesTotal: byteLength} : {}),
+    ...(isPackageScan ? {completedBytes: status === 'completed' ? byteLength : 0, totalBytes: byteLength} : {}),
     phase,
     performanceMetrics,
-    percent: status === 'completed' ? 100 : 0,
+    ...(isPackageScan && status === 'completed' ? {percent: 100} : {}),
     status,
-    totalBytes: byteLength,
     updatedAt: now.toISOString(),
     uploadMetadata: upload,
+  }
+}
+
+const updateImportWorkerProgress = async ({
+  ownerToken,
+  progress,
+  sessionId,
+}: {
+  ownerToken: string
+  progress: ProjectTransferProgressPayload
+  sessionId: string
+}) => {
+  const updated = await getProjectTransferSessionRepository().updateProjectTransferSessionProgress({
+    expectedOwnerToken: ownerToken,
+    now: new Date(progress.updatedAt ?? Date.now()),
+    progress,
+    sessionId,
+  })
+
+  if (updated === null) {
+    throw new Error(`Project transfer import session ownership was lost: ${sessionId}`)
+  }
+
+  return updated
+}
+
+const getImportRuntimePhaseProgress = ({
+  message,
+  now,
+  performanceMetrics,
+  phase,
+  previousProgress,
+  status,
+  warningCount,
+}: {
+  message?: string | null
+  now: Date
+  performanceMetrics?: ProjectTransferPerformanceMetrics
+  phase: ProjectTransferProgressPayload['phase']
+  previousProgress: ProjectTransferProgressPayload | null
+  status: ProjectTransferProgressPayload['status']
+  warningCount?: number | null
+}): ProjectTransferProgressPayload => {
+  const stagingRevision = getProjectTransferProgressStagingRevision(previousProgress)
+
+  return {
+    ...(message === undefined ? {} : {message}),
+    performanceMetrics: performanceMetrics ?? previousProgress?.performanceMetrics,
+    phase,
+    planRevision: previousProgress?.planRevision ?? null,
+    ...(previousProgress?.staging === undefined ? {} : {staging: previousProgress.staging}),
+    ...(stagingRevision === null ? {} : {stagingRevision}),
+    status,
+    updatedAt: now.toISOString(),
+    uploadMetadata: getUploadMetadataFromProgress(previousProgress),
+    warningCount: warningCount ?? previousProgress?.warningCount ?? null,
   }
 }
 
@@ -1098,6 +1153,9 @@ const runProjectTransferImportAnalyzeJob = async ({ownerToken, sessionId}: {owne
     operation: () => {
       return analyzeProjectTransferImportPackage({
         layout: getProjectTransferImportTempLayout(sessionId),
+        onProgress: (progress) => {
+          return updateImportWorkerProgress({ownerToken, progress, sessionId})
+        },
         planRevision: analyzing.planRevision + 1,
         uploadMetadata: upload,
       })
@@ -1594,7 +1652,7 @@ const analyzeImportSession = async (
     nextOwnerToken: ownerToken,
     nextState: 'extracting',
     now: claimedAt,
-    progress: getAnalyzeProgress({now: claimedAt, phase: 'extract', status: 'running', upload}),
+    progress: getAnalyzeProgress({now: claimedAt, phase: 'package_scan', status: 'running', upload}),
     sessionId,
   })
 
@@ -1665,6 +1723,28 @@ const resolveImportDependencies = async (
     return getProjectTransferApiError(set, 409, planValidation.error)
   }
 
+  const resolvingAt = new Date()
+  const resolvingProgress = getImportRuntimePhaseProgress({
+    message: 'Resolving import dependencies',
+    now: resolvingAt,
+    phase: 'dependency_resolution',
+    previousProgress: response.data.progress,
+    status: 'running',
+  })
+  const progressStarted = await getProjectTransferSessionRepository().updateProjectTransferSessionProgress({
+    now: resolvingAt,
+    progress: resolvingProgress,
+    sessionId,
+  })
+
+  if (progressStarted === null) {
+    return getProjectTransferApiError(
+      set,
+      409,
+      'Project transfer import dependency resolution could not update progress',
+    )
+  }
+
   const dependencyResolutionMeasurement = await measureProjectTransferPhase('dependencyResolution', () => {
     return resolveProjectTransferDependencies({
       deferPlanWrite: true,
@@ -1707,16 +1787,17 @@ const resolveImportDependencies = async (
     nextState: getImportAnalyzeNextState(result.planSummary),
     now: new Date(),
     planSummary: result.planSummary,
-    ...(response.data.progress === null
-      ? {}
-      : {
-          progress: {
-            ...response.data.progress,
-            performanceMetrics: dependencyPerformanceMetrics,
-            updatedAt: new Date().toISOString(),
-            warningCount: result.planSummary.warningCount,
-          },
-        }),
+    progress: {
+      ...getImportRuntimePhaseProgress({
+        message: 'Dependency resolution completed',
+        now: new Date(),
+        phase: 'dependency_resolution',
+        previousProgress: resolvingProgress,
+        status: 'completed',
+        warningCount: result.planSummary.warningCount,
+      }),
+      performanceMetrics: dependencyPerformanceMetrics,
+    },
     sessionId,
   })
 
