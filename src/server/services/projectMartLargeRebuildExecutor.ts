@@ -48,7 +48,8 @@ type GetProjectScopeBatchParams = {
 }
 
 const defaultProjectMartLargeRebuildBatchSize = 1_000
-const projectReviewServingGenerationCleanupBatchSize = 10_000
+const projectReviewServingGenerationCleanupBatchSize = 1
+const projectReviewServingGenerationCleanupMaxDeleteBatchSize = 1
 const projectReviewServingGenerationCleanupDefaultLeaseMs = 30_000
 const projectReviewServingGenerationCleanupDefaultWorkerId = 'project-review-serving-generation-cleanup'
 const batchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
@@ -59,6 +60,12 @@ const projectReviewServingGenerationCleanupRetryableErrorFragments = [
   'Failed to delete all rows from index',
   'Out of Memory Error',
   'failed to allocate data',
+]
+const projectReviewServingGenerationCleanupFatalErrorFragments = [
+  'FATAL Error',
+  'database has been invalidated because of a previous fatal error',
+  'fatal invalidation',
+  'must be restarted prior to being used again',
 ]
 const projectReviewServingGenerationCleanupTableNames: ProjectMartLargeRebuildGenerationCleanupTableName[] = [
   'mart.review_article_serving',
@@ -1103,9 +1110,13 @@ const getProjectReviewServingGenerationCleanupDeleteRetryParts = (rowIds: Array<
 const isProjectReviewServingGenerationCleanupRetryableError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error)
 
-  return projectReviewServingGenerationCleanupRetryableErrorFragments.some((fragment) => {
+  return projectReviewServingGenerationCleanupFatalErrorFragments.some((fragment) => {
     return message.includes(fragment)
   })
+    ? false
+    : projectReviewServingGenerationCleanupRetryableErrorFragments.some((fragment) => {
+        return message.includes(fragment)
+      })
 }
 
 const getProjectScopeSourceBatch = async (
@@ -1424,7 +1435,10 @@ const cleanupProjectReviewServingGenerationsBatch = async (
   }: {batchSize?: number; leaseMs?: number; now?: Date; projectId?: string; workerId?: string} = {},
   dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
 ): Promise<ProjectMartLargeRebuildGenerationCleanupBatchResult> => {
-  const normalizedBatchSize = Math.max(1, Math.floor(batchSize))
+  const normalizedBatchSize = Math.min(
+    projectReviewServingGenerationCleanupMaxDeleteBatchSize,
+    Math.max(1, Math.floor(batchSize)),
+  )
   const currentNow = now ?? new Date()
   const tables = await projectReviewServingGenerationCleanupTableNames.reduce<
     Promise<Array<{deletedRowCount: number; tableName: ProjectMartLargeRebuildGenerationCleanupTableName}>>

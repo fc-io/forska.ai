@@ -216,6 +216,7 @@ test('project mart refresh state migrations create typed bounded refresh schemas
       SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
       FROM app.project_mart_refresh_article_state
       WHERE project_id = 'refresh-project-1'
+        AND last_dirty_token > 0
         AND article_id = 'refresh-article-1'
     \`)
 
@@ -283,7 +284,7 @@ test('project mart refresh state migrations create typed bounded refresh schemas
     result.articleStateIndexes.map((index) => {
       return index.indexName
     }),
-  ).toEqual(['idx_app_project_mart_refresh_article_state_dirty_range'])
+  ).toEqual([])
   expect(result.articleStateCount.rowCount).toBe(1)
   expect(result.articleRow.projectId).toBe('refresh-project-1')
   expect(result.articleRow.articleId).toBe('refresh-article-1')
@@ -624,6 +625,7 @@ test('getDirtyProjectsForProjectIds queues project-wide materialization for curr
         updated_at AS updatedAt
       FROM app.project_mart_refresh_article_state
       WHERE project_id = 'refresh-project-1'
+        AND last_dirty_token > 0
       ORDER BY article_id ASC
     \`)
     const materializationRows = await database.queryJson(\`
@@ -795,6 +797,7 @@ test('completeProjectRefresh trims resolved article state and failProjectRefresh
         updated_at AS updatedAt
       FROM app.project_mart_refresh_article_state
       WHERE project_id = 'refresh-project-1'
+        AND last_dirty_token > 0
       ORDER BY article_id ASC
     \`)
     const unresolvedAfterComplete = await service.getDirtyArticlesForClaim({
@@ -1013,6 +1016,7 @@ test('getDirtyArticleBatchForClaim completes a one-article claim batch', () => {
       SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
       FROM app.project_mart_refresh_article_state
       WHERE project_id = 'refresh-project-1'
+        AND last_dirty_token > 0
     \`)
     const [state] = await database.queryJson(\`
       SELECT
@@ -1041,6 +1045,86 @@ test('getDirtyArticleBatchForClaim completes a one-article claim batch', () => {
     lastCompletedDirtyToken: 1,
     refreshStatus: 'idle',
     workerId: null,
+  })
+})
+
+test('markProjectsDirtyAtomically reuses inactive completed article state rows', () => {
+  const result = runRefreshStateScript<{
+    batch: {articleIds: string[]; hasMore: boolean}
+    reactivatedRow: ProjectMartRefreshArticleStateRecord
+    secondClaim: {claimedToken: number; lastCompletedToken: number; projectId: string}
+  }>(`
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
+
+    const service = getProjectMartDirtyRefreshStateService()
+    await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
+      reason: 'project-update',
+      requestedBy: 'route-test',
+      now: new Date('2026-04-02T12:25:00.000Z'),
+    })
+    const [firstClaim] = await service.claimDirtyProjects({
+      workerId: 'worker-1',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-02T12:25:01.000Z'),
+    })
+    const firstBatch = await service.getDirtyArticleBatchForClaim({
+      batchSize: 10,
+      claimedToken: firstClaim.claimedToken,
+      projectId: firstClaim.projectId,
+      workerId: firstClaim.workerId,
+    })
+    await service.completeDirtyArticleBatchForClaim({
+      articleIds: firstBatch.articleIds,
+      claimedToken: firstClaim.claimedToken,
+      projectId: firstClaim.projectId,
+      workerId: firstClaim.workerId,
+      now: new Date('2026-04-02T12:25:02.000Z'),
+    })
+    await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
+      reason: 'project-update-again',
+      requestedBy: 'route-test',
+      now: new Date('2026-04-02T12:25:03.000Z'),
+    })
+    const [secondClaim] = await service.claimDirtyProjects({
+      workerId: 'worker-2',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-02T12:25:04.000Z'),
+    })
+    const batch = await service.getDirtyArticleBatchForClaim({
+      batchSize: 10,
+      claimedToken: secondClaim.claimedToken,
+      projectId: secondClaim.projectId,
+      workerId: secondClaim.workerId,
+    })
+    const [reactivatedRow] = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        article_id AS articleId,
+        CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+        CAST(last_dirty_token AS INTEGER) AS lastDirtyToken,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.project_mart_refresh_article_state
+      WHERE project_id = 'refresh-project-1'
+        AND article_id = 'refresh-article-1'
+      LIMIT 1
+    \`)
+
+    console.log(JSON.stringify({batch, reactivatedRow, secondClaim}))
+    await database.close()
+  `)
+
+  expect(result.secondClaim).toMatchObject({claimedToken: 2, lastCompletedToken: 1, projectId: 'refresh-project-1'})
+  expect(result.batch).toEqual({articleIds: ['refresh-article-1'], hasMore: false})
+  expect(result.reactivatedRow).toMatchObject({
+    articleId: 'refresh-article-1',
+    firstDirtyToken: 2,
+    lastDirtyToken: 2,
+    projectId: 'refresh-project-1',
   })
 })
 
@@ -1082,6 +1166,7 @@ test('getDirtyArticleBatchForClaim completes an exactly batch-sized claim', () =
       SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
       FROM app.project_mart_refresh_article_state
       WHERE project_id = 'refresh-project-1'
+        AND last_dirty_token > 0
     \`)
 
     console.log(JSON.stringify({batch, completion, remainingRow}))
@@ -1160,6 +1245,7 @@ test('completeDirtyArticleBatchForClaim clears multi-batch work before advancing
         updated_at AS updatedAt
       FROM app.project_mart_refresh_article_state
       WHERE project_id = 'refresh-project-1'
+        AND last_dirty_token > 0
       ORDER BY article_id ASC
     \`)
     const secondBatch = await service.getDirtyArticleBatchForClaim({
@@ -1259,6 +1345,7 @@ test('getDirtyArticleBatchForClaim keeps large-scope reads bounded and determini
       SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
       FROM app.project_mart_refresh_article_state
       WHERE project_id = 'refresh-project-1'
+        AND last_dirty_token > 0
     \`)
     const [state] = await database.queryJson(\`
       SELECT
@@ -1316,6 +1403,66 @@ test('getDirtyArticleBatchForClaim keeps large-scope reads bounded and determini
   expect(result.nextBatch.hasMore).toBe(true)
 })
 
+test('completeDirtyArticleBatchForClaim clears many completed article states', () => {
+  const result = runRefreshStateScript<{
+    batch: {articleIds: string[]; hasMore: boolean}
+    completion: {completedState: ProjectMartDirtyRefreshStateRecord | null; isClaimComplete: boolean}
+    remainingRow: {rowCount: number}
+  }>(`
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
+    const service = getProjectMartDirtyRefreshStateService()
+    const articleIds = Array.from({length: 75}, (_entry, index) => {
+      return 'bulk-completion-article-' + String(index + 1).padStart(3, '0')
+    })
+    const articleValues = articleIds.map((articleId) => {
+      return \`('\${articleId}', '\${articleId}')\`
+    }).join(', ')
+
+    await database.run(\`INSERT INTO app.article (id, article_title) VALUES \${articleValues}\`)
+    await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1', articleIds}],
+      reason: 'project-update',
+      requestedBy: 'route-test',
+      now: new Date('2026-04-02T12:55:00.000Z'),
+    })
+
+    const [claim] = await service.claimDirtyProjects({
+      workerId: 'worker-1',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-02T12:55:01.000Z'),
+    })
+    const batch = await service.getDirtyArticleBatchForClaim({
+      batchSize: 100,
+      claimedToken: claim.claimedToken,
+      projectId: claim.projectId,
+      workerId: claim.workerId,
+    })
+    const completion = await service.completeDirtyArticleBatchForClaim({
+      articleIds: batch.articleIds,
+      claimedToken: claim.claimedToken,
+      projectId: claim.projectId,
+      workerId: claim.workerId,
+      now: new Date('2026-04-02T12:55:02.000Z'),
+    })
+    const [remainingRow] = await database.queryJson(\`
+      SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
+      FROM app.project_mart_refresh_article_state
+      WHERE project_id = 'refresh-project-1'
+        AND last_dirty_token > 0
+    \`)
+
+    console.log(JSON.stringify({batch, completion, remainingRow}))
+    await database.close()
+  `)
+
+  expect(result.batch.articleIds).toHaveLength(75)
+  expect(result.batch.hasMore).toBe(false)
+  expect(result.completion.isClaimComplete).toBe(true)
+  expect(result.completion.completedState?.lastCompletedDirtyToken).toBe(1)
+  expect(result.remainingRow.rowCount).toBe(0)
+})
+
 test('finalizeProjectRefreshAfterLargeRebuild advances refresh completion after claim release', () => {
   const result = runRefreshStateScript<{
     finalizedState: ProjectMartDirtyRefreshStateRecord | null
@@ -1367,6 +1514,7 @@ test('finalizeProjectRefreshAfterLargeRebuild advances refresh completion after 
         updated_at AS updatedAt
       FROM app.project_mart_refresh_article_state
       WHERE project_id = 'refresh-project-1'
+        AND last_dirty_token > 0
       ORDER BY article_id ASC
     \`)
     const unresolvedAfterFinalize = await service.getDirtyArticlesForClaim({
@@ -1398,6 +1546,63 @@ test('finalizeProjectRefreshAfterLargeRebuild advances refresh completion after 
     {articleId: 'refresh-article-2', firstDirtyToken: 2, lastDirtyToken: 2},
   ])
   expect(result.unresolvedAfterFinalize).toEqual([{articleId: 'refresh-article-1'}, {articleId: 'refresh-article-2'}])
+})
+
+test('finalizeProjectRefreshAfterLargeRebuild clears many completed article states', () => {
+  const result = runRefreshStateScript<{
+    finalizedState: ProjectMartDirtyRefreshStateRecord | null
+    remainingRow: {rowCount: number}
+  }>(`
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
+    const service = getProjectMartDirtyRefreshStateService()
+    const articleIds = Array.from({length: 75}, (_entry, index) => {
+      return 'bulk-refresh-article-' + String(index + 1).padStart(3, '0')
+    })
+    const articleValues = articleIds.map((articleId) => {
+      return \`('\${articleId}', '\${articleId}')\`
+    }).join(', ')
+
+    await database.run(\`INSERT INTO app.article (id, article_title) VALUES \${articleValues}\`)
+    await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1', articleIds}],
+      reason: 'project-update',
+      requestedBy: 'route-test',
+      now: new Date('2026-04-02T12:20:00.000Z'),
+    })
+
+    const [claim] = await service.claimDirtyProjects({
+      workerId: 'worker-1',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-02T12:20:01.000Z'),
+    })
+
+    await service.releaseProjectRefreshClaim({
+      projectId: 'refresh-project-1',
+      workerId: 'worker-1',
+      now: new Date('2026-04-02T12:20:02.000Z'),
+    })
+
+    const finalizedState = await service.finalizeProjectRefreshAfterLargeRebuild({
+      completedToken: claim.claimedToken,
+      projectId: 'refresh-project-1',
+      now: new Date('2026-04-02T12:20:03.000Z'),
+    })
+    const [remainingRow] = await database.queryJson(\`
+      SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
+      FROM app.project_mart_refresh_article_state
+      WHERE project_id = 'refresh-project-1'
+        AND last_dirty_token > 0
+    \`)
+
+    console.log(JSON.stringify({finalizedState, remainingRow}))
+    await database.close()
+  `)
+
+  expect(result.finalizedState?.projectId).toBe('refresh-project-1')
+  expect(result.finalizedState?.lastCompletedDirtyToken).toBe(1)
+  expect(result.finalizedState?.refreshStatus).toBe('idle')
+  expect(result.remainingRow.rowCount).toBe(0)
 })
 
 test('clearArchivedProjectRefreshStates removes archived refresh debt and claimDirtyProjects skips archived projects', () => {
@@ -1433,6 +1638,7 @@ test('clearArchivedProjectRefreshStates removes archived refresh debt and claimD
       SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
       FROM app.project_mart_refresh_article_state
       WHERE project_id = 'refresh-project-2'
+        AND last_dirty_token > 0
     \`)
 
     console.log(JSON.stringify({
@@ -1509,6 +1715,7 @@ test('dirty project claims keep quarantined articles as completion barriers', ()
         updated_at AS updatedAt
       FROM app.project_mart_refresh_article_state
       WHERE project_id = 'refresh-project-1'
+        AND last_dirty_token > 0
       ORDER BY article_id ASC
     \`)
     const [refreshState] = await database.queryJson(\`

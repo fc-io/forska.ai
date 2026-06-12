@@ -2866,8 +2866,13 @@ export const judgmentsJobsRoutes = new Elysia()
     },
     {body: judgmentCompletionBodySchema, params: t.Object({id: t.String()})},
   )
-  .get('/api/judgmentsjobs-running', async () => {
-    return {data: {jobs: await getOwnerBackedRunningJudgmentJobs()}, error: null}
+  .get('/api/judgmentsjobs-running', async ({request}) => {
+    return runJudgmentJobsRead({
+      operation: async () => {
+        return {data: {jobs: await getOwnerBackedRunningJudgmentJobs()}, error: null}
+      },
+      request,
+    })
   })
   .get(
     '/api/judgmentsjobs-provider-telemetry-history',
@@ -2906,8 +2911,13 @@ export const judgmentsJobsRoutes = new Elysia()
   )
   .get(
     '/api/judgmentsjobs/:id/runtime',
-    async ({params}) => {
-      return {data: {job: await getOwnerBackedJudgmentJobRuntime(params.id)}, error: null}
+    async ({params, request}) => {
+      return runJudgmentJobsRead({
+        operation: async () => {
+          return {data: {job: await getOwnerBackedJudgmentJobRuntime(params.id)}, error: null}
+        },
+        request,
+      })
     },
     {params: t.Object({id: t.String()})},
   )

@@ -905,13 +905,43 @@ test('generated cell insert SQL constrains source rows by article_batch', () => 
         hasArticleB: sql.includes("('article-b')"),
         hasBatchCte: sql.includes('article_batch(article_id) AS ('),
         hasBatchJoin: sql.includes(joinSql),
+        hasScopedArticleBatchJoin: sql.includes('INNER JOIN article_batch ON article_batch.article_id = a.id'),
+        hasSourceScopeBatchJoin: sql.includes('INNER JOIN article_batch ON article_batch.article_id = pa.article_id'),
       }
     }),
   ).toEqual([
-    {hasArticleA: true, hasArticleB: true, hasBatchCte: true, hasBatchJoin: true},
-    {hasArticleA: true, hasArticleB: true, hasBatchCte: true, hasBatchJoin: true},
-    {hasArticleA: true, hasArticleB: true, hasBatchCte: true, hasBatchJoin: true},
-    {hasArticleA: true, hasArticleB: true, hasBatchCte: true, hasBatchJoin: true},
+    {
+      hasArticleA: true,
+      hasArticleB: true,
+      hasBatchCte: true,
+      hasBatchJoin: true,
+      hasScopedArticleBatchJoin: true,
+      hasSourceScopeBatchJoin: true,
+    },
+    {
+      hasArticleA: true,
+      hasArticleB: true,
+      hasBatchCte: true,
+      hasBatchJoin: true,
+      hasScopedArticleBatchJoin: true,
+      hasSourceScopeBatchJoin: true,
+    },
+    {
+      hasArticleA: true,
+      hasArticleB: true,
+      hasBatchCte: true,
+      hasBatchJoin: true,
+      hasScopedArticleBatchJoin: true,
+      hasSourceScopeBatchJoin: true,
+    },
+    {
+      hasArticleA: true,
+      hasArticleB: true,
+      hasBatchCte: true,
+      hasBatchJoin: true,
+      hasScopedArticleBatchJoin: true,
+      hasSourceScopeBatchJoin: true,
+    },
   ])
 })
 
@@ -927,7 +957,7 @@ test('prompt-mode cell inserts are split by discovered article batches', async (
       queryJson: async <T>(statement: string): Promise<T[]> => {
         queryStatements.push(statement)
 
-        return statement.includes('SELECT scoped_article.article_id AS articleId')
+        return statement.includes('SELECT scoped_article_batch.article_id AS articleId')
           ? ((queryResults.shift() ?? []) as T[])
           : ([] as T[])
       },
@@ -938,7 +968,7 @@ test('prompt-mode cell inserts are split by discovered article batches', async (
   )
 
   const batchQueryStatements = queryStatements.filter((statement) => {
-    return statement.includes('SELECT scoped_article.article_id AS articleId')
+    return statement.includes('SELECT scoped_article_batch.article_id AS articleId')
   })
   const cellInsertStatements = statements.filter((statement) => {
     return statement.includes('INSERT INTO mart.comparison_cell_serving')
@@ -952,7 +982,10 @@ test('prompt-mode cell inserts are split by discovered article batches', async (
   expect(batchQueryStatements[0]).toContain(
     'INNER JOIN app.article_import_route air ON air.import_route_id = cpir.import_route_id',
   )
-  expect(batchQueryStatements[1]).toContain("WHERE scoped_article.article_id > 'article-0249'")
+  expect(batchQueryStatements[0]).not.toContain('scoped_article AS (')
+  expect(batchQueryStatements[1]).toContain("AND pa.article_id > 'article-0249'")
+  expect(batchQueryStatements[1]).toContain("AND air.article_id > 'article-0249'")
+  expect(batchQueryStatements[1]).toContain("AND article.id > 'article-0249'")
   expect(
     statements.some((statement) => {
       return statement.includes('comparison_serving_generation_model_config')

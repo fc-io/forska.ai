@@ -1501,6 +1501,16 @@ test('article rollup inserts are batched by article id', async () => {
   })
 
   expect(batchQueryStatements).toHaveLength(2)
+  expect(batchQueryStatements[0]).toContain(
+    'INNER JOIN app.project_article pa ON pa.project_id = cpsp.source_project_id',
+  )
+  expect(batchQueryStatements[0]).toContain(
+    'INNER JOIN app.article_import_route air ON air.import_route_id = cpir.import_route_id',
+  )
+  expect(batchQueryStatements[0]).not.toContain('\n    scoped_article AS (')
+  expect(batchQueryStatements[1]).toContain("AND pa.article_id > 'article-0999'")
+  expect(batchQueryStatements[1]).toContain("AND air.article_id > 'article-0999'")
+  expect(batchQueryStatements[1]).toContain("AND cell.article_id > 'article-0999'")
   expect(
     statements.some((statement) => {
       return statement.includes('comparison_serving_generation_required_column_config')

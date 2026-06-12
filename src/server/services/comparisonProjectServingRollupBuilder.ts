@@ -35,6 +35,7 @@ type ComparisonProjectServingRollupBuilderDependencies = {
 }
 
 type ComparisonProjectArticleRollupBatch = {articleIds: string[]; hasMore: boolean}
+type ComparisonProjectScopeCteParams = {useArticleBatch?: boolean}
 
 const comparisonArticleServingTable = 'mart.comparison_article_serving'
 const comparisonCellServingTable = 'mart.comparison_cell_serving'
@@ -115,13 +116,14 @@ const getComparisonProjectArticleCategorySql = ({
       END`
 }
 
-const getComparisonProjectScopeCtesSql = () => {
+const getComparisonProjectScopeCtesSql = ({useArticleBatch = false}: ComparisonProjectScopeCteParams = {}) => {
   return `
     source_project_scope AS (
       SELECT pa.article_id
       FROM app.comparison_project_source_project cpsp
       INNER JOIN comparison_project cp ON cp.id = cpsp.comparison_project_id
       INNER JOIN app.project_article pa ON pa.project_id = cpsp.source_project_id
+      ${getComparisonProjectArticleBatchJoinSql('pa.article_id', useArticleBatch)}
       GROUP BY pa.article_id
     ),
     import_route_scope AS (
@@ -129,6 +131,7 @@ const getComparisonProjectScopeCtesSql = () => {
       FROM app.comparison_project_import_route cpir
       INNER JOIN comparison_project cp ON cp.id = cpir.comparison_project_id
       INNER JOIN app.article_import_route air ON air.import_route_id = cpir.import_route_id
+      ${getComparisonProjectArticleBatchJoinSql('air.article_id', useArticleBatch)}
       GROUP BY air.article_id
     ),
     scope_config AS (
@@ -147,6 +150,7 @@ const getComparisonProjectScopeCtesSql = () => {
     scoped_article AS (
       SELECT a.id AS article_id
       FROM app.article a
+      ${getComparisonProjectArticleBatchJoinSql('a.id', useArticleBatch)}
       CROSS JOIN scope_config
       WHERE (
         scope_config.source_project_link_count > 0
@@ -187,6 +191,90 @@ const getComparisonProjectArticleBatchCteSql = (articleIds: string[] | undefined
 
 const getComparisonProjectArticleBatchJoinSql = (articleIdExpression: string, useArticleBatch: boolean) => {
   return useArticleBatch ? `INNER JOIN article_batch ON article_batch.article_id = ${articleIdExpression}` : ''
+}
+
+const getComparisonProjectScopeConfigCteSql = () => {
+  return `
+    scope_config AS (
+      SELECT
+        (
+          SELECT COUNT(*)
+          FROM app.comparison_project_source_project cpsp
+          INNER JOIN comparison_project cp ON cp.id = cpsp.comparison_project_id
+        ) AS source_project_link_count,
+        (
+          SELECT COUNT(*)
+          FROM app.comparison_project_import_route cpir
+          INNER JOIN comparison_project cp ON cp.id = cpir.comparison_project_id
+        ) AS import_route_link_count
+    )
+  `
+}
+
+const getComparisonProjectArticleCursorFilterSql = (articleIdExpression: string, cursor: string | null) => {
+  return cursor ? `AND ${articleIdExpression} > ${getSqlLiteral(cursor)}` : ''
+}
+
+const getComparisonProjectArticleRollupBatchScopeCteSql = ({
+  comparisonProjectLiteral,
+  cursor,
+  generationLiteral,
+  limit,
+}: {
+  comparisonProjectLiteral: string
+  cursor: string | null
+  generationLiteral: string
+  limit: number
+}) => {
+  return `
+    rollup_scoped_article AS (
+      SELECT article_id
+      FROM (
+        SELECT DISTINCT pa.article_id
+        FROM app.comparison_project_source_project cpsp
+        INNER JOIN comparison_project cp ON cp.id = cpsp.comparison_project_id
+        INNER JOIN app.project_article pa ON pa.project_id = cpsp.source_project_id
+        CROSS JOIN scope_config
+        WHERE scope_config.source_project_link_count > 0
+          ${getComparisonProjectArticleCursorFilterSql('pa.article_id', cursor)}
+        ORDER BY pa.article_id ASC
+        LIMIT ${limit}
+      ) source_project_article
+
+      UNION ALL
+
+      SELECT article_id
+      FROM (
+        SELECT DISTINCT air.article_id
+        FROM app.comparison_project_import_route cpir
+        INNER JOIN comparison_project cp ON cp.id = cpir.comparison_project_id
+        INNER JOIN app.article_import_route air ON air.import_route_id = cpir.import_route_id
+        CROSS JOIN scope_config
+        WHERE scope_config.source_project_link_count = 0
+          AND scope_config.import_route_link_count > 0
+          ${getComparisonProjectArticleCursorFilterSql('air.article_id', cursor)}
+        ORDER BY air.article_id ASC
+        LIMIT ${limit}
+      ) import_route_article
+
+      UNION ALL
+
+      SELECT article_id
+      FROM (
+        SELECT cell.article_id
+        FROM ${comparisonCellServingTable} cell
+        CROSS JOIN scope_config
+        WHERE scope_config.source_project_link_count = 0
+          AND scope_config.import_route_link_count = 0
+          AND cell.comparison_project_id = ${comparisonProjectLiteral}
+          AND cell.generation = ${generationLiteral}
+          ${getComparisonProjectArticleCursorFilterSql('cell.article_id', cursor)}
+        GROUP BY cell.article_id
+        ORDER BY cell.article_id ASC
+        LIMIT ${limit}
+      ) unscoped_cell_article
+    )
+  `
 }
 
 const getComparisonProjectArticleCellScopeJoinSql = (useArticleBatch: boolean) => {
@@ -364,7 +452,7 @@ const getComparisonProjectArticleServingInsertSql = ({
       FROM comparison_project cp
     ),
     ${articleBatchCte ? `${articleBatchCte},` : ''}
-    ${getComparisonProjectScopeCtesSql()},
+    ${getComparisonProjectScopeCtesSql({useArticleBatch})},
     ${getMaterializedComparisonProjectRequiredColumnCteSql({comparisonProjectLiteral, generationLiteral})},
     ${getComparisonProjectScopedImportSelectionCteSql({useArticleBatch})},
     required_column_counts AS (
@@ -782,7 +870,7 @@ const getComparisonProjectArticleRollupBatchSql = ({
 }: ComparisonProjectServingRollupBuilderParams & {cursor: string | null}) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getComparisonProjectServingGenerationSql(generation)
-  const cursorClause = cursor ? `WHERE rollup_scoped_article.article_id > ${getSqlLiteral(cursor)}` : ''
+  const batchLimit = comparisonProjectServingArticleRollupBatchSize + 1
 
   return `
     WITH comparison_project AS (
@@ -790,37 +878,17 @@ const getComparisonProjectArticleRollupBatchSql = ({
       FROM app.comparison_project cp
       WHERE cp.id = ${comparisonProjectLiteral}
     ),
-    ${getComparisonProjectScopeCtesSql()},
-    rollup_scoped_article AS (
-      SELECT source_project_scope.article_id
-      FROM source_project_scope
-      CROSS JOIN scope_config
-      WHERE scope_config.source_project_link_count > 0
-
-      UNION
-
-      SELECT import_route_scope.article_id
-      FROM import_route_scope
-      CROSS JOIN scope_config
-      WHERE scope_config.source_project_link_count = 0
-        AND scope_config.import_route_link_count > 0
-
-      UNION
-
-      SELECT cell.article_id
-      FROM ${comparisonCellServingTable} cell
-      CROSS JOIN scope_config
-      WHERE scope_config.source_project_link_count = 0
-        AND scope_config.import_route_link_count = 0
-        AND cell.comparison_project_id = ${comparisonProjectLiteral}
-        AND cell.generation = ${generationLiteral}
-      GROUP BY cell.article_id
-    )
+    ${getComparisonProjectScopeConfigCteSql()},
+    ${getComparisonProjectArticleRollupBatchScopeCteSql({
+      comparisonProjectLiteral,
+      cursor,
+      generationLiteral,
+      limit: batchLimit,
+    })}
     SELECT rollup_scoped_article.article_id AS articleId
     FROM rollup_scoped_article
-    ${cursorClause}
     ORDER BY rollup_scoped_article.article_id ASC
-    LIMIT ${comparisonProjectServingArticleRollupBatchSize + 1}
+    LIMIT ${batchLimit}
   `
 }
 

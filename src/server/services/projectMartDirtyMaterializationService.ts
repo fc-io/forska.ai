@@ -990,7 +990,11 @@ const materializeProjectScopeDirtyBatch = async ({
         ${getTimestampLiteral(currentNow)}
       FROM temp_project_scope_dirty_materialization_batch
       ON CONFLICT(project_id, article_id) DO UPDATE SET
-        first_dirty_token = LEAST(app.project_mart_refresh_article_state.first_dirty_token, EXCLUDED.first_dirty_token),
+        first_dirty_token = CASE
+          WHEN app.project_mart_refresh_article_state.last_dirty_token = 0
+          THEN EXCLUDED.first_dirty_token
+          ELSE LEAST(app.project_mart_refresh_article_state.first_dirty_token, EXCLUDED.first_dirty_token)
+        END,
         last_dirty_token = GREATEST(app.project_mart_refresh_article_state.last_dirty_token, EXCLUDED.last_dirty_token),
         updated_at = EXCLUDED.updated_at
     `)

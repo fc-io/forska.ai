@@ -64,7 +64,6 @@ const archivedProjectMartCleanupMutations: CleanupMutation[] = [
 
 const archivedProjectRuntimeCleanupMutations: CleanupMutation[] = [
   'app.project_mart_dirty_refresh_article_quarantine',
-  'app.project_mart_refresh_article_state',
   'app.project_mart_dirty_materialization_state',
   'app.project_mart_refresh_state',
   'app.project_mart_large_rebuild_state',

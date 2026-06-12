@@ -343,7 +343,6 @@ test('bounded cleanup keeps tombstoned project identity until blockers are clear
         (SELECT COUNT(*) FROM app.project_article WHERE project_id = 'archived-cleanup-project')::INTEGER AS projectArticleRows,
         (
           (SELECT COUNT(*) FROM app.project_mart_refresh_state WHERE project_id = 'archived-cleanup-project')
-          + (SELECT COUNT(*) FROM app.project_mart_refresh_article_state WHERE project_id = 'archived-cleanup-project')
           + (SELECT COUNT(*) FROM app.project_mart_dirty_materialization_state WHERE project_id = 'archived-cleanup-project')
           + (SELECT COUNT(*) FROM app.project_mart_dirty_refresh_article_quarantine WHERE project_id = 'archived-cleanup-project')
           + (SELECT COUNT(*) FROM app.project_mart_large_rebuild_state WHERE project_id = 'archived-cleanup-project')
@@ -356,7 +355,6 @@ test('bounded cleanup keeps tombstoned project identity until blockers are clear
         (SELECT COUNT(*) FROM app.project_article WHERE project_id = 'archived-cleanup-project')::INTEGER AS projectArticleRows,
         (
           (SELECT COUNT(*) FROM app.project_mart_refresh_state WHERE project_id = 'archived-cleanup-project')
-          + (SELECT COUNT(*) FROM app.project_mart_refresh_article_state WHERE project_id = 'archived-cleanup-project')
           + (SELECT COUNT(*) FROM app.project_mart_dirty_materialization_state WHERE project_id = 'archived-cleanup-project')
           + (SELECT COUNT(*) FROM app.project_mart_dirty_refresh_article_quarantine WHERE project_id = 'archived-cleanup-project')
           + (SELECT COUNT(*) FROM app.project_mart_large_rebuild_state WHERE project_id = 'archived-cleanup-project')
@@ -375,7 +373,7 @@ test('bounded cleanup keeps tombstoned project identity until blockers are clear
     projectId: 'archived-cleanup-project',
     tableName: 'mart.project_scope_article',
   })
-  expect(result.snapshotAfterFirstBatch).toEqual({projectArticleRows: 1, projectRows: 1, runtimeRows: 5})
+  expect(result.snapshotAfterFirstBatch).toEqual({projectArticleRows: 1, projectRows: 1, runtimeRows: 4})
   expect(result.runResult.status).toBe('completed')
   expect(result.finalSnapshot).toEqual({
     appJudgmentProjectId: null,

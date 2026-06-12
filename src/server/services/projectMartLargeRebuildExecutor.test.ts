@@ -1694,6 +1694,31 @@ test('review serving finalize promotes without waiting for stale generation clea
   ])
 })
 
+test('old generation cleanup caps large delete requests to one row per table', () => {
+  const result = runScript<{
+    cleanupResult: {deletedRowCount: number}
+    remainingRows: Array<{rowCount: string; tableName: string}>
+  }>(`
+    await database.run("INSERT INTO app.project_review_serving_generation (project_id, active_generation) VALUES ('large-rebuild-executor-project', 3)")
+    await database.run("INSERT INTO mart.review_article_serving (project_id, generation, article_id, article_created_at, article_updated_at, article_title, has_all_llm_judgments, llm_judged_prompt_count, enabled_prompt_count, human_answered_prompt_count, has_all_human_answers, review_opened, review_sections_completed) VALUES ('large-rebuild-executor-project', 1, 'article-1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'Article 1', TRUE, 1, 1, 0, FALSE, FALSE, 0), ('large-rebuild-executor-project', 1, 'article-2', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T02:00:00.000Z', 'Article 2', TRUE, 1, 1, 0, FALSE, FALSE, 0), ('large-rebuild-executor-project', 3, 'article-3', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T01:00:00.000Z', 'Article 3', TRUE, 1, 1, 0, FALSE, FALSE, 0)")
+    await database.run("INSERT INTO mart.review_article_filter_member (project_id, generation, prompt_id, answer_id, article_id) VALUES ('large-rebuild-executor-project', 1, 'prompt-1', 1, 'article-1'), ('large-rebuild-executor-project', 1, 'prompt-1', 1, 'article-2'), ('large-rebuild-executor-project', 3, 'prompt-1', 1, 'article-3')")
+    await database.run("INSERT INTO mart.review_article_serving_detail (project_id, generation, article_id, prompt_id, judgment_id, created_at, model_id) VALUES ('large-rebuild-executor-project', 1, 'article-1', 'prompt-1', 'judgment-stale-1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model'), ('large-rebuild-executor-project', 1, 'article-2', 'prompt-1', 'judgment-stale-2', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model'), ('large-rebuild-executor-project', 3, 'article-3', 'prompt-1', 'judgment-active', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model')")
+
+    const cleanupResult = await executor.cleanupProjectReviewServingGenerationsBatch({batchSize: 100, projectId: 'large-rebuild-executor-project'})
+    const remainingRows = await database.queryJson("SELECT 'filter_member' AS tableName, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_filter_member WHERE project_id = 'large-rebuild-executor-project' AND generation = 1 UNION ALL SELECT 'serving' AS tableName, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving WHERE project_id = 'large-rebuild-executor-project' AND generation = 1 UNION ALL SELECT 'serving_detail' AS tableName, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving_detail WHERE project_id = 'large-rebuild-executor-project' AND generation = 1 ORDER BY tableName ASC")
+
+    console.log(JSON.stringify({cleanupResult, remainingRows}))
+    await database.close()
+  `)
+
+  expect(result.cleanupResult.deletedRowCount).toBe(3)
+  expect(result.remainingRows).toEqual([
+    {rowCount: '1', tableName: 'filter_member'},
+    {rowCount: '1', tableName: 'serving'},
+    {rowCount: '1', tableName: 'serving_detail'},
+  ])
+})
+
 test('active review and filter counts ignore stale generation cleanup lag', () => {
   const result = runScript<{
     activeCountsAfterCleanup: Array<{filterCount: string; reviewCount: string}>

@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS app.idx_app_project_mart_refresh_article_state_dirty_range;
+DROP INDEX IF EXISTS idx_app_project_mart_refresh_article_state_dirty_range;

@@ -12,7 +12,6 @@ export const archivedProjectCleanupHandledProjectForeignKeys = [
   {columnName: 'project_id', schemaName: 'app', tableName: 'project_mart_dirty_materialization_state'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'project_mart_dirty_refresh_article_quarantine'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'project_mart_large_rebuild_state'},
-  {columnName: 'project_id', schemaName: 'app', tableName: 'project_mart_refresh_article_state'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'project_mart_refresh_state'},
   {columnName: 'imported_from_project_id', schemaName: 'app', tableName: 'project_article'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'project_article'},

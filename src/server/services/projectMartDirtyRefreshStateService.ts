@@ -36,6 +36,8 @@ type MarkedProjectDirtyState = {dirtyToken: number; projectId: string}
 type DirtyProjectArticleRow = {articleId: string; projectId: string}
 
 type DirtyProjectIdRow = {projectId: string}
+type ProjectRefreshArticleStateArticleRow = {articleId: string}
+type ProjectRefreshArticleStateKeyRow = {articleId: string; projectId: string}
 
 type NormalizedDirtyProject = {articleIds?: string[]; projectId: string}
 
@@ -123,6 +125,8 @@ type CompletedThroughDirtyTokenParams = {completedToken: number; projectId: stri
 const dirtyRefreshArticleInputTableName = 'temp_project_mart_dirty_refresh_article_input'
 const dirtyRefreshProjectInputTableName = 'temp_project_mart_dirty_refresh_project_input'
 const dirtyRefreshArticleInputBatchSize = 1_000
+const inactiveProjectRefreshArticleStateToken = 0
+const projectRefreshArticleStateMutationBatchSize = 100
 
 const getNow = (value?: Date) => {
   return value ?? new Date()
@@ -326,7 +330,11 @@ const markSingleProjectDirty = async (
         ${getTimestampLiteral(params.now)}
       FROM ${dirtyRefreshArticleInputTableName} article_input
       ON CONFLICT(project_id, article_id) DO UPDATE SET
-        first_dirty_token = LEAST(app.project_mart_refresh_article_state.first_dirty_token, EXCLUDED.first_dirty_token),
+        first_dirty_token = CASE
+          WHEN app.project_mart_refresh_article_state.last_dirty_token = ${inactiveProjectRefreshArticleStateToken}
+          THEN EXCLUDED.first_dirty_token
+          ELSE LEAST(app.project_mart_refresh_article_state.first_dirty_token, EXCLUDED.first_dirty_token)
+        END,
         last_dirty_token = GREATEST(app.project_mart_refresh_article_state.last_dirty_token, EXCLUDED.last_dirty_token),
         updated_at = EXCLUDED.updated_at
     `)
@@ -787,16 +795,104 @@ const releaseProjectRefreshClaim = async ({now, projectId, workerId}: ReleasePro
   return released ? getProjectRefreshStateRecord(getAppDatabaseService(), projectId) : null
 }
 
+const resetProjectRefreshArticleStateByKey = async ({
+  articleId,
+  currentNow,
+  projectId,
+  tx,
+}: {
+  articleId: string
+  currentNow: Date
+  projectId: string
+  tx: RefreshStateRunner
+}) => {
+  await tx.run(`
+    UPDATE app.project_mart_refresh_article_state
+    SET
+      first_dirty_token = ${inactiveProjectRefreshArticleStateToken},
+      last_dirty_token = ${inactiveProjectRefreshArticleStateToken},
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND article_id = ${getSqlLiteral(articleId)}
+      AND (first_dirty_token <> ${inactiveProjectRefreshArticleStateToken}
+        OR last_dirty_token <> ${inactiveProjectRefreshArticleStateToken})
+  `)
+}
+
+const resetProjectRefreshArticleStateByKeys = async ({
+  currentNow,
+  rows,
+  tx,
+}: {
+  currentNow: Date
+  rows: ProjectRefreshArticleStateKeyRow[]
+  tx: RefreshStateRunner
+}) => {
+  return rows.reduce<Promise<void>>(async (previous, row) => {
+    await previous
+    return resetProjectRefreshArticleStateByKey({articleId: row.articleId, currentNow, projectId: row.projectId, tx})
+  }, Promise.resolve())
+}
+
+const resetProjectRefreshArticleStateRowsByProject = async ({
+  currentNow,
+  projectId,
+  tx,
+}: {
+  currentNow: Date
+  projectId: string
+  tx: RefreshStateRunner
+}): Promise<void> => {
+  const rows = await tx.queryJson<ProjectRefreshArticleStateKeyRow>(`
+    SELECT
+      project_id AS projectId,
+      article_id AS articleId
+    FROM app.project_mart_refresh_article_state
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND (first_dirty_token <> ${inactiveProjectRefreshArticleStateToken}
+        OR last_dirty_token <> ${inactiveProjectRefreshArticleStateToken})
+    ORDER BY article_id ASC
+    LIMIT ${projectRefreshArticleStateMutationBatchSize}
+  `)
+
+  return rows.length === 0
+    ? undefined
+    : resetProjectRefreshArticleStateByKeys({currentNow, rows, tx}).then(() => {
+        return resetProjectRefreshArticleStateRowsByProject({currentNow, projectId, tx})
+      })
+}
+
+const resetArchivedProjectRefreshArticleStateRows = async (tx: RefreshStateRunner, currentNow: Date): Promise<void> => {
+  const rows = await tx.queryJson<ProjectRefreshArticleStateKeyRow>(`
+    SELECT
+      article_state.project_id AS projectId,
+      article_state.article_id AS articleId
+    FROM app.project_mart_refresh_article_state article_state
+    INNER JOIN app.project project
+      ON project.id = article_state.project_id
+      AND project.archived = TRUE
+    WHERE (article_state.first_dirty_token <> ${inactiveProjectRefreshArticleStateToken}
+      OR article_state.last_dirty_token <> ${inactiveProjectRefreshArticleStateToken})
+    ORDER BY article_state.project_id ASC, article_state.article_id ASC
+    LIMIT ${projectRefreshArticleStateMutationBatchSize}
+  `)
+
+  return rows.length === 0
+    ? undefined
+    : resetProjectRefreshArticleStateByKeys({currentNow, rows, tx}).then(() => {
+        return resetArchivedProjectRefreshArticleStateRows(tx, currentNow)
+      })
+}
+
 const clearProjectRefreshState = async ({now: _now, projectId, runner}: ClearProjectRefreshStateParams) => {
+  const currentNow = getNow(_now)
+
   return withTransaction(runner, async (tx) => {
     await tx.run(`
       DELETE FROM app.project_mart_dirty_refresh_article_quarantine
       WHERE project_id = ${getSqlLiteral(projectId)}
     `)
-    await tx.run(`
-      DELETE FROM app.project_mart_refresh_article_state
-      WHERE project_id = ${getSqlLiteral(projectId)}
-    `)
+    await resetProjectRefreshArticleStateRowsByProject({currentNow, projectId, tx})
     await tx.run(`
       DELETE FROM app.project_mart_refresh_state
       WHERE project_id = ${getSqlLiteral(projectId)}
@@ -806,7 +902,9 @@ const clearProjectRefreshState = async ({now: _now, projectId, runner}: ClearPro
   })
 }
 
-const clearArchivedProjectRefreshStates = async ({runner}: ClearArchivedProjectRefreshStatesParams = {}) => {
+const clearArchivedProjectRefreshStates = async ({now, runner}: ClearArchivedProjectRefreshStatesParams = {}) => {
+  const currentNow = getNow(now)
+
   return withTransaction(runner, async (tx) => {
     await tx.run(`
       DELETE FROM app.project_mart_dirty_refresh_article_quarantine
@@ -816,14 +914,7 @@ const clearArchivedProjectRefreshStates = async ({runner}: ClearArchivedProjectR
         WHERE archived = TRUE
       )
     `)
-    await tx.run(`
-      DELETE FROM app.project_mart_refresh_article_state
-      WHERE project_id IN (
-        SELECT id
-        FROM app.project
-        WHERE archived = TRUE
-      )
-    `)
+    await resetArchivedProjectRefreshArticleStateRows(tx, currentNow)
     await tx.run(`
       DELETE FROM app.project_mart_refresh_state
       WHERE project_id IN (
@@ -1028,10 +1119,61 @@ const cleanupCompletedProjectRefreshArticleState = async ({
   projectId: string
   tx: RefreshStateRunner
 }) => {
+  await resetCompletedProjectRefreshArticleStateRows({completedToken, currentNow, projectId, tx})
+  await updatePartiallyCompletedProjectRefreshArticleStateRows({completedToken, currentNow, projectId, tx})
+}
+
+const getCompletedProjectRefreshArticleStateRows = async ({
+  completedToken,
+  projectId,
+  tx,
+}: {
+  completedToken: number
+  projectId: string
+  tx: RefreshStateRunner
+}) => {
+  return tx.queryJson<ProjectRefreshArticleStateArticleRow>(`
+    SELECT article_state.article_id AS articleId
+    FROM app.project_mart_refresh_article_state article_state
+    WHERE article_state.project_id = ${getSqlLiteral(projectId)}
+      AND article_state.last_dirty_token <= ${completedToken}
+      AND article_state.last_dirty_token > ${inactiveProjectRefreshArticleStateToken}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_dirty_refresh_article_quarantine quarantine
+        WHERE quarantine.project_id = article_state.project_id
+          AND quarantine.article_id = article_state.article_id
+          AND quarantine.dirty_token <= ${completedToken}
+          AND quarantine.resolved_at IS NULL
+      )
+    ORDER BY article_state.article_id ASC
+    LIMIT ${projectRefreshArticleStateMutationBatchSize}
+  `)
+}
+
+const resetCompletedProjectRefreshArticleStateRow = async ({
+  articleId,
+  completedToken,
+  currentNow,
+  projectId,
+  tx,
+}: {
+  articleId: string
+  completedToken: number
+  currentNow: Date
+  projectId: string
+  tx: RefreshStateRunner
+}) => {
   await tx.run(`
-    DELETE FROM app.project_mart_refresh_article_state
+    UPDATE app.project_mart_refresh_article_state
+    SET
+      first_dirty_token = ${inactiveProjectRefreshArticleStateToken},
+      last_dirty_token = ${inactiveProjectRefreshArticleStateToken},
+      updated_at = ${getTimestampLiteral(currentNow)}
     WHERE project_id = ${getSqlLiteral(projectId)}
+      AND article_id = ${getSqlLiteral(articleId)}
       AND last_dirty_token <= ${completedToken}
+      AND last_dirty_token > ${inactiveProjectRefreshArticleStateToken}
       AND NOT EXISTS (
         SELECT 1
         FROM app.project_mart_dirty_refresh_article_quarantine quarantine
@@ -1041,12 +1183,87 @@ const cleanupCompletedProjectRefreshArticleState = async ({
           AND quarantine.resolved_at IS NULL
       )
   `)
+}
+
+const resetCompletedProjectRefreshArticleStateRows = async ({
+  completedToken,
+  currentNow,
+  projectId,
+  tx,
+}: {
+  completedToken: number
+  currentNow: Date
+  projectId: string
+  tx: RefreshStateRunner
+}): Promise<void> => {
+  const rows = await getCompletedProjectRefreshArticleStateRows({completedToken, projectId, tx})
+
+  return rows.length === 0
+    ? undefined
+    : rows
+        .reduce<Promise<void>>(async (previous, row) => {
+          await previous
+          return resetCompletedProjectRefreshArticleStateRow({
+            articleId: row.articleId,
+            completedToken,
+            currentNow,
+            projectId,
+            tx,
+          })
+        }, Promise.resolve())
+        .then(() => {
+          return resetCompletedProjectRefreshArticleStateRows({completedToken, currentNow, projectId, tx})
+        })
+}
+
+const getPartiallyCompletedProjectRefreshArticleStateRows = async ({
+  completedToken,
+  projectId,
+  tx,
+}: {
+  completedToken: number
+  projectId: string
+  tx: RefreshStateRunner
+}) => {
+  return tx.queryJson<ProjectRefreshArticleStateArticleRow>(`
+    SELECT article_state.article_id AS articleId
+    FROM app.project_mart_refresh_article_state article_state
+    WHERE article_state.project_id = ${getSqlLiteral(projectId)}
+      AND article_state.first_dirty_token <= ${completedToken}
+      AND article_state.last_dirty_token > ${completedToken}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_dirty_refresh_article_quarantine quarantine
+        WHERE quarantine.project_id = article_state.project_id
+          AND quarantine.article_id = article_state.article_id
+          AND quarantine.dirty_token <= ${completedToken}
+          AND quarantine.resolved_at IS NULL
+      )
+    ORDER BY article_state.article_id ASC
+    LIMIT ${projectRefreshArticleStateMutationBatchSize}
+  `)
+}
+
+const updatePartiallyCompletedProjectRefreshArticleStateRow = async ({
+  articleId,
+  completedToken,
+  currentNow,
+  projectId,
+  tx,
+}: {
+  articleId: string
+  completedToken: number
+  currentNow: Date
+  projectId: string
+  tx: RefreshStateRunner
+}) => {
   await tx.run(`
     UPDATE app.project_mart_refresh_article_state
     SET
       first_dirty_token = GREATEST(first_dirty_token, ${completedToken + 1}),
       updated_at = ${getTimestampLiteral(currentNow)}
     WHERE project_id = ${getSqlLiteral(projectId)}
+      AND article_id = ${getSqlLiteral(articleId)}
       AND first_dirty_token <= ${completedToken}
       AND last_dirty_token > ${completedToken}
       AND NOT EXISTS (
@@ -1058,6 +1275,122 @@ const cleanupCompletedProjectRefreshArticleState = async ({
           AND quarantine.resolved_at IS NULL
       )
   `)
+}
+
+const updatePartiallyCompletedProjectRefreshArticleStateRows = async ({
+  completedToken,
+  currentNow,
+  projectId,
+  tx,
+}: {
+  completedToken: number
+  currentNow: Date
+  projectId: string
+  tx: RefreshStateRunner
+}): Promise<void> => {
+  const rows = await getPartiallyCompletedProjectRefreshArticleStateRows({completedToken, projectId, tx})
+
+  return rows.length === 0
+    ? undefined
+    : rows
+        .reduce<Promise<void>>(async (previous, row) => {
+          await previous
+          return updatePartiallyCompletedProjectRefreshArticleStateRow({
+            articleId: row.articleId,
+            completedToken,
+            currentNow,
+            projectId,
+            tx,
+          })
+        }, Promise.resolve())
+        .then(() => {
+          return updatePartiallyCompletedProjectRefreshArticleStateRows({completedToken, currentNow, projectId, tx})
+        })
+}
+
+const completeDirtyRefreshArticleStateBatchRow = async ({
+  articleId,
+  claimedToken,
+  currentNow,
+  lastCompletedDirtyToken,
+  projectId,
+  tx,
+}: {
+  articleId: string
+  claimedToken: number
+  currentNow: Date
+  lastCompletedDirtyToken: number
+  projectId: string
+  tx: RefreshStateRunner
+}) => {
+  await tx.run(`
+    UPDATE app.project_mart_refresh_article_state
+    SET
+      first_dirty_token = ${inactiveProjectRefreshArticleStateToken},
+      last_dirty_token = ${inactiveProjectRefreshArticleStateToken},
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND article_id = ${getSqlLiteral(articleId)}
+      AND first_dirty_token <= ${claimedToken}
+      AND last_dirty_token > ${lastCompletedDirtyToken}
+      AND last_dirty_token <= ${claimedToken}
+      AND last_dirty_token > ${inactiveProjectRefreshArticleStateToken}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_dirty_refresh_article_quarantine quarantine
+        WHERE quarantine.project_id = app.project_mart_refresh_article_state.project_id
+          AND quarantine.article_id = app.project_mart_refresh_article_state.article_id
+          AND quarantine.dirty_token <= ${claimedToken}
+          AND quarantine.resolved_at IS NULL
+      )
+  `)
+  await tx.run(`
+    UPDATE app.project_mart_refresh_article_state
+    SET
+      first_dirty_token = GREATEST(first_dirty_token, ${claimedToken + 1}),
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND article_id = ${getSqlLiteral(articleId)}
+      AND first_dirty_token <= ${claimedToken}
+      AND last_dirty_token > ${lastCompletedDirtyToken}
+      AND last_dirty_token > ${claimedToken}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_dirty_refresh_article_quarantine quarantine
+        WHERE quarantine.project_id = app.project_mart_refresh_article_state.project_id
+          AND quarantine.article_id = app.project_mart_refresh_article_state.article_id
+          AND quarantine.dirty_token <= ${claimedToken}
+          AND quarantine.resolved_at IS NULL
+      )
+  `)
+}
+
+const completeDirtyRefreshArticleStateBatchRows = async ({
+  articleIds,
+  claimedToken,
+  currentNow,
+  lastCompletedDirtyToken,
+  projectId,
+  tx,
+}: {
+  articleIds: string[]
+  claimedToken: number
+  currentNow: Date
+  lastCompletedDirtyToken: number
+  projectId: string
+  tx: RefreshStateRunner
+}) => {
+  return articleIds.reduce<Promise<void>>(async (previous, articleId) => {
+    await previous
+    return completeDirtyRefreshArticleStateBatchRow({
+      articleId,
+      claimedToken,
+      currentNow,
+      lastCompletedDirtyToken,
+      projectId,
+      tx,
+    })
+  }, Promise.resolve())
 }
 
 const getDirtyTokenCompletionBarrier = async ({completedToken, projectId, tx}: CompletedThroughDirtyTokenParams) => {
@@ -1242,44 +1575,14 @@ const completeDirtyArticleBatchForClaim = async ({
     const batchArticleIds = getUniqueValues(articleIds)
 
     if (batchArticleIds.length > 0) {
-      await createDirtyRefreshArticleInputTable(tx, batchArticleIds)
-
-      await tx.run(`
-        DELETE FROM app.project_mart_refresh_article_state
-        WHERE project_id = ${getSqlLiteral(projectId)}
-          AND ${getDirtyRefreshArticleInputExistsSql('app.project_mart_refresh_article_state.article_id')}
-          AND first_dirty_token <= ${claimedToken}
-          AND last_dirty_token > ${claimState.lastCompletedDirtyToken}
-          AND last_dirty_token <= ${claimedToken}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM app.project_mart_dirty_refresh_article_quarantine quarantine
-            WHERE quarantine.project_id = app.project_mart_refresh_article_state.project_id
-              AND quarantine.article_id = app.project_mart_refresh_article_state.article_id
-              AND quarantine.dirty_token <= ${claimedToken}
-              AND quarantine.resolved_at IS NULL
-          )
-      `)
-      await tx.run(`
-        UPDATE app.project_mart_refresh_article_state
-        SET
-          first_dirty_token = GREATEST(first_dirty_token, ${claimedToken + 1}),
-          updated_at = ${getTimestampLiteral(currentNow)}
-        WHERE project_id = ${getSqlLiteral(projectId)}
-          AND ${getDirtyRefreshArticleInputExistsSql('app.project_mart_refresh_article_state.article_id')}
-          AND first_dirty_token <= ${claimedToken}
-          AND last_dirty_token > ${claimState.lastCompletedDirtyToken}
-          AND last_dirty_token > ${claimedToken}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM app.project_mart_dirty_refresh_article_quarantine quarantine
-            WHERE quarantine.project_id = app.project_mart_refresh_article_state.project_id
-              AND quarantine.article_id = app.project_mart_refresh_article_state.article_id
-              AND quarantine.dirty_token <= ${claimedToken}
-              AND quarantine.resolved_at IS NULL
-          )
-      `)
-      await dropDirtyRefreshArticleInputTable(tx)
+      await completeDirtyRefreshArticleStateBatchRows({
+        articleIds: batchArticleIds,
+        claimedToken,
+        currentNow,
+        lastCompletedDirtyToken: claimState.lastCompletedDirtyToken,
+        projectId,
+        tx,
+      })
     }
 
     const [remaining] = await tx.queryJson<{rowCount: number}>(`
