@@ -358,6 +358,81 @@ test('project transfer dependency resolution auto-resolves exact imported provid
   }
 })
 
+test('project transfer dependency resolution auto-resolves imported snapshots with distinct variant and version', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const fixturePayloads = getProjectTransferPayloadFixtureMap()
+    const payloads = {
+      ...fixturePayloads,
+      judgments: [],
+      models: fixturePayloads.models.map((model) => {
+        return {
+          ...model,
+          signature: {...model.signature, variant: 'reasoning', version: '2026-06-01'},
+          variant: 'reasoning',
+          version: '2026-06-01',
+        }
+      }),
+    }
+    const targetModel = getTargetModel({variant: 'reasoning', version: '2026-06-01'})
+    const targetConnection = getTargetConnection({}, [targetModel])
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        listProviderConnections: async () => {
+          return [targetConnection]
+        },
+      },
+      request: {planRevision: 1},
+    })
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.plan.dependencyResolution?.modelTargetBySourceId : {}).toEqual({
+      'model-1': 'target-model-1',
+    })
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
+    })
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer dependency resolution rejects stale reviewed plan revisions', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const payloads = getProjectTransferPayloadFixtureMap()
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        listProviderConnections: async () => {
+          return [getTargetConnection()]
+        },
+      },
+      request: {planRevision: 0},
+    })
+
+    expect(result).toEqual({
+      error: 'Project transfer dependency request planRevision is stale',
+      status: 'error',
+      statusCode: 409,
+    })
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('project transfer dependency resolution preserves imported placeholders when no exact snapshot matches', async () => {
   const cwd = getRuntimeRoot()
 

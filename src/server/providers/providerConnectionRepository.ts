@@ -8,6 +8,7 @@ import {
   getPersistedProviderConnectionConfigValue,
   getProviderConnectionRecordFromRow,
   getProviderModelRecordFromRow,
+  getProviderModelVersionSelectSql,
   type ProviderConnectionRow,
   type ProviderModelRow,
 } from './providerDbUtils.ts'
@@ -370,7 +371,7 @@ const getProviderModelRows = async (): Promise<ProviderModelRecord[]> => {
       m.remote_model_id AS modelName,
       m.remote_model_id AS remoteModelId,
       COALESCE(m.display_name, m.name) AS displayName,
-      m.variant AS version,
+      ${getProviderModelVersionSelectSql('m')} AS version,
       m.variant,
       m.source,
       COALESCE(m.enabled, TRUE) AS enabled,

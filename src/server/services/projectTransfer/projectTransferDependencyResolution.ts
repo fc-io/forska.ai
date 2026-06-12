@@ -27,7 +27,11 @@ import {
   isProjectTransferFidelityBlocker,
 } from './projectTransferFidelityValidation.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
-import {withProjectTransferOperationTables} from './projectTransferOperationTables.ts'
+import {
+  type ProjectTransferOperationTableRunner,
+  type ProjectTransferOperationTableSet,
+  withProjectTransferOperationTables,
+} from './projectTransferOperationTables.ts'
 import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import {
   normalizeProjectTransferModelVariant,
@@ -35,7 +39,7 @@ import {
   type ProjectTransferPayloadByKey,
   type ProjectTransferPayloadRecord,
 } from './projectTransferPayloadSchemas.ts'
-import {projectTransferPayloadKeys, projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
+import {projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 import type {ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 import {
   getProjectTransferModelSnapshotFingerprint,
@@ -182,6 +186,21 @@ const defaultJudgmentModelContext = 32768
 const defaultJudgmentPromptTokenLimit = Math.max(0, defaultJudgmentModelContext - MAX_COMPLETION_TOKENS)
 const dependencyScopePrefix = 'dependencies.'
 const importedSnapshotMarker = 'projectTransferImportedSnapshot'
+const dependencyPayloadKeys = [
+  'articles',
+  'humanJudgmentSummaries',
+  'humanJudgments',
+  'judgmentAssessments',
+  'judgments',
+  'models',
+  'project',
+  'projectPrompts',
+  'prompts',
+  'providerConnections',
+  'reviews',
+] as const satisfies readonly (keyof ProjectTransferPayloadByKey)[]
+
+type DependencyPayloadKey = (typeof dependencyPayloadKeys)[number]
 
 const getRepositories = (repositories?: ProjectTransferDependencyResolutionRepositories) => {
   return {
@@ -322,9 +341,11 @@ const readExtractedPayload = async <TKey extends keyof ProjectTransferPayloadByK
   return text === null ? null : parseProjectTransferPayload(input.key, text)
 }
 
-const readExtractedPayloads = async (input: RuntimePathOptions & {layout: ProjectTransferImportTempLayout}) => {
+const readExtractedDependencyPayloads = async (
+  input: RuntimePathOptions & {layout: ProjectTransferImportTempLayout},
+) => {
   const entries = await Promise.all(
-    projectTransferPayloadKeys.map(async (key) => {
+    dependencyPayloadKeys.map(async (key) => {
       return [key, await readExtractedPayload({...input, key})] as const
     }),
   )
@@ -337,6 +358,45 @@ const readExtractedPayloads = async (input: RuntimePathOptions & {layout: Projec
     : entries.reduce<Partial<ProjectTransferPayloadByKey>>((payloads, [key, payload]) => {
         return {...payloads, [key]: payload}
       }, {})
+}
+
+const readOperationTablePayload = async ({
+  key,
+  runner,
+  tables,
+}: {
+  key: DependencyPayloadKey
+  runner: ProjectTransferOperationTableRunner
+  tables: ProjectTransferOperationTableSet
+}) => {
+  const rows = await runner.queryJson<{payloadJson: unknown}>(`
+    SELECT TO_JSON(payload_json) AS payloadJson
+    FROM ${tables.tableNames[key]}
+    ORDER BY row_index ASC
+  `)
+  const values = rows.map((row) => {
+    return getJsonValue(row.payloadJson)
+  })
+
+  return key === 'project' ? values[0] : values
+}
+
+const readDependencyPayloadsFromOperationTables = async ({
+  runner,
+  tables,
+}: {
+  runner: ProjectTransferOperationTableRunner
+  tables: ProjectTransferOperationTableSet
+}) => {
+  const entries = await Promise.all(
+    dependencyPayloadKeys.map(async (key) => {
+      return [key, await readOperationTablePayload({key, runner, tables})] as const
+    }),
+  )
+
+  return entries.reduce<Partial<ProjectTransferPayloadByKey>>((payloads, [key, payload]) => {
+    return payload === undefined ? payloads : {...payloads, [key]: payload}
+  }, {})
 }
 
 const writeJsonArtifact = async (input: RuntimePathOptions & {pathValue: string; value: unknown}) => {
@@ -1170,6 +1230,10 @@ const getResolvedPlan = ({
 export const revalidateProjectTransferResolvedDependencies = async (
   input: ProjectTransferDependencyRevalidationInput,
 ): Promise<ProjectTransferDependencyResolutionResult> => {
+  if (input.request.planRevision !== input.plan.planRevision) {
+    return {error: 'Project transfer dependency request planRevision is stale', status: 'error', statusCode: 409}
+  }
+
   const repositories = getRepositories(input.repositories)
   const initialConnections = await repositories.listProviderConnections()
   const previousResolutionState = getPlanDependencyResolution(input.plan)
@@ -1300,13 +1364,14 @@ export const resolveProjectTransferDependencies = async (
     return {error: 'Project transfer import plan artifact is unavailable', status: 'error', statusCode: 409}
   }
 
-  const payloads = await readExtractedPayloads(input)
-
-  if (payloads === null) {
-    return {error: 'Project transfer dependency payloads are unavailable', status: 'error', statusCode: 409}
+  if (input.request.planRevision !== plan.planRevision) {
+    return {error: 'Project transfer dependency request planRevision is stale', status: 'error', statusCode: 409}
   }
 
-  const runRevalidation = (analyzeTargetRunner?: ProjectTransferAnalyzeTargetRunner) => {
+  const runRevalidation = (
+    payloads: Partial<ProjectTransferPayloadByKey>,
+    analyzeTargetRunner?: ProjectTransferAnalyzeTargetRunner,
+  ) => {
     const repositories =
       analyzeTargetRunner === undefined
         ? input.repositories
@@ -1327,11 +1392,21 @@ export const resolveProjectTransferDependencies = async (
           envValues: input.envValues,
           layout: input.layout,
           operationId: `dependency_${input.request.planRevision}_${input.nextPlanRevision}`,
-          work: ({runner}) => {
-            return runRevalidation(runner)
+          work: async ({runner, tables}) => {
+            const payloads = await readDependencyPayloadsFromOperationTables({runner, tables})
+
+            return runRevalidation(payloads, runner)
           },
         })
-      : await runRevalidation()
+      : await readExtractedDependencyPayloads(input).then((payloads) => {
+          return payloads === null
+            ? ({
+                error: 'Project transfer dependency payloads are unavailable',
+                status: 'error',
+                statusCode: 409,
+              } as const)
+            : runRevalidation(payloads)
+        })
 
   if (result.status === 'ok' && result.changed && input.deferPlanWrite !== true) {
     await writeProjectTransferDependencyPlan({...input, plan: result.plan})

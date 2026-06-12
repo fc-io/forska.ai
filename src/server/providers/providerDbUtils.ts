@@ -53,6 +53,18 @@ export type ProviderModelRow = {
   version: string | null
 }
 
+export const getProviderModelVersionSelectSql = (modelAlias = '') => {
+  const prefix = modelAlias === '' ? '' : `${modelAlias}.`
+
+  return `
+    CASE
+      WHEN json_extract(${prefix}metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model') IS NOT NULL
+      THEN json_extract_string(${prefix}metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.version')
+      ELSE ${prefix}variant
+    END
+  `
+}
+
 export const getTrimmedValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
 
@@ -261,7 +273,7 @@ export const getProviderModelReturnQuery = (statement: string): string => {
       remote_model_id AS modelName,
       remote_model_id AS remoteModelId,
       display_name AS displayName,
-      variant AS version,
+      ${getProviderModelVersionSelectSql()} AS version,
       variant,
       source,
       enabled,

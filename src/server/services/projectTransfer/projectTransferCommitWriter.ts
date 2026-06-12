@@ -97,6 +97,7 @@ type ImportedModelCommitRow = {
   sourceModelId: string
   sourceProviderConnectionId: string
   variant: string | null
+  version: string | null
 }
 
 type ImportedProviderSnapshotTargetRow = {
@@ -118,6 +119,7 @@ type ImportedModelSnapshotTargetRow = {
   providerKind: string
   remoteModelId: string | null
   variant: string | null
+  version: string | null
 }
 
 type ArticleField = keyof typeof articleColumnByPayloadField
@@ -442,7 +444,7 @@ const getImportedModelSnapshotFingerprint = ({
     },
     remoteModelId: importedModel.remoteModelId,
     variant: importedModel.variant,
-    version: importedModel.variant,
+    version: importedModel.version,
   })
 }
 
@@ -466,7 +468,7 @@ const getTargetModelSnapshotFingerprint = ({
     },
     remoteModelId: targetModel.remoteModelId,
     variant: targetModel.variant,
-    version: targetModel.variant,
+    version: targetModel.version,
   })
 }
 
@@ -482,6 +484,7 @@ const targetModelIdentityMatches = ({
     && targetModel.remoteModelId === (importedModel.remoteModelId ?? importedModel.modelName)
     && targetModel.displayName === importedModel.displayName
     && targetModel.variant === importedModel.variant
+    && targetModel.version === importedModel.version
   )
 }
 
@@ -550,6 +553,7 @@ const getReusableImportedModelId = async ({
       model.remote_model_id AS remoteModelId,
       model.display_name AS displayName,
       model.variant,
+      json_extract_string(model.metadata_json, '$.${importedSnapshotMarker}.snapshotFingerprint.model.version') AS version,
       TO_JSON(model.metadata_json) AS metadataJson,
       provider.provider_kind AS providerKind,
       provider.auth_mode AS providerAuthMode,
@@ -693,8 +697,8 @@ const getImportedModel = (record: ProjectTransferPayloadRecord): ImportedModelCo
       getRecordField(record, 'sourceProviderConnectionId'),
       'models.sourceProviderConnectionId',
     ),
-    variant:
-      getNullableString(getRecordField(record, 'variant')) ?? getNullableString(getRecordField(record, 'version')),
+    variant: getNullableString(getRecordField(record, 'variant')),
+    version: getNullableString(getRecordField(record, 'version')),
   }
 }
 

@@ -310,6 +310,7 @@ type ProjectTransferExportModelRow = {
   source: string | null
   updatedAt: unknown
   variant: string | null
+  version: string | null
 }
 
 type ProjectTransferExportContext = {
@@ -1331,6 +1332,11 @@ const getProjectTransferExportModelRows = async (modelIds: string[], database: A
         remote_model_id AS remoteModelId,
         display_name AS displayName,
         variant,
+        CASE
+          WHEN json_extract(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model') IS NOT NULL
+          THEN json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.version')
+          ELSE variant
+        END AS version,
         source,
         enabled,
         TO_JSON(metadata_json) AS metadataJson,
@@ -1588,6 +1594,7 @@ const getProjectTransferExportModelSignature = (
   providerConnectionRow: ProjectTransferExportProviderConnectionRow,
 ) => {
   const variant = normalizeProjectTransferModelVariant(row.variant)
+  const version = normalizeProjectTransferModelVariant(row.version)
 
   return {
     displayName: getProjectTransferExportModelDisplayName(row),
@@ -1596,7 +1603,7 @@ const getProjectTransferExportModelSignature = (
     providerConnectionSignature: getProjectTransferExportProviderConnectionSignature(providerConnectionRow),
     remoteModelId: row.remoteModelId,
     variant,
-    version: variant,
+    version,
   }
 }
 
@@ -2436,7 +2443,6 @@ const getProjectTransferExportModelsPayloadFromContext = (context: ProjectTransf
   const providerConnectionById = getRowsById(context.providerConnectionRows, 'providerConnectionId')
   const records = context.modelRows.map((row) => {
     const providerConnectionRow = providerConnectionById[row.providerConnectionId]
-    const variant = normalizeProjectTransferModelVariant(row.variant)
     const signature = providerConnectionRow
       ? getProjectTransferExportModelSignature(row, providerConnectionRow)
       : getProjectTransferExportEmptyModelSignature()
@@ -2456,7 +2462,7 @@ const getProjectTransferExportModelsPayloadFromContext = (context: ProjectTransf
       sourceProviderConnectionId: row.providerConnectionId,
       updatedAt: getIsoDateValue(row.updatedAt),
       variant: row.variant,
-      version: variant,
+      version: normalizeProjectTransferModelVariant(row.version),
     }
   })
 

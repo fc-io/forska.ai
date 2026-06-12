@@ -162,8 +162,7 @@ export const getProjectTransferModelSnapshotFingerprint = (
       promptTokenLimit,
       remoteModelId: model.remoteModelId,
       variant: normalizeProjectTransferModelVariant(model.variant),
-      version:
-        normalizeProjectTransferModelVariant(model.version) ?? normalizeProjectTransferModelVariant(model.variant),
+      version: normalizeProjectTransferModelVariant(model.version),
     },
     provider: getProjectTransferProviderSnapshotFingerprint(model.provider),
   }
