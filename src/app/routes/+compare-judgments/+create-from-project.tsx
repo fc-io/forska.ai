@@ -4,6 +4,7 @@ import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../components/ui/button'
 import {
+  type ComparisonProjectConflictResolutionImportMode,
   type ComparisonProjectConflictResolutionImportPreviewInput,
   type ComparisonProjectConflictResolutionImportSource,
   type ComparisonProjectSource,
@@ -26,6 +27,23 @@ type PostCreateConflictResolutionImportWarningResult = {
 
 const importWarningCopy =
   'Matching duplicate decisions are imported once. Conflicting or ambiguous decisions are skipped and reported after creation.'
+
+const conflictResolutionImportModeOptions: Array<{
+  description: string
+  label: string
+  value: ComparisonProjectConflictResolutionImportMode
+}> = [
+  {
+    description: 'Import only saved decisions for articles that are conflicts in the new compare project.',
+    label: 'Only current conflicts',
+    value: 'conflicting-only',
+  },
+  {
+    description: 'Import saved decisions for every matched article, even if it is not currently a conflict.',
+    label: 'All matched articles',
+    value: 'all-matched',
+  },
+]
 
 const formatContentSettings = (sourceProject: ComparisonProjectSource) => {
   const parts = [
@@ -376,6 +394,8 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
     selectedConflictResolutionImportSourceComparisonProjectIds,
     setSelectedConflictResolutionImportSourceComparisonProjectIds,
   ] = createSignal<string[]>([])
+  const [conflictResolutionImportMode, setConflictResolutionImportMode] =
+    createSignal<ComparisonProjectConflictResolutionImportMode>('conflicting-only')
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [postCreateWarningResult, setPostCreateWarningResult] =
@@ -437,6 +457,7 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
       sourceProjectIds: summaryModeEnabled()
         ? [selectedSourceProjectId(), ...selectedAdditionalSourceProjectIds()]
         : [selectedSourceProjectId()],
+      conflictResolutionImportMode: conflictResolutionImportMode(),
       conflictResolutionImportSourceComparisonProjectIds: selectedConflictResolutionImportSourceIds(),
     }
   })
@@ -573,7 +594,10 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
         ? [selectedSourceProjectId(), ...selectedAdditionalSourceProjectIds()]
         : [selectedSourceProjectId()],
       ...(conflictResolutionImportSourceComparisonProjectIds.length > 0
-        ? {conflictResolutionImportSourceComparisonProjectIds}
+        ? {
+            conflictResolutionImportMode: conflictResolutionImportMode(),
+            conflictResolutionImportSourceComparisonProjectIds,
+          }
         : {}),
     }
 
@@ -940,6 +964,33 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
 
             <Show when={isConflictResolutionImportAvailable()}>
               <div class="mt-4 space-y-2">
+                <div class="rounded-md border border-input bg-background p-3">
+                  <p class="text-sm font-medium text-gray-900">Import scope</p>
+                  <div class="mt-3 grid gap-2 md:grid-cols-2">
+                    <For each={conflictResolutionImportModeOptions}>
+                      {(option) => {
+                        return (
+                          <label class="flex cursor-pointer items-start gap-3 rounded-md border border-input p-3 hover:bg-muted/50">
+                            <input
+                              checked={conflictResolutionImportMode() === option.value}
+                              class="mt-1"
+                              name="conflict-resolution-import-mode"
+                              onChange={() => {
+                                setConflictResolutionImportMode(option.value)
+                              }}
+                              type="radio"
+                            />
+                            <span>
+                              <span class="block text-sm font-medium text-gray-900">{option.label}</span>
+                              <span class="mt-1 block text-xs text-muted-foreground">{option.description}</span>
+                            </span>
+                          </label>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </div>
+
                 <Show when={conflictResolutionImportSourcesQuery.isLoading}>
                   <p class="text-sm text-muted-foreground">Loading conflict resolution import sources...</p>
                 </Show>

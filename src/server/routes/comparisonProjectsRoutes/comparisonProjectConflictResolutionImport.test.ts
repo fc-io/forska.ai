@@ -6,6 +6,7 @@ import {
   comparisonProjectConflictResolutionTransferVersion,
 } from './comparisonProjectConflictResolutionFileTransfer.ts'
 import {
+  type ComparisonProjectConflictResolutionImportMode,
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportTargetArticle,
   getComparisonProjectConflictResolutionImportAnalyzeResult,
@@ -59,11 +60,13 @@ const getTargetArticle = (
 }
 
 const getPlan = (params: {
+  importMode?: ComparisonProjectConflictResolutionImportMode
   sourceRows: ComparisonProjectConflictResolutionImportSourceRow[]
   targetArticles: ComparisonProjectConflictResolutionImportTargetArticle[]
   targetSummaryOptionValues?: string[]
 }) => {
   return getComparisonProjectConflictResolutionImportPlan({
+    importMode: params.importMode,
     sourceRows: params.sourceRows,
     targetArticles: params.targetArticles,
     targetSummaryOptionValues: params.targetSummaryOptionValues ?? ['yes', 'no', 'maybe'],
@@ -1368,5 +1371,25 @@ test('import plan skips target articles that are not conflict-resolution eligibl
   expect(plan.candidates).toEqual([])
   expect(plan.skipCounts).toEqual(getSkipCounts({notConflicting: 1}))
   expect(plan.skippedRows).toEqual([{reason: 'not-conflicting', sourceRowId: 'source-row-1'}])
+  expect(plan.warnings).toEqual([])
+})
+
+test('import plan can include target articles that are not conflict-resolution eligible', () => {
+  const plan = getPlan({
+    importMode: 'all-matched',
+    sourceRows: [getSourceRow()],
+    targetArticles: [getTargetArticle({isConflictResolutionEligible: false})],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [{matchKey: 'source-ext-1\u001Fsource title', matchKind: 'id-title', sourceRowId: 'source-row-1'}],
+      targetArticleId: 'target-article-1',
+    },
+  ])
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.skippedRows).toEqual([])
   expect(plan.warnings).toEqual([])
 })

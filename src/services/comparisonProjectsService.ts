@@ -30,6 +30,8 @@ export type CreateComparisonProjectInput = {
   promptSelections?: Array<{promptId: string; order: number}>
 }
 
+export type ComparisonProjectConflictResolutionImportMode = 'all-matched' | 'conflicting-only'
+
 export type CreateComparisonProjectFromProjectInput = {
   name: string
   description?: string | null
@@ -39,6 +41,7 @@ export type CreateComparisonProjectFromProjectInput = {
   summarySourceProjectId?: string | null
   sourceProjectId: string
   sourceProjectIds?: string[]
+  conflictResolutionImportMode?: ComparisonProjectConflictResolutionImportMode
   conflictResolutionImportSourceComparisonProjectIds?: string[]
 }
 
@@ -460,6 +463,10 @@ export type ComparisonProjectConflictResolutionTransferArtifact = {
   source: ComparisonProjectConflictResolutionTransferSource
   rows: ComparisonProjectConflictResolutionTransferRow[]
 }
+export type ComparisonProjectConflictResolutionImportRequest = {
+  artifact: ComparisonProjectConflictResolutionTransferArtifact
+  importMode?: ComparisonProjectConflictResolutionImportMode
+}
 export type ComparisonProjectConflictResolutionExportResult = {
   artifact: ComparisonProjectConflictResolutionTransferArtifact
   filename: string
@@ -823,11 +830,11 @@ export const fetchComparisonProjectConflictResolutionExportArtifact = async (
 
 export const analyzeComparisonProjectConflictResolutionImport = async (
   comparisonProjectId: string,
-  artifact: ComparisonProjectConflictResolutionTransferArtifact,
+  request: ComparisonProjectConflictResolutionImportRequest,
 ) => {
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId})[
     'conflict-resolutions'
-  ].import.analyze.post(artifact)
+  ].import.analyze.post(request)
 
   return getResponseData<ComparisonProjectConflictResolutionImportAnalyzePreview>(
     response,
@@ -837,11 +844,11 @@ export const analyzeComparisonProjectConflictResolutionImport = async (
 
 export const commitComparisonProjectConflictResolutionImport = async (
   comparisonProjectId: string,
-  artifact: ComparisonProjectConflictResolutionTransferArtifact,
+  request: ComparisonProjectConflictResolutionImportRequest,
 ) => {
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId})[
     'conflict-resolutions'
-  ].import.commit.post(artifact)
+  ].import.commit.post(request)
 
   return getResponseData<ComparisonProjectConflictResolutionImportCommitResponse>(
     response,

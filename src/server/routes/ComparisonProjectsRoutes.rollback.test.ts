@@ -3435,6 +3435,99 @@ test('comparison project conflict resolution import commit writes safe rows and 
   expect(state.rootQueryStatementsDuringTransaction).toEqual([])
 })
 
+test('comparison project conflict resolution import commit can include non-conflicting matched rows', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    sourceProjectLinks: [{id: 'comparison-project-source-1', sourceProjectId: 'source-project-1'}],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectConflictResolutionImportCommit(app, {
+    artifact: {
+      format: comparisonProjectConflictResolutionTransferFormat,
+      version: comparisonProjectConflictResolutionTransferVersion,
+      exportedAt: '2026-06-10T10:00:00.000Z',
+      source: {
+        comparisonProjectId: 'source-comparison-project-file',
+        comparisonProjectName: 'File source project',
+        comparisonProjectDescription: null,
+      },
+      rows: [
+        {
+          sourceResolutionId: 'source-resolution-non-conflicting',
+          sourceArticleRowId: 'source-article-non-conflicting',
+          externalArticleId: 'source-ext-2',
+          title: 'Non-conflicting source',
+          doi: '10.1000/import-solo',
+          identifiers: [],
+          resolution: {mode: 'summary', value: 'yes', label: 'Yes'},
+        },
+      ],
+    },
+    importMode: 'all-matched',
+  })
+  const bodyText = await response.text()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  const body = JSON.parse(bodyText) as {
+    data: {
+      summary: ConflictResolutionImportCommitSummaryResponse
+      importableRows: Array<Record<string, unknown>>
+      skippedRows: Array<Record<string, unknown>>
+    }
+  }
+  const state = getMockDatabaseState()
+  const insertedResolution = state.conflictResolutionRows.find((row) => {
+    return row.comparisonProjectId === 'comparison-project-1' && row.articleId === 'article-2'
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.summary).toEqual({
+    deduped: 0,
+    importable: 1,
+    inserted: 1,
+    matched: 1,
+    scanned: 1,
+    skipped: 0,
+    skippedAmbiguousTarget: 0,
+    skippedConflicting: 0,
+    skippedExisting: 0,
+    skippedInvalidValue: 0,
+    skippedNoTargetMatch: 0,
+    skippedNoUsableKey: 0,
+    skippedNotConflicting: 0,
+    skippedUnsupportedMode: 0,
+  })
+  expect(body.data.importableRows).toMatchObject([
+    {
+      matchKey: '10.1000/import-solo',
+      matchKind: 'doi',
+      reason: 'importable',
+      sourceResolutionId: 'source-resolution-non-conflicting',
+      targetArticleId: 'article-2',
+    },
+  ])
+  expect(body.data.skippedRows).toEqual([])
+  expect(insertedResolution).toEqual({
+    answerValue: 'yes',
+    articleId: 'article-2',
+    comparisonProjectId: 'comparison-project-1',
+    promptId: null,
+  })
+})
+
 test('comparison project conflict resolution import commit skips rows that became unsafe after preview', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseState(),
@@ -3676,6 +3769,90 @@ test('comparison project create-from-project dedupes duplicate conflict resoluti
   })
   expect(state.createdComparisonProjectIds).toEqual(['comparison-project-created'])
   expect(state.staleServingIds).toEqual(['comparison-project-created'])
+})
+
+test('comparison project create-from-project can import non-conflicting matched resolutions', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    conflictResolutionImportSourceRows: [
+      {
+        allowConflictResolution: true,
+        archived: false,
+        createdAt: new Date('2026-04-01T00:00:00.000Z'),
+        description: null,
+        humanJudgmentMode: 'summary',
+        id: 'source-comparison-project-1',
+        name: 'Import source',
+        resolutionCount: 1,
+      },
+    ],
+    conflictResolutionRows: [
+      {
+        answerValue: 'yes',
+        articleId: 'source-article-2',
+        comparisonProjectId: 'source-comparison-project-1',
+        doi: '10.1000/import-solo',
+        externalArticleId: 'source-ext-2',
+        id: 'source-resolution-non-conflicting',
+        promptId: null,
+        title: 'Article 2',
+      },
+    ],
+    failPromptInsert: false,
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/from-project', {
+      body: JSON.stringify({
+        allowConflictResolution: true,
+        compareWithHumans: true,
+        conflictResolutionImportMode: 'all-matched',
+        conflictResolutionImportSourceComparisonProjectIds: ['source-comparison-project-1'],
+        description: 'From project comparison',
+        humanJudgmentMode: 'summary',
+        name: 'From project comparison',
+        sourceProjectId: 'source-project-1',
+        sourceProjectIds: ['source-project-1'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodyText = await response.text()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
+
+  const body = JSON.parse(bodyText) as {conflictResolutionImportSummary: ConflictResolutionImportSummaryResponse}
+  const state = getMockDatabaseState()
+  const insertedResolutions = state.conflictResolutionRows.filter((row) => {
+    return row.comparisonProjectId === 'comparison-project-created'
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.conflictResolutionImportSummary).toEqual({
+    deduped: 0,
+    imported: 1,
+    matched: 1,
+    scanned: 1,
+    skipped: 0,
+    skippedAmbiguousTarget: 0,
+    skippedConflicting: 0,
+    skippedConflictingIdentifiers: 0,
+    skippedExistingTargetResolution: 0,
+    skippedInvalidValue: 0,
+    skippedNoTargetMatch: 0,
+    skippedNoUsableKey: 0,
+    skippedNotConflicting: 0,
+    skippedUnsupportedMode: 0,
+    warnings: [],
+  })
+  expect(insertedResolutions).toEqual([
+    {answerValue: 'yes', articleId: 'article-2', comparisonProjectId: 'comparison-project-created', promptId: null},
+  ])
 })
 
 test('comparison project create-from-project skips conflicting import warnings without aborting', async () => {

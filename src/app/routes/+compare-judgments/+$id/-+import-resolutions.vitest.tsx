@@ -189,6 +189,19 @@ const getFileList = (file: File) => {
   } as unknown as FileList
 }
 
+const getInputFromLabel = (container: HTMLElement, labelText: string): HTMLInputElement => {
+  const label = Array.from(container.querySelectorAll('label')).find((candidateLabel) => {
+    return candidateLabel.textContent?.trim().startsWith(labelText)
+  })
+  const input = label?.querySelector('input')
+
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error(`Input not found for label ${labelText}`)
+  }
+
+  return input
+}
+
 const renderImportResolutionsPage = async () => {
   const {render} = await import('solid-js/web')
   const {CompareProjectImportResolutionsPage} = await import('./+import-resolutions.tsx')
@@ -236,9 +249,43 @@ describe('CompareProjectImportResolutionsPage', () => {
       await waitForCondition(() => {
         expect(mockState.analyzeComparisonProjectConflictResolutionImport).toHaveBeenCalledWith(
           'comparison-project-1',
-          mockState.transferArtifact,
+          {artifact: mockState.transferArtifact, importMode: 'conflicting-only'},
         )
         expect(container.textContent).toContain('Analyze result')
+      })
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('reanalyzes a selected file when import scope changes', async () => {
+    const {container, dispose} = await renderImportResolutionsPage()
+
+    try {
+      const input = container.querySelector('[data-testid="conflict-resolution-import-file"]')
+      const file = new File([JSON.stringify(mockState.transferArtifact)], 'conflict-resolutions.json', {
+        type: 'application/json',
+      })
+
+      if (!(input instanceof HTMLInputElement)) {
+        throw new Error('Import file input not found')
+      }
+
+      Object.defineProperty(input, 'files', {configurable: true, value: getFileList(file)})
+      input.dispatchEvent(new Event('change', {bubbles: true}))
+
+      await waitForCondition(() => {
+        expect(mockState.analyzeComparisonProjectConflictResolutionImport).toHaveBeenCalledTimes(1)
+      })
+
+      getInputFromLabel(container, 'All matched articles').click()
+
+      await waitForCondition(() => {
+        expect(mockState.analyzeComparisonProjectConflictResolutionImport).toHaveBeenCalledWith(
+          'comparison-project-1',
+          {artifact: mockState.transferArtifact, importMode: 'all-matched'},
+        )
       })
     } finally {
       dispose()

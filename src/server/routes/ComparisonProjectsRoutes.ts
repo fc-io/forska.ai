@@ -45,6 +45,7 @@ import {
   validateComparisonProjectConflictResolutionTransferArtifact,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.ts'
 import {
+  type ComparisonProjectConflictResolutionImportMode,
   type ComparisonProjectConflictResolutionImportSourceQueryRow,
   type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportSummary,
@@ -222,6 +223,7 @@ type ComparisonProjectConflictResolutionImportSourceValidationRow = {
 type CreateComparisonProjectFromProjectSelectionBody = {
   allowConflictResolution?: boolean
   compareWithHumans?: boolean
+  conflictResolutionImportMode?: ComparisonProjectConflictResolutionImportMode
   humanJudgmentMode?: HumanJudgmentMode
   sourceProjectId: string
   sourceProjectIds?: string[]
@@ -1066,6 +1068,18 @@ const getConflictResolutionImportRejectedError = (message: string) => {
   return new HttpError(400, message)
 }
 
+const getValidatedConflictResolutionImportMode = (value: unknown): ComparisonProjectConflictResolutionImportMode => {
+  if (value === undefined || value === null) {
+    return 'conflicting-only'
+  }
+
+  if (value === 'conflicting-only' || value === 'all-matched') {
+    return value
+  }
+
+  throw getConflictResolutionImportRejectedError('Conflict resolution import mode is invalid')
+}
+
 const getComparisonProjectPromptConfigsForSelections = async (
   db: AppQueryRunner,
   promptSelections: PromptSelection[],
@@ -1625,6 +1639,7 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
 }
 
 const getConflictResolutionImportPlanResult = async (params: {
+  importMode?: ComparisonProjectConflictResolutionImportMode
   promptSelections: PromptSelection[]
   scope: ComparisonProjectScope
   sourceComparisonProjectIds: string[]
@@ -1637,7 +1652,12 @@ const getConflictResolutionImportPlanResult = async (params: {
     tx: params.tx,
   })
   const targetSummaryOptionValues = await getComparisonProjectSummaryOptionValues(params.tx, params.promptSelections)
-  const plan = getComparisonProjectConflictResolutionImportPlan({sourceRows, targetArticles, targetSummaryOptionValues})
+  const plan = getComparisonProjectConflictResolutionImportPlan({
+    importMode: params.importMode,
+    sourceRows,
+    targetArticles,
+    targetSummaryOptionValues,
+  })
 
   if (plan.errors.length > 0) {
     throw getConflictResolutionImportRejectedError(
@@ -1653,6 +1673,7 @@ const getConflictResolutionImportPlanResult = async (params: {
 }
 
 const previewComparisonProjectConflictResolutionImport = async (params: {
+  importMode?: ComparisonProjectConflictResolutionImportMode
   promptSelections: PromptSelection[]
   scope: ComparisonProjectScope
   sourceComparisonProjectIds: string[]
@@ -1669,6 +1690,7 @@ const previewComparisonProjectConflictResolutionImport = async (params: {
 
 const importComparisonProjectConflictResolutions = async (params: {
   comparisonProjectId: string
+  importMode?: ComparisonProjectConflictResolutionImportMode
   promptSelections: PromptSelection[]
   scope: ComparisonProjectScope
   sourceComparisonProjectIds: string[]
@@ -1708,6 +1730,7 @@ const getComparisonProjectConflictResolutionImportPreview = async (
   await validateConflictResolutionImportSources(appDatabaseService, sourceComparisonProjectIds)
 
   return previewComparisonProjectConflictResolutionImport({
+    importMode: body.conflictResolutionImportMode,
     promptSelections: context.sourcePromptSelections,
     scope: await getCreateFromProjectImportScope({
       createdComparisonProject: getCreateFromProjectPreviewComparisonProject({body, context}),
@@ -1731,6 +1754,14 @@ const getValidatedComparisonProjectConflictResolutionImportArtifact = (body: unk
   }
 }
 
+const getComparisonProjectConflictResolutionArtifactImportRequest = (body: unknown) => {
+  const bodyRecord = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null
+  const artifact = bodyRecord && 'artifact' in bodyRecord ? bodyRecord.artifact : body
+  const importMode = bodyRecord ? getValidatedConflictResolutionImportMode(bodyRecord.importMode) : 'conflicting-only'
+
+  return {artifact: getValidatedComparisonProjectConflictResolutionImportArtifact(artifact), importMode}
+}
+
 const validateConflictResolutionImportAnalyzeTarget = (scope: ComparisonProjectScope) => {
   if (!scope.allowConflictResolution || !getIsSummaryMode(scope)) {
     throw getConflictResolutionImportRejectedError(
@@ -1742,12 +1773,13 @@ const validateConflictResolutionImportAnalyzeTarget = (scope: ComparisonProjectS
 const analyzeComparisonProjectConflictResolutionImport = async (scope: ComparisonProjectScope, body: unknown) => {
   validateConflictResolutionImportAnalyzeTarget(scope)
 
-  const artifact = getValidatedComparisonProjectConflictResolutionImportArtifact(body)
+  const {artifact, importMode} = getComparisonProjectConflictResolutionArtifactImportRequest(body)
   const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
   const targetArticles = await getConflictResolutionImportTargetArticles({sourceRows, scope, tx: appDatabaseService})
 
   return getComparisonProjectConflictResolutionImportAnalyzeResult({
     artifact,
+    importMode,
     sourceRows,
     targetArticles,
     targetSummaryOptionValues: getComparisonProjectScopeSummaryOptionValues(scope),
@@ -1761,7 +1793,7 @@ const getConflictResolutionArtifactImportAnalysis = async (params: {
 }) => {
   validateConflictResolutionImportAnalyzeTarget(params.scope)
 
-  const artifact = getValidatedComparisonProjectConflictResolutionImportArtifact(params.body)
+  const {artifact, importMode} = getComparisonProjectConflictResolutionArtifactImportRequest(params.body)
   const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
   const targetArticles = await getConflictResolutionImportTargetArticles({
     sourceRows,
@@ -1769,9 +1801,15 @@ const getConflictResolutionArtifactImportAnalysis = async (params: {
     tx: params.tx,
   })
   const targetSummaryOptionValues = getComparisonProjectScopeSummaryOptionValues(params.scope)
-  const plan = getComparisonProjectConflictResolutionImportPlan({sourceRows, targetArticles, targetSummaryOptionValues})
+  const plan = getComparisonProjectConflictResolutionImportPlan({
+    importMode,
+    sourceRows,
+    targetArticles,
+    targetSummaryOptionValues,
+  })
   const analyzeResult = getComparisonProjectConflictResolutionImportAnalyzeResult({
     artifact,
+    importMode,
     sourceRows,
     targetArticles,
     targetSummaryOptionValues,
@@ -3964,6 +4002,7 @@ export const comparisonProjectsRoutes = new Elysia()
         summarySourceProjectId: t.Optional(t.Union([t.String(), t.Null()])),
         sourceProjectId: t.String(),
         sourceProjectIds: t.Optional(t.Array(t.String())),
+        conflictResolutionImportMode: t.Optional(t.Union([t.Literal('conflicting-only'), t.Literal('all-matched')])),
         conflictResolutionImportSourceComparisonProjectIds: t.Optional(t.Array(t.String())),
       }),
     },
@@ -4013,6 +4052,7 @@ export const comparisonProjectsRoutes = new Elysia()
         const conflictResolutionImportSummary = hasConflictResolutionImportSources
           ? await importComparisonProjectConflictResolutions({
               comparisonProjectId: createdComparisonProject.id,
+              importMode: body.conflictResolutionImportMode,
               promptSelections: fromProjectContext.sourcePromptSelections,
               scope: await getCreateFromProjectImportScope({
                 createdComparisonProject,
@@ -4053,6 +4093,7 @@ export const comparisonProjectsRoutes = new Elysia()
         summarySourceProjectId: t.Optional(t.Union([t.String(), t.Null()])),
         sourceProjectId: t.String(),
         sourceProjectIds: t.Optional(t.Array(t.String())),
+        conflictResolutionImportMode: t.Optional(t.Union([t.Literal('conflicting-only'), t.Literal('all-matched')])),
         conflictResolutionImportSourceComparisonProjectIds: t.Optional(t.Array(t.String())),
       }),
     },

@@ -69,6 +69,8 @@ export type ComparisonProjectConflictResolutionImportTargetArticle = {
   title?: string | null
 }
 
+export type ComparisonProjectConflictResolutionImportMode = 'all-matched' | 'conflicting-only'
+
 export type ComparisonProjectConflictResolutionImportTargetArticleQueryRow = Omit<
   ComparisonProjectConflictResolutionImportTargetArticle,
   'isConflictResolutionEligible'
@@ -179,6 +181,7 @@ export type ComparisonProjectConflictResolutionImportPlan = {
 }
 
 export type ComparisonProjectConflictResolutionImportPlanParams = {
+  importMode?: ComparisonProjectConflictResolutionImportMode
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
   targetArticles: readonly ComparisonProjectConflictResolutionImportTargetArticle[]
   targetSummaryOptionValues: readonly string[]
@@ -1224,9 +1227,19 @@ const getTargetArticlesByArticleId = (targetArticles: readonly NormalizedTargetA
   }, new Map<string, NormalizedTargetArticle>())
 }
 
-const getEligibleTargetMatches = (matches: readonly ImportTargetArticleMatch[]) => {
+const getIsTargetArticleImportEligible = (
+  importMode: ComparisonProjectConflictResolutionImportMode,
+  targetArticle: NormalizedTargetArticle,
+) => {
+  return importMode === 'all-matched' || targetArticle.isConflictResolutionEligible
+}
+
+const getEligibleTargetMatches = (
+  matches: readonly ImportTargetArticleMatch[],
+  importMode: ComparisonProjectConflictResolutionImportMode,
+) => {
   return matches.filter((match) => {
-    return match.targetArticle.isConflictResolutionEligible
+    return getIsTargetArticleImportEligible(importMode, match.targetArticle)
   })
 }
 
@@ -1305,6 +1318,7 @@ const getIdentifierKeysForTier = (row: NormalizedSourceRow, tier: SourceIdentifi
 }
 
 const getIdentifierImportCandidateRowForTier = (
+  importMode: ComparisonProjectConflictResolutionImportMode,
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
   tier: SourceIdentifierTier,
@@ -1313,7 +1327,7 @@ const getIdentifierImportCandidateRowForTier = (
   const targetMatches = getUniqueTargetArticleMatches(
     getTargetArticlesForSourceIdentifierKeys(identifierKeys, targetArticleMaps.byIdentifierKey),
   )
-  const eligibleMatches = getEligibleTargetMatches(targetMatches)
+  const eligibleMatches = getEligibleTargetMatches(targetMatches, importMode)
   const hasConflictingIdentifiers = getHasConflictingIdentifierMatches(eligibleMatches)
   const tieBreakerMatches = hasConflictingIdentifiers ? [] : getIdentifierTieBreakerMatches(row, eligibleMatches)
   const selectedMatch =
@@ -1374,15 +1388,17 @@ const getIdentifierImportCandidateRowForTier = (
 }
 
 const getIdentifierImportCandidateRow = (
+  importMode: ComparisonProjectConflictResolutionImportMode,
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ) => {
   return sourceIdentifierTierOrder.reduce<ImportCandidateRowResult | null>((result, tier) => {
-    return result ?? getIdentifierImportCandidateRowForTier(row, targetArticleMaps, tier)
+    return result ?? getIdentifierImportCandidateRowForTier(importMode, row, targetArticleMaps, tier)
   }, null)
 }
 
 const getArticleIdImportCandidateRow = (
+  importMode: ComparisonProjectConflictResolutionImportMode,
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): ImportCandidateRowResult | null => {
@@ -1390,7 +1406,8 @@ const getArticleIdImportCandidateRow = (
   const targetMatch = targetArticle
     ? {matchKey: row.sourceArticleId, matchKind: 'article-id' as const, targetArticle}
     : null
-  const eligibleMatch = targetMatch?.targetArticle.isConflictResolutionEligible ? targetMatch : null
+  const eligibleMatch =
+    targetMatch && getIsTargetArticleImportEligible(importMode, targetMatch.targetArticle) ? targetMatch : null
   const existingResolutionResult = eligibleMatch ? getExistingTargetResolutionResult(row, eligibleMatch) : null
 
   return existingResolutionResult
@@ -1418,6 +1435,7 @@ const getArticleIdImportCandidateRow = (
 }
 
 const getIdTitleImportCandidateRow = (
+  importMode: ComparisonProjectConflictResolutionImportMode,
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): ImportCandidateRowResult => {
@@ -1432,7 +1450,7 @@ const getIdTitleImportCandidateRow = (
           })
       : [],
   )
-  const eligibleMatches = getEligibleTargetMatches(targetMatches)
+  const eligibleMatches = getEligibleTargetMatches(targetMatches, importMode)
   const selectedMatch = eligibleMatches.length === 1 ? eligibleMatches[0] : null
   const existingResolutionResult = selectedMatch ? getExistingTargetResolutionResult(row, selectedMatch) : null
   const skipReason =
@@ -1482,12 +1500,13 @@ const getIdTitleImportCandidateRow = (
 }
 
 const getImportCandidateRow = (
+  importMode: ComparisonProjectConflictResolutionImportMode,
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): ImportCandidateRowResult => {
   const hasUsableKey = row.identifierKeys.length > 0 || Boolean(row.idTitleKey)
-  const articleIdResult = getArticleIdImportCandidateRow(row, targetArticleMaps)
-  const identifierResult = hasUsableKey ? getIdentifierImportCandidateRow(row, targetArticleMaps) : null
+  const articleIdResult = getArticleIdImportCandidateRow(importMode, row, targetArticleMaps)
+  const identifierResult = hasUsableKey ? getIdentifierImportCandidateRow(importMode, row, targetArticleMaps) : null
 
   return row.resolutionMode !== 'summary'
     ? {
@@ -1507,17 +1526,18 @@ const getImportCandidateRow = (
           }
         : identifierResult
           ? identifierResult
-          : getIdTitleImportCandidateRow(row, targetArticleMaps)
+          : getIdTitleImportCandidateRow(importMode, row, targetArticleMaps)
 }
 
 const getCandidateRows = (
+  importMode: ComparisonProjectConflictResolutionImportMode,
   sourceRows: readonly NormalizedSourceRow[],
   targetArticles: readonly NormalizedTargetArticle[],
 ) => {
   const targetArticleMaps = getTargetArticleMaps(targetArticles)
 
   return sourceRows.map((row) => {
-    return getImportCandidateRow(row, targetArticleMaps)
+    return getImportCandidateRow(importMode, row, targetArticleMaps)
   })
 }
 
@@ -1700,13 +1720,14 @@ const getDedupedCount = (candidates: readonly ComparisonProjectConflictResolutio
 }
 
 const getComparisonProjectConflictResolutionImportPlanState = ({
+  importMode = 'conflicting-only',
   sourceRows,
   targetArticles,
   targetSummaryOptionValues,
 }: ComparisonProjectConflictResolutionImportPlanParams) => {
   const normalizedSourceRows = getNormalizedSourceRows(sourceRows)
   const normalizedTargetArticles = getNormalizedTargetArticles(targetArticles)
-  const candidateRowResults = getCandidateRows(normalizedSourceRows, normalizedTargetArticles)
+  const candidateRowResults = getCandidateRows(importMode, normalizedSourceRows, normalizedTargetArticles)
   const candidateRows = candidateRowResults
     .map((result) => {
       return result.candidate
@@ -1950,16 +1971,19 @@ const getAnalyzeSummary = (params: {
 
 export const getComparisonProjectConflictResolutionImportAnalyzeResult = (params: {
   artifact: ComparisonProjectConflictResolutionTransferArtifactV1
+  importMode?: ComparisonProjectConflictResolutionImportMode
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
   targetArticles: readonly ComparisonProjectConflictResolutionImportTargetArticle[]
   targetSummaryOptionValues: readonly string[]
 }): ComparisonProjectConflictResolutionImportAnalyzeResult => {
   const planState = getComparisonProjectConflictResolutionImportPlanState({
+    importMode: params.importMode,
     sourceRows: params.sourceRows,
     targetArticles: params.targetArticles,
     targetSummaryOptionValues: params.targetSummaryOptionValues,
   })
   const plan = getComparisonProjectConflictResolutionImportPlan({
+    importMode: params.importMode,
     sourceRows: params.sourceRows,
     targetArticles: params.targetArticles,
     targetSummaryOptionValues: params.targetSummaryOptionValues,

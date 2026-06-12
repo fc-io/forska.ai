@@ -196,7 +196,7 @@ export const CompareProjectImportResolutionsResults = (props: CompareProjectImpo
       <div class="rounded-lg bg-white p-6 shadow">
         <h2 class="text-lg font-semibold">Rows that will be imported</h2>
         <p class="mt-1 text-sm text-gray-600">
-          These saved conflict-resolution decisions matched unresolved target comparison rows.
+          These saved conflict-resolution decisions matched importable target comparison rows.
         </p>
         <div class="mt-4">
           <ImportableRowsTable rows={props.preview.importableRows} />

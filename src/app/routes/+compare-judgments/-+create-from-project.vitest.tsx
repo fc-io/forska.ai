@@ -9,7 +9,10 @@ type MockLinkProps = ParentProps<{class?: string; to: string}>
 type MockButtonProps = ParentProps<
   {as?: keyof JSX.IntrinsicElements | Component<Record<string, unknown>>} & Record<string, unknown>
 >
-type CreateFromProjectInput = {conflictResolutionImportSourceComparisonProjectIds?: string[]}
+type CreateFromProjectInput = {
+  conflictResolutionImportMode?: 'all-matched' | 'conflicting-only'
+  conflictResolutionImportSourceComparisonProjectIds?: string[]
+}
 
 const importWarningCopy =
   'Matching duplicate decisions are imported once. Conflicting or ambiguous decisions are skipped and reported after creation.'
@@ -345,9 +348,30 @@ describe('compare judgments create-from-project route', () => {
       await submitForm(container)
 
       expect(mockState.createComparisonProjectFromProject).toHaveBeenCalledTimes(1)
-      expect(getCreateFromProjectInput().conflictResolutionImportSourceComparisonProjectIds).toEqual([
-        'comparison-source-1',
-      ])
+      expect(getCreateFromProjectInput()).toMatchObject({
+        conflictResolutionImportMode: 'conflicting-only',
+        conflictResolutionImportSourceComparisonProjectIds: ['comparison-source-1'],
+      })
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('submits all matched conflict resolution import mode', async () => {
+    const {container, dispose} = await renderCreateFromProjectPage()
+
+    try {
+      await fillSummaryConflictResolutionForm(container)
+      setChecked(getInputFromLabel(container, 'All matched articles'), true)
+      setChecked(getInputFromLabel(container, 'Prior Compare Project'), true)
+      await submitForm(container)
+
+      expect(mockState.createComparisonProjectFromProject).toHaveBeenCalledTimes(1)
+      expect(getCreateFromProjectInput()).toMatchObject({
+        conflictResolutionImportMode: 'all-matched',
+        conflictResolutionImportSourceComparisonProjectIds: ['comparison-source-1'],
+      })
     } finally {
       dispose()
       container.remove()

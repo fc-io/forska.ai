@@ -8,6 +8,8 @@ import {
   commitComparisonProjectConflictResolutionImport,
   type ComparisonProjectConflictResolutionImportAnalyzePreview,
   type ComparisonProjectConflictResolutionImportCommitResponse,
+  type ComparisonProjectConflictResolutionImportMode,
+  type ComparisonProjectConflictResolutionImportRequest,
   type ComparisonProjectConflictResolutionTransferArtifact,
   fetchComparisonProjectJudgmentsMetadata,
 } from '../../../../services/comparisonProjectsService.ts'
@@ -36,6 +38,23 @@ const getErrorMessage = (error: unknown, fallback: string) => {
   return error instanceof Error ? error.message : fallback
 }
 
+const conflictResolutionImportModeOptions: Array<{
+  description: string
+  label: string
+  value: ComparisonProjectConflictResolutionImportMode
+}> = [
+  {
+    description: 'Import only saved decisions for articles that are currently conflicts in this comparison project.',
+    label: 'Only current conflicts',
+    value: 'conflicting-only',
+  },
+  {
+    description: 'Import saved decisions for every matched article, even if it is not currently a conflict.',
+    label: 'All matched articles',
+    value: 'all-matched',
+  },
+]
+
 export const CompareProjectImportResolutionsPage = () => {
   const params = Route.useParams()
   const queryClient = useQueryClient()
@@ -54,6 +73,7 @@ export const CompareProjectImportResolutionsPage = () => {
   const [commitResult, setCommitResult] = createSignal<ComparisonProjectConflictResolutionImportCommitResponse | null>(
     null,
   )
+  const [importMode, setImportMode] = createSignal<ComparisonProjectConflictResolutionImportMode>('conflicting-only')
   const [isDraggingFile, setIsDraggingFile] = createSignal(false)
 
   const comparisonProjectQuery = useQuery(() => {
@@ -69,11 +89,11 @@ export const CompareProjectImportResolutionsPage = () => {
 
   const analyzeMutation = useMutation(() => {
     return {
-      mutationFn: (artifact: ComparisonProjectConflictResolutionTransferArtifact) => {
-        return analyzeComparisonProjectConflictResolutionImport(comparisonProjectId(), artifact)
+      mutationFn: (request: ComparisonProjectConflictResolutionImportRequest) => {
+        return analyzeComparisonProjectConflictResolutionImport(comparisonProjectId(), request)
       },
-      onError: (error: unknown, artifact: ComparisonProjectConflictResolutionTransferArtifact) => {
-        if (parsedArtifact() !== artifact) {
+      onError: (error: unknown, request: ComparisonProjectConflictResolutionImportRequest) => {
+        if (parsedArtifact() !== request.artifact || importMode() !== request.importMode) {
           return
         }
 
@@ -81,9 +101,9 @@ export const CompareProjectImportResolutionsPage = () => {
       },
       onSuccess: (
         preview: ComparisonProjectConflictResolutionImportAnalyzePreview,
-        artifact: ComparisonProjectConflictResolutionTransferArtifact,
+        request: ComparisonProjectConflictResolutionImportRequest,
       ) => {
-        if (parsedArtifact() !== artifact) {
+        if (parsedArtifact() !== request.artifact || importMode() !== request.importMode) {
           return
         }
 
@@ -96,8 +116,8 @@ export const CompareProjectImportResolutionsPage = () => {
 
   const commitMutation = useMutation(() => {
     return {
-      mutationFn: (artifact: ComparisonProjectConflictResolutionTransferArtifact) => {
-        return commitComparisonProjectConflictResolutionImport(comparisonProjectId(), artifact)
+      mutationFn: (request: ComparisonProjectConflictResolutionImportRequest) => {
+        return commitComparisonProjectConflictResolutionImport(comparisonProjectId(), request)
       },
       onError: (error: unknown) => {
         setCommitError(getErrorMessage(error, 'Failed to commit import'))
@@ -121,6 +141,9 @@ export const CompareProjectImportResolutionsPage = () => {
     setAnalyzeError(null)
     setCommitError(null)
   }
+  const getImportRequest = (artifact: ComparisonProjectConflictResolutionTransferArtifact) => {
+    return {artifact, importMode: importMode()}
+  }
   const handleFile = async (file: File | null) => {
     setFileError(null)
     resetReviewState()
@@ -136,7 +159,7 @@ export const CompareProjectImportResolutionsPage = () => {
     try {
       const parsedFile = await readConflictResolutionImportFile(file)
       setParsedArtifact(parsedFile.artifact)
-      analyzeMutation.mutate(parsedFile.artifact)
+      analyzeMutation.mutate(getImportRequest(parsedFile.artifact))
     } catch (error) {
       setParsedArtifact(null)
       setFileError(getErrorMessage(error, 'Failed to read selected file'))
@@ -154,7 +177,7 @@ export const CompareProjectImportResolutionsPage = () => {
     setAnalyzePreview(null)
     setAnalyzeError(null)
     setCommitError(null)
-    analyzeMutation.mutate(artifact)
+    analyzeMutation.mutate(getImportRequest(artifact))
   }
   const handleCommit = () => {
     const artifact = parsedArtifact()
@@ -165,7 +188,17 @@ export const CompareProjectImportResolutionsPage = () => {
     }
 
     setCommitError(null)
-    commitMutation.mutate(artifact)
+    commitMutation.mutate(getImportRequest(artifact))
+  }
+  const handleImportModeChange = (nextImportMode: ComparisonProjectConflictResolutionImportMode) => {
+    setImportMode(nextImportMode)
+    resetReviewState()
+
+    const artifact = parsedArtifact()
+
+    if (artifact) {
+      analyzeMutation.mutate({artifact, importMode: nextImportMode})
+    }
   }
   const analyzeDisabledReason = createMemo(() => {
     return getAnalyzeImportDisabledReason({
@@ -224,8 +257,8 @@ export const CompareProjectImportResolutionsPage = () => {
                   <div>
                     <h2 class="text-lg font-semibold">Review conflict-resolution export</h2>
                     <p class="mt-1 max-w-3xl text-sm text-gray-600">
-                      Import only adds saved conflict-resolution decisions to articles already present in the target
-                      comparison project.
+                      Import adds saved conflict-resolution decisions to matched articles already present in the target
+                      comparison project. Choose whether non-conflicting matches should be included.
                     </p>
                     <Show when={!comparisonProject().allowConflictResolution}>
                       <div class="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
@@ -257,6 +290,33 @@ export const CompareProjectImportResolutionsPage = () => {
                         <Match when={true}>Commit import</Match>
                       </Switch>
                     </Button>
+                  </div>
+                </div>
+
+                <div class="mt-5 rounded-md border border-gray-200 bg-gray-50 p-4">
+                  <p class="text-sm font-medium text-gray-900">Import scope</p>
+                  <div class="mt-3 grid gap-3 md:grid-cols-2">
+                    <For each={conflictResolutionImportModeOptions}>
+                      {(option) => {
+                        return (
+                          <label class="flex cursor-pointer items-start gap-3 rounded-md border border-gray-200 bg-white p-3 hover:bg-gray-50">
+                            <input
+                              checked={importMode() === option.value}
+                              class="mt-1"
+                              name="conflict-resolution-import-mode"
+                              onChange={() => {
+                                handleImportModeChange(option.value)
+                              }}
+                              type="radio"
+                            />
+                            <span>
+                              <span class="block text-sm font-medium text-gray-900">{option.label}</span>
+                              <span class="mt-1 block text-xs text-gray-500">{option.description}</span>
+                            </span>
+                          </label>
+                        )
+                      }}
+                    </For>
                   </div>
                 </div>
 
