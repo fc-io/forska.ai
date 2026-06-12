@@ -1,9 +1,13 @@
-import {lstat, mkdir, open, readFile, rm} from 'node:fs/promises'
+import {createHash, randomUUID} from 'node:crypto'
+import {createReadStream} from 'node:fs'
+import {lstat, mkdir, open, rename, rm} from 'node:fs/promises'
 import {dirname, posix, win32} from 'node:path'
+import {Transform} from 'node:stream'
+import {pipeline} from 'node:stream/promises'
 
 import type {ProjectTransferImportPlanArtifact} from './projectTransferAnalyze.ts'
 import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
-import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
+import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {
   resolveProjectTransferArchiveMemberWritablePath,
   resolveProjectTransferPromotionWritablePath,
@@ -47,6 +51,14 @@ export type ProjectTransferCommitPromotionManifest = {
 
 export type ProjectTransferCommitArticleCreate = {article: ProjectTransferArticlePayloadRecord; sourceArticleId: string}
 
+export type ProjectTransferCommitPromotionMetrics = {
+  assetByteLength: number
+  assetReadCount: number
+  boundedConcurrency: number
+  copiedAssetCount: number
+  promotedAssetRereadCount: number
+}
+
 export type ProjectTransferCommitArticleFieldFill = {
   field: string
   sourceArticleId: string
@@ -58,6 +70,7 @@ export type ProjectTransferCommitPromotionResult = {
   articleCreates: ProjectTransferCommitArticleCreate[]
   articleFieldFills: ProjectTransferCommitArticleFieldFill[]
   manifest: ProjectTransferCommitPromotionManifest
+  metrics?: ProjectTransferCommitPromotionMetrics
   promotionPathByPackagePath: Record<string, string>
 }
 
@@ -65,6 +78,7 @@ export type ProjectTransferCommitRollbackResult = {deletedPromotedAssetCount: nu
 
 type PromoteProjectTransferCommitAssetsParams = RuntimePathOptions & {
   layout?: ProjectTransferImportTempLayout
+  maxConcurrency?: number
   now?: Date
   sessionId: string
 }
@@ -83,6 +97,7 @@ const runtimeAssetUrlPath = '/api/runtime-asset'
 const htmlAssetAttributePattern = /\b(src|href)(\s*=\s*)("([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi
 const localPathPattern = /^(\/Users\/|\/home\/|\/private\/|\/tmp\/|\/var\/folders\/|[A-Za-z]:\\)/
 const projectTransferSha256Pattern = /^[a-f0-9]{64}$/
+const defaultAssetPromotionConcurrency = 4
 
 const contentTypeExtensions: Record<string, string> = {
   'application/pdf': '.pdf',
@@ -329,16 +344,15 @@ const writePromotionManifest = async ({
     ...runtimeOptions,
     pathValue: layout.promotionManifestPath,
   })
+  const temporaryPath = `${resolvedPath}.${process.pid}.${randomUUID()}.tmp`
   await mkdir(dirname(resolvedPath), {recursive: true})
-  await globalThis.Bun.write(resolvedPath, getProjectTransferCanonicalJson(manifest))
-}
-
-const getManifestWithPendingEntry = (
-  manifest: ProjectTransferCommitPromotionManifest,
-  entry: ProjectTransferCommitPromotionManifestEntry,
-  now: Date,
-) => {
-  return {...manifest, promotions: [...manifest.promotions, entry], updatedAt: now.toISOString()}
+  await globalThis.Bun.write(temporaryPath, getProjectTransferCanonicalJson(manifest))
+  await rename(temporaryPath, resolvedPath).catch(async (error: unknown) => {
+    await rm(temporaryPath, {force: true, recursive: false}).catch(() => {
+      return undefined
+    })
+    throw error
+  })
 }
 
 const getManifestWithCopiedEntry = ({
@@ -371,6 +385,64 @@ const getManifestWithCopiedEntry = ({
   }
 }
 
+type ProjectTransferPromotionManifestWriter = {
+  getManifest: () => ProjectTransferCommitPromotionManifest
+  markCopied: (input: {
+    byteLength: number
+    checksumSha256: string
+    entry: ProjectTransferCommitPromotionManifestEntry
+    now: Date
+  }) => Promise<ProjectTransferCommitPromotionManifest>
+}
+
+const createPromotionManifestWriter = ({
+  initialManifest,
+  layout,
+  runtimeOptions,
+}: {
+  initialManifest: ProjectTransferCommitPromotionManifest
+  layout: ProjectTransferImportTempLayout
+  runtimeOptions: RuntimePathOptions
+}): ProjectTransferPromotionManifestWriter => {
+  const state: {manifest: ProjectTransferCommitPromotionManifest; writeQueue: Promise<void>} = {
+    manifest: initialManifest,
+    writeQueue: Promise.resolve(),
+  }
+
+  const enqueueManifestWrite = (
+    getNextManifest: (manifest: ProjectTransferCommitPromotionManifest) => ProjectTransferCommitPromotionManifest,
+  ) => {
+    const write = state.writeQueue.then(async () => {
+      const nextManifest = getNextManifest(state.manifest)
+      await writePromotionManifest({layout, manifest: nextManifest, runtimeOptions})
+      state.manifest = nextManifest
+
+      return nextManifest
+    })
+    state.writeQueue = write.then(
+      () => {
+        return undefined
+      },
+      () => {
+        return undefined
+      },
+    )
+
+    return write
+  }
+
+  return {
+    getManifest: () => {
+      return state.manifest
+    },
+    markCopied: ({byteLength, checksumSha256, entry, now}) => {
+      return enqueueManifestWrite((manifest) => {
+        return getManifestWithCopiedEntry({byteLength, checksumSha256, entry, manifest, now})
+      })
+    },
+  }
+}
+
 const isMissingFileError = (error: unknown) => {
   return (
     typeof error === 'object'
@@ -400,7 +472,7 @@ const getExtractedAssetPath = ({
   })
 }
 
-const readValidatedExtractedAssetBytes = async ({
+const getValidatedExtractedAssetStats = async ({
   entry,
   layout,
   runtimeOptions,
@@ -424,51 +496,14 @@ const readValidatedExtractedAssetBytes = async ({
     return getCommitPromotionError(`extracted asset is not a regular file ${entry.packagePath}`)
   }
 
-  const bytes = new Uint8Array(await readFile(resolvedPath))
-  const checksumSha256 = getProjectTransferSha256Checksum(bytes)
-
-  if (bytes.byteLength !== entry.byteLength) {
+  if (stats.size !== entry.byteLength) {
     return getCommitPromotionError(`extracted asset byte length mismatch ${entry.packagePath}`)
   }
 
-  return checksumSha256 === entry.checksumSha256
-    ? bytes
-    : getCommitPromotionError(`extracted asset checksum mismatch ${entry.packagePath}`)
+  return stats
 }
 
-const writeNewRuntimeAsset = async ({
-  bytes,
-  entry,
-  runtimeOptions,
-}: {
-  bytes: Uint8Array
-  entry: ProjectTransferCommitPromotionManifestEntry
-  runtimeOptions: RuntimePathOptions
-}) => {
-  const resolvedPath = resolveProjectTransferPromotionWritablePath({...runtimeOptions, pathValue: entry.promotedPath})
-  await mkdir(dirname(resolvedPath), {recursive: true})
-  const handle = await open(resolvedPath, 'wx').catch((error: unknown) => {
-    return isExistingFileError(error)
-      ? getCommitPromotionError(`promotion destination already exists ${entry.promotedPath}`)
-      : Promise.reject(error)
-  })
-
-  try {
-    await handle.writeFile(bytes)
-  } catch (error) {
-    await handle.close().catch(() => {
-      return undefined
-    })
-    await rm(resolvedPath, {force: true, recursive: false}).catch(() => {
-      return undefined
-    })
-    throw error
-  }
-
-  await handle.close()
-}
-
-const readCopiedRuntimeAsset = async (
+const readCopiedRuntimeAssetMetadata = async (
   input: RuntimePathOptions & {entry: ProjectTransferCommitPromotionManifestEntry},
 ) => {
   const resolvedPath = resolveProjectTransferPromotionWritablePath({...input, pathValue: input.entry.promotedPath})
@@ -482,67 +517,202 @@ const readCopiedRuntimeAsset = async (
     return getCommitPromotionError(`promoted asset is not a regular file ${input.entry.promotedPath}`)
   }
 
-  const bytes = new Uint8Array(await readFile(resolvedPath))
-  const checksumSha256 = getProjectTransferSha256Checksum(bytes)
-
-  if (bytes.byteLength !== input.entry.byteLength) {
+  if (stats.size !== input.entry.byteLength) {
     return getCommitPromotionError(`promoted asset byte length mismatch ${input.entry.promotedPath}`)
   }
 
-  return checksumSha256 === input.entry.checksumSha256
-    ? {byteLength: bytes.byteLength, checksumSha256}
-    : getCommitPromotionError(`promoted asset checksum mismatch ${input.entry.promotedPath}`)
+  return {byteLength: stats.size}
+}
+
+const getCopyHashingStream = (state: {byteLength: number; hash: ReturnType<typeof createHash>}) => {
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      state.byteLength += chunk.byteLength
+      state.hash.update(chunk)
+      callback(null, chunk)
+    },
+  })
+}
+
+const closeFileHandle = async (handle: Awaited<ReturnType<typeof open>>) => {
+  await handle.close().catch(() => {
+    return undefined
+  })
+}
+
+const copyExtractedAssetToRuntimeAsset = async ({
+  entry,
+  layout,
+  runtimeOptions,
+}: {
+  entry: ProjectTransferCommitPromotionManifestEntry
+  layout: ProjectTransferImportTempLayout
+  runtimeOptions: RuntimePathOptions
+}) => {
+  const sourcePath = getExtractedAssetPath({entry, layout, runtimeOptions})
+  await getValidatedExtractedAssetStats({entry, layout, runtimeOptions})
+  const destinationPath = resolveProjectTransferPromotionWritablePath({
+    ...runtimeOptions,
+    pathValue: entry.promotedPath,
+  })
+  await mkdir(dirname(destinationPath), {recursive: true})
+  const handle = await open(destinationPath, 'wx').catch((error: unknown) => {
+    return isExistingFileError(error)
+      ? getCommitPromotionError(`promotion destination already exists ${entry.promotedPath}`)
+      : Promise.reject(error)
+  })
+  const streamState = {byteLength: 0, hash: createHash('sha256')}
+
+  try {
+    await pipeline(createReadStream(sourcePath), getCopyHashingStream(streamState), handle.createWriteStream())
+  } catch (error) {
+    await closeFileHandle(handle)
+    await rm(destinationPath, {force: true, recursive: false}).catch(() => {
+      return undefined
+    })
+    throw error
+  }
+
+  await closeFileHandle(handle)
+
+  const checksumSha256 = streamState.hash.digest('hex')
+
+  if (streamState.byteLength !== entry.byteLength) {
+    await rm(destinationPath, {force: true, recursive: false}).catch(() => {
+      return undefined
+    })
+
+    return getCommitPromotionError(`extracted asset byte length mismatch ${entry.packagePath}`)
+  }
+
+  if (checksumSha256 !== entry.checksumSha256) {
+    await rm(destinationPath, {force: true, recursive: false}).catch(() => {
+      return undefined
+    })
+
+    return getCommitPromotionError(`extracted asset checksum mismatch ${entry.packagePath}`)
+  }
+
+  const copiedMetadata = await readCopiedRuntimeAssetMetadata({...runtimeOptions, entry})
+
+  return {byteLength: copiedMetadata.byteLength, checksumSha256}
 }
 
 const promoteManifestEntry = async ({
   entry,
   layout,
-  manifest,
   now,
   runtimeOptions,
+  writer,
 }: {
   entry: ProjectTransferCommitPromotionManifestEntry
   layout: ProjectTransferImportTempLayout
-  manifest: ProjectTransferCommitPromotionManifest
   now: Date
   runtimeOptions: RuntimePathOptions
+  writer: ProjectTransferPromotionManifestWriter
 }) => {
-  const pendingManifest = getManifestWithPendingEntry(manifest, entry, now)
-  await writePromotionManifest({layout, manifest: pendingManifest, runtimeOptions})
-  const bytes = await readValidatedExtractedAssetBytes({entry, layout, runtimeOptions})
-  await writeNewRuntimeAsset({bytes, entry, runtimeOptions})
-  const copied = await readCopiedRuntimeAsset({...runtimeOptions, entry})
-  const copiedManifest = getManifestWithCopiedEntry({
+  const copied = await copyExtractedAssetToRuntimeAsset({entry, layout, runtimeOptions})
+  const copiedManifest = await writer.markCopied({
     byteLength: copied.byteLength,
     checksumSha256: copied.checksumSha256,
     entry,
-    manifest: pendingManifest,
     now,
   })
-  await writePromotionManifest({layout, manifest: copiedManifest, runtimeOptions})
 
   return copiedManifest
 }
 
+const getPromotionConcurrency = (value: number | undefined, entryCount: number) => {
+  const normalized = Math.floor(value ?? defaultAssetPromotionConcurrency)
+
+  return Math.max(1, Math.min(entryCount || 1, normalized))
+}
+
+const runBoundedPromotionWorkers = async ({
+  entries,
+  maxConcurrency,
+  work,
+}: {
+  entries: readonly ProjectTransferCommitPromotionManifestEntry[]
+  maxConcurrency: number
+  work: (entry: ProjectTransferCommitPromotionManifestEntry) => Promise<void>
+}) => {
+  const state: {failure: {error: unknown} | null; nextIndex: number} = {failure: null, nextIndex: 0}
+  const runNext = async (): Promise<void> => {
+    const entry = state.failure === null ? entries[state.nextIndex] : undefined
+    state.nextIndex += entry === undefined ? 0 : 1
+
+    return entry === undefined
+      ? undefined
+      : work(entry).then(
+          () => {
+            return runNext()
+          },
+          (error: unknown) => {
+            state.failure = {error}
+            throw error
+          },
+        )
+  }
+  const results = await Promise.allSettled(
+    Array.from({length: maxConcurrency}, () => {
+      return runNext()
+    }),
+  )
+  const rejected = results.find((result) => {
+    return result.status === 'rejected'
+  })
+
+  return rejected?.status === 'rejected' ? Promise.reject(rejected.reason) : undefined
+}
+
 const promoteManifestEntries = async ({
+  maxConcurrency,
   layout,
   manifest,
   now,
   runtimeOptions,
 }: {
+  maxConcurrency: number
   layout: ProjectTransferImportTempLayout
   manifest: ProjectTransferCommitPromotionManifest
   now: Date
   runtimeOptions: RuntimePathOptions
 }) => {
-  const emptyManifest = {...manifest, promotions: []}
-  await writePromotionManifest({layout, manifest: emptyManifest, runtimeOptions})
+  await writePromotionManifest({layout, manifest, runtimeOptions})
 
-  return manifest.promotions.reduce<Promise<ProjectTransferCommitPromotionManifest>>(async (previous, entry) => {
-    const current = await previous
+  const writer = createPromotionManifestWriter({initialManifest: manifest, layout, runtimeOptions})
+  await runBoundedPromotionWorkers({
+    entries: manifest.promotions,
+    maxConcurrency,
+    work: async (entry) => {
+      await promoteManifestEntry({entry, layout, now, runtimeOptions, writer})
+    },
+  })
 
-    return promoteManifestEntry({entry, layout, manifest: current, now, runtimeOptions})
-  }, Promise.resolve(emptyManifest))
+  return writer.getManifest()
+}
+
+const getPromotionMetrics = ({
+  manifest,
+  maxConcurrency,
+}: {
+  manifest: ProjectTransferCommitPromotionManifest
+  maxConcurrency: number
+}): ProjectTransferCommitPromotionMetrics => {
+  return {
+    assetByteLength: manifest.promotions.reduce((total, entry) => {
+      return total + (entry.copiedByteLength ?? 0)
+    }, 0),
+    assetReadCount: manifest.promotions.filter((entry) => {
+      return entry.copied
+    }).length,
+    boundedConcurrency: maxConcurrency,
+    copiedAssetCount: manifest.promotions.filter((entry) => {
+      return entry.copied
+    }).length,
+    promotedAssetRereadCount: 0,
+  }
 }
 
 const getPromotionPathByPackagePath = (manifest: ProjectTransferCommitPromotionManifest) => {
@@ -1021,6 +1191,7 @@ const mergeRollbackResult = (
 
 export const promoteProjectTransferCommitAssets = async ({
   layout: inputLayout,
+  maxConcurrency: inputMaxConcurrency,
   now: inputNow,
   sessionId,
   ...runtimeOptions
@@ -1031,13 +1202,21 @@ export const promoteProjectTransferCommitAssets = async ({
   const articles = await readArticlesPayload({...runtimeOptions, layout})
   const planRecords = getPromotionPlanRecords(plan.targetPlan.assetPromotionPlan)
   const initialManifest = getInitialPromotionManifest({now, planRecords, sessionId})
-  const manifest = await promoteManifestEntries({layout, manifest: initialManifest, now, runtimeOptions})
+  const maxConcurrency = getPromotionConcurrency(inputMaxConcurrency, initialManifest.promotions.length)
+  const manifest = await promoteManifestEntries({
+    layout,
+    manifest: initialManifest,
+    maxConcurrency,
+    now,
+    runtimeOptions,
+  })
   const promotionPathByPackagePath = getPromotionPathByPackagePath(manifest)
 
   return {
     articleCreates: getArticleCreates({articles, plan, promotionPathByPackagePath}),
     articleFieldFills: getArticleFieldFills({plan, promotionPathByPackagePath}),
     manifest,
+    metrics: getPromotionMetrics({manifest, maxConcurrency}),
     promotionPathByPackagePath,
   }
 }

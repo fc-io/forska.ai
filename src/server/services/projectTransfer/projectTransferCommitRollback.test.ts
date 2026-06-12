@@ -298,6 +298,92 @@ test('project transfer commit promotion copies frozen-plan assets and rewrites c
       return entry.checksumSha256
     }),
   )
+  expect(result.metrics).toEqual({
+    assetByteLength: pdfBytes.byteLength + imageBytes.byteLength + imageBytes.byteLength,
+    assetReadCount: 3,
+    boundedConcurrency: 3,
+    copiedAssetCount: 3,
+    promotedAssetRereadCount: 0,
+  })
+})
+
+test('project transfer commit promotion preserves bounded-concurrency pending state when a copy fails', async () => {
+  const sessionId = 'session-bounded-promotion-state'
+  const invalidIndex = 2
+  const assets = Array.from({length: 6}, (_entry, index) => {
+    const expectedText = `bounded expected asset ${index}`
+    const expectedBytes = getBytes(expectedText)
+
+    return {
+      actualBytes: index === invalidIndex ? getBytes(expectedText.replace('asset', 'bsset')) : expectedBytes,
+      expectedBytes,
+      packagePath: `assets/source/bounded-${index}.pdf`,
+    }
+  })
+  const article = getArticle('source-article-bounded', {fullTextAssets: null, fullTextHtml: null, fullTextPdf: null})
+  const plan = getPlan({
+    articleMatches: [],
+    assetPromotionPlan: assets.map((asset) => {
+      return getAssetPromotionPlanEntry({
+        bytes: asset.expectedBytes,
+        contentType: 'application/pdf',
+        packagePath: asset.packagePath,
+      })
+    }),
+  })
+
+  await Promise.all([
+    ...assets.map((asset) => {
+      return writeExtractedAsset(sessionId, asset.packagePath, asset.actualBytes)
+    }),
+    writeArticles(sessionId, [article]),
+    writePlan(sessionId, plan),
+  ])
+
+  const error: unknown = await promoteProjectTransferCommitAssets({
+    cwd: runtimeRoot,
+    maxConcurrency: 2,
+    now,
+    sessionId,
+  }).then(
+    () => {
+      return null
+    },
+    (caught: unknown) => {
+      return caught
+    },
+  )
+  const manifest = await readPromotionManifest(sessionId)
+  const invalidPromotion = manifest.promotions.find((entry) => {
+    return entry.packagePath === assets[invalidIndex]?.packagePath
+  })
+
+  expect(error).toBeInstanceOf(Error)
+  expect(error instanceof Error ? error.message : '').toContain('extracted asset checksum mismatch')
+  expect(manifest.promotions).toHaveLength(assets.length)
+  expect(
+    manifest.promotions.map((entry) => {
+      return entry.packagePath
+    }),
+  ).toEqual(
+    assets.map((asset) => {
+      return asset.packagePath
+    }),
+  )
+  expect(invalidPromotion?.copied).toBe(false)
+  expect(invalidPromotion?.copiedAt).toBeNull()
+  expect(invalidPromotion?.copiedByteLength).toBeNull()
+  expect(invalidPromotion?.copiedChecksumSha256).toBeNull()
+  expect(await fileExists(invalidPromotion?.promotedPath ?? '')).toBe(false)
+  expect(
+    manifest.promotions
+      .filter((entry) => {
+        return entry.copied
+      })
+      .every((entry) => {
+        return entry.copiedByteLength === entry.byteLength && entry.copiedChecksumSha256 === entry.checksumSha256
+      }),
+  ).toBe(true)
 })
 
 test('project transfer commit promotion rejects source runtime asset URLs in committed article fields', async () => {

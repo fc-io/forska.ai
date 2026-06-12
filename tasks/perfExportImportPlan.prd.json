@@ -289,11 +289,12 @@
         "`bun run lint` passes."
       ],
       "priority": 13,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-012"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-014",
@@ -460,6 +461,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-06-12T21:14:07.123Z"
+    "updatedAt": "2026-06-12T21:25:10.415Z"
   }
 }

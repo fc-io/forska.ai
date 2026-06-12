@@ -1234,12 +1234,18 @@ const runProjectTransferCommitAppTableWrites = async ({
     )
     const phaseMetrics = getProjectTransferPerformanceMetrics({
       benchmark: {
+        correctnessChecks: {
+          assetPromotionReadCount: assetPromotion.value.metrics?.assetReadCount ?? projectTransferMetricUnavailable,
+          promotedAssetRereadCount:
+            assetPromotion.value.metrics?.promotedAssetRereadCount ?? projectTransferMetricUnavailable,
+        },
         finalAssetBytes: artifacts.analysis.assetSummary.actualByteLength,
         packageFingerprint: artifacts.analysis.packageFingerprint ?? undefined,
         schemaVersion,
       },
       bytes: {
         assetBytes: artifacts.analysis.assetSummary.actualByteLength,
+        assetPromotionBytes: assetPromotion.value.metrics?.assetByteLength,
         expandedArchiveBytes: artifacts.analysis.archive.expandedBytes,
         packageBytes: artifacts.analysis.archive.packageSizeBytes,
       },

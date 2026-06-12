@@ -10,6 +10,10 @@ import {
 } from '../src/server/services/projectTransfer/projectTransferAnalyze.ts'
 import type {ProjectTransferAnalyzeTargetRunner} from '../src/server/services/projectTransfer/projectTransferAnalyzeTarget.ts'
 import {revalidateProjectTransferCommitPlan} from '../src/server/services/projectTransfer/projectTransferCommit.ts'
+import {
+  promoteProjectTransferCommitAssets,
+  rollbackProjectTransferCommitPromotion,
+} from '../src/server/services/projectTransfer/projectTransferCommitRollback.ts'
 import type {ProjectTransferPlanSummary} from '../src/server/services/projectTransfer/projectTransferContracts.ts'
 import {
   getProjectTransferPackageFingerprint,
@@ -139,6 +143,9 @@ const textEncoder = new TextEncoder()
 const benchmarkSessionId = 'benchmark-project-transfer-session'
 const benchmarkAssetBytes = textEncoder.encode('benchmark-pdf')
 const articleHeavyRowCount = 1_000
+const assetHeavyAssetCount = 8
+const assetHeavyAssetByteLength = 4 * 1024 * 1024
+const assetHeavyPromotionConcurrency = 4
 
 const getEmptyAnalyzeTargetRunner = (): ProjectTransferAnalyzeTargetRunner => {
   return {
@@ -266,6 +273,56 @@ const getBenchmarkPlanSummary = ({
 
 const getBenchmarkArticleSignature = (index: number) => {
   return {identifierKeys: [], title: `Benchmark Article ${index}`}
+}
+
+const getAssetHeavyBenchmarkBytes = (index: number) => {
+  const bytes = new Uint8Array(assetHeavyAssetByteLength)
+  bytes.fill((index % 251) + 1)
+
+  return bytes
+}
+
+const getAssetHeavyPromotionAssets = () => {
+  return Array.from({length: assetHeavyAssetCount}, (_entry, index) => {
+    const bytes = getAssetHeavyBenchmarkBytes(index)
+
+    return {
+      byteLength: bytes.byteLength,
+      bytes,
+      checksumSha256: getProjectTransferSha256Checksum(bytes),
+      packagePath: `assets/source/asset-heavy-${String(index + 1).padStart(4, '0')}.pdf`,
+    }
+  })
+}
+
+const getAssetHeavyPayloads = ({
+  assets,
+  payloads,
+}: {
+  assets: ReturnType<typeof getAssetHeavyPromotionAssets>
+  payloads: ProjectTransferPayloadByKey
+}) => {
+  const [assetEntry] = payloads.assetManifest.entries
+
+  if (assetEntry === undefined) {
+    throw new Error('Project transfer benchmark asset fixture is incomplete')
+  }
+
+  return {
+    ...payloads,
+    assetManifest: {
+      ...payloads.assetManifest,
+      entries: assets.map((asset, index) => {
+        return {
+          ...assetEntry,
+          byteLength: asset.byteLength,
+          checksumSha256: asset.checksumSha256,
+          packagePath: asset.packagePath,
+          sortKey: `asset-heavy-${String(index + 1).padStart(4, '0')}`,
+        }
+      }),
+    },
+  }
 }
 
 const getArticleHeavyPayloads: ProjectTransferBenchmarkPayloadOverride = (payloads) => {
@@ -423,12 +480,14 @@ const getBenchmarkPackageCounts = (payloads: ProjectTransferPayloadByKey) => {
   )
 }
 
-const getBenchmarkTargetPlan = (): ProjectTransferImportPlanArtifact['targetPlan'] => {
+const getBenchmarkTargetPlan = (
+  assetPromotionPlan: ProjectTransferImportPlanArtifact['targetPlan']['assetPromotionPlan'] = [],
+): ProjectTransferImportPlanArtifact['targetPlan'] => {
   return {
     articleMatches: [],
     articleRoutePlan: [],
     articleUpdatePlan: [],
-    assetPromotionPlan: [],
+    assetPromotionPlan,
     duplicateImportMatches: [],
     projectPromptPlan: [],
     projectRoutePlan: [],
@@ -469,10 +528,12 @@ const getBenchmarkAnalysisArtifact = ({
 const getBenchmarkPlanArtifact = ({
   packageCounts,
   packageFingerprint,
+  targetPlan,
   targetState,
 }: {
   packageCounts: Record<ProjectTransferPayloadKey, number>
   packageFingerprint: string
+  targetPlan?: ProjectTransferImportPlanArtifact['targetPlan']
   targetState: ProjectTransferTargetStateDirtyTokenSnapshot
 }): ProjectTransferImportPlanArtifact => {
   const summary = getBenchmarkPlanSummary({packageCounts, packageFingerprint})
@@ -486,9 +547,23 @@ const getBenchmarkPlanArtifact = ({
     planRevision: 1,
     resolutionKinds: {},
     summary,
-    targetPlan: getBenchmarkTargetPlan(),
+    targetPlan: targetPlan ?? getBenchmarkTargetPlan(),
     targetState,
   }
+}
+
+const writeBenchmarkRuntimeFile = async ({
+  cwd,
+  path,
+  value,
+}: {
+  cwd: string
+  path: string
+  value: string | Uint8Array
+}) => {
+  const filePath = join(cwd, path)
+  await mkdir(dirname(filePath), {recursive: true})
+  await globalThis.Bun.write(filePath, value)
 }
 
 const writeBenchmarkUpload = async ({cwd, fixture}: {cwd: string; fixture: ProjectTransferBenchmarkFixture}) => {
@@ -519,6 +594,144 @@ const writeBenchmarkUpload = async ({cwd, fixture}: {cwd: string; fixture: Proje
       checksumSha256: zipPackage.checksumSha256,
       fileName: 'benchmark.zip',
     },
+  }
+}
+
+const getAssetHeavyPromotionPlan = ({
+  assets,
+  payloads,
+}: {
+  assets: ReturnType<typeof getAssetHeavyPromotionAssets>
+  payloads: ProjectTransferPayloadByKey
+}): ProjectTransferImportPlanArtifact['targetPlan']['assetPromotionPlan'] => {
+  const sourceArticleId = payloads.articles[0]?.sourceArticleId ?? 'benchmark-source-article'
+
+  return assets.map((asset) => {
+    return {
+      byteLength: asset.byteLength,
+      checksumSha256: asset.checksumSha256,
+      contentType: 'application/pdf',
+      fields: ['fullTextPdf'],
+      packagePath: asset.packagePath,
+      sourceArticleIds: [sourceArticleId],
+      targetArticleIds: [`new:${sourceArticleId}`],
+    }
+  })
+}
+
+const writeAssetHeavyPromotionArtifacts = async ({cwd}: {cwd: string}) => {
+  const layout = getProjectTransferImportTempLayout(benchmarkSessionId)
+  const assets = getAssetHeavyPromotionAssets()
+  const payloads = getAssetHeavyPayloads({assets, payloads: getBenchmarkPayloads('asset-heavy-package')})
+  const packageCounts = getBenchmarkPackageCounts(payloads)
+  const packageFingerprint = 'asset-heavy-package-promotion'
+  const targetState = getBenchmarkTargetStateSnapshot()
+  const plan = getBenchmarkPlanArtifact({
+    packageCounts,
+    packageFingerprint,
+    targetPlan: getBenchmarkTargetPlan(getAssetHeavyPromotionPlan({assets, payloads})),
+    targetState,
+  })
+
+  await Promise.all([
+    writeBenchmarkRuntimeFile({cwd, path: layout.planPath, value: JSON.stringify(plan)}),
+    writeBenchmarkRuntimeFile({
+      cwd,
+      path: `${layout.extractedPath}/${projectTransferPayloadPathByKey.articles}`,
+      value: serializeProjectTransferPayload('articles', payloads.articles),
+    }),
+    ...assets.map((asset) => {
+      return writeBenchmarkRuntimeFile({cwd, path: `${layout.extractedPath}/${asset.packagePath}`, value: asset.bytes})
+    }),
+  ])
+
+  return {assets, layout, packageFingerprint, payloads}
+}
+
+const getBenchmarkRatePerSecond = ({
+  durationMs,
+  value,
+}: {
+  durationMs: number | typeof projectTransferMetricUnavailable
+  value: number | typeof projectTransferMetricUnavailable
+}) => {
+  return typeof durationMs === 'number' && durationMs > 0 && typeof value === 'number'
+    ? Number((value / (durationMs / 1000)).toFixed(2))
+    : projectTransferMetricUnavailable
+}
+
+const getBenchmarkMetricTotal = (
+  values: readonly (number | typeof projectTransferMetricUnavailable)[],
+) => {
+  const knownValues = values.filter((value): value is number => {
+    return typeof value === 'number'
+  })
+
+  return knownValues.length === 0
+    ? projectTransferMetricUnavailable
+    : knownValues.reduce((total, value) => {
+        return total + value
+      }, 0)
+}
+
+const runAssetHeavyPromotionBenchmark = async () => {
+  const cwd = mkdtempSync(join(tmpdir(), `f2-project-transfer-asset-promotion-benchmark-${process.pid}-`))
+
+  try {
+    const {assets, layout, packageFingerprint, payloads} = await writeAssetHeavyPromotionArtifacts({cwd})
+    const promotion = await measureProjectTransferPhase('assetPromotion', () => {
+      return promoteProjectTransferCommitAssets({
+        cwd,
+        layout,
+        maxConcurrency: assetHeavyPromotionConcurrency,
+        now: new Date('2026-06-12T00:00:00.000Z'),
+        sessionId: benchmarkSessionId,
+      })
+    })
+    const cleanup = await measureProjectTransferPhase('cleanup', () => {
+      return rollbackProjectTransferCommitPromotion({
+        cwd,
+        manifest: promotion.value.manifest,
+        sessionId: benchmarkSessionId,
+      })
+    })
+    const assetByteLength =
+      promotion.value.metrics?.assetByteLength
+      ?? assets.reduce((total, asset) => {
+        return total + asset.byteLength
+      }, 0)
+
+    return getProjectTransferPerformanceMetrics({
+      benchmark: {
+        bytesPerSecond: getBenchmarkRatePerSecond({
+          durationMs: promotion.timing.durationMs,
+          value: assetByteLength,
+        }),
+        correctnessChecks: {
+          assetPromotionReadCount: promotion.value.metrics?.assetReadCount ?? projectTransferMetricUnavailable,
+          boundedConcurrency: promotion.value.metrics?.boundedConcurrency ?? projectTransferMetricUnavailable,
+          copiedAssetCount: promotion.value.metrics?.copiedAssetCount ?? projectTransferMetricUnavailable,
+          promotedAssetRereadCount:
+            promotion.value.metrics?.promotedAssetRereadCount ?? projectTransferMetricUnavailable,
+          rollbackDeletedPromotedAssetCount: cleanup.value.deletedPromotedAssetCount,
+          rollbackSkippedPromotedAssetCount: cleanup.value.skippedPromotedAssetCount,
+        },
+        finalAssetBytes: assetByteLength,
+        packageFingerprint,
+        schemaVersion: 1,
+        temporaryDiskBytes: assetByteLength * 2,
+        wallTimeMs: getBenchmarkMetricTotal([promotion.timing.durationMs, cleanup.timing.durationMs]),
+      },
+      bytes: {
+        assetBytes: assetByteLength,
+        assetPromotionBytes: assetByteLength,
+      },
+      operation: 'import',
+      phases: {assetPromotion: promotion.timing, cleanup: cleanup.timing},
+      rows: getProjectTransferPerformanceRowCountersFromPayloads(payloads),
+    })
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
   }
 }
 
@@ -585,7 +798,11 @@ const runReuseHeavyRevalidationBenchmark = async () => {
 
 const generatedBenchmarkMetricsByFixture: Partial<
   Record<ProjectTransferBenchmarkFixture, ProjectTransferGeneratedBenchmarkMetrics>
-> = {'article-heavy-package': runBenchmarkFixture, 'reuse-heavy-package': runReuseHeavyRevalidationBenchmark}
+> = {
+  'article-heavy-package': runBenchmarkFixture,
+  'asset-heavy-package': runAssetHeavyPromotionBenchmark,
+  'reuse-heavy-package': runReuseHeavyRevalidationBenchmark,
+}
 
 const getGeneratedBenchmarkMetrics = (args: ProjectTransferBenchmarkArgs) => {
   const generator = generatedBenchmarkMetricsByFixture[args.fixture]
