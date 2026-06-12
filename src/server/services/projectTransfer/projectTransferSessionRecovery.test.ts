@@ -34,6 +34,7 @@ const getRecoveryScript = (body: string) => {
     } = await import('./src/server/services/projectTransfer/projectTransferSession.ts')
     const {getProjectTransferSessionRecoveryService} = await import('./src/server/services/projectTransfer/projectTransferSessionRecovery.ts')
     const {getProjectTransferSessionRepository} = await import('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
+    const {getProjectTransferImportStagingLayout} = await import('./src/server/services/projectTransfer/projectTransferStaging.ts')
 
     const runtimeRoot = process.env.TRANSFER_RUNTIME_ROOT
     if (!runtimeRoot) {
@@ -327,6 +328,61 @@ test('project transfer recovery prunes expired terminal-cleaned session rows', (
 
   expect(result.recoveryResult.scannedSessionCount).toBe(0)
   expect(result.remainingIds).toEqual(['terminal-cleaned-fresh'])
+})
+
+test('project transfer recovery removes stale staging revisions for ownerless ready imports', () => {
+  const result = runRecoveryScript<{
+    currentRevisionExists: boolean
+    recoveryResult: {cleanupStaleStagingRevisionCount: number; scannedSessionCount: number}
+    staleRevisionExists: boolean
+    state: string
+  }>(`
+    const sessionId = 'session-stale-staging'
+    const layout = getProjectTransferImportTempLayout(sessionId)
+    const staleLayout = getProjectTransferImportStagingLayout({layout, stagingRevision: 1})
+    const currentLayout = getProjectTransferImportStagingLayout({layout, stagingRevision: 2})
+
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt: futureAt,
+      id: sessionId,
+      progress: {
+        phase: 'analyze',
+        staging: {stagingRevision: 2},
+        stagingRevision: 2,
+        status: 'completed',
+      },
+      state: 'ready_to_commit',
+    })
+    await writeRuntimeFile(staleLayout.planPath)
+    await writeRuntimeFile(currentLayout.planPath)
+
+    const recoveryResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: runtimeRoot,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const [row] = await database.queryJson(\`
+      SELECT state
+      FROM app.project_transfer_session
+      WHERE id = 'session-stale-staging'
+    \`)
+
+    console.log(JSON.stringify({
+      currentRevisionExists: await fileExists(currentLayout.planPath),
+      recoveryResult,
+      staleRevisionExists: await fileExists(staleLayout.planPath),
+      state: row.state,
+    }))
+  `)
+
+  expect(result.recoveryResult.scannedSessionCount).toBe(0)
+  expect(result.recoveryResult.cleanupStaleStagingRevisionCount).toBe(1)
+  expect(result.currentRevisionExists).toBe(true)
+  expect(result.staleRevisionExists).toBe(false)
+  expect(result.state).toBe('ready_to_commit')
 })
 
 test('project transfer recovery fails stale export workers but keeps ready artifacts until public expiry', () => {

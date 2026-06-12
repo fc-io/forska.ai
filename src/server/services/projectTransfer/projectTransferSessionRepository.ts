@@ -42,8 +42,11 @@ type ProjectTransferOwnerTokenCondition = {expectedOwnerToken?: string | null}
 
 type ProjectTransferPlanRevisionCondition = {expectedPlanRevision?: number}
 
+type ProjectTransferStagingRevisionCondition = {expectedStagingRevision?: number | null}
+
 type TransitionProjectTransferSessionStateParams = ProjectTransferOwnerTokenCondition
-  & ProjectTransferPlanRevisionCondition & {
+  & ProjectTransferPlanRevisionCondition
+  & ProjectTransferStagingRevisionCondition & {
     commitId?: string | null
     completionPayload?: ProjectTransferCompletionPayload | null
     error?: unknown
@@ -61,6 +64,7 @@ type TransitionProjectTransferSessionStateParams = ProjectTransferOwnerTokenCond
 
 type UpdateProjectTransferSessionPlanParams = ProjectTransferOwnerTokenCondition & {
   expectedPlanRevision: number
+  expectedStagingRevision?: number | null
   nextOwnerToken?: null
   nextState?: ProjectTransferSessionState
   now?: Date
@@ -264,6 +268,26 @@ const getPlanRevisionCondition = (expectedPlanRevision: number | undefined) => {
   return expectedPlanRevision === undefined ? null : `plan_revision = ${expectedPlanRevision}`
 }
 
+const getStagingRevisionJsonSql = () => {
+  return "COALESCE(progress_json->>'stagingRevision', progress_json->'staging'->>'stagingRevision', progress_json->'staging'->>'currentRevision')"
+}
+
+const getStagingRevisionCondition = (expectedStagingRevision: number | null | undefined) => {
+  if (expectedStagingRevision === undefined) {
+    return null
+  }
+
+  if (expectedStagingRevision === null) {
+    return `${getStagingRevisionJsonSql()} IS NULL`
+  }
+
+  if (!Number.isInteger(expectedStagingRevision) || expectedStagingRevision < 0) {
+    throw new Error('Project transfer expected stagingRevision must be a non-negative integer')
+  }
+
+  return `TRY_CAST(${getStagingRevisionJsonSql()} AS INTEGER) = ${expectedStagingRevision}`
+}
+
 const getOwnerClaimLeaseMs = (leaseMs: number | undefined) => {
   if (leaseMs === undefined) {
     return defaultProjectTransferOwnerLeaseMs
@@ -434,6 +458,7 @@ const transitionProjectTransferSessionState = async (params: TransitionProjectTr
   const optionalConditions = getOptionalConditionsSql([
     getPlanRevisionCondition(params.expectedPlanRevision),
     getOwnerTokenCondition(params.expectedOwnerToken),
+    getStagingRevisionCondition(params.expectedStagingRevision),
   ])
   const [row] = await runner.queryJson<ProjectTransferSessionRow>(`
     UPDATE app.project_transfer_session
@@ -462,6 +487,7 @@ const updateProjectTransferSessionPlanRevision = async (params: UpdateProjectTra
 
   const currentNow = getNow(params.now)
   const ownerCondition = getOwnerTokenCondition(params.expectedOwnerToken)
+  const stagingCondition = getStagingRevisionCondition(params.expectedStagingRevision)
   const [row] = await runner.queryJson<ProjectTransferSessionRow>(`
     UPDATE app.project_transfer_session
     SET
@@ -475,6 +501,7 @@ const updateProjectTransferSessionPlanRevision = async (params: UpdateProjectTra
     WHERE id = ${getSqlLiteral(params.sessionId)}
       AND plan_revision = ${params.expectedPlanRevision}
       ${ownerCondition ? `AND ${ownerCondition}` : ''}
+      ${stagingCondition ? `AND ${stagingCondition}` : ''}
     RETURNING ${getProjectTransferSessionSelectSql()}
   `)
 

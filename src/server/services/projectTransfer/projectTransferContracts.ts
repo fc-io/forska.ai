@@ -159,6 +159,20 @@ export type ProjectTransferProgressPhase =
 
 export type ProjectTransferProgressStatus = 'completed' | 'failed' | 'pending' | 'running'
 
+export type ProjectTransferStagingProgressPayload = {
+  artifactByteLengths?: Record<string, number>
+  artifactChecksums?: Record<string, string>
+  blockerCount?: number
+  currentRevision?: number
+  packageCounts?: Record<string, number>
+  packageFingerprint?: string | null
+  path?: string
+  planRevision?: number
+  publishedAt?: string
+  stagingRevision: number
+  warningCount?: number
+}
+
 export type ProjectTransferProgressPayload = {
   bytesProcessed?: number | null
   bytesTotal?: number | null
@@ -174,6 +188,8 @@ export type ProjectTransferProgressPayload = {
   rowCountProcessed?: number | null
   rowCountTotal?: number | null
   startedAt?: string | null
+  staging?: ProjectTransferStagingProgressPayload | null
+  stagingRevision?: number | null
   status: ProjectTransferProgressStatus
   totalBytes?: number | null
   totalItems?: number | null

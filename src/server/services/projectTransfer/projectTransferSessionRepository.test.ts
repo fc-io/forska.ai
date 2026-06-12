@@ -299,6 +299,98 @@ test('project transfer session plan revision update can publish final analyze st
   })
 })
 
+test('project transfer session staging revision publish and reviewed-plan validation are atomic', () => {
+  const result = runSessionRepositoryScript<{
+    currentPlanRevision: number | null
+    currentStagingRevision: number | null
+    currentState: string | null
+    freshClaimState: string | null
+    freshUpdateRevision: number | null
+    publishedRevision: number | null
+    publishedStagingRevision: number | null
+    staleClaim: unknown
+    staleUpdate: unknown
+  }>(`
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt,
+      id: 'session-staging-revision',
+      state: 'awaiting_resolution',
+    })
+
+    const published = await sessionRepository.updateProjectTransferSessionPlanRevision({
+      expectedPlanRevision: 0,
+      expectedStagingRevision: null,
+      nextState: 'awaiting_resolution',
+      planSummary: {...readyPlan, dependencyStatuses: {model: 'missing'}},
+      progress: {
+        phase: 'analyze',
+        staging: {stagingRevision: 7},
+        stagingRevision: 7,
+        status: 'completed',
+      },
+      sessionId: 'session-staging-revision',
+    })
+    const staleUpdate = await sessionRepository.updateProjectTransferSessionPlanRevision({
+      expectedPlanRevision: 1,
+      expectedStagingRevision: 6,
+      nextState: 'ready_to_commit',
+      planSummary: readyPlan,
+      sessionId: 'session-staging-revision',
+    })
+    const freshUpdate = await sessionRepository.updateProjectTransferSessionPlanRevision({
+      expectedPlanRevision: 1,
+      expectedStagingRevision: 7,
+      nextState: 'ready_to_commit',
+      planSummary: readyPlan,
+      sessionId: 'session-staging-revision',
+    })
+    const staleClaim = await sessionRepository.transitionProjectTransferSessionState({
+      commitId: 'commit-stale-staging',
+      expectedOwnerToken: null,
+      expectedPlanRevision: 2,
+      expectedStagingRevision: 6,
+      expectedState: 'ready_to_commit',
+      nextOwnerToken: 'owner-stale',
+      nextState: 'committing',
+      sessionId: 'session-staging-revision',
+    })
+    const freshClaim = await sessionRepository.transitionProjectTransferSessionState({
+      commitId: 'commit-fresh-staging',
+      expectedOwnerToken: null,
+      expectedPlanRevision: 2,
+      expectedStagingRevision: 7,
+      expectedState: 'ready_to_commit',
+      nextOwnerToken: 'owner-fresh',
+      nextState: 'committing',
+      sessionId: 'session-staging-revision',
+    })
+    const current = await sessionRepository.getProjectTransferSession({sessionId: 'session-staging-revision'})
+
+    console.log(JSON.stringify({
+      currentPlanRevision: current?.planRevision ?? null,
+      currentStagingRevision: current?.progressJson?.stagingRevision ?? null,
+      currentState: current?.state ?? null,
+      freshClaimState: freshClaim?.state ?? null,
+      freshUpdateRevision: freshUpdate?.planRevision ?? null,
+      publishedRevision: published?.planRevision ?? null,
+      publishedStagingRevision: published?.progressJson?.stagingRevision ?? null,
+      staleClaim,
+      staleUpdate,
+    }))
+  `)
+
+  expect(result.publishedRevision).toBe(1)
+  expect(result.publishedStagingRevision).toBe(7)
+  expect(result.staleUpdate).toBeNull()
+  expect(result.freshUpdateRevision).toBe(2)
+  expect(result.staleClaim).toBeNull()
+  expect(result.freshClaimState).toBe('committing')
+  expect(result.currentState).toBe('committing')
+  expect(result.currentPlanRevision).toBe(2)
+  expect(result.currentStagingRevision).toBe(7)
+})
+
 test('project transfer ready transitions validate the explicitly persisted plan summary', () => {
   const result = runSessionRepositoryScript<{
     currentPlanSummary: unknown

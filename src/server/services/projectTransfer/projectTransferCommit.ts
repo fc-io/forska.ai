@@ -25,6 +25,7 @@ import {
   getProjectTransferCommitExecutionMode,
   parseProjectTransferCompletionPayload,
   parseProjectTransferPlanSummary,
+  parseProjectTransferProgressPayload,
   type ProjectTransferCompletionPayload,
   type ProjectTransferExecutionMode,
   type ProjectTransferImportCompletionPayload,
@@ -61,6 +62,11 @@ import {
 import {projectTransferPayloadKeys, projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 import {getProjectTransferImportTempLayout, type ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 import {getProjectTransferSessionRepository} from './projectTransferSessionRepository.ts'
+import {
+  getProjectTransferCurrentImportStagingLayout,
+  getProjectTransferProgressStagingRevision,
+  validateProjectTransferReviewedPlanStagingRevision,
+} from './projectTransferStaging.ts'
 
 type RuntimePathOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
 
@@ -251,10 +257,21 @@ const readJsonArtifact = async <TValue>(input: RuntimePathOptions & {pathValue: 
 }
 
 export const loadProjectTransferCommitArtifacts = async ({
+  session,
   sessionId,
   ...runtimeOptions
-}: RuntimePathOptions & {sessionId: string}): Promise<ProjectTransferCommitArtifacts> => {
-  const layout = getProjectTransferImportTempLayout(sessionId)
+}: RuntimePathOptions & {
+  session?: ProjectTransferSessionRecord
+  sessionId: string
+}): Promise<ProjectTransferCommitArtifacts> => {
+  const baseLayout = getProjectTransferImportTempLayout(sessionId)
+  const layout =
+    session === undefined
+      ? baseLayout
+      : getProjectTransferCurrentImportStagingLayout({
+          layout: baseLayout,
+          progress: parseProjectTransferProgressPayload(session.progressJson),
+        })
   const [analysis, plan] = await Promise.all([
     readJsonArtifact({...runtimeOptions, pathValue: layout.analysisPath}),
     readJsonArtifact({...runtimeOptions, pathValue: layout.planPath}),
@@ -538,9 +555,15 @@ const assertArtifactConsistency = ({
   session: ProjectTransferSessionRecord
 }) => {
   const sessionPlanSummary = parseProjectTransferPlanSummary(session.planSummaryJson)
+  const progress = parseProjectTransferProgressPayload(session.progressJson)
+  const stagingValidation = validateProjectTransferReviewedPlanStagingRevision({plan, progress})
 
   if (requestPlanRevision !== session.planRevision) {
     return {error: 'Project transfer commit request planRevision is stale', ok: false as const}
+  }
+
+  if (!stagingValidation.ok) {
+    return {error: stagingValidation.error, ok: false as const}
   }
 
   if (plan.planRevision !== session.planRevision) {
@@ -767,6 +790,7 @@ const getCommitProgress = ({
   percent,
   performanceMetrics,
   planRevision,
+  stagingRevision,
   status,
 }: {
   artifacts: ProjectTransferCommitArtifacts
@@ -777,10 +801,12 @@ const getCommitProgress = ({
   percent: number
   performanceMetrics?: ProjectTransferPerformanceMetrics
   planRevision: number
+  stagingRevision?: number | null
   status: ProjectTransferProgressPayload['status']
 }): ProjectTransferProgressPayload => {
   const totalBytes = getExtractedAssetBytes(artifacts.analysis)
   const totalRows = getCommitRowCount(artifacts.plan)
+  const planStagingRevision = stagingRevision ?? artifacts.plan.stagingRevision ?? null
 
   return {
     bytesProcessed: completedBytes,
@@ -795,6 +821,7 @@ const getCommitProgress = ({
     startedAt: now.toISOString(),
     rowCountProcessed: completedRows,
     rowCountTotal: totalRows,
+    ...(planStagingRevision === null ? {} : {stagingRevision: planStagingRevision}),
     status,
     totalBytes,
     totalRows,
@@ -889,6 +916,7 @@ const persistPreClaimStalePlan = async ({
   const updated = await repositories.sessionRepository.updateProjectTransferSessionPlanRevision({
     expectedOwnerToken: null,
     expectedPlanRevision: artifacts.plan.planRevision,
+    expectedStagingRevision: artifacts.plan.stagingRevision ?? null,
     nextState: 'awaiting_resolution',
     now,
     planSummary: nextPlan.summary,
@@ -1030,7 +1058,7 @@ const runProjectTransferCommitAppTableWrites = async ({
   })
   const payloads = stagingLoad.value
   const assetPromotion = await measureProjectTransferPhase('assetPromotion', () => {
-    return promoteProjectTransferCommitAssets({...runtimeOptions, now, sessionId})
+    return promoteProjectTransferCommitAssets({...runtimeOptions, layout: artifacts.layout, now, sessionId})
   })
 
   try {
@@ -1368,8 +1396,11 @@ export const commitProjectTransferImportSession = async ({
     return invalidSession
   }
 
-  const artifacts = await loadProjectTransferCommitArtifacts({...runtimeOptions, sessionId})
+  const artifacts = await loadProjectTransferCommitArtifacts({...runtimeOptions, session: current, sessionId})
   const executionMode = getCommitExecutionMode(artifacts)
+  const expectedStagingRevision = getProjectTransferProgressStagingRevision(
+    parseProjectTransferProgressPayload(current.progressJson),
+  )
   const artifactConsistency = assertArtifactConsistency({
     plan: artifacts.plan,
     requestPlanRevision: revision.planRevision,
@@ -1423,6 +1454,7 @@ export const commitProjectTransferImportSession = async ({
     commitId,
     expectedOwnerToken: null,
     expectedPlanRevision: revision.planRevision,
+    expectedStagingRevision,
     expectedState: 'ready_to_commit',
     nextOwnerLeaseMs: 60_000,
     nextOwnerToken: ownerToken,

@@ -56,6 +56,12 @@ import {
   toProjectTransferSessionResponse,
 } from '../services/projectTransfer/projectTransferSession.ts'
 import {getProjectTransferSessionRepository} from '../services/projectTransfer/projectTransferSessionRepository.ts'
+import {
+  getProjectTransferCurrentImportStagingLayout,
+  getProjectTransferProgressStagingRevision,
+  getProjectTransferProgressWithStaging,
+  validateProjectTransferReviewedPlanStagingRevision,
+} from '../services/projectTransfer/projectTransferStaging.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
 type ProjectTransferExportNonReadyStatus = 'assembling' | 'packaging' | 'queued'
@@ -504,13 +510,28 @@ const canCommitImportSession = (response: ProjectTransferSessionResponse) => {
   return response.state === 'ready_to_commit' && validateProjectTransferPlanReadyToCommit(response.planSummary).ok
 }
 
-const readImportPlanArtifact = async (sessionId: string): Promise<ProjectTransferImportPlanArtifact | null> => {
-  const planPath = resolveProjectTransferTempWritablePath({
-    pathValue: getProjectTransferImportTempLayout(sessionId).planPath,
+const readImportPlanArtifact = async (
+  response: ProjectTransferSessionResponse,
+): Promise<ProjectTransferImportPlanArtifact | null> => {
+  const layout = getProjectTransferCurrentImportStagingLayout({
+    layout: getProjectTransferImportTempLayout(response.id),
+    progress: response.progress,
   })
+  const planPath = resolveProjectTransferTempWritablePath({pathValue: layout.planPath})
   const planFile = globalThis.Bun.file(planPath)
 
   return (await planFile.exists()) ? (JSON.parse(await planFile.text()) as ProjectTransferImportPlanArtifact) : null
+}
+
+const validateCurrentImportPlanArtifact = (
+  response: ProjectTransferSessionResponse,
+  plan: ProjectTransferImportPlanArtifact | null,
+) => {
+  if (plan === null) {
+    return {error: 'Project transfer import plan artifact is unavailable', ok: false as const}
+  }
+
+  return validateProjectTransferReviewedPlanStagingRevision({plan, progress: response.progress})
 }
 
 const getImportSessionData = (
@@ -562,7 +583,7 @@ const getImportSessionResponseFromRecord = async (
     return getProjectTransferApiError(set, sessionError.status, sessionError.error)
   }
 
-  const plan = await readImportPlanArtifact(response.id)
+  const plan = await readImportPlanArtifact(response)
 
   return {data: getImportSessionData(response, plan, executionMode), error: null}
 }
@@ -644,7 +665,17 @@ const getAutoResolvedImportSessionRecord = async (
     return record
   }
 
-  const layout = getProjectTransferImportTempLayout(record.id)
+  const layout = getProjectTransferCurrentImportStagingLayout({
+    layout: getProjectTransferImportTempLayout(record.id),
+    progress: response.progress,
+  })
+  const plan = await readImportPlanArtifact(response)
+  const planValidation = validateCurrentImportPlanArtifact(response, plan)
+
+  if (!planValidation.ok) {
+    return record
+  }
+
   const result = await resolveProjectTransferDependencies({
     deferPlanWrite: true,
     layout,
@@ -658,6 +689,7 @@ const getAutoResolvedImportSessionRecord = async (
 
   const updated = await getProjectTransferSessionRepository().updateProjectTransferSessionPlanRevision({
     expectedPlanRevision: record.planRevision,
+    expectedStagingRevision: getProjectTransferProgressStagingRevision(response.progress),
     nextState: getImportAnalyzeNextState(result.planSummary),
     now: new Date(),
     planSummary: result.planSummary,
@@ -1001,16 +1033,18 @@ const getCompletedAnalyzeProgress = ({
   now,
   performanceMetrics,
   planSummary,
+  staging,
   upload,
 }: {
   now: Date
   performanceMetrics?: ProjectTransferPerformanceMetrics
   planSummary: ProjectTransferPlanSummary
+  staging?: Awaited<ReturnType<typeof analyzeProjectTransferImportPackage>>['staging']
   upload: ProjectTransferUploadMetadataPayload | null
 }) => {
   const rowCount = getImportPlanRowCount(planSummary)
 
-  return {
+  const progress = {
     ...getAnalyzeProgress({now, performanceMetrics, phase: 'analyze', status: 'completed', upload}),
     completedRows: rowCount,
     rowCountProcessed: rowCount,
@@ -1018,6 +1052,8 @@ const getCompletedAnalyzeProgress = ({
     totalRows: rowCount,
     warningCount: planSummary.warningCount,
   }
+
+  return staging === undefined ? progress : getProjectTransferProgressWithStaging({progress, publishedAt: now, staging})
 }
 
 const getImportAnalyzeNextState = (planSummary: ProjectTransferPlanSummary) => {
@@ -1074,12 +1110,14 @@ const runProjectTransferImportAnalyzeJob = async ({ownerToken, sessionId}: {owne
     now: completedAt,
     performanceMetrics: analysis.analysis.performanceMetrics,
     planSummary: analysis.planSummary,
+    staging: analysis.staging,
     upload,
   })
   const nextState = getImportAnalyzeNextState(analysis.planSummary)
   const planned = await repository.updateProjectTransferSessionPlanRevision({
     expectedOwnerToken: ownerToken,
     expectedPlanRevision: analyzing.planRevision,
+    expectedStagingRevision: null,
     nextOwnerToken: null,
     nextState,
     now: completedAt,
@@ -1360,12 +1398,23 @@ const getImportSession = async (
   const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId})
 
   if (record !== null && (record.state === 'awaiting_resolution' || record.state === 'ready_to_commit')) {
-    const layout = getProjectTransferImportTempLayout(sessionId)
+    const response = toProjectTransferSessionResponse(record)
+    const layout = getProjectTransferCurrentImportStagingLayout({
+      layout: getProjectTransferImportTempLayout(sessionId),
+      progress: response.progress,
+    })
     const hasPlanArtifact = await globalThis.Bun.file(
       resolveProjectTransferTempWritablePath({pathValue: layout.planPath}),
     ).exists()
 
     if (!hasPlanArtifact) {
+      return failImportSessionForUnavailableArtifacts({record, set})
+    }
+
+    const plan = await readImportPlanArtifact(response)
+    const planValidation = validateCurrentImportPlanArtifact(response, plan)
+
+    if (!planValidation.ok) {
       return failImportSessionForUnavailableArtifacts({record, set})
     }
   }
@@ -1600,7 +1649,22 @@ const resolveImportDependencies = async (
     return getProjectTransferApiError(set, 409, 'Project transfer import session is not awaiting dependency resolution')
   }
 
-  const layout = getProjectTransferImportTempLayout(sessionId)
+  const layout = getProjectTransferCurrentImportStagingLayout({
+    layout: getProjectTransferImportTempLayout(sessionId),
+    progress: response.data.progress,
+  })
+  const plan = await readImportPlanArtifact(response.data)
+
+  if (plan === null) {
+    return failImportSessionForUnavailableArtifacts({record, set})
+  }
+
+  const planValidation = validateCurrentImportPlanArtifact(response.data, plan)
+
+  if (!planValidation.ok) {
+    return getProjectTransferApiError(set, 409, planValidation.error)
+  }
+
   const dependencyResolutionMeasurement = await measureProjectTransferPhase('dependencyResolution', () => {
     return resolveProjectTransferDependencies({
       deferPlanWrite: true,
@@ -1639,6 +1703,7 @@ const resolveImportDependencies = async (
   )
   const updated = await getProjectTransferSessionRepository().updateProjectTransferSessionPlanRevision({
     expectedPlanRevision: response.data.planRevision,
+    expectedStagingRevision: getProjectTransferProgressStagingRevision(response.data.progress),
     nextState: getImportAnalyzeNextState(result.planSummary),
     now: new Date(),
     planSummary: result.planSummary,

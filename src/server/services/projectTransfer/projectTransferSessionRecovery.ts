@@ -24,6 +24,7 @@ import {
   parseProjectTransferCompletionPayload,
   projectTransferTerminalStates,
 } from './projectTransferSession.ts'
+import {removeProjectTransferStaleStagingRevisions} from './projectTransferStaging.ts'
 
 type ProjectTransferSessionRecoveryRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -71,6 +72,7 @@ type ProjectTransferPromotedAssetCleanupResult = {deletedPromotedAssetCount: num
 
 type ProjectTransferSessionRecoveryResult = ProjectTransferPromotedAssetCleanupResult & {
   cleanupTempArtifactCount: number
+  cleanupStaleStagingRevisionCount: number
   expiredSessionCount: number
   recoveredCompletionCount: number
   scannedSessionCount: number
@@ -79,7 +81,10 @@ type ProjectTransferSessionRecoveryResult = ProjectTransferPromotedAssetCleanupR
 
 type ProjectTransferCleanupCounts = Pick<
   ProjectTransferSessionRecoveryResult,
-  'cleanupTempArtifactCount' | 'deletedPromotedAssetCount' | 'skippedPromotedAssetCount'
+  | 'cleanupStaleStagingRevisionCount'
+  | 'cleanupTempArtifactCount'
+  | 'deletedPromotedAssetCount'
+  | 'skippedPromotedAssetCount'
 >
 
 type ProjectTransferCleanupFailure = {error: unknown; plan: ProjectTransferRecoveryCleanupPlan}
@@ -101,6 +106,7 @@ const terminalStateListSql = getQuotedStringList([...projectTransferTerminalStat
 const emptyRecoveryResult = (skippedActiveWriterCheck: boolean): ProjectTransferSessionRecoveryResult => {
   return {
     cleanupTempArtifactCount: 0,
+    cleanupStaleStagingRevisionCount: 0,
     deletedPromotedAssetCount: 0,
     expiredSessionCount: 0,
     recoveredCompletionCount: 0,
@@ -108,6 +114,10 @@ const emptyRecoveryResult = (skippedActiveWriterCheck: boolean): ProjectTransfer
     skippedActiveWriterCheck,
     skippedPromotedAssetCount: 0,
   }
+}
+
+const getStagingRevisionJsonSql = () => {
+  return "COALESCE(progress_json->>'stagingRevision', progress_json->'staging'->>'stagingRevision', progress_json->'staging'->>'currentRevision')"
 }
 
 const getRecoveryBatchSize = (batchSize: number | undefined) => {
@@ -795,7 +805,7 @@ const cleanupRecoveredSessionArtifacts = async ({
   const promotedAssetCleanup = await removePromotedAssets({plan, runtimeOptions})
   const cleanupTempArtifactCount = plan.deleteTempArtifacts ? await removeTempArtifacts({plan, runtimeOptions}) : 0
 
-  return {...promotedAssetCleanup, cleanupTempArtifactCount}
+  return {...promotedAssetCleanup, cleanupStaleStagingRevisionCount: 0, cleanupTempArtifactCount}
 }
 
 const getRecoveryCounts = (
@@ -881,6 +891,7 @@ const writeProjectTransferRecoveryRuntimeEvents = ({
 
 const emptyCleanupResult = (): ProjectTransferCleanupResult => {
   return {
+    cleanupStaleStagingRevisionCount: 0,
     cleanupTempArtifactCount: 0,
     deletedPromotedAssetCount: 0,
     failedPlans: [],
@@ -952,6 +963,8 @@ const getCleanupCounts = async ({
     counts.successfulPlans.push(plan)
 
     return {
+      cleanupStaleStagingRevisionCount:
+        counts.cleanupStaleStagingRevisionCount + cleanup.result.cleanupStaleStagingRevisionCount,
       cleanupTempArtifactCount: counts.cleanupTempArtifactCount + cleanup.result.cleanupTempArtifactCount,
       deletedPromotedAssetCount: counts.deletedPromotedAssetCount + cleanup.result.deletedPromotedAssetCount,
       failedPlans: counts.failedPlans,
@@ -1020,6 +1033,46 @@ const pruneExpiredTerminalSessions = async ({
   `)
 }
 
+const cleanupStaleLiveImportStagingRevisions = async ({
+  batchSize,
+  now,
+  runtimeOptions,
+  runner,
+}: {
+  batchSize: number
+  now: Date
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+  runner: ProjectTransferSessionRecoveryRunner
+}) => {
+  const rows = await runner.queryJson<{id: string; stagingRevision: number}>(`
+    SELECT
+      id,
+      TRY_CAST(${getStagingRevisionJsonSql()} AS INTEGER) AS stagingRevision
+    FROM app.project_transfer_session
+    WHERE direction = 'import'
+      AND state IN ('awaiting_resolution', 'ready_to_commit')
+      AND owner_token IS NULL
+      AND expires_at > ${getTimestampLiteral(now)}
+      AND ${getStagingRevisionJsonSql()} IS NOT NULL
+      AND TRY_CAST(${getStagingRevisionJsonSql()} AS INTEGER) IS NOT NULL
+    ORDER BY updated_at ASC, id ASC
+    LIMIT ${batchSize}
+  `)
+
+  return rows.reduce<Promise<number>>(async (promise, row) => {
+    const count = await promise
+
+    return (
+      count
+      + (await removeProjectTransferStaleStagingRevisions({
+        currentStagingRevision: row.stagingRevision,
+        layout: getProjectTransferImportTempLayout(row.id),
+        runtimeOptions,
+      }))
+    )
+  }, Promise.resolve(0))
+}
+
 const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionRecoveryParams = {}) => {
   const isActiveWriter = params.isActiveWriter ?? canCurrentServerOwnDuckdb
 
@@ -1073,12 +1126,20 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
   const cleanupCounts = await getCleanupCounts({plans, runtimeOptions: {cwd: params.cwd, envValues: params.envValues}})
   const {failedPlans, successfulPlans, ...cleanupResultCounts} = cleanupCounts
   await markTerminalCleanupComplete({now, plans: successfulPlans, runner})
+  const cleanupStaleStagingRevisionCount = await cleanupStaleLiveImportStagingRevisions({
+    batchSize,
+    now,
+    runner,
+    runtimeOptions: {cwd: params.cwd, envValues: params.envValues},
+  })
   await pruneExpiredTerminalSessions({batchSize, now, runner})
   throwFailedCleanupPlans(failedPlans)
 
   return {
     ...recoveryCounts,
     ...cleanupResultCounts,
+    cleanupStaleStagingRevisionCount:
+      cleanupResultCounts.cleanupStaleStagingRevisionCount + cleanupStaleStagingRevisionCount,
     scannedSessionCount: sessions.length,
     skippedActiveWriterCheck: false,
   }

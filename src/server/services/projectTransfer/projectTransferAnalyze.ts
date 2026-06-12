@@ -12,6 +12,7 @@ import {
   type ProjectTransferDependencyStatus,
   type ProjectTransferPlanBlocker,
   type ProjectTransferPlanSummary,
+  type ProjectTransferStagingProgressPayload,
   type ProjectTransferUploadMetadataPayload,
   validateProjectTransferPlanReadyToCommit,
   validateProjectTransferResourceGates,
@@ -57,6 +58,11 @@ import {
 } from './projectTransferSchemas.ts'
 import type {ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 import {
+  getProjectTransferImportStagingLayout,
+  mirrorProjectTransferStagingRevisionToLegacyLayout,
+  verifyProjectTransferStagingRevision,
+} from './projectTransferStaging.ts'
+import {
   type ProjectTransferZipJsEntry,
   type ProjectTransferZipJsModule,
   type ProjectTransferZipReadEntry,
@@ -89,6 +95,7 @@ export type ProjectTransferImportAnalysisArtifact = {
   performanceMetrics?: ProjectTransferPerformanceMetrics
   payloads: Record<ProjectTransferPayloadKey, ProjectTransferPayloadAnalysis>
   planRevision: number
+  stagingRevision?: number
 }
 
 export type ProjectTransferImportPlanArtifact = {
@@ -100,6 +107,7 @@ export type ProjectTransferImportPlanArtifact = {
   packageWarnings: ProjectTransferPackageWarning[]
   planRevision: number
   resolutionKinds: Record<string, ProjectTransferPlanBlocker['resolutionKind']>
+  stagingRevision?: number
   summary: ProjectTransferPlanSummary
   targetPlan: ProjectTransferTargetPlan
 }
@@ -109,6 +117,8 @@ export type ProjectTransferImportAnalyzeResult = {
   packageFingerprint: string | null
   plan: ProjectTransferImportPlanArtifact
   planSummary: ProjectTransferPlanSummary
+  staging: ProjectTransferStagingProgressPayload
+  stagingRevision: number
 }
 
 type ProjectTransferImportAnalyzeInput = ProjectTransferAnalyzeRuntimeOptions & {
@@ -986,6 +996,7 @@ const getPlanArtifact = ({
   packageWarnings,
   planRevision,
   planSummary,
+  stagingRevision,
   targetPlan,
 }: {
   blockers: ProjectTransferPlanBlocker[]
@@ -994,6 +1005,7 @@ const getPlanArtifact = ({
   packageWarnings: ProjectTransferPackageWarning[]
   planRevision: number
   planSummary: ProjectTransferPlanSummary
+  stagingRevision: number
   targetPlan: ProjectTransferTargetPlan
 }): ProjectTransferImportPlanArtifact => {
   return {
@@ -1006,6 +1018,7 @@ const getPlanArtifact = ({
     resolutionKinds: blockers.reduce<Record<string, ProjectTransferPlanBlocker['resolutionKind']>>((kinds, blocker) => {
       return {...kinds, [blocker.code]: blocker.resolutionKind}
     }, {}),
+    stagingRevision,
     summary: planSummary,
     targetPlan,
   }
@@ -1207,6 +1220,8 @@ export const analyzeProjectTransferImportPackage = async (
   const runtimeOptions = {cwd: input.cwd, envValues: input.envValues}
   const rootPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: input.layout.rootPath})
   await mkdir(rootPath, {recursive: true})
+  const stagingRevision = input.planRevision
+  const stagingLayout = getProjectTransferImportStagingLayout({layout: input.layout, stagingRevision})
   const availableDiskBytes = input.availableDiskBytes ?? (await getAvailableDiskBytes(rootPath))
   const uploadPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: input.layout.uploadPath})
   const packageBytes = await readFile(uploadPath)
@@ -1332,6 +1347,7 @@ export const analyzeProjectTransferImportPackage = async (
     packageWarnings,
     planRevision: input.planRevision,
     planSummary,
+    stagingRevision,
     targetPlan: targetAnalysis.targetPlan,
   })
   const assetManifest = getAssetManifest(parsed.payloads)
@@ -1380,21 +1396,22 @@ export const analyzeProjectTransferImportPackage = async (
     performanceMetrics,
     payloads: payloadAnalysis,
     planRevision: input.planRevision,
+    stagingRevision,
   } satisfies ProjectTransferImportAnalysisArtifact
 
   const stagingLoad = await measureProjectTransferPhase('stagingLoad', async () => {
     await writeExtractedEntries({
       entries: zipPackage.entries,
-      extractionRootPath: input.layout.extractedPath,
+      extractionRootPath: stagingLayout.extractedPath,
       runtimeOptions,
     })
     await writeExtractedPayloadArtifacts({
-      extractionRootPath: input.layout.extractedPath,
+      extractionRootPath: stagingLayout.extractedPath,
       payloads: sanitizedPayloads,
       runtimeOptions,
     })
-    await writeJsonArtifact({pathValue: input.layout.manifestPath, runtimeOptions, value: manifest})
-    await writeJsonArtifact({pathValue: input.layout.planPath, runtimeOptions, value: plan})
+    await writeJsonArtifact({pathValue: stagingLayout.manifestPath, runtimeOptions, value: manifest})
+    await writeJsonArtifact({pathValue: stagingLayout.planPath, runtimeOptions, value: plan})
   })
   const completedPerformanceMetrics = getImportAnalysisPerformanceMetrics({
     assetManifest,
@@ -1415,15 +1432,18 @@ export const analyzeProjectTransferImportPackage = async (
     warnings: packageWarnings,
   })
   await writeJsonArtifact({
-    pathValue: input.layout.analysisPath,
+    pathValue: stagingLayout.analysisPath,
     runtimeOptions,
     value: {...analysis, performanceMetrics: completedPerformanceMetrics},
   })
-
-  return {
-    analysis: {...analysis, performanceMetrics: completedPerformanceMetrics},
-    packageFingerprint,
+  const completedAnalysis = {...analysis, performanceMetrics: completedPerformanceMetrics}
+  const staging = await verifyProjectTransferStagingRevision({
+    analysis: completedAnalysis,
+    layout: stagingLayout,
     plan,
-    planSummary,
-  }
+    runtimeOptions,
+  })
+  await mirrorProjectTransferStagingRevisionToLegacyLayout({layout: input.layout, runtimeOptions, stagingLayout})
+
+  return {analysis: completedAnalysis, packageFingerprint, plan, planSummary, staging, stagingRevision}
 }

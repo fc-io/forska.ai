@@ -1152,6 +1152,8 @@ test('project transfer import resolve updates the durable dependency plan and co
     },
     state: 'awaiting_resolution',
   })
+  mkdirSync('tmp/project-transfer/import/import-resolve', {recursive: true})
+  await globalThis.Bun.write('tmp/project-transfer/import/import-resolve/plan.json', '{}')
   const app = await getProjectTransferApp()
 
   const resolveResponse = await app.handle(
@@ -1267,6 +1269,8 @@ test('project transfer import resolve does not publish a plan when the session r
     planRevision: 1,
     state: 'awaiting_resolution',
   })
+  mkdirSync('tmp/project-transfer/import/import-resolve-race', {recursive: true})
+  await globalThis.Bun.write('tmp/project-transfer/import/import-resolve-race/plan.json', '{}')
   updateProjectTransferSessionPlanRevisionMock.mockImplementationOnce(async () => {
     return null
   })

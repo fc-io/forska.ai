@@ -63,7 +63,11 @@ export type ProjectTransferCommitPromotionResult = {
 
 export type ProjectTransferCommitRollbackResult = {deletedPromotedAssetCount: number; skippedPromotedAssetCount: number}
 
-type PromoteProjectTransferCommitAssetsParams = RuntimePathOptions & {now?: Date; sessionId: string}
+type PromoteProjectTransferCommitAssetsParams = RuntimePathOptions & {
+  layout?: ProjectTransferImportTempLayout
+  now?: Date
+  sessionId: string
+}
 
 type RollbackProjectTransferCommitPromotionParams = RuntimePathOptions & {
   copiedOnly?: boolean
@@ -1016,11 +1020,12 @@ const mergeRollbackResult = (
 }
 
 export const promoteProjectTransferCommitAssets = async ({
+  layout: inputLayout,
   now: inputNow,
   sessionId,
   ...runtimeOptions
 }: PromoteProjectTransferCommitAssetsParams): Promise<ProjectTransferCommitPromotionResult> => {
-  const layout = getProjectTransferImportTempLayout(sessionId)
+  const layout = inputLayout ?? getProjectTransferImportTempLayout(sessionId)
   const now = inputNow ?? new Date()
   const plan = await readPlanArtifact({...runtimeOptions, layout})
   const articles = await readArticlesPayload({...runtimeOptions, layout})
