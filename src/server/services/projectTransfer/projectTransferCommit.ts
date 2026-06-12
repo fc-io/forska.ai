@@ -1331,12 +1331,12 @@ export const commitProjectTransferImportSession = async ({
         artifacts,
         claimed,
         commitId,
-      inputRepositories,
-      now,
-      ownerToken,
-      repositories,
-      runtimeOptions,
-    })
+        inputRepositories,
+        now,
+        ownerToken,
+        repositories,
+        runtimeOptions,
+      })
 
       if ('artifacts' in revalidation) {
         await runClaimed(revalidation.artifacts)
@@ -1360,6 +1360,11 @@ export const commitProjectTransferImportSession = async ({
   return 'artifacts' in postClaimRevalidation
     ? runClaimed(postClaimRevalidation.artifacts)
     : postClaimRevalidation.stalePlan
-      ? {plan: postClaimRevalidation.stalePlan, session: postClaimRevalidation.session, status: 'stale', statusCode: 200}
+      ? {
+          plan: postClaimRevalidation.stalePlan,
+          session: postClaimRevalidation.session,
+          status: 'stale',
+          statusCode: 200,
+        }
       : {error: postClaimRevalidation.error, status: 'error', statusCode: 409}
 }

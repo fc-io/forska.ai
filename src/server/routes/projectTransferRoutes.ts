@@ -878,7 +878,14 @@ const writeImportUploadArtifact = async ({
       const reader = request.body.getReader()
 
       try {
-        await writeRequestBodyChunks({availableDiskBytes, fileStream, hash, reader, state, tempRootPath: layout.rootPath})
+        await writeRequestBodyChunks({
+          availableDiskBytes,
+          fileStream,
+          hash,
+          reader,
+          state,
+          tempRootPath: layout.rootPath,
+        })
       } finally {
         reader.releaseLock()
       }
