@@ -4396,7 +4396,7 @@ test('drain route only acts on the requested job and can finalize a drained sqli
   expect(await sqliteService.getReadyCount(secondJobId)).toBe(1)
 })
 
-test('unassessed endpoints bypass stale serving rows and invalidate cached counts after dirty state is recorded', async () => {
+test('unassessed endpoints keep stale count serving-only while preview uses bounded raw rows', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
   }
@@ -4430,7 +4430,7 @@ test('unassessed endpoints bypass stale serving rows and invalidate cached count
   const staleCountBody = (await staleCountResponse.json()) as {count: number}
 
   expect(staleCountResponse.status).toBe(200)
-  expect(staleCountBody.count).toBe(1)
+  expect(staleCountBody.count).toBe(0)
 
   const previewResponse = await app.handle(
     new Request(`http://localhost/api/judgmentsjobs-unassessed-articles?jobId=${jobId}`),

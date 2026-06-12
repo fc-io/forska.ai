@@ -182,6 +182,7 @@ export type UnassessedCountParams = {
   useFulltextNoImages: boolean
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
+  disableRawFallback?: boolean
   preferRawFallback?: boolean
 }
 

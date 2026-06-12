@@ -792,6 +792,42 @@ test('getUnassessedCountFromDuckdb falls back to bounded raw count when active s
   expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('COUNT(DISTINCT j.prompt_id)')
 })
 
+test('getUnassessedCountFromDuckdb skips raw count when raw fallback is disabled', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+  ])
+
+  const {getUnassessedCountFromDuckdb} = await loadDuckdbOlap()
+  const result = await getUnassessedCountFromDuckdb({
+    projectId: 'project-1',
+    projectModelId: 'model-1',
+    projectDateFrom: null,
+    projectDateTo: null,
+    importRouteIds: ['route-1'],
+    useTitle: true,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    disableRawFallback: true,
+  })
+
+  expect(result).toBe(0)
+  expect(duckdbRunnerMockRef.current.queries).toHaveLength(4)
+  expect(
+    duckdbRunnerMockRef.current.queries.some((query) => {
+      return query.includes('dirty_scope_candidate')
+    }),
+  ).toBe(false)
+  expect(
+    duckdbRunnerMockRef.current.queries.some((query) => {
+      return query.includes('FROM app.judgment j')
+    }),
+  ).toBe(false)
+})
+
 test('getUnassessedCountFromDuckdb scopes Covidence import ranking to the current raw article batch', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
@@ -912,7 +948,8 @@ test('getUnassessedArticlesFromDuckdb bounded raw preview hydrates only the requ
   expect(duckdbRunnerMockRef.current.queries).toHaveLength(6)
   expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.project_scope_article scope_article')
   expect(duckdbRunnerMockRef.current.queries[3]).toContain('INNER JOIN app.article dirty_article')
-  expect(duckdbRunnerMockRef.current.queries[3]).toContain('LIMIT 1001')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('LIMIT 3')
+  expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('LIMIT 1001')
   expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('FROM app.article a')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.judgment j')
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('TO_JSON')

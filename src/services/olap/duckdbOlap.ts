@@ -2464,10 +2464,11 @@ const getRawUnassessedArticleIdsForPreview = async (params: {
   }
 
   const collectArticleIds = async (cursor: UnassessedPairsCursor | null, articleIds: string[]): Promise<string[]> => {
+    const remainingRequestedCount = requestedCount - articleIds.length
     const articleWindow = await getScopedActivityArticleWindow({
       scope: params.scope,
       cursor,
-      limit: rawUnassessedArticleWindowSize,
+      limit: Math.min(rawUnassessedArticleWindowSize, remainingRequestedCount),
       search: params.search,
     })
     const filteredRows = await getScopedActivityArticleWindowRowsMatchingCovidenceFilters({
@@ -2499,7 +2500,10 @@ const getRawUnassessedArticleIdsForPreview = async (params: {
         }
       : null
 
-    return nextArticleIds.length >= requestedCount || !articleWindow.hasMore || nextCursor === null
+    return remainingRequestedCount <= 0
+      || nextArticleIds.length >= requestedCount
+      || !articleWindow.hasMore
+      || nextCursor === null
       ? nextArticleIds
       : collectArticleIds(nextCursor, nextArticleIds)
   }
@@ -3420,6 +3424,10 @@ export const getUnassessedCountFromDuckdb = async (params: UnassessedCountParams
       from: params.projectDateFrom ? params.projectDateFrom.toISOString().slice(0, 10) : null,
       to: params.projectDateTo ? params.projectDateTo.toISOString().slice(0, 10) : null,
     })
+  }
+
+  if (params.disableRawFallback) {
+    return 0
   }
 
   const rawFallbackScope = {

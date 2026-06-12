@@ -3106,7 +3106,7 @@ export const judgmentsJobsRoutes = new Elysia()
         useAbstract: job.useAbstract,
         useFulltext: job.useFulltext,
         useFulltextNoImages: job.useFulltextNoImages,
-        preferRawFallback: !freshness.isFresh,
+        disableRawFallback: !freshness.isFresh,
       })
 
       if (freshness.isFresh) {
