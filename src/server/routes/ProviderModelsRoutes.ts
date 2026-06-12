@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {getProviderModelEffectiveVariant} from '../../utils/providerModelOptions.ts'
 import {getProviderConnection} from '../providers/providerConnectionRepository.ts'
 import {getManualProviderModelMetadata} from '../providers/providerModelMetadata.ts'
 import {createProviderModel, updateProviderModel} from '../providers/providerModelRepository.ts'
@@ -50,7 +51,12 @@ export const providerModelsRoutes = new Elysia()
         return {data: null, error: 'remoteModelId is required'}
       }
 
-      const variant = getTrimmedValue(body.variant)
+      const variant = getProviderModelEffectiveVariant({
+        options: body.options,
+        provider: connection.providerKind,
+        remoteModelId,
+        variant: body.variant,
+      })
       const displayName = getTrimmedValue(body.displayName) ?? remoteModelId
       const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
@@ -87,7 +93,12 @@ export const providerModelsRoutes = new Elysia()
     {
       body: t.Object({
         displayName: t.Optional(t.String()),
-        options: t.Optional(t.Object({thinking: t.Optional(t.String())})),
+        options: t.Optional(
+          t.Object({
+            thinking: t.Optional(t.Union([t.String(), t.Null()])),
+            thinkingMode: t.Optional(t.Union([t.String(), t.Null()])),
+          }),
+        ),
         remoteModelId: t.String(),
         variant: t.Optional(t.String()),
       }),
@@ -118,7 +129,12 @@ export const providerModelsRoutes = new Elysia()
       body: t.Object({
         displayName: t.String(),
         enabled: t.Boolean(),
-        options: t.Optional(t.Object({thinking: t.Optional(t.String())})),
+        options: t.Optional(
+          t.Object({
+            thinking: t.Optional(t.Union([t.String(), t.Null()])),
+            thinkingMode: t.Optional(t.Union([t.String(), t.Null()])),
+          }),
+        ),
         variant: t.Optional(t.String()),
       }),
       params: t.Object({id: t.String()}),

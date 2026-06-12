@@ -1,5 +1,9 @@
 import {type ModelSource} from '../../db/schemaTypes.ts'
-import {getProviderModelOptions, type ProviderModelOptions} from '../../utils/providerModelOptions.ts'
+import {
+  getProviderModelEffectiveVariant,
+  getProviderModelOptions,
+  type ProviderModelOptions,
+} from '../../utils/providerModelOptions.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {
@@ -493,11 +497,19 @@ export const updateProviderModel = async (
   const currentModel = getProviderModelRecordFromRow(currentRow)
   const currentOptions = getProviderModelMetadataOptions(currentModel.metadataJson)
   const nextOptions = options ?? currentOptions
+  const nextVariant = getProviderModelEffectiveVariant({
+    options: nextOptions,
+    provider: currentModel.provider,
+    remoteModelId: currentModel.remoteModelId ?? currentModel.modelName,
+    variant,
+  })
   const nextMetadataJson = setProviderModelMetadataOptions(currentModel.metadataJson, nextOptions)
   const displayNameChanged = displayName !== (currentModel.displayName ?? currentModel.name)
-  const variantChanged = variant !== currentModel.variant
+  const variantChanged = nextVariant !== currentModel.variant
   const enabledChanged = enabled !== currentModel.enabled
-  const optionsChanged = nextOptions.thinking !== currentOptions.thinking
+  const optionsChanged =
+    (nextOptions.thinking ?? null) !== (currentOptions.thinking ?? null)
+    || (nextOptions.thinkingMode ?? null) !== (currentOptions.thinkingMode ?? null)
 
   if (!enabledChanged && !displayNameChanged && !optionsChanged && !variantChanged) {
     return currentModel
@@ -513,7 +525,7 @@ export const updateProviderModel = async (
       id,
       metadataJson: nextMetadataJson,
       optionsChanged,
-      variant,
+      variant: nextVariant,
       variantChanged,
     })
 

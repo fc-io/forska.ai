@@ -21,6 +21,7 @@ type OpenAIChatCompletionRequest = {
   reasoning_effort?: string
   response_format: ReturnType<typeof getJsonSchemaResponseFormat>
   temperature: number
+  thinking?: {type: 'disabled' | 'enabled'}
   top_k?: number
   top_p?: number
 }
@@ -73,12 +74,20 @@ export const getOpenAIChatCompletionRequest = ({
     response_format: getJsonSchemaResponseFormat(outputSchema),
     temperature,
   }
-  const thinking = getProviderModelOptions(modelOptions).thinking
-  const reasoningEffort = getOpenAIReasoningEffort(thinking)
-  const request = reasoningEffort ? {...defaultRequest, reasoning_effort: reasoningEffort} : defaultRequest
+  const options = getProviderModelOptions(modelOptions)
+  const reasoningEffort = getOpenAIReasoningEffort(options.thinking)
+  const request = {
+    ...defaultRequest,
+    ...(reasoningEffort ? {reasoning_effort: reasoningEffort} : {}),
+    ...(options.thinkingMode ? {thinking: {type: options.thinkingMode}} : {}),
+  }
 
   return isQwen35Model(modelName)
-    ? {...defaultRequest, ...getQwen35SamplingConfig(), chat_template_kwargs: {enable_thinking: thinking === 'enabled'}}
+    ? {
+        ...defaultRequest,
+        ...getQwen35SamplingConfig(),
+        chat_template_kwargs: {enable_thinking: options.thinking === 'enabled'},
+      }
     : request
 }
 

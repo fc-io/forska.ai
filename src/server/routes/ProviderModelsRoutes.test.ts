@@ -27,6 +27,8 @@ const state = {
     }
   }),
   getProviderConnection: mock(async (id: string) => {
+    const providerKind = id === 'sglang-connection' ? 'sglang' : 'openrouter'
+
     return id === 'missing'
       ? null
       : {
@@ -41,7 +43,7 @@ const state = {
           lastCheckedAt: null,
           lastError: null,
           maxInflightRequests: null,
-          providerKind: 'openrouter',
+          providerKind,
           secretRef: 'keychain:test',
           updatedAt: null,
         }
@@ -173,6 +175,40 @@ test('provider models route reconciles an existing manual model', async () => {
     options: {thinking: 'high'},
     variant: 'high',
   })
+})
+
+test('provider models route derives runtime provider variants from reasoning options', async () => {
+  state.createProviderModel.mockClear()
+  state.updateProviderModel.mockClear()
+  state.queryJson.mockClear()
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/provider-connections/sglang-connection/models', {
+      body: JSON.stringify({
+        displayName: 'DeepSeek V4 Flash Max',
+        options: {thinking: 'max', thinkingMode: 'enabled'},
+        remoteModelId: 'deepseek-ai/DeepSeek-V4-Flash',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const createInput = state.createProviderModel.mock.calls[0]?.[0] as {
+    metadataJson: {options?: {thinking?: string; thinkingMode?: string}}
+    modelName: string
+    remoteModelId: string
+    variant: string | null
+    version: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(state.queryJson.mock.calls[0]?.[0]).toContain("variant = 'reasoning-max--thinking-enabled'")
+  expect(createInput.metadataJson.options).toEqual({thinking: 'max', thinkingMode: 'enabled'})
+  expect(createInput.modelName).toBe('deepseek-ai/DeepSeek-V4-Flash')
+  expect(createInput.remoteModelId).toBe('deepseek-ai/DeepSeek-V4-Flash')
+  expect(createInput.variant).toBe('reasoning-max--thinking-enabled')
+  expect(createInput.version).toBe('reasoning-max--thinking-enabled')
+  expect(state.updateProviderModel).not.toHaveBeenCalled()
 })
 
 test('provider models route updates model enabled state and label', async () => {

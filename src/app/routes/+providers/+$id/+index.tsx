@@ -15,7 +15,9 @@ import {
   getProviderModelSupportedOptions,
   getProviderModelThinkingOption,
   type ProviderModelOptions,
+  type ProviderModelThinkingMode,
   type ProviderModelThinkingOption,
+  supportsProviderModelReasoningOptions,
 } from '../../../../utils/providerModelOptions.ts'
 import {
   getComparableModelNames,
@@ -75,9 +77,14 @@ type ConnectionFormState = {
 type ManualModelFormState = {
   displayName: string
   remoteModelId: string
-  thinking: ProviderModelThinkingOption
+  thinking: ProviderPageThinkingFormValue
+  thinkingMode: ProviderPageThinkingModeFormValue
   variant: string
 }
+
+type ProviderPageThinkingInputMode = 'binary' | 'none' | 'reasoning-effort'
+type ProviderPageThinkingFormValue = ProviderModelThinkingOption | ''
+type ProviderPageThinkingModeFormValue = ProviderModelThinkingMode | ''
 
 type ProviderPageModel = ProviderModel & {
   isThinkingDefaultRow?: boolean
@@ -87,11 +94,14 @@ type ProviderPageModel = ProviderModel & {
 }
 type ProviderPageModelDraft = ProviderPageModel & {
   displayNameValue: string
-  thinkingValue: ProviderModelThinkingOption
+  thinkingModeValue: ProviderPageThinkingModeFormValue
+  thinkingValue: ProviderPageThinkingFormValue
   variantValue: string
 }
 
 const providerPageBinaryThinkingOptions: ProviderModelThinkingOption[] = ['disabled', 'enabled']
+const providerPageThinkingModeOptions: ProviderModelThinkingMode[] = ['disabled', 'enabled']
+const providerPageReasoningEffortOptions: ProviderModelThinkingOption[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
 const providerPageThinkingVariantByOption: Partial<Record<ProviderModelThinkingOption, string>> = {
   disabled: 'non-thinking',
@@ -108,6 +118,28 @@ const getNormalizedProviderKind = (value: string | null | undefined): string => 
   return String(value ?? '')
     .trim()
     .toLowerCase()
+}
+
+const supportsProviderPageReasoningEffortInput = (provider: string | null | undefined) => {
+  return supportsProviderModelReasoningOptions(provider)
+}
+
+const supportsProviderPageThinkingModeInput = (model: {
+  modelName: string | null
+  provider: string | null | undefined
+  remoteModelId: string | null
+}) => {
+  return supportsProviderPageReasoningEffortInput(model.provider) && !isQwen35ProviderModel(model)
+}
+
+const supportsManualModelThinkingModeInput = ({
+  providerKind,
+  remoteModelId,
+}: {
+  providerKind: string | null | undefined
+  remoteModelId: string
+}) => {
+  return supportsProviderPageReasoningEffortInput(providerKind) && !isQwen35Model(remoteModelId)
 }
 
 const getMaxInflightRequestsInputValue = (value: number | null | undefined): string => {
@@ -245,31 +277,79 @@ const isQwen35ProviderModel = (model: {modelName: string | null; remoteModelId: 
 const supportsProviderModelThinking = (model: {
   metadataJson: unknown
   modelName: string | null
+  provider: string | null | undefined
   remoteModelId: string | null
 }) => {
   return getProviderModelSupportedOptions(model.metadataJson).thinking || isQwen35ProviderModel(model)
 }
 
+const getProviderPageThinkingInputMode = (model: {
+  metadataJson: unknown
+  modelName: string | null
+  provider: string | null | undefined
+  remoteModelId: string | null
+}): ProviderPageThinkingInputMode => {
+  return isQwen35ProviderModel(model)
+    ? 'binary'
+    : supportsProviderPageReasoningEffortInput(model.provider)
+      ? 'reasoning-effort'
+      : supportsProviderModelThinking(model)
+        ? 'binary'
+        : 'none'
+}
+
+const getManualModelThinkingInputMode = ({
+  providerKind,
+  remoteModelId,
+}: {
+  providerKind: string | null | undefined
+  remoteModelId: string
+}): ProviderPageThinkingInputMode => {
+  return isQwen35Model(remoteModelId)
+    ? 'binary'
+    : supportsProviderPageReasoningEffortInput(providerKind)
+      ? 'reasoning-effort'
+      : 'none'
+}
+
 const getProviderModelThinkingValue = (model: {
   metadataJson: unknown
   modelName: string | null
+  provider: string | null | undefined
   remoteModelId: string | null
   variant: string | null
   version: string | null
-}): ProviderModelThinkingOption => {
-  return getProviderModelConfiguredThinkingValue(model) ?? 'disabled'
+}): ProviderPageThinkingFormValue => {
+  const configuredThinking = getProviderModelConfiguredThinkingValue(model)
+  const thinkingInputMode = getProviderPageThinkingInputMode(model)
+
+  return configuredThinking ?? (thinkingInputMode === 'binary' ? 'disabled' : '')
+}
+
+const getProviderModelThinkingModeValue = (model: {
+  metadataJson: unknown
+  modelName: string | null
+  provider: string | null | undefined
+  remoteModelId: string | null
+}): ProviderPageThinkingModeFormValue => {
+  return supportsProviderPageThinkingModeInput(model)
+    ? (getProviderModelOptions(model.metadataJson).thinkingMode ?? '')
+    : ''
 }
 
 const getProviderModelConfiguredThinkingValue = (model: {
   metadataJson: unknown
   modelName: string | null
+  provider: string | null | undefined
   remoteModelId: string | null
   variant: string | null
   version: string | null
 }): ProviderModelThinkingOption | null => {
   const thinking =
     getProviderModelOptions(model.metadataJson).thinking
-    ?? getProviderModelOptions({variant: model.variant ?? model.version}).thinking
+    ?? (shouldReadProviderPageThinkingFromVariant(model)
+      ? getProviderModelOptions({variant: model.variant ?? model.version}).thinking
+      : null)
 
   return thinking
 }
@@ -284,15 +364,88 @@ const getProviderPageThinkingOptionFromVariant = (
   return getProviderModelThinkingOption(value)
 }
 
+const shouldReadProviderPageThinkingFromVariant = (model: {
+  modelName: string | null
+  provider: string | null | undefined
+  remoteModelId: string | null
+}) => {
+  return isQwen35ProviderModel(model) || !supportsProviderPageReasoningEffortInput(model.provider)
+}
+
 const getProviderPageThinkingLabel = (thinking: ProviderModelThinkingOption) => {
   return thinking
 }
 
 const getProviderPageThinkingRowLabel = (model: {
   thinkingLabelValue?: string
-  thinkingValue: ProviderModelThinkingOption
+  thinkingValue: ProviderPageThinkingFormValue
 }) => {
-  return model.thinkingLabelValue ?? getProviderPageThinkingLabel(model.thinkingValue)
+  return (
+    model.thinkingLabelValue
+    ?? (model.thinkingValue === '' ? 'default' : getProviderPageThinkingLabel(model.thinkingValue))
+  )
+}
+
+const getProviderPageThinkingInputLabel = (mode: ProviderPageThinkingInputMode) => {
+  return mode === 'reasoning-effort' ? 'Reasoning effort' : 'Thinking'
+}
+
+const getProviderPageThinkingSelectOptions = (
+  mode: ProviderPageThinkingInputMode,
+): Array<{label: string; value: ProviderPageThinkingFormValue}> => {
+  return mode === 'reasoning-effort'
+    ? [
+        {label: 'Default', value: ''},
+        ...providerPageReasoningEffortOptions.map((option) => {
+          return {label: option, value: option}
+        }),
+      ]
+    : mode === 'binary'
+      ? [
+          {label: 'Disabled', value: 'disabled'},
+          {label: 'Enabled', value: 'enabled'},
+        ]
+      : []
+}
+
+const getProviderPageThinkingModeSelectOptions = (): Array<{
+  label: string
+  value: ProviderPageThinkingModeFormValue
+}> => {
+  return [
+    {label: 'Default', value: ''},
+    ...providerPageThinkingModeOptions.map((option) => {
+      return {label: option, value: option}
+    }),
+  ]
+}
+
+const getSubmittedReasoningEffort = (value: ProviderPageThinkingFormValue): ProviderModelThinkingOption | null => {
+  return providerPageReasoningEffortOptions.includes(value as ProviderModelThinkingOption)
+    ? (value as ProviderModelThinkingOption)
+    : null
+}
+
+const getSubmittedThinkingMode = (value: ProviderPageThinkingModeFormValue): ProviderModelThinkingMode | null => {
+  return providerPageThinkingModeOptions.includes(value as ProviderModelThinkingMode)
+    ? (value as ProviderModelThinkingMode)
+    : null
+}
+
+const shouldSubmitProviderPageVariant = (model: {
+  modelName: string | null
+  provider: string | null | undefined
+  remoteModelId: string | null
+}) => {
+  return !supportsProviderPageThinkingModeInput(model)
+}
+
+const getProviderPageSubmittedVariant = (model: ProviderPageModelDraft): string | undefined => {
+  return model.provider === 'codex'
+    ? (getTrimmedModelValue(model.variant ?? model.version) ?? undefined)
+    : shouldSubmitProviderPageVariant(model)
+      ? (getTrimmedModelValue(model.variantValue) ?? undefined)
+      : undefined
 }
 
 const getProviderPageMetadataRecord = (value: unknown): Record<string, unknown> | null => {
@@ -388,7 +541,8 @@ const isProviderPageExpandableThinkingModel = (model: ProviderModel) => {
   const thinkingOptions = getProviderPageThinkingOptionsForModel(model)
 
   return (
-    thinkingOptions.length > 0
+    !supportsProviderPageThinkingModeInput(model)
+    && thinkingOptions.length > 0
     && (!variant || Boolean(configuredThinking) || Boolean(getProviderPageThinkingOptionFromVariant(variant)))
   )
 }
@@ -650,6 +804,7 @@ const getProviderPageModelDraft = (model: ProviderPageModel): ProviderPageModelD
   return {
     ...model,
     displayNameValue: model.displayName ?? model.name,
+    thinkingModeValue: getProviderModelThinkingModeValue(model),
     thinkingValue: getProviderModelThinkingValue(model),
     variantValue: model.variant ?? '',
   }
@@ -667,6 +822,7 @@ const hasProviderPageModelDraftChanges = ({
       ? draft.enabled !== source.enabled
       : draft.enabled !== source.enabled
         || draft.displayNameValue !== (source.displayName ?? source.name)
+        || draft.thinkingModeValue !== getProviderModelThinkingModeValue(source)
         || draft.thinkingValue !== getProviderModelThinkingValue(source)
         || draft.variantValue !== (source.variant ?? '')
     : false
@@ -698,17 +854,35 @@ const getConnectionFormState = (connection: ProviderConnection | null): Connecti
 }
 
 const getEmptyManualModelFormState = (): ManualModelFormState => {
-  return {displayName: '', remoteModelId: '', thinking: 'disabled', variant: ''}
+  return {displayName: '', remoteModelId: '', thinking: '', thinkingMode: '', variant: ''}
 }
 
 const getSubmittedModelOptions = ({
-  supportsThinking,
+  supportsThinkingMode,
+  thinkingModeValue,
+  thinkingInputMode,
   thinkingValue,
 }: {
-  supportsThinking: boolean
-  thinkingValue: ProviderModelThinkingOption
+  supportsThinkingMode: boolean
+  thinkingModeValue: ProviderPageThinkingModeFormValue
+  thinkingInputMode: ProviderPageThinkingInputMode
+  thinkingValue: ProviderPageThinkingFormValue
 }): ProviderModelOptions | undefined => {
-  return supportsThinking ? {thinking: thinkingValue} : undefined
+  const options = {
+    ...(thinkingInputMode === 'none'
+      ? {}
+      : {
+          thinking:
+            thinkingInputMode === 'reasoning-effort'
+              ? getSubmittedReasoningEffort(thinkingValue)
+              : thinkingValue === ''
+                ? 'disabled'
+                : thinkingValue,
+        }),
+    ...(supportsThinkingMode ? {thinkingMode: getSubmittedThinkingMode(thinkingModeValue)} : {}),
+  }
+
+  return Object.keys(options).length > 0 ? options : undefined
 }
 
 const createProviderPageThinkingModel = async (draft: ProviderPageModelDraft) => {
@@ -716,15 +890,19 @@ const createProviderPageThinkingModel = async (draft: ProviderPageModelDraft) =>
     throw new Error('Provider model connection is missing')
   }
 
+  const thinkingInputMode = draft.isThinkingDefaultRow ? 'none' : getProviderPageThinkingInputMode(draft)
+  const supportsThinkingMode = !draft.isThinkingDefaultRow && supportsProviderPageThinkingModeInput(draft)
   const result = await addManualProviderModel({
     displayName: draft.displayNameValue,
     id: draft.providerConnectionId,
     options: getSubmittedModelOptions({
-      supportsThinking: !draft.isThinkingDefaultRow,
+      supportsThinkingMode,
+      thinkingInputMode,
+      thinkingModeValue: draft.thinkingModeValue,
       thinkingValue: draft.thinkingValue,
     }),
     remoteModelId: getProviderPageThinkingModelName(draft),
-    variant: getProviderPageThinkingVariant(draft.thinkingValue),
+    variant: draft.thinkingValue === '' ? undefined : getProviderPageThinkingVariant(draft.thinkingValue),
   })
 
   return result.modelId
@@ -1104,7 +1282,15 @@ const ProviderDetailPage = () => {
       return
     }
 
-    const supportsThinking = isQwen35Model(manualModelForm.remoteModelId)
+    const thinkingInputMode = getManualModelThinkingInputMode({
+      providerKind: connection.providerKind,
+      remoteModelId: manualModelForm.remoteModelId,
+    })
+    const supportsThinkingMode = supportsManualModelThinkingModeInput({
+      providerKind: connection.providerKind,
+      remoteModelId: manualModelForm.remoteModelId,
+    })
+    const binaryThinkingValue = manualModelForm.thinking === '' ? 'disabled' : manualModelForm.thinking
 
     setPageError('')
     setPageMessage('')
@@ -1113,11 +1299,19 @@ const ProviderDetailPage = () => {
       await addManualModelMutation.mutateAsync({
         displayName: getTrimmedValue(manualModelForm.displayName) || undefined,
         id: connection.id,
-        options: getSubmittedModelOptions({supportsThinking, thinkingValue: manualModelForm.thinking}),
+        options: getSubmittedModelOptions({
+          supportsThinkingMode,
+          thinkingInputMode,
+          thinkingModeValue: manualModelForm.thinkingMode,
+          thinkingValue: manualModelForm.thinking,
+        }),
         remoteModelId: manualModelForm.remoteModelId,
-        variant: supportsThinking
-          ? getProviderPageThinkingVariant(manualModelForm.thinking)
-          : getTrimmedValue(manualModelForm.variant) || undefined,
+        variant:
+          thinkingInputMode === 'binary'
+            ? getProviderPageThinkingVariant(binaryThinkingValue)
+            : supportsThinkingMode
+              ? undefined
+              : getTrimmedValue(manualModelForm.variant) || undefined,
       })
     } catch (error) {
       setPageError(error instanceof Error ? error.message : 'Failed to add manual model')
@@ -1130,6 +1324,24 @@ const ProviderDetailPage = () => {
 
   const isCompactVariantConnection = () => {
     return isCompactVariantProvider(selectedConnection()?.providerKind)
+  }
+
+  const manualModelThinkingInputMode = () => {
+    return getManualModelThinkingInputMode({
+      providerKind: selectedConnection()?.providerKind,
+      remoteModelId: manualModelForm.remoteModelId,
+    })
+  }
+
+  const shouldShowManualModelThinkingModeInput = () => {
+    return supportsManualModelThinkingModeInput({
+      providerKind: selectedConnection()?.providerKind,
+      remoteModelId: manualModelForm.remoteModelId,
+    })
+  }
+
+  const shouldShowManualModelVariantInput = () => {
+    return !isQwen35Model(manualModelForm.remoteModelId) && !shouldShowManualModelThinkingModeInput()
   }
 
   const providerModels = () => {
@@ -1260,7 +1472,7 @@ const ProviderDetailPage = () => {
     const draftKey = [
       selectedConnection()?.id ?? 'none',
       ...models.map((model) => {
-        return `${model.id}:${model.enabled}:${model.displayName ?? model.name}:${model.variant ?? ''}:${getProviderModelThinkingValue(model)}:${model.persistedId ?? ''}`
+        return `${model.id}:${model.enabled}:${model.displayName ?? model.name}:${model.variant ?? ''}:${getProviderModelThinkingValue(model)}:${getProviderModelThinkingModeValue(model)}:${model.persistedId ?? ''}`
       }),
     ].join('|')
 
@@ -1277,7 +1489,12 @@ const ProviderDetailPage = () => {
     updates,
   }: {
     id: string
-    updates: Partial<Pick<ProviderPageModelDraft, 'displayNameValue' | 'enabled' | 'thinkingValue' | 'variantValue'>>
+    updates: Partial<
+      Pick<
+        ProviderPageModelDraft,
+        'displayNameValue' | 'enabled' | 'thinkingModeValue' | 'thinkingValue' | 'variantValue'
+      >
+    >
   }) => {
     setModelDrafts((drafts) => {
       return drafts.map((draft) => {
@@ -1304,6 +1521,8 @@ const ProviderDetailPage = () => {
 
     await Promise.all(
       changedDrafts.map(async (draft) => {
+        const thinkingInputMode = draft.isThinkingDefaultRow ? 'none' : getProviderPageThinkingInputMode(draft)
+        const supportsThinkingMode = !draft.isThinkingDefaultRow && supportsProviderPageThinkingModeInput(draft)
         const persistedModelId =
           draft.persistedId
           ?? (draft.provider === 'codex' || draft.provider === 'anthropic'
@@ -1324,13 +1543,12 @@ const ProviderDetailPage = () => {
           enabled: draft.enabled,
           id: persistedModelId,
           options: getSubmittedModelOptions({
-            supportsThinking: supportsProviderModelThinking(draft) && !draft.isThinkingDefaultRow,
+            supportsThinkingMode,
+            thinkingInputMode,
+            thinkingModeValue: draft.thinkingModeValue,
             thinkingValue: draft.thinkingValue,
           }),
-          variant:
-            draft.provider === 'codex'
-              ? (getTrimmedModelValue(draft.variant ?? draft.version) ?? undefined)
-              : (getTrimmedModelValue(draft.variantValue) ?? undefined),
+          variant: getProviderPageSubmittedVariant(draft),
         })
       }),
     )
@@ -1723,34 +1941,64 @@ const ProviderDetailPage = () => {
                             value={manualModelForm.displayName}
                           />
                         </div>
-                        <Show
-                          when={isQwen35Model(manualModelForm.remoteModelId)}
-                          fallback={
-                            <div>
-                              <label class="mb-2 block text-sm font-medium text-gray-700">Variant</label>
-                              <input
-                                class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                                onInput={(event) => {
-                                  setManualModelForm('variant', event.currentTarget.value)
-                                }}
-                                placeholder="Optional"
-                                type="text"
-                                value={manualModelForm.variant}
-                              />
-                            </div>
-                          }
-                        >
+                        <Show when={shouldShowManualModelVariantInput()}>
                           <div>
-                            <label class="mb-2 block text-sm font-medium text-gray-700">Thinking</label>
+                            <label class="mb-2 block text-sm font-medium text-gray-700">Variant</label>
+                            <input
+                              class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
+                              onInput={(event) => {
+                                setManualModelForm('variant', event.currentTarget.value)
+                              }}
+                              placeholder="Optional"
+                              type="text"
+                              value={manualModelForm.variant}
+                            />
+                          </div>
+                        </Show>
+                        <Show when={manualModelThinkingInputMode() !== 'none'}>
+                          <div>
+                            <label class="mb-2 block text-sm font-medium text-gray-700">
+                              {getProviderPageThinkingInputLabel(manualModelThinkingInputMode())}
+                            </label>
                             <select
                               class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
                               onChange={(event) => {
-                                setManualModelForm('thinking', event.currentTarget.value as ProviderModelThinkingOption)
+                                setManualModelForm(
+                                  'thinking',
+                                  event.currentTarget.value as ProviderPageThinkingFormValue,
+                                )
                               }}
-                              value={manualModelForm.thinking}
+                              value={
+                                manualModelForm.thinking
+                                || (manualModelThinkingInputMode() === 'binary' ? 'disabled' : '')
+                              }
                             >
-                              <option value="disabled">Disabled</option>
-                              <option value="enabled">Enabled</option>
+                              <For each={getProviderPageThinkingSelectOptions(manualModelThinkingInputMode())}>
+                                {(option) => {
+                                  return <option value={option.value}>{option.label}</option>
+                                }}
+                              </For>
+                            </select>
+                          </div>
+                        </Show>
+                        <Show when={shouldShowManualModelThinkingModeInput()}>
+                          <div>
+                            <label class="mb-2 block text-sm font-medium text-gray-700">Thinking mode</label>
+                            <select
+                              class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
+                              onChange={(event) => {
+                                setManualModelForm(
+                                  'thinkingMode',
+                                  event.currentTarget.value as ProviderPageThinkingModeFormValue,
+                                )
+                              }}
+                              value={manualModelForm.thinkingMode}
+                            >
+                              <For each={getProviderPageThinkingModeSelectOptions()}>
+                                {(option) => {
+                                  return <option value={option.value}>{option.label}</option>
+                                }}
+                              </For>
                             </select>
                           </div>
                         </Show>
@@ -1873,6 +2121,8 @@ const ProviderDetailPage = () => {
                               <tbody class="divide-y divide-gray-200 bg-white">
                                 <For each={modelDrafts()}>
                                   {(model) => {
+                                    const thinkingInputMode = getProviderPageThinkingInputMode(model)
+
                                     return (
                                       <tr>
                                         <td class="px-4 py-3 align-top">
@@ -1921,21 +2171,23 @@ const ProviderDetailPage = () => {
                                             when={model.isThinkingOptionRow}
                                             fallback={
                                               <>
-                                                <input
-                                                  class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
-                                                  onInput={(event) => {
-                                                    return updateModelDraft({
-                                                      id: model.id,
-                                                      updates: {variantValue: event.currentTarget.value},
-                                                    })
-                                                  }}
-                                                  type="text"
-                                                  value={model.variantValue}
-                                                />
-                                                <Show when={supportsProviderModelThinking(model)}>
+                                                <Show when={shouldSubmitProviderPageVariant(model)}>
+                                                  <input
+                                                    class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                                                    onInput={(event) => {
+                                                      return updateModelDraft({
+                                                        id: model.id,
+                                                        updates: {variantValue: event.currentTarget.value},
+                                                      })
+                                                    }}
+                                                    type="text"
+                                                    value={model.variantValue}
+                                                  />
+                                                </Show>
+                                                <Show when={thinkingInputMode !== 'none'}>
                                                   <div class="mt-2">
                                                     <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                                                      Thinking
+                                                      {getProviderPageThinkingInputLabel(thinkingInputMode)}
                                                     </label>
                                                     <select
                                                       class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
@@ -1944,14 +2196,45 @@ const ProviderDetailPage = () => {
                                                           id: model.id,
                                                           updates: {
                                                             thinkingValue: event.currentTarget
-                                                              .value as ProviderModelThinkingOption,
+                                                              .value as ProviderPageThinkingFormValue,
                                                           },
                                                         })
                                                       }}
                                                       value={model.thinkingValue}
                                                     >
-                                                      <option value="disabled">Disabled</option>
-                                                      <option value="enabled">Enabled</option>
+                                                      <For
+                                                        each={getProviderPageThinkingSelectOptions(thinkingInputMode)}
+                                                      >
+                                                        {(option) => {
+                                                          return <option value={option.value}>{option.label}</option>
+                                                        }}
+                                                      </For>
+                                                    </select>
+                                                  </div>
+                                                </Show>
+                                                <Show when={supportsProviderPageThinkingModeInput(model)}>
+                                                  <div class="mt-2">
+                                                    <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                                                      Thinking mode
+                                                    </label>
+                                                    <select
+                                                      class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                                                      onChange={(event) => {
+                                                        return updateModelDraft({
+                                                          id: model.id,
+                                                          updates: {
+                                                            thinkingModeValue: event.currentTarget
+                                                              .value as ProviderPageThinkingModeFormValue,
+                                                          },
+                                                        })
+                                                      }}
+                                                      value={model.thinkingModeValue}
+                                                    >
+                                                      <For each={getProviderPageThinkingModeSelectOptions()}>
+                                                        {(option) => {
+                                                          return <option value={option.value}>{option.label}</option>
+                                                        }}
+                                                      </For>
                                                     </select>
                                                   </div>
                                                 </Show>

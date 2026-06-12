@@ -78,14 +78,15 @@ test('uses OpenAI-compatible reasoning effort for thinking levels', () => {
   const request = getOpenAIChatCompletionRequest({
     maxCompletionTokens: 2000,
     modelName: 'openai/gpt-oss-120b',
-    modelOptions: {thinking: 'high'},
+    modelOptions: {thinking: 'max', thinkingMode: 'enabled'},
     outputSchema: {type: 'object'},
     prompt: 'Prompt',
     systemPrompt: 'System',
     temperature: 0.2,
   })
 
-  expect(request.reasoning_effort).toBe('high')
+  expect(request.reasoning_effort).toBe('max')
+  expect(request.thinking).toEqual({type: 'enabled'})
   expect(request.chat_template_kwargs).toBeUndefined()
 })
 
