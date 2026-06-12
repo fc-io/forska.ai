@@ -44,6 +44,7 @@ let martRefreshProjectCompletionTimes: number[] = []
 
 const martRefreshProjectCleanupRowBatchSize = 10
 const martRefreshProjectRebuildArticleBatchSize = 20_000
+const martRefreshArticleBatchInsertChunkSize = 256
 const martReviewArticleServingRewriteBatchSize = 1_000
 const martRefreshThroughputWindowMs = 15_000
 const martRefreshYieldDelayMs = 0
@@ -204,13 +205,43 @@ const getProjectRefreshBatchArticleIds = (rows: ProjectRefreshBatchRow[]) => {
   })
 }
 
+const getValueChunks = <T>(values: T[], chunkSize: number): T[][] => {
+  return values.length === 0 ? [] : [values.slice(0, chunkSize), ...getValueChunks(values.slice(chunkSize), chunkSize)]
+}
+
+const getProjectRefreshArticleBatchSelectSql = (articleIds: string[]) => {
+  return articleIds
+    .map((articleId) => {
+      return `SELECT ${getSqlLiteral(articleId)} AS article_id`
+    })
+    .join('\nUNION ALL\n')
+}
+
+const getProjectRefreshArticleBatchInsertSql = (articleIds: string[]) => {
+  return articleIds.length === 0
+    ? ''
+    : `
+    INSERT INTO ${martRefreshArticleBatchTableName} (article_id)
+    SELECT article_id
+    FROM (
+      ${getProjectRefreshArticleBatchSelectSql(articleIds)}
+    ) AS article_batch
+    WHERE article_id IS NOT NULL
+    ON CONFLICT DO NOTHING;
+  `
+}
+
 const getProjectRefreshArticleBatchSetupSql = (articleIds: string[]) => {
+  const insertSql = getValueChunks(articleIds, martRefreshArticleBatchInsertChunkSize)
+    .map((chunk) => {
+      return getProjectRefreshArticleBatchInsertSql(chunk)
+    })
+    .join('\n')
+
   return `
     DROP TABLE IF EXISTS ${martRefreshArticleBatchTableName};
-    CREATE TEMP TABLE ${martRefreshArticleBatchTableName} AS
-    SELECT DISTINCT article_id
-    FROM UNNEST(${getSqlLiteral(articleIds)}) AS article_batch(article_id)
-    WHERE article_id IS NOT NULL;
+    CREATE TEMP TABLE ${martRefreshArticleBatchTableName} (article_id VARCHAR PRIMARY KEY);
+    ${insertSql}
   `
 }
 

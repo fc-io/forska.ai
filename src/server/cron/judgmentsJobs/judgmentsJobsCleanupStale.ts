@@ -13,8 +13,10 @@ import {reconcileProviderAdmissionLeasesThroughOwner} from './providerAdmissionL
 import {abandonedSentPromptGraceMs} from './requeueAbandonedSentPrompts.ts'
 
 type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
+type ActiveRequestLeaseCloseoutProbe = {providerKey: string; requestAttemptId: string}
 
 const sqliteRetentionCleanupBatchSize = 1_000
+const duckdbProjectedCloseoutProbeBatchSize = 500
 const sqliteCleanupTerminalStatuses = ['completed', 'paused', 'project_removed'] as const
 const transientLockedQuarantineRecoveryBatchSize = 5
 
@@ -51,23 +53,54 @@ const getUniqueRequestAttemptCloseouts = <TCloseout extends {providerKey: string
   )
 }
 
-const getDuckdbProjectedTerminalRequestAttemptCloseouts = async (): Promise<JudgmentRequestAttemptCloseoutProof[]> => {
-  const rows = await getAppDatabaseService().queryJson<JudgmentRequestAttemptCloseoutProof>(`
-    SELECT DISTINCT
-      closeout.provider_key AS providerKey,
-      closeout.request_attempt_id AS requestAttemptId
-    FROM app.provider_admission_lease lease
-    INNER JOIN app.request_attempt_closeout closeout
-      ON closeout.provider_key = lease.provider_key
-     AND closeout.request_attempt_id = lease.request_attempt_id
-    WHERE lease.lease_kind = 'request'
-      AND lease.request_attempt_id IS NOT NULL
-      AND length(trim(lease.request_attempt_id)) > 0
-      AND lease.expires_at > current_timestamp
-    ORDER BY providerKey ASC, requestAttemptId ASC
+const getDuckdbActiveRequestLeaseCloseoutProbes = async (): Promise<ActiveRequestLeaseCloseoutProbe[]> => {
+  const rows = await getAppDatabaseService().queryJson<ActiveRequestLeaseCloseoutProbe>(`
+    SELECT
+      provider_key AS providerKey,
+      request_attempt_id AS requestAttemptId
+    FROM app.provider_admission_lease
+    WHERE lease_kind = 'request'
+      AND request_attempt_id IS NOT NULL
+      AND length(trim(request_attempt_id)) > 0
+      AND expires_at > current_timestamp
+    ORDER BY expires_at ASC, provider_key ASC, request_attempt_id ASC
+    LIMIT ${duckdbProjectedCloseoutProbeBatchSize}
   `)
 
   return getUniqueRequestAttemptCloseouts(rows)
+}
+
+const getDuckdbProjectedTerminalRequestAttemptCloseout = async (
+  lease: ActiveRequestLeaseCloseoutProbe,
+): Promise<JudgmentRequestAttemptCloseoutProof | null> => {
+  const [row] = await getAppDatabaseService().queryJson<JudgmentRequestAttemptCloseoutProof>(`
+    SELECT
+      closeout.provider_key AS providerKey,
+      closeout.request_attempt_id AS requestAttemptId
+    FROM app.request_attempt_closeout closeout
+    WHERE closeout.provider_key = ${getSqlLiteral(lease.providerKey)}
+      AND closeout.request_attempt_id = ${getSqlLiteral(lease.requestAttemptId)}
+    LIMIT 1
+  `)
+
+  return row ?? null
+}
+
+const getDuckdbProjectedTerminalRequestAttemptCloseoutsForLeases = async (
+  leases: ActiveRequestLeaseCloseoutProbe[],
+): Promise<JudgmentRequestAttemptCloseoutProof[]> => {
+  return leases.reduce<Promise<JudgmentRequestAttemptCloseoutProof[]>>(async (closeoutsPromise, lease) => {
+    const closeouts = await closeoutsPromise
+    const closeout = await getDuckdbProjectedTerminalRequestAttemptCloseout(lease)
+
+    return closeout ? [...closeouts, closeout] : closeouts
+  }, Promise.resolve([]))
+}
+
+const getDuckdbProjectedTerminalRequestAttemptCloseouts = async (): Promise<JudgmentRequestAttemptCloseoutProof[]> => {
+  const leases = await getDuckdbActiveRequestLeaseCloseoutProbes()
+
+  return getUniqueRequestAttemptCloseouts(await getDuckdbProjectedTerminalRequestAttemptCloseoutsForLeases(leases))
 }
 
 export const reconcileProviderAdmissionLeasesForDurableCloseout = async (): Promise<void> => {

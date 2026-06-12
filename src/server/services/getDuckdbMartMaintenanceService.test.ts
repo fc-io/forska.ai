@@ -463,7 +463,13 @@ test('dirty project article batch refresh uses a temp article table without proj
   const [statement = ''] = result.statements
 
   expect(result.statements).toHaveLength(1)
-  expect(statement).toContain('CREATE TEMP TABLE temp_project_mart_refresh_article_batch')
+  expect(statement).toContain(
+    'CREATE TEMP TABLE temp_project_mart_refresh_article_batch (article_id VARCHAR PRIMARY KEY)',
+  )
+  expect(statement).toContain('INSERT INTO temp_project_mart_refresh_article_batch (article_id)')
+  expect(statement).toContain('UNION ALL')
+  expect(statement).toContain('ON CONFLICT DO NOTHING')
+  expect(statement).not.toContain('FROM UNNEST')
   expect(statement).not.toContain('FROM (VALUES')
   expect(statement).not.toContain('article_id IN (')
   expect(statement).not.toMatch(
