@@ -14,6 +14,7 @@ import {
   type ProjectTransferAnalyzeTargetRunner,
   type ProjectTransferTargetPlan,
 } from './projectTransferAnalyzeTarget.ts'
+import {getProjectTransferPlanWithCommitIdMaps} from './projectTransferCommitIdMaps.ts'
 import {
   promoteProjectTransferCommitAssets,
   rollbackProjectTransferCommitPromotion,
@@ -1194,6 +1195,16 @@ const runProjectTransferCommitAppTableWrites = async ({
   })
 
   try {
+    const planWithCommitIdMaps = getProjectTransferPlanWithCommitIdMaps({
+      commitId,
+      now,
+      payloads,
+      plan: artifacts.plan,
+      promotion: assetPromotion.value,
+    })
+
+    await writePlanArtifact({layout: artifacts.layout, plan: planWithCommitIdMaps, runtimeOptions})
+
     const database = getAppDatabaseService()
     const appTableWrites = await measureProjectTransferPhase(
       'appTableWrites',
@@ -1210,7 +1221,7 @@ const runProjectTransferCommitAppTableWrites = async ({
                 database: getProjectTransferCommitOperationDatabase(runner),
                 now,
                 payloads,
-                plan: artifacts.plan,
+                plan: planWithCommitIdMaps,
                 promotion: assetPromotion.value,
                 schemaVersion,
                 sessionId,
@@ -1244,6 +1255,15 @@ const runProjectTransferCommitAppTableWrites = async ({
       phaseMetrics,
       appTableWrites.value.performanceMetrics ?? getProjectTransferPerformanceMetrics({operation: 'import'}),
     )
+    await (appTableWrites.value.commitIdMaps === undefined
+      ? undefined
+      : writePlanArtifact({
+          layout: artifacts.layout,
+          plan: {...planWithCommitIdMaps, commitIdMaps: appTableWrites.value.commitIdMaps},
+          runtimeOptions,
+        }).catch(() => {
+          return undefined
+        }))
 
     return {...appTableWrites.value, performanceMetrics}
   } catch (error) {

@@ -11,6 +11,7 @@ import {
   type ProjectTransferAnalyzeTargetRunner,
   type ProjectTransferTargetPlan,
 } from './projectTransferAnalyzeTarget.ts'
+import type {ProjectTransferCommitIdMaps} from './projectTransferCommitIdMaps.ts'
 import {
   type ProjectTransferDependencyStatus,
   type ProjectTransferPlanBlocker,
@@ -119,6 +120,7 @@ export type ProjectTransferImportAnalysisArtifact = {
 export type ProjectTransferImportPlanArtifact = {
   blockers: ProjectTransferPlanBlocker[]
   canCommit: boolean
+  commitIdMaps?: ProjectTransferCommitIdMaps
   dependencyResolution?: unknown
   packageCounts: Record<ProjectTransferPayloadKey, number>
   packageFingerprint: string | null

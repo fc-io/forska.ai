@@ -86,3 +86,34 @@ test('model snapshot fingerprints preserve variant and version separately', () =
   expect(missingVersion.model.version).toBe(null)
   expect(projectTransferSnapshotFingerprintsEqual(baseline, missingVersion)).toBe(false)
 })
+
+test('model snapshot fingerprints match dependency source and commit materialized target shapes', () => {
+  const dependencySource = getProjectTransferModelSnapshotFingerprint(getModelInput())
+  const commitMaterializedTarget = getProjectTransferModelSnapshotFingerprint(
+    getModelInput({
+      metadataJson: {
+        discovery: {contextWindow: {inputTokens: 12000, totalTokens: 16000}},
+        options: {thinking: 'high'},
+        projectTransferImportedSnapshot: {
+          snapshotFingerprint: dependencySource,
+          sourceModelId: 'source-model',
+          sourceProviderConnectionId: 'source-provider',
+        },
+      },
+      provider: getProviderInput({
+        configJson: {
+          llamaCppMode: 'server',
+          projectTransferImportedSnapshot: {
+            snapshotFingerprint: dependencySource.provider,
+            sourceProviderConnectionId: 'source-provider',
+          },
+          manualWorkerUrls: [],
+          workerUrlMode: 'manual',
+        },
+      }),
+    }),
+  )
+
+  expect(commitMaterializedTarget.model.version).toBe('2026-06-01')
+  expect(projectTransferSnapshotFingerprintsEqual(dependencySource, commitMaterializedTarget)).toBe(true)
+})

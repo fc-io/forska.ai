@@ -115,13 +115,14 @@ const runCommitWriterScript = <TResult>(body: string) => {
       'bun',
       '-e',
       `
-        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {computePromptContentHash}, {writeProjectTransferCommitAppTables}] = await Promise.all([
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {computePromptContentHash}, {writeProjectTransferCommitAppTables}, {getProjectTransferPlanWithCommitIdMaps}] = await Promise.all([
           import('./src/db/migrateDuckdb.ts'),
           import('./src/server/services/appDatabaseService.ts'),
           import('./src/server/utils/duckdbService.ts'),
           import('./src/server/utils/serverRuntimeRole.ts'),
           import('./src/server/utils/computePromptContentHash.ts'),
           import('./src/server/services/projectTransfer/projectTransferCommitWriter.ts'),
+          import('./src/server/services/projectTransfer/projectTransferCommitIdMaps.ts'),
         ])
 
         resetDuckdbServiceForTests()
@@ -1486,6 +1487,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
 
 test('project transfer commit writer materializes imported provider and model dependencies', () => {
   const result = runCommitWriterScript<{
+    commitMaps: {modelId: string | null; projectId: string | null; providerConnectionId: string | null}
     modelRow: {
       displayName: string | null
       enabled: boolean
@@ -1550,7 +1552,16 @@ test('project transfer commit writer materializes imported provider and model de
     const [modelRow] = await database.queryJson("SELECT provider_connection_id AS providerConnectionId, display_name AS displayName, remote_model_id AS remoteModelId, variant, COALESCE(enabled, TRUE) AS enabled, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') AS importedSourceModelId, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') AS importedSourceProviderConnectionId, json_extract(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.contextLimit')::INTEGER AS snapshotContextLimit, json_extract(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.promptTokenLimit')::INTEGER AS snapshotPromptTokenLimit, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.modelOptions.thinking') AS snapshotModelOptionThinking FROM app.model WHERE id = '" + projectRow.modelId + "'")
     const [providerRow] = await database.queryJson("SELECT id, provider_kind AS providerKind, label, enabled, auth_mode AS authMode, secret_ref AS secretRef, json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') AS importedSourceProviderConnectionId, json_extract_string(config_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.providerKind') AS snapshotProviderKind, json_extract_string(config_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.runtimeMode.workerUrlMode') AS snapshotWorkerUrlMode FROM app.provider_connection WHERE id = '" + modelRow.providerConnectionId + "'")
 
-    console.log(JSON.stringify({modelRow, projectRow, providerRow}))
+    console.log(JSON.stringify({
+      commitMaps: {
+        modelId: writeResult.commitIdMaps.modelIdBySourceId['source-model'],
+        projectId: writeResult.commitIdMaps.projectIdBySourceId['source-project'],
+        providerConnectionId: writeResult.commitIdMaps.providerConnectionIdBySourceId['source-provider'],
+      },
+      modelRow,
+      projectRow,
+      providerRow,
+    }))
   `)
 
   expect(result.projectRow.modelId).toBeTruthy()
@@ -1576,10 +1587,14 @@ test('project transfer commit writer materializes imported provider and model de
   expect(result.modelRow.snapshotModelOptionThinking).toBe(null)
   expect(result.modelRow.snapshotPromptTokenLimit).toBe(28768)
   expect(result.modelRow.providerConnectionId).toBe(result.providerRow.id)
+  expect(result.commitMaps.modelId).toBe(result.projectRow.modelId)
+  expect(result.commitMaps.providerConnectionId).toBe(result.providerRow.id)
+  expect(result.commitMaps.projectId).toBeTruthy()
 })
 
 test('project transfer commit writer reuses imported provider and model snapshots by marker and fingerprint', () => {
   const result = runCommitWriterScript<{
+    secondCommitMaps: {modelId: string | null; providerConnectionId: string | null}
     modelCount: number
     modelEnabledValues: boolean[]
     modelIds: string[]
@@ -1648,6 +1663,10 @@ test('project transfer commit writer reuses imported provider and model snapshot
       providerCount: providerRows.length,
       providerEnabledValues: providerRows.map((row) => row.enabled),
       providerIds: providerRows.map((row) => row.id),
+      secondCommitMaps: {
+        modelId: secondWrite.commitIdMaps.modelIdBySourceId['source-model'],
+        providerConnectionId: secondWrite.commitIdMaps.providerConnectionIdBySourceId['source-provider'],
+      },
     }))
   `)
 
@@ -1656,6 +1675,58 @@ test('project transfer commit writer reuses imported provider and model snapshot
   expect(result.providerEnabledValues).toEqual([false])
   expect(result.modelEnabledValues).toEqual([false])
   expect(result.projectModelIds).toEqual([result.modelIds[0], result.modelIds[0]])
+  expect(result.secondCommitMaps.modelId).toBe(result.modelIds[0])
+  expect(result.secondCommitMaps.providerConnectionId).toBe(result.providerIds[0])
+})
+
+test('project transfer commit writer preserves imported model variant and version separately in snapshot marker', () => {
+  const result = runCommitWriterScript<{
+    modelRow: {markerVersion: string | null; markerVariant: string | null; variant: string | null}
+  }>(`
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const importedDependencyResolution = {
+      modelTargetBySourceId: {'source-model': 'new:model:source-model'},
+      providerTargetBySourceId: {'source-provider': 'new:provider:source-provider'},
+    }
+    const writeResult = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-versioned-provider-model',
+      now,
+      payloads: {
+        models: [{...getModelPayload(), variant: 'reasoning', version: '2026-06-01'}],
+        project: getProjectPayload(settings),
+        providerConnections: [
+          {
+            authMode: 'apiKey',
+            baseURL: null,
+            configJson: {archived: false, disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+            enabled: false,
+            label: 'Imported Provider',
+            maxInflightRequests: 4,
+            providerKind: 'openai',
+            secretRef: 'secret:should-not-import',
+            sourceProviderConnectionId: 'source-provider',
+          },
+        ],
+      },
+      plan: getBasePlan({}, importedDependencyResolution),
+      promotion: {
+        articleCreates: [],
+        articleFieldFills: [],
+        manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-versioned-provider-model', updatedAt: now.toISOString()},
+        promotionPathByPackagePath: {},
+      },
+      schemaVersion: 1,
+      sessionId: 'session-versioned-provider-model',
+    })
+    const [projectRow] = await database.queryJson("SELECT model_id AS modelId FROM app.project WHERE id = '" + writeResult.projectId + "'")
+    const [modelRow] = await database.queryJson("SELECT variant, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.variant') AS markerVariant, json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.snapshotFingerprint.model.version') AS markerVersion FROM app.model WHERE id = '" + projectRow.modelId + "'")
+
+    console.log(JSON.stringify({modelRow}))
+  `)
+
+  expect(result.modelRow.variant).toBe('reasoning')
+  expect(result.modelRow.markerVariant).toBe('reasoning')
+  expect(result.modelRow.markerVersion).toBe('2026-06-01')
 })
 
 test('project transfer commit writer blocks commit when a reused imported model fingerprint drifts', () => {
@@ -1791,6 +1862,54 @@ test('project transfer commit writer blocks target article_id conflicts before i
   expect(result.errorMessage).toContain('target article_id already exists: legacy-conflict')
   expect(result.projectCount).toBe(0)
   expect(result.articleCount).toBe(1)
+})
+
+test('project transfer commit writer blocks generated target id collisions before project writes', () => {
+  const result = runCommitWriterScript<{errorMessage: string | null; projectCount: number}>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    await database.run("INSERT INTO app.project (id, name, model_id, archived) VALUES ('existing-project-id', 'Existing Project', 'target-model', FALSE)")
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const payloads = {models: [getModelPayload()], project: getProjectPayload(settings)}
+    const promotion = {
+      articleCreates: [],
+      articleFieldFills: [],
+      manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-id-collision', updatedAt: now.toISOString()},
+      promotionPathByPackagePath: {},
+    }
+    const planWithMaps = getProjectTransferPlanWithCommitIdMaps({
+      commitId: 'commit-id-collision',
+      now,
+      payloads,
+      plan: getBasePlan({}, dependencyResolution),
+      promotion,
+    })
+    const collisionPlan = {
+      ...planWithMaps,
+      commitIdMaps: {
+        ...planWithMaps.commitIdMaps,
+        generatedTargetIds: {...planWithMaps.commitIdMaps.generatedTargetIds, project: ['existing-project-id']},
+        projectIdBySourceId: {'source-project': 'existing-project-id'},
+      },
+    }
+    const errorMessage = await catchMessage(() => {
+      return writeProjectTransferCommitAppTables({
+        commitId: 'commit-id-collision',
+        now,
+        payloads,
+        plan: collisionPlan,
+        promotion,
+        schemaVersion: 1,
+        sessionId: 'session-id-collision',
+      })
+    })
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+
+    console.log(JSON.stringify({errorMessage, projectCount: projectCount.count}))
+  `)
+
+  expect(result.errorMessage).toContain('generated project target id already exists: existing-project-id')
+  expect(result.projectCount).toBe(0)
 })
 
 test('project transfer commit writer aborts article identifier races after insert conflicts', () => {

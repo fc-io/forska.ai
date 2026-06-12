@@ -1,5 +1,3 @@
-import {randomUUID} from 'node:crypto'
-
 import type {ProjectTransferHistoryRecord} from '../../../db/schemaTypes.ts'
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
@@ -10,10 +8,19 @@ import {
   getSqlLiteral,
   getTimestampLiteral,
 } from '../appQueryHelpers.ts'
-import {getOrCreateImmutablePromptTx} from '../immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../projectMartDirtyRefreshStateService.ts'
 import type {ProjectTransferImportPlanArtifact} from './projectTransferAnalyze.ts'
 import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
+import {
+  assertProjectTransferCommitGeneratedIdsAvailable,
+  dropProjectTransferCommitIdMapTables,
+  getProjectTransferCommitMapsWithDependencyTargets,
+  getProjectTransferCommitMapsWithPromptTargets,
+  getProjectTransferPlanWithCommitIdMaps,
+  getProjectTransferPromptContentHashBySourceId,
+  loadProjectTransferCommitIdMapTables,
+  type ProjectTransferCommitIdMaps,
+} from './projectTransferCommitIdMaps.ts'
 import type {ProjectTransferCommitPromotionResult} from './projectTransferCommitRollback.ts'
 import type {ProjectTransferImportCompletionPayload} from './projectTransferContracts.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
@@ -63,6 +70,7 @@ export type ProjectTransferCommitWriterInput = {
 
 export type ProjectTransferCommitAppWriteResult = {
   articleIdBySourceId: Record<string, string>
+  commitIdMaps?: ProjectTransferCommitIdMaps
   completion: ProjectTransferImportCompletionPayload
   history: ProjectTransferHistoryRecord
   importWarnings: ProjectTransferPackageWarning[]
@@ -131,6 +139,7 @@ type ArticleMatchPlan = ProjectTransferTargetPlan['articleMatches'][number]
 type ArticleIdentifierCommitRow = {
   action: ArticleMatchPlan['action']
   articleId: string
+  id: string
   identifier: ReturnType<typeof getProjectTransferNormalizedArticleIdentifiers>['strongIdentifiers'][number]
   isPrimary: boolean
   sourceArticleId: string
@@ -741,11 +750,13 @@ const getImportedModelBySourceId = (models: readonly ProjectTransferPayloadRecor
   }, {})
 }
 
-const getMaterializedProviderTargetBySourceId = async ({
+const getResolvedProviderTargetBySourceId = async ({
+  commitIdMaps,
   importedProviderBySourceId,
   providerTargetBySourceId,
   tx,
 }: {
+  commitIdMaps: ProjectTransferCommitIdMaps
   importedProviderBySourceId: Record<string, ImportedProviderConnectionCommitRow>
   providerTargetBySourceId: Record<string, string>
   tx: ProjectTransferCommitWriterTx
@@ -764,12 +775,56 @@ const getMaterializedProviderTargetBySourceId = async ({
     const existingProviderConnectionId = await getReusableImportedProviderConnectionId({importedProvider, tx})
 
     if (existingProviderConnectionId !== null) {
-      await disableImportedProviderConnectionSnapshot({providerConnectionId: existingProviderConnectionId, tx})
-
       return {...mapped, [sourceProviderConnectionId]: existingProviderConnectionId}
     }
 
-    const providerConnectionId = randomUUID()
+    const providerConnectionId = getMappedTargetId({
+      label: 'generated provider connection',
+      mapped: commitIdMaps.providerConnectionIdBySourceId,
+      sourceId: sourceProviderConnectionId,
+    })
+
+    return {...mapped, [sourceProviderConnectionId]: providerConnectionId}
+  }, Promise.resolve({}))
+}
+
+const materializeImportedProviderConnectionSnapshots = async ({
+  generatedProviderConnectionIds,
+  importedProviderBySourceId,
+  materializedProviderTargetBySourceId,
+  providerTargetBySourceId,
+  tx,
+}: {
+  generatedProviderConnectionIds: readonly string[]
+  importedProviderBySourceId: Record<string, ImportedProviderConnectionCommitRow>
+  materializedProviderTargetBySourceId: Record<string, string>
+  providerTargetBySourceId: Record<string, string>
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const generatedProviderConnectionIdSet = new Set(generatedProviderConnectionIds)
+
+  await Object.entries(providerTargetBySourceId).reduce<Promise<void>>(async (previous, entry) => {
+    await previous
+    const [sourceProviderConnectionId, targetProviderConnectionId] = entry
+
+    if (!isImportedTargetProviderConnectionId(targetProviderConnectionId)) {
+      return undefined
+    }
+
+    const importedProvider =
+      importedProviderBySourceId[sourceProviderConnectionId]
+      ?? failCommitWriter(`missing imported provider for ${sourceProviderConnectionId}`)
+    const providerConnectionId = getMappedTargetId({
+      label: 'provider connection',
+      mapped: materializedProviderTargetBySourceId,
+      sourceId: sourceProviderConnectionId,
+    })
+
+    if (!generatedProviderConnectionIdSet.has(providerConnectionId)) {
+      await disableImportedProviderConnectionSnapshot({providerConnectionId, tx})
+
+      return undefined
+    }
 
     await tx.run(`
       INSERT INTO app.provider_connection (
@@ -800,17 +855,19 @@ const getMaterializedProviderTargetBySourceId = async ({
       )
     `)
 
-    return {...mapped, [sourceProviderConnectionId]: providerConnectionId}
-  }, Promise.resolve({}))
+    return undefined
+  }, Promise.resolve())
 }
 
-const getMaterializedModelTargetBySourceId = async ({
+const getResolvedModelTargetBySourceId = async ({
+  commitIdMaps,
   importedProviderBySourceId,
   importedModelBySourceId,
   modelTargetBySourceId,
   providerTargetBySourceId,
   tx,
 }: {
+  commitIdMaps: ProjectTransferCommitIdMaps
   importedProviderBySourceId: Record<string, ImportedProviderConnectionCommitRow>
   importedModelBySourceId: Record<string, ImportedModelCommitRow>
   modelTargetBySourceId: Record<string, string>
@@ -843,12 +900,67 @@ const getMaterializedModelTargetBySourceId = async ({
     })
 
     if (existingModelId !== null) {
-      await disableImportedModelSnapshot({modelId: existingModelId, tx})
-
       return {...mapped, [sourceModelId]: existingModelId}
     }
 
-    const materializedModelId = randomUUID()
+    const materializedModelId = getMappedTargetId({
+      label: 'generated model',
+      mapped: commitIdMaps.modelIdBySourceId,
+      sourceId: sourceModelId,
+    })
+
+    return {...mapped, [sourceModelId]: materializedModelId}
+  }, Promise.resolve({}))
+}
+
+const materializeImportedModelSnapshots = async ({
+  generatedModelIds,
+  importedProviderBySourceId,
+  importedModelBySourceId,
+  materializedModelTargetBySourceId,
+  materializedProviderTargetBySourceId,
+  modelTargetBySourceId,
+  tx,
+}: {
+  generatedModelIds: readonly string[]
+  importedProviderBySourceId: Record<string, ImportedProviderConnectionCommitRow>
+  importedModelBySourceId: Record<string, ImportedModelCommitRow>
+  materializedModelTargetBySourceId: Record<string, string>
+  materializedProviderTargetBySourceId: Record<string, string>
+  modelTargetBySourceId: Record<string, string>
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const generatedModelIdSet = new Set(generatedModelIds)
+
+  await Object.entries(modelTargetBySourceId).reduce<Promise<void>>(async (previous, entry) => {
+    await previous
+    const [sourceModelId, targetModelId] = entry
+
+    if (!isImportedTargetModelId(targetModelId)) {
+      return undefined
+    }
+
+    const importedModel =
+      importedModelBySourceId[sourceModelId] ?? failCommitWriter(`missing imported model for ${sourceModelId}`)
+    const importedProvider =
+      importedProviderBySourceId[importedModel.sourceProviderConnectionId]
+      ?? failCommitWriter(`missing imported provider for ${importedModel.sourceProviderConnectionId}`)
+    const providerConnectionId = getMappedTargetId({
+      label: 'provider connection',
+      mapped: materializedProviderTargetBySourceId,
+      sourceId: importedModel.sourceProviderConnectionId,
+    })
+    const materializedModelId = getMappedTargetId({
+      label: 'model',
+      mapped: materializedModelTargetBySourceId,
+      sourceId: sourceModelId,
+    })
+
+    if (!generatedModelIdSet.has(materializedModelId)) {
+      await disableImportedModelSnapshot({modelId: materializedModelId, tx})
+
+      return undefined
+    }
 
     await tx.run(`
       INSERT INTO app.model (
@@ -880,42 +992,83 @@ const getMaterializedModelTargetBySourceId = async ({
       )
     `)
 
-    return {...mapped, [sourceModelId]: materializedModelId}
-  }, Promise.resolve({}))
+    return undefined
+  }, Promise.resolve())
 }
 
 const getPlanWithMaterializedImportedDependencies = async ({
+  commitIdMaps,
   payloads,
   plan,
   tx,
 }: {
+  commitIdMaps: ProjectTransferCommitIdMaps
   payloads: Partial<ProjectTransferPayloadByKey>
-  plan: ProjectTransferImportPlanArtifact
+  plan: ProjectTransferImportPlanArtifact & {commitIdMaps: ProjectTransferCommitIdMaps}
   tx: ProjectTransferCommitWriterTx
 }) => {
   const dependencyResolution = getDependencyResolutionState(plan)
   const providerTargetBySourceId = dependencyResolution.providerTargetBySourceId ?? {}
   const modelTargetBySourceId = dependencyResolution.modelTargetBySourceId ?? {}
-  const materializedProviderTargetBySourceId = await getMaterializedProviderTargetBySourceId({
-    importedProviderBySourceId: getImportedProviderConnectionBySourceId(payloads.providerConnections ?? []),
+  const importedProviderBySourceId = getImportedProviderConnectionBySourceId(payloads.providerConnections ?? [])
+  const importedModelBySourceId = getImportedModelBySourceId(payloads.models ?? [])
+  const materializedProviderTargetBySourceId = await getResolvedProviderTargetBySourceId({
+    commitIdMaps,
+    importedProviderBySourceId,
     providerTargetBySourceId,
     tx,
   })
-  const materializedModelTargetBySourceId = await getMaterializedModelTargetBySourceId({
-    importedProviderBySourceId: getImportedProviderConnectionBySourceId(payloads.providerConnections ?? []),
-    importedModelBySourceId: getImportedModelBySourceId(payloads.models ?? []),
+  const materializedModelTargetBySourceId = await getResolvedModelTargetBySourceId({
+    commitIdMaps,
+    importedProviderBySourceId,
+    importedModelBySourceId,
     modelTargetBySourceId,
     providerTargetBySourceId: materializedProviderTargetBySourceId,
     tx,
   })
+  const generatedProviderConnectionIds = Object.entries(providerTargetBySourceId)
+    .filter(([sourceId, targetId]) => {
+      return (
+        isImportedTargetProviderConnectionId(targetId)
+        && materializedProviderTargetBySourceId[sourceId] === commitIdMaps.providerConnectionIdBySourceId[sourceId]
+      )
+    })
+    .map(([sourceId]) => {
+      return materializedProviderTargetBySourceId[sourceId] as string
+    })
+  const generatedModelIds = Object.entries(modelTargetBySourceId)
+    .filter(([sourceId, targetId]) => {
+      return (
+        isImportedTargetModelId(targetId)
+        && materializedModelTargetBySourceId[sourceId] === commitIdMaps.modelIdBySourceId[sourceId]
+      )
+    })
+    .map(([sourceId]) => {
+      return materializedModelTargetBySourceId[sourceId] as string
+    })
+  const materializedCommitIdMaps = getProjectTransferCommitMapsWithDependencyTargets({
+    generatedModelIds,
+    generatedProviderConnectionIds,
+    maps: commitIdMaps,
+    modelIdBySourceId: materializedModelTargetBySourceId,
+    providerConnectionIdBySourceId: materializedProviderTargetBySourceId,
+  })
 
   return {
-    ...plan,
-    dependencyResolution: {
-      ...(isRecord(plan.dependencyResolution) ? plan.dependencyResolution : {}),
-      modelTargetBySourceId: materializedModelTargetBySourceId,
-      providerTargetBySourceId: materializedProviderTargetBySourceId,
+    importedModelBySourceId,
+    importedProviderBySourceId,
+    generatedModelIds,
+    generatedProviderConnectionIds,
+    plan: {
+      ...plan,
+      commitIdMaps: materializedCommitIdMaps,
+      dependencyResolution: {
+        ...(isRecord(plan.dependencyResolution) ? plan.dependencyResolution : {}),
+        modelTargetBySourceId: materializedModelTargetBySourceId,
+        providerTargetBySourceId: materializedProviderTargetBySourceId,
+      },
     },
+    sourceDependencyResolution: {modelTargetBySourceId, providerTargetBySourceId},
   }
 }
 
@@ -985,6 +1138,7 @@ const insertImportedProject = async ({
   now,
   plan,
   project,
+  projectId,
   tx,
   models,
 }: {
@@ -992,9 +1146,9 @@ const insertImportedProject = async ({
   now: Date
   plan: ProjectTransferImportPlanArtifact
   project: ProjectTransferProjectPayload
+  projectId: string
   tx: ProjectTransferCommitWriterTx
 }) => {
-  const projectId = randomUUID()
   const settings = getProjectSettings(project)
   const [created] = await tx.queryJson<{id: string; name: string}>(`
     INSERT INTO app.project (
@@ -1046,36 +1200,144 @@ const getActiveSourcePromptIds = (projectPromptPlan: readonly ProjectPromptPlanE
   )
 }
 
-const getPromptIdBySourceId = async ({
+const getPromptMaterializationPlanBySourceId = async ({
   activeSourcePromptIds,
+  commitIdMaps,
   prompts,
   tx,
 }: {
   activeSourcePromptIds: Set<string>
+  commitIdMaps: ProjectTransferCommitIdMaps
   prompts: readonly ProjectTransferPayloadRecord[]
   tx: ProjectTransferCommitWriterTx
 }) => {
-  return prompts.reduce<Promise<Record<string, string>>>(async (previous, prompt) => {
-    const mapped = await previous
-    const sourcePromptId = getRequiredString(getRecordField(prompt, 'sourcePromptId'), 'prompt.sourcePromptId')
-    const originalText = getRequiredString(
-      getRecordField(prompt, 'originalText'),
-      `prompts.${sourcePromptId}.originalText`,
-    )
-    const promptId = await getOrCreateImmutablePromptTx(tx, {
-      archived: !activeSourcePromptIds.has(sourcePromptId) && getBoolean(getRecordField(prompt, 'archived'), false),
-      originalText,
-      promptHeading: getNullableString(getRecordField(prompt, 'promptHeading')),
-      transformedText: getNullableString(getRecordField(prompt, 'transformedText')),
-      type: getNullableString(getRecordField(prompt, 'type')),
+  const contentHashBySourceId = getProjectTransferPromptContentHashBySourceId(prompts)
+  const sourceIdByContentHash = Object.entries(contentHashBySourceId).reduce<Record<string, string>>(
+    (mapped, [sourcePromptId, contentHash]) => {
+      return mapped[contentHash] === undefined ? {...mapped, [contentHash]: sourcePromptId} : mapped
+    },
+    {},
+  )
+  const contentHashes = [...new Set(Object.values(contentHashBySourceId))]
+  const existingPromptRows =
+    contentHashes.length === 0
+      ? []
+      : await queryChunks<string, {archived: boolean; contentHash: string; id: string}>(contentHashes, (chunk) => {
+          return tx.queryJson<{archived: boolean; contentHash: string; id: string}>(`
+            SELECT id, archived, content_hash AS contentHash
+            FROM app.prompt
+            WHERE content_hash IN (${getQuotedStringList([...chunk]).join(', ')})
+            ORDER BY content_hash ASC, id ASC
+          `)
+        })
+  const existingPromptByContentHash = existingPromptRows.reduce<Record<string, {archived: boolean; id: string}>>(
+    (mapped, row) => {
+      return mapped[row.contentHash] === undefined ? {...mapped, [row.contentHash]: row} : mapped
+    },
+    {},
+  )
+  const generatedPromptIdByContentHash = contentHashes.reduce<Record<string, string>>((mapped, contentHash) => {
+    const existingPrompt = existingPromptByContentHash[contentHash]
+    const sourcePromptId =
+      sourceIdByContentHash[contentHash] ?? failCommitWriter(`missing source prompt for content hash ${contentHash}`)
+    const generatedPromptId =
+      commitIdMaps.promptIdBySourceId[sourcePromptId]
+      ?? failCommitWriter(`missing generated prompt target id for ${sourcePromptId}`)
+
+    return existingPrompt === undefined ? {...mapped, [contentHash]: generatedPromptId} : mapped
+  }, {})
+  const promptBySourceId = getPayloadArrayBySourceId(prompts, 'sourcePromptId')
+  const createPromptRows = Object.entries(generatedPromptIdByContentHash).map(([contentHash, promptId]) => {
+    const sourcePromptId =
+      sourceIdByContentHash[contentHash] ?? failCommitWriter(`missing source prompt for content hash ${contentHash}`)
+    const prompt = promptBySourceId[sourcePromptId] ?? failCommitWriter(`missing prompt payload ${sourcePromptId}`)
+
+    return {contentHash, prompt, promptId, sourcePromptId}
+  })
+  const unarchivePromptIds = existingPromptRows
+    .filter((row) => {
+      const activeSourceIds = Object.entries(contentHashBySourceId)
+        .filter(([_sourcePromptId, contentHash]) => {
+          return contentHash === row.contentHash
+        })
+        .map(([sourcePromptId]) => {
+          return sourcePromptId
+        })
+
+      return (
+        row.archived
+        && activeSourceIds.some((sourcePromptId) => {
+          return activeSourcePromptIds.has(sourcePromptId)
+        })
+      )
+    })
+    .map((row) => {
+      return row.id
     })
 
-    return promptId === null
-      ? failCommitWriter(`prompt ${sourcePromptId} could not be created`)
-      : {...mapped, [sourcePromptId]: promptId}
-  }, Promise.resolve({}))
+  const promptIdBySourceId = Object.entries(contentHashBySourceId).reduce<Record<string, string>>(
+    (mapped, [sourcePromptId, contentHash]) => {
+      const promptId = existingPromptByContentHash[contentHash]?.id ?? generatedPromptIdByContentHash[contentHash]
+
+      return promptId === undefined ? mapped : {...mapped, [sourcePromptId]: promptId}
+    },
+    {},
+  )
+
+  return {
+    commitIdMaps: getProjectTransferCommitMapsWithPromptTargets({
+      contentHashTargetIdBySourceId: promptIdBySourceId,
+      generatedPromptIds: Object.values(generatedPromptIdByContentHash),
+      maps: commitIdMaps,
+    }),
+    createPromptRows,
+    promptIdBySourceId,
+    unarchivePromptIds: [...new Set(unarchivePromptIds)],
+  }
 }
 
+const materializePromptRows = async ({
+  activeSourcePromptIds,
+  createPromptRows,
+  tx,
+  unarchivePromptIds,
+}: {
+  activeSourcePromptIds: Set<string>
+  createPromptRows: Awaited<ReturnType<typeof getPromptMaterializationPlanBySourceId>>['createPromptRows']
+  tx: ProjectTransferCommitWriterTx
+  unarchivePromptIds: readonly string[]
+}) => {
+  await runChunks(createPromptRows, (rowChunk) => {
+    return tx.run(`
+      INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
+      VALUES ${rowChunk
+        .map((row) => {
+          const active = activeSourcePromptIds.has(row.sourcePromptId)
+
+          return `(
+            ${getSqlLiteral(row.promptId)},
+            ${getSqlLiteral(getRequiredString(getRecordField(row.prompt, 'originalText'), `prompts.${row.sourcePromptId}.originalText`))},
+            ${getSqlLiteral(getNullableString(getRecordField(row.prompt, 'transformedText')))},
+            ${getSqlLiteral(getNullableString(getRecordField(row.prompt, 'promptHeading')))},
+            ${getSqlLiteral(getNullableString(getRecordField(row.prompt, 'type')))},
+            ${getSqlLiteral(row.contentHash)},
+            ${getSqlLiteral(!active && getBoolean(getRecordField(row.prompt, 'archived'), false))}
+          )`
+        })
+        .join(', ')}
+      ON CONFLICT(content_hash) DO NOTHING
+    `)
+  })
+  await runChunks([...unarchivePromptIds], (rowChunk) => {
+    return tx.run(`
+      UPDATE app.prompt
+      SET archived = FALSE,
+          updated_at = current_timestamp
+      WHERE id IN (${getQuotedStringList([...rowChunk]).join(', ')})
+        AND archived = TRUE
+    `)
+  })
+}
 const getPlannedPromptHashBySourceId = (prompts: readonly ProjectTransferPayloadRecord[]) => {
   return prompts.reduce<Record<string, string>>((mapped, prompt) => {
     const sourcePromptId = getRequiredString(getRecordField(prompt, 'sourcePromptId'), 'prompt.sourcePromptId')
@@ -1174,6 +1436,7 @@ const getProjectPromptRows = ({
       order: getNullableNumber(getRecordField(projectPrompt, 'order')),
       projectId,
       promptId,
+      sourceProjectPromptId: entry.sourceProjectPromptId,
     }
   })
 }
@@ -1181,6 +1444,7 @@ const getProjectPromptRows = ({
 const insertProjectPromptRows = async (
   tx: ProjectTransferCommitWriterTx,
   rows: readonly ReturnType<typeof getProjectPromptRows>[number][],
+  commitIdMaps: ProjectTransferCommitIdMaps,
 ) => {
   assertNoProjectPromptDuplicates(rows)
 
@@ -1202,7 +1466,13 @@ const insertProjectPromptRows = async (
         ) VALUES ${rowChunk
           .map((row) => {
             return `(
-              ${getSqlLiteral(randomUUID())},
+              ${getSqlLiteral(
+                getMappedTargetId({
+                  label: 'project prompt',
+                  mapped: commitIdMaps.projectPromptIdBySourceId,
+                  sourceId: row.sourceProjectPromptId,
+                }),
+              )},
               ${getSqlLiteral(row.projectId)},
               ${getSqlLiteral(row.promptId)},
               ${getSqlLiteral(row.order)},
@@ -1221,9 +1491,11 @@ const insertProjectPromptRows = async (
 
 const getResolvedArticleIdBySourceId = ({
   articleMatches,
+  commitIdMaps,
   promotion,
 }: {
   articleMatches: readonly ArticleMatchPlan[]
+  commitIdMaps: ProjectTransferCommitIdMaps
   promotion: ProjectTransferCommitPromotionResult
 }) => {
   const createdArticleSources = new Set(
@@ -1234,7 +1506,14 @@ const getResolvedArticleIdBySourceId = ({
 
   return articleMatches.reduce<Record<string, string>>((mapped, match) => {
     return match.action === 'create' && createdArticleSources.has(match.sourceArticleId)
-      ? {...mapped, [match.sourceArticleId]: randomUUID()}
+      ? {
+          ...mapped,
+          [match.sourceArticleId]: getMappedTargetId({
+            label: 'article',
+            mapped: commitIdMaps.articleIdBySourceId,
+            sourceId: match.sourceArticleId,
+          }),
+        }
       : match.action === 'reuse' && match.selectedTargetArticleId !== null
         ? {...mapped, [match.sourceArticleId]: match.selectedTargetArticleId}
         : failCommitWriter(`article ${match.sourceArticleId} is not commit-safe`)
@@ -1435,10 +1714,12 @@ const getArticleIdentifierCommitRows = ({
   articleIdBySourceId,
   articleMatches,
   articles,
+  commitIdMaps,
 }: {
   articleIdBySourceId: Record<string, string>
   articleMatches: readonly ArticleMatchPlan[]
   articles: readonly ProjectTransferArticlePayloadRecord[]
+  commitIdMaps: ProjectTransferCommitIdMaps
 }) => {
   const articleActionBySourceId = getArticleActionBySourceId(articleMatches)
 
@@ -1450,9 +1731,26 @@ const getArticleIdentifierCommitRows = ({
     return articleId === undefined
       ? []
       : normalized.strongIdentifiers.map((identifier, index) => {
+          const sourceKey = getProjectTransferCanonicalJson({
+            kind: identifier.kind,
+            normalizedValue: identifier.normalizedValue,
+            sourceArticleId: article.sourceArticleId,
+          })
+
           return action === undefined
             ? failCommitWriter(`article identifier source ${article.sourceArticleId} has no article match plan`)
-            : {action, articleId, identifier, isPrimary: index === 0, sourceArticleId: article.sourceArticleId}
+            : {
+                action,
+                articleId,
+                id: getMappedTargetId({
+                  label: 'article identifier',
+                  mapped: commitIdMaps.articleIdentifierIdBySourceKey,
+                  sourceId: sourceKey,
+                }),
+                identifier,
+                isPrimary: index === 0,
+                sourceArticleId: article.sourceArticleId,
+              }
         })
   })
 }
@@ -1523,16 +1821,18 @@ const insertArticleIdentifiers = async ({
   articleIdBySourceId,
   articleMatches,
   articles,
+  commitIdMaps,
   now,
   tx,
 }: {
   articleIdBySourceId: Record<string, string>
   articleMatches: readonly ArticleMatchPlan[]
   articles: readonly ProjectTransferArticlePayloadRecord[]
+  commitIdMaps: ProjectTransferCommitIdMaps
   now: Date
   tx: ProjectTransferCommitWriterTx
 }) => {
-  const rows = getArticleIdentifierCommitRows({articleIdBySourceId, articleMatches, articles})
+  const rows = getArticleIdentifierCommitRows({articleIdBySourceId, articleMatches, articles, commitIdMaps})
 
   if (rows.length === 0) {
     return undefined
@@ -1553,7 +1853,7 @@ const insertArticleIdentifiers = async ({
         ) VALUES ${rowChunk
           .map((row) => {
             return `(
-              ${getSqlLiteral(randomUUID())},
+              ${getSqlLiteral(row.id)},
               ${getSqlLiteral(row.articleId)},
               ${getSqlLiteral(row.identifier.kind)},
               ${getSqlLiteral(row.identifier.normalizedValue)},
@@ -1616,7 +1916,7 @@ const getArticleImportRouteRows = ({
         return failCommitWriter(`article import route ${entry.sourceArticleImportRouteId} is not commit-safe`)
       }
 
-      return {articleId, importRouteId, payload}
+      return {articleId, importRouteId, payload, sourceArticleImportRouteId: entry.sourceArticleImportRouteId}
     })
 }
 
@@ -1656,9 +1956,11 @@ const assertNoExistingArticleRouteRows = async ({
 }
 
 const insertArticleImportRoutes = async ({
+  commitIdMaps,
   rows,
   tx,
 }: {
+  commitIdMaps: ProjectTransferCommitIdMaps
   rows: readonly ReturnType<typeof getArticleImportRouteRows>[number][]
   tx: ProjectTransferCommitWriterTx
 }) => {
@@ -1683,7 +1985,13 @@ const insertArticleImportRoutes = async ({
         ) VALUES ${rowChunk
           .map((row) => {
             return `(
-              ${getSqlLiteral(randomUUID())},
+              ${getSqlLiteral(
+                getMappedTargetId({
+                  label: 'article import route',
+                  mapped: commitIdMaps.articleImportRouteIdBySourceId,
+                  sourceId: row.sourceArticleImportRouteId,
+                }),
+              )},
               ${getSqlLiteral(row.articleId)},
               ${getSqlLiteral(row.importRouteId)},
               ${getSqlLiteral(getNullableString(getRecordField(row.payload, 'externalArticleId')))},
@@ -1702,10 +2010,12 @@ const insertArticleImportRoutes = async ({
 }
 
 const insertProjectImportRoutes = async ({
+  commitIdMaps,
   projectId,
   projectRoutePlan,
   tx,
 }: {
+  commitIdMaps: ProjectTransferCommitIdMaps
   projectId: string
   projectRoutePlan: readonly ProjectRoutePlanEntry[]
   tx: ProjectTransferCommitWriterTx
@@ -1715,7 +2025,11 @@ const insertProjectImportRoutes = async ({
       return entry.action === 'link' && entry.targetImportRouteId !== null
     })
     .map((entry) => {
-      return {importRouteId: entry.targetImportRouteId as string, projectId}
+      return {
+        importRouteId: entry.targetImportRouteId as string,
+        projectId,
+        sourceProjectImportRouteId: entry.sourceProjectImportRouteId,
+      }
     })
   const keys = rows.map((row) => {
     return `${row.projectId}\u0000${row.importRouteId}`
@@ -1730,7 +2044,17 @@ const insertProjectImportRoutes = async ({
         INSERT INTO app.project_import_route (id, project_id, import_route_id)
         VALUES ${rowChunk
           .map((row) => {
-            return `(${getSqlLiteral(randomUUID())}, ${getSqlLiteral(row.projectId)}, ${getSqlLiteral(row.importRouteId)})`
+            return `(
+              ${getSqlLiteral(
+                getMappedTargetId({
+                  label: 'project import route',
+                  mapped: commitIdMaps.projectImportRouteIdBySourceId,
+                  sourceId: row.sourceProjectImportRouteId,
+                }),
+              )},
+              ${getSqlLiteral(row.projectId)},
+              ${getSqlLiteral(row.importRouteId)}
+            )`
           })
           .join(', ')}
       `)
@@ -1761,12 +2085,14 @@ const getProjectArticleSourceIds = ({
 const insertProjectArticles = async ({
   articleIdBySourceId,
   articleRoutePlan,
+  commitIdMaps,
   projectArticles,
   projectId,
   tx,
 }: {
   articleIdBySourceId: Record<string, string>
   articleRoutePlan: readonly ArticleRoutePlanEntry[]
+  commitIdMaps: ProjectTransferCommitIdMaps
   projectArticles: readonly ProjectTransferPayloadRecord[]
   projectId: string
   tx: ProjectTransferCommitWriterTx
@@ -1776,7 +2102,7 @@ const insertProjectArticles = async ({
 
     return articleId === undefined
       ? failCommitWriter(`missing target article id for project article ${sourceArticleId}`)
-      : {articleId, projectId}
+      : {articleId, projectId, sourceArticleId}
   })
   const keys = rows.map((row) => {
     return `${row.projectId}\u0000${row.articleId}`
@@ -1791,7 +2117,18 @@ const insertProjectArticles = async ({
         INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
         VALUES ${rowChunk
           .map((row) => {
-            return `(${getSqlLiteral(randomUUID())}, ${getSqlLiteral(row.projectId)}, ${getSqlLiteral(row.articleId)}, NULL)`
+            return `(
+              ${getSqlLiteral(
+                getMappedTargetId({
+                  label: 'project article',
+                  mapped: commitIdMaps.projectArticleIdBySourceArticleId,
+                  sourceId: row.sourceArticleId,
+                }),
+              )},
+              ${getSqlLiteral(row.projectId)},
+              ${getSqlLiteral(row.articleId)},
+              NULL
+            )`
           })
           .join(', ')}
       `)
@@ -2155,6 +2492,7 @@ const getTargetJudgmentFieldSignature = (row: TargetJudgmentRow) => {
 
 const getJudgmentRows = ({
   articleIdBySourceId,
+  commitIdMaps,
   judgmentPlan,
   judgments,
   now,
@@ -2162,6 +2500,7 @@ const getJudgmentRows = ({
   promptIdBySourceId,
 }: {
   articleIdBySourceId: Record<string, string>
+  commitIdMaps: ProjectTransferCommitIdMaps
   judgmentPlan: readonly JudgmentPlanEntry[]
   judgments: readonly ProjectTransferPayloadRecord[]
   now: Date
@@ -2239,7 +2578,11 @@ const getJudgmentRows = ({
       explanation: getNullableString(getRecordField(judgment, 'explanation')),
       id:
         action === 'insert'
-          ? randomUUID()
+          ? getMappedTargetId({
+              label: 'judgment',
+              mapped: commitIdMaps.judgmentIdBySourceId,
+              sourceId: sourceJudgmentId,
+            })
           : (entry.targetJudgmentId ?? failCommitWriter(`reused judgment ${sourceJudgmentId} has no target id`)),
       modelId,
       promptId,
@@ -2492,11 +2835,13 @@ const getTargetAssessmentSignature = (row: TargetJudgmentAssessmentRow) => {
 const getJudgmentAssessmentRows = ({
   assessmentPlan,
   assessments,
+  commitIdMaps,
   judgmentIdBySourceId,
   now,
 }: {
   assessmentPlan: readonly JudgmentAssessmentPlanEntry[]
   assessments: readonly ProjectTransferPayloadRecord[]
+  commitIdMaps: ProjectTransferCommitIdMaps
   judgmentIdBySourceId: Record<string, string>
   now: Date
 }) => {
@@ -2547,7 +2892,11 @@ const getJudgmentAssessmentRows = ({
       createdAt: getDateOrDefault(getRecordField(assessment, 'createdAt'), now),
       id:
         action === 'insert'
-          ? randomUUID()
+          ? getMappedTargetId({
+              label: 'judgment assessment',
+              mapped: commitIdMaps.judgmentAssessmentIdBySourceId,
+              sourceId: sourceJudgmentAssessmentId,
+            })
           : (entry.targetAssessmentId
             ?? failCommitWriter(`reused assessment ${sourceJudgmentAssessmentId} has no target id`)),
       judgmentId,
@@ -2704,6 +3053,7 @@ const assertHumanReviewPlanEntry = ({
 
 const getHumanJudgmentRows = ({
   articleIdBySourceId,
+  commitIdMaps,
   humanJudgments,
   humanReviewPlan,
   now,
@@ -2711,6 +3061,7 @@ const getHumanJudgmentRows = ({
   promptIdBySourceId,
 }: {
   articleIdBySourceId: Record<string, string>
+  commitIdMaps: ProjectTransferCommitIdMaps
   humanJudgments: readonly ProjectTransferPayloadRecord[]
   humanReviewPlan: readonly HumanReviewPlanEntry[]
   now: Date
@@ -2756,7 +3107,11 @@ const getHumanJudgmentRows = ({
       articleId,
       comment: getNullableString(getRecordField(judgment, 'comment')),
       createdAt: getDateOrDefault(getRecordField(judgment, 'createdAt'), now),
-      id: randomUUID(),
+      id: getMappedTargetId({
+        label: 'human judgment',
+        mapped: commitIdMaps.humanJudgmentIdBySourceId,
+        sourceId: sourceHumanJudgmentId,
+      }),
       isAnswered: getBoolean(getRecordField(judgment, 'isAnswered'), false),
       projectId,
       promptId,
@@ -2768,12 +3123,14 @@ const getHumanJudgmentRows = ({
 
 const getHumanJudgmentSummaryRows = ({
   articleIdBySourceId,
+  commitIdMaps,
   humanReviewPlan,
   humanSummaries,
   now,
   projectId,
 }: {
   articleIdBySourceId: Record<string, string>
+  commitIdMaps: ProjectTransferCommitIdMaps
   humanReviewPlan: readonly HumanReviewPlanEntry[]
   humanSummaries: readonly ProjectTransferPayloadRecord[]
   now: Date
@@ -2807,7 +3164,11 @@ const getHumanJudgmentSummaryRows = ({
       answer: getNullableString(getRecordField(summary, 'answer')),
       articleId,
       createdAt: getDateOrDefault(getRecordField(summary, 'createdAt'), now),
-      id: randomUUID(),
+      id: getMappedTargetId({
+        label: 'human judgment summary',
+        mapped: commitIdMaps.humanJudgmentSummaryIdBySourceId,
+        sourceId: sourceHumanJudgmentSummaryId,
+      }),
       origin: getRequiredString(
         getRecordField(summary, 'origin'),
         `humanJudgmentSummaries.${sourceHumanJudgmentSummaryId}.origin`,
@@ -2850,12 +3211,14 @@ const getReviewSections = (value: unknown) => {
 
 const getReviewRows = ({
   articleIdBySourceId,
+  commitIdMaps,
   humanReviewPlan,
   now,
   projectId,
   reviews,
 }: {
   articleIdBySourceId: Record<string, string>
+  commitIdMaps: ProjectTransferCommitIdMaps
   humanReviewPlan: readonly HumanReviewPlanEntry[]
   now: Date
   projectId: string
@@ -2885,7 +3248,7 @@ const getReviewRows = ({
     return {
       articleId,
       createdAt: getDateOrDefault(getRecordField(review, 'createdAt'), now),
-      id: randomUUID(),
+      id: getMappedTargetId({label: 'review', mapped: commitIdMaps.reviewIdBySourceId, sourceId: sourceReviewId}),
       opened: getBoolean(getRecordField(review, 'opened'), false),
       projectId,
       sections: getReviewSections(getRecordField(review, 'sections')),
@@ -3184,190 +3547,259 @@ const writeProjectTransferCommitAppTablesTx = async ({
   const humanJudgmentSummaries = payloads.humanJudgmentSummaries ?? []
   const reviews = payloads.reviews ?? []
   const importedAt = now ?? new Date()
-  const materializedPlan = await getPlanWithMaterializedImportedDependencies({payloads, plan, tx})
-  const judgmentPlan = getRequiredPlanEntries(
-    materializedPlan.targetPlan.judgmentPlan,
-    'judgment plan',
-    judgments.length,
-  )
-  const judgmentAssessmentPlan = getRequiredPlanEntries(
-    materializedPlan.targetPlan.judgmentAssessmentPlan,
-    'judgment assessment plan',
-    judgmentAssessments.length,
-  )
-  const humanReviewPlan = getRequiredPlanEntries(
-    materializedPlan.targetPlan.humanReviewPlan,
-    'human review plan',
-    humanJudgments.length + humanJudgmentSummaries.length + reviews.length,
-  )
-  const createdProject = await insertImportedProject({
-    models: payloads.models ?? [],
+  const planWithCommitIdMaps = getProjectTransferPlanWithCommitIdMaps({
+    commitId,
     now: importedAt,
-    plan: materializedPlan,
-    project,
-    tx,
-  })
-  const activeSourcePromptIds = getActiveSourcePromptIds(materializedPlan.targetPlan.projectPromptPlan)
-
-  assertPromptPlanHashes({promptPlan: materializedPlan.targetPlan.promptPlan, prompts})
-
-  const promptIdBySourceId = await getPromptIdBySourceId({activeSourcePromptIds, prompts, tx})
-  const projectPromptRows = getProjectPromptRows({
-    projectId: createdProject.id,
-    projectPromptPlan: materializedPlan.targetPlan.projectPromptPlan,
-    projectPrompts,
-    promptIdBySourceId,
-  })
-  const articleIdBySourceId = getResolvedArticleIdBySourceId({
-    articleMatches: materializedPlan.targetPlan.articleMatches,
+    payloads,
+    plan,
     promotion,
   })
+  const dependencyMaterialization = await getPlanWithMaterializedImportedDependencies({
+    commitIdMaps: planWithCommitIdMaps.commitIdMaps,
+    payloads,
+    plan: planWithCommitIdMaps,
+    tx,
+  })
+  const activeSourcePromptIds = getActiveSourcePromptIds(dependencyMaterialization.plan.targetPlan.projectPromptPlan)
 
-  await assertNoArticleIdConflicts({articles, matches: materializedPlan.targetPlan.articleMatches, tx})
-  await insertProjectPromptRows(tx, projectPromptRows)
-  await insertCreatedArticles({articleIdBySourceId, now: importedAt, promotion, tx})
-  const targetArticleById = await getFillTargetArticleRows({promotion, tx})
-  await updateReusedArticles({now: importedAt, promotion, targetArticleById, tx})
-  await markUpdatedReusedArticlesDirty({promotion, tx})
-  await insertArticleIdentifiers({
-    articleIdBySourceId,
-    articleMatches: materializedPlan.targetPlan.articleMatches,
-    articles,
-    now: importedAt,
+  assertPromptPlanHashes({promptPlan: dependencyMaterialization.plan.targetPlan.promptPlan, prompts})
+
+  const promptMaterialization = await getPromptMaterializationPlanBySourceId({
+    activeSourcePromptIds,
+    commitIdMaps: dependencyMaterialization.plan.commitIdMaps,
+    prompts,
     tx,
   })
-  await insertProjectImportRoutes({
-    projectId: createdProject.id,
-    projectRoutePlan: materializedPlan.targetPlan.projectRoutePlan,
-    tx,
+  const materializedPlan = {...dependencyMaterialization.plan, commitIdMaps: promptMaterialization.commitIdMaps}
+  const commitIdMapTables = await loadProjectTransferCommitIdMapTables({
+    maps: materializedPlan.commitIdMaps,
+    operationId: commitId,
+    runner: tx,
   })
-  const routeIdBySourceId = getRouteIdBySourceId(materializedPlan.targetPlan.projectRoutePlan)
-  const articleImportRouteRows = getArticleImportRouteRows({
-    articleIdBySourceId,
-    articleImportRoutes,
-    articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
-    routeIdBySourceId,
-  })
-  await insertArticleImportRoutes({rows: articleImportRouteRows, tx})
-  await insertProjectArticles({
-    articleIdBySourceId,
-    articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
-    projectArticles,
-    projectId: createdProject.id,
-    tx,
-  })
-  await markImportedProjectDirty({projectId: createdProject.id, tx})
-  const judgmentRows = getJudgmentRows({
-    articleIdBySourceId,
-    judgmentPlan,
-    judgments,
-    now: importedAt,
-    plan: materializedPlan,
-    promptIdBySourceId,
-  })
-  await insertJudgmentRows({projectId: createdProject.id, rows: judgmentRows, tx})
-  const judgmentIdBySourceId = getJudgmentIdBySourceId(judgmentRows)
-  const judgmentAssessmentRows = getJudgmentAssessmentRows({
-    assessmentPlan: judgmentAssessmentPlan,
-    assessments: judgmentAssessments,
-    judgmentIdBySourceId,
-    now: importedAt,
-  })
-  await insertJudgmentAssessmentRows({
-    allJudgmentIds: Object.values(judgmentIdBySourceId),
-    rows: judgmentAssessmentRows,
-    tx,
-  })
-  assertNoHumanReviewPlanExtras({humanJudgments, humanReviewPlan, humanSummaries: humanJudgmentSummaries, reviews})
-  const humanJudgmentRows = getHumanJudgmentRows({
-    articleIdBySourceId,
-    humanJudgments,
-    humanReviewPlan,
-    now: importedAt,
-    projectId: createdProject.id,
-    promptIdBySourceId,
-  })
-  const humanSummaryRows = getHumanJudgmentSummaryRows({
-    articleIdBySourceId,
-    humanReviewPlan,
-    humanSummaries: humanJudgmentSummaries,
-    now: importedAt,
-    projectId: createdProject.id,
-  })
-  const reviewRows = getReviewRows({
-    articleIdBySourceId,
-    humanReviewPlan,
-    now: importedAt,
-    projectId: createdProject.id,
-    reviews,
-  })
-  await insertHumanJudgmentRows({rows: humanJudgmentRows, tx})
-  await insertHumanJudgmentSummaryRows({rows: humanSummaryRows, tx})
-  await insertReviewRows({rows: reviewRows, tx})
-  const importWarnings = getCommitImportWarnings({
-    articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
-    judgmentPlan,
-    plan: materializedPlan,
-    projectRoutePlan: materializedPlan.targetPlan.projectRoutePlan,
-  })
-  const payloadCounts = getPayloadCounts(materializedPlan)
-  const transferHistoryId = randomUUID()
-  const completion = getCompletionPayload({
-    finalCounts: getFinalCounts({
-      articleIdBySourceId,
-      humanJudgmentRows,
-      humanSummaryRows,
-      importWarnings,
-      judgmentAssessmentRows,
-      judgmentIdBySourceId,
-      promptIdBySourceId,
-      reviewRows,
-      routeIdBySourceId,
-    }),
-    importWarnings,
-    packageFingerprint: getRequiredString(materializedPlan.packageFingerprint, 'plan.packageFingerprint'),
-    payloadCounts,
-    projectId: createdProject.id,
-    projectName: createdProject.name,
-    transferHistoryId,
-  })
-  const historyWrite = await measureProjectTransferPhase('historyWrite', () => {
-    return getProjectTransferHistoryRepository().createProjectTransferHistory({
-      commitId,
-      completionPayload: completion,
-      direction: 'import',
-      id: transferHistoryId,
-      packageFingerprint:
-        completion.packageFingerprint ?? failCommitWriter('completion package fingerprint is required'),
-      payloadCounts,
-      runner: tx,
-      schemaVersion,
-      sessionId,
-      sourceProjectId: project.sourceProjectId,
-      sourceProjectName: project.name,
-      targetProjectId: createdProject.id,
-      targetProjectName: createdProject.name,
+
+  try {
+    const judgmentPlan = getRequiredPlanEntries(
+      materializedPlan.targetPlan.judgmentPlan,
+      'judgment plan',
+      judgments.length,
+    )
+    const judgmentAssessmentPlan = getRequiredPlanEntries(
+      materializedPlan.targetPlan.judgmentAssessmentPlan,
+      'judgment assessment plan',
+      judgmentAssessments.length,
+    )
+    const humanReviewPlan = getRequiredPlanEntries(
+      materializedPlan.targetPlan.humanReviewPlan,
+      'human review plan',
+      humanJudgments.length + humanJudgmentSummaries.length + reviews.length,
+    )
+
+    await assertProjectTransferCommitGeneratedIdsAvailable({maps: materializedPlan.commitIdMaps, runner: tx})
+    await materializeImportedProviderConnectionSnapshots({
+      generatedProviderConnectionIds: dependencyMaterialization.generatedProviderConnectionIds,
+      importedProviderBySourceId: dependencyMaterialization.importedProviderBySourceId,
+      materializedProviderTargetBySourceId: materializedPlan.commitIdMaps.providerConnectionIdBySourceId,
+      providerTargetBySourceId: dependencyMaterialization.sourceDependencyResolution.providerTargetBySourceId,
+      tx,
     })
-  })
-  const history = historyWrite.value
-  await advanceCommitTargetStateDirtyTokens({now: importedAt, tx})
-  const performanceMetrics = getProjectTransferPerformanceMetrics({
-    benchmark: {packageFingerprint: completion.packageFingerprint ?? undefined, schemaVersion},
-    operation: 'import',
-    phases: {historyWrite: historyWrite.timing},
-    warnings: importWarnings,
-  })
+    await materializeImportedModelSnapshots({
+      generatedModelIds: dependencyMaterialization.generatedModelIds,
+      importedModelBySourceId: dependencyMaterialization.importedModelBySourceId,
+      importedProviderBySourceId: dependencyMaterialization.importedProviderBySourceId,
+      materializedModelTargetBySourceId: materializedPlan.commitIdMaps.modelIdBySourceId,
+      materializedProviderTargetBySourceId: materializedPlan.commitIdMaps.providerConnectionIdBySourceId,
+      modelTargetBySourceId: dependencyMaterialization.sourceDependencyResolution.modelTargetBySourceId,
+      tx,
+    })
+    await materializePromptRows({
+      activeSourcePromptIds,
+      createPromptRows: promptMaterialization.createPromptRows,
+      tx,
+      unarchivePromptIds: promptMaterialization.unarchivePromptIds,
+    })
+    const sourceProjectId = getRequiredString(project.sourceProjectId, 'project.sourceProjectId')
+    const createdProject = await insertImportedProject({
+      models: payloads.models ?? [],
+      now: importedAt,
+      plan: materializedPlan,
+      project,
+      projectId: getMappedTargetId({
+        label: 'project',
+        mapped: materializedPlan.commitIdMaps.projectIdBySourceId,
+        sourceId: sourceProjectId,
+      }),
+      tx,
+    })
+    const promptIdBySourceId = promptMaterialization.promptIdBySourceId
+    const projectPromptRows = getProjectPromptRows({
+      projectId: createdProject.id,
+      projectPromptPlan: materializedPlan.targetPlan.projectPromptPlan,
+      projectPrompts,
+      promptIdBySourceId,
+    })
+    const articleIdBySourceId = getResolvedArticleIdBySourceId({
+      articleMatches: materializedPlan.targetPlan.articleMatches,
+      commitIdMaps: materializedPlan.commitIdMaps,
+      promotion,
+    })
 
-  return {
-    articleIdBySourceId,
-    completion,
-    history,
-    importWarnings,
-    performanceMetrics,
-    projectId: createdProject.id,
-    projectName: createdProject.name,
-    promptIdBySourceId,
-    routeIdBySourceId,
+    await assertNoArticleIdConflicts({articles, matches: materializedPlan.targetPlan.articleMatches, tx})
+    await insertProjectPromptRows(tx, projectPromptRows, materializedPlan.commitIdMaps)
+    await insertCreatedArticles({articleIdBySourceId, now: importedAt, promotion, tx})
+    const targetArticleById = await getFillTargetArticleRows({promotion, tx})
+    await updateReusedArticles({now: importedAt, promotion, targetArticleById, tx})
+    await markUpdatedReusedArticlesDirty({promotion, tx})
+    await insertArticleIdentifiers({
+      articleIdBySourceId,
+      articleMatches: materializedPlan.targetPlan.articleMatches,
+      articles,
+      commitIdMaps: materializedPlan.commitIdMaps,
+      now: importedAt,
+      tx,
+    })
+    await insertProjectImportRoutes({
+      commitIdMaps: materializedPlan.commitIdMaps,
+      projectId: createdProject.id,
+      projectRoutePlan: materializedPlan.targetPlan.projectRoutePlan,
+      tx,
+    })
+    const routeIdBySourceId = getRouteIdBySourceId(materializedPlan.targetPlan.projectRoutePlan)
+    const articleImportRouteRows = getArticleImportRouteRows({
+      articleIdBySourceId,
+      articleImportRoutes,
+      articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
+      routeIdBySourceId,
+    })
+    await insertArticleImportRoutes({commitIdMaps: materializedPlan.commitIdMaps, rows: articleImportRouteRows, tx})
+    await insertProjectArticles({
+      articleIdBySourceId,
+      articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
+      commitIdMaps: materializedPlan.commitIdMaps,
+      projectArticles,
+      projectId: createdProject.id,
+      tx,
+    })
+    await markImportedProjectDirty({projectId: createdProject.id, tx})
+    const judgmentRows = getJudgmentRows({
+      articleIdBySourceId,
+      commitIdMaps: materializedPlan.commitIdMaps,
+      judgmentPlan,
+      judgments,
+      now: importedAt,
+      plan: materializedPlan,
+      promptIdBySourceId,
+    })
+    await insertJudgmentRows({projectId: createdProject.id, rows: judgmentRows, tx})
+    const judgmentIdBySourceId = getJudgmentIdBySourceId(judgmentRows)
+    const judgmentAssessmentRows = getJudgmentAssessmentRows({
+      assessmentPlan: judgmentAssessmentPlan,
+      assessments: judgmentAssessments,
+      commitIdMaps: materializedPlan.commitIdMaps,
+      judgmentIdBySourceId,
+      now: importedAt,
+    })
+    await insertJudgmentAssessmentRows({
+      allJudgmentIds: Object.values(judgmentIdBySourceId),
+      rows: judgmentAssessmentRows,
+      tx,
+    })
+    assertNoHumanReviewPlanExtras({humanJudgments, humanReviewPlan, humanSummaries: humanJudgmentSummaries, reviews})
+    const humanJudgmentRows = getHumanJudgmentRows({
+      articleIdBySourceId,
+      commitIdMaps: materializedPlan.commitIdMaps,
+      humanJudgments,
+      humanReviewPlan,
+      now: importedAt,
+      projectId: createdProject.id,
+      promptIdBySourceId,
+    })
+    const humanSummaryRows = getHumanJudgmentSummaryRows({
+      articleIdBySourceId,
+      commitIdMaps: materializedPlan.commitIdMaps,
+      humanReviewPlan,
+      humanSummaries: humanJudgmentSummaries,
+      now: importedAt,
+      projectId: createdProject.id,
+    })
+    const reviewRows = getReviewRows({
+      articleIdBySourceId,
+      commitIdMaps: materializedPlan.commitIdMaps,
+      humanReviewPlan,
+      now: importedAt,
+      projectId: createdProject.id,
+      reviews,
+    })
+    await insertHumanJudgmentRows({rows: humanJudgmentRows, tx})
+    await insertHumanJudgmentSummaryRows({rows: humanSummaryRows, tx})
+    await insertReviewRows({rows: reviewRows, tx})
+    const importWarnings = getCommitImportWarnings({
+      articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
+      judgmentPlan,
+      plan: materializedPlan,
+      projectRoutePlan: materializedPlan.targetPlan.projectRoutePlan,
+    })
+    const payloadCounts = getPayloadCounts(materializedPlan)
+    const transferHistoryId = materializedPlan.commitIdMaps.transferHistoryId
+    const completion = getCompletionPayload({
+      finalCounts: getFinalCounts({
+        articleIdBySourceId,
+        humanJudgmentRows,
+        humanSummaryRows,
+        importWarnings,
+        judgmentAssessmentRows,
+        judgmentIdBySourceId,
+        promptIdBySourceId,
+        reviewRows,
+        routeIdBySourceId,
+      }),
+      importWarnings,
+      packageFingerprint: getRequiredString(materializedPlan.packageFingerprint, 'plan.packageFingerprint'),
+      payloadCounts,
+      projectId: createdProject.id,
+      projectName: createdProject.name,
+      transferHistoryId,
+    })
+    const historyWrite = await measureProjectTransferPhase('historyWrite', () => {
+      return getProjectTransferHistoryRepository().createProjectTransferHistory({
+        commitId,
+        completionPayload: completion,
+        direction: 'import',
+        id: transferHistoryId,
+        packageFingerprint:
+          completion.packageFingerprint ?? failCommitWriter('completion package fingerprint is required'),
+        payloadCounts,
+        runner: tx,
+        schemaVersion,
+        sessionId,
+        sourceProjectId: project.sourceProjectId,
+        sourceProjectName: project.name,
+        targetProjectId: createdProject.id,
+        targetProjectName: createdProject.name,
+      })
+    })
+    const history = historyWrite.value
+    await advanceCommitTargetStateDirtyTokens({now: importedAt, tx})
+    const performanceMetrics = getProjectTransferPerformanceMetrics({
+      benchmark: {packageFingerprint: completion.packageFingerprint ?? undefined, schemaVersion},
+      operation: 'import',
+      phases: {historyWrite: historyWrite.timing},
+      warnings: importWarnings,
+    })
+
+    return {
+      articleIdBySourceId,
+      commitIdMaps: materializedPlan.commitIdMaps,
+      completion,
+      history,
+      importWarnings,
+      performanceMetrics,
+      projectId: createdProject.id,
+      projectName: createdProject.name,
+      promptIdBySourceId,
+      routeIdBySourceId,
+    }
+  } finally {
+    await dropProjectTransferCommitIdMapTables({runner: tx, tables: commitIdMapTables})
   }
 }
 
