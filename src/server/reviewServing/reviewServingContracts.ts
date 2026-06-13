@@ -50,6 +50,30 @@ export const reviewServingWorkloadClasses = [
 
 export type ReviewServingWorkloadClass = (typeof reviewServingWorkloadClasses)[number]
 
+export const reviewServingFreshnessStates = ['ready', 'indexing', 'stale', 'unavailable'] as const
+
+export type ReviewServingFreshnessState = (typeof reviewServingFreshnessStates)[number]
+
+export const reviewServingCountAvailabilityStates = ['ready', 'stale', 'unavailable', 'async'] as const
+
+export type ReviewServingCountAvailability = (typeof reviewServingCountAvailabilityStates)[number]
+
+export const reviewServingSearchAvailabilityStates = ['ready', 'indexing', 'unavailable', 'async'] as const
+
+export type ReviewServingSearchAvailability = (typeof reviewServingSearchAvailabilityStates)[number]
+
+export const reviewServingBulkJobStatuses = ['pending', 'running', 'completed', 'failed', 'cancelled'] as const
+
+export type ReviewServingBulkJobStatus = (typeof reviewServingBulkJobStatuses)[number]
+
+export const reviewServingSnapshotStatuses = ['candidate', 'active', 'failed', 'retired'] as const
+
+export type ReviewServingSnapshotStatus = (typeof reviewServingSnapshotStatuses)[number]
+
+export const reviewServingComponentRequirements = ['required', 'optional'] as const
+
+export type ReviewServingComponentRequirement = (typeof reviewServingComponentRequirements)[number]
+
 export const reviewServingFilterKeys = [
   'articleId',
   'duplicateFlag',
@@ -64,6 +88,18 @@ export const reviewServingFilterKeys = [
 ] as const
 
 export type ReviewServingFilterKey = (typeof reviewServingFilterKeys)[number]
+
+export const reviewServingPhysicalAccessStrategies = [
+  'jobCriteria',
+  'keyedLookup',
+  'orderedPrefix',
+  'postingIntersection',
+  'queueOrdering',
+  'summaryLookup',
+  'tokenPrefixIndex',
+] as const
+
+export type ReviewServingPhysicalAccessStrategy = (typeof reviewServingPhysicalAccessStrategies)[number]
 
 export const namedReviewFastCountKeys = [
   'review.list.total',
@@ -102,20 +138,69 @@ export const reviewServingReadContractKeys = [
 
 export type ReviewServingReadContractKey = (typeof reviewServingReadContractKeys)[number]
 
-export type ReviewServingFreshnessState = 'ready' | 'indexing' | 'stale' | 'unavailable'
+export const reviewServingRouteBudgetKeys = [
+  'allowsTempSpill',
+  'maxEstimatedResultBytes',
+  'maxPageSize',
+  'maxResultRows',
+] as const
 
-export type ReviewServingCountAvailability = 'ready' | 'stale' | 'unavailable' | 'async'
+export type ReviewServingRouteBudgetKey = (typeof reviewServingRouteBudgetKeys)[number]
 
-export type ReviewServingSearchAvailability = 'ready' | 'indexing' | 'unavailable' | 'async'
+export type ReviewServingSnapshotId = string
 
-export type ReviewServingPhysicalAccessStrategy =
-  | 'jobCriteria'
-  | 'keyedLookup'
-  | 'orderedPrefix'
-  | 'postingIntersection'
-  | 'queueOrdering'
-  | 'summaryLookup'
-  | 'tokenPrefixIndex'
+export type ReviewServingSnapshotPinId = string
+
+export type ReviewServingSelectedImportSnapshotId = string
+
+export type ReviewServingSnapshotIdentifier = {
+  projectId: string
+  reviewConfigHash: string | null
+  snapshotId: ReviewServingSnapshotId
+}
+
+export type ReviewServingSnapshotPinIdentifier = ReviewServingSnapshotIdentifier & {pinId: ReviewServingSnapshotPinId}
+
+export type ReviewServingRouteBudget = {
+  allowsTempSpill: boolean
+  maxEstimatedResultBytes: number
+  maxPageSize: number
+  maxResultRows: number
+}
+
+export type ReviewServingPhysicalFilterAccess = {
+  allowedFilters: readonly ReviewServingFilterKey[]
+  physicalAccessStrategy: ReviewServingPhysicalAccessStrategy
+}
+
+export type ReviewServingComponentState = {
+  baseGeneration: string
+  component: ReviewServingProjectionComponent
+  patchWatermark: string
+  projectionIdentity: string
+}
+
+export type ReviewServingRequiredComponentState = ReviewServingComponentState & {requirement: 'required'}
+
+export type ReviewServingOptionalComponentState = ReviewServingComponentState & {requirement: 'optional'}
+
+export type ReviewServingSnapshotComponentStates = {
+  optional: readonly ReviewServingOptionalComponentState[]
+  required: readonly ReviewServingRequiredComponentState[]
+}
+
+export type ReviewServingComponentRequirements = {
+  optionalComponents: readonly ReviewServingProjectionComponent[]
+  requiredComponents: readonly ReviewServingProjectionComponent[]
+}
+
+export type ReviewServingSnapshotState = ReviewServingSnapshotIdentifier & {
+  componentStates: ReviewServingSnapshotComponentStates
+  freshness: ReviewServingFreshnessState
+  lastKnownGoodSnapshotId: ReviewServingSnapshotId | null
+  selectedImportSnapshotId: ReviewServingSelectedImportSnapshotId | null
+  status: ReviewServingSnapshotStatus
+}
 
 export type ReviewServingFreshnessBehavior = 'allowStaleSnapshot' | 'asyncUnavailable' | 'requireReadySnapshot'
 
@@ -130,37 +215,64 @@ export type ReviewServingNamedSummaryDefinition = {
   summaryDefinitionVersion: string
 }
 
-export type ReviewServingReadContract = {
-  key: ReviewServingReadContractKey
-  allowedFilters: readonly ReviewServingFilterKey[]
-  allowsTempSpill: boolean
-  cursorFields: readonly string[]
-  freshnessBehavior: ReviewServingFreshnessBehavior
-  listMode: ReviewServingListMode | null
-  maxEstimatedResultBytes: number
-  maxPageSize: number
-  maxResultRows: number
-  namedFastCounts: readonly NamedReviewFastCountKey[]
-  optionalComponents: readonly ReviewServingProjectionComponent[]
-  physicalAccessStrategy: ReviewServingPhysicalAccessStrategy
-  requiredComponents: readonly ReviewServingProjectionComponent[]
-  searchMode: ReviewServingSearchMode
-  servingTable: string
-  sort: {direction: ReviewServingSortDirection; fields: readonly string[]}
-  workloadClass: ReviewServingWorkloadClass
-}
+export type ReviewServingReadContract = ReviewServingRouteBudget
+  & ReviewServingPhysicalFilterAccess
+  & ReviewServingComponentRequirements & {
+    key: ReviewServingReadContractKey
+    cursorFields: readonly string[]
+    freshnessBehavior: ReviewServingFreshnessBehavior
+    listMode: ReviewServingListMode | null
+    namedFastCounts: readonly NamedReviewFastCountKey[]
+    searchMode: ReviewServingSearchMode
+    servingTable: string
+    sort: {direction: ReviewServingSortDirection; fields: readonly string[]}
+    workloadClass: ReviewServingWorkloadClass
+  }
 
 export type ReviewServingCountState =
   | {availability: 'async'; jobId: string | null; key: NamedReviewFastCountKey; reason: string}
-  | {availability: 'ready'; key: NamedReviewFastCountKey; snapshotId: string; value: number}
-  | {availability: 'stale'; key: NamedReviewFastCountKey; snapshotId: string; value: number}
+  | {availability: 'ready'; key: NamedReviewFastCountKey; snapshotId: ReviewServingSnapshotId; value: number}
+  | {availability: 'stale'; key: NamedReviewFastCountKey; snapshotId: ReviewServingSnapshotId; value: number}
   | {availability: 'unavailable'; key: NamedReviewFastCountKey; reason: string}
 
 export type ReviewServingSearchState =
   | {availability: 'async'; jobId: string | null; reason: string}
   | {availability: 'indexing'; reason: string}
-  | {availability: 'ready'; snapshotId: string}
+  | {availability: 'ready'; snapshotId: ReviewServingSnapshotId}
   | {availability: 'unavailable'; reason: string}
+
+export type ReviewServingBulkState =
+  | {
+      jobId: string
+      processedCount: number
+      snapshotId: ReviewServingSnapshotId | null
+      status: 'pending' | 'running'
+      totalEstimate: number | null
+    }
+  | {
+      jobId: string
+      processedCount: number
+      resultManifestId: string | null
+      snapshotId: ReviewServingSnapshotId | null
+      status: 'completed'
+      totalEstimate: number | null
+    }
+  | {
+      jobId: string
+      lastError: string
+      processedCount: number
+      snapshotId: ReviewServingSnapshotId | null
+      status: 'failed'
+      totalEstimate: number | null
+    }
+  | {
+      jobId: string
+      lastError: string | null
+      processedCount: number
+      snapshotId: ReviewServingSnapshotId | null
+      status: 'cancelled'
+      totalEstimate: number | null
+    }
 
 const isOneOf = <T extends string>(values: readonly T[], value: string): value is T => {
   return (values as readonly string[]).includes(value)
@@ -178,12 +290,40 @@ export const isReviewServingReadContractKey = (value: string): value is ReviewSe
   return isOneOf(reviewServingReadContractKeys, value)
 }
 
+export const isReviewServingFreshnessState = (value: string): value is ReviewServingFreshnessState => {
+  return isOneOf(reviewServingFreshnessStates, value)
+}
+
+export const isReviewServingCountAvailability = (value: string): value is ReviewServingCountAvailability => {
+  return isOneOf(reviewServingCountAvailabilityStates, value)
+}
+
+export const isReviewServingSearchAvailability = (value: string): value is ReviewServingSearchAvailability => {
+  return isOneOf(reviewServingSearchAvailabilityStates, value)
+}
+
+export const isReviewServingSnapshotStatus = (value: string): value is ReviewServingSnapshotStatus => {
+  return isOneOf(reviewServingSnapshotStatuses, value)
+}
+
+export const isReviewServingComponentRequirement = (value: string): value is ReviewServingComponentRequirement => {
+  return isOneOf(reviewServingComponentRequirements, value)
+}
+
 export const isNamedReviewFastCountKey = (value: string): value is NamedReviewFastCountKey => {
   return isOneOf(namedReviewFastCountKeys, value)
 }
 
 export const isReviewServingWorkloadClass = (value: string): value is ReviewServingWorkloadClass => {
   return isOneOf(reviewServingWorkloadClasses, value)
+}
+
+export const isReviewServingPhysicalAccessStrategy = (value: string): value is ReviewServingPhysicalAccessStrategy => {
+  return isOneOf(reviewServingPhysicalAccessStrategies, value)
+}
+
+export const isReviewServingBulkJobStatus = (value: string): value is ReviewServingBulkJobStatus => {
+  return isOneOf(reviewServingBulkJobStatuses, value)
 }
 
 export const namedReviewFastCountDefinitions: Record<NamedReviewFastCountKey, ReviewServingNamedSummaryDefinition> = {
