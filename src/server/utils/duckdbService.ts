@@ -117,6 +117,7 @@ type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
 }
+type CloseDuckdbServiceOptions = {releaseOwnerLease?: boolean}
 type DuckdbAppendBarrier = {promise: Promise<void>; resolve: () => void}
 type DuckdbBoundValues = DuckDBValue[] | Record<string, DuckDBValue>
 type DuckdbBoundTypes = DuckDBType[] | Record<string, DuckDBType | undefined>
@@ -742,7 +743,7 @@ const checkpointDuckdbBeforeClose = async (connection: DuckDBConnection | null, 
   }
 }
 
-const closeDuckdbServiceWithoutBarrier = async () => {
+const closeDuckdbServiceWithoutBarrier = async ({releaseOwnerLease = true}: CloseDuckdbServiceOptions = {}) => {
   const activeConnection = duckdbServiceState.controlConnection
   const activeAppendConnections = [...duckdbServiceState.appendConnections]
   const activeBackgroundConnection = duckdbServiceState.backgroundConnection
@@ -780,10 +781,12 @@ const closeDuckdbServiceWithoutBarrier = async () => {
     ),
   ])
 
-  try {
-    await releaseCurrentDuckdbOwnerLease()
-  } catch (error) {
-    throw closeError === null ? error : getChainedDuckdbError(closeError, error, 'lease release failed')
+  if (releaseOwnerLease) {
+    try {
+      await releaseCurrentDuckdbOwnerLease()
+    } catch (error) {
+      throw closeError === null ? error : getChainedDuckdbError(closeError, error, 'lease release failed')
+    }
   }
 
   if (closeError !== null) {
@@ -791,8 +794,10 @@ const closeDuckdbServiceWithoutBarrier = async () => {
   }
 }
 
-const closeDuckdbServiceDirect = async () => {
-  return withDuckdbAppendBarrier(closeDuckdbServiceWithoutBarrier)
+const closeDuckdbServiceDirect = async (options: CloseDuckdbServiceOptions = {}) => {
+  return withDuckdbAppendBarrier(() => {
+    return closeDuckdbServiceWithoutBarrier(options)
+  })
 }
 
 const closeDuckdbServiceForSignal = async () => {
@@ -1992,9 +1997,9 @@ export const deleteDuckdbSnapshot = async (snapshotPath: string) => {
   })
 }
 
-export const closeDuckdbService = async () => {
+export const closeDuckdbService = async (options: CloseDuckdbServiceOptions = {}) => {
   await enqueueDuckdbWork(async () => {
-    await closeDuckdbServiceDirect()
+    await closeDuckdbServiceDirect(options)
   })
 }
 

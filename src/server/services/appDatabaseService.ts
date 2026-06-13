@@ -214,6 +214,10 @@ const appDatabaseService = {
     await closeDuckdbService()
     resetAppDatabaseAppendMetricsState()
   },
+  closeForReset: async () => {
+    await closeDuckdbService({releaseOwnerLease: false})
+    resetAppDatabaseAppendMetricsState()
+  },
   createSnapshot: async () => {
     return withDuckdbOwnerWriteTracking('createSnapshot', createDuckdbSnapshot)
   },

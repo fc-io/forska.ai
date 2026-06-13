@@ -93,9 +93,11 @@ test('public gate leaves backend readiness routes available', async () => {
 test('public gate leaves supported and sensitive product routes available', async () => {
   const usersResponse = await getResponse('/api/users')
   const projectResponse = await getResponse('/api/projects/project-1/export', 'POST')
+  const clearDatabasesResponse = await getResponse('/api/admin/clear-databases', 'POST')
 
   expect(usersResponse.status).toBe(200)
   expect(projectResponse.status).toBe(200)
+  expect(clearDatabasesResponse.status).toBe(200)
 })
 
 test('public gate leaves UI-required status routes available', async () => {

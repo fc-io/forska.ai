@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getApiReadOnlyAppDatabaseService} from '../services/appReadOnlyDatabaseService.ts'
+import {clearLocalDatabases} from '../services/clearLocalDatabases.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
 import {
   getJudgmentJobSqliteHealthProjectionService,
@@ -934,6 +935,9 @@ export const adminInvestigateRoutes = new Elysia()
       serverRole: process.env.SERVER_ROLE ?? null,
       pid: process.pid,
     }
+  })
+  .post('/api/admin/clear-databases', async () => {
+    return {data: await clearLocalDatabases()}
   })
   .get(workerRuntimeDiagnosticsPath, async () => {
     return getWorkerRuntimeDiagnostics()

@@ -129,6 +129,13 @@ type UpdateUserResponse = {data: LocalUser}
 type StoredModelsResponse = {data: StoredModel[]}
 type RuntimeReadyResponse = {data: RuntimeReady}
 type RuntimeStateResponse = {data: RuntimeState}
+type ClearDatabasesResult = {
+  clearedPaths: string[]
+  duckdbPath: string
+  judgmentJobsRootDirectory: string
+  migrated: boolean
+}
+type ClearDatabasesResponse = {data: ClearDatabasesResult}
 
 const fetchLocalUser = async (): Promise<LocalUser | null> => {
   const response = await apiClient.api.users.get()
@@ -242,6 +249,13 @@ const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> 
   return result.data
 }
 
+const clearDatabases = async (): Promise<ClearDatabasesResult> => {
+  const response = await apiClient.api.admin['clear-databases'].post()
+  const result = handleApiResponse<ClearDatabasesResponse>(response, 'Failed to clear databases')
+
+  return result.data
+}
+
 const Settings = () => {
   const [maintenanceWorkerDuckdbMemoryLimit, setMaintenanceWorkerDuckdbMemoryLimit] = createSignal('')
   const [displayName, setDisplayName] = createSignal('')
@@ -332,6 +346,18 @@ const Settings = () => {
           void maintenanceRuntimeDiagnosticsQuery.refetch()
           void workerRuntimeDiagnosticsQuery.refetch()
         }
+      },
+    }
+  })
+  const clearDatabasesMutation = createMutation(() => {
+    return {
+      mutationFn: clearDatabases,
+      onSuccess: () => {
+        void localUserQuery.refetch()
+        void storedModelsQuery.refetch()
+        void maintenanceRuntimeDiagnosticsQuery.refetch()
+        void workerRuntimeDiagnosticsQuery.refetch()
+        void runtimeStateQuery.refetch()
       },
     }
   })
@@ -790,6 +816,43 @@ const Settings = () => {
                     </p>
                   </div>
                   <p class="text-xs text-gray-500">Binary changes apply on the next server restart.</p>
+                </div>
+              </div>
+              <div class="pt-2 border-t border-red-200">
+                <h3 class="text-sm font-semibold text-red-900 mb-3">Danger zone</h3>
+                <div class="rounded-md border border-red-200 bg-red-50 p-4 space-y-3">
+                  <div>
+                    <p class="text-sm font-medium text-red-900">Clear local databases</p>
+                    <p class="mt-1 text-xs text-red-700">
+                      Deletes the local DuckDB database and judgment job SQLite databases, then reruns DuckDB
+                      migrations. This cannot be undone.
+                    </p>
+                  </div>
+                  <Show when={clearDatabasesMutation.isError}>
+                    <p class="text-sm text-red-700">
+                      {clearDatabasesMutation.error instanceof Error
+                        ? clearDatabasesMutation.error.message
+                        : 'Failed to clear databases'}
+                    </p>
+                  </Show>
+                  <Show when={clearDatabasesMutation.isSuccess}>
+                    <p class="text-sm text-green-700">Databases cleared and migrations rerun.</p>
+                  </Show>
+                  <button
+                    class="w-full sm:w-auto px-4 py-3 bg-red-600 text-white rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                    disabled={clearDatabasesMutation.isPending}
+                    onClick={() => {
+                      if (
+                        globalThis.confirm(
+                          'Clear all local databases? This deletes local projects, articles, judgments, jobs, and database-backed settings.',
+                        )
+                      ) {
+                        clearDatabasesMutation.mutate()
+                      }
+                    }}
+                  >
+                    {clearDatabasesMutation.isPending ? 'Clearing...' : 'Clear Databases'}
+                  </button>
                 </div>
               </div>
               <Show when={updateLocalUserMutation.isError}>

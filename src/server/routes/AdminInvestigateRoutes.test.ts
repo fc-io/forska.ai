@@ -129,6 +129,96 @@ test('admin append metrics route returns append lane metrics', () => {
   }
 })
 
+test('admin clear databases route rebuilds DuckDB and removes judgment job SQLite files', () => {
+  const runtimeRoot = `/tmp/f1-admin-clear-databases-route-${Date.now()}`
+  const duckdbPath = `${runtimeRoot}/forska.duckdb`
+  const runRoute = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {existsSync, writeFileSync} = await import('node:fs')
+        const {Elysia} = await import('elysia')
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getJudgmentJobSqlitePath} = await import('./src/server/cron/judgmentsJobs/judgmentJobPaths.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getProductApiRoutes} = await import('./src/server/routes/productApiRoutes.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        await database.run(\`INSERT INTO app.prompt (id, original_text, content_hash) VALUES ('clear-route-prompt', 'Prompt', 'clear-route-hash')\`)
+
+        const sqlitePath = getJudgmentJobSqlitePath('clear-route-job')
+        writeFileSync(sqlitePath, 'sqlite-state')
+
+        const app = new Elysia().use(getProductApiRoutes())
+        const response = await app.handle(new Request('http://localhost/api/admin/clear-databases', {method: 'POST'}))
+        const responseBody = await response.json()
+        const projectsResponse = await app.handle(new Request('http://localhost/api/projects'))
+        const projectsBody = await projectsResponse.json()
+        const [promptCountRow] = await database.queryJson(\`SELECT COUNT(*)::INTEGER AS count FROM app.prompt\`)
+        const [migrationCountRow] = await database.queryJson(\`SELECT COUNT(*)::INTEGER AS count FROM app_schema_migration\`)
+
+        console.log(JSON.stringify({
+          leaseExists: existsSync(\`${duckdbPath}.duckdb-owner.lock\`),
+          migrationCount: migrationCountRow?.count ?? 0,
+          promptCount: promptCountRow?.count ?? 0,
+          projectsBody,
+          projectsStatus: projectsResponse.status,
+          responseBody,
+          sqliteExists: existsSync(sqlitePath),
+          status: response.status,
+        }))
+
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runRoute.exitCode !== 0) {
+      throw new Error(
+        runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin clear databases route test failed',
+      )
+    }
+
+    const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
+      leaseExists: boolean
+      migrationCount: number
+      promptCount: number
+      projectsBody: {data?: unknown[]; error?: string}
+      projectsStatus: number
+      responseBody: {data?: {migrated?: boolean}; error?: string}
+      sqliteExists: boolean
+      status: number
+    }
+
+    expect(responseBody).toMatchObject({
+      leaseExists: true,
+      promptCount: 0,
+      projectsBody: {data: []},
+      projectsStatus: 200,
+      responseBody: {data: {migrated: true}},
+      sqliteExists: false,
+      status: 200,
+    })
+    expect(responseBody.migrationCount).toBeGreaterThan(0)
+  } finally {
+    removeFileIfExists(runtimeRoot)
+  }
+})
+
 test('admin project mart large rebuild status route returns explicit operator progress for a project', () => {
   const duckdbPath = `/tmp/f1-admin-large-rebuild-status-route-${Date.now()}.duckdb`
   const runRoute = globalThis.Bun.spawnSync(
