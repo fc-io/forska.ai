@@ -227,7 +227,7 @@ const getDefaultBenchmarkObservation = (workItem: ReviewServingBenchmarkWorkItem
 }
 
 const getRejectedBenchmarkObservation = (workItem: ReviewServingBenchmarkWorkItem) => {
-  return {...workItem.observation, rowsReturned: 0, rowsScanned: 0}
+  return {...workItem.observation, rowsReturned: 0, rowsScanned: 0, tempUsageBytes: 0}
 }
 
 const getBenchmarkSample = ({
@@ -396,7 +396,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           queueDepth: 3,
           rowsReturned: 10,
           rowsScanned: 10,
-          tempUsageBytes: 0,
+          tempUsageBytes: 256,
         },
         operationKey: 'llmPromptOverlapRows',
       },

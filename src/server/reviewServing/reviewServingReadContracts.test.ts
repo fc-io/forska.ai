@@ -102,6 +102,13 @@ test('normal foreground row contracts require ready snapshots and serving tables
   expect(bothRows?.requiredComponents).toContain('llmStatus')
 })
 
+test('prompt preview contract does not advertise prompt filters on article payload serving rows', () => {
+  const promptPreview = getReviewServingReadContract('review.prompt.preview')
+
+  expect(promptPreview?.allowedFilters).toEqual([])
+  expect(promptPreview?.servingTable).toBe('mart.review_article_serving_payload_v4')
+})
+
 test('review serving read contracts use planned Phase 1 physical table names', () => {
   const allowedTables = new Set([
     'app.review_bulk_operation_job',
