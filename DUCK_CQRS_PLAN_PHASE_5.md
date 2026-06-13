@@ -16,7 +16,7 @@ After final verification, normal product review paths must not reach raw fallbac
 
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
-| [ ] | Final deletion sweep | Remove any remaining normal raw review fallback, old selected-import foreground joins, large-ID return paths, hidden `OFFSET` pagination, competing V4 serving writers, and obsolete intermediate state. | Static SQL-shape tests and route tests fail if forbidden raw paths return. Route-specific parity validation has passed for every migrated route/flow. Obsolete state is rebuilt or cleared with no compatibility shim unless explicitly required. |
+| [ ] | Final deletion sweep | Remove any remaining normal raw review fallback, old selected-import foreground joins, large-ID return paths, hidden `OFFSET` pagination, competing V4 serving writers, and obsolete intermediate state. | Static SQL-shape tests and route tests fail if forbidden raw paths return. Route-specific parity validation has passed for every migrated route/flow, and every mounted route inventory entry covers the full product response shape. Obsolete state is rebuilt or cleared with no compatibility shim unless explicitly required. |
 | [ ] | Desktop and interruption hardening | Verify browser and desktop use the same serving/job/admission behavior. Test sleep/restart/interruption for projectors, bulk jobs, search jobs, and low-memory runtime. | Desktop build or targeted desktop verification passes, interrupted work resumes safely, and low-memory batch defaults prevent OOM. |
 | [ ] | Final benchmark and release gate | Run the overlap benchmark and repo-native quality gates. | 10M/7-prompt benchmark passes under target memory limits, no foreground temp spill occurs for hot reads, all targeted tests pass, lint passes, and `OOM_ERRORS.md` is updated with the implementation entry. |
 
@@ -38,6 +38,8 @@ After final verification, normal product review paths must not reach raw fallbac
 - Phase 3 projectors, selected-import projection, serving projections, manifests, and cleanup are complete.
 - Phase 4 production route migration, jobs, search, route-specific parity, and DuckDB usage migration are complete.
 - Route-specific parity validation has passed for semantic fixtures, sampled safe-size parity, named counts, freshness states, cursor behavior, SQL shape, latency, and response-size budgets for every migrated route/flow.
+- Every mounted route inventory entry represents complete product-route coverage, not partial helper coverage.
+- Standalone count, filter-option, detail, warning, and prompt-preview routes preserve current product semantics or return explicit unavailable/async states for unsupported pieces.
 - A single normal V4 serving writer owns all `mart.review_*_v4` writes and active V4 snapshot promotion.
 - Legacy mart refresh/rebuild paths cannot promote competing V4 review snapshots.
 - Serving manifests classify required versus optional components, and optional search/count work cannot block unrelated review-list activation.
@@ -53,7 +55,9 @@ After final verification, normal product review paths must not reach raw fallbac
 - Rebuild chunk input digests are maintained incrementally by normal projection work, not computed by rescanning source rows during rebuild startup.
 - Snapshot pins prevent cleanup from deleting data needed by repeatable durable jobs.
 - Every synchronous filter route has a bounded ordered-prefix, posting-table, projection, or pre-proven candidate-set access path.
+- Filter-option routes are backed by complete option/min-max response projections, not only article posting rows.
 - Serving reads, cursors, counts, search, and jobs include the narrow projection identities they depend on and reject mismatched identity state.
+- Foreground admission rejects mismatched search modes before DuckDB execution, and omitted search mode means no search.
 - No normal browser or desktop review flow can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 - Admin/maintenance/debug-only raw reads are named, route-classified, guarded, and excluded from normal product flows.
 
@@ -85,6 +89,9 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [ ] Benchmark proves routine deltas create bounded patches or dirty work, not full 10M-row serving copies, and compaction triggers before patch reads exceed hot-route budgets.
 - [ ] Static SQL-shape tests fail if forbidden raw paths return.
 - [ ] Route tests fail if normal product flows can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
+- [ ] Route inventory tests fail if `mounted: true` entries claim partial count, filter-option, detail, warning, or helper coverage as migrated product routes.
+- [ ] Route tests prove count, filter-option, detail, warning, and prompt-preview migrated routes preserve full current semantics or expose explicit unavailable/async state.
+- [ ] Admission tests prove mismatched search modes are rejected before DuckDB execution.
 - [ ] Desktop build or targeted desktop verification passes for shared runtime paths.
 - [ ] Interrupted projector, bulk, search, and cleanup work resumes safely.
 - [ ] `bun test src/server/reviewServing`
