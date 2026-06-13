@@ -673,6 +673,8 @@ CREATE TABLE IF NOT EXISTS mart.review_article_serving_payload_v4 (
   payload_identity VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
   article_id VARCHAR NOT NULL,
+  article_created_at TIMESTAMPTZ,
+  article_seq BIGINT,
   source_metadata JSON,
   abstract_text VARCHAR,
   full_text_preview VARCHAR,
@@ -843,6 +845,9 @@ ON mart.review_filter_posting_stats_v4(project_id, review_config_hash, snapshot_
 
 CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_lookup
 ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_id);
+
+CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_preview_order
+ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_created_at, article_seq, article_id);
 
 CREATE INDEX IF NOT EXISTS idx_review_article_summary_contribution_v4_lookup
 ON mart.review_article_summary_contribution_v4(project_id, review_config_hash, snapshot_id, component_kind, summary_definition_version, contribution_key);

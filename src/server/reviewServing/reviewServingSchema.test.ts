@@ -130,3 +130,9 @@ test('Phase 1 schema migration keeps raw payloads out of import hot fields', () 
   expect(hotFieldSql).not.toContain('payload_json')
   expect(hotFieldSql).not.toContain('source_metadata JSON')
 })
+
+test('Phase 1 payload serving schema preserves prompt preview article ordering', () => {
+  expect(
+    getMissingColumns('mart.review_article_serving_payload_v4', ['article_created_at', 'article_seq', 'article_id']),
+  ).toEqual([])
+})
