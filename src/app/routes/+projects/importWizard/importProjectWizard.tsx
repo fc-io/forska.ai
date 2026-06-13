@@ -356,6 +356,14 @@ const isRunningProgress = (session: ProjectImportSession | null) => {
   return session?.progress?.status === 'running' || (session !== null && activeSessionStates.has(session.state))
 }
 
+const isActiveSession = (session: ProjectImportSession | null) => {
+  return session !== null && activeSessionStates.has(session.state)
+}
+
+const isProgressTimerRunning = (session: ProjectImportSession | null) => {
+  return session?.progress ? session.progress.status === 'running' : isActiveSession(session)
+}
+
 const getVisibleProgressWidth = (session: ProjectImportSession | null, percent: number | null) => {
   return percent === null ? 0 : percent === 0 && isRunningProgress(session) ? 2 : Math.max(0, Math.min(100, percent))
 }
@@ -404,20 +412,25 @@ const getProgressItemValues = (progress: ProjectImportProgress | null | undefine
 
 const getElapsedProgressMs = (session: ProjectImportSession | null, nowMs: number) => {
   const startedAt = getTimeMs(session?.progress?.startedAt ?? null) || getTimeMs(session?.createdAt ?? null)
+  const finishedAt =
+    getTimeMs(session?.progress?.updatedAt ?? null)
+    || getTimeMs(session?.updatedAt ?? null)
+    || getTimeMs(session?.createdAt ?? null)
+  const elapsedEnd = isProgressTimerRunning(session) ? nowMs : finishedAt
 
-  return startedAt === 0 ? null : Math.max(0, nowMs - startedAt)
+  return startedAt === 0 || elapsedEnd === 0 ? null : Math.max(0, elapsedEnd - startedAt)
 }
 
 const getProgressUpdatedAgoMs = (session: ProjectImportSession | null, nowMs: number) => {
   const updatedAt = getTimeMs(session?.progress?.updatedAt ?? null)
 
-  return updatedAt === 0 ? null : Math.max(0, nowMs - updatedAt)
+  return !isActiveSession(session) || updatedAt === 0 ? null : Math.max(0, nowMs - updatedAt)
 }
 
 const getSessionHeartbeatAgoMs = (session: ProjectImportSession | null, nowMs: number) => {
   const heartbeatAt = getTimeMs(session?.heartbeatAt ?? null) || getTimeMs(session?.updatedAt ?? null)
 
-  return heartbeatAt === 0 ? null : Math.max(0, nowMs - heartbeatAt)
+  return !isActiveSession(session) || heartbeatAt === 0 ? null : Math.max(0, nowMs - heartbeatAt)
 }
 
 const getProgressDetailRows = (session: ProjectImportSession | null, uploadPercent: number | null, nowMs: number) => {

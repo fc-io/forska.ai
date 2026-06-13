@@ -789,6 +789,36 @@ describe('project import route', () => {
     }
   })
 
+  test('stops elapsed timer when import progress is completed', async () => {
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({
+        progress: {
+          message: 'Analysis completed',
+          percent: 100,
+          phase: 'analyze',
+          startedAt: '2030-01-01T00:00:00.000Z',
+          status: 'completed',
+          updatedAt: '2030-01-01T00:03:05.000Z',
+        },
+        state: 'ready_to_commit',
+        updatedAt: '2030-01-01T00:03:05.000Z',
+      }),
+    }
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      expect(container.textContent).toContain('Import progress')
+      expect(container.textContent).toContain('Elapsed: 3m 5s')
+      expect(container.textContent).not.toContain('Progress update:')
+      expect(container.textContent).not.toContain('Session heartbeat:')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('does not expose manual provider or model remapping controls', async () => {
     mockState.sessionQueryResult = {
       ...mockState.sessionQueryResult,
