@@ -12,6 +12,14 @@ Entry format:
 - Fix: Short explanation of the code, query, config, or operational change.
 - Verification: Command, test, or runtime check used to verify the fix.
 
+## 2026-06-13 - Review Serving V4 Foundation
+
+- Error: `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` from foreground review reads under import/materialization overlap.
+- Context: Phase 1 foundation for review rows, counts, facets, queues, search, bulk/export/PDF jobs, and DuckDB foreground workload admission.
+- Cause: Normal review reads still lacked durable serving-only schema and generic runtime budget hooks needed to prevent project-scale raw scans from reaching DuckDB.
+- Fix: Added empty `_v4` serving/control schema plus optional DuckDB workload contexts with row/byte/temp/elapsed budget enforcement and metrics.
+- Verification: `bun test src/server/reviewServing/*.test.ts src/server/utils/duckdbServiceWorkloadContext.test.ts`; `bun test src/server/utils/duckdbService*.test.ts`; isolated temp migration through `0097_reviewServingV4Foundation.sql`.
+
 ## 2026-06-13 - Articles Reviews Serving Read
 
 - Error: `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` from `POST /api/articlesreviews`.

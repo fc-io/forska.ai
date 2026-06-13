@@ -1,5 +1,23 @@
 # DuckDB Long-Term Serving Index Plan
 
+This is the master coordinator for the DuckDB CQRS serving-index work. It owns
+the global problem statement, scale target, contracts, architecture rules,
+cutover gate, non-goals, and repo-wide quality gates.
+
+Phase execution details live in the phase files below:
+
+| Phase | File | Scope |
+|---|---|---|
+| 0 | [DUCK_CQRS_PLAN_PHASE_0.md](./DUCK_CQRS_PLAN_PHASE_0.md) | Contracts, budgets, module boundary, static guards, and benchmark harness. |
+| 1 | [DUCK_CQRS_PLAN_PHASE_1.md](./DUCK_CQRS_PLAN_PHASE_1.md) | Durable schema foundation and generic DuckDB workload admission hooks. |
+| 2 | [DUCK_CQRS_PLAN_PHASE_2.md](./DUCK_CQRS_PLAN_PHASE_2.md) | Write-side deltas, import hot-field extraction, outbox reconciliation, and overlays. |
+| 3 | [DUCK_CQRS_PLAN_PHASE_3.md](./DUCK_CQRS_PLAN_PHASE_3.md) | Projector core, selected-import projection, serving projections, manifests, and cleanup. |
+| 4 | [DUCK_CQRS_PLAN_PHASE_4.md](./DUCK_CQRS_PLAN_PHASE_4.md) | Production serving reads, route-specific parity validation, bulk/search/export/PDF jobs, and usage migration. |
+| 5 | [DUCK_CQRS_PLAN_PHASE_5.md](./DUCK_CQRS_PLAN_PHASE_5.md) | Final hardening sweep, any remaining raw fallback deletion, desktop hardening, benchmark, and release gates. |
+
+When a phase-specific detail conflicts with this master document, update both in
+the same change and keep this master as the coordination source of truth.
+
 ## Problem
 
 Import and materialization should be able to run at the same time. The observed OOM happens when foreground review reads issue maintenance-grade DuckDB queries while import and mart refresh already use the same constrained DuckDB runtime.
@@ -22,18 +40,19 @@ This is a CQRS-style split:
 - Projection model: bounded projectors with leases, cursors, high-water marks, and completed-snapshot promotion.
 - Read model: compact `mart.*_serving` tables keyed by project, required projection identities, logical `snapshot_id`, component `base_generation`, filter state, and cursor sort keys.
 
-This should land as one integrated implementation, not as a staged product
-rollout. The schema, projectors, serving writers, route changes, UI states,
-diagnostics, cleanup, and tests should be completed together before the normal
-review path is cut over. After cutover, raw fallback is removed from normal
-review reads.
+This should land as one coordinated CQRS cutover, not as long-lived parallel
+fallback paths. Phase 4 may migrate production route handlers as soon as the
+route-specific serving path, parity checks, SQL-shape checks, budget checks, and
+relevant browser/desktop checks pass. When a route is migrated, remove or hard
+disable the corresponding legacy raw path in the same change unless it is
+explicitly reclassified as admin/maintenance/debug-only.
 
-Before the normal product path switches, the new pipeline should run through an
-internal parity gate. This is not a staged user rollout: it builds serving
+Before any normal product route switches, the new pipeline should pass the
+route-specific parity gate for that route. The parity gate builds serving
 snapshots, executes sampled read contracts, compares rows/count states and cursor
 behavior against semantic fixtures and safe-size current behavior, records
-latency/query-shape metrics, and blocks cutover on invariant, parity, or budget
-failures.
+latency/query-shape metrics, and blocks that route migration on invariant,
+parity, or budget failures.
 
 ## Scale Target
 
@@ -80,7 +99,7 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - Freshness contract: every review response has an explicit state: fresh, stale, indexing, failed, or missing. Stale state returns the last completed snapshot plus progress; missing state returns indexing state and empty rows.
 - Atomic snapshot manifest: a snapshot becomes active only after every required route component completes for the same composed identity set. Optional components such as async search or unsupported counts have their own availability state and do not block unrelated review-list activation.
 - Component-scoped projector graph: each delta kind enters the graph at the first affected component declared by the invalidation registry. Selected-import projection is only on import/scope paths; judgment and human-review deltas do not wait for selected-import work.
-- Serving writer ownership: one normal writer owns `mart.review_*` serving rows and snapshot promotion. Legacy refresh/rebuild services either call that writer as helpers, produce deltas/dirty work, or are retired; they do not independently write or promote review-serving snapshots.
+- Serving writer ownership: one normal writer owns V4 `mart.review_*_v4` serving rows and V4 snapshot promotion. Legacy refresh/rebuild services either call that writer as helpers, produce deltas/dirty work, or are retired; they do not independently write or promote V4 review-serving snapshots.
 - Delta semantics: deltas enumerate supported changes explicitly, including article import, import record update, route membership removal, LLM judgment create/update/delete, human judgment update, and project config change.
 - Delta coalescing: append-only delta ledgers feed compact dirty-work state keyed by project/article or projection scope. Projectors consume coalesced dirty work and source high-water marks instead of repeatedly scanning large historical delta ranges.
 - Transaction boundary: source writes and delta/outbox writes commit in the same DuckDB transaction. If a source mutation cannot share the transaction, it must use a durable outbox plus reconciliation scan before the projector can advance the affected watermark.
@@ -108,7 +127,7 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - Specific-count contract: only named product-critical counts are synchronous and fast. Unsupported filter/search combinations return nullable/unavailable counts or start async count work; they never trigger raw aggregation.
 - Workload admission contract: every normal foreground DuckDB request comes from a registered read/job contract with a workload class, result-size budget, row budget, memory/temp budget, and timeout. Ad hoc SQL estimation is not a safety boundary; unregistered foreground work is rejected before query execution.
 - Result-size contract: API responses have maximum page size, row count, payload bytes, and hydrated-detail budgets. Detail payloads and ID lists are paged or job-backed, not embedded in hot list responses.
-- Internal parity contract: internal parity reads compare semantic fixtures, sampled safe-size parity, invariants, freshness states, cursors, SQL shape, latency, and result-size behavior before cutover. Any mismatch, forbidden SQL shape, or budget breach blocks normal-route switching.
+- Route-specific parity contract: parity reads compare semantic fixtures, sampled safe-size parity, invariants, freshness states, cursors, SQL shape, latency, and result-size behavior before each production route or flow migrates. Any mismatch, forbidden SQL shape, or budget breach blocks that route migration.
 
 ## Success Criteria
 
@@ -136,7 +155,7 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - [ ] Routine reviewer/import deltas do not full-copy 10 million serving rows; they promote bounded patches or compacted base generations by policy.
 - [ ] Routine patches are component-narrow; judgment-only changes do not rewrite display, import, payload, or search fields.
 - [ ] Serving manifests distinguish route-required projection components from optional async/search/count components.
-- [ ] Exactly one normal serving writer owns `mart.review_*` writes and active snapshot promotion.
+- [ ] Exactly one normal V4 serving writer owns `mart.review_*_v4` writes and active V4 snapshot promotion.
 - [ ] Review list, count, facet, badge, and unassessed-queue reads use serving indexes only.
 - [ ] Hot serving rows contain typed columns for sort, filters, badges, and selected import fields.
 - [ ] Hot serving tables use physical layouts that keep product reads bounded by ordered snapshot/filter prefixes, typed columns, and compact projection-specific rows.
@@ -162,7 +181,7 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - [ ] DuckDB settings are not silently retried, downgraded, or mutated after failures.
 - [ ] Failed snapshots preserve the last known-good snapshot and never trigger raw foreground fallback.
 - [ ] Browser and desktop flows use the same bounded, resumable serving path.
-- [ ] Internal parity validation passes semantic fixture, sampled parity, cursor, freshness-state, SQL-shape, and latency checks before normal-route cutover.
+- [ ] Route-specific parity validation passes semantic fixture, sampled parity, cursor, freshness-state, SQL-shape, and latency checks before each production route or flow migrates.
 - [ ] Read-your-write overlay semantics are route-specific and do not silently mutate snapshot-scoped counts, facets, queues, or bulk eligibility.
 - [ ] OOM logs include enough state to identify route, project, workload class, active snapshot/identity set, and raw/serving mode.
 
@@ -503,31 +522,32 @@ workload-class enforcement.
 | `src/server/reviewServing/reviewServingDirtyWorkService.ts` | Coalesced dirty-work state from append-only deltas to project/article or projection scopes. | Collapses repeated changes, tracks source high-water marks, and records component-level acknowledgements so current components do not reprocess lagging dirty keys. |
 | `src/server/reviewServing/reviewServingContributionService.ts` | Old/new contribution rows and summary deltas for counts, facets, badges, queues, postings, and stats. | Applies `-old +new` changes transactionally with contribution rows and watermarks. No project-wide summary reaggregation for routine changes. |
 | `src/server/reviewServing/reviewServingChunkManifestRepository.ts` | Chunk manifests for rebuilds, compactions, and repair jobs. | Tracks input watermark/hash, chunk key range, output status, checksums, and resume/skip behavior. |
-| `src/server/reviewServing/reviewServingProjectorService.ts` | Projector dependency graph, watermarks, leases, idempotent replay, selected-import projection, serving-row projection, contribution projection, single serving-writer ownership, and cleanup. | Runs only bounded batches. Advances component watermarks and dirty-work acknowledgements in the same transaction as output. This is the only normal owner of `mart.review_*` writes and active-snapshot promotion. |
+| `src/server/reviewServing/reviewServingProjectorService.ts` | Projector dependency graph, watermarks, leases, idempotent replay, selected-import projection, serving-row projection, contribution projection, single serving-writer ownership, and cleanup. | Runs only bounded batches. Advances component watermarks and dirty-work acknowledgements in the same transaction as output. This is the only normal owner of V4 `mart.review_*_v4` writes and active V4 snapshot promotion. |
 | `src/server/workers/reviewServingProjectorWorker.ts` | Scheduling bounded projector wakes. | Coordinates with existing mart refresh/dirty materialization workers and releases claims on wake budgets. It does not bypass `reviewServingProjectorService` to write serving rows or promote snapshots. |
 | `src/server/reviewServing/reviewBulkOperationService.ts` | Select-all, add-to-project, PDF fetch, and export selection jobs. | Stores criteria, required projection identities, snapshot ID, cursor, and progress, then acquires snapshot pins when repeatable results are required. Processes keyset batches. Does not materialize all IDs in memory. |
 | `src/server/workers/reviewBulkOperationWorker.ts` | Executes durable bulk jobs. | Uses batch budgets, cancellation, retry, progress state, and result manifests. |
 | `src/server/reviewServing/reviewSearchService.ts` | Ready token/prefix search state and async substring search jobs. | Synchronous substring scans are not admitted unless a benchmarked n-gram projection is added. Missing search state returns search-indexing/unavailable or creates bounded async work over projected/searchable state, not raw title scans. |
 | `src/server/reviewServing/reviewServingDiagnostics.ts` | OOM/workload diagnostics for route, project, workload class, active snapshot/identity set, queue state, memory limit, temp usage, and raw/serving mode. | Logging shape is shared by foreground reads, projectors, bulk jobs, search jobs, and benchmarks. |
 | `src/server/utils/duckdbService.ts` | Low-level DuckDB execution, queues, memory/runtime metrics, owner behavior, and workload class enforcement hooks. | No product semantics. It enforces budgets supplied by serving/admission layers and records metrics for every DuckDB request. Normal product work must arrive classified from registered contracts. |
-| `src/services/olap/*` | Temporary compatibility wrappers during internal cutover work. | Wrappers delegate to `reviewServingReader` or job services. After internal parity validation and hard cutover, raw review fallback logic is deleted rather than preserved. |
+| `src/services/olap/*` | Temporary compatibility wrappers during route migration work. | Wrappers delegate to `reviewServingReader` or job services for migrated routes. After route-specific parity validation and route migration, matching raw review fallback logic is deleted rather than preserved. |
 
 Route handlers should not call `runDuckdbJsonQuery`, build DuckDB SQL, decode
 review cursors, compute filter signatures, or decide raw fallback. Route handlers
 should validate request bodies, call the appropriate serving reader/job service,
 and return the contract state to the client.
 
-The serving projector service is the single normal write boundary for review
-serving rows and snapshot promotion. Existing mart refresh, dirty
+The serving projector service is the single normal write boundary for new V4
+review-serving rows and V4 snapshot promotion. Existing mart refresh, dirty
 materialization, and large rebuild services may schedule work, produce deltas,
 or provide implementation helpers behind that service, but they must not become
-parallel writers with separate promotion rules.
+parallel V4 writers with separate promotion rules.
 
 Implementation choice for cutover: `reviewServingProjectorService` replaces the
-review-serving write role of existing mart maintenance/rebuild services. Existing
-services may remain only as schedulers, migration/backfill helpers, or
-admin/debug maintenance paths that call the new service. They must not write
-`mart.review_*` review-serving rows or promote manifests directly after Phase 3.
+review-serving write role of existing mart maintenance/rebuild services for V4
+state after Phase 3. Legacy V3 writers may continue only for not-yet-migrated
+normal routes during Phase 4. When a route is migrated to V4 serving reads, the
+matching legacy V3 normal writer/read path should be deleted or hard disabled in
+the same change unless explicitly reclassified as admin/maintenance/debug-only.
 
 Schema objects and persisted state stay in DuckDB migrations under
 `src/db/duckdbMigrations/`. Runtime orchestration stays in server services and
@@ -557,9 +577,9 @@ be explicitly classified as admin/maintenance/debug-only before cutover.
 | Project export | `ProjectExportRoutes.ts` | Use serving/export jobs with projection-identity/snapshot/filter cursors, snapshot pins, and payload budgets. No `OFFSET` batches, full prompt-filter in-memory passes, or raw project scans in request path. |
 | Review health/warnings/prompt preview | `projectsRoutesGetReviewsHealth.ts`, `projectsRoutesGetReviewsWarnings.ts`, `projectsRoutesGetPromptPreview.ts` | Read manifest, diagnostics, and compact serving/progress state. Any project-scale inspection must be maintenance/debug-only or async. |
 | Job execution snapshots | `judgmentExecutionSnapshotService.ts` | Use selected-import projection and review serving state for snapshot inputs. No foreground selected-import CTE recreation. |
-| Mart refresh worker | `projectMartRefreshWorker.ts` | Coordinate with review serving projectors, snapshot manifests, wake budgets, and admission metrics. It may schedule or wake work but must not directly write `mart.review_*` rows or promote snapshots. |
+| Mart refresh worker | `projectMartRefreshWorker.ts` | Coordinate with review serving projectors, snapshot manifests, wake budgets, and admission metrics. It may schedule or wake work but must not directly write V4 `mart.review_*_v4` rows or promote V4 snapshots. |
 | Dirty materialization services | `projectMartDirtyMaterializationService.ts`, `projectMartDirtyRefreshStateService.ts` | Consume coalesced dirty work/projector output and mark article-scoped dirty state without broad rediscovery. Maintain bounded batches, watermarks, and dirty-work compaction. |
-| Mart maintenance service | `getDuckdbMartMaintenanceService.ts` | Retire as a direct review-serving writer. Keep only migration/backfill/admin helpers that call `reviewServingProjectorService`; no direct `mart.review_*` writes or manifest promotion after Phase 3. |
+| Mart maintenance service | `getDuckdbMartMaintenanceService.ts` | Retire as a direct V4 review-serving writer. Keep only migration/backfill/admin helpers that call `reviewServingProjectorService`; no direct V4 `mart.review_*_v4` writes or V4 manifest promotion after Phase 3. |
 | Large rebuild services | `projectMartLargeRebuildExecutor.ts`, `projectMartLargeRebuildRunner.ts`, `projectMartLargeRebuildCyclesService.ts`, `projectMartLargeRebuildStateService.ts` | Become schedulers/backfill drivers for `reviewServingProjectorService`. Rebuild only affected components through the same projector/manifest writer. Use chunk manifests, input hashes, bounded phases, and skip/resume behavior so unchanged completed chunks are not rerun. No foreground raw fallback during rebuild. |
 | Import writers | `articleImportStoreService.ts`, `articleCanonicalMatcher.ts`, `structuredFileImportService.ts`, `pubmedWorkflowStoreEntries.ts`, `europePmcPprWorkflowStoreEntries.ts` | Append compact import/source-record deltas transactionally, pre-extract hot JSON fields, and avoid synchronous project fanout. |
 | Route proxy/classification | `apiRouteClassification.ts`, `ApiProxyRoutes.ts`, `routeSurfaceInventory.ts` | Preserve browser/desktop owner routing while adding workload classifications for review reads, background jobs, bulk jobs, and maintenance/debug routes. |
@@ -586,121 +606,45 @@ unclassified DuckDB work.
 | Bulk jobs | Worker tests for `reviewBulkOperationService` and `reviewBulkOperationWorker`. | Jobs store criteria, projection identities, snapshot ID, and filter signature, pin or declare latest-snapshot semantics, process keyset batches, respect batch/result budgets, support cancellation/retry/resume, and never allocate all matching IDs. |
 | Search jobs | Tests for `reviewSearchService` and any search projection. | Missing search state returns search-indexing/unavailable or async job state. Ready search state is bounded and token/prefix based unless an n-gram projection is explicitly added. Model/prompt changes do not rebuild title-search projections. Synchronous substring scans and raw-title async scans are not emitted. |
 | Overlay semantics | Route/service tests for read-your-write overlays. | Row/detail overlays reconcile after projection, while counts/facets/queues/bulk jobs remain snapshot-scoped or explicitly return overlay-aware state. |
-| Internal parity | Internal validation tests and benchmark assertions for parity mode. | Semantic fixtures, sampled safe-size parity, invariants, freshness states, cursors, SQL shape, latency, result bytes, and route states match expected behavior before normal-route cutover. |
+| Route-specific parity | Validation tests and benchmark assertions for parity mode. | Semantic fixtures, sampled safe-size parity, invariants, freshness states, cursors, SQL shape, latency, result bytes, and route states match expected behavior before each production route or flow migrates. |
 | Desktop/proxy | Route-surface/proxy tests for browser and desktop owner paths. | Browser and desktop share the same serving/job/admission behavior and route classifications. |
 | Benchmark | Scripted 10M-article/7-prompt synthetic benchmark. | Overlap import, dirty materialization, serving refresh, review reads, filters, counts, token/prefix search, unavailable/async substring state, bulk jobs, PDF/export jobs, and desktop interruption/resume under target memory limits. Include repeated small updates proving projectors do not rerun unrelated components. |
 
 Add a shared foreground-SQL assertion helper used by route and SQL-builder tests.
 It should fail if a foreground query contains any forbidden token or non-allowlisted
 raw table. Existing tests in `duckdbOlap.test.ts` that currently expect raw
-fallback should be replaced with tests proving raw fallback is absent after the
-cutover.
+fallback should be replaced route-by-route with tests proving raw fallback is
+absent after each route migration.
 
-## Implementation Phase Checklist
+## Implementation Phase Index
 
-These are implementation phases, not staged product releases. Complete all
-phases and pass the final cutover gate before the normal review path is switched
-over. Each phase should leave tests passing, but users should not receive a
-partial serving architecture.
+These are implementation phases, not staged product releases. Production route
+migration happens in Phase 4 route-by-route after the relevant gates pass. Final
+cutover is complete only after all phases and the Phase 5 release gate pass. Each
+phase should leave tests passing, and migrated routes should not retain hidden
+legacy fallback paths.
 
-Phase 0 cut line: add pure contracts, registries, cursor/admission helpers,
-diagnostic shapes, and SQL-shape guards without changing existing route behavior.
-Static guards in Phase 0 must protect the new `reviewServing` package and record
-the current migration inventory; they must not fail simply because the legacy
-routes still delegate to OLAP before Phase 4. Route-level raw-path guards become
-blocking when those routes are migrated in Phase 4 and at hard cutover in Phase 5.
+The phase files are authoritative for implementation tasks and phase-local
+quality gates. This master remains authoritative for shared constraints, terms,
+non-goals, architecture boundaries, migration inventory, and final cutover gates.
 
-Phase 1 cut line: add empty durable schema, constraints, indexes, and generic
-DuckDB runtime admission hooks. Phase 1 does not need projectors to populate every
-row and does not switch product routes. New serving schema must use `snapshot_id`
-for logical product snapshots and `base_generation`/`patch_watermark` for
-component physical state. Existing V3 review mart tables that use `generation`
-remain legacy compatibility tables until hard cutover.
+| Phase | File | Cut Line | Product Route Switch? |
+|---|---|---|---|
+| 0 | [DUCK_CQRS_PLAN_PHASE_0.md](./DUCK_CQRS_PLAN_PHASE_0.md) | Contracts, budgets, module boundary, static guards, and benchmark harness. | No |
+| 1 | [DUCK_CQRS_PLAN_PHASE_1.md](./DUCK_CQRS_PLAN_PHASE_1.md) | Empty durable schema plus generic DuckDB workload-admission hooks. | No |
+| 2 | [DUCK_CQRS_PLAN_PHASE_2.md](./DUCK_CQRS_PLAN_PHASE_2.md) | Transactional deltas, import hot fields, outbox/reconciliation, and overlays. | No |
+| 3 | [DUCK_CQRS_PLAN_PHASE_3.md](./DUCK_CQRS_PLAN_PHASE_3.md) | Projector core, selected-import projection, serving projections, manifests, and cleanup. | No |
+| 4 | [DUCK_CQRS_PLAN_PHASE_4.md](./DUCK_CQRS_PLAN_PHASE_4.md) | Production route migration to serving readers, durable jobs, route-specific parity validation, and DuckDB usage migration. | Yes, per route after gates pass |
+| 5 | [DUCK_CQRS_PLAN_PHASE_5.md](./DUCK_CQRS_PLAN_PHASE_5.md) | Final hardening sweep, any remaining raw fallback deletion, desktop hardening, final benchmark, and release gate. | Final verification |
 
-Phase 1 table naming rule: create new review-serving mart tables with a `_v4`
-suffix when the unsuffixed name already exists or the old route still depends on
-the current schema. Read contracts should point at the Phase 1 `_v4` physical
-tables. At Phase 5, either keep the `_v4` names as the permanent contract names
-or swap/rename after old callers are deleted; do not mutate legacy V3 table
-schemas during Phase 1.
+Rules for phase coordination:
 
-Phase 2 cut line: instrument write paths to append compact delta/outbox rows,
-extract hot import fields, and create small reviewer-action overlays. Phase 2
-must not populate serving projections, promote snapshots, wake project-scale
-selected-import fanout synchronously, or switch product routes. A Phase 2 write
-path may return success only after the source write and its local delta/outbox
-entry are durable in the same transaction or after a durable reconciliation path
-can prove the missing delta will be recovered before any dependent watermark
-advances.
-
-Phase 2 delta envelope: every row in `app.import_run_article_delta` and
-`app.review_change_delta` has common fields independent of `change_kind`:
-`delta_id`, `change_kind`, `source_table`, `source_row_id`, `source_operation`,
-`source_partition`, `source_high_water_mark`, `source_updated_at`,
-`idempotency_key`, `payload_version`, compact typed key columns, optional
-`payload_json`, `created_at`, and `reconciled_at`. The invalidation registry
-`requiredKeys` are change-specific payload keys; the envelope fields are required
-for every delta and are tested separately. `source_high_water_mark` is monotonic
-within `source_partition`; projectors and dirty-work conversion cannot advance a
-consumer watermark past an unreconciled source high-water mark.
-
-Phase 2 source ownership rules:
-
-- Article/import-route membership writes emit `importRoute.article.added`,
-  `importRoute.article.removed`, or `importRoute.article.rankFields.updated` and
-  do not resolve affected projects in the write transaction.
-- Direct project membership writes emit `projectScope.article.added` or
-  `projectScope.article.removed` because the affected project is already the
-  source row owner.
-- Article content/display writes may emit multiple deltas in one transaction:
-  `article.display.updated`, `article.searchText.updated`, and/or
-  `article.judgmentInput.updated`, depending on which derived input identities
-  changed.
-- LLM judgment writes emit `judgment.llm.created`, `judgment.llm.updated`, or
-  `judgment.llm.deleted` with model ID, prompt ID, content flags, judgment ID,
-  and source high-water state from the persisted source row. They must preserve
-  benchmark-critical model/content settings and must not silently retry or
-  reinterpret failed requests.
-- Human review writes emit `judgment.human.updated`. If human deletes or hard
-  tombstones are introduced later, add a new `change_kind` and registry rule
-  before wiring that write path.
-- Prompt edits emit `prompt.config.updated` for the affected prompt identity.
-  Project model/content/prompt membership changes emit
-  `project.reviewConfig.updated`; they do not mark article/display/search/payload
-  identities dirty unless those inputs actually changed.
-
-Phase 2 hot-field extraction rule: import writers pre-extract only compact typed
-fields needed by selected-import ranking, display, filters, postings, and
-contribution keys into `app.review_import_article_hot_field`. Raw source JSON,
-large metadata, and audit payloads remain in existing source/audit tables.
-Projectors read the hot-field table or compact delta keys; foreground routes do
-not extract JSON.
-
-Phase 2 overlay rule: `app.review_write_overlay` is only for immediate reviewer
-feedback on row/detail actions. It stores the affected project, optional review
-config hash, article, prompt/judgment key, overlay kind, small typed value,
-source high-water mark, `created_at`, `expires_at`, and reconcile status. It does
-not make counts, facets, queues, search, bulk selection, PDF, or export
-overlay-aware unless that route contract explicitly opts in.
-
-| Status | Phase | Theme | Implement First | Done When |
-|---|---|---|---|---|
-| [ ] | 0 | Contracts, budgets, and module boundary | Add `src/server/reviewServing/` with contracts, projection identity builders, invalidation registry, read registry, cursor helpers, SQL-shape test helpers, admission interfaces, internal parity contracts, and diagnostics shape. Define freshness/count/search/bulk states, named fast counts, route budgets, workload classes, narrow projection identities, snapshot IDs, physical filter access strategies, and required/optional projection components. | Every planned hot read has a contract entry mapped to product routes in the migration inventory, every hot read has a declared physical table/cursor/budget/count/filter-access behavior, every delta kind maps to first affected component/downstream dependents/update mode, foreground admission is registry-based, and static tests guard the new SQL builders/registries from raw fallback shapes. |
-| [ ] | 0 | Benchmark harness | Add the 10M-article/7-prompt synthetic fixture generator, overlap workload definition, memory limits, and metrics capture API. | The harness can run a smoke workload before final schema/projectors exist and can later run the full fixture. It reports p50/p95/p99 latency, memory, temp usage, queue depth, rows scanned, rows returned, and admitted/rejected work. The full 10M pass remains a Phase 5 release gate. |
-| [ ] | 1 | Schema foundation | Add migrations for import deltas, review change deltas, review delta outbox/reconciliation cursors, import hot fields, coalesced dirty work, dirty-work acknowledgements, projector cursors/watermarks, projection identity manifests, rebuild chunk manifests, selected-import snapshots, logical snapshot manifests, snapshot pins, compacted serving bases, typed component patch tables, filter postings, posting stats, contribution rows, payloads, count/facet rows, search state, bulk jobs, write overlays, and retention metadata. Use `_v4` physical mart names where legacy V3 tables conflict. | `bun run db:mig` applies cleanly and schema tests prove the exact table names used by `reviewServingReadContracts.ts`, common delta envelope fields, hot-field columns, outbox/reconciliation cursors, narrow identity keys, sorted/order keys, `snapshot_id`/`base_generation`/typed-patch fields, required/optional component status, retention/pin fields, dirty-work acknowledgement fields, contribution keys, posting stats, and chunk resume fields exist. |
-| [ ] | 1 | Runtime admission foundation | Add generic workload classification and budget-enforcement hooks in the DuckDB runtime without adding product-specific SQL there. Thread an optional workload context through execution helpers with workload class, route/job key, project ID, result-row/byte budget, temp-spill policy, timeout, and stale/async fallback intent. | Registered review-serving foreground work can be admitted from contracts before DuckDB execution, unregistered migrated foreground work can be rejected or served stale, legacy non-migrated routes remain explicitly classified during migration, and metrics include workload class, memory limit, temp usage, queue state, route/job key, and project context. |
-| [ ] | 2 | Write-side deltas | Add `reviewServingDeltaLedger` append APIs and update import, article content/display, LLM judgment, human judgment, prompt/config, and project-scope writers to append compact deltas transactionally with change kinds from the invalidation registry. Pre-extract hot import fields into `app.review_import_article_hot_field`. Add durable outbox/reconciliation only for source writes that cannot append the delta in the same transaction. | Tests prove source writes and deltas/outbox rows commit atomically or reconcile before watermark advancement, common envelope fields are present, idempotency keys prevent duplicate deltas, deletes/removals create tombstones, config changes produce only the narrow identities they affect, import writes do not persist affected-project fanout unless proven bounded, and no write path synchronously fans out selected-import state to every project. |
-| [ ] | 2 | Read-your-write state | Add optimistic/overlay state for reviewer actions that need immediate feedback before projection catches up. | Reviewer changes have a clear immediate response path, route-specific overlay semantics are documented, and reconciliation tests prove overlays disappear once included in a completed serving snapshot. |
-| [ ] | 3 | Projector core | Build component-scoped projector dependency graph, coalesced dirty-work service, compacted component acknowledgements, leases, watermarks, idempotent replay, wake budgets, single serving-writer boundary, major base/minor patch snapshot model, contribution diff service, incrementally digested rebuild chunk manifests, failure state, snapshot pins, and retention cleanup primitives. | Projector tests prove crash/retry/replay safety, bounded batch size, dirty-work coalescing, component ack skip behavior, wake release, watermark atomicity, single-writer ownership, contribution diffs, component-narrow patches, patch compaction thresholds, chunk resume/skip behavior without source-row hash scans, pin-aware cleanup, and failed snapshots preserving last-known-good data. |
-| [ ] | 3 | Selected-import projection | Replace runtime `selected_scoped_article_import` ranking with snapshot-scoped selected-import projection. | Selected import rows are projected by bounded batches, promoted atomically, and normal foreground SQL never contains `selected_scoped_article_import` after cutover. |
-| [ ] | 3 | Serving projections | Write compacted base rows, component-narrow patch rows, payload rows, human/both/unassessed status, badges, contribution rows, count/facet rows, filter postings, posting stats, queue rows, and search projection or async search state from completed dependency inputs. | Manifest checks prove all route-required components and watermarks match one logical snapshot before promotion. Optional search/count components expose availability states and do not block unrelated route activation. Routine changes update only affected component fields, contributions, postings, and chunk digests. |
-| [ ] | 4 | Foreground serving reads | Migrate LLM, human, both, unassessed, filters, facets, badges, counts, rows, queues, detail reads, health/warnings, and prompt preview to `reviewServingReader`. | Route tests prove serving-only reads, projection-identity/snapshot/filter-scoped cursors, bounded filter access, result caps, no raw fallback, no `OFFSET`, no JSON extraction/sorts, no project-wide windows, and registry-based admission. |
-| [ ] | 4 | Internal parity validation | Run the new serving reader behind internal wiring against semantic fixtures, invariant checks, benchmarks, and safe-size current behavior before product cutover. | Parity checks pass for row payload semantics, named count states, freshness states, cursor behavior, SQL shape, latency budgets, result bytes, and no forbidden foreground DuckDB work. |
-| [ ] | 4 | Bulk, export, PDF, and search jobs | Replace select-all/add-to-project/PDF/export all-ID materialization with durable keyset-batched jobs. Add token/prefix search and async-only substring behavior unless n-gram projection is benchmarked. | Bulk/search tests prove criteria/projection-identity/snapshot/filter signatures are persisted, repeatable jobs pin snapshots, batches are bounded, jobs resume/cancel/retry, and synchronous substring search scans are not admitted. |
-| [ ] | 4 | DuckDB usage migration | Resolve every row in the DuckDB usage migration inventory. | Each current review-related DuckDB use delegates to serving/admission/job logic or is explicitly marked admin/maintenance/debug-only. |
-| [ ] | 5 | Hard cutover and deletion | Remove normal raw review fallback, old selected-import foreground joins, large-ID return paths, hidden `OFFSET` pagination, competing serving writers, and obsolete intermediate state. | Static SQL-shape tests and route tests fail if forbidden raw paths return. Internal parity validation has passed. Obsolete state is rebuilt or cleared with no compatibility shim unless explicitly required. |
-| [ ] | 5 | Desktop and interruption hardening | Verify browser and desktop use the same serving/job/admission behavior. Test sleep/restart/interruption for projectors, bulk jobs, search jobs, and low-memory runtime. | Desktop build or targeted desktop verification passes, interrupted work resumes safely, and low-memory batch defaults prevent OOM. |
-| [ ] | 5 | Final benchmark and release gate | Run the overlap benchmark and repo-native quality gates. | 10M/7-prompt benchmark passes under target memory limits, no foreground temp spill occurs for hot reads, all targeted tests pass, lint passes, and `OOM_ERRORS.md` is updated with the implementation entry. |
+- Phase 4 may switch production route handlers one route or flow at a time after route-specific serving, parity, SQL-shape, budget, and relevant browser/desktop gates pass.
+- When a Phase 4 route switches, delete or hard-disable the matching legacy raw path in the same change unless it is explicitly reclassified as admin/maintenance/debug-only.
+- Phase 5 is the final hardening and verification sweep, not the first normal-route switch.
+- Do not preserve raw fallback as a hidden normal path after a route has migrated.
+- If a phase file changes a global contract, term, table name, or cutover gate, update this master document in the same change.
+- If this master document changes a phase cut line or quality gate, update the affected phase file in the same change.
 
 ## Proposed Tables
 
@@ -785,7 +729,7 @@ cheap at million-scale.
 - Failed index means return the last known-good snapshot plus failure state, not a raw scan.
 - Serving snapshot promotion must be all-or-nothing through a manifest.
 - Serving manifests distinguish route-required components from optional search/count/job components so optional work does not block unrelated hot reads.
-- Exactly one normal serving writer may write `mart.review_*` rows and promote active snapshots.
+- Exactly one normal V4 serving writer may write `mart.review_*_v4` rows and promote active V4 snapshots.
 - Routine deltas promote logical snapshots with bounded patches; they do not copy all rows for a 10M-article project.
 - Projector wakes start at the first affected component declared by the invalidation registry. Judgment-only and human-review changes must not run selected-import, display, payload, or search projectors.
 - Prompt config changes are prompt-scoped. One prompt change must not rebuild unchanged prompt projections or summaries.
@@ -834,18 +778,18 @@ cheap at million-scale.
 
 ## Cutover Gate
 
-The cutover happens only after every implementation phase above is complete.
-Until then, the work can exist behind internal wiring, but the normal product
-review path should not partially switch to the new architecture.
+Cutover can happen route-by-route in Phase 4 after route-specific gates pass.
+Final cutover is complete only after every implementation phase above is
+complete and no normal product review flow can reach legacy raw fallback.
 
-- [ ] Phase 0 contracts, module boundaries, static guards, and benchmark harness are complete.
-- [ ] Phase 1 schema and DuckDB workload-admission foundations are complete.
-- [ ] Phase 2 write-side deltas, hot-field extraction, and read-your-write state are complete.
-- [ ] Phase 3 projectors, selected-import projection, serving projections, manifests, and cleanup are complete.
-- [ ] Phase 4 foreground serving reads, jobs, search, and DuckDB usage migration are complete.
-- [ ] Phase 5 raw fallback deletion, desktop hardening, final benchmark, and repo quality gates are complete.
-- [ ] Internal parity validation has passed for semantic fixtures, sampled safe-size parity, named counts, freshness states, cursor behavior, SQL shape, latency, and response-size budgets.
-- [ ] A single normal serving writer owns all `mart.review_*` writes and active-snapshot promotion; legacy mart refresh/rebuild paths cannot promote competing review snapshots.
+- [ ] [Phase 0](./DUCK_CQRS_PLAN_PHASE_0.md) contracts, module boundaries, static guards, and benchmark harness are complete.
+- [ ] [Phase 1](./DUCK_CQRS_PLAN_PHASE_1.md) schema and DuckDB workload-admission foundations are complete.
+- [ ] [Phase 2](./DUCK_CQRS_PLAN_PHASE_2.md) write-side deltas, hot-field extraction, and read-your-write state are complete.
+- [ ] [Phase 3](./DUCK_CQRS_PLAN_PHASE_3.md) projectors, selected-import projection, serving projections, manifests, and cleanup are complete.
+- [ ] [Phase 4](./DUCK_CQRS_PLAN_PHASE_4.md) production route migration, jobs, search, route-specific parity, and DuckDB usage migration are complete.
+- [ ] [Phase 5](./DUCK_CQRS_PLAN_PHASE_5.md) remaining raw fallback deletion, desktop hardening, final benchmark, and repo quality gates are complete.
+- [ ] Route-specific parity validation has passed for semantic fixtures, sampled safe-size parity, named counts, freshness states, cursor behavior, SQL shape, latency, and response-size budgets for every migrated route/flow.
+- [ ] A single normal V4 serving writer owns all `mart.review_*_v4` writes and active V4 snapshot promotion; legacy mart refresh/rebuild paths cannot promote competing V4 review snapshots.
 - [ ] Serving manifests classify required versus optional components, and optional search/count work cannot block unrelated review-list activation.
 - [ ] Logical snapshot/base/patch behavior is benchmarked, and routine deltas cannot full-copy project-scale serving rows.
 - [ ] Layered projection identities prove model/prompt/content changes do not rebuild article/import/title/payload/search projections when those inputs are unchanged.
@@ -893,65 +837,23 @@ review path should not partially switch to the new architecture.
 
 ## Quality Gates
 
+Phase-local quality gates live in the phase files and must pass before that phase
+is treated as complete. This master tracks only final cross-phase gates.
+
+- [ ] [Phase 0](./DUCK_CQRS_PLAN_PHASE_0.md) quality gates pass.
+- [ ] [Phase 1](./DUCK_CQRS_PLAN_PHASE_1.md) quality gates pass.
+- [ ] [Phase 2](./DUCK_CQRS_PLAN_PHASE_2.md) quality gates pass.
+- [ ] [Phase 3](./DUCK_CQRS_PLAN_PHASE_3.md) quality gates pass.
+- [ ] [Phase 4](./DUCK_CQRS_PLAN_PHASE_4.md) quality gates pass for every migrated route/flow.
+- [ ] [Phase 5](./DUCK_CQRS_PLAN_PHASE_5.md) final hardening and release gates pass.
 - [ ] 10M-article/7-prompt benchmark fixture or synthetic equivalent is available and documented.
 - [ ] Overlap benchmark passes under target DuckDB memory limits with import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume.
 - [ ] Benchmark records p50/p95/p99 latency, peak process memory, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected query counts, rows scanned, rows returned, and active snapshot/identity state.
 - [ ] Benchmark proves foreground review reads are bounded by page size, selected filter postings, or precomputed summary rows, not total project article/judgment/import-route count.
-- [ ] Benchmark records physical read-shape evidence for hot routes: row groups/rows scanned, temp spill, response bytes, and whether ordered snapshot/filter prefixes were used.
-- [ ] Benchmark proves routine deltas create bounded patches or dirty work, not full 10M-row serving copies, and compaction triggers before patch reads exceed hot-route budgets.
-- [ ] Benchmark includes repeated article/title changes, judgment changes, human-review changes, import appends, and prompt/config changes proving unrelated projections are not rerun.
-- [ ] Benchmark separately measures display-only, search-only, judgment-input-content, one-prompt config, and judgment-only changes proving each updates only affected components.
 - [ ] Every product review route has a `reviewServingReadContracts.ts` registry entry with workload class, cursor spec, narrow projection identity behavior, budgets, allowed filters, physical filter access strategy, and named fast counts.
 - [ ] Every normal foreground DuckDB call is traceable to a registered read/job contract; unregistered foreground calls fail tests before query execution.
-- [ ] A static test or grep-based test fails if review route handlers call `runDuckdbJsonQuery`, build DuckDB SQL, decode cursors, or call raw OLAP fallback directly.
 - [ ] Every row in the DuckDB usage migration inventory is either migrated to serving/admission/job logic or explicitly classified as admin/maintenance/debug-only.
-- [ ] Shared foreground SQL-shape tests reject `selected_scoped_article_import`, `ROW_NUMBER(`, `OFFSET`, raw `app.article`/`app.judgment` scans, `json_extract`, and unbounded `GROUP BY` in product-read SQL.
-- [ ] `bun test src/services/olap/duckdbOlap.test.ts`
-- [ ] `bun test src/server/reviewServing`
-- [ ] `bun test src/server/services/projectMartDirtyMaterializationService.test.ts`
-- [ ] `bun test src/server/workers/projectMartRefreshWorker.test.ts`
-- [ ] `bun test src/server/services/projectMartLargeRebuildExecutor.test.ts`
-- [ ] Targeted tests for import delta ledger writes with the common delta envelope, deterministic idempotency keys, tombstones, and no affected-project fanout
-- [ ] Targeted tests for import hot-field extraction into `app.review_import_article_hot_field`, proving projectors do not need raw JSON for selected-import ranking, display, filters, postings, or contribution keys
-- [ ] Targeted tests for review change delta writes from article display/search/judgment-input changes, LLM judgments, human judgments, prompt/config changes, and project-scope changes
-- [ ] Targeted tests proving one source mutation that affects multiple identities emits every required delta in the same transaction, for example title changes that affect display, search, and judgment-input content
-- [ ] Targeted tests proving source writes and delta/outbox writes are atomic or reconciled before watermarks advance
-- [ ] Targeted tests proving outbox reconciliation converts, retries, or quarantines missing/malformed deltas and prevents dependent watermark advancement while unreconciled source high-water marks exist
-- [ ] Targeted tests proving LLM judgment deltas preserve persisted model ID and content flags without retrying, downgrading, or reinterpreting benchmark-critical settings
-- [ ] Targeted tests proving projection identity changes invalidate only dependent components, and review config changes do not rebuild config-independent article/import/title/payload/search state
-- [ ] Targeted tests proving display, search, judgment-input-content, project-scope, prompt config, and review config identities advance independently
-- [ ] Targeted tests proving one prompt config change does not rebuild unchanged prompt outputs, summaries, queues, or facets
-- [ ] Targeted tests proving every delta kind has an invalidation registry entry with first affected component, downstream dependents, affected keys, and update mode
-- [ ] Targeted tests for delta semantics, tombstones, and replay after deletes/removals
-- [ ] Targeted tests for coalesced dirty-work creation, repeated-change collapse, component acknowledgements, retention, and compaction after consumer watermarks advance
-- [ ] Targeted tests proving dirty-work acknowledgements compact into component high-water rows or compressed ranges
-- [ ] Targeted tests for route/project delta projector fanout and cursor behavior
-- [ ] Targeted tests for projector dependency order, watermarks, and idempotent replay
-- [ ] Targeted tests proving only the review serving projector boundary writes `mart.review_*` rows and promotes active snapshots
-- [ ] Targeted tests for major base generation, append-first large imports, bounded patch promotion, patch merge-cost budgets, patch compaction thresholds, and pin-aware cleanup
-- [ ] Targeted tests proving judgment-only, display-only, search-only, and selected-import-only changes write component-narrow patches instead of row-wide patches
-- [ ] Targeted tests for chunk manifests proving rebuilds and compactions skip unchanged completed chunks, resume failed chunks, and use incrementally maintained input digests instead of source-row scans
-- [ ] Targeted tests for selected import projector snapshot/checkpoint behavior
-- [ ] Targeted tests for atomic review serving snapshot manifest promotion and failed-snapshot recovery
-- [ ] Targeted tests for required versus optional manifest components and route-specific availability states
-- [ ] Targeted tests for count/facet serving projections
-- [ ] Targeted tests for old/new contribution diffs for counts, facets, badges, queues, posting stats, deletes, answer changes, and membership removals
-- [ ] Targeted tests for unsupported count/facet combinations returning nullable or unavailable states
-- [ ] Targeted tests for filter contracts proving every synchronous filter combination uses ordered-prefix, posting/projection, or bounded-candidate access with maintained selectivity stats.
-- [ ] Targeted tests for token/prefix search behavior and async/unavailable substring behavior proving substring search never runs as a synchronous full-table scan.
-- [ ] Targeted tests for projection-identity/snapshot/filter-scoped cursors and cursor-invalid behavior after identity/snapshot/component-state/filter mismatch.
-- [ ] Targeted tests for hard route result-size caps: max page size, max response bytes, max hydrated payload bytes, and max per-request ID count.
-- [ ] Targeted tests for read-your-write overlay or optimistic reconciliation behavior, including TTL/reconcile status and route-scoped overlay eligibility
-- [ ] Targeted tests proving counts, facets, queues, and bulk jobs do not silently include overlay state unless declared by the route contract
-- [ ] Targeted tests proving foreground LLM, human, both, unassessed, filter, count, badge, row, queue, bulk, PDF, and export routes do not include raw fallback, `selected_scoped_article_import`, or raw project-wide scans
-- [ ] Targeted tests proving stale, indexing, failed, and missing serving states do not trigger raw fallback
-- [ ] Targeted tests proving review list routes use keyset pagination and do not require large `OFFSET`
-- [ ] Targeted tests proving select-all, add-to-project, PDF fetch, and export use durable jobs and keyset-batched execution without returning all matching article IDs.
-- [ ] Targeted tests proving repeatable durable jobs pin serving snapshots and cleanup skips pinned base/patch/payload/count/search state
-- [ ] Targeted tests proving foreground query admission rejects or serves stale for over-budget workload classes before DuckDB execution.
-- [ ] Targeted tests proving internal parity validation blocks cutover on semantic fixture, invariant, sampled parity, cursor, freshness-state, SQL-shape, latency, or response-size mismatches.
-- [ ] Browser review-flow verification for stale/indexing/failed/missing states
-- [ ] Desktop review-flow verification or targeted desktop build when shared runtime paths change
+- [ ] No normal browser or desktop review flow can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 - [ ] `bun run lint`
-- [ ] `bun run db:mig` if schema/projection migrations are added
-- [ ] Add an `OOM_ERRORS.md` entry in the same change as any OOM fix implementation
+- [ ] `bun run db:mig` if schema/projection migrations are added.
+- [ ] Add an `OOM_ERRORS.md` entry in the same change as any OOM fix implementation.

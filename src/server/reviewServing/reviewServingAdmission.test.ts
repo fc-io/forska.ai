@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test'
 
-import {admitReviewServingRequest} from './reviewServingAdmission.ts'
+import {admitReviewServingDuckdbWorkload, admitReviewServingRequest} from './reviewServingAdmission.ts'
 
 test('admitReviewServingRequest accepts a registered foreground row read within budget', () => {
   const result = admitReviewServingRequest({
@@ -89,4 +89,35 @@ test('admitReviewServingRequest rejects stale snapshots unless the caller explic
 
   expect(rejected.admitted ? null : rejected.reason).toBe('staleSnapshotRequired')
   expect(allowed.admitted).toBe(true)
+})
+
+test('admitReviewServingDuckdbWorkload maps an admitted contract to generic DuckDB workload context', () => {
+  const result = admitReviewServingDuckdbWorkload({
+    contractKey: 'review.llm.rows',
+    estimatedResultBytes: 50_000,
+    pageSize: 25,
+    projectId: 'project-a',
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewRows',
+  })
+
+  expect(result.admitted ? result.workloadContext : null).toEqual({
+    allowsTempSpill: false,
+    fallbackIntent: 'reject',
+    maxResultBytes: 2_000_000,
+    maxResultRows: 100,
+    projectId: 'project-a',
+    routeOrJobKey: 'review.llm.rows',
+    workloadClass: 'foregroundReviewRows',
+  })
+})
+
+test('admitReviewServingDuckdbWorkload preserves rejection before DuckDB execution', () => {
+  const result = admitReviewServingDuckdbWorkload({
+    contractKey: 'review.rawFallback.rows',
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewRows',
+  })
+
+  expect(result).toEqual({admitted: false, contract: null, reason: 'unregisteredContract'})
 })

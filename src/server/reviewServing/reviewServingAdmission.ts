@@ -1,3 +1,4 @@
+import type {DuckdbWorkloadContext, DuckdbWorkloadFallbackIntent} from '../utils/duckdbService.ts'
 import type {
   NamedReviewFastCountKey,
   ReviewServingFreshnessState,
@@ -15,6 +16,7 @@ export type ReviewServingAdmissionRequest = {
   estimatedResultBytes?: number
   namedCountKey?: string
   pageSize?: number
+  projectId?: string
   requiresTempSpill?: boolean
   searchMode?: ReviewServingAdmissionSearchMode
   snapshotFreshness?: ReviewServingFreshnessState
@@ -35,6 +37,10 @@ export type ReviewServingAdmissionResult =
   | {admitted: true; contract: ReviewServingReadContract}
   | {admitted: false; contract: ReviewServingReadContract | null; reason: ReviewServingAdmissionRejectionReason}
 
+export type ReviewServingDuckdbWorkloadAdmissionResult =
+  | {admitted: true; contract: ReviewServingReadContract; workloadContext: DuckdbWorkloadContext}
+  | {admitted: false; contract: ReviewServingReadContract | null; reason: ReviewServingAdmissionRejectionReason}
+
 const hasNamedCount = (contract: ReviewServingReadContract, namedCountKey: NamedReviewFastCountKey) => {
   return contract.namedFastCounts.includes(namedCountKey)
 }
@@ -50,6 +56,29 @@ const getUnsupportedCountResult = (
   return isNamedReviewFastCountKey(namedCountKey) && hasNamedCount(contract, namedCountKey)
     ? null
     : {admitted: false, contract, reason: 'unsupportedCountShape'}
+}
+
+const getNonStaleDuckdbFallbackIntent = (request: ReviewServingAdmissionRequest): DuckdbWorkloadFallbackIntent => {
+  return request.searchMode === 'substringAsync' ? 'async' : 'reject'
+}
+
+const getDuckdbFallbackIntent = (request: ReviewServingAdmissionRequest): DuckdbWorkloadFallbackIntent => {
+  return request.allowStale ? 'serveStale' : getNonStaleDuckdbFallbackIntent(request)
+}
+
+const getDuckdbWorkloadContext = (
+  contract: ReviewServingReadContract,
+  request: ReviewServingAdmissionRequest,
+): DuckdbWorkloadContext => {
+  return {
+    allowsTempSpill: contract.allowsTempSpill,
+    fallbackIntent: getDuckdbFallbackIntent(request),
+    maxResultBytes: contract.maxEstimatedResultBytes,
+    maxResultRows: contract.maxResultRows,
+    projectId: request.projectId,
+    routeOrJobKey: contract.key,
+    workloadClass: contract.workloadClass,
+  }
 }
 
 export const admitReviewServingRequest = (request: ReviewServingAdmissionRequest): ReviewServingAdmissionResult => {
@@ -94,4 +123,18 @@ export const admitReviewServingRequest = (request: ReviewServingAdmissionRequest
   }
 
   return {admitted: true, contract}
+}
+
+export const admitReviewServingDuckdbWorkload = (
+  request: ReviewServingAdmissionRequest,
+): ReviewServingDuckdbWorkloadAdmissionResult => {
+  const admission = admitReviewServingRequest(request)
+
+  return admission.admitted
+    ? {
+        admitted: true,
+        contract: admission.contract,
+        workloadContext: getDuckdbWorkloadContext(admission.contract, request),
+      }
+    : admission
 }

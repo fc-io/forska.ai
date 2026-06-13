@@ -1,0 +1,80 @@
+# DuckDB CQRS Plan Phase 1 - Schema And Runtime Admission Foundation
+
+Master coordinator: [DUCK_OOM_FIX_PLAN.md](./DUCK_OOM_FIX_PLAN.md)
+
+## Objective
+
+Add the empty durable schema and generic DuckDB workload-admission foundation required by later phases. This phase must not populate serving projections or switch product routes.
+
+## Cut Line
+
+Add empty durable schema, constraints, indexes, and generic DuckDB runtime admission hooks.
+
+Phase 1 does not need projectors to populate every row and does not switch product routes.
+
+New serving schema must use `snapshot_id` for logical product snapshots and `base_generation`/`patch_watermark` for component physical state.
+
+Existing V3 review mart tables that use `generation` remain legacy compatibility tables only for not-yet-migrated routes. Delete or hard-disable each dependent V3 normal path as its Phase 4 route migration lands, with any remainder cleared in Phase 5.
+
+## Table Naming Rule
+
+Create new review-serving mart tables with a `_v4` suffix when the unsuffixed name already exists or the old route still depends on the current schema.
+
+Read contracts should point at the Phase 1 `_v4` physical tables.
+
+After old callers are deleted, either keep the `_v4` names as permanent contract names or swap/rename during the Phase 5 final verification sweep.
+
+Do not mutate legacy V3 table schemas during Phase 1.
+
+## Workstreams
+
+| Status | Theme | Implement First | Done When |
+|---|---|---|---|
+| [ ] | Schema foundation | Add migrations for import deltas, review change deltas, review delta outbox/reconciliation cursors, import hot fields, coalesced dirty work, dirty-work acknowledgements, projector cursors/watermarks, projection identity manifests, rebuild chunk manifests, selected-import snapshots, logical snapshot manifests, snapshot pins, compacted serving bases, typed component patch tables, filter postings, posting stats, contribution rows, payloads, count/facet rows, search state, bulk jobs, write overlays, and retention metadata. Use `_v4` physical mart names where legacy V3 tables conflict. | `bun run db:mig` applies cleanly and schema tests prove the exact table names used by `reviewServingReadContracts.ts`, common delta envelope fields, hot-field columns, outbox/reconciliation cursors, narrow identity keys, sorted/order keys, `snapshot_id`/`base_generation`/typed-patch fields, required/optional component status, retention/pin fields, dirty-work acknowledgement fields, contribution keys, posting stats, and chunk resume fields exist. |
+| [ ] | Runtime admission foundation | Add generic workload classification and budget-enforcement hooks in the DuckDB runtime without adding product-specific SQL there. Thread an optional workload context through execution helpers with workload class, route/job key, project ID, result-row/byte budget, temp-spill policy, timeout, and stale/async fallback intent. | Registered review-serving foreground work can be admitted from contracts before DuckDB execution, unregistered migrated foreground work can be rejected or served stale, legacy non-migrated routes remain explicitly classified during migration, and metrics include workload class, memory limit, temp usage, queue state, route/job key, and project context. |
+
+## Required Schema Groups
+
+- Delta ledgers: `app.import_run_article_delta`, `app.review_change_delta`
+- Reconciliation: `app.review_source_change_outbox`, `app.review_delta_reconciliation_cursor`
+- Import hot fields: `app.review_import_article_hot_field`
+- Dirty work: `app.review_serving_dirty_work`, `app.review_serving_dirty_work_ack`, `app.review_project_import_delta_cursor`
+- Projector state: `app.review_serving_projector_watermark`, `app.review_projection_identity_manifest`, `app.review_rebuild_chunk_manifest`
+- Selected import: `app.review_selected_import_snapshot`, `app.review_selected_article_import_v4`
+- Snapshot state: `app.review_serving_snapshot_manifest`, `app.review_serving_snapshot_pin`
+- Reviewer overlay: `app.review_write_overlay`
+- Jobs: `app.review_bulk_operation_job`, `app.review_search_job`
+- Retention: `app.review_serving_retention_mark`
+- Serving marts: `mart.review_article_serving_v4`, `mart.review_article_count_serving_v4`, `mart.review_filter_facet_serving_v4`, `mart.review_unassessed_queue_serving_v4`, `mart.review_title_search_serving_v4`
+- Patch and support marts: display patches, selected-import patches, LLM patches, human patches, queue patches, posting patches, posting serving rows, posting stats, payload rows, and summary contributions
+
+## Runtime Admission Requirements
+
+- Low-level DuckDB helpers accept an optional workload context but contain no product-specific SQL or review-serving decisions.
+- The workload context includes workload class, route/job key, project ID, row budget, byte budget, temp-spill policy, timeout, and fallback intent.
+- Metrics include workload class, memory limit, temp usage, queue state, route/job key, project context, rows returned, result bytes, and failures.
+- Budget enforcement happens when a workload context is supplied.
+- Legacy non-migrated routes remain explicitly classified during migration instead of being silently treated as registered serving reads.
+
+## Rules
+
+- Do not populate projections in Phase 1.
+- Do not promote serving snapshots in Phase 1.
+- Do not switch product routes in Phase 1.
+- Do not add product-specific SQL or contract knowledge to `duckdbService.ts`.
+- Keep raw JSON out of hot import-field and hot serving schemas.
+- Keep large payloads out of hot list/count/filter serving rows.
+
+## Quality Gates
+
+- [ ] `bun run db:mig`
+- [ ] If the live DuckDB owner blocks `bun run db:mig`, run the full migration flow against a temporary DuckDB path and record the blocker.
+- [ ] `bun test src/server/reviewServing`
+- [ ] `bun test src/server/utils/duckdbService*.test.ts`
+- [ ] `bunx eslint src/server/reviewServing src/server/utils/duckdbService.ts`
+- [ ] `bun run lint`
+- [ ] Schema tests prove every table referenced by `reviewServingReadContracts.ts` exists.
+- [ ] Schema tests prove common delta envelope fields exist on both delta ledgers.
+- [ ] Schema tests prove `snapshot_id`, `base_generation`, `patch_watermark`, typed patch keys, required/optional component status, retention/pin fields, dirty-work ack fields, contribution keys, posting stats, and chunk resume fields exist.
+- [ ] Runtime tests prove over-budget contextual DuckDB work records metrics and is rejected before becoming a normal product success path.
+- [ ] Browser and desktop review flows are not changed by this phase.
