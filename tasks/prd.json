@@ -1,98 +1,188 @@
 {
-  "name": "Chinese Article Comparison",
-  "description": "Compare Chinese-language/script articles against non-Chinese articles on the compare projects page with performant server-side aggregate stats.",
-  "branchName": "ralph/chinese-article-comparison",
+  "name": "DuckDB CQRS Phase 0",
+  "branchName": "ralph/duckdb-cqrs-phase-0",
+  "description": "Create the pure review-serving contracts, registries, cursor and admission helpers, SQL-shape guards, diagnostics, and benchmark smoke harness without changing product route behavior.",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Materialize Chinese article category",
-      "description": "As a developer, I want each comparison-serving article categorized by language/script so later stats can split Chinese and non-Chinese articles without per-request text scans.",
+      "title": "Define review-serving core contracts",
+      "description": "As a developer, I want shared review-serving contract types so later Phase 0 modules can agree on freshness, counts, search, bulk, snapshots, workload classes, and route budgets.",
       "acceptanceCriteria": [
-        "Add a derived category for `chinese` and `non_chinese` based on language metadata or CJK Han characters in title/abstract.",
-        "Add the category column to `mart.comparison_article_serving` through the DuckDB migration flow.",
-        "Populate the category in `comparisonProjectServingRollupBuilder.ts` during serving rebuilds.",
-        "Mark comparison serving generations stale so categories are regenerated after migration.",
-        "Add serving rollup tests for metadata language, CJK title/abstract, and non-Chinese cases.",
-        "`bun run db:mig` passes.",
-        "`bun test src/server/services/comparisonProjectServingRollupBuilder.test.ts` passes.",
-        "`bun run lint` passes.",
-        "`bun run build` passes."
+        "Add or update `src/server/reviewServing/reviewServingContracts.ts` with explicit freshness states, count/search/bulk states, named fast count keys, workload classes, route budget shapes, snapshot identifiers, required/optional component states, and physical filter access strategy types.",
+        "Keep contract definitions pure and free of database calls or route behavior changes.",
+        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
+        "Add adjacent tests for contract invariants and exported state values.",
+        "`bun test src/server/reviewServing` passes.",
+        "`bunx eslint src/server/reviewServing` passes.",
+        "`bun run lint` passes."
       ],
       "priority": 1,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [],
-      "completionNotes": "Completed by agent"
+      "dependsOn": []
     },
     {
       "id": "US-002",
-      "title": "Aggregate stats by article category",
-      "description": "As a developer, I want comparison stats aggregated by Chinese and non-Chinese category so sensitivity, specificity, and related metrics use independent denominators.",
+      "title": "Build projection identity helpers",
+      "description": "As a developer, I want stable projection identity helpers so review-serving rows can carry only the invalidation keys they depend on.",
       "acceptanceCriteria": [
-        "Join `mart.comparison_cell_serving` to `mart.comparison_article_serving` by comparison project, generation, and article ID in stats aggregate SQL.",
-        "Aggregate existing comparison stats by `comparison_id` and article category without returning article-level rows.",
-        "Aggregate resolved-truth confusion counts by category for Human and LLM metrics.",
-        "Return category article counts so the UI can hide the section when Chinese article count is 0.",
-        "Keep the existing all-articles stats unchanged.",
-        "Add stats tests for independent category denominators and null metric handling.",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts` passes.",
-        "`bun run lint` passes.",
-        "`bun run build` passes."
+        "Add or update `src/server/reviewServing/reviewProjectionIdentity.ts` with stable identity builders for display, search, judgment-input content, project scope, prompt config, review config, and composed route identities.",
+        "Identity builders produce stable output for equivalent input ordering and do not include unrelated projection inputs.",
+        "Keep helpers pure and free of database calls or route behavior changes.",
+        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
+        "Add adjacent tests proving stable identity hashing and narrow component dependencies.",
+        "`bun test src/server/reviewServing` passes.",
+        "`bunx eslint src/server/reviewServing` passes.",
+        "`bun run lint` passes."
       ],
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
         "US-001"
-      ],
-      "completionNotes": "Completed by agent"
+      ]
     },
     {
       "id": "US-003",
-      "title": "Expose category breakdowns in stats API types",
-      "description": "As a frontend developer, I want typed category breakdowns from the stats endpoint so the compare projects page can render the new split safely.",
+      "title": "Add invalidation registry",
+      "description": "As a developer, I want every planned review-serving delta kind mapped to the narrowest affected component so later write paths cannot fall back to broad project invalidation.",
       "acceptanceCriteria": [
-        "Extend `/api/comparison-projects/:id/stats` to return `categoryBreakdowns` beside existing `comparisons` and `additionalProjectStats`.",
-        "Use a flat category breakdown shape containing category, label, article count, comparisons, and additional project stats.",
-        "Update client service types in `comparisonProjectsService.ts` without changing existing callers of all-articles stats.",
-        "Ensure category labels are stable as `Chinese` and `Non-Chinese`.",
-        "`bun test src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.test.ts` passes.",
-        "`bun run lint` passes.",
-        "`bun run build` passes."
+        "Add or update `src/server/reviewServing/reviewServingInvalidationRegistry.ts` with every Phase 0 change kind planned for Phase 2 and Phase 3.",
+        "Each change kind declares first affected component, downstream dependents, required affected keys, and update mode.",
+        "LLM judgment changes do not invalidate display, selected-import, or search components unless those inputs actually changed.",
+        "Unknown change kinds are not treated as broad project invalidation.",
+        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
+        "Static tests prove every `reviewServingChangeKind` has an invalidation registry entry and no unknown change kind becomes broad project invalidation.",
+        "`bun test src/server/reviewServing` passes.",
+        "`bunx eslint src/server/reviewServing` passes.",
+        "`bun run lint` passes."
       ],
       "priority": 3,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
+        "US-001",
         "US-002"
-      ],
-      "completionNotes": "Completed by agent"
+      ]
     },
     {
       "id": "US-004",
-      "title": "Render Chinese vs Non-Chinese stats",
-      "description": "As a compare projects user, I want to see Chinese vs non-Chinese performance stats only when Chinese articles exist so the page stays focused and useful.",
+      "title": "Create read contract registry",
+      "description": "As a developer, I want every planned hot review read registered with serving-table, cursor, budget, count, filter, freshness, and workload metadata before route migration starts.",
       "acceptanceCriteria": [
-        "Add a compact Chinese vs Non-Chinese section to `comparisonProjectStatsCard.tsx`.",
-        "Hide the section when the Chinese article count is 0.",
-        "Prioritize resolved-truth metrics: resolved count, accuracy, sensitivity, specificity, precision, NPV, F1, balanced accuracy, truth prevalence, TP, FP, TN, and FN.",
-        "When no adjudicated truth exists, show agreement stats by category: overlap, conflicts, true conflicts, Cohen's kappa, sensitivity, and specificity.",
-        "Keep the current main Project Stats and Additional Project Stats tables available and unchanged.",
-        "Browser-check the compare projects page with a project containing Chinese and non-Chinese articles.",
-        "`bun run lint` passes.",
-        "`bun run build` passes.",
-        "`bun run desktop:build` passes because shared compare-project UI changed."
+        "Add or update `src/server/reviewServing/reviewServingReadContracts.ts` with contract entries for LLM, human, both, unassessed, filter, facet, badge, count, row, queue, detail, health, warning, prompt preview, bulk, PDF, export, and search surfaces planned for Phase 4.",
+        "Every contract declares workload class, cursor spec, result budgets, allowed filters, physical filter access strategy, named fast counts, freshness behavior, required/optional components, and physical serving table.",
+        "Read contracts point only to planned serving/index tables and do not include raw fallback tables.",
+        "The migration inventory maps contracts to product routes without changing route behavior.",
+        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
+        "Static tests prove every `reviewServingReadContracts.ts` key has workload class, cursor spec, budgets, allowed filters, physical filter access strategy, named fast counts, freshness behavior, and required/optional components.",
+        "`bun test src/server/reviewServing` passes.",
+        "`bunx eslint src/server/reviewServing` passes.",
+        "`bun run lint` passes."
       ],
       "priority": 4,
-      "passes": true,
+      "passes": false,
       "notes": "",
       "dependsOn": [
+        "US-001",
+        "US-002",
         "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Add cursor and filter signature helpers",
+      "description": "As a developer, I want review-serving cursors and filter signatures to be snapshot, projection identity, filter, and sort scoped so migrated routes can reject stale or mismatched cursors.",
+      "acceptanceCriteria": [
+        "Add or update `src/server/reviewServing/reviewServingCursor.ts` with cursor encode/decode helpers and validation against snapshot ID, projection identities, component state, filter signature, sort key, and route contract.",
+        "Add stable filter signature helpers that produce identical signatures for equivalent filter inputs.",
+        "Malformed cursors and identity, component, filter, or sort mismatches return explicit invalid-cursor results instead of raw fallback behavior.",
+        "Keep helpers pure and free of database calls or route behavior changes.",
+        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
+        "Add adjacent tests for cursor round trips, malformed cursors, filter signature stability, and mismatch rejection.",
+        "`bun test src/server/reviewServing` passes.",
+        "`bunx eslint src/server/reviewServing` passes.",
+        "`bun run lint` passes."
       ],
-      "completionNotes": "Completed by agent"
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Add admission interfaces and diagnostics shape",
+      "description": "As a developer, I want registry-based admission and diagnostics contracts so Phase 4 foreground work can be admitted or rejected before DuckDB execution.",
+      "acceptanceCriteria": [
+        "Add or update `src/server/reviewServing/reviewServingAdmission.ts` with registry-based admission for registered contracts, page/result budgets, stale allowance, unsupported count shapes, and synchronous substring search rejection.",
+        "Admission returns explicit accepted or rejected results without executing DuckDB SQL.",
+        "Add diagnostics shapes for freshness, count/search/job state, route budget decisions, workload class, and rejection reasons.",
+        "Do not add product-specific SQL or route behavior changes.",
+        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
+        "Add adjacent tests for accepted registered work, unregistered foreground work, over-budget work, stale snapshot behavior, unsupported counts, and synchronous substring search rejection.",
+        "`bun test src/server/reviewServing` passes.",
+        "`bunx eslint src/server/reviewServing` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-004",
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Add serving SQL-shape guards",
+      "description": "As a developer, I want SQL-shape guard helpers so new review-serving SQL cannot accidentally reintroduce raw fallback, unbounded scans, or large-offset pagination patterns.",
+      "acceptanceCriteria": [
+        "Add `src/server/reviewServing/reviewServingSql.ts` or sibling `reviewServingSql/` files with SQL-shape guard helpers for new serving SQL builders.",
+        "SQL-shape guards reject `selected_scoped_article_import`, `ROW_NUMBER(`, `OFFSET`, raw `app.article` scans, raw `app.judgment` scans, `json_extract`, and unbounded foreground `GROUP BY` in new serving SQL.",
+        "SQL-shape guards accept bounded serving-table keyset SQL over registered serving/index tables.",
+        "Static guards protect the new `reviewServing` package and do not fail just because legacy routes still delegate to OLAP before Phase 4.",
+        "Use `effect` for any non-trivial JavaScript/TypeScript async or server flow added by this story, while keeping pure transforms as plain functions.",
+        "SQL-shape tests prove new serving SQL cannot include raw fallback shapes.",
+        "`bun test src/server/reviewServing` passes.",
+        "`bunx eslint src/server/reviewServing` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Add benchmark smoke harness scaffold",
+      "description": "As a developer, I want a smoke-capable benchmark scaffold so later phases can run the full 10M-article/7-prompt overlap workload with consistent metrics.",
+      "acceptanceCriteria": [
+        "Add a benchmark harness scaffold for the 10M-article/7-prompt synthetic fixture and overlap workload definition without requiring completed schema or projectors.",
+        "The harness metrics shape includes p50/p95/p99 latency, memory, temp usage, queue depth, rows scanned, rows returned, and admitted/rejected work.",
+        "The smoke path can run against minimal or mocked inputs before final schema/projectors exist.",
+        "The full 10M benchmark remains documented as a Phase 5 release gate and is not required for Phase 0 completion.",
+        "Use `effect` for non-trivial JavaScript/TypeScript async benchmark orchestration, resource lifetime, retries, polling, or backoff, while keeping pure transforms as plain functions.",
+        "Benchmark smoke harness can run without requiring completed schema/projectors.",
+        "`bun test src/server/reviewServing` passes.",
+        "`bunx eslint src/server/reviewServing` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-004",
+        "US-006",
+        "US-007"
+      ]
     }
-  ],
-  "metadata": {
-    "updatedAt": "2026-06-06T11:09:12.737Z"
-  }
+  ]
 }
