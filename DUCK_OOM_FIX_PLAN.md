@@ -20,7 +20,7 @@ This is a CQRS-style split:
 
 - Write model: `app.article`, `app.article_import_route`, `app.judgment`, human judgment tables, and append-only delta ledgers.
 - Projection model: bounded projectors with leases, cursors, high-water marks, and completed-snapshot promotion.
-- Read model: compact `mart.*_serving` tables keyed by project, required projection identities, logical snapshot/base generation, filter state, and cursor sort keys.
+- Read model: compact `mart.*_serving` tables keyed by project, required projection identities, logical `snapshot_id`, component `base_generation`, filter state, and cursor sort keys.
 
 This should land as one integrated implementation, not as a staged product
 rollout. The schema, projectors, serving writers, route changes, UI states,
@@ -84,9 +84,9 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - Delta semantics: deltas enumerate supported changes explicitly, including article import, import record update, route membership removal, LLM judgment create/update/delete, human judgment update, and project config change.
 - Delta coalescing: append-only delta ledgers feed compact dirty-work state keyed by project/article or projection scope. Projectors consume coalesced dirty work and source high-water marks instead of repeatedly scanning large historical delta ranges.
 - Transaction boundary: source writes and delta/outbox writes commit in the same DuckDB transaction. If a source mutation cannot share the transaction, it must use a durable outbox plus reconciliation scan before the projector can advance the affected watermark.
-- Idempotency and replay: projector writes use stable generation-scoped keys, upserts, tombstones, and transactions so the same delta range can be retried or replayed without double-counting.
+- Idempotency and replay: projector writes use stable snapshot/base-scoped keys, upserts, tombstones, and transactions so the same delta range can be retried or replayed without double-counting.
 - Layered projection identity: every serving row carries only the invalidation keys it depends on. Identities are stable base generation plus component patch watermark/ranges, not one global generation per small update. Display, search, judgment-input content, project scope, prompt config, and review config identities advance independently.
-- Logical snapshot model: a route `generation` means a logical serving snapshot, not a full project-row copy. Normal deltas create component-narrow patches and manifest updates; full base generations are reserved for rebuilds, large compactions, or structural config changes.
+- Logical snapshot model: a route reads one `snapshot_id`, not a full project-row copy. `base_generation` is per component and reserved for first builds, rebuilds, large compactions, or structural config changes. Normal deltas create component-narrow patches and manifest updates.
 - Change dependency matrix: every delta `change_kind` maps to affected projection components, affected keys, first affected component, downstream dependents, and update mode: component patch, contribution diff, posting update, queue update, search update, compacted base rebuild, or unavailable/async.
 - Watermark model: every projected table records the source high-water mark it includes, and watermarks advance atomically with the projector output they describe.
 - Dirty-work acknowledgement: dirty keys are acknowledged per projection component using bounded range/high-water ack state. A slow optional component must not cause already-current required components to reprocess the same key.
@@ -100,7 +100,7 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - Desktop constraints: the same architecture must tolerate laptop memory limits, slower disks, sleep/restart interruptions, and resumable background work.
 - Physical read-path contract: every hot route declares its serving table, required columns, filter keys, sort key, cursor shape, and index/access path. Hot reads use projected typed columns and config/snapshot-scoped keys, not runtime JSON extraction or selected-import joins.
 - Filter access contract: every synchronous filter combination is allowlisted with a bounded physical access strategy: ordered prefix, posting/projection table, small candidate set, or unavailable/async. A serving-only predicate is not enough if it scans project-scale rows.
-- Cursor contract: every cursor includes generation, sort key values, page direction, and a filter signature. If the generation or filter signature changes, the route returns a fresh first page or a cursor-invalid state instead of mixing generations.
+- Cursor contract: every cursor includes `snapshot_id`, required component identities, component base/patch state, sort key values, page direction, and a filter signature. If the snapshot, identity set, component state, or filter signature changes, the route returns a fresh first page or a cursor-invalid state instead of mixing snapshots.
 - Snapshot pinning contract: durable jobs and long-lived cursors that require repeatable results acquire snapshot pins. Cleanup cannot delete pinned base rows, patches, payloads, counts, facets, or search state until the pin expires or is released.
 - Rebuild chunk contract: long rebuilds use chunk manifests with incrementally maintained input watermarks/digests and output status. Rebuild workers skip unchanged completed chunks and resume failed/interrupted chunks instead of rerunning the full phase or rescanning source rows just to decide skip eligibility.
 - Bulk-operation contract: select-all, add-to-project, PDF fetch, export, and similar actions operate through persisted selection jobs or cursor-batched server jobs. They never return or allocate all matching article IDs in one request.
@@ -122,7 +122,7 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - [ ] Import writes append deltas cheaply and do not synchronously fan out selected-import state to every affected project.
 - [ ] Source writes and delta/outbox writes commit atomically, or reconciliation blocks watermark advancement until missing deltas are recovered.
 - [ ] Delta ledgers cover article/import creates, updates, deletes, route membership changes, LLM judgments, human judgments, and project config changes explicitly.
-- [ ] Selected scoped import state is maintained by bounded projectors with generation/checkpoint semantics.
+- [ ] Selected scoped import state is maintained by bounded projectors with snapshot/checkpoint semantics.
 - [ ] Serving snapshots use layered projection identity with stable base generations plus component patch watermarks/ranges, so small updates do not globally invalidate unchanged rows.
 - [ ] Project model/content/prompt changes invalidate only dependent judgment-derived rows, cursors, counts, queues, and jobs, not config-independent display/import/title/payload/search projections.
 - [ ] Every delta kind has an explicit affected-component matrix with affected keys and update mode.
@@ -139,7 +139,7 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - [ ] Exactly one normal serving writer owns `mart.review_*` writes and active snapshot promotion.
 - [ ] Review list, count, facet, badge, and unassessed-queue reads use serving indexes only.
 - [ ] Hot serving rows contain typed columns for sort, filters, badges, and selected import fields.
-- [ ] Hot serving tables use physical layouts that keep product reads bounded by ordered generation/filter prefixes, typed columns, and compact projection-specific rows.
+- [ ] Hot serving tables use physical layouts that keep product reads bounded by ordered snapshot/filter prefixes, typed columns, and compact projection-specific rows.
 - [ ] Named product-critical counts and facets are precomputed or nullable; they are never computed from raw tables in request paths.
 - [ ] Counts, facets, badges, and posting cardinalities update from per-article old/new contribution diffs instead of full reaggregation for routine changes.
 - [ ] Count and facet projections document the specific fast count keys, cardinality limits, and unavailable states.
@@ -148,9 +148,9 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - [ ] Product list routes use keyset pagination and never require `OFFSET` over large scopes.
 - [ ] Every synchronous filter combination has a bounded physical access path or returns unavailable/async state.
 - [ ] Filter posting selectivity/cardinality stats are maintained incrementally and used to pick bounded leading access paths.
-- [ ] Cursors include generation and filter signatures so pagination cannot mix generations or filter states.
+- [ ] Cursors include `snapshot_id`, component base/patch state, and filter signatures so pagination cannot mix snapshots or filter states.
 - [ ] Bulk actions and exports never materialize all matching article IDs or payloads in memory.
-- [ ] Durable bulk/export/PDF/search jobs pin the serving snapshot they read or explicitly declare latest-generation semantics.
+- [ ] Durable bulk/export/PDF/search jobs pin the serving snapshot they read or explicitly declare latest-snapshot semantics.
 - [ ] Delta ledgers are coalesced into bounded dirty-work queues and retained/compacted after all consumers pass the relevant watermarks.
 - [ ] Long rebuilds use chunk manifests and skip unchanged completed chunks after crash, resume, or repeated runs.
 - [ ] Chunk skip decisions use incrementally maintained input digests/watermarks, not source-row rescans.
@@ -172,10 +172,10 @@ Foreground judgment-derived review-list routes should follow this shape:
 
 ```sql
 SELECT ...
-FROM mart.review_article_serving
+FROM mart.review_article_serving_v4
 WHERE project_id = ?
   AND review_config_hash = ?
-  AND generation = ?
+  AND snapshot_id = ?
   AND list_mode_key = ?
   AND <projected_filter_predicates>
   AND (activity_sort_at, article_id) < (?, ?)
@@ -187,10 +187,10 @@ Judgment-derived counts and facets should follow this shape:
 
 ```sql
 SELECT count_value
-FROM mart.review_article_count_serving
+FROM mart.review_article_count_serving_v4
 WHERE project_id = ?
   AND review_config_hash = ?
-  AND generation = ?
+  AND snapshot_id = ?
   AND count_kind = ?
   AND filter_key = ?
 ```
@@ -200,9 +200,9 @@ contract, but each hot read must be backed by projected typed columns and an
 explicit access path. No raw fallback. No `ROW_NUMBER()`. No JSON extraction. No
 raw total count. No `OFFSET` over large projects.
 
-Here, `generation` is a logical serving snapshot ID. It can refer to a compacted
-base generation plus bounded patch watermarks; it must not imply a full 10M-row
-copy for every routine delta.
+Here, `snapshot_id` is a logical serving snapshot ID. It points at component
+projection identities, compacted `base_generation` values, and bounded patch
+watermarks; it must not imply a full 10M-row copy for every routine delta.
 
 If the active snapshot includes patches, the SQL builder may read bounded
 component patch tables plus the compacted base with anti-joins only for the
@@ -224,9 +224,10 @@ Every hot read shape must declare:
 - Workload class and admission budget.
 
 Review cursors must encode the projection identities used by the route,
-generation/snapshot ID, filter signature, sort direction, sort values, and
-article ID. A cursor from one generation, identity set, or filter signature must
-not page through a different generation, identity set, or filter state.
+`snapshot_id`, component base/patch state, filter signature, sort direction,
+sort values, and article ID. A cursor from one snapshot, identity set, component
+state, or filter signature must not page through a different snapshot, identity
+set, or filter state.
 
 ## Persisted Identity Glossary
 
@@ -344,14 +345,14 @@ declared downstream dependents. Examples:
 ## Filter Access Strategy
 
 Serving-only SQL is not automatically safe. A predicate over
-`mart.review_article_serving` can still scan millions of rows if it is not tied
+`mart.review_article_serving_v4` can still scan millions of rows if it is not tied
 to the physical layout.
 
 Every synchronous filter combination in `reviewServingReadContracts.ts` must use
 one of these strategies:
 
 - Ordered-prefix read: the filter is part of the table order/prefix for that route and list mode.
-- Posting/projection table: start from a compact table keyed by project, required projection identities, generation, filter kind/value, list mode, sort key, and article ID.
+- Posting/projection table: start from a compact table keyed by project, required projection identities, `snapshot_id`, filter kind/value, list mode, sort key, and article ID.
 - Bounded candidate set: a prior contract step proves the candidate set is under the route row/result budget before hydration.
 - Async/unavailable: the combination is not admitted synchronously and returns unavailable state or creates a durable job.
 
@@ -361,7 +362,7 @@ foreground DuckDB query for that filter combination.
 
 The most selective posting must come from maintained stats, not runtime scans.
 Each posting/projection table should have incrementally updated cardinality rows
-keyed by project, projection identity, generation, filter kind/value, and list
+keyed by project, projection identity, `snapshot_id`, filter kind/value, and list
 mode. Admission uses those stats to reject combinations whose leading candidate
 set cannot fit route budgets.
 
@@ -377,12 +378,12 @@ The serving design depends on columnar layout, not only query syntax. Hot tables
 should be written so DuckDB can prune and stream bounded row groups instead of
 discovering candidates through project-scale scans.
 
-- Write hot serving rows ordered by the dominant read prefixes, such as `project_id`, required projection identities, optional `review_config_hash`, `generation`, `list_mode_key`, projected filter bucket, descending sort key, and `article_id`.
+- Write hot serving rows ordered by the dominant read prefixes, such as `project_id`, required projection identities, optional `review_config_hash`, `snapshot_id`, `list_mode_key`, projected filter bucket, descending sort key, and `article_id`.
 - Keep hot rows narrow and typed: IDs, timestamps, booleans, small enums, numeric sort keys, compact text needed by list UI, and precomputed membership/filter keys.
 - Keep arrays, large text, raw metadata, source JSON, prompt payloads, and derived detail blobs out of hot rows. Store them in keyed payload/detail tables or export-job payload paths.
 - Use projection-specific tables for high-cardinality or specialized access, such as title-search tokens, unassessed queue ordering, count/facet summaries, and bulk selection cursors.
 - Avoid one universal wide table if a route would need to scan many irrelevant columns or rows. Add a compact projection when it makes the hot path bounded and easy to test.
-- Treat DuckDB indexes as optional acceleration. Correctness and OOM safety must come from generation/filter prefixes, sorted writes, keyset cursors, result caps, and workload admission.
+- Treat DuckDB indexes as optional acceleration. Correctness and OOM safety must come from snapshot/filter prefixes, sorted writes, keyset cursors, result caps, and workload admission.
 - Rebuild or compact serving projections in bounded batches that preserve the target physical order for the next completed snapshot.
 - Benchmark row-group pruning, rows scanned, temp spill, and response bytes for every registered hot read; a syntactically valid serving query still fails if it scans project-scale rows.
 
@@ -391,7 +392,7 @@ discovering candidates through project-scale scans.
 Rebuilds and compactions should avoid rerunning unchanged work. Every long
 projector phase should be split into deterministic chunks.
 
-- Chunk manifests are keyed by project, component, projection identity, incrementally maintained input watermark/digest, chunk key range, output generation, status, and error.
+- Chunk manifests are keyed by project, component, projection identity, incrementally maintained input watermark/digest, chunk key range, output `base_generation`, status, and error.
 - A rebuild worker claims chunks independently, writes output for that chunk, validates chunk-level counts/checksums, and marks the chunk complete in the same transaction as output promotion for that chunk.
 - On crash, sleep, or restart, workers skip completed chunks whose input watermark/hash still matches and retry only failed or missing chunks.
 - If an upstream input hash changes for a chunk, invalidate only that chunk and dependent chunks, not the whole rebuild.
@@ -490,19 +491,21 @@ workload-class enforcement.
 | `src/server/reviewServing/reviewProjectionIdentity.ts` | Builds narrow display, search, judgment input content, project-scope, per-prompt config, summary, and review-config identity hashes. | Identity builders are pure and deterministic. Do not use one broad config hash for config-independent projections or unchanged prompts. |
 | `src/server/reviewServing/reviewServingInvalidationRegistry.ts` | Change-kind to affected-component matrix. | Every delta kind declares first affected component, downstream dependents, affected keys, and update mode. Unmapped deltas are quarantined or fail tests. |
 | `src/server/reviewServing/reviewServingReadContracts.ts` | Registry of every hot product read: LLM, human, both, unassessed, filters, facets, badges, counts, rows, queues, PDF/export selection, and bulk selection. | Each contract declares allowed filters, named fast counts, serving table, physical filter access strategy, sort key, cursor fields, result-size caps, and DuckDB workload class. This registry is the normal foreground admission source. |
-| `src/server/reviewServing/reviewServingCursor.ts` | Encoding, decoding, validation, and invalidation of projection-identity/generation/filter-scoped cursors. | Cursor payloads include the projection identities used by the route, snapshot ID, filter signature, sort direction, sort values, and article ID. Routes do not hand-roll cursors. |
+| `src/server/reviewServing/reviewServingCursor.ts` | Encoding, decoding, validation, and invalidation of projection-identity/snapshot/filter-scoped cursors. | Cursor payloads include the projection identities used by the route, snapshot ID, component base/patch state, filter signature, sort direction, sort values, and article ID. Routes do not hand-roll cursors. |
 | `src/server/reviewServing/reviewServingAdmission.ts` | Foreground query admission before DuckDB execution. | Admits only registered read/job contracts for normal product work. Validates workload class, page limit, result-size budget, stale-allowed behavior, temp-spill policy, and search/count availability before SQL runs. |
 | `src/server/reviewServing/reviewServingReader.ts` | Product-facing serving reads for list/count/filter/facet/badge/queue/detail entrypoints. | Routes call this module instead of `duckdbOlap.ts`. It returns freshness/count/search states and never chooses raw fallback. |
 | `src/server/reviewServing/reviewServingSql.ts` or sibling `reviewServingSql/` files | Small SQL builders for serving reads only. | Builders are pure, contract-driven, and tested for forbidden patterns. No route-specific string concatenation outside this layer. |
 | `src/server/reviewServing/reviewServingManifestRepository.ts` | Active/candidate/failed snapshot manifests, consistency check results, last-known-good snapshot, and promotion state. | Manifest reads are cheap keyed lookups. Promotion is transactional and all-or-nothing. |
 | `src/server/reviewServing/reviewServingSnapshotPinRepository.ts` | Snapshot pins for durable jobs and any cursor/session that needs repeatable reads. | Cleanup must consult pins before deleting base generations, patches, payloads, counts, facets, queues, or search rows. |
 | `src/server/reviewServing/reviewServingDeltaLedger.ts` | Append APIs for import, LLM judgment, human judgment, prompt/config, and project-scope deltas. | Write paths append compact deltas transactionally with source changes. Large payloads stay out of delta rows. |
+| `src/server/reviewServing/reviewServingDeltaReconciliation.ts` | Durable outbox conversion, source high-water reconciliation, quarantine, and missing-delta recovery. | Used only when a source write cannot append the final delta in the same transaction. Projector watermarks must consult reconciliation state before advancing. |
+| `src/server/reviewServing/reviewImportHotFieldService.ts` | Compact hot-field extraction for import/source-record writes. | Stores only typed fields needed by selected-import ranking, display, filters, postings, and contribution keys. Raw JSON remains in source/audit tables. |
 | `src/server/reviewServing/reviewServingDirtyWorkService.ts` | Coalesced dirty-work state from append-only deltas to project/article or projection scopes. | Collapses repeated changes, tracks source high-water marks, and records component-level acknowledgements so current components do not reprocess lagging dirty keys. |
 | `src/server/reviewServing/reviewServingContributionService.ts` | Old/new contribution rows and summary deltas for counts, facets, badges, queues, postings, and stats. | Applies `-old +new` changes transactionally with contribution rows and watermarks. No project-wide summary reaggregation for routine changes. |
 | `src/server/reviewServing/reviewServingChunkManifestRepository.ts` | Chunk manifests for rebuilds, compactions, and repair jobs. | Tracks input watermark/hash, chunk key range, output status, checksums, and resume/skip behavior. |
 | `src/server/reviewServing/reviewServingProjectorService.ts` | Projector dependency graph, watermarks, leases, idempotent replay, selected-import projection, serving-row projection, contribution projection, single serving-writer ownership, and cleanup. | Runs only bounded batches. Advances component watermarks and dirty-work acknowledgements in the same transaction as output. This is the only normal owner of `mart.review_*` writes and active-snapshot promotion. |
 | `src/server/workers/reviewServingProjectorWorker.ts` | Scheduling bounded projector wakes. | Coordinates with existing mart refresh/dirty materialization workers and releases claims on wake budgets. It does not bypass `reviewServingProjectorService` to write serving rows or promote snapshots. |
-| `src/server/reviewServing/reviewBulkOperationService.ts` | Select-all, add-to-project, PDF fetch, and export selection jobs. | Stores criteria, required projection identities, generation, cursor, and progress, then acquires snapshot pins when repeatable results are required. Processes keyset batches. Does not materialize all IDs in memory. |
+| `src/server/reviewServing/reviewBulkOperationService.ts` | Select-all, add-to-project, PDF fetch, and export selection jobs. | Stores criteria, required projection identities, snapshot ID, cursor, and progress, then acquires snapshot pins when repeatable results are required. Processes keyset batches. Does not materialize all IDs in memory. |
 | `src/server/workers/reviewBulkOperationWorker.ts` | Executes durable bulk jobs. | Uses batch budgets, cancellation, retry, progress state, and result manifests. |
 | `src/server/reviewServing/reviewSearchService.ts` | Ready token/prefix search state and async substring search jobs. | Synchronous substring scans are not admitted unless a benchmarked n-gram projection is added. Missing search state returns search-indexing/unavailable or creates bounded async work over projected/searchable state, not raw title scans. |
 | `src/server/reviewServing/reviewServingDiagnostics.ts` | OOM/workload diagnostics for route, project, workload class, active snapshot/identity set, queue state, memory limit, temp usage, and raw/serving mode. | Logging shape is shared by foreground reads, projectors, bulk jobs, search jobs, and benchmarks. |
@@ -545,13 +548,13 @@ be explicitly classified as admin/maintenance/debug-only before cutover.
 | LLM review routes | `projectsRoutesGetArticlesReviews.ts`, `projectsRoutesGetArticlesReviewsCount.ts` | Use serving reader contracts, review config hash, keyset cursors, named count states, bounded filter access, route result caps, and foreground admission. |
 | Both review routes | `projectsRoutesGetArticlesReviewsBoth.ts` and both-list logic in `duckdbOlap.ts` | Use serving-only both-mode rows and counts. No in-memory intersection of LLM/human article sets. |
 | Human review routes | `projectsRoutesGetArticlesReviewsHuman.ts`, `projectsRoutesGetArticlesReviewsHumanFilters.ts` | Move to serving-only human rows, human prompt/facet projections, keyset cursors, and named fast counts. No raw `app.judgment_human*` candidate ID materialization. |
-| Unassessed and queue routes | `projectsRoutesGetArticlesReviewsUnassessed.ts`, `JudgmentsJobsRoutes.ts`, `judgmentsJobsCronGetPrompts.ts` | Use `mart.review_unassessed_queue_serving` or equivalent queue projection, generation/filter cursors, and serving count states. No raw fallback windows in foreground/job API paths. |
+| Unassessed and queue routes | `projectsRoutesGetArticlesReviewsUnassessed.ts`, `JudgmentsJobsRoutes.ts`, `judgmentsJobsCronGetPrompts.ts` | Use `mart.review_unassessed_queue_serving_v4` or equivalent queue projection, snapshot/filter cursors, and serving count states. No raw fallback windows in foreground/job API paths. |
 | Filter/facet routes | `projectsRoutesGetArticlesReviewsFilters.ts`, `projectsRoutesGetArticlesReviewsHumanFilters.ts`, `getDatabaseBasedFiltersFromDuckdb`, `getNumericFiltersFromDuckdb` | Use precomputed facet tables, filter posting/projection tables, and count/facet availability states. No foreground `GROUP BY` over raw judgments, prompt facts, scoped import CTEs, or unbounded serving-table predicates. |
 | Detail/hydration routes | `projectsRoutesPostArticleReviewDetails.ts`, `ArticlesRoutes.ts` detail reads, `appQueryServiceCore.ts` article hydration helpers | Use keyed serving payload/detail reads with payload budgets. Do not hydrate large metadata from list routes. |
 | Search | Current title filters using `LOWER(...) LIKE '%term%'` in OLAP and route SQL | Use `reviewSearchService` and ready token/prefix search projection by default. Async substring jobs must use bounded cursors/projections, not raw title scans, and synchronous substring scans are not admitted at 10M scale unless a benchmarked n-gram projection is added. |
-| Select-all and add-to-project | `selectArticleIdsByFilterDuckdb`, `selectArticleIdsOlap.ts`, `ProjectsAddArticlesRoutes.ts` | Replace all-ID result arrays with `reviewBulkOperationService` jobs using projection-identity/generation/filter criteria, snapshot pins when repeatable semantics are required, and keyset-batched processing. |
-| PDF fetch | `ArticlesRoutes.ts` PDF-by-filter/project endpoints and `pdfFetchJobs.ts` | Use durable bulk jobs with snapshot pins or declared latest-generation semantics. PDF fetch receives bounded batches from serving selection jobs, not a full in-memory article ID list. |
-| Project export | `ProjectExportRoutes.ts` | Use serving/export jobs with projection-identity/generation/filter cursors, snapshot pins, and payload budgets. No `OFFSET` batches, full prompt-filter in-memory passes, or raw project scans in request path. |
+| Select-all and add-to-project | `selectArticleIdsByFilterDuckdb`, `selectArticleIdsOlap.ts`, `ProjectsAddArticlesRoutes.ts` | Replace all-ID result arrays with `reviewBulkOperationService` jobs using projection-identity/snapshot/filter criteria, snapshot pins when repeatable semantics are required, and keyset-batched processing. |
+| PDF fetch | `ArticlesRoutes.ts` PDF-by-filter/project endpoints and `pdfFetchJobs.ts` | Use durable bulk jobs with snapshot pins or declared latest-snapshot semantics. PDF fetch receives bounded batches from serving selection jobs, not a full in-memory article ID list. |
+| Project export | `ProjectExportRoutes.ts` | Use serving/export jobs with projection-identity/snapshot/filter cursors, snapshot pins, and payload budgets. No `OFFSET` batches, full prompt-filter in-memory passes, or raw project scans in request path. |
 | Review health/warnings/prompt preview | `projectsRoutesGetReviewsHealth.ts`, `projectsRoutesGetReviewsWarnings.ts`, `projectsRoutesGetPromptPreview.ts` | Read manifest, diagnostics, and compact serving/progress state. Any project-scale inspection must be maintenance/debug-only or async. |
 | Job execution snapshots | `judgmentExecutionSnapshotService.ts` | Use selected-import projection and review serving state for snapshot inputs. No foreground selected-import CTE recreation. |
 | Mart refresh worker | `projectMartRefreshWorker.ts` | Coordinate with review serving projectors, snapshot manifests, wake budgets, and admission metrics. It may schedule or wake work but must not directly write `mart.review_*` rows or promote snapshots. |
@@ -571,16 +574,16 @@ unclassified DuckDB work.
 | Layer | Tests | Required Coverage |
 |---|---|---|
 | Contracts and registry | Adjacent unit tests for `reviewServingContracts.ts`, `reviewProjectionIdentity.ts`, `reviewServingInvalidationRegistry.ts`, and `reviewServingReadContracts.ts`. | Every route has a workload class, allowed filters, physical filter access strategy, named fast counts, cursor spec, page/result budget, freshness behavior, count/search unavailable state, narrow projection identity behavior, and required/optional projection component list. Every delta kind maps to first affected component, downstream dependents, affected keys, and update mode. |
-| Cursor/filter signatures | Unit tests for `reviewServingCursor.ts`. | Round-trip encoding, config-hash mismatch, generation mismatch, filter-signature mismatch, sort direction mismatch, malformed cursors, and stable signatures for equivalent filters. |
+| Cursor/filter signatures | Unit tests for `reviewServingCursor.ts`. | Round-trip encoding, config-hash mismatch, snapshot/component-state mismatch, filter-signature mismatch, sort direction mismatch, malformed cursors, and stable signatures for equivalent filters. |
 | SQL builders | Unit tests for `reviewServingSql` builders using golden strings or parsed assertions. | Foreground SQL contains only serving tables and required keys. Assert absence of `selected_scoped_article_import`, `ROW_NUMBER(`, `OFFSET`, raw `app.article`/`app.judgment` scans, `json_extract`, and unbounded `GROUP BY`. |
 | Admission and budgets | Unit tests for `reviewServingAdmission.ts` and DuckDB service workload hooks. | Over-limit page size, result bytes, temp-spill policy, unregistered foreground work, unclassified workload, synchronous substring search, unsupported count shape, and over-budget foreground work are rejected or served stale before DuckDB execution. |
-| Route behavior | Route tests for LLM, human, both, unassessed, filters, counts, details, PDF/export job creation, and bulk add-to-project. | Responses include freshness/count/search/job states, clamp limits, reject invalid projection-identity/generation/filter cursors, avoid raw fallback, and create durable jobs instead of returning all IDs. |
-| Delta ledgers | Unit/integration tests for import, LLM judgment, human judgment, prompt/config, and project-scope writers. | Deltas are transactional with source writes or recovered through outbox reconciliation, compact, ordered, idempotent, include tombstones for deletes/removals, coalesce into dirty work, have per-component acknowledgements, and can be retained/compacted after consumer watermarks pass. |
+| Route behavior | Route tests for LLM, human, both, unassessed, filters, counts, details, PDF/export job creation, and bulk add-to-project. | Responses include freshness/count/search/job states, clamp limits, reject invalid projection-identity/snapshot/filter cursors, avoid raw fallback, and create durable jobs instead of returning all IDs. |
+| Delta ledgers | Unit/integration tests for import, article display/search/judgment-input, LLM judgment, human judgment, prompt/config, and project-scope writers. | Deltas use the common envelope, are transactional with source writes or recovered through outbox reconciliation, compact, ordered, idempotent, include tombstones for deletes/removals, preserve benchmark-critical model/content settings, coalesce into dirty work, have per-component acknowledgements, and can be retained/compacted after consumer watermarks pass. |
 | Incremental summaries | Unit/integration tests for `reviewServingContributionService.ts`. | Old/new contribution rows apply exact `-old +new` updates to counts, facets, badges, queues, posting stats, deletes, answer changes, and membership removals without full reaggregation. |
 | Projectors | Integration tests for projector services with small DuckDB fixtures. | Component-scoped dependency order, first-affected-component scheduling, leases, watermarks, idempotent replay, crash/retry, tombstones, dirty-work coalescing, compacted component acknowledgements, major base generation, append/patch imports, component-narrow patches, compaction thresholds, single-writer ownership, selected-import projection, serving rows, contribution summaries, search state, and queue state. |
 | Manifest promotion | Integration tests for manifest repository and serving promotion. | Candidate snapshots promote only after all required pieces and checks pass. Optional components expose availability state without blocking unrelated routes. Failed snapshots preserve last known-good data and never trigger raw foreground fallback. |
-| Snapshot pins | Unit/integration tests for snapshot pin repository and cleanup. | Durable jobs pin repeatable snapshots, pins expire/release, cleanup skips pinned base/patch/payload/count/search rows, and latest-generation jobs declare restart semantics. |
-| Bulk jobs | Worker tests for `reviewBulkOperationService` and `reviewBulkOperationWorker`. | Jobs store criteria, projection identities, generation, and filter signature, pin or declare latest-generation semantics, process keyset batches, respect batch/result budgets, support cancellation/retry/resume, and never allocate all matching IDs. |
+| Snapshot pins | Unit/integration tests for snapshot pin repository and cleanup. | Durable jobs pin repeatable snapshots, pins expire/release, cleanup skips pinned base/patch/payload/count/search rows, and latest-snapshot jobs declare restart semantics. |
+| Bulk jobs | Worker tests for `reviewBulkOperationService` and `reviewBulkOperationWorker`. | Jobs store criteria, projection identities, snapshot ID, and filter signature, pin or declare latest-snapshot semantics, process keyset batches, respect batch/result budgets, support cancellation/retry/resume, and never allocate all matching IDs. |
 | Search jobs | Tests for `reviewSearchService` and any search projection. | Missing search state returns search-indexing/unavailable or async job state. Ready search state is bounded and token/prefix based unless an n-gram projection is explicitly added. Model/prompt changes do not rebuild title-search projections. Synchronous substring scans and raw-title async scans are not emitted. |
 | Overlay semantics | Route/service tests for read-your-write overlays. | Row/detail overlays reconcile after projection, while counts/facets/queues/bulk jobs remain snapshot-scoped or explicitly return overlay-aware state. |
 | Internal parity | Internal validation tests and benchmark assertions for parity mode. | Semantic fixtures, sampled safe-size parity, invariants, freshness states, cursors, SQL shape, latency, result bytes, and route states match expected behavior before normal-route cutover. |
@@ -600,20 +603,100 @@ phases and pass the final cutover gate before the normal review path is switched
 over. Each phase should leave tests passing, but users should not receive a
 partial serving architecture.
 
+Phase 0 cut line: add pure contracts, registries, cursor/admission helpers,
+diagnostic shapes, and SQL-shape guards without changing existing route behavior.
+Static guards in Phase 0 must protect the new `reviewServing` package and record
+the current migration inventory; they must not fail simply because the legacy
+routes still delegate to OLAP before Phase 4. Route-level raw-path guards become
+blocking when those routes are migrated in Phase 4 and at hard cutover in Phase 5.
+
+Phase 1 cut line: add empty durable schema, constraints, indexes, and generic
+DuckDB runtime admission hooks. Phase 1 does not need projectors to populate every
+row and does not switch product routes. New serving schema must use `snapshot_id`
+for logical product snapshots and `base_generation`/`patch_watermark` for
+component physical state. Existing V3 review mart tables that use `generation`
+remain legacy compatibility tables until hard cutover.
+
+Phase 1 table naming rule: create new review-serving mart tables with a `_v4`
+suffix when the unsuffixed name already exists or the old route still depends on
+the current schema. Read contracts should point at the Phase 1 `_v4` physical
+tables. At Phase 5, either keep the `_v4` names as the permanent contract names
+or swap/rename after old callers are deleted; do not mutate legacy V3 table
+schemas during Phase 1.
+
+Phase 2 cut line: instrument write paths to append compact delta/outbox rows,
+extract hot import fields, and create small reviewer-action overlays. Phase 2
+must not populate serving projections, promote snapshots, wake project-scale
+selected-import fanout synchronously, or switch product routes. A Phase 2 write
+path may return success only after the source write and its local delta/outbox
+entry are durable in the same transaction or after a durable reconciliation path
+can prove the missing delta will be recovered before any dependent watermark
+advances.
+
+Phase 2 delta envelope: every row in `app.import_run_article_delta` and
+`app.review_change_delta` has common fields independent of `change_kind`:
+`delta_id`, `change_kind`, `source_table`, `source_row_id`, `source_operation`,
+`source_partition`, `source_high_water_mark`, `source_updated_at`,
+`idempotency_key`, `payload_version`, compact typed key columns, optional
+`payload_json`, `created_at`, and `reconciled_at`. The invalidation registry
+`requiredKeys` are change-specific payload keys; the envelope fields are required
+for every delta and are tested separately. `source_high_water_mark` is monotonic
+within `source_partition`; projectors and dirty-work conversion cannot advance a
+consumer watermark past an unreconciled source high-water mark.
+
+Phase 2 source ownership rules:
+
+- Article/import-route membership writes emit `importRoute.article.added`,
+  `importRoute.article.removed`, or `importRoute.article.rankFields.updated` and
+  do not resolve affected projects in the write transaction.
+- Direct project membership writes emit `projectScope.article.added` or
+  `projectScope.article.removed` because the affected project is already the
+  source row owner.
+- Article content/display writes may emit multiple deltas in one transaction:
+  `article.display.updated`, `article.searchText.updated`, and/or
+  `article.judgmentInput.updated`, depending on which derived input identities
+  changed.
+- LLM judgment writes emit `judgment.llm.created`, `judgment.llm.updated`, or
+  `judgment.llm.deleted` with model ID, prompt ID, content flags, judgment ID,
+  and source high-water state from the persisted source row. They must preserve
+  benchmark-critical model/content settings and must not silently retry or
+  reinterpret failed requests.
+- Human review writes emit `judgment.human.updated`. If human deletes or hard
+  tombstones are introduced later, add a new `change_kind` and registry rule
+  before wiring that write path.
+- Prompt edits emit `prompt.config.updated` for the affected prompt identity.
+  Project model/content/prompt membership changes emit
+  `project.reviewConfig.updated`; they do not mark article/display/search/payload
+  identities dirty unless those inputs actually changed.
+
+Phase 2 hot-field extraction rule: import writers pre-extract only compact typed
+fields needed by selected-import ranking, display, filters, postings, and
+contribution keys into `app.review_import_article_hot_field`. Raw source JSON,
+large metadata, and audit payloads remain in existing source/audit tables.
+Projectors read the hot-field table or compact delta keys; foreground routes do
+not extract JSON.
+
+Phase 2 overlay rule: `app.review_write_overlay` is only for immediate reviewer
+feedback on row/detail actions. It stores the affected project, optional review
+config hash, article, prompt/judgment key, overlay kind, small typed value,
+source high-water mark, `created_at`, `expires_at`, and reconcile status. It does
+not make counts, facets, queues, search, bulk selection, PDF, or export
+overlay-aware unless that route contract explicitly opts in.
+
 | Status | Phase | Theme | Implement First | Done When |
 |---|---|---|---|---|
-| [ ] | 0 | Contracts, budgets, and module boundary | Add `src/server/reviewServing/` with contracts, projection identity builders, invalidation registry, read registry, cursor helpers, SQL-shape test helpers, admission interfaces, internal parity contracts, and diagnostics shape. Define freshness/count/search/bulk states, named fast counts, route budgets, workload classes, narrow projection identities, snapshot IDs, physical filter access strategies, and required/optional projection components. | Every product review route has a contract entry, every hot read has a declared table/cursor/budget/count/filter-access behavior, every delta kind maps to first affected component/downstream dependents/update mode, normal foreground admission is registry-based, and static tests prevent review routes from direct DuckDB SQL or raw fallback calls. |
-| [ ] | 0 | Benchmark harness | Add the 10M-article/7-prompt synthetic fixture, overlap workload definition, memory limits, and metrics capture. | Benchmark can run without the final implementation and report p50/p95/p99 latency, memory, temp usage, queue depth, rows scanned, rows returned, and admitted/rejected work. |
-| [ ] | 1 | Schema foundation | Add migrations for import deltas, review change deltas, coalesced dirty work, dirty-work acknowledgements, projector cursors/watermarks, projection identity manifests, rebuild chunk manifests, selected-import snapshots, logical snapshot manifests, snapshot pins, compacted serving bases, typed component patch tables, filter postings, posting stats, contribution rows, payloads, count/facet rows, search state, bulk jobs, write overlays, and retention metadata. | `bun run db:mig` applies cleanly and schema tests prove narrow identity keys, sorted/order keys, snapshot/base/typed-patch fields, required/optional component status, retention/pin fields, dirty-work acknowledgement fields, contribution keys, posting stats, and chunk resume fields exist. |
-| [ ] | 1 | Runtime admission foundation | Add workload classifications and budget enforcement hooks in the DuckDB runtime without adding product-specific SQL there. | Foreground work is accepted only from registered read/job contracts, over-budget work can be rejected/served stale, and metrics include workload class, memory limit, temp usage, queue state, and route/project context. |
-| [ ] | 2 | Write-side deltas | Update import, LLM judgment, human judgment, prompt/config, and project-scope writers to append compact deltas transactionally with change kinds from the invalidation registry. Pre-extract hot JSON fields during import. | Tests prove source writes and deltas/outbox rows commit atomically or reconcile before watermark advancement, deletes/removals create tombstones, config changes produce only the narrow identities they affect, and no write path synchronously fans out selected-import state to every project. |
+| [ ] | 0 | Contracts, budgets, and module boundary | Add `src/server/reviewServing/` with contracts, projection identity builders, invalidation registry, read registry, cursor helpers, SQL-shape test helpers, admission interfaces, internal parity contracts, and diagnostics shape. Define freshness/count/search/bulk states, named fast counts, route budgets, workload classes, narrow projection identities, snapshot IDs, physical filter access strategies, and required/optional projection components. | Every planned hot read has a contract entry mapped to product routes in the migration inventory, every hot read has a declared physical table/cursor/budget/count/filter-access behavior, every delta kind maps to first affected component/downstream dependents/update mode, foreground admission is registry-based, and static tests guard the new SQL builders/registries from raw fallback shapes. |
+| [ ] | 0 | Benchmark harness | Add the 10M-article/7-prompt synthetic fixture generator, overlap workload definition, memory limits, and metrics capture API. | The harness can run a smoke workload before final schema/projectors exist and can later run the full fixture. It reports p50/p95/p99 latency, memory, temp usage, queue depth, rows scanned, rows returned, and admitted/rejected work. The full 10M pass remains a Phase 5 release gate. |
+| [ ] | 1 | Schema foundation | Add migrations for import deltas, review change deltas, review delta outbox/reconciliation cursors, import hot fields, coalesced dirty work, dirty-work acknowledgements, projector cursors/watermarks, projection identity manifests, rebuild chunk manifests, selected-import snapshots, logical snapshot manifests, snapshot pins, compacted serving bases, typed component patch tables, filter postings, posting stats, contribution rows, payloads, count/facet rows, search state, bulk jobs, write overlays, and retention metadata. Use `_v4` physical mart names where legacy V3 tables conflict. | `bun run db:mig` applies cleanly and schema tests prove the exact table names used by `reviewServingReadContracts.ts`, common delta envelope fields, hot-field columns, outbox/reconciliation cursors, narrow identity keys, sorted/order keys, `snapshot_id`/`base_generation`/typed-patch fields, required/optional component status, retention/pin fields, dirty-work acknowledgement fields, contribution keys, posting stats, and chunk resume fields exist. |
+| [ ] | 1 | Runtime admission foundation | Add generic workload classification and budget-enforcement hooks in the DuckDB runtime without adding product-specific SQL there. Thread an optional workload context through execution helpers with workload class, route/job key, project ID, result-row/byte budget, temp-spill policy, timeout, and stale/async fallback intent. | Registered review-serving foreground work can be admitted from contracts before DuckDB execution, unregistered migrated foreground work can be rejected or served stale, legacy non-migrated routes remain explicitly classified during migration, and metrics include workload class, memory limit, temp usage, queue state, route/job key, and project context. |
+| [ ] | 2 | Write-side deltas | Add `reviewServingDeltaLedger` append APIs and update import, article content/display, LLM judgment, human judgment, prompt/config, and project-scope writers to append compact deltas transactionally with change kinds from the invalidation registry. Pre-extract hot import fields into `app.review_import_article_hot_field`. Add durable outbox/reconciliation only for source writes that cannot append the delta in the same transaction. | Tests prove source writes and deltas/outbox rows commit atomically or reconcile before watermark advancement, common envelope fields are present, idempotency keys prevent duplicate deltas, deletes/removals create tombstones, config changes produce only the narrow identities they affect, import writes do not persist affected-project fanout unless proven bounded, and no write path synchronously fans out selected-import state to every project. |
 | [ ] | 2 | Read-your-write state | Add optimistic/overlay state for reviewer actions that need immediate feedback before projection catches up. | Reviewer changes have a clear immediate response path, route-specific overlay semantics are documented, and reconciliation tests prove overlays disappear once included in a completed serving snapshot. |
 | [ ] | 3 | Projector core | Build component-scoped projector dependency graph, coalesced dirty-work service, compacted component acknowledgements, leases, watermarks, idempotent replay, wake budgets, single serving-writer boundary, major base/minor patch snapshot model, contribution diff service, incrementally digested rebuild chunk manifests, failure state, snapshot pins, and retention cleanup primitives. | Projector tests prove crash/retry/replay safety, bounded batch size, dirty-work coalescing, component ack skip behavior, wake release, watermark atomicity, single-writer ownership, contribution diffs, component-narrow patches, patch compaction thresholds, chunk resume/skip behavior without source-row hash scans, pin-aware cleanup, and failed snapshots preserving last-known-good data. |
-| [ ] | 3 | Selected-import projection | Replace runtime `selected_scoped_article_import` ranking with generation-scoped selected-import projection. | Selected import rows are projected by bounded batches, promoted atomically, and normal foreground SQL never contains `selected_scoped_article_import` after cutover. |
+| [ ] | 3 | Selected-import projection | Replace runtime `selected_scoped_article_import` ranking with snapshot-scoped selected-import projection. | Selected import rows are projected by bounded batches, promoted atomically, and normal foreground SQL never contains `selected_scoped_article_import` after cutover. |
 | [ ] | 3 | Serving projections | Write compacted base rows, component-narrow patch rows, payload rows, human/both/unassessed status, badges, contribution rows, count/facet rows, filter postings, posting stats, queue rows, and search projection or async search state from completed dependency inputs. | Manifest checks prove all route-required components and watermarks match one logical snapshot before promotion. Optional search/count components expose availability states and do not block unrelated route activation. Routine changes update only affected component fields, contributions, postings, and chunk digests. |
-| [ ] | 4 | Foreground serving reads | Migrate LLM, human, both, unassessed, filters, facets, badges, counts, rows, queues, detail reads, health/warnings, and prompt preview to `reviewServingReader`. | Route tests prove serving-only reads, projection-identity/generation/filter-scoped cursors, bounded filter access, result caps, no raw fallback, no `OFFSET`, no JSON extraction/sorts, no project-wide windows, and registry-based admission. |
+| [ ] | 4 | Foreground serving reads | Migrate LLM, human, both, unassessed, filters, facets, badges, counts, rows, queues, detail reads, health/warnings, and prompt preview to `reviewServingReader`. | Route tests prove serving-only reads, projection-identity/snapshot/filter-scoped cursors, bounded filter access, result caps, no raw fallback, no `OFFSET`, no JSON extraction/sorts, no project-wide windows, and registry-based admission. |
 | [ ] | 4 | Internal parity validation | Run the new serving reader behind internal wiring against semantic fixtures, invariant checks, benchmarks, and safe-size current behavior before product cutover. | Parity checks pass for row payload semantics, named count states, freshness states, cursor behavior, SQL shape, latency budgets, result bytes, and no forbidden foreground DuckDB work. |
-| [ ] | 4 | Bulk, export, PDF, and search jobs | Replace select-all/add-to-project/PDF/export all-ID materialization with durable keyset-batched jobs. Add token/prefix search and async-only substring behavior unless n-gram projection is benchmarked. | Bulk/search tests prove criteria/projection-identity/generation/filter signatures are persisted, repeatable jobs pin snapshots, batches are bounded, jobs resume/cancel/retry, and synchronous substring search scans are not admitted. |
+| [ ] | 4 | Bulk, export, PDF, and search jobs | Replace select-all/add-to-project/PDF/export all-ID materialization with durable keyset-batched jobs. Add token/prefix search and async-only substring behavior unless n-gram projection is benchmarked. | Bulk/search tests prove criteria/projection-identity/snapshot/filter signatures are persisted, repeatable jobs pin snapshots, batches are bounded, jobs resume/cancel/retry, and synchronous substring search scans are not admitted. |
 | [ ] | 4 | DuckDB usage migration | Resolve every row in the DuckDB usage migration inventory. | Each current review-related DuckDB use delegates to serving/admission/job logic or is explicitly marked admin/maintenance/debug-only. |
 | [ ] | 5 | Hard cutover and deletion | Remove normal raw review fallback, old selected-import foreground joins, large-ID return paths, hidden `OFFSET` pagination, competing serving writers, and obsolete intermediate state. | Static SQL-shape tests and route tests fail if forbidden raw paths return. Internal parity validation has passed. Obsolete state is rebuilt or cleared with no compatibility shim unless explicitly required. |
 | [ ] | 5 | Desktop and interruption hardening | Verify browser and desktop use the same serving/job/admission behavior. Test sleep/restart/interruption for projectors, bulk jobs, search jobs, and low-memory runtime. | Desktop build or targeted desktop verification passes, interrupted work resumes safely, and low-memory batch defaults prevent OOM. |
@@ -623,36 +706,39 @@ partial serving architecture.
 
 | Table | Purpose | Performance Notes |
 |---|---|---|
-| `app.import_run_article_delta` | Append-only ledger of article/import-route changes from import runs. | Index by `import_route_id, delta_id`, `article_id, delta_id`, and `import_run_id`. Keep rows compact and avoid large JSON payloads. Do not require project fanout in import writes. |
-| `app.review_change_delta` | Append-only ledger of judgment, human-review, prompt/config, and scope changes that affect review serving rows. | Index by `project_id, delta_id`, `article_id, delta_id`, and change-specific stable keys. Keep payloads compact and use tombstones for deletes/removals. |
+| `app.import_run_article_delta` | Append-only ledger of article/import-route changes from import runs. | Include the common delta envelope plus import-specific typed keys: `import_run_id`, `import_route_id`, `article_id`, source record key/hash, compact rank/filter/display key changes, and tombstone state. Index by `import_route_id, delta_id`, `article_id, delta_id`, `import_run_id`, `source_partition, source_high_water_mark`, and idempotency key. Keep rows compact and avoid large JSON payloads. Do not require project fanout in import writes. |
+| `app.review_change_delta` | Append-only ledger of article display/search/judgment-input, LLM judgment, human-review, prompt/config, and direct project-scope changes that affect review serving rows. | Include the common delta envelope plus change-specific typed keys such as project ID, article ID, prompt ID, model ID, content flags, judgment ID, human judgment key, and config field set. Index by `project_id, delta_id`, `article_id, delta_id`, `source_partition, source_high_water_mark`, idempotency key, and change-specific stable keys. Keep payloads compact and use tombstones for deletes/removals. |
+| `app.review_source_change_outbox` | Durable outbox for source mutations that cannot append the final delta ledger row in the same transaction. | Key by source table/row/operation/version and idempotency key. Store only compact recovery payload, source high-water mark, status, retry count, last error, and timestamps. Reconciliation must drain or quarantine these rows before affected projector watermarks advance. |
+| `app.review_delta_reconciliation_cursor` | Cursor state for reconciling source writes, outbox rows, and delta ledger high-water marks. | Track source partition, source high-water mark, last reconciled delta ID, status, lease, retry/error fields, and quarantine state. Used only to prove missing deltas are recovered or quarantined before projector advancement. |
+| `app.review_import_article_hot_field` | Compact current hot fields extracted during import/source-record writes for selected-import ranking, display, filters, postings, and contribution keys. | Key by `import_route_id`, `article_id`, source record key/hash, and active/tombstone state. Store only typed small fields such as source kind, selected rank key, publication year, journal/title display snippets, duplicate/conflict flags, and compact filter buckets. Keep raw source JSON out of this table. |
 | `app.review_serving_dirty_work` | Coalesced dirty project/article or projection-scope work derived from append-only deltas. | Key by project/scope, article or projection key, dirty kind, and latest source high-water mark. Collapse repeated changes and compact completed work after all dependent projectors pass the watermark. |
 | `app.review_serving_dirty_work_ack` | Per-component completion state for dirty keys or dirty ranges. | Prefer component high-water rows and compressed contiguous ranges over one row per key. Key by dirty work range, component, projection identity, completed source high-water mark, and status. Lets fast components skip already-processed dirty work even if optional components lag. |
 | `app.review_project_import_delta_cursor` | Projector cursor from route/article import deltas to project/article dirty work. | Track project, route, source delta high-water, lease, status, cursor, and errors. Use this to resolve affected projects in bounded batches. |
-| `app.review_serving_projector_watermark` | Durable source/output state for each review-serving projector dependency. | Track projector name, project/import scope, source high-water marks, output generation, status, lease, cursor, and error. Advance watermarks atomically with projector output. |
-| `app.review_projection_identity_manifest` | Active narrow identity values for display, search, judgment input content, project scope, per-prompt config, summary, and review config projections. | Stores identity kind, base generation, patch watermark/ranges, input watermarks/digests, definition version, active generation, and invalidation reason. Readers compose these identities instead of forcing one broad rebuild key. |
-| `app.review_rebuild_chunk_manifest` | Chunk-level rebuild/compaction/repair state. | Key by project, component, projection identity, incrementally maintained input watermark/digest, chunk range, output generation, status, checksum, lease, and error. Completed unchanged chunks are skipped on rerun without scanning source rows to decide skip eligibility. |
-| `app.review_selected_import_snapshot` | Projector snapshot/checkpoint state for selected import projection. | Track `project_id`, `project_scope_generation`, `selected_import_snapshot_id`, `source_delta_high_water`, cursor fields, status, owner, lease, started/completed timestamps, and errors. It does not depend on model/prompt config. |
-| `app.review_selected_article_import` | Selected-import snapshot rows per project/article. | Key by `project_id, project_scope_generation, selected_import_snapshot_id, article_id`. Store selected IDs and rank/filter/display fields. Promote completed selected-import snapshots atomically. |
-| `app.review_serving_snapshot_manifest` | Atomic control record for logical review serving snapshots. | Track project, active/candidate/failed state, snapshot ID, base generation, patch watermark, composed projection identities, optional review config hash, route-required projection completeness, optional projection availability, source watermarks, validation results, selected-import snapshot, last-known-good snapshot, timestamps, and last error. |
+| `app.review_serving_projector_watermark` | Durable source/output state for each review-serving projector dependency. | Track projector name, project/import scope, source high-water marks, output `base_generation` or `patch_watermark`, status, lease, cursor, and error. Advance watermarks atomically with projector output. |
+| `app.review_projection_identity_manifest` | Active narrow identity values for display, search, judgment input content, project scope, per-prompt config, summary, and review config projections. | Stores `projection_component`, `projection_identity`, `base_generation`, `patch_watermark`, patch ranges, input watermarks/digests, definition version, status, and invalidation reason. Readers compose these identities instead of forcing one broad rebuild key. |
+| `app.review_rebuild_chunk_manifest` | Chunk-level rebuild/compaction/repair state. | Key by project, component, projection identity, incrementally maintained input watermark/digest, chunk range, output `base_generation`, status, checksum, lease, and error. Completed unchanged chunks are skipped on rerun without scanning source rows to decide skip eligibility. |
+| `app.review_selected_import_snapshot` | Projector snapshot/checkpoint state for selected import projection. | Track `project_id`, `project_scope_identity`, `selected_import_snapshot_id`, `source_delta_high_water`, cursor fields, status, owner, lease, started/completed timestamps, and errors. It does not depend on model/prompt config. |
+| `app.review_selected_article_import_v4` | Selected-import snapshot rows per project/article. | Key by `project_id, project_scope_identity, selected_import_snapshot_id, article_id`. Store selected IDs and rank/filter/display fields. Promote completed selected-import snapshots atomically. The `_v4` name avoids mutating legacy selected-import state during Phase 1. |
+| `app.review_serving_snapshot_manifest` | Atomic control record for logical review serving snapshots. | Track project, active/candidate/failed state, `snapshot_id`, composed projection identities, component `base_generation` and `patch_watermark` state, optional review config hash, route-required projection completeness, optional projection availability, source watermarks, validation results, selected-import snapshot, last-known-good snapshot, timestamps, and last error. |
 | `app.review_serving_snapshot_pin` | TTL/refcount pin for durable jobs and repeatable-read cursors. | Key by project, composed projection identities, snapshot ID, owner kind/job ID, expiration, and release state. Cleanup must not delete referenced base/patch/payload/count/search state while a pin is active. |
-| `app.review_write_overlay` | Optional immediate read-your-write state for reviewer actions. | Key by `project_id`, `review_config_hash`, `article_id`, and judgment/human-judgment key. Keep small, expire/reconcile after the durable serving snapshot includes the change. |
-| `app.review_bulk_operation_job` | Persisted select-all/add-to-project/PDF/export work. | Store project, composed projection identities, optional review config hash, generation, snapshot pin ID or latest-generation semantics, filter signature, serialized criteria, cursor, batch size, status, result manifest, progress, cancellation, retry count, and error. Never store unbounded article ID arrays. |
-| `app.review_search_job` | Optional async title/search work for unsupported synchronous search. | Store project, search/project-scope identities, optional review config hash when combined with review filters, generation, snapshot pin ID or latest-generation semantics, search mode, search text, filter signature, cursor/progress, status, result count availability, expiration, and error. Do not store unbounded article ID arrays. Use when ready search projection is missing. |
-| `mart.review_title_search_serving` | Optional compact token/prefix title search projection. | Store normalized token/prefix rows keyed by `project_id, search_generation, project_scope_generation, token/search_key, article_id`. Add n-gram rows only if benchmarked and product-critical. Request paths and async jobs must not scan raw titles or rebuild for model/prompt changes. |
-| `mart.review_article_serving` | Compacted hot review-list/filter/count base for LLM, human, both, and unassessed modes. | Store small typed fields needed for list UI, filters, sorting, badges, selected external IDs, human status, LLM status, cursor sort keys, and count/facet membership. Key by project, component identities, optional review config hash for judgment-derived state, generation, list/filter/sort prefixes. |
-| `mart.review_article_display_patch` | Bounded display/payload-field patch rows/tombstones over a compacted base generation. | Key by project, display identity, patch watermark, article ID, and display sort/filter keys. Store only changed display fields. |
-| `mart.review_selected_import_patch` | Bounded selected-import patch rows/tombstones over selected-import base state. | Key by project, project-scope generation, selected-import snapshot ID, patch watermark, article ID, and selected-import sort/filter keys. Store only selected import/rank/display source fields. |
-| `mart.review_llm_status_patch` | Bounded LLM judgment-status patch rows/tombstones. | Key by project, review config hash, prompt config hash, patch watermark, list mode, article ID, prompt ID, and LLM status sort/filter keys. Store only LLM-derived status/badge fields. |
-| `mart.review_human_status_patch` | Bounded human judgment-status patch rows/tombstones. | Key by project, prompt config hash, patch watermark, list mode, article ID, prompt ID, and human status sort/filter keys. Store only human-derived status/badge fields. |
-| `mart.review_queue_patch` | Bounded queue ordering patch rows/tombstones. | Key by project, queue component identity, patch watermark, queue kind, priority bucket, sort key, and article ID. Store only queue membership/order fields. |
-| `mart.review_article_filter_posting_patch` | Bounded posting patch rows/tombstones for changed filter memberships. | Key by project, posting component identity, patch watermark, filter kind/value, list mode, sort key, and article ID. Store only added/removed posting memberships. |
-| `mart.review_article_filter_posting_serving` | Compact postings for synchronous filter combinations that are not ordered prefixes. | Key by project, required projection identities, optional review config hash, generation, filter kind/value, list mode, sort key, and article ID. Multi-filter reads must start from a bounded posting/projection or return async/unavailable. |
-| `mart.review_filter_posting_stats` | Incremental cardinality/selectivity stats for posting tables. | Key by project, projection identities, filter kind/value, list mode, and generation. Updated from contribution diffs so readers can choose a leading posting without scanning. |
-| `mart.review_article_serving_payload` | Optional detail payloads for larger JSON/raw metadata. | Load by `project_id, article_projection_generation, article_id` only on detail routes, export jobs, or explicit capped hydration steps. Never join by default in hot list/count/filter reads and never rebuild for model/prompt-only changes. |
-| `mart.review_article_summary_contribution` | Previous per-article contributions for count/facet/badge/posting summaries. | Key by project, projection identities, optional review config hash, article ID, component kind, summary definition version, and contribution key. Enables exact `-old +new` summary updates. |
-| `mart.review_article_count_serving` | Precomputed count and badge values. | Key by `project_id`, required projection identities, optional `review_config_hash`, generation, count kind, summary definition version, and filter key. Keep values small and nullable/stale-aware. |
-| `mart.review_filter_facet_serving` | Precomputed filter/facet values. | Key by `project_id`, required projection identities, optional `review_config_hash`, generation, facet kind, prompt ID, answer ID/value, and summary definition version. Serve filter UIs without grouping raw facts. |
-| `mart.review_unassessed_queue_serving` | Optional unassessed queue candidate ordering. | Key by `project_id, review_config_hash, generation, priority_bucket, activity_sort_at, article_id`. Use contribution diffs for routine judgment changes and rebuild in chunks for definition/config changes. |
+| `app.review_write_overlay` | Optional immediate read-your-write state for reviewer actions. | Key by `project_id`, optional `review_config_hash`, `article_id`, prompt/judgment or human-judgment key, overlay kind, and source high-water mark. Store only small typed values, created/expiration timestamps, and reconcile status. Counts, facets, queues, search, bulk, PDF, and export remain snapshot-scoped unless their route contracts explicitly opt in. |
+| `app.review_bulk_operation_job` | Persisted select-all/add-to-project/PDF/export work. | Store project, composed projection identities, optional review config hash, `snapshot_id`, snapshot pin ID or latest-snapshot semantics, filter signature, serialized criteria, cursor, batch size, status, result manifest, progress, cancellation, retry count, and error. Never store unbounded article ID arrays. |
+| `app.review_search_job` | Optional async title/search work for unsupported synchronous search. | Store project, search/project-scope identities, optional review config hash when combined with review filters, `snapshot_id`, snapshot pin ID or latest-snapshot semantics, search mode, search text, filter signature, cursor/progress, status, result count availability, expiration, and error. Do not store unbounded article ID arrays. Use when ready search projection is missing. |
+| `mart.review_title_search_serving_v4` | Optional compact token/prefix title search projection. | Store normalized token/prefix rows keyed by `project_id`, `search_identity`, `project_scope_identity`, `snapshot_id`, token/search key, and `article_id`. Add n-gram rows only if benchmarked and product-critical. Request paths and async jobs must not scan raw titles or rebuild for model/prompt changes. |
+| `mart.review_article_serving_v4` | Compacted hot review-list/filter/count base for LLM, human, both, and unassessed modes. | Store small typed fields needed for list UI, filters, sorting, badges, selected external IDs, human status, LLM status, cursor sort keys, and count/facet membership. Key by project, component identities, optional review config hash for judgment-derived state, `snapshot_id`, list/filter/sort prefixes. The `_v4` table must exist alongside legacy `mart.review_article_serving` until cutover. |
+| `mart.review_article_display_patch_v4` | Bounded display/payload-field patch rows/tombstones over a compacted base generation. | Key by project, display identity, base generation, patch watermark, article ID, and display sort/filter keys. Store only changed display fields. |
+| `mart.review_selected_import_patch_v4` | Bounded selected-import patch rows/tombstones over selected-import base state. | Key by project, project-scope identity, selected-import snapshot ID, patch watermark, article ID, and selected-import sort/filter keys. Store only selected import/rank/display source fields. |
+| `mart.review_llm_status_patch_v4` | Bounded LLM judgment-status patch rows/tombstones. | Key by project, review config hash, prompt config hash, base generation, patch watermark, list mode, article ID, prompt ID, and LLM status sort/filter keys. Store only LLM-derived status/badge fields. |
+| `mart.review_human_status_patch_v4` | Bounded human judgment-status patch rows/tombstones. | Key by project, prompt config hash, base generation, patch watermark, list mode, article ID, prompt ID, and human status sort/filter keys. Store only human-derived status/badge fields. |
+| `mart.review_queue_patch_v4` | Bounded queue ordering patch rows/tombstones. | Key by project, queue component identity, base generation, patch watermark, queue kind, priority bucket, sort key, and article ID. Store only queue membership/order fields. |
+| `mart.review_article_filter_posting_patch_v4` | Bounded posting patch rows/tombstones for changed filter memberships. | Key by project, posting component identity, base generation, patch watermark, filter kind/value, list mode, sort key, and article ID. Store only added/removed posting memberships. |
+| `mart.review_article_filter_posting_serving_v4` | Compact postings for synchronous filter combinations that are not ordered prefixes. | Key by project, required projection identities, optional review config hash, `snapshot_id`, filter kind/value, list mode, sort key, and article ID. Multi-filter reads must start from a bounded posting/projection or return async/unavailable. |
+| `mart.review_filter_posting_stats_v4` | Incremental cardinality/selectivity stats for posting tables. | Key by project, projection identities, filter kind/value, list mode, and `snapshot_id`. Updated from contribution diffs so readers can choose a leading posting without scanning. |
+| `mart.review_article_serving_payload_v4` | Optional detail payloads for larger JSON/raw metadata. | Load by `project_id`, display/payload identity, `snapshot_id`, and `article_id` only on detail routes, export jobs, or explicit capped hydration steps. Never join by default in hot list/count/filter reads and never rebuild for model/prompt-only changes. |
+| `mart.review_article_summary_contribution_v4` | Previous per-article contributions for count/facet/badge/posting summaries. | Key by project, projection identities, optional review config hash, article ID, component kind, summary definition version, and contribution key. Enables exact `-old +new` summary updates. |
+| `mart.review_article_count_serving_v4` | Precomputed count and badge values. | Key by `project_id`, required projection identities, optional `review_config_hash`, `snapshot_id`, count kind, summary definition version, and filter key. Keep values small and nullable/stale-aware. |
+| `mart.review_filter_facet_serving_v4` | Precomputed filter/facet values. | Key by `project_id`, required projection identities, optional `review_config_hash`, `snapshot_id`, facet kind, prompt ID, answer ID/value, and summary definition version. Serve filter UIs without grouping raw facts. |
+| `mart.review_unassessed_queue_serving_v4` | Optional unassessed queue candidate ordering. | Key by `project_id, review_config_hash, snapshot_id, priority_bucket, activity_sort_at, article_id`. Use contribution diffs for routine judgment changes and rebuild in chunks for definition/config changes. |
 
 ## Delta Ledger Guidance
 
@@ -660,35 +746,43 @@ Delta rows should describe what changed, not every product view affected by the
 change. This keeps imports, judgments, human review, and project-config writes
 cheap at million-scale.
 
-- For imports, prefer route/article deltas: `delta_id`, `import_run_id`, `import_route_id`, `article_id`, `change_kind`, source record key/hash, changed timestamp, and compact rank/filter fields.
-- Define `change_kind` explicitly for creates, updates, removals, judgment changes, human judgment changes, and project config changes.
+- For imports, prefer route/article deltas with the common envelope plus `import_run_id`, `import_route_id`, `article_id`, source record key/hash, changed timestamp, compact rank/filter fields, and tombstone state.
+- Define `change_kind` explicitly for creates, updates, removals, judgment changes, human judgment changes, article display/search/judgment-input changes, direct project-scope changes, and project config changes.
 - Each `change_kind` must use the invalidation registry to produce affected projection components and keys. Do not let projectors infer broad invalidation from generic dirty flags.
-- Write source mutations and delta/outbox rows in the same DuckDB transaction whenever the source write is local. If that is impossible, a reconciliation projector must detect missing/orphan changes before dependent watermarks advance.
+- Write source mutations and delta rows in the same DuckDB transaction whenever the source write is local. If the source write cannot append the final delta row in that transaction, it must append `app.review_source_change_outbox` in the same durable source transaction and a reconciliation cursor must convert or quarantine it before dependent watermarks advance.
+- Use deterministic idempotency keys for every delta/outbox write, such as source table, source row ID, source operation, source version/high-water mark, and change kind. Retried writes must not duplicate deltas or overlays.
+- Treat reconciliation quarantine as a serving-indexing failure state for affected components. Do not skip or silently mark source high-water ranges complete when a delta is missing, malformed, or unmapped.
+- Keep the invalidation registry as the only source of change-kind to affected-component mapping. Write paths supply source facts; they do not compute downstream projector fanout.
 - Project config changes that affect model, prompt set/version, or title/abstract/fulltext flags produce a new review config identity only for judgment-derived projections. They reuse article/import/title/payload projections when those inputs are unchanged.
 - For import route deltas, resolve affected projects in bounded projector work by joining route deltas to `app.project_import_route`.
 - Only persist `affected_project_id` in an import-write transaction if route-to-project fanout is measured and bounded.
+- Direct project membership writes already know the affected project and may write `projectScope.article.*` deltas directly. Import-route writes must not synthesize `projectScope.article.*` deltas synchronously.
+- Article updates that change title, abstract, fulltext, source display fields, or search text should emit every applicable article delta in one transaction. A title change can affect display, search, and judgment-input identities; emitting only one of them is a failed source-delta test.
+- LLM judgment deltas must include the persisted model ID and content flags from the actual judgment request profile. They must not infer or rewrite benchmark-critical settings during delta emission.
+- Prompt/config deltas should carry the smallest changed field set that lets identity builders determine whether a prompt, review config, or summary definition changed. They do not mark unrelated article/import/search identities dirty.
 - Keep large JSON, raw payloads, source records, and audit data out of the delta ledger.
+- Pre-extract import hot fields in `app.review_import_article_hot_field` before or with the import delta. If a source record lacks a hot field, store a typed null/unavailable value rather than requiring projectors or foreground reads to parse raw JSON.
 - Convert delta ranges into `app.review_serving_dirty_work` before expensive projections. Coalesce repeated changes for the same project/article/projection key to the latest source high-water mark.
 - Projectors should consume dirty-work keys and high-water marks, not repeatedly rescan historical delta ledgers for every serving component.
 - Record per-component dirty-work acknowledgements in the same transaction as output rows and watermarks. Components that already acknowledged a key/range skip it on later wakes.
 - Store acknowledgements as component high-water rows or compressed contiguous key ranges whenever possible. Do not retain one ack row per dirty key/component forever.
 - Compact dirty work and acknowledgements together after every required consumer has acknowledged the range and optional consumers have either acknowledged, expired, or moved to async/unavailable state.
 - Retain raw delta ledgers only as long as replay, audit, and lagging projectors require them. Compact or archive ranges after every consumer watermark has advanced past them.
-- Make projector output idempotent by `(project_id, source_delta_high_water, article_id)` or generation-scoped keys.
+- Make projector output idempotent by `(project_id, source_delta_high_water, article_id)` or snapshot/base-scoped keys.
 - Use tombstones for deletes and membership removals so replay can retract stale serving rows.
 - Advance projector watermarks in the same transaction as the output rows they describe.
 - Judgment, human-review, prompt/config, and project-scope deltas should carry enough stable keys to mark exactly affected project/article serving rows dirty without scanning all judgments.
 
 ## Performance Rules
 
-- Product review routes read only from `mart.review_article_serving` and keyed payload/detail tables.
+- Product review routes read only from `mart.review_article_serving_v4` and keyed payload/detail tables after cutover.
 - Product review routes include LLM, human, both, unassessed, filters, facets, badges, counts, rows, queues, bulk actions, PDF fetch, and export entrypoints.
 - Product review routes do not call raw fallback, even when serving is stale or missing.
 - Product review routes include only the projection identity keys they need. Judgment-derived reads include `review_config_hash`; article/import/title/payload reads use narrower identities and must not rebuild for model/prompt-only changes.
 - Normal foreground DuckDB work must come from registered read/job contracts. Ad hoc product SQL is rejected before execution, even if a rough estimate appears small.
 - Initial index missing means return indexing state and empty rows, not a raw scan.
 - Dirty index means return stale serving rows plus progress state.
-- Failed index means return the last known-good generation plus failure state, not a raw scan.
+- Failed index means return the last known-good snapshot plus failure state, not a raw scan.
 - Serving snapshot promotion must be all-or-nothing through a manifest.
 - Serving manifests distinguish route-required components from optional search/count/job components so optional work does not block unrelated hot reads.
 - Exactly one normal serving writer may write `mart.review_*` rows and promote active snapshots.
@@ -700,10 +794,10 @@ cheap at million-scale.
 - Patches are component-narrow. Do not write row-wide hot patches when only display, selected-import, LLM status, human status, queue, posting, or search fields changed.
 - Large append imports create append/patch partitions first and compact only when read budgets or storage policy require it; they do not automatically rebuild the full existing base.
 - Foreground routes must verify they are reading one active snapshot with one composed identity set, not mixed rows/counts/facets from incompatible snapshots or identities.
-- Hot serving tables must be physically written in generation/filter/sort order that matches the registered read contracts.
+- Hot serving tables must be physically written in snapshot/filter/sort order that matches the registered read contracts.
 - Use keyset pagination, not offset pagination, for hot review lists.
-- Cursors must include the route's projection identities, generation, filter signature, sort direction, sort values, and article ID.
-- Cursor mismatch means restart from page one or return cursor-invalid state; never continue against a different generation/filter.
+- Cursors must include the route's projection identities, `snapshot_id`, component base/patch state, filter signature, sort direction, sort values, and article ID.
+- Cursor mismatch means restart from page one or return cursor-invalid state; never continue against a different snapshot/filter/component state.
 - Cursor projection-identity mismatch means cursor-invalid; never read a serving snapshot built from a different identity set.
 - Every synchronous filter must use an ordered prefix, filter posting table, compact projection, or pre-proven bounded candidate set. Otherwise return unavailable or async state.
 - Filter posting selection uses maintained cardinality stats. Do not compute selectivity with a foreground scan.
@@ -716,7 +810,7 @@ cheap at million-scale.
 - Reviewer read-your-write behavior must use optimistic UI state or a small overlay, not synchronous raw refresh.
 - Overlays affect only route contracts that declare overlay-aware behavior; snapshot-scoped counts/facets/queues/bulk jobs stay stale or pending until projection catches up.
 - Select-all, add-to-project, PDF fetch, export, and other bulk operations must use durable jobs and keyset-batched processing.
-- Repeatable bulk/export/PDF/search jobs must pin the serving snapshot they read. Latest-generation jobs must declare that they may restart if the active snapshot changes.
+- Repeatable bulk/export/PDF/search jobs must pin the serving snapshot they read. Latest-snapshot jobs must declare that they may restart if the active snapshot changes.
 - Routes must never return or allocate all matching article IDs for a large filter in one request.
 - API `limit` values must be clamped, and every hot route must have max response-byte and hydrated-payload budgets.
 - Foreground queries must be admitted by workload class before execution. Over-budget work is rejected, queued as async work, or served from stale state.
@@ -777,7 +871,7 @@ review path should not partially switch to the new architecture.
 - Do not open additional live DuckDB readers for the API while a maintenance owner is writing, unless reads are from a controlled snapshot or serving projection.
 - Do not keep raw review fallback as a hidden normal path for large/importing projects.
 - Do not keep multiple normal writers or promotion paths for review-serving snapshots.
-- Do not treat every routine delta as a full project serving-generation copy.
+- Do not treat every routine delta as a full project serving snapshot/base copy.
 - Do not use one broad review config hash to invalidate config-independent article/import/title/payload/search projections.
 - Do not reuse judgment-derived serving rows across model, prompt, or content-setting changes without a new review config identity.
 - Do not rebuild unchanged prompt projections when only one prompt changes.
@@ -803,7 +897,7 @@ review path should not partially switch to the new architecture.
 - [ ] Overlap benchmark passes under target DuckDB memory limits with import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume.
 - [ ] Benchmark records p50/p95/p99 latency, peak process memory, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected query counts, rows scanned, rows returned, and active snapshot/identity state.
 - [ ] Benchmark proves foreground review reads are bounded by page size, selected filter postings, or precomputed summary rows, not total project article/judgment/import-route count.
-- [ ] Benchmark records physical read-shape evidence for hot routes: row groups/rows scanned, temp spill, response bytes, and whether ordered generation/filter prefixes were used.
+- [ ] Benchmark records physical read-shape evidence for hot routes: row groups/rows scanned, temp spill, response bytes, and whether ordered snapshot/filter prefixes were used.
 - [ ] Benchmark proves routine deltas create bounded patches or dirty work, not full 10M-row serving copies, and compaction triggers before patch reads exceed hot-route budgets.
 - [ ] Benchmark includes repeated article/title changes, judgment changes, human-review changes, import appends, and prompt/config changes proving unrelated projections are not rerun.
 - [ ] Benchmark separately measures display-only, search-only, judgment-input-content, one-prompt config, and judgment-only changes proving each updates only affected components.
@@ -817,9 +911,13 @@ review path should not partially switch to the new architecture.
 - [ ] `bun test src/server/services/projectMartDirtyMaterializationService.test.ts`
 - [ ] `bun test src/server/workers/projectMartRefreshWorker.test.ts`
 - [ ] `bun test src/server/services/projectMartLargeRebuildExecutor.test.ts`
-- [ ] Targeted tests for import delta ledger writes
-- [ ] Targeted tests for review change delta writes from LLM judgments, human judgments, prompt/config changes, and project-scope changes
+- [ ] Targeted tests for import delta ledger writes with the common delta envelope, deterministic idempotency keys, tombstones, and no affected-project fanout
+- [ ] Targeted tests for import hot-field extraction into `app.review_import_article_hot_field`, proving projectors do not need raw JSON for selected-import ranking, display, filters, postings, or contribution keys
+- [ ] Targeted tests for review change delta writes from article display/search/judgment-input changes, LLM judgments, human judgments, prompt/config changes, and project-scope changes
+- [ ] Targeted tests proving one source mutation that affects multiple identities emits every required delta in the same transaction, for example title changes that affect display, search, and judgment-input content
 - [ ] Targeted tests proving source writes and delta/outbox writes are atomic or reconciled before watermarks advance
+- [ ] Targeted tests proving outbox reconciliation converts, retries, or quarantines missing/malformed deltas and prevents dependent watermark advancement while unreconciled source high-water marks exist
+- [ ] Targeted tests proving LLM judgment deltas preserve persisted model ID and content flags without retrying, downgrading, or reinterpreting benchmark-critical settings
 - [ ] Targeted tests proving projection identity changes invalidate only dependent components, and review config changes do not rebuild config-independent article/import/title/payload/search state
 - [ ] Targeted tests proving display, search, judgment-input-content, project-scope, prompt config, and review config identities advance independently
 - [ ] Targeted tests proving one prompt config change does not rebuild unchanged prompt outputs, summaries, queues, or facets
@@ -841,9 +939,9 @@ review path should not partially switch to the new architecture.
 - [ ] Targeted tests for unsupported count/facet combinations returning nullable or unavailable states
 - [ ] Targeted tests for filter contracts proving every synchronous filter combination uses ordered-prefix, posting/projection, or bounded-candidate access with maintained selectivity stats.
 - [ ] Targeted tests for token/prefix search behavior and async/unavailable substring behavior proving substring search never runs as a synchronous full-table scan.
-- [ ] Targeted tests for projection-identity/generation/filter-scoped cursors and cursor-invalid behavior after identity/generation/filter mismatch.
+- [ ] Targeted tests for projection-identity/snapshot/filter-scoped cursors and cursor-invalid behavior after identity/snapshot/component-state/filter mismatch.
 - [ ] Targeted tests for hard route result-size caps: max page size, max response bytes, max hydrated payload bytes, and max per-request ID count.
-- [ ] Targeted tests for read-your-write overlay or optimistic reconciliation behavior
+- [ ] Targeted tests for read-your-write overlay or optimistic reconciliation behavior, including TTL/reconcile status and route-scoped overlay eligibility
 - [ ] Targeted tests proving counts, facets, queues, and bulk jobs do not silently include overlay state unless declared by the route contract
 - [ ] Targeted tests proving foreground LLM, human, both, unassessed, filter, count, badge, row, queue, bulk, PDF, and export routes do not include raw fallback, `selected_scoped_article_import`, or raw project-wide scans
 - [ ] Targeted tests proving stale, indexing, failed, and missing serving states do not trigger raw fallback
