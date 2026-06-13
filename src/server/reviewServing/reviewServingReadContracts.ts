@@ -9,6 +9,38 @@ import {
   reviewServingReadContractKeys,
 } from './reviewServingContracts.ts'
 
+export const reviewServingReadSurfaces = [
+  'badge',
+  'both',
+  'bulk',
+  'count',
+  'detail',
+  'export',
+  'facet',
+  'filter',
+  'health',
+  'human',
+  'llm',
+  'pdf',
+  'promptPreview',
+  'queue',
+  'row',
+  'search',
+  'unassessed',
+  'warning',
+] as const
+
+export type ReviewServingReadSurface = (typeof reviewServingReadSurfaces)[number]
+
+export type ReviewServingReadContractRouteInventoryEntry = {
+  contractKeys: readonly ReviewServingReadContractKey[]
+  method: 'GET' | 'POST'
+  mounted: boolean
+  productRoute: string
+  routeFile: string
+  surfaces: readonly ReviewServingReadSurface[]
+}
+
 type ContractInput = Omit<
   ReviewServingReadContract,
   'allowsTempSpill' | 'maxEstimatedResultBytes' | 'maxResultRows'
@@ -29,10 +61,13 @@ const queueComponents = [
 const defaultRowFilters = ['duplicateFlag', 'importRoute', 'publicationYear', 'searchTokenPrefix'] as const
 const defaultReviewCounts = ['review.list.total', 'review.list.filteredTotal'] as const
 const reviewArticleServingTable = 'mart.review_article_serving_v4'
+const reviewArticlePayloadServingTable = 'mart.review_article_serving_payload_v4'
 const reviewCountServingTable = 'mart.review_article_count_serving_v4'
 const reviewFacetServingTable = 'mart.review_filter_facet_serving_v4'
+const reviewFilterPostingServingTable = 'mart.review_article_filter_posting_serving_v4'
 const reviewQueueServingTable = 'mart.review_unassessed_queue_serving_v4'
 const reviewSearchServingTable = 'mart.review_title_search_serving_v4'
+const reviewSnapshotManifestTable = 'app.review_serving_snapshot_manifest'
 
 const defineContract = (input: ContractInput): ReviewServingReadContract => {
   return {
@@ -167,6 +202,33 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: [
+      'articleId',
+      'conflictFlag',
+      'duplicateFlag',
+      'humanStatus',
+      'importRoute',
+      'llmStatus',
+      'promptAnswer',
+      'publicationYear',
+      'queueKind',
+      'searchTokenPrefix',
+    ],
+    cursorFields: ['sort_key', 'article_id'],
+    freshnessBehavior: 'requireReadySnapshot',
+    key: 'review.filters.postings',
+    listMode: null,
+    maxPageSize: 100,
+    namedFastCounts: ['review.list.filteredTotal'],
+    optionalComponents: ['search'],
+    physicalAccessStrategy: 'postingIntersection',
+    requiredComponents: ['posting', 'summary'],
+    searchMode: 'tokenPrefix',
+    servingTable: reviewFilterPostingServingTable,
+    sort: {direction: 'desc', fields: ['sort_key', 'article_id']},
+    workloadClass: 'foregroundReviewRows',
+  }),
+  defineContract({
+    allowedFilters: [
       'conflictFlag',
       'duplicateFlag',
       'humanStatus',
@@ -234,7 +296,101 @@ export const reviewServingReadContractList = [
     workloadClass: 'foregroundReviewQueue',
   }),
   defineContract({
-    allowedFilters: [...defaultRowFilters, 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer', 'queueKind'],
+    allowedFilters: ['articleId'],
+    cursorFields: ['article_id'],
+    freshnessBehavior: 'requireReadySnapshot',
+    key: 'review.detail.row',
+    listMode: null,
+    maxPageSize: 1,
+    maxResultRows: 1,
+    namedFastCounts: [],
+    optionalComponents: [],
+    physicalAccessStrategy: 'keyedLookup',
+    requiredComponents: ['display', 'llmStatus', 'humanStatus', 'projectScope', 'selectedImport', 'summary'],
+    searchMode: 'none',
+    servingTable: reviewArticleServingTable,
+    sort: {direction: 'asc', fields: ['article_id']},
+    workloadClass: 'foregroundReviewRows',
+  }),
+  defineContract({
+    allowedFilters: ['articleId'],
+    cursorFields: ['article_id'],
+    freshnessBehavior: 'requireReadySnapshot',
+    key: 'review.detail.payload',
+    listMode: null,
+    maxEstimatedResultBytes: 1_000_000,
+    maxPageSize: 1,
+    maxResultRows: 1,
+    namedFastCounts: [],
+    optionalComponents: [],
+    physicalAccessStrategy: 'keyedLookup',
+    requiredComponents: ['display', 'payload'],
+    searchMode: 'none',
+    servingTable: reviewArticlePayloadServingTable,
+    sort: {direction: 'asc', fields: ['article_id']},
+    workloadClass: 'foregroundReviewRows',
+  }),
+  defineContract({
+    allowedFilters: [],
+    cursorFields: ['snapshot_id'],
+    freshnessBehavior: 'allowStaleSnapshot',
+    key: 'review.health.snapshot',
+    listMode: null,
+    maxPageSize: 1,
+    maxResultRows: 1,
+    namedFastCounts: ['review.list.total'],
+    optionalComponents: ['queue', 'search'],
+    physicalAccessStrategy: 'keyedLookup',
+    requiredComponents: ['projectScope', 'summary'],
+    searchMode: 'none',
+    servingTable: reviewSnapshotManifestTable,
+    sort: {direction: 'desc', fields: ['updated_at', 'snapshot_id']},
+    workloadClass: 'reviewMaintenance',
+  }),
+  defineContract({
+    allowedFilters: [],
+    cursorFields: ['snapshot_id'],
+    freshnessBehavior: 'allowStaleSnapshot',
+    key: 'review.warning.snapshot',
+    listMode: null,
+    maxPageSize: 8,
+    namedFastCounts: ['review.list.total', 'review.queue.unassessedReady'],
+    optionalComponents: ['queue', 'search'],
+    physicalAccessStrategy: 'keyedLookup',
+    requiredComponents: ['projectScope', 'posting', 'summary'],
+    searchMode: 'none',
+    servingTable: reviewSnapshotManifestTable,
+    sort: {direction: 'desc', fields: ['updated_at', 'snapshot_id']},
+    workloadClass: 'reviewMaintenance',
+  }),
+  defineContract({
+    allowedFilters: ['promptId'],
+    cursorFields: ['article_id'],
+    freshnessBehavior: 'requireReadySnapshot',
+    key: 'review.prompt.preview',
+    listMode: null,
+    maxEstimatedResultBytes: 1_000_000,
+    maxPageSize: 1,
+    maxResultRows: 1,
+    namedFastCounts: [],
+    optionalComponents: [],
+    physicalAccessStrategy: 'orderedPrefix',
+    requiredComponents: ['judgmentInputContent', 'projectScope', 'selectedImport', 'payload'],
+    searchMode: 'none',
+    servingTable: reviewArticlePayloadServingTable,
+    sort: {direction: 'asc', fields: ['article_id']},
+    workloadClass: 'foregroundReviewRows',
+  }),
+  defineContract({
+    allowedFilters: [
+      ...defaultRowFilters,
+      'articleId',
+      'conflictFlag',
+      'humanStatus',
+      'llmStatus',
+      'promptAnswer',
+      'queueKind',
+    ],
     cursorFields: ['sort_key', 'article_id'],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.bulk.selection',
@@ -252,7 +408,7 @@ export const reviewServingReadContractList = [
     workloadClass: 'bulkReviewJob',
   }),
   defineContract({
-    allowedFilters: [...defaultRowFilters, 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer'],
+    allowedFilters: [...defaultRowFilters, 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer', 'sourceProject'],
     cursorFields: ['sort_key', 'article_id'],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.export.selection',
@@ -270,7 +426,15 @@ export const reviewServingReadContractList = [
     workloadClass: 'bulkReviewJob',
   }),
   defineContract({
-    allowedFilters: [...defaultRowFilters, 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer'],
+    allowedFilters: [
+      ...defaultRowFilters,
+      'articleId',
+      'conflictFlag',
+      'humanStatus',
+      'llmStatus',
+      'promptAnswer',
+      'queueKind',
+    ],
     cursorFields: ['sort_key', 'article_id'],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.pdf.selection',
@@ -322,6 +486,155 @@ export const reviewServingReadContractList = [
     workloadClass: 'bulkReviewJob',
   }),
 ] satisfies readonly ReviewServingReadContract[]
+
+export const reviewServingReadContractRouteInventory = [
+  {
+    contractKeys: [
+      'review.llm.rows',
+      'review.llm.count',
+      'review.prompt.badges',
+      'review.filters.postings',
+      'review.search.tokenPrefix',
+      'review.search.substringAsync',
+    ],
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/articlesreviews',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts',
+    surfaces: ['llm', 'row', 'count', 'badge', 'filter', 'search'],
+  },
+  {
+    contractKeys: ['review.llm.count', 'review.prompt.badges'],
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/articlesreviewscount',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts',
+    surfaces: ['llm', 'count', 'badge'],
+  },
+  {
+    contractKeys: [
+      'review.human.rows',
+      'review.human.count',
+      'review.filters.postings',
+      'review.search.tokenPrefix',
+      'review.search.substringAsync',
+    ],
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/articlesreviewshuman',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts',
+    surfaces: ['human', 'row', 'count', 'filter', 'search'],
+  },
+  {
+    contractKeys: [
+      'review.both.rows',
+      'review.both.count',
+      'review.filters.postings',
+      'review.search.tokenPrefix',
+      'review.search.substringAsync',
+    ],
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/articlesreviewsboth',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsBoth.ts',
+    surfaces: ['both', 'row', 'count', 'filter', 'search'],
+  },
+  {
+    contractKeys: [
+      'review.unassessed.rows',
+      'review.unassessed.count',
+      'review.queue.unassessed',
+      'review.filters.postings',
+      'review.search.tokenPrefix',
+      'review.search.substringAsync',
+    ],
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/articlesreviewsunassessed',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsUnassessed.ts',
+    surfaces: ['unassessed', 'row', 'count', 'queue', 'filter', 'search'],
+  },
+  {
+    contractKeys: ['review.filters.facets', 'review.filters.postings'],
+    method: 'GET',
+    mounted: true,
+    productRoute: '/api/articlesreviewsfilters',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
+    surfaces: ['filter', 'facet'],
+  },
+  {
+    contractKeys: ['review.filters.facets', 'review.filters.postings'],
+    method: 'GET',
+    mounted: true,
+    productRoute: '/api/articlesreviewshumanfilters',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
+    surfaces: ['human', 'filter', 'facet'],
+  },
+  {
+    contractKeys: ['review.detail.row', 'review.detail.payload', 'review.prompt.badges'],
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/projectsreview',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
+    surfaces: ['detail', 'row', 'badge'],
+  },
+  {
+    contractKeys: ['review.warning.snapshot', 'review.health.snapshot'],
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/projectsreviewswarnings',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts',
+    surfaces: ['warning', 'health'],
+  },
+  {
+    contractKeys: ['review.health.snapshot'],
+    method: 'POST',
+    mounted: false,
+    productRoute: '/api/projectsreviewshealth',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsHealth.ts',
+    surfaces: ['health'],
+  },
+  {
+    contractKeys: ['review.prompt.preview', 'review.detail.payload'],
+    method: 'GET',
+    mounted: true,
+    productRoute: '/api/projects/:id/prompts/:promptId/preview',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview.ts',
+    surfaces: ['promptPreview', 'detail'],
+  },
+  {
+    contractKeys: ['review.bulk.selection', 'review.pdf.selection'],
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/articles/pdf-fetch-by-filter',
+    routeFile: 'src/server/routes/ArticlesRoutes.ts',
+    surfaces: ['bulk', 'pdf', 'filter'],
+  },
+  {
+    contractKeys: ['review.pdf.selection'],
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/articles/pdf-fetch-by-project',
+    routeFile: 'src/server/routes/ArticlesRoutes.ts',
+    surfaces: ['pdf', 'bulk'],
+  },
+  {
+    contractKeys: ['review.pdf.selection'],
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/articles/pdf-fetch-bulk',
+    routeFile: 'src/server/routes/ArticlesRoutes.ts',
+    surfaces: ['pdf', 'bulk'],
+  },
+  {
+    contractKeys: ['review.export.selection'],
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/projects/:id/export',
+    routeFile: 'src/server/routes/ProjectExportRoutes.ts',
+    surfaces: ['export', 'bulk'],
+  },
+] as const satisfies readonly ReviewServingReadContractRouteInventoryEntry[]
 
 export const reviewServingReadContracts = reviewServingReadContractList.reduce<
   Record<ReviewServingReadContractKey, ReviewServingReadContract>
