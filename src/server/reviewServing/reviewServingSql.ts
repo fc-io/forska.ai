@@ -129,10 +129,14 @@ export const buildReviewServingRowsSql = (params: {
   contract: ReviewServingReadContract
   cursorPredicate?: string
   limitParameter: string
+  listModeParameter: string
   projectIdParameter: string
+  reviewConfigHashParameter: string
+  snapshotIdParameter: string
 }) => {
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
+  const listModePredicate = params.contract.listMode ? ` AND list_mode_key = ${params.listModeParameter}` : ''
   const sortSql = getSortSql(params.contract)
 
-  return `SELECT * FROM ${params.contract.servingTable} WHERE project_id = ${params.projectIdParameter}${cursorPredicate} ORDER BY ${sortSql} LIMIT ${params.limitParameter}`
+  return `SELECT * FROM ${params.contract.servingTable} WHERE project_id = ${params.projectIdParameter} AND review_config_hash = ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter}${listModePredicate}${cursorPredicate} ORDER BY ${sortSql} LIMIT ${params.limitParameter}`
 }

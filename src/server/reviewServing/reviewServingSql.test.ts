@@ -11,6 +11,7 @@ import {
   getReviewServingSqlTableReferences,
   reviewServingRegisteredSqlTables,
 } from './reviewServingSql.ts'
+import {reviewServingSqlForbiddenPatterns} from './reviewServingSqlForbiddenPatterns.ts'
 
 const reviewServingSourceRoot = import.meta.dir
 const sqlGuardDefinitionFile = join(reviewServingSourceRoot, 'reviewServingSqlForbiddenPatterns.ts')
@@ -43,12 +44,18 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   const contract = getRequiredReviewServingReadContract('review.llm.rows')
   const sql = buildReviewServingRowsSql({
     contract,
-    cursorPredicate: '(sort_key, article_id) < (?, ?)',
-    limitParameter: '?',
-    projectIdParameter: '?',
+    cursorPredicate: '(sort_key, article_id) < ($sortKey, $articleId)',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    projectIdParameter: '$projectId',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    snapshotIdParameter: '$snapshotId',
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain(
+    'WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId AND list_mode_key = $listMode',
+  )
 })
 
 test('assertReviewServingSqlShape reads table references from SQL', () => {
@@ -93,6 +100,27 @@ test('assertReviewServingSqlShape rejects raw fallback query patterns', () => {
   expect(violations).toContain('raw judgment table scan')
   expect(violations).toContain('json extraction')
   expect(violations).toContain('foreground aggregation')
+})
+
+test('forbidden SQL regexes stay stateless across repeated checks', () => {
+  const statefulPatternLabels = reviewServingSqlForbiddenPatterns
+    .filter((forbiddenPattern) => {
+      return forbiddenPattern.pattern.global || forbiddenPattern.pattern.sticky
+    })
+    .map((forbiddenPattern) => {
+      return forbiddenPattern.label
+    })
+  const rawFallbackSql = 'SELECT * FROM app.article WHERE project_id = ? ORDER BY id ASC LIMIT ?'
+  const firstViolationLabels = getReviewServingSqlShapeViolations(rawFallbackSql).map((violation) => {
+    return violation.label
+  })
+  const secondViolationLabels = getReviewServingSqlShapeViolations(rawFallbackSql).map((violation) => {
+    return violation.label
+  })
+
+  expect(statefulPatternLabels).toEqual([])
+  expect(firstViolationLabels).toContain('raw article table scan')
+  expect(secondViolationLabels).toContain('raw article table scan')
 })
 
 test('assertReviewServingSqlShape rejects unregistered tables and unbounded reads', () => {

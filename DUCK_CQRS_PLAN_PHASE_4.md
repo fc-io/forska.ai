@@ -37,7 +37,10 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - `/api/articlesreviewsfilters` and `/api/articlesreviewshumanfilters` must not migrate through article posting rows alone. They need complete filter-option/min-max response contracts, including active search scope where the current route applies `query.search`.
 - `/api/projectsreview` must not migrate until judgment-detail serving contracts cover prompt-level explanations, quotes, assessments, placeholder judgments, payload references, row metadata, and badges.
 - `/api/projectsreviewswarnings` must not migrate through snapshot manifests alone. It needs warning/health contracts for active refresh counts, maintenance lease state, large-rebuild progress, quarantine warnings, and snapshot status.
+- Review list routes must not mount until row contracts preserve prompt-level judgment arrays and the current duplicate/conflict/date/prompt/search filter scopes.
 - Posting contracts used by list routes must be constrained by list mode or split into per-list contracts before they are mounted.
+- PDF-by-filter routes must not mount until list type is represented in the selection contract. Explicit-ID PDF bulk routes must use an article-ID-only contract instead of project-scoped review-serving selection.
+- Export routes must not mount until export contracts cover selected article metadata plus prompt answers, explanations, and quotes.
 - Prompt preview must preserve the current sample-article order: `article_created_at ASC NULLS LAST, article_id ASC`.
 
 ## Job Migration Scope
@@ -89,6 +92,8 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [ ] Route tests prove each migrated LLM, human, both, unassessed, filter, count, badge, row, queue, bulk, PDF, and export route does not include raw fallback, `selected_scoped_article_import`, raw project-wide scans, large ID arrays, or large-offset pagination.
 - [ ] Route inventory tests prove `mounted: true` entries cover the full product response shape and do not mark partial helper contracts as migrated routes.
 - [ ] Route tests prove standalone count, filter-option, detail, warning, and prompt-preview routes preserve current semantics or return explicit unavailable/async state for unsupported pieces.
+- [ ] Route tests prove list routes preserve judgment arrays plus duplicate/conflict/date/prompt/search filter scope before they are mounted.
+- [ ] Route tests prove PDF and export product routes preserve explicit-ID, list-type, article metadata, and prompt-output semantics before they are mounted.
 - [ ] Targeted tests for filter contracts prove every synchronous filter combination uses ordered-prefix, posting/projection, or bounded-candidate access with maintained selectivity stats.
 - [ ] Targeted tests prove posting contracts used by list routes are list-mode constrained.
 - [ ] Targeted tests for token/prefix search behavior and async/unavailable substring behavior prove substring search never runs as a synchronous full-table scan.
