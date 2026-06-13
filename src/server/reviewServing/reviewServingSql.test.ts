@@ -50,7 +50,9 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
     listModeParameter: '$listMode',
     payloadIdentityParameter: '$payloadIdentity',
     projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
     reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
     snapshotIdParameter: '$snapshotId',
   })
 
@@ -69,7 +71,9 @@ test('buildReviewServingRowsSql uses payload identities for payload serving tabl
     listModeParameter: '$listMode',
     payloadIdentityParameter: '$payloadIdentity',
     projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
     reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
     snapshotIdParameter: '$snapshotId',
   })
 
@@ -81,6 +85,28 @@ test('buildReviewServingRowsSql uses payload identities for payload serving tabl
   expect(sql).not.toContain('list_mode_key')
 })
 
+test('buildReviewServingRowsSql uses search identities for search serving tables', () => {
+  const contract = getRequiredReviewServingReadContract('review.search.tokenPrefix')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain(
+    'WHERE project_id = $projectId AND search_identity = $searchIdentity AND project_scope_identity = $projectScopeIdentity AND snapshot_id = $snapshotId',
+  )
+  expect(sql).not.toContain('review_config_hash')
+})
+
 test('buildReviewServingRowsSql only emits list-mode predicates for list-mode tables', () => {
   const contract = getRequiredReviewServingReadContract('review.queue.unassessed')
   const sql = buildReviewServingRowsSql({
@@ -90,7 +116,9 @@ test('buildReviewServingRowsSql only emits list-mode predicates for list-mode ta
     listModeParameter: '$listMode',
     payloadIdentityParameter: '$payloadIdentity',
     projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
     reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
     snapshotIdParameter: '$snapshotId',
   })
 
@@ -99,6 +127,29 @@ test('buildReviewServingRowsSql only emits list-mode predicates for list-mode ta
     'WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId',
   )
   expect(sql).not.toContain('list_mode_key')
+  expect(sql).toContain('ORDER BY priority_bucket ASC, activity_sort_at ASC, article_id ASC')
+  expect(sql).not.toContain('sort_key')
+})
+
+test('buildReviewServingRowsSql uses count-table sort columns for count serving tables', () => {
+  const contract = getRequiredReviewServingReadContract('review.prompt.badges')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('ORDER BY count_kind ASC, summary_definition_version ASC, filter_key ASC')
+  expect(sql).not.toContain('summary_key')
+  expect(sql).not.toContain('prompt_id')
 })
 
 test('assertReviewServingSqlShape reads table references from SQL', () => {

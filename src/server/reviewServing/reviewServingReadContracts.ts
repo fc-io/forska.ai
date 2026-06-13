@@ -68,6 +68,7 @@ const reviewFilterPostingServingTable = 'mart.review_article_filter_posting_serv
 const reviewQueueServingTable = 'mart.review_unassessed_queue_serving_v4'
 const reviewSearchServingTable = 'mart.review_title_search_serving_v4'
 const reviewSnapshotManifestTable = 'app.review_serving_snapshot_manifest'
+const countServingSort = {direction: 'asc', fields: ['count_kind', 'summary_definition_version', 'filter_key']} as const
 
 const defineContract = (input: ContractInput): ReviewServingReadContract => {
   return {
@@ -125,7 +126,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['llmStatus', 'posting', 'summary'],
     searchMode: 'none',
     servingTable: reviewCountServingTable,
-    sort: {direction: 'asc', fields: ['summary_key']},
+    sort: countServingSort,
     workloadClass: 'foregroundReviewCount',
   }),
   rowContract({
@@ -149,7 +150,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['humanStatus', 'posting', 'summary'],
     searchMode: 'none',
     servingTable: reviewCountServingTable,
-    sort: {direction: 'asc', fields: ['summary_key']},
+    sort: countServingSort,
     workloadClass: 'foregroundReviewCount',
   }),
   rowContract({
@@ -173,7 +174,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['llmStatus', 'humanStatus', 'posting', 'summary'],
     searchMode: 'none',
     servingTable: reviewCountServingTable,
-    sort: {direction: 'asc', fields: ['summary_key']},
+    sort: countServingSort,
     workloadClass: 'foregroundReviewCount',
   }),
   rowContract({
@@ -197,7 +198,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['queue', 'summary'],
     searchMode: 'none',
     servingTable: reviewCountServingTable,
-    sort: {direction: 'asc', fields: ['summary_key']},
+    sort: countServingSort,
     workloadClass: 'foregroundReviewCount',
   }),
   defineContract({
@@ -276,12 +277,12 @@ export const reviewServingReadContractList = [
     requiredComponents: ['llmStatus', 'humanStatus', 'summary'],
     searchMode: 'none',
     servingTable: reviewCountServingTable,
-    sort: {direction: 'asc', fields: ['prompt_id', 'summary_key']},
+    sort: countServingSort,
     workloadClass: 'foregroundReviewCount',
   }),
   defineContract({
     allowedFilters: ['queueKind'],
-    cursorFields: ['priority_bucket', 'sort_key', 'article_id'],
+    cursorFields: ['priority_bucket', 'activity_sort_at', 'article_id'],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.queue.unassessed',
     listMode: 'unassessed',
@@ -292,7 +293,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['queue'],
     searchMode: 'none',
     servingTable: reviewQueueServingTable,
-    sort: {direction: 'asc', fields: ['priority_bucket', 'sort_key', 'article_id']},
+    sort: {direction: 'asc', fields: ['priority_bucket', 'activity_sort_at', 'article_id']},
     workloadClass: 'foregroundReviewQueue',
   }),
   defineContract({
@@ -332,7 +333,7 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: [],
-    cursorFields: ['snapshot_id'],
+    cursorFields: ['updated_at', 'snapshot_id'],
     freshnessBehavior: 'allowStaleSnapshot',
     key: 'review.health.snapshot',
     listMode: null,
@@ -349,15 +350,15 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: [],
-    cursorFields: ['snapshot_id'],
+    cursorFields: ['updated_at', 'snapshot_id'],
     freshnessBehavior: 'allowStaleSnapshot',
     key: 'review.warning.snapshot',
     listMode: null,
     maxPageSize: 8,
     namedFastCounts: ['review.list.total', 'review.queue.unassessedReady'],
-    optionalComponents: ['queue', 'search'],
+    optionalComponents: ['search'],
     physicalAccessStrategy: 'keyedLookup',
-    requiredComponents: ['projectScope', 'posting', 'summary'],
+    requiredComponents: ['projectScope', 'posting', 'queue', 'summary'],
     searchMode: 'none',
     servingTable: reviewSnapshotManifestTable,
     sort: {direction: 'desc', fields: ['updated_at', 'snapshot_id']},

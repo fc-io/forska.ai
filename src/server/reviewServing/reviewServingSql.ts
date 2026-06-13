@@ -135,11 +135,17 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
   contract: ReviewServingReadContract
   displayIdentityParameter: string
   payloadIdentityParameter: string
+  projectScopeIdentityParameter: string
   reviewConfigHashParameter: string
+  searchIdentityParameter: string
   snapshotIdParameter: string
 }) => {
-  return params.contract.servingTable === 'mart.review_article_serving_payload_v4'
-    ? ` AND display_identity = ${params.displayIdentityParameter} AND payload_identity = ${params.payloadIdentityParameter} AND snapshot_id = ${params.snapshotIdParameter}`
+  if (params.contract.servingTable === 'mart.review_article_serving_payload_v4') {
+    return ` AND display_identity = ${params.displayIdentityParameter} AND payload_identity = ${params.payloadIdentityParameter} AND snapshot_id = ${params.snapshotIdParameter}`
+  }
+
+  return params.contract.servingTable === 'mart.review_title_search_serving_v4'
+    ? ` AND search_identity = ${params.searchIdentityParameter} AND project_scope_identity = ${params.projectScopeIdentityParameter} AND snapshot_id = ${params.snapshotIdParameter}`
     : ` AND review_config_hash = ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter}`
 }
 
@@ -165,7 +171,9 @@ export const buildReviewServingRowsSql = (params: {
   listModeParameter: string
   payloadIdentityParameter: string
   projectIdParameter: string
+  projectScopeIdentityParameter: string
   reviewConfigHashParameter: string
+  searchIdentityParameter: string
   snapshotIdParameter: string
 }) => {
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
