@@ -1,3 +1,6 @@
+import {readdirSync, readFileSync} from 'node:fs'
+import {join, relative} from 'node:path'
+
 import {expect, test} from 'bun:test'
 
 import {getReviewServingReadContract} from './reviewServingReadContracts.ts'
@@ -5,7 +8,12 @@ import {
   assertReviewServingSqlShape,
   buildReviewServingRowsSql,
   getReviewServingSqlShapeViolations,
+  getReviewServingSqlTableReferences,
+  reviewServingRegisteredSqlTables,
 } from './reviewServingSql.ts'
+
+const reviewServingSourceRoot = import.meta.dir
+const sqlGuardDefinitionFile = join(reviewServingSourceRoot, 'reviewServingSqlForbiddenPatterns.ts')
 
 const getRequiredReviewServingReadContract = (contractKey: string) => {
   const contract = getReviewServingReadContract(contractKey)
@@ -15,6 +23,20 @@ const getRequiredReviewServingReadContract = (contractKey: string) => {
   }
 
   return contract
+}
+
+const getReviewServingSourceFiles = (directory: string): string[] => {
+  return readdirSync(directory, {withFileTypes: true}).flatMap((entry) => {
+    const entryPath = join(directory, entry.name)
+
+    return entry.isDirectory() ? getReviewServingSourceFiles(entryPath) : entryPath
+  })
+}
+
+const getGuardedReviewServingSourceFiles = () => {
+  return getReviewServingSourceFiles(reviewServingSourceRoot).filter((filePath) => {
+    return filePath.endsWith('.ts') && !filePath.endsWith('.test.ts') && filePath !== sqlGuardDefinitionFile
+  })
 }
 
 test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
@@ -29,18 +51,38 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
 })
 
-test('assertReviewServingSqlShape rejects raw fallback and unbounded query patterns', () => {
+test('assertReviewServingSqlShape reads table references from SQL', () => {
   const sql = `
+    SELECT s.article_id
+    FROM mart.review_article_serving_v4 s
+    JOIN mart.review_article_filter_posting_serving_v4 p ON p.article_id = s.article_id
+    WHERE s.project_id = ?
+    ORDER BY s.sort_key DESC, s.article_id DESC
+    LIMIT ?
+  `
+
+  expect(getReviewServingSqlTableReferences(sql)).toEqual([
+    'mart.review_article_serving_v4',
+    'mart.review_article_filter_posting_serving_v4',
+  ])
+})
+
+test('assertReviewServingSqlShape rejects raw fallback query patterns', () => {
+  const rawFallbackSql = `
     WITH selected_scoped_article_import AS (
       SELECT article_id, ROW_NUMBER() OVER () AS rank FROM app.article
     )
     SELECT json_extract_string(a.metadata_json, '$.year'), COUNT(*)
     FROM app.judgment j
     JOIN app.article a ON a.id = j.article_id
+    JOIN app.judgment_human_summary h ON h.article_id = a.id
+    WHERE j.project_id = ?
     GROUP BY 1
+    ORDER BY rank DESC
+    LIMIT ?
     OFFSET 100
   `
-  const violations = getReviewServingSqlShapeViolations(sql).map((violation) => {
+  const violations = getReviewServingSqlShapeViolations(rawFallbackSql).map((violation) => {
     return violation.label
   })
 
@@ -51,4 +93,46 @@ test('assertReviewServingSqlShape rejects raw fallback and unbounded query patte
   expect(violations).toContain('raw judgment table scan')
   expect(violations).toContain('json extraction')
   expect(violations).toContain('foreground aggregation')
+})
+
+test('assertReviewServingSqlShape rejects unregistered tables and unbounded reads', () => {
+  const unregisteredSql = `
+    SELECT *
+    FROM mart.review_article_rollup
+    WHERE project_id = ?
+    ORDER BY article_id ASC
+    LIMIT ?
+  `
+  const unboundedSql = `
+    SELECT *
+    FROM mart.review_article_serving_v4
+    WHERE snapshot_id = ?
+  `
+  const unregisteredViolations = getReviewServingSqlShapeViolations(unregisteredSql).map((violation) => {
+    return violation.label
+  })
+  const unboundedViolations = getReviewServingSqlShapeViolations(unboundedSql).map((violation) => {
+    return violation.label
+  })
+
+  expect(unregisteredViolations).toContain('unregistered table reference: mart.review_article_rollup')
+  expect(unboundedViolations).toContain('project scoped read')
+  expect(unboundedViolations).toContain('keyset ordering')
+  expect(unboundedViolations).toContain('bounded limit')
+})
+
+test('reviewServing source files are statically guarded without scanning legacy route SQL', () => {
+  const sourceViolations = getGuardedReviewServingSourceFiles().flatMap((filePath) => {
+    return getReviewServingSqlShapeViolations(readFileSync(filePath, 'utf8'), {
+      allowedTables: reviewServingRegisteredSqlTables,
+      requireLimit: false,
+      requireOrderBy: false,
+      requireProjectScope: false,
+      requireRegisteredTable: false,
+    }).map((violation) => {
+      return `${relative(reviewServingSourceRoot, filePath)}: ${violation.label}`
+    })
+  })
+
+  expect(sourceViolations).toEqual([])
 })
