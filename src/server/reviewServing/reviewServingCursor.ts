@@ -21,6 +21,7 @@ export type ReviewServingCursorPayload = {
   reviewConfigHash: string | null
   snapshotId: string
   sortDirection: ReviewServingSortDirection
+  sortKey: string
   sortValues: readonly (null | number | string)[]
   version: 1
 }
@@ -32,29 +33,117 @@ export type ReviewServingCursorValidationContext = {
   reviewConfigHash?: string | null
   snapshotId: string
   sortDirection: ReviewServingSortDirection
+  sortKey: string
 }
+
+export type ReviewServingCursorDecodeFailureReason = 'malformedCursor' | 'schemaMismatch'
+
+export type ReviewServingCursorValidationFailureReason =
+  | 'componentBaseGenerationMismatch'
+  | 'componentPatchWatermarkMismatch'
+  | 'componentProjectionIdentityMismatch'
+  | 'contractMismatch'
+  | 'filterSignatureMismatch'
+  | 'reviewConfigHashMismatch'
+  | 'snapshotMismatch'
+  | 'sortDirectionMismatch'
+  | 'sortKeyMismatch'
+
+export type ReviewServingCursorFailureReason =
+  | ReviewServingCursorDecodeFailureReason
+  | ReviewServingCursorValidationFailureReason
 
 export type ReviewServingCursorDecodeResult =
   | {payload: ReviewServingCursorPayload; valid: true}
-  | {reason: 'malformedCursor' | 'schemaMismatch'; valid: false}
+  | {reason: ReviewServingCursorDecodeFailureReason; valid: false}
 
 export type ReviewServingCursorValidationResult =
   | {payload: ReviewServingCursorPayload; valid: true}
-  | {
-      reason:
-        | 'componentBaseGenerationMismatch'
-        | 'componentPatchWatermarkMismatch'
-        | 'componentProjectionIdentityMismatch'
-        | 'contractMismatch'
-        | 'filterSignatureMismatch'
-        | 'reviewConfigHashMismatch'
-        | 'snapshotMismatch'
-        | 'sortDirectionMismatch'
-      valid: false
-    }
+  | {reason: ReviewServingCursorValidationFailureReason; valid: false}
 
-export const getReviewServingFilterSignature = (input: ReviewServingIdentityValue) => {
-  return Buffer.from(getStableReviewServingJson(input), 'utf8').toString('base64url')
+export type ReviewServingCursorParseResult =
+  | {payload: ReviewServingCursorPayload; valid: true}
+  | {reason: ReviewServingCursorFailureReason; valid: false}
+
+export type ReviewServingFilterSignaturePrimitive = boolean | null | number | string
+
+export type ReviewServingFilterSignatureValue =
+  | ReviewServingFilterSignaturePrimitive
+  | readonly ReviewServingFilterSignatureValue[]
+  | {[key: string]: ReviewServingFilterSignatureValue | undefined}
+  | undefined
+
+const isFilterSignatureRecord = (
+  value: ReviewServingFilterSignatureValue,
+): value is {[key: string]: ReviewServingFilterSignatureValue | undefined} => {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+const compareStableReviewServingValues = (left: ReviewServingIdentityValue, right: ReviewServingIdentityValue) => {
+  return getStableReviewServingJson(left).localeCompare(getStableReviewServingJson(right))
+}
+
+const getUniqueReviewServingValues = (values: readonly ReviewServingIdentityValue[]) => {
+  const valuesByJson = values.reduce<Record<string, ReviewServingIdentityValue>>((entries, value) => {
+    return {...entries, [getStableReviewServingJson(value)]: value}
+  }, {})
+
+  return Object.values(valuesByJson).sort(compareStableReviewServingValues)
+}
+
+const getNormalizedReviewServingFilterArray = (
+  values: readonly ReviewServingFilterSignatureValue[],
+): readonly ReviewServingIdentityValue[] => {
+  const normalizedValues = values
+    .map(getNormalizedReviewServingFilterValue)
+    .filter((value): value is Exclude<ReviewServingIdentityValue, undefined> => {
+      return value !== undefined
+    })
+
+  return getUniqueReviewServingValues(normalizedValues)
+}
+
+const getNormalizedReviewServingFilterRecord = (value: {
+  [key: string]: ReviewServingFilterSignatureValue | undefined
+}) => {
+  return Object.keys(value)
+    .sort()
+    .reduce<{[key: string]: ReviewServingIdentityValue}>((record, key) => {
+      const normalizedValue = getNormalizedReviewServingFilterValue(value[key])
+      const shouldSkip =
+        normalizedValue === undefined || (Array.isArray(normalizedValue) && normalizedValue.length === 0)
+
+      return shouldSkip ? record : {...record, [key]: normalizedValue}
+    }, {})
+}
+
+const getNormalizedReviewServingFilterValue = (
+  value: ReviewServingFilterSignatureValue,
+): ReviewServingIdentityValue => {
+  if (Array.isArray(value)) {
+    return getNormalizedReviewServingFilterArray(value)
+  }
+
+  return isFilterSignatureRecord(value) ? getNormalizedReviewServingFilterRecord(value) : value
+}
+
+export const getNormalizedReviewServingFilterSignatureInput = (
+  input: ReviewServingFilterSignatureValue,
+): ReviewServingIdentityValue => {
+  const normalizedInput = getNormalizedReviewServingFilterValue(input)
+
+  return normalizedInput === undefined ? null : normalizedInput
+}
+
+export const getReviewServingFilterSignature = (input: ReviewServingFilterSignatureValue) => {
+  return Buffer.from(
+    getStableReviewServingJson(getNormalizedReviewServingFilterSignatureInput(input)),
+    'utf8',
+  ).toString('base64url')
+}
+
+export const getReviewServingCursorSortKey = (fields: readonly string[]) => {
+  return Buffer.from(getStableReviewServingJson(fields), 'utf8').toString('base64url')
 }
 
 const isSortValue = (value: unknown): value is null | number | string => {
@@ -111,6 +200,7 @@ const isReviewServingCursorPayload = (value: unknown): value is ReviewServingCur
     && typeof payload.snapshotId === 'string'
     && typeof payload.filterSignature === 'string'
     && (payload.sortDirection === 'asc' || payload.sortDirection === 'desc')
+    && typeof payload.sortKey === 'string'
     && Array.isArray(payload.sortValues)
     && payload.sortValues.every(isSortValue)
     && typeof payload.articleId === 'string'
@@ -195,9 +285,22 @@ export const validateReviewServingCursor = (
     return {reason: 'sortDirectionMismatch', valid: false}
   }
 
+  if (payload.sortKey !== expected.sortKey) {
+    return {reason: 'sortKeyMismatch', valid: false}
+  }
+
   if ((expected.reviewConfigHash ?? null) !== payload.reviewConfigHash) {
     return {reason: 'reviewConfigHashMismatch', valid: false}
   }
 
   return componentMismatch ?? {payload, valid: true}
+}
+
+export const decodeAndValidateReviewServingCursor = (
+  cursor: string | null | undefined,
+  expected: ReviewServingCursorValidationContext,
+): ReviewServingCursorParseResult => {
+  const decoded = decodeReviewServingCursor(cursor)
+
+  return decoded.valid ? validateReviewServingCursor(decoded.payload, expected) : decoded
 }
