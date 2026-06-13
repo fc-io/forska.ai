@@ -21,6 +21,7 @@ export type ProjectImportProgress = {
   bytesProcessed?: number | null
   bytesTotal?: number | null
   completedBytes?: number | null
+  completedItems?: number | null
   completedRows?: number | null
   message?: string | null
   percent?: number | null
@@ -28,7 +29,9 @@ export type ProjectImportProgress = {
   rowCountProcessed?: number | null
   rowCountTotal?: number | null
   status: 'completed' | 'failed' | 'pending' | 'running'
+  startedAt?: string | null
   totalBytes?: number | null
+  totalItems?: number | null
   totalRows?: number | null
   updatedAt?: string | null
   uploadMetadata?: ProjectImportUploadMetadata | null

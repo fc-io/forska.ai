@@ -122,7 +122,11 @@ const getCommitIdMapTableName = (operationId: string) => {
 const getMapRecord = (value: unknown): Record<string, string> => {
   return isRecord(value)
     ? Object.entries(value).reduce<Record<string, string>>((mapped, [sourceId, targetId]) => {
-        return typeof targetId === 'string' && targetId.trim() !== '' ? {...mapped, [sourceId]: targetId} : mapped
+        if (typeof targetId === 'string' && targetId.trim() !== '') {
+          mapped[sourceId] = targetId
+        }
+
+        return mapped
       }, {})
     : {}
 }
@@ -138,7 +142,11 @@ const getGeneratedTargetIds = (value: unknown): Partial<Record<ProjectTransferCo
           })
         : []
 
-      return targetIds.length === 0 ? mapped : {...mapped, [table as ProjectTransferCommitTargetTable]: targetIds}
+      if (targetIds.length !== 0) {
+        mapped[table as ProjectTransferCommitTargetTable] = targetIds
+      }
+
+      return mapped
     },
     {},
   )
@@ -213,7 +221,9 @@ const generatedId = ({
   table: ProjectTransferCommitTargetTable
   targetId: string
 }) => {
-  generated[table] = [...(generated[table] ?? []), targetId]
+  const targetIds = generated[table] ?? []
+  targetIds.push(targetId)
+  generated[table] = targetIds
 
   return targetId
 }
@@ -268,27 +278,32 @@ const getArticleIdBySourceId = ({
   )
 
   return articleMatches.reduce<Record<string, string>>((mapped, match) => {
-    return match.action === 'create' && createdArticleSources.has(match.sourceArticleId)
-      ? {
-          ...mapped,
-          [match.sourceArticleId]: getGeneratedMapValue({
-            existing,
-            generated,
-            sourceId: match.sourceArticleId,
-            table: 'article',
-          }),
-        }
-      : match.action === 'reuse' && match.selectedTargetArticleId !== null
-        ? {...mapped, [match.sourceArticleId]: match.selectedTargetArticleId}
-        : mapped
+    if (match.action === 'create' && createdArticleSources.has(match.sourceArticleId)) {
+      mapped[match.sourceArticleId] = getGeneratedMapValue({
+        existing,
+        generated,
+        sourceId: match.sourceArticleId,
+        table: 'article',
+      })
+
+      return mapped
+    }
+
+    if (match.action === 'reuse' && match.selectedTargetArticleId !== null) {
+      mapped[match.sourceArticleId] = match.selectedTargetArticleId
+    }
+
+    return mapped
   }, {})
 }
 
 const getRouteIdBySourceId = (projectRoutePlan: readonly ProjectTransferTargetPlan['projectRoutePlan'][number][]) => {
   return projectRoutePlan.reduce<Record<string, string>>((mapped, route) => {
-    return route.action === 'link' && route.targetImportRouteId !== null
-      ? {...mapped, [route.sourceImportRouteId]: route.targetImportRouteId}
-      : mapped
+    if (route.action === 'link' && route.targetImportRouteId !== null) {
+      mapped[route.sourceImportRouteId] = route.targetImportRouteId
+    }
+
+    return mapped
   }, {})
 }
 
@@ -306,15 +321,14 @@ const getArticleImportRouteIdBySourceId = ({
       return entry.action === 'write'
     })
     .reduce<Record<string, string>>((mapped, entry) => {
-      return {
-        ...mapped,
-        [entry.sourceArticleImportRouteId]: getGeneratedMapValue({
-          existing,
-          generated,
-          sourceId: entry.sourceArticleImportRouteId,
-          table: 'articleImportRoute',
-        }),
-      }
+      mapped[entry.sourceArticleImportRouteId] = getGeneratedMapValue({
+        existing,
+        generated,
+        sourceId: entry.sourceArticleImportRouteId,
+        table: 'articleImportRoute',
+      })
+
+      return mapped
     }, {})
 }
 
@@ -332,15 +346,14 @@ const getProjectImportRouteIdBySourceId = ({
       return entry.action === 'link'
     })
     .reduce<Record<string, string>>((mapped, entry) => {
-      return {
-        ...mapped,
-        [entry.sourceProjectImportRouteId]: getGeneratedMapValue({
-          existing,
-          generated,
-          sourceId: entry.sourceProjectImportRouteId,
-          table: 'projectImportRoute',
-        }),
-      }
+      mapped[entry.sourceProjectImportRouteId] = getGeneratedMapValue({
+        existing,
+        generated,
+        sourceId: entry.sourceProjectImportRouteId,
+        table: 'projectImportRoute',
+      })
+
+      return mapped
     }, {})
 }
 
@@ -355,9 +368,11 @@ const getProviderConnectionIdBySourceId = ({
 }) => {
   return Object.entries(getDependencyResolutionMap(plan, 'providerTargetBySourceId')).reduce<Record<string, string>>(
     (mapped, [sourceId, targetId]) => {
-      return isImportedTargetProviderConnectionId(targetId)
-        ? {...mapped, [sourceId]: getGeneratedMapValue({existing, generated, sourceId, table: 'providerConnection'})}
-        : {...mapped, [sourceId]: targetId}
+      mapped[sourceId] = isImportedTargetProviderConnectionId(targetId)
+        ? getGeneratedMapValue({existing, generated, sourceId, table: 'providerConnection'})
+        : targetId
+
+      return mapped
     },
     {},
   )
@@ -374,9 +389,11 @@ const getModelIdBySourceId = ({
 }) => {
   return Object.entries(getDependencyResolutionMap(plan, 'modelTargetBySourceId')).reduce<Record<string, string>>(
     (mapped, [sourceId, targetId]) => {
-      return isImportedTargetModelId(targetId)
-        ? {...mapped, [sourceId]: getGeneratedMapValue({existing, generated, sourceId, table: 'model'})}
-        : {...mapped, [sourceId]: targetId}
+      mapped[sourceId] = isImportedTargetModelId(targetId)
+        ? getGeneratedMapValue({existing, generated, sourceId, table: 'model'})
+        : targetId
+
+      return mapped
     },
     {},
   )
@@ -398,9 +415,11 @@ const getPayloadMapBySourceId = ({
   return records.reduce<Record<string, string>>((mapped, record) => {
     const sourceId = getStringValue(getRecordField(record, sourceField))
 
-    return sourceId === null
-      ? mapped
-      : {...mapped, [sourceId]: getGeneratedMapValue({existing, generated, sourceId, table})}
+    if (sourceId !== null) {
+      mapped[sourceId] = getGeneratedMapValue({existing, generated, sourceId, table})
+    }
+
+    return mapped
   }, {})
 }
 
@@ -414,19 +433,22 @@ const getJudgmentIdBySourceId = ({
   judgmentPlan: readonly NonNullable<ProjectTransferTargetPlan['judgmentPlan']>
 }) => {
   return judgmentPlan.reduce<Record<string, string>>((mapped, entry) => {
-    return entry.action === 'insert'
-      ? {
-          ...mapped,
-          [entry.sourceJudgmentId]: getGeneratedMapValue({
-            existing,
-            generated,
-            sourceId: entry.sourceJudgmentId,
-            table: 'judgment',
-          }),
-        }
-      : entry.action === 'reuse' && entry.targetJudgmentId !== null
-        ? {...mapped, [entry.sourceJudgmentId]: entry.targetJudgmentId}
-        : mapped
+    if (entry.action === 'insert') {
+      mapped[entry.sourceJudgmentId] = getGeneratedMapValue({
+        existing,
+        generated,
+        sourceId: entry.sourceJudgmentId,
+        table: 'judgment',
+      })
+
+      return mapped
+    }
+
+    if (entry.action === 'reuse' && entry.targetJudgmentId !== null) {
+      mapped[entry.sourceJudgmentId] = entry.targetJudgmentId
+    }
+
+    return mapped
   }, {})
 }
 
@@ -440,19 +462,22 @@ const getJudgmentAssessmentIdBySourceId = ({
   judgmentAssessmentPlan: readonly NonNullable<ProjectTransferTargetPlan['judgmentAssessmentPlan']>
 }) => {
   return judgmentAssessmentPlan.reduce<Record<string, string>>((mapped, entry) => {
-    return entry.action === 'insert'
-      ? {
-          ...mapped,
-          [entry.sourceJudgmentAssessmentId]: getGeneratedMapValue({
-            existing,
-            generated,
-            sourceId: entry.sourceJudgmentAssessmentId,
-            table: 'judgmentAssessment',
-          }),
-        }
-      : entry.action === 'reuse' && entry.targetAssessmentId !== null
-        ? {...mapped, [entry.sourceJudgmentAssessmentId]: entry.targetAssessmentId}
-        : mapped
+    if (entry.action === 'insert') {
+      mapped[entry.sourceJudgmentAssessmentId] = getGeneratedMapValue({
+        existing,
+        generated,
+        sourceId: entry.sourceJudgmentAssessmentId,
+        table: 'judgmentAssessment',
+      })
+
+      return mapped
+    }
+
+    if (entry.action === 'reuse' && entry.targetAssessmentId !== null) {
+      mapped[entry.sourceJudgmentAssessmentId] = entry.targetAssessmentId
+    }
+
+    return mapped
   }, {})
 }
 
@@ -474,7 +499,9 @@ const getHumanReviewIdBySourceId = ({
       return entry.kind === kind && entry.action === 'insert'
     })
     .reduce<Record<string, string>>((mapped, entry) => {
-      return {...mapped, [entry.sourceId]: getGeneratedMapValue({existing, generated, sourceId: entry.sourceId, table})}
+      mapped[entry.sourceId] = getGeneratedMapValue({existing, generated, sourceId: entry.sourceId, table})
+
+      return mapped
     }, {})
 }
 
@@ -502,7 +529,9 @@ const getProjectArticleIdBySourceArticleId = ({
   const sourceArticleIds = [...new Set([...projectArticleSources, ...snapshotArticleSources])]
 
   return sourceArticleIds.reduce<Record<string, string>>((mapped, sourceId) => {
-    return {...mapped, [sourceId]: getGeneratedMapValue({existing, generated, sourceId, table: 'projectArticle'})}
+    mapped[sourceId] = getGeneratedMapValue({existing, generated, sourceId, table: 'projectArticle'})
+
+    return mapped
   }, {})
 }
 
@@ -529,20 +558,24 @@ const getArticleIdentifierIdBySourceKey = ({
 }) => {
   return articles.reduce<Record<string, string>>((mapped, article) => {
     const identifiers = getProjectTransferNormalizedArticleIdentifiers(article).strongIdentifiers
-    const articleMap = identifiers.reduce<Record<string, string>>((identifierMap, identifier) => {
+    identifiers.reduce<Record<string, string>>((identifierMap, identifier) => {
       const sourceKey = getArticleIdentifierSourceKey({
         kind: identifier.kind,
         normalizedValue: identifier.normalizedValue,
         sourceArticleId: article.sourceArticleId,
       })
 
-      return {
-        ...identifierMap,
-        [sourceKey]: getGeneratedMapValue({existing, generated, sourceId: sourceKey, table: 'articleIdentifier'}),
-      }
-    }, {})
+      identifierMap[sourceKey] = getGeneratedMapValue({
+        existing,
+        generated,
+        sourceId: sourceKey,
+        table: 'articleIdentifier',
+      })
 
-    return {...mapped, ...articleMap}
+      return identifierMap
+    }, mapped)
+
+    return mapped
   }, {})
 }
 
@@ -557,7 +590,11 @@ const getProjectTransferCommitIdMapsGeneratedTargetIds = (
 
   return generatedEntries.reduce<Partial<Record<ProjectTransferCommitTargetTable, string[]>>>(
     (mapped, [table, ids]) => {
-      return ids.length === 0 ? mapped : {...mapped, [table as ProjectTransferCommitTargetTable]: ids}
+      if (ids.length !== 0) {
+        mapped[table as ProjectTransferCommitTargetTable] = ids
+      }
+
+      return mapped
     },
     {},
   )
@@ -806,18 +843,18 @@ const assertNoDuplicateGeneratedTargetIds = (maps: ProjectTransferCommitIdMaps) 
   const allIds = Object.values(maps.generatedTargetIds).flatMap((ids) => {
     return ids ?? []
   })
-  const duplicate = allIds.reduce<{duplicate: string | null; seen: Set<string>}>(
-    (state, id) => {
-      return state.duplicate
-        ? state
-        : state.seen.has(id)
-          ? {...state, duplicate: id}
-          : {duplicate: null, seen: new Set([...state.seen, id])}
-    },
-    {duplicate: null, seen: new Set()},
-  ).duplicate
+  const seen = new Set<string>()
+  const duplicate = allIds.find((id) => {
+    const alreadySeen = seen.has(id)
 
-  if (duplicate !== null) {
+    if (!alreadySeen) {
+      seen.add(id)
+    }
+
+    return alreadySeen
+  })
+
+  if (duplicate !== undefined) {
     throw new Error(`Project transfer commit id maps: duplicate generated target id ${duplicate}`)
   }
 }
@@ -875,7 +912,9 @@ export const getProjectTransferPromptContentHashBySourceId = (prompts: readonly 
   return prompts.reduce<Record<string, string>>((mapped, prompt) => {
     const entry = getPromptContentHash(prompt)
 
-    return {...mapped, [entry.sourcePromptId]: entry.contentHash}
+    mapped[entry.sourcePromptId] = entry.contentHash
+
+    return mapped
   }, {})
 }
 

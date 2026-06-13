@@ -501,11 +501,9 @@ const getTableCount = async ({sql, tx}: {sql: string; tx: ProjectTransferCommitW
 }
 
 const getValueChunks = <TValue>(values: readonly TValue[], chunkSize = commitWriterInsertBatchSize): TValue[][] => {
-  return values.length === 0
-    ? []
-    : values.length <= chunkSize
-      ? [[...values]]
-      : [[...values.slice(0, chunkSize)], ...getValueChunks(values.slice(chunkSize), chunkSize)]
+  return Array.from({length: Math.ceil(values.length / chunkSize)}, (_value, index) => {
+    return values.slice(index * chunkSize, (index + 1) * chunkSize)
+  })
 }
 
 const runChunks = async <TValue>(
@@ -526,7 +524,9 @@ const queryChunks = async <TValue, TRow>(
     const rows = await previous
     const chunkRows = await work(chunk)
 
-    return [...rows, ...chunkRows]
+    rows.push(...chunkRows)
+
+    return rows
   }, Promise.resolve([]))
 }
 
@@ -905,7 +905,9 @@ const getImportedProviderConnectionBySourceId = (providers: readonly ProjectTran
   return providers.reduce<Record<string, ImportedProviderConnectionCommitRow>>((mapped, provider) => {
     const importedProvider = getImportedProviderConnection(provider)
 
-    return {...mapped, [importedProvider.sourceProviderConnectionId]: importedProvider}
+    mapped[importedProvider.sourceProviderConnectionId] = importedProvider
+
+    return mapped
   }, {})
 }
 
@@ -913,7 +915,9 @@ const getImportedModelBySourceId = (models: readonly ProjectTransferPayloadRecor
   return models.reduce<Record<string, ImportedModelCommitRow>>((mapped, model) => {
     const importedModel = getImportedModel(model)
 
-    return {...mapped, [importedModel.sourceModelId]: importedModel}
+    mapped[importedModel.sourceModelId] = importedModel
+
+    return mapped
   }, {})
 }
 
@@ -933,7 +937,9 @@ const getResolvedProviderTargetBySourceId = async ({
     const [sourceProviderConnectionId, targetProviderConnectionId] = entry
 
     if (!isImportedTargetProviderConnectionId(targetProviderConnectionId)) {
-      return {...mapped, [sourceProviderConnectionId]: targetProviderConnectionId}
+      mapped[sourceProviderConnectionId] = targetProviderConnectionId
+
+      return mapped
     }
 
     const importedProvider =
@@ -942,7 +948,9 @@ const getResolvedProviderTargetBySourceId = async ({
     const existingProviderConnectionId = await getReusableImportedProviderConnectionId({importedProvider, tx})
 
     if (existingProviderConnectionId !== null) {
-      return {...mapped, [sourceProviderConnectionId]: existingProviderConnectionId}
+      mapped[sourceProviderConnectionId] = existingProviderConnectionId
+
+      return mapped
     }
 
     const providerConnectionId = getMappedTargetId({
@@ -951,7 +959,9 @@ const getResolvedProviderTargetBySourceId = async ({
       sourceId: sourceProviderConnectionId,
     })
 
-    return {...mapped, [sourceProviderConnectionId]: providerConnectionId}
+    mapped[sourceProviderConnectionId] = providerConnectionId
+
+    return mapped
   }, Promise.resolve({}))
 }
 
@@ -1046,7 +1056,9 @@ const getResolvedModelTargetBySourceId = async ({
     const [sourceModelId, targetModelId] = entry
 
     if (!isImportedTargetModelId(targetModelId)) {
-      return {...mapped, [sourceModelId]: targetModelId}
+      mapped[sourceModelId] = targetModelId
+
+      return mapped
     }
 
     const importedModel =
@@ -1067,7 +1079,9 @@ const getResolvedModelTargetBySourceId = async ({
     })
 
     if (existingModelId !== null) {
-      return {...mapped, [sourceModelId]: existingModelId}
+      mapped[sourceModelId] = existingModelId
+
+      return mapped
     }
 
     const materializedModelId = getMappedTargetId({
@@ -1076,7 +1090,9 @@ const getResolvedModelTargetBySourceId = async ({
       sourceId: sourceModelId,
     })
 
-    return {...mapped, [sourceModelId]: materializedModelId}
+    mapped[sourceModelId] = materializedModelId
+
+    return mapped
   }, Promise.resolve({}))
 }
 
@@ -1246,13 +1262,19 @@ const getPayloadArrayBySourceId = <TRecord extends ProjectTransferPayloadRecord>
   return records.reduce<Record<string, TRecord>>((mapped, record) => {
     const sourceId = getNullableString(getRecordField(record, sourceField))
 
-    return sourceId === null ? mapped : {...mapped, [sourceId]: record}
+    if (sourceId !== null) {
+      mapped[sourceId] = record
+    }
+
+    return mapped
   }, {})
 }
 
 const getArticleBySourceId = (articles: readonly ProjectTransferArticlePayloadRecord[]) => {
   return articles.reduce<Record<string, ProjectTransferArticlePayloadRecord>>((mapped, article) => {
-    return {...mapped, [article.sourceArticleId]: article}
+    mapped[article.sourceArticleId] = article
+
+    return mapped
   }, {})
 }
 
@@ -1381,7 +1403,11 @@ const getPromptMaterializationPlanBySourceId = async ({
   const contentHashBySourceId = getProjectTransferPromptContentHashBySourceId(prompts)
   const sourceIdByContentHash = Object.entries(contentHashBySourceId).reduce<Record<string, string>>(
     (mapped, [sourcePromptId, contentHash]) => {
-      return mapped[contentHash] === undefined ? {...mapped, [contentHash]: sourcePromptId} : mapped
+      if (mapped[contentHash] === undefined) {
+        mapped[contentHash] = sourcePromptId
+      }
+
+      return mapped
     },
     {},
   )
@@ -1399,7 +1425,11 @@ const getPromptMaterializationPlanBySourceId = async ({
         })
   const existingPromptByContentHash = existingPromptRows.reduce<Record<string, {archived: boolean; id: string}>>(
     (mapped, row) => {
-      return mapped[row.contentHash] === undefined ? {...mapped, [row.contentHash]: row} : mapped
+      if (mapped[row.contentHash] === undefined) {
+        mapped[row.contentHash] = row
+      }
+
+      return mapped
     },
     {},
   )
@@ -1411,7 +1441,11 @@ const getPromptMaterializationPlanBySourceId = async ({
       commitIdMaps.promptIdBySourceId[sourcePromptId]
       ?? failCommitWriter(`missing generated prompt target id for ${sourcePromptId}`)
 
-    return existingPrompt === undefined ? {...mapped, [contentHash]: generatedPromptId} : mapped
+    if (existingPrompt === undefined) {
+      mapped[contentHash] = generatedPromptId
+    }
+
+    return mapped
   }, {})
   const promptBySourceId = getPayloadArrayBySourceId(prompts, 'sourcePromptId')
   const createPromptRows = Object.entries(generatedPromptIdByContentHash).map(([contentHash, promptId]) => {
@@ -1446,7 +1480,11 @@ const getPromptMaterializationPlanBySourceId = async ({
     (mapped, [sourcePromptId, contentHash]) => {
       const promptId = existingPromptByContentHash[contentHash]?.id ?? generatedPromptIdByContentHash[contentHash]
 
-      return promptId === undefined ? mapped : {...mapped, [sourcePromptId]: promptId}
+      if (promptId !== undefined) {
+        mapped[sourcePromptId] = promptId
+      }
+
+      return mapped
     },
     {},
   )
@@ -1515,7 +1553,9 @@ const getPlannedPromptHashBySourceId = (prompts: readonly ProjectTransferPayload
       getNullableString(getRecordField(prompt, 'type')),
     )
 
-    return {...mapped, [sourcePromptId]: contentHash}
+    mapped[sourcePromptId] = contentHash
+
+    return mapped
   }, {})
 }
 
@@ -1539,18 +1579,18 @@ const assertPromptPlanHashes = ({
 }
 
 const getDuplicateValue = (values: readonly string[]) => {
-  const state = values.reduce<{duplicate: string | null; seen: Set<string>}>(
-    (current, value) => {
-      return current.duplicate
-        ? current
-        : current.seen.has(value)
-          ? {...current, duplicate: value}
-          : {duplicate: null, seen: new Set([...current.seen, value])}
-    },
-    {duplicate: null, seen: new Set()},
-  )
+  const seen = new Set<string>()
+  const duplicate = values.find((value) => {
+    const alreadySeen = seen.has(value)
 
-  return state.duplicate
+    if (!alreadySeen) {
+      seen.add(value)
+    }
+
+    return alreadySeen
+  })
+
+  return duplicate ?? null
 }
 
 const assertNoProjectPromptDuplicates = (projectPromptRows: readonly {promptId: string}[]) => {
@@ -1672,18 +1712,23 @@ const getResolvedArticleIdBySourceId = ({
   )
 
   return articleMatches.reduce<Record<string, string>>((mapped, match) => {
-    return match.action === 'create' && createdArticleSources.has(match.sourceArticleId)
-      ? {
-          ...mapped,
-          [match.sourceArticleId]: getMappedTargetId({
-            label: 'article',
-            mapped: commitIdMaps.articleIdBySourceId,
-            sourceId: match.sourceArticleId,
-          }),
-        }
-      : match.action === 'reuse' && match.selectedTargetArticleId !== null
-        ? {...mapped, [match.sourceArticleId]: match.selectedTargetArticleId}
-        : failCommitWriter(`article ${match.sourceArticleId} is not commit-safe`)
+    if (match.action === 'create' && createdArticleSources.has(match.sourceArticleId)) {
+      mapped[match.sourceArticleId] = getMappedTargetId({
+        label: 'article',
+        mapped: commitIdMaps.articleIdBySourceId,
+        sourceId: match.sourceArticleId,
+      })
+
+      return mapped
+    }
+
+    if (match.action === 'reuse' && match.selectedTargetArticleId !== null) {
+      mapped[match.sourceArticleId] = match.selectedTargetArticleId
+
+      return mapped
+    }
+
+    return failCommitWriter(`article ${match.sourceArticleId} is not commit-safe`)
   }, {})
 }
 
@@ -1843,7 +1888,9 @@ const getFillTargetArticleRows = async ({
         })
 
   return rows.reduce<Record<string, TargetArticleFieldRow>>((mapped, row) => {
-    return {...mapped, [row.id]: row}
+    mapped[row.id] = row
+
+    return mapped
   }, {})
 }
 
@@ -1927,7 +1974,9 @@ const getArticleFieldFillCounts = async ({
   `)
 
   return rows.reduce<Record<string, number>>((mapped, row) => {
-    return {...mapped, [row.field]: row.count}
+    mapped[row.field] = row.count
+
+    return mapped
   }, {})
 }
 
@@ -2034,12 +2083,15 @@ const updateReusedArticles = async ({
     return updateReusedArticlesSetBased({context, now, tx})
   }
 
-  const fillsByArticleId = promotion.articleFieldFills.reduce<Record<string, typeof promotion.articleFieldFills>>(
-    (mapped, fill) => {
-      return {...mapped, [fill.targetArticleId]: [...(mapped[fill.targetArticleId] ?? []), fill]}
-    },
-    {},
-  )
+  const fillsByArticleId = promotion.articleFieldFills.reduce<
+    Record<string, (typeof promotion.articleFieldFills)[number][]>
+  >((mapped, fill) => {
+    const fills = mapped[fill.targetArticleId] ?? []
+    fills.push(fill)
+    mapped[fill.targetArticleId] = fills
+
+    return mapped
+  }, {})
 
   assertArticleFieldFillsStillMissing({promotion, targetArticleById})
 
@@ -2068,7 +2120,9 @@ const updateReusedArticles = async ({
 
 const getArticleActionBySourceId = (articleMatches: readonly ArticleMatchPlan[]) => {
   return articleMatches.reduce<Record<string, ArticleMatchPlan['action']>>((mapped, match) => {
-    return {...mapped, [match.sourceArticleId]: match.action}
+    mapped[match.sourceArticleId] = match.action
+
+    return mapped
   }, {})
 }
 
@@ -2430,7 +2484,9 @@ const getArticleIdentifierTargetRowsByKey = async ({
   })
 
   return targetRows.reduce<Record<string, ArticleIdentifierTargetRow>>((mapped, row) => {
-    return {...mapped, [getArticleIdentifierTargetKey(row)]: row}
+    mapped[getArticleIdentifierTargetKey(row)] = row
+
+    return mapped
   }, {})
 }
 
@@ -2634,9 +2690,11 @@ const insertArticleIdentifiers = async ({
 
 const getRouteIdBySourceId = (projectRoutePlan: readonly ProjectRoutePlanEntry[]) => {
   return projectRoutePlan.reduce<Record<string, string>>((mapped, route) => {
-    return route.action === 'link' && route.targetImportRouteId !== null
-      ? {...mapped, [route.sourceImportRouteId]: route.targetImportRouteId}
-      : mapped
+    if (route.action === 'link' && route.targetImportRouteId !== null) {
+      mapped[route.sourceImportRouteId] = route.targetImportRouteId
+    }
+
+    return mapped
   }, {})
 }
 
@@ -3310,9 +3368,12 @@ const getDedupedWarnings = (warnings: readonly ProjectTransferPackageWarning[]) 
     (current, warning) => {
       const key = getProjectTransferCanonicalJson(warning)
 
-      return current.seen.has(key)
-        ? current
-        : {seen: new Set([...current.seen, key]), warnings: [...current.warnings, warning]}
+      if (!current.seen.has(key)) {
+        current.seen.add(key)
+        current.warnings.push(warning)
+      }
+
+      return current
     },
     {seen: new Set(), warnings: []},
   )
@@ -3594,7 +3655,9 @@ const getJudgmentRows = ({
   promptIdBySourceId: Record<string, string>
 }) => {
   const planBySourceId = judgmentPlan.reduce<Record<string, JudgmentPlanEntry>>((mapped, entry) => {
-    return {...mapped, [entry.sourceJudgmentId]: entry}
+    mapped[entry.sourceJudgmentId] = entry
+
+    return mapped
   }, {})
   const judgmentBySourceId = getPayloadArrayBySourceId(judgments, 'sourceJudgmentId')
   const extraPlanEntry = judgmentPlan.find((entry) => {
@@ -3781,13 +3844,19 @@ const assertJudgmentTargetsCommitSafe = async ({
   const targets = await getTargetJudgmentRows({rows, tx})
   const targetsByPhysicalKey = targets.reduce<Record<string, TargetJudgmentRow[]>>((mapped, target) => {
     const key = getTargetJudgmentPhysicalKey(target)
+    const keyTargets = mapped[key] ?? []
+    keyTargets.push(target)
+    mapped[key] = keyTargets
 
-    return {...mapped, [key]: [...(mapped[key] ?? []), target]}
+    return mapped
   }, {})
   const targetsByVisibleKey = targets.reduce<Record<string, TargetJudgmentRow[]>>((mapped, target) => {
     const key = getTargetJudgmentReviewVisibleKey(target)
+    const keyTargets = mapped[key] ?? []
+    keyTargets.push(target)
+    mapped[key] = keyTargets
 
-    return {...mapped, [key]: [...(mapped[key] ?? []), target]}
+    return mapped
   }, {})
 
   return rows.map((row) => {
@@ -4318,7 +4387,9 @@ const insertJudgmentRows = async ({
 
 const getJudgmentIdBySourceId = (rows: readonly JudgmentCommitRow[]) => {
   return rows.reduce<Record<string, string>>((mapped, row) => {
-    return {...mapped, [row.sourceJudgmentId]: row.id}
+    mapped[row.sourceJudgmentId] = row.id
+
+    return mapped
   }, {})
 }
 
@@ -4346,7 +4417,9 @@ const getJudgmentAssessmentRows = ({
   now: Date
 }) => {
   const planBySourceId = assessmentPlan.reduce<Record<string, JudgmentAssessmentPlanEntry>>((mapped, entry) => {
-    return {...mapped, [entry.sourceJudgmentAssessmentId]: entry}
+    mapped[entry.sourceJudgmentAssessmentId] = entry
+
+    return mapped
   }, {})
   const assessmentBySourceId = getPayloadArrayBySourceId(assessments, 'sourceJudgmentAssessmentId')
   const extraPlanEntry = assessmentPlan.find((entry) => {
@@ -4449,7 +4522,9 @@ const assertJudgmentAssessmentTargetsCommitSafe = async ({
 
   const targets = await getTargetAssessmentRows({judgmentIds: allJudgmentIds, tx})
   const targetByJudgmentId = targets.reduce<Record<string, TargetJudgmentAssessmentRow>>((mapped, target) => {
-    return {...mapped, [target.judgmentId]: target}
+    mapped[target.judgmentId] = target
+
+    return mapped
   }, {})
   const packageJudgmentIds = new Set(
     rows.map((row) => {
@@ -4822,7 +4897,9 @@ const insertJudgmentAssessmentRows = async ({
 
 const getHumanReviewPlanByKey = (humanReviewPlan: readonly HumanReviewPlanEntry[]) => {
   return humanReviewPlan.reduce<Record<string, HumanReviewPlanEntry>>((mapped, entry) => {
-    return {...mapped, [`${entry.kind}\u0000${entry.sourceId}`]: entry}
+    mapped[`${entry.kind}\u0000${entry.sourceId}`] = entry
+
+    return mapped
   }, {})
 }
 
@@ -4990,13 +5067,12 @@ const getReviewSections = (value: unknown) => {
     const sectionValue = getRecordField(sections, section)
     const sectionRecord = isRecord(sectionValue) ? sectionValue : {}
 
-    return {
-      ...mapped,
-      [section]: {
-        comment: getNullableString(getRecordField(sectionRecord, 'comment')),
-        reviewed: getBoolean(getRecordField(sectionRecord, 'reviewed'), false),
-      },
+    mapped[section] = {
+      comment: getNullableString(getRecordField(sectionRecord, 'comment')),
+      reviewed: getBoolean(getRecordField(sectionRecord, 'reviewed'), false),
     }
+
+    return mapped
   }, {})
 }
 
@@ -5104,16 +5180,18 @@ const assertNoExistingHumanSummaries = async ({
   const existing =
     rows.length === 0
       ? []
-      : await tx.queryJson<{articleId: string; projectId: string}>(`
+      : await queryChunks<HumanJudgmentSummaryCommitRow, {articleId: string; projectId: string}>(rows, (rowChunk) => {
+          return tx.queryJson<{articleId: string; projectId: string}>(`
           SELECT project_id AS projectId, article_id AS articleId
           FROM app.judgment_human_summary
-          WHERE ${rows
+          WHERE ${rowChunk
             .map((row) => {
               return `(project_id = ${getSqlLiteral(row.projectId)} AND article_id = ${getSqlLiteral(row.articleId)})`
             })
             .join(' OR ')}
           ORDER BY project_id ASC, article_id ASC
         `)
+        })
   const conflict = existing[0]
 
   return conflict
@@ -5139,16 +5217,18 @@ const assertNoExistingReviews = async ({
   const existing =
     rows.length === 0
       ? []
-      : await tx.queryJson<{articleId: string; projectId: string}>(`
+      : await queryChunks<ReviewCommitRow, {articleId: string; projectId: string}>(rows, (rowChunk) => {
+          return tx.queryJson<{articleId: string; projectId: string}>(`
           SELECT project_id AS projectId, article_id AS articleId
           FROM app.review
-          WHERE ${rows
+          WHERE ${rowChunk
             .map((row) => {
               return `(project_id = ${getSqlLiteral(row.projectId)} AND article_id = ${getSqlLiteral(row.articleId)})`
             })
             .join(' OR ')}
           ORDER BY project_id ASC, article_id ASC
         `)
+        })
   const conflict = existing[0]
 
   return conflict

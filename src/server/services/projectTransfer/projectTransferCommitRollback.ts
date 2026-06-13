@@ -77,9 +77,12 @@ export type ProjectTransferCommitPromotionResult = {
 export type ProjectTransferCommitRollbackResult = {deletedPromotedAssetCount: number; skippedPromotedAssetCount: number}
 
 type PromoteProjectTransferCommitAssetsParams = RuntimePathOptions & {
+  articles?: readonly ProjectTransferArticlePayloadRecord[]
   layout?: ProjectTransferImportTempLayout
   maxConcurrency?: number
   now?: Date
+  onProgress?: (progress: ProjectTransferCommitPromotionProgress) => Promise<void> | void
+  plan?: ProjectTransferImportPlanArtifact
   sessionId: string
 }
 
@@ -91,6 +94,14 @@ type RollbackProjectTransferCommitPromotionParams = RuntimePathOptions & {
 
 type RunProjectTransferCommitWithPromotionRollbackParams<TResult> = PromoteProjectTransferCommitAssetsParams & {
   work: (promotion: ProjectTransferCommitPromotionResult) => Promise<TResult>
+}
+
+type ProjectTransferCommitPromotionProgress = {
+  completedBytes: number
+  completedItems: number
+  currentPackagePath: string | null
+  totalBytes: number
+  totalItems: number
 }
 
 const runtimeAssetUrlPath = '/api/runtime-asset'
@@ -619,7 +630,13 @@ const promoteManifestEntry = async ({
     now,
   })
 
-  return copiedManifest
+  return {...copied, manifest: copiedManifest}
+}
+
+const getManifestTotalBytes = (manifest: ProjectTransferCommitPromotionManifest) => {
+  return manifest.promotions.reduce((total, entry) => {
+    return total + entry.byteLength
+  }, 0)
 }
 
 const getPromotionConcurrency = (value: number | undefined, entryCount: number) => {
@@ -671,24 +688,53 @@ const promoteManifestEntries = async ({
   layout,
   manifest,
   now,
+  onProgress,
   runtimeOptions,
 }: {
   maxConcurrency: number
   layout: ProjectTransferImportTempLayout
   manifest: ProjectTransferCommitPromotionManifest
   now: Date
+  onProgress?: (progress: ProjectTransferCommitPromotionProgress) => Promise<void> | void
   runtimeOptions: RuntimePathOptions
 }) => {
   await writePromotionManifest({layout, manifest, runtimeOptions})
 
   const writer = createPromotionManifestWriter({initialManifest: manifest, layout, runtimeOptions})
+  const totalBytes = getManifestTotalBytes(manifest)
+  const progressState = {completedBytes: 0, completedItems: 0, queue: Promise.resolve()}
+  const publishProgress = (entry: ProjectTransferCommitPromotionManifestEntry, byteLength: number) => {
+    progressState.completedBytes += byteLength
+    progressState.completedItems += 1
+
+    if (onProgress === undefined) {
+      return Promise.resolve()
+    }
+
+    const progress = {
+      completedBytes: progressState.completedBytes,
+      completedItems: progressState.completedItems,
+      currentPackagePath: entry.packagePath,
+      totalBytes,
+      totalItems: manifest.promotions.length,
+    }
+
+    progressState.queue = progressState.queue.then(() => {
+      return onProgress(progress)
+    })
+
+    return progressState.queue
+  }
+
   await runBoundedPromotionWorkers({
     entries: manifest.promotions,
     maxConcurrency,
     work: async (entry) => {
-      await promoteManifestEntry({entry, layout, now, runtimeOptions, writer})
+      const copied = await promoteManifestEntry({entry, layout, now, runtimeOptions, writer})
+      await publishProgress(entry, copied.byteLength)
     },
   })
+  await progressState.queue
 
   return writer.getManifest()
 }
@@ -1026,6 +1072,35 @@ const rewriteArticleAssetFields = ({
   }
 }
 
+const hasAssetFieldValue = (value: unknown) => {
+  return typeof value === 'string'
+    ? value.trim() !== ''
+    : Array.isArray(value)
+      ? value.length > 0
+      : isRecord(value)
+        ? Object.keys(value).length > 0
+        : value !== null && value !== undefined
+}
+
+const shouldRewriteArticleAssetFields = ({
+  article,
+  rewriteAssets,
+}: {
+  article: ProjectTransferArticlePayloadRecord
+  rewriteAssets: boolean
+}) => {
+  return (
+    rewriteAssets
+    || hasAssetFieldValue(article.fullTextAssets)
+    || hasAssetFieldValue(article.fullTextHtml)
+    || hasAssetFieldValue(article.fullTextPdf)
+  )
+}
+
+const shouldRewriteArticleFieldFillAssetValue = ({field, rewriteAssets}: {field: string; rewriteAssets: boolean}) => {
+  return rewriteAssets || field === 'fullTextAssets' || field === 'fullTextHtml' || field === 'fullTextPdf'
+}
+
 const getArticlesBySource = (articles: readonly ProjectTransferArticlePayloadRecord[]) => {
   return articles.reduce<Map<string, {article: ProjectTransferArticlePayloadRecord; index: number}>>(
     (articleMap, article, index) => {
@@ -1047,6 +1122,7 @@ const getArticleCreates = ({
   promotionPathByPackagePath: Record<string, string>
 }) => {
   const articlesBySource = getArticlesBySource(articles)
+  const rewriteAssets = plan.targetPlan.assetPromotionPlan.length > 0
 
   return plan.targetPlan.articleMatches
     .filter((match) => {
@@ -1058,11 +1134,13 @@ const getArticleCreates = ({
       return entry === undefined
         ? getCommitPromotionError(`missing article payload for ${match.sourceArticleId}`)
         : {
-            article: rewriteArticleAssetFields({
-              article: entry.article,
-              articleIndex: entry.index,
-              promotionPathByPackagePath,
-            }),
+            article: shouldRewriteArticleAssetFields({article: entry.article, rewriteAssets})
+              ? rewriteArticleAssetFields({
+                  article: entry.article,
+                  articleIndex: entry.index,
+                  promotionPathByPackagePath,
+                })
+              : entry.article,
             sourceArticleId: match.sourceArticleId,
           }
     })
@@ -1075,18 +1153,22 @@ const getArticleFieldFills = ({
   plan: ProjectTransferImportPlanArtifact
   promotionPathByPackagePath: Record<string, string>
 }) => {
+  const rewriteAssets = plan.targetPlan.assetPromotionPlan.length > 0
+
   return plan.targetPlan.articleUpdatePlan.flatMap((articlePlan) => {
     return articlePlan.fieldFills.map((fieldFill): ProjectTransferCommitArticleFieldFill => {
       return {
         field: fieldFill.field,
         sourceArticleId: articlePlan.sourceArticleId,
         targetArticleId: articlePlan.targetArticleId,
-        value: rewriteArticleFullTextAssetField({
-          field: fieldFill.field,
-          fieldPath: `articles.${articlePlan.sourceArticleId}.${fieldFill.field}`,
-          promotionPathByPackagePath,
-          value: fieldFill.value,
-        }),
+        value: shouldRewriteArticleFieldFillAssetValue({field: fieldFill.field, rewriteAssets})
+          ? rewriteArticleFullTextAssetField({
+              field: fieldFill.field,
+              fieldPath: `articles.${articlePlan.sourceArticleId}.${fieldFill.field}`,
+              promotionPathByPackagePath,
+              value: fieldFill.value,
+            })
+          : fieldFill.value,
       }
     })
   })
@@ -1190,16 +1272,19 @@ const mergeRollbackResult = (
 }
 
 export const promoteProjectTransferCommitAssets = async ({
+  articles: inputArticles,
   layout: inputLayout,
   maxConcurrency: inputMaxConcurrency,
   now: inputNow,
+  onProgress,
+  plan: inputPlan,
   sessionId,
   ...runtimeOptions
 }: PromoteProjectTransferCommitAssetsParams): Promise<ProjectTransferCommitPromotionResult> => {
   const layout = inputLayout ?? getProjectTransferImportTempLayout(sessionId)
   const now = inputNow ?? new Date()
-  const plan = await readPlanArtifact({...runtimeOptions, layout})
-  const articles = await readArticlesPayload({...runtimeOptions, layout})
+  const plan = inputPlan ?? (await readPlanArtifact({...runtimeOptions, layout}))
+  const articles = inputArticles ?? (await readArticlesPayload({...runtimeOptions, layout}))
   const planRecords = getPromotionPlanRecords(plan.targetPlan.assetPromotionPlan)
   const initialManifest = getInitialPromotionManifest({now, planRecords, sessionId})
   const maxConcurrency = getPromotionConcurrency(inputMaxConcurrency, initialManifest.promotions.length)
@@ -1208,6 +1293,7 @@ export const promoteProjectTransferCommitAssets = async ({
     manifest: initialManifest,
     maxConcurrency,
     now,
+    onProgress,
     runtimeOptions,
   })
   const promotionPathByPackagePath = getPromotionPathByPackagePath(manifest)

@@ -16,6 +16,7 @@ import {
   type ProjectTransferCommitResult,
   revalidateProjectTransferCommitPlan,
 } from './projectTransferCommit.ts'
+import {getProjectTransferPlanWithCommitIdMaps} from './projectTransferCommitIdMaps.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import type {ProjectTransferPlanSummary} from './projectTransferSession.ts'
 import {getProjectTransferImportTempLayout} from './projectTransferSession.ts'
@@ -502,6 +503,7 @@ const getFakeSessionRepository = (initialSession: ProjectTransferSessionRecord) 
           ? {
               ...session,
               commitId: Object.hasOwn(params, 'commitId') ? (params.commitId ?? null) : session.commitId,
+              errorJson: Object.hasOwn(params, 'error') ? (params.error ?? null) : session.errorJson,
               heartbeatAt: params.now ?? null,
               ownerToken: Object.hasOwn(params, 'nextOwnerToken')
                 ? (params.nextOwnerToken ?? null)
@@ -655,7 +657,7 @@ test('project transfer commit loads frozen artifacts and claims with server gene
     expect(fake.calls.transition[1]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
       nextState: 'committing',
-      progress: {percent: 0, phase: 'asset_promotion', status: 'running'},
+      progress: {percent: 0, phase: 'staging_load', status: 'running'},
     })
     expect(fake.calls.transition[2]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
@@ -857,6 +859,76 @@ test('project transfer commit claims large imports before running background rev
   }
 })
 
+test('project transfer commit id maps keep large insert plans complete', () => {
+  const rowCount = 12_000
+  const sourceIds = Array.from({length: rowCount}, (_value, index) => {
+    return `source-large-${index}`
+  })
+  const basePlan = getPlan({planRevision: 1})
+  const judgmentPlan: NonNullable<ProjectTransferImportPlanArtifact['targetPlan']['judgmentPlan']> = sourceIds.map(
+    (sourceId) => {
+      return {
+        action: 'insert',
+        conflictCodes: [],
+        inputSignatureMatches: true,
+        physicalKey: `physical-${sourceId}`,
+        provenanceKind: 'currentReviewRows',
+        reviewVisibleKey: `visible-${sourceId}`,
+        sourceJudgmentId: `source-judgment-${sourceId}`,
+        targetArticleId: `new:article:${sourceId}`,
+        targetJudgmentId: `new:judgment:${sourceId}`,
+        targetModelId: 'target-model',
+        targetPromptId: 'target-prompt',
+      }
+    },
+  )
+  const humanReviewPlan: NonNullable<ProjectTransferImportPlanArtifact['targetPlan']['humanReviewPlan']> =
+    sourceIds.map((sourceId) => {
+      return {
+        action: 'insert',
+        conflictCodes: [],
+        inputSignatureMatches: true,
+        kind: 'humanJudgmentSummary',
+        provenanceKind: 'currentReviewRows',
+        sourceId: `source-human-summary-${sourceId}`,
+        targetArticleId: `new:article:${sourceId}`,
+        targetPromptId: null,
+        uniqueKey: `human-summary-${sourceId}`,
+      }
+    })
+  const plan = {
+    ...basePlan,
+    packageCounts: {...basePlan.packageCounts, humanJudgmentSummaries: rowCount, judgments: rowCount},
+    targetPlan: {...basePlan.targetPlan, humanReviewPlan, judgmentPlan},
+  }
+  const result = getProjectTransferPlanWithCommitIdMaps({
+    commitId: 'commit-large-map',
+    now: new Date('2026-05-28T10:30:00.000Z'),
+    payloads: {},
+    plan,
+    promotion: {
+      articleCreates: [],
+      articleFieldFills: [],
+      manifest: {
+        createdAt: '2026-05-28T10:30:00.000Z',
+        promotions: [],
+        sessionId: 'commit-session',
+        updatedAt: '2026-05-28T10:30:00.000Z',
+      },
+      promotionPathByPackagePath: {},
+    },
+  })
+  const judgmentIds = Object.values(result.commitIdMaps.judgmentIdBySourceId)
+  const humanSummaryIds = Object.values(result.commitIdMaps.humanJudgmentSummaryIdBySourceId)
+
+  expect(judgmentIds).toHaveLength(rowCount)
+  expect(humanSummaryIds).toHaveLength(rowCount)
+  expect(result.commitIdMaps.generatedTargetIds.judgment).toHaveLength(rowCount)
+  expect(result.commitIdMaps.generatedTargetIds.humanJudgmentSummary).toHaveLength(rowCount)
+  expect(new Set(judgmentIds).size).toBe(rowCount)
+  expect(new Set(humanSummaryIds).size).toBe(rowCount)
+})
+
 test('project transfer commit reopens stale plans before claiming', async () => {
   const cwd = getRuntimeRoot()
 
@@ -979,6 +1051,109 @@ test('project transfer commit does not publish post-claim stale plans after a lo
     })
     expect(fake.calls.reopen).toHaveLength(1)
     expect(writtenPlan.planRevision).toBe(1)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit marks claimed sessions failed when post-claim revalidation throws', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = getPlan({planRevision: 1, summary})
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    let revalidationCount = 0
+    const result = await runCommit({
+      cwd,
+      repository: fake.repository,
+      revalidate: async () => {
+        revalidationCount += 1
+
+        if (revalidationCount === 2) {
+          throw new Error('post-claim revalidation failed')
+        }
+
+        return {changed: false, plan, ready: true}
+      },
+    })
+
+    expect(result).toMatchObject({error: 'post-claim revalidation failed', status: 'error', statusCode: 500})
+    expect(fake.getSession()).toMatchObject({
+      commitId: 'commit-generated',
+      errorJson: {message: 'post-claim revalidation failed', name: 'Error'},
+      ownerToken: null,
+      state: 'failed',
+    })
+    expect(fake.calls.transition).toHaveLength(2)
+    expect(fake.calls.transition[1]).toMatchObject({
+      expectedOwnerToken: 'owner-generated',
+      nextOwnerToken: null,
+      nextState: 'failed',
+      progress: {phase: 'commit', status: 'failed'},
+    })
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer background commit marks claimed sessions failed when revalidation throws', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = {
+      ...getPlan({planRevision: 1, summary}),
+      packageCounts: {...getPlan({planRevision: 1, summary}).packageCounts, articles: 10_000, judgments: 40_000},
+    }
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    let backgroundOperation: null | (() => Promise<void>) = null
+    const result = await commitProjectTransferImportSession({
+      cwd,
+      now: new Date('2026-05-28T10:30:00.000Z'),
+      repositories: {
+        getCommitId: () => {
+          return 'commit-generated'
+        },
+        getOwnerToken: () => {
+          return 'owner-generated'
+        },
+        historyRepository: getNoopHistoryRepository(),
+        revalidate: async () => {
+          throw new Error('background revalidation failed')
+        },
+        runAppTableWrites: async () => {
+          throw new Error('unexpected writes')
+        },
+        sessionRepository: fake.repository,
+        startBackgroundCommit: (operation) => {
+          backgroundOperation = operation
+        },
+      },
+      request: {planRevision: 1},
+      sessionId: 'commit-session',
+    })
+
+    expect(result).toMatchObject({executionMode: 'background', status: 'claimed', statusCode: 202})
+    expect(backgroundOperation).not.toBeNull()
+
+    await backgroundOperation?.()
+
+    expect(fake.getSession()).toMatchObject({
+      commitId: 'commit-generated',
+      errorJson: {message: 'background revalidation failed', name: 'Error'},
+      ownerToken: null,
+      state: 'failed',
+    })
+    expect(fake.calls.transition).toHaveLength(2)
+    expect(fake.calls.transition[1]).toMatchObject({
+      expectedOwnerToken: 'owner-generated',
+      nextOwnerToken: null,
+      nextState: 'failed',
+      progress: {phase: 'commit', status: 'failed'},
+    })
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

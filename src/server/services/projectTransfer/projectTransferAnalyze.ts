@@ -1806,11 +1806,22 @@ const getAnalyzePlanWithAutoResolvedDependencies = async ({
 }
 
 const getTargetStateDirtyTokenSnapshotForPlan = async (runner?: ProjectTransferAnalyzeTargetRunner) => {
-  return runner === undefined
-    ? getProjectTransferTargetStateDirtyTokenService().getTargetStateDirtyTokenSnapshot()
-    : runner.run === undefined
-      ? null
-      : getProjectTransferTargetStateDirtyTokenService().getTargetStateDirtyTokenSnapshot({runner})
+  const service = getProjectTransferTargetStateDirtyTokenService()
+
+  if (runner === undefined) {
+    await service.initializeTargetStateCoverage()
+
+    return service.getTargetStateDirtyTokenSnapshot()
+  }
+
+  if (runner.run === undefined) {
+    return null
+  }
+
+  const writableRunner = {queryJson: runner.queryJson, run: runner.run}
+  await service.initializeTargetStateCoverage({runner: writableRunner})
+
+  return service.getTargetStateDirtyTokenSnapshot({runner: writableRunner})
 }
 
 const writeJsonArtifact = async ({

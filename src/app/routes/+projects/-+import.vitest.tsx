@@ -349,7 +349,11 @@ vi.mock('./importWizard/projectImportClient.ts', () => {
       return getSession({stalePlan: false})
     }),
     uploadProjectImportPackage: vi.fn((input: unknown) => {
+      const uploadInput = input as {onProgress?: (percent: number) => void}
+
       mockState.uploadInputs.push(input)
+      uploadInput.onProgress?.(100)
+
       return getSession({state: 'queued'})
     }),
   }
@@ -662,7 +666,12 @@ describe('project import route', () => {
   })
 
   test('updates the session query cache when a background commit starts', async () => {
-    const committingSession = getSession({canCommit: false, state: 'committing', updatedAt: '2030-01-01T00:00:01.000Z'})
+    const committingSession = getSession({
+      canCommit: false,
+      progress: {phase: 'revalidation', status: 'running'},
+      state: 'committing',
+      updatedAt: '2030-01-01T00:00:01.000Z',
+    })
     mockState.sessionQueryResult = {
       ...mockState.sessionQueryResult,
       data: getSession({canCommit: true, state: 'ready_to_commit'}),
@@ -684,7 +693,96 @@ describe('project import route', () => {
         committingSession,
       )
       expect(container.textContent).toContain('Create progress')
+      expect(container.textContent).toContain('Working on revalidation.')
       expect(container.textContent).not.toContain('Commit started. Progress will update here.')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('shows indeterminate create progress instead of stale upload percent', async () => {
+    const readyPlanSummary = {
+      ...getSession().planSummary,
+      blockerCount: 0,
+      blockers: [],
+      conflictCounts: {...getSession().planSummary.conflictCounts, articleConflictCount: 0},
+    }
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({blockers: [], canCommit: true, planSummary: readyPlanSummary, state: 'ready_to_commit'}),
+    }
+    mockState.commitResult = getSession({
+      blockers: [],
+      canCommit: false,
+      progress: {phase: 'revalidation', status: 'running'},
+      planSummary: readyPlanSummary,
+      state: 'committing',
+      updatedAt: '2030-01-01T00:00:01.000Z',
+    })
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      const input = container.querySelector('input[type="file"]')
+      const file = new File(['project-transfer'], 'project-transfer.zip', {type: 'application/zip'})
+
+      Object.defineProperty(input, 'files', {configurable: true, value: [file]})
+      input?.dispatchEvent(new Event('change', {bubbles: true}))
+      await flushMutationUpdates()
+      await flushMutationUpdates()
+
+      const commitButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.includes('Create project from import')
+      })
+
+      expect(container.textContent).toContain('Plan ready')
+      expect(commitButton?.disabled).toBe(false)
+
+      commitButton?.click()
+      await flushMutationUpdates()
+
+      expect(mockState.uploadInputs).toHaveLength(1)
+      expect(mockState.commitInputs).toEqual([{planRevision: 2, sessionId: 'session-1'}])
+      expect(container.textContent).toContain('Create progress')
+      expect(container.textContent).toContain('Working on revalidation.')
+      expect(container.textContent).not.toContain('100%')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('shows elapsed and item details for create progress', async () => {
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({
+        progress: {
+          bytesProcessed: 0,
+          bytesTotal: 0,
+          completedItems: 2,
+          message: 'Loading package payload judgments',
+          percent: 0,
+          phase: 'staging_load',
+          startedAt: '2026-05-28T10:00:00.000Z',
+          status: 'running',
+          totalItems: 15,
+          updatedAt: '2030-01-01T00:00:01.000Z',
+        },
+        state: 'committing',
+        updatedAt: '2030-01-01T00:00:01.000Z',
+      }),
+    }
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      expect(container.textContent).toContain('Create progress')
+      expect(container.textContent).toContain('0% · Loading package payload judgments')
+      expect(container.textContent).toContain('Activity: Loading package payload judgments')
+      expect(container.textContent).toContain('Elapsed:')
+      expect(container.textContent).toContain('Items: 2 of 15')
+      expect(container.textContent).not.toContain('Bytes: 0 B of 0 B')
     } finally {
       dispose()
       container.remove()

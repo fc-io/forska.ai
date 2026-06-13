@@ -37,6 +37,13 @@ import {
 } from './projectTransferSchemas.ts'
 import {getProjectTransferImportTempLayout} from './projectTransferSession.ts'
 import {
+  isProjectTransferTargetStateCoverageComplete,
+  projectTransferDependencyFingerprintAlgorithm,
+  projectTransferDependencyFingerprintCodeVersion,
+  projectTransferTargetStateCoverageCodeVersion,
+  projectTransferTargetStateSafetySurfaces,
+} from './projectTransferTargetStateDirtyTokenService.ts'
+import {
   type ProjectTransferZipJsModule,
   type ProjectTransferZipJsUint8ArrayWriter,
   writeProjectTransferZipPackage,
@@ -421,6 +428,52 @@ const getEmptyAnalyzeTargetRunner = (): ProjectTransferAnalyzeTargetRunner => {
   }
 }
 
+const getTargetStateInitializingAnalyzeRunner = (): ProjectTransferAnalyzeTargetRunner => {
+  let initialized = false
+  const now = '2026-06-13T12:00:00.000Z'
+  const tokenRows = projectTransferTargetStateSafetySurfaces.map((surface) => {
+    return {dirtyToken: 0, surface}
+  })
+  const coverageRow = {
+    coverageCodeVersion: projectTransferTargetStateCoverageCodeVersion,
+    coveredSurfacesJson: [...projectTransferTargetStateSafetySurfaces],
+    dependencyFingerprintAlgorithm: projectTransferDependencyFingerprintAlgorithm,
+    dependencyFingerprintCodeVersion: projectTransferDependencyFingerprintCodeVersion,
+    initializedAt: now,
+    updatedAt: now,
+  }
+  const getRows = (statement: string): unknown[] => {
+    if (!initialized) {
+      return []
+    }
+
+    if (statement.includes('project_transfer_target_state_coverage')) {
+      return [coverageRow]
+    }
+
+    if (statement.includes('project_transfer_target_state_unknown_token')) {
+      return [{dirtyToken: 0}]
+    }
+
+    if (statement.includes('project_transfer_target_state_dirty_token')) {
+      return tokenRows
+    }
+
+    return []
+  }
+
+  return {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      return getRows(statement) as T[]
+    },
+    run: async (statement: string) => {
+      if (statement.includes('project_transfer_target_state_coverage')) {
+        initialized = true
+      }
+    },
+  }
+}
+
 const getHistoryRow = (packageFingerprint: string) => {
   return {
     commitId: 'commit-duplicate',
@@ -601,7 +654,7 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
       cwd,
       layout,
       planRevision: 1,
-      runner: getEmptyAnalyzeTargetRunner(),
+      runner: getTargetStateInitializingAnalyzeRunner(),
       uploadMetadata,
       zipModule,
     })
@@ -628,6 +681,16 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
     expect(result.analysis.stagedPackage?.canonicalPayloadChecksums.articles).toBe(
       getProjectTransferSha256Checksum(extractedArticlesBytes),
     )
+    const targetState = result.plan.targetState
+    expect(targetState).not.toBeNull()
+    expect(targetState).not.toBeUndefined()
+
+    if (targetState === null || targetState === undefined) {
+      throw new Error('Expected analyzed plan target-state snapshot')
+    }
+
+    expect(isProjectTransferTargetStateCoverageComplete(targetState)).toBe(true)
+    expect(Object.keys(targetState.tokens).sort()).toEqual([...projectTransferTargetStateSafetySurfaces].sort())
     expect(result.staging.stagedPackage?.sourceProject).toMatchObject({
       name: 'Fixture Project',
       schemaVersion: 2,

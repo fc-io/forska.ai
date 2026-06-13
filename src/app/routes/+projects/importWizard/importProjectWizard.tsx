@@ -1,6 +1,6 @@
 import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {Link, useNavigate} from '@tanstack/solid-router'
-import {createEffect, createMemo, createSignal, For, Match, Show, Switch} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
 import {
@@ -89,9 +89,7 @@ const setSessionSearchParam = (sessionId: string | null) => {
 }
 
 const getSessionUpdatedAtTime = (session: ProjectImportSession) => {
-  const time = new Date(session.updatedAt).getTime()
-
-  return Number.isNaN(time) ? 0 : time
+  return getTimeMs(session.updatedAt)
 }
 
 const shouldReplaceSessionOverride = ({
@@ -115,6 +113,38 @@ const formatBytes = (value: number | null | undefined) => {
   const divisor = unitIndex === 0 ? 1 : 1024 ** unitIndex
 
   return `${(bytes / divisor).toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
+}
+
+const getTimeMs = (value: Date | string | null | undefined) => {
+  const time = value instanceof Date ? value.getTime() : typeof value === 'string' ? new Date(value).getTime() : 0
+
+  return Number.isNaN(time) ? 0 : time
+}
+
+const formatDuration = (durationMs: number) => {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const minuteSecondLabel = `${minutes}m ${seconds.toString().padStart(hours > 0 ? 2 : 1, '0')}s`
+
+  return hours > 0 ? `${hours}h ${minuteSecondLabel}` : minutes > 0 ? minuteSecondLabel : `${seconds}s`
+}
+
+const createNowMs = () => {
+  const [nowMs, setNowMs] = createSignal(Date.now())
+
+  if (typeof window !== 'undefined') {
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now())
+    }, 1000)
+
+    onCleanup(() => {
+      window.clearInterval(intervalId)
+    })
+  }
+
+  return nowMs
 }
 
 const formatLabel = (value: string) => {
@@ -285,10 +315,18 @@ const getCompletedProjectId = (completion: ProjectImportCompletion | null) => {
   return completion?.targetProjectId ?? completion?.projectId ?? null
 }
 
-const getProgressPercent = (session: ProjectImportSession | null, uploadPercent: number | null) => {
+const getProgressPercent = (
+  session: ProjectImportSession | null,
+  uploadPercent: number | null,
+  createProgress: boolean,
+) => {
   const progressPercent = session?.progress?.percent
 
-  return typeof progressPercent === 'number' ? Math.round(progressPercent) : uploadPercent
+  return typeof progressPercent === 'number'
+    ? Math.round(progressPercent)
+    : createProgress || session?.state === 'committing'
+      ? null
+      : uploadPercent
 }
 
 const hasUnresolvedDependencies = (session: ProjectImportSession | null) => {
@@ -314,6 +352,31 @@ const getProgressTitle = (session: ProjectImportSession | null, createProgress: 
   return createProgress || session?.state === 'committing' ? 'Create progress' : 'Import progress'
 }
 
+const isRunningProgress = (session: ProjectImportSession | null) => {
+  return session?.progress?.status === 'running' || (session !== null && activeSessionStates.has(session.state))
+}
+
+const getVisibleProgressWidth = (session: ProjectImportSession | null, percent: number | null) => {
+  return percent === null ? 0 : percent === 0 && isRunningProgress(session) ? 2 : Math.max(0, Math.min(100, percent))
+}
+
+const getProgressNotice = (session: ProjectImportSession | null, createProgress: boolean, nowMs: number) => {
+  const progressUpdatedAgoMs = getProgressUpdatedAgoMs(session, nowMs)
+  const heartbeatAgoMs = getSessionHeartbeatAgoMs(session, nowMs)
+  const progressMessage = session?.progress?.message ?? null
+  const phaseLabel = formatLabel(session?.progress?.phase ?? session?.state ?? 'progress')
+
+  return heartbeatAgoMs !== null && heartbeatAgoMs > 60_000
+    ? `No session heartbeat for ${formatDuration(heartbeatAgoMs)}.`
+    : progressUpdatedAgoMs !== null && progressUpdatedAgoMs > 60_000
+      ? `No phase progress update for ${formatDuration(progressUpdatedAgoMs)}.`
+      : progressMessage !== null
+        ? progressMessage
+        : createProgress
+          ? `Working on ${phaseLabel}.`
+          : 'Progress is running.'
+}
+
 const hasNumber = (value: number | null | undefined): value is number => {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -332,10 +395,39 @@ const getProgressRowValues = (progress: ProjectImportProgress | null | undefined
   return hasNumber(processed) && hasNumber(total) ? {processed, total} : null
 }
 
-const getProgressDetailRows = (session: ProjectImportSession | null, uploadPercent: number | null) => {
+const getProgressItemValues = (progress: ProjectImportProgress | null | undefined) => {
+  const processed = progress?.completedItems ?? null
+  const total = progress?.totalItems ?? null
+
+  return hasNumber(processed) && hasNumber(total) ? {processed, total} : null
+}
+
+const getElapsedProgressMs = (session: ProjectImportSession | null, nowMs: number) => {
+  const startedAt = getTimeMs(session?.progress?.startedAt ?? null) || getTimeMs(session?.createdAt ?? null)
+
+  return startedAt === 0 ? null : Math.max(0, nowMs - startedAt)
+}
+
+const getProgressUpdatedAgoMs = (session: ProjectImportSession | null, nowMs: number) => {
+  const updatedAt = getTimeMs(session?.progress?.updatedAt ?? null)
+
+  return updatedAt === 0 ? null : Math.max(0, nowMs - updatedAt)
+}
+
+const getSessionHeartbeatAgoMs = (session: ProjectImportSession | null, nowMs: number) => {
+  const heartbeatAt = getTimeMs(session?.heartbeatAt ?? null) || getTimeMs(session?.updatedAt ?? null)
+
+  return heartbeatAt === 0 ? null : Math.max(0, nowMs - heartbeatAt)
+}
+
+const getProgressDetailRows = (session: ProjectImportSession | null, uploadPercent: number | null, nowMs: number) => {
   const progress = session?.progress
   const byteValues = getProgressByteValues(progress)
   const rowValues = getProgressRowValues(progress)
+  const itemValues = getProgressItemValues(progress)
+  const elapsedMs = getElapsedProgressMs(session, nowMs)
+  const progressUpdatedAgoMs = getProgressUpdatedAgoMs(session, nowMs)
+  const heartbeatAgoMs = getSessionHeartbeatAgoMs(session, nowMs)
   const upload = session?.upload
   const uploadLabel =
     upload === null || upload === undefined
@@ -347,19 +439,41 @@ const getProgressDetailRows = (session: ProjectImportSession | null, uploadPerce
     {label: 'Upload', value: uploadLabel},
     {label: 'Plan revision', value: formatCount(session?.planRevision ?? 0)},
   ]
+  const activityRow = progress?.message ? [{label: 'Activity', value: progress.message}] : []
+  const elapsedRow = elapsedMs === null ? [] : [{label: 'Elapsed', value: formatDuration(elapsedMs)}]
+  const progressUpdatedRow =
+    progressUpdatedAgoMs === null
+      ? []
+      : [{label: 'Progress update', value: `${formatDuration(progressUpdatedAgoMs)} ago`}]
+  const heartbeatRow =
+    heartbeatAgoMs === null ? [] : [{label: 'Session heartbeat', value: `${formatDuration(heartbeatAgoMs)} ago`}]
   const byteRow =
-    byteValues === null
+    byteValues === null || (byteValues.processed === 0 && byteValues.total === 0)
       ? []
       : [{label: 'Bytes', value: `${formatBytes(byteValues.processed)} of ${formatBytes(byteValues.total)}`}]
   const rowRow =
     rowValues === null
       ? []
       : [{label: 'Rows', value: `${formatCount(rowValues.processed)} of ${formatCount(rowValues.total)}`}]
+  const itemRow =
+    itemValues === null
+      ? []
+      : [{label: 'Items', value: `${formatCount(itemValues.processed)} of ${formatCount(itemValues.total)}`}]
   const warningRow = hasNumber(progress?.warningCount)
     ? [{label: 'Warnings', value: formatCount(progress?.warningCount)}]
     : []
 
-  return [...baseRows, ...byteRow, ...rowRow, ...warningRow]
+  return [
+    ...baseRows,
+    ...activityRow,
+    ...elapsedRow,
+    ...progressUpdatedRow,
+    ...heartbeatRow,
+    ...itemRow,
+    ...byteRow,
+    ...rowRow,
+    ...warningRow,
+  ]
 }
 
 const getStalePlanReasonEntries = (session: ProjectImportSession | null) => {
@@ -423,11 +537,18 @@ const ProgressPanel = (props: {
   session: ProjectImportSession | null
   uploadPercent: number | null
 }) => {
+  const nowMs = createNowMs()
   const percent = createMemo(() => {
-    return getProgressPercent(props.session, props.uploadPercent)
+    return getProgressPercent(props.session, props.uploadPercent, props.createProgress)
+  })
+  const visiblePercent = createMemo(() => {
+    return getVisibleProgressWidth(props.session, percent())
+  })
+  const progressNotice = createMemo(() => {
+    return getProgressNotice(props.session, props.createProgress, nowMs())
   })
   const detailRows = createMemo(() => {
-    return getProgressDetailRows(props.session, props.uploadPercent)
+    return getProgressDetailRows(props.session, props.uploadPercent, nowMs())
   })
 
   return (
@@ -448,11 +569,13 @@ const ProgressPanel = (props: {
           <div class="mt-4 space-y-2">
             <div class="h-2 overflow-hidden rounded-full bg-gray-100">
               <div
-                class="h-full rounded-full bg-blue-600 transition-all"
-                style={{width: `${Math.max(0, Math.min(100, percent() ?? 0))}%`}}
+                class={`h-full rounded-full bg-blue-600 transition-all ${isRunningProgress(props.session) ? 'animate-pulse' : ''}`}
+                style={{width: `${visiblePercent()}%`}}
               />
             </div>
-            <p class="text-xs text-gray-500">{formatCount(percent())}%</p>
+            <p class="text-xs text-gray-500">
+              {formatCount(percent())}% · {progressNotice()}
+            </p>
           </div>
         </Match>
         <Match when={props.createProgress}>
@@ -460,7 +583,7 @@ const ProgressPanel = (props: {
             <div class="h-2 overflow-hidden rounded-full bg-gray-100">
               <div class="h-full w-1/3 animate-pulse rounded-full bg-blue-600" />
             </div>
-            <p class="text-xs text-gray-500">Waiting for create progress...</p>
+            <p class="text-xs text-gray-500">{progressNotice()}</p>
           </div>
         </Match>
         <Match when={true}>

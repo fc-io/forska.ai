@@ -373,18 +373,6 @@ const readExtractedPayload = async <TKey extends keyof ProjectTransferPayloadByK
   return parseProjectTransferPayload(input.key, text)
 }
 
-const readExtractedPayloads = async (input: RuntimePathOptions & {layout: ProjectTransferImportTempLayout}) => {
-  const entries = await Promise.all(
-    projectTransferPayloadKeys.map(async (key) => {
-      return [key, await readExtractedPayload({...input, key})] as const
-    }),
-  )
-
-  return entries.reduce<Partial<ProjectTransferPayloadByKey>>((payloads, [key, payload]) => {
-    return {...payloads, [key]: payload as ProjectTransferPayload}
-  }, {})
-}
-
 const getPackageCount = (plan: ProjectTransferImportPlanArtifact, key: string) => {
   const value = plan.packageCounts[key as keyof typeof plan.packageCounts]
 
@@ -401,6 +389,79 @@ const getCommitRowCount = (plan: ProjectTransferImportPlanArtifact) => {
   return Object.values(plan.packageCounts).reduce((total, count) => {
     return total + (typeof count === 'number' && Number.isInteger(count) && count >= 0 ? count : 0)
   }, 0)
+}
+
+const getPercentFromCounts = ({completed, total}: {completed: number; total: number}) => {
+  return total > 0 ? Math.min(100, Math.floor((completed / total) * 100)) : 100
+}
+
+const formatCommitPayloadKey = (key: string) => {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_:-]+/g, ' ')
+    .toLowerCase()
+}
+
+const readExtractedPayloads = async (
+  input: RuntimePathOptions & {
+    artifacts?: ProjectTransferCommitArtifacts
+    layout: ProjectTransferImportTempLayout
+    onProgress?: (progress: ProjectTransferProgressPayload) => Promise<void>
+    phaseStartedAt?: Date
+  },
+) => {
+  const payloads: Partial<ProjectTransferPayloadByKey> = {}
+  const totalItems = projectTransferPayloadKeys.length
+  const phaseStartedAt = input.phaseStartedAt ?? new Date()
+
+  await projectTransferPayloadKeys.reduce<Promise<number>>(async (previous, key, index) => {
+    const completedRows = await previous
+    const nextCompletedRows = completedRows + (input.artifacts ? getPackageCount(input.artifacts.plan, key) : 0)
+
+    if (input.artifacts && input.onProgress) {
+      await input.onProgress(
+        getCommitProgress({
+          artifacts: input.artifacts,
+          completedItems: index,
+          completedRows,
+          includeBytes: false,
+          message: `Loading package payload ${formatCommitPayloadKey(key)}`,
+          now: new Date(),
+          percent: getPercentFromCounts({completed: index, total: totalItems}),
+          phase: 'staging_load',
+          phaseStartedAt,
+          planRevision: input.artifacts.plan.planRevision,
+          status: 'running',
+          totalItems,
+        }),
+      )
+    }
+
+    payloads[key] = (await readExtractedPayload({...input, key})) as ProjectTransferPayload
+
+    if (input.artifacts && input.onProgress) {
+      await input.onProgress(
+        getCommitProgress({
+          artifacts: input.artifacts,
+          completedItems: index + 1,
+          completedRows: nextCompletedRows,
+          includeBytes: false,
+          message: `Loaded package payload ${formatCommitPayloadKey(key)}`,
+          now: new Date(),
+          percent: getPercentFromCounts({completed: index + 1, total: totalItems}),
+          phase: 'staging_load',
+          phaseStartedAt,
+          planRevision: input.artifacts.plan.planRevision,
+          status: index + 1 === totalItems ? 'completed' : 'running',
+          totalItems,
+        }),
+      )
+    }
+
+    return nextCompletedRows
+  }, Promise.resolve(0))
+
+  return payloads
 }
 
 const getImportPerformanceMetrics = (performanceMetrics: ProjectTransferPerformanceMetrics | null | undefined) => {
@@ -906,31 +967,37 @@ export const revalidateProjectTransferCommitPlan = async ({
 const getCommitProgress = ({
   artifacts,
   completedBytes = 0,
+  completedItems,
   completedRows = 0,
   includeBytes = true,
   includeRows = true,
   message,
   now,
   phase = 'commit',
+  phaseStartedAt,
   percent,
   performanceMetrics,
   planRevision,
   stagingRevision,
   status,
+  totalItems,
 }: {
   artifacts: ProjectTransferCommitArtifacts
   completedBytes?: number
+  completedItems?: number
   completedRows?: number
   includeBytes?: boolean
   includeRows?: boolean
   message: string
   now: Date
   phase?: ProjectTransferProgressPayload['phase']
+  phaseStartedAt?: Date
   percent?: number | null
   performanceMetrics?: ProjectTransferPerformanceMetrics
   planRevision: number
   stagingRevision?: number | null
   status: ProjectTransferProgressPayload['status']
+  totalItems?: number
 }): ProjectTransferProgressPayload => {
   const totalBytes = getExtractedAssetBytes(artifacts.analysis)
   const totalRows = getCommitRowCount(artifacts.plan)
@@ -938,13 +1005,14 @@ const getCommitProgress = ({
 
   return {
     ...(includeBytes ? {bytesProcessed: completedBytes, bytesTotal: totalBytes, completedBytes, totalBytes} : {}),
+    ...(completedItems === undefined || totalItems === undefined ? {} : {completedItems, totalItems}),
     ...(includeRows ? {completedRows, rowCountProcessed: completedRows, rowCountTotal: totalRows, totalRows} : {}),
     message,
     ...(percent === undefined || percent === null ? {} : {percent}),
     performanceMetrics,
     phase,
     planRevision,
-    startedAt: now.toISOString(),
+    startedAt: (phaseStartedAt ?? now).toISOString(),
     ...(planStagingRevision === null ? {} : {stagingRevision: planStagingRevision}),
     status,
     updatedAt: now.toISOString(),
@@ -1189,12 +1257,84 @@ const runProjectTransferCommitAppTableWrites = async ({
   schemaVersion: number
   sessionId: string
 }): Promise<ProjectTransferCommitAppWriteResult> => {
+  const stagingLoadStartedAt = new Date()
+  await onProgress?.(
+    getCommitProgress({
+      artifacts,
+      completedItems: 0,
+      completedRows: 0,
+      includeBytes: false,
+      message: 'Loading package payloads',
+      now: stagingLoadStartedAt,
+      percent: 0,
+      phase: 'staging_load',
+      phaseStartedAt: stagingLoadStartedAt,
+      planRevision: artifacts.plan.planRevision,
+      status: 'running',
+      totalItems: projectTransferPayloadKeys.length,
+    }),
+  )
   const stagingLoad = await measureProjectTransferPhase('stagingLoad', () => {
-    return readExtractedPayloads({...runtimeOptions, layout: artifacts.layout})
+    return readExtractedPayloads({
+      ...runtimeOptions,
+      artifacts,
+      layout: artifacts.layout,
+      onProgress,
+      phaseStartedAt: stagingLoadStartedAt,
+    })
   })
   const payloads = stagingLoad.value
+  const assetPromotionStartedAt = new Date()
+  const assetPromotionItemCount = artifacts.plan.targetPlan.assetPromotionPlan.length
+  const assetPromotionBytes = getExtractedAssetBytes(artifacts.analysis)
+  await onProgress?.(
+    getCommitProgress({
+      artifacts,
+      completedBytes: 0,
+      completedItems: 0,
+      includeBytes: assetPromotionBytes > 0,
+      includeRows: false,
+      message: assetPromotionItemCount === 0 ? 'No package assets to promote' : 'Asset promotion running',
+      now: assetPromotionStartedAt,
+      percent: assetPromotionItemCount === 0 ? 100 : 0,
+      phase: 'asset_promotion',
+      phaseStartedAt: assetPromotionStartedAt,
+      planRevision: artifacts.plan.planRevision,
+      status: assetPromotionItemCount === 0 ? 'completed' : 'running',
+      totalItems: assetPromotionItemCount,
+    }),
+  )
   const assetPromotion = await measureProjectTransferPhase('assetPromotion', () => {
-    return promoteProjectTransferCommitAssets({...runtimeOptions, layout: artifacts.layout, now, sessionId})
+    return promoteProjectTransferCommitAssets({
+      ...runtimeOptions,
+      articles: payloads.articles ?? [],
+      layout: artifacts.layout,
+      now,
+      onProgress: (progress) => {
+        return onProgress?.(
+          getCommitProgress({
+            artifacts,
+            completedBytes: progress.completedBytes,
+            completedItems: progress.completedItems,
+            includeBytes: progress.totalBytes > 0,
+            includeRows: false,
+            message:
+              progress.currentPackagePath === null
+                ? 'Asset promotion running'
+                : `Promoted asset ${progress.currentPackagePath}`,
+            now: new Date(),
+            percent: getPercentFromCounts({completed: progress.completedItems, total: progress.totalItems}),
+            phase: 'asset_promotion',
+            phaseStartedAt: assetPromotionStartedAt,
+            planRevision: artifacts.plan.planRevision,
+            status: progress.completedItems === progress.totalItems ? 'completed' : 'running',
+            totalItems: progress.totalItems,
+          }),
+        )
+      },
+      plan: artifacts.plan,
+      sessionId,
+    })
   })
 
   try {
@@ -1202,13 +1342,16 @@ const runProjectTransferCommitAppTableWrites = async ({
       getCommitProgress({
         artifacts,
         completedBytes: getExtractedAssetBytes(artifacts.analysis),
+        completedItems: assetPromotionItemCount,
         includeRows: false,
         message: 'Asset promotion completed',
         now: new Date(),
         phase: 'asset_promotion',
+        phaseStartedAt: assetPromotionStartedAt,
         percent: 100,
         planRevision: artifacts.plan.planRevision,
         status: 'completed',
+        totalItems: assetPromotionItemCount,
       }),
     )
     await onProgress?.(
@@ -1452,6 +1595,26 @@ const getCommitErrorResult = (error: unknown): ProjectTransferCommitResult => {
   return {error: error instanceof Error ? error.message : String(error), status: 'error', statusCode: 500}
 }
 
+const failClaimedPostClaimCommit = async ({
+  artifacts,
+  error,
+  ownerToken,
+  repositories,
+  sessionId,
+  statusCode = 500,
+}: {
+  artifacts: ProjectTransferCommitArtifacts
+  error: unknown
+  ownerToken: string
+  repositories: ProjectTransferCommitRepositorySet
+  sessionId: string
+  statusCode?: number
+}): Promise<ProjectTransferCommitResult> => {
+  await settleCompletionSideEffect(failClaimedCommit({artifacts, error, ownerToken, repositories, sessionId}))
+
+  return {error: error instanceof Error ? error.message : String(error), status: 'error', statusCode}
+}
+
 const runClaimedProjectTransferImportCommit = async ({
   artifacts,
   claimed,
@@ -1474,18 +1637,20 @@ const runClaimedProjectTransferImportCommit = async ({
   sessionId: string
 }): Promise<ProjectTransferCommitResult> => {
   try {
-    const assetPromotionProgress = getCommitProgress({
+    const stagingLoadProgress = getCommitProgress({
       artifacts,
-      completedBytes: 0,
-      includeRows: false,
-      message: 'Asset promotion running',
+      completedItems: 0,
+      completedRows: 0,
+      includeBytes: false,
+      message: 'Loading package payloads',
       now: new Date(),
-      phase: 'asset_promotion',
+      phase: 'staging_load',
       percent: 0,
       planRevision: claimed.planRevision,
       status: 'running',
+      totalItems: projectTransferPayloadKeys.length,
     })
-    let activeProgress = assetPromotionProgress
+    let activeProgress = stagingLoadProgress
     const publishProgress = async (progress: ProjectTransferProgressPayload) => {
       activeProgress = progress
       const updated = await updateClaimedCommitProgress({ownerToken, progress, repositories, sessionId})
@@ -1496,7 +1661,7 @@ const runClaimedProjectTransferImportCommit = async ({
     }
     const progressed = await updateClaimedCommitProgress({
       ownerToken,
-      progress: assetPromotionProgress,
+      progress: stagingLoadProgress,
       repositories,
       sessionId,
     })
@@ -1718,35 +1883,56 @@ export const commitProjectTransferImportSession = async ({
 
   if (executionMode === 'background') {
     repositories.startBackgroundCommit(async () => {
-      const revalidation = await getPostClaimRevalidationResult({
-        artifacts,
-        claimed,
-        commitId,
-        inputRepositories,
-        now,
-        ownerToken,
-        repositories,
-        runtimeOptions,
-      })
+      try {
+        const revalidation = await getPostClaimRevalidationResult({
+          artifacts,
+          claimed,
+          commitId,
+          inputRepositories,
+          now,
+          ownerToken,
+          repositories,
+          runtimeOptions,
+        })
 
-      if ('artifacts' in revalidation) {
-        await runClaimed(revalidation.artifacts, revalidation.performanceMetrics)
+        if ('artifacts' in revalidation) {
+          await runClaimed(revalidation.artifacts, revalidation.performanceMetrics)
+        }
+
+        if ('error' in revalidation && !('stalePlan' in revalidation)) {
+          await failClaimedPostClaimCommit({
+            artifacts,
+            error: revalidation.error,
+            ownerToken,
+            repositories,
+            sessionId,
+            statusCode: 409,
+          })
+        }
+      } catch (error) {
+        await failClaimedPostClaimCommit({artifacts, error, ownerToken, repositories, sessionId})
       }
     })
 
     return {commitId, executionMode, session: claimed, status: 'claimed', statusCode: 202}
   }
 
-  const postClaimRevalidation = await getPostClaimRevalidationResult({
-    artifacts,
-    claimed,
-    commitId,
-    inputRepositories,
-    now,
-    ownerToken,
-    repositories,
-    runtimeOptions,
-  })
+  let postClaimRevalidation: Awaited<ReturnType<typeof getPostClaimRevalidationResult>>
+
+  try {
+    postClaimRevalidation = await getPostClaimRevalidationResult({
+      artifacts,
+      claimed,
+      commitId,
+      inputRepositories,
+      now,
+      ownerToken,
+      repositories,
+      runtimeOptions,
+    })
+  } catch (error) {
+    return failClaimedPostClaimCommit({artifacts, error, ownerToken, repositories, sessionId})
+  }
 
   return 'artifacts' in postClaimRevalidation
     ? runClaimed(postClaimRevalidation.artifacts, postClaimRevalidation.performanceMetrics)
@@ -1757,5 +1943,12 @@ export const commitProjectTransferImportSession = async ({
           status: 'stale',
           statusCode: 200,
         }
-      : {error: postClaimRevalidation.error, status: 'error', statusCode: 409}
+      : failClaimedPostClaimCommit({
+          artifacts,
+          error: postClaimRevalidation.error,
+          ownerToken,
+          repositories,
+          sessionId,
+          statusCode: 409,
+        })
 }
