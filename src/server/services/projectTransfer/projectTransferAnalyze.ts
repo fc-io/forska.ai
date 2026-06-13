@@ -26,6 +26,10 @@ import {
   validateProjectTransferResourceGates,
 } from './projectTransferContracts.ts'
 import {
+  type ProjectTransferDependencyResolutionRepositories,
+  revalidateProjectTransferResolvedDependencies,
+} from './projectTransferDependencyResolution.ts'
+import {
   getProjectTransferCanonicalJson,
   getProjectTransferCanonicalNdjson,
   getProjectTransferLegacyPackageFingerprint,
@@ -53,6 +57,7 @@ import {
   serializeProjectTransferPayload,
   serializeProjectTransferPayloadForSchemaVersion,
   serializeProjectTransferPayloadNdjsonRow,
+  serializeProjectTransferPayloadNdjsonRowForSchemaVersion,
   validateProjectTransferPayloadRowForSchemaVersion,
 } from './projectTransferPayloadSchemas.ts'
 import {
@@ -154,7 +159,9 @@ export type ProjectTransferImportAnalyzeResult = {
 }
 
 type ProjectTransferImportAnalyzeInput = ProjectTransferAnalyzeRuntimeOptions & {
+  autoResolveDependencies?: boolean
   availableDiskBytes?: number
+  dependencyResolutionRepositories?: ProjectTransferDependencyResolutionRepositories
   layout: ProjectTransferImportTempLayout
   onProgress?: (progress: ProjectTransferProgressPayload) => Promise<void> | void
   planRevision: number
@@ -166,6 +173,7 @@ type ProjectTransferImportAnalyzeInput = ProjectTransferAnalyzeRuntimeOptions & 
 type JsonMetrics = {depth: number; memberCount: number}
 
 type ProjectTransferStagedPayloadParse = {
+  artifactMetadata?: ProjectTransferStagedPayloadMetadata
   blockers: ProjectTransferPlanBlocker[]
   metadata: ProjectTransferStagedPayloadMetadata
   payload: unknown
@@ -645,6 +653,7 @@ const appendStagedNdjsonLine = async ({
   hash,
   key,
   lineNumber,
+  schemaVersion,
   state,
   stream,
   value,
@@ -653,14 +662,23 @@ const appendStagedNdjsonLine = async ({
   hash: ReturnType<typeof createHash>
   key: ProjectTransferPackagePayloadKey
   lineNumber: number
+  schemaVersion: ProjectTransferManifest['schemaVersion']
   state: ProjectTransferNdjsonStreamState
-  stream: WriteStream
+  stream: null | WriteStream
   value: Record<string, unknown>
 }) => {
-  const serializedLine = `${serializeProjectTransferPayloadNdjsonRow(artifactKey, value, lineNumber)}\n`
+  const serializedLine = `${serializeProjectTransferPayloadNdjsonRowForSchemaVersion(
+    schemaVersion,
+    key,
+    value,
+    lineNumber,
+  )}\n`
   const lineBytes = textEncoder.encode(serializedLine)
 
-  await writeTextToStream(stream, serializedLine)
+  if (stream !== null) {
+    await writeTextToStream(stream, `${serializeProjectTransferPayloadNdjsonRow(artifactKey, value, lineNumber)}\n`)
+  }
+
   hash.update(lineBytes)
   state.records.push(value)
   state.warnings.push(...getPackageWarningsFromRecord(value))
@@ -686,7 +704,7 @@ const processStagedNdjsonLine = async ({
   line: string
   schemaVersion: ProjectTransferManifest['schemaVersion']
   state: ProjectTransferNdjsonStreamState
-  stream: WriteStream
+  stream: null | WriteStream
 }) => {
   const lineValue = getStreamedNdjsonLineValue({key, line, lineNumber: state.lineNumber, schemaVersion})
 
@@ -704,7 +722,16 @@ const processStagedNdjsonLine = async ({
     return state
   }
 
-  return appendStagedNdjsonLine({artifactKey, hash, key, lineNumber, state, stream, value: lineValue.value})
+  return appendStagedNdjsonLine({
+    artifactKey,
+    hash,
+    key,
+    lineNumber,
+    schemaVersion,
+    state,
+    stream,
+    value: lineValue.value,
+  })
 }
 
 const processStagedNdjsonText = async ({
@@ -721,7 +748,7 @@ const processStagedNdjsonText = async ({
   key: ProjectTransferPackagePayloadKey
   schemaVersion: ProjectTransferManifest['schemaVersion']
   state: ProjectTransferNdjsonStreamState
-  stream: WriteStream
+  stream: null | WriteStream
   text: string
 }) => {
   let nextState = state
@@ -764,9 +791,10 @@ const parseAndStageNdjsonPayloadEntry = async ({
   schemaVersion: ProjectTransferManifest['schemaVersion']
 }): Promise<ProjectTransferStagedPayloadParse> => {
   const resolvedPath = getResolvedPayloadArtifactPath({extractionRootPath, key: artifactKey, runtimeOptions})
+  const artifactFormat = projectTransferPayloadFormatByKey[artifactKey]
   await mkdir(dirname(resolvedPath), {recursive: true})
 
-  const stream = createWriteStream(resolvedPath)
+  const stream = artifactFormat === 'ndjson' ? createWriteStream(resolvedPath) : null
   const hash = createHash('sha256')
   const decoder = new TextDecoder()
   const initialState: ProjectTransferNdjsonStreamState = {
@@ -817,11 +845,34 @@ const parseAndStageNdjsonPayloadEntry = async ({
           stream,
         })
 
-  await closeWriteStream(stream)
+  if (stream !== null) {
+    await closeWriteStream(stream)
+  }
 
   const payload = assertProjectTransferPayload(artifactKey, completedState.records)
+  const artifactSerializedPayload =
+    artifactFormat === 'json' ? serializeProjectTransferPayload(artifactKey, payload) : null
+  const artifactSerializedBytes =
+    artifactSerializedPayload === null ? null : textEncoder.encode(artifactSerializedPayload)
+
+  if (artifactSerializedPayload !== null) {
+    await globalThis.Bun.write(resolvedPath, artifactSerializedPayload)
+  }
 
   return {
+    ...(artifactSerializedBytes === null
+      ? {}
+      : {
+          artifactMetadata: {
+            archiveByteLength: entry.uncompressedSize,
+            archiveChecksumSha256: entry.checksumSha256,
+            canonicalByteLength: artifactSerializedBytes.byteLength,
+            canonicalChecksumSha256: getProjectTransferSha256Checksum(artifactSerializedBytes),
+            invalidRecordCount: completedState.invalidRecordCount,
+            logicalDigestSha256: null,
+            recordCount: completedState.validRecordCount,
+          },
+        }),
     blockers: completedState.blockers,
     metadata: {
       archiveByteLength: entry.uncompressedSize,
@@ -1170,7 +1221,7 @@ const parsePayloads = ({
           },
           stagedPayloads: {
             ...state.stagedPayloads,
-            ...(artifactKey === null ? {} : {[artifactKey]: stagedPayload.metadata}),
+            ...(artifactKey === null ? {} : {[artifactKey]: stagedPayload.artifactMetadata ?? stagedPayload.metadata}),
           },
           warnings: [...state.warnings, ...stagedPayload.warnings],
         }
@@ -1615,6 +1666,12 @@ const getInitialDependencyStatuses = (
   }, providerStatuses)
 }
 
+const hasOnlyReadyDependencyStatuses = (planSummary: ProjectTransferPlanSummary) => {
+  return Object.values(planSummary.dependencyStatuses).every((status) => {
+    return status === 'resolved' || status === 'not_required'
+  })
+}
+
 const getPlanSummary = ({
   blockers,
   conflictCounts,
@@ -1683,6 +1740,68 @@ const getPlanArtifact = ({
     summary: planSummary,
     targetPlan,
     targetState,
+  }
+}
+
+const getAnalyzeDependencyResolutionRepositories = (
+  input: ProjectTransferImportAnalyzeInput,
+): ProjectTransferDependencyResolutionRepositories | undefined => {
+  return input.runner === undefined && input.dependencyResolutionRepositories === undefined
+    ? undefined
+    : {
+        ...(input.dependencyResolutionRepositories ?? {}),
+        analyzeTargetRunner: input.runner ?? input.dependencyResolutionRepositories?.analyzeTargetRunner,
+      }
+}
+
+const getAnalyzePlanWithAutoResolvedDependencies = async ({
+  input,
+  payloads,
+  plan,
+}: {
+  input: ProjectTransferImportAnalyzeInput
+  payloads: Partial<ProjectTransferPayloadByKey>
+  plan: ProjectTransferImportPlanArtifact
+}) => {
+  if (input.autoResolveDependencies !== true || hasOnlyReadyDependencyStatuses(plan.summary)) {
+    return {dependencyResolutionTiming: null, plan, planSummary: plan.summary}
+  }
+
+  await publishImportAnalyzeProgress({
+    input,
+    message: 'Resolving import dependencies',
+    phase: 'dependency_resolution',
+    status: 'running',
+    warningCount: plan.summary.warningCount,
+  })
+
+  const dependencyResolutionMeasurement = await measureProjectTransferPhase('dependencyResolution', () => {
+    return revalidateProjectTransferResolvedDependencies({
+      nextPlanRevision: plan.planRevision,
+      payloads,
+      plan,
+      repositories: getAnalyzeDependencyResolutionRepositories(input),
+      request: {autoResolve: true, planRevision: plan.planRevision},
+    })
+  })
+  const result = dependencyResolutionMeasurement.value
+
+  if (result.status === 'error') {
+    throw new Error(result.error)
+  }
+
+  await publishImportAnalyzeProgress({
+    input,
+    message: 'Dependency resolution completed',
+    phase: 'dependency_resolution',
+    status: 'completed',
+    warningCount: result.planSummary.warningCount,
+  })
+
+  return {
+    dependencyResolutionTiming: dependencyResolutionMeasurement.timing,
+    plan: result.plan,
+    planSummary: result.planSummary,
   }
 }
 
@@ -2070,7 +2189,10 @@ const getImportAnalysisPerformanceMetrics = ({
   packageFingerprint: string | null
   payloadAnalysis: Record<ProjectTransferPayloadKey, ProjectTransferPayloadAnalysis>
   phases: Partial<
-    Record<'payloadParse' | 'stagingLoad' | 'targetAnalysis' | 'zipScan', ProjectTransferPerformancePhaseTiming>
+    Record<
+      'dependencyResolution' | 'payloadParse' | 'stagingLoad' | 'targetAnalysis' | 'zipScan',
+      ProjectTransferPerformancePhaseTiming
+    >
   >
   schemaVersion: number
   warnings: ProjectTransferPackageWarning[]
@@ -2362,7 +2484,7 @@ export const analyzeProjectTransferImportPackage = async (
     zipBytes: packageBytes.byteLength,
   })
 
-  const planSummary = getPlanSummary({
+  const initialPlanSummary = getPlanSummary({
     blockers,
     conflictCounts: {
       ...getProjectTransferInitialConflictCounts(packageContractBlockers.length),
@@ -2375,17 +2497,24 @@ export const analyzeProjectTransferImportPackage = async (
     packageFingerprint,
     packageWarnings,
   })
-  const plan = getPlanArtifact({
+  const initialPlan = getPlanArtifact({
     blockers,
     packageCounts,
     packageFingerprint,
     packageWarnings,
     planRevision: input.planRevision,
-    planSummary,
+    planSummary: initialPlanSummary,
     stagingRevision,
     targetPlan: targetAnalysis.targetPlan,
     targetState,
   })
+  const resolvedAnalyzePlan = await getAnalyzePlanWithAutoResolvedDependencies({
+    input,
+    payloads: parsed.payloads,
+    plan: initialPlan,
+  })
+  const plan = resolvedAnalyzePlan.plan
+  const planSummary = resolvedAnalyzePlan.planSummary
   const assetManifest = getAssetManifest(parsed.payloads)
   const assetSummaryBytes = sumNumbers(
     assetManifest.entries.map((entry) => {
@@ -2412,6 +2541,9 @@ export const analyzeProjectTransferImportPackage = async (
     packageFingerprint,
     payloadAnalysis,
     phases: {
+      ...(resolvedAnalyzePlan.dependencyResolutionTiming === null
+        ? {}
+        : {dependencyResolution: resolvedAnalyzePlan.dependencyResolutionTiming}),
       payloadParse: parsedMeasurement.timing,
       stagingLoad: stagingLoad.timing,
       targetAnalysis: targetAnalysisMeasurement.timing,
@@ -2456,6 +2588,9 @@ export const analyzeProjectTransferImportPackage = async (
     packageFingerprint,
     payloadAnalysis,
     phases: {
+      ...(resolvedAnalyzePlan.dependencyResolutionTiming === null
+        ? {}
+        : {dependencyResolution: resolvedAnalyzePlan.dependencyResolutionTiming}),
       payloadParse: parsedMeasurement.timing,
       stagingLoad: stagingLoad.timing,
       targetAnalysis: targetAnalysisMeasurement.timing,

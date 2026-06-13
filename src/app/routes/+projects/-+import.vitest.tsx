@@ -149,8 +149,10 @@ const getSession = (overrides: Record<string, unknown> = {}) => {
 
 const mockState = vi.hoisted(() => {
   return {
+    analyzeInputs: [] as unknown[],
     commitInputs: [] as unknown[],
     commitResult: null as Record<string, unknown> | null,
+    createInputs: [] as unknown[],
     codexStatusQueryResult: {
       data: {
         appServerReady: false,
@@ -241,6 +243,7 @@ const mockState = vi.hoisted(() => {
       refetch: vi.fn(),
     },
     navigate: vi.fn(),
+    uploadInputs: [] as unknown[],
   }
 })
 
@@ -320,6 +323,7 @@ vi.mock('../+admin/+models/providerConnectionsClient.ts', () => {
 vi.mock('./importWizard/projectImportClient.ts', () => {
   return {
     analyzeProjectImportSession: vi.fn((input: unknown) => {
+      mockState.analyzeInputs.push(input)
       return {...getSession({state: 'awaiting_resolution'}), ...(input as Record<string, unknown>)}
     }),
     cancelProjectImportSession: vi.fn(() => {
@@ -330,6 +334,7 @@ vi.mock('./importWizard/projectImportClient.ts', () => {
       return mockState.commitResult ?? getSession({canCommit: false, state: 'committing'})
     }),
     createProjectImportSession: vi.fn(() => {
+      mockState.createInputs.push(null)
       return getSession({state: 'awaiting_upload'})
     }),
     fetchProjectImportSession: vi.fn(() => {
@@ -343,7 +348,8 @@ vi.mock('./importWizard/projectImportClient.ts', () => {
 
       return getSession({stalePlan: false})
     }),
-    uploadProjectImportPackage: vi.fn(() => {
+    uploadProjectImportPackage: vi.fn((input: unknown) => {
+      mockState.uploadInputs.push(input)
       return getSession({state: 'queued'})
     }),
   }
@@ -398,15 +404,26 @@ const renderImportWizard = async () => {
   return {container, dispose}
 }
 
+const flushMutationUpdates = async () => {
+  await Promise.resolve()
+  await Promise.resolve()
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
 describe('project import route', () => {
   beforeEach(() => {
     vi.resetModules()
     document.body.innerHTML = ''
     window.history.replaceState(null, '', '/projects/import?sessionId=session-1')
+    mockState.analyzeInputs = []
     mockState.commitInputs = []
     mockState.commitResult = null
+    mockState.createInputs = []
     mockState.manualProviderModelInputs = []
     mockState.resolveInputs = []
+    mockState.uploadInputs = []
     mockState.navigate.mockClear()
     mockState.queryClient.setQueryData.mockClear()
     mockState.sessionQueryResult = {
@@ -434,6 +451,12 @@ describe('project import route', () => {
       expect(container.textContent).toContain('Import Project')
       expect(container.textContent).toContain('Upload a transfer package')
       expect(container.textContent).toContain('Debug')
+      expect(debugSection?.textContent).toContain('Package review')
+      expect(debugSection?.textContent).toContain('Overlap summary')
+      expect(debugSection?.textContent).toContain('Conflict summary')
+      expect(debugSection?.textContent).toContain('Dependency status')
+      expect(debugSection?.textContent).toContain('Session')
+      expect(debugSection?.textContent).toContain('Read paths')
       expect(container.textContent).toContain('Reused-article update plan')
       expect(container.textContent).toContain('Route-link omissions')
       expect(container.textContent).toContain('Snapshot project-article links')
@@ -443,9 +466,35 @@ describe('project import route', () => {
       expect(container.textContent).toContain('Human/review comparison signature source')
       expect(container.textContent).toContain('Shows where the judgment comparison signature came from')
       expect(container.textContent).not.toContain('Dependency resolution')
+      expect(container.textContent).not.toContain('Start import review')
       expect(container.textContent).toContain('requires new package or target changes')
       expect(container.textContent).toContain('Create project from import')
+      expect((container.textContent ?? '').indexOf('Create project from import')).toBeLessThan(
+        (container.textContent ?? '').indexOf('Import progress'),
+      )
       expect(debugSection?.hasAttribute('open')).toBe(false)
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('starts import automatically when a package is selected', async () => {
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      const input = container.querySelector('input[type="file"]')
+      const file = new File(['project-transfer'], 'project-transfer.zip', {type: 'application/zip'})
+
+      expect(input).not.toBeNull()
+      Object.defineProperty(input, 'files', {configurable: true, value: [file]})
+      input?.dispatchEvent(new Event('change', {bubbles: true}))
+      await flushMutationUpdates()
+
+      expect(container.textContent).not.toContain('Start import review')
+      expect(mockState.createInputs).toEqual([null])
+      expect(mockState.uploadInputs).toMatchObject([{file, sessionId: 'session-1'}])
+      expect(mockState.analyzeInputs).toEqual([{expectedPlanRevision: 2, sessionId: 'session-1'}])
     } finally {
       dispose()
       container.remove()
@@ -600,7 +649,7 @@ describe('project import route', () => {
       })
 
       commitButton?.click()
-      await Promise.resolve()
+      await flushMutationUpdates()
 
       expect(mockState.commitInputs).toEqual([{planRevision: 2, sessionId: 'session-1'}])
       expect(container.textContent).toContain('Post-import warnings')
@@ -613,7 +662,7 @@ describe('project import route', () => {
   })
 
   test('updates the session query cache when a background commit starts', async () => {
-    const committingSession = getSession({canCommit: false, state: 'committing'})
+    const committingSession = getSession({canCommit: false, state: 'committing', updatedAt: '2030-01-01T00:00:01.000Z'})
     mockState.sessionQueryResult = {
       ...mockState.sessionQueryResult,
       data: getSession({canCommit: true, state: 'ready_to_commit'}),
@@ -628,13 +677,14 @@ describe('project import route', () => {
       })
 
       commitButton?.click()
-      await Promise.resolve()
+      await flushMutationUpdates()
 
       expect(mockState.queryClient.setQueryData).toHaveBeenCalledWith(
         ['project-import-session', 'session-1'],
         committingSession,
       )
-      expect(container.textContent).toContain('Commit started. Progress will update here.')
+      expect(container.textContent).toContain('Create progress')
+      expect(container.textContent).not.toContain('Commit started. Progress will update here.')
     } finally {
       dispose()
       container.remove()
@@ -666,7 +716,7 @@ describe('project import route', () => {
     }
   })
 
-  test('auto-resolves unresolved dependencies when the analyzed session is awaiting resolution', async () => {
+  test('manually auto-resolves unresolved dependencies when the analyzed session is awaiting resolution', async () => {
     mockState.sessionQueryResult = {
       ...mockState.sessionQueryResult,
       data: getSession({
@@ -680,6 +730,11 @@ describe('project import route', () => {
     const {container, dispose} = await renderImportWizard()
 
     try {
+      const autoResolveButton = Array.from(container.querySelectorAll('button')).find((button) => {
+        return button.textContent?.includes('Auto-resolve')
+      })
+
+      autoResolveButton?.click()
       await Promise.resolve()
 
       expect(mockState.resolveInputs[0]).toEqual({autoResolve: true, planRevision: 2, sessionId: 'session-1'})

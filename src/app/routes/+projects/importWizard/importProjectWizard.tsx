@@ -310,6 +310,10 @@ const getSessionPhaseLabel = (session: ProjectImportSession | null) => {
   return `${phaseLabel.charAt(0).toUpperCase()}${phaseLabel.slice(1)} (${statusLabel})`
 }
 
+const getProgressTitle = (session: ProjectImportSession | null, createProgress: boolean) => {
+  return createProgress || session?.state === 'committing' ? 'Create progress' : 'Import progress'
+}
+
 const hasNumber = (value: number | null | undefined): value is number => {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -414,7 +418,11 @@ const StatusBadge = (props: {status: string}) => {
   )
 }
 
-const ProgressPanel = (props: {session: ProjectImportSession | null; uploadPercent: number | null}) => {
+const ProgressPanel = (props: {
+  createProgress: boolean
+  session: ProjectImportSession | null
+  uploadPercent: number | null
+}) => {
   const percent = createMemo(() => {
     return getProgressPercent(props.session, props.uploadPercent)
   })
@@ -426,7 +434,7 @@ const ProgressPanel = (props: {session: ProjectImportSession | null; uploadPerce
     <section class="rounded-lg border border-gray-200 bg-white p-4">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-base font-semibold text-gray-900">Import progress</h2>
+          <h2 class="text-base font-semibold text-gray-900">{getProgressTitle(props.session, props.createProgress)}</h2>
           <p class="mt-1 text-sm text-gray-500">{getSessionPhaseLabel(props.session)}</p>
         </div>
         <Show when={props.session}>
@@ -435,20 +443,30 @@ const ProgressPanel = (props: {session: ProjectImportSession | null; uploadPerce
           }}
         </Show>
       </div>
-      <Show
-        when={percent() !== null}
-        fallback={<p class="mt-4 text-sm text-gray-500">No determinate percentage for this phase.</p>}
-      >
-        <div class="mt-4 space-y-2">
-          <div class="h-2 overflow-hidden rounded-full bg-gray-100">
-            <div
-              class="h-full rounded-full bg-blue-600 transition-all"
-              style={{width: `${Math.max(0, Math.min(100, percent() ?? 0))}%`}}
-            />
+      <Switch>
+        <Match when={percent() !== null}>
+          <div class="mt-4 space-y-2">
+            <div class="h-2 overflow-hidden rounded-full bg-gray-100">
+              <div
+                class="h-full rounded-full bg-blue-600 transition-all"
+                style={{width: `${Math.max(0, Math.min(100, percent() ?? 0))}%`}}
+              />
+            </div>
+            <p class="text-xs text-gray-500">{formatCount(percent())}%</p>
           </div>
-          <p class="text-xs text-gray-500">{formatCount(percent())}%</p>
-        </div>
-      </Show>
+        </Match>
+        <Match when={props.createProgress}>
+          <div class="mt-4 space-y-2">
+            <div class="h-2 overflow-hidden rounded-full bg-gray-100">
+              <div class="h-full w-1/3 animate-pulse rounded-full bg-blue-600" />
+            </div>
+            <p class="text-xs text-gray-500">Waiting for create progress...</p>
+          </div>
+        </Match>
+        <Match when={true}>
+          <p class="mt-4 text-sm text-gray-500">No determinate percentage for this phase.</p>
+        </Match>
+      </Switch>
       <div class="mt-3 grid gap-3 text-sm text-gray-700 md:grid-cols-3">
         <For each={detailRows()}>
           {(row) => {
@@ -753,13 +771,56 @@ const DependencyStatusTable = (props: {session: ProjectImportSession | null}) =>
   )
 }
 
+const SessionPanel = (props: {packageFingerprint: string | null | undefined; session: ProjectImportSession | null}) => {
+  return (
+    <section class="rounded-lg border border-gray-200 bg-white p-4">
+      <h2 class="text-base font-semibold text-gray-900">Session</h2>
+      <dl class="mt-3 space-y-2 text-sm">
+        <div>
+          <dt class="text-gray-500">Session id</dt>
+          <dd class="break-all font-mono text-xs text-gray-900">{props.session?.id ?? 'Not created'}</dd>
+        </div>
+        <div>
+          <dt class="text-gray-500">State</dt>
+          <dd class="text-gray-900">{props.session?.state ?? 'Not started'}</dd>
+        </div>
+        <div>
+          <dt class="text-gray-500">Revision</dt>
+          <dd class="text-gray-900">{props.session?.planRevision ?? 0}</dd>
+        </div>
+        <div>
+          <dt class="text-gray-500">Package fingerprint</dt>
+          <dd class="break-all font-mono text-xs text-gray-900">
+            {props.session?.packageFingerprint ?? props.packageFingerprint ?? 'Unavailable'}
+          </dd>
+        </div>
+        <div>
+          <dt class="text-gray-500">Can commit</dt>
+          <dd class="text-gray-900">{props.session?.canCommit ? 'Yes' : 'No'}</dd>
+        </div>
+      </dl>
+    </section>
+  )
+}
+
+const ReadPathsPanel = () => {
+  return (
+    <section class="rounded-lg border border-gray-200 bg-white p-4">
+      <h2 class="text-base font-semibold text-gray-900">Read paths</h2>
+      <div class="mt-3 space-y-2 text-sm text-gray-600">
+        <p>Normal session reads and dependency mutations use Eden and TanStack Query.</p>
+        <p>Package upload uses the desktop-safe API origin resolved by getApiRequestUrl.</p>
+      </div>
+    </section>
+  )
+}
+
 export const ImportProjectWizard = () => {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [sessionId, setSessionId] = createSignal<string | null>(getInitialSessionId())
   const [sessionOverride, setSessionOverride] = createSignal<ProjectImportSession | null>(null)
   const [navigatedProjectId, setNavigatedProjectId] = createSignal<string | null>(null)
-  const [autoResolvedRevisionKey, setAutoResolvedRevisionKey] = createSignal<string | null>(null)
   const [selectedFile, setSelectedFile] = createSignal<File | null>(null)
   const [uploadPercent, setUploadPercent] = createSignal<number | null>(null)
   const [pageError, setPageError] = createSignal('')
@@ -815,11 +876,6 @@ export const ImportProjectWizard = () => {
 
     if (session.stalePlan) {
       setPageMessage('Plan revision was stale; review the refreshed plan before committing.')
-      return
-    }
-
-    if (session.state === 'committing') {
-      setPageMessage('Commit started. Progress will update here.')
       return
     }
 
@@ -906,9 +962,6 @@ export const ImportProjectWizard = () => {
       || cancelMutation.isPending
     )
   })
-  const startDisabled = createMemo(() => {
-    return selectedFile() === null || isBusy()
-  })
   const canAnalyze = createMemo(() => {
     return currentSession()?.state === 'queued' && !isBusy()
   })
@@ -966,25 +1019,6 @@ export const ImportProjectWizard = () => {
     }
   })
 
-  createEffect(() => {
-    const session = currentSession()
-    const revisionKey = session ? `${session.id}:${session.planRevision}` : null
-
-    if (
-      session === null
-      || session.state !== 'awaiting_resolution'
-      || !hasUnresolvedDependencies(session)
-      || resolveMutation.isPending
-      || autoResolvedRevisionKey() === revisionKey
-    ) {
-      return
-    }
-
-    setAutoResolvedRevisionKey(revisionKey)
-    setPageError('')
-    resolveMutation.mutate({autoResolve: true, planRevision: session.planRevision, sessionId: session.id})
-  })
-
   const handleFileChange = (event: Event) => {
     const file = event.currentTarget instanceof HTMLInputElement ? (event.currentTarget.files?.[0] ?? null) : null
 
@@ -992,15 +1026,12 @@ export const ImportProjectWizard = () => {
     setUploadPercent(null)
     setPageError('')
     setPageMessage('')
-  }
-  const handleStartImport = () => {
-    const file = selectedFile()
 
-    if (file === null) {
-      setPageError('Choose a project transfer package first.')
-      return
+    if (file !== null && !isBusy()) {
+      startProjectImport(file)
     }
-
+  }
+  const startProjectImport = (file: File) => {
     setPageError('')
     setPageMessage('')
     setUploadPercent(0)
@@ -1082,198 +1113,159 @@ export const ImportProjectWizard = () => {
           </div>
         </Show>
 
-        <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
-          <div class="space-y-6">
-            <section class="rounded-lg border border-gray-200 bg-white p-4">
-              <div class="flex flex-wrap items-end gap-4">
-                <label class="min-w-72 flex-1 text-sm font-medium text-gray-700">
-                  <span>Project transfer package</span>
-                  <input
-                    accept=".zip,application/zip"
-                    class="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-blue-700"
-                    onChange={handleFileChange}
-                    type="file"
-                  />
-                </label>
-                <Button disabled={startDisabled()} onClick={handleStartImport} type="button">
+        <div class="space-y-6">
+          <section class="rounded-lg border border-gray-200 bg-white p-4">
+            <div class="flex flex-wrap items-end gap-4">
+              <label class="min-w-72 flex-1 text-sm font-medium text-gray-700">
+                <span>Project transfer package</span>
+                <input
+                  accept=".zip,application/zip"
+                  class="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-blue-700"
+                  onChange={handleFileChange}
+                  type="file"
+                />
+              </label>
+              <Button disabled={!canAnalyze()} onClick={handleAnalyze} type="button" variant="outline">
+                Analyze queued upload
+              </Button>
+              <Button disabled={!canCancel()} onClick={handleCancel} type="button" variant="outline">
+                Cancel
+              </Button>
+            </div>
+            <Show when={selectedFile()}>
+              {(file) => {
+                return (
+                  <p class="mt-3 text-sm text-gray-500">
+                    Selected: {file().name} ({formatBytes(file().size)})
+                  </p>
+                )
+              }}
+            </Show>
+          </section>
+
+          <section class="rounded-lg border border-gray-200 bg-white p-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 class="text-base font-semibold text-gray-900">Project</h2>
+                <p class="mt-1 text-sm text-gray-500">{getCommitUnavailableReason(currentSession())}</p>
+              </div>
+              <div class="flex items-center gap-3">
+                <StatusBadge status={commitmentState()} />
+                <Button disabled={!canCommit()} onClick={handleCommit} type="button">
                   <Switch>
-                    <Match when={createSessionMutation.isPending}>Creating session...</Match>
-                    <Match when={uploadMutation.isPending}>Uploading...</Match>
-                    <Match when={analyzeMutation.isPending}>Analyzing...</Match>
-                    <Match when={true}>Start import review</Match>
+                    <Match when={commitMutation.isPending}>Creating...</Match>
+                    <Match when={currentSession()?.state === 'committing'}>Create running</Match>
+                    <Match when={currentSession()?.state === 'completed'}>Created</Match>
+                    <Match when={true}>Create project from import</Match>
                   </Switch>
                 </Button>
-                <Button disabled={!canAnalyze()} onClick={handleAnalyze} type="button" variant="outline">
-                  Analyze queued upload
-                </Button>
-                <Button disabled={!canCancel()} onClick={handleCancel} type="button" variant="outline">
-                  Cancel
-                </Button>
               </div>
-              <Show when={selectedFile()}>
-                {(file) => {
-                  return (
-                    <p class="mt-3 text-sm text-gray-500">
-                      Selected: {file().name} ({formatBytes(file().size)})
-                    </p>
-                  )
-                }}
-              </Show>
-            </section>
+            </div>
+          </section>
 
-            <ProgressPanel session={currentSession()} uploadPercent={uploadPercent()} />
-            <PackageReviewPanel session={currentSession()} />
-            <StalePlanReasonsPanel session={currentSession()} />
-            <PostImportWarningsPanel session={currentSession()} />
-            <SummaryTable fields={overlapSummaryFields} title="Overlap summary" values={planSummary()?.overlapCounts} />
-            <SummaryTable
-              fields={conflictSummaryFields}
-              title="Conflict summary"
-              values={planSummary()?.conflictCounts}
-            />
-            <DependencyStatusTable session={currentSession()} />
-            <BlockersPanel summary={planSummary()} />
+          <ProgressPanel
+            createProgress={commitMutation.isPending || currentSession()?.state === 'committing'}
+            session={currentSession()}
+            uploadPercent={uploadPercent()}
+          />
+          <StalePlanReasonsPanel session={currentSession()} />
+          <PostImportWarningsPanel session={currentSession()} />
+          <BlockersPanel summary={planSummary()} />
 
-            <Show when={shouldShowDependencyResolution()}>
-              <section class="rounded-lg border border-gray-200 bg-white p-4">
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h2 class="text-base font-semibold text-gray-900">Dependency resolution</h2>
-                    <p class="mt-1 text-sm text-gray-500">
-                      Existing connections stay unchanged. New connections and model rows are created explicitly.
-                    </p>
-                  </div>
-                  <Button
-                    disabled={!currentSession() || resolveMutation.isPending}
-                    onClick={handleAutoResolve}
-                    type="button"
-                  >
-                    Auto-resolve
-                  </Button>
-                </div>
-
-                <p class="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
-                  Provider and model dependencies resolve to imported source snapshots. Exact prior imported snapshots
-                  are reused by fingerprint; otherwise the import creates disabled snapshot rows during commit.
-                </p>
-              </section>
-            </Show>
-
+          <Show when={shouldShowDependencyResolution()}>
             <section class="rounded-lg border border-gray-200 bg-white p-4">
               <div class="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h2 class="text-base font-semibold text-gray-900">Project</h2>
-                  <p class="mt-1 text-sm text-gray-500">{getCommitUnavailableReason(currentSession())}</p>
+                  <h2 class="text-base font-semibold text-gray-900">Dependency resolution</h2>
+                  <p class="mt-1 text-sm text-gray-500">
+                    Existing connections stay unchanged. New connections and model rows are created explicitly.
+                  </p>
                 </div>
-                <div class="flex items-center gap-3">
-                  <StatusBadge status={commitmentState()} />
-                  <Button disabled={!canCommit()} onClick={handleCommit} type="button">
-                    <Switch>
-                      <Match when={commitMutation.isPending}>Committing...</Match>
-                      <Match when={currentSession()?.state === 'committing'}>Commit running</Match>
-                      <Match when={currentSession()?.state === 'completed'}>Committed</Match>
-                      <Match when={true}>Create project from import</Match>
-                    </Switch>
-                  </Button>
-                </div>
+                <Button
+                  disabled={!currentSession() || resolveMutation.isPending}
+                  onClick={handleAutoResolve}
+                  type="button"
+                >
+                  Auto-resolve
+                </Button>
               </div>
-            </section>
 
-            <details class="rounded-lg border border-gray-200 bg-white p-4">
-              <summary class="cursor-pointer text-base font-semibold text-gray-900">Debug</summary>
-              <div class="mt-4 space-y-4">
-                <div class="grid gap-4 lg:grid-cols-2">
-                  <MappingPanel
-                    mapping={plan()?.dependencyResolution?.providerTargetBySourceId}
-                    title="Final provider mappings"
-                  />
-                  <MappingPanel
-                    mapping={plan()?.dependencyResolution?.modelTargetBySourceId}
-                    title="Final model mappings"
-                  />
-                </div>
-                <div class="grid gap-4 lg:grid-cols-2">
-                  <ProvenancePanel
-                    description="Shows where the judgment comparison signature came from when import checks whether an existing target judgment already matches."
-                    entries={judgmentPlan()}
-                    title="Judgment comparison signature source"
-                  />
-                  <ProvenancePanel
-                    description="Shows where the human/review comparison signature came from when import checks whether existing human judgment or review state already matches."
-                    entries={humanReviewPlan()}
-                    title="Human/review comparison signature source"
-                  />
-                </div>
-                <PlanDetailList
-                  emptyLabel="No reused-article updates are planned."
-                  entries={getPlanArray(plan(), 'articleUpdatePlan')}
-                  title="Reused-article update plan"
+              <p class="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+                Provider and model dependencies resolve to imported source snapshots. Exact prior imported snapshots are
+                reused by fingerprint; otherwise the import creates disabled snapshot rows during commit.
+              </p>
+            </section>
+          </Show>
+
+          <details class="rounded-lg border border-gray-200 bg-white p-4">
+            <summary class="cursor-pointer text-base font-semibold text-gray-900">Debug</summary>
+            <div class="mt-4 space-y-4">
+              <PackageReviewPanel session={currentSession()} />
+              <SummaryTable
+                fields={overlapSummaryFields}
+                title="Overlap summary"
+                values={planSummary()?.overlapCounts}
+              />
+              <SummaryTable
+                fields={conflictSummaryFields}
+                title="Conflict summary"
+                values={planSummary()?.conflictCounts}
+              />
+              <DependencyStatusTable session={currentSession()} />
+              <div class="grid gap-4 lg:grid-cols-2">
+                <SessionPanel packageFingerprint={planSummary()?.packageFingerprint} session={currentSession()} />
+                <ReadPathsPanel />
+              </div>
+              <div class="grid gap-4 lg:grid-cols-2">
+                <MappingPanel
+                  mapping={plan()?.dependencyResolution?.providerTargetBySourceId}
+                  title="Final provider mappings"
                 />
-                <PlanDetailList
-                  emptyLabel="No omitted project route links."
-                  entries={getOmittedRoutes(plan())}
-                  title="Route-link omissions"
+                <MappingPanel
+                  mapping={plan()?.dependencyResolution?.modelTargetBySourceId}
+                  title="Final model mappings"
                 />
-                <PlanDetailList
-                  emptyLabel="No omitted article route links."
-                  entries={getOmittedArticleRoutes(plan())}
-                  title="Article route-link omissions"
-                />
-                <PlanDetailList
-                  emptyLabel="No snapshot project-article links."
-                  entries={getSnapshotArticleRoutes(plan())}
-                  title="Snapshot project-article links"
-                />
-                <PlanDetailList
-                  emptyLabel="No judgment plan rows."
+              </div>
+              <div class="grid gap-4 lg:grid-cols-2">
+                <ProvenancePanel
+                  description="Shows where the judgment comparison signature came from when import checks whether an existing target judgment already matches."
                   entries={judgmentPlan()}
-                  title="Judgment plan rows"
+                  title="Judgment comparison signature source"
                 />
-                <PlanDetailList
-                  emptyLabel="No human/review plan rows."
+                <ProvenancePanel
+                  description="Shows where the human/review comparison signature came from when import checks whether existing human judgment or review state already matches."
                   entries={humanReviewPlan()}
-                  title="Human/review plan rows"
+                  title="Human/review comparison signature source"
                 />
               </div>
-            </details>
-          </div>
-
-          <aside class="space-y-4">
-            <section class="rounded-lg border border-gray-200 bg-white p-4">
-              <h2 class="text-base font-semibold text-gray-900">Session</h2>
-              <dl class="mt-3 space-y-2 text-sm">
-                <div>
-                  <dt class="text-gray-500">Session id</dt>
-                  <dd class="break-all font-mono text-xs text-gray-900">{currentSession()?.id ?? 'Not created'}</dd>
-                </div>
-                <div>
-                  <dt class="text-gray-500">State</dt>
-                  <dd class="text-gray-900">{currentSession()?.state ?? 'Not started'}</dd>
-                </div>
-                <div>
-                  <dt class="text-gray-500">Revision</dt>
-                  <dd class="text-gray-900">{currentSession()?.planRevision ?? 0}</dd>
-                </div>
-                <div>
-                  <dt class="text-gray-500">Package fingerprint</dt>
-                  <dd class="break-all font-mono text-xs text-gray-900">
-                    {currentSession()?.packageFingerprint ?? planSummary()?.packageFingerprint ?? 'Unavailable'}
-                  </dd>
-                </div>
-                <div>
-                  <dt class="text-gray-500">Can commit</dt>
-                  <dd class="text-gray-900">{currentSession()?.canCommit ? 'Yes' : 'No'}</dd>
-                </div>
-              </dl>
-            </section>
-            <section class="rounded-lg border border-gray-200 bg-white p-4">
-              <h2 class="text-base font-semibold text-gray-900">Read paths</h2>
-              <div class="mt-3 space-y-2 text-sm text-gray-600">
-                <p>Normal session reads and dependency mutations use Eden and TanStack Query.</p>
-                <p>Package upload uses the desktop-safe API origin resolved by getApiRequestUrl.</p>
-              </div>
-            </section>
-          </aside>
+              <PlanDetailList
+                emptyLabel="No reused-article updates are planned."
+                entries={getPlanArray(plan(), 'articleUpdatePlan')}
+                title="Reused-article update plan"
+              />
+              <PlanDetailList
+                emptyLabel="No omitted project route links."
+                entries={getOmittedRoutes(plan())}
+                title="Route-link omissions"
+              />
+              <PlanDetailList
+                emptyLabel="No omitted article route links."
+                entries={getOmittedArticleRoutes(plan())}
+                title="Article route-link omissions"
+              />
+              <PlanDetailList
+                emptyLabel="No snapshot project-article links."
+                entries={getSnapshotArticleRoutes(plan())}
+                title="Snapshot project-article links"
+              />
+              <PlanDetailList emptyLabel="No judgment plan rows." entries={judgmentPlan()} title="Judgment plan rows" />
+              <PlanDetailList
+                emptyLabel="No human/review plan rows."
+                entries={humanReviewPlan()}
+                title="Human/review plan rows"
+              />
+            </div>
+          </details>
         </div>
       </div>
     </main>

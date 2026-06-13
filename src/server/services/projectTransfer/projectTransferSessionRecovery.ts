@@ -10,7 +10,15 @@ import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
 import {canCurrentServerOwnDuckdb} from '../../utils/serverRuntimeRole.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
-import type {ProjectTransferAssetPromotionMetadata, ProjectTransferRuntimeEvent} from './projectTransferContracts.ts'
+import type {
+  ProjectTransferImportAnalysisArtifact,
+  ProjectTransferImportPlanArtifact,
+} from './projectTransferAnalyze.ts'
+import type {
+  ProjectTransferAssetPromotionMetadata,
+  ProjectTransferRuntimeEvent,
+  ProjectTransferUploadMetadataPayload,
+} from './projectTransferContracts.ts'
 import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
 import {
   resolveProjectTransferPromotionWritablePath,
@@ -22,7 +30,11 @@ import {
   getProjectTransferImportTempLayout,
   isProjectTransferTerminalState,
   parseProjectTransferCompletionPayload,
+  parseProjectTransferProgressPayload,
+  type ProjectTransferPlanSummary,
+  type ProjectTransferProgressPayload,
   projectTransferTerminalStates,
+  validateProjectTransferPlanReadyToCommit,
 } from './projectTransferSession.ts'
 import {removeProjectTransferStaleStagingRevisions} from './projectTransferStaging.ts'
 
@@ -56,6 +68,8 @@ type ProjectTransferRecoveryCandidate = {
   direction: ProjectTransferDirection
   id: string
   ownerToken: string | null
+  planRevision?: number
+  progressJson?: unknown
   recoveryKind: ProjectTransferRecoveryKind
   state: ProjectTransferSessionState
 }
@@ -63,6 +77,7 @@ type ProjectTransferRecoveryCandidate = {
 type ProjectTransferRecoveryCleanupPlan = ProjectTransferRecoveryCandidate & {
   deletePromotedAssets: boolean
   deleteTempArtifacts: boolean
+  recoveredAnalyzedPlan?: boolean
   recoveredFromHistory: boolean
   transitionedToFailed: boolean
   transitionedToExpired: boolean
@@ -171,6 +186,8 @@ const getStaleProjectTransferSessions = async ({
       direction,
       id,
       owner_token AS ownerToken,
+      CAST(plan_revision AS INTEGER) AS planRevision,
+      progress_json AS progressJson,
       CASE
         WHEN direction = 'import'
           AND state = 'uploading'
@@ -477,10 +494,231 @@ const getCompletedImportHistory = async ({
     : null
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const readImportRecoveryJsonArtifact = async <TValue>({
+  pathValue,
+  runtimeOptions,
+}: {
+  pathValue: string
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+}): Promise<TValue | null> => {
+  try {
+    const resolvedPath = getResolvedTempPath({pathValue, runtimeOptions})
+
+    return getJsonValue(JSON.parse(await readFile(resolvedPath, 'utf8'))) as TValue
+  } catch {
+    return null
+  }
+}
+
+const isRecoverableAnalyzeArtifact = ({
+  analysis,
+  plan,
+  session,
+}: {
+  analysis: ProjectTransferImportAnalysisArtifact | null
+  plan: ProjectTransferImportPlanArtifact | null
+  session: ProjectTransferRecoveryCandidate
+}) => {
+  const expectedPlanRevision = session.planRevision === undefined ? null : session.planRevision + 1
+
+  return (
+    isRecord(plan)
+    && isRecord(analysis)
+    && Number.isInteger(plan.planRevision)
+    && (expectedPlanRevision === null || plan.planRevision === expectedPlanRevision)
+    && analysis.planRevision === plan.planRevision
+    && analysis.stagingRevision === plan.stagingRevision
+    && analysis.packageFingerprint === plan.packageFingerprint
+    && isRecord(plan.summary)
+  )
+}
+
+const getRecoveredAnalyzeArtifacts = async ({
+  runtimeOptions,
+  session,
+}: {
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+  session: ProjectTransferRecoveryCandidate
+}) => {
+  const layout = getProjectTransferImportTempLayout(session.id)
+  const [analysis, plan] = await Promise.all([
+    readImportRecoveryJsonArtifact<ProjectTransferImportAnalysisArtifact>({
+      pathValue: layout.analysisPath,
+      runtimeOptions,
+    }),
+    readImportRecoveryJsonArtifact<ProjectTransferImportPlanArtifact>({pathValue: layout.planPath, runtimeOptions}),
+  ])
+
+  return isRecoverableAnalyzeArtifact({analysis, plan, session}) ? {analysis, plan} : null
+}
+
+const getImportPlanRowCount = (planSummary: ProjectTransferPlanSummary) => {
+  return planSummary.packageCounts
+    ? Object.values(planSummary.packageCounts).reduce((total, count) => {
+        return total + count
+      }, 0)
+    : 0
+}
+
+const isUploadMetadataPayload = (value: unknown): value is ProjectTransferUploadMetadataPayload => {
+  return (
+    isRecord(value)
+    && typeof value.byteLength === 'number'
+    && Number.isInteger(value.byteLength)
+    && value.byteLength >= 0
+    && typeof value.checksumSha256 === 'string'
+    && typeof value.fileName === 'string'
+  )
+}
+
+const getRecoveryUploadMetadata = (progress: ProjectTransferProgressPayload | null) => {
+  return isUploadMetadataPayload(progress?.uploadMetadata) ? progress.uploadMetadata : null
+}
+
+const getRecoveredAnalyzeProgress = ({
+  analysis,
+  now,
+  plan,
+  previousProgress,
+  session,
+}: {
+  analysis: ProjectTransferImportAnalysisArtifact
+  now: Date
+  plan: ProjectTransferImportPlanArtifact
+  previousProgress: ProjectTransferProgressPayload | null
+  session: ProjectTransferRecoveryCandidate
+}): ProjectTransferProgressPayload => {
+  const rowCount = getImportPlanRowCount(plan.summary)
+  const stagingRevision = plan.stagingRevision ?? analysis.stagingRevision ?? plan.planRevision
+  const stagingLayout = getProjectTransferImportTempLayout(session.id)
+
+  return {
+    completedRows: rowCount,
+    performanceMetrics: analysis.performanceMetrics,
+    phase: 'analyze',
+    planRevision: plan.planRevision,
+    rowCountProcessed: rowCount,
+    rowCountTotal: rowCount,
+    staging: {
+      blockerCount: plan.summary.blockerCount,
+      currentRevision: stagingRevision,
+      packageCounts: plan.packageCounts,
+      packageFingerprint: plan.packageFingerprint,
+      path: `${stagingLayout.rootPath}/staging/revision-${stagingRevision}`,
+      planRevision: plan.planRevision,
+      stagedPackage: analysis.stagedPackage,
+      stagingRevision,
+      warningCount: plan.summary.warningCount,
+    },
+    stagingRevision,
+    status: 'completed',
+    totalRows: rowCount,
+    updatedAt: now.toISOString(),
+    uploadMetadata: getRecoveryUploadMetadata(previousProgress),
+    warningCount: plan.summary.warningCount,
+  }
+}
+
+const getRecoveredAnalyzeNextState = (planSummary: ProjectTransferPlanSummary) => {
+  return validateProjectTransferPlanReadyToCommit(planSummary).ok ? 'ready_to_commit' : 'awaiting_resolution'
+}
+
+const transitionImportAnalyzeSessionToRecoveredPlan = async ({
+  analysis,
+  now,
+  plan,
+  runner,
+  session,
+  staleImportAnalyzeHeartbeatBefore,
+  staleImportCommitHeartbeatBefore,
+}: {
+  analysis: ProjectTransferImportAnalysisArtifact
+  now: Date
+  plan: ProjectTransferImportPlanArtifact
+  runner: ProjectTransferSessionRecoveryRunner
+  session: ProjectTransferRecoveryCandidate
+  staleImportAnalyzeHeartbeatBefore: Date
+  staleImportCommitHeartbeatBefore: Date
+}) => {
+  const previousProgress = parseProjectTransferProgressPayload(session.progressJson)
+  const progress = getRecoveredAnalyzeProgress({analysis, now, plan, previousProgress, session})
+  const expectedPlanRevisionCondition =
+    session.planRevision === undefined ? '' : `AND plan_revision = ${session.planRevision}`
+  const [row] = await runner.queryJson<ProjectTransferRecoveryCandidate>(`
+    UPDATE app.project_transfer_session
+    SET
+      state = ${getSqlLiteral(getRecoveredAnalyzeNextState(plan.summary))},
+      plan_revision = ${plan.planRevision},
+      package_fingerprint = ${getSqlLiteral(plan.packageFingerprint)},
+      owner_token = NULL,
+      progress_json = ${getJsonLiteral(progress)},
+      plan_summary_json = ${getJsonLiteral(plan.summary)},
+      error_json = NULL,
+      updated_at = ${getTimestampLiteral(now)}
+    WHERE id = ${getSqlLiteral(session.id)}
+      AND direction = 'import'
+      AND state IN ('extracting', 'analyzing')
+      ${expectedPlanRevisionCondition}
+      ${getImportRecoveryCondition({now, session, staleImportAnalyzeHeartbeatBefore, staleImportCommitHeartbeatBefore})}
+    RETURNING direction, id, state
+  `)
+
+  return row ?? null
+}
+
+const recoverImportAnalyzeSessionFromArtifacts = async ({
+  now,
+  runner,
+  runtimeOptions,
+  session,
+  staleImportAnalyzeHeartbeatBefore,
+  staleImportCommitHeartbeatBefore,
+}: {
+  now: Date
+  runner: ProjectTransferSessionRecoveryRunner
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
+  session: ProjectTransferRecoveryCandidate
+  staleImportAnalyzeHeartbeatBefore: Date
+  staleImportCommitHeartbeatBefore: Date
+}) => {
+  const artifacts = await getRecoveredAnalyzeArtifacts({runtimeOptions, session})
+
+  if (artifacts === null) {
+    return null
+  }
+
+  const recoveredSession = await transitionImportAnalyzeSessionToRecoveredPlan({
+    analysis: artifacts.analysis,
+    now,
+    plan: artifacts.plan,
+    runner,
+    session,
+    staleImportAnalyzeHeartbeatBefore,
+    staleImportCommitHeartbeatBefore,
+  })
+
+  return recoveredSession === null
+    ? null
+    : {
+        ...session,
+        deletePromotedAssets: false,
+        deleteTempArtifacts: false,
+        recoveredAnalyzedPlan: true,
+        recoveredFromHistory: false,
+        transitionedToFailed: false,
+        transitionedToExpired: false,
+      }
+}
+
 const getCleanupPlanForSession = async ({
   now,
   ownerToken,
   runner,
+  runtimeOptions,
   session,
   staleImportAnalyzeHeartbeatBefore,
   staleImportCommitHeartbeatBefore,
@@ -489,6 +727,7 @@ const getCleanupPlanForSession = async ({
   now: Date
   ownerToken: string
   runner: ProjectTransferSessionRecoveryRunner
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
   session: ProjectTransferRecoveryCandidate
   staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
@@ -553,6 +792,19 @@ const getCleanupPlanForSession = async ({
   }
 
   if (session.recoveryKind === 'stale_import_analysis') {
+    const recoveredAnalyzeSession = await recoverImportAnalyzeSessionFromArtifacts({
+      now,
+      runner,
+      runtimeOptions,
+      session,
+      staleImportAnalyzeHeartbeatBefore,
+      staleImportCommitHeartbeatBefore,
+    })
+
+    if (recoveredAnalyzeSession !== null) {
+      return recoveredAnalyzeSession
+    }
+
     const failedSession = await transitionImportAnalyzeSessionToFailed({
       now,
       ownerToken,
@@ -617,6 +869,7 @@ const getCleanupPlans = async ({
   now,
   ownerToken,
   runner,
+  runtimeOptions,
   sessions,
   staleImportAnalyzeHeartbeatBefore,
   staleImportCommitHeartbeatBefore,
@@ -625,6 +878,7 @@ const getCleanupPlans = async ({
   now: Date
   ownerToken: string
   runner: ProjectTransferSessionRecoveryRunner
+  runtimeOptions: ProjectTransferSessionRecoveryRuntimeOptions
   sessions: ProjectTransferRecoveryCandidate[]
   staleImportAnalyzeHeartbeatBefore: Date
   staleImportCommitHeartbeatBefore: Date
@@ -636,6 +890,7 @@ const getCleanupPlans = async ({
       now,
       ownerToken,
       runner,
+      runtimeOptions,
       session,
       staleExportHeartbeatBefore,
       staleImportAnalyzeHeartbeatBefore,
@@ -859,7 +1114,7 @@ const writeProjectTransferRecoveryRuntimeEvents = ({
 }) => {
   return plans
     .filter((plan) => {
-      return plan.direction === 'import'
+      return plan.direction === 'import' && plan.recoveredAnalyzedPlan !== true
     })
     .map((plan) => {
       const timestamp = now.toISOString()
@@ -1088,6 +1343,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
   const exportQueuedSessionStaleMs = params.exportQueuedSessionStaleMs ?? defaultExportQueuedSessionStaleMs
   const importAnalyzeHeartbeatStaleMs = params.importAnalyzeHeartbeatStaleMs ?? defaultImportAnalyzeHeartbeatStaleMs
   const importCommitHeartbeatStaleMs = params.importCommitHeartbeatStaleMs ?? defaultImportCommitHeartbeatStaleMs
+  const runtimeOptions = {cwd: params.cwd, envValues: params.envValues}
   const staleExportHeartbeatBefore = getDateBefore({ms: exportOwnerHeartbeatStaleMs, now})
   const staleImportAnalyzeHeartbeatBefore = getDateBefore({ms: importAnalyzeHeartbeatStaleMs, now})
   const staleImportCommitHeartbeatBefore = getDateBefore({ms: importCommitHeartbeatStaleMs, now})
@@ -1106,6 +1362,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
           now,
           ownerToken,
           runner: tx,
+          runtimeOptions,
           sessions,
           staleExportHeartbeatBefore,
           staleImportAnalyzeHeartbeatBefore,
@@ -1116,6 +1373,7 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
         now,
         ownerToken,
         runner,
+        runtimeOptions,
         sessions,
         staleExportHeartbeatBefore,
         staleImportAnalyzeHeartbeatBefore,
@@ -1123,14 +1381,14 @@ const runProjectTransferSessionRecovery = async (params: ProjectTransferSessionR
       })
   writeProjectTransferRecoveryRuntimeEvents({now, ownerToken, plans})
   const recoveryCounts = getRecoveryCounts(plans)
-  const cleanupCounts = await getCleanupCounts({plans, runtimeOptions: {cwd: params.cwd, envValues: params.envValues}})
+  const cleanupCounts = await getCleanupCounts({plans, runtimeOptions})
   const {failedPlans, successfulPlans, ...cleanupResultCounts} = cleanupCounts
   await markTerminalCleanupComplete({now, plans: successfulPlans, runner})
   const cleanupStaleStagingRevisionCount = await cleanupStaleLiveImportStagingRevisions({
     batchSize,
     now,
     runner,
-    runtimeOptions: {cwd: params.cwd, envValues: params.envValues},
+    runtimeOptions,
   })
   await pruneExpiredTerminalSessions({batchSize, now, runner})
   throwFailedCleanupPlans(failedPlans)

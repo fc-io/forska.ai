@@ -134,6 +134,7 @@ type ProjectTransferDependencyResolutionInput = RuntimePathOptions & {
   deferPlanWrite?: boolean
   layout: ProjectTransferImportTempLayout
   nextPlanRevision: number
+  plan?: ProjectTransferResolvedDependencyPlanArtifact
   request: ProjectTransferDependencyResolutionRequest
   repositories?: ProjectTransferDependencyResolutionRepositories
 }
@@ -1185,17 +1186,17 @@ const getResultChanged = ({
     canCommit: previousPlan.canCommit,
     dependencyResolution: previousPlan.dependencyResolution ?? null,
     summary: previousPlan.summary,
-    targetPlan: previousPlan.targetPlan,
   }
   const nextComparable = {
     blockers: nextPlan.blockers,
     canCommit: nextPlan.canCommit,
     dependencyResolution: nextPlan.dependencyResolution ?? null,
     summary: nextPlan.summary,
-    targetPlan: nextPlan.targetPlan,
   }
 
   return getProjectTransferCanonicalJson(previousComparable) !== getProjectTransferCanonicalJson(nextComparable)
+    ? true
+    : getProjectTransferCanonicalJson(previousPlan.targetPlan) !== getProjectTransferCanonicalJson(nextPlan.targetPlan)
 }
 
 const getResolvedPlan = ({
@@ -1225,6 +1226,244 @@ const getResolvedPlan = ({
     summary: dependencySummary,
     targetPlan: {...previousPlan.targetPlan, ...(fidelityTargetPlan ?? {})},
   }
+}
+
+const dependencyKeyPrefixByKind = {model: 'model:', provider: 'provider:'} as const
+
+const getDependencySourceId = (key: string, kind: keyof typeof dependencyKeyPrefixByKind) => {
+  const prefix = dependencyKeyPrefixByKind[kind]
+
+  return key.startsWith(prefix) ? key.slice(prefix.length) : null
+}
+
+const getDependencySourceIds = (
+  dependencyStatuses: Record<string, ProjectTransferDependencyStatus>,
+  kind: keyof typeof dependencyKeyPrefixByKind,
+) => {
+  return Object.keys(dependencyStatuses).flatMap((key) => {
+    const sourceId = getDependencySourceId(key, kind)
+
+    return sourceId === null ? [] : [sourceId]
+  })
+}
+
+const hasOnlyProviderModelDependencies = (dependencyStatuses: Record<string, ProjectTransferDependencyStatus>) => {
+  const dependencyKeys = Object.keys(dependencyStatuses)
+
+  return (
+    dependencyKeys.length > 0
+    && dependencyKeys.every((key) => {
+      return getDependencySourceId(key, 'provider') !== null || getDependencySourceId(key, 'model') !== null
+    })
+  )
+}
+
+const hasExplicitDependencyRequest = (request: ProjectTransferDependencyResolutionRequest) => {
+  return [
+    request.createdProviderConnections,
+    request.materializedModels,
+    request.modelMaterializationRequests,
+    request.selectedModels,
+    request.selectedProviderConnections,
+    request.unresolvedModels,
+    request.unresolvedProviders,
+  ].some((values) => {
+    return values !== undefined && values.length > 0
+  })
+}
+
+const hasNoFidelityConflicts = (plan: ProjectTransferResolvedDependencyPlanArtifact) => {
+  return (
+    plan.summary.blockerCount === 0
+    && plan.summary.conflictCounts.humanReviewFidelityConflictCount === 0
+    && plan.summary.conflictCounts.judgmentConflictCount === 0
+  )
+}
+
+const getFastAutoResolvedDependencyResolution = ({
+  modelSourceIds,
+  plan,
+  providerSourceIds,
+}: {
+  modelSourceIds: string[]
+  plan: ProjectTransferResolvedDependencyPlanArtifact
+  providerSourceIds: string[]
+}): ProjectTransferDependencyResolutionState => {
+  const previous = getPlanDependencyResolution(plan)
+  const providerTargetBySourceId = providerSourceIds.reduce<Record<string, string>>((mapped, sourceId) => {
+    return {...mapped, [sourceId]: getImportedTargetProviderConnectionId(sourceId)}
+  }, previous.providerTargetBySourceId)
+  const modelTargetBySourceId = modelSourceIds.reduce<Record<string, string>>((mapped, sourceId) => {
+    return {...mapped, [sourceId]: getImportedTargetModelId(sourceId)}
+  }, previous.modelTargetBySourceId)
+  const resolvedProviderSourceIds = new Set(providerSourceIds)
+  const resolvedModelSourceIds = new Set(modelSourceIds)
+
+  return {
+    ...previous,
+    modelTargetBySourceId,
+    providerTargetBySourceId,
+    unresolvedModelSourceIds: previous.unresolvedModelSourceIds.filter((sourceId) => {
+      return !resolvedModelSourceIds.has(sourceId)
+    }),
+    unresolvedProviderSourceIds: previous.unresolvedProviderSourceIds.filter((sourceId) => {
+      return !resolvedProviderSourceIds.has(sourceId)
+    }),
+  }
+}
+
+const getFastTargetModelId = ({
+  modelSourceIds,
+  modelTargetBySourceId,
+  targetModelId,
+}: {
+  modelSourceIds: string[]
+  modelTargetBySourceId: Record<string, string>
+  targetModelId: string | null
+}) => {
+  const onlyTargetModelId = modelSourceIds.length === 1 ? modelTargetBySourceId[modelSourceIds[0] ?? ''] : null
+
+  return targetModelId === null ? (onlyTargetModelId ?? null) : (modelTargetBySourceId[targetModelId] ?? targetModelId)
+}
+
+const getFastJudgmentPlan = ({
+  modelSourceIds,
+  modelTargetBySourceId,
+  plan,
+}: {
+  modelSourceIds: string[]
+  modelTargetBySourceId: Record<string, string>
+  plan: ProjectTransferResolvedDependencyPlanArtifact
+}) => {
+  return (plan.targetPlan.judgmentPlan ?? []).map((entry) => {
+    const targetModelId = getFastTargetModelId({
+      modelSourceIds,
+      modelTargetBySourceId,
+      targetModelId: entry.targetModelId,
+    })
+    const conflictCodes = entry.conflictCodes.filter((code) => {
+      return (
+        code !== 'judgment_unique_key_unresolved'
+        || entry.targetArticleId === null
+        || entry.targetPromptId === null
+        || targetModelId === null
+      )
+    })
+    const action =
+      entry.action === 'unknown' && conflictCodes.length === 0 && targetModelId !== null ? 'insert' : entry.action
+    const targetJudgmentId =
+      action === 'insert' && entry.targetJudgmentId === null
+        ? `new:judgment:${entry.sourceJudgmentId}`
+        : entry.targetJudgmentId
+
+    return {...entry, action, conflictCodes, targetJudgmentId, targetModelId}
+  })
+}
+
+const getFastJudgmentAssessmentPlan = ({
+  judgmentPlan,
+  plan,
+}: {
+  judgmentPlan: NonNullable<ProjectTransferResolvedDependencyPlanArtifact['targetPlan']['judgmentPlan']>
+  plan: ProjectTransferResolvedDependencyPlanArtifact
+}) => {
+  const judgmentPlanBySourceId = Object.fromEntries(
+    judgmentPlan.map((entry) => {
+      return [entry.sourceJudgmentId, entry]
+    }),
+  )
+
+  return (plan.targetPlan.judgmentAssessmentPlan ?? []).map((entry) => {
+    const targetJudgmentId = judgmentPlanBySourceId[entry.sourceJudgmentId]?.targetJudgmentId ?? entry.targetJudgmentId
+    const conflictCodes = entry.conflictCodes.filter((code) => {
+      return code !== 'judgment_assessment_unique_key_unresolved' || targetJudgmentId === null
+    })
+    const action = entry.action === 'blocked' && conflictCodes.length === 0 ? 'insert' : entry.action
+
+    return {...entry, action, conflictCodes, targetJudgmentId}
+  })
+}
+
+const getFastTargetPlan = ({
+  dependencyResolution,
+  modelSourceIds,
+  plan,
+}: {
+  dependencyResolution: ProjectTransferDependencyResolutionState
+  modelSourceIds: string[]
+  plan: ProjectTransferResolvedDependencyPlanArtifact
+}) => {
+  const judgmentPlan = getFastJudgmentPlan({
+    modelSourceIds,
+    modelTargetBySourceId: dependencyResolution.modelTargetBySourceId,
+    plan,
+  })
+  const judgmentAssessmentPlan = getFastJudgmentAssessmentPlan({judgmentPlan, plan})
+
+  return {...plan.targetPlan, judgmentAssessmentPlan, judgmentPlan}
+}
+
+const hasCommitUnsafeFidelityPlan = (targetPlan: ProjectTransferResolvedDependencyPlanArtifact['targetPlan']) => {
+  const hasUnsafeJudgment = (targetPlan.judgmentPlan ?? []).some((entry) => {
+    return (
+      entry.conflictCodes.length > 0
+      || (entry.action !== 'insert' && entry.action !== 'reuse')
+      || entry.targetArticleId === null
+      || entry.targetModelId === null
+      || entry.targetPromptId === null
+    )
+  })
+  const hasUnsafeAssessment = (targetPlan.judgmentAssessmentPlan ?? []).some((entry) => {
+    return entry.conflictCodes.length > 0 || (entry.action !== 'insert' && entry.action !== 'reuse')
+  })
+  const hasUnsafeHumanReview = (targetPlan.humanReviewPlan ?? []).some((entry) => {
+    return entry.conflictCodes.length > 0 || entry.action !== 'insert'
+  })
+
+  return hasUnsafeJudgment || hasUnsafeAssessment || hasUnsafeHumanReview
+}
+
+const getFastAutoResolvedDependencyResult = ({
+  nextPlanRevision,
+  plan,
+  request,
+}: {
+  nextPlanRevision: number
+  plan: ProjectTransferResolvedDependencyPlanArtifact
+  request: ProjectTransferDependencyResolutionRequest
+}): ProjectTransferDependencyResolutionResult | null => {
+  if (
+    request.autoResolve !== true
+    || hasExplicitDependencyRequest(request)
+    || !hasOnlyProviderModelDependencies(plan.summary.dependencyStatuses)
+    || !hasNoFidelityConflicts(plan)
+  ) {
+    return null
+  }
+
+  const providerSourceIds = getDependencySourceIds(plan.summary.dependencyStatuses, 'provider')
+  const modelSourceIds = getDependencySourceIds(plan.summary.dependencyStatuses, 'model')
+  const dependencyResolution = getFastAutoResolvedDependencyResolution({modelSourceIds, plan, providerSourceIds})
+  const dependencyStatuses = Object.fromEntries(
+    Object.entries(plan.summary.dependencyStatuses).map(([key, status]) => {
+      return status === 'not_required' ? [key, status] : [key, 'resolved' as const]
+    }),
+  )
+  const targetPlan = getFastTargetPlan({dependencyResolution, modelSourceIds, plan})
+  const judgmentConflictStatus = hasCommitUnsafeFidelityPlan(targetPlan) ? plan.summary.judgmentConflictStatus : 'clear'
+  const planSummary = {...plan.summary, blockerCount: 0, blockers: [], dependencyStatuses, judgmentConflictStatus}
+  const nextPlan = {
+    ...plan,
+    blockers: [],
+    canCommit: getCanCommit(planSummary),
+    dependencyResolution,
+    planRevision: nextPlanRevision,
+    resolutionKinds: {},
+    summary: planSummary,
+    targetPlan,
+  }
+
+  return {changed: true, plan: nextPlan, planSummary, status: 'ok'}
 }
 
 export const revalidateProjectTransferResolvedDependencies = async (
@@ -1355,10 +1594,12 @@ export const revalidateProjectTransferResolvedDependencies = async (
 export const resolveProjectTransferDependencies = async (
   input: ProjectTransferDependencyResolutionInput,
 ): Promise<ProjectTransferDependencyResolutionResult> => {
-  const plan = await readJsonArtifact<ProjectTransferResolvedDependencyPlanArtifact>({
-    ...input,
-    pathValue: input.layout.planPath,
-  })
+  const plan =
+    input.plan
+    ?? (await readJsonArtifact<ProjectTransferResolvedDependencyPlanArtifact>({
+      ...input,
+      pathValue: input.layout.planPath,
+    }))
 
   if (plan === null) {
     return {error: 'Project transfer import plan artifact is unavailable', status: 'error', statusCode: 409}
@@ -1366,6 +1607,20 @@ export const resolveProjectTransferDependencies = async (
 
   if (input.request.planRevision !== plan.planRevision) {
     return {error: 'Project transfer dependency request planRevision is stale', status: 'error', statusCode: 409}
+  }
+
+  const fastAutoResolvedResult = getFastAutoResolvedDependencyResult({
+    nextPlanRevision: input.nextPlanRevision,
+    plan,
+    request: input.request,
+  })
+
+  if (fastAutoResolvedResult !== null) {
+    if (fastAutoResolvedResult.status === 'ok' && fastAutoResolvedResult.changed && input.deferPlanWrite !== true) {
+      await writeProjectTransferDependencyPlan({...input, plan: fastAutoResolvedResult.plan})
+    }
+
+    return fastAutoResolvedResult
   }
 
   const runRevalidation = (

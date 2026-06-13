@@ -530,6 +530,162 @@ test('project transfer recovery fails stale import analysis workers before expir
   ])
 })
 
+test('project transfer recovery publishes stale import analysis when completed artifacts exist', () => {
+  const result = runRecoveryScript<{
+    planExistsAfterRecovery: boolean
+    recoveryResult: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}
+    row: {
+      fileName: string | null
+      ownerToken: string | null
+      planRevision: number
+      state: string
+      stagingRevision: number | null
+      warningCount: number | null
+    }
+  }>(`
+    const sessionId = 'import-analysis-artifacts-stale'
+    const layout = getProjectTransferImportTempLayout(sessionId)
+    const summary = {
+      blockerCount: 0,
+      blockers: [],
+      conflictCounts: {},
+      dependencyStatuses: {'provider:source-provider': 'missing'},
+      overlapCounts: {},
+      packageCounts: {project: 1},
+      packageFingerprint: 'fingerprint-artifacts',
+      packageWarnings: [{message: 'warning'}],
+      warningCount: 1,
+    }
+    const plan = {
+      blockers: [],
+      canCommit: false,
+      packageCounts: {project: 1},
+      packageFingerprint: 'fingerprint-artifacts',
+      packageWarnings: [{message: 'warning'}],
+      planRevision: 1,
+      resolutionKinds: {},
+      stagingRevision: 1,
+      summary,
+      targetPlan: {},
+    }
+    const analysis = {
+      analyzedAt: '2026-05-21T11:01:00.000Z',
+      archive: {
+        expandedBytes: 10,
+        memberCount: 1,
+        packageChecksumSha256: 'checksum',
+        packageSizeBytes: 10,
+      },
+      assetSummary: {
+        actualByteLength: 0,
+        actualEntryCount: 0,
+        manifestByteLength: 0,
+        manifestEntryCount: 0,
+      },
+      computedPackageFingerprint: 'fingerprint-artifacts',
+      manifest: {},
+      packageCounts: {project: 1},
+      packageFingerprint: 'fingerprint-artifacts',
+      packageWarnings: [{message: 'warning'}],
+      payloads: {},
+      planRevision: 1,
+      stagedPackage: {
+        archiveAssetBytes: 0,
+        archiveEntryByteCounts: {},
+        archiveEntryChecksums: {},
+        canonicalPayloadByteCounts: {},
+        canonicalPayloadChecksums: {},
+        declaredAssetBytes: 0,
+        logicalPayloadDigests: {},
+        packageFingerprintInputs: {
+          checksumSha256: 'fingerprint-artifacts',
+          fingerprintMode: 'stagedRowAndSingletonPayloadDigests',
+          payloadDigests: {},
+          schemaVersion: 2,
+        },
+        payloads: {},
+        rowCounts: {project: 1},
+        sourceProject: {
+          exportedAt: '2026-05-21T10:00:00.000Z',
+          humanJudgmentMode: 'summary',
+          name: 'Source Project',
+          schemaVersion: 2,
+          sourceAppVersion: 'test',
+          sourceProjectId: 'source-project',
+        },
+      },
+      stagingRevision: 1,
+    }
+
+    await sessionRepository.createProjectTransferSession({
+      direction: 'import',
+      expiresAt: futureAt,
+      id: sessionId,
+      state: 'queued',
+    })
+    await sessionRepository.transitionProjectTransferSessionState({
+      expectedOwnerToken: null,
+      expectedState: 'queued',
+      nextOwnerLeaseMs: 60_000,
+      nextOwnerToken: 'analysis-owner-artifacts',
+      nextState: 'extracting',
+      now: new Date('2026-05-21T11:00:00.000Z'),
+      progress: {
+        phase: 'package_scan',
+        status: 'running',
+        uploadMetadata: {byteLength: 10, checksumSha256: 'checksum', fileName: 'package.zip'},
+      },
+      sessionId,
+    })
+    await sessionRepository.transitionProjectTransferSessionState({
+      expectedOwnerToken: 'analysis-owner-artifacts',
+      expectedState: 'extracting',
+      nextOwnerLeaseMs: 60_000,
+      nextOwnerToken: 'analysis-owner-artifacts',
+      nextState: 'analyzing',
+      now: new Date('2026-05-21T11:00:01.000Z'),
+      progress: {
+        phase: 'analyze',
+        status: 'running',
+        uploadMetadata: {byteLength: 10, checksumSha256: 'checksum', fileName: 'package.zip'},
+      },
+      sessionId,
+    })
+    await writeRuntimeFile(layout.analysisPath, JSON.stringify(analysis))
+    await writeRuntimeFile(layout.planPath, JSON.stringify(plan))
+
+    const recoveryResult = await recovery.runProjectTransferStartupRecovery({
+      batchSize: 10,
+      cwd: runtimeRoot,
+      importAnalyzeHeartbeatStaleMs: 60_000,
+      isActiveWriter: () => true,
+      now,
+      ownerToken: 'recovery-owner',
+    })
+    const [row] = await database.queryJson(
+      "SELECT state, owner_token AS ownerToken, CAST(plan_revision AS INTEGER) AS planRevision, CAST(json_extract(progress_json, '$.stagingRevision') AS INTEGER) AS stagingRevision, CAST(json_extract(progress_json, '$.warningCount') AS INTEGER) AS warningCount, json_extract_string(progress_json, '$.uploadMetadata.fileName') AS fileName FROM app.project_transfer_session WHERE id = '" + sessionId + "'"
+    )
+
+    console.log(JSON.stringify({
+      planExistsAfterRecovery: await fileExists(layout.planPath),
+      recoveryResult,
+      row,
+    }))
+  `)
+
+  expect(result.recoveryResult.scannedSessionCount).toBe(1)
+  expect(result.recoveryResult.cleanupTempArtifactCount).toBe(0)
+  expect(result.planExistsAfterRecovery).toBe(true)
+  expect(result.row).toMatchObject({
+    fileName: 'package.zip',
+    ownerToken: null,
+    planRevision: 1,
+    state: 'awaiting_resolution',
+    stagingRevision: 1,
+    warningCount: 1,
+  })
+})
+
 test('project transfer recovery fails abandoned import upload claims before expiry', () => {
   const result = runRecoveryScript<{
     recoveryResult: {cleanupTempArtifactCount: number; expiredSessionCount: number; scannedSessionCount: number}

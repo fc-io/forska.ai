@@ -641,6 +641,64 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
   }
 })
 
+test('auto-resolves provider and model dependencies during analyze when enabled', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const progressEvents: {phase: string; status: string}[] = []
+    const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({cwd, useZipModule: false})
+    const result = await analyzeProjectTransferImportPackage({
+      autoResolveDependencies: true,
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      dependencyResolutionRepositories: {
+        listProviderConnections: async () => {
+          return []
+        },
+      },
+      layout,
+      onProgress: (progress) => {
+        progressEvents.push({phase: progress.phase, status: progress.status})
+      },
+      planRevision: 1,
+      runner: getEmptyAnalyzeTargetRunner(),
+      uploadMetadata,
+      zipModule,
+    })
+    const planPath = join(cwd, layout.planPath)
+    const planArtifact = JSON.parse(await readFile(planPath, 'utf8')) as {
+      canCommit: boolean
+      dependencyResolution: {
+        modelTargetBySourceId: Record<string, string>
+        providerTargetBySourceId: Record<string, string>
+      }
+      planRevision: number
+      summary: {dependencyStatuses: Record<string, string>; judgmentConflictStatus: string}
+    }
+
+    expect(result.planSummary.dependencyStatuses).toEqual({
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
+    })
+    expect(result.planSummary.judgmentConflictStatus).toBe('clear')
+    expect(result.plan.planRevision).toBe(1)
+    expect(result.plan.dependencyResolution?.providerTargetBySourceId).toEqual({
+      'provider-connection-1': 'new:provider:provider-connection-1',
+    })
+    expect(result.plan.dependencyResolution?.modelTargetBySourceId).toEqual({'model-1': 'new:model:model-1'})
+    expect(planArtifact.planRevision).toBe(1)
+    expect(planArtifact.canCommit).toBe(true)
+    expect(planArtifact.dependencyResolution.providerTargetBySourceId).toEqual({
+      'provider-connection-1': 'new:provider:provider-connection-1',
+    })
+    expect(planArtifact.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': 'new:model:model-1'})
+    expect(progressEvents).toContainEqual({phase: 'dependency_resolution', status: 'running'})
+    expect(progressEvents).toContainEqual({phase: 'dependency_resolution', status: 'completed'})
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('rejects schema-1 project-transfer packages after schema-vNext cutover', async () => {
   const cwd = getRuntimeRoot()
 
@@ -1048,6 +1106,34 @@ test('records streamed NDJSON row validation failures as package-contract blocke
     expect(result.analysis.stagedPackage?.payloads.articles?.invalidRecordCount).toBe(1)
     expect(result.analysis.stagedPackage?.rowCounts.articles).toBe(0)
     expect(extractedArticlesText).toBe('')
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('normalizes schema-vNext NDJSON payloads to legacy JSON artifacts for downstream consumers', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({cwd})
+
+    await analyzeProjectTransferImportPackage({
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      layout,
+      planRevision: 9,
+      runner: getEmptyAnalyzeTargetRunner(),
+      uploadMetadata,
+      zipModule,
+    })
+
+    const legacyProjectPromptsText = await readFile(
+      join(cwd, layout.extractedPath, projectTransferPayloadPathByKey.projectPrompts),
+      'utf8',
+    )
+    const parsedLegacyProjectPrompts = JSON.parse(legacyProjectPromptsText) as unknown
+
+    expect(Array.isArray(parsedLegacyProjectPrompts)).toBe(true)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

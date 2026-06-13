@@ -258,47 +258,53 @@ const getProjectTargetId = (payloads: Partial<ProjectTransferPayloadByKey>) => {
 }
 
 const getArticleTargetIdBySource = (targetPlan: ProjectTransferTargetPlan) => {
-  return targetPlan.articleMatches.reduce<Record<string, string | null>>((mapped, match) => {
-    const createdTargetId = match.action === 'create' ? `new:article:${match.sourceArticleId}` : null
-    const targetArticleId = match.selectedTargetArticleId ?? createdTargetId
+  return Object.fromEntries(
+    targetPlan.articleMatches.map((match) => {
+      const createdTargetId = match.action === 'create' ? `new:article:${match.sourceArticleId}` : null
+      const targetArticleId = match.selectedTargetArticleId ?? createdTargetId
 
-    return {...mapped, [match.sourceArticleId]: targetArticleId}
-  }, {})
+      return [match.sourceArticleId, targetArticleId]
+    }),
+  ) as Record<string, string | null>
 }
 
 const getPromptTargetIdBySource = (targetPlan: ProjectTransferTargetPlan) => {
-  return targetPlan.promptPlan.reduce<Record<string, string | null>>((mapped, prompt) => {
-    const createdTargetId = prompt.action === 'create' ? `new:prompt:${prompt.computedContentHash}` : null
-    const targetPromptId = prompt.targetPromptId ?? createdTargetId
+  return Object.fromEntries(
+    targetPlan.promptPlan.map((prompt) => {
+      const createdTargetId = prompt.action === 'create' ? `new:prompt:${prompt.computedContentHash}` : null
+      const targetPromptId = prompt.targetPromptId ?? createdTargetId
 
-    return {...mapped, [prompt.sourcePromptId]: targetPromptId}
-  }, {})
+      return [prompt.sourcePromptId, targetPromptId]
+    }),
+  ) as Record<string, string | null>
 }
 
 const getProjectPromptPlanBySourcePrompt = (targetPlan: ProjectTransferTargetPlan) => {
-  return targetPlan.projectPromptPlan.reduce<Record<string, ProjectTransferTargetPlan['projectPromptPlan'][number]>>(
-    (mapped, prompt) => {
-      return mapped[prompt.sourcePromptId] ? mapped : {...mapped, [prompt.sourcePromptId]: prompt}
-    },
-    {},
-  )
+  const mapped = targetPlan.projectPromptPlan.reduce<
+    Map<string, ProjectTransferTargetPlan['projectPromptPlan'][number]>
+  >((mapped, prompt) => {
+    return mapped.has(prompt.sourcePromptId) ? mapped : mapped.set(prompt.sourcePromptId, prompt)
+  }, new Map())
+
+  return Object.fromEntries(mapped) as Record<string, ProjectTransferTargetPlan['projectPromptPlan'][number]>
 }
 
 const getPromptPlanBySource = (targetPlan: ProjectTransferTargetPlan) => {
-  return targetPlan.promptPlan.reduce<Record<string, ProjectTransferTargetPlan['promptPlan'][number]>>(
-    (mapped, prompt) => {
-      return {...mapped, [prompt.sourcePromptId]: prompt}
-    },
-    {},
-  )
+  return Object.fromEntries(
+    targetPlan.promptPlan.map((prompt) => {
+      return [prompt.sourcePromptId, prompt]
+    }),
+  ) as Record<string, ProjectTransferTargetPlan['promptPlan'][number]>
 }
 
 const getRowsBySourceId = (rows: readonly ProjectTransferPayloadRecord[], field: string) => {
-  return rows.reduce<Record<string, ProjectTransferPayloadRecord>>((mapped, row) => {
-    const sourceId = getStringField(row, field)
+  return Object.fromEntries(
+    rows.flatMap((row) => {
+      const sourceId = getStringField(row, field)
 
-    return sourceId ? {...mapped, [sourceId]: row} : mapped
-  }, {})
+      return sourceId ? [[sourceId, row]] : []
+    }),
+  ) as Record<string, ProjectTransferPayloadRecord>
 }
 
 const getArticleInputBySource = ({
@@ -309,27 +315,29 @@ const getArticleInputBySource = ({
   targetPlan: ProjectTransferTargetPlan
 }) => {
   const sourceArticlesById = getRowsBySourceId(payloads.articles ?? [], 'sourceArticleId')
-  const updatesBySource = targetPlan.articleUpdatePlan.reduce<
-    Record<string, ProjectTransferTargetPlan['articleUpdatePlan'][number]>
-  >((mapped, update) => {
-    return {...mapped, [update.sourceArticleId]: update}
-  }, {})
+  const updatesBySource = Object.fromEntries(
+    targetPlan.articleUpdatePlan.map((update) => {
+      return [update.sourceArticleId, update]
+    }),
+  ) as Record<string, ProjectTransferTargetPlan['articleUpdatePlan'][number]>
 
-  return targetPlan.articleMatches.reduce<Record<string, ExportArticleInput>>((mapped, match) => {
-    const sourceArticle = sourceArticlesById[match.sourceArticleId]
-    const baseArticle = sourceArticle ?? null
-    const update = updatesBySource[match.sourceArticleId] ?? null
-    const filledArticle = update
-      ? update.fieldFills.reduce<Record<string, unknown>>(
-          (article, fill) => {
-            return {...article, [fill.field]: fill.value}
-          },
-          {...(baseArticle ?? {})},
-        )
-      : baseArticle
+  return Object.fromEntries(
+    targetPlan.articleMatches.flatMap((match) => {
+      const sourceArticle = sourceArticlesById[match.sourceArticleId]
+      const baseArticle = sourceArticle ?? null
+      const update = updatesBySource[match.sourceArticleId] ?? null
+      const filledArticle = update
+        ? update.fieldFills.reduce<Record<string, unknown>>(
+            (article, fill) => {
+              return {...article, [fill.field]: fill.value}
+            },
+            {...(baseArticle ?? {})},
+          )
+        : baseArticle
 
-    return filledArticle ? {...mapped, [match.sourceArticleId]: filledArticle as ExportArticleInput} : mapped
-  }, {})
+      return filledArticle ? [[match.sourceArticleId, filledArticle as ExportArticleInput]] : []
+    }),
+  ) as Record<string, ExportArticleInput>
 }
 
 const getPromptInputBySource = ({
@@ -343,102 +351,110 @@ const getPromptInputBySource = ({
   const projectPromptBySource = getProjectPromptPlanBySourcePrompt(targetPlan)
   const promptPlanBySource = getPromptPlanBySource(targetPlan)
 
-  return (payloads.prompts ?? []).reduce<Record<string, ExportPromptInput>>((mapped, prompt) => {
-    const sourcePromptId = getStringField(prompt, 'sourcePromptId')
-    const projectPrompt = projectPromptBySource[sourcePromptId] ?? null
-    const promptPlan = promptPlanBySource[sourcePromptId] ?? null
-    const sourcePrompt = promptsBySource[sourcePromptId] ?? prompt
+  return Object.fromEntries(
+    (payloads.prompts ?? []).map((prompt) => {
+      const sourcePromptId = getStringField(prompt, 'sourcePromptId')
+      const projectPrompt = projectPromptBySource[sourcePromptId] ?? null
+      const promptPlan = promptPlanBySource[sourcePromptId] ?? null
+      const sourcePrompt = promptsBySource[sourcePromptId] ?? prompt
 
-    return {
-      ...mapped,
-      [sourcePromptId]: {
-        contentHash: promptPlan?.computedContentHash ?? getNullableStringField(sourcePrompt, 'contentHash'),
-        order: projectPrompt?.order ?? null,
-        originalText: getStringField(sourcePrompt, 'originalText'),
-        promptHeading: getNullableStringField(sourcePrompt, 'promptHeading'),
-        transformedText: getNullableStringField(sourcePrompt, 'transformedText'),
-        type: getNullableStringField(sourcePrompt, 'type'),
-      } as ExportPromptInput,
-    }
-  }, {})
+      return [
+        sourcePromptId,
+        {
+          contentHash: promptPlan?.computedContentHash ?? getNullableStringField(sourcePrompt, 'contentHash'),
+          order: projectPrompt?.order ?? null,
+          originalText: getStringField(sourcePrompt, 'originalText'),
+          promptHeading: getNullableStringField(sourcePrompt, 'promptHeading'),
+          transformedText: getNullableStringField(sourcePrompt, 'transformedText'),
+          type: getNullableStringField(sourcePrompt, 'type'),
+        } as ExportPromptInput,
+      ]
+    }),
+  ) as Record<string, ExportPromptInput>
 }
 
 const getSourceProviderInputById = (payloads: Partial<ProjectTransferPayloadByKey>) => {
-  return (payloads.providerConnections ?? []).reduce<Record<string, ExportProviderConnectionInput>>((mapped, row) => {
-    const sourceProviderConnectionId = getStringField(row, 'sourceProviderConnectionId')
+  return Object.fromEntries(
+    (payloads.providerConnections ?? []).map((row) => {
+      const sourceProviderConnectionId = getStringField(row, 'sourceProviderConnectionId')
 
-    return {
-      ...mapped,
-      [sourceProviderConnectionId]: {
-        authMode: getNullableStringField(row, 'authMode'),
-        baseURL: getNullableStringField(row, 'baseURL'),
-        configJson: getRecordField(row, 'configJson'),
-        providerConnectionId: sourceProviderConnectionId,
-        providerKind: getStringField(row, 'providerKind'),
-      } as ExportProviderConnectionInput,
-    }
-  }, {})
+      return [
+        sourceProviderConnectionId,
+        {
+          authMode: getNullableStringField(row, 'authMode'),
+          baseURL: getNullableStringField(row, 'baseURL'),
+          configJson: getRecordField(row, 'configJson'),
+          providerConnectionId: sourceProviderConnectionId,
+          providerKind: getStringField(row, 'providerKind'),
+        } as ExportProviderConnectionInput,
+      ]
+    }),
+  ) as Record<string, ExportProviderConnectionInput>
 }
 
 const getSourceModelInputById = (payloads: Partial<ProjectTransferPayloadByKey>) => {
-  return (payloads.models ?? []).reduce<Record<string, ExportModelInput>>((mapped, row) => {
-    const sourceModelId = getStringField(row, 'sourceModelId')
+  return Object.fromEntries(
+    (payloads.models ?? []).map((row) => {
+      const sourceModelId = getStringField(row, 'sourceModelId')
 
-    return {
-      ...mapped,
-      [sourceModelId]: {
-        displayName: getNullableStringField(row, 'displayName'),
-        metadataJson: getRecordField(row, 'metadataJson'),
-        modelId: sourceModelId,
-        modelName: getStringField(row, 'modelName'),
-        name: getStringField(row, 'name'),
-        providerConnectionId: getStringField(row, 'sourceProviderConnectionId'),
-        remoteModelId: getNullableStringField(row, 'remoteModelId'),
-        source: getNullableStringField(row, 'source'),
-        variant: getNullableStringField(row, 'variant'),
-        version: getNullableStringField(row, 'version'),
-      } as ExportModelInput,
-    }
-  }, {})
+      return [
+        sourceModelId,
+        {
+          displayName: getNullableStringField(row, 'displayName'),
+          metadataJson: getRecordField(row, 'metadataJson'),
+          modelId: sourceModelId,
+          modelName: getStringField(row, 'modelName'),
+          name: getStringField(row, 'name'),
+          providerConnectionId: getStringField(row, 'sourceProviderConnectionId'),
+          remoteModelId: getNullableStringField(row, 'remoteModelId'),
+          source: getNullableStringField(row, 'source'),
+          variant: getNullableStringField(row, 'variant'),
+          version: getNullableStringField(row, 'version'),
+        } as ExportModelInput,
+      ]
+    }),
+  ) as Record<string, ExportModelInput>
 }
 
 const getTargetProviderInputById = (targetConnections: readonly ProviderConnectionForAdmin[] = []) => {
-  return targetConnections.reduce<Record<string, ExportProviderConnectionInput>>((mapped, connection) => {
-    return {
-      ...mapped,
-      [connection.id]: {
-        authMode: connection.authMode,
-        baseURL: connection.baseURL,
-        configJson: connection.config,
-        providerConnectionId: connection.id,
-        providerKind: connection.providerKind,
-      } as ExportProviderConnectionInput,
-    }
-  }, {})
+  return Object.fromEntries(
+    targetConnections.map((connection) => {
+      return [
+        connection.id,
+        {
+          authMode: connection.authMode,
+          baseURL: connection.baseURL,
+          configJson: connection.config,
+          providerConnectionId: connection.id,
+          providerKind: connection.providerKind,
+        } as ExportProviderConnectionInput,
+      ]
+    }),
+  ) as Record<string, ExportProviderConnectionInput>
 }
 
 const getTargetModelInputById = (targetConnections: readonly ProviderConnectionForAdmin[] = []) => {
-  return targetConnections
-    .flatMap((connection) => {
-      return connection.models
-    })
-    .reduce<Record<string, ExportModelInput>>((mapped, model: ProviderModelRecord) => {
-      return {
-        ...mapped,
-        [model.id]: {
-          displayName: model.displayName,
-          metadataJson: model.metadataJson,
-          modelId: model.id,
-          modelName: model.modelName,
-          name: model.name,
-          providerConnectionId: model.providerConnectionId,
-          remoteModelId: model.remoteModelId,
-          source: model.source,
-          variant: model.variant,
-          version: model.version,
-        } as ExportModelInput,
-      }
-    }, {})
+  return Object.fromEntries(
+    targetConnections.flatMap((connection) => {
+      return connection.models.map((model: ProviderModelRecord) => {
+        return [
+          model.id,
+          {
+            displayName: model.displayName,
+            metadataJson: model.metadataJson,
+            modelId: model.id,
+            modelName: model.modelName,
+            name: model.name,
+            providerConnectionId: model.providerConnectionId,
+            remoteModelId: model.remoteModelId,
+            source: model.source,
+            variant: model.variant,
+            version: model.version,
+          } as ExportModelInput,
+        ]
+      })
+    }),
+  ) as Record<string, ExportModelInput>
 }
 
 const getModelTargetIdBySource = ({
@@ -450,12 +466,14 @@ const getModelTargetIdBySource = ({
 }) => {
   const sourceModelInputById = getSourceModelInputById(payloads)
 
-  return (payloads.models ?? []).reduce<Record<string, string | null>>((mapped, model) => {
-    const sourceModelId = getStringField(model, 'sourceModelId')
-    const targetModelId = dependencyResolution?.modelTargetBySourceId[sourceModelId] ?? null
+  return Object.fromEntries(
+    (payloads.models ?? []).map((model) => {
+      const sourceModelId = getStringField(model, 'sourceModelId')
+      const targetModelId = dependencyResolution?.modelTargetBySourceId[sourceModelId] ?? null
 
-    return {...mapped, [sourceModelId]: targetModelId ?? (sourceModelInputById[sourceModelId] ? sourceModelId : null)}
-  }, {})
+      return [sourceModelId, targetModelId ?? (sourceModelInputById[sourceModelId] ? sourceModelId : null)]
+    }),
+  ) as Record<string, string | null>
 }
 
 const getContentSettings = (judgment: ProjectTransferPayloadRecord): ProjectTransferContentSettings => {
@@ -893,17 +911,16 @@ const getJudgmentModelRows = ({
       ? {...mapped, [sourceModelId]: (targetModel ?? sourceModel) as ExportModelInput}
       : mapped
   }, {})
-  const providerInputById = Object.values(modelInputById).reduce<Record<string, ExportProviderConnectionInput>>(
-    (mapped, model) => {
+  const providerInputById = Object.fromEntries(
+    Object.values(modelInputById).flatMap((model) => {
       const targetProvider = targetProviderInputById[model.providerConnectionId] ?? null
       const sourceProvider = sourceProviderInputById[model.providerConnectionId] ?? null
 
       return (targetProvider ?? sourceProvider)
-        ? {...mapped, [model.providerConnectionId]: (targetProvider ?? sourceProvider) as ExportProviderConnectionInput}
-        : mapped
-    },
-    {},
-  )
+        ? [[model.providerConnectionId, (targetProvider ?? sourceProvider) as ExportProviderConnectionInput]]
+        : []
+    }),
+  ) as Record<string, ExportProviderConnectionInput>
 
   return {modelInputById, providerInputById}
 }
@@ -934,14 +951,22 @@ const getJudgmentPlan = async ({
     return {targetArticleId, targetModelId, targetPromptId}
   })
   const targetJudgments = await getTargetJudgmentRows({keys: judgmentKeys, runner: input.runner})
-  const targetJudgmentByPhysicalKey = targetJudgments.reduce<Record<string, TargetJudgmentRow>>((mapped, row) => {
-    return {...mapped, [getTargetJudgmentPhysicalKey(row)]: row}
-  }, {})
+  const targetJudgmentByPhysicalKey = Object.fromEntries(
+    targetJudgments.map((row) => {
+      return [getTargetJudgmentPhysicalKey(row), row]
+    }),
+  ) as Record<string, TargetJudgmentRow>
   const targetJudgmentsByVisibleKey = targetJudgments.reduce<Record<string, TargetJudgmentRow[]>>((mapped, row) => {
     const key = getTargetJudgmentReviewVisibleKey(row)
-    const existing = mapped[key] ?? []
+    const existing = mapped[key]
 
-    return {...mapped, [key]: [...existing, row]}
+    if (existing === undefined) {
+      mapped[key] = [row]
+      return mapped
+    }
+
+    existing.push(row)
+    return mapped
   }, {})
   const duplicatePhysicalKeyBlockers = getDuplicateKeyBlockers({
     code: 'judgment_package_duplicate_physical_key',
@@ -1040,12 +1065,11 @@ const getAssessmentPlan = async ({
   input: ProjectTransferFidelityValidationInput
   judgmentPlan: ProjectTransferJudgmentPlanEntry[]
 }) => {
-  const judgmentPlanBySource = judgmentPlan.reduce<Record<string, ProjectTransferJudgmentPlanEntry>>(
-    (mapped, entry) => {
-      return {...mapped, [entry.sourceJudgmentId]: entry}
-    },
-    {},
-  )
+  const judgmentPlanBySource = Object.fromEntries(
+    judgmentPlan.map((entry) => {
+      return [entry.sourceJudgmentId, entry]
+    }),
+  ) as Record<string, ProjectTransferJudgmentPlanEntry>
   const targetAssessments = await getTargetJudgmentAssessmentRows({
     runner: input.runner,
     targetJudgmentIds: judgmentPlan
@@ -1056,12 +1080,11 @@ const getAssessmentPlan = async ({
         return targetJudgmentId !== null
       }),
   })
-  const targetAssessmentByJudgmentId = targetAssessments.reduce<Record<string, TargetJudgmentAssessmentRow>>(
-    (mapped, assessment) => {
-      return {...mapped, [assessment.targetJudgmentId]: assessment}
-    },
-    {},
-  )
+  const targetAssessmentByJudgmentId = Object.fromEntries(
+    targetAssessments.map((assessment) => {
+      return [assessment.targetJudgmentId, assessment]
+    }),
+  ) as Record<string, TargetJudgmentAssessmentRow>
   const duplicateAssessmentBlockers = getDuplicateKeyBlockers({
     code: 'judgment_assessment_package_duplicate_key',
     entries: input.payloads.judgmentAssessments ?? [],

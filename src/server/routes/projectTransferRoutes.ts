@@ -566,6 +566,7 @@ const getImportSessionResponseFromRecord = async (
   set: RouteSet,
   record: Awaited<ReturnType<ReturnType<typeof getProjectTransferSessionRepository>['getProjectTransferSession']>>,
   executionMode?: ProjectTransferExecutionMode,
+  includePlan = false,
 ): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData> | null> => {
   if (record === null) {
     return null
@@ -583,7 +584,7 @@ const getImportSessionResponseFromRecord = async (
     return getProjectTransferApiError(set, sessionError.status, sessionError.error)
   }
 
-  const plan = await readImportPlanArtifact(response)
+  const plan = includePlan ? await readImportPlanArtifact(response) : null
 
   return {data: getImportSessionData(response, plan, executionMode), error: null}
 }
@@ -640,69 +641,6 @@ const failImportSessionForUnavailableArtifacts = async ({
     (await getImportSessionResponseFromRecord(set, failed))
     ?? getProjectTransferApiError(set, 500, 'Import session unavailable')
   )
-}
-
-const hasOnlyReadyDependencyStatuses = (planSummary: ProjectTransferPlanSummary | null) => {
-  return Object.values(planSummary?.dependencyStatuses ?? {}).every((status) => {
-    return status === 'resolved' || status === 'not_required'
-  })
-}
-
-const getAutoResolvedImportSessionRecord = async (
-  record: Awaited<ReturnType<ReturnType<typeof getProjectTransferSessionRepository>['getProjectTransferSession']>>,
-) => {
-  if (record === null) {
-    return null
-  }
-
-  const response = toProjectTransferSessionResponse(record)
-
-  if (
-    response.direction !== 'import'
-    || (response.state !== 'awaiting_resolution' && response.state !== 'ready_to_commit')
-    || hasOnlyReadyDependencyStatuses(response.planSummary)
-  ) {
-    return record
-  }
-
-  const layout = getProjectTransferCurrentImportStagingLayout({
-    layout: getProjectTransferImportTempLayout(record.id),
-    progress: response.progress,
-  })
-  const plan = await readImportPlanArtifact(response)
-  const planValidation = validateCurrentImportPlanArtifact(response, plan)
-
-  if (!planValidation.ok) {
-    return record
-  }
-
-  const result = await resolveProjectTransferDependencies({
-    deferPlanWrite: true,
-    layout,
-    nextPlanRevision: record.planRevision + 1,
-    request: {autoResolve: true, planRevision: record.planRevision},
-  })
-
-  if (result.status === 'error' || !result.changed) {
-    return record
-  }
-
-  const updated = await getProjectTransferSessionRepository().updateProjectTransferSessionPlanRevision({
-    expectedPlanRevision: record.planRevision,
-    expectedStagingRevision: getProjectTransferProgressStagingRevision(response.progress),
-    nextState: getImportAnalyzeNextState(result.planSummary),
-    now: new Date(),
-    planSummary: result.planSummary,
-    sessionId: record.id,
-  })
-
-  if (updated === null) {
-    return record
-  }
-
-  await writeProjectTransferDependencyPlan({layout, plan: result.plan})
-
-  return updated
 }
 
 const getUploadFileName = (request: Request) => {
@@ -1152,6 +1090,7 @@ const runProjectTransferImportAnalyzeJob = async ({ownerToken, sessionId}: {owne
   const analysis = await runProjectTransferImportWorkerHeartbeat({
     operation: () => {
       return analyzeProjectTransferImportPackage({
+        autoResolveDependencies: true,
         layout: getProjectTransferImportTempLayout(sessionId),
         onProgress: (progress) => {
           return updateImportWorkerProgress({ownerToken, progress, sessionId})
@@ -1171,6 +1110,7 @@ const runProjectTransferImportAnalyzeJob = async ({ownerToken, sessionId}: {owne
     staging: analysis.staging,
     upload,
   })
+
   const nextState = getImportAnalyzeNextState(analysis.planSummary)
   const planned = await repository.updateProjectTransferSessionPlanRevision({
     expectedOwnerToken: ownerToken,
@@ -1452,6 +1392,7 @@ const createImportSession = async (
 const getImportSession = async (
   set: RouteSet,
   sessionId: string,
+  includePlan = false,
 ): Promise<ProjectTransferApiResponse<ProjectTransferImportSessionData>> => {
   const record = await getProjectTransferSessionRepository().getProjectTransferSession({sessionId})
 
@@ -1469,16 +1410,17 @@ const getImportSession = async (
       return failImportSessionForUnavailableArtifacts({record, set})
     }
 
-    const plan = await readImportPlanArtifact(response)
-    const planValidation = validateCurrentImportPlanArtifact(response, plan)
+    if (includePlan) {
+      const plan = await readImportPlanArtifact(response)
+      const planValidation = validateCurrentImportPlanArtifact(response, plan)
 
-    if (!planValidation.ok) {
-      return failImportSessionForUnavailableArtifacts({record, set})
+      if (!planValidation.ok) {
+        return failImportSessionForUnavailableArtifacts({record, set})
+      }
     }
   }
 
-  const resolvedRecord = await getAutoResolvedImportSessionRecord(record)
-  const response = await getImportSessionResponseFromRecord(set, resolvedRecord)
+  const response = await getImportSessionResponseFromRecord(set, record, undefined, includePlan)
 
   return response === null
     ? getProjectTransferApiError(set, 404, 'Project transfer import session not found')
@@ -1750,6 +1692,7 @@ const resolveImportDependencies = async (
       deferPlanWrite: true,
       layout,
       nextPlanRevision: response.data.planRevision + 1,
+      plan,
       request: request.value,
     })
   })
@@ -2176,8 +2119,8 @@ export const projectTransferRoutes = new Elysia()
   )
   .get(
     '/api/projects/import/:sessionId',
-    ({params, set}) => {
-      return getImportSession(set, params.sessionId)
+    ({params, query, set}) => {
+      return getImportSession(set, params.sessionId, query.includePlan === 'true')
     },
     {params: importSessionParamSchema},
   )

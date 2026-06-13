@@ -105,7 +105,48 @@ const getBackgroundExportResult = () => {
   }
 }
 
+const getDefaultAnalyzeResult = (planRevision: number) => {
+  const planSummary = {
+    blockerCount: 1,
+    blockers: [
+      {
+        code: 'package_contract_blocker',
+        message: 'Package contract requires a new package or target changes',
+        resolutionKind: 'requires_new_package_or_target_changes',
+        scope: 'manifest',
+      },
+    ],
+    conflictCounts: getFinalConflictCounts(1),
+    dependencyStatuses: {},
+    overlapCounts: getFinalOverlapCounts(),
+    packageCounts: {
+      articleImportRoutes: 0,
+      articles: 1,
+      assetManifest: 0,
+      humanJudgmentSummaries: 0,
+      humanJudgments: 0,
+      importRoutes: 0,
+      judgmentAssessments: 0,
+      judgments: 0,
+      models: 1,
+      project: 1,
+      projectArticles: 0,
+      projectImportRoutes: 0,
+      projectPrompts: 0,
+      prompts: 0,
+      providerConnections: 0,
+      reviews: 0,
+    },
+    packageFingerprint: 'analyzed-fingerprint',
+    packageWarnings: [],
+    warningCount: 0,
+  }
+
+  return {analysis: {}, packageFingerprint: 'analyzed-fingerprint', plan: {canCommit: false, planRevision}, planSummary}
+}
+
 const routeState: {
+  analyzeResult: unknown
   commitResult: unknown
   exportResult: unknown
   exportSummary: unknown
@@ -114,6 +155,7 @@ const routeState: {
   resolveResult: unknown
   sessions: Record<string, ProjectTransferSessionRecord | null>
 } = {
+  analyzeResult: null,
   commitResult: null,
   exportResult: getInlineExportResult(),
   exportSummary: {
@@ -156,48 +198,7 @@ const getProjectTransferExportSummaryMock = mock(async (_projectId: string) => {
 })
 
 const analyzeProjectTransferImportPackageMock = mock(async (input: {planRevision: number}) => {
-  const planSummary = {
-    blockerCount: 1,
-    blockers: [
-      {
-        code: 'package_contract_blocker',
-        message: 'Package contract requires a new package or target changes',
-        resolutionKind: 'requires_new_package_or_target_changes',
-        scope: 'manifest',
-      },
-    ],
-    conflictCounts: getFinalConflictCounts(1),
-    dependencyStatuses: {},
-    overlapCounts: getFinalOverlapCounts(),
-    packageCounts: {
-      articleImportRoutes: 0,
-      articles: 1,
-      assetManifest: 0,
-      humanJudgmentSummaries: 0,
-      humanJudgments: 0,
-      importRoutes: 0,
-      judgmentAssessments: 0,
-      judgments: 0,
-      models: 1,
-      project: 1,
-      projectArticles: 0,
-      projectImportRoutes: 0,
-      projectPrompts: 0,
-      prompts: 0,
-      providerConnections: 0,
-      reviews: 0,
-    },
-    packageFingerprint: 'analyzed-fingerprint',
-    packageWarnings: [],
-    warningCount: 0,
-  }
-
-  return {
-    analysis: {},
-    packageFingerprint: 'analyzed-fingerprint',
-    plan: {canCommit: false, planRevision: input.planRevision},
-    planSummary,
-  }
+  return routeState.analyzeResult ?? getDefaultAnalyzeResult(input.planRevision)
 })
 
 const resolveProjectTransferDependenciesMock = mock(async (_input: unknown) => {
@@ -607,6 +608,7 @@ afterEach(() => {
     summaryHumanJudgmentCount: 2,
   }
   routeState.commitResult = null
+  routeState.analyzeResult = null
   routeState.projectRows = [{deletePendingAt: null, id: 'project-1'}]
   routeState.queryStatements.length = 0
   routeState.resolveResult = {
@@ -625,6 +627,7 @@ afterEach(() => {
   rmSync(`tmp/project-transfer/export/${readySessionId}`, {force: true, recursive: true})
   rmSync(`tmp/project-transfer/import/${uploadSessionId}`, {force: true, recursive: true})
   rmSync('tmp/project-transfer/import/import-auto-resolve-get', {force: true, recursive: true})
+  rmSync('tmp/project-transfer/import/import-read-only-get', {force: true, recursive: true})
 })
 
 afterAll(() => {
@@ -1005,9 +1008,9 @@ test('project transfer import upload falls back when the request body has no rea
   expect(body.data.upload).toEqual(getUploadMetadata('zip-body'))
 })
 
-test('project transfer import get auto-resolves unresolved dependencies before returning the session', async () => {
-  routeState.sessions['import-auto-resolve-get'] = getImportSessionRecord({
-    id: 'import-auto-resolve-get',
+test('project transfer import get ignores autoResolve query and remains read-only', async () => {
+  routeState.sessions['import-read-only-get'] = getImportSessionRecord({
+    id: 'import-read-only-get',
     planRevision: 1,
     planSummaryJson: {
       blockerCount: 2,
@@ -1018,11 +1021,13 @@ test('project transfer import get auto-resolves unresolved dependencies before r
     },
     state: 'awaiting_resolution',
   })
-  mkdirSync('tmp/project-transfer/import/import-auto-resolve-get', {recursive: true})
-  await globalThis.Bun.write('tmp/project-transfer/import/import-auto-resolve-get/plan.json', '{}')
+  mkdirSync('tmp/project-transfer/import/import-read-only-get', {recursive: true})
+  await globalThis.Bun.write('tmp/project-transfer/import/import-read-only-get/plan.json', '{}')
   const app = await getProjectTransferApp()
 
-  const response = await app.handle(new Request('http://localhost/api/projects/import/import-auto-resolve-get'))
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/import/import-read-only-get?autoResolve=true'),
+  )
   const body = (await response.json()) as {
     data: {planRevision: number; planSummary: {dependencyStatuses: Record<string, string>}; state: string}
     error: string | null
@@ -1031,16 +1036,14 @@ test('project transfer import get auto-resolves unresolved dependencies before r
   expect(response.status).toBe(200)
   expect(body).toMatchObject({
     data: {
-      planRevision: 2,
-      planSummary: {dependencyStatuses: {'model:model-1': 'resolved', 'provider:provider-connection-1': 'resolved'}},
-      state: 'ready_to_commit',
+      planRevision: 1,
+      planSummary: {dependencyStatuses: {'model:model-1': 'missing', 'provider:provider-connection-1': 'missing'}},
+      state: 'awaiting_resolution',
     },
     error: null,
   })
-  expect(resolveProjectTransferDependenciesMock).toHaveBeenCalledWith(
-    expect.objectContaining({deferPlanWrite: true, request: {autoResolve: true, planRevision: 1}}),
-  )
-  expect(writeProjectTransferDependencyPlanMock).toHaveBeenCalledWith(expect.objectContaining({plan: {}}))
+  expect(resolveProjectTransferDependenciesMock).not.toHaveBeenCalled()
+  expect(writeProjectTransferDependencyPlanMock).not.toHaveBeenCalled()
 })
 
 test('project transfer import get fails the session when dependency artifacts are missing', async () => {

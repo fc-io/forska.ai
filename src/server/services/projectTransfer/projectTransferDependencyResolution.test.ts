@@ -358,6 +358,88 @@ test('project transfer dependency resolution auto-resolves exact imported provid
   }
 })
 
+test('project transfer dependency resolution fast auto-copies published provider and model dependencies', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const layout = getProjectTransferImportTempLayout(sessionId)
+    const basePlan = getBasePlan()
+    const plan: ProjectTransferImportPlanArtifact = {
+      ...basePlan,
+      canCommit: false,
+      summary: {
+        ...basePlan.summary,
+        dependencyStatuses: {'model:model-1': 'missing', 'provider:provider-connection-1': 'missing'},
+        judgmentConflictStatus: 'unknown',
+      },
+      targetPlan: {
+        ...basePlan.targetPlan,
+        humanReviewPlan: [],
+        judgmentAssessmentPlan: [],
+        judgmentPlan: [
+          {
+            action: 'unknown',
+            conflictCodes: [],
+            inputSignatureMatches: null,
+            physicalKey: null,
+            provenanceKind: null,
+            reviewVisibleKey: null,
+            sourceJudgmentId: 'judgment-1',
+            targetArticleId: 'new:article:article-1',
+            targetJudgmentId: 'new:judgment:judgment-1',
+            targetModelId: 'model-1',
+            targetPromptId: 'new:prompt:c4f659c8baf0066f65ecb7006731b24d',
+          },
+        ],
+      },
+    }
+    const planPath = join(cwd, layout.planPath)
+    await mkdir(dirname(planPath), {recursive: true})
+    await globalThis.Bun.write(planPath, JSON.stringify(plan))
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      plan,
+      repositories: {
+        listProviderConnections: async () => {
+          throw new Error('fast auto-copy should not inspect provider connections')
+        },
+      },
+      request: {autoResolve: true, planRevision: 1},
+    })
+    const persistedPlan = JSON.parse(await readFile(planPath, 'utf8')) as {
+      canCommit: boolean
+      dependencyResolution: {
+        modelTargetBySourceId: Record<string, string>
+        providerTargetBySourceId: Record<string, string>
+      }
+      planRevision: number
+      summary: {dependencyStatuses: Record<string, string>; judgmentConflictStatus: string}
+      targetPlan: {judgmentPlan: {action: string; targetModelId: string | null}[]}
+    }
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
+    })
+    expect(persistedPlan.canCommit).toBe(true)
+    expect(persistedPlan.planRevision).toBe(2)
+    expect(persistedPlan.summary.judgmentConflictStatus).toBe('clear')
+    expect(persistedPlan.dependencyResolution.providerTargetBySourceId).toEqual({
+      'provider-connection-1': 'new:provider:provider-connection-1',
+    })
+    expect(persistedPlan.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': 'new:model:model-1'})
+    expect(persistedPlan.targetPlan.judgmentPlan).toMatchObject([
+      {action: 'insert', targetModelId: 'new:model:model-1'},
+    ])
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('project transfer dependency resolution auto-resolves imported snapshots with distinct variant and version', async () => {
   const cwd = getRuntimeRoot()
 
