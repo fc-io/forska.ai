@@ -182,6 +182,59 @@ test('admitReviewServingRequest rejects unsupported count shapes', () => {
   expect(unsupportedRegisteredCount.admitted ? null : unsupportedRegisteredCount.reason).toBe('unsupportedCountShape')
 })
 
+test('admitReviewServingRequest rejects supported count keys without ready matching count state', () => {
+  const unavailable = admitReviewServingRequest({
+    contractKey: 'review.llm.count',
+    countState: {availability: 'unavailable', key: 'review.llm.assessedByPrompt', reason: 'projector unavailable'},
+    namedCountKey: 'review.llm.assessedByPrompt',
+    pageSize: 1,
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewCount',
+  })
+  const pending = admitReviewServingRequest({
+    contractKey: 'review.llm.count',
+    countState: {availability: 'async', jobId: 'count-job-1', key: 'review.llm.assessedByPrompt', reason: 'building'},
+    namedCountKey: 'review.llm.assessedByPrompt',
+    pageSize: 1,
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewCount',
+  })
+  const mismatched = admitReviewServingRequest({
+    contractKey: 'review.llm.count',
+    countState: {availability: 'ready', key: 'review.list.total', snapshotId: 'snapshot-1', value: 12},
+    namedCountKey: 'review.llm.assessedByPrompt',
+    pageSize: 1,
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewCount',
+  })
+
+  expect(unavailable.admitted ? null : unavailable.reason).toBe('countStateUnavailable')
+  expect(pending.admitted ? null : pending.reason).toBe('countStateUnavailable')
+  expect(mismatched.admitted ? null : mismatched.reason).toBe('countStateUnavailable')
+})
+
+test('admitReviewServingRequest rejects token-prefix search without ready search state', () => {
+  const indexing = admitReviewServingRequest({
+    contractKey: 'review.search.tokenPrefix',
+    pageSize: 10,
+    searchMode: 'tokenPrefix',
+    searchState: {availability: 'indexing', reason: 'search projector indexing'},
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewSearch',
+  })
+  const ready = admitReviewServingRequest({
+    contractKey: 'review.search.tokenPrefix',
+    pageSize: 10,
+    searchMode: 'tokenPrefix',
+    searchState: {availability: 'ready', snapshotId: 'snapshot-1'},
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewSearch',
+  })
+
+  expect(indexing.admitted ? null : indexing.reason).toBe('searchStateUnavailable')
+  expect(ready.admitted).toBe(true)
+})
+
 test('admitReviewServingRequest rejects stale snapshots unless the caller explicitly allows stale', () => {
   const rejected = admitReviewServingRequest({
     contractKey: 'review.llm.rows',
@@ -280,6 +333,7 @@ test('admitReviewServingDuckdbWorkload maps an admitted contract to generic Duck
     maxResultRows: 100,
     projectId: 'project-a',
     routeOrJobKey: 'review.llm.rows',
+    timeoutMs: 5_000,
     workloadClass: 'foregroundReviewRows',
   })
 })

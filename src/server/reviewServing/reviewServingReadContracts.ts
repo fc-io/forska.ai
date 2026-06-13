@@ -43,8 +43,8 @@ export type ReviewServingReadContractRouteInventoryEntry = {
 
 type ContractInput = Omit<
   ReviewServingReadContract,
-  'allowsTempSpill' | 'maxEstimatedResultBytes' | 'maxResultRows'
-> & {allowsTempSpill?: boolean; maxEstimatedResultBytes?: number; maxResultRows?: number}
+  'allowsTempSpill' | 'maxEstimatedResultBytes' | 'maxResultRows' | 'timeoutMs'
+> & {allowsTempSpill?: boolean; maxEstimatedResultBytes?: number; maxResultRows?: number; timeoutMs?: number}
 
 const baseComponents = ['display', 'projectScope', 'selectedImport', 'payload'] as const
 const llmComponents = [...baseComponents, 'llmStatus', 'posting', 'summary'] as const
@@ -76,6 +76,7 @@ const defineContract = (input: ContractInput): ReviewServingReadContract => {
     allowsTempSpill: input.allowsTempSpill ?? false,
     maxEstimatedResultBytes: input.maxEstimatedResultBytes ?? 2_000_000,
     maxResultRows: input.maxResultRows ?? input.maxPageSize,
+    timeoutMs: input.timeoutMs ?? 5_000,
   }
 }
 

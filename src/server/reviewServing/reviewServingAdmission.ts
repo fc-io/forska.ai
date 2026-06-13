@@ -36,11 +36,13 @@ export type ReviewServingAdmissionRequest = {
 export type ReviewServingAdmissionDecision = 'accepted' | 'rejected'
 
 export type ReviewServingAdmissionRejectionReason =
+  | 'countStateUnavailable'
   | 'estimatedResultBytesOverLimit'
   | 'estimatedResultRowsOverLimit'
   | 'invalidBudgetValue'
   | 'pageSizeOverLimit'
   | 'searchModeMismatch'
+  | 'searchStateUnavailable'
   | 'staleSnapshotRequired'
   | 'synchronousSubstringSearchUnavailable'
   | 'tempSpillNotAllowed'
@@ -186,6 +188,7 @@ const getDuckdbWorkloadContext = (
     maxResultRows: contract.maxResultRows,
     projectId: request.projectId,
     routeOrJobKey: contract.key,
+    timeoutMs: contract.timeoutMs,
     workloadClass: contract.workloadClass,
   }
 }
@@ -309,6 +312,22 @@ const isSearchModeAccepted = (contract: ReviewServingReadContract, request: Revi
   return requestedMode === 'none' || requestedMode === contract.searchMode
 }
 
+const isCountStateAccepted = (request: ReviewServingAdmissionRequest) => {
+  if (request.namedCountKey === undefined) {
+    return true
+  }
+
+  return request.countState?.availability === 'ready' && request.countState.key === request.namedCountKey
+}
+
+const isSearchStateAccepted = (request: ReviewServingAdmissionRequest) => {
+  if (request.searchMode !== 'tokenPrefix') {
+    return true
+  }
+
+  return request.searchState?.availability === 'ready'
+}
+
 const getWorkloadClassDiagnostics = (
   contract: ReviewServingReadContract | null,
   request: ReviewServingAdmissionRequest,
@@ -366,6 +385,14 @@ const getAdmissionRejectionReason = (
 
   if (!isSupportedNamedCount(contract, request.namedCountKey)) {
     return 'unsupportedCountShape'
+  }
+
+  if (!isCountStateAccepted(request)) {
+    return 'countStateUnavailable'
+  }
+
+  if (!isSearchStateAccepted(request)) {
+    return 'searchStateUnavailable'
   }
 
   if (!isFreshnessAccepted(contract, request)) {

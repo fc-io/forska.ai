@@ -3,6 +3,7 @@ import {Effect} from 'effect'
 
 import {
   getReviewServingBenchmarkMetrics,
+  getReviewServingBenchmarkRequestCountViolations,
   getReviewServingBenchmarkSmokeInput,
   reviewServingBenchmarkOverlapWorkloadDefinition,
   reviewServingBenchmarkPhase5ReleaseGate,
@@ -43,6 +44,11 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
     releaseGatePhase: 'Phase 5',
     requiredForPhase0: false,
   })
+  expect(
+    result.workload.operations.map((operation) => {
+      return operation.requestCount
+    }),
+  ).toEqual([2, 1, 1])
   expect(
     result.samples.map((sample) => {
       return sample.admissionStatus
@@ -111,17 +117,42 @@ test('review-serving benchmark metrics shape keeps latency, memory, temp, queue,
 
 test('review-serving benchmark runner can use an injected executor for later real workload phases', async () => {
   const input = getReviewServingBenchmarkSmokeInput()
+  const singleWorkItemInput = {
+    ...input,
+    workload: {...input.workload, operations: [{...input.workload.operations[0], requestCount: 1}]},
+    workItems: input.workItems.slice(0, 1),
+  }
   const result = await Effect.runPromise(
     runReviewServingBenchmarkEffect({
-      ...input,
+      ...singleWorkItemInput,
       executor: (workItem) => {
         return Effect.succeed({...workItem.observation, latencyMs: workItem.observation.latencyMs + 1})
       },
-      workItems: input.workItems.slice(0, 1),
     }),
   )
 
   expect(result.samples).toHaveLength(1)
   expect(result.metrics.latency).toMatchObject({p50Ms: 9, p95Ms: 9, p99Ms: 9, sampleCount: 1})
   expect(result.metrics.work).toEqual({admitted: 1, rejected: 0, total: 1})
+})
+
+test('review-serving benchmark rejects runs that do not satisfy operation request counts', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const underSampledInput = {...input, workItems: input.workItems.slice(0, 1)}
+
+  expect(getReviewServingBenchmarkRequestCountViolations(underSampledInput)).toEqual([
+    {actualRequestCount: 1, expectedRequestCount: 2, operationKey: 'llmPromptOverlapRows'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'llmHumanOverlapRows'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'overlapFacetRefresh'},
+  ])
+  const failureMessage = await Effect.runPromise(runReviewServingBenchmarkEffect(underSampledInput)).then(
+    () => {
+      return ''
+    },
+    (error) => {
+      return String(error)
+    },
+  )
+
+  expect(failureMessage).toContain('Review-serving benchmark request count mismatch')
 })

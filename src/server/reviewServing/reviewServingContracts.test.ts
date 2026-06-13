@@ -50,6 +50,7 @@ test('review serving contracts export physical access and budget value sets', ()
     'maxEstimatedResultBytes',
     'maxPageSize',
     'maxResultRows',
+    'timeoutMs',
   ])
 })
 
