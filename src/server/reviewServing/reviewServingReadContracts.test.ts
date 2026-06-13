@@ -120,11 +120,17 @@ test('detail row contract pins a canonical list mode for article lookups', () =>
 
 test('mounted routes stay off incomplete option, count, detail, and warning contract coverage', () => {
   const incompleteProductRoutes = new Set([
+    '/api/articles/pdf-fetch-by-filter',
+    '/api/articlesreviews',
+    '/api/articlesreviewsboth',
     '/api/articlesreviewscount',
     '/api/articlesreviewsfilters',
+    '/api/articlesreviewshuman',
     '/api/articlesreviewshumanfilters',
+    '/api/articlesreviewsunassessed',
     '/api/projectsreview',
     '/api/projectsreviewswarnings',
+    '/api/projects/:id/export',
   ])
   const mountedIncompleteRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
     return entry.mounted && incompleteProductRoutes.has(entry.productRoute)
@@ -139,6 +145,14 @@ test('mounted routes stay off incomplete option, count, detail, and warning cont
   expect(mountedIncompleteRoutes).toEqual([])
   expect(mountedPostingRoutes).toEqual([])
   expect(mountedFacetRoutes).toEqual([])
+})
+
+test('explicit PDF bulk ID route is not mapped to project-scoped review serving selection', () => {
+  const explicitBulkPdfRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.productRoute === '/api/articles/pdf-fetch-bulk'
+  })
+
+  expect(explicitBulkPdfRoutes).toEqual([])
 })
 
 test('future filter posting and facet contracts stay unmounted until route shapes are complete', () => {
