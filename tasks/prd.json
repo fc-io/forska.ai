@@ -1,7 +1,7 @@
 {
   "name": "DuckDB CQRS Phase 0",
-  "branchName": "ralph/duckdb-cqrs-phase-0",
   "description": "Create the pure review-serving contracts, registries, cursor and admission helpers, SQL-shape guards, diagnostics, and benchmark smoke harness without changing product route behavior.",
+  "branchName": "ralph/duckdb-cqrs-phase-0",
   "userStories": [
     {
       "id": "US-001",
@@ -17,9 +17,10 @@
         "`bun run lint` passes."
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -184,5 +185,8 @@
         "US-007"
       ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-06-13T13:24:24.308Z"
+  }
 }
