@@ -98,6 +98,30 @@ test('admitReviewServingRequest rejects synchronous substring search', () => {
   })
 })
 
+test('admitReviewServingRequest rejects search modes that do not match the contract', () => {
+  const substringOnTokenPrefixRows = admitReviewServingRequest({
+    contractKey: 'review.llm.rows',
+    pageSize: 10,
+    searchMode: 'substringAsync',
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewRows',
+  })
+  const tokenPrefixOnNoSearchCount = admitReviewServingRequest({
+    contractKey: 'review.llm.count',
+    pageSize: 1,
+    searchMode: 'tokenPrefix',
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewCount',
+  })
+
+  expect(substringOnTokenPrefixRows.admitted ? null : substringOnTokenPrefixRows.reason).toBe('searchModeMismatch')
+  expect(tokenPrefixOnNoSearchCount.admitted ? null : tokenPrefixOnNoSearchCount.reason).toBe('searchModeMismatch')
+  expect(substringOnTokenPrefixRows.diagnostics.search).toMatchObject({
+    registeredMode: 'tokenPrefix',
+    requestedMode: 'substringAsync',
+  })
+})
+
 test('admitReviewServingRequest rejects unsupported count shapes', () => {
   const result = admitReviewServingRequest({
     contractKey: 'review.llm.count',

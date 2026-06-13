@@ -39,6 +39,7 @@ export type ReviewServingAdmissionRejectionReason =
   | 'estimatedResultBytesOverLimit'
   | 'estimatedResultRowsOverLimit'
   | 'pageSizeOverLimit'
+  | 'searchModeMismatch'
   | 'staleSnapshotRequired'
   | 'synchronousSubstringSearchUnavailable'
   | 'tempSpillNotAllowed'
@@ -290,6 +291,12 @@ const getSearchDiagnostics = (
   }
 }
 
+const isSearchModeAccepted = (contract: ReviewServingReadContract, request: ReviewServingAdmissionRequest) => {
+  const requestedMode = request.searchMode ?? 'none'
+
+  return requestedMode === 'none' || requestedMode === contract.searchMode
+}
+
 const getWorkloadClassDiagnostics = (
   contract: ReviewServingReadContract | null,
   request: ReviewServingAdmissionRequest,
@@ -331,6 +338,10 @@ const getAdmissionRejectionReason = (
 
   if (request.searchMode === 'substringSync') {
     return 'synchronousSubstringSearchUnavailable'
+  }
+
+  if (!isSearchModeAccepted(contract, request)) {
+    return 'searchModeMismatch'
   }
 
   if (!isSupportedNamedCount(contract, request.namedCountKey)) {

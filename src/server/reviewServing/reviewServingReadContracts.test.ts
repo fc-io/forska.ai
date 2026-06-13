@@ -106,9 +106,9 @@ test('prompt preview contract does not advertise prompt filters on article paylo
   const promptPreview = getReviewServingReadContract('review.prompt.preview')
 
   expect(promptPreview?.allowedFilters).toEqual([])
-  expect(promptPreview?.cursorFields).toEqual(['article_created_at', 'article_seq', 'article_id'])
+  expect(promptPreview?.cursorFields).toEqual(['article_created_at', 'article_id'])
   expect(promptPreview?.servingTable).toBe('mart.review_article_serving_payload_v4')
-  expect(promptPreview?.sort).toEqual({direction: 'asc', fields: ['article_created_at', 'article_seq', 'article_id']})
+  expect(promptPreview?.sort).toEqual({direction: 'asc', fields: ['article_created_at', 'article_id']})
 })
 
 test('detail row contract pins a canonical list mode for article lookups', () => {
@@ -118,20 +118,39 @@ test('detail row contract pins a canonical list mode for article lookups', () =>
   expect(detailRow?.servingTable).toBe('mart.review_article_serving_v4')
 })
 
-test('mounted search-scoped filter routes stay off unscoped facet contracts', () => {
-  const mountedFilterRoutes = new Set(['/api/articlesreviewsfilters', '/api/articlesreviewshumanfilters'])
+test('mounted routes stay off incomplete option, count, detail, and warning contract coverage', () => {
+  const incompleteProductRoutes = new Set([
+    '/api/articlesreviewscount',
+    '/api/articlesreviewsfilters',
+    '/api/articlesreviewshumanfilters',
+    '/api/projectsreview',
+    '/api/projectsreviewswarnings',
+  ])
+  const mountedIncompleteRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.mounted && incompleteProductRoutes.has(entry.productRoute)
+  })
+  const mountedPostingRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.mounted && entry.contractKeys.includes('review.filters.postings')
+  })
   const mountedFacetRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
-    return (
-      entry.mounted
-      && mountedFilterRoutes.has(entry.productRoute)
-      && entry.contractKeys.includes('review.filters.facets')
-    )
+    return entry.mounted && entry.contractKeys.includes('review.filters.facets')
+  })
+
+  expect(mountedIncompleteRoutes).toEqual([])
+  expect(mountedPostingRoutes).toEqual([])
+  expect(mountedFacetRoutes).toEqual([])
+})
+
+test('future filter posting and facet contracts stay unmounted until route shapes are complete', () => {
+  const postingInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.contractKeys.includes('review.filters.postings')
   })
   const facetInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
     return entry.contractKeys.includes('review.filters.facets')
   })
 
-  expect(mountedFacetRoutes).toEqual([])
+  expect(postingInventoryEntries).toHaveLength(1)
+  expect(postingInventoryEntries[0]).toMatchObject({mounted: false, surfaces: ['filter']})
   expect(facetInventoryEntries).toHaveLength(1)
   expect(facetInventoryEntries[0]).toMatchObject({mounted: false, surfaces: ['facet']})
 })
