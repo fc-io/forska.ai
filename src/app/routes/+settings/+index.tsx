@@ -110,6 +110,7 @@ type RuntimeState = {
   runtimeVersion: string
   serverRole: string | null
 }
+type RuntimeReady = {localOperatorApiExposed: boolean; ready: boolean; settingsDiagnosticsApiExposed?: boolean}
 type UpdateLocalUserInput = {
   maintenanceWorkerDuckdbMemoryLimit: string
   codexBin: string
@@ -126,6 +127,7 @@ type UpdateLocalUserInput = {
 }
 type UpdateUserResponse = {data: LocalUser}
 type StoredModelsResponse = {data: StoredModel[]}
+type RuntimeReadyResponse = {data: RuntimeReady}
 type RuntimeStateResponse = {data: RuntimeState}
 
 const fetchLocalUser = async (): Promise<LocalUser | null> => {
@@ -151,10 +153,25 @@ const fetchWorkerRuntimeDiagnostics = async (): Promise<WorkerRuntimeDiagnostics
   return handleApiResponse<WorkerRuntimeDiagnostics>(response, 'Failed to load worker runtime diagnostics')
 }
 
+const fetchRuntimeReady = async (): Promise<RuntimeReady> => {
+  const response = await apiClient.api.runtime.ready.get()
+  const result = handleApiResponse<RuntimeReadyResponse>(response, 'Failed to load runtime readiness')
+  return result.data
+}
+
 const fetchRuntimeState = async (): Promise<RuntimeState | null> => {
   const response = await apiClient.api.runtime.state.get()
   const result = handleApiResponse<RuntimeStateResponse>(response, 'Failed to load runtime state')
   return result.data
+}
+
+const SettingsDiagnosticsGateMessage = () => {
+  return (
+    <p class="text-xs text-amber-700">
+      Settings diagnostics are not available from this backend. Restart the local server after updating to show this
+      panel.
+    </p>
+  )
 }
 
 const getNullableString = (value: string): string | null => {
@@ -250,10 +267,26 @@ const Settings = () => {
       refetchOnWindowFocus: false,
     }
   })
+  const runtimeReadyQuery = useQuery(() => {
+    return {
+      queryKey: ['runtime-ready'],
+      queryFn: fetchRuntimeReady,
+      staleTime: 60_000,
+      refetchInterval: 15_000,
+      refetchOnWindowFocus: false,
+    }
+  })
+  const canLoadSettingsDiagnostics = () => {
+    return runtimeReadyQuery.data?.settingsDiagnosticsApiExposed !== false
+  }
+  const shouldShowSettingsDiagnosticsGateMessage = () => {
+    return !runtimeReadyQuery.isLoading && !canLoadSettingsDiagnostics()
+  }
   const maintenanceRuntimeDiagnosticsQuery = useQuery(() => {
     return {
       queryKey: ['maintenance-runtime-diagnostics'],
       queryFn: fetchMaintenanceRuntimeDiagnostics,
+      enabled: canLoadSettingsDiagnostics(),
       staleTime: 1_000,
       refetchInterval: 5_000,
       refetchOnWindowFocus: false,
@@ -263,13 +296,20 @@ const Settings = () => {
     return {
       queryKey: ['worker-runtime-diagnostics'],
       queryFn: fetchWorkerRuntimeDiagnostics,
+      enabled: canLoadSettingsDiagnostics(),
       staleTime: 1_000,
       refetchInterval: 5_000,
       refetchOnWindowFocus: false,
     }
   })
   const runtimeStateQuery = useQuery(() => {
-    return {queryKey: ['runtime-state'], queryFn: fetchRuntimeState, staleTime: 60_000, refetchOnWindowFocus: false}
+    return {
+      queryKey: ['runtime-state'],
+      queryFn: fetchRuntimeState,
+      enabled: canLoadSettingsDiagnostics(),
+      staleTime: 60_000,
+      refetchOnWindowFocus: false,
+    }
   })
   const updateLocalUserMutation = createMutation(() => {
     return {
@@ -288,8 +328,10 @@ const Settings = () => {
         setDuckdbBin(user.duckdbBin ?? '')
         setCodexBin(user.codexBin ?? '')
         void localUserQuery.refetch()
-        void maintenanceRuntimeDiagnosticsQuery.refetch()
-        void workerRuntimeDiagnosticsQuery.refetch()
+        if (canLoadSettingsDiagnostics()) {
+          void maintenanceRuntimeDiagnosticsQuery.refetch()
+          void workerRuntimeDiagnosticsQuery.refetch()
+        }
       },
     }
   })
@@ -507,10 +549,16 @@ const Settings = () => {
                   </Show>
                   <div class="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-2">
                     <p class="text-sm font-medium text-gray-900">Effective maintenance config</p>
-                    <Show when={maintenanceRuntimeDiagnosticsQuery.isLoading}>
+                    <Show when={runtimeReadyQuery.isLoading && !canLoadSettingsDiagnostics()}>
+                      <p class="text-xs text-gray-500">Checking Settings diagnostics access...</p>
+                    </Show>
+                    <Show when={shouldShowSettingsDiagnosticsGateMessage()}>
+                      <SettingsDiagnosticsGateMessage />
+                    </Show>
+                    <Show when={canLoadSettingsDiagnostics() && maintenanceRuntimeDiagnosticsQuery.isLoading}>
                       <p class="text-xs text-gray-500">Loading maintenance runtime diagnostics...</p>
                     </Show>
-                    <Show when={maintenanceRuntimeDiagnosticsQuery.isError}>
+                    <Show when={canLoadSettingsDiagnostics() && maintenanceRuntimeDiagnosticsQuery.isError}>
                       <p class="text-xs text-red-600">
                         {maintenanceRuntimeDiagnosticsQuery.error instanceof Error
                           ? maintenanceRuntimeDiagnosticsQuery.error.message
@@ -519,7 +567,9 @@ const Settings = () => {
                     </Show>
                     <Show
                       when={
-                        !maintenanceRuntimeDiagnosticsQuery.isLoading && !maintenanceRuntimeDiagnosticsQuery.isError
+                        canLoadSettingsDiagnostics()
+                        && !maintenanceRuntimeDiagnosticsQuery.isLoading
+                        && !maintenanceRuntimeDiagnosticsQuery.isError
                       }
                     >
                       <p class="text-xs text-gray-600">
@@ -578,17 +628,25 @@ const Settings = () => {
                   </div>
                   <div class="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-2">
                     <p class="text-sm font-medium text-gray-900">Runtime state</p>
-                    <Show when={runtimeStateQuery.isLoading}>
+                    <Show when={runtimeReadyQuery.isLoading && !canLoadSettingsDiagnostics()}>
+                      <p class="text-xs text-gray-500">Checking Settings diagnostics access...</p>
+                    </Show>
+                    <Show when={shouldShowSettingsDiagnosticsGateMessage()}>
+                      <SettingsDiagnosticsGateMessage />
+                    </Show>
+                    <Show when={canLoadSettingsDiagnostics() && runtimeStateQuery.isLoading}>
                       <p class="text-xs text-gray-500">Loading runtime state...</p>
                     </Show>
-                    <Show when={runtimeStateQuery.isError}>
+                    <Show when={canLoadSettingsDiagnostics() && runtimeStateQuery.isError}>
                       <p class="text-xs text-red-600">
                         {runtimeStateQuery.error instanceof Error
                           ? runtimeStateQuery.error.message
                           : 'Failed to load runtime state'}
                       </p>
                     </Show>
-                    <Show when={!runtimeStateQuery.isLoading && !runtimeStateQuery.isError}>
+                    <Show
+                      when={canLoadSettingsDiagnostics() && !runtimeStateQuery.isLoading && !runtimeStateQuery.isError}
+                    >
                       <p class="text-xs text-gray-600">
                         Bun max HTTP requests:{' '}
                         {runtimeStateQuery.data?.bun.maxHttpRequests.effectiveMaxHttpRequests ?? 'N/A'} (
@@ -607,17 +665,29 @@ const Settings = () => {
                   </div>
                   <div class="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-3">
                     <p class="text-sm font-medium text-gray-900">Worker runtime diagnostics</p>
-                    <Show when={workerRuntimeDiagnosticsQuery.isLoading}>
+                    <Show when={runtimeReadyQuery.isLoading && !canLoadSettingsDiagnostics()}>
+                      <p class="text-xs text-gray-500">Checking Settings diagnostics access...</p>
+                    </Show>
+                    <Show when={shouldShowSettingsDiagnosticsGateMessage()}>
+                      <SettingsDiagnosticsGateMessage />
+                    </Show>
+                    <Show when={canLoadSettingsDiagnostics() && workerRuntimeDiagnosticsQuery.isLoading}>
                       <p class="text-xs text-gray-500">Loading worker runtime diagnostics...</p>
                     </Show>
-                    <Show when={workerRuntimeDiagnosticsQuery.isError}>
+                    <Show when={canLoadSettingsDiagnostics() && workerRuntimeDiagnosticsQuery.isError}>
                       <p class="text-xs text-red-600">
                         {workerRuntimeDiagnosticsQuery.error instanceof Error
                           ? workerRuntimeDiagnosticsQuery.error.message
                           : 'Failed to load worker runtime diagnostics'}
                       </p>
                     </Show>
-                    <Show when={!workerRuntimeDiagnosticsQuery.isLoading && !workerRuntimeDiagnosticsQuery.isError}>
+                    <Show
+                      when={
+                        canLoadSettingsDiagnostics()
+                        && !workerRuntimeDiagnosticsQuery.isLoading
+                        && !workerRuntimeDiagnosticsQuery.isError
+                      }
+                    >
                       <div class="grid gap-2 md:grid-cols-2">
                         <p class="text-xs text-gray-600">
                           Local role: {workerRuntimeDiagnosticsQuery.data?.localRole ?? 'N/A'} | Server role:{' '}

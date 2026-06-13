@@ -9,6 +9,7 @@ import {
   getKnownDuckdbOwnerUrl,
   shouldCurrentServerProxyApiToOwner,
 } from '../utils/serverRuntimeRole.ts'
+import {isLocalOperatorApiExposed} from './publicRouteSurfaceGate.ts'
 
 const bunDefaultMaxHttpRequests = 256
 
@@ -34,10 +35,12 @@ export const runtimeReadyRoutes = new Elysia()
         capabilities: getServerRoleCapabilities(role),
         duckdbOwner: canCurrentServerOwnDuckdb(),
         duckdbOwnerUrl: getKnownDuckdbOwnerUrl(),
+        localOperatorApiExposed: isLocalOperatorApiExposed(),
         ownerProxy: shouldCurrentServerProxyApiToOwner(),
         ready: true,
         role,
         runtimeVersion: getRuntimeCutoverVersion(),
+        settingsDiagnosticsApiExposed: true,
       },
       error: null,
     }

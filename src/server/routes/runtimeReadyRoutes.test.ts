@@ -1,8 +1,13 @@
 import {expect, test} from 'bun:test'
 
-import {runtimeStatePath} from '../utils/runtimeReadyContract.ts'
+import {runtimeReadyPath, runtimeStatePath} from '../utils/runtimeReadyContract.ts'
 import {classifyApiRoute, shouldApiRouteProxyToDuckdbOwner} from './apiRouteClassification.ts'
+import {exposeLocalOperatorApiEnvVar} from './publicRouteSurfaceGate.ts'
 import {runtimeReadyRoutes} from './runtimeReadyRoutes.ts'
+
+type RuntimeReadyResponse = {
+  data: {localOperatorApiExposed: boolean; ready: boolean; settingsDiagnosticsApiExposed: boolean}
+}
 
 type RuntimeStateResponse = {
   data: {
@@ -41,12 +46,61 @@ const withBunMaxHttpRequestsEnv = async (value: string | undefined, run: () => P
   }
 }
 
+const withLocalOperatorApiEnv = async (value: string | undefined, run: () => Promise<void>) => {
+  const previousValue = process.env[exposeLocalOperatorApiEnvVar]
+
+  try {
+    if (value === undefined) {
+      delete process.env[exposeLocalOperatorApiEnvVar]
+    }
+
+    if (value !== undefined) {
+      process.env[exposeLocalOperatorApiEnvVar] = value
+    }
+
+    await run()
+  } finally {
+    if (previousValue === undefined) {
+      delete process.env[exposeLocalOperatorApiEnvVar]
+    }
+
+    if (previousValue !== undefined) {
+      process.env[exposeLocalOperatorApiEnvVar] = previousValue
+    }
+  }
+}
+
+const getRuntimeReadyResponse = async () => {
+  const response = await runtimeReadyRoutes.handle(new Request(`http://localhost${runtimeReadyPath}`))
+
+  expect(response.ok).toBe(true)
+  return (await response.json()) as RuntimeReadyResponse
+}
+
 const getRuntimeStateResponse = async () => {
   const response = await runtimeReadyRoutes.handle(new Request(`http://localhost${runtimeStatePath}`))
 
   expect(response.ok).toBe(true)
   return (await response.json()) as RuntimeStateResponse
 }
+
+test('runtime readiness reports local operator API exposure', async () => {
+  await withLocalOperatorApiEnv('true', async () => {
+    const response = await getRuntimeReadyResponse()
+
+    expect(response.data.ready).toBe(true)
+    expect(response.data.localOperatorApiExposed).toBe(true)
+    expect(response.data.settingsDiagnosticsApiExposed).toBe(true)
+  })
+
+  await withLocalOperatorApiEnv(undefined, async () => {
+    const response = await getRuntimeReadyResponse()
+
+    expect(response.data.ready).toBe(true)
+    expect(response.data.localOperatorApiExposed).toBe(false)
+    expect(response.data.settingsDiagnosticsApiExposed).toBe(true)
+  })
+})
 
 test('runtime state reports env configured Bun HTTP request cap', async () => {
   await withBunMaxHttpRequestsEnv('2048', async () => {

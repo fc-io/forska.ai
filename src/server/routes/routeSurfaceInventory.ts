@@ -44,6 +44,7 @@ const maintenanceDecision =
   'Gated on the public API by default. Keep developer/operator-only or remove before public release.'
 const removeBeforeReleaseDecision =
   'Gated on the public API by default. Remove before release unless explicitly justified.'
+const settingsDiagnosticsDecision = 'Keep as read-only Settings diagnostics on the local loopback API.'
 
 const routeGroup = (defaults: RouteSurfaceRouteDefaults, routes: readonly RoutePair[]): RouteSurfaceRoute[] => {
   return routes.map(([method, path]) => {
@@ -103,12 +104,38 @@ const ownerDependentDiagnostics = (routeModule: string, sensitivity: string, rou
   )
 }
 
+const ownerDependentSettingsDiagnostics = (routeModule: string, sensitivity: string, routes: readonly RoutePair[]) => {
+  return routeGroup(
+    {
+      category: 'sensitive-local-api',
+      proxyClassification: 'owner-dependent',
+      releaseDecision: settingsDiagnosticsDecision,
+      routeModule,
+      sensitivity,
+    },
+    routes,
+  )
+}
+
 const ownerlessDiagnostics = (routeModule: string, sensitivity: string, routes: readonly RoutePair[]) => {
   return routeGroup(
     {
       category: 'local-diagnostics-api',
       proxyClassification: 'ownerless-readable-diagnostics',
       releaseDecision: diagnosticsDecision,
+      routeModule,
+      sensitivity,
+    },
+    routes,
+  )
+}
+
+const ownerlessSettingsDiagnostics = (routeModule: string, sensitivity: string, routes: readonly RoutePair[]) => {
+  return routeGroup(
+    {
+      category: 'sensitive-local-api',
+      proxyClassification: 'ownerless-readable-diagnostics',
+      releaseDecision: settingsDiagnosticsDecision,
       routeModule,
       sensitivity,
     },
@@ -194,9 +221,11 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     },
     [['GET', '/api/runtime/ready']],
   ),
-  ...ownerlessDiagnostics('runtimeReadyRoutes.ts', 'Process id, server role, runtime version, and Bun HTTP cap.', [
-    ['GET', '/api/runtime/state'],
-  ]),
+  ...ownerlessSettingsDiagnostics(
+    'runtimeReadyRoutes.ts',
+    'Process id, server role, runtime version, and Bun HTTP cap.',
+    [['GET', '/api/runtime/state']],
+  ),
   ...routeGroup(
     {
       category: 'sensitive-local-api',
@@ -230,7 +259,6 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     'Admin diagnostics, rebuild controls, and prompt/judgment cleanup.',
     [
       ['GET', '/api/admin/duckdb-append-metrics'],
-      ['GET', '/api/admin/maintenance-runtime-diagnostics'],
       ['GET', '/api/admin/project-mart-large-rebuild-status'],
       ['POST', '/api/admin/project-mart-large-rebuild-run'],
       ['POST', '/api/admin/project-mart-large-rebuild-pause'],
@@ -243,7 +271,12 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
       ['GET', '/api/admin/investigate-unexpected-answers'],
     ],
   ),
-  ...ownerlessDiagnostics('AdminInvestigateRoutes.ts', 'Local worker runtime diagnostics.', [
+  ...ownerDependentSettingsDiagnostics(
+    'AdminInvestigateRoutes.ts',
+    'DuckDB path, process memory, and maintenance runtime state.',
+    [['GET', '/api/admin/maintenance-runtime-diagnostics']],
+  ),
+  ...ownerlessSettingsDiagnostics('AdminInvestigateRoutes.ts', 'Local worker runtime diagnostics.', [
     ['GET', '/api/admin/worker-runtime-diagnostics'],
   ]),
   ...ownerDependentProduct('ComparisonProjectsRoutes.ts', [

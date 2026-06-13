@@ -45,10 +45,18 @@ test('public gate blocks database snapshot routes by default', async () => {
   expect(response.status).toBe(404)
 })
 
-test('public gate blocks runtime status routes by default', async () => {
-  const response = await getResponse('/api/runtime/state')
+test('public gate leaves read-only Settings diagnostics routes available', async () => {
+  const responses = await Promise.all([
+    getResponse('/api/runtime/state'),
+    getResponse('/api/admin/maintenance-runtime-diagnostics'),
+    getResponse('/api/admin/worker-runtime-diagnostics'),
+  ])
 
-  expect(response.status).toBe(404)
+  expect(
+    responses.map((response) => {
+      return response.status
+    }),
+  ).toEqual([200, 200, 200])
 })
 
 test('public gate blocks internal runtime routes by default', async () => {
