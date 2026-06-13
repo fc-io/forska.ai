@@ -36,6 +36,7 @@ Route-level raw-path guards become blocking when those routes are migrated in Ph
 ## Rules
 
 - Keep the Phase 0 package pure where possible. Contracts, identity builders, invalidation registry, cursor helpers, read contracts, and SQL-shape helpers should not call the database.
+- Use the `effect` library for non-trivial JavaScript/TypeScript async and server flow. Prefer `Effect.gen` for sequencing, `Layer`/`Context` for service wiring, `Effect.acquireRelease`/`Scope` for resource lifetime, and `Schedule` for retries, polling, and backoff. Keep pure transforms and very small handlers as plain functions.
 - Do not add route behavior changes in Phase 0.
 - Do not fail tests only because legacy pre-cutover routes still use raw OLAP paths.
 - Every normal hot read planned for Phase 4 must have a contract before route migration starts.

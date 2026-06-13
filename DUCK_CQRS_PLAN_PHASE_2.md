@@ -61,6 +61,10 @@ It stores the affected project, optional review config hash, article, prompt/jud
 
 It does not make counts, facets, queues, search, bulk selection, PDF, or export overlay-aware unless that route contract explicitly opts in.
 
+## JavaScript And TypeScript Rule
+
+Use the `effect` library for non-trivial JavaScript/TypeScript async and server flow in Phase 2 write integrations, reconciliation, hot-field extraction, and overlay services. Prefer `Effect.gen` for sequencing, `Layer`/`Context` for service wiring, `Effect.acquireRelease`/`Scope` for resource lifetime, and `Schedule` for retries, polling, and backoff. Keep pure transforms and very small handlers as plain functions.
+
 ## Required Artifacts
 
 - `src/server/reviewServing/reviewServingDeltaLedger.ts`

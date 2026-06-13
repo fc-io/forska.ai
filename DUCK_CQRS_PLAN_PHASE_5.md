@@ -65,6 +65,10 @@ After final verification, normal product review paths must not reach raw fallbac
 - Low-memory runtime defaults reduce batch sizes before increasing concurrency.
 - Snapshot pins and retention cleanup must tolerate laptop storage and interruption patterns.
 
+## JavaScript And TypeScript Rule
+
+Use the `effect` library for non-trivial JavaScript/TypeScript async and server flow in Phase 5 hardening, interruption handling, cleanup, benchmark orchestration, and release-gate checks. Prefer `Effect.gen` for sequencing, `Layer`/`Context` for service wiring, `Effect.acquireRelease`/`Scope` for resource lifetime, and `Schedule` for retries, polling, and backoff. Keep pure transforms and very small handlers as plain functions.
+
 ## Final Benchmark Scope
 
 - 10M articles in one project with an average of 7 prompts per article.

@@ -96,6 +96,7 @@ be tuned only with benchmark evidence and an explicit plan update.
 
 These contracts make the serving-index plan safe to operate instead of only faster:
 
+- JavaScript/TypeScript implementation uses the `effect` library for non-trivial async and server flow in every phase. Phase docs call out the specific JS/TS surfaces that should use `Effect.gen`, `Layer`/`Context`, `Effect.acquireRelease`/`Scope`, and `Schedule`.
 - Freshness contract: every review response has an explicit state: fresh, stale, indexing, failed, or missing. Stale state returns the last completed snapshot plus progress; missing state returns indexing state and empty rows.
 - Atomic snapshot manifest: a snapshot becomes active only after every required route component completes for the same composed identity set. Optional components such as async search or unsupported counts have their own availability state and do not block unrelated review-list activation.
 - Component-scoped projector graph: each delta kind enters the graph at the first affected component declared by the invalidation registry. Selected-import projection is only on import/scope paths; judgment and human-review deltas do not wait for selected-import work.

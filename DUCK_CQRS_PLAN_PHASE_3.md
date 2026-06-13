@@ -59,6 +59,10 @@ The serving projector service becomes the single normal write boundary for V4 `m
 - Input digests come from upstream dirty tokens, contribution digests, posting stats, and per-chunk high-water rows maintained during normal projection.
 - A rebuild worker must not scan source rows only to decide whether a completed chunk can be skipped.
 
+## JavaScript And TypeScript Rule
+
+Use the `effect` library for non-trivial JavaScript/TypeScript async and server flow in Phase 3 projectors, writers, workers, manifests, leases, and cleanup. Prefer `Effect.gen` for sequencing, `Layer`/`Context` for service wiring, `Effect.acquireRelease`/`Scope` for resource lifetime, and `Schedule` for retries, polling, and backoff. Keep pure transforms and very small handlers as plain functions.
+
 ## Required Artifacts
 
 - `src/server/reviewServing/reviewServingDirtyWorkService.ts`

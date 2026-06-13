@@ -58,6 +58,10 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - Block each route or flow migration on any mismatch, forbidden SQL shape, unregistered foreground DuckDB work, or budget breach.
 - Parity mode can run behind internal wiring before the route switches, but the route should switch and delete legacy as soon as its gates pass.
 
+## JavaScript And TypeScript Rule
+
+Use the `effect` library for non-trivial JavaScript/TypeScript async and server flow in Phase 4 readers, route adapters, durable jobs, workers, search, export/PDF, and parity validation. Prefer `Effect.gen` for sequencing, `Layer`/`Context` for service wiring, `Effect.acquireRelease`/`Scope` for resource lifetime, and `Schedule` for retries, polling, and backoff. Keep pure transforms and very small handlers as plain functions.
+
 ## Required Artifacts
 
 - `src/server/reviewServing/reviewServingReader.ts`

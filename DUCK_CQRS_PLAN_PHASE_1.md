@@ -58,6 +58,7 @@ Do not mutate legacy V3 table schemas during Phase 1.
 
 ## Rules
 
+- Use the `effect` library for non-trivial JavaScript/TypeScript async and server flow. Prefer `Effect.gen` for sequencing, `Layer`/`Context` for service wiring, `Effect.acquireRelease`/`Scope` for resource lifetime, and `Schedule` for retries, polling, and backoff. Keep pure transforms and very small handlers as plain functions.
 - Do not populate projections in Phase 1.
 - Do not promote serving snapshots in Phase 1.
 - Do not switch product routes in Phase 1.
