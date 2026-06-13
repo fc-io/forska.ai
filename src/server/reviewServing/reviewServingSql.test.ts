@@ -81,6 +81,26 @@ test('buildReviewServingRowsSql uses payload identities for payload serving tabl
   expect(sql).not.toContain('list_mode_key')
 })
 
+test('buildReviewServingRowsSql only emits list-mode predicates for list-mode tables', () => {
+  const contract = getRequiredReviewServingReadContract('review.queue.unassessed')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain(
+    'WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId',
+  )
+  expect(sql).not.toContain('list_mode_key')
+})
+
 test('assertReviewServingSqlShape reads table references from SQL', () => {
   const sql = `
     SELECT s.article_id
@@ -172,6 +192,21 @@ test('assertReviewServingSqlShape rejects unregistered tables and unbounded read
   expect(unboundedViolations).toContain('bounded limit')
 })
 
+test('assertReviewServingSqlShape requires snapshot scope by default', () => {
+  const missingSnapshotSql = `
+    SELECT *
+    FROM mart.review_article_serving_v4
+    WHERE project_id = ?
+    ORDER BY article_id ASC
+    LIMIT ?
+  `
+  const violations = getReviewServingSqlShapeViolations(missingSnapshotSql).map((violation) => {
+    return violation.label
+  })
+
+  expect(violations).toContain('snapshot scoped read')
+})
+
 test('reviewServing source files are statically guarded without scanning legacy route SQL', () => {
   const sourceViolations = getGuardedReviewServingSourceFiles().flatMap((filePath) => {
     return getReviewServingSqlShapeViolations(readFileSync(filePath, 'utf8'), {
@@ -180,6 +215,7 @@ test('reviewServing source files are statically guarded without scanning legacy 
       requireOrderBy: false,
       requireProjectScope: false,
       requireRegisteredTable: false,
+      requireSnapshotScope: false,
     }).map((violation) => {
       return `${relative(reviewServingSourceRoot, filePath)}: ${violation.label}`
     })

@@ -12,6 +12,7 @@ export type ReviewServingSqlShapeOptions = {
   requireOrderBy?: boolean
   requireProjectScope?: boolean
   requireRegisteredTable?: boolean
+  requireSnapshotScope?: boolean
 }
 
 const tableReferencePattern = /\b(?:from|join)\s+((?:"[^"]+"|[a-z_][\w]*)(?:\.(?:"[^"]+"|[a-z_][\w]*))?)/giu
@@ -31,6 +32,7 @@ const getDefaultReviewServingSqlShapeOptions = (): Required<ReviewServingSqlShap
     requireOrderBy: true,
     requireProjectScope: true,
     requireRegisteredTable: true,
+    requireSnapshotScope: true,
   }
 }
 
@@ -99,12 +101,16 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
     options.requireProjectScope && !/\bwhere\b[\s\S]*\bproject_id\b/iu.test(sql)
       ? [{label: 'project scoped read', pattern: 'WHERE ... project_id'}]
       : []
+  const snapshotScopeViolations =
+    options.requireSnapshotScope && !/\bwhere\b[\s\S]*\bsnapshot_id\b/iu.test(sql)
+      ? [{label: 'snapshot scoped read', pattern: 'WHERE ... snapshot_id'}]
+      : []
   const orderByViolations =
     options.requireOrderBy && !/\border\s+by\b/iu.test(sql) ? [{label: 'keyset ordering', pattern: 'ORDER BY'}] : []
   const limitViolations =
     options.requireLimit && !/\blimit\b/iu.test(sql) ? [{label: 'bounded limit', pattern: 'LIMIT'}] : []
 
-  return [...projectScopeViolations, ...orderByViolations, ...limitViolations]
+  return [...projectScopeViolations, ...snapshotScopeViolations, ...orderByViolations, ...limitViolations]
 }
 
 export const getReviewServingSqlShapeViolations = (sql: string, options?: ReviewServingSqlShapeOptions) => {
@@ -137,6 +143,20 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
     : ` AND review_config_hash = ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter}`
 }
 
+const reviewServingListModePredicateTables = new Set([
+  'mart.review_article_filter_posting_serving_v4',
+  'mart.review_article_serving_v4',
+])
+
+const getReviewServingRowsSqlListModePredicate = (params: {
+  contract: ReviewServingReadContract
+  listModeParameter: string
+}) => {
+  return params.contract.listMode && reviewServingListModePredicateTables.has(params.contract.servingTable)
+    ? ` AND list_mode_key = ${params.listModeParameter}`
+    : ''
+}
+
 export const buildReviewServingRowsSql = (params: {
   contract: ReviewServingReadContract
   cursorPredicate?: string
@@ -150,7 +170,7 @@ export const buildReviewServingRowsSql = (params: {
 }) => {
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
   const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
-  const listModePredicate = params.contract.listMode ? ` AND list_mode_key = ${params.listModeParameter}` : ''
+  const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
   const sortSql = getSortSql(params.contract)
 
   return `SELECT * FROM ${params.contract.servingTable} WHERE project_id = ${params.projectIdParameter}${identityPredicates}${listModePredicate}${cursorPredicate} ORDER BY ${sortSql} LIMIT ${params.limitParameter}`

@@ -128,6 +128,20 @@ test('validateReviewServingCursor rejects filter and sort scope mismatches', () 
   expect(sortKeyResult).toEqual({reason: 'sortKeyMismatch', valid: false})
 })
 
+test('validateReviewServingCursor rejects sort value arity mismatches', () => {
+  const truncatedResult = validateReviewServingCursor(
+    {...payload, sortValues: [payload.sortValues[0] ?? null]},
+    validationContext,
+  )
+  const extraResult = validateReviewServingCursor(
+    {...payload, sortValues: [...payload.sortValues, 'extra']},
+    validationContext,
+  )
+
+  expect(truncatedResult).toEqual({reason: 'sortArityMismatch', valid: false})
+  expect(extraResult).toEqual({reason: 'sortArityMismatch', valid: false})
+})
+
 test('decodeReviewServingCursor rejects malformed cursors', () => {
   const decoded = decodeReviewServingCursor('not-json')
 

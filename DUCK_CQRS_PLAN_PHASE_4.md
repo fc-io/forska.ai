@@ -41,7 +41,7 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - Posting contracts used by list routes must be constrained by list mode or split into per-list contracts before they are mounted.
 - PDF-by-filter and PDF-by-project routes must not mount until list type, date bounds, and search scope are represented in the selection contract. Explicit-ID PDF bulk routes must use an article-ID-only contract instead of project-scoped review-serving selection.
 - Export routes must not mount until export contracts cover selected article metadata plus prompt answers, explanations, and quotes.
-- Prompt preview must preserve the current sample-article order: `article_created_at ASC NULLS LAST, article_id ASC`.
+- Prompt preview must preserve the current sample-article order, full-text preparation behavior, `no_fulltext` handling, and conversion-failure behavior before it is mounted.
 
 ## Job Migration Scope
 

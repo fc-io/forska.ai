@@ -46,6 +46,7 @@ export type ReviewServingCursorValidationFailureReason =
   | 'filterSignatureMismatch'
   | 'reviewConfigHashMismatch'
   | 'snapshotMismatch'
+  | 'sortArityMismatch'
   | 'sortDirectionMismatch'
   | 'sortKeyMismatch'
 
@@ -151,6 +152,21 @@ export const getReviewServingFilterSignature = (input: ReviewServingFilterSignat
 
 export const getReviewServingCursorSortKey = (fields: readonly string[]) => {
   return Buffer.from(getStableReviewServingJson(fields), 'utf8').toString('base64url')
+}
+
+const getReviewServingCursorSortFieldCount = (sortKey: string) => {
+  try {
+    const fields = JSON.parse(Buffer.from(sortKey, 'base64url').toString('utf8')) as unknown
+
+    return Array.isArray(fields)
+      && fields.every((field) => {
+        return typeof field === 'string'
+      })
+      ? fields.length
+      : null
+  } catch (_error) {
+    return null
+  }
 }
 
 const isSortValue = (value: unknown): value is null | number | string => {
@@ -294,6 +310,10 @@ export const validateReviewServingCursor = (
 
   if (payload.sortKey !== expected.sortKey) {
     return {reason: 'sortKeyMismatch', valid: false}
+  }
+
+  if (payload.sortValues.length !== getReviewServingCursorSortFieldCount(expected.sortKey)) {
+    return {reason: 'sortArityMismatch', valid: false}
   }
 
   if ((expected.reviewConfigHash ?? null) !== payload.reviewConfigHash) {

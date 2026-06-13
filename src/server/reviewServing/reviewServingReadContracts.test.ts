@@ -118,7 +118,7 @@ test('detail row contract pins a canonical list mode for article lookups', () =>
   expect(detailRow?.servingTable).toBe('mart.review_article_serving_v4')
 })
 
-test('mounted routes stay off incomplete option, count, detail, and warning contract coverage', () => {
+test('mounted routes stay off incomplete option, count, detail, warning, and preview coverage', () => {
   const incompleteProductRoutes = new Set([
     '/api/articles/pdf-fetch-by-filter',
     '/api/articles/pdf-fetch-by-project',
@@ -131,6 +131,7 @@ test('mounted routes stay off incomplete option, count, detail, and warning cont
     '/api/articlesreviewsunassessed',
     '/api/projectsreview',
     '/api/projectsreviewswarnings',
+    '/api/projects/:id/prompts/:promptId/preview',
     '/api/projects/:id/export',
   ])
   const mountedIncompleteRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
