@@ -82,9 +82,11 @@ export const reviewServingFilterKeys = [
   'importRoute',
   'llmStatus',
   'promptAnswer',
+  'promptId',
   'publicationYear',
   'queueKind',
   'searchTokenPrefix',
+  'sourceProject',
 ] as const
 
 export type ReviewServingFilterKey = (typeof reviewServingFilterKeys)[number]
@@ -126,9 +128,15 @@ export const reviewServingReadContractKeys = [
   'review.both.count',
   'review.unassessed.rows',
   'review.unassessed.count',
+  'review.filters.postings',
   'review.filters.facets',
   'review.prompt.badges',
   'review.queue.unassessed',
+  'review.detail.row',
+  'review.detail.payload',
+  'review.health.snapshot',
+  'review.warning.snapshot',
+  'review.prompt.preview',
   'review.bulk.selection',
   'review.export.selection',
   'review.pdf.selection',
