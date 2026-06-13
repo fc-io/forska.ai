@@ -18,7 +18,7 @@ Route-level raw-path guards become blocking when those routes are migrated in Ph
 
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
-| [ ] | Contracts, budgets, and module boundary | Add `src/server/reviewServing/` with contracts, projection identity builders, invalidation registry, read registry, cursor helpers, SQL-shape test helpers, admission interfaces, route-specific parity contracts, and diagnostics shape. | Every planned hot read has a contract entry mapped to product routes in the migration inventory, every hot read has a declared physical table/cursor/budget/count/filter-access behavior, every delta kind maps to first affected component/downstream dependents/update mode, foreground admission is registry-based, and static tests guard the new SQL builders/registries from raw fallback shapes. |
+| [ ] | Contracts, budgets, and module boundary | Add `src/server/reviewServing/` with contracts, projection identity builders, invalidation registry, read registry, cursor helpers, SQL-shape test helpers, admission interfaces, route-specific parity contracts, and diagnostics shape. | Every planned hot read has a contract entry and conservative migration inventory entry, every mounted route entry represents complete product-route coverage, incomplete helper/future contracts stay unmounted, every hot read has a declared physical table/cursor/budget/count/filter-access behavior, every delta kind maps to first affected component/downstream dependents/update mode, foreground admission is registry-based, and static tests guard the new SQL builders/registries from raw fallback shapes. |
 | [ ] | Benchmark harness | Add the 10M-article/7-prompt synthetic fixture generator, overlap workload definition, memory limits, and metrics capture API. | The harness can run a smoke workload before final schema/projectors exist and can later run the full fixture. It reports p50/p95/p99 latency, memory, temp usage, queue depth, rows scanned, rows returned, and admitted/rejected work. The full 10M pass remains a Phase 5 release gate. |
 
 ## Required Artifacts
@@ -40,6 +40,8 @@ Route-level raw-path guards become blocking when those routes are migrated in Ph
 - Do not add route behavior changes in Phase 0.
 - Do not fail tests only because legacy pre-cutover routes still use raw OLAP paths.
 - Every normal hot read planned for Phase 4 must have a contract before route migration starts.
+- A route inventory entry may be `mounted: true` only when the listed contracts cover the complete current product response shape. Partial contracts for count panels, filter options, detail judgment payloads, warning diagnostics, or future helper reads must stay unmounted.
+- Admission must reject requested search modes that do not match the registered contract search mode. Omitted search mode means no search.
 - Every delta kind planned for Phase 2 and Phase 3 must have an invalidation registry entry before write paths emit it.
 - The registry is the source of truth for first affected component, downstream dependents, affected keys, and update mode.
 - SQL-shape guards should reject `selected_scoped_article_import`, `ROW_NUMBER(`, `OFFSET`, raw `app.article`/`app.judgment` scans, `json_extract`, and unbounded foreground `GROUP BY` in new serving SQL.
@@ -50,6 +52,8 @@ Route-level raw-path guards become blocking when those routes are migrated in Ph
 - [ ] `bunx eslint src/server/reviewServing`
 - [ ] `bun run lint`
 - [ ] Static tests prove every `reviewServingReadContracts.ts` key has workload class, cursor spec, budgets, allowed filters, physical filter access strategy, named fast counts, freshness behavior, and required/optional components.
+- [ ] Static tests prove mounted route inventory entries do not claim partial count, filter-option, detail, warning, or route-helper coverage.
+- [ ] Admission tests prove mismatched search modes are rejected before DuckDB execution.
 - [ ] Static tests prove every `reviewServingChangeKind` has an invalidation registry entry and no unknown change kind becomes broad project invalidation.
 - [ ] SQL-shape tests prove new serving SQL cannot include raw fallback shapes.
 - [ ] Benchmark smoke harness can run without requiring completed schema/projectors.

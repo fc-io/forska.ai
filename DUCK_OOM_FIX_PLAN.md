@@ -54,6 +54,12 @@ behavior against semantic fixtures and safe-size current behavior, records
 latency/query-shape metrics, and blocks that route migration on invariant,
 parity, or budget failures.
 
+The route inventory is intentionally conservative. `mounted: true` means the
+registered contracts cover the full product response shape for that route.
+Partial helper contracts, future route contracts, or contracts missing search,
+filter-option, detail, or warning-diagnostic parity stay unmounted until their
+route-specific gates pass.
+
 ## Scale Target
 
 The initial production-scale target is 10 million articles in one project, with
@@ -119,6 +125,7 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - Failure recovery: failed snapshots stay inactive, preserve the last known-good snapshot, expose the failure state, and allow bounded retry without raw foreground fallback.
 - Desktop constraints: the same architecture must tolerate laptop memory limits, slower disks, sleep/restart interruptions, and resumable background work.
 - Physical read-path contract: every hot route declares its serving table, required columns, filter keys, sort key, cursor shape, and index/access path. Hot reads use projected typed columns and config/snapshot-scoped keys, not runtime JSON extraction or selected-import joins.
+- Route inventory contract: mounted route inventory entries are complete product-route coverage only. Partial contracts remain unmounted and cannot be used as evidence that the route is migrated or safe.
 - Filter access contract: every synchronous filter combination is allowlisted with a bounded physical access strategy: ordered prefix, posting/projection table, small candidate set, or unavailable/async. A serving-only predicate is not enough if it scans project-scale rows.
 - Cursor contract: every cursor includes `snapshot_id`, required component identities, component base/patch state, sort key values, page direction, and a filter signature. If the snapshot, identity set, component state, or filter signature changes, the route returns a fresh first page or a cursor-invalid state instead of mixing snapshots.
 - Snapshot pinning contract: durable jobs and long-lived cursors that require repeatable results acquire snapshot pins. Cleanup cannot delete pinned base rows, patches, payloads, counts, facets, or search state until the pin expires or is released.
@@ -126,7 +133,7 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - Bulk-operation contract: select-all, add-to-project, PDF fetch, export, and similar actions operate through persisted selection jobs or cursor-batched server jobs. They never return or allocate all matching article IDs in one request.
 - Search contract: synchronous ready search supports declared token/prefix semantics from compact search projections. Arbitrary substring/contains search over million-scale projects is async-only or unavailable unless a benchmarked n-gram projection is explicitly added.
 - Specific-count contract: only named product-critical counts are synchronous and fast. Unsupported filter/search combinations return nullable/unavailable counts or start async count work; they never trigger raw aggregation.
-- Workload admission contract: every normal foreground DuckDB request comes from a registered read/job contract with a workload class, result-size budget, row budget, memory/temp budget, and timeout. Ad hoc SQL estimation is not a safety boundary; unregistered foreground work is rejected before query execution.
+- Workload admission contract: every normal foreground DuckDB request comes from a registered read/job contract with a workload class, search mode, result-size budget, row budget, memory/temp budget, and timeout. Ad hoc SQL estimation is not a safety boundary; unregistered foreground work or mismatched search-mode work is rejected before query execution.
 - Result-size contract: API responses have maximum page size, row count, payload bytes, and hydrated-detail budgets. Detail payloads and ID lists are paged or job-backed, not embedded in hot list responses.
 - Route-specific parity contract: parity reads compare semantic fixtures, sampled safe-size parity, invariants, freshness states, cursors, SQL shape, latency, and result-size behavior before each production route or flow migrates. Any mismatch, forbidden SQL shape, or budget breach blocks that route migration.
 
@@ -158,6 +165,7 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - [ ] Serving manifests distinguish route-required projection components from optional async/search/count components.
 - [ ] Exactly one normal V4 serving writer owns `mart.review_*_v4` writes and active V4 snapshot promotion.
 - [ ] Review list, count, facet, badge, and unassessed-queue reads use serving indexes only.
+- [ ] Filter-option routes, detail routes, and warning/health routes are not marked migrated until their contracts cover the complete response shape, including search-scoped options, prompt judgment details, and maintenance diagnostics.
 - [ ] Hot serving rows contain typed columns for sort, filters, badges, and selected import fields.
 - [ ] Hot serving tables use physical layouts that keep product reads bounded by ordered snapshot/filter prefixes, typed columns, and compact projection-specific rows.
 - [ ] Named product-critical counts and facets are precomputed or nullable; they are never computed from raw tables in request paths.
@@ -239,6 +247,7 @@ Every hot read shape must declare:
 - Sort key and keyset cursor columns.
 - Filter keys that are allowed synchronously.
 - Physical access strategy for each allowed synchronous filter combination.
+- Whether the contract is complete product-route coverage or only an unmounted helper/future contract.
 - Which named counts are fast, and whether other count shapes return stale, nullable, unavailable, or async counts.
 - Maximum page size, result row count, response bytes, and detail hydration budget.
 - Workload class and admission budget.
@@ -457,6 +466,12 @@ table with a summary definition version, contribution keys, and tests.
 
 Unsupported count shapes must not fall back to raw `COUNT(*)`, raw prompt-answer
 aggregation, or selected-import scans in foreground requests.
+
+Filter-option routes are distinct from article posting rows. A migrated filter
+option route must return the complete option/min-max payload expected by the UI,
+scoped to active search and filters when the current product route does so. A
+posting contract is only a row-candidate access path unless paired with an option
+or facet contract that proves full response parity.
 
 ## Incremental Summary Updates
 

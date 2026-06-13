@@ -18,7 +18,7 @@ The serving projector service becomes the single normal write boundary for V4 `m
 |---|---|---|---|
 | [ ] | Projector core | Build component-scoped projector dependency graph, coalesced dirty-work service, compacted component acknowledgements, leases, watermarks, idempotent replay, wake budgets, single serving-writer boundary, major base/minor patch snapshot model, contribution diff service, incrementally digested rebuild chunk manifests, failure state, snapshot pins, and retention cleanup primitives. | Projector tests prove crash/retry/replay safety, bounded batch size, dirty-work coalescing, component ack skip behavior, wake release, watermark atomicity, single-writer ownership, contribution diffs, component-narrow patches, patch compaction thresholds, chunk resume/skip behavior without source-row hash scans, pin-aware cleanup, and failed snapshots preserving last-known-good data. |
 | [ ] | Selected-import projection | Replace runtime `selected_scoped_article_import` ranking with snapshot-scoped selected-import projection. | Selected import rows are projected by bounded batches, promoted atomically, and normal foreground SQL never contains `selected_scoped_article_import` after cutover. |
-| [ ] | Serving projections | Write compacted base rows, component-narrow patch rows, payload rows, human/both/unassessed status, badges, contribution rows, count/facet rows, filter postings, posting stats, queue rows, and search projection or async search state from completed dependency inputs. | Manifest checks prove all route-required components and watermarks match one logical snapshot before promotion. Optional search/count components expose availability states and do not block unrelated route activation. Routine changes update only affected component fields, contributions, postings, and chunk digests. |
+| [ ] | Serving projections | Write compacted base rows, component-narrow patch rows, payload rows, human/both/unassessed status, badges, contribution rows, count/facet rows, filter-option rows, prompt judgment-detail rows, filter postings, posting stats, queue rows, warning/health diagnostic state, and search projection or async search state from completed dependency inputs. | Manifest checks prove all route-required components and watermarks match one logical snapshot before promotion. Optional search/count components expose availability states and do not block unrelated route activation. Routine changes update only affected component fields, contributions, postings, option rows, detail rows, diagnostic rows, and chunk digests. |
 
 ## Snapshot And Generation Rules
 
@@ -49,6 +49,14 @@ The serving projector service becomes the single normal write boundary for V4 `m
 - Apply `-old +new` deltas to summary tables in one transaction with updated contribution rows and projector watermark.
 - If contribution state is missing, corrupted, or from an incompatible definition version, enqueue bounded repair instead of falling back to full foreground aggregation.
 - Posting cardinality stats update from the same contribution diff path and let readers choose the most selective bounded posting without scanning.
+
+## Route Completeness Rules
+
+- Filter posting rows are article-candidate access paths, not filter-option route responses. Filter-option projections must produce the complete option/min-max payload expected by the current UI and preserve active search/filter scope.
+- Detail route projections must include prompt-level judgment details, explanations, quotes, assessments, placeholder judgments, payload references, and badges before `/api/projectsreview` can migrate.
+- Warning/health projections or repositories must expose snapshot state together with maintenance lease state, queued/in-flight refresh counts, large-rebuild progress, and quarantine diagnostics before `/api/projectsreviewswarnings` can migrate.
+- Standalone count route projections must cover the same search/filter scope as the current count panel or return explicit unavailable/async state.
+- Prompt-preview payload projection preserves current first-article ordering by `article_created_at ASC NULLS LAST, article_id ASC`.
 
 ## Chunked Rebuild Rules
 
@@ -93,6 +101,9 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [ ] Targeted tests for atomic review serving snapshot manifest promotion and failed-snapshot recovery
 - [ ] Targeted tests for required versus optional manifest components and route-specific availability states
 - [ ] Targeted tests for count/facet serving projections
+- [ ] Targeted tests for filter-option projections proving complete option/min-max payloads and active search/filter scope
+- [ ] Targeted tests for judgment-detail serving projections proving explanations, quotes, assessments, placeholders, and payload references are present
+- [ ] Targeted tests for warning/health diagnostics proving maintenance, rebuild, dirty-work, and quarantine states are represented
 - [ ] Targeted tests for old/new contribution diffs for counts, facets, badges, queues, posting stats, deletes, answer changes, and membership removals
 - [ ] Targeted tests for unsupported count/facet combinations returning nullable or unavailable states
 - [ ] `bun run lint`
