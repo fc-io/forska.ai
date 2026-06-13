@@ -118,6 +118,27 @@ test('detail row contract pins a canonical list mode for article lookups', () =>
   expect(detailRow?.servingTable).toBe('mart.review_article_serving_v4')
 })
 
+test('queue and count contracts use physical serving-table sort columns', () => {
+  const queue = getReviewServingReadContract('review.queue.unassessed')
+  const count = getReviewServingReadContract('review.llm.count')
+  const badges = getReviewServingReadContract('review.prompt.badges')
+
+  expect(queue?.cursorFields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id'])
+  expect(queue?.sort.fields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id'])
+  expect(count?.sort.fields).toEqual(['count_kind', 'summary_definition_version', 'filter_key'])
+  expect(badges?.sort.fields).toEqual(['count_kind', 'summary_definition_version', 'filter_key'])
+})
+
+test('snapshot contracts align cursor fields with sort keys and required counts', () => {
+  const health = getReviewServingReadContract('review.health.snapshot')
+  const warning = getReviewServingReadContract('review.warning.snapshot')
+
+  expect(health?.cursorFields).toEqual(['updated_at', 'snapshot_id'])
+  expect(warning?.cursorFields).toEqual(['updated_at', 'snapshot_id'])
+  expect(warning?.requiredComponents).toContain('queue')
+  expect(warning?.optionalComponents).not.toContain('queue')
+})
+
 test('mounted routes stay off incomplete option, count, detail, warning, and preview coverage', () => {
   const incompleteProductRoutes = new Set([
     '/api/articles/pdf-fetch-by-filter',
