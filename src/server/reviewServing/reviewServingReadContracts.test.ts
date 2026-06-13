@@ -106,7 +106,34 @@ test('prompt preview contract does not advertise prompt filters on article paylo
   const promptPreview = getReviewServingReadContract('review.prompt.preview')
 
   expect(promptPreview?.allowedFilters).toEqual([])
+  expect(promptPreview?.cursorFields).toEqual(['article_created_at', 'article_seq', 'article_id'])
   expect(promptPreview?.servingTable).toBe('mart.review_article_serving_payload_v4')
+  expect(promptPreview?.sort).toEqual({direction: 'asc', fields: ['article_created_at', 'article_seq', 'article_id']})
+})
+
+test('detail row contract pins a canonical list mode for article lookups', () => {
+  const detailRow = getReviewServingReadContract('review.detail.row')
+
+  expect(detailRow?.listMode).toBe('both')
+  expect(detailRow?.servingTable).toBe('mart.review_article_serving_v4')
+})
+
+test('mounted search-scoped filter routes stay off unscoped facet contracts', () => {
+  const mountedFilterRoutes = new Set(['/api/articlesreviewsfilters', '/api/articlesreviewshumanfilters'])
+  const mountedFacetRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
+    return (
+      entry.mounted
+      && mountedFilterRoutes.has(entry.productRoute)
+      && entry.contractKeys.includes('review.filters.facets')
+    )
+  })
+  const facetInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.contractKeys.includes('review.filters.facets')
+  })
+
+  expect(mountedFacetRoutes).toEqual([])
+  expect(facetInventoryEntries).toHaveLength(1)
+  expect(facetInventoryEntries[0]).toMatchObject({mounted: false, surfaces: ['facet']})
 })
 
 test('review serving read contracts use planned Phase 1 physical table names', () => {
