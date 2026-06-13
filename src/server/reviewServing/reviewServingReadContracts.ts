@@ -577,7 +577,7 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: ['review.prompt.preview', 'review.detail.payload'],
     method: 'GET',
-    mounted: true,
+    mounted: false,
     productRoute: '/api/projects/:id/prompts/:promptId/preview',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview.ts',
     surfaces: ['promptPreview', 'detail'],
