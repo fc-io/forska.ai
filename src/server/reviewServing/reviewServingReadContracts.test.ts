@@ -121,6 +121,7 @@ test('detail row contract pins a canonical list mode for article lookups', () =>
 test('mounted routes stay off incomplete option, count, detail, and warning contract coverage', () => {
   const incompleteProductRoutes = new Set([
     '/api/articles/pdf-fetch-by-filter',
+    '/api/articles/pdf-fetch-by-project',
     '/api/articlesreviews',
     '/api/articlesreviewsboth',
     '/api/articlesreviewscount',
