@@ -10,7 +10,7 @@ Add the empty durable schema and generic DuckDB workload-admission foundation re
 
 Add empty durable schema, constraints, indexes, and generic DuckDB runtime admission hooks.
 
-Phase 1 does not need projectors to populate every row and does not switch product routes.
+Phase 1 does not populate projections and does not switch product routes.
 
 New serving schema must use `snapshot_id` for logical product snapshots and `base_generation`/`patch_watermark` for component physical state.
 
@@ -30,8 +30,8 @@ Do not mutate legacy V3 table schemas during Phase 1.
 
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
-| [ ] | Schema foundation | Add migrations for import deltas, review change deltas, review delta outbox/reconciliation cursors, import hot fields, coalesced dirty work, dirty-work acknowledgements, projector cursors/watermarks, projection identity manifests, rebuild chunk manifests, selected-import snapshots, logical snapshot manifests, snapshot pins, compacted serving bases, typed component patch tables, filter postings, posting stats, contribution rows, payloads, count/facet rows, search state, bulk jobs, write overlays, and retention metadata. Use `_v4` physical mart names where legacy V3 tables conflict. | `bun run db:mig` applies cleanly and schema tests prove the exact table names used by `reviewServingReadContracts.ts`, common delta envelope fields, hot-field columns, outbox/reconciliation cursors, narrow identity keys, sorted/order keys, `snapshot_id`/`base_generation`/typed-patch fields, required/optional component status, retention/pin fields, dirty-work acknowledgement fields, contribution keys, posting stats, and chunk resume fields exist. |
-| [ ] | Runtime admission foundation | Add generic workload classification and budget-enforcement hooks in the DuckDB runtime without adding product-specific SQL there. Thread an optional workload context through execution helpers with workload class, route/job key, project ID, result-row/byte budget, temp-spill policy, timeout, and stale/async fallback intent. | Registered review-serving foreground work can be admitted from contracts before DuckDB execution, unregistered migrated foreground work can be rejected or served stale, legacy non-migrated routes remain explicitly classified during migration, and metrics include workload class, memory limit, temp usage, queue state, route/job key, and project context. |
+| [ ] | Schema foundation | Add migrations for import deltas, review change deltas, review delta outbox/reconciliation cursors, import hot fields, coalesced dirty work, dirty-work acknowledgements, projector cursors/watermarks, projection identity manifests, rebuild chunk manifests, selected-import snapshots, logical snapshot manifests, snapshot pins, compacted serving bases, typed component patch tables, filter postings, posting stats, contribution rows, payloads, count/facet rows, search state, bulk jobs, write overlays, and retention metadata. Use `_v4` physical mart names where legacy V3 tables conflict. | `bun run db:mig` applies cleanly and schema tests prove the exact table names used by `reviewServingReadContracts.ts`, every non-job read contract's `cursorFields` and `sort.fields`, common delta envelope fields, hot-field columns, outbox/reconciliation cursors, narrow identity keys, sorted/order keys, `snapshot_id`/`base_generation`/typed-patch fields, required/optional component status, retention/pin fields, dirty-work acknowledgement fields, contribution keys, posting stats, and chunk resume fields exist. |
+| [ ] | Runtime admission foundation | Add generic workload classification and budget-enforcement hooks in the DuckDB runtime without adding product-specific SQL there. Extend the Phase 0 budget/read-contract shape with `timeoutMs`, and thread an optional workload context through DuckDB execution helpers and wrapper services with workload class, route/job key, project ID, result-row/byte budget, temp-spill policy, timeout, and stale/async fallback intent. | Registered review-serving foreground work can be admitted from contracts before DuckDB execution, unregistered migrated foreground work is rejected, registered stale-allowed work can serve stale or async according to its contract, legacy non-migrated routes remain explicitly classified during migration, and metrics include workload class, memory limit, temp usage, queue state, route/job key, and project context. |
 
 ## Required Schema Groups
 
@@ -46,14 +46,16 @@ Do not mutate legacy V3 table schemas during Phase 1.
 - Jobs: `app.review_bulk_operation_job`, `app.review_search_job`
 - Retention: `app.review_serving_retention_mark`
 - Serving marts: `mart.review_article_serving_v4`, `mart.review_article_count_serving_v4`, `mart.review_filter_facet_serving_v4`, `mart.review_unassessed_queue_serving_v4`, `mart.review_title_search_serving_v4`
-- Patch and support marts: display patches, selected-import patches, LLM patches, human patches, queue patches, posting patches, posting serving rows, posting stats, payload rows, and summary contributions
+- Patch and support marts: `mart.review_article_display_patch_v4`, `mart.review_selected_import_patch_v4`, `mart.review_llm_status_patch_v4`, `mart.review_human_status_patch_v4`, `mart.review_queue_patch_v4`, `mart.review_article_filter_posting_patch_v4`, `mart.review_article_filter_posting_serving_v4`, `mart.review_filter_posting_stats_v4`, `mart.review_article_serving_payload_v4`, and `mart.review_article_summary_contribution_v4`
 
 ## Runtime Admission Requirements
 
 - Low-level DuckDB helpers accept an optional workload context but contain no product-specific SQL or review-serving decisions.
-- The workload context includes workload class, route/job key, project ID, row budget, byte budget, temp-spill policy, timeout, and fallback intent.
+- The workload context includes workload class, route/job key, project ID, row budget, byte budget, temp-spill policy, `timeoutMs`, and fallback intent.
+- Thread workload context through `duckdbService.ts`, `appDatabaseService.ts`, `readOnlyDuckdbService.ts`, `appReadOnlyDatabaseService.ts`, and `src/services/olap/duckdbRunner.ts` so route and worker wrappers cannot bypass contextual metrics or budget enforcement.
 - Metrics include workload class, memory limit, temp usage, queue state, route/job key, project context, rows returned, result bytes, and failures.
 - Budget enforcement happens when a workload context is supplied.
+- Unregistered migrated foreground work is rejected. Only registered contracts whose freshness behavior allows stale or async fallback can serve stale or async instead of executing fresh DuckDB work.
 - Legacy non-migrated routes remain explicitly classified during migration instead of being silently treated as registered serving reads.
 
 ## Rules
@@ -75,7 +77,10 @@ Do not mutate legacy V3 table schemas during Phase 1.
 - [ ] `bunx eslint src/server/reviewServing src/server/utils/duckdbService.ts`
 - [ ] `bun run lint`
 - [ ] Schema tests prove every table referenced by `reviewServingReadContracts.ts` exists.
+- [ ] Schema tests derive required physical columns from `reviewServingReadContracts.ts` and prove every non-job contract's `cursorFields` and `sort.fields` exist on its serving table.
 - [ ] Schema tests prove common delta envelope fields exist on both delta ledgers.
 - [ ] Schema tests prove `snapshot_id`, `base_generation`, `patch_watermark`, typed patch keys, required/optional component status, retention/pin fields, dirty-work ack fields, contribution keys, posting stats, and chunk resume fields exist.
+- [ ] Admission tests prove `timeoutMs` is declared on read contracts, mapped into `DuckdbWorkloadContext`, recorded in metrics, and enforced when contextual work exceeds it.
+- [ ] Wrapper tests prove workload context can be passed through `appDatabaseService.ts`, `readOnlyDuckdbService.ts`, `appReadOnlyDatabaseService.ts`, and `src/services/olap/duckdbRunner.ts`.
 - [ ] Runtime tests prove over-budget contextual DuckDB work records metrics and is rejected before becoming a normal product success path.
 - [ ] Browser and desktop review flows are not changed by this phase.
