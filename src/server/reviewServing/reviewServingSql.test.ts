@@ -258,6 +258,23 @@ test('assertReviewServingSqlShape requires snapshot scope by default', () => {
   expect(violations).toContain('snapshot scoped read')
 })
 
+test('assertReviewServingSqlShape requires project and snapshot scope for every joined alias', () => {
+  const sql = `
+    SELECT s.article_id
+    FROM mart.review_article_serving_v4 s
+    JOIN mart.review_article_filter_posting_serving_v4 p ON p.article_id = s.article_id
+    WHERE s.project_id = ? AND s.snapshot_id = ?
+    ORDER BY s.sort_key DESC, s.article_id DESC
+    LIMIT ?
+  `
+  const violations = getReviewServingSqlShapeViolations(sql).map((violation) => {
+    return violation.label
+  })
+
+  expect(violations).toContain('project scoped read: p')
+  expect(violations).toContain('snapshot scoped read: p')
+})
+
 test('reviewServing source files are statically guarded without scanning legacy route SQL', () => {
   const sourceViolations = getGuardedReviewServingSourceFiles().flatMap((filePath) => {
     return getReviewServingSqlShapeViolations(readFileSync(filePath, 'utf8'), {

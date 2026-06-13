@@ -16,6 +16,24 @@ export type ReviewServingSqlShapeOptions = {
 }
 
 const tableReferencePattern = /\b(?:from|join)\s+((?:"[^"]+"|[a-z_][\w]*)(?:\.(?:"[^"]+"|[a-z_][\w]*))?)/giu
+const tableReferenceWithAliasPattern =
+  /\b(?:from|join)\s+((?:"[^"]+"|[a-z_][\w]*)(?:\.(?:"[^"]+"|[a-z_][\w]*))?)(?:\s+(?:as\s+)?((?!where\b|on\b|join\b|order\b|limit\b|group\b|having\b|using\b|inner\b|left\b|right\b|full\b|cross\b)(?:"[^"]+"|[a-z_][\w]*)))?/giu
+const sqlClauseKeywords = new Set([
+  'cross',
+  'full',
+  'group',
+  'having',
+  'inner',
+  'join',
+  'left',
+  'limit',
+  'on',
+  'order',
+  'right',
+  'using',
+  'where',
+])
+type ReviewServingSqlTableReference = {alias: string | null; table: string}
 
 export const reviewServingRegisteredSqlTables = [
   ...new Set(
@@ -48,6 +66,16 @@ const normalizeSqlIdentifier = (identifier: string) => {
   return identifier.replaceAll('"', '').toLowerCase()
 }
 
+const escapeRegex = (value: string) => {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+const getNormalizedSqlAlias = (alias: string | undefined) => {
+  const normalizedAlias = alias ? normalizeSqlIdentifier(alias) : null
+
+  return normalizedAlias && !sqlClauseKeywords.has(normalizedAlias) ? normalizedAlias : null
+}
+
 const getReviewServingSqlForbiddenPatternViolations = (sql: string) => {
   return reviewServingSqlForbiddenPatterns
     .filter((forbiddenPattern) => {
@@ -68,6 +96,16 @@ export const getReviewServingSqlTableReferences = (sql: string) => {
   ].filter((tableReference) => {
     return tableReference.length > 0
   })
+}
+
+const getReviewServingSqlTableReferenceDetails = (sql: string): ReviewServingSqlTableReference[] => {
+  return [...sql.matchAll(tableReferenceWithAliasPattern)]
+    .map((match) => {
+      return {alias: getNormalizedSqlAlias(match[2]), table: normalizeSqlIdentifier(match[1] ?? '')}
+    })
+    .filter((tableReference) => {
+      return tableReference.table.length > 0
+    })
 }
 
 const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Required<ReviewServingSqlShapeOptions>) => {
@@ -97,14 +135,38 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
 }
 
 const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required<ReviewServingSqlShapeOptions>) => {
-  const projectScopeViolations =
-    options.requireProjectScope && !/\bwhere\b[\s\S]*\bproject_id\b/iu.test(sql)
-      ? [{label: 'project scoped read', pattern: 'WHERE ... project_id'}]
+  const tableReferences = getReviewServingSqlTableReferenceDetails(sql)
+  const hasMultipleReferences = tableReferences.length > 1
+  const getQualifierPattern = (tableReference: ReviewServingSqlTableReference) => {
+    if (tableReference.alias) {
+      return `${escapeRegex(tableReference.alias)}\\s*\\.\\s*`
+    }
+
+    return hasMultipleReferences ? `${escapeRegex(tableReference.table)}\\s*\\.\\s*` : '(?:[a-z_][\\w]*\\s*\\.\\s*)?'
+  }
+  const getScopeViolations = (field: 'project_id' | 'snapshot_id', label: string, required: boolean) => {
+    return required
+      ? tableReferences
+          .filter((tableReference) => {
+            return !new RegExp(`\\bwhere\\b[\\s\\S]*\\b${getQualifierPattern(tableReference)}${field}\\b`, 'iu').test(
+              sql,
+            )
+          })
+          .map((tableReference) => {
+            const scopedLabel = tableReference.alias ?? tableReference.table
+
+            return tableReferences.length === 1
+              ? {label, pattern: `WHERE ... ${field}`}
+              : {label: `${label}: ${scopedLabel}`, pattern: `${scopedLabel}.${field}`}
+          })
       : []
-  const snapshotScopeViolations =
-    options.requireSnapshotScope && !/\bwhere\b[\s\S]*\bsnapshot_id\b/iu.test(sql)
-      ? [{label: 'snapshot scoped read', pattern: 'WHERE ... snapshot_id'}]
-      : []
+  }
+  const projectScopeViolations = getScopeViolations('project_id', 'project scoped read', options.requireProjectScope)
+  const snapshotScopeViolations = getScopeViolations(
+    'snapshot_id',
+    'snapshot scoped read',
+    options.requireSnapshotScope,
+  )
   const orderByViolations =
     options.requireOrderBy && !/\border\s+by\b/iu.test(sql) ? [{label: 'keyset ordering', pattern: 'ORDER BY'}] : []
   const limitViolations =

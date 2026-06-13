@@ -151,6 +151,7 @@ export const reviewServingRouteBudgetKeys = [
   'maxEstimatedResultBytes',
   'maxPageSize',
   'maxResultRows',
+  'timeoutMs',
 ] as const
 
 export type ReviewServingRouteBudgetKey = (typeof reviewServingRouteBudgetKeys)[number]
@@ -174,6 +175,7 @@ export type ReviewServingRouteBudget = {
   maxEstimatedResultBytes: number
   maxPageSize: number
   maxResultRows: number
+  timeoutMs: number
 }
 
 export type ReviewServingPhysicalFilterAccess = {

@@ -61,6 +61,7 @@ test('review serving read contracts declare every static registry field', () => 
       || contract.maxPageSize < 1
       || contract.maxResultRows < 0
       || contract.maxEstimatedResultBytes < 1
+      || contract.timeoutMs < 1
       || contract.sort.fields.length === 0
     )
   })

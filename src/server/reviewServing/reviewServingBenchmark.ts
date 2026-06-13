@@ -91,6 +91,12 @@ export type ReviewServingBenchmarkRunResult = {
   workload: ReviewServingBenchmarkWorkloadDefinition
 }
 
+export type ReviewServingBenchmarkRequestCountViolation = {
+  actualRequestCount: number
+  expectedRequestCount: number
+  operationKey: string
+}
+
 type ReviewServingBenchmarkRunState = {startedAtMs: number; startRssBytes: number}
 
 export const reviewServingSynthetic10m7PromptOverlapFixture = {
@@ -216,6 +222,52 @@ const getBenchmarkRunState = () => {
   })
 }
 
+export const getReviewServingBenchmarkRequestCountViolations = (
+  input: Pick<ReviewServingBenchmarkRunInput, 'workItems' | 'workload'>,
+) => {
+  const actualRequestCounts = input.workItems.reduce<Record<string, number>>((counts, workItem) => {
+    return {...counts, [workItem.operationKey]: (counts[workItem.operationKey] ?? 0) + 1}
+  }, {})
+  const workloadOperationKeys = new Set(
+    input.workload.operations.map((operation) => {
+      return operation.key
+    }),
+  )
+  const workloadViolations = input.workload.operations
+    .filter((operation) => {
+      return (actualRequestCounts[operation.key] ?? 0) !== operation.requestCount
+    })
+    .map((operation) => {
+      return {
+        actualRequestCount: actualRequestCounts[operation.key] ?? 0,
+        expectedRequestCount: operation.requestCount,
+        operationKey: operation.key,
+      }
+    })
+  const unknownWorkItemViolations = Object.entries(actualRequestCounts)
+    .filter(([operationKey]) => {
+      return !workloadOperationKeys.has(operationKey)
+    })
+    .map(([operationKey, actualRequestCount]) => {
+      return {actualRequestCount, expectedRequestCount: 0, operationKey}
+    })
+
+  return [...workloadViolations, ...unknownWorkItemViolations]
+}
+
+const validateReviewServingBenchmarkRequestCounts = (input: ReviewServingBenchmarkRunInput) => {
+  const violations = getReviewServingBenchmarkRequestCountViolations(input)
+  const message = violations
+    .map((violation) => {
+      return `${violation.operationKey}: expected ${violation.expectedRequestCount}, got ${violation.actualRequestCount}`
+    })
+    .join('; ')
+
+  return violations.length === 0
+    ? Effect.void
+    : Effect.fail(new Error(`Review-serving benchmark request count mismatch: ${message}`))
+}
+
 const releaseBenchmarkRunState = (_state: ReviewServingBenchmarkRunState) => {
   return Effect.void
 }
@@ -318,6 +370,11 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
       ...reviewServingBenchmarkOverlapWorkloadDefinition,
       fixtureKind: 'smoke',
       key: 'reviewServing.smokeOverlap.v1',
+      operations: [
+        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[0], requestCount: 2},
+        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[1], requestCount: 1},
+        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[2], requestCount: 1},
+      ],
     },
     workItems: [
       {
@@ -409,6 +466,7 @@ export const runReviewServingBenchmarkEffect = (input: ReviewServingBenchmarkRun
 
   return Effect.scoped(
     Effect.gen(function* () {
+      yield* validateReviewServingBenchmarkRequestCounts(input)
       const runState = yield* Effect.acquireRelease(getBenchmarkRunState(), releaseBenchmarkRunState)
       const samples = yield* Effect.forEach(input.workItems, (workItem) => {
         return runBenchmarkWorkItemEffect(workItem, executor)
