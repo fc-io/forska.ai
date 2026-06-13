@@ -205,6 +205,11 @@ test('admitReviewServingDuckdbWorkload maps an admitted contract to generic Duck
     workloadClass: 'foregroundReviewRows',
   })
 
+  expect(result).toMatchObject({
+    admitted: true,
+    diagnostics: {decision: 'accepted', rejectionReason: null},
+    status: 'accepted',
+  })
   expect(result.admitted ? result.workloadContext : null).toEqual({
     allowsTempSpill: false,
     fallbackIntent: 'reject',

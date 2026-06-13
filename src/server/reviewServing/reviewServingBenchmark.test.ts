@@ -53,6 +53,7 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
     rejectionReason: 'unregisteredContract',
     rowsReturned: 0,
     rowsScanned: 0,
+    tempUsageBytes: 0,
   })
   expect(result.metrics).toMatchObject({
     latency: {p50Ms: 8, p95Ms: 20, p99Ms: 20, sampleCount: 4},

@@ -79,6 +79,14 @@ const isFilterSignatureRecord = (
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+const isEmptyNormalizedReviewServingFilterValue = (value: ReviewServingIdentityValue) => {
+  return (
+    value === undefined
+    || (Array.isArray(value) && value.length === 0)
+    || (value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0)
+  )
+}
+
 const compareStableReviewServingValues = (left: ReviewServingIdentityValue, right: ReviewServingIdentityValue) => {
   return getStableReviewServingJson(left).localeCompare(getStableReviewServingJson(right))
 }
@@ -97,7 +105,7 @@ const getNormalizedReviewServingFilterArray = (
   const normalizedValues = values
     .map(getNormalizedReviewServingFilterValue)
     .filter((value): value is Exclude<ReviewServingIdentityValue, undefined> => {
-      return value !== undefined
+      return !isEmptyNormalizedReviewServingFilterValue(value)
     })
 
   return getUniqueReviewServingValues(normalizedValues)
@@ -110,8 +118,7 @@ const getNormalizedReviewServingFilterRecord = (value: {
     .sort()
     .reduce<{[key: string]: ReviewServingIdentityValue}>((record, key) => {
       const normalizedValue = getNormalizedReviewServingFilterValue(value[key])
-      const shouldSkip =
-        normalizedValue === undefined || (Array.isArray(normalizedValue) && normalizedValue.length === 0)
+      const shouldSkip = isEmptyNormalizedReviewServingFilterValue(normalizedValue)
 
       return shouldSkip ? record : {...record, [key]: normalizedValue}
     }, {})

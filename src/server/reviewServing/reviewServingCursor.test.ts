@@ -57,6 +57,21 @@ test('review serving filter signatures are stable for equivalent filters', () =>
   expect(left).toBe(right)
 })
 
+test('review serving filter signatures drop empty nested filter records', () => {
+  const normalized = getNormalizedReviewServingFilterSignatureInput({
+    filters: {nested: {promptAnswer: []}, promptAnswer: []},
+    listMode: 'llm',
+  })
+  const nestedEmptySignature = getReviewServingFilterSignature({
+    filters: {nested: {promptAnswer: []}, promptAnswer: []},
+    listMode: 'llm',
+  })
+  const omittedSignature = getReviewServingFilterSignature({listMode: 'llm'})
+
+  expect(normalized).toEqual({listMode: 'llm'})
+  expect(nestedEmptySignature).toBe(omittedSignature)
+})
+
 test('review serving filter signature normalization keeps ordered range values explicit', () => {
   const normalized = getNormalizedReviewServingFilterSignatureInput({
     filters: {createdAt: {from: '2026-01-01', to: '2026-01-31'}, promptAnswer: ['maybe', 'yes', 'maybe']},

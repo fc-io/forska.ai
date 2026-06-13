@@ -364,7 +364,7 @@ export const reviewServingReadContractList = [
     workloadClass: 'reviewMaintenance',
   }),
   defineContract({
-    allowedFilters: ['promptId'],
+    allowedFilters: [],
     cursorFields: ['article_id'],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.prompt.preview',

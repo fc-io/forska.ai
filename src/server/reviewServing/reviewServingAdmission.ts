@@ -395,6 +395,8 @@ export const admitReviewServingDuckdbWorkload = (
     ? {
         admitted: true,
         contract: admission.contract,
+        diagnostics: admission.diagnostics,
+        status: admission.status,
         workloadContext: getDuckdbWorkloadContext(admission.contract, request),
       }
     : admission
