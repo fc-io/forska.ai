@@ -361,8 +361,20 @@ const getDuckdbScopeClause = (params: {articleAlias: string; routeIds: string[];
   return routeClause ? `(${routeClause} OR ${projectClause})` : projectClause
 }
 
-const getDuckdbScopedArticleImportCteSql = (scope: ProjectOlapScope) => {
-  return getScopedArticleImportSelectionCteSql({importRouteIds: scope.routeIds, projectIds: [scope.projectId]})
+const getDuckdbScopedArticleImportCteSql = (scope: ProjectOlapScope, articleIds?: string[]) => {
+  return getScopedArticleImportSelectionCteSql({
+    articleIds,
+    importRouteIds: scope.routeIds,
+    projectIds: [scope.projectId],
+  })
+}
+
+const getDuckdbPageScopedArticleImportCteSql = (scope: ProjectOlapScope) => {
+  return getScopedArticleImportSelectionCteSql({
+    articleIdFilterSql: 'air.article_id IN (SELECT articleId FROM page_rows)',
+    importRouteIds: scope.routeIds,
+    projectIds: [scope.projectId],
+  })
 }
 
 const getDuckdbScopedArticleImportJoinSql = (articleIdExpression: string) => {
@@ -381,13 +393,12 @@ const getDuckdbServingArticleExternalIdExpression = () => {
   return 's.article_external_id'
 }
 
-const getDuckdbActiveGenerationWithScopedImportPrefix = (scope: ProjectOlapScope) => {
+const getDuckdbActiveGenerationWithPrefix = (scope: ProjectOlapScope) => {
   return `WITH active_generation AS (
     SELECT project_id AS projectId, active_generation AS generation
     FROM app.project_review_serving_generation
     WHERE project_id = ${getDuckdbSqlString(scope.projectId)}
-  ),
-  ${getDuckdbScopedArticleImportCteSql(scope)}`
+  )`
 }
 
 const getDuckdbSqlArrayLiteral = (values: string[]) => {
@@ -699,9 +710,8 @@ const getReviewedPageRowsFromServingMart = async (params: {
   const whereParts = getDuckdbServingWhereParts({...params, sourceMetadataExpression})
   const offset = params.cursor ? 0 : Math.max(params.page - 1, 0) * params.limit
   const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
-  const withPrefix = getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)
+  const withPrefix = getDuckdbActiveGenerationWithPrefix(params.scope)
   const withClause = postingSelection ? `${withPrefix}, ${postingSelection.sql}` : withPrefix
-  const scopedImportJoinClause = getDuckdbScopedArticleImportJoinSql('s.article_id')
   const postingJoinClause = postingSelection
     ? 'INNER JOIN matched_article_id matched ON matched.articleId = s.article_id'
     : ''
@@ -724,35 +734,53 @@ const getReviewedPageRowsFromServingMart = async (params: {
     sourceMetadata: unknown
     url: string | null
   }>(`
-    ${withClause}
+    ${withClause},
+    page_rows AS (
+      SELECT
+        s.article_id AS articleId,
+        s.article_external_id AS canonicalArticleId,
+        ${getDuckdbServingArticleExternalIdExpression()} AS articleExternalId,
+        s.article_title AS articleTitle,
+        s.article_created_at AS articleCreatedAt,
+        s.article_updated_at AS articleUpdatedAt,
+        s.url AS url,
+        s.full_text_pdf AS fullTextPDF,
+        s.full_text_fetched_at AS fullTextFetchedAt,
+        s.full_text_conversion_status AS fullTextConversionStatus,
+        s.source_metadata AS canonicalSourceMetadata,
+        ${sourceMetadataExpression} AS sourceMetadata
+      FROM mart.review_article_serving s
+      INNER JOIN active_generation active
+        ON active.projectId = s.project_id
+       AND active.generation = s.generation
+      ${postingJoinClause}
+      WHERE ${whereParts.join(' AND ')}
+      ORDER BY COALESCE(s.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, s.article_id ASC
+      LIMIT ${params.limit + 1}
+      OFFSET ${offset}
+    ),
+    ${getDuckdbPageScopedArticleImportCteSql(params.scope)}
     SELECT
-      s.article_id AS articleId,
-      s.article_external_id AS canonicalArticleId,
-      ${getDuckdbServingArticleExternalIdExpression()} AS articleExternalId,
-      s.article_title AS articleTitle,
-      s.article_created_at AS articleCreatedAt,
-      s.article_updated_at AS articleUpdatedAt,
-      s.url AS url,
-      s.full_text_pdf AS fullTextPDF,
-      s.full_text_fetched_at AS fullTextFetchedAt,
-      s.full_text_conversion_status AS fullTextConversionStatus,
-      s.source_metadata AS canonicalSourceMetadata,
+      page_rows.articleId AS articleId,
+      page_rows.canonicalArticleId AS canonicalArticleId,
+      page_rows.articleExternalId AS articleExternalId,
+      page_rows.articleTitle AS articleTitle,
+      page_rows.articleCreatedAt AS articleCreatedAt,
+      page_rows.articleUpdatedAt AS articleUpdatedAt,
+      page_rows.url AS url,
+      page_rows.fullTextPDF AS fullTextPDF,
+      page_rows.fullTextFetchedAt AS fullTextFetchedAt,
+      page_rows.fullTextConversionStatus AS fullTextConversionStatus,
+      page_rows.canonicalSourceMetadata AS canonicalSourceMetadata,
       scoped_import.import_metadata AS scopedImportMetadata,
       scoped_import.external_article_id AS selectedExternalArticleId,
       scoped_import.id AS selectedImportRecordId,
       scoped_import.import_route_id AS selectedImportRouteId,
       scoped_import.source_record_key AS selectedSourceRecordKey,
-      ${sourceMetadataExpression} AS sourceMetadata
-    FROM mart.review_article_serving s
-    INNER JOIN active_generation active
-      ON active.projectId = s.project_id
-     AND active.generation = s.generation
-    ${scopedImportJoinClause}
-    ${postingJoinClause}
-    WHERE ${whereParts.join(' AND ')}
-    ORDER BY COALESCE(s.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, s.article_id ASC
-    LIMIT ${params.limit + 1}
-    OFFSET ${offset}
+      page_rows.sourceMetadata AS sourceMetadata
+    FROM page_rows
+    ${getDuckdbScopedArticleImportJoinSql('page_rows.articleId')}
+    ORDER BY COALESCE(page_rows.articleCreatedAt, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, page_rows.articleId ASC
   `)
   const hasMore = rows.length > params.limit
   const pageRows = rows.slice(0, params.limit)
@@ -806,9 +834,8 @@ const countReviewedServingRows = async (params: {
   const sourceMetadataExpression = 's.source_metadata'
   const whereParts = getDuckdbServingWhereParts({...params, cursor: null, sourceMetadataExpression})
   const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
-  const withPrefix = getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)
+  const withPrefix = getDuckdbActiveGenerationWithPrefix(params.scope)
   const withClause = postingSelection ? `${withPrefix}, ${postingSelection.sql}` : withPrefix
-  const scopedImportJoinClause = getDuckdbScopedArticleImportJoinSql('s.article_id')
   const postingJoinClause = postingSelection
     ? 'INNER JOIN matched_article_id matched ON matched.articleId = s.article_id'
     : ''
@@ -819,7 +846,6 @@ const countReviewedServingRows = async (params: {
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
      AND active.generation = s.generation
-    ${scopedImportJoinClause}
     ${postingJoinClause}
     WHERE ${whereParts.join(' AND ')}
   `)
@@ -847,9 +873,8 @@ const getBothPageRowsFromServing = async (params: {
     sourceMetadataExpression,
   })
   const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
-  const withPrefix = getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)
+  const withPrefix = getDuckdbActiveGenerationWithPrefix(params.scope)
   const withClause = postingSelection ? `${withPrefix}, ${postingSelection.sql}` : withPrefix
-  const scopedImportJoinClause = getDuckdbScopedArticleImportJoinSql('s.article_id')
   const postingJoinClause = postingSelection
     ? 'INNER JOIN matched_article_id matched ON matched.articleId = s.article_id'
     : ''
@@ -860,7 +885,6 @@ const getBothPageRowsFromServing = async (params: {
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
      AND active.generation = s.generation
-    ${scopedImportJoinClause}
     ${postingJoinClause}
     WHERE ${whereParts.join(' AND ')}
   `)
@@ -883,7 +907,6 @@ const getBothPageRowsFromServing = async (params: {
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
      AND active.generation = s.generation
-    ${scopedImportJoinClause}
     ${postingJoinClause}
     WHERE ${whereParts.join(' AND ')}
     ORDER BY COALESCE(s.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, s.article_id ASC
@@ -916,13 +939,12 @@ const countUnassessedRowsFromServing = async (params: {
   const sourceMetadataExpression = 's.source_metadata'
   const whereParts = getDuckdbServingReviewWhereParts({...params, requireIncompleteLlm: true, sourceMetadataExpression})
   const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
-    ${getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)}
+    ${getDuckdbActiveGenerationWithPrefix(params.scope)}
     SELECT COUNT(*) AS totalCount
     FROM mart.review_article_serving s
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
      AND active.generation = s.generation
-    ${getDuckdbScopedArticleImportJoinSql('s.article_id')}
     WHERE ${whereParts.join(' AND ')}
   `)
 
@@ -951,7 +973,7 @@ const getUnassessedRowsFromServing = async (params: {
     articleUpdatedAt: unknown
     llmJudgedPromptIds: unknown
   }>(`
-    ${getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)}
+    ${getDuckdbActiveGenerationWithPrefix(params.scope)}
     SELECT
       s.article_id AS articleId,
       s.article_title AS articleTitle,
@@ -962,7 +984,6 @@ const getUnassessedRowsFromServing = async (params: {
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
      AND active.generation = s.generation
-    ${getDuckdbScopedArticleImportJoinSql('s.article_id')}
     WHERE ${whereParts.join(' AND ')}
     ORDER BY COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC
     ${limitClause}
@@ -1010,7 +1031,7 @@ const getUnassessedCandidateRowsFromServing = async (params: {
     llmJudgedPromptIds: unknown
     priorityBucket: number
   }>(`
-    ${getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)}
+    ${getDuckdbActiveGenerationWithPrefix(params.scope)}
     SELECT
       s.article_id AS articleId,
       s.article_created_at AS articleCreatedAt,
@@ -1021,7 +1042,6 @@ const getUnassessedCandidateRowsFromServing = async (params: {
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
      AND active.generation = s.generation
-    ${getDuckdbScopedArticleImportJoinSql('s.article_id')}
     WHERE ${[...whereParts, cursorClause]
       .filter((part): part is string => {
         return part !== null
@@ -1070,9 +1090,8 @@ const getReviewedArticleIdsFromServing = async (params: {
     sourceMetadataExpression,
   })
   const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
-  const withPrefix = getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)
+  const withPrefix = getDuckdbActiveGenerationWithPrefix(params.scope)
   const withClause = postingSelection ? `${withPrefix}, ${postingSelection.sql}` : withPrefix
-  const scopedImportJoinClause = getDuckdbScopedArticleImportJoinSql('s.article_id')
   const postingJoinClause = postingSelection
     ? 'INNER JOIN matched_article_id matched ON matched.articleId = s.article_id'
     : ''
@@ -1083,7 +1102,6 @@ const getReviewedArticleIdsFromServing = async (params: {
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
      AND active.generation = s.generation
-    ${scopedImportJoinClause}
     ${postingJoinClause}
     WHERE ${whereParts.join(' AND ')}
     ORDER BY COALESCE(s.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, s.article_id ASC
@@ -1109,13 +1127,12 @@ const getHumanReviewedArticleIdsFromServing = async (params: {
     sourceMetadataExpression,
   })
   const rows = await runDuckdbJsonQuery<{articleId: string}>(`
-    ${getDuckdbActiveGenerationWithScopedImportPrefix(params.scope)}
+    ${getDuckdbActiveGenerationWithPrefix(params.scope)}
     SELECT s.article_id AS articleId
     FROM mart.review_article_serving s
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
      AND active.generation = s.generation
-    ${getDuckdbScopedArticleImportJoinSql('s.article_id')}
     WHERE ${whereParts.join(' AND ')}
     ORDER BY COALESCE(s.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, s.article_id ASC
   `)
@@ -1244,7 +1261,7 @@ const getLlmJudgmentRowsFromMart = async (
     explanation: string | null
     quotes: unknown
   }>(`
-    WITH ${getDuckdbScopedArticleImportCteSql(scope)}
+    WITH ${getDuckdbScopedArticleImportCteSql(scope, articleIds)}
     SELECT
       j.judgment_id AS id,
       j.created_at AS createdAt,
@@ -1302,7 +1319,7 @@ const getLlmJudgmentRowsFromReviewDetailMart = async (
       FROM app.project_review_serving_generation
       WHERE project_id = ${getDuckdbSqlString(scope.projectId)}
     ),
-    ${getDuckdbScopedArticleImportCteSql(scope)}
+    ${getDuckdbScopedArticleImportCteSql(scope, articleIds)}
     SELECT
       j.judgment_id AS id,
       j.created_at AS createdAt,
@@ -1355,7 +1372,10 @@ const getDuckdbReviewedArticlesQuerySections = (params: {
   const effectiveFromDate = getEffectiveFromDate(params.scope.dateFrom, requestFromDate)
   const effectiveToDate = getEffectiveToDate(params.scope.dateTo, requestToDate)
   const trimmedSearch = params.search?.trim() ?? ''
-  const scopedMetadataExpression = getDuckdbScopedArticleMetadataExpression('a')
+  const hasCovidenceMetadataFilters = getHasCovidenceSourceMetadataFilters(params)
+  const scopedMetadataExpression = hasCovidenceMetadataFilters
+    ? getDuckdbScopedArticleMetadataExpression('a')
+    : 'a.source_metadata'
   const scopeRouteQuery =
     params.scope.routeIds.length > 0
       ? `SELECT article_id AS articleId
@@ -1398,8 +1418,7 @@ const getDuckdbReviewedArticlesQuerySections = (params: {
       filteredScopeWhereParts.length > 0 ? `WHERE ${filteredScopeWhereParts.join(' AND ')}` : '',
     judgmentsWhereClause: judgmentsWhereParts.join(' AND '),
     havingClause: havingParts.join(' AND '),
-    scopedArticleImportCteSql: getDuckdbScopedArticleImportCteSql(params.scope),
-    scopedArticleImportJoinSql: getDuckdbScopedArticleImportJoinSql('a.id'),
+    scopedArticleImportJoinSql: hasCovidenceMetadataFilters ? getDuckdbScopedArticleImportJoinSql('a.id') : '',
     scopeArticleIdsQuery: [
       scopeRouteQuery,
       `SELECT article_id AS articleId
@@ -1410,6 +1429,8 @@ const getDuckdbReviewedArticlesQuerySections = (params: {
         return query !== null
       })
       .join('\nUNION\n'),
+    sourceMetadataExpression: scopedMetadataExpression,
+    withPrefix: hasCovidenceMetadataFilters ? `WITH ${getDuckdbScopedArticleImportCteSql(params.scope)},` : 'WITH',
   }
 }
 
@@ -1445,7 +1466,7 @@ const getDuckdbReviewedPageRows = async (params: {
     articleUpdatedAt: unknown
     sourceMetadata: unknown
   }>(`
-    WITH ${sections.scopedArticleImportCteSql},
+    ${sections.withPrefix}
     scope_article_ids AS (
       ${sections.scopeArticleIdsQuery}
     ),
@@ -1469,10 +1490,10 @@ const getDuckdbReviewedPageRows = async (params: {
       a.article_title AS articleTitle,
       a.article_created_at AS articleCreatedAt,
       a.article_updated_at AS articleUpdatedAt,
-      ${getDuckdbScopedArticleMetadataExpression('a')} AS sourceMetadata
+      ${sections.sourceMetadataExpression} AS sourceMetadata
     FROM reviewed_article_ids r
     INNER JOIN app.article a ON a.id = r.articleId
-    ${getDuckdbScopedArticleImportJoinSql('a.id')}
+    ${sections.scopedArticleImportJoinSql}
     ${cursorClause ? `WHERE ${cursorClause}` : ''}
     ORDER BY a.article_created_at DESC NULLS LAST, a.id ASC
     LIMIT ${params.limit + 1}
@@ -1515,7 +1536,7 @@ const countDuckdbReviewedArticles = async (params: {
 }) => {
   const sections = getDuckdbReviewedArticlesQuerySections(params)
   const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
-    WITH ${sections.scopedArticleImportCteSql},
+    ${sections.withPrefix}
     scope_article_ids AS (
       ${sections.scopeArticleIdsQuery}
     ),

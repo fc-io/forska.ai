@@ -358,6 +358,10 @@ test('queryArticlesReviewsFromDuckdb uses new serving mart when rows exist', asy
   expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('scope_article_ids')
   expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('app.article_import_route')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('page_rows AS')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('air.article_id IN (SELECT articleId FROM page_rows)')
+  expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('WITH selected_scoped_article_import AS')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain("air.article_id IN ('article-1')")
   expect(duckdbRunnerMockRef.current.queries[6]).toContain(getJudgmentProjectClause())
 })
 
@@ -511,6 +515,7 @@ test('queryArticlesReviewsFromDuckdb falls back to raw judgments when serving ro
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain(getJudgmentProjectClause())
   expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('selected_scoped_article_import')
 })
 
 test('queryArticlesReviewsFromDuckdb uses review article serving details when they exist', async () => {
@@ -624,6 +629,7 @@ test('queryArticlesReviewsFromDuckdb uses filter member mart when available', as
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_filter_member member')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_serving s')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('WITH active_generation AS')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('air.article_id IN (SELECT articleId FROM page_rows)')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('active.generation = member.generation')
   expect(duckdbRunnerMockRef.current.queries[7]).toContain('FROM mart.review_article_serving_detail j')
   expect(duckdbRunnerMockRef.current.queries[7]).toContain('active.generation = j.generation')
@@ -680,6 +686,8 @@ test('countArticlesReviewsFromDuckdb requires dirty refresh freshness for servin
     'COALESCE(dirty.dirtyToken, 0) = COALESCE(dirty.lastCompletedDirtyToken, 0)',
   )
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
+  expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('selected_scoped_article_import')
+  expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('app.article_import_route')
 })
 
 test('countArticlesReviewsFromDuckdb uses new serving filter members when rows exist', async () => {
