@@ -1,10 +1,16 @@
 import {expect, test} from 'bun:test'
 
 import {
+  buildComposedRouteIdentity,
   buildPromptConfigHash,
   buildReviewConfigHash,
+  buildReviewDisplayIdentity,
+  buildReviewJudgmentInputContentIdentity,
   buildReviewProjectionIdentity,
+  buildReviewProjectScopeIdentity,
+  buildReviewSearchIdentity,
   buildSummaryDefinitionIdentity,
+  getComposedRouteIdentityJson,
   getStableReviewServingJson,
 } from './reviewProjectionIdentity.ts'
 
@@ -30,6 +36,80 @@ test('buildReviewProjectionIdentity keeps projection components narrow', () => {
   expect(displayIdentity).not.toBe(searchIdentity)
   expect(displayIdentity.startsWith('display:')).toBe(true)
   expect(searchIdentity.startsWith('search:')).toBe(true)
+})
+
+test('specific projection builders are stable for equivalent dependency ordering', () => {
+  const displayLeft = buildReviewDisplayIdentity({
+    definitionVersion: 'display:v1',
+    displayDependencyKeys: ['journalTitle', 'articleTitle'],
+  })
+  const displayRight = buildReviewDisplayIdentity({
+    definitionVersion: 'display:v1',
+    displayDependencyKeys: ['articleTitle', 'journalTitle'],
+  })
+  const searchLeft = buildReviewSearchIdentity({
+    definitionVersion: 'search:v1',
+    searchDependencyKeys: ['abstractText', 'articleTitle'],
+    tokenizerVersion: 'tokenizer:v1',
+  })
+  const searchRight = buildReviewSearchIdentity({
+    definitionVersion: 'search:v1',
+    searchDependencyKeys: ['articleTitle', 'abstractText'],
+    tokenizerVersion: 'tokenizer:v1',
+  })
+  const judgmentInputLeft = buildReviewJudgmentInputContentIdentity({
+    contentDependencyKeys: ['fullText', 'title'],
+    definitionVersion: 'judgment-input:v1',
+    useAbstract: false,
+    useFulltext: true,
+    useFulltextNoImages: true,
+    useTitle: true,
+  })
+  const judgmentInputRight = buildReviewJudgmentInputContentIdentity({
+    contentDependencyKeys: ['title', 'fullText'],
+    definitionVersion: 'judgment-input:v1',
+    useAbstract: false,
+    useFulltext: true,
+    useFulltextNoImages: true,
+    useTitle: true,
+  })
+  const projectScopeLeft = buildReviewProjectScopeIdentity({
+    definitionVersion: 'project-scope:v1',
+    projectScopeDependencyKeys: ['route:b', 'route:a'],
+  })
+  const projectScopeRight = buildReviewProjectScopeIdentity({
+    definitionVersion: 'project-scope:v1',
+    projectScopeDependencyKeys: ['route:a', 'route:b'],
+  })
+
+  expect(displayLeft).toBe(displayRight)
+  expect(searchLeft).toBe(searchRight)
+  expect(judgmentInputLeft).toBe(judgmentInputRight)
+  expect(projectScopeLeft).toBe(projectScopeRight)
+})
+
+test('specific identity builders ignore unrelated projection inputs', () => {
+  const displayInput = {definitionVersion: 'display:v1', displayDependencyKeys: ['articleTitle']}
+  const displayIdentity = buildReviewDisplayIdentity(displayInput)
+  const displayWithUnrelatedInput = buildReviewDisplayIdentity({
+    ...displayInput,
+    searchDependencyKeys: ['abstractText'],
+  } as typeof displayInput & {searchDependencyKeys: readonly string[]})
+  const promptInput = {
+    answerSchemaHash: 'answer-a',
+    promptId: 'prompt-a',
+    promptTextHash: 'text-a',
+    settingsVersion: 'settings:v1',
+    thresholdVersion: null,
+  }
+  const promptConfigHash = buildPromptConfigHash(promptInput)
+  const promptConfigHashWithUnrelatedInput = buildPromptConfigHash({
+    ...promptInput,
+    displayIdentity,
+  } as typeof promptInput & {displayIdentity: string})
+
+  expect(displayIdentity).toBe(displayWithUnrelatedInput)
+  expect(promptConfigHash).toBe(promptConfigHashWithUnrelatedInput)
 })
 
 test('buildReviewConfigHash sorts prompt configs before hashing', () => {
@@ -73,6 +153,23 @@ test('buildReviewConfigHash sorts prompt configs before hashing', () => {
   expect(left).toBe(right)
 })
 
+test('buildReviewConfigHash ignores unrelated projection inputs', () => {
+  const input = {
+    modelId: 'model-a',
+    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a'}],
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  } as const
+  const left = buildReviewConfigHash(input)
+  const right = buildReviewConfigHash({...input, displayIdentity: 'display:other'} as typeof input & {
+    displayIdentity: string
+  })
+
+  expect(left).toBe(right)
+})
+
 test('buildSummaryDefinitionIdentity sorts contribution keys before hashing', () => {
   const left = buildSummaryDefinitionIdentity({
     contributionKeys: ['answer:yes', 'answer:no'],
@@ -81,6 +178,62 @@ test('buildSummaryDefinitionIdentity sorts contribution keys before hashing', ()
   const right = buildSummaryDefinitionIdentity({
     contributionKeys: ['answer:no', 'answer:yes'],
     summaryDefinitionVersion: 'summary:v1',
+  })
+
+  expect(left).toBe(right)
+})
+
+test('buildComposedRouteIdentity uses only the route component dependency set', () => {
+  const componentStates = {
+    display: {baseGeneration: '1', patchWatermark: '2', projectionIdentity: 'display:aaa'},
+    projectScope: {baseGeneration: '3', patchWatermark: '4', projectionIdentity: 'projectScope:bbb'},
+    search: {baseGeneration: '5', patchWatermark: '6', projectionIdentity: 'search:ccc'},
+  } as const
+  const input = {
+    componentStates,
+    contractKey: 'review.llm.rows',
+    optionalComponents: [],
+    requiredComponents: ['projectScope', 'display'],
+    reviewConfigHash: 'review:aaa',
+    routeVersion: 'route:v1',
+  } as const
+  const reordered = buildComposedRouteIdentity({...input, requiredComponents: ['display', 'projectScope']})
+  const withUnrelatedSearchChange = buildComposedRouteIdentity({
+    ...input,
+    componentStates: {
+      ...componentStates,
+      search: {baseGeneration: '9', patchWatermark: '9', projectionIdentity: 'search:changed'},
+    },
+  })
+  const withSearchDependency = buildComposedRouteIdentity({...input, optionalComponents: ['search']})
+
+  expect(buildComposedRouteIdentity(input)).toBe(reordered)
+  expect(buildComposedRouteIdentity(input)).toBe(withUnrelatedSearchChange)
+  expect(buildComposedRouteIdentity(input)).not.toBe(withSearchDependency)
+})
+
+test('getComposedRouteIdentityJson is stable for route component order', () => {
+  const left = getComposedRouteIdentityJson({
+    componentStates: {
+      display: {baseGeneration: '1', patchWatermark: '2', projectionIdentity: 'display:aaa'},
+      projectScope: {baseGeneration: '3', patchWatermark: '4', projectionIdentity: 'projectScope:bbb'},
+    },
+    contractKey: 'review.llm.rows',
+    optionalComponents: [],
+    requiredComponents: ['projectScope', 'display'],
+    reviewConfigHash: 'review:aaa',
+    routeVersion: 'route:v1',
+  })
+  const right = getComposedRouteIdentityJson({
+    componentStates: {
+      projectScope: {baseGeneration: '3', patchWatermark: '4', projectionIdentity: 'projectScope:bbb'},
+      display: {baseGeneration: '1', patchWatermark: '2', projectionIdentity: 'display:aaa'},
+    },
+    contractKey: 'review.llm.rows',
+    optionalComponents: [],
+    requiredComponents: ['display', 'projectScope'],
+    reviewConfigHash: 'review:aaa',
+    routeVersion: 'route:v1',
   })
 
   expect(left).toBe(right)
