@@ -81,6 +81,45 @@ test('admitReviewServingRequest rejects over-budget foreground work before SQL e
   })
 })
 
+test('admitReviewServingRequest rejects invalid numeric budgets before SQL execution', () => {
+  const negativePageSize = admitReviewServingRequest({
+    contractKey: 'review.llm.rows',
+    pageSize: -1,
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewRows',
+  })
+  const zeroPageSize = admitReviewServingRequest({
+    contractKey: 'review.llm.rows',
+    pageSize: 0,
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewRows',
+  })
+  const negativeRows = admitReviewServingRequest({
+    contractKey: 'review.llm.rows',
+    estimatedResultRows: -1,
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewRows',
+  })
+  const invalidBytes = admitReviewServingRequest({
+    contractKey: 'review.llm.rows',
+    estimatedResultBytes: Number.POSITIVE_INFINITY,
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewRows',
+  })
+
+  expect(negativePageSize.admitted ? null : negativePageSize.reason).toBe('invalidBudgetValue')
+  expect(zeroPageSize.admitted ? null : zeroPageSize.reason).toBe('invalidBudgetValue')
+  expect(negativeRows.admitted ? null : negativeRows.reason).toBe('invalidBudgetValue')
+  expect(invalidBytes.admitted ? null : invalidBytes.reason).toBe('invalidBudgetValue')
+  expect(negativePageSize.diagnostics.routeBudget.pageSize).toEqual({
+    accepted: false,
+    budgetKey: 'maxPageSize',
+    limit: 100,
+    rejectionReason: 'invalidBudgetValue',
+    requested: -1,
+  })
+})
+
 test('admitReviewServingRequest rejects synchronous substring search', () => {
   const result = admitReviewServingRequest({
     contractKey: 'review.search.tokenPrefix',

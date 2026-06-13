@@ -39,7 +39,7 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - `/api/projectsreviewswarnings` must not migrate through snapshot manifests alone. It needs warning/health contracts for active refresh counts, maintenance lease state, large-rebuild progress, quarantine warnings, and snapshot status.
 - Review list routes must not mount until row contracts preserve prompt-level judgment arrays and the current duplicate/conflict/date/prompt/search filter scopes.
 - Posting contracts used by list routes must be constrained by list mode or split into per-list contracts before they are mounted.
-- PDF-by-filter routes must not mount until list type is represented in the selection contract. Explicit-ID PDF bulk routes must use an article-ID-only contract instead of project-scoped review-serving selection.
+- PDF-by-filter and PDF-by-project routes must not mount until list type, date bounds, and search scope are represented in the selection contract. Explicit-ID PDF bulk routes must use an article-ID-only contract instead of project-scoped review-serving selection.
 - Export routes must not mount until export contracts cover selected article metadata plus prompt answers, explanations, and quotes.
 - Prompt preview must preserve the current sample-article order: `article_created_at ASC NULLS LAST, article_id ASC`.
 

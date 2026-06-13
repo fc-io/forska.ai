@@ -45,8 +45,10 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   const sql = buildReviewServingRowsSql({
     contract,
     cursorPredicate: '(sort_key, article_id) < ($sortKey, $articleId)',
+    displayIdentityParameter: '$displayIdentity',
     limitParameter: '$limit',
     listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
     projectIdParameter: '$projectId',
     reviewConfigHashParameter: '$reviewConfigHash',
     snapshotIdParameter: '$snapshotId',
@@ -56,6 +58,27 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
   expect(sql).toContain(
     'WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId AND list_mode_key = $listMode',
   )
+})
+
+test('buildReviewServingRowsSql uses payload identities for payload serving tables', () => {
+  const contract = getRequiredReviewServingReadContract('review.prompt.preview')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain(
+    'WHERE project_id = $projectId AND display_identity = $displayIdentity AND payload_identity = $payloadIdentity AND snapshot_id = $snapshotId',
+  )
+  expect(sql).not.toContain('review_config_hash')
+  expect(sql).not.toContain('list_mode_key')
 })
 
 test('assertReviewServingSqlShape reads table references from SQL', () => {

@@ -38,6 +38,7 @@ export type ReviewServingAdmissionDecision = 'accepted' | 'rejected'
 export type ReviewServingAdmissionRejectionReason =
   | 'estimatedResultBytesOverLimit'
   | 'estimatedResultRowsOverLimit'
+  | 'invalidBudgetValue'
   | 'pageSizeOverLimit'
   | 'searchModeMismatch'
   | 'staleSnapshotRequired'
@@ -192,24 +193,32 @@ const getDuckdbWorkloadContext = (
 const getNumericBudgetDecision = ({
   budgetKey,
   limit,
+  minimum,
   rejectionReason,
   requested,
 }: {
   budgetKey: ReviewServingAdmissionNumericBudgetDecision['budgetKey']
   limit: number | null
+  minimum: number
   rejectionReason: ReviewServingAdmissionRejectionReason
   requested: number | undefined
 }): ReviewServingAdmissionNumericBudgetDecision => {
   const normalizedRequested = requested ?? null
-  const accepted = limit !== null && (normalizedRequested ?? 0) <= limit
+  const invalidValue =
+    normalizedRequested !== null && (!Number.isFinite(normalizedRequested) || normalizedRequested < minimum)
+  const accepted = limit !== null && !invalidValue && (normalizedRequested ?? 0) <= limit
 
   return {
     accepted,
     budgetKey,
     limit,
-    rejectionReason: !accepted && limit !== null ? rejectionReason : null,
+    rejectionReason: !accepted && limit !== null ? (invalidValue ? 'invalidBudgetValue' : rejectionReason) : null,
     requested: normalizedRequested,
   }
+}
+
+const hasInvalidNumericBudgetInput = (requested: number | undefined, minimum: number) => {
+  return requested !== undefined && (!Number.isFinite(requested) || requested < minimum)
 }
 
 const getTempSpillBudgetDecision = (
@@ -237,18 +246,21 @@ const getRouteBudgetDiagnostics = (
     estimatedResultBytes: getNumericBudgetDecision({
       budgetKey: 'maxEstimatedResultBytes',
       limit: contract?.maxEstimatedResultBytes ?? null,
+      minimum: 0,
       rejectionReason: 'estimatedResultBytesOverLimit',
       requested: request.estimatedResultBytes,
     }),
     pageSize: getNumericBudgetDecision({
       budgetKey: 'maxPageSize',
       limit: contract?.maxPageSize ?? null,
+      minimum: 1,
       rejectionReason: 'pageSizeOverLimit',
       requested: request.pageSize,
     }),
     resultRows: getNumericBudgetDecision({
       budgetKey: 'maxResultRows',
       limit: contract?.maxResultRows ?? null,
+      minimum: 0,
       rejectionReason: 'estimatedResultRowsOverLimit',
       requested: request.estimatedResultRows,
     }),
@@ -318,6 +330,14 @@ const getAdmissionRejectionReason = (
 
   if (contract.workloadClass !== request.workloadClass) {
     return 'workloadClassMismatch'
+  }
+
+  if (
+    hasInvalidNumericBudgetInput(request.pageSize, 1)
+    || hasInvalidNumericBudgetInput(request.estimatedResultRows, 0)
+    || hasInvalidNumericBudgetInput(request.estimatedResultBytes, 0)
+  ) {
+    return 'invalidBudgetValue'
   }
 
   if ((request.pageSize ?? 0) > contract.maxPageSize) {

@@ -593,7 +593,7 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: ['review.pdf.selection'],
     method: 'POST',
-    mounted: true,
+    mounted: false,
     productRoute: '/api/articles/pdf-fetch-by-project',
     routeFile: 'src/server/routes/ArticlesRoutes.ts',
     surfaces: ['pdf', 'bulk'],

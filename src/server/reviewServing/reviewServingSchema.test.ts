@@ -9,6 +9,10 @@ const schemaMigrationSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0097_reviewServingV4Foundation.sql'),
   'utf8',
 )
+const payloadOrderForwardMigrationSql = readFileSync(
+  resolve(import.meta.dir, '../../db/duckdbMigrations/0098_reviewServingPayloadOrderColumns.sql'),
+  'utf8',
+)
 
 const reviewServingPhase1Tables = [
   'app.import_run_article_delta',
@@ -133,4 +137,16 @@ test('Phase 1 schema migration keeps raw payloads out of import hot fields', () 
 
 test('Phase 1 payload serving schema preserves prompt preview article ordering', () => {
   expect(getMissingColumns('mart.review_article_serving_payload_v4', ['article_created_at', 'article_id'])).toEqual([])
+})
+
+test('payload order forward migration upgrades already-applied review-serving schemas', () => {
+  expect(payloadOrderForwardMigrationSql).toContain(
+    'ALTER TABLE mart.review_article_serving_payload_v4\nADD COLUMN IF NOT EXISTS article_created_at TIMESTAMPTZ;',
+  )
+  expect(payloadOrderForwardMigrationSql).toContain(
+    'CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_preview_order',
+  )
+  expect(payloadOrderForwardMigrationSql).toContain(
+    'ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_created_at, article_id);',
+  )
 })

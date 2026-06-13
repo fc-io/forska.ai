@@ -125,18 +125,33 @@ export const assertReviewServingSqlShape = (
   return violations.length === 0 ? {ok: true, violations: []} : {ok: false, violations}
 }
 
+const getReviewServingRowsSqlIdentityPredicates = (params: {
+  contract: ReviewServingReadContract
+  displayIdentityParameter: string
+  payloadIdentityParameter: string
+  reviewConfigHashParameter: string
+  snapshotIdParameter: string
+}) => {
+  return params.contract.servingTable === 'mart.review_article_serving_payload_v4'
+    ? ` AND display_identity = ${params.displayIdentityParameter} AND payload_identity = ${params.payloadIdentityParameter} AND snapshot_id = ${params.snapshotIdParameter}`
+    : ` AND review_config_hash = ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter}`
+}
+
 export const buildReviewServingRowsSql = (params: {
   contract: ReviewServingReadContract
   cursorPredicate?: string
+  displayIdentityParameter: string
   limitParameter: string
   listModeParameter: string
+  payloadIdentityParameter: string
   projectIdParameter: string
   reviewConfigHashParameter: string
   snapshotIdParameter: string
 }) => {
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
+  const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
   const listModePredicate = params.contract.listMode ? ` AND list_mode_key = ${params.listModeParameter}` : ''
   const sortSql = getSortSql(params.contract)
 
-  return `SELECT * FROM ${params.contract.servingTable} WHERE project_id = ${params.projectIdParameter} AND review_config_hash = ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter}${listModePredicate}${cursorPredicate} ORDER BY ${sortSql} LIMIT ${params.limitParameter}`
+  return `SELECT * FROM ${params.contract.servingTable} WHERE project_id = ${params.projectIdParameter}${identityPredicates}${listModePredicate}${cursorPredicate} ORDER BY ${sortSql} LIMIT ${params.limitParameter}`
 }
