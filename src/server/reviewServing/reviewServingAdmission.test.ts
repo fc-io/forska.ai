@@ -164,6 +164,7 @@ test('admitReviewServingRequest rejects search modes that do not match the contr
   const acceptedSubstringMode = admitReviewServingRequest({
     contractKey: 'review.search.substringAsync',
     pageSize: 1,
+    projectId: 'project-1',
     searchMode: 'substringAsync',
     snapshotFreshness: 'ready',
     workloadClass: 'bulkReviewJob',
@@ -435,6 +436,28 @@ test('admitReviewServingRequest rejects ready serving reads without project and 
     projectId: null,
     snapshotId: 'snapshot-1',
   })
+})
+
+test('admitReviewServingRequest rejects async and stale contracts without project identity', () => {
+  const asyncSearch = admitReviewServingRequest({
+    contractKey: 'review.search.substringAsync',
+    pageSize: 1,
+    searchMode: 'substringAsync',
+    snapshotFreshness: 'unavailable',
+    workloadClass: 'bulkReviewJob',
+  })
+  const warningSnapshot = admitReviewServingRequest({
+    allowStale: true,
+    contractKey: 'review.warning.snapshot',
+    pageSize: 1,
+    snapshotFreshness: 'stale',
+    snapshotId: 'snapshot-1',
+    workloadClass: 'reviewMaintenance',
+  })
+
+  expect(asyncSearch.admitted ? null : asyncSearch.reason).toBe('servingIdentityMissing')
+  expect(warningSnapshot.admitted ? null : warningSnapshot.reason).toBe('servingIdentityMissing')
+  expect(asyncSearch.diagnostics.servingIdentity).toEqual({accepted: false, projectId: null, snapshotId: null})
 })
 
 test('getReviewServingAdmissionDiagnostics exposes route and work state shapes', () => {

@@ -311,9 +311,9 @@ const judgmentConfigCondition = or(...judgmentConfigParts)
 <!-- headroom:rtk-instructions -->
 # RTK (Rust Token Killer) - Token-Optimized Commands
 
-When running shell commands, **always prefix with `rtk`**. This reduces context
-usage by 60-90% with zero behavior change. If rtk has no filter for a command,
-it passes through unchanged — so it is always safe to use.
+When `rtk` is available on PATH, prefix shell commands with `rtk`. This reduces
+context usage by 60-90% with zero behavior change. If `rtk` is unavailable,
+run the underlying command directly instead of failing the task.
 
 ## Key Commands
 ```bash

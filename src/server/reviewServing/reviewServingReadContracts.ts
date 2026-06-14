@@ -50,14 +50,7 @@ const baseComponents = ['display', 'projectScope', 'selectedImport', 'payload'] 
 const llmComponents = [...baseComponents, 'llmStatus', 'posting', 'summary'] as const
 const humanComponents = [...baseComponents, 'humanStatus', 'posting', 'summary'] as const
 const bothComponents = [...baseComponents, 'llmStatus', 'humanStatus', 'posting', 'summary'] as const
-const queueComponents = [
-  'judgmentInputContent',
-  'projectScope',
-  'selectedImport',
-  'llmStatus',
-  'queue',
-  'summary',
-] as const
+const queueComponents = [...baseComponents, 'judgmentInputContent', 'llmStatus', 'queue', 'summary'] as const
 const defaultRowFilters = ['duplicateFlag', 'importRoute', 'publicationYear', 'searchTokenPrefix'] as const
 const defaultReviewCounts = ['review.list.total', 'review.list.filteredTotal'] as const
 const reviewArticleServingTable = 'mart.review_article_serving_v4'
@@ -75,6 +68,7 @@ const countServingSort = {
 const jobServingSort = {direction: 'desc', fields: ['updated_at', 'job_id']} as const
 const detailRowListModePrioritySort =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
+const promptPreviewCreatedAtSort = 'article_created_at ASC NULLS LAST'
 
 const defineContract = (input: ContractInput): ReviewServingReadContract => {
   return {
@@ -373,7 +367,7 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: [],
-    cursorFields: ['article_created_at', 'article_id'],
+    cursorFields: [promptPreviewCreatedAtSort, 'article_id'],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.prompt.preview',
     listMode: null,
@@ -386,7 +380,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['judgmentInputContent', 'projectScope', 'selectedImport', 'payload'],
     searchMode: 'none',
     servingTable: reviewArticlePayloadServingTable,
-    sort: {direction: 'asc', fields: ['article_created_at', 'article_id']},
+    sort: {direction: 'asc', fields: [promptPreviewCreatedAtSort, 'article_id']},
     workloadClass: 'foregroundReviewRows',
   }),
   defineContract({
