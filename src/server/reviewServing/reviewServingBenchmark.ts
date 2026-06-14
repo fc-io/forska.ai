@@ -104,6 +104,13 @@ export type ReviewServingBenchmarkWorkItemShapeViolation = {
   key: string
 }
 
+export type ReviewServingBenchmarkRowTargetViolation = {
+  actualRowsReturned: number
+  expectedRowsReturned: number
+  key: string
+  operationKey: string
+}
+
 type ReviewServingBenchmarkRunState = {startedAtMs: number; startRssBytes: number}
 
 export const reviewServingSynthetic10m7PromptOverlapFixture = {
@@ -318,6 +325,38 @@ const getReviewServingBenchmarkWorkItemShapeViolationMessage = (
     .join('; ')
 }
 
+export const getReviewServingBenchmarkRowTargetViolations = (
+  input: Pick<ReviewServingBenchmarkRunInput, 'workload'>,
+  samples: readonly ReviewServingBenchmarkSample[],
+) => {
+  return samples
+    .map((sample) => {
+      const operation = getReviewServingBenchmarkOperationByKey(input, sample.operationKey)
+
+      return operation && sample.rowsReturned < operation.targetRowsReturnedPerRequest
+        ? {
+            actualRowsReturned: sample.rowsReturned,
+            expectedRowsReturned: operation.targetRowsReturnedPerRequest,
+            key: sample.key,
+            operationKey: sample.operationKey,
+          }
+        : null
+    })
+    .filter((violation): violation is ReviewServingBenchmarkRowTargetViolation => {
+      return violation !== null
+    })
+}
+
+const getReviewServingBenchmarkRowTargetViolationMessage = (
+  violations: readonly ReviewServingBenchmarkRowTargetViolation[],
+) => {
+  return violations
+    .map((violation) => {
+      return `${violation.key}.${violation.operationKey}: expected ${violation.expectedRowsReturned}, got ${violation.actualRowsReturned}`
+    })
+    .join('; ')
+}
+
 const validateReviewServingBenchmarkRequestCounts = (input: ReviewServingBenchmarkRunInput) => {
   const shapeViolations = input.workItems.flatMap((workItem) => {
     return getReviewServingBenchmarkWorkItemShapeViolations(input, workItem)
@@ -328,6 +367,14 @@ const validateReviewServingBenchmarkRequestCounts = (input: ReviewServingBenchma
       return `${violation.operationKey}: expected ${violation.expectedRequestCount}, got ${violation.actualRequestCount}`
     })
     .join('; ')
+
+  if (input.fixture.kind !== input.workload.fixtureKind) {
+    return Effect.fail(
+      new Error(
+        `Review-serving benchmark fixture mismatch: expected ${input.workload.fixtureKind}, got ${input.fixture.kind}`,
+      ),
+    )
+  }
 
   if (shapeViolations.length > 0) {
     return Effect.fail(
@@ -340,6 +387,21 @@ const validateReviewServingBenchmarkRequestCounts = (input: ReviewServingBenchma
   return violations.length === 0
     ? Effect.void
     : Effect.fail(new Error(`Review-serving benchmark request count mismatch: ${message}`))
+}
+
+const validateReviewServingBenchmarkRowTargets = (
+  input: ReviewServingBenchmarkRunInput,
+  samples: readonly ReviewServingBenchmarkSample[],
+) => {
+  const violations = getReviewServingBenchmarkRowTargetViolations(input, samples)
+
+  return violations.length === 0
+    ? Effect.void
+    : Effect.fail(
+        new Error(
+          `Review-serving benchmark row target mismatch: ${getReviewServingBenchmarkRowTargetViolationMessage(violations)}`,
+        ),
+      )
 }
 
 const releaseBenchmarkRunState = (_state: ReviewServingBenchmarkRunState) => {
@@ -539,6 +601,7 @@ export const runReviewServingBenchmarkEffect = (input: ReviewServingBenchmarkRun
       const samples = yield* Effect.forEach(input.workItems, (workItem) => {
         return runBenchmarkWorkItemEffect(workItem, executor)
       })
+      yield* validateReviewServingBenchmarkRowTargets(input, samples)
       const endRssBytes = sampleReviewServingBenchmarkMemoryRssBytes()
 
       return {

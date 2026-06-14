@@ -9,6 +9,7 @@ import type {
   ReviewServingRouteBudgetKey,
   ReviewServingSearchMode,
   ReviewServingSearchState,
+  ReviewServingSnapshotId,
   ReviewServingWorkloadClass,
 } from './reviewServingContracts.ts'
 import {isNamedReviewFastCountKey} from './reviewServingContracts.ts'
@@ -30,6 +31,7 @@ export type ReviewServingAdmissionRequest = {
   searchState?: ReviewServingSearchState | null
   searchMode?: ReviewServingAdmissionSearchMode
   snapshotFreshness?: ReviewServingFreshnessState
+  snapshotId?: ReviewServingSnapshotId
   workloadClass: string
 }
 
@@ -148,9 +150,13 @@ const hasNamedCount = (contract: ReviewServingReadContract, namedCountKey: Named
   return contract.namedFastCounts.includes(namedCountKey)
 }
 
+const requiresNamedCount = (contract: ReviewServingReadContract) => {
+  return contract.servingTable === 'mart.review_article_count_serving_v4' && contract.namedFastCounts.length > 0
+}
+
 const isSupportedNamedCount = (contract: ReviewServingReadContract, namedCountKey: string | undefined): boolean => {
   if (namedCountKey === undefined) {
-    return true
+    return !requiresNamedCount(contract)
   }
 
   return isNamedReviewFastCountKey(namedCountKey) && hasNamedCount(contract, namedCountKey)
@@ -309,7 +315,9 @@ const getSearchDiagnostics = (
 const isSearchModeAccepted = (contract: ReviewServingReadContract, request: ReviewServingAdmissionRequest) => {
   const requestedMode = request.searchMode ?? 'none'
 
-  return requestedMode === 'none' || requestedMode === contract.searchMode
+  return contract.physicalAccessStrategy === 'tokenPrefixIndex'
+    ? requestedMode === contract.searchMode
+    : requestedMode === 'none' || requestedMode === contract.searchMode
 }
 
 const isCountStateAccepted = (request: ReviewServingAdmissionRequest) => {
@@ -317,7 +325,12 @@ const isCountStateAccepted = (request: ReviewServingAdmissionRequest) => {
     return true
   }
 
-  return request.countState?.availability === 'ready' && request.countState.key === request.namedCountKey
+  return (
+    request.countState?.availability === 'ready'
+    && request.countState.key === request.namedCountKey
+    && request.snapshotId !== undefined
+    && request.countState.snapshotId === request.snapshotId
+  )
 }
 
 const isSearchStateAccepted = (request: ReviewServingAdmissionRequest) => {
@@ -325,7 +338,11 @@ const isSearchStateAccepted = (request: ReviewServingAdmissionRequest) => {
     return true
   }
 
-  return request.searchState?.availability === 'ready'
+  return (
+    request.searchState?.availability === 'ready'
+    && request.snapshotId !== undefined
+    && request.searchState.snapshotId === request.snapshotId
+  )
 }
 
 const getWorkloadClassDiagnostics = (

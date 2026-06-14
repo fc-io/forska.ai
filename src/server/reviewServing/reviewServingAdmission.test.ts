@@ -182,6 +182,19 @@ test('admitReviewServingRequest rejects unsupported count shapes', () => {
   expect(unsupportedRegisteredCount.admitted ? null : unsupportedRegisteredCount.reason).toBe('unsupportedCountShape')
 })
 
+test('admitReviewServingRequest rejects summary lookups without a named count key', () => {
+  const result = admitReviewServingRequest({
+    contractKey: 'review.llm.count',
+    pageSize: 1,
+    snapshotFreshness: 'ready',
+    snapshotId: 'snapshot-1',
+    workloadClass: 'foregroundReviewCount',
+  })
+
+  expect(result.admitted ? null : result.reason).toBe('unsupportedCountShape')
+  expect(result.diagnostics.count).toMatchObject({requestedKey: null, supported: false})
+})
+
 test('admitReviewServingRequest rejects supported count keys without ready matching count state', () => {
   const unavailable = admitReviewServingRequest({
     contractKey: 'review.llm.count',
@@ -205,21 +218,50 @@ test('admitReviewServingRequest rejects supported count keys without ready match
     namedCountKey: 'review.llm.assessedByPrompt',
     pageSize: 1,
     snapshotFreshness: 'ready',
+    snapshotId: 'snapshot-1',
+    workloadClass: 'foregroundReviewCount',
+  })
+  const wrongSnapshot = admitReviewServingRequest({
+    contractKey: 'review.llm.count',
+    countState: {availability: 'ready', key: 'review.llm.assessedByPrompt', snapshotId: 'snapshot-old', value: 12},
+    namedCountKey: 'review.llm.assessedByPrompt',
+    pageSize: 1,
+    snapshotFreshness: 'ready',
+    snapshotId: 'snapshot-1',
     workloadClass: 'foregroundReviewCount',
   })
 
   expect(unavailable.admitted ? null : unavailable.reason).toBe('countStateUnavailable')
   expect(pending.admitted ? null : pending.reason).toBe('countStateUnavailable')
   expect(mismatched.admitted ? null : mismatched.reason).toBe('countStateUnavailable')
+  expect(wrongSnapshot.admitted ? null : wrongSnapshot.reason).toBe('countStateUnavailable')
 })
 
 test('admitReviewServingRequest rejects token-prefix search without ready search state', () => {
+  const missingMode = admitReviewServingRequest({
+    contractKey: 'review.search.tokenPrefix',
+    pageSize: 10,
+    searchState: {availability: 'ready', snapshotId: 'snapshot-1'},
+    snapshotFreshness: 'ready',
+    snapshotId: 'snapshot-1',
+    workloadClass: 'foregroundReviewSearch',
+  })
   const indexing = admitReviewServingRequest({
     contractKey: 'review.search.tokenPrefix',
     pageSize: 10,
     searchMode: 'tokenPrefix',
     searchState: {availability: 'indexing', reason: 'search projector indexing'},
     snapshotFreshness: 'ready',
+    snapshotId: 'snapshot-1',
+    workloadClass: 'foregroundReviewSearch',
+  })
+  const wrongSnapshot = admitReviewServingRequest({
+    contractKey: 'review.search.tokenPrefix',
+    pageSize: 10,
+    searchMode: 'tokenPrefix',
+    searchState: {availability: 'ready', snapshotId: 'snapshot-old'},
+    snapshotFreshness: 'ready',
+    snapshotId: 'snapshot-1',
     workloadClass: 'foregroundReviewSearch',
   })
   const ready = admitReviewServingRequest({
@@ -228,10 +270,13 @@ test('admitReviewServingRequest rejects token-prefix search without ready search
     searchMode: 'tokenPrefix',
     searchState: {availability: 'ready', snapshotId: 'snapshot-1'},
     snapshotFreshness: 'ready',
+    snapshotId: 'snapshot-1',
     workloadClass: 'foregroundReviewSearch',
   })
 
+  expect(missingMode.admitted ? null : missingMode.reason).toBe('searchModeMismatch')
   expect(indexing.admitted ? null : indexing.reason).toBe('searchStateUnavailable')
+  expect(wrongSnapshot.admitted ? null : wrongSnapshot.reason).toBe('searchStateUnavailable')
   expect(ready.admitted).toBe(true)
 })
 
@@ -275,6 +320,7 @@ test('getReviewServingAdmissionDiagnostics exposes route and work state shapes',
     pageSize: 1,
     searchState: {availability: 'unavailable', reason: 'count route has no search work'},
     snapshotFreshness: 'ready',
+    snapshotId: 'snapshot-1',
     workloadClass: 'foregroundReviewCount',
   })
 
