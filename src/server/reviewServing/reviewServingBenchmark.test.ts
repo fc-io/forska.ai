@@ -66,15 +66,15 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
     }),
   ).toBe(true)
   expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations[0]).toMatchObject({
-    coverageKeyPrefix: 'page:llm:',
     maxRowsScannedPerRequest: 300,
-    minimumDistinctCoverageKeys: 7_000,
+    minimumDistinctRequestSlices: 7_000,
+    requestSliceFields: ['cursor', 'filter'],
   })
   expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations[2]).toMatchObject({
-    coverageKeyPrefix: 'facet:',
     maxRowsScannedPerRequest: 512,
-    minimumDistinctCoverageKeys: 700,
+    minimumDistinctRequestSlices: 700,
     pageSize: 128,
+    requestSliceFields: ['filter'],
   })
   expect(
     reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
@@ -397,13 +397,13 @@ test('review-serving benchmark rejects samples over scanned row ceilings', async
   ).toContain('Review-serving benchmark rows scanned mismatch')
 })
 
-test('review-serving benchmark rejects repeated page coverage keys', async () => {
+test('review-serving benchmark rejects repeated request slices', async () => {
   const input = getReviewServingBenchmarkSmokeInput()
   const operation = input.workload.operations[0]
   const firstWorkItem = input.workItems[0]
   const duplicatedCoverageInput = {
     ...input,
-    workload: {...input.workload, operations: [{...operation, minimumDistinctCoverageKeys: 2, requestCount: 2}]},
+    workload: {...input.workload, operations: [{...operation, minimumDistinctRequestSlices: 2, requestCount: 2}]},
     workItems: [firstWorkItem, {...firstWorkItem, key: 'smoke-llm-page-repeat'}],
   }
 

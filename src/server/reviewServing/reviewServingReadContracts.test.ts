@@ -258,6 +258,7 @@ test('mounted routes stay off incomplete option, count, detail, warning, and pre
     '/api/articlesreviewsfilters',
     '/api/articlesreviewshuman',
     '/api/articlesreviewshumanfilters',
+    '/api/projects/add_articles_by_filter',
     '/api/articlesreviewsunassessed',
     '/api/projectsreview',
     '/api/projectsreviewswarnings',
@@ -412,6 +413,21 @@ test('detail read inventory maps to the mounted project review route', () => {
     method: 'POST',
     productRoute: '/api/projectsreview',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
+  })
+})
+
+test('add-articles filter inventory maps to the mounted bulk selection route', () => {
+  const addArticlesInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.productRoute === '/api/projects/add_articles_by_filter'
+  })
+
+  expect(addArticlesInventoryEntries).toHaveLength(1)
+  expect(addArticlesInventoryEntries[0]).toMatchObject({
+    contractKeys: ['review.bulk.selection'],
+    method: 'POST',
+    mounted: false,
+    routeFile: 'src/server/routes/ProjectsAddArticlesRoutes.ts',
+    surfaces: ['bulk', 'filter', 'search'],
   })
 })
 

@@ -223,8 +223,11 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain('AND article_id = $articleId')
+  expect(sql).toContain('QUALIFY CASE list_mode_key')
+  expect(sql).toContain('OVER (PARTITION BY prompt_id)')
   expect(sql).toContain('ORDER BY CASE list_mode_key')
   expect(sql).toContain('prompt_order ASC NULLS LAST, prompt_id ASC')
+  expect(sql).not.toContain('AND list_mode_key =')
 })
 
 test('buildReviewServingRowsSql applies posting filter keys before row ordering', () => {
@@ -409,7 +412,6 @@ test('buildReviewServingRowsSql constrains durable job lookups by criteria', () 
     ...baseParams,
     contract: bulkContract,
     jobFilterSignatureParameter: '$filterSignature',
-    jobKindParameter: '$jobKind',
   })
   const searchSql = buildReviewServingRowsSql({
     ...baseParams,
@@ -422,7 +424,6 @@ test('buildReviewServingRowsSql constrains durable job lookups by criteria', () 
   expect(bulkSql).toContain('AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash')
   expect(bulkSql).toContain('AND snapshot_id = $snapshotId')
   expect(bulkSql).toContain("AND job_kind = 'review.bulk.selection' AND filter_signature = $filterSignature")
-  expect(bulkSql).not.toContain('$jobKind')
   expect(assertReviewServingSqlShape(searchSql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
   expect(searchSql).toContain('WHERE project_id = $projectId')
   expect(searchSql).toContain("AND search_mode = 'substringAsync' AND search_text = $searchText")
