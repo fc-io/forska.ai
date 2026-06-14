@@ -212,6 +212,7 @@ export const assertReviewServingSqlShape = (
 const reviewServingSnapshotManifestTable = 'app.review_serving_snapshot_manifest'
 const reviewServingBulkOperationJobTable = 'app.review_bulk_operation_job'
 const reviewServingSearchJobTable = 'app.review_search_job'
+const reviewServingFilterOptionTable = 'mart.review_filter_option_serving_v4'
 
 const getReviewServingRowsSqlIdentityPredicates = (params: {
   contract: ReviewServingReadContract
@@ -236,6 +237,10 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
 
   if (params.contract.servingTable === reviewServingBulkOperationJobTable) {
     return ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter}`
+  }
+
+  if (params.contract.servingTable === reviewServingFilterOptionTable) {
+    return ` AND review_config_hash = ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter} AND search_identity = ${params.searchIdentityParameter}`
   }
 
   return params.contract.servingTable === 'mart.review_title_search_serving_v4'
@@ -291,7 +296,7 @@ const getReviewServingRowsSqlCountPredicate = (params: {
 
   const summaryDefinition = namedReviewFastCountDefinitions[params.namedCountKey]
   const listModePredicate = params.contract.listMode
-    ? ` AND list_mode_key = ${params.listModeParameter}`
+    ? ` AND list_mode_key = ${getSqlStringLiteral(params.contract.listMode)}`
     : ` AND list_mode_key = 'global'`
 
   return [
@@ -394,7 +399,6 @@ const getReviewServingRowsSqlQueuePredicate = (params: {
 const getReviewServingRowsSqlJobPredicate = (params: {
   contract: ReviewServingReadContract
   jobFilterSignatureParameter?: string | null
-  jobKindParameter?: string | null
   searchTextParameter?: string | null
 }) => {
   if (params.contract.physicalAccessStrategy !== 'jobCriteria') {
@@ -408,13 +412,7 @@ const getReviewServingRowsSqlJobPredicate = (params: {
   )
 
   if (params.contract.servingTable === reviewServingBulkOperationJobTable) {
-    const jobKindParameter = getRequiredReviewServingRowsSqlParameter(
-      params.jobKindParameter,
-      'job kind',
-      params.contract,
-    )
-
-    return ` AND job_kind = ${jobKindParameter} AND filter_signature = ${jobFilterSignatureParameter}`
+    return ` AND job_kind = ${getSqlStringLiteral(params.contract.key)} AND filter_signature = ${jobFilterSignatureParameter}`
   }
 
   if (params.contract.servingTable === reviewServingSearchJobTable) {
@@ -436,7 +434,6 @@ const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
   filterKindParameter?: string | null
   filterValueParameter?: string | null
   jobFilterSignatureParameter?: string | null
-  jobKindParameter?: string | null
   queueKindParameter?: string | null
   searchTokenPrefixParameter?: string | null
   searchTextParameter?: string | null

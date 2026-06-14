@@ -28,9 +28,12 @@ export type ReviewServingBenchmarkFixture = {
 export type ReviewServingBenchmarkWorkloadOperation = {
   contractKey: ReviewServingReadContractKey
   countFilterKeyPrefix?: string
+  coverageKeyPrefix?: string
   jobFilterSignaturePrefix?: string
   jobKind?: string
   key: string
+  maxRowsScannedPerRequest: number
+  minimumDistinctCoverageKeys?: number
   namedCountKey?: NamedReviewFastCountKey
   pageSize: number
   requestCount: number
@@ -67,6 +70,7 @@ export type ReviewServingBenchmarkObservation = {
 
 export type ReviewServingBenchmarkWorkItem = {
   admissionRequest: ReviewServingAdmissionRequest
+  coverageKey?: string
   jobFilterSignature?: string
   jobKind?: string
   key: string
@@ -125,6 +129,7 @@ export type ReviewServingBenchmarkWorkItemShapeViolation = {
   field:
     | 'contractKey'
     | 'countFilterKeyPrefix'
+    | 'coverageKeyPrefix'
     | 'jobFilterSignaturePrefix'
     | 'jobKind'
     | 'namedCountKey'
@@ -140,6 +145,19 @@ export type ReviewServingBenchmarkRowTargetViolation = {
   actualRowsReturned: number
   expectedRowsReturned: number
   key: string
+  operationKey: string
+}
+
+export type ReviewServingBenchmarkRowsScannedViolation = {
+  actualRowsScanned: number
+  expectedRowsScanned: number
+  key: string
+  operationKey: string
+}
+
+export type ReviewServingBenchmarkCoverageViolation = {
+  actualDistinctCoverageKeys: number
+  expectedDistinctCoverageKeys: number
   operationKey: string
 }
 
@@ -185,6 +203,9 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     {
       contractKey: 'review.llm.rows',
       key: 'llmPromptOverlapRows',
+      coverageKeyPrefix: 'page:llm:',
+      maxRowsScannedPerRequest: 300,
+      minimumDistinctCoverageKeys: 7_000,
       pageSize: 100,
       requestCount: 7_000,
       targetRowsReturnedPerRequest: 100,
@@ -193,6 +214,9 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     {
       contractKey: 'review.both.rows',
       key: 'llmHumanOverlapRows',
+      coverageKeyPrefix: 'page:both:',
+      maxRowsScannedPerRequest: 300,
+      minimumDistinctCoverageKeys: 7_000,
       pageSize: 100,
       requestCount: 7_000,
       targetRowsReturnedPerRequest: 100,
@@ -200,8 +224,11 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     },
     {
       contractKey: 'review.filters.facets',
+      coverageKeyPrefix: 'facet:',
       key: 'overlapFacetRefresh',
-      pageSize: 1,
+      maxRowsScannedPerRequest: 512,
+      minimumDistinctCoverageKeys: 700,
+      pageSize: 128,
       requestCount: 700,
       targetRowsReturnedPerRequest: 128,
       workloadClass: 'foregroundReviewFacet',
@@ -210,6 +237,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       contractKey: 'review.llm.count',
       countFilterKeyPrefix: 'prompt:',
       key: 'llmPromptOverlapCounts',
+      maxRowsScannedPerRequest: 8,
       namedCountKey: 'review.llm.assessedByPrompt',
       pageSize: 1,
       requestCount: 700,
@@ -221,6 +249,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       jobFilterSignaturePrefix: 'phase5-overlap:',
       jobKind: 'review.bulk.selection',
       key: 'bulkOverlapSelectionJob',
+      maxRowsScannedPerRequest: 10,
       pageSize: 1,
       requestCount: 70,
       searchMode: 'tokenPrefix',
@@ -232,6 +261,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       jobFilterSignaturePrefix: 'phase5-overlap:',
       jobKind: 'review.export.selection',
       key: 'exportOverlapSelectionJob',
+      maxRowsScannedPerRequest: 10,
       pageSize: 1,
       requestCount: 70,
       searchMode: 'tokenPrefix',
@@ -243,6 +273,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       jobFilterSignaturePrefix: 'phase5-overlap:',
       jobKind: 'review.pdf.selection',
       key: 'pdfOverlapSelectionJob',
+      maxRowsScannedPerRequest: 10,
       pageSize: 1,
       requestCount: 70,
       searchMode: 'tokenPrefix',
@@ -253,6 +284,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       contractKey: 'review.search.substringAsync',
       jobFilterSignaturePrefix: 'phase5-overlap:',
       key: 'substringOverlapSearchJob',
+      maxRowsScannedPerRequest: 10,
       pageSize: 1,
       requestCount: 70,
       searchMode: 'substringAsync',
@@ -262,7 +294,10 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     },
     {
       contractKey: 'review.queue.unassessed',
+      coverageKeyPrefix: 'queue:',
       key: 'unassessedOverlapQueue',
+      maxRowsScannedPerRequest: 300,
+      minimumDistinctCoverageKeys: 700,
       pageSize: 100,
       requestCount: 700,
       targetRowsReturnedPerRequest: 100,
@@ -270,7 +305,10 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     },
     {
       contractKey: 'review.search.tokenPrefix',
+      coverageKeyPrefix: 'tokenPrefix:',
       key: 'titlePrefixOverlapSearch',
+      maxRowsScannedPerRequest: 150,
+      minimumDistinctCoverageKeys: 700,
       pageSize: 50,
       requestCount: 700,
       targetRowsReturnedPerRequest: 50,
@@ -410,6 +448,7 @@ export const getReviewServingBenchmarkWorkItemShapeViolations = (
     [ReviewServingBenchmarkWorkItemShapeViolation['field'], string | null, string | undefined]
   > = [
     ['countFilterKeyPrefix', workItem.admissionRequest.countFilterKey ?? null, operation.countFilterKeyPrefix],
+    ['coverageKeyPrefix', workItem.coverageKey ?? null, operation.coverageKeyPrefix],
     ['jobFilterSignaturePrefix', workItem.jobFilterSignature ?? null, operation.jobFilterSignaturePrefix],
     ['searchTextPrefix', workItem.searchText ?? null, operation.searchTextPrefix],
   ]
@@ -437,6 +476,46 @@ export const getReviewServingBenchmarkWorkItemShapeViolations = (
     })
 
   return [...exactViolations, ...prefixViolations]
+}
+
+export const getReviewServingBenchmarkCoverageViolations = (
+  input: Pick<ReviewServingBenchmarkRunInput, 'workItems' | 'workload'>,
+) => {
+  return input.workload.operations
+    .map((operation) => {
+      const expectedDistinctCoverageKeys = operation.minimumDistinctCoverageKeys ?? 0
+      const matchingCoverageKeys = input.workItems
+        .filter((workItem) => {
+          return (
+            workItem.operationKey === operation.key
+            && getReviewServingBenchmarkWorkItemShapeViolations(input, workItem).length === 0
+          )
+        })
+        .map((workItem) => {
+          return workItem.coverageKey ?? null
+        })
+        .filter((coverageKey): coverageKey is string => {
+          return coverageKey !== null
+        })
+      const actualDistinctCoverageKeys = new Set(matchingCoverageKeys).size
+
+      return expectedDistinctCoverageKeys > 0 && actualDistinctCoverageKeys < expectedDistinctCoverageKeys
+        ? {actualDistinctCoverageKeys, expectedDistinctCoverageKeys, operationKey: operation.key}
+        : null
+    })
+    .filter((violation): violation is ReviewServingBenchmarkCoverageViolation => {
+      return violation !== null
+    })
+}
+
+const getReviewServingBenchmarkCoverageViolationMessage = (
+  violations: readonly ReviewServingBenchmarkCoverageViolation[],
+) => {
+  return violations
+    .map((violation) => {
+      return `${violation.operationKey}: expected ${violation.expectedDistinctCoverageKeys} distinct coverage keys, got ${violation.actualDistinctCoverageKeys}`
+    })
+    .join('; ')
 }
 
 const getReviewServingBenchmarkWorkItemShapeViolationMessage = (
@@ -469,6 +548,38 @@ export const getReviewServingBenchmarkRowTargetViolations = (
     .filter((violation): violation is ReviewServingBenchmarkRowTargetViolation => {
       return violation !== null
     })
+}
+
+export const getReviewServingBenchmarkRowsScannedViolations = (
+  input: Pick<ReviewServingBenchmarkRunInput, 'workload'>,
+  samples: readonly ReviewServingBenchmarkSample[],
+) => {
+  return samples
+    .map((sample) => {
+      const operation = getReviewServingBenchmarkOperationByKey(input, sample.operationKey)
+
+      return operation && sample.rowsScanned > operation.maxRowsScannedPerRequest
+        ? {
+            actualRowsScanned: sample.rowsScanned,
+            expectedRowsScanned: operation.maxRowsScannedPerRequest,
+            key: sample.key,
+            operationKey: sample.operationKey,
+          }
+        : null
+    })
+    .filter((violation): violation is ReviewServingBenchmarkRowsScannedViolation => {
+      return violation !== null
+    })
+}
+
+const getReviewServingBenchmarkRowsScannedViolationMessage = (
+  violations: readonly ReviewServingBenchmarkRowsScannedViolation[],
+) => {
+  return violations
+    .map((violation) => {
+      return `${violation.key}.${violation.operationKey}: expected <= ${violation.expectedRowsScanned}, got ${violation.actualRowsScanned}`
+    })
+    .join('; ')
 }
 
 const getReviewServingBenchmarkRowTargetViolationMessage = (
@@ -553,9 +664,12 @@ const isReviewServingBenchmarkOperationMatch = (
     expectedOperation !== undefined
     && operation.contractKey === expectedOperation.contractKey
     && operation.countFilterKeyPrefix === expectedOperation.countFilterKeyPrefix
+    && operation.coverageKeyPrefix === expectedOperation.coverageKeyPrefix
     && operation.jobFilterSignaturePrefix === expectedOperation.jobFilterSignaturePrefix
     && operation.jobKind === expectedOperation.jobKind
     && operation.key === expectedOperation.key
+    && operation.maxRowsScannedPerRequest === expectedOperation.maxRowsScannedPerRequest
+    && operation.minimumDistinctCoverageKeys === expectedOperation.minimumDistinctCoverageKeys
     && operation.namedCountKey === expectedOperation.namedCountKey
     && operation.pageSize === expectedOperation.pageSize
     && operation.requestCount === expectedOperation.requestCount
@@ -608,6 +722,7 @@ const validateReviewServingBenchmarkRequestCounts = (input: ReviewServingBenchma
     return getReviewServingBenchmarkWorkItemShapeViolations(input, workItem)
   })
   const violations = getReviewServingBenchmarkRequestCountViolations(input)
+  const coverageViolations = getReviewServingBenchmarkCoverageViolations(input)
   const fixtureMismatch = getReviewServingBenchmarkFixtureMismatch(input)
   const workloadMismatch = getReviewServingBenchmarkWorkloadMismatch(input)
   const message = violations
@@ -632,9 +747,17 @@ const validateReviewServingBenchmarkRequestCounts = (input: ReviewServingBenchma
     )
   }
 
-  return violations.length === 0
+  if (violations.length > 0) {
+    return Effect.fail(new Error(`Review-serving benchmark request count mismatch: ${message}`))
+  }
+
+  return coverageViolations.length === 0
     ? Effect.void
-    : Effect.fail(new Error(`Review-serving benchmark request count mismatch: ${message}`))
+    : Effect.fail(
+        new Error(
+          `Review-serving benchmark coverage mismatch: ${getReviewServingBenchmarkCoverageViolationMessage(coverageViolations)}`,
+        ),
+      )
 }
 
 const validateReviewServingBenchmarkRowTargets = (
@@ -648,6 +771,21 @@ const validateReviewServingBenchmarkRowTargets = (
     : Effect.fail(
         new Error(
           `Review-serving benchmark row target mismatch: ${getReviewServingBenchmarkRowTargetViolationMessage(violations)}`,
+        ),
+      )
+}
+
+const validateReviewServingBenchmarkRowsScanned = (
+  input: ReviewServingBenchmarkRunInput,
+  samples: readonly ReviewServingBenchmarkSample[],
+) => {
+  const violations = getReviewServingBenchmarkRowsScannedViolations(input, samples)
+
+  return violations.length === 0
+    ? Effect.void
+    : Effect.fail(
+        new Error(
+          `Review-serving benchmark rows scanned mismatch: ${getReviewServingBenchmarkRowsScannedViolationMessage(violations)}`,
         ),
       )
 }
@@ -783,19 +921,22 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
       operations: [
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[0],
+          minimumDistinctCoverageKeys: 1,
           pageSize: 12,
           requestCount: 1,
           targetRowsReturnedPerRequest: 12,
         },
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[1],
+          minimumDistinctCoverageKeys: 1,
           pageSize: 10,
           requestCount: 1,
           targetRowsReturnedPerRequest: 10,
         },
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[2],
-          pageSize: 1,
+          minimumDistinctCoverageKeys: 1,
+          pageSize: 16,
           requestCount: 1,
           targetRowsReturnedPerRequest: 16,
         },
@@ -823,6 +964,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewRows',
         },
+        coverageKey: 'page:llm:smoke-first',
         key: 'smoke-llm-page',
         observation: {
           latencyMs: 8,
@@ -845,6 +987,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewRows',
         },
+        coverageKey: 'page:both:smoke-first',
         key: 'smoke-both-page',
         observation: {
           latencyMs: 12,
@@ -861,12 +1004,13 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           contractKey: 'review.filters.facets',
           estimatedResultBytes: 4_000,
           estimatedResultRows: 16,
-          pageSize: 1,
+          pageSize: 16,
           projectId: 'smoke-project',
           snapshotFreshness: 'ready',
           snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewFacet',
         },
+        coverageKey: 'facet:smoke-first',
         key: 'smoke-facet',
         observation: {
           latencyMs: 20,
@@ -1026,6 +1170,7 @@ export const runReviewServingBenchmarkEffect = (input: ReviewServingBenchmarkRun
         return runBenchmarkWorkItemEffect(workItem, executor)
       })
       yield* validateReviewServingBenchmarkRowTargets(input, samples)
+      yield* validateReviewServingBenchmarkRowsScanned(input, samples)
       yield* validateReviewServingBenchmarkTempSpill(samples)
       const endRssBytes = sampleReviewServingBenchmarkMemoryRssBytes()
       const metrics = getReviewServingBenchmarkMetrics({endRssBytes, samples, startRssBytes: runState.startRssBytes})
