@@ -240,10 +240,22 @@ export type ReviewServingReadContract = ReviewServingRouteBudget
   }
 
 export type ReviewServingCountState =
-  | {availability: 'async'; jobId: string | null; key: NamedReviewFastCountKey; reason: string}
-  | {availability: 'ready'; key: NamedReviewFastCountKey; snapshotId: ReviewServingSnapshotId; value: number}
-  | {availability: 'stale'; key: NamedReviewFastCountKey; snapshotId: ReviewServingSnapshotId; value: number}
-  | {availability: 'unavailable'; key: NamedReviewFastCountKey; reason: string}
+  | {availability: 'async'; filterKey: string; jobId: string | null; key: NamedReviewFastCountKey; reason: string}
+  | {
+      availability: 'ready'
+      filterKey: string
+      key: NamedReviewFastCountKey
+      snapshotId: ReviewServingSnapshotId
+      value: number
+    }
+  | {
+      availability: 'stale'
+      filterKey: string
+      key: NamedReviewFastCountKey
+      snapshotId: ReviewServingSnapshotId
+      value: number
+    }
+  | {availability: 'unavailable'; filterKey: string; key: NamedReviewFastCountKey; reason: string}
 
 export type ReviewServingSearchState =
   | {availability: 'async'; jobId: string | null; reason: string}

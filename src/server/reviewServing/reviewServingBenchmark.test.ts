@@ -181,6 +181,23 @@ test('review-serving benchmark rejects fixture and workload kind mismatches', as
   expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark fixture mismatch')
 })
 
+test('review-serving benchmark rejects synthetic runs without the canonical release workload', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const tinySyntheticInput = {
+    ...input,
+    fixture: reviewServingSynthetic10m7PromptOverlapFixture,
+    workload: {
+      ...reviewServingBenchmarkOverlapWorkloadDefinition,
+      operations: [{...reviewServingBenchmarkOverlapWorkloadDefinition.operations[0], requestCount: 1}],
+    },
+    workItems: input.workItems.slice(0, 1),
+  }
+
+  expect(await getBenchmarkRunFailureMessage(tinySyntheticInput)).toContain(
+    'Review-serving benchmark workload mismatch',
+  )
+})
+
 test('review-serving benchmark rejects incomplete canonical fixture properties', async () => {
   const input = getReviewServingBenchmarkSmokeInput()
   const mismatchedInput = {...input, fixture: {...input.fixture, articleCount: 1}}

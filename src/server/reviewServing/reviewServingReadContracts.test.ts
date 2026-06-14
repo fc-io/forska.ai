@@ -285,3 +285,16 @@ test('review serving migration inventory maps contracts to product routes and pl
   expect(missingSurfaces).toEqual([])
   expect(missingRoutes).toEqual([])
 })
+
+test('detail read inventory maps to the mounted project review route', () => {
+  const detailInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.contractKeys.includes('review.detail.row')
+  })
+
+  expect(detailInventoryEntries).toHaveLength(1)
+  expect(detailInventoryEntries[0]).toMatchObject({
+    method: 'POST',
+    productRoute: '/api/projectsreview',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
+  })
+})

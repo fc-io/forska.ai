@@ -6,11 +6,14 @@ import {
   getReviewServingAdmissionDiagnostics,
 } from './reviewServingAdmission.ts'
 
+const readyServingIdentity = {projectId: 'project-1', snapshotId: 'snapshot-1'} as const
+
 test('admitReviewServingRequest accepts a registered foreground row read within budget', () => {
   const result = admitReviewServingRequest({
     contractKey: 'review.llm.rows',
     estimatedResultBytes: 50_000,
     pageSize: 25,
+    ...readyServingIdentity,
     snapshotFreshness: 'ready',
     workloadClass: 'foregroundReviewRows',
   })
@@ -213,36 +216,81 @@ test('admitReviewServingRequest rejects summary lookups without a named count ke
 test('admitReviewServingRequest rejects supported count keys without ready matching count state', () => {
   const unavailable = admitReviewServingRequest({
     contractKey: 'review.llm.count',
-    countState: {availability: 'unavailable', key: 'review.llm.assessedByPrompt', reason: 'projector unavailable'},
+    countFilterKey: 'prompt:1',
+    countState: {
+      availability: 'unavailable',
+      filterKey: 'prompt:1',
+      key: 'review.llm.assessedByPrompt',
+      reason: 'projector unavailable',
+    },
     namedCountKey: 'review.llm.assessedByPrompt',
     pageSize: 1,
+    ...readyServingIdentity,
     snapshotFreshness: 'ready',
     workloadClass: 'foregroundReviewCount',
   })
   const pending = admitReviewServingRequest({
     contractKey: 'review.llm.count',
-    countState: {availability: 'async', jobId: 'count-job-1', key: 'review.llm.assessedByPrompt', reason: 'building'},
+    countFilterKey: 'prompt:1',
+    countState: {
+      availability: 'async',
+      filterKey: 'prompt:1',
+      jobId: 'count-job-1',
+      key: 'review.llm.assessedByPrompt',
+      reason: 'building',
+    },
     namedCountKey: 'review.llm.assessedByPrompt',
     pageSize: 1,
+    ...readyServingIdentity,
     snapshotFreshness: 'ready',
     workloadClass: 'foregroundReviewCount',
   })
   const mismatched = admitReviewServingRequest({
     contractKey: 'review.llm.count',
-    countState: {availability: 'ready', key: 'review.list.total', snapshotId: 'snapshot-1', value: 12},
+    countFilterKey: 'prompt:1',
+    countState: {
+      availability: 'ready',
+      filterKey: 'prompt:1',
+      key: 'review.list.total',
+      snapshotId: 'snapshot-1',
+      value: 12,
+    },
     namedCountKey: 'review.llm.assessedByPrompt',
     pageSize: 1,
+    ...readyServingIdentity,
     snapshotFreshness: 'ready',
-    snapshotId: 'snapshot-1',
     workloadClass: 'foregroundReviewCount',
   })
   const wrongSnapshot = admitReviewServingRequest({
     contractKey: 'review.llm.count',
-    countState: {availability: 'ready', key: 'review.llm.assessedByPrompt', snapshotId: 'snapshot-old', value: 12},
+    countFilterKey: 'prompt:1',
+    countState: {
+      availability: 'ready',
+      filterKey: 'prompt:1',
+      key: 'review.llm.assessedByPrompt',
+      snapshotId: 'snapshot-old',
+      value: 12,
+    },
     namedCountKey: 'review.llm.assessedByPrompt',
     pageSize: 1,
+    ...readyServingIdentity,
     snapshotFreshness: 'ready',
-    snapshotId: 'snapshot-1',
+    workloadClass: 'foregroundReviewCount',
+  })
+  const wrongFilterKey = admitReviewServingRequest({
+    contractKey: 'review.llm.count',
+    countFilterKey: 'prompt:2',
+    countState: {
+      availability: 'ready',
+      filterKey: 'prompt:1',
+      key: 'review.llm.assessedByPrompt',
+      snapshotId: 'snapshot-1',
+      value: 12,
+    },
+    namedCountKey: 'review.llm.assessedByPrompt',
+    pageSize: 1,
+    ...readyServingIdentity,
+    snapshotFreshness: 'ready',
     workloadClass: 'foregroundReviewCount',
   })
 
@@ -250,6 +298,7 @@ test('admitReviewServingRequest rejects supported count keys without ready match
   expect(pending.admitted ? null : pending.reason).toBe('countStateUnavailable')
   expect(mismatched.admitted ? null : mismatched.reason).toBe('countStateUnavailable')
   expect(wrongSnapshot.admitted ? null : wrongSnapshot.reason).toBe('countStateUnavailable')
+  expect(wrongFilterKey.admitted ? null : wrongFilterKey.reason).toBe('countStateUnavailable')
 })
 
 test('admitReviewServingRequest rejects token-prefix search without ready search state', () => {
@@ -266,8 +315,8 @@ test('admitReviewServingRequest rejects token-prefix search without ready search
     pageSize: 10,
     searchMode: 'tokenPrefix',
     searchState: {availability: 'indexing', reason: 'search projector indexing'},
+    ...readyServingIdentity,
     snapshotFreshness: 'ready',
-    snapshotId: 'snapshot-1',
     workloadClass: 'foregroundReviewSearch',
   })
   const wrongSnapshot = admitReviewServingRequest({
@@ -275,8 +324,8 @@ test('admitReviewServingRequest rejects token-prefix search without ready search
     pageSize: 10,
     searchMode: 'tokenPrefix',
     searchState: {availability: 'ready', snapshotId: 'snapshot-old'},
+    ...readyServingIdentity,
     snapshotFreshness: 'ready',
-    snapshotId: 'snapshot-1',
     workloadClass: 'foregroundReviewSearch',
   })
   const ready = admitReviewServingRequest({
@@ -284,8 +333,8 @@ test('admitReviewServingRequest rejects token-prefix search without ready search
     pageSize: 10,
     searchMode: 'tokenPrefix',
     searchState: {availability: 'ready', snapshotId: 'snapshot-1'},
+    ...readyServingIdentity,
     snapshotFreshness: 'ready',
-    snapshotId: 'snapshot-1',
     workloadClass: 'foregroundReviewSearch',
   })
 
@@ -306,6 +355,7 @@ test('admitReviewServingRequest rejects stale snapshots unless the caller explic
     allowStale: true,
     contractKey: 'review.llm.rows',
     pageSize: 25,
+    ...readyServingIdentity,
     snapshotFreshness: 'stale',
     workloadClass: 'foregroundReviewRows',
   })
@@ -326,13 +376,46 @@ test('admitReviewServingRequest rejects stale snapshots unless the caller explic
   })
 })
 
+test('admitReviewServingRequest rejects ready serving reads without project and snapshot identity', () => {
+  const missingProject = admitReviewServingRequest({
+    contractKey: 'review.detail.row',
+    pageSize: 1,
+    snapshotFreshness: 'ready',
+    snapshotId: 'snapshot-1',
+    workloadClass: 'foregroundReviewRows',
+  })
+  const missingSnapshot = admitReviewServingRequest({
+    contractKey: 'review.detail.row',
+    pageSize: 1,
+    projectId: 'project-1',
+    snapshotFreshness: 'ready',
+    workloadClass: 'foregroundReviewRows',
+  })
+
+  expect(missingProject.admitted ? null : missingProject.reason).toBe('servingIdentityMissing')
+  expect(missingSnapshot.admitted ? null : missingSnapshot.reason).toBe('servingIdentityMissing')
+  expect(missingProject.diagnostics.servingIdentity).toEqual({
+    accepted: false,
+    projectId: null,
+    snapshotId: 'snapshot-1',
+  })
+})
+
 test('getReviewServingAdmissionDiagnostics exposes route and work state shapes', () => {
   const diagnostics = getReviewServingAdmissionDiagnostics({
     contractKey: 'review.llm.count',
-    countState: {availability: 'ready', key: 'review.llm.assessedByPrompt', snapshotId: 'snapshot-1', value: 12},
+    countFilterKey: 'prompt:1',
+    countState: {
+      availability: 'ready',
+      filterKey: 'prompt:1',
+      key: 'review.llm.assessedByPrompt',
+      snapshotId: 'snapshot-1',
+      value: 12,
+    },
     jobState: {jobId: 'job-1', processedCount: 4, snapshotId: 'snapshot-1', status: 'running', totalEstimate: 12},
     namedCountKey: 'review.llm.assessedByPrompt',
     pageSize: 1,
+    projectId: 'project-1',
     searchState: {availability: 'unavailable', reason: 'count route has no search work'},
     snapshotFreshness: 'ready',
     snapshotId: 'snapshot-1',
@@ -342,6 +425,7 @@ test('getReviewServingAdmissionDiagnostics exposes route and work state shapes',
   expect(diagnostics).toMatchObject({
     contractKey: 'review.llm.count',
     count: {
+      requestedFilterKey: 'prompt:1',
       requestedKey: 'review.llm.assessedByPrompt',
       state: {availability: 'ready', snapshotId: 'snapshot-1', value: 12},
       supported: true,
@@ -368,6 +452,7 @@ test('getReviewServingAdmissionDiagnostics exposes route and work state shapes',
       state: {availability: 'unavailable', reason: 'count route has no search work'},
       synchronousSubstringRejected: false,
     },
+    servingIdentity: {accepted: true, projectId: 'project-1', snapshotId: 'snapshot-1'},
     workloadClass: {matches: true, registered: 'foregroundReviewCount', requested: 'foregroundReviewCount'},
   })
 })
@@ -379,6 +464,7 @@ test('admitReviewServingDuckdbWorkload maps an admitted contract to generic Duck
     pageSize: 25,
     projectId: 'project-a',
     snapshotFreshness: 'ready',
+    snapshotId: 'snapshot-1',
     workloadClass: 'foregroundReviewRows',
   })
 

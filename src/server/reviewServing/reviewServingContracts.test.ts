@@ -119,6 +119,7 @@ test('review serving contract state shapes carry snapshot and component identifi
   } satisfies ReviewServingSnapshotState
   const countState = {
     availability: 'ready',
+    filterKey: 'all',
     key: 'review.list.total',
     snapshotId: snapshotState.snapshotId,
     value: 12,

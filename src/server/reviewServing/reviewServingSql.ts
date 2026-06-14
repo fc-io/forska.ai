@@ -253,14 +253,107 @@ const getReviewServingRowsSqlCountPredicate = (params: {
 
   const summaryDefinition = namedReviewFastCountDefinitions[params.namedCountKey]
 
-  return ` AND count_kind = ${getSqlStringLiteral(params.namedCountKey)} AND summary_definition_version = ${getSqlStringLiteral(summaryDefinition.summaryDefinitionVersion)} AND filter_key = ${params.countFilterKeyParameter}`
+  return [
+    ` AND count_kind = ${getSqlStringLiteral(params.namedCountKey)}`,
+    ` AND summary_definition_version = ${getSqlStringLiteral(summaryDefinition.summaryDefinitionVersion)}`,
+    ` AND filter_key = ${params.countFilterKeyParameter}`,
+  ].join('')
+}
+
+const getRequiredReviewServingRowsSqlParameter = (
+  parameter: string | null | undefined,
+  label: string,
+  contract: ReviewServingReadContract,
+) => {
+  if (!parameter) {
+    throw new Error(`Missing ${label} for ${contract.key}`)
+  }
+
+  return parameter
+}
+
+const getReviewServingRowsSqlArticlePredicate = (params: {
+  articleIdParameter?: string | null
+  contract: ReviewServingReadContract
+}) => {
+  if (
+    params.contract.physicalAccessStrategy !== 'keyedLookup'
+    || !params.contract.allowedFilters.includes('articleId')
+  ) {
+    return ''
+  }
+
+  const articleIdParameter = getRequiredReviewServingRowsSqlParameter(
+    params.articleIdParameter,
+    'article id',
+    params.contract,
+  )
+
+  return ` AND article_id = ${articleIdParameter}`
+}
+
+const getReviewServingRowsSqlPostingPredicate = (params: {
+  contract: ReviewServingReadContract
+  filterKindParameter?: string | null
+  filterValueParameter?: string | null
+}) => {
+  if (params.contract.physicalAccessStrategy !== 'postingIntersection') {
+    return ''
+  }
+
+  const filterKindParameter = getRequiredReviewServingRowsSqlParameter(
+    params.filterKindParameter,
+    'filter kind',
+    params.contract,
+  )
+  const filterValueParameter = getRequiredReviewServingRowsSqlParameter(
+    params.filterValueParameter,
+    'filter value',
+    params.contract,
+  )
+
+  return ` AND filter_kind = ${filterKindParameter} AND filter_value = ${filterValueParameter}`
+}
+
+const getReviewServingRowsSqlSearchPredicate = (params: {
+  contract: ReviewServingReadContract
+  searchTokenPrefixParameter?: string | null
+}) => {
+  if (params.contract.physicalAccessStrategy !== 'tokenPrefixIndex') {
+    return ''
+  }
+
+  const searchTokenPrefixParameter = getRequiredReviewServingRowsSqlParameter(
+    params.searchTokenPrefixParameter,
+    'search token prefix',
+    params.contract,
+  )
+
+  return ` AND starts_with(token, ${searchTokenPrefixParameter})`
+}
+
+const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
+  articleIdParameter?: string | null
+  contract: ReviewServingReadContract
+  filterKindParameter?: string | null
+  filterValueParameter?: string | null
+  searchTokenPrefixParameter?: string | null
+}) => {
+  return [
+    getReviewServingRowsSqlArticlePredicate(params),
+    getReviewServingRowsSqlPostingPredicate(params),
+    getReviewServingRowsSqlSearchPredicate(params),
+  ].join('')
 }
 
 export const buildReviewServingRowsSql = (params: {
+  articleIdParameter?: string | null
   contract: ReviewServingReadContract
   countFilterKeyParameter?: string | null
   cursorPredicate?: string
   displayIdentityParameter: string
+  filterKindParameter?: string | null
+  filterValueParameter?: string | null
   limitParameter: string
   listModeParameter: string
   namedCountKey?: NamedReviewFastCountKey | null
@@ -269,13 +362,23 @@ export const buildReviewServingRowsSql = (params: {
   projectScopeIdentityParameter: string
   reviewConfigHashParameter: string
   searchIdentityParameter: string
+  searchTokenPrefixParameter?: string | null
   snapshotIdParameter: string
 }) => {
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
   const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
   const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
   const countPredicate = getReviewServingRowsSqlCountPredicate(params)
+  const physicalFilterPredicate = getReviewServingRowsSqlPhysicalFilterPredicate(params)
   const sortSql = getSortSql(params.contract)
 
-  return `SELECT * FROM ${params.contract.servingTable} WHERE project_id = ${params.projectIdParameter}${identityPredicates}${listModePredicate}${countPredicate}${cursorPredicate} ORDER BY ${sortSql} LIMIT ${params.limitParameter}`
+  return [
+    `SELECT * FROM ${params.contract.servingTable} WHERE project_id = ${params.projectIdParameter}`,
+    identityPredicates,
+    listModePredicate,
+    countPredicate,
+    physicalFilterPredicate,
+    cursorPredicate,
+    ` ORDER BY ${sortSql} LIMIT ${params.limitParameter}`,
+  ].join('')
 }
