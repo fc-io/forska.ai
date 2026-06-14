@@ -30,6 +30,18 @@ const getBenchmarkRunFailureMessage = async (input: Parameters<typeof runReviewS
   )
 }
 
+const getBenchmarkOperation = (operationKey: string) => {
+  const operation = reviewServingBenchmarkOverlapWorkloadDefinition.operations.find((candidate) => {
+    return candidate.key === operationKey
+  })
+
+  if (!operation) {
+    throw new Error(`Missing benchmark operation ${operationKey}`)
+  }
+
+  return operation
+}
+
 test('review-serving benchmark documents the full 10M article and 7 prompt overlap release gate', () => {
   expect(reviewServingSynthetic10m7PromptOverlapFixture).toEqual({
     articleCount: 10_000_000,
@@ -68,18 +80,48 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
       )
     }),
   ).toBe(true)
-  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations[0]).toMatchObject({
+  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations).toHaveLength(14)
+  expect(
+    reviewServingBenchmarkOverlapWorkloadDefinition.operations.map((operation) => {
+      return {contractKey: operation.contractKey, key: operation.key}
+    }),
+  ).toEqual([
+    {contractKey: 'review.llm.rows', key: 'llmPromptOverlapRows'},
+    {contractKey: 'review.human.rows', key: 'humanPromptOverlapRows'},
+    {contractKey: 'review.both.rows', key: 'llmHumanOverlapRows'},
+    {contractKey: 'review.unassessed.rows', key: 'unassessedOverlapRows'},
+    {contractKey: 'review.filters.postings', key: 'filteredOverlapRows'},
+    {contractKey: 'review.filters.facets', key: 'overlapFacetRefresh'},
+    {contractKey: 'review.filters.options', key: 'overlapFilterOptions'},
+    {contractKey: 'review.llm.count', key: 'llmPromptOverlapCounts'},
+    {contractKey: 'review.bulk.selection', key: 'bulkOverlapSelectionJob'},
+    {contractKey: 'review.export.selection', key: 'exportOverlapSelectionJob'},
+    {contractKey: 'review.pdf.selection', key: 'pdfOverlapSelectionJob'},
+    {contractKey: 'review.search.substringAsync', key: 'substringOverlapSearchJob'},
+    {contractKey: 'review.queue.unassessed', key: 'unassessedOverlapQueue'},
+    {contractKey: 'review.search.tokenPrefix', key: 'titlePrefixOverlapSearch'},
+  ])
+  expect(getBenchmarkOperation('llmPromptOverlapRows')).toMatchObject({
     maxRowsScannedPerRequest: 300,
     minimumDistinctRequestSlices: 7_000,
-    requestSliceFields: ['cursor', 'filter'],
+    requestSliceFields: ['cursor'],
   })
-  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations[2]).toMatchObject({
+  expect(getBenchmarkOperation('filteredOverlapRows')).toMatchObject({
+    contractKey: 'review.filters.postings',
+    maxRowsScannedPerRequest: 300,
+    minimumDistinctRequestSlices: 7_000,
+    pageSize: 100,
+    requestSliceFields: ['cursor', 'filter', 'searchTokenPrefix'],
+    searchMode: 'tokenPrefix',
+    workloadClass: 'foregroundReviewRows',
+  })
+  expect(getBenchmarkOperation('overlapFacetRefresh')).toMatchObject({
     maxRowsScannedPerRequest: 512,
     minimumDistinctRequestSlices: 700,
     pageSize: 128,
     requestSliceFields: ['filter'],
   })
-  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations[3]).toMatchObject({
+  expect(getBenchmarkOperation('overlapFilterOptions')).toMatchObject({
     contractKey: 'review.filters.options',
     maxRowsScannedPerRequest: 512,
     minimumDistinctRequestSlices: 700,
@@ -88,6 +130,20 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
     searchMode: 'tokenPrefix',
     workloadClass: 'foregroundReviewFacet',
   })
+  expect(
+    ['bulkOverlapSelectionJob', 'exportOverlapSelectionJob', 'pdfOverlapSelectionJob', 'substringOverlapSearchJob'].map(
+      (operationKey) => {
+        const operation = getBenchmarkOperation(operationKey)
+
+        return {key: operation.key, targetRowsReturnedPerRequest: operation.targetRowsReturnedPerRequest}
+      },
+    ),
+  ).toEqual([
+    {key: 'bulkOverlapSelectionJob', targetRowsReturnedPerRequest: 1},
+    {key: 'exportOverlapSelectionJob', targetRowsReturnedPerRequest: 1},
+    {key: 'pdfOverlapSelectionJob', targetRowsReturnedPerRequest: 1},
+    {key: 'substringOverlapSearchJob', targetRowsReturnedPerRequest: 1},
+  ])
   expect(
     reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
       return operation.contractKey === 'review.bulk.selection' && operation.jobKind === 'review.bulk.selection'
@@ -119,30 +175,26 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
     result.workload.operations.map((operation) => {
       return operation.requestCount
     }),
-  ).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+  ).toEqual(
+    Array.from({length: 14}, () => {
+      return 1
+    }),
+  )
   expect(
     result.samples.map((sample) => {
       return sample.admissionStatus
     }),
-  ).toEqual([
-    'accepted',
-    'accepted',
-    'accepted',
-    'accepted',
-    'accepted',
-    'accepted',
-    'accepted',
-    'accepted',
-    'accepted',
-    'accepted',
-    'accepted',
-  ])
+  ).toEqual(
+    Array.from({length: 14}, () => {
+      return 'accepted'
+    }),
+  )
   expect(result.metrics).toMatchObject({
-    latency: {p50Ms: 10, p95Ms: 20, p99Ms: 20, sampleCount: 11},
-    queueDepth: {average: 1.09, peak: 3},
-    rows: {rowsReturned: 58, rowsScanned: 161},
+    latency: {p50Ms: 11, p95Ms: 20, p99Ms: 20, sampleCount: 14},
+    queueDepth: {average: 1.29, peak: 3},
+    rows: {rowsReturned: 84, rowsScanned: 211},
     tempUsage: {peakBytes: 0, totalBytes: 0},
-    work: {admitted: 11, rejected: 0, total: 11},
+    work: {admitted: 14, rejected: 0, total: 14},
   })
   expect(result.metrics.memory.peakRssBytes).toBeGreaterThanOrEqual(result.metrics.memory.startRssBytes)
 })
@@ -217,7 +269,10 @@ test('review-serving benchmark rejects runs that do not satisfy operation reques
   const underSampledInput = {...input, workItems: input.workItems.slice(0, 1)}
 
   expect(getReviewServingBenchmarkRequestCountViolations(underSampledInput)).toEqual([
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'humanPromptOverlapRows'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'llmHumanOverlapRows'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'unassessedOverlapRows'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'filteredOverlapRows'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'overlapFacetRefresh'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'overlapFilterOptions'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'llmPromptOverlapCounts'},
