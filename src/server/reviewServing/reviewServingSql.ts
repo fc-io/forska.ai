@@ -243,7 +243,7 @@ const getReviewServingRowsSqlCountPredicate = (params: {
   }
 
   if (!params.namedCountKey || !params.contract.namedFastCounts.includes(params.namedCountKey)) {
-    return ' AND 1 = 0'
+    throw new Error(`Missing supported named count key for ${params.contract.key}`)
   }
 
   const summaryDefinition = namedReviewFastCountDefinitions[params.namedCountKey]

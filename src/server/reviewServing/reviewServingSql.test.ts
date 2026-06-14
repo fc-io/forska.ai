@@ -175,6 +175,25 @@ test('buildReviewServingRowsSql scopes count lookups to the requested named summ
   )
 })
 
+test('buildReviewServingRowsSql rejects count table reads without a supported named count', () => {
+  const contract = getRequiredReviewServingReadContract('review.llm.count')
+
+  expect(() => {
+    buildReviewServingRowsSql({
+      contract,
+      displayIdentityParameter: '$displayIdentity',
+      limitParameter: '$limit',
+      listModeParameter: '$listMode',
+      payloadIdentityParameter: '$payloadIdentity',
+      projectIdParameter: '$projectId',
+      projectScopeIdentityParameter: '$projectScopeIdentity',
+      reviewConfigHashParameter: '$reviewConfigHash',
+      searchIdentityParameter: '$searchIdentity',
+      snapshotIdParameter: '$snapshotId',
+    })
+  }).toThrow('Missing supported named count key for review.llm.count')
+})
+
 test('assertReviewServingSqlShape reads table references from SQL', () => {
   const sql = `
     SELECT s.article_id

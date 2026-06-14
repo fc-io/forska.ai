@@ -4,6 +4,7 @@ import {Effect} from 'effect'
 import {
   getReviewServingBenchmarkMetrics,
   getReviewServingBenchmarkRequestCountViolations,
+  getReviewServingBenchmarkRowTargetViolations,
   getReviewServingBenchmarkSmokeInput,
   getReviewServingBenchmarkWorkItemShapeViolations,
   reviewServingBenchmarkOverlapWorkloadDefinition,
@@ -171,4 +172,47 @@ test('review-serving benchmark rejects work items that do not match the declared
     operationKey: 'llmPromptOverlapRows',
   })
   expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark work item mismatch')
+})
+
+test('review-serving benchmark rejects fixture and workload kind mismatches', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const mismatchedInput = {...input, workload: {...input.workload, fixtureKind: 'synthetic10m7PromptOverlap' as const}}
+
+  expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark fixture mismatch')
+})
+
+test('review-serving benchmark rejects samples below declared row targets', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const samples = [
+    {
+      admissionStatus: 'accepted' as const,
+      contractKey: 'review.llm.rows',
+      key: 'sample-low-row-count',
+      latencyMs: 1,
+      memoryRssBytes: 1,
+      operationKey: 'llmPromptOverlapRows',
+      queueDepth: 0,
+      rejectionReason: null,
+      rowsReturned: 0,
+      rowsScanned: 0,
+      tempUsageBytes: 0,
+    },
+  ]
+
+  expect(getReviewServingBenchmarkRowTargetViolations(input, samples)).toEqual([
+    {
+      actualRowsReturned: 0,
+      expectedRowsReturned: 12,
+      key: 'sample-low-row-count',
+      operationKey: 'llmPromptOverlapRows',
+    },
+  ])
+  expect(
+    await getBenchmarkRunFailureMessage({
+      ...input,
+      executor: (workItem) => {
+        return Effect.succeed({...workItem.observation, rowsReturned: 0})
+      },
+    }),
+  ).toContain('Review-serving benchmark row target mismatch')
 })
