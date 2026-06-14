@@ -238,13 +238,27 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       workloadClass: 'foregroundReviewFacet',
     },
     {
+      contractKey: 'review.filters.options',
+      key: 'overlapFilterOptions',
+      maxRowsScannedPerRequest: 512,
+      minimumDistinctRequestSlices: 700,
+      pageSize: 512,
+      requestCount: 700,
+      requestSliceFields: ['filter', 'searchTokenPrefix'],
+      searchMode: 'tokenPrefix',
+      targetRowsReturnedPerRequest: 512,
+      workloadClass: 'foregroundReviewFacet',
+    },
+    {
       contractKey: 'review.llm.count',
       countFilterKeyPrefix: 'prompt:',
       key: 'llmPromptOverlapCounts',
       maxRowsScannedPerRequest: 8,
+      minimumDistinctRequestSlices: 7,
       namedCountKey: 'review.llm.assessedByPrompt',
       pageSize: 1,
       requestCount: 700,
+      requestSliceFields: ['filter'],
       targetRowsReturnedPerRequest: 1,
       workloadClass: 'foregroundReviewCount',
     },
@@ -485,16 +499,13 @@ export const getReviewServingBenchmarkWorkItemShapeViolations = (
   ]
 
   const prefixShapeEntries: ReadonlyArray<
-    [ReviewServingBenchmarkWorkItemShapeViolation['field'], string | null, string | undefined]
+    [ReviewServingBenchmarkWorkItemShapeViolation['field'], string | null, string | null]
   > = [
-    ['countFilterKeyPrefix', workItem.admissionRequest.countFilterKey ?? null, operation.countFilterKeyPrefix],
-    ['jobFilterSignaturePrefix', workItem.jobFilterSignature ?? null, operation.jobFilterSignaturePrefix],
-    ['searchTextPrefix', workItem.searchText ?? null, operation.searchTextPrefix],
+    ['countFilterKeyPrefix', workItem.admissionRequest.countFilterKey ?? null, operation.countFilterKeyPrefix ?? null],
+    ['jobFilterSignaturePrefix', workItem.jobFilterSignature ?? null, operation.jobFilterSignaturePrefix ?? null],
+    ['searchTextPrefix', workItem.searchText ?? null, operation.searchTextPrefix ?? null],
   ]
   const exactViolations: ReviewServingBenchmarkWorkItemShapeViolation[] = exactShapeEntries
-    .filter(([_field, _actual, expected]) => {
-      return expected !== null
-    })
     .map(([field, actual, expected]) => {
       return {actual, expected, field, key: workItem.key}
     })
@@ -502,16 +513,13 @@ export const getReviewServingBenchmarkWorkItemShapeViolations = (
       return violation.actual !== violation.expected
     })
   const prefixViolations: ReviewServingBenchmarkWorkItemShapeViolation[] = prefixShapeEntries
-    .filter(([_field, _actual, expected]) => {
-      return expected !== undefined
-    })
     .map(([field, actual, expected]) => {
-      return {actual, expected: `${expected}*`, field, key: workItem.key}
+      return {actual, expected: expected === null ? null : `${expected}*`, field, key: workItem.key}
     })
     .filter((violation) => {
-      return (
-        typeof violation.actual !== 'string' || !violation.actual.startsWith(String(violation.expected).slice(0, -1))
-      )
+      return violation.expected === null
+        ? violation.actual !== null
+        : typeof violation.actual !== 'string' || !violation.actual.startsWith(String(violation.expected).slice(0, -1))
     })
   const requestSliceViolations = getReviewServingBenchmarkRequestSliceViolations(operation, workItem)
 
@@ -992,14 +1000,22 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
         },
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[3],
+          minimumDistinctRequestSlices: 1,
+          pageSize: 8,
+          requestCount: 1,
+          targetRowsReturnedPerRequest: 8,
+        },
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[4],
+          minimumDistinctRequestSlices: 1,
           pageSize: 1,
           requestCount: 1,
           targetRowsReturnedPerRequest: 1,
         },
-        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[4], requestCount: 1},
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[5], requestCount: 1},
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[6], requestCount: 1},
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[7], requestCount: 1},
+        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[8], requestCount: 1},
       ],
     },
     workItems: [
@@ -1074,6 +1090,31 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
       },
       {
         admissionRequest: {
+          contractKey: 'review.filters.options',
+          estimatedResultBytes: 8_000,
+          estimatedResultRows: 8,
+          pageSize: 8,
+          projectId: 'smoke-project',
+          searchMode: 'tokenPrefix',
+          searchState: {availability: 'ready', snapshotId: 'smoke-snapshot'},
+          snapshotFreshness: 'ready',
+          snapshotId: 'smoke-snapshot',
+          workloadClass: 'foregroundReviewFacet',
+        },
+        key: 'smoke-filter-options',
+        observation: {
+          latencyMs: 18,
+          memoryRssBytes: 129_500_000,
+          queueDepth: 2,
+          rowsReturned: 8,
+          rowsScanned: 32,
+          tempUsageBytes: 0,
+        },
+        operationKey: 'overlapFilterOptions',
+        requestSlice: {filter: 'all', searchTokenPrefix: 'overlap'},
+      },
+      {
+        admissionRequest: {
           contractKey: 'review.llm.count',
           countFilterKey: 'prompt:1',
           countState: {
@@ -1102,6 +1143,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'llmPromptOverlapCounts',
+        requestSlice: {filter: 'prompt:1'},
       },
       {
         admissionRequest: {

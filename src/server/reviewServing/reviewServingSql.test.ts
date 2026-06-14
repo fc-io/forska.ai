@@ -574,6 +574,24 @@ test('assertReviewServingSqlShape requires real bound scope predicates', () => {
   expect(violations).toContain('snapshot scoped read: p')
 })
 
+test('assertReviewServingSqlShape does not accept scope predicates from qualify clauses', () => {
+  const sql = `
+    SELECT s.article_id
+    FROM mart.review_article_serving_v4 s
+    JOIN mart.review_article_filter_posting_serving_v4 p ON p.article_id = s.article_id
+    WHERE s.project_id = ? AND s.snapshot_id = ?
+    QUALIFY p.project_id = ? AND p.snapshot_id = ?
+    ORDER BY s.sort_key DESC, s.article_id DESC
+    LIMIT ?
+  `
+  const violations = getReviewServingSqlShapeViolations(sql).map((violation) => {
+    return violation.label
+  })
+
+  expect(violations).toContain('project scoped read: p')
+  expect(violations).toContain('snapshot scoped read: p')
+})
+
 test('assertReviewServingSqlShape rejects literal scope predicates', () => {
   const sql = `
     SELECT s.article_id
