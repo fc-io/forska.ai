@@ -153,7 +153,13 @@ test('buildReviewServingRowsSql separates review and human facet rows', () => {
   expect(assertReviewServingSqlShape(reviewSql)).toEqual({ok: true, violations: []})
   expect(assertReviewServingSqlShape(humanSql)).toEqual({ok: true, violations: []})
   expect(reviewSql).toContain("AND facet_kind = 'review'")
+  expect(reviewSql).toContain('AND summary_definition_version IN (')
+  expect(reviewSql).toContain("'review-filter-duplicate-flag:v1'")
+  expect(reviewSql).toContain("'review-filter-import-route:v1'")
+  expect(reviewSql).toContain("'review-filter-prompt-answer:v1'")
+  expect(reviewSql).toContain("'review-filter-publication-year:v1'")
   expect(humanSql).toContain("AND facet_kind = 'human'")
+  expect(humanSql).toContain("AND summary_definition_version = 'review-human-filter-prompt-answer:v1'")
 })
 
 test('buildReviewServingRowsSql lets snapshot manifests discover latest project status', () => {
@@ -293,6 +299,7 @@ test('buildReviewServingRowsSql uses contract list-mode literals for fixed row c
 
   expect(sql).toContain("AND list_mode_key = 'both'")
   expect(sql).not.toContain('$wrongRuntimeMode')
+  expect(sql).toContain('ORDER BY sort_key DESC, article_id ASC')
 })
 
 test('buildReviewServingRowsSql uses count-table sort columns for count serving tables', () => {

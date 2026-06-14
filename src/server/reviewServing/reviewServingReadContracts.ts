@@ -103,7 +103,7 @@ const rowContract = (input: {
     requiredComponents: input.requiredComponents,
     searchMode: 'none',
     servingTable: reviewArticleServingTable,
-    sort: {direction: 'desc', fields: ['sort_key', 'article_id']},
+    sort: {direction: 'desc', fields: ['sort_key', 'article_id ASC']},
     workloadClass: 'foregroundReviewRows',
   })
 }
@@ -275,7 +275,7 @@ export const reviewServingReadContractList = [
   filterFacetContract({
     allowedFilters: ['humanStatus', 'promptAnswer'],
     key: 'review.human.filters.facets',
-    namedFastCounts: [],
+    namedFastCounts: ['review.human.filter.promptAnswer'],
     requiredComponents: ['display', 'humanStatus', 'posting', 'projectScope', 'selectedImport', 'summary'],
   }),
   defineContract({

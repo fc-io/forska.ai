@@ -139,13 +139,19 @@ test('direct ordered row contracts do not advertise filters ignored by row SQL',
 
   expect(
     orderedRowContracts.map((contract) => {
-      return [contract.key, contract.allowedFilters, contract.optionalComponents, contract.searchMode]
+      return [
+        contract.key,
+        contract.allowedFilters,
+        contract.optionalComponents,
+        contract.searchMode,
+        contract.sort.fields,
+      ]
     }),
   ).toEqual([
-    ['review.llm.rows', [], [], 'none'],
-    ['review.human.rows', [], [], 'none'],
-    ['review.both.rows', [], [], 'none'],
-    ['review.unassessed.rows', [], [], 'none'],
+    ['review.llm.rows', [], [], 'none', ['sort_key', 'article_id ASC']],
+    ['review.human.rows', [], [], 'none', ['sort_key', 'article_id ASC']],
+    ['review.both.rows', [], [], 'none', ['sort_key', 'article_id ASC']],
+    ['review.unassessed.rows', [], [], 'none', ['sort_key', 'article_id ASC']],
   ])
 })
 
@@ -268,6 +274,7 @@ test('human filter facets use a dedicated contract', () => {
     'summary',
   ])
   expect(humanFacets?.allowedFilters).toEqual(['humanStatus', 'promptAnswer'])
+  expect(humanFacets?.namedFastCounts).toEqual(['review.human.filter.promptAnswer'])
 })
 
 test('search contracts require project scope without blocking async substring on search readiness', () => {

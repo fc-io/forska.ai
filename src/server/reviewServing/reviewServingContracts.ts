@@ -115,6 +115,7 @@ export const namedReviewFastCountKeys = [
   'review.filter.importRoute',
   'review.filter.promptAnswer',
   'review.filter.publicationYear',
+  'review.human.filter.promptAnswer',
 ] as const
 
 export type NamedReviewFastCountKey = (typeof namedReviewFastCountKeys)[number]
@@ -381,6 +382,12 @@ export const namedReviewFastCountDefinitions: Record<NamedReviewFastCountKey, Re
     kind: 'facet',
     requiredComponents: ['display', 'summary'],
     summaryDefinitionVersion: 'review-filter-publication-year:v1',
+  },
+  'review.human.filter.promptAnswer': {
+    key: 'review.human.filter.promptAnswer',
+    kind: 'facet',
+    requiredComponents: ['humanStatus', 'summary'],
+    summaryDefinitionVersion: 'review-human-filter-prompt-answer:v1',
   },
   'review.human.reviewedByPrompt': {
     key: 'review.human.reviewedByPrompt',
