@@ -219,7 +219,8 @@ test('buildReviewServingRowsSql uses count-table sort columns for count serving 
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
-  expect(sql).toContain('ORDER BY count_kind ASC, summary_definition_version ASC, filter_key ASC')
+  expect(sql).toContain("AND list_mode_key = 'global'")
+  expect(sql).toContain('ORDER BY list_mode_key ASC, count_kind ASC, summary_definition_version ASC, filter_key ASC')
   expect(sql).not.toContain('summary_key')
   expect(sql).not.toContain('prompt_id')
 })
@@ -243,7 +244,7 @@ test('buildReviewServingRowsSql scopes count lookups to the requested named summ
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    "AND count_kind = 'review.llm.assessedByPrompt' AND summary_definition_version = 'review-llm-assessed-by-prompt:v1' AND filter_key = $filterKey",
+    "AND list_mode_key = $listMode AND count_kind = 'review.llm.assessedByPrompt' AND summary_definition_version = 'review-llm-assessed-by-prompt:v1' AND filter_key = $filterKey",
   )
 })
 

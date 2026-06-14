@@ -80,6 +80,29 @@ test('search text changes are search-only at the first projection step', () => {
   expect(rule.affectedComponents).toEqual(['search'])
 })
 
+test('judgment input changes invalidate dependent LLM facts and payload rows', () => {
+  const rule = getReviewServingInvalidationRule('article.judgmentInput.updated')
+
+  expect(rule.firstAffectedComponent).toBe('judgmentInputContent')
+  expect(rule.affectedComponents).toEqual([
+    'judgmentInputContent',
+    'llmStatus',
+    'queue',
+    'posting',
+    'summary',
+    'payload',
+  ])
+  expect(rule.downstreamDependents).toEqual(['llmStatus', 'queue', 'posting', 'summary', 'payload'])
+})
+
+test('review config changes invalidate judgment input content for content flag changes', () => {
+  const rule = getReviewServingInvalidationRule('project.reviewConfig.updated')
+
+  expect(rule.firstAffectedComponent).toBe('judgmentInputContent')
+  expect(rule.affectedComponents).toContain('judgmentInputContent')
+  expect(rule.downstreamDependents).toEqual(['llmStatus', 'humanStatus', 'queue', 'posting', 'summary'])
+})
+
 test('unknown change kinds are not treated as broad project invalidation', () => {
   const rule = getReviewServingInvalidationRuleOrNull('project.everything.changed')
 

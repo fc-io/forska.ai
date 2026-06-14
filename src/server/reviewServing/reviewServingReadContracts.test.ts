@@ -154,8 +154,47 @@ test('queue and count contracts use physical serving-table sort columns', () => 
 
   expect(queue?.cursorFields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id'])
   expect(queue?.sort.fields).toEqual(['priority_bucket', 'activity_sort_at', 'article_id'])
-  expect(count?.sort.fields).toEqual(['count_kind', 'summary_definition_version', 'filter_key'])
-  expect(badges?.sort.fields).toEqual(['count_kind', 'summary_definition_version', 'filter_key'])
+  expect(count?.sort.fields).toEqual(['list_mode_key', 'count_kind', 'summary_definition_version', 'filter_key'])
+  expect(badges?.sort.fields).toEqual(['list_mode_key', 'count_kind', 'summary_definition_version', 'filter_key'])
+})
+
+test('job criteria contracts use job-table cursor and sort columns', () => {
+  const jobContracts = [
+    getReviewServingReadContract('review.bulk.selection'),
+    getReviewServingReadContract('review.export.selection'),
+    getReviewServingReadContract('review.pdf.selection'),
+    getReviewServingReadContract('review.search.substringAsync'),
+  ]
+
+  expect(
+    jobContracts.map((contract) => {
+      return contract?.cursorFields
+    }),
+  ).toEqual([
+    ['updated_at', 'job_id'],
+    ['updated_at', 'job_id'],
+    ['updated_at', 'job_id'],
+    ['updated_at', 'job_id'],
+  ])
+  expect(
+    jobContracts.map((contract) => {
+      return contract?.sort.fields
+    }),
+  ).toEqual([
+    ['updated_at', 'job_id'],
+    ['updated_at', 'job_id'],
+    ['updated_at', 'job_id'],
+    ['updated_at', 'job_id'],
+  ])
+})
+
+test('search contracts require project scope without blocking async substring on search readiness', () => {
+  const tokenPrefix = getReviewServingReadContract('review.search.tokenPrefix')
+  const substringAsync = getReviewServingReadContract('review.search.substringAsync')
+
+  expect(tokenPrefix?.requiredComponents).toEqual(['projectScope', 'search'])
+  expect(substringAsync?.requiredComponents).toEqual(['projectScope'])
+  expect(substringAsync?.optionalComponents).toEqual(['search'])
 })
 
 test('snapshot contracts align cursor fields with sort keys and required counts', () => {
