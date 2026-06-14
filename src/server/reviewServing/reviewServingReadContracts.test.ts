@@ -92,6 +92,17 @@ test('named fast count definitions use explicit versions', () => {
   expect(missingVersions).toEqual([])
 })
 
+test('contracts advertising queue-backed LLM unassessed counts require queue projection state', () => {
+  const contracts = reviewServingReadContractList.filter((contract) => {
+    return contract.namedFastCounts.includes('review.llm.unassessedByPrompt')
+  })
+  const contractsMissingQueue = contracts.filter((contract) => {
+    return !contract.requiredComponents.includes('queue')
+  })
+
+  expect(contractsMissingQueue).toEqual([])
+})
+
 test('normal foreground row contracts require ready snapshots and serving tables', () => {
   const llmRows = getReviewServingReadContract('review.llm.rows')
   const humanRows = getReviewServingReadContract('review.human.rows')
@@ -112,10 +123,10 @@ test('prompt preview contract does not advertise prompt filters on article paylo
   expect(promptPreview?.sort).toEqual({direction: 'asc', fields: ['article_created_at', 'article_id']})
 })
 
-test('detail row contract pins a canonical list mode for article lookups', () => {
+test('detail row contract does not pin article lookups to a list mode', () => {
   const detailRow = getReviewServingReadContract('review.detail.row')
 
-  expect(detailRow?.listMode).toBe('both')
+  expect(detailRow?.listMode).toBeNull()
   expect(detailRow?.servingTable).toBe('mart.review_article_serving_v4')
 })
 

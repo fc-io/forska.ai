@@ -152,9 +152,24 @@ test('admitReviewServingRequest rejects search modes that do not match the contr
     snapshotFreshness: 'ready',
     workloadClass: 'foregroundReviewCount',
   })
+  const missingSubstringMode = admitReviewServingRequest({
+    contractKey: 'review.search.substringAsync',
+    pageSize: 1,
+    snapshotFreshness: 'ready',
+    workloadClass: 'bulkReviewJob',
+  })
+  const acceptedSubstringMode = admitReviewServingRequest({
+    contractKey: 'review.search.substringAsync',
+    pageSize: 1,
+    searchMode: 'substringAsync',
+    snapshotFreshness: 'ready',
+    workloadClass: 'bulkReviewJob',
+  })
 
   expect(substringOnTokenPrefixRows.admitted ? null : substringOnTokenPrefixRows.reason).toBe('searchModeMismatch')
   expect(tokenPrefixOnNoSearchCount.admitted ? null : tokenPrefixOnNoSearchCount.reason).toBe('searchModeMismatch')
+  expect(missingSubstringMode.admitted ? null : missingSubstringMode.reason).toBe('searchModeMismatch')
+  expect(acceptedSubstringMode.admitted).toBe(true)
   expect(substringOnTokenPrefixRows.diagnostics.search).toMatchObject({
     registeredMode: 'tokenPrefix',
     requestedMode: 'substringAsync',

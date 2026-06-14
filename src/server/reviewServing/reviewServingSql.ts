@@ -236,6 +236,7 @@ const getSqlStringLiteral = (value: string) => {
 
 const getReviewServingRowsSqlCountPredicate = (params: {
   contract: ReviewServingReadContract
+  countFilterKeyParameter?: string | null
   namedCountKey?: NamedReviewFastCountKey | null
 }) => {
   if (params.contract.servingTable !== reviewServingCountServingTable) {
@@ -246,13 +247,18 @@ const getReviewServingRowsSqlCountPredicate = (params: {
     throw new Error(`Missing supported named count key for ${params.contract.key}`)
   }
 
+  if (!params.countFilterKeyParameter) {
+    throw new Error(`Missing count filter key for ${params.contract.key}`)
+  }
+
   const summaryDefinition = namedReviewFastCountDefinitions[params.namedCountKey]
 
-  return ` AND count_kind = ${getSqlStringLiteral(params.namedCountKey)} AND summary_definition_version = ${getSqlStringLiteral(summaryDefinition.summaryDefinitionVersion)}`
+  return ` AND count_kind = ${getSqlStringLiteral(params.namedCountKey)} AND summary_definition_version = ${getSqlStringLiteral(summaryDefinition.summaryDefinitionVersion)} AND filter_key = ${params.countFilterKeyParameter}`
 }
 
 export const buildReviewServingRowsSql = (params: {
   contract: ReviewServingReadContract
+  countFilterKeyParameter?: string | null
   cursorPredicate?: string
   displayIdentityParameter: string
   limitParameter: string

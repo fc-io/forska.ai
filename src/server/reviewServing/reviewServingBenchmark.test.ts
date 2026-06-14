@@ -181,6 +181,13 @@ test('review-serving benchmark rejects fixture and workload kind mismatches', as
   expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark fixture mismatch')
 })
 
+test('review-serving benchmark rejects incomplete canonical fixture properties', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const mismatchedInput = {...input, fixture: {...input.fixture, articleCount: 1}}
+
+  expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark fixture mismatch')
+})
+
 test('review-serving benchmark rejects samples below declared row targets', async () => {
   const input = getReviewServingBenchmarkSmokeInput()
   const samples = [
