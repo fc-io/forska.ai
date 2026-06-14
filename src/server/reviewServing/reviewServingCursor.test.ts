@@ -24,7 +24,7 @@ const payload: ReviewServingCursorPayload = {
   reviewConfigHash: 'review:123',
   snapshotId: 'snapshot-1',
   sortDirection: 'desc',
-  sortKey: getReviewServingCursorSortKey(['sort_key', 'article_id']),
+  sortKey: getReviewServingCursorSortKey(['sort_key DESC', 'article_id ASC']),
   sortValues: ['2026-01-01T00:00:00.000Z', 'article-1'],
   version: 1,
 }
@@ -126,6 +126,13 @@ test('validateReviewServingCursor rejects filter and sort scope mismatches', () 
   expect(filterResult).toEqual({reason: 'filterSignatureMismatch', valid: false})
   expect(sortResult).toEqual({reason: 'sortDirectionMismatch', valid: false})
   expect(sortKeyResult).toEqual({reason: 'sortKeyMismatch', valid: false})
+})
+
+test('validateReviewServingCursor rejects cursors minted for older tie-break directions', () => {
+  const oldTieBreakPayload = {...payload, sortKey: getReviewServingCursorSortKey(['sort_key', 'article_id'])}
+  const result = validateReviewServingCursor(oldTieBreakPayload, validationContext)
+
+  expect(result).toEqual({reason: 'sortKeyMismatch', valid: false})
 })
 
 test('validateReviewServingCursor rejects sort value arity mismatches', () => {

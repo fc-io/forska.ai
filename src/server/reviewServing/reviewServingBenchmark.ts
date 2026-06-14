@@ -74,6 +74,8 @@ export type ReviewServingBenchmarkObservation = {
 
 export type ReviewServingBenchmarkWorkItem = {
   admissionRequest: ReviewServingAdmissionRequest
+  cursor?: string
+  filterSignature?: string
   jobFilterSignature?: string
   jobKind?: string
   key: string
@@ -81,6 +83,7 @@ export type ReviewServingBenchmarkWorkItem = {
   operationKey: string
   requestSlice?: ReviewServingBenchmarkRequestSlice
   searchText?: string
+  searchTokenPrefix?: string
 }
 
 export type ReviewServingBenchmarkSample = ReviewServingBenchmarkObservation & {
@@ -152,6 +155,13 @@ export type ReviewServingBenchmarkRowTargetViolation = {
   operationKey: string
 }
 
+export type ReviewServingBenchmarkRowsReturnedLimitViolation = {
+  actualRowsReturned: number
+  expectedMaxRowsReturned: number
+  key: string
+  operationKey: string
+}
+
 export type ReviewServingBenchmarkRowsScannedViolation = {
   actualRowsScanned: number
   expectedRowsScanned: number
@@ -171,6 +181,7 @@ export type ReviewServingBenchmarkPerformanceViolation = {
   actual: number
   expected: number
   metric: 'latency.p95Ms' | 'latency.p99Ms' | 'memory.peakRssBytes' | 'memory.rssGrowthBytes'
+  operationKey?: string
 }
 
 type ReviewServingBenchmarkRunState = {startedAtMs: number; startRssBytes: number}
@@ -452,9 +463,24 @@ const getReviewServingBenchmarkRequestSliceKey = (
     ? null
     : fields
         .map((field) => {
-          return `${field}:${workItem.requestSlice?.[field] ?? ''}`
+          return `${field}:${getReviewServingBenchmarkActualRequestSliceValue(field, workItem) ?? ''}`
         })
         .join('|')
+}
+
+const getReviewServingBenchmarkActualRequestSliceValue = (
+  field: ReviewServingBenchmarkRequestSliceField,
+  workItem: ReviewServingBenchmarkWorkItem,
+) => {
+  if (field === 'cursor') {
+    return workItem.cursor ?? null
+  }
+
+  if (field === 'searchTokenPrefix') {
+    return workItem.searchTokenPrefix ?? null
+  }
+
+  return workItem.admissionRequest.countFilterKey ?? workItem.filterSignature ?? null
 }
 
 const getReviewServingBenchmarkRequestSliceViolations = (
@@ -462,20 +488,32 @@ const getReviewServingBenchmarkRequestSliceViolations = (
   workItem: ReviewServingBenchmarkWorkItem,
 ): ReviewServingBenchmarkWorkItemShapeViolation[] => {
   const fields = operation.requestSliceFields ?? []
-  const missingFields = fields.filter((field) => {
-    return !workItem.requestSlice?.[field]
-  })
 
-  return missingFields.length === 0
-    ? []
-    : [
-        {
-          actual: `missing:${missingFields.join(',')}`,
-          expected: fields.join(','),
-          field: 'requestSlice',
-          key: workItem.key,
-        },
+  return fields.flatMap((field) => {
+    const declaredValue = workItem.requestSlice?.[field] ?? null
+    const actualValue = getReviewServingBenchmarkActualRequestSliceValue(field, workItem)
+
+    if (!declaredValue) {
+      return [{actual: `missing:${field}`, expected: actualValue ?? field, field: 'requestSlice', key: workItem.key}]
+    }
+
+    if (!actualValue) {
+      return [
+        {actual: `${field}:${declaredValue}`, expected: `actual:${field}`, field: 'requestSlice', key: workItem.key},
       ]
+    }
+
+    return declaredValue === actualValue
+      ? []
+      : [
+          {
+            actual: `${field}:${declaredValue}`,
+            expected: `${field}:${actualValue}`,
+            field: 'requestSlice',
+            key: workItem.key,
+          },
+        ]
+  })
 }
 
 export const getReviewServingBenchmarkWorkItemShapeViolations = (
@@ -625,12 +663,44 @@ export const getReviewServingBenchmarkRowsScannedViolations = (
     })
 }
 
+export const getReviewServingBenchmarkRowsReturnedLimitViolations = (
+  input: Pick<ReviewServingBenchmarkRunInput, 'workload'>,
+  samples: readonly ReviewServingBenchmarkSample[],
+) => {
+  return samples
+    .map((sample) => {
+      const operation = getReviewServingBenchmarkOperationByKey(input, sample.operationKey)
+
+      return operation && sample.rowsReturned > operation.pageSize
+        ? {
+            actualRowsReturned: sample.rowsReturned,
+            expectedMaxRowsReturned: operation.pageSize,
+            key: sample.key,
+            operationKey: sample.operationKey,
+          }
+        : null
+    })
+    .filter((violation): violation is ReviewServingBenchmarkRowsReturnedLimitViolation => {
+      return violation !== null
+    })
+}
+
 const getReviewServingBenchmarkRowsScannedViolationMessage = (
   violations: readonly ReviewServingBenchmarkRowsScannedViolation[],
 ) => {
   return violations
     .map((violation) => {
       return `${violation.key}.${violation.operationKey}: expected <= ${violation.expectedRowsScanned}, got ${violation.actualRowsScanned}`
+    })
+    .join('; ')
+}
+
+const getReviewServingBenchmarkRowsReturnedLimitViolationMessage = (
+  violations: readonly ReviewServingBenchmarkRowsReturnedLimitViolation[],
+) => {
+  return violations
+    .map((violation) => {
+      return `${violation.key}.${violation.operationKey}: expected <= ${violation.expectedMaxRowsReturned}, got ${violation.actualRowsReturned}`
     })
     .join('; ')
 }
@@ -668,10 +738,36 @@ const getReviewServingBenchmarkTempSpillViolationMessage = (
 export const getReviewServingBenchmarkPerformanceViolations = (
   metrics: ReviewServingBenchmarkMetrics,
   targets: ReviewServingBenchmarkPerformanceTargets,
+  samples: readonly ReviewServingBenchmarkSample[] = [],
 ) => {
   const rssGrowthBytes = metrics.memory.peakRssBytes - metrics.memory.startRssBytes
+  const operationKeys = [
+    ...new Set(
+      samples.map((sample) => {
+        return sample.operationKey
+      }),
+    ),
+  ]
+  const operationLatencyViolations = operationKeys.flatMap((operationKey) => {
+    const operationLatencyValues = samples
+      .filter((sample) => {
+        return sample.operationKey === operationKey
+      })
+      .map((sample) => {
+        return sample.latencyMs
+      })
+    const p95Ms = getPercentileMetric(operationLatencyValues, 0.95)
+    const p99Ms = getPercentileMetric(operationLatencyValues, 0.99)
 
-  return [
+    return [
+      {actual: p95Ms, expected: targets.maxP95LatencyMs, metric: 'latency.p95Ms' as const, operationKey},
+      {actual: p99Ms, expected: targets.maxP99LatencyMs, metric: 'latency.p99Ms' as const, operationKey},
+    ].filter((violation) => {
+      return violation.actual > violation.expected
+    })
+  })
+
+  const aggregateViolations = [
     {actual: metrics.latency.p95Ms, expected: targets.maxP95LatencyMs, metric: 'latency.p95Ms' as const},
     {actual: metrics.latency.p99Ms, expected: targets.maxP99LatencyMs, metric: 'latency.p99Ms' as const},
     {actual: metrics.memory.peakRssBytes, expected: targets.maxPeakRssBytes, metric: 'memory.peakRssBytes' as const},
@@ -679,6 +775,8 @@ export const getReviewServingBenchmarkPerformanceViolations = (
   ].filter((violation) => {
     return violation.actual > violation.expected
   })
+
+  return [...aggregateViolations, ...operationLatencyViolations]
 }
 
 const getReviewServingBenchmarkPerformanceViolationMessage = (
@@ -686,7 +784,9 @@ const getReviewServingBenchmarkPerformanceViolationMessage = (
 ) => {
   return violations
     .map((violation) => {
-      return `${violation.metric}: expected <= ${violation.expected}, got ${violation.actual}`
+      const metric = violation.operationKey ? `${violation.operationKey}.${violation.metric}` : violation.metric
+
+      return `${metric}: expected <= ${violation.expected}, got ${violation.actual}`
     })
     .join('; ')
 }
@@ -849,6 +949,21 @@ const validateReviewServingBenchmarkRowsScanned = (
       )
 }
 
+const validateReviewServingBenchmarkRowsReturnedLimit = (
+  input: ReviewServingBenchmarkRunInput,
+  samples: readonly ReviewServingBenchmarkSample[],
+) => {
+  const violations = getReviewServingBenchmarkRowsReturnedLimitViolations(input, samples)
+
+  return violations.length === 0
+    ? Effect.void
+    : Effect.fail(
+        new Error(
+          `Review-serving benchmark rows returned limit mismatch: ${getReviewServingBenchmarkRowsReturnedLimitViolationMessage(violations)}`,
+        ),
+      )
+}
+
 const validateReviewServingBenchmarkTempSpill = (samples: readonly ReviewServingBenchmarkSample[]) => {
   const violations = getReviewServingBenchmarkTempSpillViolations(samples)
 
@@ -863,9 +978,10 @@ const validateReviewServingBenchmarkTempSpill = (samples: readonly ReviewServing
 
 const validateReviewServingBenchmarkPerformanceTargets = (
   metrics: ReviewServingBenchmarkMetrics,
+  samples: readonly ReviewServingBenchmarkSample[],
   targets: ReviewServingBenchmarkPerformanceTargets,
 ) => {
-  const violations = getReviewServingBenchmarkPerformanceViolations(metrics, targets)
+  const violations = getReviewServingBenchmarkPerformanceViolations(metrics, targets, samples)
 
   return violations.length === 0
     ? Effect.void
@@ -1017,6 +1133,20 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[6], requestCount: 1},
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[7], requestCount: 1},
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[8], requestCount: 1},
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[9],
+          minimumDistinctRequestSlices: 1,
+          pageSize: 5,
+          requestCount: 1,
+          targetRowsReturnedPerRequest: 5,
+        },
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[10],
+          minimumDistinctRequestSlices: 1,
+          pageSize: 6,
+          requestCount: 1,
+          targetRowsReturnedPerRequest: 6,
+        },
       ],
     },
     workItems: [
@@ -1031,6 +1161,8 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewRows',
         },
+        cursor: 'start',
+        filterSignature: 'all',
         key: 'smoke-llm-page',
         observation: {
           latencyMs: 8,
@@ -1054,6 +1186,8 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewRows',
         },
+        cursor: 'start',
+        filterSignature: 'all',
         key: 'smoke-both-page',
         observation: {
           latencyMs: 12,
@@ -1077,6 +1211,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewFacet',
         },
+        filterSignature: 'all',
         key: 'smoke-facet',
         observation: {
           latencyMs: 20,
@@ -1102,6 +1237,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewFacet',
         },
+        filterSignature: 'all',
         key: 'smoke-filter-options',
         observation: {
           latencyMs: 18,
@@ -1113,6 +1249,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
         },
         operationKey: 'overlapFilterOptions',
         requestSlice: {filter: 'all', searchTokenPrefix: 'overlap'},
+        searchTokenPrefix: 'overlap',
       },
       {
         admissionRequest: {
@@ -1248,6 +1385,58 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
         operationKey: 'substringOverlapSearchJob',
         searchText: 'overlap smoke',
       },
+      {
+        admissionRequest: {
+          contractKey: 'review.queue.unassessed',
+          estimatedResultBytes: 5_000,
+          estimatedResultRows: 5,
+          pageSize: 5,
+          projectId: 'smoke-project',
+          snapshotFreshness: 'ready',
+          snapshotId: 'smoke-snapshot',
+          workloadClass: 'foregroundReviewQueue',
+        },
+        cursor: 'start',
+        filterSignature: 'all',
+        key: 'smoke-unassessed-queue',
+        observation: {
+          latencyMs: 14,
+          memoryRssBytes: 128_450_000,
+          queueDepth: 2,
+          rowsReturned: 5,
+          rowsScanned: 10,
+          tempUsageBytes: 0,
+        },
+        operationKey: 'unassessedOverlapQueue',
+        requestSlice: {cursor: 'start', filter: 'all'},
+      },
+      {
+        admissionRequest: {
+          contractKey: 'review.search.tokenPrefix',
+          estimatedResultBytes: 6_000,
+          estimatedResultRows: 6,
+          pageSize: 6,
+          projectId: 'smoke-project',
+          searchMode: 'tokenPrefix',
+          searchState: {availability: 'ready', snapshotId: 'smoke-snapshot'},
+          snapshotFreshness: 'ready',
+          snapshotId: 'smoke-snapshot',
+          workloadClass: 'foregroundReviewSearch',
+        },
+        cursor: 'overlap-0',
+        key: 'smoke-title-prefix-search',
+        observation: {
+          latencyMs: 10,
+          memoryRssBytes: 128_475_000,
+          queueDepth: 1,
+          rowsReturned: 6,
+          rowsScanned: 12,
+          tempUsageBytes: 0,
+        },
+        operationKey: 'titlePrefixOverlapSearch',
+        requestSlice: {cursor: 'overlap-0', searchTokenPrefix: 'overlap'},
+        searchTokenPrefix: 'overlap',
+      },
     ],
   }
 }
@@ -1263,11 +1452,12 @@ export const runReviewServingBenchmarkEffect = (input: ReviewServingBenchmarkRun
         return runBenchmarkWorkItemEffect(workItem, executor)
       })
       yield* validateReviewServingBenchmarkRowTargets(input, samples)
+      yield* validateReviewServingBenchmarkRowsReturnedLimit(input, samples)
       yield* validateReviewServingBenchmarkRowsScanned(input, samples)
       yield* validateReviewServingBenchmarkTempSpill(samples)
       const endRssBytes = sampleReviewServingBenchmarkMemoryRssBytes()
       const metrics = getReviewServingBenchmarkMetrics({endRssBytes, samples, startRssBytes: runState.startRssBytes})
-      yield* validateReviewServingBenchmarkPerformanceTargets(metrics, input.workload.performanceTargets)
+      yield* validateReviewServingBenchmarkPerformanceTargets(metrics, samples, input.workload.performanceTargets)
 
       return {fixture: input.fixture, metrics, samples, workload: input.workload}
     }),
