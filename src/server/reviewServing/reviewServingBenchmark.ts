@@ -97,6 +97,13 @@ export type ReviewServingBenchmarkRequestCountViolation = {
   operationKey: string
 }
 
+export type ReviewServingBenchmarkWorkItemShapeViolation = {
+  actual: string | number | null
+  expected: string | number | null
+  field: 'contractKey' | 'operationKey' | 'pageSize' | 'workloadClass'
+  key: string
+}
+
 type ReviewServingBenchmarkRunState = {startedAtMs: number; startRssBytes: number}
 
 export const reviewServingSynthetic10m7PromptOverlapFixture = {
@@ -225,7 +232,10 @@ const getBenchmarkRunState = () => {
 export const getReviewServingBenchmarkRequestCountViolations = (
   input: Pick<ReviewServingBenchmarkRunInput, 'workItems' | 'workload'>,
 ) => {
-  const actualRequestCounts = input.workItems.reduce<Record<string, number>>((counts, workItem) => {
+  const matchingWorkItems = input.workItems.filter((workItem) => {
+    return getReviewServingBenchmarkWorkItemShapeViolations(input, workItem).length === 0
+  })
+  const actualRequestCounts = matchingWorkItems.reduce<Record<string, number>>((counts, workItem) => {
     return {...counts, [workItem.operationKey]: (counts[workItem.operationKey] ?? 0) + 1}
   }, {})
   const workloadOperationKeys = new Set(
@@ -255,13 +265,77 @@ export const getReviewServingBenchmarkRequestCountViolations = (
   return [...workloadViolations, ...unknownWorkItemViolations]
 }
 
+const getReviewServingBenchmarkOperationByKey = (
+  input: Pick<ReviewServingBenchmarkRunInput, 'workload'>,
+  operationKey: string,
+) => {
+  return input.workload.operations.find((operation) => {
+    return operation.key === operationKey
+  })
+}
+
+export const getReviewServingBenchmarkWorkItemShapeViolations = (
+  input: Pick<ReviewServingBenchmarkRunInput, 'workload'>,
+  workItem: ReviewServingBenchmarkWorkItem,
+): ReviewServingBenchmarkWorkItemShapeViolation[] => {
+  const operation = getReviewServingBenchmarkOperationByKey(input, workItem.operationKey)
+
+  if (!operation) {
+    return [{actual: workItem.operationKey, expected: null, field: 'operationKey', key: workItem.key}]
+  }
+
+  return [
+    {
+      actual: workItem.admissionRequest.contractKey,
+      expected: operation.contractKey,
+      field: 'contractKey',
+      key: workItem.key,
+    },
+    {
+      actual: workItem.admissionRequest.pageSize ?? null,
+      expected: operation.pageSize,
+      field: 'pageSize',
+      key: workItem.key,
+    },
+    {
+      actual: workItem.admissionRequest.workloadClass,
+      expected: operation.workloadClass,
+      field: 'workloadClass',
+      key: workItem.key,
+    },
+  ].filter((violation) => {
+    return violation.actual !== violation.expected
+  })
+}
+
+const getReviewServingBenchmarkWorkItemShapeViolationMessage = (
+  violations: readonly ReviewServingBenchmarkWorkItemShapeViolation[],
+) => {
+  return violations
+    .map((violation) => {
+      return `${violation.key}.${violation.field}: expected ${violation.expected}, got ${violation.actual}`
+    })
+    .join('; ')
+}
+
 const validateReviewServingBenchmarkRequestCounts = (input: ReviewServingBenchmarkRunInput) => {
+  const shapeViolations = input.workItems.flatMap((workItem) => {
+    return getReviewServingBenchmarkWorkItemShapeViolations(input, workItem)
+  })
   const violations = getReviewServingBenchmarkRequestCountViolations(input)
   const message = violations
     .map((violation) => {
       return `${violation.operationKey}: expected ${violation.expectedRequestCount}, got ${violation.actualRequestCount}`
     })
     .join('; ')
+
+  if (shapeViolations.length > 0) {
+    return Effect.fail(
+      new Error(
+        `Review-serving benchmark work item mismatch: ${getReviewServingBenchmarkWorkItemShapeViolationMessage(shapeViolations)}`,
+      ),
+    )
+  }
 
   return violations.length === 0
     ? Effect.void
@@ -276,10 +350,6 @@ const getDefaultBenchmarkObservation = (workItem: ReviewServingBenchmarkWorkItem
   return Effect.sync(() => {
     return workItem.observation
   })
-}
-
-const getRejectedBenchmarkObservation = (workItem: ReviewServingBenchmarkWorkItem) => {
-  return {...workItem.observation, rowsReturned: 0, rowsScanned: 0, tempUsageBytes: 0}
 }
 
 const getBenchmarkSample = ({
@@ -307,10 +377,13 @@ const runBenchmarkWorkItemEffect = (
 ) => {
   return Effect.gen(function* () {
     const admission = admitReviewServingRequest(workItem.admissionRequest)
-    const observationEffect = admission.admitted
-      ? executor(workItem, admission)
-      : Effect.succeed(getRejectedBenchmarkObservation(workItem))
-    const observation = yield* observationEffect
+    if (!admission.admitted) {
+      return yield* Effect.fail(
+        new Error(`Review-serving benchmark admission rejected for ${workItem.key}: ${admission.reason}`),
+      )
+    }
+
+    const observation = yield* executor(workItem, admission)
 
     return getBenchmarkSample({admission, observation, workItem})
   })
@@ -371,9 +444,24 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
       fixtureKind: 'smoke',
       key: 'reviewServing.smokeOverlap.v1',
       operations: [
-        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[0], requestCount: 2},
-        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[1], requestCount: 1},
-        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[2], requestCount: 1},
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[0],
+          pageSize: 12,
+          requestCount: 1,
+          targetRowsReturnedPerRequest: 12,
+        },
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[1],
+          pageSize: 10,
+          requestCount: 1,
+          targetRowsReturnedPerRequest: 10,
+        },
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[2],
+          pageSize: 1,
+          requestCount: 1,
+          targetRowsReturnedPerRequest: 16,
+        },
       ],
     },
     workItems: [
@@ -436,26 +524,6 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 128,
         },
         operationKey: 'overlapFacetRefresh',
-      },
-      {
-        admissionRequest: {
-          contractKey: 'review.rawFallback.rows',
-          estimatedResultBytes: 10_000,
-          estimatedResultRows: 10,
-          pageSize: 10,
-          snapshotFreshness: 'ready',
-          workloadClass: 'foregroundReviewRows',
-        },
-        key: 'smoke-rejected-raw-fallback',
-        observation: {
-          latencyMs: 4,
-          memoryRssBytes: 127_000_000,
-          queueDepth: 3,
-          rowsReturned: 10,
-          rowsScanned: 10,
-          tempUsageBytes: 256,
-        },
-        operationKey: 'llmPromptOverlapRows',
       },
     ],
   }

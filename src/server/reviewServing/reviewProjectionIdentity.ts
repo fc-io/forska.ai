@@ -125,10 +125,8 @@ const getStableIdentityRecord = (value: {[key: string]: ReviewServingIdentityVal
 
 const getReviewProjectionIdentityValue = (input: ReviewProjectionIdentityInput): ReviewServingIdentityValue => {
   return {
-    ...(input.baseGeneration === undefined ? {} : {baseGeneration: input.baseGeneration}),
     component: input.component,
     definitionVersion: input.definitionVersion,
-    ...(input.patchWatermark === undefined ? {} : {patchWatermark: input.patchWatermark}),
     ...(input.upstreamDigests === undefined ? {} : {upstreamDigests: getStableIdentityRecord(input.upstreamDigests)}),
   }
 }
