@@ -73,6 +73,11 @@ const reviewFilterFacetSort = {direction: 'asc', fields: ['facet_key', 'facet_va
 const detailRowListModePrioritySort =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
 const promptPreviewCreatedAtSort = 'article_created_at ASC NULLS LAST'
+const reviewedRowCursorFields = ['sort_key DESC', 'article_id ASC'] as const
+const reviewedRowSort = {direction: 'desc', fields: ['sort_key', 'article_id ASC']} as const
+const unassessedRowCursorFields = ['activity_sort_at DESC', 'article_id DESC'] as const
+const unassessedRowSort = {direction: 'desc', fields: ['activity_sort_at', 'article_id']} as const
+const postingCursorFields = ['sort_key DESC', 'article_id DESC'] as const
 
 const defineContract = (input: ContractInput): ReviewServingReadContract => {
   return {
@@ -85,14 +90,16 @@ const defineContract = (input: ContractInput): ReviewServingReadContract => {
 }
 
 const rowContract = (input: {
+  cursorFields?: ReviewServingReadContract['cursorFields']
   key: ReviewServingReadContractKey
   listMode: ReviewServingListMode
   namedFastCounts: readonly NamedReviewFastCountKey[]
   requiredComponents: readonly ReviewServingProjectionComponent[]
+  sort?: ReviewServingReadContract['sort']
 }) => {
   return defineContract({
     allowedFilters: [],
-    cursorFields: ['sort_key', 'article_id'],
+    cursorFields: input.cursorFields ?? reviewedRowCursorFields,
     freshnessBehavior: 'requireReadySnapshot',
     key: input.key,
     listMode: input.listMode,
@@ -103,7 +110,7 @@ const rowContract = (input: {
     requiredComponents: input.requiredComponents,
     searchMode: 'none',
     servingTable: reviewArticleServingTable,
-    sort: {direction: 'desc', fields: ['sort_key', 'article_id ASC']},
+    sort: input.sort ?? reviewedRowSort,
     workloadClass: 'foregroundReviewRows',
   })
 }
@@ -204,10 +211,12 @@ export const reviewServingReadContractList = [
     workloadClass: 'foregroundReviewCount',
   }),
   rowContract({
+    cursorFields: unassessedRowCursorFields,
     key: 'review.unassessed.rows',
     listMode: 'unassessed',
     namedFastCounts: ['review.queue.unassessedReady', 'review.llm.unassessedByPrompt'],
     requiredComponents: queueComponents,
+    sort: unassessedRowSort,
   }),
   defineContract({
     allowedFilters: ['importRoute', 'publicationYear', 'queueKind'],
@@ -239,7 +248,7 @@ export const reviewServingReadContractList = [
       'queueKind',
       'searchTokenPrefix',
     ],
-    cursorFields: ['sort_key', 'article_id'],
+    cursorFields: postingCursorFields,
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.filters.postings',
     listMode: null,
@@ -557,6 +566,7 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: [
       'review.llm.rows',
+      'review.filters.postings',
       'review.prompt.badges',
       'review.search.tokenPrefix',
       'review.search.substringAsync',
@@ -578,6 +588,7 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: [
       'review.human.rows',
+      'review.filters.postings',
       'review.human.count',
       'review.search.tokenPrefix',
       'review.search.substringAsync',
@@ -591,6 +602,7 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: [
       'review.both.rows',
+      'review.filters.postings',
       'review.both.count',
       'review.search.tokenPrefix',
       'review.search.substringAsync',
@@ -604,6 +616,7 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: [
       'review.unassessed.rows',
+      'review.filters.postings',
       'review.unassessed.count',
       'review.queue.unassessed',
       'review.search.tokenPrefix',
@@ -669,7 +682,7 @@ export const reviewServingReadContractRouteInventory = [
     mounted: false,
     productRoute: '/api/articles/pdf-fetch-by-filter',
     routeFile: 'src/server/routes/ArticlesRoutes.ts',
-    surfaces: ['bulk', 'pdf', 'filter'],
+    surfaces: ['bulk', 'pdf', 'filter', 'search'],
   },
   {
     contractKeys: ['review.bulk.selection'],
@@ -685,7 +698,7 @@ export const reviewServingReadContractRouteInventory = [
     mounted: false,
     productRoute: '/api/articles/pdf-fetch-by-project',
     routeFile: 'src/server/routes/ArticlesRoutes.ts',
-    surfaces: ['pdf', 'bulk'],
+    surfaces: ['pdf', 'bulk', 'filter', 'search'],
   },
   {
     contractKeys: ['review.export.selection'],
@@ -693,7 +706,7 @@ export const reviewServingReadContractRouteInventory = [
     mounted: false,
     productRoute: '/api/projects/:id/export',
     routeFile: 'src/server/routes/ProjectExportRoutes.ts',
-    surfaces: ['export', 'bulk'],
+    surfaces: ['export', 'bulk', 'filter', 'search', 'detail'],
   },
 ] as const satisfies readonly ReviewServingReadContractRouteInventoryEntry[]
 

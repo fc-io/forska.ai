@@ -144,14 +144,22 @@ test('direct ordered row contracts do not advertise filters ignored by row SQL',
         contract.allowedFilters,
         contract.optionalComponents,
         contract.searchMode,
+        contract.cursorFields,
         contract.sort.fields,
       ]
     }),
   ).toEqual([
-    ['review.llm.rows', [], [], 'none', ['sort_key', 'article_id ASC']],
-    ['review.human.rows', [], [], 'none', ['sort_key', 'article_id ASC']],
-    ['review.both.rows', [], [], 'none', ['sort_key', 'article_id ASC']],
-    ['review.unassessed.rows', [], [], 'none', ['sort_key', 'article_id ASC']],
+    ['review.llm.rows', [], [], 'none', ['sort_key DESC', 'article_id ASC'], ['sort_key', 'article_id ASC']],
+    ['review.human.rows', [], [], 'none', ['sort_key DESC', 'article_id ASC'], ['sort_key', 'article_id ASC']],
+    ['review.both.rows', [], [], 'none', ['sort_key DESC', 'article_id ASC'], ['sort_key', 'article_id ASC']],
+    [
+      'review.unassessed.rows',
+      [],
+      [],
+      'none',
+      ['activity_sort_at DESC', 'article_id DESC'],
+      ['activity_sort_at', 'article_id'],
+    ],
   ])
 })
 
@@ -349,8 +357,17 @@ test('future filter posting and facet contracts stay unmounted until route shape
     return entry.contractKeys.includes('review.filters.options')
   })
 
-  expect(postingInventoryEntries).toHaveLength(1)
-  expect(postingInventoryEntries[0]).toMatchObject({mounted: false, surfaces: ['filter']})
+  expect(
+    postingInventoryEntries.map((entry) => {
+      return [entry.productRoute, entry.mounted]
+    }),
+  ).toEqual([
+    ['/api/articlesreviews', false],
+    ['/api/articlesreviewshuman', false],
+    ['/api/articlesreviewsboth', false],
+    ['/api/articlesreviewsunassessed', false],
+    ['/api/review-serving/filter-postings', false],
+  ])
   expect(facetInventoryEntries).toHaveLength(2)
   expect(
     facetInventoryEntries.map((entry) => {
@@ -365,6 +382,29 @@ test('future filter posting and facet contracts stay unmounted until route shape
   ).toEqual([
     ['review.filters.facets', 'review.filters.options'],
     ['review.human.filters.facets', 'review.filters.options'],
+  ])
+})
+
+test('filtered row product routes include posting-intersection coverage', () => {
+  const rowProductRoutes = new Set([
+    '/api/articlesreviews',
+    '/api/articlesreviewshuman',
+    '/api/articlesreviewsboth',
+    '/api/articlesreviewsunassessed',
+  ])
+  const rowInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return rowProductRoutes.has(entry.productRoute)
+  })
+
+  expect(
+    rowInventoryEntries.map((entry) => {
+      return [entry.productRoute, entry.contractKeys.includes('review.filters.postings'), entry.surfaces]
+    }),
+  ).toEqual([
+    ['/api/articlesreviews', true, ['llm', 'row', 'count', 'badge', 'filter', 'search']],
+    ['/api/articlesreviewshuman', true, ['human', 'row', 'count', 'filter', 'search']],
+    ['/api/articlesreviewsboth', true, ['both', 'row', 'count', 'filter', 'search']],
+    ['/api/articlesreviewsunassessed', true, ['unassessed', 'row', 'count', 'queue', 'filter', 'search']],
   ])
 })
 
@@ -479,6 +519,18 @@ test('add-articles filter inventory maps to the mounted bulk selection route', (
     routeFile: 'src/server/routes/ProjectsAddArticlesRoutes.ts',
     surfaces: ['bulk', 'filter', 'search'],
   })
+})
+
+test('filtered PDF and export inventories stay unmounted until full response coverage is migrated', () => {
+  const pdfByProjectEntry = reviewServingReadContractRouteInventory.find((entry) => {
+    return entry.productRoute === '/api/articles/pdf-fetch-by-project'
+  })
+  const exportEntry = reviewServingReadContractRouteInventory.find((entry) => {
+    return entry.productRoute === '/api/projects/:id/export'
+  })
+
+  expect(pdfByProjectEntry).toMatchObject({mounted: false, surfaces: ['pdf', 'bulk', 'filter', 'search']})
+  expect(exportEntry).toMatchObject({mounted: false, surfaces: ['export', 'bulk', 'filter', 'search', 'detail']})
 })
 
 test('count read inventory maps to the mounted review count route', () => {

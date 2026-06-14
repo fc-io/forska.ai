@@ -222,6 +222,7 @@ const reviewServingListModePrioritySql =
 const getReviewServingRowsSqlIdentityPredicates = (params: {
   contract: ReviewServingReadContract
   displayIdentityParameter: string
+  filterOptionIdentityParameter?: string | null
   payloadIdentityParameter: string
   projectScopeIdentityParameter: string
   reviewConfigHashParameter: string
@@ -245,7 +246,13 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
   }
 
   if (params.contract.servingTable === reviewServingFilterOptionTable) {
-    return ` AND review_config_hash = ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter} AND search_identity = ${params.searchIdentityParameter}`
+    const filterOptionIdentityParameter = getRequiredReviewServingRowsSqlParameter(
+      params.filterOptionIdentityParameter,
+      'filter option identity',
+      params.contract,
+    )
+
+    return ` AND review_config_hash = ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter} AND search_identity = ${params.searchIdentityParameter} AND filter_option_identity = ${filterOptionIdentityParameter}`
   }
 
   return params.contract.servingTable === 'mart.review_title_search_serving_v4'
@@ -494,6 +501,7 @@ export const buildReviewServingRowsSql = (params: {
   countFilterKeyParameter?: string | null
   cursorPredicate?: string
   displayIdentityParameter: string
+  filterOptionIdentityParameter?: string | null
   filterKindParameter?: string | null
   filterValueParameter?: string | null
   jobFilterSignatureParameter?: string | null

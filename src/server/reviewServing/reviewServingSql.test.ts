@@ -116,6 +116,7 @@ test('buildReviewServingRowsSql scopes filter option rows by search identity', (
   const sql = buildReviewServingRowsSql({
     contract,
     displayIdentityParameter: '$displayIdentity',
+    filterOptionIdentityParameter: '$filterOptionIdentity',
     limitParameter: '$limit',
     listModeParameter: '$listMode',
     payloadIdentityParameter: '$payloadIdentity',
@@ -128,9 +129,28 @@ test('buildReviewServingRowsSql scopes filter option rows by search identity', (
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    'WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId AND search_identity = $searchIdentity',
+    'WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId AND search_identity = $searchIdentity AND filter_option_identity = $filterOptionIdentity',
   )
   expect(sql).toContain('ORDER BY filter_kind ASC, facet_key ASC, option_value_key ASC')
+})
+
+test('buildReviewServingRowsSql rejects filter option reads without a filter-option identity', () => {
+  const contract = getRequiredReviewServingReadContract('review.filters.options')
+
+  expect(() => {
+    buildReviewServingRowsSql({
+      contract,
+      displayIdentityParameter: '$displayIdentity',
+      limitParameter: '$limit',
+      listModeParameter: '$listMode',
+      payloadIdentityParameter: '$payloadIdentity',
+      projectIdParameter: '$projectId',
+      projectScopeIdentityParameter: '$projectScopeIdentity',
+      reviewConfigHashParameter: '$reviewConfigHash',
+      searchIdentityParameter: '$searchIdentity',
+      snapshotIdParameter: '$snapshotId',
+    })
+  }).toThrow('Missing filter option identity for review.filters.options')
 })
 
 test('buildReviewServingRowsSql separates review and human facet rows', () => {
@@ -300,6 +320,26 @@ test('buildReviewServingRowsSql uses contract list-mode literals for fixed row c
   expect(sql).toContain("AND list_mode_key = 'both'")
   expect(sql).not.toContain('$wrongRuntimeMode')
   expect(sql).toContain('ORDER BY sort_key DESC, article_id ASC')
+})
+
+test('buildReviewServingRowsSql uses activity ordering for unassessed row contracts', () => {
+  const contract = getRequiredReviewServingReadContract('review.unassessed.rows')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$wrongRuntimeMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(sql).toContain("AND list_mode_key = 'unassessed'")
+  expect(sql).toContain('ORDER BY activity_sort_at DESC, article_id DESC')
+  expect(sql).not.toContain('ORDER BY sort_key')
 })
 
 test('buildReviewServingRowsSql uses count-table sort columns for count serving tables', () => {
