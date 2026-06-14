@@ -213,6 +213,9 @@ const reviewServingSnapshotManifestTable = 'app.review_serving_snapshot_manifest
 const reviewServingBulkOperationJobTable = 'app.review_bulk_operation_job'
 const reviewServingSearchJobTable = 'app.review_search_job'
 const reviewServingFilterOptionTable = 'mart.review_filter_option_serving_v4'
+const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_serving_v4'
+const reviewServingListModePrioritySql =
+  "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
 
 const getReviewServingRowsSqlIdentityPredicates = (params: {
   contract: ReviewServingReadContract
@@ -428,6 +431,12 @@ const getReviewServingRowsSqlJobPredicate = (params: {
   throw new Error(`Unsupported job criteria table for ${params.contract.key}`)
 }
 
+const getReviewServingRowsSqlListModeDedupeQualifier = (contract: ReviewServingReadContract) => {
+  return contract.servingTable === reviewServingJudgmentDetailTable
+    ? ` QUALIFY ${reviewServingListModePrioritySql} = min(${reviewServingListModePrioritySql}) OVER (PARTITION BY prompt_id)`
+    : ''
+}
+
 const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
   articleIdParameter?: string | null
   contract: ReviewServingReadContract
@@ -456,7 +465,6 @@ export const buildReviewServingRowsSql = (params: {
   filterKindParameter?: string | null
   filterValueParameter?: string | null
   jobFilterSignatureParameter?: string | null
-  jobKindParameter?: string | null
   limitParameter: string
   listModeParameter: string
   namedCountKey?: NamedReviewFastCountKey | null
@@ -475,6 +483,7 @@ export const buildReviewServingRowsSql = (params: {
   const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
   const countPredicate = getReviewServingRowsSqlCountPredicate(params)
   const physicalFilterPredicate = getReviewServingRowsSqlPhysicalFilterPredicate(params)
+  const listModeDedupeQualifier = getReviewServingRowsSqlListModeDedupeQualifier(params.contract)
   const sortSql = getSortSql(params.contract)
 
   return [
@@ -484,6 +493,7 @@ export const buildReviewServingRowsSql = (params: {
     countPredicate,
     physicalFilterPredicate,
     cursorPredicate,
+    listModeDedupeQualifier,
     ` ORDER BY ${sortSql} LIMIT ${params.limitParameter}`,
   ].join('')
 }

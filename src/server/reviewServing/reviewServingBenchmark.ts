@@ -14,8 +14,12 @@ import type {
 } from './reviewServingContracts.ts'
 
 export const reviewServingBenchmarkFixtureKinds = ['smoke', 'synthetic10m7PromptOverlap'] as const
+export const reviewServingBenchmarkRequestSliceFields = ['cursor', 'filter', 'searchTokenPrefix'] as const
 
 export type ReviewServingBenchmarkFixtureKind = (typeof reviewServingBenchmarkFixtureKinds)[number]
+export type ReviewServingBenchmarkRequestSliceField = (typeof reviewServingBenchmarkRequestSliceFields)[number]
+
+export type ReviewServingBenchmarkRequestSlice = Partial<Record<ReviewServingBenchmarkRequestSliceField, string>>
 
 export type ReviewServingBenchmarkFixture = {
   articleCount: number
@@ -28,15 +32,15 @@ export type ReviewServingBenchmarkFixture = {
 export type ReviewServingBenchmarkWorkloadOperation = {
   contractKey: ReviewServingReadContractKey
   countFilterKeyPrefix?: string
-  coverageKeyPrefix?: string
   jobFilterSignaturePrefix?: string
   jobKind?: string
   key: string
   maxRowsScannedPerRequest: number
-  minimumDistinctCoverageKeys?: number
+  minimumDistinctRequestSlices?: number
   namedCountKey?: NamedReviewFastCountKey
   pageSize: number
   requestCount: number
+  requestSliceFields?: readonly ReviewServingBenchmarkRequestSliceField[]
   searchMode?: ReviewServingSearchMode
   searchTextPrefix?: string
   targetRowsReturnedPerRequest: number
@@ -70,12 +74,12 @@ export type ReviewServingBenchmarkObservation = {
 
 export type ReviewServingBenchmarkWorkItem = {
   admissionRequest: ReviewServingAdmissionRequest
-  coverageKey?: string
   jobFilterSignature?: string
   jobKind?: string
   key: string
   observation: ReviewServingBenchmarkObservation
   operationKey: string
+  requestSlice?: ReviewServingBenchmarkRequestSlice
   searchText?: string
 }
 
@@ -129,12 +133,12 @@ export type ReviewServingBenchmarkWorkItemShapeViolation = {
   field:
     | 'contractKey'
     | 'countFilterKeyPrefix'
-    | 'coverageKeyPrefix'
     | 'jobFilterSignaturePrefix'
     | 'jobKind'
     | 'namedCountKey'
     | 'operationKey'
     | 'pageSize'
+    | 'requestSlice'
     | 'searchMode'
     | 'searchTextPrefix'
     | 'workloadClass'
@@ -203,33 +207,33 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     {
       contractKey: 'review.llm.rows',
       key: 'llmPromptOverlapRows',
-      coverageKeyPrefix: 'page:llm:',
       maxRowsScannedPerRequest: 300,
-      minimumDistinctCoverageKeys: 7_000,
+      minimumDistinctRequestSlices: 7_000,
       pageSize: 100,
       requestCount: 7_000,
+      requestSliceFields: ['cursor', 'filter'],
       targetRowsReturnedPerRequest: 100,
       workloadClass: 'foregroundReviewRows',
     },
     {
       contractKey: 'review.both.rows',
       key: 'llmHumanOverlapRows',
-      coverageKeyPrefix: 'page:both:',
       maxRowsScannedPerRequest: 300,
-      minimumDistinctCoverageKeys: 7_000,
+      minimumDistinctRequestSlices: 7_000,
       pageSize: 100,
       requestCount: 7_000,
+      requestSliceFields: ['cursor', 'filter'],
       targetRowsReturnedPerRequest: 100,
       workloadClass: 'foregroundReviewRows',
     },
     {
       contractKey: 'review.filters.facets',
-      coverageKeyPrefix: 'facet:',
       key: 'overlapFacetRefresh',
       maxRowsScannedPerRequest: 512,
-      minimumDistinctCoverageKeys: 700,
+      minimumDistinctRequestSlices: 700,
       pageSize: 128,
       requestCount: 700,
+      requestSliceFields: ['filter'],
       targetRowsReturnedPerRequest: 128,
       workloadClass: 'foregroundReviewFacet',
     },
@@ -294,23 +298,23 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     },
     {
       contractKey: 'review.queue.unassessed',
-      coverageKeyPrefix: 'queue:',
       key: 'unassessedOverlapQueue',
       maxRowsScannedPerRequest: 300,
-      minimumDistinctCoverageKeys: 700,
+      minimumDistinctRequestSlices: 700,
       pageSize: 100,
       requestCount: 700,
+      requestSliceFields: ['cursor', 'filter'],
       targetRowsReturnedPerRequest: 100,
       workloadClass: 'foregroundReviewQueue',
     },
     {
       contractKey: 'review.search.tokenPrefix',
-      coverageKeyPrefix: 'tokenPrefix:',
       key: 'titlePrefixOverlapSearch',
       maxRowsScannedPerRequest: 150,
-      minimumDistinctCoverageKeys: 700,
+      minimumDistinctRequestSlices: 700,
       pageSize: 50,
       requestCount: 700,
+      requestSliceFields: ['cursor', 'searchTokenPrefix'],
       targetRowsReturnedPerRequest: 50,
       workloadClass: 'foregroundReviewSearch',
     },
@@ -423,6 +427,42 @@ const getReviewServingBenchmarkOperationByKey = (
   })
 }
 
+const getReviewServingBenchmarkRequestSliceKey = (
+  operation: ReviewServingBenchmarkWorkloadOperation,
+  workItem: ReviewServingBenchmarkWorkItem,
+) => {
+  const fields = operation.requestSliceFields ?? []
+
+  return fields.length === 0
+    ? null
+    : fields
+        .map((field) => {
+          return `${field}:${workItem.requestSlice?.[field] ?? ''}`
+        })
+        .join('|')
+}
+
+const getReviewServingBenchmarkRequestSliceViolations = (
+  operation: ReviewServingBenchmarkWorkloadOperation,
+  workItem: ReviewServingBenchmarkWorkItem,
+): ReviewServingBenchmarkWorkItemShapeViolation[] => {
+  const fields = operation.requestSliceFields ?? []
+  const missingFields = fields.filter((field) => {
+    return !workItem.requestSlice?.[field]
+  })
+
+  return missingFields.length === 0
+    ? []
+    : [
+        {
+          actual: `missing:${missingFields.join(',')}`,
+          expected: fields.join(','),
+          field: 'requestSlice',
+          key: workItem.key,
+        },
+      ]
+}
+
 export const getReviewServingBenchmarkWorkItemShapeViolations = (
   input: Pick<ReviewServingBenchmarkRunInput, 'workload'>,
   workItem: ReviewServingBenchmarkWorkItem,
@@ -448,7 +488,6 @@ export const getReviewServingBenchmarkWorkItemShapeViolations = (
     [ReviewServingBenchmarkWorkItemShapeViolation['field'], string | null, string | undefined]
   > = [
     ['countFilterKeyPrefix', workItem.admissionRequest.countFilterKey ?? null, operation.countFilterKeyPrefix],
-    ['coverageKeyPrefix', workItem.coverageKey ?? null, operation.coverageKeyPrefix],
     ['jobFilterSignaturePrefix', workItem.jobFilterSignature ?? null, operation.jobFilterSignaturePrefix],
     ['searchTextPrefix', workItem.searchText ?? null, operation.searchTextPrefix],
   ]
@@ -474,8 +513,9 @@ export const getReviewServingBenchmarkWorkItemShapeViolations = (
         typeof violation.actual !== 'string' || !violation.actual.startsWith(String(violation.expected).slice(0, -1))
       )
     })
+  const requestSliceViolations = getReviewServingBenchmarkRequestSliceViolations(operation, workItem)
 
-  return [...exactViolations, ...prefixViolations]
+  return [...exactViolations, ...prefixViolations, ...requestSliceViolations]
 }
 
 export const getReviewServingBenchmarkCoverageViolations = (
@@ -483,8 +523,8 @@ export const getReviewServingBenchmarkCoverageViolations = (
 ) => {
   return input.workload.operations
     .map((operation) => {
-      const expectedDistinctCoverageKeys = operation.minimumDistinctCoverageKeys ?? 0
-      const matchingCoverageKeys = input.workItems
+      const expectedDistinctRequestSlices = operation.minimumDistinctRequestSlices ?? 0
+      const matchingRequestSliceKeys = input.workItems
         .filter((workItem) => {
           return (
             workItem.operationKey === operation.key
@@ -492,15 +532,19 @@ export const getReviewServingBenchmarkCoverageViolations = (
           )
         })
         .map((workItem) => {
-          return workItem.coverageKey ?? null
+          return getReviewServingBenchmarkRequestSliceKey(operation, workItem)
         })
-        .filter((coverageKey): coverageKey is string => {
-          return coverageKey !== null
+        .filter((requestSliceKey): requestSliceKey is string => {
+          return requestSliceKey !== null
         })
-      const actualDistinctCoverageKeys = new Set(matchingCoverageKeys).size
+      const actualDistinctCoverageKeys = new Set(matchingRequestSliceKeys).size
 
-      return expectedDistinctCoverageKeys > 0 && actualDistinctCoverageKeys < expectedDistinctCoverageKeys
-        ? {actualDistinctCoverageKeys, expectedDistinctCoverageKeys, operationKey: operation.key}
+      return expectedDistinctRequestSlices > 0 && actualDistinctCoverageKeys < expectedDistinctRequestSlices
+        ? {
+            actualDistinctCoverageKeys,
+            expectedDistinctCoverageKeys: expectedDistinctRequestSlices,
+            operationKey: operation.key,
+          }
         : null
     })
     .filter((violation): violation is ReviewServingBenchmarkCoverageViolation => {
@@ -513,7 +557,7 @@ const getReviewServingBenchmarkCoverageViolationMessage = (
 ) => {
   return violations
     .map((violation) => {
-      return `${violation.operationKey}: expected ${violation.expectedDistinctCoverageKeys} distinct coverage keys, got ${violation.actualDistinctCoverageKeys}`
+      return `${violation.operationKey}: expected ${violation.expectedDistinctCoverageKeys} distinct request slices, got ${violation.actualDistinctCoverageKeys}`
     })
     .join('; ')
 }
@@ -660,19 +704,25 @@ const isReviewServingBenchmarkOperationMatch = (
   operation: ReviewServingBenchmarkWorkloadOperation,
   expectedOperation: ReviewServingBenchmarkWorkloadOperation | undefined,
 ) => {
+  const requestSliceFields = operation.requestSliceFields ?? []
+  const expectedRequestSliceFields = expectedOperation?.requestSliceFields ?? []
+
   return (
     expectedOperation !== undefined
     && operation.contractKey === expectedOperation.contractKey
     && operation.countFilterKeyPrefix === expectedOperation.countFilterKeyPrefix
-    && operation.coverageKeyPrefix === expectedOperation.coverageKeyPrefix
     && operation.jobFilterSignaturePrefix === expectedOperation.jobFilterSignaturePrefix
     && operation.jobKind === expectedOperation.jobKind
     && operation.key === expectedOperation.key
     && operation.maxRowsScannedPerRequest === expectedOperation.maxRowsScannedPerRequest
-    && operation.minimumDistinctCoverageKeys === expectedOperation.minimumDistinctCoverageKeys
+    && operation.minimumDistinctRequestSlices === expectedOperation.minimumDistinctRequestSlices
     && operation.namedCountKey === expectedOperation.namedCountKey
     && operation.pageSize === expectedOperation.pageSize
     && operation.requestCount === expectedOperation.requestCount
+    && requestSliceFields.length === expectedRequestSliceFields.length
+    && requestSliceFields.every((field, index) => {
+      return field === expectedRequestSliceFields[index]
+    })
     && operation.searchMode === expectedOperation.searchMode
     && operation.searchTextPrefix === expectedOperation.searchTextPrefix
     && operation.targetRowsReturnedPerRequest === expectedOperation.targetRowsReturnedPerRequest
@@ -921,21 +971,21 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
       operations: [
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[0],
-          minimumDistinctCoverageKeys: 1,
+          minimumDistinctRequestSlices: 1,
           pageSize: 12,
           requestCount: 1,
           targetRowsReturnedPerRequest: 12,
         },
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[1],
-          minimumDistinctCoverageKeys: 1,
+          minimumDistinctRequestSlices: 1,
           pageSize: 10,
           requestCount: 1,
           targetRowsReturnedPerRequest: 10,
         },
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[2],
-          minimumDistinctCoverageKeys: 1,
+          minimumDistinctRequestSlices: 1,
           pageSize: 16,
           requestCount: 1,
           targetRowsReturnedPerRequest: 16,
@@ -964,7 +1014,6 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewRows',
         },
-        coverageKey: 'page:llm:smoke-first',
         key: 'smoke-llm-page',
         observation: {
           latencyMs: 8,
@@ -975,6 +1024,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'llmPromptOverlapRows',
+        requestSlice: {cursor: 'start', filter: 'all'},
       },
       {
         admissionRequest: {
@@ -987,7 +1037,6 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewRows',
         },
-        coverageKey: 'page:both:smoke-first',
         key: 'smoke-both-page',
         observation: {
           latencyMs: 12,
@@ -998,6 +1047,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'llmHumanOverlapRows',
+        requestSlice: {cursor: 'start', filter: 'all'},
       },
       {
         admissionRequest: {
@@ -1010,7 +1060,6 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewFacet',
         },
-        coverageKey: 'facet:smoke-first',
         key: 'smoke-facet',
         observation: {
           latencyMs: 20,
@@ -1021,6 +1070,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'overlapFacetRefresh',
+        requestSlice: {filter: 'all'},
       },
       {
         admissionRequest: {

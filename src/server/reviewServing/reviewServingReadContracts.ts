@@ -656,6 +656,14 @@ export const reviewServingReadContractRouteInventory = [
     surfaces: ['bulk', 'pdf', 'filter'],
   },
   {
+    contractKeys: ['review.bulk.selection'],
+    method: 'POST',
+    mounted: false,
+    productRoute: '/api/projects/add_articles_by_filter',
+    routeFile: 'src/server/routes/ProjectsAddArticlesRoutes.ts',
+    surfaces: ['bulk', 'filter', 'search'],
+  },
+  {
     contractKeys: ['review.pdf.selection'],
     method: 'POST',
     mounted: false,
