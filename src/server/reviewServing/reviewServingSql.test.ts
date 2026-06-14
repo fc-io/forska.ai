@@ -196,6 +196,7 @@ test('buildReviewServingRowsSql applies posting filter keys before row ordering'
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('AND list_mode_key = $listMode')
   expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
   expect(sql).toContain('ORDER BY sort_key DESC, article_id DESC')
 })
@@ -425,6 +426,25 @@ test('assertReviewServingSqlShape requires project and snapshot scope for every 
     JOIN mart.review_article_filter_posting_serving_v4 p ON p.article_id = s.article_id
     WHERE s.project_id = ? AND s.snapshot_id = ?
     ORDER BY s.sort_key DESC, s.article_id DESC
+    LIMIT ?
+  `
+  const violations = getReviewServingSqlShapeViolations(sql).map((violation) => {
+    return violation.label
+  })
+
+  expect(violations).toContain('project scoped read: p')
+  expect(violations).toContain('snapshot scoped read: p')
+})
+
+test('assertReviewServingSqlShape requires real bound scope predicates', () => {
+  const sql = `
+    SELECT s.article_id
+    FROM mart.review_article_serving_v4 s
+    JOIN mart.review_article_filter_posting_serving_v4 p ON p.article_id = s.article_id
+    WHERE s.project_id = ?
+      AND s.snapshot_id = ?
+      AND (p.project_id, p.snapshot_id, p.sort_key, p.article_id) < (?, ?, ?, ?)
+    ORDER BY p.project_id ASC, p.snapshot_id ASC, p.sort_key DESC, p.article_id DESC
     LIMIT ?
   `
   const violations = getReviewServingSqlShapeViolations(sql).map((violation) => {

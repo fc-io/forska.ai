@@ -141,6 +141,9 @@ const getReviewServingSqlRegisteredTableViolations = (sql: string, options: Requ
 const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required<ReviewServingSqlShapeOptions>) => {
   const tableReferences = getReviewServingSqlTableReferenceDetails(sql)
   const hasMultipleReferences = tableReferences.length > 1
+  const wherePredicateClause =
+    sql.match(/\bwhere\b([\s\S]*?)(?:\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/iu)?.[1] ?? ''
+  const bindOperandPattern = "(?:\\?|[$:@][a-z_][\\w.]*|'[^']*'|[0-9]+)"
   const getQualifierPattern = (tableReference: ReviewServingSqlTableReference) => {
     if (tableReference.alias) {
       return `${escapeRegex(tableReference.alias)}\\s*\\.\\s*`
@@ -148,13 +151,22 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
 
     return hasMultipleReferences ? `${escapeRegex(tableReference.table)}\\s*\\.\\s*` : '(?:[a-z_][\\w]*\\s*\\.\\s*)?'
   }
+  const getScopePredicatePattern = (
+    tableReference: ReviewServingSqlTableReference,
+    field: 'project_id' | 'snapshot_id',
+  ) => {
+    const qualifiedFieldPattern = `${getQualifierPattern(tableReference)}${field}`
+
+    return new RegExp(
+      `(?:\\b${qualifiedFieldPattern}\\b\\s*(?:=|is\\s+not\\s+distinct\\s+from)\\s*${bindOperandPattern}|${bindOperandPattern}\\s*(?:=|is\\s+not\\s+distinct\\s+from)\\s*\\b${qualifiedFieldPattern}\\b)`,
+      'iu',
+    )
+  }
   const getScopeViolations = (field: 'project_id' | 'snapshot_id', label: string, required: boolean) => {
     return required
       ? tableReferences
           .filter((tableReference) => {
-            return !new RegExp(`\\bwhere\\b[\\s\\S]*\\b${getQualifierPattern(tableReference)}${field}\\b`, 'iu').test(
-              sql,
-            )
+            return !getScopePredicatePattern(tableReference, field).test(wherePredicateClause)
           })
           .map((tableReference) => {
             const scopedLabel = tableReference.alias ?? tableReference.table
@@ -224,14 +236,17 @@ const reviewServingListModePredicateTables = new Set([
   'mart.review_article_serving_v4',
 ])
 const reviewServingCountServingTable = 'mart.review_article_count_serving_v4'
+const reviewServingRuntimeListModeStrategies = new Set(['postingIntersection'])
 
 const getReviewServingRowsSqlListModePredicate = (params: {
   contract: ReviewServingReadContract
   listModeParameter: string
 }) => {
-  return params.contract.listMode && reviewServingListModePredicateTables.has(params.contract.servingTable)
-    ? ` AND list_mode_key = ${params.listModeParameter}`
-    : ''
+  const hasListModePredicate =
+    (params.contract.listMode || reviewServingRuntimeListModeStrategies.has(params.contract.physicalAccessStrategy))
+    && reviewServingListModePredicateTables.has(params.contract.servingTable)
+
+  return hasListModePredicate ? ` AND list_mode_key = ${params.listModeParameter}` : ''
 }
 
 const getSqlStringLiteral = (value: string) => {

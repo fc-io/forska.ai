@@ -570,6 +570,14 @@ export const reviewServingReadContractRouteInventory = [
     surfaces: ['facet'],
   },
   {
+    contractKeys: ['review.filters.facets'],
+    method: 'GET',
+    mounted: false,
+    productRoute: '/api/articlesreviewshumanfilters',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
+    surfaces: ['human', 'facet'],
+  },
+  {
     contractKeys: ['review.detail.row', 'review.detail.payload', 'review.prompt.badges'],
     method: 'POST',
     mounted: false,
