@@ -140,6 +140,7 @@ test('buildReviewServingRowsSql only emits list-mode predicates for list-mode ta
     payloadIdentityParameter: '$payloadIdentity',
     projectIdParameter: '$projectId',
     projectScopeIdentityParameter: '$projectScopeIdentity',
+    queueKindParameter: '$queueKind',
     reviewConfigHashParameter: '$reviewConfigHash',
     searchIdentityParameter: '$searchIdentity',
     snapshotIdParameter: '$snapshotId',
@@ -150,6 +151,7 @@ test('buildReviewServingRowsSql only emits list-mode predicates for list-mode ta
     'WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId',
   )
   expect(sql).not.toContain('list_mode_key')
+  expect(sql).toContain('AND queue_kind = $queueKind')
   expect(sql).toContain('ORDER BY priority_bucket ASC, activity_sort_at ASC, article_id ASC')
   expect(sql).not.toContain('sort_key')
 })
@@ -289,6 +291,7 @@ test('buildReviewServingRowsSql rejects count table reads without a filter key',
 
 test('buildReviewServingRowsSql rejects physical access contracts without requested filters', () => {
   const detailContract = getRequiredReviewServingReadContract('review.detail.row')
+  const queueContract = getRequiredReviewServingReadContract('review.queue.unassessed')
   const searchContract = getRequiredReviewServingReadContract('review.search.tokenPrefix')
   const postingContract = getRequiredReviewServingReadContract('review.filters.postings')
   const baseParams = {
@@ -312,6 +315,9 @@ test('buildReviewServingRowsSql rejects physical access contracts without reques
   expect(() => {
     buildReviewServingRowsSql({...baseParams, contract: postingContract})
   }).toThrow('Missing filter kind for review.filters.postings')
+  expect(() => {
+    buildReviewServingRowsSql({...baseParams, contract: queueContract})
+  }).toThrow('Missing queue kind for review.queue.unassessed')
 })
 
 test('assertReviewServingSqlShape reads table references from SQL', () => {
@@ -454,6 +460,23 @@ test('assertReviewServingSqlShape requires real bound scope predicates', () => {
 
   expect(violations).toContain('project scoped read: p')
   expect(violations).toContain('snapshot scoped read: p')
+})
+
+test('assertReviewServingSqlShape rejects literal scope predicates', () => {
+  const sql = `
+    SELECT s.article_id
+    FROM mart.review_article_serving_v4 s
+    WHERE s.project_id = 'project-1'
+      AND s.snapshot_id = 'snapshot-1'
+    ORDER BY s.sort_key DESC, s.article_id DESC
+    LIMIT ?
+  `
+  const violations = getReviewServingSqlShapeViolations(sql).map((violation) => {
+    return violation.label
+  })
+
+  expect(violations).toContain('project scoped read')
+  expect(violations).toContain('snapshot scoped read')
 })
 
 test('reviewServing source files are statically guarded without scanning legacy route SQL', () => {

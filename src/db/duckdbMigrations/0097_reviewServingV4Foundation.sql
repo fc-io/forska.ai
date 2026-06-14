@@ -754,6 +754,7 @@ CREATE TABLE IF NOT EXISTS mart.review_filter_option_serving_v4 (
   snapshot_id VARCHAR NOT NULL,
   search_identity VARCHAR NOT NULL DEFAULT 'none',
   filter_option_identity VARCHAR NOT NULL,
+  option_value_key VARCHAR NOT NULL,
   filter_kind VARCHAR NOT NULL,
   facet_key VARCHAR NOT NULL,
   facet_value VARCHAR,
@@ -764,7 +765,7 @@ CREATE TABLE IF NOT EXISTS mart.review_filter_option_serving_v4 (
   option_payload_json JSON,
   count_value BIGINT,
   option_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  PRIMARY KEY(project_id, review_config_hash, snapshot_id, search_identity, filter_option_identity, filter_kind, facet_key)
+  PRIMARY KEY(project_id, review_config_hash, snapshot_id, search_identity, filter_option_identity, filter_kind, facet_key, option_value_key)
 );
 
 CREATE TABLE IF NOT EXISTS mart.review_unassessed_queue_serving_v4 (
@@ -899,7 +900,7 @@ CREATE INDEX IF NOT EXISTS idx_review_filter_facet_serving_v4_lookup
 ON mart.review_filter_facet_serving_v4(project_id, review_config_hash, snapshot_id, facet_kind, facet_key, facet_value);
 
 CREATE INDEX IF NOT EXISTS idx_review_filter_option_serving_v4_lookup
-ON mart.review_filter_option_serving_v4(project_id, review_config_hash, snapshot_id, search_identity, filter_kind, facet_key);
+ON mart.review_filter_option_serving_v4(project_id, review_config_hash, snapshot_id, search_identity, filter_kind, facet_key, option_value_key);
 
 CREATE INDEX IF NOT EXISTS idx_review_unassessed_queue_serving_v4_order
 ON mart.review_unassessed_queue_serving_v4(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id);
