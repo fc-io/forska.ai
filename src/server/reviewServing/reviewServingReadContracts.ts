@@ -52,12 +52,15 @@ const humanComponents = [...baseComponents, 'humanStatus', 'posting', 'summary']
 const bothComponents = [...baseComponents, 'llmStatus', 'humanStatus', 'posting', 'summary'] as const
 const queueComponents = [...baseComponents, 'judgmentInputContent', 'llmStatus', 'queue', 'summary'] as const
 const defaultRowFilters = ['duplicateFlag', 'importRoute', 'publicationYear', 'searchTokenPrefix'] as const
+const defaultCountFilters = ['duplicateFlag', 'importRoute', 'publicationYear'] as const
 const defaultReviewCounts = ['review.list.total', 'review.list.filteredTotal'] as const
 const reviewArticleServingTable = 'mart.review_article_serving_v4'
 const reviewArticlePayloadServingTable = 'mart.review_article_serving_payload_v4'
 const reviewCountServingTable = 'mart.review_article_count_serving_v4'
 const reviewFacetServingTable = 'mart.review_filter_facet_serving_v4'
+const reviewFilterOptionServingTable = 'mart.review_filter_option_serving_v4'
 const reviewFilterPostingServingTable = 'mart.review_article_filter_posting_serving_v4'
+const reviewJudgmentDetailServingTable = 'mart.review_article_judgment_detail_serving_v4'
 const reviewQueueServingTable = 'mart.review_unassessed_queue_serving_v4'
 const reviewSearchServingTable = 'mart.review_title_search_serving_v4'
 const reviewSnapshotManifestTable = 'app.review_serving_snapshot_manifest'
@@ -114,7 +117,7 @@ export const reviewServingReadContractList = [
     requiredComponents: llmComponents,
   }),
   defineContract({
-    allowedFilters: [...defaultRowFilters, 'llmStatus', 'promptAnswer'],
+    allowedFilters: [...defaultCountFilters, 'llmStatus', 'promptAnswer'],
     cursorFields: [],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.llm.count',
@@ -138,7 +141,7 @@ export const reviewServingReadContractList = [
     requiredComponents: humanComponents,
   }),
   defineContract({
-    allowedFilters: [...defaultRowFilters, 'humanStatus', 'promptAnswer'],
+    allowedFilters: [...defaultCountFilters, 'humanStatus', 'promptAnswer'],
     cursorFields: [],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.human.count',
@@ -162,7 +165,7 @@ export const reviewServingReadContractList = [
     requiredComponents: bothComponents,
   }),
   defineContract({
-    allowedFilters: [...defaultRowFilters, 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer'],
+    allowedFilters: [...defaultCountFilters, 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer'],
     cursorFields: [],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.both.count',
@@ -243,7 +246,7 @@ export const reviewServingReadContractList = [
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.filters.facets',
     listMode: null,
-    maxPageSize: 1,
+    maxPageSize: 128,
     maxResultRows: 128,
     namedFastCounts: [
       'review.filter.duplicateFlag',
@@ -257,6 +260,33 @@ export const reviewServingReadContractList = [
     searchMode: 'none',
     servingTable: reviewFacetServingTable,
     sort: {direction: 'asc', fields: ['facet_key', 'facet_value']},
+    workloadClass: 'foregroundReviewFacet',
+  }),
+  defineContract({
+    allowedFilters: [
+      'conflictFlag',
+      'duplicateFlag',
+      'humanStatus',
+      'importRoute',
+      'llmStatus',
+      'promptAnswer',
+      'publicationYear',
+      'searchTokenPrefix',
+    ],
+    cursorFields: [],
+    freshnessBehavior: 'requireReadySnapshot',
+    key: 'review.filters.options',
+    listMode: null,
+    maxEstimatedResultBytes: 1_000_000,
+    maxPageSize: 512,
+    maxResultRows: 512,
+    namedFastCounts: [],
+    optionalComponents: ['search'],
+    physicalAccessStrategy: 'summaryLookup',
+    requiredComponents: ['display', 'humanStatus', 'llmStatus', 'posting', 'projectScope', 'selectedImport', 'summary'],
+    searchMode: 'tokenPrefix',
+    servingTable: reviewFilterOptionServingTable,
+    sort: {direction: 'asc', fields: ['filter_kind', 'facet_key', 'option_value_key']},
     workloadClass: 'foregroundReviewFacet',
   }),
   defineContract({
@@ -330,6 +360,24 @@ export const reviewServingReadContractList = [
     searchMode: 'none',
     servingTable: reviewArticlePayloadServingTable,
     sort: {direction: 'asc', fields: ['article_id']},
+    workloadClass: 'foregroundReviewRows',
+  }),
+  defineContract({
+    allowedFilters: ['articleId'],
+    cursorFields: [detailRowListModePrioritySort, 'prompt_order ASC NULLS LAST', 'prompt_id'],
+    freshnessBehavior: 'requireReadySnapshot',
+    key: 'review.detail.judgments',
+    listMode: null,
+    maxEstimatedResultBytes: 2_000_000,
+    maxPageSize: 512,
+    maxResultRows: 512,
+    namedFastCounts: [],
+    optionalComponents: [],
+    physicalAccessStrategy: 'keyedLookup',
+    requiredComponents: ['humanStatus', 'llmStatus', 'summary'],
+    searchMode: 'none',
+    servingTable: reviewJudgmentDetailServingTable,
+    sort: {direction: 'asc', fields: [detailRowListModePrioritySort, 'prompt_order ASC NULLS LAST', 'prompt_id']},
     workloadClass: 'foregroundReviewRows',
   }),
   defineContract({
@@ -509,7 +557,7 @@ export const reviewServingReadContractRouteInventory = [
     mounted: false,
     productRoute: '/api/articlesreviewscount',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts',
-    surfaces: ['count', 'filter', 'search'],
+    surfaces: ['count', 'filter'],
   },
   {
     contractKeys: [
@@ -560,23 +608,23 @@ export const reviewServingReadContractRouteInventory = [
     surfaces: ['filter'],
   },
   {
-    contractKeys: ['review.filters.facets'],
+    contractKeys: ['review.filters.facets', 'review.filters.options'],
     method: 'GET',
     mounted: false,
     productRoute: '/api/articlesreviewsfilters',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
-    surfaces: ['facet'],
+    surfaces: ['facet', 'filter'],
   },
   {
-    contractKeys: ['review.filters.facets'],
+    contractKeys: ['review.filters.facets', 'review.filters.options'],
     method: 'GET',
     mounted: false,
     productRoute: '/api/articlesreviewshumanfilters',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
-    surfaces: ['human', 'facet'],
+    surfaces: ['human', 'facet', 'filter'],
   },
   {
-    contractKeys: ['review.detail.row', 'review.detail.payload', 'review.prompt.badges'],
+    contractKeys: ['review.detail.row', 'review.detail.payload', 'review.detail.judgments', 'review.prompt.badges'],
     method: 'POST',
     mounted: false,
     productRoute: '/api/projectsreview',

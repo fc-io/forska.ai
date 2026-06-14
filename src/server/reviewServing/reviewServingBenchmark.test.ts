@@ -2,9 +2,11 @@ import {expect, test} from 'bun:test'
 import {Effect} from 'effect'
 
 import {
+  getReviewServingBenchmarkCoverageViolations,
   getReviewServingBenchmarkMetrics,
   getReviewServingBenchmarkPerformanceViolations,
   getReviewServingBenchmarkRequestCountViolations,
+  getReviewServingBenchmarkRowsScannedViolations,
   getReviewServingBenchmarkRowTargetViolations,
   getReviewServingBenchmarkSmokeInput,
   getReviewServingBenchmarkTempSpillViolations,
@@ -63,6 +65,17 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
       )
     }),
   ).toBe(true)
+  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations[0]).toMatchObject({
+    coverageKeyPrefix: 'page:llm:',
+    maxRowsScannedPerRequest: 300,
+    minimumDistinctCoverageKeys: 7_000,
+  })
+  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations[2]).toMatchObject({
+    coverageKeyPrefix: 'facet:',
+    maxRowsScannedPerRequest: 512,
+    minimumDistinctCoverageKeys: 700,
+    pageSize: 128,
+  })
   expect(
     reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
       return operation.contractKey === 'review.bulk.selection' && operation.jobKind === 'review.bulk.selection'
@@ -351,6 +364,55 @@ test('review-serving benchmark rejects samples below declared row targets', asyn
       },
     }),
   ).toContain('Review-serving benchmark row target mismatch')
+})
+
+test('review-serving benchmark rejects samples over scanned row ceilings', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const samples = [
+    {
+      admissionStatus: 'accepted' as const,
+      contractKey: 'review.llm.rows',
+      key: 'sample-wide-scan',
+      latencyMs: 1,
+      memoryRssBytes: 1,
+      operationKey: 'llmPromptOverlapRows',
+      queueDepth: 0,
+      rejectionReason: null,
+      rowsReturned: 12,
+      rowsScanned: 301,
+      tempUsageBytes: 0,
+    },
+  ]
+
+  expect(getReviewServingBenchmarkRowsScannedViolations(input, samples)).toEqual([
+    {actualRowsScanned: 301, expectedRowsScanned: 300, key: 'sample-wide-scan', operationKey: 'llmPromptOverlapRows'},
+  ])
+  expect(
+    await getBenchmarkRunFailureMessage({
+      ...input,
+      executor: (workItem) => {
+        return Effect.succeed({...workItem.observation, rowsScanned: 301})
+      },
+    }),
+  ).toContain('Review-serving benchmark rows scanned mismatch')
+})
+
+test('review-serving benchmark rejects repeated page coverage keys', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const operation = input.workload.operations[0]
+  const firstWorkItem = input.workItems[0]
+  const duplicatedCoverageInput = {
+    ...input,
+    workload: {...input.workload, operations: [{...operation, minimumDistinctCoverageKeys: 2, requestCount: 2}]},
+    workItems: [firstWorkItem, {...firstWorkItem, key: 'smoke-llm-page-repeat'}],
+  }
+
+  expect(getReviewServingBenchmarkCoverageViolations(duplicatedCoverageInput)).toEqual([
+    {actualDistinctCoverageKeys: 1, expectedDistinctCoverageKeys: 2, operationKey: 'llmPromptOverlapRows'},
+  ])
+  expect(await getBenchmarkRunFailureMessage(duplicatedCoverageInput)).toContain(
+    'Review-serving benchmark coverage mismatch',
+  )
 })
 
 test('review-serving benchmark rejects temp spill observations', async () => {

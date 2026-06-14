@@ -156,10 +156,36 @@ test('unassessed row contract requires display and payload dependencies', () => 
 
 test('detail row contract does not pin article lookups to a list mode', () => {
   const detailRow = getReviewServingReadContract('review.detail.row')
+  const detailJudgments = getReviewServingReadContract('review.detail.judgments')
 
   expect(detailRow?.listMode).toBeNull()
   expect(detailRow?.servingTable).toBe('mart.review_article_serving_v4')
   expect(detailRow?.sort.fields[0]).toContain('CASE list_mode_key')
+  expect(detailJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
+  expect(detailJudgments?.allowedFilters).toEqual(['articleId'])
+  expect(detailJudgments?.sort.fields).toEqual([
+    "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
+    'prompt_order ASC NULLS LAST',
+    'prompt_id',
+  ])
+})
+
+test('count contracts do not advertise unsupported searched-count reads', () => {
+  const countContracts = reviewServingReadContractList.filter((contract) => {
+    return contract.workloadClass === 'foregroundReviewCount'
+  })
+
+  expect(
+    countContracts.map((contract) => {
+      return [contract.key, contract.searchMode, contract.allowedFilters.includes('searchTokenPrefix')]
+    }),
+  ).toEqual([
+    ['review.llm.count', 'none', false],
+    ['review.human.count', 'none', false],
+    ['review.both.count', 'none', false],
+    ['review.unassessed.count', 'none', false],
+    ['review.prompt.badges', 'none', false],
+  ])
 })
 
 test('queue and count contracts use physical serving-table sort columns', () => {
@@ -268,6 +294,9 @@ test('future filter posting and facet contracts stay unmounted until route shape
   const facetInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
     return entry.contractKeys.includes('review.filters.facets')
   })
+  const optionInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.contractKeys.includes('review.filters.options')
+  })
 
   expect(postingInventoryEntries).toHaveLength(1)
   expect(postingInventoryEntries[0]).toMatchObject({mounted: false, surfaces: ['filter']})
@@ -277,6 +306,15 @@ test('future filter posting and facet contracts stay unmounted until route shape
       return entry.mounted
     }),
   ).toEqual([false, false])
+  expect(optionInventoryEntries).toHaveLength(2)
+  expect(
+    optionInventoryEntries.map((entry) => {
+      return entry.contractKeys
+    }),
+  ).toEqual([
+    ['review.filters.facets', 'review.filters.options'],
+    ['review.filters.facets', 'review.filters.options'],
+  ])
 })
 
 test('review serving read contracts use planned Phase 1 physical table names', () => {
@@ -286,9 +324,11 @@ test('review serving read contracts use planned Phase 1 physical table names', (
     'app.review_serving_snapshot_manifest',
     'mart.review_article_filter_posting_serving_v4',
     'mart.review_article_count_serving_v4',
+    'mart.review_article_judgment_detail_serving_v4',
     'mart.review_article_serving_payload_v4',
     'mart.review_article_serving_v4',
     'mart.review_filter_facet_serving_v4',
+    'mart.review_filter_option_serving_v4',
     'mart.review_title_search_serving_v4',
     'mart.review_unassessed_queue_serving_v4',
   ])
@@ -368,6 +408,7 @@ test('detail read inventory maps to the mounted project review route', () => {
 
   expect(detailInventoryEntries).toHaveLength(1)
   expect(detailInventoryEntries[0]).toMatchObject({
+    contractKeys: ['review.detail.row', 'review.detail.payload', 'review.detail.judgments', 'review.prompt.badges'],
     method: 'POST',
     productRoute: '/api/projectsreview',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
@@ -384,6 +425,7 @@ test('count read inventory maps to the mounted review count route', () => {
     method: 'POST',
     productRoute: '/api/articlesreviewscount',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts',
+    surfaces: ['count', 'filter'],
   })
 })
 
@@ -394,6 +436,7 @@ test('facet read inventory maps to the mounted review filters route', () => {
 
   expect(facetInventoryEntries).toHaveLength(1)
   expect(facetInventoryEntries[0]).toMatchObject({
+    contractKeys: ['review.filters.facets', 'review.filters.options'],
     method: 'GET',
     productRoute: '/api/articlesreviewsfilters',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
@@ -409,6 +452,7 @@ test('human facet read inventory maps to the mounted human review filters route'
 
   expect(humanFacetInventoryEntries).toHaveLength(1)
   expect(humanFacetInventoryEntries[0]).toMatchObject({
+    contractKeys: ['review.filters.facets', 'review.filters.options'],
     method: 'GET',
     productRoute: '/api/articlesreviewshumanfilters',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
