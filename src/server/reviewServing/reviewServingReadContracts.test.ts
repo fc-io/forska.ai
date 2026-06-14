@@ -217,8 +217,12 @@ test('future filter posting and facet contracts stay unmounted until route shape
 
   expect(postingInventoryEntries).toHaveLength(1)
   expect(postingInventoryEntries[0]).toMatchObject({mounted: false, surfaces: ['filter']})
-  expect(facetInventoryEntries).toHaveLength(1)
-  expect(facetInventoryEntries[0]).toMatchObject({mounted: false, surfaces: ['facet']})
+  expect(facetInventoryEntries).toHaveLength(2)
+  expect(
+    facetInventoryEntries.map((entry) => {
+      return entry.mounted
+    }),
+  ).toEqual([false, false])
 })
 
 test('review serving read contracts use planned Phase 1 physical table names', () => {
@@ -331,7 +335,7 @@ test('count read inventory maps to the mounted review count route', () => {
 
 test('facet read inventory maps to the mounted review filters route', () => {
   const facetInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.contractKeys.includes('review.filters.facets')
+    return entry.contractKeys.includes('review.filters.facets') && entry.productRoute === '/api/articlesreviewsfilters'
   })
 
   expect(facetInventoryEntries).toHaveLength(1)
@@ -339,6 +343,21 @@ test('facet read inventory maps to the mounted review filters route', () => {
     method: 'GET',
     productRoute: '/api/articlesreviewsfilters',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
+  })
+})
+
+test('human facet read inventory maps to the mounted human review filters route', () => {
+  const humanFacetInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return (
+      entry.contractKeys.includes('review.filters.facets') && entry.productRoute === '/api/articlesreviewshumanfilters'
+    )
+  })
+
+  expect(humanFacetInventoryEntries).toHaveLength(1)
+  expect(humanFacetInventoryEntries[0]).toMatchObject({
+    method: 'GET',
+    productRoute: '/api/articlesreviewshumanfilters',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
   })
 })
 

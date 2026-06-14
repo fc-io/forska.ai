@@ -46,6 +46,7 @@ export type PromptConfigHashInput = {
 }
 
 export type ReviewConfigHashInput = {
+  modelExecutionIdentity: ReviewServingIdentityValue
   modelId: string | null
   promptConfigs: readonly {promptConfigHash: string; promptId: string}[]
   useAbstract: boolean
@@ -233,6 +234,7 @@ export const buildReviewConfigHash = (input: ReviewConfigHashInput) => {
     })
 
   return `review:${getReviewServingHash('review-config', {
+    modelExecutionIdentity: input.modelExecutionIdentity,
     modelId: input.modelId,
     promptConfigs,
     useAbstract: input.useAbstract,

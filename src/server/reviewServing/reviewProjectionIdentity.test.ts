@@ -145,6 +145,7 @@ test('buildReviewConfigHash sorts prompt configs before hashing', () => {
     thresholdVersion: null,
   })
   const left = buildReviewConfigHash({
+    modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
     modelId: 'model-a',
     promptConfigs: [
       {promptConfigHash: promptB, promptId: 'prompt-b'},
@@ -156,6 +157,7 @@ test('buildReviewConfigHash sorts prompt configs before hashing', () => {
     useTitle: true,
   })
   const right = buildReviewConfigHash({
+    modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
     modelId: 'model-a',
     promptConfigs: [
       {promptConfigHash: promptA, promptId: 'prompt-a'},
@@ -172,6 +174,7 @@ test('buildReviewConfigHash sorts prompt configs before hashing', () => {
 
 test('buildReviewConfigHash ignores unrelated projection inputs', () => {
   const input = {
+    modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
     modelId: 'model-a',
     promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a'}],
     useAbstract: true,
@@ -185,6 +188,35 @@ test('buildReviewConfigHash ignores unrelated projection inputs', () => {
   })
 
   expect(left).toBe(right)
+})
+
+test('buildReviewConfigHash changes when model execution settings change', () => {
+  const input = {
+    modelExecutionIdentity: {
+      options: {thinking: {effort: 'medium'}},
+      providerConnectionId: 'provider-a',
+      remoteModelId: 'model-a',
+      variant: 'thinking',
+    },
+    modelId: 'model-a',
+    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a'}],
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  } as const
+  const baseHash = buildReviewConfigHash(input)
+  const changedThinking = buildReviewConfigHash({
+    ...input,
+    modelExecutionIdentity: {...input.modelExecutionIdentity, options: {thinking: {effort: 'high'}}},
+  })
+  const changedVariant = buildReviewConfigHash({
+    ...input,
+    modelExecutionIdentity: {...input.modelExecutionIdentity, variant: 'non-thinking'},
+  })
+
+  expect(changedThinking).not.toBe(baseHash)
+  expect(changedVariant).not.toBe(baseHash)
 })
 
 test('buildSummaryDefinitionIdentity sorts contribution keys before hashing', () => {
