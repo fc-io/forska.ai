@@ -13,6 +13,10 @@ const payloadOrderForwardMigrationSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0098_reviewServingPayloadOrderColumns.sql'),
   'utf8',
 )
+const countScopeForwardMigrationSql = readFileSync(
+  resolve(import.meta.dir, '../../db/duckdbMigrations/0099_reviewServingCountScopeAndDetailOptionTables.sql'),
+  'utf8',
+)
 
 const reviewServingPhase1Tables = [
   'app.import_run_article_delta',
@@ -45,9 +49,11 @@ const reviewServingPhase1Tables = [
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_filter_posting_stats_v4',
   'mart.review_article_serving_payload_v4',
+  'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_summary_contribution_v4',
   'mart.review_article_count_serving_v4',
   'mart.review_filter_facet_serving_v4',
+  'mart.review_filter_option_serving_v4',
   'mart.review_unassessed_queue_serving_v4',
 ] as const
 
@@ -149,4 +155,33 @@ test('payload order forward migration upgrades already-applied review-serving sc
   expect(payloadOrderForwardMigrationSql).toContain(
     'ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_created_at, article_id);',
   )
+})
+
+test('Phase 1 schema migration keeps count rows list-mode scoped', () => {
+  expect(getMissingColumns('mart.review_article_count_serving_v4', ['list_mode_key'])).toEqual([])
+  expect(countScopeForwardMigrationSql).toContain('DROP TABLE IF EXISTS mart.review_article_count_serving_v4')
+  expect(countScopeForwardMigrationSql).toContain("list_mode_key VARCHAR NOT NULL DEFAULT 'global'")
+})
+
+test('Phase 1 schema migration includes dedicated judgment detail and filter option tables', () => {
+  expect(
+    getMissingColumns('mart.review_article_judgment_detail_serving_v4', [
+      'article_id',
+      'prompt_id',
+      'judgment_payload_json',
+      'placeholder_kind',
+    ]),
+  ).toEqual([])
+  expect(
+    getMissingColumns('mart.review_filter_option_serving_v4', [
+      'filter_kind',
+      'filter_option_identity',
+      'option_payload_json',
+      'search_identity',
+    ]),
+  ).toEqual([])
+  expect(countScopeForwardMigrationSql).toContain(
+    'CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4',
+  )
+  expect(countScopeForwardMigrationSql).toContain('CREATE TABLE IF NOT EXISTS mart.review_filter_option_serving_v4')
 })

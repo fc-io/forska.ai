@@ -68,7 +68,11 @@ const reviewFilterPostingServingTable = 'mart.review_article_filter_posting_serv
 const reviewQueueServingTable = 'mart.review_unassessed_queue_serving_v4'
 const reviewSearchServingTable = 'mart.review_title_search_serving_v4'
 const reviewSnapshotManifestTable = 'app.review_serving_snapshot_manifest'
-const countServingSort = {direction: 'asc', fields: ['count_kind', 'summary_definition_version', 'filter_key']} as const
+const countServingSort = {
+  direction: 'asc',
+  fields: ['list_mode_key', 'count_kind', 'summary_definition_version', 'filter_key'],
+} as const
+const jobServingSort = {direction: 'desc', fields: ['updated_at', 'job_id']} as const
 const detailRowListModePrioritySort =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
 
@@ -395,7 +399,7 @@ export const reviewServingReadContractList = [
       'promptAnswer',
       'queueKind',
     ],
-    cursorFields: ['sort_key', 'article_id'],
+    cursorFields: ['updated_at', 'job_id'],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.bulk.selection',
     listMode: null,
@@ -408,12 +412,12 @@ export const reviewServingReadContractList = [
     requiredComponents: ['projectScope', 'posting', 'summary'],
     searchMode: 'tokenPrefix',
     servingTable: 'app.review_bulk_operation_job',
-    sort: {direction: 'asc', fields: ['article_id']},
+    sort: jobServingSort,
     workloadClass: 'bulkReviewJob',
   }),
   defineContract({
     allowedFilters: [...defaultRowFilters, 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer', 'sourceProject'],
-    cursorFields: ['sort_key', 'article_id'],
+    cursorFields: ['updated_at', 'job_id'],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.export.selection',
     listMode: null,
@@ -426,7 +430,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['projectScope', 'posting', 'payload'],
     searchMode: 'tokenPrefix',
     servingTable: 'app.review_bulk_operation_job',
-    sort: {direction: 'asc', fields: ['article_id']},
+    sort: jobServingSort,
     workloadClass: 'bulkReviewJob',
   }),
   defineContract({
@@ -439,7 +443,7 @@ export const reviewServingReadContractList = [
       'promptAnswer',
       'queueKind',
     ],
-    cursorFields: ['sort_key', 'article_id'],
+    cursorFields: ['updated_at', 'job_id'],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.pdf.selection',
     listMode: null,
@@ -452,7 +456,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['projectScope', 'posting', 'payload'],
     searchMode: 'tokenPrefix',
     servingTable: 'app.review_bulk_operation_job',
-    sort: {direction: 'asc', fields: ['article_id']},
+    sort: jobServingSort,
     workloadClass: 'bulkReviewJob',
   }),
   defineContract({
@@ -465,7 +469,7 @@ export const reviewServingReadContractList = [
     namedFastCounts: [],
     optionalComponents: [],
     physicalAccessStrategy: 'tokenPrefixIndex',
-    requiredComponents: ['search'],
+    requiredComponents: ['projectScope', 'search'],
     searchMode: 'tokenPrefix',
     servingTable: reviewSearchServingTable,
     sort: {direction: 'asc', fields: ['token', 'article_id']},
@@ -473,7 +477,7 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: ['searchTokenPrefix'],
-    cursorFields: [],
+    cursorFields: ['updated_at', 'job_id'],
     freshnessBehavior: 'asyncUnavailable',
     key: 'review.search.substringAsync',
     listMode: null,
@@ -483,10 +487,10 @@ export const reviewServingReadContractList = [
     namedFastCounts: [],
     optionalComponents: ['search'],
     physicalAccessStrategy: 'jobCriteria',
-    requiredComponents: ['search'],
+    requiredComponents: ['projectScope'],
     searchMode: 'substringAsync',
     servingTable: 'app.review_search_job',
-    sort: {direction: 'asc', fields: ['article_id']},
+    sort: jobServingSort,
     workloadClass: 'bulkReviewJob',
   }),
 ] satisfies readonly ReviewServingReadContract[]

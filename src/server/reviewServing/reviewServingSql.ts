@@ -256,6 +256,7 @@ const getSqlStringLiteral = (value: string) => {
 const getReviewServingRowsSqlCountPredicate = (params: {
   contract: ReviewServingReadContract
   countFilterKeyParameter?: string | null
+  listModeParameter: string
   namedCountKey?: NamedReviewFastCountKey | null
 }) => {
   if (params.contract.servingTable !== reviewServingCountServingTable) {
@@ -271,8 +272,12 @@ const getReviewServingRowsSqlCountPredicate = (params: {
   }
 
   const summaryDefinition = namedReviewFastCountDefinitions[params.namedCountKey]
+  const listModePredicate = params.contract.listMode
+    ? ` AND list_mode_key = ${params.listModeParameter}`
+    : ` AND list_mode_key = 'global'`
 
   return [
+    listModePredicate,
     ` AND count_kind = ${getSqlStringLiteral(params.namedCountKey)}`,
     ` AND summary_definition_version = ${getSqlStringLiteral(summaryDefinition.summaryDefinitionVersion)}`,
     ` AND filter_key = ${params.countFilterKeyParameter}`,
