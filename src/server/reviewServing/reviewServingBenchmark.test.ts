@@ -5,12 +5,24 @@ import {
   getReviewServingBenchmarkMetrics,
   getReviewServingBenchmarkRequestCountViolations,
   getReviewServingBenchmarkSmokeInput,
+  getReviewServingBenchmarkWorkItemShapeViolations,
   reviewServingBenchmarkOverlapWorkloadDefinition,
   reviewServingBenchmarkPhase5ReleaseGate,
   reviewServingSynthetic10m7PromptOverlapFixture,
   runReviewServingBenchmarkEffect,
   runReviewServingBenchmarkSmoke,
 } from './reviewServingBenchmark.ts'
+
+const getBenchmarkRunFailureMessage = async (input: Parameters<typeof runReviewServingBenchmarkEffect>[0]) => {
+  return Effect.runPromise(runReviewServingBenchmarkEffect(input)).then(
+    () => {
+      return ''
+    },
+    (error) => {
+      return String(error)
+    },
+  )
+}
 
 test('review-serving benchmark documents the full 10M article and 7 prompt overlap release gate', () => {
   expect(reviewServingSynthetic10m7PromptOverlapFixture).toEqual({
@@ -48,25 +60,18 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
     result.workload.operations.map((operation) => {
       return operation.requestCount
     }),
-  ).toEqual([2, 1, 1])
+  ).toEqual([1, 1, 1])
   expect(
     result.samples.map((sample) => {
       return sample.admissionStatus
     }),
-  ).toEqual(['accepted', 'accepted', 'accepted', 'rejected'])
-  expect(result.samples.at(-1)).toMatchObject({
-    key: 'smoke-rejected-raw-fallback',
-    rejectionReason: 'unregisteredContract',
-    rowsReturned: 0,
-    rowsScanned: 0,
-    tempUsageBytes: 0,
-  })
+  ).toEqual(['accepted', 'accepted', 'accepted'])
   expect(result.metrics).toMatchObject({
-    latency: {p50Ms: 8, p95Ms: 20, p99Ms: 20, sampleCount: 4},
-    queueDepth: {average: 2.25, peak: 3},
+    latency: {p50Ms: 12, p95Ms: 20, p99Ms: 20, sampleCount: 3},
+    queueDepth: {average: 2, peak: 3},
     rows: {rowsReturned: 38, rowsScanned: 102},
     tempUsage: {peakBytes: 128, totalBytes: 192},
-    work: {admitted: 3, rejected: 1, total: 4},
+    work: {admitted: 3, rejected: 0, total: 3},
   })
   expect(result.metrics.memory.peakRssBytes).toBeGreaterThanOrEqual(result.metrics.memory.startRssBytes)
 })
@@ -141,18 +146,29 @@ test('review-serving benchmark rejects runs that do not satisfy operation reques
   const underSampledInput = {...input, workItems: input.workItems.slice(0, 1)}
 
   expect(getReviewServingBenchmarkRequestCountViolations(underSampledInput)).toEqual([
-    {actualRequestCount: 1, expectedRequestCount: 2, operationKey: 'llmPromptOverlapRows'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'llmHumanOverlapRows'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'overlapFacetRefresh'},
   ])
-  const failureMessage = await Effect.runPromise(runReviewServingBenchmarkEffect(underSampledInput)).then(
-    () => {
-      return ''
-    },
-    (error) => {
-      return String(error)
-    },
-  )
+  const failureMessage = await getBenchmarkRunFailureMessage(underSampledInput)
 
   expect(failureMessage).toContain('Review-serving benchmark request count mismatch')
+})
+
+test('review-serving benchmark rejects work items that do not match the declared operation', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const mismatchedWorkItem = {
+    ...input.workItems[0],
+    admissionRequest: {...input.workItems[0].admissionRequest, contractKey: 'review.rawFallback.rows'},
+  }
+  const mismatchedInput = {...input, workItems: [mismatchedWorkItem, ...input.workItems.slice(1)]}
+
+  expect(getReviewServingBenchmarkWorkItemShapeViolations(mismatchedInput, mismatchedWorkItem)).toEqual([
+    {actual: 'review.rawFallback.rows', expected: 'review.llm.rows', field: 'contractKey', key: 'smoke-llm-page'},
+  ])
+  expect(getReviewServingBenchmarkRequestCountViolations(mismatchedInput)).toContainEqual({
+    actualRequestCount: 0,
+    expectedRequestCount: 1,
+    operationKey: 'llmPromptOverlapRows',
+  })
+  expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark work item mismatch')
 })

@@ -138,6 +138,7 @@ test('buildReviewServingRowsSql uses count-table sort columns for count serving 
     displayIdentityParameter: '$displayIdentity',
     limitParameter: '$limit',
     listModeParameter: '$listMode',
+    namedCountKey: 'review.llm.assessedByPrompt',
     payloadIdentityParameter: '$payloadIdentity',
     projectIdParameter: '$projectId',
     projectScopeIdentityParameter: '$projectScopeIdentity',
@@ -150,6 +151,28 @@ test('buildReviewServingRowsSql uses count-table sort columns for count serving 
   expect(sql).toContain('ORDER BY count_kind ASC, summary_definition_version ASC, filter_key ASC')
   expect(sql).not.toContain('summary_key')
   expect(sql).not.toContain('prompt_id')
+})
+
+test('buildReviewServingRowsSql scopes count lookups to the requested named summary', () => {
+  const contract = getRequiredReviewServingReadContract('review.llm.count')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    namedCountKey: 'review.llm.assessedByPrompt',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain(
+    "AND count_kind = 'review.llm.assessedByPrompt' AND summary_definition_version = 'review-llm-assessed-by-prompt:v1'",
+  )
 })
 
 test('assertReviewServingSqlShape reads table references from SQL', () => {

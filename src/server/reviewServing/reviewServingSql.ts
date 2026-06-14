@@ -1,4 +1,8 @@
-import type {ReviewServingReadContract} from './reviewServingContracts.ts'
+import {
+  namedReviewFastCountDefinitions,
+  type NamedReviewFastCountKey,
+  type ReviewServingReadContract,
+} from './reviewServingContracts.ts'
 import {reviewServingReadContractList} from './reviewServingReadContracts.ts'
 import {reviewServingSqlForbiddenPatterns} from './reviewServingSqlForbiddenPatterns.ts'
 
@@ -215,6 +219,7 @@ const reviewServingListModePredicateTables = new Set([
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_serving_v4',
 ])
+const reviewServingCountServingTable = 'mart.review_article_count_serving_v4'
 
 const getReviewServingRowsSqlListModePredicate = (params: {
   contract: ReviewServingReadContract
@@ -225,12 +230,34 @@ const getReviewServingRowsSqlListModePredicate = (params: {
     : ''
 }
 
+const getSqlStringLiteral = (value: string) => {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
+const getReviewServingRowsSqlCountPredicate = (params: {
+  contract: ReviewServingReadContract
+  namedCountKey?: NamedReviewFastCountKey | null
+}) => {
+  if (params.contract.servingTable !== reviewServingCountServingTable) {
+    return ''
+  }
+
+  if (!params.namedCountKey || !params.contract.namedFastCounts.includes(params.namedCountKey)) {
+    return ' AND 1 = 0'
+  }
+
+  const summaryDefinition = namedReviewFastCountDefinitions[params.namedCountKey]
+
+  return ` AND count_kind = ${getSqlStringLiteral(params.namedCountKey)} AND summary_definition_version = ${getSqlStringLiteral(summaryDefinition.summaryDefinitionVersion)}`
+}
+
 export const buildReviewServingRowsSql = (params: {
   contract: ReviewServingReadContract
   cursorPredicate?: string
   displayIdentityParameter: string
   limitParameter: string
   listModeParameter: string
+  namedCountKey?: NamedReviewFastCountKey | null
   payloadIdentityParameter: string
   projectIdParameter: string
   projectScopeIdentityParameter: string
@@ -241,7 +268,8 @@ export const buildReviewServingRowsSql = (params: {
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
   const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
   const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
+  const countPredicate = getReviewServingRowsSqlCountPredicate(params)
   const sortSql = getSortSql(params.contract)
 
-  return `SELECT * FROM ${params.contract.servingTable} WHERE project_id = ${params.projectIdParameter}${identityPredicates}${listModePredicate}${cursorPredicate} ORDER BY ${sortSql} LIMIT ${params.limitParameter}`
+  return `SELECT * FROM ${params.contract.servingTable} WHERE project_id = ${params.projectIdParameter}${identityPredicates}${listModePredicate}${countPredicate}${cursorPredicate} ORDER BY ${sortSql} LIMIT ${params.limitParameter}`
 }

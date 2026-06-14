@@ -38,6 +38,23 @@ test('buildReviewProjectionIdentity keeps projection components narrow', () => {
   expect(searchIdentity.startsWith('search:')).toBe(true)
 })
 
+test('buildReviewProjectionIdentity ignores physical patch counters', () => {
+  const baseIdentity = buildReviewProjectionIdentity({
+    component: 'display',
+    definitionVersion: 'display:v1',
+    upstreamDigests: {articleDisplay: 'digest-a'},
+  })
+  const advancedPatchIdentity = buildReviewProjectionIdentity({
+    baseGeneration: '42',
+    component: 'display',
+    definitionVersion: 'display:v1',
+    patchWatermark: '84',
+    upstreamDigests: {articleDisplay: 'digest-a'},
+  })
+
+  expect(advancedPatchIdentity).toBe(baseIdentity)
+})
+
 test('specific projection builders are stable for equivalent dependency ordering', () => {
   const displayLeft = buildReviewDisplayIdentity({
     definitionVersion: 'display:v1',
