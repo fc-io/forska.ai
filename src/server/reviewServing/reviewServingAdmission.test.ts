@@ -376,6 +376,42 @@ test('admitReviewServingRequest rejects stale snapshots unless the caller explic
   })
 })
 
+test('admitReviewServingRequest rejects stale fallback without explicit stale snapshot freshness', () => {
+  const omitted = admitReviewServingRequest({
+    allowStale: true,
+    contractKey: 'review.llm.rows',
+    pageSize: 25,
+    ...readyServingIdentity,
+    workloadClass: 'foregroundReviewRows',
+  })
+  const indexing = admitReviewServingRequest({
+    allowStale: true,
+    contractKey: 'review.llm.rows',
+    pageSize: 25,
+    ...readyServingIdentity,
+    snapshotFreshness: 'indexing',
+    workloadClass: 'foregroundReviewRows',
+  })
+  const unavailable = admitReviewServingRequest({
+    allowStale: true,
+    contractKey: 'review.llm.rows',
+    pageSize: 25,
+    ...readyServingIdentity,
+    snapshotFreshness: 'unavailable',
+    workloadClass: 'foregroundReviewRows',
+  })
+
+  expect(omitted.admitted ? null : omitted.reason).toBe('staleSnapshotRequired')
+  expect(indexing.admitted ? null : indexing.reason).toBe('staleSnapshotRequired')
+  expect(unavailable.admitted ? null : unavailable.reason).toBe('staleSnapshotRequired')
+  expect(indexing.diagnostics.freshness).toEqual({
+    accepted: false,
+    allowStale: true,
+    behavior: 'requireReadySnapshot',
+    snapshotFreshness: 'indexing',
+  })
+})
+
 test('admitReviewServingRequest rejects ready serving reads without project and snapshot identity', () => {
   const missingProject = admitReviewServingRequest({
     contractKey: 'review.detail.row',
@@ -483,6 +519,30 @@ test('admitReviewServingDuckdbWorkload maps an admitted contract to generic Duck
     timeoutMs: 5_000,
     workloadClass: 'foregroundReviewRows',
   })
+})
+
+test('admitReviewServingDuckdbWorkload only uses stale fallback for explicit stale snapshots', () => {
+  const ready = admitReviewServingDuckdbWorkload({
+    allowStale: true,
+    contractKey: 'review.llm.rows',
+    pageSize: 25,
+    projectId: 'project-a',
+    snapshotFreshness: 'ready',
+    snapshotId: 'snapshot-1',
+    workloadClass: 'foregroundReviewRows',
+  })
+  const stale = admitReviewServingDuckdbWorkload({
+    allowStale: true,
+    contractKey: 'review.llm.rows',
+    pageSize: 25,
+    projectId: 'project-a',
+    snapshotFreshness: 'stale',
+    snapshotId: 'snapshot-1',
+    workloadClass: 'foregroundReviewRows',
+  })
+
+  expect(ready.admitted ? ready.workloadContext.fallbackIntent : null).toBe('reject')
+  expect(stale.admitted ? stale.workloadContext.fallbackIntent : null).toBe('serveStale')
 })
 
 test('admitReviewServingDuckdbWorkload preserves rejection before DuckDB execution', () => {
