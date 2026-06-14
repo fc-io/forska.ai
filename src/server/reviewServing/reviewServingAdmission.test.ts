@@ -302,6 +302,29 @@ test('admitReviewServingRequest rejects supported count keys without ready match
   expect(wrongFilterKey.admitted ? null : wrongFilterKey.reason).toBe('countStateUnavailable')
 })
 
+test('admitReviewServingRequest accepts matching stale counts for explicit stale snapshots', () => {
+  const result = admitReviewServingRequest({
+    allowStale: true,
+    contractKey: 'review.llm.count',
+    countFilterKey: 'prompt:1',
+    countState: {
+      availability: 'stale',
+      filterKey: 'prompt:1',
+      key: 'review.llm.assessedByPrompt',
+      snapshotId: 'snapshot-1',
+      value: 12,
+    },
+    namedCountKey: 'review.llm.assessedByPrompt',
+    pageSize: 1,
+    ...readyServingIdentity,
+    snapshotFreshness: 'stale',
+    workloadClass: 'foregroundReviewCount',
+  })
+
+  expect(result.admitted).toBe(true)
+  expect(result.diagnostics.count.state).toMatchObject({availability: 'stale', snapshotId: 'snapshot-1', value: 12})
+})
+
 test('admitReviewServingRequest rejects token-prefix search without ready search state', () => {
   const missingMode = admitReviewServingRequest({
     contractKey: 'review.search.tokenPrefix',

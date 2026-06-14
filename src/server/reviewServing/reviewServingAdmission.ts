@@ -350,13 +350,22 @@ const isSearchModeAccepted = (contract: ReviewServingReadContract, request: Revi
     : requestedMode === 'none' || requestedMode === contract.searchMode
 }
 
+const isCountStateAvailabilityAccepted = (request: ReviewServingAdmissionRequest) => {
+  return (
+    request.countState?.availability === 'ready'
+    || (request.countState?.availability === 'stale'
+      && request.allowStale === true
+      && request.snapshotFreshness === 'stale')
+  )
+}
+
 const isCountStateAccepted = (request: ReviewServingAdmissionRequest) => {
   if (request.namedCountKey === undefined) {
     return true
   }
 
   return (
-    request.countState?.availability === 'ready'
+    isCountStateAvailabilityAccepted(request)
     && request.countState.key === request.namedCountKey
     && hasNonEmptyString(request.countFilterKey)
     && request.countState.filterKey === request.countFilterKey

@@ -3,6 +3,7 @@ import {Effect} from 'effect'
 
 import {
   getReviewServingBenchmarkMetrics,
+  getReviewServingBenchmarkPerformanceViolations,
   getReviewServingBenchmarkRequestCountViolations,
   getReviewServingBenchmarkRowTargetViolations,
   getReviewServingBenchmarkSmokeInput,
@@ -37,6 +38,12 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
   expect(reviewServingBenchmarkOverlapWorkloadDefinition).toMatchObject({
     fixtureKind: 'synthetic10m7PromptOverlap',
     key: 'reviewServing.10m7PromptOverlap.v1',
+    performanceTargets: {
+      maxP95LatencyMs: 2_000,
+      maxP99LatencyMs: 5_000,
+      maxPeakRssBytes: 21_474_836_480,
+      maxRssGrowthBytes: 4_294_967_296,
+    },
     releaseGatePhase: 'Phase 5',
     requiredForPhase0: false,
   })
@@ -48,7 +55,22 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
   })
   expect(
     reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
-      return operation.contractKey === 'review.llm.count' && operation.workloadClass === 'foregroundReviewCount'
+      return (
+        operation.contractKey === 'review.llm.count'
+        && operation.namedCountKey === 'review.llm.assessedByPrompt'
+        && operation.countFilterKeyPrefix === 'prompt:'
+        && operation.workloadClass === 'foregroundReviewCount'
+      )
+    }),
+  ).toBe(true)
+  expect(
+    reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
+      return operation.contractKey === 'review.bulk.selection' && operation.jobKind === 'review.bulk.selection'
+    }),
+  ).toBe(true)
+  expect(
+    reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
+      return operation.contractKey === 'review.search.substringAsync' && operation.searchTextPrefix === 'overlap '
     }),
   ).toBe(true)
 })
@@ -67,18 +89,18 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
     result.workload.operations.map((operation) => {
       return operation.requestCount
     }),
-  ).toEqual([1, 1, 1, 1])
+  ).toEqual([1, 1, 1, 1, 1, 1, 1, 1])
   expect(
     result.samples.map((sample) => {
       return sample.admissionStatus
     }),
-  ).toEqual(['accepted', 'accepted', 'accepted', 'accepted'])
+  ).toEqual(['accepted', 'accepted', 'accepted', 'accepted', 'accepted', 'accepted', 'accepted', 'accepted'])
   expect(result.metrics).toMatchObject({
-    latency: {p50Ms: 8, p95Ms: 20, p99Ms: 20, sampleCount: 4},
-    queueDepth: {average: 1.75, peak: 3},
-    rows: {rowsReturned: 39, rowsScanned: 103},
+    latency: {p50Ms: 8, p95Ms: 20, p99Ms: 20, sampleCount: 8},
+    queueDepth: {average: 0.88, peak: 3},
+    rows: {rowsReturned: 39, rowsScanned: 107},
     tempUsage: {peakBytes: 0, totalBytes: 0},
-    work: {admitted: 4, rejected: 0, total: 4},
+    work: {admitted: 8, rejected: 0, total: 8},
   })
   expect(result.metrics.memory.peakRssBytes).toBeGreaterThanOrEqual(result.metrics.memory.startRssBytes)
 })
@@ -156,6 +178,10 @@ test('review-serving benchmark rejects runs that do not satisfy operation reques
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'llmHumanOverlapRows'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'overlapFacetRefresh'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'llmPromptOverlapCounts'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'bulkOverlapSelectionJob'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'exportOverlapSelectionJob'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'pdfOverlapSelectionJob'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'substringOverlapSearchJob'},
   ])
   const failureMessage = await getBenchmarkRunFailureMessage(underSampledInput)
 
@@ -178,6 +204,85 @@ test('review-serving benchmark rejects work items that do not match the declared
     expectedRequestCount: 1,
     operationKey: 'llmPromptOverlapRows',
   })
+  expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark work item mismatch')
+})
+
+test('review-serving benchmark rejects count operations with the wrong count shape', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const countWorkItem = input.workItems.find((workItem) => {
+    return workItem.operationKey === 'llmPromptOverlapCounts'
+  })
+
+  if (!countWorkItem) {
+    throw new Error('Missing smoke count work item')
+  }
+
+  const mismatchedWorkItem = {
+    ...countWorkItem,
+    admissionRequest: {
+      ...countWorkItem.admissionRequest,
+      countFilterKey: 'list:all',
+      countState: {
+        availability: 'ready' as const,
+        filterKey: 'list:all',
+        key: 'review.list.total' as const,
+        snapshotId: 'smoke-snapshot',
+        value: 10,
+      },
+      namedCountKey: 'review.list.total',
+    },
+  }
+  const mismatchedInput = {
+    ...input,
+    workItems: input.workItems.map((workItem) => {
+      return workItem.operationKey === 'llmPromptOverlapCounts' ? mismatchedWorkItem : workItem
+    }),
+  }
+
+  expect(getReviewServingBenchmarkWorkItemShapeViolations(mismatchedInput, mismatchedWorkItem)).toEqual([
+    {
+      actual: 'review.list.total',
+      expected: 'review.llm.assessedByPrompt',
+      field: 'namedCountKey',
+      key: 'smoke-llm-count',
+    },
+    {actual: 'list:all', expected: 'prompt:*', field: 'countFilterKeyPrefix', key: 'smoke-llm-count'},
+  ])
+  expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark work item mismatch')
+})
+
+test('review-serving benchmark rejects durable job operations with the wrong criteria shape', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const bulkWorkItem = input.workItems.find((workItem) => {
+    return workItem.operationKey === 'bulkOverlapSelectionJob'
+  })
+
+  if (!bulkWorkItem) {
+    throw new Error('Missing smoke bulk work item')
+  }
+
+  const mismatchedWorkItem = {...bulkWorkItem, jobFilterSignature: 'other:bulk:smoke', jobKind: 'review.pdf.selection'}
+  const mismatchedInput = {
+    ...input,
+    workItems: input.workItems.map((workItem) => {
+      return workItem.operationKey === 'bulkOverlapSelectionJob' ? mismatchedWorkItem : workItem
+    }),
+  }
+
+  expect(getReviewServingBenchmarkWorkItemShapeViolations(mismatchedInput, mismatchedWorkItem)).toEqual([
+    {
+      actual: 'review.pdf.selection',
+      expected: 'review.bulk.selection',
+      field: 'jobKind',
+      key: 'smoke-bulk-selection-job',
+    },
+    {
+      actual: 'other:bulk:smoke',
+      expected: 'phase5-overlap:*',
+      field: 'jobFilterSignaturePrefix',
+      key: 'smoke-bulk-selection-job',
+    },
+  ])
   expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark work item mismatch')
 })
 
@@ -276,4 +381,49 @@ test('review-serving benchmark rejects temp spill observations', async () => {
     {key: 'sample-spill', operationKey: 'llmPromptOverlapRows', tempUsageBytes: 1},
   ])
   expect(await getBenchmarkRunFailureMessage(spilledInput)).toContain('Review-serving benchmark temp spill mismatch')
+})
+
+test('review-serving benchmark rejects latency and memory target violations', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const metrics = getReviewServingBenchmarkMetrics({
+    endRssBytes: 1_600,
+    samples: [
+      {
+        admissionStatus: 'accepted' as const,
+        contractKey: 'review.llm.rows',
+        key: 'sample-slow',
+        latencyMs: 2_001,
+        memoryRssBytes: 1_600,
+        operationKey: 'llmPromptOverlapRows',
+        queueDepth: 0,
+        rejectionReason: null,
+        rowsReturned: 12,
+        rowsScanned: 12,
+        tempUsageBytes: 0,
+      },
+    ],
+    startRssBytes: 100,
+  })
+  const tightTargets = {
+    maxP95LatencyMs: 2_000,
+    maxP99LatencyMs: 2_000,
+    maxPeakRssBytes: 1_000,
+    maxRssGrowthBytes: 1_000,
+  }
+
+  expect(getReviewServingBenchmarkPerformanceViolations(metrics, tightTargets)).toEqual([
+    {actual: 2_001, expected: 2_000, metric: 'latency.p95Ms'},
+    {actual: 2_001, expected: 2_000, metric: 'latency.p99Ms'},
+    {actual: 1_600, expected: 1_000, metric: 'memory.peakRssBytes'},
+    {actual: 1_500, expected: 1_000, metric: 'memory.rssGrowthBytes'},
+  ])
+  expect(
+    await getBenchmarkRunFailureMessage({
+      ...input,
+      executor: (workItem) => {
+        return Effect.succeed({...workItem.observation, latencyMs: 2_001})
+      },
+      workload: {...input.workload, performanceTargets: {...input.workload.performanceTargets, maxP95LatencyMs: 2_000}},
+    }),
+  ).toContain('Review-serving benchmark performance target mismatch')
 })
