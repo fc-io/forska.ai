@@ -298,3 +298,16 @@ test('detail read inventory maps to the mounted project review route', () => {
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
   })
 })
+
+test('warning read inventory maps to the mounted project warnings route', () => {
+  const warningInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.contractKeys.includes('review.warning.snapshot')
+  })
+
+  expect(warningInventoryEntries).toHaveLength(1)
+  expect(warningInventoryEntries[0]).toMatchObject({
+    method: 'POST',
+    productRoute: '/api/projectsreviewswarnings',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts',
+  })
+})

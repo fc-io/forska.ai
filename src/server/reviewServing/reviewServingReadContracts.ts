@@ -572,7 +572,7 @@ export const reviewServingReadContractRouteInventory = [
     contractKeys: ['review.warning.snapshot', 'review.health.snapshot'],
     method: 'POST',
     mounted: false,
-    productRoute: '/api/review-serving/snapshot-status',
+    productRoute: '/api/projectsreviewswarnings',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts',
     surfaces: ['warning', 'health'],
   },

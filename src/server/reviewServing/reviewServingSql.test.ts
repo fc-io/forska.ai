@@ -109,6 +109,27 @@ test('buildReviewServingRowsSql uses search identities for search serving tables
   expect(sql).not.toContain('review_config_hash')
 })
 
+test('buildReviewServingRowsSql uses null-safe config identity for snapshot manifests', () => {
+  const contract = getRequiredReviewServingReadContract('review.health.snapshot')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain(
+    'WHERE project_id = $projectId AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash AND snapshot_id = $snapshotId',
+  )
+})
+
 test('buildReviewServingRowsSql only emits list-mode predicates for list-mode tables', () => {
   const contract = getRequiredReviewServingReadContract('review.queue.unassessed')
   const sql = buildReviewServingRowsSql({
