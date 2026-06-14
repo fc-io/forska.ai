@@ -315,7 +315,7 @@ const getSearchDiagnostics = (
 const isSearchModeAccepted = (contract: ReviewServingReadContract, request: ReviewServingAdmissionRequest) => {
   const requestedMode = request.searchMode ?? 'none'
 
-  return contract.physicalAccessStrategy === 'tokenPrefixIndex'
+  return contract.physicalAccessStrategy === 'tokenPrefixIndex' || contract.searchMode === 'substringAsync'
     ? requestedMode === contract.searchMode
     : requestedMode === 'none' || requestedMode === contract.searchMode
 }

@@ -357,23 +357,38 @@ const getReviewServingBenchmarkRowTargetViolationMessage = (
     .join('; ')
 }
 
+const getExpectedReviewServingBenchmarkFixture = (fixtureKind: ReviewServingBenchmarkFixtureKind) => {
+  return fixtureKind === 'synthetic10m7PromptOverlap'
+    ? reviewServingSynthetic10m7PromptOverlapFixture
+    : reviewServingBenchmarkSmokeFixture
+}
+
+const getReviewServingBenchmarkFixtureMismatch = (input: ReviewServingBenchmarkRunInput) => {
+  const expectedFixture = getExpectedReviewServingBenchmarkFixture(input.workload.fixtureKind)
+
+  return input.fixture.articleCount !== expectedFixture.articleCount
+    || input.fixture.articlePromptOverlapRows !== expectedFixture.articlePromptOverlapRows
+    || input.fixture.kind !== expectedFixture.kind
+    || input.fixture.promptCount !== expectedFixture.promptCount
+    || input.fixture.requiresCompletedSchemaProjectors !== expectedFixture.requiresCompletedSchemaProjectors
+    ? `expected ${JSON.stringify(expectedFixture)}, got ${JSON.stringify(input.fixture)}`
+    : null
+}
+
 const validateReviewServingBenchmarkRequestCounts = (input: ReviewServingBenchmarkRunInput) => {
   const shapeViolations = input.workItems.flatMap((workItem) => {
     return getReviewServingBenchmarkWorkItemShapeViolations(input, workItem)
   })
   const violations = getReviewServingBenchmarkRequestCountViolations(input)
+  const fixtureMismatch = getReviewServingBenchmarkFixtureMismatch(input)
   const message = violations
     .map((violation) => {
       return `${violation.operationKey}: expected ${violation.expectedRequestCount}, got ${violation.actualRequestCount}`
     })
     .join('; ')
 
-  if (input.fixture.kind !== input.workload.fixtureKind) {
-    return Effect.fail(
-      new Error(
-        `Review-serving benchmark fixture mismatch: expected ${input.workload.fixtureKind}, got ${input.fixture.kind}`,
-      ),
-    )
+  if (fixtureMismatch) {
+    return Effect.fail(new Error(`Review-serving benchmark fixture mismatch: ${fixtureMismatch}`))
   }
 
   if (shapeViolations.length > 0) {
