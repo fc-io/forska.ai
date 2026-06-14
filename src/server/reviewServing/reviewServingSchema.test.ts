@@ -17,6 +17,10 @@ const countScopeForwardMigrationSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0099_reviewServingCountScopeAndDetailOptionTables.sql'),
   'utf8',
 )
+const filterOptionValueForwardMigrationSql = readFileSync(
+  resolve(import.meta.dir, '../../db/duckdbMigrations/0100_reviewServingFilterOptionValueKey.sql'),
+  'utf8',
+)
 
 const reviewServingPhase1Tables = [
   'app.import_run_article_delta',
@@ -177,6 +181,7 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
       'filter_kind',
       'filter_option_identity',
       'option_payload_json',
+      'option_value_key',
       'search_identity',
     ]),
   ).toEqual([])
@@ -184,4 +189,7 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
     'CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4',
   )
   expect(countScopeForwardMigrationSql).toContain('CREATE TABLE IF NOT EXISTS mart.review_filter_option_serving_v4')
+  expect(countScopeForwardMigrationSql).toContain('option_value_key VARCHAR NOT NULL')
+  expect(filterOptionValueForwardMigrationSql).toContain('DROP TABLE IF EXISTS mart.review_filter_option_serving_v4')
+  expect(filterOptionValueForwardMigrationSql).toContain('option_value_key VARCHAR NOT NULL')
 })

@@ -143,7 +143,7 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
   const hasMultipleReferences = tableReferences.length > 1
   const wherePredicateClause =
     sql.match(/\bwhere\b([\s\S]*?)(?:\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/iu)?.[1] ?? ''
-  const bindOperandPattern = "(?:\\?|[$:@][a-z_][\\w.]*|'[^']*'|[0-9]+)"
+  const bindOperandPattern = '(?:\\?|[$:@](?:[a-z_][\\w.]*|[0-9]+))'
   const getQualifierPattern = (tableReference: ReviewServingSqlTableReference) => {
     if (tableReference.alias) {
       return `${escapeRegex(tableReference.alias)}\\s*\\.\\s*`
@@ -356,17 +356,36 @@ const getReviewServingRowsSqlSearchPredicate = (params: {
   return ` AND starts_with(token, ${searchTokenPrefixParameter})`
 }
 
+const getReviewServingRowsSqlQueuePredicate = (params: {
+  contract: ReviewServingReadContract
+  queueKindParameter?: string | null
+}) => {
+  if (params.contract.physicalAccessStrategy !== 'queueOrdering') {
+    return ''
+  }
+
+  const queueKindParameter = getRequiredReviewServingRowsSqlParameter(
+    params.queueKindParameter,
+    'queue kind',
+    params.contract,
+  )
+
+  return ` AND queue_kind = ${queueKindParameter}`
+}
+
 const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
   articleIdParameter?: string | null
   contract: ReviewServingReadContract
   filterKindParameter?: string | null
   filterValueParameter?: string | null
+  queueKindParameter?: string | null
   searchTokenPrefixParameter?: string | null
 }) => {
   return [
     getReviewServingRowsSqlArticlePredicate(params),
     getReviewServingRowsSqlPostingPredicate(params),
     getReviewServingRowsSqlSearchPredicate(params),
+    getReviewServingRowsSqlQueuePredicate(params),
   ].join('')
 }
 
@@ -384,6 +403,7 @@ export const buildReviewServingRowsSql = (params: {
   payloadIdentityParameter: string
   projectIdParameter: string
   projectScopeIdentityParameter: string
+  queueKindParameter?: string | null
   reviewConfigHashParameter: string
   searchIdentityParameter: string
   searchTokenPrefixParameter?: string | null
