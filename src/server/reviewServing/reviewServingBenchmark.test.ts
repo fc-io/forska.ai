@@ -61,6 +61,8 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
         operation.contractKey === 'review.llm.count'
         && operation.namedCountKey === 'review.llm.assessedByPrompt'
         && operation.countFilterKeyPrefix === 'prompt:'
+        && operation.minimumDistinctRequestSlices === 7
+        && operation.requestSliceFields?.includes('filter')
         && operation.workloadClass === 'foregroundReviewCount'
       )
     }),
@@ -75,6 +77,15 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
     minimumDistinctRequestSlices: 700,
     pageSize: 128,
     requestSliceFields: ['filter'],
+  })
+  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations[3]).toMatchObject({
+    contractKey: 'review.filters.options',
+    maxRowsScannedPerRequest: 512,
+    minimumDistinctRequestSlices: 700,
+    pageSize: 512,
+    requestSliceFields: ['filter', 'searchTokenPrefix'],
+    searchMode: 'tokenPrefix',
+    workloadClass: 'foregroundReviewFacet',
   })
   expect(
     reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
@@ -102,18 +113,28 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
     result.workload.operations.map((operation) => {
       return operation.requestCount
     }),
-  ).toEqual([1, 1, 1, 1, 1, 1, 1, 1])
+  ).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1])
   expect(
     result.samples.map((sample) => {
       return sample.admissionStatus
     }),
-  ).toEqual(['accepted', 'accepted', 'accepted', 'accepted', 'accepted', 'accepted', 'accepted', 'accepted'])
+  ).toEqual([
+    'accepted',
+    'accepted',
+    'accepted',
+    'accepted',
+    'accepted',
+    'accepted',
+    'accepted',
+    'accepted',
+    'accepted',
+  ])
   expect(result.metrics).toMatchObject({
-    latency: {p50Ms: 8, p95Ms: 20, p99Ms: 20, sampleCount: 8},
-    queueDepth: {average: 0.88, peak: 3},
-    rows: {rowsReturned: 39, rowsScanned: 107},
+    latency: {p50Ms: 9, p95Ms: 20, p99Ms: 20, sampleCount: 9},
+    queueDepth: {average: 1, peak: 3},
+    rows: {rowsReturned: 47, rowsScanned: 139},
     tempUsage: {peakBytes: 0, totalBytes: 0},
-    work: {admitted: 8, rejected: 0, total: 8},
+    work: {admitted: 9, rejected: 0, total: 9},
   })
   expect(result.metrics.memory.peakRssBytes).toBeGreaterThanOrEqual(result.metrics.memory.startRssBytes)
 })
@@ -190,6 +211,7 @@ test('review-serving benchmark rejects runs that do not satisfy operation reques
   expect(getReviewServingBenchmarkRequestCountViolations(underSampledInput)).toEqual([
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'llmHumanOverlapRows'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'overlapFacetRefresh'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'overlapFilterOptions'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'llmPromptOverlapCounts'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'bulkOverlapSelectionJob'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'exportOverlapSelectionJob'},
@@ -217,6 +239,29 @@ test('review-serving benchmark rejects work items that do not match the declared
     expectedRequestCount: 1,
     operationKey: 'llmPromptOverlapRows',
   })
+  expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark work item mismatch')
+})
+
+test('review-serving benchmark rejects dimensions that the declared operation omits', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const mismatchedWorkItem = {
+    ...input.workItems[0],
+    admissionRequest: {
+      ...input.workItems[0].admissionRequest,
+      namedCountKey: 'review.llm.assessedByPrompt' as const,
+      searchMode: 'tokenPrefix' as const,
+    },
+    jobFilterSignature: 'phase5-overlap:unexpected',
+    jobKind: 'review.bulk.selection',
+  }
+  const mismatchedInput = {...input, workItems: [mismatchedWorkItem, ...input.workItems.slice(1)]}
+
+  expect(getReviewServingBenchmarkWorkItemShapeViolations(mismatchedInput, mismatchedWorkItem)).toEqual([
+    {actual: 'review.llm.assessedByPrompt', expected: null, field: 'namedCountKey', key: 'smoke-llm-page'},
+    {actual: 'review.bulk.selection', expected: null, field: 'jobKind', key: 'smoke-llm-page'},
+    {actual: 'tokenPrefix', expected: null, field: 'searchMode', key: 'smoke-llm-page'},
+    {actual: 'phase5-overlap:unexpected', expected: null, field: 'jobFilterSignaturePrefix', key: 'smoke-llm-page'},
+  ])
   expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark work item mismatch')
 })
 

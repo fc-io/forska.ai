@@ -21,7 +21,7 @@ export type ReviewServingSqlShapeOptions = {
 
 const tableReferencePattern = /\b(?:from|join)\s+((?:"[^"]+"|[a-z_][\w]*)(?:\.(?:"[^"]+"|[a-z_][\w]*))?)/giu
 const tableReferenceWithAliasPattern =
-  /\b(?:from|join)\s+((?:"[^"]+"|[a-z_][\w]*)(?:\.(?:"[^"]+"|[a-z_][\w]*))?)(?:\s+(?:as\s+)?((?!where\b|on\b|join\b|order\b|limit\b|group\b|having\b|using\b|inner\b|left\b|right\b|full\b|cross\b)(?:"[^"]+"|[a-z_][\w]*)))?/giu
+  /\b(?:from|join)\s+((?:"[^"]+"|[a-z_][\w]*)(?:\.(?:"[^"]+"|[a-z_][\w]*))?)(?:\s+(?:as\s+)?((?!where\b|on\b|join\b|order\b|limit\b|group\b|having\b|qualify\b|using\b|inner\b|left\b|right\b|full\b|cross\b)(?:"[^"]+"|[a-z_][\w]*)))?/giu
 const sqlClauseKeywords = new Set([
   'cross',
   'full',
@@ -33,6 +33,7 @@ const sqlClauseKeywords = new Set([
   'limit',
   'on',
   'order',
+  'qualify',
   'right',
   'using',
   'where',
@@ -142,7 +143,7 @@ const getReviewServingSqlBoundedReadViolations = (sql: string, options: Required
   const tableReferences = getReviewServingSqlTableReferenceDetails(sql)
   const hasMultipleReferences = tableReferences.length > 1
   const wherePredicateClause =
-    sql.match(/\bwhere\b([\s\S]*?)(?:\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/iu)?.[1] ?? ''
+    sql.match(/\bwhere\b([\s\S]*?)(?:\bqualify\b|\border\s+by\b|\blimit\b|\bgroup\s+by\b|\bhaving\b|$)/iu)?.[1] ?? ''
   const bindOperandPattern = '(?:\\?|[$:@](?:[a-z_][\\w.]*|[0-9]+))'
   const getQualifierPattern = (tableReference: ReviewServingSqlTableReference) => {
     if (tableReference.alias) {
