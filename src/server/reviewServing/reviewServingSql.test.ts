@@ -82,7 +82,7 @@ test('buildReviewServingRowsSql uses payload identities for payload serving tabl
     'WHERE project_id = $projectId AND display_identity = $displayIdentity AND payload_identity = $payloadIdentity AND snapshot_id = $snapshotId',
   )
   expect(sql).not.toContain('review_config_hash')
-  expect(sql).not.toContain('list_mode_key')
+  expect(sql).not.toContain('AND list_mode_key =')
 })
 
 test('buildReviewServingRowsSql uses search identities for search serving tables', () => {
@@ -172,7 +172,10 @@ test('buildReviewServingRowsSql does not pin detail article lookups to a list mo
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('AND article_id = $articleId')
-  expect(sql).not.toContain('list_mode_key')
+  expect(sql).toContain(
+    "ORDER BY CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END ASC, article_id ASC",
+  )
+  expect(sql).not.toContain('AND list_mode_key =')
 })
 
 test('buildReviewServingRowsSql applies posting filter keys before row ordering', () => {

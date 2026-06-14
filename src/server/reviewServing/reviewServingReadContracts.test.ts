@@ -103,6 +103,22 @@ test('contracts advertising queue-backed LLM unassessed counts require queue pro
   expect(contractsMissingQueue).toEqual([])
 })
 
+test('contracts advertising fast counts require each count dependency component', () => {
+  const contractsMissingCountDependencies = reviewServingReadContractList.filter((contract) => {
+    return contract.namedFastCounts.some((countKey) => {
+      return namedReviewFastCountDefinitions[countKey].requiredComponents.some((component) => {
+        return !contract.requiredComponents.includes(component)
+      })
+    })
+  })
+
+  expect(
+    contractsMissingCountDependencies.map((contract) => {
+      return contract.key
+    }),
+  ).toEqual([])
+})
+
 test('normal foreground row contracts require ready snapshots and serving tables', () => {
   const llmRows = getReviewServingReadContract('review.llm.rows')
   const humanRows = getReviewServingReadContract('review.human.rows')
@@ -128,6 +144,7 @@ test('detail row contract does not pin article lookups to a list mode', () => {
 
   expect(detailRow?.listMode).toBeNull()
   expect(detailRow?.servingTable).toBe('mart.review_article_serving_v4')
+  expect(detailRow?.sort.fields[0]).toContain('CASE list_mode_key')
 })
 
 test('queue and count contracts use physical serving-table sort columns', () => {
@@ -296,6 +313,32 @@ test('detail read inventory maps to the mounted project review route', () => {
     method: 'POST',
     productRoute: '/api/projectsreview',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
+  })
+})
+
+test('count read inventory maps to the mounted review count route', () => {
+  const countInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.contractKeys.includes('review.llm.count')
+  })
+
+  expect(countInventoryEntries).toHaveLength(1)
+  expect(countInventoryEntries[0]).toMatchObject({
+    method: 'POST',
+    productRoute: '/api/articlesreviewscount',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts',
+  })
+})
+
+test('facet read inventory maps to the mounted review filters route', () => {
+  const facetInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.contractKeys.includes('review.filters.facets')
+  })
+
+  expect(facetInventoryEntries).toHaveLength(1)
+  expect(facetInventoryEntries[0]).toMatchObject({
+    method: 'GET',
+    productRoute: '/api/articlesreviewsfilters',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
   })
 })
 

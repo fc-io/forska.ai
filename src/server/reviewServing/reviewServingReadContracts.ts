@@ -69,6 +69,8 @@ const reviewQueueServingTable = 'mart.review_unassessed_queue_serving_v4'
 const reviewSearchServingTable = 'mart.review_title_search_serving_v4'
 const reviewSnapshotManifestTable = 'app.review_serving_snapshot_manifest'
 const countServingSort = {direction: 'asc', fields: ['count_kind', 'summary_definition_version', 'filter_key']} as const
+const detailRowListModePrioritySort =
+  "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
 
 const defineContract = (input: ContractInput): ReviewServingReadContract => {
   return {
@@ -196,7 +198,7 @@ export const reviewServingReadContractList = [
     namedFastCounts: ['review.queue.unassessedReady', 'review.llm.unassessedByPrompt'],
     optionalComponents: [],
     physicalAccessStrategy: 'summaryLookup',
-    requiredComponents: ['queue', 'summary'],
+    requiredComponents: ['llmStatus', 'queue', 'summary'],
     searchMode: 'none',
     servingTable: reviewCountServingTable,
     sort: countServingSort,
@@ -253,7 +255,7 @@ export const reviewServingReadContractList = [
     ],
     optionalComponents: [],
     physicalAccessStrategy: 'summaryLookup',
-    requiredComponents: ['posting', 'summary'],
+    requiredComponents: ['display', 'humanStatus', 'llmStatus', 'posting', 'projectScope', 'selectedImport', 'summary'],
     searchMode: 'none',
     servingTable: reviewFacetServingTable,
     sort: {direction: 'asc', fields: ['facet_key', 'facet_value']},
@@ -291,7 +293,7 @@ export const reviewServingReadContractList = [
     namedFastCounts: ['review.queue.unassessedReady'],
     optionalComponents: [],
     physicalAccessStrategy: 'queueOrdering',
-    requiredComponents: ['queue'],
+    requiredComponents: ['queue', 'summary'],
     searchMode: 'none',
     servingTable: reviewQueueServingTable,
     sort: {direction: 'asc', fields: ['priority_bucket', 'activity_sort_at', 'article_id']},
@@ -311,7 +313,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['display', 'llmStatus', 'humanStatus', 'projectScope', 'selectedImport', 'summary'],
     searchMode: 'none',
     servingTable: reviewArticleServingTable,
-    sort: {direction: 'asc', fields: ['article_id']},
+    sort: {direction: 'asc', fields: [detailRowListModePrioritySort, 'article_id']},
     workloadClass: 'foregroundReviewRows',
   }),
   defineContract({
@@ -493,7 +495,6 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: [
       'review.llm.rows',
-      'review.llm.count',
       'review.prompt.badges',
       'review.search.tokenPrefix',
       'review.search.substringAsync',
@@ -503,6 +504,14 @@ export const reviewServingReadContractRouteInventory = [
     productRoute: '/api/articlesreviews',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts',
     surfaces: ['llm', 'row', 'count', 'badge', 'filter', 'search'],
+  },
+  {
+    contractKeys: ['review.llm.count'],
+    method: 'POST',
+    mounted: false,
+    productRoute: '/api/articlesreviewscount',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts',
+    surfaces: ['count', 'filter', 'search'],
   },
   {
     contractKeys: [
@@ -556,7 +565,7 @@ export const reviewServingReadContractRouteInventory = [
     contractKeys: ['review.filters.facets'],
     method: 'GET',
     mounted: false,
-    productRoute: '/api/review-serving/filter-facets',
+    productRoute: '/api/articlesreviewsfilters',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
     surfaces: ['facet'],
   },

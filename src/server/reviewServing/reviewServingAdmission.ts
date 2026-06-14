@@ -184,9 +184,11 @@ const isFreshnessAccepted = (
     return false
   }
 
-  return contract.freshnessBehavior === 'requireReadySnapshot' && request.snapshotFreshness !== 'ready'
-    ? request.allowStale === true
-    : true
+  if (contract.freshnessBehavior !== 'requireReadySnapshot' || request.snapshotFreshness === 'ready') {
+    return true
+  }
+
+  return request.snapshotFreshness === 'stale' && request.allowStale === true
 }
 
 const getNonStaleDuckdbFallbackIntent = (request: ReviewServingAdmissionRequest): DuckdbWorkloadFallbackIntent => {
@@ -194,7 +196,9 @@ const getNonStaleDuckdbFallbackIntent = (request: ReviewServingAdmissionRequest)
 }
 
 const getDuckdbFallbackIntent = (request: ReviewServingAdmissionRequest): DuckdbWorkloadFallbackIntent => {
-  return request.allowStale ? 'serveStale' : getNonStaleDuckdbFallbackIntent(request)
+  return request.allowStale && request.snapshotFreshness === 'stale'
+    ? 'serveStale'
+    : getNonStaleDuckdbFallbackIntent(request)
 }
 
 const getDuckdbWorkloadContext = (
