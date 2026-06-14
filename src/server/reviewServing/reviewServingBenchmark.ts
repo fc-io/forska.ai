@@ -329,6 +329,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       pageSize: 50,
       requestCount: 700,
       requestSliceFields: ['cursor', 'searchTokenPrefix'],
+      searchMode: 'tokenPrefix',
       targetRowsReturnedPerRequest: 50,
       workloadClass: 'foregroundReviewSearch',
     },

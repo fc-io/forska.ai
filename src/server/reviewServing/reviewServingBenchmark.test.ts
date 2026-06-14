@@ -97,6 +97,11 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
       return operation.contractKey === 'review.search.substringAsync' && operation.searchTextPrefix === 'overlap '
     }),
   ).toBe(true)
+  expect(
+    reviewServingBenchmarkOverlapWorkloadDefinition.operations.some((operation) => {
+      return operation.contractKey === 'review.search.tokenPrefix' && operation.searchMode === 'tokenPrefix'
+    }),
+  ).toBe(true)
 })
 
 test('review-serving smoke benchmark runs against mocked inputs without completed schema or projectors', async () => {

@@ -312,12 +312,34 @@ const getReviewServingRowsSqlCountPredicate = (params: {
   ].join('')
 }
 
-const getReviewServingRowsSqlFacetKindPredicate = (contract: ReviewServingReadContract) => {
+const getReviewServingRowsSqlFacetVersionPredicate = (contract: ReviewServingReadContract) => {
   if (contract.servingTable !== reviewServingFilterFacetTable) {
     return ''
   }
 
-  return contract.key === 'review.human.filters.facets' ? " AND facet_kind = 'human'" : " AND facet_kind = 'review'"
+  const facetDefinitionVersions = contract.namedFastCounts
+    .map((countKey) => {
+      return namedReviewFastCountDefinitions[countKey]
+    })
+    .filter((definition) => {
+      return definition.kind === 'facet'
+    })
+    .map((definition) => {
+      return getSqlStringLiteral(definition.summaryDefinitionVersion)
+    })
+
+  if (facetDefinitionVersions.length === 0) {
+    throw new Error(`Missing facet summary definition for ${contract.key}`)
+  }
+
+  const facetKindPredicate =
+    contract.key === 'review.human.filters.facets' ? " AND facet_kind = 'human'" : " AND facet_kind = 'review'"
+  const summaryVersionPredicate =
+    facetDefinitionVersions.length === 1
+      ? ` AND summary_definition_version = ${facetDefinitionVersions[0]}`
+      : ` AND summary_definition_version IN (${facetDefinitionVersions.join(', ')})`
+
+  return `${facetKindPredicate}${summaryVersionPredicate}`
 }
 
 const getRequiredReviewServingRowsSqlParameter = (
@@ -492,7 +514,7 @@ export const buildReviewServingRowsSql = (params: {
   const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
   const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
   const countPredicate = getReviewServingRowsSqlCountPredicate(params)
-  const facetKindPredicate = getReviewServingRowsSqlFacetKindPredicate(params.contract)
+  const facetVersionPredicate = getReviewServingRowsSqlFacetVersionPredicate(params.contract)
   const physicalFilterPredicate = getReviewServingRowsSqlPhysicalFilterPredicate(params)
   const listModeDedupeQualifier = getReviewServingRowsSqlListModeDedupeQualifier(params.contract)
   const sortSql = getSortSql(params.contract)
@@ -502,7 +524,7 @@ export const buildReviewServingRowsSql = (params: {
     identityPredicates,
     listModePredicate,
     countPredicate,
-    facetKindPredicate,
+    facetVersionPredicate,
     physicalFilterPredicate,
     cursorPredicate,
     listModeDedupeQualifier,
