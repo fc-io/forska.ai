@@ -69,6 +69,7 @@ const countServingSort = {
   fields: ['list_mode_key', 'count_kind', 'summary_definition_version', 'filter_key'],
 } as const
 const jobServingSort = {direction: 'desc', fields: ['updated_at', 'job_id']} as const
+const reviewFilterFacetSort = {direction: 'asc', fields: ['facet_key', 'facet_value']} as const
 const detailRowListModePrioritySort =
   "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END"
 const promptPreviewCreatedAtSort = 'article_created_at ASC NULLS LAST'
@@ -84,33 +85,56 @@ const defineContract = (input: ContractInput): ReviewServingReadContract => {
 }
 
 const rowContract = (input: {
-  allowedFilters: readonly ReviewServingFilterKey[]
   key: ReviewServingReadContractKey
   listMode: ReviewServingListMode
   namedFastCounts: readonly NamedReviewFastCountKey[]
   requiredComponents: readonly ReviewServingProjectionComponent[]
 }) => {
   return defineContract({
-    allowedFilters: input.allowedFilters,
+    allowedFilters: [],
     cursorFields: ['sort_key', 'article_id'],
     freshnessBehavior: 'requireReadySnapshot',
     key: input.key,
     listMode: input.listMode,
     maxPageSize: 100,
     namedFastCounts: input.namedFastCounts,
-    optionalComponents: ['search'],
+    optionalComponents: [],
     physicalAccessStrategy: 'orderedPrefix',
     requiredComponents: input.requiredComponents,
-    searchMode: 'tokenPrefix',
+    searchMode: 'none',
     servingTable: reviewArticleServingTable,
     sort: {direction: 'desc', fields: ['sort_key', 'article_id']},
     workloadClass: 'foregroundReviewRows',
   })
 }
 
+const filterFacetContract = (input: {
+  allowedFilters: readonly ReviewServingFilterKey[]
+  key: ReviewServingReadContractKey
+  namedFastCounts: readonly NamedReviewFastCountKey[]
+  requiredComponents: readonly ReviewServingProjectionComponent[]
+}) => {
+  return defineContract({
+    allowedFilters: input.allowedFilters,
+    cursorFields: [],
+    freshnessBehavior: 'requireReadySnapshot',
+    key: input.key,
+    listMode: null,
+    maxPageSize: 128,
+    maxResultRows: 128,
+    namedFastCounts: input.namedFastCounts,
+    optionalComponents: [],
+    physicalAccessStrategy: 'summaryLookup',
+    requiredComponents: input.requiredComponents,
+    searchMode: 'none',
+    servingTable: reviewFacetServingTable,
+    sort: reviewFilterFacetSort,
+    workloadClass: 'foregroundReviewFacet',
+  })
+}
+
 export const reviewServingReadContractList = [
   rowContract({
-    allowedFilters: [...defaultRowFilters, 'llmStatus', 'promptAnswer'],
     key: 'review.llm.rows',
     listMode: 'llm',
     namedFastCounts: [...defaultReviewCounts, 'review.llm.assessedByPrompt'],
@@ -134,7 +158,6 @@ export const reviewServingReadContractList = [
     workloadClass: 'foregroundReviewCount',
   }),
   rowContract({
-    allowedFilters: [...defaultRowFilters, 'humanStatus', 'promptAnswer'],
     key: 'review.human.rows',
     listMode: 'human',
     namedFastCounts: [...defaultReviewCounts, 'review.human.reviewedByPrompt'],
@@ -158,7 +181,6 @@ export const reviewServingReadContractList = [
     workloadClass: 'foregroundReviewCount',
   }),
   rowContract({
-    allowedFilters: [...defaultRowFilters, 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer'],
     key: 'review.both.rows',
     listMode: 'both',
     namedFastCounts: [...defaultReviewCounts, 'review.both.conflictByPrompt'],
@@ -182,7 +204,6 @@ export const reviewServingReadContractList = [
     workloadClass: 'foregroundReviewCount',
   }),
   rowContract({
-    allowedFilters: ['importRoute', 'publicationYear', 'queueKind', 'searchTokenPrefix'],
     key: 'review.unassessed.rows',
     listMode: 'unassessed',
     namedFastCounts: ['review.queue.unassessedReady', 'review.llm.unassessedByPrompt'],
@@ -232,7 +253,7 @@ export const reviewServingReadContractList = [
     sort: {direction: 'desc', fields: ['sort_key', 'article_id']},
     workloadClass: 'foregroundReviewRows',
   }),
-  defineContract({
+  filterFacetContract({
     allowedFilters: [
       'conflictFlag',
       'duplicateFlag',
@@ -242,25 +263,20 @@ export const reviewServingReadContractList = [
       'promptAnswer',
       'publicationYear',
     ],
-    cursorFields: [],
-    freshnessBehavior: 'requireReadySnapshot',
     key: 'review.filters.facets',
-    listMode: null,
-    maxPageSize: 128,
-    maxResultRows: 128,
     namedFastCounts: [
       'review.filter.duplicateFlag',
       'review.filter.importRoute',
       'review.filter.promptAnswer',
       'review.filter.publicationYear',
     ],
-    optionalComponents: [],
-    physicalAccessStrategy: 'summaryLookup',
     requiredComponents: ['display', 'humanStatus', 'llmStatus', 'posting', 'projectScope', 'selectedImport', 'summary'],
-    searchMode: 'none',
-    servingTable: reviewFacetServingTable,
-    sort: {direction: 'asc', fields: ['facet_key', 'facet_value']},
-    workloadClass: 'foregroundReviewFacet',
+  }),
+  filterFacetContract({
+    allowedFilters: ['humanStatus', 'promptAnswer'],
+    key: 'review.human.filters.facets',
+    namedFastCounts: [],
+    requiredComponents: ['display', 'humanStatus', 'posting', 'projectScope', 'selectedImport', 'summary'],
   }),
   defineContract({
     allowedFilters: [
@@ -447,7 +463,7 @@ export const reviewServingReadContractList = [
     listMode: null,
     maxEstimatedResultBytes: 500_000,
     maxPageSize: 1,
-    maxResultRows: 0,
+    maxResultRows: 1,
     namedFastCounts: [],
     optionalComponents: ['search'],
     physicalAccessStrategy: 'jobCriteria',
@@ -465,7 +481,7 @@ export const reviewServingReadContractList = [
     listMode: null,
     maxEstimatedResultBytes: 500_000,
     maxPageSize: 1,
-    maxResultRows: 0,
+    maxResultRows: 1,
     namedFastCounts: [],
     optionalComponents: ['search'],
     physicalAccessStrategy: 'jobCriteria',
@@ -491,7 +507,7 @@ export const reviewServingReadContractList = [
     listMode: null,
     maxEstimatedResultBytes: 500_000,
     maxPageSize: 1,
-    maxResultRows: 0,
+    maxResultRows: 1,
     namedFastCounts: [],
     optionalComponents: ['search'],
     physicalAccessStrategy: 'jobCriteria',
@@ -525,7 +541,7 @@ export const reviewServingReadContractList = [
     listMode: null,
     maxEstimatedResultBytes: 100_000,
     maxPageSize: 1,
-    maxResultRows: 0,
+    maxResultRows: 1,
     namedFastCounts: [],
     optionalComponents: ['search'],
     physicalAccessStrategy: 'jobCriteria',
@@ -616,7 +632,7 @@ export const reviewServingReadContractRouteInventory = [
     surfaces: ['facet', 'filter'],
   },
   {
-    contractKeys: ['review.filters.facets', 'review.filters.options'],
+    contractKeys: ['review.human.filters.facets', 'review.filters.options'],
     method: 'GET',
     mounted: false,
     productRoute: '/api/articlesreviewshumanfilters',

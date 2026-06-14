@@ -133,6 +133,29 @@ test('buildReviewServingRowsSql scopes filter option rows by search identity', (
   expect(sql).toContain('ORDER BY filter_kind ASC, facet_key ASC, option_value_key ASC')
 })
 
+test('buildReviewServingRowsSql separates review and human facet rows', () => {
+  const reviewContract = getRequiredReviewServingReadContract('review.filters.facets')
+  const humanContract = getRequiredReviewServingReadContract('review.human.filters.facets')
+  const baseParams = {
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  }
+  const reviewSql = buildReviewServingRowsSql({...baseParams, contract: reviewContract})
+  const humanSql = buildReviewServingRowsSql({...baseParams, contract: humanContract})
+
+  expect(assertReviewServingSqlShape(reviewSql)).toEqual({ok: true, violations: []})
+  expect(assertReviewServingSqlShape(humanSql)).toEqual({ok: true, violations: []})
+  expect(reviewSql).toContain("AND facet_kind = 'review'")
+  expect(humanSql).toContain("AND facet_kind = 'human'")
+})
+
 test('buildReviewServingRowsSql lets snapshot manifests discover latest project status', () => {
   const contract = getRequiredReviewServingReadContract('review.health.snapshot')
   const sql = buildReviewServingRowsSql({

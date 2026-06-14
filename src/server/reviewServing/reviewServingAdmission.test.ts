@@ -175,7 +175,7 @@ test('admitReviewServingRequest rejects search modes that do not match the contr
   expect(missingSubstringMode.admitted ? null : missingSubstringMode.reason).toBe('searchModeMismatch')
   expect(acceptedSubstringMode.admitted).toBe(true)
   expect(substringOnTokenPrefixRows.diagnostics.search).toMatchObject({
-    registeredMode: 'tokenPrefix',
+    registeredMode: 'none',
     requestedMode: 'substringAsync',
   })
 })

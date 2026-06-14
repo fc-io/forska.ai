@@ -131,6 +131,7 @@ export const reviewServingReadContractKeys = [
   'review.filters.postings',
   'review.filters.facets',
   'review.filters.options',
+  'review.human.filters.facets',
   'review.prompt.badges',
   'review.queue.unassessed',
   'review.detail.row',

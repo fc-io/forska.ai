@@ -213,6 +213,7 @@ export const assertReviewServingSqlShape = (
 const reviewServingSnapshotManifestTable = 'app.review_serving_snapshot_manifest'
 const reviewServingBulkOperationJobTable = 'app.review_bulk_operation_job'
 const reviewServingSearchJobTable = 'app.review_search_job'
+const reviewServingFilterFacetTable = 'mart.review_filter_facet_serving_v4'
 const reviewServingFilterOptionTable = 'mart.review_filter_option_serving_v4'
 const reviewServingJudgmentDetailTable = 'mart.review_article_judgment_detail_serving_v4'
 const reviewServingListModePrioritySql =
@@ -309,6 +310,14 @@ const getReviewServingRowsSqlCountPredicate = (params: {
     ` AND summary_definition_version = ${getSqlStringLiteral(summaryDefinition.summaryDefinitionVersion)}`,
     ` AND filter_key = ${params.countFilterKeyParameter}`,
   ].join('')
+}
+
+const getReviewServingRowsSqlFacetKindPredicate = (contract: ReviewServingReadContract) => {
+  if (contract.servingTable !== reviewServingFilterFacetTable) {
+    return ''
+  }
+
+  return contract.key === 'review.human.filters.facets' ? " AND facet_kind = 'human'" : " AND facet_kind = 'review'"
 }
 
 const getRequiredReviewServingRowsSqlParameter = (
@@ -483,6 +492,7 @@ export const buildReviewServingRowsSql = (params: {
   const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
   const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
   const countPredicate = getReviewServingRowsSqlCountPredicate(params)
+  const facetKindPredicate = getReviewServingRowsSqlFacetKindPredicate(params.contract)
   const physicalFilterPredicate = getReviewServingRowsSqlPhysicalFilterPredicate(params)
   const listModeDedupeQualifier = getReviewServingRowsSqlListModeDedupeQualifier(params.contract)
   const sortSql = getSortSql(params.contract)
@@ -492,6 +502,7 @@ export const buildReviewServingRowsSql = (params: {
     identityPredicates,
     listModePredicate,
     countPredicate,
+    facetKindPredicate,
     physicalFilterPredicate,
     cursorPredicate,
     listModeDedupeQualifier,

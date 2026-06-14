@@ -130,6 +130,25 @@ test('normal foreground row contracts require ready snapshots and serving tables
   expect(bothRows?.requiredComponents).toContain('llmStatus')
 })
 
+test('direct ordered row contracts do not advertise filters ignored by row SQL', () => {
+  const orderedRowContracts = reviewServingReadContractList.filter((contract) => {
+    return (
+      contract.physicalAccessStrategy === 'orderedPrefix' && contract.servingTable === 'mart.review_article_serving_v4'
+    )
+  })
+
+  expect(
+    orderedRowContracts.map((contract) => {
+      return [contract.key, contract.allowedFilters, contract.optionalComponents, contract.searchMode]
+    }),
+  ).toEqual([
+    ['review.llm.rows', [], [], 'none'],
+    ['review.human.rows', [], [], 'none'],
+    ['review.both.rows', [], [], 'none'],
+    ['review.unassessed.rows', [], [], 'none'],
+  ])
+})
+
 test('prompt preview contract does not advertise prompt filters on article payload serving rows', () => {
   const promptPreview = getReviewServingReadContract('review.prompt.preview')
 
@@ -227,6 +246,28 @@ test('job criteria contracts use job-table cursor and sort columns', () => {
     ['updated_at', 'job_id'],
     ['updated_at', 'job_id'],
   ])
+  expect(
+    jobContracts.map((contract) => {
+      return contract?.maxResultRows
+    }),
+  ).toEqual([1, 1, 1, 1])
+})
+
+test('human filter facets use a dedicated contract', () => {
+  const reviewFacets = getReviewServingReadContract('review.filters.facets')
+  const humanFacets = getReviewServingReadContract('review.human.filters.facets')
+
+  expect(reviewFacets?.key).toBe('review.filters.facets')
+  expect(humanFacets?.servingTable).toBe('mart.review_filter_facet_serving_v4')
+  expect(humanFacets?.requiredComponents).toEqual([
+    'display',
+    'humanStatus',
+    'posting',
+    'projectScope',
+    'selectedImport',
+    'summary',
+  ])
+  expect(humanFacets?.allowedFilters).toEqual(['humanStatus', 'promptAnswer'])
 })
 
 test('search contracts require project scope without blocking async substring on search readiness', () => {
@@ -293,7 +334,9 @@ test('future filter posting and facet contracts stay unmounted until route shape
     return entry.contractKeys.includes('review.filters.postings')
   })
   const facetInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.contractKeys.includes('review.filters.facets')
+    return (
+      entry.contractKeys.includes('review.filters.facets') || entry.contractKeys.includes('review.human.filters.facets')
+    )
   })
   const optionInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
     return entry.contractKeys.includes('review.filters.options')
@@ -314,7 +357,7 @@ test('future filter posting and facet contracts stay unmounted until route shape
     }),
   ).toEqual([
     ['review.filters.facets', 'review.filters.options'],
-    ['review.filters.facets', 'review.filters.options'],
+    ['review.human.filters.facets', 'review.filters.options'],
   ])
 })
 
@@ -462,13 +505,14 @@ test('facet read inventory maps to the mounted review filters route', () => {
 test('human facet read inventory maps to the mounted human review filters route', () => {
   const humanFacetInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
     return (
-      entry.contractKeys.includes('review.filters.facets') && entry.productRoute === '/api/articlesreviewshumanfilters'
+      entry.contractKeys.includes('review.human.filters.facets')
+      && entry.productRoute === '/api/articlesreviewshumanfilters'
     )
   })
 
   expect(humanFacetInventoryEntries).toHaveLength(1)
   expect(humanFacetInventoryEntries[0]).toMatchObject({
-    contractKeys: ['review.filters.facets', 'review.filters.options'],
+    contractKeys: ['review.human.filters.facets', 'review.filters.options'],
     method: 'GET',
     productRoute: '/api/articlesreviewshumanfilters',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
