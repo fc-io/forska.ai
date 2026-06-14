@@ -367,7 +367,7 @@ const isCountStateAccepted = (request: ReviewServingAdmissionRequest) => {
 
 const isServingIdentityAccepted = (contract: ReviewServingReadContract, request: ReviewServingAdmissionRequest) => {
   return contract.freshnessBehavior !== 'requireReadySnapshot'
-    ? true
+    ? hasNonEmptyString(request.projectId)
     : hasNonEmptyString(request.projectId) && hasNonEmptyString(request.snapshotId)
 }
 

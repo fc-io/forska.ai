@@ -111,6 +111,8 @@ export type ReviewServingBenchmarkRowTargetViolation = {
   operationKey: string
 }
 
+export type ReviewServingBenchmarkTempSpillViolation = {key: string; operationKey: string; tempUsageBytes: number}
+
 type ReviewServingBenchmarkRunState = {startedAtMs: number; startRssBytes: number}
 
 export const reviewServingSynthetic10m7PromptOverlapFixture = {
@@ -156,6 +158,14 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       requestCount: 700,
       targetRowsReturnedPerRequest: 128,
       workloadClass: 'foregroundReviewFacet',
+    },
+    {
+      contractKey: 'review.llm.count',
+      key: 'llmPromptOverlapCounts',
+      pageSize: 1,
+      requestCount: 700,
+      targetRowsReturnedPerRequest: 1,
+      workloadClass: 'foregroundReviewCount',
     },
     {
       contractKey: 'review.queue.unassessed',
@@ -357,6 +367,26 @@ const getReviewServingBenchmarkRowTargetViolationMessage = (
     .join('; ')
 }
 
+export const getReviewServingBenchmarkTempSpillViolations = (samples: readonly ReviewServingBenchmarkSample[]) => {
+  return samples
+    .filter((sample) => {
+      return sample.admissionStatus === 'accepted' && sample.tempUsageBytes > 0
+    })
+    .map((sample) => {
+      return {key: sample.key, operationKey: sample.operationKey, tempUsageBytes: sample.tempUsageBytes}
+    })
+}
+
+const getReviewServingBenchmarkTempSpillViolationMessage = (
+  violations: readonly ReviewServingBenchmarkTempSpillViolation[],
+) => {
+  return violations
+    .map((violation) => {
+      return `${violation.key}.${violation.operationKey}: temp spill ${violation.tempUsageBytes}`
+    })
+    .join('; ')
+}
+
 const getExpectedReviewServingBenchmarkFixture = (fixtureKind: ReviewServingBenchmarkFixtureKind) => {
   return fixtureKind === 'synthetic10m7PromptOverlap'
     ? reviewServingSynthetic10m7PromptOverlapFixture
@@ -456,6 +486,18 @@ const validateReviewServingBenchmarkRowTargets = (
     : Effect.fail(
         new Error(
           `Review-serving benchmark row target mismatch: ${getReviewServingBenchmarkRowTargetViolationMessage(violations)}`,
+        ),
+      )
+}
+
+const validateReviewServingBenchmarkTempSpill = (samples: readonly ReviewServingBenchmarkSample[]) => {
+  const violations = getReviewServingBenchmarkTempSpillViolations(samples)
+
+  return violations.length === 0
+    ? Effect.void
+    : Effect.fail(
+        new Error(
+          `Review-serving benchmark temp spill mismatch: ${getReviewServingBenchmarkTempSpillViolationMessage(violations)}`,
         ),
       )
 }
@@ -580,6 +622,12 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           requestCount: 1,
           targetRowsReturnedPerRequest: 16,
         },
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[3],
+          pageSize: 1,
+          requestCount: 1,
+          targetRowsReturnedPerRequest: 1,
+        },
       ],
     },
     workItems: [
@@ -623,7 +671,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           queueDepth: 2,
           rowsReturned: 10,
           rowsScanned: 30,
-          tempUsageBytes: 64,
+          tempUsageBytes: 0,
         },
         operationKey: 'llmHumanOverlapRows',
       },
@@ -645,9 +693,40 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           queueDepth: 3,
           rowsReturned: 16,
           rowsScanned: 48,
-          tempUsageBytes: 128,
+          tempUsageBytes: 0,
         },
         operationKey: 'overlapFacetRefresh',
+      },
+      {
+        admissionRequest: {
+          contractKey: 'review.llm.count',
+          countFilterKey: 'prompt:1',
+          countState: {
+            availability: 'ready',
+            filterKey: 'prompt:1',
+            key: 'review.llm.assessedByPrompt',
+            snapshotId: 'smoke-snapshot',
+            value: 10,
+          },
+          estimatedResultBytes: 1_000,
+          estimatedResultRows: 1,
+          namedCountKey: 'review.llm.assessedByPrompt',
+          pageSize: 1,
+          projectId: 'smoke-project',
+          snapshotFreshness: 'ready',
+          snapshotId: 'smoke-snapshot',
+          workloadClass: 'foregroundReviewCount',
+        },
+        key: 'smoke-llm-count',
+        observation: {
+          latencyMs: 6,
+          memoryRssBytes: 128_500_000,
+          queueDepth: 1,
+          rowsReturned: 1,
+          rowsScanned: 1,
+          tempUsageBytes: 0,
+        },
+        operationKey: 'llmPromptOverlapCounts',
       },
     ],
   }
@@ -664,6 +743,7 @@ export const runReviewServingBenchmarkEffect = (input: ReviewServingBenchmarkRun
         return runBenchmarkWorkItemEffect(workItem, executor)
       })
       yield* validateReviewServingBenchmarkRowTargets(input, samples)
+      yield* validateReviewServingBenchmarkTempSpill(samples)
       const endRssBytes = sampleReviewServingBenchmarkMemoryRssBytes()
 
       return {

@@ -134,9 +134,24 @@ test('prompt preview contract does not advertise prompt filters on article paylo
   const promptPreview = getReviewServingReadContract('review.prompt.preview')
 
   expect(promptPreview?.allowedFilters).toEqual([])
-  expect(promptPreview?.cursorFields).toEqual(['article_created_at', 'article_id'])
+  expect(promptPreview?.cursorFields).toEqual(['article_created_at ASC NULLS LAST', 'article_id'])
   expect(promptPreview?.servingTable).toBe('mart.review_article_serving_payload_v4')
-  expect(promptPreview?.sort).toEqual({direction: 'asc', fields: ['article_created_at', 'article_id']})
+  expect(promptPreview?.sort).toEqual({direction: 'asc', fields: ['article_created_at ASC NULLS LAST', 'article_id']})
+})
+
+test('unassessed row contract requires display and payload dependencies', () => {
+  const unassessedRows = getReviewServingReadContract('review.unassessed.rows')
+
+  expect(unassessedRows?.requiredComponents).toEqual([
+    'display',
+    'projectScope',
+    'selectedImport',
+    'payload',
+    'judgmentInputContent',
+    'llmStatus',
+    'queue',
+    'summary',
+  ])
 })
 
 test('detail row contract does not pin article lookups to a list mode', () => {

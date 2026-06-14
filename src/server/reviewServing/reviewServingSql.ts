@@ -61,7 +61,7 @@ const getDefaultReviewServingSqlShapeOptions = (): Required<ReviewServingSqlShap
 const getSortSql = (contract: ReviewServingReadContract) => {
   return contract.sort.fields
     .map((field) => {
-      return `${field} ${contract.sort.direction.toUpperCase()}`
+      return /\b(?:asc|desc)\b/iu.test(field) ? field : `${field} ${contract.sort.direction.toUpperCase()}`
     })
     .join(', ')
 }
@@ -242,11 +242,17 @@ const getReviewServingRowsSqlListModePredicate = (params: {
   contract: ReviewServingReadContract
   listModeParameter: string
 }) => {
-  const hasListModePredicate =
-    (params.contract.listMode || reviewServingRuntimeListModeStrategies.has(params.contract.physicalAccessStrategy))
-    && reviewServingListModePredicateTables.has(params.contract.servingTable)
+  if (!reviewServingListModePredicateTables.has(params.contract.servingTable)) {
+    return ''
+  }
 
-  return hasListModePredicate ? ` AND list_mode_key = ${params.listModeParameter}` : ''
+  if (params.contract.listMode) {
+    return ` AND list_mode_key = ${getSqlStringLiteral(params.contract.listMode)}`
+  }
+
+  return reviewServingRuntimeListModeStrategies.has(params.contract.physicalAccessStrategy)
+    ? ` AND list_mode_key = ${params.listModeParameter}`
+    : ''
 }
 
 const getSqlStringLiteral = (value: string) => {

@@ -58,7 +58,7 @@ test('assertReviewServingSqlShape accepts serving-table keyset SQL', () => {
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    'WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId AND list_mode_key = $listMode',
+    "WHERE project_id = $projectId AND review_config_hash = $reviewConfigHash AND snapshot_id = $snapshotId AND list_mode_key = 'llm'",
   )
 })
 
@@ -83,6 +83,8 @@ test('buildReviewServingRowsSql uses payload identities for payload serving tabl
   )
   expect(sql).not.toContain('review_config_hash')
   expect(sql).not.toContain('AND list_mode_key =')
+  expect(sql).toContain('ORDER BY article_created_at ASC NULLS LAST, article_id ASC')
+  expect(sql).not.toContain('ASC NULLS LAST ASC')
 })
 
 test('buildReviewServingRowsSql uses search identities for search serving tables', () => {
@@ -201,6 +203,25 @@ test('buildReviewServingRowsSql applies posting filter keys before row ordering'
   expect(sql).toContain('AND list_mode_key = $listMode')
   expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
   expect(sql).toContain('ORDER BY sort_key DESC, article_id DESC')
+})
+
+test('buildReviewServingRowsSql uses contract list-mode literals for fixed row contracts', () => {
+  const contract = getRequiredReviewServingReadContract('review.both.rows')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$wrongRuntimeMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(sql).toContain("AND list_mode_key = 'both'")
+  expect(sql).not.toContain('$wrongRuntimeMode')
 })
 
 test('buildReviewServingRowsSql uses count-table sort columns for count serving tables', () => {
