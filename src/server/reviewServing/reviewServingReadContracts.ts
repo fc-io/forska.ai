@@ -564,7 +564,7 @@ export const reviewServingReadContractRouteInventory = [
     contractKeys: ['review.detail.row', 'review.detail.payload', 'review.prompt.badges'],
     method: 'POST',
     mounted: false,
-    productRoute: '/api/review-serving/article-detail',
+    productRoute: '/api/projectsreview',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
     surfaces: ['detail', 'row', 'badge'],
   },

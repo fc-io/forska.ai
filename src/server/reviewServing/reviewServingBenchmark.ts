@@ -375,12 +375,49 @@ const getReviewServingBenchmarkFixtureMismatch = (input: ReviewServingBenchmarkR
     : null
 }
 
+const isReviewServingBenchmarkOperationMatch = (
+  operation: ReviewServingBenchmarkWorkloadOperation,
+  expectedOperation: ReviewServingBenchmarkWorkloadOperation | undefined,
+) => {
+  return (
+    expectedOperation !== undefined
+    && operation.contractKey === expectedOperation.contractKey
+    && operation.key === expectedOperation.key
+    && operation.pageSize === expectedOperation.pageSize
+    && operation.requestCount === expectedOperation.requestCount
+    && operation.targetRowsReturnedPerRequest === expectedOperation.targetRowsReturnedPerRequest
+    && operation.workloadClass === expectedOperation.workloadClass
+  )
+}
+
+const getReviewServingBenchmarkWorkloadMismatch = (input: ReviewServingBenchmarkRunInput) => {
+  if (input.workload.fixtureKind !== reviewServingSynthetic10m7PromptOverlapFixture.kind) {
+    return null
+  }
+
+  const expectedWorkload = reviewServingBenchmarkOverlapWorkloadDefinition
+  const operationsMatch =
+    input.workload.operations.length === expectedWorkload.operations.length
+    && input.workload.operations.every((operation, index) => {
+      return isReviewServingBenchmarkOperationMatch(operation, expectedWorkload.operations[index])
+    })
+  const workloadMatches =
+    input.workload.fixtureKind === expectedWorkload.fixtureKind
+    && input.workload.key === expectedWorkload.key
+    && input.workload.releaseGatePhase === expectedWorkload.releaseGatePhase
+    && input.workload.requiredForPhase0 === expectedWorkload.requiredForPhase0
+    && operationsMatch
+
+  return workloadMatches ? null : `expected ${JSON.stringify(expectedWorkload)}, got ${JSON.stringify(input.workload)}`
+}
+
 const validateReviewServingBenchmarkRequestCounts = (input: ReviewServingBenchmarkRunInput) => {
   const shapeViolations = input.workItems.flatMap((workItem) => {
     return getReviewServingBenchmarkWorkItemShapeViolations(input, workItem)
   })
   const violations = getReviewServingBenchmarkRequestCountViolations(input)
   const fixtureMismatch = getReviewServingBenchmarkFixtureMismatch(input)
+  const workloadMismatch = getReviewServingBenchmarkWorkloadMismatch(input)
   const message = violations
     .map((violation) => {
       return `${violation.operationKey}: expected ${violation.expectedRequestCount}, got ${violation.actualRequestCount}`
@@ -389,6 +426,10 @@ const validateReviewServingBenchmarkRequestCounts = (input: ReviewServingBenchma
 
   if (fixtureMismatch) {
     return Effect.fail(new Error(`Review-serving benchmark fixture mismatch: ${fixtureMismatch}`))
+  }
+
+  if (workloadMismatch) {
+    return Effect.fail(new Error(`Review-serving benchmark workload mismatch: ${workloadMismatch}`))
   }
 
   if (shapeViolations.length > 0) {
@@ -548,7 +589,9 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           estimatedResultBytes: 12_000,
           estimatedResultRows: 12,
           pageSize: 12,
+          projectId: 'smoke-project',
           snapshotFreshness: 'ready',
+          snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewRows',
         },
         key: 'smoke-llm-page',
@@ -568,7 +611,9 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           estimatedResultBytes: 10_000,
           estimatedResultRows: 10,
           pageSize: 10,
+          projectId: 'smoke-project',
           snapshotFreshness: 'ready',
+          snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewRows',
         },
         key: 'smoke-both-page',
@@ -588,7 +633,9 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           estimatedResultBytes: 4_000,
           estimatedResultRows: 16,
           pageSize: 1,
+          projectId: 'smoke-project',
           snapshotFreshness: 'ready',
+          snapshotId: 'smoke-snapshot',
           workloadClass: 'foregroundReviewFacet',
         },
         key: 'smoke-facet',

@@ -97,6 +97,7 @@ test('buildReviewServingRowsSql uses search identities for search serving tables
     projectScopeIdentityParameter: '$projectScopeIdentity',
     reviewConfigHashParameter: '$reviewConfigHash',
     searchIdentityParameter: '$searchIdentity',
+    searchTokenPrefixParameter: '$searchTokenPrefix',
     snapshotIdParameter: '$snapshotId',
   })
 
@@ -104,6 +105,7 @@ test('buildReviewServingRowsSql uses search identities for search serving tables
   expect(sql).toContain(
     'WHERE project_id = $projectId AND search_identity = $searchIdentity AND project_scope_identity = $projectScopeIdentity AND snapshot_id = $snapshotId',
   )
+  expect(sql).toContain('AND starts_with(token, $searchTokenPrefix)')
   expect(sql).not.toContain('review_config_hash')
 })
 
@@ -134,6 +136,7 @@ test('buildReviewServingRowsSql only emits list-mode predicates for list-mode ta
 test('buildReviewServingRowsSql does not pin detail article lookups to a list mode', () => {
   const contract = getRequiredReviewServingReadContract('review.detail.row')
   const sql = buildReviewServingRowsSql({
+    articleIdParameter: '$articleId',
     contract,
     displayIdentityParameter: '$displayIdentity',
     limitParameter: '$limit',
@@ -147,7 +150,30 @@ test('buildReviewServingRowsSql does not pin detail article lookups to a list mo
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('AND article_id = $articleId')
   expect(sql).not.toContain('list_mode_key')
+})
+
+test('buildReviewServingRowsSql applies posting filter keys before row ordering', () => {
+  const contract = getRequiredReviewServingReadContract('review.filters.postings')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    filterKindParameter: '$filterKind',
+    filterValueParameter: '$filterValue',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
+  expect(sql).toContain('ORDER BY sort_key DESC, article_id DESC')
 })
 
 test('buildReviewServingRowsSql uses count-table sort columns for count serving tables', () => {
@@ -233,6 +259,33 @@ test('buildReviewServingRowsSql rejects count table reads without a filter key',
       snapshotIdParameter: '$snapshotId',
     })
   }).toThrow('Missing count filter key for review.llm.count')
+})
+
+test('buildReviewServingRowsSql rejects physical access contracts without requested filters', () => {
+  const detailContract = getRequiredReviewServingReadContract('review.detail.row')
+  const searchContract = getRequiredReviewServingReadContract('review.search.tokenPrefix')
+  const postingContract = getRequiredReviewServingReadContract('review.filters.postings')
+  const baseParams = {
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  }
+
+  expect(() => {
+    buildReviewServingRowsSql({...baseParams, contract: detailContract})
+  }).toThrow('Missing article id for review.detail.row')
+  expect(() => {
+    buildReviewServingRowsSql({...baseParams, contract: searchContract})
+  }).toThrow('Missing search token prefix for review.search.tokenPrefix')
+  expect(() => {
+    buildReviewServingRowsSql({...baseParams, contract: postingContract})
+  }).toThrow('Missing filter kind for review.filters.postings')
 })
 
 test('assertReviewServingSqlShape reads table references from SQL', () => {

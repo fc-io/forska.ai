@@ -20,6 +20,7 @@ export type ReviewServingAdmissionSearchMode = ReviewServingSearchMode | 'substr
 export type ReviewServingAdmissionRequest = {
   allowStale?: boolean
   contractKey: string
+  countFilterKey?: string
   countState?: ReviewServingCountState | null
   estimatedResultBytes?: number
   estimatedResultRows?: number
@@ -45,6 +46,7 @@ export type ReviewServingAdmissionRejectionReason =
   | 'pageSizeOverLimit'
   | 'searchModeMismatch'
   | 'searchStateUnavailable'
+  | 'servingIdentityMissing'
   | 'staleSnapshotRequired'
   | 'synchronousSubstringSearchUnavailable'
   | 'tempSpillNotAllowed'
@@ -83,9 +85,16 @@ export type ReviewServingAdmissionFreshnessDiagnostics = {
 }
 
 export type ReviewServingAdmissionCountDiagnostics = {
+  requestedFilterKey: string | null
   requestedKey: string | null
   state: ReviewServingCountState | null
   supported: boolean
+}
+
+export type ReviewServingAdmissionServingIdentityDiagnostics = {
+  accepted: boolean
+  projectId: string | null
+  snapshotId: ReviewServingSnapshotId | null
 }
 
 export type ReviewServingAdmissionSearchDiagnostics = {
@@ -112,6 +121,7 @@ export type ReviewServingAdmissionDiagnostics = {
   rejectionReason: ReviewServingAdmissionRejectionReason | null
   routeBudget: ReviewServingAdmissionRouteBudgetDiagnostics
   search: ReviewServingAdmissionSearchDiagnostics
+  servingIdentity: ReviewServingAdmissionServingIdentityDiagnostics
   workloadClass: ReviewServingAdmissionWorkloadClassDiagnostics
 }
 
@@ -152,6 +162,10 @@ const hasNamedCount = (contract: ReviewServingReadContract, namedCountKey: Named
 
 const requiresNamedCount = (contract: ReviewServingReadContract) => {
   return contract.servingTable === 'mart.review_article_count_serving_v4' && contract.namedFastCounts.length > 0
+}
+
+const hasNonEmptyString = (value: string | null | undefined) => {
+  return typeof value === 'string' && value.trim().length > 0
 }
 
 const isSupportedNamedCount = (contract: ReviewServingReadContract, namedCountKey: string | undefined): boolean => {
@@ -282,9 +296,21 @@ const getCountDiagnostics = (
   request: ReviewServingAdmissionRequest,
 ): ReviewServingAdmissionCountDiagnostics => {
   return {
+    requestedFilterKey: request.countFilterKey ?? null,
     requestedKey: request.namedCountKey ?? null,
     state: request.countState ?? null,
     supported: contract ? isSupportedNamedCount(contract, request.namedCountKey) : false,
+  }
+}
+
+const getServingIdentityDiagnostics = (
+  contract: ReviewServingReadContract | null,
+  request: ReviewServingAdmissionRequest,
+): ReviewServingAdmissionServingIdentityDiagnostics => {
+  return {
+    accepted: contract ? isServingIdentityAccepted(contract, request) : false,
+    projectId: request.projectId ?? null,
+    snapshotId: request.snapshotId ?? null,
   }
 }
 
@@ -328,9 +354,17 @@ const isCountStateAccepted = (request: ReviewServingAdmissionRequest) => {
   return (
     request.countState?.availability === 'ready'
     && request.countState.key === request.namedCountKey
+    && hasNonEmptyString(request.countFilterKey)
+    && request.countState.filterKey === request.countFilterKey
     && request.snapshotId !== undefined
     && request.countState.snapshotId === request.snapshotId
   )
+}
+
+const isServingIdentityAccepted = (contract: ReviewServingReadContract, request: ReviewServingAdmissionRequest) => {
+  return contract.freshnessBehavior !== 'requireReadySnapshot'
+    ? true
+    : hasNonEmptyString(request.projectId) && hasNonEmptyString(request.snapshotId)
 }
 
 const isSearchStateAccepted = (request: ReviewServingAdmissionRequest) => {
@@ -416,6 +450,10 @@ const getAdmissionRejectionReason = (
     return 'staleSnapshotRequired'
   }
 
+  if (!isServingIdentityAccepted(contract, request)) {
+    return 'servingIdentityMissing'
+  }
+
   return null
 }
 
@@ -433,6 +471,7 @@ const getAdmissionDiagnostics = (
     rejectionReason,
     routeBudget: getRouteBudgetDiagnostics(contract, request),
     search: getSearchDiagnostics(contract, request),
+    servingIdentity: getServingIdentityDiagnostics(contract, request),
     workloadClass: getWorkloadClassDiagnostics(contract, request),
   }
 }
