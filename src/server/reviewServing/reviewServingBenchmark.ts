@@ -6,7 +6,12 @@ import {
   type ReviewServingAdmissionRequest,
   type ReviewServingAdmissionResult,
 } from './reviewServingAdmission.ts'
-import type {ReviewServingReadContractKey, ReviewServingWorkloadClass} from './reviewServingContracts.ts'
+import type {
+  NamedReviewFastCountKey,
+  ReviewServingReadContractKey,
+  ReviewServingSearchMode,
+  ReviewServingWorkloadClass,
+} from './reviewServingContracts.ts'
 
 export const reviewServingBenchmarkFixtureKinds = ['smoke', 'synthetic10m7PromptOverlap'] as const
 
@@ -22,17 +27,31 @@ export type ReviewServingBenchmarkFixture = {
 
 export type ReviewServingBenchmarkWorkloadOperation = {
   contractKey: ReviewServingReadContractKey
+  countFilterKeyPrefix?: string
+  jobFilterSignaturePrefix?: string
+  jobKind?: string
   key: string
+  namedCountKey?: NamedReviewFastCountKey
   pageSize: number
   requestCount: number
+  searchMode?: ReviewServingSearchMode
+  searchTextPrefix?: string
   targetRowsReturnedPerRequest: number
   workloadClass: ReviewServingWorkloadClass
+}
+
+export type ReviewServingBenchmarkPerformanceTargets = {
+  maxP95LatencyMs: number
+  maxP99LatencyMs: number
+  maxPeakRssBytes: number
+  maxRssGrowthBytes: number
 }
 
 export type ReviewServingBenchmarkWorkloadDefinition = {
   fixtureKind: ReviewServingBenchmarkFixtureKind
   key: string
   operations: readonly ReviewServingBenchmarkWorkloadOperation[]
+  performanceTargets: ReviewServingBenchmarkPerformanceTargets
   requiredForPhase0: boolean
   releaseGatePhase: 'Phase 5'
 }
@@ -48,9 +67,12 @@ export type ReviewServingBenchmarkObservation = {
 
 export type ReviewServingBenchmarkWorkItem = {
   admissionRequest: ReviewServingAdmissionRequest
+  jobFilterSignature?: string
+  jobKind?: string
   key: string
   observation: ReviewServingBenchmarkObservation
   operationKey: string
+  searchText?: string
 }
 
 export type ReviewServingBenchmarkSample = ReviewServingBenchmarkObservation & {
@@ -100,7 +122,17 @@ export type ReviewServingBenchmarkRequestCountViolation = {
 export type ReviewServingBenchmarkWorkItemShapeViolation = {
   actual: string | number | null
   expected: string | number | null
-  field: 'contractKey' | 'operationKey' | 'pageSize' | 'workloadClass'
+  field:
+    | 'contractKey'
+    | 'countFilterKeyPrefix'
+    | 'jobFilterSignaturePrefix'
+    | 'jobKind'
+    | 'namedCountKey'
+    | 'operationKey'
+    | 'pageSize'
+    | 'searchMode'
+    | 'searchTextPrefix'
+    | 'workloadClass'
   key: string
 }
 
@@ -113,7 +145,22 @@ export type ReviewServingBenchmarkRowTargetViolation = {
 
 export type ReviewServingBenchmarkTempSpillViolation = {key: string; operationKey: string; tempUsageBytes: number}
 
+export type ReviewServingBenchmarkPerformanceViolation = {
+  actual: number
+  expected: number
+  metric: 'latency.p95Ms' | 'latency.p99Ms' | 'memory.peakRssBytes' | 'memory.rssGrowthBytes'
+}
+
 type ReviewServingBenchmarkRunState = {startedAtMs: number; startRssBytes: number}
+
+const gibibyte = 1024 ** 3
+
+export const reviewServingBenchmarkPhase5PerformanceTargets = {
+  maxP95LatencyMs: 2_000,
+  maxP99LatencyMs: 5_000,
+  maxPeakRssBytes: 20 * gibibyte,
+  maxRssGrowthBytes: 4 * gibibyte,
+} as const satisfies ReviewServingBenchmarkPerformanceTargets
 
 export const reviewServingSynthetic10m7PromptOverlapFixture = {
   articleCount: 10_000_000,
@@ -161,11 +208,57 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     },
     {
       contractKey: 'review.llm.count',
+      countFilterKeyPrefix: 'prompt:',
       key: 'llmPromptOverlapCounts',
+      namedCountKey: 'review.llm.assessedByPrompt',
       pageSize: 1,
       requestCount: 700,
       targetRowsReturnedPerRequest: 1,
       workloadClass: 'foregroundReviewCount',
+    },
+    {
+      contractKey: 'review.bulk.selection',
+      jobFilterSignaturePrefix: 'phase5-overlap:',
+      jobKind: 'review.bulk.selection',
+      key: 'bulkOverlapSelectionJob',
+      pageSize: 1,
+      requestCount: 70,
+      searchMode: 'tokenPrefix',
+      targetRowsReturnedPerRequest: 0,
+      workloadClass: 'bulkReviewJob',
+    },
+    {
+      contractKey: 'review.export.selection',
+      jobFilterSignaturePrefix: 'phase5-overlap:',
+      jobKind: 'review.export.selection',
+      key: 'exportOverlapSelectionJob',
+      pageSize: 1,
+      requestCount: 70,
+      searchMode: 'tokenPrefix',
+      targetRowsReturnedPerRequest: 0,
+      workloadClass: 'bulkReviewJob',
+    },
+    {
+      contractKey: 'review.pdf.selection',
+      jobFilterSignaturePrefix: 'phase5-overlap:',
+      jobKind: 'review.pdf.selection',
+      key: 'pdfOverlapSelectionJob',
+      pageSize: 1,
+      requestCount: 70,
+      searchMode: 'tokenPrefix',
+      targetRowsReturnedPerRequest: 0,
+      workloadClass: 'bulkReviewJob',
+    },
+    {
+      contractKey: 'review.search.substringAsync',
+      jobFilterSignaturePrefix: 'phase5-overlap:',
+      key: 'substringOverlapSearchJob',
+      pageSize: 1,
+      requestCount: 70,
+      searchMode: 'substringAsync',
+      searchTextPrefix: 'overlap ',
+      targetRowsReturnedPerRequest: 0,
+      workloadClass: 'bulkReviewJob',
     },
     {
       contractKey: 'review.queue.unassessed',
@@ -184,6 +277,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       workloadClass: 'foregroundReviewSearch',
     },
   ],
+  performanceTargets: reviewServingBenchmarkPhase5PerformanceTargets,
   releaseGatePhase: 'Phase 5',
   requiredForPhase0: false,
 } as const satisfies ReviewServingBenchmarkWorkloadDefinition
@@ -301,28 +395,48 @@ export const getReviewServingBenchmarkWorkItemShapeViolations = (
     return [{actual: workItem.operationKey, expected: null, field: 'operationKey', key: workItem.key}]
   }
 
-  return [
-    {
-      actual: workItem.admissionRequest.contractKey,
-      expected: operation.contractKey,
-      field: 'contractKey',
-      key: workItem.key,
-    },
-    {
-      actual: workItem.admissionRequest.pageSize ?? null,
-      expected: operation.pageSize,
-      field: 'pageSize',
-      key: workItem.key,
-    },
-    {
-      actual: workItem.admissionRequest.workloadClass,
-      expected: operation.workloadClass,
-      field: 'workloadClass',
-      key: workItem.key,
-    },
-  ].filter((violation) => {
-    return violation.actual !== violation.expected
-  })
+  const exactShapeEntries: ReadonlyArray<
+    [ReviewServingBenchmarkWorkItemShapeViolation['field'], string | number | null, string | number | null]
+  > = [
+    ['contractKey', workItem.admissionRequest.contractKey, operation.contractKey],
+    ['pageSize', workItem.admissionRequest.pageSize ?? null, operation.pageSize],
+    ['workloadClass', workItem.admissionRequest.workloadClass, operation.workloadClass],
+    ['namedCountKey', workItem.admissionRequest.namedCountKey ?? null, operation.namedCountKey ?? null],
+    ['jobKind', workItem.jobKind ?? null, operation.jobKind ?? null],
+    ['searchMode', workItem.admissionRequest.searchMode ?? null, operation.searchMode ?? null],
+  ]
+
+  const prefixShapeEntries: ReadonlyArray<
+    [ReviewServingBenchmarkWorkItemShapeViolation['field'], string | null, string | undefined]
+  > = [
+    ['countFilterKeyPrefix', workItem.admissionRequest.countFilterKey ?? null, operation.countFilterKeyPrefix],
+    ['jobFilterSignaturePrefix', workItem.jobFilterSignature ?? null, operation.jobFilterSignaturePrefix],
+    ['searchTextPrefix', workItem.searchText ?? null, operation.searchTextPrefix],
+  ]
+  const exactViolations: ReviewServingBenchmarkWorkItemShapeViolation[] = exactShapeEntries
+    .filter(([_field, _actual, expected]) => {
+      return expected !== null
+    })
+    .map(([field, actual, expected]) => {
+      return {actual, expected, field, key: workItem.key}
+    })
+    .filter((violation) => {
+      return violation.actual !== violation.expected
+    })
+  const prefixViolations: ReviewServingBenchmarkWorkItemShapeViolation[] = prefixShapeEntries
+    .filter(([_field, _actual, expected]) => {
+      return expected !== undefined
+    })
+    .map(([field, actual, expected]) => {
+      return {actual, expected: `${expected}*`, field, key: workItem.key}
+    })
+    .filter((violation) => {
+      return (
+        typeof violation.actual !== 'string' || !violation.actual.startsWith(String(violation.expected).slice(0, -1))
+      )
+    })
+
+  return [...exactViolations, ...prefixViolations]
 }
 
 const getReviewServingBenchmarkWorkItemShapeViolationMessage = (
@@ -387,6 +501,32 @@ const getReviewServingBenchmarkTempSpillViolationMessage = (
     .join('; ')
 }
 
+export const getReviewServingBenchmarkPerformanceViolations = (
+  metrics: ReviewServingBenchmarkMetrics,
+  targets: ReviewServingBenchmarkPerformanceTargets,
+) => {
+  const rssGrowthBytes = metrics.memory.peakRssBytes - metrics.memory.startRssBytes
+
+  return [
+    {actual: metrics.latency.p95Ms, expected: targets.maxP95LatencyMs, metric: 'latency.p95Ms' as const},
+    {actual: metrics.latency.p99Ms, expected: targets.maxP99LatencyMs, metric: 'latency.p99Ms' as const},
+    {actual: metrics.memory.peakRssBytes, expected: targets.maxPeakRssBytes, metric: 'memory.peakRssBytes' as const},
+    {actual: rssGrowthBytes, expected: targets.maxRssGrowthBytes, metric: 'memory.rssGrowthBytes' as const},
+  ].filter((violation) => {
+    return violation.actual > violation.expected
+  })
+}
+
+const getReviewServingBenchmarkPerformanceViolationMessage = (
+  violations: readonly ReviewServingBenchmarkPerformanceViolation[],
+) => {
+  return violations
+    .map((violation) => {
+      return `${violation.metric}: expected <= ${violation.expected}, got ${violation.actual}`
+    })
+    .join('; ')
+}
+
 const getExpectedReviewServingBenchmarkFixture = (fixtureKind: ReviewServingBenchmarkFixtureKind) => {
   return fixtureKind === 'synthetic10m7PromptOverlap'
     ? reviewServingSynthetic10m7PromptOverlapFixture
@@ -412,11 +552,29 @@ const isReviewServingBenchmarkOperationMatch = (
   return (
     expectedOperation !== undefined
     && operation.contractKey === expectedOperation.contractKey
+    && operation.countFilterKeyPrefix === expectedOperation.countFilterKeyPrefix
+    && operation.jobFilterSignaturePrefix === expectedOperation.jobFilterSignaturePrefix
+    && operation.jobKind === expectedOperation.jobKind
     && operation.key === expectedOperation.key
+    && operation.namedCountKey === expectedOperation.namedCountKey
     && operation.pageSize === expectedOperation.pageSize
     && operation.requestCount === expectedOperation.requestCount
+    && operation.searchMode === expectedOperation.searchMode
+    && operation.searchTextPrefix === expectedOperation.searchTextPrefix
     && operation.targetRowsReturnedPerRequest === expectedOperation.targetRowsReturnedPerRequest
     && operation.workloadClass === expectedOperation.workloadClass
+  )
+}
+
+const isReviewServingBenchmarkPerformanceTargetMatch = (
+  targets: ReviewServingBenchmarkPerformanceTargets,
+  expectedTargets: ReviewServingBenchmarkPerformanceTargets,
+) => {
+  return (
+    targets.maxP95LatencyMs === expectedTargets.maxP95LatencyMs
+    && targets.maxP99LatencyMs === expectedTargets.maxP99LatencyMs
+    && targets.maxPeakRssBytes === expectedTargets.maxPeakRssBytes
+    && targets.maxRssGrowthBytes === expectedTargets.maxRssGrowthBytes
   )
 }
 
@@ -434,6 +592,10 @@ const getReviewServingBenchmarkWorkloadMismatch = (input: ReviewServingBenchmark
   const workloadMatches =
     input.workload.fixtureKind === expectedWorkload.fixtureKind
     && input.workload.key === expectedWorkload.key
+    && isReviewServingBenchmarkPerformanceTargetMatch(
+      input.workload.performanceTargets,
+      expectedWorkload.performanceTargets,
+    )
     && input.workload.releaseGatePhase === expectedWorkload.releaseGatePhase
     && input.workload.requiredForPhase0 === expectedWorkload.requiredForPhase0
     && operationsMatch
@@ -498,6 +660,21 @@ const validateReviewServingBenchmarkTempSpill = (samples: readonly ReviewServing
     : Effect.fail(
         new Error(
           `Review-serving benchmark temp spill mismatch: ${getReviewServingBenchmarkTempSpillViolationMessage(violations)}`,
+        ),
+      )
+}
+
+const validateReviewServingBenchmarkPerformanceTargets = (
+  metrics: ReviewServingBenchmarkMetrics,
+  targets: ReviewServingBenchmarkPerformanceTargets,
+) => {
+  const violations = getReviewServingBenchmarkPerformanceViolations(metrics, targets)
+
+  return violations.length === 0
+    ? Effect.void
+    : Effect.fail(
+        new Error(
+          `Review-serving benchmark performance target mismatch: ${getReviewServingBenchmarkPerformanceViolationMessage(violations)}`,
         ),
       )
 }
@@ -628,6 +805,10 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           requestCount: 1,
           targetRowsReturnedPerRequest: 1,
         },
+        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[4], requestCount: 1},
+        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[5], requestCount: 1},
+        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[6], requestCount: 1},
+        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[7], requestCount: 1},
       ],
     },
     workItems: [
@@ -728,6 +909,108 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
         },
         operationKey: 'llmPromptOverlapCounts',
       },
+      {
+        admissionRequest: {
+          contractKey: 'review.bulk.selection',
+          estimatedResultBytes: 1_000,
+          estimatedResultRows: 0,
+          pageSize: 1,
+          projectId: 'smoke-project',
+          searchMode: 'tokenPrefix',
+          searchState: {availability: 'ready', snapshotId: 'smoke-snapshot'},
+          snapshotFreshness: 'ready',
+          snapshotId: 'smoke-snapshot',
+          workloadClass: 'bulkReviewJob',
+        },
+        jobFilterSignature: 'phase5-overlap:bulk:smoke',
+        jobKind: 'review.bulk.selection',
+        key: 'smoke-bulk-selection-job',
+        observation: {
+          latencyMs: 5,
+          memoryRssBytes: 128_250_000,
+          queueDepth: 0,
+          rowsReturned: 0,
+          rowsScanned: 1,
+          tempUsageBytes: 0,
+        },
+        operationKey: 'bulkOverlapSelectionJob',
+      },
+      {
+        admissionRequest: {
+          contractKey: 'review.export.selection',
+          estimatedResultBytes: 1_000,
+          estimatedResultRows: 0,
+          pageSize: 1,
+          projectId: 'smoke-project',
+          searchMode: 'tokenPrefix',
+          searchState: {availability: 'ready', snapshotId: 'smoke-snapshot'},
+          snapshotFreshness: 'ready',
+          snapshotId: 'smoke-snapshot',
+          workloadClass: 'bulkReviewJob',
+        },
+        jobFilterSignature: 'phase5-overlap:export:smoke',
+        jobKind: 'review.export.selection',
+        key: 'smoke-export-selection-job',
+        observation: {
+          latencyMs: 7,
+          memoryRssBytes: 128_300_000,
+          queueDepth: 0,
+          rowsReturned: 0,
+          rowsScanned: 1,
+          tempUsageBytes: 0,
+        },
+        operationKey: 'exportOverlapSelectionJob',
+      },
+      {
+        admissionRequest: {
+          contractKey: 'review.pdf.selection',
+          estimatedResultBytes: 1_000,
+          estimatedResultRows: 0,
+          pageSize: 1,
+          projectId: 'smoke-project',
+          searchMode: 'tokenPrefix',
+          searchState: {availability: 'ready', snapshotId: 'smoke-snapshot'},
+          snapshotFreshness: 'ready',
+          snapshotId: 'smoke-snapshot',
+          workloadClass: 'bulkReviewJob',
+        },
+        jobFilterSignature: 'phase5-overlap:pdf:smoke',
+        jobKind: 'review.pdf.selection',
+        key: 'smoke-pdf-selection-job',
+        observation: {
+          latencyMs: 9,
+          memoryRssBytes: 128_350_000,
+          queueDepth: 0,
+          rowsReturned: 0,
+          rowsScanned: 1,
+          tempUsageBytes: 0,
+        },
+        operationKey: 'pdfOverlapSelectionJob',
+      },
+      {
+        admissionRequest: {
+          contractKey: 'review.search.substringAsync',
+          estimatedResultBytes: 1_000,
+          estimatedResultRows: 0,
+          pageSize: 1,
+          projectId: 'smoke-project',
+          searchMode: 'substringAsync',
+          snapshotFreshness: 'unavailable',
+          workloadClass: 'bulkReviewJob',
+        },
+        jobFilterSignature: 'phase5-overlap:substring:smoke',
+        key: 'smoke-substring-search-job',
+        observation: {
+          latencyMs: 11,
+          memoryRssBytes: 128_400_000,
+          queueDepth: 0,
+          rowsReturned: 0,
+          rowsScanned: 1,
+          tempUsageBytes: 0,
+        },
+        operationKey: 'substringOverlapSearchJob',
+        searchText: 'overlap smoke',
+      },
     ],
   }
 }
@@ -745,13 +1028,10 @@ export const runReviewServingBenchmarkEffect = (input: ReviewServingBenchmarkRun
       yield* validateReviewServingBenchmarkRowTargets(input, samples)
       yield* validateReviewServingBenchmarkTempSpill(samples)
       const endRssBytes = sampleReviewServingBenchmarkMemoryRssBytes()
+      const metrics = getReviewServingBenchmarkMetrics({endRssBytes, samples, startRssBytes: runState.startRssBytes})
+      yield* validateReviewServingBenchmarkPerformanceTargets(metrics, input.workload.performanceTargets)
 
-      return {
-        fixture: input.fixture,
-        metrics: getReviewServingBenchmarkMetrics({endRssBytes, samples, startRssBytes: runState.startRssBytes}),
-        samples,
-        workload: input.workload,
-      }
+      return {fixture: input.fixture, metrics, samples, workload: input.workload}
     }),
   )
 }

@@ -111,7 +111,7 @@ test('buildReviewServingRowsSql uses search identities for search serving tables
   expect(sql).not.toContain('review_config_hash')
 })
 
-test('buildReviewServingRowsSql uses null-safe config identity for snapshot manifests', () => {
+test('buildReviewServingRowsSql lets snapshot manifests discover latest project status', () => {
   const contract = getRequiredReviewServingReadContract('review.health.snapshot')
   const sql = buildReviewServingRowsSql({
     contract,
@@ -126,10 +126,10 @@ test('buildReviewServingRowsSql uses null-safe config identity for snapshot mani
     snapshotIdParameter: '$snapshotId',
   })
 
-  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
-  expect(sql).toContain(
-    'WHERE project_id = $projectId AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash AND snapshot_id = $snapshotId',
-  )
+  expect(assertReviewServingSqlShape(sql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
+  expect(sql).toContain('WHERE project_id = $projectId ORDER BY updated_at DESC, snapshot_id DESC')
+  expect(sql).not.toContain('review_config_hash')
+  expect(sql).not.toContain('$snapshotId')
 })
 
 test('buildReviewServingRowsSql only emits list-mode predicates for list-mode tables', () => {
@@ -312,6 +312,7 @@ test('buildReviewServingRowsSql rejects count table reads without a filter key',
 
 test('buildReviewServingRowsSql rejects physical access contracts without requested filters', () => {
   const detailContract = getRequiredReviewServingReadContract('review.detail.row')
+  const jobContract = getRequiredReviewServingReadContract('review.bulk.selection')
   const queueContract = getRequiredReviewServingReadContract('review.queue.unassessed')
   const searchContract = getRequiredReviewServingReadContract('review.search.tokenPrefix')
   const postingContract = getRequiredReviewServingReadContract('review.filters.postings')
@@ -339,6 +340,48 @@ test('buildReviewServingRowsSql rejects physical access contracts without reques
   expect(() => {
     buildReviewServingRowsSql({...baseParams, contract: queueContract})
   }).toThrow('Missing queue kind for review.queue.unassessed')
+  expect(() => {
+    buildReviewServingRowsSql({...baseParams, contract: jobContract})
+  }).toThrow('Missing job filter signature for review.bulk.selection')
+})
+
+test('buildReviewServingRowsSql constrains durable job lookups by criteria', () => {
+  const bulkContract = getRequiredReviewServingReadContract('review.bulk.selection')
+  const searchContract = getRequiredReviewServingReadContract('review.search.substringAsync')
+  const baseParams = {
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  }
+  const bulkSql = buildReviewServingRowsSql({
+    ...baseParams,
+    contract: bulkContract,
+    jobFilterSignatureParameter: '$filterSignature',
+    jobKindParameter: '$jobKind',
+  })
+  const searchSql = buildReviewServingRowsSql({
+    ...baseParams,
+    contract: searchContract,
+    jobFilterSignatureParameter: '$filterSignature',
+    searchTextParameter: '$searchText',
+  })
+
+  expect(assertReviewServingSqlShape(bulkSql)).toEqual({ok: true, violations: []})
+  expect(bulkSql).toContain('AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash')
+  expect(bulkSql).toContain('AND snapshot_id = $snapshotId')
+  expect(bulkSql).toContain('AND job_kind = $jobKind AND filter_signature = $filterSignature')
+  expect(assertReviewServingSqlShape(searchSql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
+  expect(searchSql).toContain('WHERE project_id = $projectId')
+  expect(searchSql).toContain("AND search_mode = 'substringAsync' AND search_text = $searchText")
+  expect(searchSql).toContain('AND filter_signature = $filterSignature')
+  expect(searchSql).not.toContain('review_config_hash')
+  expect(searchSql).not.toContain('$snapshotId')
 })
 
 test('assertReviewServingSqlShape reads table references from SQL', () => {

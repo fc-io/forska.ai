@@ -209,6 +209,10 @@ export const assertReviewServingSqlShape = (
   return violations.length === 0 ? {ok: true, violations: []} : {ok: false, violations}
 }
 
+const reviewServingSnapshotManifestTable = 'app.review_serving_snapshot_manifest'
+const reviewServingBulkOperationJobTable = 'app.review_bulk_operation_job'
+const reviewServingSearchJobTable = 'app.review_search_job'
+
 const getReviewServingRowsSqlIdentityPredicates = (params: {
   contract: ReviewServingReadContract
   displayIdentityParameter: string
@@ -222,7 +226,15 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
     return ` AND display_identity = ${params.displayIdentityParameter} AND payload_identity = ${params.payloadIdentityParameter} AND snapshot_id = ${params.snapshotIdParameter}`
   }
 
-  if (params.contract.servingTable === 'app.review_serving_snapshot_manifest') {
+  if (params.contract.servingTable === reviewServingSnapshotManifestTable) {
+    return ''
+  }
+
+  if (params.contract.servingTable === reviewServingSearchJobTable) {
+    return ''
+  }
+
+  if (params.contract.servingTable === reviewServingBulkOperationJobTable) {
     return ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter}`
   }
 
@@ -379,19 +391,62 @@ const getReviewServingRowsSqlQueuePredicate = (params: {
   return ` AND queue_kind = ${queueKindParameter}`
 }
 
+const getReviewServingRowsSqlJobPredicate = (params: {
+  contract: ReviewServingReadContract
+  jobFilterSignatureParameter?: string | null
+  jobKindParameter?: string | null
+  searchTextParameter?: string | null
+}) => {
+  if (params.contract.physicalAccessStrategy !== 'jobCriteria') {
+    return ''
+  }
+
+  const jobFilterSignatureParameter = getRequiredReviewServingRowsSqlParameter(
+    params.jobFilterSignatureParameter,
+    'job filter signature',
+    params.contract,
+  )
+
+  if (params.contract.servingTable === reviewServingBulkOperationJobTable) {
+    const jobKindParameter = getRequiredReviewServingRowsSqlParameter(
+      params.jobKindParameter,
+      'job kind',
+      params.contract,
+    )
+
+    return ` AND job_kind = ${jobKindParameter} AND filter_signature = ${jobFilterSignatureParameter}`
+  }
+
+  if (params.contract.servingTable === reviewServingSearchJobTable) {
+    const searchTextParameter = getRequiredReviewServingRowsSqlParameter(
+      params.searchTextParameter,
+      'search text',
+      params.contract,
+    )
+
+    return ` AND search_mode = ${getSqlStringLiteral(params.contract.searchMode)} AND search_text = ${searchTextParameter} AND filter_signature = ${jobFilterSignatureParameter}`
+  }
+
+  throw new Error(`Unsupported job criteria table for ${params.contract.key}`)
+}
+
 const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
   articleIdParameter?: string | null
   contract: ReviewServingReadContract
   filterKindParameter?: string | null
   filterValueParameter?: string | null
+  jobFilterSignatureParameter?: string | null
+  jobKindParameter?: string | null
   queueKindParameter?: string | null
   searchTokenPrefixParameter?: string | null
+  searchTextParameter?: string | null
 }) => {
   return [
     getReviewServingRowsSqlArticlePredicate(params),
     getReviewServingRowsSqlPostingPredicate(params),
     getReviewServingRowsSqlSearchPredicate(params),
     getReviewServingRowsSqlQueuePredicate(params),
+    getReviewServingRowsSqlJobPredicate(params),
   ].join('')
 }
 
@@ -403,6 +458,8 @@ export const buildReviewServingRowsSql = (params: {
   displayIdentityParameter: string
   filterKindParameter?: string | null
   filterValueParameter?: string | null
+  jobFilterSignatureParameter?: string | null
+  jobKindParameter?: string | null
   limitParameter: string
   listModeParameter: string
   namedCountKey?: NamedReviewFastCountKey | null
@@ -412,6 +469,7 @@ export const buildReviewServingRowsSql = (params: {
   queueKindParameter?: string | null
   reviewConfigHashParameter: string
   searchIdentityParameter: string
+  searchTextParameter?: string | null
   searchTokenPrefixParameter?: string | null
   snapshotIdParameter: string
 }) => {
