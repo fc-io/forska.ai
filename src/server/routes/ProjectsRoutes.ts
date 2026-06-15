@@ -9,6 +9,7 @@ import {getProviderModelMetadataOptions} from '../providers/providerModelMetadat
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {appendLlmJudgmentReviewServingDeltas} from '../reviewServing/llmJudgmentReviewServingDeltaService.ts'
+import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {
   appendProjectReviewConfigReviewServingDelta,
   appendPromptConfigReviewServingDelta,
@@ -2479,14 +2480,32 @@ export const projectsRoutes = new Elysia()
       }
 
       if (sourceArticles.length > 0) {
+        const projectArticleRows = sourceArticles.map((article) => {
+          return {articleId: article.articleId, projectArticleId: crypto.randomUUID()}
+        })
+
         await tx.run(`
           INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
-          VALUES ${sourceArticles
-            .map((article) => {
-              return `(${getQuotedStringList([crypto.randomUUID(), clonedProject.id, article.articleId, params.id]).join(', ')})`
+          VALUES ${projectArticleRows
+            .map((row) => {
+              return `(${getQuotedStringList([row.projectArticleId, clonedProject.id, row.articleId, params.id]).join(', ')})`
             })
             .join(', ')}
         `)
+
+        await appendProjectScopeArticleReviewServingDeltas(
+          tx,
+          projectArticleRows.map((row) => {
+            return {
+              articleId: row.articleId,
+              changeKind: 'projectScope.article.added' as const,
+              projectArticleId: row.projectArticleId,
+              projectId: clonedProject.id,
+              sourceMutationKey: `projectCloneArticle|${params.id}|${clonedProject.id}|${row.projectArticleId}`,
+              sourceOperation: 'insert' as const,
+            }
+          }),
+        )
       }
 
       if (sourceProject.humanJudgmentMode === 'summary' && sourceSummaryJudgments.length > 0) {

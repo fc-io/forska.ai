@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
+import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getOrCreateImmutablePromptTx} from '../services/immutablePromptService.ts'
@@ -511,15 +512,33 @@ export const subprojectsRoutes = new Elysia()
             continue
           }
 
+          const projectArticleRows = idsChunk.map((articleId) => {
+            return {articleId, projectArticleId: crypto.randomUUID()}
+          })
+
           await tx.run(`
             INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
-            VALUES ${idsChunk
-              .map((articleId) => {
-                return `('${appQueryHelpers.escapeSqlString(crypto.randomUUID())}', '${appQueryHelpers.escapeSqlString(createdProject.id)}', '${appQueryHelpers.escapeSqlString(articleId)}', NULL)`
+            VALUES ${projectArticleRows
+              .map((row) => {
+                return `('${appQueryHelpers.escapeSqlString(row.projectArticleId)}', '${appQueryHelpers.escapeSqlString(createdProject.id)}', '${appQueryHelpers.escapeSqlString(row.articleId)}', NULL)`
               })
               .join(', ')}
             ON CONFLICT DO NOTHING
           `)
+
+          await appendProjectScopeArticleReviewServingDeltas(
+            tx,
+            projectArticleRows.map((row) => {
+              return {
+                articleId: row.articleId,
+                changeKind: 'projectScope.article.added' as const,
+                projectArticleId: row.projectArticleId,
+                projectId: createdProject.id,
+                sourceMutationKey: `SubprojectsRoutes.post|${createdProject.id}|${row.projectArticleId}`,
+                sourceOperation: 'insert' as const,
+              }
+            }),
+          )
         }
 
         await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({

@@ -1,6 +1,7 @@
 import type {ProjectTransferHistoryRecord} from '../../../db/schemaTypes.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {appendLlmJudgmentReviewServingDeltas} from '../../reviewServing/llmJudgmentReviewServingDeltaService.ts'
+import {appendProjectScopeArticleReviewServingDeltas} from '../../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {
@@ -3223,16 +3224,30 @@ const insertProjectArticlesSetBased = async ({
     return undefined
   }
 
-  const insertedRows = await tx.queryJson<{id: string}>(`
+  const insertedRows = await tx.queryJson<{articleId: string; id: string; projectId: string}>(`
     INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
     SELECT id, project_id, article_id, imported_from_project_id
     FROM (${getSetBasedProjectArticleRowsSql({context, projectId})}) rows
-    RETURNING id
+    RETURNING id, project_id AS projectId, article_id AS articleId
   `)
 
-  return insertedRows.length === expectedCount
-    ? undefined
-    : failCommitWriter(`project_article insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+  if (insertedRows.length !== expectedCount) {
+    return failCommitWriter(`project_article insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+  }
+
+  return appendProjectScopeArticleReviewServingDeltas(
+    tx,
+    insertedRows.map((row) => {
+      return {
+        articleId: row.articleId,
+        changeKind: 'projectScope.article.added' as const,
+        projectArticleId: row.id,
+        projectId: row.projectId,
+        sourceMutationKey: `projectTransferCommit.projectArticle|${projectId}|${row.id}`,
+        sourceOperation: 'insert' as const,
+      }
+    }),
+  )
 }
 
 const insertProjectArticles = async ({
@@ -3271,19 +3286,24 @@ const insertProjectArticles = async ({
 
   return rows.length === 0
     ? undefined
-    : runChunks(rows, (rowChunk) => {
-        return tx.run(`
+    : runChunks(rows, async (rowChunk) => {
+        const projectArticleRows = rowChunk.map((row) => {
+          return {
+            ...row,
+            projectArticleId: getMappedTargetId({
+              label: 'project article',
+              mapped: commitIdMaps.projectArticleIdBySourceArticleId,
+              sourceId: row.sourceArticleId,
+            }),
+          }
+        })
+
+        await tx.run(`
         INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
-        VALUES ${rowChunk
+        VALUES ${projectArticleRows
           .map((row) => {
             return `(
-              ${getSqlLiteral(
-                getMappedTargetId({
-                  label: 'project article',
-                  mapped: commitIdMaps.projectArticleIdBySourceArticleId,
-                  sourceId: row.sourceArticleId,
-                }),
-              )},
+              ${getSqlLiteral(row.projectArticleId)},
               ${getSqlLiteral(row.projectId)},
               ${getSqlLiteral(row.articleId)},
               NULL
@@ -3291,6 +3311,20 @@ const insertProjectArticles = async ({
           })
           .join(', ')}
       `)
+
+        await appendProjectScopeArticleReviewServingDeltas(
+          tx,
+          projectArticleRows.map((row) => {
+            return {
+              articleId: row.articleId,
+              changeKind: 'projectScope.article.added' as const,
+              projectArticleId: row.projectArticleId,
+              projectId: row.projectId,
+              sourceMutationKey: `projectTransferCommit.projectArticle|${projectId}|${row.projectArticleId}`,
+              sourceOperation: 'insert' as const,
+            }
+          }),
+        )
       })
 }
 
