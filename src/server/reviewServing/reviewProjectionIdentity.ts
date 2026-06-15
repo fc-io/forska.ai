@@ -49,7 +49,7 @@ export type ReviewConfigHashInput = {
   humanJudgmentMode: 'prompt' | 'summary'
   modelExecutionIdentity: ReviewServingIdentityValue
   modelId: string | null
-  promptConfigs: readonly {promptConfigHash: string; promptId: string}[]
+  promptConfigs: readonly {promptConfigHash: string; promptId: string; promptOrder: number}[]
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -228,7 +228,11 @@ export const buildPromptConfigHash = (input: PromptConfigHashInput) => {
 export const buildReviewConfigHash = (input: ReviewConfigHashInput) => {
   const promptConfigs = input.promptConfigs
     .map((promptConfig) => {
-      return {promptConfigHash: promptConfig.promptConfigHash, promptId: promptConfig.promptId}
+      return {
+        promptConfigHash: promptConfig.promptConfigHash,
+        promptId: promptConfig.promptId,
+        promptOrder: promptConfig.promptOrder,
+      }
     })
     .sort((left, right) => {
       return left.promptId.localeCompare(right.promptId)
