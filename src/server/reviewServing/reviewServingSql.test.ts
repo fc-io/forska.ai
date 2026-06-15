@@ -225,7 +225,7 @@ test('buildReviewServingRowsSql only emits list-mode predicates for list-mode ta
   )
   expect(sql).not.toContain('list_mode_key')
   expect(sql).toContain('AND queue_kind = $queueKind')
-  expect(sql).toContain('ORDER BY priority_bucket ASC, activity_sort_at ASC, article_id ASC')
+  expect(sql).toContain('ORDER BY priority_bucket DESC, activity_sort_at DESC, article_id DESC')
   expect(sql).not.toContain('sort_key')
 })
 
@@ -299,7 +299,34 @@ test('buildReviewServingRowsSql applies posting filter keys before row ordering'
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('AND list_mode_key = $listMode')
   expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
-  expect(sql).toContain('ORDER BY sort_key DESC, article_id DESC')
+  expect(sql).toContain('ORDER BY sort_key DESC, article_id ASC')
+})
+
+test('buildReviewServingRowsSql can require all active posting filters', () => {
+  const contract = getRequiredReviewServingReadContract('review.filters.postings')
+  const filterPredicatesSql = '(VALUES ($filterKind, $filterValue), ($secondFilterKind, $secondFilterValue))'
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    filterKindParameter: '$filterKind',
+    filterPredicatesSql,
+    filterValueParameter: '$filterValue',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
+  expect(sql).toContain(`JOIN ${filterPredicatesSql} requested_filter(filter_kind, filter_value)`)
+  expect(sql).toContain('requested_filter.filter_kind = posting.filter_kind')
+  expect(sql).toContain('posting.list_mode_key = $listMode')
+  expect(sql).toContain(`HAVING count(*) = (SELECT count(*) FROM ${filterPredicatesSql})`)
 })
 
 test('buildReviewServingRowsSql uses contract list-mode literals for fixed row contracts', () => {
@@ -360,7 +387,7 @@ test('buildReviewServingRowsSql uses count-table sort columns for count serving 
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
-  expect(sql).toContain("AND list_mode_key = 'global'")
+  expect(sql).toContain("AND list_mode_key = 'llm'")
   expect(sql).toContain('ORDER BY list_mode_key ASC, count_kind ASC, summary_definition_version ASC, filter_key ASC')
   expect(sql).not.toContain('summary_key')
   expect(sql).not.toContain('prompt_id')
@@ -496,10 +523,12 @@ test('buildReviewServingRowsSql constrains durable job lookups by criteria', () 
   expect(bulkSql).toContain("AND job_kind = 'review.bulk.selection' AND filter_signature = $filterSignature")
   expect(assertReviewServingSqlShape(searchSql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
   expect(searchSql).toContain('WHERE project_id = $projectId')
+  expect(searchSql).toContain('AND search_identity = $searchIdentity')
+  expect(searchSql).toContain('AND project_scope_identity = $projectScopeIdentity')
+  expect(searchSql).toContain('AND review_config_hash = $reviewConfigHash')
+  expect(searchSql).toContain('AND snapshot_id = $snapshotId')
   expect(searchSql).toContain("AND search_mode = 'substringAsync' AND search_text = $searchText")
   expect(searchSql).toContain('AND filter_signature = $filterSignature')
-  expect(searchSql).not.toContain('review_config_hash')
-  expect(searchSql).not.toContain('$snapshotId')
 })
 
 test('assertReviewServingSqlShape reads table references from SQL', () => {

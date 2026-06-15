@@ -14,7 +14,7 @@ import type {
 } from './reviewServingContracts.ts'
 
 export const reviewServingBenchmarkFixtureKinds = ['smoke', 'synthetic10m7PromptOverlap'] as const
-export const reviewServingBenchmarkRequestSliceFields = ['cursor', 'filter', 'searchTokenPrefix'] as const
+export const reviewServingBenchmarkRequestSliceFields = ['cursor', 'filter', 'listMode', 'searchTokenPrefix'] as const
 
 export type ReviewServingBenchmarkFixtureKind = (typeof reviewServingBenchmarkFixtureKinds)[number]
 export type ReviewServingBenchmarkRequestSliceField = (typeof reviewServingBenchmarkRequestSliceFields)[number]
@@ -79,6 +79,7 @@ export type ReviewServingBenchmarkWorkItem = {
   jobFilterSignature?: string
   jobKind?: string
   key: string
+  listMode?: string
   observation: ReviewServingBenchmarkObservation
   operationKey: string
   requestSlice?: ReviewServingBenchmarkRequestSlice
@@ -266,7 +267,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       minimumDistinctRequestSlices: 7_000,
       pageSize: 100,
       requestCount: 7_000,
-      requestSliceFields: ['cursor', 'filter', 'searchTokenPrefix'],
+      requestSliceFields: ['cursor', 'filter', 'listMode', 'searchTokenPrefix'],
       searchMode: 'tokenPrefix',
       targetRowsReturnedPerRequest: 100,
       workloadClass: 'foregroundReviewRows',
@@ -274,6 +275,17 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
     {
       contractKey: 'review.filters.facets',
       key: 'overlapFacetRefresh',
+      maxRowsScannedPerRequest: 512,
+      minimumDistinctRequestSlices: 700,
+      pageSize: 128,
+      requestCount: 700,
+      requestSliceFields: ['filter'],
+      targetRowsReturnedPerRequest: 128,
+      workloadClass: 'foregroundReviewFacet',
+    },
+    {
+      contractKey: 'review.human.filters.facets',
+      key: 'humanOverlapFacetRefresh',
       maxRowsScannedPerRequest: 512,
       minimumDistinctRequestSlices: 700,
       pageSize: 128,
@@ -512,6 +524,10 @@ const getReviewServingBenchmarkActualRequestSliceValue = (
 
   if (field === 'searchTokenPrefix') {
     return workItem.searchTokenPrefix ?? null
+  }
+
+  if (field === 'listMode') {
+    return workItem.listMode ?? null
   }
 
   return workItem.admissionRequest.countFilterKey ?? workItem.filterSignature ?? null
@@ -1173,30 +1189,37 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
         {
           ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[6],
           minimumDistinctRequestSlices: 1,
+          pageSize: 16,
+          requestCount: 1,
+          targetRowsReturnedPerRequest: 16,
+        },
+        {
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[7],
+          minimumDistinctRequestSlices: 1,
           pageSize: 8,
           requestCount: 1,
           targetRowsReturnedPerRequest: 8,
         },
         {
-          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[7],
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[8],
           minimumDistinctRequestSlices: 1,
           pageSize: 1,
           requestCount: 1,
           targetRowsReturnedPerRequest: 1,
         },
-        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[8], requestCount: 1},
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[9], requestCount: 1},
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[10], requestCount: 1},
         {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[11], requestCount: 1},
+        {...reviewServingBenchmarkOverlapWorkloadDefinition.operations[12], requestCount: 1},
         {
-          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[12],
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[13],
           minimumDistinctRequestSlices: 1,
           pageSize: 5,
           requestCount: 1,
           targetRowsReturnedPerRequest: 5,
         },
         {
-          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[13],
+          ...reviewServingBenchmarkOverlapWorkloadDefinition.operations[14],
           minimumDistinctRequestSlices: 1,
           pageSize: 6,
           requestCount: 1,
@@ -1317,6 +1340,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
         cursor: 'start',
         filterSignature: 'prompt:1',
         key: 'smoke-filtered-page',
+        listMode: 'llm',
         observation: {
           latencyMs: 16,
           memoryRssBytes: 129_300_000,
@@ -1326,7 +1350,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'filteredOverlapRows',
-        requestSlice: {cursor: 'start', filter: 'prompt:1', searchTokenPrefix: 'overlap'},
+        requestSlice: {cursor: 'start', filter: 'prompt:1', listMode: 'llm', searchTokenPrefix: 'overlap'},
         searchTokenPrefix: 'overlap',
       },
       {
@@ -1351,6 +1375,30 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'overlapFacetRefresh',
+        requestSlice: {filter: 'all'},
+      },
+      {
+        admissionRequest: {
+          contractKey: 'review.human.filters.facets',
+          estimatedResultBytes: 4_000,
+          estimatedResultRows: 16,
+          pageSize: 16,
+          projectId: 'smoke-project',
+          snapshotFreshness: 'ready',
+          snapshotId: 'smoke-snapshot',
+          workloadClass: 'foregroundReviewFacet',
+        },
+        filterSignature: 'all',
+        key: 'smoke-human-facet',
+        observation: {
+          latencyMs: 20,
+          memoryRssBytes: 130_050_000,
+          queueDepth: 3,
+          rowsReturned: 16,
+          rowsScanned: 48,
+          tempUsageBytes: 0,
+        },
+        operationKey: 'humanOverlapFacetRefresh',
         requestSlice: {filter: 'all'},
       },
       {
