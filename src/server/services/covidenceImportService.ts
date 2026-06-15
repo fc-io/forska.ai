@@ -5,6 +5,7 @@ import path from 'node:path'
 import {normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
+import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {
   appendProjectReviewConfigReviewServingDelta,
   appendPromptConfigReviewServingDelta,
@@ -2101,15 +2102,51 @@ const deleteRemovedCovidenceSeededProjectArticles = async (params: {
   queryRunner: CovidenceProjectTx
 }) => {
   if (params.articleIds.length === 0) {
+    const removedRows = await params.queryRunner.queryJson<{articleId: string; projectArticleId: string}>(`
+      SELECT
+        id AS projectArticleId,
+        article_id AS articleId
+      FROM app.project_article
+      WHERE project_id = ${getSqlLiteral(params.projectId)}
+        AND imported_from_project_id = ${getSqlLiteral(params.projectId)}
+    `)
+
     await params.queryRunner.run(`
       DELETE FROM app.project_article
       WHERE project_id = ${getSqlLiteral(params.projectId)}
         AND imported_from_project_id = ${getSqlLiteral(params.projectId)}
     `)
+
+    await appendProjectScopeArticleReviewServingDeltas(
+      params.queryRunner,
+      removedRows.map((row) => {
+        return {
+          articleId: row.articleId,
+          changeKind: 'projectScope.article.removed' as const,
+          projectArticleId: row.projectArticleId,
+          projectId: params.projectId,
+          sourceMutationKey: `covidenceSeedProjectArticle.delete|${params.projectId}|${row.projectArticleId}`,
+          sourceOperation: 'delete' as const,
+        }
+      }),
+    )
+
     return
   }
 
   await createCovidenceProjectArticleInputTable({articleIds: params.articleIds, queryRunner: params.queryRunner})
+  const removedRows = await params.queryRunner.queryJson<{articleId: string; projectArticleId: string}>(`
+    SELECT
+      id AS projectArticleId,
+      article_id AS articleId
+    FROM app.project_article
+    WHERE project_id = ${getSqlLiteral(params.projectId)}
+      AND imported_from_project_id = ${getSqlLiteral(params.projectId)}
+      AND article_id NOT IN (
+        SELECT article_id
+        FROM ${covidenceProjectArticleInputTableName} article_input
+      )
+  `)
   await params.queryRunner.run(`
     DELETE FROM app.project_article
     WHERE project_id = ${getSqlLiteral(params.projectId)}
@@ -2119,6 +2156,19 @@ const deleteRemovedCovidenceSeededProjectArticles = async (params: {
         FROM ${covidenceProjectArticleInputTableName} article_input
       )
   `)
+  await appendProjectScopeArticleReviewServingDeltas(
+    params.queryRunner,
+    removedRows.map((row) => {
+      return {
+        articleId: row.articleId,
+        changeKind: 'projectScope.article.removed' as const,
+        projectArticleId: row.projectArticleId,
+        projectId: params.projectId,
+        sourceMutationKey: `covidenceSeedProjectArticle.delete|${params.projectId}|${row.projectArticleId}`,
+        sourceOperation: 'delete' as const,
+      }
+    }),
+  )
   await dropCovidenceProjectArticleInputTable(params.queryRunner)
 }
 
@@ -2129,15 +2179,37 @@ const insertCovidenceSeededProjectArticles = async (params: {
 }) => {
   await getCovidenceValueChunks(params.articleIds).reduce<Promise<void>>((previousRun, articleIdChunk) => {
     return previousRun.then(() => {
-      return params.queryRunner.run(`
-        INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
-        VALUES ${articleIdChunk
-          .map((articleId) => {
-            return `(${getQuotedStringList([globalThis.crypto.randomUUID(), params.projectId, articleId, params.projectId]).join(', ')})`
-          })
-          .join(', ')}
-        ON CONFLICT(project_id, article_id) DO NOTHING
-      `)
+      const projectArticleRows = articleIdChunk.map((articleId) => {
+        return {articleId, projectArticleId: globalThis.crypto.randomUUID()}
+      })
+
+      return params.queryRunner
+        .run(
+          `
+            INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
+            VALUES ${projectArticleRows
+              .map((row) => {
+                return `(${getQuotedStringList([row.projectArticleId, params.projectId, row.articleId, params.projectId]).join(', ')})`
+              })
+              .join(', ')}
+            ON CONFLICT(project_id, article_id) DO NOTHING
+          `,
+        )
+        .then(() => {
+          return appendProjectScopeArticleReviewServingDeltas(
+            params.queryRunner,
+            projectArticleRows.map((row) => {
+              return {
+                articleId: row.articleId,
+                changeKind: 'projectScope.article.added' as const,
+                projectArticleId: row.projectArticleId,
+                projectId: params.projectId,
+                sourceMutationKey: `covidenceSeedProjectArticle.insert|${params.projectId}|${row.projectArticleId}`,
+                sourceOperation: 'insert' as const,
+              }
+            }),
+          )
+        })
     })
   }, Promise.resolve())
 }
@@ -2157,8 +2229,12 @@ const syncCovidenceSeededProjectArticles = async (params: {
   const currentArticleIds = currentArticleRows.map((articleRow) => {
     return articleRow.articleId
   })
+  const currentArticleIdSet = new Set(currentArticleIds)
   const nextArticleIds = Array.from(new Set(params.articleIds))
   const nextArticleIdSet = new Set(nextArticleIds)
+  const addedArticleIds = nextArticleIds.filter((articleId) => {
+    return !currentArticleIdSet.has(articleId)
+  })
   const scopeChanged =
     currentArticleIds.length !== nextArticleIds.length
     || currentArticleIds.some((articleId) => {
@@ -2180,7 +2256,7 @@ const syncCovidenceSeededProjectArticles = async (params: {
         })
       : undefined
     : await insertCovidenceSeededProjectArticles({
-        articleIds: nextArticleIds,
+        articleIds: addedArticleIds,
         projectId: params.projectId,
         queryRunner,
       }).then(() => {
@@ -2765,6 +2841,14 @@ export const clearCovidenceSeededHumanJudgments = async (params: {importRoute: s
   }
 
   const queryRunner = getCovidenceProjectQueryRunner(params.tx)
+  const removedProjectArticleRows = await queryRunner.queryJson<{articleId: string; projectArticleId: string}>(`
+    SELECT
+      id AS projectArticleId,
+      article_id AS articleId
+    FROM app.project_article
+    WHERE project_id = ${getSqlLiteral(project.id)}
+      AND imported_from_project_id = ${getSqlLiteral(project.id)}
+  `)
 
   await queryRunner.run(`
     DELETE FROM app.judgment_human
@@ -2781,6 +2865,20 @@ export const clearCovidenceSeededHumanJudgments = async (params: {importRoute: s
     WHERE project_id = ${getSqlLiteral(project.id)}
       AND imported_from_project_id = ${getSqlLiteral(project.id)}
   `)
+
+  await appendProjectScopeArticleReviewServingDeltas(
+    queryRunner,
+    removedProjectArticleRows.map((row) => {
+      return {
+        articleId: row.articleId,
+        changeKind: 'projectScope.article.removed' as const,
+        projectArticleId: row.projectArticleId,
+        projectId: project.id,
+        sourceMutationKey: `covidenceSeedProjectArticle.clear|${project.id}|${row.projectArticleId}`,
+        sourceOperation: 'delete' as const,
+      }
+    }),
+  )
 }
 
 export const getCovidencePackageConfig = (cursor: string | null) => {

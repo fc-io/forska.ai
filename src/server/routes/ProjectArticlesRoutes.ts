@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {appendProjectScopeArticleReviewServingDelta} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString} from '../services/appQueryHelpers.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
@@ -71,8 +72,10 @@ export const projectArticlesRoutes = new Elysia()
     const {id: projectId, articleId} = params
 
     await getAppDatabaseService().transaction(async (tx) => {
-      const [existingProjectArticle] = await tx.queryJson<{articleId: string}>(`
-        SELECT article_id AS articleId
+      const [existingProjectArticle] = await tx.queryJson<{articleId: string; projectArticleId: string}>(`
+        SELECT
+          id AS projectArticleId,
+          article_id AS articleId
         FROM app.project_article
         WHERE project_id = '${escapeSqlString(projectId)}'
           AND article_id = '${escapeSqlString(articleId)}'
@@ -88,6 +91,15 @@ export const projectArticlesRoutes = new Elysia()
         WHERE project_id = '${escapeSqlString(projectId)}'
           AND article_id = '${escapeSqlString(articleId)}'
       `)
+
+      await appendProjectScopeArticleReviewServingDelta(tx, {
+        articleId,
+        changeKind: 'projectScope.article.removed',
+        projectArticleId: existingProjectArticle.projectArticleId,
+        projectId,
+        sourceMutationKey: `ProjectArticlesRoutes.delete|${projectId}|${existingProjectArticle.projectArticleId}`,
+        sourceOperation: 'delete',
+      })
 
       await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
         projects: [{articleIds: [articleId], projectId}],

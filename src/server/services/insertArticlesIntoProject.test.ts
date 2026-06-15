@@ -129,6 +129,14 @@ const createMockDatabaseState = (options?: {failProjectPromptInsert?: boolean}):
         return []
       }
 
+      if (statement.includes('FROM app.review_change_delta')) {
+        return []
+      }
+
+      if (statement.includes('FROM app.review_delta_reconciliation_cursor')) {
+        return [{sourceHighWaterMark: 1}]
+      }
+
       if (statement.includes('FROM app.judgment')) {
         return [{pid: 'prompt-1'}]
       }

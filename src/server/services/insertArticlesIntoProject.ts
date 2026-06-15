@@ -1,3 +1,4 @@
+import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList} from './appQueryHelpers.ts'
 import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
@@ -100,6 +101,9 @@ export const insertArticlesIntoProject = async (
   const toInsert = validIds.filter((id) => {
     return !existingAssocSet.has(id)
   })
+  const projectArticleRowsToInsert = toInsert.map((articleId) => {
+    return {articleId, projectArticleId: crypto.randomUUID()}
+  })
 
   // Auto-link prompts that already have judgments (AI or human) for these articles
   let linkedPrompts = 0
@@ -169,18 +173,32 @@ export const insertArticlesIntoProject = async (
 
   const batchSize = 1000
   await database.transaction(async (tx) => {
-    for (const idsChunk of chunk(toInsert, batchSize)) {
-      if (idsChunk.length === 0) continue
+    for (const rowChunk of chunk(projectArticleRowsToInsert, batchSize)) {
+      if (rowChunk.length === 0) continue
       await tx.run(`
         INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
-        VALUES ${idsChunk
-          .map((articleId) => {
-            return `(${getQuotedStringList([crypto.randomUUID(), projectId, articleId]).join(', ')}, ${importedFromProjectId ? `'${escapeSqlString(importedFromProjectId)}'` : 'NULL'})`
+        VALUES ${rowChunk
+          .map((row) => {
+            return `(${getQuotedStringList([row.projectArticleId, projectId, row.articleId]).join(', ')}, ${importedFromProjectId ? `'${escapeSqlString(importedFromProjectId)}'` : 'NULL'})`
           })
           .join(', ')}
         ON CONFLICT(project_id, article_id) DO NOTHING
       `)
     }
+
+    await appendProjectScopeArticleReviewServingDeltas(
+      tx,
+      projectArticleRowsToInsert.map((row) => {
+        return {
+          articleId: row.articleId,
+          changeKind: 'projectScope.article.added' as const,
+          projectArticleId: row.projectArticleId,
+          projectId,
+          sourceMutationKey: `insertArticlesIntoProject|${projectId}|${row.projectArticleId}`,
+          sourceOperation: 'insert' as const,
+        }
+      }),
+    )
 
     let orderIndex = 0
     for (const promptChunk of chunk(ensuredPromptIds, batchSize)) {
