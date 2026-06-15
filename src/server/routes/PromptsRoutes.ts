@@ -3,6 +3,10 @@ import {Elysia, t} from 'elysia'
 import type {PromptRecord} from '../../db/schemaTypes.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {appendLlmJudgmentReviewServingDeltas} from '../reviewServing/llmJudgmentReviewServingDeltaService.ts'
+import {
+  appendProjectReviewConfigReviewServingDeltas,
+  appendPromptConfigReviewServingDeltas,
+} from '../reviewServing/reviewConfigReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService'
 import {
   escapeSqlString,
@@ -11,6 +15,7 @@ import {
   getQuotedStringList,
   getSqlLiteral,
 } from '../services/appQueryHelpers'
+import {immutablePromptIdentityReviewServingFields} from '../services/immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -674,6 +679,32 @@ const promptsAdminRoutes = new Elysia()
             }
           }
         }
+
+        await appendProjectReviewConfigReviewServingDeltas(
+          tx,
+          affectedProjects.map((project) => {
+            return {
+              changedReviewConfigFields: ['promptMembership'],
+              projectId: project.projectId,
+              sourceMutationKey: `promptMergeProjectReviewConfig|${keepPromptId}|${mergePromptIds.join(',')}|${project.projectId}`,
+              sourceOperation: 'update' as const,
+              sourceTable: 'app.project_prompt',
+            }
+          }),
+        )
+        await appendPromptConfigReviewServingDeltas(
+          tx,
+          affectedProjects.map((project) => {
+            return {
+              changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields],
+              projectId: project.projectId,
+              promptId: keepPromptId,
+              sourceMutationKey: `promptMergePromptConfig|${keepPromptId}|${mergePromptIds.join(',')}|${project.projectId}`,
+              sourceOperation: 'update' as const,
+              sourceTable: 'app.project_prompt',
+            }
+          }),
+        )
 
         const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(
           tx,

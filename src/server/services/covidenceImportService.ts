@@ -5,6 +5,10 @@ import path from 'node:path'
 import {normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
+import {
+  appendProjectReviewConfigReviewServingDelta,
+  appendPromptConfigReviewServingDelta,
+} from '../reviewServing/reviewConfigReviewServingDeltaService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {resolveRuntimeFilePath, resolveRuntimeWritablePath} from '../utils/runtimeWritablePath.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
@@ -16,7 +20,7 @@ import {
   syncImportedArticlesWithTx,
 } from './articleImportStoreService.ts'
 import {getComparisonProjectServingInvalidationService} from './comparisonProjectServingInvalidationService.ts'
-import {getOrCreateImmutablePromptTx} from './immutablePromptService.ts'
+import {getOrCreateImmutablePromptTx, immutablePromptIdentityReviewServingFields} from './immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
@@ -2337,9 +2341,8 @@ export const syncCovidenceProjectPrompts = async (params: {
       }
   `)
 
-  return promptLinks.length === 0
-    ? undefined
-    : await queryRunner.run(`
+  if (promptLinks.length > 0) {
+    await queryRunner.run(`
         INSERT INTO app.project_prompt (
           id,
           project_id,
@@ -2377,6 +2380,29 @@ export const syncCovidenceProjectPrompts = async (params: {
           criteria_section_label = EXCLUDED.criteria_section_label,
           updated_at = now()
       `)
+    await promptLinks.reduce<Promise<void>>(async (previousRun, promptLink) => {
+      await previousRun
+      await appendPromptConfigReviewServingDelta(queryRunner, {
+        changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
+        projectId: params.projectId,
+        promptId: promptLink.promptId,
+        sourceMutationKey: `covidenceSyncProjectPrompt|${params.projectId}|${promptLink.promptId}`,
+        sourceOperation: 'upsert',
+      })
+    }, Promise.resolve())
+  }
+
+  await appendProjectReviewConfigReviewServingDelta(queryRunner, {
+    changedReviewConfigFields: ['promptMembership'],
+    projectId: params.projectId,
+    sourceMutationKey: `covidenceProjectPrompts|${params.projectId}|${promptLinks
+      .map((promptLink) => {
+        return promptLink.promptId
+      })
+      .join(',')}`,
+    sourceOperation: 'upsert',
+    sourceTable: 'app.project_prompt',
+  })
 }
 
 export const getOrCreateCovidenceProject = async (params: {
@@ -2409,6 +2435,20 @@ export const getOrCreateCovidenceProject = async (params: {
           enabled = TRUE,
           updated_at = now()
       `)
+      await appendPromptConfigReviewServingDelta(queryRunner, {
+        changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
+        projectId: existingProject.id,
+        promptId: params.promptId,
+        sourceMutationKey: `covidenceProjectPrompt|${existingProject.id}|${params.promptId}`,
+        sourceOperation: 'upsert',
+      })
+      await appendProjectReviewConfigReviewServingDelta(queryRunner, {
+        changedReviewConfigFields: ['promptMembership'],
+        projectId: existingProject.id,
+        sourceMutationKey: `covidenceExistingProjectReviewConfig|${existingProject.id}|${params.promptId}`,
+        sourceOperation: 'upsert',
+        sourceTable: 'app.project_prompt',
+      })
     }
 
     return {...existingProject, created: false}
@@ -2476,7 +2516,31 @@ export const getOrCreateCovidenceProject = async (params: {
       )
       ON CONFLICT(project_id, prompt_id) DO NOTHING
     `)
+    await appendPromptConfigReviewServingDelta(queryRunner, {
+      changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
+      projectId,
+      promptId: params.promptId,
+      sourceMutationKey: `covidenceNewProjectPrompt|${projectId}|${params.promptId}`,
+      sourceOperation: 'insert',
+    })
   }
+
+  await appendProjectReviewConfigReviewServingDelta(queryRunner, {
+    changedReviewConfigFields: [
+      'modelId',
+      'modelExecutionIdentity',
+      'humanJudgmentMode',
+      'useTitle',
+      'useAbstract',
+      'useFulltext',
+      'useFulltextNoImages',
+      ...(params.promptId ? (['promptMembership'] as const) : []),
+      'importRoutes',
+    ],
+    projectId,
+    sourceMutationKey: `covidenceNewProjectReviewConfig|${projectId}`,
+    sourceOperation: 'insert',
+  })
 
   return {created: true, humanJudgmentMode: 'summary', id: projectId, modelId, name: params.title, ...settings}
 }

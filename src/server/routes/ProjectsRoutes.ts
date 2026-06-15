@@ -9,6 +9,12 @@ import {getProviderModelMetadataOptions} from '../providers/providerModelMetadat
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {appendLlmJudgmentReviewServingDeltas} from '../reviewServing/llmJudgmentReviewServingDeltaService.ts'
+import {
+  appendProjectReviewConfigReviewServingDelta,
+  appendPromptConfigReviewServingDelta,
+  type ProjectReviewConfigReviewServingField,
+  type PromptConfigReviewServingField,
+} from '../reviewServing/reviewConfigReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -19,7 +25,10 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getComparisonProjectServingRebuildService} from '../services/comparisonProjectServingRebuildService.ts'
-import {getOrCreateImmutablePromptTx} from '../services/immutablePromptService.ts'
+import {
+  getOrCreateImmutablePromptTx,
+  immutablePromptIdentityReviewServingFields,
+} from '../services/immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
 import {HttpError} from '../utils/httpError.ts'
@@ -104,6 +113,7 @@ type ExistingProjectPromptAssociation = {
 
 type ResolvedProjectPromptEdit = {
   archived: boolean | undefined
+  changedPromptConfigFields: PromptConfigReviewServingField[]
   currentAssociation: ExistingProjectPromptAssociation | undefined
   enabled: boolean | undefined
   order: number
@@ -589,6 +599,65 @@ const getChangedProjectPromptLinks = ({
   return [...replacedLinks, ...removedLinks]
 }
 
+const getChangedReviewConfigFields = (params: {
+  hasImportRouteChanges: boolean
+  hasModelIdUpdate: boolean
+  hasPromptChanges: boolean
+  currentProject: ProjectEditCurrentProject
+  body: {
+    humanJudgmentMode?: 'prompt' | 'summary'
+    useAbstract?: boolean
+    useFulltext?: boolean
+    useFulltextNoImages?: boolean
+    useTitle?: boolean
+  }
+}) => {
+  return [
+    params.hasModelIdUpdate ? 'modelId' : null,
+    params.hasModelIdUpdate ? 'modelExecutionIdentity' : null,
+    params.body.useTitle !== undefined && params.body.useTitle !== params.currentProject.useTitle ? 'useTitle' : null,
+    params.body.useAbstract !== undefined && params.body.useAbstract !== params.currentProject.useAbstract
+      ? 'useAbstract'
+      : null,
+    params.body.useFulltext !== undefined && params.body.useFulltext !== params.currentProject.useFulltext
+      ? 'useFulltext'
+      : null,
+    params.body.useFulltextNoImages !== undefined
+    && params.body.useFulltextNoImages !== params.currentProject.useFulltextNoImages
+      ? 'useFulltextNoImages'
+      : null,
+    params.body.humanJudgmentMode !== undefined
+    && params.body.humanJudgmentMode !== (params.currentProject.humanJudgmentMode ?? 'prompt')
+      ? 'humanJudgmentMode'
+      : null,
+    params.hasPromptChanges ? 'promptMembership' : null,
+    params.hasImportRouteChanges ? 'importRoutes' : null,
+  ].filter((field): field is ProjectReviewConfigReviewServingField => {
+    return field !== null
+  })
+}
+
+const appendProjectReviewConfigDeltaIfNeeded = async (
+  tx: AppTx,
+  params: {
+    changedReviewConfigFields: ProjectReviewConfigReviewServingField[]
+    projectId: string
+    sourceMutationKey: string
+    sourceOperation: 'insert' | 'update' | 'upsert'
+    sourceTable?: string
+  },
+) => {
+  return params.changedReviewConfigFields.length === 0
+    ? undefined
+    : await appendProjectReviewConfigReviewServingDelta(tx, {
+        changedReviewConfigFields: params.changedReviewConfigFields,
+        projectId: params.projectId,
+        sourceMutationKey: params.sourceMutationKey,
+        sourceOperation: params.sourceOperation,
+        sourceTable: params.sourceTable,
+      })
+}
+
 const deleteProjectHumanPromptAnswersForChangedPromptLinksTx = async (
   tx: AppTx,
   params: {changedPromptLinks: ChangedProjectPromptLink[]; projectId: string},
@@ -861,6 +930,7 @@ const getExistingProjectPromptComparisonRows = async (projectId: string) => {
 const upsertProjectPromptTx = async (
   tx: AppTx,
   params: {
+    changedPromptConfigFields?: PromptConfigReviewServingField[]
     projectId: string
     promptId: string
     order: number
@@ -917,6 +987,14 @@ const upsertProjectPromptTx = async (
     ON CONFLICT(project_id, prompt_id) DO UPDATE SET
       ${updateParts.join(',\n      ')}
   `)
+
+  await appendPromptConfigReviewServingDelta(tx, {
+    changedPromptConfigFields: params.changedPromptConfigFields ?? ['archived', 'enabled', 'promptOrder'],
+    projectId: params.projectId,
+    promptId: params.promptId,
+    sourceMutationKey: `projectPromptUpsert|${params.projectId}|${params.promptId}|${params.order}|${params.archived}|${params.enabled}`,
+    sourceOperation: 'upsert',
+  })
 }
 
 export const projectsRoutes = new Elysia()
@@ -1445,6 +1523,7 @@ export const projectsRoutes = new Elysia()
             }
 
             await upsertProjectPromptTx(tx, {
+              changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
               projectId: createdProject.id,
               promptId,
               order: orderVal,
@@ -1469,6 +1548,7 @@ export const projectsRoutes = new Elysia()
             }
 
             await upsertProjectPromptTx(tx, {
+              changedPromptConfigFields: ['promptOrder', 'enabled'],
               projectId: createdProject.id,
               promptId: existing.originalId,
               order: existing.order,
@@ -1508,6 +1588,22 @@ export const projectsRoutes = new Elysia()
             ON CONFLICT(project_id, import_route_id) DO NOTHING
           `)
         }
+
+        await appendProjectReviewConfigDeltaIfNeeded(tx, {
+          changedReviewConfigFields: [
+            'modelId',
+            'modelExecutionIdentity',
+            'useTitle',
+            'useAbstract',
+            'useFulltext',
+            'useFulltextNoImages',
+            ...(body.prompts?.length || body.existingPromptIds?.length ? (['promptMembership'] as const) : []),
+            ...(selectedRoutes.length > 0 ? (['importRoutes'] as const) : []),
+          ],
+          projectId: createdProject.id,
+          sourceMutationKey: `projectCreate|${createdProject.id}`,
+          sourceOperation: 'insert',
+        })
 
         const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(tx, [
           createdProject.id,
@@ -1666,6 +1762,15 @@ export const projectsRoutes = new Elysia()
       }
 
       const hasModelIdUpdate = body.modelId !== undefined && body.modelId !== currentProject.modelId
+      const hasImportRouteChanges =
+        body.importRoutes !== undefined && (!hasExistingJob || changedProtectedFields.includes('importRoutes'))
+      const changedReviewConfigFields = getChangedReviewConfigFields({
+        body,
+        currentProject,
+        hasImportRouteChanges,
+        hasModelIdUpdate,
+        hasPromptChanges,
+      })
 
       const runEditTransaction = () => {
         return getAppDatabaseService().transaction(async (tx) => {
@@ -1804,6 +1909,18 @@ export const projectsRoutes = new Elysia()
 
                 resolvedPromptEdits.push({
                   archived,
+                  changedPromptConfigFields: [
+                    ...(textChanged ? (['promptText'] as const) : []),
+                    ...(targetPromptHeading !== existingPromptHeading ? (['promptHeading'] as const) : []),
+                    ...(targetPromptType !== existingPromptType ? (['promptType'] as const) : []),
+                    'promptOrder',
+                    ...(typeof archived === 'boolean' && archived !== currentAssociation?.archived
+                      ? (['archived'] as const)
+                      : []),
+                    ...(typeof enabled === 'boolean' && enabled !== currentAssociation?.enabled
+                      ? (['enabled'] as const)
+                      : []),
+                  ],
                   currentAssociation,
                   enabled,
                   order,
@@ -1827,6 +1944,7 @@ export const projectsRoutes = new Elysia()
 
                 resolvedPromptEdits.push({
                   archived,
+                  changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
                   currentAssociation: undefined,
                   enabled,
                   order,
@@ -1905,6 +2023,7 @@ export const projectsRoutes = new Elysia()
             for (const promptEdit of resolvedPromptEdits) {
               if (promptEdit.currentAssociation) {
                 await upsertProjectPromptTx(tx, {
+                  changedPromptConfigFields: promptEdit.changedPromptConfigFields,
                   projectId: params.id,
                   promptId: promptEdit.targetPromptId,
                   order: promptEdit.order,
@@ -1917,6 +2036,7 @@ export const projectsRoutes = new Elysia()
                 })
               } else {
                 await upsertProjectPromptTx(tx, {
+                  changedPromptConfigFields: promptEdit.changedPromptConfigFields,
                   projectId: params.id,
                   promptId: promptEdit.targetPromptId,
                   order: promptEdit.order,
@@ -1981,6 +2101,13 @@ export const projectsRoutes = new Elysia()
             `)
             }
           }
+
+          await appendProjectReviewConfigDeltaIfNeeded(tx, {
+            changedReviewConfigFields,
+            projectId: params.id,
+            sourceMutationKey: `projectEdit|${params.id}|${changedReviewConfigFields.join(',')}`,
+            sourceOperation: 'update',
+          })
 
           const updatedPrompts = await tx.queryJson<{
             id: string
@@ -2330,6 +2457,13 @@ export const projectsRoutes = new Elysia()
               ${getSqlLiteral(prompt.criteriaSectionLabel)}
             )
           `)
+          await appendPromptConfigReviewServingDelta(tx, {
+            changedPromptConfigFields: ['promptOrder', 'archived', 'enabled'],
+            projectId: clonedProject.id,
+            promptId: prompt.promptId,
+            sourceMutationKey: `projectClonePrompt|${params.id}|${clonedProject.id}|${prompt.promptId}`,
+            sourceOperation: 'insert',
+          })
         }
       }
 
@@ -2382,6 +2516,23 @@ export const projectsRoutes = new Elysia()
           }),
         )
       }
+
+      await appendProjectReviewConfigDeltaIfNeeded(tx, {
+        changedReviewConfigFields: [
+          'modelId',
+          'modelExecutionIdentity',
+          'humanJudgmentMode',
+          'useTitle',
+          'useAbstract',
+          'useFulltext',
+          'useFulltextNoImages',
+          ...(sourcePrompts.length > 0 ? (['promptMembership'] as const) : []),
+          ...(sourceRouteLinks.length > 0 ? (['importRoutes'] as const) : []),
+        ],
+        projectId: clonedProject.id,
+        sourceMutationKey: `projectClone|${params.id}|${clonedProject.id}`,
+        sourceOperation: 'insert',
+      })
 
       const clonedDirtyArticleRows = await tx.queryJson<{articleId: string}>(`
         SELECT article_id AS articleId

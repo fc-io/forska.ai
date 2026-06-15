@@ -1,3 +1,4 @@
+import type {PromptConfigReviewServingField} from '../reviewServing/reviewConfigReviewServingDeltaService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {escapeSqlString, getSqlLiteral} from './appQueryHelpers.ts'
 
@@ -13,6 +14,12 @@ type ImmutablePromptInput = {
 }
 
 type ImmutablePromptRow = {archived: boolean; id: string}
+
+export const immutablePromptIdentityReviewServingFields = [
+  'promptText',
+  'promptHeading',
+  'promptType',
+] as const satisfies readonly PromptConfigReviewServingField[]
 
 const getImmutablePromptByContentHash = async (
   queryRunner: PromptQueryRunner,
