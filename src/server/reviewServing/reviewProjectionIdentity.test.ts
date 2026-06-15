@@ -200,6 +200,28 @@ test('buildReviewConfigHash changes when prompt order changes', () => {
   expect(reorderedHash).not.toBe(baseHash)
 })
 
+test('buildReviewConfigHash changes when model execution identity or human review mode changes', () => {
+  const input = {
+    humanJudgmentMode: 'prompt',
+    modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', thinking: 'medium'},
+    modelId: 'model-a',
+    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a', promptOrder: 1}],
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  } as const
+  const baseHash = buildReviewConfigHash(input)
+  const changedExecutionHash = buildReviewConfigHash({
+    ...input,
+    modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', thinking: 'high'},
+  })
+  const changedHumanModeHash = buildReviewConfigHash({...input, humanJudgmentMode: 'summary'})
+
+  expect(changedExecutionHash).not.toBe(baseHash)
+  expect(changedHumanModeHash).not.toBe(baseHash)
+})
+
 test('buildReviewConfigHash ignores unrelated projection inputs', () => {
   const input = {
     humanJudgmentMode: 'prompt',
