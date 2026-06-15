@@ -27,6 +27,7 @@ export type ReviewServingImportRunArticleChangeKind = Extract<
 >
 
 export type ReviewServingDeltaAppendInput = ReviewServingIdempotencyKeyInput & {
+  allocatedSourceHighWaterMark?: number
   articleId?: string | null
   changeKind: ReviewServingChangeKind
   configFieldSet?: string | null
@@ -46,6 +47,7 @@ export type ReviewServingDeltaAppendInput = ReviewServingIdempotencyKeyInput & {
 }
 
 export type ReviewServingImportRunArticleDeltaAppendInput = ReviewServingIdempotencyKeyInput & {
+  allocatedSourceHighWaterMark?: number
   articleId?: string | null
   changeKind: ReviewServingImportRunArticleChangeKind
   importRouteId?: string | null
@@ -224,7 +226,8 @@ export const appendReviewServingChangeDelta = async (
   }
 
   const deltaId = getDeterministicReviewServingLedgerId('delta', idempotencyKey)
-  const sourceHighWaterMark = await allocateReviewServingSourceHighWaterMark(tx, input.sourcePartition)
+  const sourceHighWaterMark =
+    input.allocatedSourceHighWaterMark ?? (await allocateReviewServingSourceHighWaterMark(tx, input.sourcePartition))
 
   await tx.run(`
     INSERT INTO app.review_change_delta (
@@ -303,7 +306,8 @@ export const appendReviewServingImportRunArticleDelta = async (
   }
 
   const deltaId = getDeterministicReviewServingLedgerId('delta', idempotencyKey)
-  const sourceHighWaterMark = await allocateReviewServingSourceHighWaterMark(tx, input.sourcePartition)
+  const sourceHighWaterMark =
+    input.allocatedSourceHighWaterMark ?? (await allocateReviewServingSourceHighWaterMark(tx, input.sourcePartition))
 
   await tx.run(`
     INSERT INTO app.import_run_article_delta (
