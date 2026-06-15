@@ -304,6 +304,40 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
   expect(sql).not.toContain('AND list_mode_key =')
 })
 
+test('buildReviewServingRowsSql pins fixed list-mode judgment payload reads', () => {
+  const humanListSql = buildReviewServingRowsSql({
+    articleIdParameter: '$articleId',
+    contract: getRequiredReviewServingReadContract('review.human.list.judgments'),
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+  const bothListSql = buildReviewServingRowsSql({
+    articleIdParameter: '$articleId',
+    contract: getRequiredReviewServingReadContract('review.both.list.humanJudgments'),
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(humanListSql)).toEqual({ok: true, violations: []})
+  expect(assertReviewServingSqlShape(bothListSql)).toEqual({ok: true, violations: []})
+  expect(humanListSql).toContain("AND list_mode_key = 'human'")
+  expect(bothListSql).toContain("AND list_mode_key = 'both'")
+})
+
 test('buildReviewServingRowsSql applies posting filter keys before row ordering', () => {
   const contract = getRequiredReviewServingReadContract('review.filters.postings')
   const sql = buildReviewServingRowsSql({

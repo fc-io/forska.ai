@@ -80,7 +80,7 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
       )
     }),
   ).toBe(true)
-  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations).toHaveLength(18)
+  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations).toHaveLength(22)
   expect(
     reviewServingBenchmarkOverlapWorkloadDefinition.operations.map((operation) => {
       return {contractKey: operation.contractKey, key: operation.key}
@@ -94,6 +94,10 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
     {contractKey: 'review.filters.facets', key: 'overlapFacetRefresh'},
     {contractKey: 'review.human.filters.facets', key: 'humanOverlapFacetRefresh'},
     {contractKey: 'review.filters.options', key: 'overlapFilterOptions'},
+    {contractKey: 'review.human.filters.options', key: 'humanOverlapFilterOptions'},
+    {contractKey: 'review.detail.judgments', key: 'detailJudgmentPayloadRows'},
+    {contractKey: 'review.human.list.judgments', key: 'humanListJudgmentPayloadRows'},
+    {contractKey: 'review.both.list.humanJudgments', key: 'bothListHumanJudgmentPayloadRows'},
     {contractKey: 'review.llm.count', key: 'llmPromptOverlapCounts'},
     {contractKey: 'review.human.count', key: 'humanPromptOverlapCounts'},
     {contractKey: 'review.both.count', key: 'bothPromptOverlapCounts'},
@@ -141,6 +145,39 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
     requestSliceFields: ['filter', 'searchTokenPrefix'],
     searchMode: 'tokenPrefix',
     workloadClass: 'foregroundReviewFacet',
+  })
+  expect(getBenchmarkOperation('humanOverlapFilterOptions')).toMatchObject({
+    contractKey: 'review.human.filters.options',
+    maxRowsScannedPerRequest: 512,
+    minimumDistinctRequestSlices: 700,
+    pageSize: 512,
+    requestSliceFields: ['filter', 'searchTokenPrefix'],
+    searchMode: 'tokenPrefix',
+    workloadClass: 'foregroundReviewFacet',
+  })
+  expect(getBenchmarkOperation('detailJudgmentPayloadRows')).toMatchObject({
+    contractKey: 'review.detail.judgments',
+    maxRowsScannedPerRequest: 512,
+    minimumDistinctRequestSlices: 700,
+    pageSize: 512,
+    requestSliceFields: ['filter'],
+    workloadClass: 'foregroundReviewRows',
+  })
+  expect(getBenchmarkOperation('humanListJudgmentPayloadRows')).toMatchObject({
+    contractKey: 'review.human.list.judgments',
+    maxRowsScannedPerRequest: 10_000,
+    minimumDistinctRequestSlices: 7_000,
+    pageSize: 10_000,
+    requestSliceFields: ['cursor', 'filter'],
+    workloadClass: 'foregroundReviewRows',
+  })
+  expect(getBenchmarkOperation('bothListHumanJudgmentPayloadRows')).toMatchObject({
+    contractKey: 'review.both.list.humanJudgments',
+    maxRowsScannedPerRequest: 10_000,
+    minimumDistinctRequestSlices: 7_000,
+    pageSize: 10_000,
+    requestSliceFields: ['cursor', 'filter'],
+    workloadClass: 'foregroundReviewRows',
   })
   expect(getBenchmarkOperation('unassessedOverlapQueue')).toMatchObject({
     contractKey: 'review.queue.unassessed',
@@ -193,7 +230,7 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
       return operation.requestCount
     }),
   ).toEqual(
-    Array.from({length: 18}, () => {
+    Array.from({length: 22}, () => {
       return 1
     }),
   )
@@ -202,16 +239,16 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
       return sample.admissionStatus
     }),
   ).toEqual(
-    Array.from({length: 18}, () => {
+    Array.from({length: 22}, () => {
       return 'accepted'
     }),
   )
   expect(result.metrics).toMatchObject({
-    latency: {p50Ms: 10, p95Ms: 20, p99Ms: 20, sampleCount: 18},
-    queueDepth: {average: 1.33, peak: 3},
-    rows: {rowsReturned: 103, rowsScanned: 262},
+    latency: {p50Ms: 10, p95Ms: 20, p99Ms: 20, sampleCount: 22},
+    queueDepth: {average: 1.32, peak: 3},
+    rows: {rowsReturned: 119, rowsScanned: 310},
     tempUsage: {peakBytes: 0, totalBytes: 0},
-    work: {admitted: 18, rejected: 0, total: 18},
+    work: {admitted: 22, rejected: 0, total: 22},
   })
   expect(result.metrics.memory.peakRssBytes).toBeGreaterThanOrEqual(result.metrics.memory.startRssBytes)
 })
@@ -293,6 +330,10 @@ test('review-serving benchmark rejects runs that do not satisfy operation reques
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'overlapFacetRefresh'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'humanOverlapFacetRefresh'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'overlapFilterOptions'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'humanOverlapFilterOptions'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'detailJudgmentPayloadRows'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'humanListJudgmentPayloadRows'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'bothListHumanJudgmentPayloadRows'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'llmPromptOverlapCounts'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'humanPromptOverlapCounts'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'bothPromptOverlapCounts'},
