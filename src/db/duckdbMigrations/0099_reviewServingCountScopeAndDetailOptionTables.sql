@@ -19,11 +19,14 @@ CREATE TABLE IF NOT EXISTS mart.review_article_count_serving_v4 (
 CREATE INDEX IF NOT EXISTS idx_review_article_count_serving_v4_lookup
 ON mart.review_article_count_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, count_kind, filter_key);
 
+DROP TABLE IF EXISTS mart.review_article_judgment_detail_serving_v4;
+
 CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4 (
   project_id VARCHAR NOT NULL,
   review_config_hash VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
   list_mode_key VARCHAR NOT NULL,
+  payload_kind VARCHAR NOT NULL DEFAULT 'llm',
   article_id VARCHAR NOT NULL,
   prompt_id VARCHAR NOT NULL,
   prompt_order INTEGER,
@@ -34,11 +37,11 @@ CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4 (
   judgment_payload_json JSON,
   placeholder_kind VARCHAR,
   detail_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, article_id, prompt_id)
+  PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_article_judgment_detail_serving_v4_article
-ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, article_id, prompt_order);
+ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, article_id, payload_kind, prompt_order);
 
 CREATE TABLE IF NOT EXISTS mart.review_filter_option_serving_v4 (
   project_id VARCHAR NOT NULL,

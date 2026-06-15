@@ -51,8 +51,9 @@ const llmComponents = [...baseComponents, 'llmStatus', 'posting', 'summary'] as 
 const humanComponents = [...baseComponents, 'humanStatus', 'posting', 'summary'] as const
 const bothComponents = [...baseComponents, 'llmStatus', 'humanStatus', 'posting', 'summary'] as const
 const queueComponents = [...baseComponents, 'judgmentInputContent', 'llmStatus', 'queue', 'summary'] as const
-const defaultRowFilters = ['duplicateFlag', 'importRoute', 'publicationYear', 'searchTokenPrefix'] as const
-const defaultCountFilters = ['duplicateFlag', 'importRoute', 'publicationYear'] as const
+const articleDateRangeFilters = ['articleCreatedAtFrom', 'articleCreatedAtTo'] as const
+const defaultRowFilters = ['duplicateFlag', 'importRoute', 'publicationYear', ...articleDateRangeFilters, 'searchTokenPrefix'] as const
+const defaultCountFilters = ['duplicateFlag', 'importRoute', 'publicationYear', ...articleDateRangeFilters] as const
 const defaultReviewCounts = ['review.list.total', 'review.list.filteredTotal'] as const
 const reviewArticleServingTable = 'mart.review_article_serving_v4'
 const reviewArticlePayloadServingTable = 'mart.review_article_serving_payload_v4'
@@ -115,6 +116,33 @@ const rowContract = (input: {
   })
 }
 
+const rowByArticleSetContract = (input: {
+  cursorFields?: ReviewServingReadContract['cursorFields']
+  key: ReviewServingReadContractKey
+  listMode: ReviewServingListMode
+  namedFastCounts: readonly NamedReviewFastCountKey[]
+  requiredComponents: readonly ReviewServingProjectionComponent[]
+  sort?: ReviewServingReadContract['sort']
+}) => {
+  return defineContract({
+    allowedFilters: ['articleId'],
+    cursorFields: input.cursorFields ?? reviewedRowCursorFields,
+    freshnessBehavior: 'requireReadySnapshot',
+    key: input.key,
+    listMode: input.listMode,
+    maxEstimatedResultBytes: 5_000_000,
+    maxPageSize: 100,
+    namedFastCounts: input.namedFastCounts,
+    optionalComponents: [],
+    physicalAccessStrategy: 'articleSetLookup',
+    requiredComponents: input.requiredComponents,
+    searchMode: 'none',
+    servingTable: reviewArticleServingTable,
+    sort: input.sort ?? reviewedRowSort,
+    workloadClass: 'foregroundReviewRows',
+  })
+}
+
 const filterFacetContract = (input: {
   allowedFilters: readonly ReviewServingFilterKey[]
   key: ReviewServingReadContractKey
@@ -147,6 +175,12 @@ export const reviewServingReadContractList = [
     namedFastCounts: [...defaultReviewCounts, 'review.llm.assessedByPrompt'],
     requiredComponents: llmComponents,
   }),
+  rowByArticleSetContract({
+    key: 'review.llm.rowsByArticleSet',
+    listMode: 'llm',
+    namedFastCounts: [...defaultReviewCounts, 'review.llm.assessedByPrompt'],
+    requiredComponents: llmComponents,
+  }),
   defineContract({
     allowedFilters: [...defaultCountFilters, 'llmStatus', 'promptAnswer'],
     cursorFields: [],
@@ -170,6 +204,12 @@ export const reviewServingReadContractList = [
     namedFastCounts: [...defaultReviewCounts, 'review.human.reviewedByPrompt'],
     requiredComponents: humanComponents,
   }),
+  rowByArticleSetContract({
+    key: 'review.human.rowsByArticleSet',
+    listMode: 'human',
+    namedFastCounts: [...defaultReviewCounts, 'review.human.reviewedByPrompt'],
+    requiredComponents: humanComponents,
+  }),
   defineContract({
     allowedFilters: [...defaultCountFilters, 'humanStatus', 'promptAnswer'],
     cursorFields: [],
@@ -189,6 +229,12 @@ export const reviewServingReadContractList = [
   }),
   rowContract({
     key: 'review.both.rows',
+    listMode: 'both',
+    namedFastCounts: [...defaultReviewCounts, 'review.both.conflictByPrompt'],
+    requiredComponents: bothComponents,
+  }),
+  rowByArticleSetContract({
+    key: 'review.both.rowsByArticleSet',
     listMode: 'both',
     namedFastCounts: [...defaultReviewCounts, 'review.both.conflictByPrompt'],
     requiredComponents: bothComponents,
@@ -218,8 +264,16 @@ export const reviewServingReadContractList = [
     requiredComponents: queueComponents,
     sort: unassessedRowSort,
   }),
+  rowByArticleSetContract({
+    cursorFields: unassessedRowCursorFields,
+    key: 'review.unassessed.rowsByArticleSet',
+    listMode: 'unassessed',
+    namedFastCounts: ['review.queue.unassessedReady', 'review.llm.unassessedByPrompt'],
+    requiredComponents: queueComponents,
+    sort: unassessedRowSort,
+  }),
   defineContract({
-    allowedFilters: ['importRoute', 'publicationYear', 'queueKind'],
+    allowedFilters: [...defaultCountFilters, 'queueKind'],
     cursorFields: [],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.unassessed.count',
@@ -237,6 +291,7 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: [
+      ...articleDateRangeFilters,
       'articleId',
       'conflictFlag',
       'duplicateFlag',
@@ -264,6 +319,7 @@ export const reviewServingReadContractList = [
   }),
   filterFacetContract({
     allowedFilters: [
+      ...articleDateRangeFilters,
       'conflictFlag',
       'duplicateFlag',
       'humanStatus',
@@ -289,6 +345,7 @@ export const reviewServingReadContractList = [
   }),
   defineContract({
     allowedFilters: [
+      ...articleDateRangeFilters,
       'conflictFlag',
       'duplicateFlag',
       'humanStatus',
@@ -315,7 +372,16 @@ export const reviewServingReadContractList = [
     workloadClass: 'foregroundReviewFacet',
   }),
   defineContract({
-    allowedFilters: ['humanStatus', 'promptAnswer', 'searchTokenPrefix'],
+    allowedFilters: [
+      ...articleDateRangeFilters,
+      'conflictFlag',
+      'duplicateFlag',
+      'humanStatus',
+      'importRoute',
+      'promptAnswer',
+      'publicationYear',
+      'searchTokenPrefix',
+    ],
     cursorFields: [],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.human.filters.options',
@@ -674,6 +740,7 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: [
       'review.llm.rows',
+      'review.llm.rowsByArticleSet',
       'review.llm.count',
       'review.filters.postings',
       'review.prompt.badges',
@@ -703,6 +770,7 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: [
       'review.human.rows',
+      'review.human.rowsByArticleSet',
       'review.human.list.judgments',
       'review.filters.postings',
       'review.human.count',
@@ -718,6 +786,7 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: [
       'review.both.rows',
+      'review.both.rowsByArticleSet',
       'review.both.list.judgments',
       'review.both.list.humanJudgments',
       'review.filters.postings',
@@ -734,6 +803,7 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: [
       'review.unassessed.rows',
+      'review.unassessed.rowsByArticleSet',
       'review.filters.postings',
       'review.unassessed.count',
       'review.queue.unassessed',
