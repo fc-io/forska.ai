@@ -60,6 +60,51 @@ Partial helper contracts, future route contracts, or contracts missing search,
 filter-option, detail, or warning-diagnostic parity stay unmounted until their
 route-specific gates pass.
 
+## PR 68 Review Alignment
+
+The Phase 0 review comments tightened this plan rather than changing its
+direction. The accepted fixes and pending gates all reinforce the same goal:
+normal review flows must not be able to certify partial serving coverage and then
+fall back to expensive raw DuckDB behavior.
+
+The plan now treats these review-driven refinements as part of the serving-index
+goal:
+
+- Direct ordered-prefix row contracts are only unfiltered list reads. Filtered
+  pages must go through bounded posting/search selection and then hydrate the
+  selected page by an `articleSetLookup` contract, never by N+1 single-article
+  lookups or by reading an unfiltered page.
+- Product route inventories must include list judgment payload contracts, human
+  summary/prompt payload contracts, count contracts, facet and filter-option
+  contracts, substring-job contracts, and warning/detail extras before a route can
+  be marked mounted. Incomplete detail, prompt-preview, warning, or helper routes
+  stay unmounted.
+- Filter signatures include explicit article-created date bounds
+  (`articleCreatedAtFrom` and `articleCreatedAtTo`), duplicate/conflict flags,
+  import route scope, prompt/human/LLM status, queue kind, publication year, and
+  search scope where the current product route applies those predicates.
+- Human filter routes have human-specific facet and option contracts. Summary-mode
+  human answers are first-class summary/facet inputs instead of being modeled as
+  prompt-only human judgments.
+- Synchronous title search is token/prefix only. Substring search, including
+  add-to-project-by-filter substring requests, is represented by async job
+  contracts over projected state or remains unavailable.
+- Job criteria reads use job-table identities such as `job_kind`,
+  `filter_signature`, `search_mode`, `search_text`, `updated_at`, and `job_id`.
+  They do not inherit article-row ordering or article-ID cursor assumptions.
+- Snapshot/health/warning reads must select usable manifests explicitly, such as
+  active or last-known-good/retired states, and must not make candidate or failed
+  manifests drive normal freshness decisions.
+- The Phase 5 benchmark is a release gate only if it covers rows, filtered
+  posting plus article-set hydration, list/detail judgment payloads, human facets
+  and options, named counts across list modes, queue kind, token-prefix search,
+  async substring jobs, bulk/export/PDF jobs, request-slice diversity, scanned-row
+  ceilings, zero foreground temp spill, latency, and RSS targets.
+
+These refinements do not conflict with the OOM fix. They reduce the chance of a
+false cutover by making semantic parity and physical boundedness part of the same
+contract.
+
 ## Scale Target
 
 The initial production-scale target is 10 million articles in one project, with
@@ -103,7 +148,7 @@ be tuned only with benchmark evidence and an explicit plan update.
 These contracts make the serving-index plan safe to operate instead of only faster:
 
 - JavaScript/TypeScript implementation uses the `effect` library for non-trivial async and server flow in every phase. Phase docs call out the specific JS/TS surfaces that should use `Effect.gen`, `Layer`/`Context`, `Effect.acquireRelease`/`Scope`, and `Schedule`.
-- Freshness contract: every review response has an explicit state: fresh, stale, indexing, failed, or missing. Stale state returns the last completed snapshot plus progress; missing state returns indexing state and empty rows.
+- Freshness contract: every review response has an explicit readiness state using the implementation vocabulary `ready`, `stale`, `indexing`, or `unavailable`, plus snapshot status and diagnostics when the underlying manifest is candidate, failed, missing, or retired. Stale state returns the last completed snapshot plus progress; unavailable/missing initial state returns indexing or unavailable state and empty rows.
 - Atomic snapshot manifest: a snapshot becomes active only after every required route component completes for the same composed identity set. Optional components such as async search or unsupported counts have their own availability state and do not block unrelated review-list activation.
 - Component-scoped projector graph: each delta kind enters the graph at the first affected component declared by the invalidation registry. Selected-import projection is only on import/scope paths; judgment and human-review deltas do not wait for selected-import work.
 - Serving writer ownership: one normal writer owns V4 `mart.review_*_v4` serving rows and V4 snapshot promotion. Legacy refresh/rebuild services either call that writer as helpers, produce deltas/dirty work, or are retired; they do not independently write or promote V4 review-serving snapshots.
@@ -127,10 +172,12 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - Physical read-path contract: every hot route declares its serving table, required columns, filter keys, sort key, cursor shape, and index/access path. Hot reads use projected typed columns and config/snapshot-scoped keys, not runtime JSON extraction or selected-import joins.
 - Route inventory contract: mounted route inventory entries are complete product-route coverage only. Partial contracts remain unmounted and cannot be used as evidence that the route is migrated or safe.
 - Filter access contract: every synchronous filter combination is allowlisted with a bounded physical access strategy: ordered prefix, posting/projection table, small candidate set, or unavailable/async. A serving-only predicate is not enough if it scans project-scale rows.
+- Filtered hydration contract: posting/search contracts produce bounded page article sets, and row/detail/list-payload hydration for those sets uses `articleSetLookup` with explicit article-ID-set budgets. Direct ordered-prefix row contracts must not advertise filters that their SQL does not bind.
 - Cursor contract: every cursor includes `snapshot_id`, required component identities, component base/patch state, sort key values, page direction, and a filter signature. If the snapshot, identity set, component state, or filter signature changes, the route returns a fresh first page or a cursor-invalid state instead of mixing snapshots.
 - Snapshot pinning contract: durable jobs and long-lived cursors that require repeatable results acquire snapshot pins. Cleanup cannot delete pinned base rows, patches, payloads, counts, facets, or search state until the pin expires or is released.
 - Rebuild chunk contract: long rebuilds use chunk manifests with incrementally maintained input watermarks/digests and output status. Rebuild workers skip unchanged completed chunks and resume failed/interrupted chunks instead of rerunning the full phase or rescanning source rows just to decide skip eligibility.
 - Bulk-operation contract: select-all, add-to-project, PDF fetch, export, and similar actions operate through persisted selection jobs or cursor-batched server jobs. They never return or allocate all matching article IDs in one request.
+- Job-criteria contract: durable bulk/export/PDF/search job lookups are keyed by job kind, filter signature, search mode/text when relevant, projection identities, and either a pinned snapshot or explicit latest-snapshot semantics. Job reads use job-table cursor/sort columns, not article-row ordering.
 - Search contract: synchronous ready search supports declared token/prefix semantics from compact search projections. Arbitrary substring/contains search over million-scale projects is async-only or unavailable unless a benchmarked n-gram projection is explicitly added.
 - Specific-count contract: only named product-critical counts are synchronous and fast. Unsupported filter/search combinations return nullable/unavailable counts or start async count work; they never trigger raw aggregation.
 - Workload admission contract: every normal foreground DuckDB request comes from a registered read/job contract with a workload class, search mode, result-size budget, row budget, memory/temp budget, and timeout. Ad hoc SQL estimation is not a safety boundary; unregistered foreground work or mismatched search-mode work is rejected before query execution.
@@ -142,7 +189,7 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - [ ] Import, dirty materialization, and review-index refresh can overlap without review-list OOMs.
 - [ ] A benchmark fixture with 10 million articles and an average of 7 prompts per article passes without OOM under the target DuckDB memory limits.
 - [ ] Review lists remain readable during materialization by using the last completed serving snapshot.
-- [ ] Review responses expose freshness state: fresh, stale, indexing, failed, or missing.
+- [ ] Review responses expose `ready`, `stale`, `indexing`, or `unavailable` readiness plus snapshot status/diagnostics for failed, missing, candidate, retired, or last-known-good state.
 - [ ] Foreground API reads never run unbounded raw/import-route scans.
 - [ ] Foreground review routes never execute project-wide windows, raw total counts, or JSON sorts.
 - [ ] LLM, human, both, unassessed, filter, count, badge, bulk-action, PDF, and export flows are all covered by the same serving/cursor/job architecture.
@@ -165,7 +212,9 @@ These contracts make the serving-index plan safe to operate instead of only fast
 - [ ] Serving manifests distinguish route-required projection components from optional async/search/count components.
 - [ ] Exactly one normal V4 serving writer owns `mart.review_*_v4` writes and active V4 snapshot promotion.
 - [ ] Review list, count, facet, badge, and unassessed-queue reads use serving indexes only.
+- [ ] Filtered review pages use posting/search selection plus `articleSetLookup` row hydration, with stable sort tie-breaks and no N+1 single-article hydration.
 - [ ] Filter-option routes, detail routes, and warning/health routes are not marked migrated until their contracts cover the complete response shape, including search-scoped options, prompt judgment details, and maintenance diagnostics.
+- [ ] List routes are not marked migrated until they preserve current row metadata, article timestamps, LLM judgment arrays, human prompt/summary payloads, both-mode payloads, prompt badges, and supported duplicate/conflict/date/prompt/search filter scopes.
 - [ ] Hot serving rows contain typed columns for sort, filters, badges, and selected import fields.
 - [ ] Hot serving tables use physical layouts that keep product reads bounded by ordered snapshot/filter prefixes, typed columns, and compact projection-specific rows.
 - [ ] Named product-critical counts and facets are precomputed or nullable; they are never computed from raw tables in request paths.
@@ -211,6 +260,22 @@ ORDER BY activity_sort_at DESC, article_id ASC
 LIMIT ?
 ```
 
+Filtered list routes should split selection from hydration. The posting/search
+step returns the bounded page article set, and the row hydration step follows an
+article-set shape instead of replaying unfiltered list SQL or doing N+1 lookups:
+
+```sql
+SELECT ...
+FROM mart.review_article_serving_v4
+WHERE project_id = ?
+  AND review_config_hash = ?
+  AND snapshot_id = ?
+  AND list_mode_key = ?
+  AND article_id IN (SELECT unnest(?))
+ORDER BY activity_sort_at DESC, article_id ASC
+LIMIT ?
+```
+
 Judgment-derived counts and facets should follow this shape:
 
 ```sql
@@ -227,6 +292,23 @@ The exact `list_mode_key` and projected filter predicates can vary by serving
 contract, but each hot read must be backed by projected typed columns and an
 explicit access path. No raw fallback. No `ROW_NUMBER()`. No JSON extraction. No
 raw total count. No `OFFSET` over large projects.
+
+Job criteria reads should follow job-table identity, not article-row identity:
+
+```sql
+SELECT ...
+FROM app.review_bulk_operation_job
+WHERE project_id = ?
+  AND job_kind = ?
+  AND filter_signature = ?
+  AND (snapshot_id = ? OR (latest_snapshot_semantics = TRUE AND snapshot_id IS NULL))
+ORDER BY updated_at DESC, job_id DESC
+LIMIT 1
+```
+
+Search-job reads similarly include search mode/text, filter signature, project
+scope identity, and null-safe optional identities. They must not be ordered by or
+scoped through article-row fields.
 
 Here, `snapshot_id` is a logical serving snapshot ID. It points at component
 projection identities, compacted `base_generation` values, and bounded patch
@@ -459,10 +541,16 @@ Initial named fast counts and facets for Phase 0 contracts:
 | `review.filter.duplicateFlag` | Facet | Project, list mode, duplicate/conflict flag. | Derived from selected import/display contribution rows. |
 | `review.filter.importRoute` | Facet | Project, list mode, import route/source kind. | Derived from project-scope/selected-import contribution rows. |
 | `review.filter.promptAnswer` | Facet | Project, prompt, answer/status. | Derived from LLM/human contribution rows. |
+| `review.human.filter.summaryAnswer` | Facet | Project, human summary mode answer/status. | Derived from summary-mode human contribution rows and not modeled as prompt-scoped human judgments. |
 | `review.filter.publicationYear` | Facet | Project, list mode, year bucket. | Derived from article display contribution rows. |
 
 Any count or facet not listed here is unavailable or async until added to this
 table with a summary definition version, contribution keys, and tests.
+
+Date filters are explicit range keys, not publication-year approximations. Routes
+that accept partial article-created bounds must use `articleCreatedAtFrom` and
+`articleCreatedAtTo` in the filter signature, count/facet identity, posting
+selection, and durable job criteria, or they must return unavailable/async state.
 
 Unsupported count shapes must not fall back to raw `COUNT(*)`, raw prompt-answer
 aggregation, or selected-import scans in foreground requests.
@@ -624,7 +712,7 @@ unclassified DuckDB work.
 | Overlay semantics | Route/service tests for read-your-write overlays. | Row/detail overlays reconcile after projection, while counts/facets/queues/bulk jobs remain snapshot-scoped or explicitly return overlay-aware state. |
 | Route-specific parity | Validation tests and benchmark assertions for parity mode. | Semantic fixtures, sampled safe-size parity, invariants, freshness states, cursors, SQL shape, latency, result bytes, and route states match expected behavior before each production route or flow migrates. |
 | Desktop/proxy | Route-surface/proxy tests for browser and desktop owner paths. | Browser and desktop share the same serving/job/admission behavior and route classifications. |
-| Benchmark | Scripted 10M-article/7-prompt synthetic benchmark. | Overlap import, dirty materialization, serving refresh, review reads, filters, counts, token/prefix search, unavailable/async substring state, bulk jobs, PDF/export jobs, and desktop interruption/resume under target memory limits. Include repeated small updates proving projectors do not rerun unrelated components. |
+| Benchmark | Scripted 10M-article/7-prompt synthetic benchmark. | Overlap import, dirty materialization, serving refresh, direct rows, filtered postings, article-set hydration, list/detail judgment payloads, human facets/options, named counts across list modes, queue-kind reads, token/prefix search, unavailable/async substring state, bulk substring selection, bulk jobs, PDF/export jobs, and desktop interruption/resume under target memory limits. Validate request-slice diversity, expected count/search/job dimensions, rows scanned ceilings, zero foreground temp spill, latency, and RSS targets. Include repeated small updates proving projectors do not rerun unrelated components. |
 
 Add a shared foreground-SQL assertion helper used by route and SQL-builder tests.
 It should fail if a foreground query contains any forbidden token or non-allowlisted
@@ -685,7 +773,7 @@ Rules for phase coordination:
 | `app.review_bulk_operation_job` | Persisted select-all/add-to-project/PDF/export work. | Store project, composed projection identities, optional review config hash, `snapshot_id`, snapshot pin ID or latest-snapshot semantics, filter signature, serialized criteria, cursor, batch size, status, result manifest, progress, cancellation, retry count, and error. Never store unbounded article ID arrays. |
 | `app.review_search_job` | Optional async title/search work for unsupported synchronous search. | Store project, search/project-scope identities, optional review config hash when combined with review filters, `snapshot_id`, snapshot pin ID or latest-snapshot semantics, search mode, search text, filter signature, cursor/progress, status, result count availability, expiration, and error. Do not store unbounded article ID arrays. Use when ready search projection is missing. |
 | `mart.review_title_search_serving_v4` | Optional compact token/prefix title search projection. | Store normalized token/prefix rows keyed by `project_id`, `search_identity`, `project_scope_identity`, `snapshot_id`, token/search key, and `article_id`. Add n-gram rows only if benchmarked and product-critical. Request paths and async jobs must not scan raw titles or rebuild for model/prompt changes. |
-| `mart.review_article_serving_v4` | Compacted hot review-list/filter/count base for LLM, human, both, and unassessed modes. | Store small typed fields needed for list UI, filters, sorting, badges, selected external IDs, human status, LLM status, cursor sort keys, and count/facet membership. Key by project, component identities, optional review config hash for judgment-derived state, `snapshot_id`, list/filter/sort prefixes. The `_v4` table must exist alongside legacy `mart.review_article_serving` until cutover. |
+| `mart.review_article_serving_v4` | Compacted hot review-list/filter/count base for LLM, human, both, and unassessed modes. | Store small typed fields needed for list UI, filters, sorting, badges, selected external IDs, article timestamps required by current list responses, human status, LLM status, cursor sort keys, and count/facet membership. Key by project, component identities, optional review config hash for judgment-derived state, `snapshot_id`, list/filter/sort prefixes. The `_v4` table must exist alongside legacy `mart.review_article_serving` until cutover. |
 | `mart.review_article_display_patch_v4` | Bounded display/payload-field patch rows/tombstones over a compacted base generation. | Key by project, display identity, base generation, patch watermark, article ID, and display sort/filter keys. Store only changed display fields. |
 | `mart.review_selected_import_patch_v4` | Bounded selected-import patch rows/tombstones over selected-import base state. | Key by project, project-scope identity, selected-import snapshot ID, patch watermark, article ID, and selected-import sort/filter keys. Store only selected import/rank/display source fields. |
 | `mart.review_llm_status_patch_v4` | Bounded LLM judgment-status patch rows/tombstones. | Key by project, review config hash, prompt config hash, base generation, patch watermark, list mode, article ID, prompt ID, and LLM status sort/filter keys. Store only LLM-derived status/badge fields. |
@@ -694,10 +782,12 @@ Rules for phase coordination:
 | `mart.review_article_filter_posting_patch_v4` | Bounded posting patch rows/tombstones for changed filter memberships. | Key by project, posting component identity, base generation, patch watermark, filter kind/value, list mode, sort key, and article ID. Store only added/removed posting memberships. |
 | `mart.review_article_filter_posting_serving_v4` | Compact postings for synchronous filter combinations that are not ordered prefixes. | Key by project, required projection identities, optional review config hash, `snapshot_id`, filter kind/value, list mode, sort key, and article ID. Multi-filter reads must start from a bounded posting/projection or return async/unavailable. |
 | `mart.review_filter_posting_stats_v4` | Incremental cardinality/selectivity stats for posting tables. | Key by project, projection identities, filter kind/value, list mode, and `snapshot_id`. Updated from contribution diffs so readers can choose a leading posting without scanning. |
-| `mart.review_article_serving_payload_v4` | Optional detail payloads for larger JSON/raw metadata. | Load by `project_id`, display/payload identity, `snapshot_id`, and `article_id` only on detail routes, export jobs, or explicit capped hydration steps. Never join by default in hot list/count/filter reads and never rebuild for model/prompt-only changes. |
+| `mart.review_article_serving_payload_v4` | Optional detail payloads for larger JSON/raw metadata. | Load by `project_id`, display/payload identity, `snapshot_id`, and `article_id` only on detail routes, export jobs, prompt preview, or explicit capped hydration steps. Never join by default in hot list/count/filter reads and never rebuild for model/prompt-only changes. |
+| `mart.review_article_judgment_detail_serving_v4` | Prompt/detail/list judgment payload rows. | Key by project, review config, snapshot, list mode, payload kind (`llm` or `human`), article, and prompt. List payload reads use article-set hydration and prompt-overlap row budgets. Detail reads may use deterministic list-mode priority only after article-scoped filtering keeps the window bounded. |
 | `mart.review_article_summary_contribution_v4` | Previous per-article contributions for count/facet/badge/posting summaries. | Key by project, projection identities, optional review config hash, article ID, component kind, summary definition version, and contribution key. Enables exact `-old +new` summary updates. |
-| `mart.review_article_count_serving_v4` | Precomputed count and badge values. | Key by `project_id`, required projection identities, optional `review_config_hash`, `snapshot_id`, count kind, summary definition version, and filter key. Keep values small and nullable/stale-aware. |
-| `mart.review_filter_facet_serving_v4` | Precomputed filter/facet values. | Key by `project_id`, required projection identities, optional `review_config_hash`, `snapshot_id`, facet kind, prompt ID, answer ID/value, and summary definition version. Serve filter UIs without grouping raw facts. |
+| `mart.review_article_count_serving_v4` | Precomputed count and badge values. | Key by `project_id`, required projection identities, optional `review_config_hash`, `snapshot_id`, `list_mode_key`, count kind, summary definition version, and filter key. Count SQL derives list mode from the named count key before falling back to a contract/global mode. Keep values small and nullable/stale-aware. |
+| `mart.review_filter_facet_serving_v4` | Precomputed filter/facet values. | Key by `project_id`, required projection identities, optional `review_config_hash`, `snapshot_id`, summary identity/filter scope, facet kind, facet key/value, prompt ID, answer ID/value, and summary definition version. Serve review and human-specific filter UIs without grouping raw facts. |
+| `mart.review_filter_option_serving_v4` | Precomputed filter option/min-max payload rows. | Key by project, review config, snapshot, search identity, filter option identity, filter kind, facet key, option value key, and option payload fields. A filter route cannot mount with facet rows alone when the UI expects option/min-max payloads. |
 | `mart.review_unassessed_queue_serving_v4` | Optional unassessed queue candidate ordering. | Key by `project_id, review_config_hash, snapshot_id, priority_bucket, activity_sort_at, article_id`. Use contribution diffs for routine judgment changes and rebuild in chunks for definition/config changes. |
 
 ## Delta Ledger Guidance
@@ -760,6 +850,7 @@ cheap at million-scale.
 - Cursor mismatch means restart from page one or return cursor-invalid state; never continue against a different snapshot/filter/component state.
 - Cursor projection-identity mismatch means cursor-invalid; never read a serving snapshot built from a different identity set.
 - Every synchronous filter must use an ordered prefix, filter posting table, compact projection, or pre-proven bounded candidate set. Otherwise return unavailable or async state.
+- Filtered list reads must not use direct ordered-prefix row contracts unless those contracts bind every advertised filter. Use posting/search selection plus article-set row hydration when the filter predicate is not part of the row-table prefix.
 - Filter posting selection uses maintained cardinality stats. Do not compute selectivity with a foreground scan.
 - Named product-critical counts must be precomputed or nullable; do not calculate raw counts on hot paths.
 - Named product-critical counts, facets, badges, queue counts, and posting stats update from stored old/new contribution diffs for routine changes.
@@ -771,6 +862,7 @@ cheap at million-scale.
 - Overlays affect only route contracts that declare overlay-aware behavior; snapshot-scoped counts/facets/queues/bulk jobs stay stale or pending until projection catches up.
 - Select-all, add-to-project, PDF fetch, export, and other bulk operations must use durable jobs and keyset-batched processing.
 - Repeatable bulk/export/PDF/search jobs must pin the serving snapshot they read. Latest-snapshot jobs must declare that they may restart if the active snapshot changes.
+- Durable job lookups must bind job kind, filter signature, and search mode/text when relevant. They use `updated_at`/`job_id` cursors and must support explicitly declared latest-snapshot rows with `snapshot_id IS NULL` where the schema allows them.
 - Routes must never return or allocate all matching article IDs for a large filter in one request.
 - API `limit` values must be clamped, and every hot route must have max response-byte and hydrated-payload budgets.
 - Foreground queries must be admitted by workload class before execution. Over-budget work is rejected, queued as async work, or served from stale state.
@@ -790,6 +882,7 @@ cheap at million-scale.
 - Under low-memory runtimes, reduce projector/materialization batch sizes before increasing concurrency.
 - Keep active, candidate, last known-good, and pinned snapshots; clean obsolete base, patch, payload, count, facet, queue, and search rows in bounded batches.
 - Store and compare snapshot state explicitly so foreground routes know whether data is active, stale, indexing, failed, or missing.
+- Health and warning reads choose usable manifests explicitly, such as active or last-known-good/retired state, and do not let newer candidate/failed manifests masquerade as readable snapshots.
 - Prefer clear cutovers that rebuild obsolete intermediate state over compatibility shims that keep old and new paths alive.
 
 ## Cutover Gate
@@ -819,6 +912,9 @@ complete and no normal product review flow can reach legacy raw fallback.
 - [ ] Rebuild chunk input digests are maintained incrementally by normal projection work, not computed by rescanning source rows during rebuild startup.
 - [ ] Snapshot pins prevent cleanup from deleting data needed by repeatable durable jobs.
 - [ ] Every synchronous filter route has a bounded ordered-prefix, posting-table, projection, or pre-proven candidate-set access path.
+- [ ] Filtered list routes prove posting/search selection plus article-set hydration, including stable list-mode and article-ID tie-break ordering.
+- [ ] List/detail judgment payload contracts preserve LLM, human prompt-mode, human summary-mode, and both-mode payloads without single-article N+1 lookups.
+- [ ] Count, facet, option, and durable job contracts include duplicate/conflict/date/search/list-mode/filter-signature scope where the current product flow applies it.
 - [ ] Serving reads, cursors, counts, search, and jobs include the narrow projection identities they depend on and reject mismatched identity state.
 - [ ] No normal browser or desktop review flow can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 - [ ] Admin/maintenance/debug-only raw reads are named, route-classified, guarded, and excluded from normal product flows.
@@ -866,6 +962,7 @@ is treated as complete. This master tracks only final cross-phase gates.
 - [ ] Overlap benchmark passes under target DuckDB memory limits with import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume.
 - [ ] Benchmark records p50/p95/p99 latency, peak process memory, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected query counts, rows scanned, rows returned, and active snapshot/identity state.
 - [ ] Benchmark proves foreground review reads are bounded by page size, selected filter postings, or precomputed summary rows, not total project article/judgment/import-route count.
+- [ ] Benchmark rejects wrong or missing request dimensions, including list mode, queue kind, search mode/text, named count key/filter prefix, job kind/filter signature, request-slice diversity, scanned-row ceilings, temp spill, latency, and RSS budgets.
 - [ ] Every product review route has a `reviewServingReadContracts.ts` registry entry with workload class, cursor spec, narrow projection identity behavior, budgets, allowed filters, physical filter access strategy, and named fast counts.
 - [ ] Every normal foreground DuckDB call is traceable to a registered read/job contract; unregistered foreground calls fail tests before query execution.
 - [ ] Every row in the DuckDB usage migration inventory is either migrated to serving/admission/job logic or explicitly classified as admin/maintenance/debug-only.

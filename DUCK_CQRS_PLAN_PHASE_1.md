@@ -33,6 +33,32 @@ Do not mutate legacy V3 table schemas during Phase 1.
 | [ ] | Schema foundation | Add migrations for import deltas, review change deltas, review delta outbox/reconciliation cursors, import hot fields, coalesced dirty work, dirty-work acknowledgements, projector cursors/watermarks, projection identity manifests, rebuild chunk manifests, selected-import snapshots, logical snapshot manifests, snapshot pins, compacted serving bases, typed component patch tables, filter postings, posting stats, contribution rows, payloads, judgment-detail rows, filter-option rows, count/facet rows, search state, bulk jobs, write overlays, and retention metadata. Use `_v4` physical mart names where legacy V3 tables conflict. | `bun run db:mig` applies cleanly and schema tests prove the exact table names used by `reviewServingReadContracts.ts`, every non-job read contract's `cursorFields` and `sort.fields`, common delta envelope fields, hot-field columns, outbox/reconciliation cursors, narrow identity keys, sorted/order keys, `snapshot_id`/`base_generation`/typed-patch fields, prompt-preview article ordering columns, required/optional component status, retention/pin fields, dirty-work acknowledgement fields, contribution keys, posting stats, and chunk resume fields exist. |
 | [ ] | Runtime admission foundation | Add generic workload classification and budget-enforcement hooks in the DuckDB runtime without adding product-specific SQL there. Extend the Phase 0 budget/read-contract shape with `timeoutMs`, and thread an optional workload context through DuckDB execution helpers and wrapper services with workload class, route/job key, project ID, result-row/byte budget, temp-spill policy, timeout, search mode, and stale/async fallback intent. | Registered review-serving foreground work can be admitted from contracts before DuckDB execution, unregistered migrated foreground work and mismatched search-mode work are rejected, registered stale-allowed work can serve stale or async according to its contract, legacy non-migrated routes remain explicitly classified during migration, and metrics include workload class, search mode, memory limit, temp usage, queue state, route/job key, and project context. |
 
+## Review-Driven Schema Requirements
+
+- `mart.review_article_serving_v4` must store the small row metadata needed by
+  current list responses, including stable sort keys, article ID tie-breakers, and
+  article timestamps or an explicit capped companion contract that provides them
+  before list routes mount.
+- `mart.review_article_count_serving_v4` includes `list_mode_key` so generic count
+  keys such as `review.list.total` cannot collide across LLM, human, both, and
+  unassessed modes.
+- `mart.review_filter_facet_serving_v4` includes summary/filter scope,
+  `facet_kind`, facet key/value, prompt/answer fields, and summary definition
+  version in its lookup/key so review facets, human facets, search-scoped facets,
+  and old summary versions cannot mix.
+- `mart.review_filter_option_serving_v4` includes an option value discriminator
+  and enough option/min-max payload columns to serve filter routes without falling
+  back to raw grouping.
+- `mart.review_article_judgment_detail_serving_v4` includes `list_mode_key` and a
+  payload source discriminator such as `payload_kind` so LLM and human both-list
+  payloads cannot overwrite or masquerade as each other.
+- Job tables support both pinned snapshots and explicitly declared latest-snapshot
+  semantics. Job lookups use `updated_at`/`job_id` sort fields and job-specific
+  identity columns, not article-row fields.
+- Snapshot manifests persist `snapshot_status` and enough active/retired/failed
+  state for health and warning reads to choose usable snapshots and preserve the
+  last-known-good snapshot.
+
 ## Required Schema Groups
 
 - Delta ledgers: `app.import_run_article_delta`, `app.review_change_delta`
@@ -68,6 +94,9 @@ Do not mutate legacy V3 table schemas during Phase 1.
 - Do not add product-specific SQL or contract knowledge to `duckdbService.ts`.
 - Keep raw JSON out of hot import-field and hot serving schemas.
 - Keep large payloads out of hot list/count/filter serving rows.
+- Keep list/detail payload discriminators, filter option value keys, facet scope,
+  and count list modes in schema keys so route-completeness tests cannot pass on
+  rows that would collide or mix modes.
 
 ## Quality Gates
 
@@ -79,8 +108,11 @@ Do not mutate legacy V3 table schemas during Phase 1.
 - [ ] `bun run lint`
 - [ ] Schema tests prove every table referenced by `reviewServingReadContracts.ts` exists.
 - [ ] Schema tests derive required physical columns from `reviewServingReadContracts.ts` and prove every non-job contract's `cursorFields` and `sort.fields` exist on its serving table.
+- [ ] Schema tests prove job contracts use job-table `updated_at`/`job_id` fields and do not require article-row sort/cursor columns.
 - [ ] Schema tests prove prompt-preview payload ordering preserves current route semantics: `article_created_at ASC NULLS LAST, article_id ASC`, without inserting project ordinal before article ID.
 - [ ] Schema tests prove detail judgment and filter-option serving tables exist before those mounted routes can migrate.
+- [ ] Schema tests prove count rows include `list_mode_key`, facet rows include summary/filter scope, filter-option rows include option value keys, judgment detail rows include payload kind, and manifest reads use `snapshot_status`.
+- [ ] Schema tests prove list row response metadata, including article timestamps, is present on hot rows or covered by an explicit capped companion contract before list routes can be mounted.
 - [ ] Schema tests prove common delta envelope fields exist on both delta ledgers.
 - [ ] Schema tests prove `snapshot_id`, `base_generation`, `patch_watermark`, typed patch keys, required/optional component status, retention/pin fields, dirty-work ack fields, contribution keys, posting stats, and chunk resume fields exist.
 - [ ] Admission tests prove `timeoutMs` is declared on read contracts, mapped into `DuckdbWorkloadContext`, recorded in metrics, and enforced when contextual work exceeds it.

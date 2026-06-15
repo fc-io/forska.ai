@@ -18,7 +18,7 @@ The serving projector service becomes the single normal write boundary for V4 `m
 |---|---|---|---|
 | [ ] | Projector core | Build component-scoped projector dependency graph, coalesced dirty-work service, compacted component acknowledgements, leases, watermarks, idempotent replay, wake budgets, single serving-writer boundary, major base/minor patch snapshot model, contribution diff service, incrementally digested rebuild chunk manifests, failure state, snapshot pins, and retention cleanup primitives. | Projector tests prove crash/retry/replay safety, bounded batch size, dirty-work coalescing, component ack skip behavior, wake release, watermark atomicity, single-writer ownership, contribution diffs, component-narrow patches, patch compaction thresholds, chunk resume/skip behavior without source-row hash scans, pin-aware cleanup, and failed snapshots preserving last-known-good data. |
 | [ ] | Selected-import projection | Replace runtime `selected_scoped_article_import` ranking with snapshot-scoped selected-import projection. | Selected import rows are projected by bounded batches, promoted atomically, and normal foreground SQL never contains `selected_scoped_article_import` after cutover. |
-| [ ] | Serving projections | Write compacted base rows, component-narrow patch rows, payload rows, human/both/unassessed status, badges, contribution rows, count/facet rows, filter-option rows, prompt judgment-detail rows, filter postings, posting stats, queue rows, warning/health diagnostic state, and search projection or async search state from completed dependency inputs. | Manifest checks prove all route-required components and watermarks match one logical snapshot before promotion. Optional search/count components expose availability states and do not block unrelated route activation. Routine changes update only affected component fields, contributions, postings, option rows, detail rows, diagnostic rows, and chunk digests. |
+| [ ] | Serving projections | Write compacted base rows, component-narrow patch rows, payload rows, human/both/unassessed status, badges, contribution rows, count/facet rows, filter-option rows, prompt judgment-detail rows, list judgment payload rows, article-set hydration support, filter postings, posting stats, queue rows, warning/health diagnostic state, and search projection or async search state from completed dependency inputs. | Manifest checks prove all route-required components and watermarks match one logical snapshot before promotion. Optional search/count components expose availability states and do not block unrelated route activation. Routine changes update only affected component fields, contributions, postings, option rows, detail rows, list payload rows, diagnostic rows, and chunk digests. |
 
 ## Snapshot And Generation Rules
 
@@ -53,10 +53,13 @@ The serving projector service becomes the single normal write boundary for V4 `m
 ## Route Completeness Rules
 
 - Filter posting rows are article-candidate access paths, not filter-option route responses. Filter-option projections must produce the complete option/min-max payload expected by the current UI and preserve active search/filter scope.
-- Detail route projections must include prompt-level judgment details, explanations, quotes, assessments, placeholder judgments, payload references, and badges before `/api/projectsreview` can migrate.
+- Filtered list route projections must support the two-step serving path: posting/search candidate selection followed by article-set hydration for the page's rows and list judgment payloads.
+- Detail route projections must include prompt-level judgment details, human prompt/summary payloads, explanations, quotes, assessments, placeholder judgments, payload references, badges, and current detail extras before `/api/projectsreview` can migrate.
+- List route projections must preserve current row metadata, article timestamps, LLM judgment arrays, human prompt/summary arrays, both-mode LLM and human payloads, and prompt badges before list routes can migrate.
 - Warning/health projections or repositories must expose snapshot state together with maintenance lease state, queued/in-flight refresh counts, large-rebuild progress, and quarantine diagnostics before `/api/projectsreviewswarnings` can migrate.
 - Standalone count route projections must cover the same search/filter scope as the current count panel or return explicit unavailable/async state.
-- Prompt-preview payload projection preserves current first-article ordering by `article_created_at ASC NULLS LAST, article_id ASC`.
+- Prompt-preview payload projection preserves current first-article ordering by `article_created_at ASC NULLS LAST, article_id ASC` and includes the prompt/config identity needed for prompt text, model execution context, content flags, and prompt order, or the route remains unmounted.
+- Count/facet/option projections persist list mode, summary identity, facet kind, filter/search scope, and option value keys so list modes, human/review facets, and old summary versions cannot mix.
 
 ## Chunked Rebuild Rules
 
@@ -101,8 +104,10 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [ ] Targeted tests for atomic review serving snapshot manifest promotion and failed-snapshot recovery
 - [ ] Targeted tests for required versus optional manifest components and route-specific availability states
 - [ ] Targeted tests for count/facet serving projections
-- [ ] Targeted tests for filter-option projections proving complete option/min-max payloads and active search/filter scope
-- [ ] Targeted tests for judgment-detail serving projections proving explanations, quotes, assessments, placeholders, and payload references are present
+- [ ] Targeted tests for count/facet serving projections proving list-mode, summary identity, date-range, search-scope, and human summary-answer behavior
+- [ ] Targeted tests for filter-option projections proving complete option/min-max payloads, option value keys, and active search/filter scope
+- [ ] Targeted tests for article-set row hydration after posting/search selection, including stable list-mode and article-ID tie-break ordering
+- [ ] Targeted tests for judgment-detail and list judgment payload projections proving LLM/human payload kind separation, prompt-overlap row counts, explanations, quotes, assessments, placeholders, and payload references are present
 - [ ] Targeted tests for warning/health diagnostics proving maintenance, rebuild, dirty-work, and quarantine states are represented
 - [ ] Targeted tests for old/new contribution diffs for counts, facets, badges, queues, posting stats, deletes, answer changes, and membership removals
 - [ ] Targeted tests for unsupported count/facet combinations returning nullable or unavailable states

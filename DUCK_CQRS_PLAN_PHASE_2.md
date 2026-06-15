@@ -34,12 +34,13 @@ The invalidation registry `requiredKeys` are change-specific payload keys. The e
 - Article/import-route membership writes emit `importRoute.article.added`, `importRoute.article.removed`, or `importRoute.article.rankFields.updated` and do not resolve affected projects in the write transaction.
 - Direct project membership writes emit `projectScope.article.added` or `projectScope.article.removed` because the affected project is already the source row owner.
 - Article content/display writes may emit multiple deltas in one transaction: `article.display.updated`, `article.searchText.updated`, and/or `article.judgmentInput.updated`, depending on which derived input identities changed.
+- `article.judgmentInput.updated` must dirty every dependent component whose data can be stale after title/abstract/fulltext changes, including judgment input content, affected LLM status, queue, posting, summary, and payload rows that back prompt preview or detail text.
 - LLM judgment writes emit `judgment.llm.created`, `judgment.llm.updated`, or `judgment.llm.deleted` with model ID, prompt ID, content flags, judgment ID, and source high-water state from the persisted source row.
 - LLM judgment deltas must preserve benchmark-critical model/content settings and must not silently retry or reinterpret failed requests.
-- Human review writes emit `judgment.human.updated`.
+- Human review writes emit `judgment.human.updated`. Prompt-mode human updates include the prompt key; summary-mode human updates are valid without `promptId` and must still dirty human status, posting, and summary projections.
 - If human deletes or hard tombstones are introduced later, add a new `change_kind` and registry rule before wiring that write path.
-- Prompt edits emit `prompt.config.updated` for the affected prompt identity.
-- Project model/content/prompt membership changes emit `project.reviewConfig.updated` and do not mark article/display/search/payload identities dirty unless those inputs actually changed.
+- Prompt edits emit `prompt.config.updated` for the affected prompt identity, including prompt text, answer schema, thresholding, prompt order, and other prompt-output-affecting settings.
+- Project model/content/prompt membership changes emit `project.reviewConfig.updated` and do not mark article/display/search/payload identities dirty unless those inputs actually changed. Review config identity changes include model execution identity, content flags, prompt membership/order, and human review mode when those settings affect route semantics.
 - Import-route writes must not synthesize `projectScope.article.*` deltas synchronously.
 - Only persist `affected_project_id` in an import-write transaction if route-to-project fanout is measured and bounded.
 
@@ -84,6 +85,9 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [ ] Targeted tests proving source writes and delta/outbox writes are atomic or reconciled before watermarks advance
 - [ ] Targeted tests proving outbox reconciliation converts, retries, or quarantines missing/malformed deltas and prevents dependent watermark advancement while unreconciled source high-water marks exist
 - [ ] Targeted tests proving LLM judgment deltas preserve persisted model ID and content flags without retrying, downgrading, or reinterpreting benchmark-critical settings
+- [ ] Targeted tests proving model execution identity, prompt order, and human review mode changes advance the correct prompt/review config identities without rebuilding unrelated article/import/title/search state
+- [ ] Targeted tests proving summary-mode human updates do not require `promptId` and still dirty human status, posting, and summary components
+- [ ] Targeted tests proving judgment-input changes dirty payload-backed detail/preview rows and dependent LLM/count/queue state where the changed content participates in judging
 - [ ] Targeted tests proving projection identity changes invalidate only dependent components, and review config changes do not rebuild config-independent article/import/title/payload/search state
 - [ ] Targeted tests proving display, search, judgment-input-content, project-scope, prompt config, and review config identities advance independently
 - [ ] Targeted tests proving one prompt config change does not rebuild unchanged prompt outputs, summaries, queues, or facets
