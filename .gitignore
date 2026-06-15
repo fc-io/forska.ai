@@ -83,6 +83,7 @@ Desktop.ini
 
 .tanstack/
 .ralph-tui/
+.serena/
 .hermes/
 drizzle
 ./CLAUDE.local.md
