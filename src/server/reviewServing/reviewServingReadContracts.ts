@@ -53,7 +53,7 @@ const bothComponents = [...baseComponents, 'llmStatus', 'humanStatus', 'posting'
 const queueComponents = [...baseComponents, 'judgmentInputContent', 'llmStatus', 'queue', 'summary'] as const
 const articleDateRangeFilters = ['articleCreatedAtFrom', 'articleCreatedAtTo'] as const
 const defaultRowFilters = ['duplicateFlag', 'importRoute', 'publicationYear', ...articleDateRangeFilters, 'searchTokenPrefix'] as const
-const defaultCountFilters = ['duplicateFlag', 'importRoute', 'publicationYear', ...articleDateRangeFilters] as const
+const defaultCountFilters = ['conflictFlag', 'duplicateFlag', 'importRoute', 'publicationYear', ...articleDateRangeFilters] as const
 const defaultReviewCounts = ['review.list.total', 'review.list.filteredTotal'] as const
 const reviewArticleServingTable = 'mart.review_article_serving_v4'
 const reviewArticlePayloadServingTable = 'mart.review_article_serving_payload_v4'
@@ -149,6 +149,8 @@ const filterFacetContract = (input: {
   namedFastCounts: readonly NamedReviewFastCountKey[]
   requiredComponents: readonly ReviewServingProjectionComponent[]
 }) => {
+  const supportsSearchScope = input.allowedFilters.includes('searchTokenPrefix')
+
   return defineContract({
     allowedFilters: input.allowedFilters,
     cursorFields: [],
@@ -158,10 +160,10 @@ const filterFacetContract = (input: {
     maxPageSize: 128,
     maxResultRows: 128,
     namedFastCounts: input.namedFastCounts,
-    optionalComponents: [],
+    optionalComponents: supportsSearchScope ? ['search'] : [],
     physicalAccessStrategy: 'summaryLookup',
     requiredComponents: input.requiredComponents,
-    searchMode: 'none',
+    searchMode: supportsSearchScope ? 'tokenPrefix' : 'none',
     servingTable: reviewFacetServingTable,
     sort: reviewFilterFacetSort,
     workloadClass: 'foregroundReviewFacet',
@@ -240,7 +242,7 @@ export const reviewServingReadContractList = [
     requiredComponents: bothComponents,
   }),
   defineContract({
-    allowedFilters: [...defaultCountFilters, 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer'],
+    allowedFilters: [...defaultCountFilters, 'humanStatus', 'llmStatus', 'promptAnswer'],
     cursorFields: [],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.both.count',
@@ -327,6 +329,7 @@ export const reviewServingReadContractList = [
       'llmStatus',
       'promptAnswer',
       'publicationYear',
+      'searchTokenPrefix',
     ],
     key: 'review.filters.facets',
     namedFastCounts: [
@@ -666,6 +669,32 @@ export const reviewServingReadContractList = [
     workloadClass: 'bulkReviewJob',
   }),
   defineContract({
+    allowedFilters: [
+      ...defaultRowFilters,
+      'articleId',
+      'conflictFlag',
+      'humanStatus',
+      'llmStatus',
+      'promptAnswer',
+      'queueKind',
+    ],
+    cursorFields: ['updated_at', 'job_id'],
+    freshnessBehavior: 'asyncUnavailable',
+    key: 'review.bulk.substringSelection',
+    listMode: null,
+    maxEstimatedResultBytes: 500_000,
+    maxPageSize: 1,
+    maxResultRows: 1,
+    namedFastCounts: [],
+    optionalComponents: ['search'],
+    physicalAccessStrategy: 'jobCriteria',
+    requiredComponents: ['projectScope', 'posting', 'summary'],
+    searchMode: 'substringAsync',
+    servingTable: 'app.review_bulk_operation_job',
+    sort: jobServingSort,
+    workloadClass: 'bulkReviewJob',
+  }),
+  defineContract({
     allowedFilters: [...defaultRowFilters, 'conflictFlag', 'humanStatus', 'llmStatus', 'promptAnswer', 'sourceProject'],
     cursorFields: ['updated_at', 'job_id'],
     freshnessBehavior: 'requireReadySnapshot',
@@ -898,7 +927,7 @@ export const reviewServingReadContractRouteInventory = [
     surfaces: ['bulk', 'pdf', 'filter', 'search'],
   },
   {
-    contractKeys: ['review.bulk.selection'],
+    contractKeys: ['review.bulk.substringSelection'],
     method: 'POST',
     mounted: false,
     productRoute: '/api/projects/add_articles_by_filter',

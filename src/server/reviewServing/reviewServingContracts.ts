@@ -156,6 +156,7 @@ export const reviewServingReadContractKeys = [
   'review.warning.snapshot',
   'review.prompt.preview',
   'review.bulk.selection',
+  'review.bulk.substringSelection',
   'review.export.selection',
   'review.pdf.selection',
   'review.search.tokenPrefix',
