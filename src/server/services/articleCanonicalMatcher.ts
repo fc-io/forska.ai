@@ -3,6 +3,7 @@ import type {
   ArticleIdentifierEvidence,
   ArticleStrongIdentifierKind,
 } from '../../utils/articleIdentifierNormalization.ts'
+import {appendArticleReviewServingDeltas} from '../reviewServing/articleReviewServingDeltaService.ts'
 import {getOrClause, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {
   type CanonicalArticleFieldCandidate,
@@ -730,6 +731,24 @@ const insertCreatedArticles = async (tx: CanonicalArticleMatcherTx, plans: Accep
           )
           VALUES ${planChunk.map(getCreateArticleInsertValue).join(', ')}
         `)
+    })
+  }, Promise.resolve())
+  await createPlans.reduce<Promise<void>>(async (previousRun, plan) => {
+    await previousRun
+    await appendArticleReviewServingDeltas(tx, {
+      articleId: plan.articleId,
+      changedFields: [
+        'articleAuthors',
+        'articleSummary',
+        'articleTitle',
+        'fullText',
+        'fullTextHtml',
+        'fullTextPDF',
+        'publicationStatus',
+        'url',
+      ],
+      sourceMutationKey: `articleCanonicalMatcher|article|${plan.articleId}|create`,
+      sourceOperation: 'insert',
     })
   }, Promise.resolve())
 }

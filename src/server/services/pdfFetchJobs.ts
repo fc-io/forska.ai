@@ -3,6 +3,10 @@ import {randomUUID} from 'node:crypto'
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {type ArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
+import {
+  appendArticleReviewServingDeltas,
+  getArticleReviewServingMutationValueHash,
+} from '../reviewServing/articleReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../services/appQueryHelpers.ts'
 
@@ -141,12 +145,20 @@ const fetchAndStoreForRow = async (jobId: string, row: PdfFetchRow): Promise<voi
     }
     return `${columnNameMap[key] ?? key} = ${getSqlLiteral(value)}`
   })
-  await getAppDatabaseService().run(`
-    UPDATE app.article
-    SET ${updateParts.join(', ')},
-        updated_at = ${getTimestampLiteral(new Date())}
-    WHERE id = '${escapeSqlString(row.id)}'
-  `)
+  await getAppDatabaseService().transaction(async (tx) => {
+    await tx.run(`
+      UPDATE app.article
+      SET ${updateParts.join(', ')},
+          updated_at = ${getTimestampLiteral(new Date())}
+      WHERE id = '${escapeSqlString(row.id)}'
+    `)
+    await appendArticleReviewServingDeltas(tx, {
+      articleId: row.id,
+      changedFields: result?.fullTextPDF ? ['fullText', 'fullTextHtml', 'fullTextPDF'] : [],
+      sourceMutationKey: `pdfFetchJobs|article|${row.id}|${getArticleReviewServingMutationValueHash(result)}`,
+      sourceOperation: 'update',
+    })
+  })
   processAttemptResult(jobId, result)
 }
 
