@@ -1564,3 +1564,211 @@ test('storeImportedArticlesWithTx skips canonical field updates for identifier-r
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
+
+test('syncImportedArticlesWithTx emits import deltas and hot fields without affected-project fanout', async () => {
+  const duckdbPath = `/tmp/f1-article-import-review-serving-deltas-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {syncImportedArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const importRoute = 'structured-file:review-serving-delta-test'
+        const createRow = (params) => ({
+          articleAuthors: ['Alice Example'],
+          articleId: params.articleId,
+          articleSummary: 'Review serving delta summary',
+          articleTitle: params.articleTitle,
+          doi: params.doi,
+          externalArticleId: params.externalArticleId,
+          importMetadata: {publicationYear: params.publicationYear, title: params.articleTitle},
+          importRoute,
+          importRunId: params.importRunId,
+          sourceKind: 'structured_file',
+          sourceRecordHash: params.sourceRecordHash,
+          sourceRecordKey: params.sourceRecordKey,
+        })
+
+        await database.transaction(async (tx) => {
+          await syncImportedArticlesWithTx({
+            importRoute,
+            rows: [
+              createRow({
+                articleId: 'delta-article-a',
+                articleTitle: 'Delta article A',
+                doi: '10.1000/delta-article-a',
+                externalArticleId: 'external-delta-a',
+                importRunId: 'delta-run-1',
+                publicationYear: 2024,
+                sourceRecordHash: 'hash-delta-a-1',
+                sourceRecordKey: 'delta-source-a',
+              }),
+              createRow({
+                articleId: 'delta-article-b',
+                articleTitle: 'Delta article B',
+                doi: '10.1000/delta-article-b',
+                externalArticleId: 'external-delta-b',
+                importRunId: 'delta-run-1',
+                publicationYear: 2025,
+                sourceRecordHash: 'hash-delta-b-1',
+                sourceRecordKey: 'delta-source-b',
+              }),
+            ],
+            tx,
+          })
+        })
+
+        await database.transaction(async (tx) => {
+          await syncImportedArticlesWithTx({
+            importRoute,
+            rows: [
+              createRow({
+                articleId: 'delta-article-a',
+                articleTitle: 'Delta article A updated',
+                doi: '10.1000/delta-article-a',
+                externalArticleId: 'external-delta-a',
+                importRunId: 'delta-run-2',
+                publicationYear: 2026,
+                sourceRecordHash: 'hash-delta-a-2',
+                sourceRecordKey: 'delta-source-a',
+              }),
+            ],
+            tx,
+          })
+        })
+
+        const deltaRows = await database.queryJson(
+          "SELECT change_kind AS changeKind, source_operation AS sourceOperation, source_record_key AS sourceRecordKey, source_record_hash AS sourceRecordHash, publication_year AS publicationYear, tombstone FROM app.import_run_article_delta ORDER BY source_high_water_mark ASC"
+        )
+        const hotFieldRows = await database.queryJson(
+          "SELECT external_id AS externalId, publication_year AS publicationYear, source_record_hash AS sourceRecordHash, source_record_key AS sourceRecordKey, tombstone FROM app.review_import_article_hot_field ORDER BY source_record_key ASC, tombstone ASC"
+        )
+        const [dirtyWorkCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.review_serving_dirty_work"
+        )
+        const [outboxCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.review_source_change_outbox"
+        )
+        const [reviewChangeCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.review_change_delta WHERE project_id IS NOT NULL"
+        )
+        const [snapshotCountRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.review_serving_snapshot_manifest"
+        )
+
+        console.log(JSON.stringify({deltaRows, dirtyWorkCountRow, hotFieldRows, outboxCountRow, reviewChangeCountRow, snapshotCountRow}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to emit import deltas')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      deltaRows: Array<{
+        changeKind: string
+        publicationYear: number | null
+        sourceOperation: string
+        sourceRecordHash: string
+        sourceRecordKey: string
+        tombstone: boolean
+      }>
+      dirtyWorkCountRow: {count: number}
+      hotFieldRows: Array<{
+        externalId: string
+        publicationYear: number | null
+        sourceRecordHash: string
+        sourceRecordKey: string
+        tombstone: boolean
+      }>
+      outboxCountRow: {count: number}
+      reviewChangeCountRow: {count: number}
+      snapshotCountRow: {count: number}
+    }
+
+    expect(
+      parsed.deltaRows.map((row) => {
+        return row.changeKind
+      }),
+    ).toEqual([
+      'importRoute.article.rankFields.updated',
+      'importRoute.article.rankFields.updated',
+      'importRoute.article.added',
+      'importRoute.article.added',
+      'importRoute.article.rankFields.updated',
+      'importRoute.article.removed',
+    ])
+    expect(parsed.deltaRows.at(4)).toMatchObject({
+      changeKind: 'importRoute.article.rankFields.updated',
+      publicationYear: 2026,
+      sourceRecordHash: 'hash-delta-a-2',
+      sourceRecordKey: 'delta-source-a',
+      tombstone: false,
+    })
+    expect(parsed.deltaRows.at(5)).toMatchObject({
+      changeKind: 'importRoute.article.removed',
+      sourceOperation: 'delete',
+      sourceRecordKey: 'delta-source-b',
+      tombstone: true,
+    })
+    expect(parsed.hotFieldRows).toEqual([
+      {
+        externalId: 'external-delta-a',
+        publicationYear: 2026,
+        sourceRecordHash: 'hash-delta-a-2',
+        sourceRecordKey: 'delta-source-a',
+        tombstone: false,
+      },
+      {
+        externalId: 'external-delta-b',
+        publicationYear: 2025,
+        sourceRecordHash: 'hash-delta-b-1',
+        sourceRecordKey: 'delta-source-b',
+        tombstone: true,
+      },
+    ])
+    expect(parsed.dirtyWorkCountRow.count).toBe(0)
+    expect(parsed.outboxCountRow.count).toBe(0)
+    expect(parsed.reviewChangeCountRow.count).toBe(0)
+    expect(parsed.snapshotCountRow.count).toBe(0)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
