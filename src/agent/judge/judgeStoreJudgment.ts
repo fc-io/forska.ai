@@ -1,4 +1,5 @@
 import type {JudgmentChunkingStrategy} from '../../db/schemaTypes.ts'
+import {appendLlmJudgmentReviewServingDeltas} from '../../server/reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
 import {getComparisonProjectServingInvalidationService} from '../../server/services/comparisonProjectServingInvalidationService.ts'
@@ -9,6 +10,19 @@ import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/
 type JudgmentStoreRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
+}
+type StoredJudgmentRow = {
+  articleId: string
+  changeKind: 'judgment.llm.created' | 'judgment.llm.updated'
+  id: string
+  modelId: string
+  projectId: string | null
+  promptId: string
+  updatedAt: string | null
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
 }
 
 const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
@@ -33,6 +47,10 @@ const storeJudgmentForPrompt = async ({
   shortIdMapping,
   snapshotProjectId,
   snapshotProjectModelName,
+  useAbstract,
+  useFulltext,
+  useFulltextNoImages,
+  useTitle,
 }: {
   articleId: string
   chunkingStrategy: JudgmentChunkingStrategy | null
@@ -43,6 +61,10 @@ const storeJudgmentForPrompt = async ({
   shortIdMapping: ShortIdMapping
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
 }) => {
   const shortId = getShortIdForPrompt(promptId, shortIdMapping)
   const answers = Object.entries(judgment).filter(([key]) => {
@@ -52,19 +74,30 @@ const storeJudgmentForPrompt = async ({
   const answeredExplanation = findAnswer<string>(answers, '---explanation')
   const answeredQuotes = findAnswer<string[]>(answers, '---quotes')
   const answeredOriginalAsArray = judgeStoreJudgmentGetStringAsArrayOfStrings(answeredOriginal)
-  const existing = await runner.queryJson<{id: string}>(`
-    SELECT id
+  const existing = await runner.queryJson<StoredJudgmentRow>(`
+    SELECT
+      id,
+      article_id AS articleId,
+      model_id AS modelId,
+      project_id AS projectId,
+      prompt_id AS promptId,
+      updated_at AS updatedAt,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages,
+      use_title AS useTitle
     FROM app.judgment
     WHERE article_id = ${getSqlLiteral(articleId)}
       AND model_id = ${getSqlLiteral(modelId)}
       AND prompt_id = ${getSqlLiteral(promptId)}
+      AND deleted_at IS NULL
     LIMIT 1
   `)
   const existingId = existing[0]?.id ?? null
 
   return existingId
     ? (
-        await runner.queryJson<{id: string}>(`
+        await runner.queryJson<StoredJudgmentRow>(`
           UPDATE app.judgment
           SET is_answered = TRUE,
               answered_original = ${getSqlLiteral(answeredOriginal)},
@@ -75,16 +108,32 @@ const storeJudgmentForPrompt = async ({
               chunking_strategy = ${getSqlLiteral(chunkingStrategy)},
               updated_at = current_timestamp
           WHERE id = ${getSqlLiteral(existingId)}
-          RETURNING id
+          RETURNING
+            id,
+            article_id AS articleId,
+            'judgment.llm.updated' AS changeKind,
+            model_id AS modelId,
+            project_id AS projectId,
+            prompt_id AS promptId,
+            updated_at AS updatedAt,
+            use_abstract AS useAbstract,
+            use_fulltext AS useFulltext,
+            use_fulltext_no_images AS useFulltextNoImages,
+            use_title AS useTitle
         `)
       )[0]
     : (
-        await runner.queryJson<{id: string}>(`
+        await runner.queryJson<StoredJudgmentRow>(`
           INSERT INTO app.judgment (
             id,
             article_id,
             model_id,
             prompt_id,
+            project_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
             is_answered,
             answered_original,
             answered_original_as_array,
@@ -100,6 +149,11 @@ const storeJudgmentForPrompt = async ({
             ${getSqlLiteral(articleId)},
             ${getSqlLiteral(modelId)},
             ${getSqlLiteral(promptId)},
+            ${getSqlLiteral(snapshotProjectId)},
+            ${getSqlLiteral(useTitle)},
+            ${getSqlLiteral(useAbstract)},
+            ${getSqlLiteral(useFulltext)},
+            ${getSqlLiteral(useFulltextNoImages)},
             TRUE,
             ${getSqlLiteral(answeredOriginal)},
             ${getSqlLiteral(answeredOriginalAsArray)},
@@ -110,7 +164,18 @@ const storeJudgmentForPrompt = async ({
             ${getSqlLiteral(snapshotProjectId)},
             ${getSqlLiteral(snapshotProjectModelName)}
           )
-          RETURNING id
+          RETURNING
+            id,
+            article_id AS articleId,
+            'judgment.llm.created' AS changeKind,
+            model_id AS modelId,
+            project_id AS projectId,
+            prompt_id AS promptId,
+            updated_at AS updatedAt,
+            use_abstract AS useAbstract,
+            use_fulltext AS useFulltext,
+            use_fulltext_no_images AS useFulltextNoImages,
+            use_title AS useTitle
         `)
       )[0]
 }
@@ -166,27 +231,54 @@ export const judgeStoreJudgment = async (
       snapshotProjectModelName: modelRow?.modelName ?? null,
     } as const
     await getAppDatabaseService().transaction(async (runner) => {
-      const results = await promptIds.reduce<Promise<Array<{id: string} | undefined>>>(async (promise, promptId) => {
-        const currentResults = await promise
-        const stored = await storeJudgmentForPrompt({
-          articleId,
-          chunkingStrategy,
-          judgment,
-          modelId,
-          promptId,
-          runner,
-          shortIdMapping,
-          snapshotProjectId: snapshotValues.snapshotProjectId,
-          snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
-        })
+      const results = await promptIds.reduce<Promise<Array<StoredJudgmentRow | undefined>>>(
+        async (promise, promptId) => {
+          const currentResults = await promise
+          const stored = await storeJudgmentForPrompt({
+            articleId,
+            chunkingStrategy,
+            judgment,
+            modelId,
+            promptId,
+            runner,
+            shortIdMapping,
+            snapshotProjectId: snapshotValues.snapshotProjectId,
+            snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
+            useAbstract: projectRow?.useAbstract ?? true,
+            useFulltext: projectRow?.useFulltext ?? false,
+            useFulltextNoImages: projectRow?.useFulltextNoImages ?? false,
+            useTitle: projectRow?.useTitle ?? true,
+          })
 
-        return [...currentResults, stored]
-      }, Promise.resolve([]))
-      const successfulResults = results.filter((result): result is {id: string} => {
+          return [...currentResults, stored]
+        },
+        Promise.resolve([]),
+      )
+      const successfulResults = results.filter((result): result is StoredJudgmentRow => {
         return result !== undefined
       })
 
       if (successfulResults.length > 0) {
+        await appendLlmJudgmentReviewServingDeltas(
+          runner,
+          successfulResults.map((result) => {
+            return {
+              articleId: result.articleId,
+              changeKind: result.changeKind,
+              judgmentId: result.id,
+              modelId: result.modelId,
+              projectId: result.projectId,
+              promptId: result.promptId,
+              sourceMutationKey: `judgeStoreJudgment|${result.id}|${result.changeKind}`,
+              sourceOperation: result.changeKind === 'judgment.llm.created' ? 'insert' : 'update',
+              sourceUpdatedAt: result.updatedAt,
+              useAbstract: result.useAbstract,
+              useFulltext: result.useFulltext,
+              useFulltextNoImages: result.useFulltextNoImages,
+              useTitle: result.useTitle,
+            }
+          }),
+        )
         await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
           articleIds: [articleId],
           reason: 'judgeStoreJudgment',
