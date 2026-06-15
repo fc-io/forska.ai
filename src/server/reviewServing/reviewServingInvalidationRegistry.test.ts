@@ -42,6 +42,136 @@ test('reviewServingInvalidationRegistry maps every Phase 0 change kind', () => {
   ).toEqual([])
 })
 
+test('every emitted delta kind declares complete invalidation metadata', () => {
+  const rules = reviewServingChangeKinds.map(getReviewServingInvalidationRule)
+  const incompleteRules = rules.filter((rule) => {
+    return (
+      rule.changeKind.length === 0
+      || rule.firstAffectedComponent.length === 0
+      || rule.affectedComponents.length === 0
+      || rule.requiredKeys.length === 0
+      || rule.updateMode.length === 0
+      || !rule.requiredKeys.includes('sourceHighWaterMark')
+      || !rule.affectedComponents.includes(rule.firstAffectedComponent)
+      || rule.downstreamDependents.some((component) => {
+        return !rule.affectedComponents.includes(component)
+      })
+    )
+  })
+
+  expect(incompleteRules).toEqual([])
+  expect(
+    rules.map((rule) => {
+      return [
+        rule.changeKind,
+        rule.firstAffectedComponent,
+        rule.downstreamDependents,
+        rule.requiredKeys,
+        rule.updateMode,
+      ]
+    }),
+  ).toEqual([
+    [
+      'article.display.updated',
+      'display',
+      ['payload', 'posting', 'summary'],
+      ['articleId', 'changedDisplayFieldNames', 'sourceHighWaterMark'],
+      'componentPatch',
+    ],
+    [
+      'article.searchText.updated',
+      'search',
+      [],
+      ['articleId', 'changedSearchableFieldNames', 'sourceHighWaterMark'],
+      'componentPatch',
+    ],
+    [
+      'article.judgmentInput.updated',
+      'judgmentInputContent',
+      ['llmStatus', 'queue', 'posting', 'summary', 'payload'],
+      ['articleId', 'affectedContentFlags', 'sourceHighWaterMark'],
+      'componentPatch',
+    ],
+    [
+      'importRoute.article.added',
+      'projectScope',
+      ['selectedImport', 'posting', 'summary'],
+      ['importRouteId', 'articleId', 'importSourceRecordKey', 'sourceHighWaterMark'],
+      'appendPatch',
+    ],
+    [
+      'importRoute.article.removed',
+      'projectScope',
+      ['selectedImport', 'posting', 'summary'],
+      ['importRouteId', 'articleId', 'importSourceRecordKey', 'sourceHighWaterMark'],
+      'appendPatch',
+    ],
+    [
+      'importRoute.article.rankFields.updated',
+      'selectedImport',
+      ['posting', 'summary'],
+      ['importRouteId', 'articleId', 'changedRankFilterFields', 'sourceHighWaterMark'],
+      'componentPatch',
+    ],
+    [
+      'projectScope.article.added',
+      'projectScope',
+      ['selectedImport', 'llmStatus', 'humanStatus', 'queue', 'posting', 'summary', 'payload'],
+      ['projectId', 'articleId', 'projectArticleId', 'sourceHighWaterMark'],
+      'appendPatch',
+    ],
+    [
+      'projectScope.article.removed',
+      'projectScope',
+      ['selectedImport', 'llmStatus', 'humanStatus', 'queue', 'posting', 'summary', 'payload'],
+      ['projectId', 'articleId', 'projectArticleId', 'sourceHighWaterMark'],
+      'appendPatch',
+    ],
+    [
+      'judgment.llm.created',
+      'llmStatus',
+      ['queue', 'posting', 'summary'],
+      ['projectId', 'articleId', 'promptId', 'modelId', 'contentFlags', 'judgmentId', 'sourceHighWaterMark'],
+      'contributionDiff',
+    ],
+    [
+      'judgment.llm.updated',
+      'llmStatus',
+      ['queue', 'posting', 'summary'],
+      ['projectId', 'articleId', 'promptId', 'modelId', 'contentFlags', 'judgmentId', 'sourceHighWaterMark'],
+      'contributionDiff',
+    ],
+    [
+      'judgment.llm.deleted',
+      'llmStatus',
+      ['queue', 'posting', 'summary'],
+      ['projectId', 'articleId', 'promptId', 'modelId', 'contentFlags', 'judgmentId', 'sourceHighWaterMark'],
+      'contributionDiff',
+    ],
+    [
+      'judgment.human.updated',
+      'humanStatus',
+      ['posting', 'summary'],
+      ['projectId', 'articleId', 'humanJudgmentKey', 'sourceHighWaterMark'],
+      'contributionDiff',
+    ],
+    [
+      'prompt.config.updated',
+      'llmStatus',
+      ['queue', 'posting', 'summary'],
+      ['projectId', 'promptId', 'changedPromptConfigFields', 'sourceHighWaterMark'],
+      'promptScopedRebuild',
+    ],
+    [
+      'project.reviewConfig.updated',
+      'judgmentInputContent',
+      ['llmStatus', 'humanStatus', 'queue', 'posting', 'summary'],
+      ['projectId', 'changedReviewConfigFields', 'sourceHighWaterMark'],
+      'componentRebuild',
+    ],
+  ])
+})
+
 test('LLM judgment changes do not invalidate display, selected import, or search components', () => {
   const llmJudgmentRules = reviewServingChangeKinds
     .filter((changeKind) => {

@@ -355,3 +355,39 @@ test('Phase 2 hook inventory keeps product routes on existing read contracts', (
 
   expect(forbiddenServingSwitchMarkers).toEqual([])
 })
+
+test('Phase 2 integrated write hooks do not populate serving projections, promote snapshots, or fan out import scope', () => {
+  const integratedHookFiles = [
+    ...new Set(
+      hookInventory
+        .filter((entry) => {
+          return !entry.outOfPhase2ScopeReason
+        })
+        .map((entry) => {
+          return entry.filePath
+        }),
+    ),
+  ]
+  const forbiddenWriteMarkers = [
+    'INSERT INTO mart.review_',
+    'UPDATE mart.review_',
+    'DELETE FROM mart.review_',
+    'INSERT INTO app.review_serving_snapshot_manifest',
+    'UPDATE app.review_serving_snapshot_manifest',
+    'promoteReviewServingSnapshot',
+    'project-scale selected-import fanout',
+  ]
+  const forbiddenMatches = integratedHookFiles.flatMap((filePath) => {
+    const source = getSource(filePath)
+
+    return forbiddenWriteMarkers
+      .filter((marker) => {
+        return source.includes(marker)
+      })
+      .map((marker) => {
+        return `${filePath}: ${marker}`
+      })
+  })
+
+  expect(forbiddenMatches).toEqual([])
+})
