@@ -234,7 +234,7 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
   }
 
   if (params.contract.servingTable === reviewServingSnapshotManifestTable) {
-    return ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter} AND status IN ('active', 'retired')`
+    return ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter} AND snapshot_status IN ('active', 'retired')`
   }
 
   if (params.contract.servingTable === reviewServingSearchJobTable) {
@@ -242,7 +242,7 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
   }
 
   if (params.contract.servingTable === reviewServingBulkOperationJobTable) {
-    return ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter}`
+    return ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter} AND (snapshot_id = ${params.snapshotIdParameter} OR (latest_snapshot_semantics = TRUE AND snapshot_id IS NULL))`
   }
 
   if (params.contract.servingTable === reviewServingFilterOptionTable) {

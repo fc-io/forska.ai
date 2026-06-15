@@ -223,8 +223,9 @@ test('buildReviewServingRowsSql pins snapshot manifests to the active review con
 
   expect(assertReviewServingSqlShape(sql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    "WHERE project_id = $projectId AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash AND status IN ('active', 'retired') ORDER BY updated_at DESC, snapshot_id DESC",
+    "WHERE project_id = $projectId AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash AND snapshot_status IN ('active', 'retired') ORDER BY updated_at DESC, snapshot_id DESC",
   )
+  expect(sql).not.toContain(' AND status IN ')
   expect(sql).not.toContain('$snapshotId')
 })
 
@@ -655,7 +656,7 @@ test('buildReviewServingRowsSql constrains durable job lookups by criteria', () 
 
   expect(assertReviewServingSqlShape(bulkSql)).toEqual({ok: true, violations: []})
   expect(bulkSql).toContain('AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash')
-  expect(bulkSql).toContain('AND snapshot_id = $snapshotId')
+  expect(bulkSql).toContain('AND (snapshot_id = $snapshotId OR (latest_snapshot_semantics = TRUE AND snapshot_id IS NULL))')
   expect(bulkSql).toContain("AND job_kind = 'review.bulk.selection' AND filter_signature = $filterSignature")
   expect(assertReviewServingSqlShape(searchSql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
   expect(searchSql).toContain('WHERE project_id = $projectId')
