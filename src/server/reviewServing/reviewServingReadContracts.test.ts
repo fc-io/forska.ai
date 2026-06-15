@@ -221,6 +221,26 @@ test('count contracts do not advertise unsupported searched-count reads', () => 
   ])
 })
 
+test('count contracts include shared conflict filter scope', () => {
+  const countContracts = [
+    getReviewServingReadContract('review.llm.count'),
+    getReviewServingReadContract('review.human.count'),
+    getReviewServingReadContract('review.both.count'),
+    getReviewServingReadContract('review.unassessed.count'),
+  ]
+
+  expect(
+    countContracts.map((contract) => {
+      return [contract?.key, contract?.allowedFilters.includes('conflictFlag')]
+    }),
+  ).toEqual([
+    ['review.llm.count', true],
+    ['review.human.count', true],
+    ['review.both.count', true],
+    ['review.unassessed.count', true],
+  ])
+})
+
 test('queue and count contracts use physical serving-table sort columns', () => {
   const queue = getReviewServingReadContract('review.queue.unassessed')
   const count = getReviewServingReadContract('review.llm.count')
@@ -236,6 +256,7 @@ test('queue and count contracts use physical serving-table sort columns', () => 
 test('job criteria contracts use job-table cursor and sort columns', () => {
   const jobContracts = [
     getReviewServingReadContract('review.bulk.selection'),
+    getReviewServingReadContract('review.bulk.substringSelection'),
     getReviewServingReadContract('review.export.selection'),
     getReviewServingReadContract('review.pdf.selection'),
     getReviewServingReadContract('review.search.substringAsync'),
@@ -250,6 +271,7 @@ test('job criteria contracts use job-table cursor and sort columns', () => {
     ['updated_at', 'job_id'],
     ['updated_at', 'job_id'],
     ['updated_at', 'job_id'],
+    ['updated_at', 'job_id'],
   ])
   expect(
     jobContracts.map((contract) => {
@@ -260,12 +282,13 @@ test('job criteria contracts use job-table cursor and sort columns', () => {
     ['updated_at', 'job_id'],
     ['updated_at', 'job_id'],
     ['updated_at', 'job_id'],
+    ['updated_at', 'job_id'],
   ])
   expect(
     jobContracts.map((contract) => {
       return contract?.maxResultRows
     }),
-  ).toEqual([1, 1, 1, 1])
+  ).toEqual([1, 1, 1, 1, 1])
 })
 
 test('human filter facets use a dedicated contract', () => {
@@ -274,6 +297,9 @@ test('human filter facets use a dedicated contract', () => {
   const humanOptions = getReviewServingReadContract('review.human.filters.options')
 
   expect(reviewFacets?.key).toBe('review.filters.facets')
+  expect(reviewFacets?.allowedFilters).toContain('searchTokenPrefix')
+  expect(reviewFacets?.optionalComponents).toEqual(['search'])
+  expect(reviewFacets?.searchMode).toBe('tokenPrefix')
   expect(humanFacets?.servingTable).toBe('mart.review_filter_facet_serving_v4')
   expect(humanFacets?.requiredComponents).toEqual([
     'display',
@@ -310,6 +336,8 @@ test('human filter facets use a dedicated contract', () => {
     'summary',
   ])
   expect(humanOptions?.requiredComponents).not.toContain('llmStatus')
+  expect(humanFacets?.optionalComponents).toEqual(['search'])
+  expect(humanFacets?.searchMode).toBe('tokenPrefix')
 })
 
 test('human payload contracts cover list and detail response judgments', () => {
@@ -341,6 +369,7 @@ test('review serving contracts represent article-created date ranges explicitly'
     getReviewServingReadContract('review.filters.postings'),
     getReviewServingReadContract('review.filters.options'),
     getReviewServingReadContract('review.bulk.selection'),
+    getReviewServingReadContract('review.bulk.substringSelection'),
     getReviewServingReadContract('review.export.selection'),
     getReviewServingReadContract('review.pdf.selection'),
   ]
@@ -358,6 +387,7 @@ test('review serving contracts represent article-created date ranges explicitly'
     ['review.filters.postings', true, true],
     ['review.filters.options', true, true],
     ['review.bulk.selection', true, true],
+    ['review.bulk.substringSelection', true, true],
     ['review.export.selection', true, true],
     ['review.pdf.selection', true, true],
   ])
@@ -390,6 +420,17 @@ test('search contracts require project scope without blocking async substring on
   expect(tokenPrefix?.requiredComponents).toEqual(['projectScope', 'search'])
   expect(substringAsync?.requiredComponents).toEqual(['projectScope'])
   expect(substringAsync?.optionalComponents).toEqual(['search'])
+})
+
+test('bulk add selection models substring search as an async job', () => {
+  const tokenPrefixSelection = getReviewServingReadContract('review.bulk.selection')
+  const substringSelection = getReviewServingReadContract('review.bulk.substringSelection')
+
+  expect(tokenPrefixSelection?.searchMode).toBe('tokenPrefix')
+  expect(substringSelection?.searchMode).toBe('substringAsync')
+  expect(substringSelection?.freshnessBehavior).toBe('asyncUnavailable')
+  expect(substringSelection?.optionalComponents).toEqual(['search'])
+  expect(substringSelection?.allowedFilters).toContain('searchTokenPrefix')
 })
 
 test('snapshot contracts align cursor fields with sort keys and required counts', () => {
@@ -629,7 +670,7 @@ test('add-articles filter inventory maps to the mounted bulk selection route', (
 
   expect(addArticlesInventoryEntries).toHaveLength(1)
   expect(addArticlesInventoryEntries[0]).toMatchObject({
-    contractKeys: ['review.bulk.selection'],
+    contractKeys: ['review.bulk.substringSelection'],
     method: 'POST',
     mounted: false,
     routeFile: 'src/server/routes/ProjectsAddArticlesRoutes.ts',
