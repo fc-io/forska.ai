@@ -52,8 +52,20 @@ const humanComponents = [...baseComponents, 'humanStatus', 'posting', 'summary']
 const bothComponents = [...baseComponents, 'llmStatus', 'humanStatus', 'posting', 'summary'] as const
 const queueComponents = [...baseComponents, 'judgmentInputContent', 'llmStatus', 'queue', 'summary'] as const
 const articleDateRangeFilters = ['articleCreatedAtFrom', 'articleCreatedAtTo'] as const
-const defaultRowFilters = ['duplicateFlag', 'importRoute', 'publicationYear', ...articleDateRangeFilters, 'searchTokenPrefix'] as const
-const defaultCountFilters = ['conflictFlag', 'duplicateFlag', 'importRoute', 'publicationYear', ...articleDateRangeFilters] as const
+const defaultRowFilters = [
+  'duplicateFlag',
+  'importRoute',
+  'publicationYear',
+  ...articleDateRangeFilters,
+  'searchTokenPrefix',
+] as const
+const defaultCountFilters = [
+  'conflictFlag',
+  'duplicateFlag',
+  'importRoute',
+  'publicationYear',
+  ...articleDateRangeFilters,
+] as const
 const defaultReviewCounts = ['review.list.total', 'review.list.filteredTotal'] as const
 const reviewArticleServingTable = 'mart.review_article_serving_v4'
 const reviewArticlePayloadServingTable = 'mart.review_article_serving_payload_v4'

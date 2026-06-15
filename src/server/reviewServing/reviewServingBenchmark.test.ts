@@ -14,6 +14,7 @@ import {
   getReviewServingBenchmarkWorkItemShapeViolations,
   reviewServingBenchmarkOverlapWorkloadDefinition,
   reviewServingBenchmarkPhase5ReleaseGate,
+  type ReviewServingBenchmarkWorkloadOperation,
   reviewServingSynthetic10m7PromptOverlapFixture,
   runReviewServingBenchmarkEffect,
   runReviewServingBenchmarkSmoke,
@@ -30,7 +31,7 @@ const getBenchmarkRunFailureMessage = async (input: Parameters<typeof runReviewS
   )
 }
 
-const getBenchmarkOperation = (operationKey: string) => {
+const getBenchmarkOperation = (operationKey: string): ReviewServingBenchmarkWorkloadOperation => {
   const operation = reviewServingBenchmarkOverlapWorkloadDefinition.operations.find((candidate) => {
     return candidate.key === operationKey
   })
@@ -141,7 +142,7 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
       return {
         contractKey: operation.contractKey,
         maxRowsScannedPerRequest: operation.maxRowsScannedPerRequest,
-        requestSliceFields: operation.requestSliceFields,
+        requestSliceFields: operation.requestSliceFields ?? [],
         workloadClass: operation.workloadClass,
       }
     }),
@@ -565,12 +566,7 @@ test('review-serving benchmark rejects queue work items without a declared queue
   }
 
   expect(getReviewServingBenchmarkWorkItemShapeViolations(mismatchedInput, mismatchedWorkItem)).toEqual([
-    {
-      actual: 'missing:queueKind',
-      expected: 'queueKind',
-      field: 'requestSlice',
-      key: 'smoke-unassessed-queue',
-    },
+    {actual: 'missing:queueKind', expected: 'queueKind', field: 'requestSlice', key: 'smoke-unassessed-queue'},
   ])
   expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark work item mismatch')
 })

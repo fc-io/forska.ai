@@ -5,6 +5,7 @@ import {
   deleteDuckdbSnapshot,
   type DuckdbAppendRuntimeMetrics,
   type DuckdbSnapshot,
+  type DuckdbWorkloadContext,
   getDuckdbAppendRuntimeMetrics,
   getDuckdbRuntimeConfig,
   runDuckdbAppendJsonQuery,
@@ -224,26 +225,29 @@ const appDatabaseService = {
   deleteSnapshot: deleteDuckdbSnapshot,
   getAppendMetrics: getAppDatabaseAppendMetrics,
   getRuntimeConfig: getDuckdbRuntimeConfig,
-  maintenance: async (command: AppDatabaseMaintenanceCommand) => {
+  maintenance: async (command: AppDatabaseMaintenanceCommand, workloadContext?: DuckdbWorkloadContext) => {
     await withDuckdbOwnerWriteTracking(`maintenance:${command}`, () => {
-      return runDuckdbMaintenance(command)
+      return runDuckdbMaintenance(command, workloadContext)
     })
   },
   queryJson: runDuckdbJsonQuery,
   queryJsonBackground: runDuckdbBackgroundJsonQuery,
-  run: async (statement: string) => {
+  run: async (statement: string, workloadContext?: DuckdbWorkloadContext) => {
     await withDuckdbOwnerWriteTracking('run', () => {
-      return runDuckdbStatement(statement)
+      return runDuckdbStatement(statement, workloadContext)
     })
   },
-  runBackground: async (statement: string) => {
+  runBackground: async (statement: string, workloadContext?: DuckdbWorkloadContext) => {
     await withDuckdbOwnerWriteTracking('runBackground', () => {
-      return runDuckdbBackgroundStatement(statement)
+      return runDuckdbBackgroundStatement(statement, workloadContext)
     })
   },
-  transaction: async (operation: Parameters<typeof runDuckdbTransaction>[0]) => {
+  transaction: async (
+    operation: Parameters<typeof runDuckdbTransaction>[0],
+    workloadContext?: DuckdbWorkloadContext,
+  ) => {
     return withDuckdbOwnerWriteTracking('transaction', () => {
-      return runDuckdbTransaction(operation)
+      return runDuckdbTransaction(operation, workloadContext)
     })
   },
 }

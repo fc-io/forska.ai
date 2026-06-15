@@ -30,8 +30,8 @@ Do not mutate legacy V3 table schemas during Phase 1.
 
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
-| [ ] | Schema foundation | Add migrations for import deltas, review change deltas, review delta outbox/reconciliation cursors, import hot fields, coalesced dirty work, dirty-work acknowledgements, projector cursors/watermarks, projection identity manifests, rebuild chunk manifests, selected-import snapshots, logical snapshot manifests, snapshot pins, compacted serving bases, typed component patch tables, filter postings, posting stats, contribution rows, payloads, judgment-detail rows, filter-option rows, count/facet rows, search state, bulk jobs, write overlays, and retention metadata. Use `_v4` physical mart names where legacy V3 tables conflict. | `bun run db:mig` applies cleanly and schema tests prove the exact table names used by `reviewServingReadContracts.ts`, every non-job read contract's `cursorFields` and `sort.fields`, common delta envelope fields, hot-field columns, outbox/reconciliation cursors, narrow identity keys, sorted/order keys, `snapshot_id`/`base_generation`/typed-patch fields, prompt-preview article ordering columns, required/optional component status, retention/pin fields, dirty-work acknowledgement fields, contribution keys, posting stats, and chunk resume fields exist. |
-| [ ] | Runtime admission foundation | Add generic workload classification and budget-enforcement hooks in the DuckDB runtime without adding product-specific SQL there. Extend the Phase 0 budget/read-contract shape with `timeoutMs`, and thread an optional workload context through DuckDB execution helpers and wrapper services with workload class, route/job key, project ID, result-row/byte budget, temp-spill policy, timeout, search mode, and stale/async fallback intent. | Registered review-serving foreground work can be admitted from contracts before DuckDB execution, unregistered migrated foreground work and mismatched search-mode work are rejected, registered stale-allowed work can serve stale or async according to its contract, legacy non-migrated routes remain explicitly classified during migration, and metrics include workload class, search mode, memory limit, temp usage, queue state, route/job key, and project context. |
+| [x] | Schema foundation | Add migrations for import deltas, review change deltas, review delta outbox/reconciliation cursors, import hot fields, coalesced dirty work, dirty-work acknowledgements, projector cursors/watermarks, projection identity manifests, rebuild chunk manifests, selected-import snapshots, logical snapshot manifests, snapshot pins, compacted serving bases, typed component patch tables, filter postings, posting stats, contribution rows, payloads, judgment-detail rows, filter-option rows, count/facet rows, search state, bulk jobs, write overlays, and retention metadata. Use `_v4` physical mart names where legacy V3 tables conflict. | `bun run db:mig` applies cleanly and schema tests prove the exact table names used by `reviewServingReadContracts.ts`, every non-job read contract's normalized physical `cursorFields` and `sort.fields`, common delta envelope fields, hot-field columns, outbox/reconciliation cursors, narrow identity keys, sorted/order keys, `snapshot_id`/`base_generation`/typed-patch fields, prompt-preview article ordering columns, required/optional component status, retention/pin fields, dirty-work acknowledgement fields, contribution keys, posting stats, and chunk resume fields exist. |
+| [x] | Runtime admission foundation | Add generic workload classification and budget-enforcement hooks in the DuckDB runtime without adding product-specific SQL there. Extend the Phase 0 budget/read-contract shape with `timeoutMs`, and thread an optional workload context through DuckDB execution helpers and wrapper services with workload class, route/job key, project ID, result-row/byte budget, temp-spill policy, timeout, search mode, and stale/async fallback intent. | Registered review-serving foreground work can be admitted from contracts before DuckDB execution, unregistered migrated foreground work and mismatched search-mode work are rejected, registered stale-allowed work can serve stale or async according to its contract, legacy non-migrated routes remain explicitly classified during migration, and metrics include workload class, search mode, memory limit, temp usage, queue state, route/job key, and project context. |
 
 ## Review-Driven Schema Requirements
 
@@ -77,13 +77,20 @@ Do not mutate legacy V3 table schemas during Phase 1.
 ## Runtime Admission Requirements
 
 - Low-level DuckDB helpers accept an optional workload context but contain no product-specific SQL or review-serving decisions.
-- The workload context includes workload class, route/job key, project ID, row budget, byte budget, temp-spill policy, `timeoutMs`, and fallback intent.
+- The workload context includes workload class, route/job key, project ID, row budget, byte budget, temp-spill policy, `timeoutMs`, `searchMode`, and fallback intent.
 - Thread workload context through `duckdbService.ts`, `appDatabaseService.ts`, `readOnlyDuckdbService.ts`, `appReadOnlyDatabaseService.ts`, and `src/services/olap/duckdbRunner.ts` so route and worker wrappers cannot bypass contextual metrics or budget enforcement.
-- Metrics include workload class, memory limit, temp usage, queue state, route/job key, project context, rows returned, result bytes, and failures.
+- Metrics include workload class, search mode, memory limit, temp usage, queue state, route/job key, project context, rows returned, result bytes, and failures.
 - Budget enforcement happens when a workload context is supplied.
 - Unregistered migrated foreground work is rejected. Only registered contracts whose freshness behavior allows stale or async fallback can serve stale or async instead of executing fresh DuckDB work.
 - Requested search mode must match the registered contract search mode; omitted search mode means no search.
 - Legacy non-migrated routes remain explicitly classified during migration instead of being silently treated as registered serving reads.
+
+## Runtime Decisions
+
+- `searchMode` is a contract and metrics dimension, not product SQL in the DuckDB runtime. It distinguishes no-search reads, token-prefix index reads, and async substring jobs so admission rejects mismatches and diagnostics show whether fast index paths or async job paths were used.
+- Read-only DuckDB remains a direct read path for long-term read performance. Contextual read-only work is wrapped in the generic measured workload helper with `readOnlyQuery` metrics and budget checks, but it is not forced through the writer/owner queue.
+- Migrated-route enforcement is route-inventory driven. A route becomes blocking only when its real product route inventory entry is mounted for Phase 4; until then legacy routes stay explicitly classified and cannot be counted as registered serving reads.
+- Schema tests normalize contract cursor/sort fields by extracting physical leading identifiers and ignoring computed SQL expressions such as deterministic list-mode priority. Job contracts are checked separately and must stay on `updated_at`/`job_id` fields.
 
 ## Rules
 
@@ -100,23 +107,23 @@ Do not mutate legacy V3 table schemas during Phase 1.
 
 ## Quality Gates
 
-- [ ] `bun run db:mig`
-- [ ] If the live DuckDB owner blocks `bun run db:mig`, run the full migration flow against a temporary DuckDB path and record the blocker.
-- [ ] `bun test src/server/reviewServing`
-- [ ] `bun test src/server/utils/duckdbService*.test.ts`
-- [ ] `bunx eslint src/server/reviewServing src/server/utils/duckdbService.ts`
-- [ ] `bun run lint`
-- [ ] Schema tests prove every table referenced by `reviewServingReadContracts.ts` exists.
-- [ ] Schema tests derive required physical columns from `reviewServingReadContracts.ts` and prove every non-job contract's `cursorFields` and `sort.fields` exist on its serving table.
-- [ ] Schema tests prove job contracts use job-table `updated_at`/`job_id` fields and do not require article-row sort/cursor columns.
-- [ ] Schema tests prove prompt-preview payload ordering preserves current route semantics: `article_created_at ASC NULLS LAST, article_id ASC`, without inserting project ordinal before article ID.
-- [ ] Schema tests prove detail judgment and filter-option serving tables exist before those mounted routes can migrate.
-- [ ] Schema tests prove count rows include `list_mode_key`, facet rows include summary/filter scope, filter-option rows include option value keys, judgment detail rows include payload kind, and manifest reads use `snapshot_status`.
-- [ ] Schema tests prove list row response metadata, including article timestamps, is present on hot rows or covered by an explicit capped companion contract before list routes can be mounted.
-- [ ] Schema tests prove common delta envelope fields exist on both delta ledgers.
-- [ ] Schema tests prove `snapshot_id`, `base_generation`, `patch_watermark`, typed patch keys, required/optional component status, retention/pin fields, dirty-work ack fields, contribution keys, posting stats, and chunk resume fields exist.
-- [ ] Admission tests prove `timeoutMs` is declared on read contracts, mapped into `DuckdbWorkloadContext`, recorded in metrics, and enforced when contextual work exceeds it.
-- [ ] Admission tests prove mismatched search modes are rejected before DuckDB execution.
-- [ ] Wrapper tests prove workload context can be passed through `appDatabaseService.ts`, `readOnlyDuckdbService.ts`, `appReadOnlyDatabaseService.ts`, and `src/services/olap/duckdbRunner.ts`.
-- [ ] Runtime tests prove over-budget contextual DuckDB work records metrics and is rejected before becoming a normal product success path.
-- [ ] Browser and desktop review flows are not changed by this phase.
+- [x] `bun run db:mig`
+- [x] Live DuckDB owner did not block `bun run db:mig`.
+- [x] `bun test src/server/reviewServing`
+- [x] `bun test src/server/utils/duckdbService*.test.ts`
+- [x] `bunx eslint src/server/reviewServing src/server/utils/duckdbService.ts`
+- [x] `bun run lint`
+- [x] Schema tests prove every table referenced by `reviewServingReadContracts.ts` exists.
+- [x] Schema tests derive required physical columns from `reviewServingReadContracts.ts` and prove every non-job contract's normalized physical `cursorFields` and `sort.fields` exist on its final migrated serving table.
+- [x] Schema tests prove job contracts use job-table `updated_at`/`job_id` fields and do not require article-row sort/cursor columns.
+- [x] Schema tests prove prompt-preview payload ordering preserves current route semantics: `article_created_at ASC NULLS LAST, article_id ASC`, without inserting project ordinal before article ID.
+- [x] Schema tests prove detail judgment and filter-option serving tables exist before those mounted routes can migrate.
+- [x] Schema tests prove count rows include `list_mode_key`, facet rows include summary/filter scope, filter-option rows include option value keys, judgment detail rows include payload kind, and manifest reads use `snapshot_status`.
+- [x] Schema tests prove list row response metadata, including article timestamps, is present on hot rows or covered by an explicit capped companion contract before list routes can be mounted.
+- [x] Schema tests prove common delta envelope fields exist on both delta ledgers.
+- [x] Schema tests prove `snapshot_id`, `base_generation`, `patch_watermark`, typed patch keys, required/optional component status, retention/pin fields, dirty-work ack fields, contribution keys, posting stats, and chunk resume fields exist.
+- [x] Admission tests prove `timeoutMs` and `searchMode` are declared on read contracts, mapped into `DuckdbWorkloadContext`, recorded in metrics, and enforced when contextual work exceeds declared budgets.
+- [x] Admission tests prove mismatched search modes are rejected before DuckDB execution.
+- [x] Wrapper tests prove workload context can be passed through `appDatabaseService.ts`, `readOnlyDuckdbService.ts`, `appReadOnlyDatabaseService.ts`, and `src/services/olap/duckdbRunner.ts`.
+- [x] Runtime tests prove over-budget contextual DuckDB work records metrics and is rejected before becoming a normal product success path.
+- [x] Browser and desktop review flows are not changed by this phase.

@@ -68,6 +68,7 @@ export type DuckdbWorkloadContext = {
   maxResultRows?: number
   projectId?: string
   routeOrJobKey: string
+  searchMode?: string
   timeoutMs?: number
   workloadClass: string
 }
@@ -75,11 +76,13 @@ export type DuckdbWorkloadOperation =
   | 'appendQuery'
   | 'backgroundQuery'
   | 'backgroundStatement'
+  | 'externalQuery'
   | 'mainQuery'
   | 'mainStatement'
   | 'maintenance'
+  | 'readOnlyQuery'
   | 'transaction'
-export type DuckdbWorkloadQueue = 'append' | 'background' | 'main'
+export type DuckdbWorkloadQueue = 'append' | 'background' | 'external' | 'main' | 'readOnly'
 export type DuckdbWorkloadRuntimeMetric = {
   allowsTempSpill: boolean | null
   durationMs: number
@@ -94,6 +97,7 @@ export type DuckdbWorkloadRuntimeMetric = {
   resultBytes: number | null
   resultRows: number | null
   routeOrJobKey: string
+  searchMode: string | null
   tempDirectory: string | null
   tempSpillDeltaBytes: number | null
   timeoutMs: number | null
@@ -1603,6 +1607,7 @@ const getDuckdbWorkloadRuntimeMetric = ({
     resultBytes: resultMetrics.resultBytes,
     resultRows: resultMetrics.resultRows,
     routeOrJobKey: context.routeOrJobKey,
+    searchMode: context.searchMode ?? null,
     tempDirectory: tempAfter?.tempDirectory ?? tempBefore?.tempDirectory ?? null,
     tempSpillDeltaBytes: getDuckdbTempSpillDeltaBytes(tempBefore, tempAfter),
     timeoutMs: context.timeoutMs ?? null,
@@ -1680,6 +1685,29 @@ const withDuckdbWorkloadContext = <T>({
 
 export const getDuckdbWorkloadRuntimeMetricsSnapshot = () => {
   return [...duckdbServiceState.duckdbWorkloadMetrics]
+}
+
+export const runMeasuredDuckdbJsonWorkload = async <T>({
+  operation,
+  queue,
+  queueDepthAtStart,
+  workloadContext,
+  work,
+}: {
+  operation: DuckdbWorkloadOperation
+  queue: DuckdbWorkloadQueue
+  queueDepthAtStart: number
+  workloadContext?: DuckdbWorkloadContext
+  work: () => Promise<T[]>
+}): Promise<T[]> => {
+  return withDuckdbWorkloadContext({
+    context: workloadContext,
+    getResultMetrics: getDuckdbJsonWorkloadResultMetrics,
+    operation,
+    queue,
+    queueDepthAtStart,
+    work,
+  })
 }
 
 export const runDuckdbJsonQuery = async <T>(

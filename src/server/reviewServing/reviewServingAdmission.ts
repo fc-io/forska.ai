@@ -212,6 +212,7 @@ const getDuckdbWorkloadContext = (
     maxResultRows: contract.maxResultRows,
     projectId: request.projectId,
     routeOrJobKey: contract.key,
+    searchMode: contract.searchMode,
     timeoutMs: contract.timeoutMs,
     workloadClass: contract.workloadClass,
   }

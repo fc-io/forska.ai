@@ -25,6 +25,9 @@ test('duckdb workload context rejects over-budget query results and records metr
 
   void mock.module(serverRuntimeRoleModulePath, () => {
     return {
+      canCurrentServerOwnDuckdb: () => {
+        return true
+      },
       ensureCurrentDuckdbOwnerLease: async () => {},
       registerDuckdbOwnerDemotionHandler: () => {},
       releaseCurrentDuckdbOwnerLease: async () => {},
@@ -77,6 +80,7 @@ test('duckdb workload context rejects over-budget query results and records metr
         maxResultRows: 1,
         projectId: 'project-a',
         routeOrJobKey: 'review.llm.rows',
+        searchMode: 'tokenPrefix',
         workloadClass: 'foregroundReviewRows',
       })
       .then(
@@ -97,6 +101,7 @@ test('duckdb workload context rejects over-budget query results and records metr
       projectId: 'project-a',
       resultRows: 2,
       routeOrJobKey: 'review.llm.rows',
+      searchMode: 'tokenPrefix',
       workloadClass: 'foregroundReviewRows',
     })
     await duckdbService.closeDuckdbService()
