@@ -149,8 +149,8 @@ test('buildReviewConfigHash sorts prompt configs before hashing', () => {
     modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
     modelId: 'model-a',
     promptConfigs: [
-      {promptConfigHash: promptB, promptId: 'prompt-b'},
-      {promptConfigHash: promptA, promptId: 'prompt-a'},
+      {promptConfigHash: promptB, promptId: 'prompt-b', promptOrder: 2},
+      {promptConfigHash: promptA, promptId: 'prompt-a', promptOrder: 1},
     ],
     useAbstract: true,
     useFulltext: false,
@@ -162,8 +162,8 @@ test('buildReviewConfigHash sorts prompt configs before hashing', () => {
     modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
     modelId: 'model-a',
     promptConfigs: [
-      {promptConfigHash: promptA, promptId: 'prompt-a'},
-      {promptConfigHash: promptB, promptId: 'prompt-b'},
+      {promptConfigHash: promptA, promptId: 'prompt-a', promptOrder: 1},
+      {promptConfigHash: promptB, promptId: 'prompt-b', promptOrder: 2},
     ],
     useAbstract: true,
     useFulltext: false,
@@ -174,12 +174,38 @@ test('buildReviewConfigHash sorts prompt configs before hashing', () => {
   expect(left).toBe(right)
 })
 
+test('buildReviewConfigHash changes when prompt order changes', () => {
+  const input = {
+    humanJudgmentMode: 'prompt',
+    modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
+    modelId: 'model-a',
+    promptConfigs: [
+      {promptConfigHash: 'prompt:a', promptId: 'prompt-a', promptOrder: 1},
+      {promptConfigHash: 'prompt:b', promptId: 'prompt-b', promptOrder: 2},
+    ],
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  } as const
+  const baseHash = buildReviewConfigHash(input)
+  const reorderedHash = buildReviewConfigHash({
+    ...input,
+    promptConfigs: [
+      {promptConfigHash: 'prompt:a', promptId: 'prompt-a', promptOrder: 2},
+      {promptConfigHash: 'prompt:b', promptId: 'prompt-b', promptOrder: 1},
+    ],
+  })
+
+  expect(reorderedHash).not.toBe(baseHash)
+})
+
 test('buildReviewConfigHash ignores unrelated projection inputs', () => {
   const input = {
     humanJudgmentMode: 'prompt',
     modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
     modelId: 'model-a',
-    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a'}],
+    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a', promptOrder: 1}],
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
@@ -203,7 +229,7 @@ test('buildReviewConfigHash changes when model execution settings change', () =>
       variant: 'thinking',
     },
     modelId: 'model-a',
-    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a'}],
+    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a', promptOrder: 1}],
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
@@ -228,7 +254,7 @@ test('buildReviewConfigHash changes when human judgment mode changes', () => {
     humanJudgmentMode: 'prompt',
     modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
     modelId: 'model-a',
-    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a'}],
+    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a', promptOrder: 1}],
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,

@@ -327,6 +327,35 @@ test('buildReviewServingRowsSql applies posting filter keys before row ordering'
   expect(sql).toContain('ORDER BY sort_key DESC, article_id ASC')
 })
 
+test('buildReviewServingRowsSql intersects posting filters with token-prefix search when requested', () => {
+  const contract = getRequiredReviewServingReadContract('review.filters.postings')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    displayIdentityParameter: '$displayIdentity',
+    filterKindParameter: '$filterKind',
+    filterValueParameter: '$filterValue',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    searchTokenPrefixParameter: '$searchTokenPrefix',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
+  expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search')
+  expect(sql).toContain('search.project_id = $projectId')
+  expect(sql).toContain('search.search_identity = $searchIdentity')
+  expect(sql).toContain('search.project_scope_identity = $projectScopeIdentity')
+  expect(sql).toContain('search.snapshot_id = $snapshotId')
+  expect(sql).toContain('search.article_id = mart.review_article_filter_posting_serving_v4.article_id')
+  expect(sql).toContain('starts_with(search.token, $searchTokenPrefix)')
+})
+
 test('buildReviewServingRowsSql rejects foreground multi-filter posting intersections', () => {
   const contract = getRequiredReviewServingReadContract('review.filters.postings')
   const filterPredicatesSql = '(VALUES ($filterKind, $filterValue), ($secondFilterKind, $secondFilterValue))'

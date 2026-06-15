@@ -80,7 +80,7 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
       )
     }),
   ).toBe(true)
-  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations).toHaveLength(15)
+  expect(reviewServingBenchmarkOverlapWorkloadDefinition.operations).toHaveLength(18)
   expect(
     reviewServingBenchmarkOverlapWorkloadDefinition.operations.map((operation) => {
       return {contractKey: operation.contractKey, key: operation.key}
@@ -95,6 +95,9 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
     {contractKey: 'review.human.filters.facets', key: 'humanOverlapFacetRefresh'},
     {contractKey: 'review.filters.options', key: 'overlapFilterOptions'},
     {contractKey: 'review.llm.count', key: 'llmPromptOverlapCounts'},
+    {contractKey: 'review.human.count', key: 'humanPromptOverlapCounts'},
+    {contractKey: 'review.both.count', key: 'bothPromptOverlapCounts'},
+    {contractKey: 'review.unassessed.count', key: 'unassessedPromptOverlapCounts'},
     {contractKey: 'review.bulk.selection', key: 'bulkOverlapSelectionJob'},
     {contractKey: 'review.export.selection', key: 'exportOverlapSelectionJob'},
     {contractKey: 'review.pdf.selection', key: 'pdfOverlapSelectionJob'},
@@ -185,7 +188,7 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
       return operation.requestCount
     }),
   ).toEqual(
-    Array.from({length: 14}, () => {
+    Array.from({length: 18}, () => {
       return 1
     }),
   )
@@ -194,16 +197,16 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
       return sample.admissionStatus
     }),
   ).toEqual(
-    Array.from({length: 14}, () => {
+    Array.from({length: 18}, () => {
       return 'accepted'
     }),
   )
   expect(result.metrics).toMatchObject({
-    latency: {p50Ms: 11, p95Ms: 20, p99Ms: 20, sampleCount: 14},
-    queueDepth: {average: 1.29, peak: 3},
-    rows: {rowsReturned: 84, rowsScanned: 211},
+    latency: {p50Ms: 10, p95Ms: 20, p99Ms: 20, sampleCount: 18},
+    queueDepth: {average: 1.33, peak: 3},
+    rows: {rowsReturned: 87, rowsScanned: 214},
     tempUsage: {peakBytes: 0, totalBytes: 0},
-    work: {admitted: 14, rejected: 0, total: 14},
+    work: {admitted: 18, rejected: 0, total: 18},
   })
   expect(result.metrics.memory.peakRssBytes).toBeGreaterThanOrEqual(result.metrics.memory.startRssBytes)
 })

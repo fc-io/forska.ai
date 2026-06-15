@@ -367,10 +367,10 @@ test('future filter posting and facet contracts stay unmounted until route shape
     }),
   ).toEqual([
     ['/api/articlesreviews', false],
+    ['/api/articlesreviewscount', false],
     ['/api/articlesreviewshuman', false],
     ['/api/articlesreviewsboth', false],
     ['/api/articlesreviewsunassessed', false],
-    ['/api/articlesreviewscount', false],
     ['/api/review-serving/filter-postings', false],
   ])
   expect(facetInventoryEntries).toHaveLength(2)
