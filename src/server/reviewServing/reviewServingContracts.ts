@@ -75,6 +75,8 @@ export const reviewServingComponentRequirements = ['required', 'optional'] as co
 export type ReviewServingComponentRequirement = (typeof reviewServingComponentRequirements)[number]
 
 export const reviewServingFilterKeys = [
+  'articleCreatedAtFrom',
+  'articleCreatedAtTo',
   'articleId',
   'duplicateFlag',
   'conflictFlag',
@@ -124,12 +126,16 @@ export type NamedReviewFastCountKey = (typeof namedReviewFastCountKeys)[number]
 
 export const reviewServingReadContractKeys = [
   'review.llm.rows',
+  'review.llm.rowsByArticleSet',
   'review.llm.count',
   'review.human.rows',
+  'review.human.rowsByArticleSet',
   'review.human.count',
   'review.both.rows',
+  'review.both.rowsByArticleSet',
   'review.both.count',
   'review.unassessed.rows',
+  'review.unassessed.rowsByArticleSet',
   'review.unassessed.count',
   'review.filters.postings',
   'review.filters.facets',

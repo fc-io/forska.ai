@@ -688,6 +688,7 @@ CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4 (
   review_config_hash VARCHAR NOT NULL,
   snapshot_id VARCHAR NOT NULL,
   list_mode_key VARCHAR NOT NULL,
+  payload_kind VARCHAR NOT NULL DEFAULT 'llm',
   article_id VARCHAR NOT NULL,
   prompt_id VARCHAR NOT NULL,
   prompt_order INTEGER,
@@ -698,7 +699,7 @@ CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4 (
   judgment_payload_json JSON,
   placeholder_kind VARCHAR,
   detail_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, article_id, prompt_id)
+  PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)
 );
 
 CREATE TABLE IF NOT EXISTS mart.review_article_summary_contribution_v4 (
@@ -888,7 +889,7 @@ CREATE INDEX IF NOT EXISTS idx_review_article_serving_payload_v4_preview_order
 ON mart.review_article_serving_payload_v4(project_id, snapshot_id, article_created_at, article_id);
 
 CREATE INDEX IF NOT EXISTS idx_review_article_judgment_detail_serving_v4_article
-ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, article_id, prompt_order);
+ON mart.review_article_judgment_detail_serving_v4(project_id, review_config_hash, snapshot_id, article_id, payload_kind, prompt_order);
 
 CREATE INDEX IF NOT EXISTS idx_review_article_summary_contribution_v4_lookup
 ON mart.review_article_summary_contribution_v4(project_id, review_config_hash, snapshot_id, component_kind, summary_definition_version, contribution_key);

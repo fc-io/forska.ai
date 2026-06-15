@@ -223,7 +223,7 @@ test('buildReviewServingRowsSql pins snapshot manifests to the active review con
 
   expect(assertReviewServingSqlShape(sql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
   expect(sql).toContain(
-    'WHERE project_id = $projectId AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash ORDER BY updated_at DESC, snapshot_id DESC',
+    "WHERE project_id = $projectId AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash AND status IN ('active', 'retired') ORDER BY updated_at DESC, snapshot_id DESC",
   )
   expect(sql).not.toContain('$snapshotId')
 })
@@ -297,10 +297,32 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
   expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
   expect(sql).toContain('AND article_id = $articleId')
+  expect(sql).toContain("AND payload_kind = 'llm'")
   expect(sql).toContain('QUALIFY CASE list_mode_key')
   expect(sql).toContain('OVER (PARTITION BY prompt_id)')
   expect(sql).toContain('ORDER BY CASE list_mode_key')
   expect(sql).toContain('prompt_order ASC NULLS LAST, prompt_id ASC')
+  expect(sql).not.toContain('AND list_mode_key =')
+})
+
+test('buildReviewServingRowsSql pins human detail judgment reads to human payloads', () => {
+  const sql = buildReviewServingRowsSql({
+    articleIdParameter: '$articleId',
+    contract: getRequiredReviewServingReadContract('review.detail.humanJudgments'),
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('AND article_id = $articleId')
+  expect(sql).toContain("AND payload_kind = 'human'")
   expect(sql).not.toContain('AND list_mode_key =')
 })
 
@@ -338,6 +360,8 @@ test('buildReviewServingRowsSql pins fixed list-mode judgment payload reads', ()
   expect(bothListSql).toContain('AND article_id IN (SELECT unnest($articleIds))')
   expect(humanListSql).toContain("AND list_mode_key = 'human'")
   expect(bothListSql).toContain("AND list_mode_key = 'both'")
+  expect(humanListSql).toContain("AND payload_kind = 'human'")
+  expect(bothListSql).toContain("AND payload_kind = 'human'")
 })
 
 test('buildReviewServingRowsSql applies posting filter keys before row ordering', () => {
@@ -663,6 +687,27 @@ test('buildReviewServingRowsSql supports article-set list judgment lookups', () 
   expect(sql).toContain('AND review_config_hash = $reviewConfigHash')
   expect(sql).toContain('AND snapshot_id = $snapshotId')
   expect(sql).toContain("AND list_mode_key = 'both'")
+  expect(sql).toContain("AND payload_kind = 'llm'")
+  expect(sql).toContain('AND article_id IN (SELECT unnest($articleIds))')
+})
+
+test('buildReviewServingRowsSql supports article-set row hydration lookups', () => {
+  const sql = buildReviewServingRowsSql({
+    articleIdsParameter: '$articleIds',
+    contract: getRequiredReviewServingReadContract('review.human.rowsByArticleSet'),
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain("AND list_mode_key = 'human'")
   expect(sql).toContain('AND article_id IN (SELECT unnest($articleIds))')
 })
 

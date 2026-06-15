@@ -234,7 +234,7 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
   }
 
   if (params.contract.servingTable === reviewServingSnapshotManifestTable) {
-    return ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter}`
+    return ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter} AND status IN ('active', 'retired')`
   }
 
   if (params.contract.servingTable === reviewServingSearchJobTable) {
@@ -292,6 +292,18 @@ const getReviewServingRowsSqlListModePredicate = (params: {
   return reviewServingRuntimeListModeStrategies.has(params.contract.physicalAccessStrategy)
     ? ` AND list_mode_key = ${params.listModeParameter}`
     : ''
+}
+
+const getReviewServingRowsSqlJudgmentPayloadKindPredicate = (contract: ReviewServingReadContract) => {
+  if (contract.servingTable !== reviewServingJudgmentDetailTable) {
+    return ''
+  }
+
+  return contract.key === 'review.detail.humanJudgments'
+    || contract.key === 'review.human.list.judgments'
+    || contract.key === 'review.both.list.humanJudgments'
+    ? " AND payload_kind = 'human'"
+    : " AND payload_kind = 'llm'"
 }
 
 const getSqlStringLiteral = (value: string) => {
@@ -602,6 +614,7 @@ export const buildReviewServingRowsSql = (params: {
   const cursorPredicate = params.cursorPredicate ? ` AND (${params.cursorPredicate})` : ''
   const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
   const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
+  const judgmentPayloadKindPredicate = getReviewServingRowsSqlJudgmentPayloadKindPredicate(params.contract)
   const countPredicate = getReviewServingRowsSqlCountPredicate(params)
   const facetVersionPredicate = getReviewServingRowsSqlFacetVersionPredicate(params)
   const physicalFilterPredicate = getReviewServingRowsSqlPhysicalFilterPredicate(params)
@@ -614,6 +627,7 @@ export const buildReviewServingRowsSql = (params: {
     `SELECT * FROM ${params.contract.servingTable} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
     identityPredicates,
     listModePredicate,
+    judgmentPayloadKindPredicate,
     countPredicate,
     facetVersionPredicate,
     physicalFilterPredicate,

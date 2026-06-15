@@ -172,6 +172,7 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
     getMissingColumns('mart.review_article_judgment_detail_serving_v4', [
       'article_id',
       'prompt_id',
+      'payload_kind',
       'judgment_payload_json',
       'placeholder_kind',
     ]),
@@ -187,6 +188,11 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   ).toEqual([])
   expect(countScopeForwardMigrationSql).toContain(
     'CREATE TABLE IF NOT EXISTS mart.review_article_judgment_detail_serving_v4',
+  )
+  expect(countScopeForwardMigrationSql).toContain('DROP TABLE IF EXISTS mart.review_article_judgment_detail_serving_v4')
+  expect(countScopeForwardMigrationSql).toContain("payload_kind VARCHAR NOT NULL DEFAULT 'llm'")
+  expect(countScopeForwardMigrationSql).toContain(
+    'PRIMARY KEY(project_id, review_config_hash, snapshot_id, list_mode_key, payload_kind, article_id, prompt_id)',
   )
   expect(countScopeForwardMigrationSql).toContain('CREATE TABLE IF NOT EXISTS mart.review_filter_option_serving_v4')
   expect(countScopeForwardMigrationSql).toContain('option_value_key VARCHAR NOT NULL')

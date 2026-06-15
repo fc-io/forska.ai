@@ -284,6 +284,17 @@ test('human filter facets use a dedicated contract', () => {
     'summary',
   ])
   expect(humanFacets?.allowedFilters).toEqual(['humanStatus', 'promptAnswer'])
+  expect(humanOptions?.allowedFilters).toEqual([
+    'articleCreatedAtFrom',
+    'articleCreatedAtTo',
+    'conflictFlag',
+    'duplicateFlag',
+    'humanStatus',
+    'importRoute',
+    'promptAnswer',
+    'publicationYear',
+    'searchTokenPrefix',
+  ])
   expect(humanFacets?.namedFastCounts).toEqual([
     'review.human.filter.promptAnswer',
     'review.human.filter.summaryAnswer',
@@ -320,6 +331,54 @@ test('human payload contracts cover list and detail response judgments', () => {
   expect(bothListJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
   expect(bothListHumanJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
   expect(detailHumanJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
+})
+
+test('review serving contracts represent article-created date ranges explicitly', () => {
+  const contracts = [
+    getReviewServingReadContract('review.llm.count'),
+    getReviewServingReadContract('review.filters.postings'),
+    getReviewServingReadContract('review.filters.options'),
+    getReviewServingReadContract('review.bulk.selection'),
+    getReviewServingReadContract('review.export.selection'),
+    getReviewServingReadContract('review.pdf.selection'),
+  ]
+
+  expect(
+    contracts.map((contract) => {
+      return [
+        contract?.key,
+        contract?.allowedFilters.includes('articleCreatedAtFrom'),
+        contract?.allowedFilters.includes('articleCreatedAtTo'),
+      ]
+    }),
+  ).toEqual([
+    ['review.llm.count', true, true],
+    ['review.filters.postings', true, true],
+    ['review.filters.options', true, true],
+    ['review.bulk.selection', true, true],
+    ['review.export.selection', true, true],
+    ['review.pdf.selection', true, true],
+  ])
+})
+
+test('filtered row routes have article-set hydration contracts', () => {
+  const rowSetContracts = [
+    getReviewServingReadContract('review.llm.rowsByArticleSet'),
+    getReviewServingReadContract('review.human.rowsByArticleSet'),
+    getReviewServingReadContract('review.both.rowsByArticleSet'),
+    getReviewServingReadContract('review.unassessed.rowsByArticleSet'),
+  ]
+
+  expect(
+    rowSetContracts.map((contract) => {
+      return [contract?.listMode, contract?.physicalAccessStrategy, contract?.allowedFilters]
+    }),
+  ).toEqual([
+    ['llm', 'articleSetLookup', ['articleId']],
+    ['human', 'articleSetLookup', ['articleId']],
+    ['both', 'articleSetLookup', ['articleId']],
+    ['unassessed', 'articleSetLookup', ['articleId']],
+  ])
 })
 
 test('search contracts require project scope without blocking async substring on search readiness', () => {
@@ -443,13 +502,17 @@ test('filtered row product routes include posting-intersection coverage', () => 
 
   expect(
     rowInventoryEntries.map((entry) => {
-      return [entry.productRoute, entry.contractKeys.includes('review.filters.postings'), entry.surfaces]
+      const hasRowSetContract = entry.contractKeys.some((contractKey) => {
+        return contractKey.endsWith('.rowsByArticleSet')
+      })
+
+      return [entry.productRoute, entry.contractKeys.includes('review.filters.postings'), hasRowSetContract, entry.surfaces]
     }),
   ).toEqual([
-    ['/api/articlesreviews', true, ['llm', 'row', 'count', 'badge', 'filter', 'search']],
-    ['/api/articlesreviewshuman', true, ['human', 'row', 'count', 'filter', 'search']],
-    ['/api/articlesreviewsboth', true, ['both', 'row', 'count', 'filter', 'search']],
-    ['/api/articlesreviewsunassessed', true, ['unassessed', 'row', 'count', 'queue', 'filter', 'search']],
+    ['/api/articlesreviews', true, true, ['llm', 'row', 'count', 'badge', 'filter', 'search']],
+    ['/api/articlesreviewshuman', true, true, ['human', 'row', 'count', 'filter', 'search']],
+    ['/api/articlesreviewsboth', true, true, ['both', 'row', 'count', 'filter', 'search']],
+    ['/api/articlesreviewsunassessed', true, true, ['unassessed', 'row', 'count', 'queue', 'filter', 'search']],
   ])
 })
 
@@ -611,6 +674,7 @@ test('list read inventory covers total count and inline judgments', () => {
 
   expect(listInventoryEntry?.contractKeys).toEqual([
     'review.llm.rows',
+    'review.llm.rowsByArticleSet',
     'review.llm.count',
     'review.filters.postings',
     'review.prompt.badges',
@@ -627,6 +691,7 @@ test('both-list inventory covers LLM and human judgment payloads', () => {
 
   expect(bothListInventoryEntry?.contractKeys).toEqual([
     'review.both.rows',
+    'review.both.rowsByArticleSet',
     'review.both.list.judgments',
     'review.both.list.humanJudgments',
     'review.filters.postings',
