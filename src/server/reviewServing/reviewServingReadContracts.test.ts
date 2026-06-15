@@ -283,7 +283,10 @@ test('human filter facets use a dedicated contract', () => {
     'summary',
   ])
   expect(humanFacets?.allowedFilters).toEqual(['humanStatus', 'promptAnswer'])
-  expect(humanFacets?.namedFastCounts).toEqual(['review.human.filter.promptAnswer'])
+  expect(humanFacets?.namedFastCounts).toEqual([
+    'review.human.filter.promptAnswer',
+    'review.human.filter.summaryAnswer',
+  ])
 })
 
 test('search contracts require project scope without blocking async substring on search readiness', () => {
@@ -367,6 +370,7 @@ test('future filter posting and facet contracts stay unmounted until route shape
     ['/api/articlesreviewshuman', false],
     ['/api/articlesreviewsboth', false],
     ['/api/articlesreviewsunassessed', false],
+    ['/api/articlesreviewscount', false],
     ['/api/review-serving/filter-postings', false],
   ])
   expect(facetInventoryEntries).toHaveLength(2)
@@ -536,7 +540,7 @@ test('filtered PDF and export inventories stay unmounted until full response cov
 
 test('count read inventory maps to the mounted review count route', () => {
   const countInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.contractKeys.includes('review.llm.count')
+    return entry.productRoute === '/api/articlesreviewscount'
   })
 
   expect(countInventoryEntries).toHaveLength(1)
@@ -544,8 +548,25 @@ test('count read inventory maps to the mounted review count route', () => {
     method: 'POST',
     productRoute: '/api/articlesreviewscount',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts',
-    surfaces: ['count', 'filter'],
+    contractKeys: ['review.llm.count', 'review.filters.postings', 'review.search.tokenPrefix', 'review.search.substringAsync'],
+    surfaces: ['count', 'filter', 'search'],
   })
+})
+
+test('list read inventory covers total count and inline judgments', () => {
+  const listInventoryEntry = reviewServingReadContractRouteInventory.find((entry) => {
+    return entry.productRoute === '/api/articlesreviews'
+  })
+
+  expect(listInventoryEntry?.contractKeys).toEqual([
+    'review.llm.rows',
+    'review.llm.count',
+    'review.filters.postings',
+    'review.prompt.badges',
+    'review.detail.judgments',
+    'review.search.tokenPrefix',
+    'review.search.substringAsync',
+  ])
 })
 
 test('facet read inventory maps to the mounted review filters route', () => {

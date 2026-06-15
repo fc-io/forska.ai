@@ -284,7 +284,7 @@ export const reviewServingReadContractList = [
   filterFacetContract({
     allowedFilters: ['humanStatus', 'promptAnswer'],
     key: 'review.human.filters.facets',
-    namedFastCounts: ['review.human.filter.promptAnswer'],
+    namedFastCounts: ['review.human.filter.promptAnswer', 'review.human.filter.summaryAnswer'],
     requiredComponents: ['display', 'humanStatus', 'posting', 'projectScope', 'selectedImport', 'summary'],
   }),
   defineContract({
@@ -566,8 +566,10 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: [
       'review.llm.rows',
+      'review.llm.count',
       'review.filters.postings',
       'review.prompt.badges',
+      'review.detail.judgments',
       'review.search.tokenPrefix',
       'review.search.substringAsync',
     ],
@@ -578,12 +580,12 @@ export const reviewServingReadContractRouteInventory = [
     surfaces: ['llm', 'row', 'count', 'badge', 'filter', 'search'],
   },
   {
-    contractKeys: ['review.llm.count'],
+    contractKeys: ['review.llm.count', 'review.filters.postings', 'review.search.tokenPrefix', 'review.search.substringAsync'],
     method: 'POST',
     mounted: false,
     productRoute: '/api/articlesreviewscount',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts',
-    surfaces: ['count', 'filter'],
+    surfaces: ['count', 'filter', 'search'],
   },
   {
     contractKeys: [
@@ -642,7 +644,7 @@ export const reviewServingReadContractRouteInventory = [
     mounted: false,
     productRoute: '/api/articlesreviewsfilters',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
-    surfaces: ['facet', 'filter'],
+    surfaces: ['facet', 'filter', 'search'],
   },
   {
     contractKeys: ['review.human.filters.facets', 'review.filters.options'],
@@ -650,7 +652,7 @@ export const reviewServingReadContractRouteInventory = [
     mounted: false,
     productRoute: '/api/articlesreviewshumanfilters',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
-    surfaces: ['human', 'facet', 'filter'],
+    surfaces: ['human', 'facet', 'filter', 'search'],
   },
   {
     contractKeys: ['review.detail.row', 'review.detail.payload', 'review.detail.judgments', 'review.prompt.badges'],

@@ -745,7 +745,7 @@ CREATE TABLE IF NOT EXISTS mart.review_filter_facet_serving_v4 (
   count_value BIGINT,
   availability VARCHAR NOT NULL DEFAULT 'ready',
   facet_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  PRIMARY KEY(project_id, review_config_hash, snapshot_id, facet_kind, facet_key, facet_value, summary_definition_version)
+  PRIMARY KEY(project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version)
 );
 
 CREATE TABLE IF NOT EXISTS mart.review_filter_option_serving_v4 (
@@ -897,7 +897,7 @@ CREATE INDEX IF NOT EXISTS idx_review_article_count_serving_v4_lookup
 ON mart.review_article_count_serving_v4(project_id, review_config_hash, snapshot_id, list_mode_key, count_kind, filter_key);
 
 CREATE INDEX IF NOT EXISTS idx_review_filter_facet_serving_v4_lookup
-ON mart.review_filter_facet_serving_v4(project_id, review_config_hash, snapshot_id, facet_kind, facet_key, facet_value);
+ON mart.review_filter_facet_serving_v4(project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value);
 
 CREATE INDEX IF NOT EXISTS idx_review_filter_option_serving_v4_lookup
 ON mart.review_filter_option_serving_v4(project_id, review_config_hash, snapshot_id, search_identity, filter_kind, facet_key, option_value_key);
