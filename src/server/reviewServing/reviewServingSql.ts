@@ -387,12 +387,24 @@ const getReviewServingRowsSqlScopeColumn = (params: {contract: ReviewServingRead
 
 const getReviewServingRowsSqlArticlePredicate = (params: {
   articleIdParameter?: string | null
+  articleIdsParameter?: string | null
   contract: ReviewServingReadContract
 }) => {
-  if (
-    params.contract.physicalAccessStrategy !== 'keyedLookup'
-    || !params.contract.allowedFilters.includes('articleId')
-  ) {
+  if (!params.contract.allowedFilters.includes('articleId')) {
+    return ''
+  }
+
+  if (params.contract.physicalAccessStrategy === 'articleSetLookup') {
+    const articleIdsParameter = getRequiredReviewServingRowsSqlParameter(
+      params.articleIdsParameter,
+      'article ids',
+      params.contract,
+    )
+
+    return ` AND article_id IN (SELECT unnest(${articleIdsParameter}))`
+  }
+
+  if (params.contract.physicalAccessStrategy !== 'keyedLookup') {
     return ''
   }
 
@@ -490,7 +502,11 @@ const getReviewServingRowsSqlQueuePredicate = (params: {
 const getReviewServingRowsSqlJobPredicate = (params: {
   contract: ReviewServingReadContract
   jobFilterSignatureParameter?: string | null
+  projectScopeIdentityParameter: string
+  reviewConfigHashParameter: string
+  searchIdentityParameter: string
   searchTextParameter?: string | null
+  snapshotIdParameter: string
 }) => {
   if (params.contract.physicalAccessStrategy !== 'jobCriteria') {
     return ''
@@ -514,7 +530,7 @@ const getReviewServingRowsSqlJobPredicate = (params: {
     )
 
     return [
-      ` AND search_identity = ${params.searchIdentityParameter}`,
+      ` AND search_identity IS NOT DISTINCT FROM ${params.searchIdentityParameter}`,
       ` AND project_scope_identity = ${params.projectScopeIdentityParameter}`,
       ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter}`,
       ` AND snapshot_id IS NOT DISTINCT FROM ${params.snapshotIdParameter}`,
@@ -535,6 +551,7 @@ const getReviewServingRowsSqlListModeDedupeQualifier = (contract: ReviewServingR
 
 const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
   articleIdParameter?: string | null
+  articleIdsParameter?: string | null
   contract: ReviewServingReadContract
   filterPredicatesSql?: string | null
   filterKindParameter?: string | null
@@ -559,6 +576,7 @@ const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
 
 export const buildReviewServingRowsSql = (params: {
   articleIdParameter?: string | null
+  articleIdsParameter?: string | null
   contract: ReviewServingReadContract
   countFilterKeyParameter?: string | null
   cursorPredicate?: string

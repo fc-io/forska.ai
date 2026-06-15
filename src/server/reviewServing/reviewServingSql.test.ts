@@ -633,12 +633,35 @@ test('buildReviewServingRowsSql constrains durable job lookups by criteria', () 
   expect(bulkSql).toContain("AND job_kind = 'review.bulk.selection' AND filter_signature = $filterSignature")
   expect(assertReviewServingSqlShape(searchSql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
   expect(searchSql).toContain('WHERE project_id = $projectId')
-  expect(searchSql).toContain('AND search_identity = $searchIdentity')
+  expect(searchSql).toContain('AND search_identity IS NOT DISTINCT FROM $searchIdentity')
   expect(searchSql).toContain('AND project_scope_identity = $projectScopeIdentity')
   expect(searchSql).toContain('AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash')
   expect(searchSql).toContain('AND snapshot_id IS NOT DISTINCT FROM $snapshotId')
   expect(searchSql).toContain("AND search_mode = 'substringAsync' AND search_text = $searchText")
   expect(searchSql).toContain('AND filter_signature = $filterSignature')
+})
+
+test('buildReviewServingRowsSql supports article-set list judgment lookups', () => {
+  const listJudgmentContract = getRequiredReviewServingReadContract('review.both.list.judgments')
+  const sql = buildReviewServingRowsSql({
+    articleIdsParameter: '$articleIds',
+    contract: listJudgmentContract,
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('AND review_config_hash = $reviewConfigHash')
+  expect(sql).toContain('AND snapshot_id = $snapshotId')
+  expect(sql).toContain("AND list_mode_key = 'both'")
+  expect(sql).toContain('AND article_id IN (SELECT unnest($articleIds))')
 })
 
 test('assertReviewServingSqlShape reads table references from SQL', () => {
