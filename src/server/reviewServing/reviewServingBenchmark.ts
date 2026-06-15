@@ -14,7 +14,13 @@ import type {
 } from './reviewServingContracts.ts'
 
 export const reviewServingBenchmarkFixtureKinds = ['smoke', 'synthetic10m7PromptOverlap'] as const
-export const reviewServingBenchmarkRequestSliceFields = ['cursor', 'filter', 'listMode', 'searchTokenPrefix'] as const
+export const reviewServingBenchmarkRequestSliceFields = [
+  'cursor',
+  'filter',
+  'listMode',
+  'queueKind',
+  'searchTokenPrefix',
+] as const
 
 export type ReviewServingBenchmarkFixtureKind = (typeof reviewServingBenchmarkFixtureKinds)[number]
 export type ReviewServingBenchmarkRequestSliceField = (typeof reviewServingBenchmarkRequestSliceFields)[number]
@@ -82,6 +88,7 @@ export type ReviewServingBenchmarkWorkItem = {
   listMode?: string
   observation: ReviewServingBenchmarkObservation
   operationKey: string
+  queueKind?: string
   requestSlice?: ReviewServingBenchmarkRequestSlice
   searchText?: string
   searchTokenPrefix?: string
@@ -413,7 +420,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       minimumDistinctRequestSlices: 700,
       pageSize: 100,
       requestCount: 700,
-      requestSliceFields: ['cursor', 'filter'],
+      requestSliceFields: ['cursor', 'filter', 'queueKind'],
       targetRowsReturnedPerRequest: 100,
       workloadClass: 'foregroundReviewQueue',
     },
@@ -567,6 +574,10 @@ const getReviewServingBenchmarkActualRequestSliceValue = (
 
   if (field === 'listMode') {
     return workItem.listMode ?? null
+  }
+
+  if (field === 'queueKind') {
+    return workItem.queueKind ?? null
   }
 
   return workItem.admissionRequest.countFilterKey ?? workItem.filterSignature ?? null
@@ -1741,7 +1752,8 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'unassessedOverlapQueue',
-        requestSlice: {cursor: 'start', filter: 'all'},
+        queueKind: 'oldestUnassessed',
+        requestSlice: {cursor: 'start', filter: 'all', queueKind: 'oldestUnassessed'},
       },
       {
         admissionRequest: {

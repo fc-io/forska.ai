@@ -95,6 +95,14 @@ test('judgment input changes invalidate dependent LLM facts and payload rows', (
   expect(rule.downstreamDependents).toEqual(['llmStatus', 'queue', 'posting', 'summary', 'payload'])
 })
 
+test('human judgment updates do not require prompt-scoped keys', () => {
+  const rule = getReviewServingInvalidationRule('judgment.human.updated')
+
+  expect(rule.requiredKeys).toEqual(['projectId', 'articleId', 'humanJudgmentKey', 'sourceHighWaterMark'])
+  expect(rule.affectedComponents).toEqual(['humanStatus', 'posting', 'summary'])
+  expect(rule.downstreamDependents).toEqual(['posting', 'summary'])
+})
+
 test('review config changes invalidate judgment input content for content flag changes', () => {
   const rule = getReviewServingInvalidationRule('project.reviewConfig.updated')
 

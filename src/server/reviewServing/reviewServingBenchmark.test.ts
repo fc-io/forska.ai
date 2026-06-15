@@ -142,6 +142,11 @@ test('review-serving benchmark documents the full 10M article and 7 prompt overl
     searchMode: 'tokenPrefix',
     workloadClass: 'foregroundReviewFacet',
   })
+  expect(getBenchmarkOperation('unassessedOverlapQueue')).toMatchObject({
+    contractKey: 'review.queue.unassessed',
+    requestSliceFields: ['cursor', 'filter', 'queueKind'],
+    workloadClass: 'foregroundReviewQueue',
+  })
   expect(
     ['bulkOverlapSelectionJob', 'exportOverlapSelectionJob', 'pdfOverlapSelectionJob', 'substringOverlapSearchJob'].map(
       (operationKey) => {
@@ -418,6 +423,35 @@ test('review-serving benchmark rejects durable job operations with the wrong cri
       expected: 'phase5-overlap:*',
       field: 'jobFilterSignaturePrefix',
       key: 'smoke-bulk-selection-job',
+    },
+  ])
+  expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark work item mismatch')
+})
+
+test('review-serving benchmark rejects queue work items without a declared queue kind slice', async () => {
+  const input = getReviewServingBenchmarkSmokeInput()
+  const queueWorkItem = input.workItems.find((workItem) => {
+    return workItem.operationKey === 'unassessedOverlapQueue'
+  })
+
+  if (!queueWorkItem) {
+    throw new Error('Missing smoke queue work item')
+  }
+
+  const mismatchedWorkItem = {...queueWorkItem, queueKind: undefined, requestSlice: {cursor: 'start', filter: 'all'}}
+  const mismatchedInput = {
+    ...input,
+    workItems: input.workItems.map((workItem) => {
+      return workItem.operationKey === 'unassessedOverlapQueue' ? mismatchedWorkItem : workItem
+    }),
+  }
+
+  expect(getReviewServingBenchmarkWorkItemShapeViolations(mismatchedInput, mismatchedWorkItem)).toEqual([
+    {
+      actual: 'missing:queueKind',
+      expected: 'queueKind',
+      field: 'requestSlice',
+      key: 'smoke-unassessed-queue',
     },
   ])
   expect(await getBenchmarkRunFailureMessage(mismatchedInput)).toContain('Review-serving benchmark work item mismatch')

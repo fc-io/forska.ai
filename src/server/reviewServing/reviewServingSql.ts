@@ -255,9 +255,11 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
     return ` AND review_config_hash = ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter} AND search_identity = ${params.searchIdentityParameter} AND filter_option_identity = ${filterOptionIdentityParameter}`
   }
 
+  const snapshotIdColumn = getReviewServingRowsSqlScopeColumn({contract: params.contract, field: 'snapshot_id'})
+
   return params.contract.servingTable === 'mart.review_title_search_serving_v4'
     ? ` AND search_identity = ${params.searchIdentityParameter} AND project_scope_identity = ${params.projectScopeIdentityParameter} AND snapshot_id = ${params.snapshotIdParameter}`
-    : ` AND review_config_hash = ${params.reviewConfigHashParameter} AND snapshot_id = ${params.snapshotIdParameter}`
+    : ` AND review_config_hash = ${params.reviewConfigHashParameter} AND ${snapshotIdColumn} = ${params.snapshotIdParameter}`
 }
 
 const reviewServingListModePredicateTables = new Set([
@@ -314,7 +316,7 @@ const getReviewServingRowsSqlCountPredicate = (params: {
   }
 
   const summaryDefinition = namedReviewFastCountDefinitions[params.namedCountKey]
-  const listModeKey = params.contract.listMode ?? reviewServingCountListModesByKey[params.namedCountKey] ?? 'global'
+  const listModeKey = reviewServingCountListModesByKey[params.namedCountKey] ?? params.contract.listMode ?? 'global'
   const listModePredicate = ` AND list_mode_key = ${getSqlStringLiteral(listModeKey)}`
 
   return [
@@ -374,6 +376,12 @@ const getRequiredReviewServingRowsSqlParameter = (
   }
 
   return parameter
+}
+
+const getReviewServingRowsSqlScopeColumn = (params: {contract: ReviewServingReadContract; field: string}) => {
+  return params.contract.physicalAccessStrategy === 'postingIntersection'
+    ? `${params.contract.servingTable}.${params.field}`
+    : params.field
 }
 
 const getReviewServingRowsSqlArticlePredicate = (params: {
@@ -581,8 +589,10 @@ export const buildReviewServingRowsSql = (params: {
   const listModeDedupeQualifier = getReviewServingRowsSqlListModeDedupeQualifier(params.contract)
   const sortSql = getSortSql(params.contract)
 
+  const projectIdColumn = getReviewServingRowsSqlScopeColumn({contract: params.contract, field: 'project_id'})
+
   return [
-    `SELECT * FROM ${params.contract.servingTable} WHERE project_id = ${params.projectIdParameter}`,
+    `SELECT * FROM ${params.contract.servingTable} WHERE ${projectIdColumn} = ${params.projectIdParameter}`,
     identityPredicates,
     listModePredicate,
     countPredicate,
