@@ -147,10 +147,26 @@ test('dirty work commits judgment, import marker, and dirty state idempotently',
     importableEntries: [entry],
     requestedBy: 'test-importer',
   })
-  const [row] = await queryDatabase<{dirtyToken: number; judgmentRows: number; markerRows: number}>(`
+  const [row] = await queryDatabase<{
+    deltaRows: number
+    dirtyToken: number
+    judgmentRows: number
+    markerRows: number
+    modelId: string | null
+    useAbstract: boolean | null
+    useFulltext: boolean | null
+    useFulltextNoImages: boolean | null
+    useTitle: boolean | null
+  }>(`
     SELECT
       (SELECT COUNT(*) FROM app.judgment WHERE id = '${ids.judgmentId}') AS judgmentRows,
       (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${ids.jobId}') AS markerRows,
+      (SELECT COUNT(*) FROM app.review_change_delta WHERE judgment_id = '${ids.judgmentId}') AS deltaRows,
+      (SELECT model_id FROM app.review_change_delta WHERE judgment_id = '${ids.judgmentId}' LIMIT 1) AS modelId,
+      (SELECT use_title FROM app.review_change_delta WHERE judgment_id = '${ids.judgmentId}' LIMIT 1) AS useTitle,
+      (SELECT use_abstract FROM app.review_change_delta WHERE judgment_id = '${ids.judgmentId}' LIMIT 1) AS useAbstract,
+      (SELECT use_fulltext FROM app.review_change_delta WHERE judgment_id = '${ids.judgmentId}' LIMIT 1) AS useFulltext,
+      (SELECT use_fulltext_no_images FROM app.review_change_delta WHERE judgment_id = '${ids.judgmentId}' LIMIT 1) AS useFulltextNoImages,
       (SELECT CAST(dirty_token AS INTEGER) FROM app.project_mart_refresh_state WHERE project_id = '${ids.projectId}') AS dirtyToken
   `)
 
@@ -160,6 +176,12 @@ test('dirty work commits judgment, import marker, and dirty state idempotently',
   expect(secondResult.duplicateRows).toEqual([{jobId: ids.jobId, outboxSeq: 1}])
   expect(Number(row?.judgmentRows ?? 0)).toBe(1)
   expect(Number(row?.markerRows ?? 0)).toBe(1)
+  expect(Number(row?.deltaRows ?? 0)).toBe(1)
+  expect(row?.modelId).toBe(ids.modelId)
+  expect(row?.useTitle).toBe(true)
+  expect(row?.useAbstract).toBe(true)
+  expect(row?.useFulltext).toBe(false)
+  expect(row?.useFulltextNoImages).toBe(false)
   expect(Number(row?.dirtyToken ?? 0)).toBe(1)
 })
 

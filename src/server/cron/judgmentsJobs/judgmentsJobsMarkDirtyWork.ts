@@ -1,3 +1,4 @@
+import {appendLlmJudgmentReviewServingDeltas} from '../../reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import type {JudgmentInsertRow} from '../../services/appDatabaseService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
@@ -157,12 +158,39 @@ const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqli
     ON CONFLICT(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, delete_generation) DO NOTHING
     RETURNING id
   `)
-
-  return new Set(
+  const insertedJudgmentIds = new Set(
     rows.map((row) => {
       return row.id
     }),
   )
+
+  await appendLlmJudgmentReviewServingDeltas(
+    runner,
+    entries
+      .filter((entry) => {
+        return insertedJudgmentIds.has(entry.judgmentId)
+      })
+      .map((entry) => {
+        return {
+          articleId: entry.articleId,
+          changeKind: 'judgment.llm.created' as const,
+          judgmentId: entry.judgmentId,
+          modelId: entry.modelId,
+          projectId: entry.projectId,
+          promptId: entry.promptId,
+          sourceMutationKey: `sqliteOutboxImport|${entry.jobId}|${entry.outboxSeq}|${entry.judgmentId}`,
+          sourceOperation: 'insert' as const,
+          sourcePartition: `judgmentSqliteOutboxImport:${entry.jobId}`,
+          sourceUpdatedAt: entry.updatedAt,
+          useAbstract: entry.useAbstract,
+          useFulltext: entry.useFulltext,
+          useFulltextNoImages: entry.useFulltextNoImages,
+          useTitle: entry.useTitle,
+        }
+      }),
+  )
+
+  return insertedJudgmentIds
 }
 
 const getUniqueArticleIds = (entries: JudgmentJobSqliteOutboxEntry[]) => {

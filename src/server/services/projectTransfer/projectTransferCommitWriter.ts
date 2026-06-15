@@ -1,4 +1,5 @@
 import type {ProjectTransferHistoryRecord} from '../../../db/schemaTypes.ts'
+import {appendLlmJudgmentReviewServingDeltas} from '../../reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {
@@ -206,6 +207,19 @@ type JudgmentCommitRow = {
   snapshotProjectModelName: string | null
   sourceJudgmentId: string
   updatedAt: Date
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+type ProjectTransferInsertedJudgmentDeltaRow = {
+  articleId: string
+  id: string
+  modelId: string
+  projectId: string
+  promptId: string
+  sourceJudgmentId: string
+  updatedAt: Date | string | null
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -4219,6 +4233,35 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
     : undefined
 }
 
+const appendProjectTransferJudgmentCreatedDeltas = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly ProjectTransferInsertedJudgmentDeltaRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await appendLlmJudgmentReviewServingDeltas(
+    tx,
+    rows.map((row) => {
+      return {
+        articleId: row.articleId,
+        changeKind: 'judgment.llm.created' as const,
+        judgmentId: row.id,
+        modelId: row.modelId,
+        projectId: row.projectId,
+        promptId: row.promptId,
+        sourceMutationKey: `projectTransfer|${row.projectId}|${row.sourceJudgmentId}|${row.id}`,
+        sourceOperation: 'insert' as const,
+        sourceUpdatedAt: row.updatedAt,
+        useAbstract: row.useAbstract,
+        useFulltext: row.useFulltext,
+        useFulltextNoImages: row.useFulltextNoImages,
+        useTitle: row.useTitle,
+      }
+    }),
+  )
+}
+
 const insertJudgmentRowsSetBased = async ({
   context,
   now,
@@ -4298,9 +4341,30 @@ const insertJudgmentRowsSetBased = async ({
     RETURNING id
   `)
 
-  return insertedRows.length === expectedInsertCount
-    ? undefined
-    : failCommitWriter(`judgment insert wrote ${insertedRows.length} of ${expectedInsertCount} staged rows`)
+  if (insertedRows.length !== expectedInsertCount) {
+    return failCommitWriter(`judgment insert wrote ${insertedRows.length} of ${expectedInsertCount} staged rows`)
+  }
+
+  const deltaRows = await tx.queryJson<ProjectTransferInsertedJudgmentDeltaRow>(`
+    SELECT
+      id,
+      source_judgment_id AS sourceJudgmentId,
+      article_id AS articleId,
+      model_id AS modelId,
+      project_id AS projectId,
+      prompt_id AS promptId,
+      updated_at AS updatedAt,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages,
+      use_title AS useTitle
+    FROM (${rowsSql}) rows
+    WHERE action = 'insert'
+  `)
+
+  await appendProjectTransferJudgmentCreatedDeltas({rows: deltaRows, tx})
+
+  return undefined
 }
 
 const insertJudgmentRows = async ({
@@ -4328,8 +4392,8 @@ const insertJudgmentRows = async ({
 
   return insertRows.length === 0
     ? undefined
-    : runChunks(insertRows, (rowChunk) => {
-        return tx.run(`
+    : runChunks(insertRows, async (rowChunk) => {
+        await tx.queryJson<{id: string}>(`
         INSERT INTO app.judgment (
           id,
           article_id,
@@ -4381,7 +4445,26 @@ const insertJudgmentRows = async ({
             )`
           })
           .join(', ')}
+          RETURNING id
       `)
+        await appendProjectTransferJudgmentCreatedDeltas({
+          rows: rowChunk.map((row) => {
+            return {
+              articleId: row.articleId,
+              id: row.id,
+              modelId: row.modelId,
+              projectId,
+              promptId: row.promptId,
+              sourceJudgmentId: row.sourceJudgmentId,
+              updatedAt: row.updatedAt,
+              useAbstract: row.useAbstract,
+              useFulltext: row.useFulltext,
+              useFulltextNoImages: row.useFulltextNoImages,
+              useTitle: row.useTitle,
+            }
+          }),
+          tx,
+        })
       })
 }
 

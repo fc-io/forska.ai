@@ -7,6 +7,7 @@ import {
 } from '../../utils/providerModelLabel.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
+import {appendLlmJudgmentReviewServingDeltas} from '../reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -192,8 +193,15 @@ type ProjectPromptLlmCleanupCandidateRow = {
   articleId: string
   comparisonPromptReferenced: boolean
   id: string
+  modelId: string
+  projectId: string | null
   promptId: string
   sharedProjectReferenced: boolean
+  updatedAt: string | null
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
 }
 
 type ProjectEditCurrentProject = {
@@ -631,7 +639,14 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
       SELECT
         judgment.id,
         judgment.article_id,
-        judgment.prompt_id
+        judgment.model_id,
+        judgment.project_id,
+        judgment.prompt_id,
+        judgment.updated_at,
+        judgment.use_abstract,
+        judgment.use_fulltext,
+        judgment.use_fulltext_no_images,
+        judgment.use_title
       FROM app.judgment judgment
       INNER JOIN old_prompt ON old_prompt.prompt_id = judgment.prompt_id
       INNER JOIN app.project project ON project.id = '${escapeSqlString(params.projectId)}'
@@ -672,7 +687,14 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
     SELECT
       candidate.id AS id,
       candidate.article_id AS articleId,
+      candidate.model_id AS modelId,
+      candidate.project_id AS projectId,
       candidate.prompt_id AS promptId,
+      candidate.updated_at AS updatedAt,
+      candidate.use_abstract AS useAbstract,
+      candidate.use_fulltext AS useFulltext,
+      candidate.use_fulltext_no_images AS useFulltextNoImages,
+      candidate.use_title AS useTitle,
       EXISTS (
         SELECT 1
         FROM app.comparison_project_prompt comparison_prompt
@@ -760,6 +782,30 @@ const softDeleteProjectPromptLlmJudgmentsTx = async (
     })
 
   if (softDeleteIds.length > 0) {
+    await appendLlmJudgmentReviewServingDeltas(
+      tx,
+      candidateRows
+        .filter((row) => {
+          return softDeleteIds.includes(row.id)
+        })
+        .map((row) => {
+          return {
+            articleId: row.articleId,
+            changeKind: 'judgment.llm.deleted' as const,
+            judgmentId: row.id,
+            modelId: row.modelId,
+            projectId: row.projectId,
+            promptId: row.promptId,
+            sourceMutationKey: `projectPromptCleanup|${params.projectId}|${row.id}`,
+            sourceOperation: 'delete' as const,
+            sourceUpdatedAt: row.updatedAt,
+            useAbstract: row.useAbstract,
+            useFulltext: row.useFulltext,
+            useFulltextNoImages: row.useFulltextNoImages,
+            useTitle: row.useTitle,
+          }
+        }),
+    )
     await tx.run(`
       UPDATE app.judgment AS judgment
       SET deleted_at = current_timestamp,

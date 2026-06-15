@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import type {PromptRecord} from '../../db/schemaTypes.ts'
+import {appendLlmJudgmentReviewServingDeltas} from '../reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService'
 import {
   escapeSqlString,
@@ -28,7 +29,19 @@ type PromptMergeTransaction = {
   queryJson: <TRow>(statement: string) => Promise<TRow[]>
   run: (statement: string) => Promise<void>
 }
-type JudgmentPromptCollisionRow = {keepJudgmentId: string; mergeJudgmentId: string}
+type JudgmentPromptCollisionRow = {
+  articleId: string
+  keepJudgmentId: string
+  mergeJudgmentId: string
+  modelId: string
+  projectId: string | null
+  promptId: string
+  updatedAt: string | null
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
 type JudgmentAssessmentRow = {id: string}
 type JudgmentHumanPromptCollisionRow = {id: string}
 
@@ -143,7 +156,16 @@ const getJudgmentPromptCollisions = async ({
 }) => {
   return tx.queryJson<JudgmentPromptCollisionRow>(`
     SELECT keep_row.id AS keepJudgmentId,
-           merge_row.id AS mergeJudgmentId
+           merge_row.id AS mergeJudgmentId,
+           merge_row.article_id AS articleId,
+           merge_row.model_id AS modelId,
+           merge_row.project_id AS projectId,
+           merge_row.prompt_id AS promptId,
+           merge_row.updated_at AS updatedAt,
+           merge_row.use_abstract AS useAbstract,
+           merge_row.use_fulltext AS useFulltext,
+           merge_row.use_fulltext_no_images AS useFulltextNoImages,
+           merge_row.use_title AS useTitle
     FROM app.judgment merge_row
     INNER JOIN app.judgment keep_row
       ON keep_row.article_id = merge_row.article_id
@@ -223,6 +245,23 @@ const resolveJudgmentPromptCollisions = async ({
       mergeJudgmentId: collision.mergeJudgmentId,
       tx,
     })
+    await appendLlmJudgmentReviewServingDeltas(tx, [
+      {
+        articleId: collision.articleId,
+        changeKind: 'judgment.llm.deleted',
+        judgmentId: collision.mergeJudgmentId,
+        modelId: collision.modelId,
+        projectId: collision.projectId,
+        promptId: collision.promptId,
+        sourceMutationKey: `promptMerge|${mergeId}|${keepPromptId}|${collision.mergeJudgmentId}`,
+        sourceOperation: 'delete',
+        sourceUpdatedAt: collision.updatedAt,
+        useAbstract: collision.useAbstract,
+        useFulltext: collision.useFulltext,
+        useFulltextNoImages: collision.useFulltextNoImages,
+        useTitle: collision.useTitle,
+      },
+    ])
     await tx.run(`
       DELETE FROM app.judgment
       WHERE id = '${escapeSqlString(collision.mergeJudgmentId)}'
