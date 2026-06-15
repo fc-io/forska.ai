@@ -18,7 +18,7 @@ After final verification, normal product review paths must not reach raw fallbac
 |---|---|---|---|
 | [ ] | Final deletion sweep | Remove any remaining normal raw review fallback, old selected-import foreground joins, large-ID return paths, hidden `OFFSET` pagination, competing V4 serving writers, and obsolete intermediate state. | Static SQL-shape tests and route tests fail if forbidden raw paths return. Route-specific parity validation has passed for every migrated route/flow, and every mounted route inventory entry covers the full product response shape. Obsolete state is rebuilt or cleared with no compatibility shim unless explicitly required. |
 | [ ] | Desktop and interruption hardening | Verify browser and desktop use the same serving/job/admission behavior. Test sleep/restart/interruption for projectors, bulk jobs, search jobs, and low-memory runtime. | Desktop build or targeted desktop verification passes, interrupted work resumes safely, and low-memory batch defaults prevent OOM. |
-| [ ] | Final benchmark and release gate | Run the overlap benchmark and repo-native quality gates. | 10M/7-prompt benchmark passes under target memory limits, no foreground temp spill occurs for hot reads, all targeted tests pass, lint passes, and `OOM_ERRORS.md` is updated with the implementation entry. |
+| [ ] | Final benchmark and release gate | Run the overlap benchmark and repo-native quality gates. | 10M/7-prompt benchmark passes under target memory limits, no foreground temp spill occurs for hot reads, article-set hydration and judgment payload paths are exercised, all targeted tests pass, lint passes, and `OOM_ERRORS.md` is updated with the implementation entry. |
 
 ## Deletion Scope
 
@@ -56,8 +56,11 @@ After final verification, normal product review paths must not reach raw fallbac
 - Snapshot pins prevent cleanup from deleting data needed by repeatable durable jobs.
 - Every synchronous filter route has a bounded ordered-prefix, posting-table, projection, or pre-proven candidate-set access path.
 - Filter-option routes are backed by complete option/min-max response projections, not only article posting rows.
+- Filtered list routes prove posting/search selection plus article-set row and list-payload hydration, including stable list-mode and article-ID tie-break ordering.
+- List/detail payload routes preserve LLM judgment arrays, human prompt/summary payloads, both-mode payloads, prompt badges, current row metadata, article timestamps, and detail extras before they are mounted.
 - Serving reads, cursors, counts, search, and jobs include the narrow projection identities they depend on and reject mismatched identity state.
 - Foreground admission rejects mismatched search modes before DuckDB execution, and omitted search mode means no search.
+- Durable job contracts bind job kind, filter signature, search mode/text when relevant, and pinned or latest-snapshot semantics through job-table fields.
 - No normal browser or desktop review flow can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.
 - Admin/maintenance/debug-only raw reads are named, route-classified, guarded, and excluded from normal product flows.
 
@@ -77,8 +80,10 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 
 - 10M articles in one project with an average of 7 prompts per article.
 - Overlap import, dirty materialization, serving refresh, review list, filters, counts, token/prefix search, unavailable/async substring state, bulk jobs, PDF/export jobs, and desktop-style interruption/resume.
+- Direct rows, posting/search selection, article-set row hydration, list/detail judgment payload hydration, human-specific facets/options, queue-kind reads, count reads across LLM/human/both/unassessed modes, bulk substring selection, token-prefix search, async substring jobs, bulk jobs, PDF/export jobs, and desktop-style interruption/resume.
 - Repeated article/title changes, judgment changes, human-review changes, import appends, and prompt/config changes proving unrelated projections are not rerun.
 - Physical read-shape evidence for hot routes: row groups/rows scanned, temp spill, response bytes, and ordered snapshot/filter prefix use.
+- Work-item shape evidence: expected list mode, queue kind, count key/filter prefix, search mode/text, job kind/filter signature, and request-slice diversity are all validated before a release run can pass.
 
 ## Quality Gates
 
@@ -86,6 +91,10 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [ ] Overlap benchmark passes under target DuckDB memory limits with import, dirty materialization, serving refresh, review list, filters, counts, bulk jobs, export/PDF jobs, and desktop-style interruption/resume.
 - [ ] Benchmark records p50/p95/p99 latency, peak process memory, DuckDB memory limit, temp-dir growth, queue depth, admitted/rejected query counts, rows scanned, rows returned, and active snapshot/identity state.
 - [ ] Benchmark proves foreground review reads are bounded by page size, selected filter postings, or precomputed summary rows, not total project article/judgment/import-route count.
+- [ ] Benchmark includes article-set hydration operations for LLM, human, both, and unassessed filtered rows.
+- [ ] Benchmark includes list/detail judgment payload operations with prompt-overlap row targets for LLM, human, both LLM, and both human payloads.
+- [ ] Benchmark includes human-specific facet and filter-option operations, named count operations for all list modes, queue-kind operations, token-prefix search, async substring search, bulk substring selection, and bulk/export/PDF job lookups.
+- [ ] Benchmark validation rejects missing or unexpected dimensions, insufficient request-slice diversity, wrong count keys/filter prefixes, missing queue kind/list mode/search mode, over-wide rows scanned, foreground temp spill, latency target breaches, and RSS target breaches.
 - [ ] Benchmark proves routine deltas create bounded patches or dirty work, not full 10M-row serving copies, and compaction triggers before patch reads exceed hot-route budgets.
 - [ ] Static SQL-shape tests fail if forbidden raw paths return.
 - [ ] Route tests fail if normal product flows can reach raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.

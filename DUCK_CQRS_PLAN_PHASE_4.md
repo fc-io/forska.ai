@@ -33,19 +33,21 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 
 ## Route Completeness Requirements
 
-- `/api/articlesreviewscount` must not migrate until the serving count path covers the current duplicate/conflict/date/prompt/search scope or returns explicit unavailable/async count state for unsupported combinations.
-- `/api/articlesreviewsfilters` and `/api/articlesreviewshumanfilters` must not migrate through article posting rows alone. They need complete filter-option/min-max response contracts, including active search scope where the current route applies `query.search`.
-- `/api/projectsreview` must not migrate until judgment-detail serving contracts cover prompt-level explanations, quotes, assessments, placeholder judgments, payload references, row metadata, and badges.
-- `/api/projectsreviewswarnings` must not migrate through snapshot manifests alone. It needs warning/health contracts for active refresh counts, maintenance lease state, large-rebuild progress, quarantine warnings, and snapshot status.
-- Review list routes must not mount until row contracts preserve prompt-level judgment arrays and the current duplicate/conflict/date/prompt/search filter scopes.
+- `/api/articlesreviewscount` must not migrate until the serving count path covers the current duplicate/conflict/article-created-date/prompt scope and either supports search-scoped counts explicitly or returns explicit unavailable/async state for searched counts.
+- `/api/articlesreviewsfilters` and `/api/articlesreviewshumanfilters` must not migrate through article posting rows alone. They need complete review-specific and human-specific facet plus filter-option/min-max response contracts, including active search scope and summary-mode human answer scope where the current route applies them.
+- `/api/projectsreview` must not migrate until judgment-detail serving contracts cover prompt-level explanations, quotes, assessments, placeholder judgments, payload references, human prompt/summary fields, row metadata, badges, related-record/project-context extras, and freshness/diagnostic payloads.
+- `/api/projectsreviewswarnings` must not migrate through snapshot manifests alone. It needs warning/health contracts for active refresh counts, usable manifest status, maintenance lease state, large-rebuild progress, quarantine warnings, and last-known-good/failed state.
+- Review list routes must not mount until row contracts preserve row metadata, article timestamps, prompt-level LLM judgment arrays, human prompt/summary arrays, both-mode LLM and human payloads, prompt badges, and the current duplicate/conflict/article-created-date/prompt/search filter scopes.
+- Filtered review list routes must use posting/search selection plus article-set hydration for rows and list judgment payloads. They must not hydrate filtered pages by replaying unfiltered ordered-prefix rows or by issuing N+1 single-article detail lookups.
 - Posting contracts used by list routes must be constrained by list mode or split into per-list contracts before they are mounted.
-- PDF-by-filter and PDF-by-project routes must not mount until list type, date bounds, and search scope are represented in the selection contract. Explicit-ID PDF bulk routes must use an article-ID-only contract instead of project-scoped review-serving selection.
+- PDF-by-filter and PDF-by-project routes must not mount until list type, date bounds, duplicate/conflict filters, and search scope are represented in the selection contract. Explicit-ID PDF bulk routes must use an article-ID-only contract instead of project-scoped review-serving selection.
 - Export routes must not mount until export contracts cover selected article metadata plus prompt answers, explanations, and quotes.
-- Prompt preview must preserve the current sample-article order, full-text preparation behavior, `no_fulltext` handling, and conversion-failure behavior before it is mounted.
+- Prompt preview must preserve the current sample-article order, prompt/config identity, model execution context, full-text preparation behavior, `no_fulltext` handling, and conversion-failure behavior before it is mounted.
 
 ## Job Migration Scope
 
 - Select-all and add-to-project use `reviewBulkOperationService` jobs instead of all-ID arrays.
+- Add-to-project by filter uses a substring async selection contract when the product route receives substring search input; it must not certify substring behavior under token-prefix search semantics.
 - PDF fetch uses durable bulk jobs with snapshot pins or declared latest-snapshot semantics.
 - Project export uses serving/export jobs with projection-identity/snapshot/filter cursors, snapshot pins, and payload budgets.
 - Ready title search uses token/prefix search projection.
@@ -61,6 +63,7 @@ Route-specific parity validation blocks that route migration on semantic mismatc
 - Responses include explicit freshness/count/search/job states.
 - Stale, indexing, failed, and missing serving states do not trigger raw fallback.
 - Every synchronous filter combination uses an ordered prefix, posting/projection table, bounded candidate set, or unavailable/async state.
+- Direct row contracts and posting/article-set hydration contracts must preserve stable list-mode and article-ID tie-break ordering so keyset cursors match route semantics.
 - Product list routes use keyset pagination and never require large `OFFSET`.
 - Detail payloads are keyed and capped, not hydrated by default into hot list responses.
 - Browser and desktop route surfaces share the same serving/job/admission behavior.
@@ -93,6 +96,8 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [ ] Route inventory tests prove `mounted: true` entries cover the full product response shape and do not mark partial helper contracts as migrated routes.
 - [ ] Route tests prove standalone count, filter-option, detail, warning, and prompt-preview routes preserve current semantics or return explicit unavailable/async state for unsupported pieces.
 - [ ] Route tests prove list routes preserve judgment arrays plus duplicate/conflict/date/prompt/search filter scope before they are mounted.
+- [ ] Route tests prove filtered list routes use posting/search selection plus article-set row and payload hydration, with no N+1 single-article lookup path.
+- [ ] Route tests prove list row responses preserve current article timestamps or explicitly hydrate them through a capped companion contract before route inventory entries are mounted.
 - [ ] Route tests prove PDF and export product routes preserve explicit-ID, list-type, article metadata, and prompt-output semantics before they are mounted.
 - [ ] Targeted tests for filter contracts prove every synchronous filter combination uses ordered-prefix, posting/projection, or bounded-candidate access with maintained selectivity stats.
 - [ ] Targeted tests prove posting contracts used by list routes are list-mode constrained.
@@ -101,6 +106,7 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [ ] Targeted tests for hard route result-size caps: max page size, max response bytes, max hydrated payload bytes, and max per-request ID count.
 - [ ] Targeted tests prove stale, indexing, failed, and missing serving states do not trigger raw fallback.
 - [ ] Targeted tests prove select-all, add-to-project, PDF fetch, and export use durable jobs and keyset-batched execution without returning all matching article IDs.
+- [ ] Targeted tests prove durable job lookups bind job kind, filter signature, search mode/text when relevant, and pinned or latest-snapshot semantics using job-table cursor fields.
 - [ ] Targeted tests prove repeatable durable jobs pin serving snapshots and cleanup skips pinned base/patch/payload/count/search state.
 - [ ] Targeted tests prove foreground query admission rejects or serves stale for over-budget workload classes before DuckDB execution.
 - [ ] Targeted tests prove foreground admission rejects mismatched search modes before DuckDB execution.
