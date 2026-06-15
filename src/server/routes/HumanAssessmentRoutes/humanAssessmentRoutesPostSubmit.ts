@@ -205,9 +205,11 @@ export const humanAssessmentRoutesPostSubmit = async ({
           return {
             answer: byId[row.id]?.answer ?? null,
             articleId: row.articleId,
+            comment: byId[row.id]?.comment ?? null,
             humanJudgmentKey: row.id,
             projectId: body.projectId,
             promptId: row.promptId,
+            reviewerOverlay: {readSurface: 'row' as const},
             sourceMutationKey: `humanAssessmentSubmit|${body.projectId}|${row.id}`,
             sourceOperation: 'update' as const,
             sourceUpdatedAt: updatedAt,

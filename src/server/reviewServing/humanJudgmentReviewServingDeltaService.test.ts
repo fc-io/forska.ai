@@ -63,6 +63,39 @@ test('prompt human judgment updates emit human dirty deltas', async () => {
   expect(inserts).toContain('app.judgment_human')
 })
 
+test('prompt human reviewer actions can create row-scoped overlays tied to delta high-water marks', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  await appendHumanJudgmentReviewServingDelta(tx, {
+    answer: 'include',
+    articleId: 'article-1',
+    comment: 'reviewed by human',
+    humanJudgmentKey: 'judgment-human-1',
+    projectId: 'project-1',
+    promptId: 'prompt-1',
+    reviewerOverlay: {readSurface: 'row', reviewConfigHash: 'review-config-1', ttlMs: 60_000},
+    sourceMutationKey: 'human-submit-1',
+    sourceOperation: 'update',
+    sourceUpdatedAt: '2026-06-16T10:00:00.000Z',
+  })
+
+  const overlayInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_write_overlay')
+  })
+
+  expect(overlayInsert).toContain('humanJudgment.answer')
+  expect(overlayInsert).toContain('review-config-1')
+  expect(overlayInsert).toContain('humanJudgment:project-1:article-1')
+  expect(overlayInsert).toContain('source_high_water_mark')
+  expect(overlayInsert).toContain('include')
+  expect(overlayInsert).toContain('reviewed by human')
+  expect(
+    statements.some((statement) => {
+      return statement.includes('mart.review_') || statement.includes('app.review_serving_snapshot_manifest')
+    }),
+  ).toBe(false)
+})
+
 test('summary human judgment updates do not require promptId', async () => {
   const {statements, tx} = createFakeLedgerTransaction()
 
