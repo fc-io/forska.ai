@@ -549,7 +549,12 @@ test('filtered row product routes include posting-intersection coverage', () => 
         return contractKey.endsWith('.rowsByArticleSet')
       })
 
-      return [entry.productRoute, entry.contractKeys.includes('review.filters.postings'), hasRowSetContract, entry.surfaces]
+      return [
+        entry.productRoute,
+        entry.contractKeys.includes('review.filters.postings'),
+        hasRowSetContract,
+        entry.surfaces,
+      ]
     }),
   ).toEqual([
     ['/api/articlesreviews', true, true, ['llm', 'row', 'count', 'badge', 'filter', 'search']],

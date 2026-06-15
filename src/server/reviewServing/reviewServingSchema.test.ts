@@ -5,22 +5,33 @@ import {expect, test} from 'bun:test'
 
 import {reviewServingReadContractList} from './reviewServingReadContracts.ts'
 
-const schemaMigrationSql = readFileSync(
-  resolve(import.meta.dir, '../../db/duckdbMigrations/0097_reviewServingV4Foundation.sql'),
-  'utf8',
+const reviewServingPhase1MigrationPaths = [
+  '../../db/duckdbMigrations/0097_reviewServingV4Foundation.sql',
+  '../../db/duckdbMigrations/0098_reviewServingPayloadOrderColumns.sql',
+  '../../db/duckdbMigrations/0099_reviewServingCountScopeAndDetailOptionTables.sql',
+  '../../db/duckdbMigrations/0100_reviewServingFilterOptionValueKey.sql',
+  '../../db/duckdbMigrations/0101_reviewServingFacetSummaryScope.sql',
+] as const
+const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
+  reviewServingPhase1MigrationPaths.map((migrationPath) => {
+    return [migrationPath, readFileSync(resolve(import.meta.dir, migrationPath), 'utf8')]
+  }),
 )
-const payloadOrderForwardMigrationSql = readFileSync(
-  resolve(import.meta.dir, '../../db/duckdbMigrations/0098_reviewServingPayloadOrderColumns.sql'),
-  'utf8',
-)
-const countScopeForwardMigrationSql = readFileSync(
-  resolve(import.meta.dir, '../../db/duckdbMigrations/0099_reviewServingCountScopeAndDetailOptionTables.sql'),
-  'utf8',
-)
-const filterOptionValueForwardMigrationSql = readFileSync(
-  resolve(import.meta.dir, '../../db/duckdbMigrations/0100_reviewServingFilterOptionValueKey.sql'),
-  'utf8',
-)
+const schemaMigrationSql = reviewServingPhase1MigrationPaths
+  .map((migrationPath) => {
+    return reviewServingPhase1MigrationSqlByPath[migrationPath]
+  })
+  .join('\n')
+const payloadOrderForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0098_reviewServingPayloadOrderColumns.sql']
+const countScopeForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath[
+    '../../db/duckdbMigrations/0099_reviewServingCountScopeAndDetailOptionTables.sql'
+  ]
+const filterOptionValueForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0100_reviewServingFilterOptionValueKey.sql']
+const facetSummaryScopeForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0101_reviewServingFacetSummaryScope.sql']
 
 const reviewServingPhase1Tables = [
   'app.import_run_article_delta',
@@ -82,11 +93,41 @@ const escapeRegex = (value: string) => {
 }
 
 const getTableSql = (tableName: string) => {
-  const [match = ''] = schemaMigrationSql.match(
-    new RegExp(`CREATE TABLE IF NOT EXISTS ${escapeRegex(tableName)} \\([\\s\\S]*?\\n\\);`),
-  ) ?? ['']
+  const matches = [
+    ...schemaMigrationSql.matchAll(
+      new RegExp(`CREATE TABLE IF NOT EXISTS ${escapeRegex(tableName)} \\([\\s\\S]*?\\n\\);`, 'g'),
+    ),
+  ]
+  const lastMatch = matches.at(-1)
 
-  return match
+  return lastMatch?.[0] ?? ''
+}
+
+const getTableColumns = (tableName: string) => {
+  return new Set(
+    [...getTableSql(tableName).matchAll(/^ {2}([a-z_][\w]*)\s+/gm)].map((match) => {
+      return match[1]
+    }),
+  )
+}
+
+const getPhysicalColumnNameFromContractField = (field: string) => {
+  const firstToken = field.trim().split(/\s+/)[0] ?? ''
+  const columnName = firstToken.replace(/^.*\./, '')
+
+  return /^[a-z_][\w]*$/.test(columnName) ? columnName : null
+}
+
+const getContractPhysicalColumns = (contract: (typeof reviewServingReadContractList)[number]) => {
+  return [
+    ...new Set(
+      [...contract.cursorFields, ...contract.sort.fields]
+        .map(getPhysicalColumnNameFromContractField)
+        .filter((columnName): columnName is string => {
+          return columnName !== null
+        }),
+    ),
+  ]
 }
 
 const getMissingColumns = (tableName: string, columnNames: readonly string[]) => {
@@ -149,6 +190,43 @@ test('Phase 1 payload serving schema preserves prompt preview article ordering',
   expect(getMissingColumns('mart.review_article_serving_payload_v4', ['article_created_at', 'article_id'])).toEqual([])
 })
 
+test('Phase 1 schema migration creates contract cursor and sort columns on non-job serving tables', () => {
+  const missingColumns = reviewServingReadContractList
+    .filter((contract) => {
+      return contract.physicalAccessStrategy !== 'jobCriteria'
+    })
+    .flatMap((contract) => {
+      const tableColumns = getTableColumns(contract.servingTable)
+
+      return getContractPhysicalColumns(contract)
+        .filter((columnName) => {
+          return !tableColumns.has(columnName)
+        })
+        .map((columnName) => {
+          return `${contract.key}:${contract.servingTable}.${columnName}`
+        })
+    })
+
+  expect(missingColumns).toEqual([])
+})
+
+test('Phase 1 schema migration keeps job contracts on job cursor and sort columns', () => {
+  const jobContractFields = reviewServingReadContractList
+    .filter((contract) => {
+      return contract.physicalAccessStrategy === 'jobCriteria'
+    })
+    .flatMap((contract) => {
+      return getContractPhysicalColumns(contract).map((columnName) => {
+        return `${contract.key}:${columnName}`
+      })
+    })
+  const invalidJobContractFields = jobContractFields.filter((field) => {
+    return !field.endsWith(':updated_at') && !field.endsWith(':job_id')
+  })
+
+  expect(invalidJobContractFields).toEqual([])
+})
+
 test('payload order forward migration upgrades already-applied review-serving schemas', () => {
   expect(payloadOrderForwardMigrationSql).toContain(
     'ALTER TABLE mart.review_article_serving_payload_v4\nADD COLUMN IF NOT EXISTS article_created_at TIMESTAMPTZ;',
@@ -198,4 +276,22 @@ test('Phase 1 schema migration includes dedicated judgment detail and filter opt
   expect(countScopeForwardMigrationSql).toContain('option_value_key VARCHAR NOT NULL')
   expect(filterOptionValueForwardMigrationSql).toContain('DROP TABLE IF EXISTS mart.review_filter_option_serving_v4')
   expect(filterOptionValueForwardMigrationSql).toContain('option_value_key VARCHAR NOT NULL')
+})
+
+test('Phase 1 schema migration keeps facets scoped by summary and facet kind in the final table shape', () => {
+  expect(
+    getMissingColumns('mart.review_filter_facet_serving_v4', [
+      'answer_value',
+      'facet_kind',
+      'facet_key',
+      'facet_value',
+      'prompt_id',
+      'summary_definition_version',
+      'summary_identity',
+    ]),
+  ).toEqual([])
+  expect(facetSummaryScopeForwardMigrationSql).toContain('DROP TABLE IF EXISTS mart.review_filter_facet_serving_v4')
+  expect(facetSummaryScopeForwardMigrationSql).toContain(
+    'PRIMARY KEY(project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version)',
+  )
 })

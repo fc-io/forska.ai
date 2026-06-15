@@ -562,6 +562,7 @@ test('admitReviewServingDuckdbWorkload maps an admitted contract to generic Duck
     maxResultRows: 100,
     projectId: 'project-a',
     routeOrJobKey: 'review.llm.rows',
+    searchMode: 'none',
     timeoutMs: 5_000,
     workloadClass: 'foregroundReviewRows',
   })

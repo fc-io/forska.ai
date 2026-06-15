@@ -1,3 +1,4 @@
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   closeReadOnlyDuckdbService,
   type ReadOnlyDuckdbContext,
@@ -7,15 +8,15 @@ import {
 
 export type AppReadOnlyDatabaseService = {
   close: () => Promise<void>
-  queryJson: <T>(statement: string) => Promise<T[]>
+  queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
   validate: () => Promise<void>
 }
 
 const createAppReadOnlyDatabaseService = (context: ReadOnlyDuckdbContext): AppReadOnlyDatabaseService => {
   return {
     close: closeReadOnlyDuckdbService,
-    queryJson: <T>(statement: string) => {
-      return runReadOnlyDuckdbJsonQuery<T>(context, statement)
+    queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
+      return runReadOnlyDuckdbJsonQuery<T>(context, statement, workloadContext)
     },
     validate: () => {
       return validateReadOnlyDuckdbService(context)

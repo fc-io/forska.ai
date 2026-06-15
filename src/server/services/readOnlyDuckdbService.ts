@@ -2,7 +2,7 @@ import {existsSync} from 'node:fs'
 
 import {DuckDBConnection, DuckDBInstance} from '@duckdb/node-api'
 
-import {runDuckdbJsonQuery} from '../utils/duckdbService.ts'
+import {type DuckdbWorkloadContext, runDuckdbJsonQuery, runMeasuredDuckdbJsonWorkload} from '../utils/duckdbService.ts'
 import {getEnv} from '../utils/env.ts'
 import {canCurrentServerOwnDuckdb} from '../utils/serverRuntimeRole.ts'
 
@@ -14,6 +14,7 @@ type ReadOnlyDuckdbServiceState = {
   connection: DuckDBConnection | null
   databasePath: string | null
   duckdbInstance: DuckDBInstance | null
+  pendingCount: number
   queue: Promise<void>
   startupPromise: Promise<DuckDBConnection> | null
 }
@@ -31,6 +32,7 @@ const getReadOnlyDuckdbServiceState = () => {
     connection: null,
     databasePath: null,
     duckdbInstance: null,
+    pendingCount: 0,
     queue: Promise.resolve(),
     startupPromise: null,
   }
@@ -171,13 +173,16 @@ const ensureReadOnlyDuckdbServiceStarted = async (context: ReadOnlyDuckdbContext
 }
 
 const enqueueReadOnlyDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
+  readOnlyDuckdbServiceState.pendingCount += 1
   const queuedWork = readOnlyDuckdbServiceState.queue.then(work)
 
   readOnlyDuckdbServiceState.queue = queuedWork.then(
     () => {
+      readOnlyDuckdbServiceState.pendingCount = Math.max(0, readOnlyDuckdbServiceState.pendingCount - 1)
       return undefined
     },
     () => {
+      readOnlyDuckdbServiceState.pendingCount = Math.max(0, readOnlyDuckdbServiceState.pendingCount - 1)
       return undefined
     },
   )
@@ -201,26 +206,41 @@ const shouldUseOwnerGuardedJudgeWorkerReadPath = (context: ReadOnlyDuckdbContext
   return context === 'judge-worker' && canCurrentServerOwnDuckdb()
 }
 
-const runOwnerGuardedJudgeWorkerReadQuery = async <T>(context: ReadOnlyDuckdbContext, statement: string) => {
+const runOwnerGuardedJudgeWorkerReadQuery = async <T>(
+  context: ReadOnlyDuckdbContext,
+  statement: string,
+  workloadContext?: DuckdbWorkloadContext,
+) => {
   if (!shouldUseOwnerGuardedJudgeWorkerReadPath(context)) {
     throw getReadOnlyDuckdbUnavailableError(context, 'owner guarded read path is not available')
   }
 
-  return runDuckdbJsonQuery<T>(statement)
+  return runDuckdbJsonQuery<T>(statement, workloadContext)
 }
 
 export const runReadOnlyDuckdbJsonQuery = async <T>(
   context: ReadOnlyDuckdbContext,
   statement: string,
+  workloadContext?: DuckdbWorkloadContext,
 ): Promise<T[]> => {
   assertReadOnlyDuckdbSql(context, statement)
 
   if (shouldUseOwnerGuardedJudgeWorkerReadPath(context)) {
-    return runOwnerGuardedJudgeWorkerReadQuery<T>(context, statement)
+    return runOwnerGuardedJudgeWorkerReadQuery<T>(context, statement, workloadContext)
   }
 
+  const queueDepthAtStart = readOnlyDuckdbServiceState.pendingCount
+
   return enqueueReadOnlyDuckdbWork(() => {
-    return runEphemeralReadOnlyDuckdbJsonQuery<T>(context, statement)
+    return runMeasuredDuckdbJsonWorkload({
+      operation: 'readOnlyQuery',
+      queue: 'readOnly',
+      queueDepthAtStart,
+      workloadContext,
+      work: () => {
+        return runEphemeralReadOnlyDuckdbJsonQuery<T>(context, statement)
+      },
+    })
   })
 }
 
@@ -236,5 +256,6 @@ export const closeReadOnlyDuckdbService = async (): Promise<void> => {
 
 export const resetReadOnlyDuckdbServiceForTests = () => {
   closeReadOnlyDuckdbServiceDirect()
+  readOnlyDuckdbServiceState.pendingCount = 0
   readOnlyDuckdbServiceState.queue = Promise.resolve()
 }

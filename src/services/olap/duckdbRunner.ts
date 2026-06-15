@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {getDuckdbBinary} from '../../server/utils/duckdbBinary.ts'
+import {type DuckdbWorkloadContext, runMeasuredDuckdbJsonWorkload} from '../../server/utils/duckdbService.ts'
 import {env} from '../../server/utils/env.ts'
 import {getDuckdbPath} from '../../server/utils/getDuckdbPath.ts'
 
@@ -57,9 +58,21 @@ const runDuckdbJsonQueryFromSpawn = async <T>(query: string, duckdbPath: string)
   return Array.isArray(parsed) ? parsed : [parsed]
 }
 
-export const runDuckdbJsonQuery = async <T>(query: string, duckdbPath?: string): Promise<T[]> => {
+export const runDuckdbJsonQuery = async <T>(
+  query: string,
+  duckdbPath?: string,
+  workloadContext?: DuckdbWorkloadContext,
+): Promise<T[]> => {
   const resolvedDuckdbPath = getDuckdbDatabasePath(duckdbPath)
   return resolvedDuckdbPath === env.DUCKDB_PATH
-    ? getAppDatabaseService().queryJson<T>(query)
-    : runDuckdbJsonQueryFromSpawn<T>(query, resolvedDuckdbPath)
+    ? getAppDatabaseService().queryJson<T>(query, workloadContext)
+    : runMeasuredDuckdbJsonWorkload({
+        operation: 'externalQuery',
+        queue: 'external',
+        queueDepthAtStart: 0,
+        workloadContext,
+        work: () => {
+          return runDuckdbJsonQueryFromSpawn<T>(query, resolvedDuckdbPath)
+        },
+      })
 }
