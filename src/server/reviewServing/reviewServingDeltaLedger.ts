@@ -2,6 +2,8 @@ import {createHash} from 'node:crypto'
 
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
+import {type ReviewServingChangeKind} from './reviewServingContracts.ts'
+import {getReviewServingInvalidationRuleOrNull} from './reviewServingInvalidationRegistry.ts'
 
 export type ReviewServingDeltaLedgerTransaction = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -19,9 +21,14 @@ export type ReviewServingIdempotencyKeyInput = {
   typedKey: ReviewServingIdentityValue
 }
 
+export type ReviewServingImportRunArticleChangeKind = Extract<
+  ReviewServingChangeKind,
+  'importRoute.article.added' | 'importRoute.article.rankFields.updated' | 'importRoute.article.removed'
+>
+
 export type ReviewServingDeltaAppendInput = ReviewServingIdempotencyKeyInput & {
   articleId?: string | null
-  changeKind: string
+  changeKind: ReviewServingChangeKind
   configFieldSet?: string | null
   humanJudgmentKey?: string | null
   judgmentId?: string | null
@@ -40,7 +47,7 @@ export type ReviewServingDeltaAppendInput = ReviewServingIdempotencyKeyInput & {
 
 export type ReviewServingImportRunArticleDeltaAppendInput = ReviewServingIdempotencyKeyInput & {
   articleId?: string | null
-  changeKind: string
+  changeKind: ReviewServingImportRunArticleChangeKind
   importRouteId?: string | null
   importRunId?: string | null
   payloadJson?: ReviewServingIdentityValue
@@ -95,6 +102,25 @@ const getReviewServingJsonLiteral = (value: ReviewServingIdentityValue) => {
 
 const getReviewServingPayloadValue = (value: ReviewServingIdentityValue) => {
   return value === undefined ? null : value
+}
+
+const getReviewServingDeltaTombstone = (input: {changeKind: string; sourceOperation: string; tombstone?: boolean}) => {
+  return (
+    input.tombstone
+    ?? (input.sourceOperation === 'delete'
+      || input.changeKind.endsWith('.deleted')
+      || input.changeKind.endsWith('.removed'))
+  )
+}
+
+const validateReviewServingChangeKind = (changeKind: string) => {
+  const rule = getReviewServingInvalidationRuleOrNull(changeKind)
+
+  if (!rule) {
+    throw new Error(`unknown review-serving change kind: ${changeKind}`)
+  }
+
+  return rule.changeKind
 }
 
 const getReviewServingIdempotencyIdentityValue = (input: ReviewServingIdempotencyKeyInput) => {
@@ -184,6 +210,7 @@ export const appendReviewServingChangeDelta = async (
   tx: ReviewServingDeltaLedgerTransaction,
   input: ReviewServingDeltaAppendInput,
 ): Promise<ReviewServingDeltaAppendResult> => {
+  const changeKind = validateReviewServingChangeKind(input.changeKind)
   const idempotencyKey = getReviewServingDeltaIdempotencyKey(input)
   const existing = await getExistingReviewServingDelta(tx, 'app.review_change_delta', idempotencyKey)
 
@@ -223,10 +250,12 @@ export const appendReviewServingChangeDelta = async (
       human_judgment_key,
       config_field_set,
       tombstone,
-      payload_json
+      payload_json,
+      created_at,
+      reconciled_at
     ) VALUES (
       ${getSqlLiteral(deltaId)},
-      ${getSqlLiteral(input.changeKind)},
+      ${getSqlLiteral(changeKind)},
       ${getSqlLiteral(input.sourceTable)},
       ${getSqlLiteral(input.sourceRowId)},
       ${getSqlLiteral(input.sourceOperation)},
@@ -246,8 +275,10 @@ export const appendReviewServingChangeDelta = async (
       ${getSqlLiteral(input.judgmentId)},
       ${getSqlLiteral(input.humanJudgmentKey)},
       ${getSqlLiteral(input.configFieldSet)},
-      ${getSqlLiteral(input.tombstone ?? false)},
-      ${getReviewServingJsonLiteral(getReviewServingPayloadValue(input.payloadJson))}
+      ${getSqlLiteral(getReviewServingDeltaTombstone(input))},
+      ${getReviewServingJsonLiteral(getReviewServingPayloadValue(input.payloadJson))},
+      current_timestamp,
+      NULL
     )
   `)
 
@@ -258,6 +289,7 @@ export const appendReviewServingImportRunArticleDelta = async (
   tx: ReviewServingDeltaLedgerTransaction,
   input: ReviewServingImportRunArticleDeltaAppendInput,
 ): Promise<ReviewServingDeltaAppendResult> => {
+  const changeKind = validateReviewServingChangeKind(input.changeKind)
   const idempotencyKey = getReviewServingDeltaIdempotencyKey(input)
   const existing = await getExistingReviewServingDelta(tx, 'app.import_run_article_delta', idempotencyKey)
 
@@ -293,10 +325,12 @@ export const appendReviewServingImportRunArticleDelta = async (
       selected_rank_key,
       publication_year,
       tombstone,
-      payload_json
+      payload_json,
+      created_at,
+      reconciled_at
     ) VALUES (
       ${getSqlLiteral(deltaId)},
-      ${getSqlLiteral(input.changeKind)},
+      ${getSqlLiteral(changeKind)},
       ${getSqlLiteral(input.sourceTable)},
       ${getSqlLiteral(input.sourceRowId)},
       ${getSqlLiteral(input.sourceOperation)},
@@ -312,8 +346,10 @@ export const appendReviewServingImportRunArticleDelta = async (
       ${getSqlLiteral(input.sourceRecordHash)},
       ${getSqlLiteral(input.selectedRankKey)},
       ${getSqlLiteral(input.publicationYear)},
-      ${getSqlLiteral(input.tombstone ?? false)},
-      ${getReviewServingJsonLiteral(getReviewServingPayloadValue(input.payloadJson))}
+      ${getSqlLiteral(getReviewServingDeltaTombstone(input))},
+      ${getReviewServingJsonLiteral(getReviewServingPayloadValue(input.payloadJson))},
+      current_timestamp,
+      NULL
     )
   `)
 
