@@ -308,8 +308,8 @@ test('human payload contracts cover list and detail response judgments', () => {
 
   expect(llmListJudgments?.requiredComponents).toEqual(['llmStatus', 'summary'])
   expect(humanListJudgments?.requiredComponents).toEqual(['humanStatus', 'summary'])
-  expect(bothListJudgments?.requiredComponents).toEqual(['llmStatus', 'summary'])
-  expect(bothListHumanJudgments?.requiredComponents).toEqual(['humanStatus', 'summary'])
+  expect(bothListJudgments?.requiredComponents).toEqual(['llmStatus', 'humanStatus', 'summary'])
+  expect(bothListHumanJudgments?.requiredComponents).toEqual(['llmStatus', 'humanStatus', 'summary'])
   expect(detailHumanJudgments?.requiredComponents).toEqual(['humanStatus', 'summary'])
   expect(llmListJudgments?.physicalAccessStrategy).toBe('articleSetLookup')
   expect(humanListJudgments?.physicalAccessStrategy).toBe('articleSetLookup')

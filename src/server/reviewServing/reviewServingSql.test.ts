@@ -306,7 +306,7 @@ test('buildReviewServingRowsSql covers judgment detail rows for article details'
 
 test('buildReviewServingRowsSql pins fixed list-mode judgment payload reads', () => {
   const humanListSql = buildReviewServingRowsSql({
-    articleIdParameter: '$articleId',
+    articleIdsParameter: '$articleIds',
     contract: getRequiredReviewServingReadContract('review.human.list.judgments'),
     displayIdentityParameter: '$displayIdentity',
     limitParameter: '$limit',
@@ -319,7 +319,7 @@ test('buildReviewServingRowsSql pins fixed list-mode judgment payload reads', ()
     snapshotIdParameter: '$snapshotId',
   })
   const bothListSql = buildReviewServingRowsSql({
-    articleIdParameter: '$articleId',
+    articleIdsParameter: '$articleIds',
     contract: getRequiredReviewServingReadContract('review.both.list.humanJudgments'),
     displayIdentityParameter: '$displayIdentity',
     limitParameter: '$limit',
@@ -334,6 +334,8 @@ test('buildReviewServingRowsSql pins fixed list-mode judgment payload reads', ()
 
   expect(assertReviewServingSqlShape(humanListSql)).toEqual({ok: true, violations: []})
   expect(assertReviewServingSqlShape(bothListSql)).toEqual({ok: true, violations: []})
+  expect(humanListSql).toContain('AND article_id IN (SELECT unnest($articleIds))')
+  expect(bothListSql).toContain('AND article_id IN (SELECT unnest($articleIds))')
   expect(humanListSql).toContain("AND list_mode_key = 'human'")
   expect(bothListSql).toContain("AND list_mode_key = 'both'")
 })

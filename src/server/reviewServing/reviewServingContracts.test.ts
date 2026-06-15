@@ -37,6 +37,7 @@ test('review serving contracts export explicit lifecycle state values', () => {
 
 test('review serving contracts export physical access and budget value sets', () => {
   expect(reviewServingPhysicalAccessStrategies).toEqual([
+    'articleSetLookup',
     'jobCriteria',
     'keyedLookup',
     'orderedPrefix',
