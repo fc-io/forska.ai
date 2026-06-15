@@ -11,6 +11,11 @@ import {
 } from '../../utils/articleIdentifierNormalization.ts'
 import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {
+  appendArticleReviewServingDeltas,
+  type ArticleReviewServingFieldName,
+  getArticleReviewServingMutationValueHash,
+} from '../reviewServing/articleReviewServingDeltaService.ts'
+import {
   getReviewImportHotFieldRow,
   type ReviewImportHotFieldInput,
   upsertReviewImportArticleHotField,
@@ -731,18 +736,30 @@ const updateExistingCanonicalArticlesInTx = async (params: {
   })
 
   await updates.reduce<Promise<void>>((previousRun, update) => {
-    return previousRun.then(() => {
+    return previousRun.then(async () => {
       const assignments = Object.entries(update.values).map((entry) => {
         return `${canonicalArticleUpdateColumnMap[entry[0] as CanonicalArticleUpdateKey]} = ${getSqlLiteral(entry[1])}`
       })
+      const changedFields = Object.keys(update.values).filter(
+        (fieldName): fieldName is ArticleReviewServingFieldName => {
+          return ['articleAuthors', 'articleSummary', 'articleTitle', 'publicationStatus', 'url'].includes(fieldName)
+        },
+      )
 
-      return params.tx.run(`
+      await params.tx.run(`
         UPDATE app.article
         SET
           ${assignments.join(',\n          ')},
           updated_at = now()
         WHERE id = ${getSqlLiteral(update.current.id)}
       `)
+      await appendArticleReviewServingDeltas(params.tx, {
+        articleId: update.current.id,
+        changedFields,
+        sourceMutationKey: `articleImportStoreService|canonicalArticle|${update.current.id}|${getArticleReviewServingMutationValueHash(update.values)}`,
+        sourceOperation: 'update',
+        sourceUpdatedAt: new Date(),
+      })
     })
   }, Promise.resolve())
 }

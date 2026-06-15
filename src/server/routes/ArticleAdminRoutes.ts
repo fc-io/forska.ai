@@ -4,6 +4,10 @@ import path from 'path'
 
 import {emptyArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
+import {
+  appendArticleReviewServingDeltas,
+  getArticleReviewServingMutationValueHash,
+} from '../reviewServing/articleReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -136,12 +140,20 @@ export const articleAdminRoutes = new Elysia()
         }
         return `${columnMap[key] ?? key} = ${getSqlLiteral(value)}`
       })
-      await getAppDatabaseService().run(`
-        UPDATE app.article
-        SET ${updateParts.join(', ')},
-            updated_at = current_timestamp
-        WHERE id = '${escapeSqlString(id)}'
-      `)
+      await getAppDatabaseService().transaction(async (tx) => {
+        await tx.run(`
+          UPDATE app.article
+          SET ${updateParts.join(', ')},
+              updated_at = current_timestamp
+          WHERE id = '${escapeSqlString(id)}'
+        `)
+        await appendArticleReviewServingDeltas(tx, {
+          articleId: id,
+          changedFields: result.fullTextPDF ? ['fullText', 'fullTextHtml', 'fullTextPDF'] : [],
+          sourceMutationKey: `ArticleAdminRoutes.fetchPdf|article|${id}|${getArticleReviewServingMutationValueHash(result)}`,
+          sourceOperation: 'update',
+        })
+      })
 
       return {
         success: true,
@@ -194,20 +206,28 @@ export const articleAdminRoutes = new Elysia()
       }
 
       // Update the article with the uploaded PDF info
-      await getAppDatabaseService().run(`
-        UPDATE app.article
-        SET full_text_pdf = ${getSqlLiteral(fullTextPDF)},
-            full_text_source = 'user_upload',
-            full_text_original_format = 'pdf',
-            full_text_fetched_at = ${getTimestampLiteral(new Date())},
-            full_text_conversion_status = NULL,
-            full_text_conversion_attempts = 0,
-            full_text_conversion_error = NULL,
-            full_text = NULL,
-            full_text_html = NULL,
-            updated_at = current_timestamp
-        WHERE id = '${escapeSqlString(id)}'
-      `)
+      await getAppDatabaseService().transaction(async (tx) => {
+        await tx.run(`
+          UPDATE app.article
+          SET full_text_pdf = ${getSqlLiteral(fullTextPDF)},
+              full_text_source = 'user_upload',
+              full_text_original_format = 'pdf',
+              full_text_fetched_at = ${getTimestampLiteral(new Date())},
+              full_text_conversion_status = NULL,
+              full_text_conversion_attempts = 0,
+              full_text_conversion_error = NULL,
+              full_text = NULL,
+              full_text_html = NULL,
+              updated_at = current_timestamp
+          WHERE id = '${escapeSqlString(id)}'
+        `)
+        await appendArticleReviewServingDeltas(tx, {
+          articleId: id,
+          changedFields: ['fullText', 'fullTextHtml', 'fullTextPDF'],
+          sourceMutationKey: `ArticleAdminRoutes.uploadPdf|article|${id}|${fullTextPDF}|${pdfBuffer.byteLength}|${Date.now()}`,
+          sourceOperation: 'update',
+        })
+      })
 
       return {success: true, fullTextPDF, message: 'PDF uploaded successfully'}
     },
@@ -270,17 +290,25 @@ export const articleAdminRoutes = new Elysia()
             timeoutMs: DOCLING_CONVERSION_TIMEOUT_MS,
           })
 
-          await getAppDatabaseService().run(`
-            UPDATE app.article
-            SET full_text = ${getSqlLiteral(md)},
-                full_text_html = ${getSqlLiteral(html)},
-                full_text_conversion_status = 'success',
-                full_text_conversion_error = NULL,
-                full_text_char_count = ${md.length},
-                full_text_conversion_attempts = ${(article.fullTextConversionAttempts ?? 0) + 1},
-                updated_at = current_timestamp
-            WHERE id = '${escapeSqlString(article.id)}'
-          `)
+          await getAppDatabaseService().transaction(async (tx) => {
+            await tx.run(`
+              UPDATE app.article
+              SET full_text = ${getSqlLiteral(md)},
+                  full_text_html = ${getSqlLiteral(html)},
+                  full_text_conversion_status = 'success',
+                  full_text_conversion_error = NULL,
+                  full_text_char_count = ${md.length},
+                  full_text_conversion_attempts = ${(article.fullTextConversionAttempts ?? 0) + 1},
+                  updated_at = current_timestamp
+              WHERE id = '${escapeSqlString(article.id)}'
+            `)
+            await appendArticleReviewServingDeltas(tx, {
+              articleId: article.id,
+              changedFields: ['fullText', 'fullTextHtml'],
+              sourceMutationKey: `ArticleAdminRoutes.convertPdf|article|${article.id}|success|${getArticleReviewServingMutationValueHash({html, md})}`,
+              sourceOperation: 'update',
+            })
+          })
 
           const duration = Date.now() - startTime
           console.log(`[convertPdf] Success: article ${article.id} (${duration}ms, ${md.length} chars)`)

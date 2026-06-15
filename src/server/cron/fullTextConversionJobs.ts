@@ -2,6 +2,10 @@ import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
 import {getJsonSqlLiteral} from '../providers/providerDbUtils.ts'
+import {
+  appendArticleReviewServingDeltas,
+  getArticleReviewServingMutationValueHash,
+} from '../reviewServing/articleReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -319,24 +323,32 @@ const convertArticle = async ({
       timeoutMs: DOCLING_CONVERSION_TIMEOUT_MS,
     })
 
-    await getAppDatabaseService().run(`
-      UPDATE app.article
-      SET full_text = ${getSqlLiteral(md)},
-          full_text_html = ${getSqlLiteral(html)},
-          full_text_conversion_status = 'success',
-          full_text_conversion_error = NULL,
-          full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
-          full_text_conversion_metadata = ${getJsonSqlLiteral({
-            baseURL: runtimeConfig.baseURL,
-            modelId: runtimeConfig.modelId,
-            modelName: runtimeConfig.modelName,
-            providerKind: runtimeConfig.providerKind,
-          })},
-          full_text_char_count = ${md.length},
-          full_text_conversion_attempts = ${(article.fullTextConversionAttempts ?? 0) + 1},
-          updated_at = current_timestamp
-      WHERE id = '${escapeSqlString(article.id)}'
-    `)
+    await getAppDatabaseService().transaction(async (tx) => {
+      await tx.run(`
+        UPDATE app.article
+        SET full_text = ${getSqlLiteral(md)},
+            full_text_html = ${getSqlLiteral(html)},
+            full_text_conversion_status = 'success',
+            full_text_conversion_error = NULL,
+            full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
+            full_text_conversion_metadata = ${getJsonSqlLiteral({
+              baseURL: runtimeConfig.baseURL,
+              modelId: runtimeConfig.modelId,
+              modelName: runtimeConfig.modelName,
+              providerKind: runtimeConfig.providerKind,
+            })},
+            full_text_char_count = ${md.length},
+            full_text_conversion_attempts = ${(article.fullTextConversionAttempts ?? 0) + 1},
+            updated_at = current_timestamp
+        WHERE id = '${escapeSqlString(article.id)}'
+      `)
+      await appendArticleReviewServingDeltas(tx, {
+        articleId: article.id,
+        changedFields: ['fullText', 'fullTextHtml'],
+        sourceMutationKey: `fullTextConversionJobs|article|${article.id}|success|${getArticleReviewServingMutationValueHash({html, md})}`,
+        sourceOperation: 'update',
+      })
+    })
 
     fullTextConversionLogger.log(
       'fullTextConversion:articleConversionSucceeded',

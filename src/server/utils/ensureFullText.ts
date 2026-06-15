@@ -1,4 +1,8 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
+import {
+  appendArticleReviewServingDeltas,
+  getArticleReviewServingMutationValueHash,
+} from '../reviewServing/articleReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
@@ -124,17 +128,25 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
       timeoutMs: DOCLING_CONVERSION_TIMEOUT_MS,
     })
 
-    await getAppDatabaseService().run(`
-      UPDATE app.article
-      SET full_text = ${getSqlLiteral(md)},
-          full_text_html = ${getSqlLiteral(html)},
-          full_text_conversion_status = 'success',
-          full_text_conversion_error = NULL,
-          full_text_char_count = ${md.length},
-          full_text_conversion_attempts = ${(fresh.fullTextConversionAttempts ?? 0) + 1},
-          updated_at = current_timestamp
-      WHERE id = '${escapeSqlString(articleId)}'
-    `)
+    await getAppDatabaseService().transaction(async (tx) => {
+      await tx.run(`
+        UPDATE app.article
+        SET full_text = ${getSqlLiteral(md)},
+            full_text_html = ${getSqlLiteral(html)},
+            full_text_conversion_status = 'success',
+            full_text_conversion_error = NULL,
+            full_text_char_count = ${md.length},
+            full_text_conversion_attempts = ${(fresh.fullTextConversionAttempts ?? 0) + 1},
+            updated_at = current_timestamp
+        WHERE id = '${escapeSqlString(articleId)}'
+      `)
+      await appendArticleReviewServingDeltas(tx, {
+        articleId,
+        changedFields: ['fullText', 'fullTextHtml'],
+        sourceMutationKey: `ensureFullText|article|${articleId}|success|${getArticleReviewServingMutationValueHash({html, md})}`,
+        sourceOperation: 'update',
+      })
+    })
 
     ensureFullTextLogger.log('ensureFullText:conversionSucceeded', '[ensureFullText] On-demand conversion succeeded', {
       articleId,

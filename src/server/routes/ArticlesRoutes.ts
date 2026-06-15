@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
+import {appendArticleReviewServingDeltasForIds} from '../reviewServing/articleReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -140,19 +141,36 @@ export const articlesRoutes = new Elysia()
   })
   .post('/api/articles/pdf-fetch-reset', () => {
     void getAppDatabaseService()
-      .run(
-        `
-        UPDATE app.article
-        SET full_text_fetched_at = NULL,
-            full_text_pdf = NULL,
-            full_text_source = NULL,
-            full_text_original_format = NULL,
-            updated_at = current_timestamp
-        WHERE full_text_pdf LIKE 'assets/article_pdfs/%'
+      .transaction(async (tx) => {
+        const whereSql = `full_text_pdf LIKE 'assets/article_pdfs/%'
           AND full_text_source IS NOT NULL
-          AND full_text_source != 'user_upload'
-      `,
-      )
+          AND full_text_source != 'user_upload'`
+        const articleRows = await tx.queryJson<{articleId: string}>(`
+          SELECT id AS articleId
+          FROM app.article
+          WHERE ${whereSql}
+        `)
+        const articleIds = articleRows.map((row) => {
+          return row.articleId
+        })
+        await tx.run(
+          `
+          UPDATE app.article
+          SET full_text_fetched_at = NULL,
+              full_text_pdf = NULL,
+              full_text_source = NULL,
+              full_text_original_format = NULL,
+              updated_at = current_timestamp
+          WHERE ${whereSql}
+        `,
+        )
+        await appendArticleReviewServingDeltasForIds(tx, {
+          articleIds,
+          changedFields: ['fullTextPDF'],
+          sourceMutationKey: 'ArticlesRoutes.pdfFetchReset',
+          sourceOperation: 'update',
+        })
+      })
       .then(() => {
         console.log('[pdf-fetch-reset] Reset fetched article PDFs')
       })
