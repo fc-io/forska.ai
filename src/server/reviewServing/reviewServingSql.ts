@@ -493,8 +493,8 @@ const getReviewServingRowsSqlJobPredicate = (params: {
     return [
       ` AND search_identity = ${params.searchIdentityParameter}`,
       ` AND project_scope_identity = ${params.projectScopeIdentityParameter}`,
-      ` AND review_config_hash = ${params.reviewConfigHashParameter}`,
-      ` AND snapshot_id = ${params.snapshotIdParameter}`,
+      ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter}`,
+      ` AND snapshot_id IS NOT DISTINCT FROM ${params.snapshotIdParameter}`,
       ` AND search_mode = ${getSqlStringLiteral(params.contract.searchMode)}`,
       ` AND search_text = ${searchTextParameter}`,
       ` AND filter_signature = ${jobFilterSignatureParameter}`,

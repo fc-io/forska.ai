@@ -145,6 +145,7 @@ test('buildReviewConfigHash sorts prompt configs before hashing', () => {
     thresholdVersion: null,
   })
   const left = buildReviewConfigHash({
+    humanJudgmentMode: 'prompt',
     modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
     modelId: 'model-a',
     promptConfigs: [
@@ -157,6 +158,7 @@ test('buildReviewConfigHash sorts prompt configs before hashing', () => {
     useTitle: true,
   })
   const right = buildReviewConfigHash({
+    humanJudgmentMode: 'prompt',
     modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
     modelId: 'model-a',
     promptConfigs: [
@@ -174,6 +176,7 @@ test('buildReviewConfigHash sorts prompt configs before hashing', () => {
 
 test('buildReviewConfigHash ignores unrelated projection inputs', () => {
   const input = {
+    humanJudgmentMode: 'prompt',
     modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
     modelId: 'model-a',
     promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a'}],
@@ -192,6 +195,7 @@ test('buildReviewConfigHash ignores unrelated projection inputs', () => {
 
 test('buildReviewConfigHash changes when model execution settings change', () => {
   const input = {
+    humanJudgmentMode: 'prompt',
     modelExecutionIdentity: {
       options: {thinking: {effort: 'medium'}},
       providerConnectionId: 'provider-a',
@@ -217,6 +221,23 @@ test('buildReviewConfigHash changes when model execution settings change', () =>
 
   expect(changedThinking).not.toBe(baseHash)
   expect(changedVariant).not.toBe(baseHash)
+})
+
+test('buildReviewConfigHash changes when human judgment mode changes', () => {
+  const input = {
+    humanJudgmentMode: 'prompt',
+    modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
+    modelId: 'model-a',
+    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a'}],
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  } as const
+  const baseHash = buildReviewConfigHash(input)
+  const summaryHash = buildReviewConfigHash({...input, humanJudgmentMode: 'summary'})
+
+  expect(summaryHash).not.toBe(baseHash)
 })
 
 test('buildSummaryDefinitionIdentity sorts contribution keys before hashing', () => {
