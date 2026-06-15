@@ -105,6 +105,122 @@ test('specific projection builders are stable for equivalent dependency ordering
   expect(projectScopeLeft).toBe(projectScopeRight)
 })
 
+test('display search judgment-input project-scope prompt and review identities advance independently', () => {
+  const promptConfig = buildPromptConfigHash({
+    answerSchemaHash: 'answer-a',
+    promptId: 'prompt-a',
+    promptTextHash: 'text-a',
+    settingsVersion: 'settings:v1',
+    thresholdVersion: null,
+  })
+  const baseline = {
+    display: buildReviewDisplayIdentity({definitionVersion: 'display:v1', displayDependencyKeys: ['title']}),
+    judgmentInputContent: buildReviewJudgmentInputContentIdentity({
+      contentDependencyKeys: ['title'],
+      definitionVersion: 'judgment-input:v1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }),
+    projectScope: buildReviewProjectScopeIdentity({
+      definitionVersion: 'project-scope:v1',
+      projectScopeDependencyKeys: ['project-article:a'],
+    }),
+    promptConfig,
+    reviewConfig: buildReviewConfigHash({
+      humanJudgmentMode: 'prompt',
+      modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
+      modelId: 'model-a',
+      promptConfigs: [{promptConfigHash: promptConfig, promptId: 'prompt-a', promptOrder: 1}],
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }),
+    search: buildReviewSearchIdentity({
+      definitionVersion: 'search:v1',
+      searchDependencyKeys: ['title'],
+      tokenizerVersion: 'tokenizer:v1',
+    }),
+  }
+  const changedIdentities = {
+    display: {
+      ...baseline,
+      display: buildReviewDisplayIdentity({
+        definitionVersion: 'display:v1',
+        displayDependencyKeys: ['title', 'journal'],
+      }),
+    },
+    judgmentInputContent: {
+      ...baseline,
+      judgmentInputContent: buildReviewJudgmentInputContentIdentity({
+        contentDependencyKeys: ['title', 'abstract'],
+        definitionVersion: 'judgment-input:v1',
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      }),
+    },
+    projectScope: {
+      ...baseline,
+      projectScope: buildReviewProjectScopeIdentity({
+        definitionVersion: 'project-scope:v1',
+        projectScopeDependencyKeys: ['project-article:a', 'project-article:b'],
+      }),
+    },
+    promptConfig: {
+      ...baseline,
+      promptConfig: buildPromptConfigHash({
+        answerSchemaHash: 'answer-b',
+        promptId: 'prompt-a',
+        promptTextHash: 'text-a',
+        settingsVersion: 'settings:v1',
+        thresholdVersion: null,
+      }),
+    },
+    reviewConfig: {
+      ...baseline,
+      reviewConfig: buildReviewConfigHash({
+        humanJudgmentMode: 'summary',
+        modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
+        modelId: 'model-a',
+        promptConfigs: [{promptConfigHash: promptConfig, promptId: 'prompt-a', promptOrder: 1}],
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      }),
+    },
+    search: {
+      ...baseline,
+      search: buildReviewSearchIdentity({
+        definitionVersion: 'search:v1',
+        searchDependencyKeys: ['title', 'abstract'],
+        tokenizerVersion: 'tokenizer:v1',
+      }),
+    },
+  }
+
+  expect(
+    Object.entries(changedIdentities).map(([changedIdentity, identities]) => {
+      const changedKeys = Object.keys(identities).filter((identityKey) => {
+        return identities[identityKey as keyof typeof baseline] !== baseline[identityKey as keyof typeof baseline]
+      })
+
+      return [changedIdentity, changedKeys]
+    }),
+  ).toEqual([
+    ['display', ['display']],
+    ['judgmentInputContent', ['judgmentInputContent']],
+    ['projectScope', ['projectScope']],
+    ['promptConfig', ['promptConfig']],
+    ['reviewConfig', ['reviewConfig']],
+    ['search', ['search']],
+  ])
+})
+
 test('specific identity builders ignore unrelated projection inputs', () => {
   const displayInput = {definitionVersion: 'display:v1', displayDependencyKeys: ['articleTitle']}
   const displayIdentity = buildReviewDisplayIdentity(displayInput)

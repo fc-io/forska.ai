@@ -180,4 +180,18 @@ test('count, facet, queue, search, bulk, PDF, and export routes stay snapshot-sc
       })
     }).length,
   ).toBeGreaterThan(0)
+  expect(
+    snapshotOnlyRouteEntries.flatMap((entry) => {
+      return entry.surfaces
+        .filter((surface) => {
+          return (
+            snapshotOnlySurfaces.includes(surface as (typeof snapshotOnlySurfaces)[number])
+            && canApplyReviewWriteOverlayToReadSurface(surface)
+          )
+        })
+        .map((surface) => {
+          return `${entry.productRoute}:${surface}`
+        })
+    }),
+  ).toEqual([])
 })
