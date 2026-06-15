@@ -189,8 +189,8 @@ export const upsertReviewImportArticleHotFieldEffect = (
         ${getSqlLiteral(row.filterBucketValue)},
         ${getTimestampSqlLiteral(row.sourceUpdatedAt)},
         ${getSqlLiteral(row.tombstone)},
-        current_timestamp,
-        current_timestamp
+        now(),
+        now()
       )
       ON CONFLICT(import_route_id, article_id, source_record_key) DO UPDATE SET
         source_record_hash = excluded.source_record_hash,
@@ -208,7 +208,7 @@ export const upsertReviewImportArticleHotFieldEffect = (
         filter_bucket_value = excluded.filter_bucket_value,
         source_updated_at = excluded.source_updated_at,
         tombstone = excluded.tombstone,
-        updated_at = current_timestamp
+        updated_at = now()
     `)
   })
 }

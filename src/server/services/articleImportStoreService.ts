@@ -10,6 +10,16 @@ import {
   type RejectedArticleIdentifierNormalization,
 } from '../../utils/articleIdentifierNormalization.ts'
 import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
+import {
+  getReviewImportHotFieldRow,
+  type ReviewImportHotFieldInput,
+  upsertReviewImportArticleHotField,
+} from '../reviewServing/reviewImportHotFieldService.ts'
+import {
+  appendReviewServingImportRunArticleDelta,
+  type ReviewServingImportRunArticleChangeKind,
+  type ReviewServingSourceOperation,
+} from '../reviewServing/reviewServingDeltaLedger.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {
@@ -126,6 +136,18 @@ type ExistingArticleImportRouteLink = {
   sourceRecordHash: string | null
   sourceRecordKey: string | null
 }
+type DeletedArticleImportRouteLink = ArticleImportRouteLinkRecord
+type DeletedArticleImportRouteLinkRow = {
+  articleId: string
+  externalArticleId: string | null
+  importMetadata: unknown
+  importRunId: string | null
+  matchMetadata: unknown
+  rawPayload: unknown
+  sourceKind: string | null
+  sourceRecordHash: string
+  sourceRecordKey: string
+}
 type ExistingArticleImportSourceRecord = {
   articleId: string
   importRouteId: string
@@ -214,6 +236,33 @@ const getStableJsonValue = (value: unknown): string => {
             })
             .join(',')}}`
         : (JSON.stringify(value) ?? 'null')
+}
+
+const getNullableMetadataString = (metadata: unknown, keys: string[]) => {
+  const record = isObjectRecord(metadata) ? metadata : {}
+  const value = keys
+    .map((key) => {
+      return record[key]
+    })
+    .find((entry) => {
+      return typeof entry === 'string' && entry.trim() !== ''
+    })
+
+  return typeof value === 'string' ? value : null
+}
+
+const getNullableMetadataInteger = (metadata: unknown, keys: string[]) => {
+  const record = isObjectRecord(metadata) ? metadata : {}
+  const value = keys
+    .map((key) => {
+      return record[key]
+    })
+    .find((entry) => {
+      return typeof entry === 'number' || typeof entry === 'string'
+    })
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number.parseInt(value, 10) : null
+
+  return Number.isInteger(parsed) ? parsed : null
 }
 
 const getSourceRecordHash = (value: unknown) => {
@@ -765,6 +814,103 @@ const getArticleImportRouteLinkValue = (record: ArticleImportRouteLinkRecord) =>
     .join(', ')})`
 }
 
+const getArticleImportRouteDeltaPartition = (importRouteId: string) => {
+  return `import-route:${importRouteId}`
+}
+
+const getArticleImportRouteDeltaTypedKey = (
+  record: Pick<ArticleImportRouteLinkRecord, 'articleId' | 'importRouteId'>,
+) => {
+  return {articleId: record.articleId, importRouteId: record.importRouteId}
+}
+
+const getArticleImportRouteSourceRecordMutationKey = (
+  record: Pick<ArticleImportRouteLinkRecord, 'importRouteId' | 'sourceRecordHash' | 'sourceRecordKey'>,
+) => {
+  return [record.importRouteId, record.sourceRecordKey, record.sourceRecordHash].join('|')
+}
+
+const getArticleImportRouteCurrentLinkMutationKey = (
+  record: Pick<ArticleImportRouteLinkRecord, 'articleId' | 'importRouteId' | 'sourceRecordHash' | 'sourceRecordKey'>,
+) => {
+  return [record.articleId, record.importRouteId, record.sourceRecordKey, record.sourceRecordHash].join('|')
+}
+
+const getArticleImportRouteLinkHotFieldInput = (
+  record: ArticleImportRouteLinkRecord,
+  tombstone = false,
+): ReviewImportHotFieldInput => {
+  return {
+    articleId: record.articleId,
+    articleTitle: getNullableMetadataString(record.importMetadata, ['articleTitle', 'title']),
+    duplicateFlag: getNullableMetadataString(record.matchMetadata, ['duplicateKey']) !== null,
+    duplicateKey: getNullableMetadataString(record.matchMetadata, ['duplicateKey']),
+    externalId: record.externalArticleId,
+    filterBucketKey: record.sourceKind ? 'source_kind' : null,
+    filterBucketValue: record.sourceKind,
+    importRouteId: record.importRouteId,
+    journalTitle: getNullableMetadataString(record.importMetadata, ['journalTitle', 'journal', 'journalName']),
+    publicationYear: getNullableMetadataInteger(record.importMetadata, ['publicationYear', 'year']),
+    sourceKind: record.sourceKind,
+    sourceRecordHash: record.sourceRecordHash,
+    sourceRecordKey: record.sourceRecordKey,
+    tombstone,
+  }
+}
+
+const appendImportRouteArticleDelta = async (params: {
+  changeKind: ReviewServingImportRunArticleChangeKind
+  record: ArticleImportRouteLinkRecord
+  sourceMutationKey: string
+  sourceOperation: ReviewServingSourceOperation
+  sourceTable: string
+  tombstone?: boolean
+  tx: ArticleImportStoreTx
+}) => {
+  const hotFieldRow = getReviewImportHotFieldRow(
+    getArticleImportRouteLinkHotFieldInput(params.record, params.tombstone),
+  )
+
+  await appendReviewServingImportRunArticleDelta(params.tx, {
+    articleId: params.record.articleId,
+    changeKind: params.changeKind,
+    importRouteId: params.record.importRouteId,
+    importRunId: params.record.importRunId,
+    payloadJson: {
+      externalArticleId: params.record.externalArticleId,
+      sourceKind: params.record.sourceKind,
+      sourceRecordKey: params.record.sourceRecordKey,
+    },
+    payloadVersion: 1,
+    publicationYear: hotFieldRow.publicationYear,
+    selectedRankKey: hotFieldRow.selectedRankKey,
+    sourceMutationKey: params.sourceMutationKey,
+    sourceOperation: params.sourceOperation,
+    sourcePartition: getArticleImportRouteDeltaPartition(params.record.importRouteId),
+    sourceRecordHash: params.record.sourceRecordHash,
+    sourceRecordKey: params.record.sourceRecordKey,
+    sourceRowId: `${params.record.importRouteId}|${params.record.sourceRecordKey}`,
+    sourceTable: params.sourceTable,
+    tombstone: params.tombstone,
+    typedKey: getArticleImportRouteDeltaTypedKey(params.record),
+  })
+}
+
+const upsertReviewImportArticleHotFields = async (
+  tx: ArticleImportStoreTx,
+  records: ArticleImportRouteLinkRecord[],
+) => {
+  await getValueChunks(records).reduce<Promise<void>>((previousRun, recordChunk) => {
+    return previousRun.then(() => {
+      return recordChunk.reduce<Promise<void>>((previousRecordRun, record) => {
+        return previousRecordRun.then(() => {
+          return upsertReviewImportArticleHotField(tx, getArticleImportRouteLinkHotFieldInput(record))
+        })
+      }, Promise.resolve())
+    })
+  }, Promise.resolve())
+}
+
 const getExistingArticleImportRouteSourceRecords = async (
   tx: ArticleImportStoreTx,
   records: ArticleImportRouteSourceRecordLookup[],
@@ -922,6 +1068,9 @@ const upsertArticleImportRouteCurrentLinks = async (
 ) => {
   const deduplicatedRecords = getDeduplicatedCurrentLinks(records)
   const existingLinks = await getExistingArticleImportRouteLinks(tx, deduplicatedRecords)
+  const recordsToAdd = deduplicatedRecords.filter((record) => {
+    return !existingLinks.has(getArticleImportRouteCurrentLinkKey(record))
+  })
   const recordsToWrite = deduplicatedRecords.filter((record) => {
     const existingLink = existingLinks.get(getArticleImportRouteCurrentLinkKey(record))
 
@@ -950,6 +1099,19 @@ const upsertArticleImportRouteCurrentLinks = async (
             raw_payload = excluded.raw_payload,
             updated_at = now()
         `)
+    })
+  }, Promise.resolve())
+
+  await recordsToAdd.reduce<Promise<void>>((previousRun, record) => {
+    return previousRun.then(() => {
+      return appendImportRouteArticleDelta({
+        changeKind: 'importRoute.article.added',
+        record,
+        sourceMutationKey: getArticleImportRouteCurrentLinkMutationKey(record),
+        sourceOperation: 'insert',
+        sourceTable: 'app.article_import_route',
+        tx,
+      })
     })
   }, Promise.resolve())
 }
@@ -987,6 +1149,20 @@ const upsertArticleImportRouteSourceRecords = async (
             quarantine_metadata = NULL,
             updated_at = now()
         `)
+    })
+  }, Promise.resolve())
+
+  await upsertReviewImportArticleHotFields(tx, recordsToWrite)
+  await recordsToWrite.reduce<Promise<void>>((previousRun, record) => {
+    return previousRun.then(() => {
+      return appendImportRouteArticleDelta({
+        changeKind: 'importRoute.article.rankFields.updated',
+        record,
+        sourceMutationKey: getArticleImportRouteSourceRecordMutationKey(record),
+        sourceOperation: 'upsert',
+        sourceTable: 'app.article_import_route_source_record',
+        tx,
+      })
     })
   }, Promise.resolve())
 }
@@ -1594,6 +1770,34 @@ const clearStaleImportRouteLinks = async (
     sourceRecordKeys.length === 0
       ? ''
       : `AND (source_record_key IS NULL OR source_record_key NOT IN (${getQuotedStringList(sourceRecordKeys).join(', ')}))`
+  const deletedRows = await tx.queryJson<DeletedArticleImportRouteLinkRow>(`
+    SELECT
+      article_id AS articleId,
+      external_article_id AS externalArticleId,
+      TO_JSON(import_metadata) AS importMetadata,
+      import_run_id AS importRunId,
+      TO_JSON(match_metadata) AS matchMetadata,
+      TO_JSON(raw_payload) AS rawPayload,
+      source_kind AS sourceKind,
+      source_record_hash AS sourceRecordHash,
+      source_record_key AS sourceRecordKey
+    FROM app.article_import_route
+    WHERE import_route_id = ${getSqlLiteral(importRouteId)}
+      ${currentLinkSourceRecordKeyClause}
+  `)
+  const deletedRecords = deletedRows
+    .filter((row) => {
+      return row.sourceRecordKey !== null && row.sourceRecordHash !== null
+    })
+    .map((row): DeletedArticleImportRouteLink => {
+      return {
+        ...row,
+        importMetadata: getJsonValue(row.importMetadata),
+        importRouteId,
+        matchMetadata: getJsonValue(row.matchMetadata),
+        rawPayload: getJsonValue(row.rawPayload),
+      }
+    })
 
   await tx.run(`
     DELETE FROM app.article_import_route_source_record
@@ -1607,6 +1811,21 @@ const clearStaleImportRouteLinks = async (
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}
       ${currentLinkSourceRecordKeyClause}
   `)
+
+  await deletedRecords.reduce<Promise<void>>((previousRun, record) => {
+    return previousRun.then(async () => {
+      await upsertReviewImportArticleHotField(tx, getArticleImportRouteLinkHotFieldInput(record, true))
+      await appendImportRouteArticleDelta({
+        changeKind: 'importRoute.article.removed',
+        record,
+        sourceMutationKey: getArticleImportRouteCurrentLinkMutationKey(record),
+        sourceOperation: 'delete',
+        sourceTable: 'app.article_import_route',
+        tombstone: true,
+        tx,
+      })
+    })
+  }, Promise.resolve())
 }
 
 const getAcceptedImportRouteSourceRecordKeys = (
