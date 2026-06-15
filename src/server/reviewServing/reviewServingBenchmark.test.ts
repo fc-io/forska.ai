@@ -209,7 +209,7 @@ test('review-serving smoke benchmark runs against mocked inputs without complete
   expect(result.metrics).toMatchObject({
     latency: {p50Ms: 10, p95Ms: 20, p99Ms: 20, sampleCount: 18},
     queueDepth: {average: 1.33, peak: 3},
-    rows: {rowsReturned: 87, rowsScanned: 214},
+    rows: {rowsReturned: 103, rowsScanned: 262},
     tempUsage: {peakBytes: 0, totalBytes: 0},
     work: {admitted: 18, rejected: 0, total: 18},
   })
@@ -294,6 +294,9 @@ test('review-serving benchmark rejects runs that do not satisfy operation reques
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'humanOverlapFacetRefresh'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'overlapFilterOptions'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'llmPromptOverlapCounts'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'humanPromptOverlapCounts'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'bothPromptOverlapCounts'},
+    {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'unassessedPromptOverlapCounts'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'bulkOverlapSelectionJob'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'exportOverlapSelectionJob'},
     {actualRequestCount: 0, expectedRequestCount: 1, operationKey: 'pdfOverlapSelectionJob'},
