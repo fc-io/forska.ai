@@ -164,6 +164,16 @@ test('human assessment submit marks the project dirty in the same transaction fo
       return statement.includes('INSERT INTO app.review_change_delta') && statement.includes('judgment.human.updated')
     }),
   ).toBe(true)
+  expect(
+    statements.some((statement) => {
+      return statement.includes('INSERT INTO app.review_write_overlay') && statement.includes('humanJudgment.answer')
+    }),
+  ).toBe(true)
+  expect(
+    statements.some((statement) => {
+      return statement.includes('app.review_serving_snapshot_manifest') || statement.includes('mart.review_')
+    }),
+  ).toBe(false)
 })
 
 test('human assessment submit rejects summary-mode projects before prompt validation', async () => {

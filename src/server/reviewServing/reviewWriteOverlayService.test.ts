@@ -1,7 +1,11 @@
 import {expect, test} from 'bun:test'
 
 import {type ReviewServingDeltaLedgerTransaction} from './reviewServingDeltaLedger.ts'
-import {reviewServingReadContractList, reviewServingReadSurfaces} from './reviewServingReadContracts.ts'
+import {
+  reviewServingReadContractList,
+  reviewServingReadContractRouteInventory,
+  reviewServingReadSurfaces,
+} from './reviewServingReadContracts.ts'
 import {
   appendReviewWriteOverlay,
   canApplyReviewWriteOverlayToReadSurface,
@@ -83,7 +87,7 @@ test('active overlay reads are scoped to row/detail feedback and filter expired 
   expect(selectStatement).toContain('review_config_hash IS NULL')
 })
 
-test('overlay reconcile status transitions only pending unexpired rows under completed high-water mark', async () => {
+test('overlay reconcile status transitions once a completed serving snapshot includes the high-water mark', async () => {
   const {statements, tx} = createFakeOverlayTransaction()
   await reconcileReviewWriteOverlays(tx, {
     completedHighWaterMark: 42,
@@ -97,6 +101,16 @@ test('overlay reconcile status transitions only pending unexpired rows under com
   expect(updateStatement).toContain('source_high_water_mark <= 42')
   expect(updateStatement).toContain("reconcile_status = 'pending'")
   expect(updateStatement).toContain("expires_at > '2026-06-16T10:01:00.000Z'::TIMESTAMPTZ")
+
+  await getActiveReviewWriteOverlays(tx, {
+    articleId: 'article-1',
+    now: '2026-06-16T10:01:01.000Z',
+    projectId: 'project-1',
+    readSurface: 'row',
+  })
+  const activeReadStatement = getStatement(statements.slice(1), 'FROM app.review_write_overlay')
+
+  expect(activeReadStatement).toContain("reconcile_status = 'pending'")
 })
 
 test('overlay TTL expiration marks pending expired rows without promoting snapshots', async () => {
@@ -135,4 +149,35 @@ test('snapshot-scoped read contracts do not silently include overlay storage', (
   })
 
   expect(overlayBackedContracts).toEqual([])
+})
+
+test('count, facet, queue, search, bulk, PDF, and export routes stay snapshot-scoped without overlays', () => {
+  const snapshotOnlySurfaces = ['count', 'facet', 'queue', 'search', 'bulk', 'pdf', 'export'] as const
+  const snapshotOnlyRouteEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.surfaces.some((surface) => {
+      return snapshotOnlySurfaces.includes(surface as (typeof snapshotOnlySurfaces)[number])
+    })
+  })
+
+  expect(snapshotOnlyRouteEntries.length).toBeGreaterThan(0)
+  expect(
+    snapshotOnlySurfaces.map((surface) => {
+      return [surface, canApplyReviewWriteOverlayToReadSurface(surface)]
+    }),
+  ).toEqual([
+    ['count', false],
+    ['facet', false],
+    ['queue', false],
+    ['search', false],
+    ['bulk', false],
+    ['pdf', false],
+    ['export', false],
+  ])
+  expect(
+    snapshotOnlyRouteEntries.flatMap((entry) => {
+      return entry.contractKeys.map((contractKey) => {
+        return `${entry.productRoute}:${contractKey}`
+      })
+    }).length,
+  ).toBeGreaterThan(0)
 })
