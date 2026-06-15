@@ -79,7 +79,7 @@ export const reviewServingInvalidationRegistry: Record<ReviewServingChangeKind, 
     changeKind: 'judgment.human.updated',
     downstreamDependents: ['posting', 'summary'],
     firstAffectedComponent: 'humanStatus',
-    requiredKeys: ['projectId', 'articleId', 'promptId', 'humanJudgmentKey', 'sourceHighWaterMark'],
+    requiredKeys: ['projectId', 'articleId', 'humanJudgmentKey', 'sourceHighWaterMark'],
     updateMode: 'contributionDiff',
   }),
   'judgment.llm.created': rule({

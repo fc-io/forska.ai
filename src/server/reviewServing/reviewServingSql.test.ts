@@ -346,6 +346,8 @@ test('buildReviewServingRowsSql intersects posting filters with token-prefix sea
   })
 
   expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain('WHERE mart.review_article_filter_posting_serving_v4.project_id = $projectId')
+  expect(sql).toContain('AND mart.review_article_filter_posting_serving_v4.snapshot_id = $snapshotId')
   expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
   expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search')
   expect(sql).toContain('search.project_id = $projectId')
@@ -465,6 +467,30 @@ test('buildReviewServingRowsSql scopes count lookups to the requested named summ
     "AND list_mode_key = 'llm' AND count_kind = 'review.llm.assessedByPrompt' AND summary_definition_version = 'review-llm-assessed-by-prompt:v1' AND filter_key = $filterKey",
   )
   expect(sql).not.toContain('$listMode')
+})
+
+test('buildReviewServingRowsSql lets count keys override fixed count contract list modes', () => {
+  const contract = getRequiredReviewServingReadContract('review.llm.count')
+  const sql = buildReviewServingRowsSql({
+    contract,
+    countFilterKeyParameter: '$filterKey',
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$listMode',
+    namedCountKey: 'review.llm.unassessedByPrompt',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
+  expect(sql).toContain(
+    "AND list_mode_key = 'unassessed' AND count_kind = 'review.llm.unassessedByPrompt' AND summary_definition_version = 'review-llm-unassessed-by-prompt:v1' AND filter_key = $filterKey",
+  )
+  expect(sql).not.toContain("AND list_mode_key = 'llm'")
 })
 
 test('buildReviewServingRowsSql rejects count table reads without a supported named count', () => {
