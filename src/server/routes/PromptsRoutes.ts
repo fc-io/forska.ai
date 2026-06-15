@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import type {PromptRecord} from '../../db/schemaTypes.ts'
+import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {appendLlmJudgmentReviewServingDeltas} from '../reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService'
 import {
@@ -41,6 +42,13 @@ type JudgmentPromptCollisionRow = {
   useFulltext: boolean
   useFulltextNoImages: boolean
   useTitle: boolean
+}
+type JudgmentHumanPromptMoveRow = {
+  answer: string | null
+  articleId: string
+  id: string
+  projectId: string
+  updatedAt: string | null
 }
 type JudgmentAssessmentRow = {id: string}
 type JudgmentHumanPromptCollisionRow = {id: string}
@@ -585,12 +593,33 @@ const promptsAdminRoutes = new Elysia()
           `)
 
           await resolveJudgmentHumanPromptCollisions({keepPromptId, mergeId, tx})
+          const humanPromptMoveRows = await tx.queryJson<JudgmentHumanPromptMoveRow>(`
+            SELECT id, project_id AS projectId, article_id AS articleId, answer, updated_at AS updatedAt
+            FROM app.judgment_human
+            WHERE prompt_id = '${escapeSqlString(mergeId)}'
+          `)
           await tx.run(`
             UPDATE app.judgment_human
             SET prompt_id = '${escapeSqlString(keepPromptId)}',
                 updated_at = current_timestamp
             WHERE prompt_id = '${escapeSqlString(mergeId)}'
           `)
+          await appendHumanJudgmentReviewServingDeltas(
+            tx,
+            humanPromptMoveRows.map((row) => {
+              return {
+                answer: row.answer,
+                articleId: row.articleId,
+                humanJudgmentKey: row.id,
+                projectId: row.projectId,
+                promptId: keepPromptId,
+                sourceMutationKey: `promptMergeHuman|${mergeId}|${keepPromptId}|${row.id}`,
+                sourceOperation: 'update' as const,
+                sourceTable: 'app.judgment_human',
+                sourceUpdatedAt: row.updatedAt,
+              }
+            }),
+          )
 
           const comparisonProjectsUsingMerge = await tx.queryJson<{
             comparisonProjectId: string

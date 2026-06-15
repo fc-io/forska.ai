@@ -1,4 +1,5 @@
 import type {ProjectTransferHistoryRecord} from '../../../db/schemaTypes.ts'
+import {appendHumanJudgmentReviewServingDeltas} from '../../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {appendLlmJudgmentReviewServingDeltas} from '../../reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
@@ -4262,6 +4263,61 @@ const appendProjectTransferJudgmentCreatedDeltas = async ({
   )
 }
 
+const appendProjectTransferHumanJudgmentDeltas = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly HumanJudgmentCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await appendHumanJudgmentReviewServingDeltas(
+    tx,
+    rows.map((row) => {
+      const humanJudgmentKey = `${row.projectId}:${row.articleId}:${row.promptId}`
+
+      return {
+        answer: row.answer,
+        articleId: row.articleId,
+        humanJudgmentKey,
+        projectId: row.projectId,
+        promptId: row.promptId,
+        sourceMutationKey: `projectTransferHumanJudgment|${row.projectId}|${row.sourceHumanJudgmentId}|${humanJudgmentKey}`,
+        sourceOperation: 'insert' as const,
+        sourceRowId: humanJudgmentKey,
+        sourceTable: 'app.judgment_human',
+        sourceUpdatedAt: row.updatedAt,
+      }
+    }),
+  )
+}
+
+const appendProjectTransferHumanSummaryDeltas = async ({
+  rows,
+  tx,
+}: {
+  rows: readonly HumanJudgmentSummaryCommitRow[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await appendHumanJudgmentReviewServingDeltas(
+    tx,
+    rows.map((row) => {
+      const humanJudgmentKey = `${row.projectId}:${row.articleId}:summary`
+
+      return {
+        answer: row.answer,
+        articleId: row.articleId,
+        humanJudgmentKey,
+        projectId: row.projectId,
+        sourceMutationKey: `projectTransferHumanSummary|${row.projectId}|${row.sourceHumanJudgmentSummaryId}|${humanJudgmentKey}`,
+        sourceOperation: 'insert' as const,
+        sourceRowId: humanJudgmentKey,
+        sourceTable: 'app.judgment_human_summary',
+        sourceUpdatedAt: row.updatedAt,
+      }
+    }),
+  )
+}
+
 const insertJudgmentRowsSetBased = async ({
   context,
   now,
@@ -5473,6 +5529,21 @@ const insertHumanJudgmentRowsSetBased = async ({
     return undefined
   }
 
+  const deltaRows = await tx.queryJson<HumanJudgmentCommitRow>(`
+    SELECT
+      answer,
+      article_id AS articleId,
+      comment,
+      created_at AS createdAt,
+      id,
+      is_answered AS isAnswered,
+      project_id AS projectId,
+      prompt_id AS promptId,
+      source_id AS sourceHumanJudgmentId,
+      updated_at AS updatedAt
+    FROM (${rowsSql}) rows
+  `)
+
   const insertedRows = await tx.queryJson<{id: string}>(`
     INSERT INTO app.judgment_human (
       id,
@@ -5499,9 +5570,13 @@ const insertHumanJudgmentRowsSetBased = async ({
     RETURNING id
   `)
 
-  return insertedRows.length === expectedCount
-    ? undefined
-    : failCommitWriter(`human judgment insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+  if (insertedRows.length !== expectedCount) {
+    return failCommitWriter(`human judgment insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+  }
+
+  await appendProjectTransferHumanJudgmentDeltas({rows: deltaRows, tx})
+
+  return undefined
 }
 
 const getSetBasedHumanSummaryRowsSql = ({
@@ -5605,6 +5680,19 @@ const insertHumanJudgmentSummaryRowsSetBased = async ({
     return undefined
   }
 
+  const deltaRows = await tx.queryJson<HumanJudgmentSummaryCommitRow>(`
+    SELECT
+      answer,
+      article_id AS articleId,
+      created_at AS createdAt,
+      id,
+      origin,
+      project_id AS projectId,
+      source_id AS sourceHumanJudgmentSummaryId,
+      updated_at AS updatedAt
+    FROM (${rowsSql}) rows
+  `)
+
   const insertedRows = await tx.queryJson<{id: string}>(`
     INSERT INTO app.judgment_human_summary (
       id,
@@ -5627,9 +5715,15 @@ const insertHumanJudgmentSummaryRowsSetBased = async ({
     RETURNING id
   `)
 
-  return insertedRows.length === expectedCount
-    ? undefined
-    : failCommitWriter(`human judgment summary insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+  if (insertedRows.length !== expectedCount) {
+    return failCommitWriter(
+      `human judgment summary insert wrote ${insertedRows.length} of ${expectedCount} staged rows`,
+    )
+  }
+
+  await appendProjectTransferHumanSummaryDeltas({rows: deltaRows, tx})
+
+  return undefined
 }
 
 const getReviewSectionReviewedSql = (section: (typeof reviewSectionNames)[number]) => {
@@ -5832,10 +5926,12 @@ const insertHumanJudgmentRows = async ({
 
   assertNoDuplicateHumanJudgmentRows(rows)
 
-  return rows.length === 0
-    ? undefined
-    : runChunks(rows, (rowChunk) => {
-        return tx.run(`
+  if (rows.length === 0) {
+    return undefined
+  }
+
+  await runChunks(rows, (rowChunk) => {
+    return tx.run(`
         INSERT INTO app.judgment_human (
           id,
           project_id,
@@ -5862,7 +5958,11 @@ const insertHumanJudgmentRows = async ({
           })
           .join(', ')}
       `)
-      })
+  })
+
+  await appendProjectTransferHumanJudgmentDeltas({rows, tx})
+
+  return undefined
 }
 
 const insertHumanJudgmentSummaryRows = async ({
@@ -5884,10 +5984,12 @@ const insertHumanJudgmentSummaryRows = async ({
 
   await assertNoExistingHumanSummaries({rows, tx})
 
-  return rows.length === 0
-    ? undefined
-    : runChunks(rows, (rowChunk) => {
-        return tx.run(`
+  if (rows.length === 0) {
+    return undefined
+  }
+
+  await runChunks(rows, (rowChunk) => {
+    return tx.run(`
         INSERT INTO app.judgment_human_summary (
           id,
           project_id,
@@ -5910,7 +6012,11 @@ const insertHumanJudgmentSummaryRows = async ({
           })
           .join(', ')}
       `)
-      })
+  })
+
+  await appendProjectTransferHumanSummaryDeltas({rows, tx})
+
+  return undefined
 }
 
 const getReviewSection = (row: ReviewCommitRow, section: (typeof reviewSectionNames)[number]) => {

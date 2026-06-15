@@ -1,6 +1,7 @@
 import {type as arktype} from 'arktype'
 import type {Context} from 'elysia'
 
+import {appendHumanJudgmentReviewServingDeltas} from '../../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getComparisonProjectServingInvalidationService} from '../../services/comparisonProjectServingInvalidationService.ts'
@@ -193,6 +194,26 @@ export const humanAssessmentRoutesPostSubmit = async ({
         AND project_id = '${escapeSqlString(body.projectId)}'
         AND is_answered = FALSE
     `)
+
+    await appendHumanJudgmentReviewServingDeltas(
+      tx,
+      pending
+        .filter((row) => {
+          return submittedIds.has(row.id)
+        })
+        .map((row) => {
+          return {
+            answer: byId[row.id]?.answer ?? null,
+            articleId: row.articleId,
+            humanJudgmentKey: row.id,
+            projectId: body.projectId,
+            promptId: row.promptId,
+            sourceMutationKey: `humanAssessmentSubmit|${body.projectId}|${row.id}`,
+            sourceOperation: 'update' as const,
+            sourceUpdatedAt: updatedAt,
+          }
+        }),
+    )
 
     await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
       projects: [{articleIds: [currentArticleId], projectId: body.projectId}],

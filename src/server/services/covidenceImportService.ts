@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import {normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
+import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {resolveRuntimeFilePath, resolveRuntimeWritablePath} from '../utils/runtimeWritablePath.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
@@ -2579,16 +2580,18 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
   if (project.humanJudgmentMode === 'summary') {
     await getChunkedCovidenceHumanJudgmentSeeds(mappedJudgmentSeeds, 500).reduce<Promise<void>>(
       (previousRun, judgmentSeedChunk) => {
-        return previousRun.then(() => {
+        return previousRun.then(async () => {
           const insertValues = judgmentSeedChunk
             .map((judgmentSeed) => {
               return `(${getQuotedStringList([globalThis.crypto.randomUUID(), project.id, judgmentSeed.articleId]).join(', ')}, ${getSqlLiteral(judgmentSeed.answer)}, 'covidence_import')`
             })
             .join(', ')
 
-          return insertValues === ''
-            ? Promise.resolve()
-            : queryRunner.run(`
+          if (insertValues === '') {
+            return
+          }
+
+          await queryRunner.run(`
       INSERT INTO app.judgment_human_summary (id, project_id, article_id, answer, origin)
       VALUES ${insertValues}
       ON CONFLICT(project_id, article_id) DO UPDATE SET
@@ -2596,6 +2599,23 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
         origin = EXCLUDED.origin,
         updated_at = now()
     `)
+          await appendHumanJudgmentReviewServingDeltas(
+            queryRunner,
+            judgmentSeedChunk.map((judgmentSeed) => {
+              const humanJudgmentKey = `${project.id}:${judgmentSeed.articleId}:summary`
+
+              return {
+                answer: judgmentSeed.answer,
+                articleId: judgmentSeed.articleId,
+                humanJudgmentKey,
+                projectId: project.id,
+                sourceMutationKey: `covidenceHumanSummarySeed|${humanJudgmentKey}`,
+                sourceOperation: 'upsert' as const,
+                sourceRowId: humanJudgmentKey,
+                sourceTable: 'app.judgment_human_summary',
+              }
+            }),
+          )
         })
       },
       Promise.resolve(),
@@ -2622,7 +2642,7 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
 
   await getChunkedCovidenceHumanJudgmentSeeds(mappedJudgmentSeeds, 500).reduce<Promise<void>>(
     (previousRun, judgmentSeedChunk) => {
-      return previousRun.then(() => {
+      return previousRun.then(async () => {
         const insertValues = promptIds
           .flatMap((promptId) => {
             return judgmentSeedChunk.map((judgmentSeed) => {
@@ -2631,9 +2651,11 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
           })
           .join(', ')
 
-        return insertValues === ''
-          ? Promise.resolve()
-          : queryRunner.run(`
+        if (insertValues === '') {
+          return
+        }
+
+        await queryRunner.run(`
       INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered, answer, comment)
       VALUES ${insertValues}
       ON CONFLICT(project_id, article_id, prompt_id) DO UPDATE SET
@@ -2642,6 +2664,26 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
         comment = EXCLUDED.comment,
         updated_at = now()
     `)
+        await appendHumanJudgmentReviewServingDeltas(
+          queryRunner,
+          promptIds.flatMap((promptId) => {
+            return judgmentSeedChunk.map((judgmentSeed) => {
+              const humanJudgmentKey = `${project.id}:${judgmentSeed.articleId}:${promptId}`
+
+              return {
+                answer: judgmentSeed.answer,
+                articleId: judgmentSeed.articleId,
+                humanJudgmentKey,
+                projectId: project.id,
+                promptId,
+                sourceMutationKey: `covidenceHumanPromptSeed|${humanJudgmentKey}`,
+                sourceOperation: 'upsert' as const,
+                sourceRowId: humanJudgmentKey,
+                sourceTable: 'app.judgment_human',
+              }
+            })
+          }),
+        )
       })
     },
     Promise.resolve(),
