@@ -1,0 +1,318 @@
+{
+  "name": "DuckDB CQRS Phase 2",
+  "description": "Instrument write paths so source mutations create compact durable deltas, import writers pre-extract hot fields, and reviewer actions have a small immediate feedback path before projections catch up.",
+  "branchName": "ralph/duck-cqrs-phase-2",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add source high-water and idempotency helpers",
+      "description": "As a developer, I want shared high-water and idempotency helpers so every review-serving delta writer allocates source marks consistently and deduplicates retries safely.",
+      "acceptanceCriteria": [
+        "Add shared Phase 2 helpers in `src/server/reviewServing/reviewServingDeltaLedger.ts` or a sibling used only by ledger/reconciliation code.",
+        "Allocate `source_high_water_mark` by incrementing `app.review_delta_reconciliation_cursor.source_high_water_mark` inside the same DuckDB transaction as the source write and delta or outbox append.",
+        "Source high-water allocation is monotonic per `source_partition`.",
+        "Deterministic idempotency keys are derived from stable source mutation identity and compact typed keys, not random IDs, attempt IDs, process-time timestamps, or allocated high-water marks.",
+        "Duplicate append attempts with the same idempotency key are no-ops that return the existing delta or outbox identity and do not allocate a second effective mutation.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Add review-serving delta ledger append APIs",
+      "description": "As a developer, I want typed delta append APIs so import and review source mutations can persist compact durable delta rows with the Phase 1 common envelope.",
+      "acceptanceCriteria": [
+        "Create append APIs for `app.import_run_article_delta` and `app.review_change_delta` using change kinds from the invalidation registry.",
+        "Every appended delta includes the common envelope fields: `delta_id`, `change_kind`, `source_table`, `source_row_id`, `source_operation`, `source_partition`, `source_high_water_mark`, `source_updated_at`, `idempotency_key`, `payload_version`, typed key columns, optional `payload_json`, `created_at`, and `reconciled_at`.",
+        "Append APIs validate emitted change kinds against the invalidation registry and reject unknown kinds.",
+        "Delete and removal deltas support tombstone semantics for replay after source deletes/removals.",
+        "Import delta ledger tests cover deterministic idempotency keys, tombstones, common envelope fields, and no affected-project fanout.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Add delta outbox reconciliation foundation",
+      "description": "As a developer, I want durable outbox reconciliation for write paths that cannot append deltas transactionally so dependent watermarks cannot advance past missing or malformed deltas.",
+      "acceptanceCriteria": [
+        "Create `src/server/reviewServing/reviewServingDeltaReconciliation.ts` for converting, retrying, and quarantining `app.review_source_change_outbox` rows.",
+        "Write paths that cannot append a delta in the source transaction can create an outbox row with the allocated high-water mark before returning success.",
+        "Reconciliation prevents dependent watermark advancement while unreconciled source high-water marks are pending, retryable, or quarantined without an explicit terminal operator decision.",
+        "Tests prove source writes and delta/outbox writes are atomic or reconciled before watermarks advance.",
+        "Tests prove malformed outbox rows are retried or quarantined and do not silently become successful product paths.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Add import hot-field extraction service",
+      "description": "As a developer, I want import writers to pre-extract compact hot fields so projectors can avoid parsing raw JSON for selected import, display, filters, postings, and contribution keys.",
+      "acceptanceCriteria": [
+        "Create `src/server/reviewServing/reviewImportHotFieldService.ts` for deriving compact typed rows for `app.review_import_article_hot_field`.",
+        "Extract only compact fields needed by selected-import ranking, display, filters, postings, and contribution keys.",
+        "Raw source JSON, large metadata, and audit payloads remain in existing source/audit tables and are not copied into hot fields.",
+        "Missing source hot fields are stored as typed null/unavailable values rather than requiring projectors or foreground reads to parse raw JSON.",
+        "Tests prove projectors do not need raw JSON for selected-import ranking, display, filters, postings, or contribution keys.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Instrument import/source record write deltas",
+      "description": "As a developer, I want central import storage writes to emit import-route deltas and hot fields transactionally so import membership and rank-field changes are durable for later projectors.",
+      "acceptanceCriteria": [
+        "Instrument `src/server/services/articleImportStoreService.ts` hook points: `storeImportedArticlesInTx`, `storeImportedArticlesWithTx`, `syncImportedArticlesWithTx`, `upsertArticleImportRouteCurrentLinks`, `upsertArticleImportRouteSourceRecords`, and `clearStaleImportRouteLinks`.",
+        "Emit `importRoute.article.added`, `importRoute.article.removed`, and `importRoute.article.rankFields.updated` without resolving affected projects in the write transaction.",
+        "Write `app.review_import_article_hot_field` rows in the same transaction as accepted import/source records.",
+        "Import callers such as structured file, Covidence, and data-source import routes do not duplicate delta logic unless they bypass `articleImportStoreService.ts`.",
+        "Tests prove import writes do not persist affected-project fanout unless fanout is explicitly measured and bounded.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Instrument article display/search/judgment-input deltas",
+      "description": "As a developer, I want article update paths to emit narrow display, search, and judgment-input deltas so later projections only rebuild affected identities.",
+      "acceptanceCriteria": [
+        "Instrument canonical article writes in `articleImportStoreService.ts` and `articleCanonicalMatcher.ts` for display, search text, and judgment-input content changes.",
+        "Cover full-text/PDF/admin update paths in `pdfFetchJobs.ts`, `fullTextConversionJobs.ts`, `ensureFullText.ts`, `ArticleAdminRoutes.ts`, and `ArticlesRoutes.ts`, or explicitly document any out-of-scope path with a targeted test.",
+        "A single source mutation that affects multiple identities emits every required delta in the same transaction, such as title changes that affect display, search, and judgment-input content.",
+        "`article.judgmentInput.updated` dirties payload-backed detail/preview rows and dependent LLM/count/queue state where changed content participates in judging.",
+        "Tests prove display, search, and judgment-input-content identities advance independently.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Instrument LLM judgment deltas",
+      "description": "As a developer, I want LLM judgment write paths to emit benchmark-safe deltas so LLM status, queue, posting, and summary state can be updated later without reinterpreting request settings.",
+      "acceptanceCriteria": [
+        "Instrument `src/server/cron/judgmentsJobs/judgmentsJobsMarkDirtyWork.ts` at `commitJudgmentSqliteOutboxImportDirtyWork` and `insertJudgments`.",
+        "Emit `judgment.llm.created`, `judgment.llm.updated`, or `judgment.llm.deleted` with persisted model ID, prompt ID, content flags, judgment ID, and source high-water state.",
+        "Direct and bulk paths such as `storeSinglePromptJudgment.ts`, `judgeStoreJudgment.ts`, prompt/admin delete paths, and `projectTransferCommitWriter.ts` route through the ledger helper or have explicit reconciliation coverage.",
+        "Tests prove LLM judgment deltas preserve persisted model ID and content flags without retrying, downgrading, or reinterpreting benchmark-critical settings.",
+        "Every emitted LLM delta kind has an invalidation registry entry with first affected component, downstream dependents, affected keys, and update mode.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Instrument human judgment deltas",
+      "description": "As a developer, I want human judgment write paths to emit deltas for prompt-mode and summary-mode updates so human status, posting, and summary projections can catch up.",
+      "acceptanceCriteria": [
+        "Instrument `HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts` for prompt-mode human review writes.",
+        "Cover pending human rows, Covidence seeded judgments, prompt merge/delete paths, summary-mode human judgments, and project-transfer human judgment imports, or explicitly document any out-of-scope path with a targeted test.",
+        "Emit `judgment.human.updated` for prompt-mode and summary-mode human updates.",
+        "Summary-mode human updates do not require `promptId` and still dirty human status, posting, and summary components.",
+        "If human deletes or hard tombstones are introduced, tests require a new `change_kind` and invalidation rule before wiring that path.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Instrument prompt and review-config deltas",
+      "description": "As a developer, I want prompt and project review config writes to emit narrow config deltas so prompt output, review config, and human mode changes do not rebuild unrelated state.",
+      "acceptanceCriteria": [
+        "Instrument `ProjectsRoutes.ts` around `upsertProjectPromptTx`, `softDeleteProjectPromptLlmJudgmentsTx`, project import-route edits, and project create/edit/clone transactions.",
+        "Ensure `PromptsRoutes.ts`, `immutablePromptService.ts`, and `covidenceImportService.ts` use the same helper for prompt identity changes.",
+        "Prompt edits emit `prompt.config.updated` for prompt text, answer schema, thresholding, prompt order, and other prompt-output-affecting settings.",
+        "Project model/content/prompt membership changes emit `project.reviewConfig.updated` without rebuilding config-independent article/import/title/payload/search state.",
+        "Tests prove model execution identity, prompt order, and human review mode changes advance the correct prompt/review config identities.",
+        "Tests prove one prompt config change does not rebuild unchanged prompt outputs, summaries, queues, or facets.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-010",
+      "title": "Instrument project-scope membership deltas",
+      "description": "As a developer, I want direct project membership writes to emit project-scope deltas so project-owned article additions/removals are distinct from import-route membership changes.",
+      "acceptanceCriteria": [
+        "Instrument `insertArticlesIntoProject.ts`, `ProjectArticlesRoutes.ts`, `ProjectsAddArticlesRoutes.ts`, `SubprojectsRoutes.ts`, project import-route membership edits, and `projectTransferCommitWriter.ts` bulk membership writes.",
+        "Direct project membership writes emit `projectScope.article.added` or `projectScope.article.removed` because the project is already the source row owner.",
+        "Import-route writes do not synthesize `projectScope.article.*` deltas synchronously.",
+        "Tests cover delta semantics, tombstones, and replay after project membership deletes/removals.",
+        "Every emitted project-scope delta kind has an invalidation registry entry with first affected component, downstream dependents, affected keys, and update mode.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-011",
+      "title": "Add read-your-write overlay repository and service",
+      "description": "As a developer, I want a small overlay repository/service so reviewer row/detail actions can show immediate feedback before serving snapshots catch up.",
+      "acceptanceCriteria": [
+        "Add an overlay repository/service for `app.review_write_overlay` reviewer actions.",
+        "Overlay rows store affected project, optional review config hash, article, prompt/judgment key, overlay kind, small typed value, source high-water mark, `created_at`, `expires_at`, and reconcile status.",
+        "Overlay scope is limited to immediate reviewer feedback on row/detail actions.",
+        "Tests cover TTL and reconcile status behavior.",
+        "Counts, facets, queues, search, bulk selection, PDF, and export do not silently include overlay state unless declared by the route contract.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-012",
+      "title": "Integrate reviewer overlays with human actions",
+      "description": "As a developer, I want reviewer actions to create route-scoped overlays and reconcile them once included in a completed serving snapshot.",
+      "acceptanceCriteria": [
+        "Human reviewer actions that need immediate row/detail feedback create eligible overlay rows through the overlay service.",
+        "Route-specific overlay semantics are documented in tests or adjacent code.",
+        "Reconciliation tests prove overlays disappear once included in a completed serving snapshot.",
+        "Tests prove counts, facets, queues, search, bulk jobs, PDF, and export do not include overlay state unless a route contract explicitly opts in.",
+        "Overlay integration does not switch product routes to serving projections in Phase 2.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-008",
+        "US-011"
+      ]
+    },
+    {
+      "id": "US-013",
+      "title": "Add Phase 2 hook inventory guardrails",
+      "description": "As a developer, I want static hook-inventory tests so central write paths cannot bypass the review-serving delta ledger or outbox accidentally.",
+      "acceptanceCriteria": [
+        "Add static hook-inventory tests for all hook points listed in `DUCK_CQRS_PLAN_PHASE_2.md`.",
+        "Each listed central write hook point either calls the review-serving ledger/outbox helper or is explicitly documented as out of Phase 2 scope.",
+        "Tests fail when a listed hook point is removed, renamed, or no longer references the ledger/outbox integration marker.",
+        "Hook inventory tests do not require product routes to switch to serving projections.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005",
+        "US-006",
+        "US-007",
+        "US-008",
+        "US-009",
+        "US-010"
+      ]
+    },
+    {
+      "id": "US-014",
+      "title": "Complete Phase 2 integration and guardrail sweep",
+      "description": "As a developer, I want a final Phase 2 verification sweep so all emitted deltas, overlays, and reconciliation paths satisfy the PRD before Phase 3 projectors begin.",
+      "acceptanceCriteria": [
+        "Tests prove every emitted delta kind has an invalidation registry entry with first affected component, downstream dependents, affected keys, and update mode.",
+        "Tests prove projection identity changes invalidate only dependent components and review config changes do not rebuild config-independent article/import/title/payload/search state.",
+        "Tests prove display, search, judgment-input-content, project-scope, prompt config, and review config identities advance independently.",
+        "Tests prove source writes and delta/outbox writes are atomic or reconciled before watermarks advance across all integrated hook points.",
+        "Tests prove counts, facets, queues, and bulk jobs do not silently include overlay state unless declared by the route contract.",
+        "No serving projections are populated, no snapshots are promoted, no product routes are switched, and no project-scale selected-import fanout is introduced.",
+        "bun test src/server/reviewServing passes",
+        "bun run lint passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-005",
+        "US-006",
+        "US-007",
+        "US-008",
+        "US-009",
+        "US-010",
+        "US-012",
+        "US-013"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-06-15T16:14:14.808Z"
+  }
+}
