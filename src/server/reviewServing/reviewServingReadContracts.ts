@@ -77,7 +77,7 @@ const reviewedRowCursorFields = ['sort_key DESC', 'article_id ASC'] as const
 const reviewedRowSort = {direction: 'desc', fields: ['sort_key', 'article_id ASC']} as const
 const unassessedRowCursorFields = ['activity_sort_at DESC', 'article_id DESC'] as const
 const unassessedRowSort = {direction: 'desc', fields: ['activity_sort_at', 'article_id']} as const
-const postingCursorFields = ['sort_key DESC', 'article_id DESC'] as const
+const postingCursorFields = ['sort_key DESC', 'article_id ASC'] as const
 
 const defineContract = (input: ContractInput): ReviewServingReadContract => {
   return {
@@ -259,7 +259,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['posting', 'summary'],
     searchMode: 'tokenPrefix',
     servingTable: reviewFilterPostingServingTable,
-    sort: {direction: 'desc', fields: ['sort_key', 'article_id']},
+    sort: {direction: 'desc', fields: ['sort_key', 'article_id ASC']},
     workloadClass: 'foregroundReviewRows',
   }),
   filterFacetContract({
@@ -349,7 +349,7 @@ export const reviewServingReadContractList = [
     requiredComponents: ['queue', 'summary'],
     searchMode: 'none',
     servingTable: reviewQueueServingTable,
-    sort: {direction: 'asc', fields: ['priority_bucket', 'activity_sort_at', 'article_id']},
+    sort: {direction: 'desc', fields: ['priority_bucket', 'activity_sort_at', 'article_id']},
     workloadClass: 'foregroundReviewQueue',
   }),
   defineContract({

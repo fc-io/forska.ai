@@ -266,6 +266,13 @@ const reviewServingListModePredicateTables = new Set([
 ])
 const reviewServingCountServingTable = 'mart.review_article_count_serving_v4'
 const reviewServingRuntimeListModeStrategies = new Set(['postingIntersection'])
+const reviewServingCountListModesByKey: Partial<Record<NamedReviewFastCountKey, string>> = {
+  'review.both.conflictByPrompt': 'both',
+  'review.human.reviewedByPrompt': 'human',
+  'review.llm.assessedByPrompt': 'llm',
+  'review.llm.unassessedByPrompt': 'unassessed',
+  'review.queue.unassessedReady': 'unassessed',
+}
 
 const getReviewServingRowsSqlListModePredicate = (params: {
   contract: ReviewServingReadContract
@@ -307,9 +314,8 @@ const getReviewServingRowsSqlCountPredicate = (params: {
   }
 
   const summaryDefinition = namedReviewFastCountDefinitions[params.namedCountKey]
-  const listModePredicate = params.contract.listMode
-    ? ` AND list_mode_key = ${getSqlStringLiteral(params.contract.listMode)}`
-    : ` AND list_mode_key = 'global'`
+  const listModeKey = params.contract.listMode ?? reviewServingCountListModesByKey[params.namedCountKey] ?? 'global'
+  const listModePredicate = ` AND list_mode_key = ${getSqlStringLiteral(listModeKey)}`
 
   return [
     listModePredicate,
@@ -383,8 +389,13 @@ const getReviewServingRowsSqlArticlePredicate = (params: {
 
 const getReviewServingRowsSqlPostingPredicate = (params: {
   contract: ReviewServingReadContract
+  filterPredicatesSql?: string | null
   filterKindParameter?: string | null
   filterValueParameter?: string | null
+  listModeParameter: string
+  projectIdParameter: string
+  reviewConfigHashParameter: string
+  snapshotIdParameter: string
 }) => {
   if (params.contract.physicalAccessStrategy !== 'postingIntersection') {
     return ''
@@ -401,7 +412,26 @@ const getReviewServingRowsSqlPostingPredicate = (params: {
     params.contract,
   )
 
-  return ` AND filter_kind = ${filterKindParameter} AND filter_value = ${filterValueParameter}`
+  const anchorPredicate = ` AND filter_kind = ${filterKindParameter} AND filter_value = ${filterValueParameter}`
+
+  if (!params.filterPredicatesSql) {
+    return anchorPredicate
+  }
+
+  const intersectionPredicate = [
+    ` AND article_id IN (SELECT posting.article_id FROM ${params.contract.servingTable} posting`,
+    ` JOIN ${params.filterPredicatesSql} requested_filter(filter_kind, filter_value)`,
+    ' ON requested_filter.filter_kind = posting.filter_kind',
+    ' AND requested_filter.filter_value = posting.filter_value',
+    ` WHERE posting.project_id = ${params.projectIdParameter}`,
+    ` AND posting.review_config_hash = ${params.reviewConfigHashParameter}`,
+    ` AND posting.snapshot_id = ${params.snapshotIdParameter}`,
+    ` AND posting.list_mode_key = ${params.listModeParameter}`,
+    ' GROUP BY posting.article_id',
+    ` HAVING count(*) = (SELECT count(*) FROM ${params.filterPredicatesSql}))`,
+  ].join('')
+
+  return `${anchorPredicate}${intersectionPredicate}`
 }
 
 const getReviewServingRowsSqlSearchPredicate = (params: {
@@ -464,7 +494,15 @@ const getReviewServingRowsSqlJobPredicate = (params: {
       params.contract,
     )
 
-    return ` AND search_mode = ${getSqlStringLiteral(params.contract.searchMode)} AND search_text = ${searchTextParameter} AND filter_signature = ${jobFilterSignatureParameter}`
+    return [
+      ` AND search_identity = ${params.searchIdentityParameter}`,
+      ` AND project_scope_identity = ${params.projectScopeIdentityParameter}`,
+      ` AND review_config_hash = ${params.reviewConfigHashParameter}`,
+      ` AND snapshot_id = ${params.snapshotIdParameter}`,
+      ` AND search_mode = ${getSqlStringLiteral(params.contract.searchMode)}`,
+      ` AND search_text = ${searchTextParameter}`,
+      ` AND filter_signature = ${jobFilterSignatureParameter}`,
+    ].join('')
   }
 
   throw new Error(`Unsupported job criteria table for ${params.contract.key}`)
@@ -479,12 +517,17 @@ const getReviewServingRowsSqlListModeDedupeQualifier = (contract: ReviewServingR
 const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
   articleIdParameter?: string | null
   contract: ReviewServingReadContract
+  filterPredicatesSql?: string | null
   filterKindParameter?: string | null
   filterValueParameter?: string | null
   jobFilterSignatureParameter?: string | null
+  listModeParameter: string
+  projectIdParameter: string
+  reviewConfigHashParameter: string
   queueKindParameter?: string | null
   searchTokenPrefixParameter?: string | null
   searchTextParameter?: string | null
+  snapshotIdParameter: string
 }) => {
   return [
     getReviewServingRowsSqlArticlePredicate(params),
@@ -502,6 +545,7 @@ export const buildReviewServingRowsSql = (params: {
   cursorPredicate?: string
   displayIdentityParameter: string
   filterOptionIdentityParameter?: string | null
+  filterPredicatesSql?: string | null
   filterKindParameter?: string | null
   filterValueParameter?: string | null
   jobFilterSignatureParameter?: string | null
