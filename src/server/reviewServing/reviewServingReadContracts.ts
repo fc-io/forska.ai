@@ -338,7 +338,16 @@ export const reviewServingReadContractList = [
     requiredComponents: ['display', 'humanStatus', 'llmStatus', 'posting', 'projectScope', 'selectedImport', 'summary'],
   }),
   filterFacetContract({
-    allowedFilters: ['humanStatus', 'promptAnswer'],
+    allowedFilters: [
+      ...articleDateRangeFilters,
+      'conflictFlag',
+      'duplicateFlag',
+      'humanStatus',
+      'importRoute',
+      'promptAnswer',
+      'publicationYear',
+      'searchTokenPrefix',
+    ],
     key: 'review.human.filters.facets',
     namedFastCounts: ['review.human.filter.promptAnswer', 'review.human.filter.summaryAnswer'],
     requiredComponents: ['display', 'humanStatus', 'posting', 'projectScope', 'selectedImport', 'summary'],

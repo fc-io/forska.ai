@@ -283,8 +283,7 @@ test('human filter facets use a dedicated contract', () => {
     'selectedImport',
     'summary',
   ])
-  expect(humanFacets?.allowedFilters).toEqual(['humanStatus', 'promptAnswer'])
-  expect(humanOptions?.allowedFilters).toEqual([
+  const humanArticleScopeFilters = [
     'articleCreatedAtFrom',
     'articleCreatedAtTo',
     'conflictFlag',
@@ -294,7 +293,10 @@ test('human filter facets use a dedicated contract', () => {
     'promptAnswer',
     'publicationYear',
     'searchTokenPrefix',
-  ])
+  ]
+
+  expect(humanFacets?.allowedFilters).toEqual(humanArticleScopeFilters)
+  expect(humanOptions?.allowedFilters).toEqual(humanArticleScopeFilters)
   expect(humanFacets?.namedFastCounts).toEqual([
     'review.human.filter.promptAnswer',
     'review.human.filter.summaryAnswer',
