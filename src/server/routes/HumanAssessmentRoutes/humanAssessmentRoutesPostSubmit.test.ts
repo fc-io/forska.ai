@@ -116,13 +116,15 @@ test('human assessment submit marks the project dirty in the same transaction fo
       ? [{articleId: 'article-1'}]
       : statement.includes('FROM app.project_prompt pp')
         ? [{id: 'prompt-1'}]
-        : statement.includes('SELECT id, prompt_id AS promptId, is_answered AS isAnswered')
-          ? [{id: 'judgment-human-1', promptId: 'prompt-1', isAnswered: false}]
-          : statement.includes('FROM app.judgment_human jh')
-            ? [{id: 'judgment-human-1', promptId: 'prompt-1', articleId: 'article-1', type: 'string'}]
-            : statement.includes('WHERE id IN') && statement.includes('AND is_answered = FALSE')
-              ? [{id: 'judgment-human-1'}]
-              : []
+        : statement.includes('FROM app.review_delta_reconciliation_cursor')
+          ? [{sourceHighWaterMark: 1}]
+          : statement.includes('SELECT id, prompt_id AS promptId, is_answered AS isAnswered')
+            ? [{id: 'judgment-human-1', promptId: 'prompt-1', isAnswered: false}]
+            : statement.includes('FROM app.judgment_human jh')
+              ? [{id: 'judgment-human-1', promptId: 'prompt-1', articleId: 'article-1', type: 'string'}]
+              : statement.includes('WHERE id IN') && statement.includes('AND is_answered = FALSE')
+                ? [{id: 'judgment-human-1'}]
+                : []
   }
   runRef.current = async (statement) => {
     statements.push(statement)
@@ -155,6 +157,11 @@ test('human assessment submit marks the project dirty in the same transaction fo
   expect(
     statements.some((statement) => {
       return statement.includes('UPDATE app.judgment_human') && statement.includes('is_answered = TRUE')
+    }),
+  ).toBe(true)
+  expect(
+    statements.some((statement) => {
+      return statement.includes('INSERT INTO app.review_change_delta') && statement.includes('judgment.human.updated')
     }),
   ).toBe(true)
 })

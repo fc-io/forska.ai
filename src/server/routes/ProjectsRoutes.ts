@@ -7,6 +7,7 @@ import {
 } from '../../utils/providerModelLabel.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
+import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {appendLlmJudgmentReviewServingDeltas} from '../reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
@@ -2363,6 +2364,23 @@ export const projectsRoutes = new Elysia()
             })
             .join(', ')}
         `)
+        await appendHumanJudgmentReviewServingDeltas(
+          tx,
+          sourceSummaryJudgments.map((judgment) => {
+            const humanJudgmentKey = `${clonedProject.id}:${judgment.articleId}:summary`
+
+            return {
+              answer: judgment.answer,
+              articleId: judgment.articleId,
+              humanJudgmentKey,
+              projectId: clonedProject.id,
+              sourceMutationKey: `projectCloneHumanSummary|${params.id}|${humanJudgmentKey}`,
+              sourceOperation: 'insert' as const,
+              sourceRowId: humanJudgmentKey,
+              sourceTable: 'app.judgment_human_summary',
+            }
+          }),
+        )
       }
 
       const clonedDirtyArticleRows = await tx.queryJson<{articleId: string}>(`
