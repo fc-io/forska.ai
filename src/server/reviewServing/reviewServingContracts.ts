@@ -92,6 +92,7 @@ export const reviewServingFilterKeys = [
 export type ReviewServingFilterKey = (typeof reviewServingFilterKeys)[number]
 
 export const reviewServingPhysicalAccessStrategies = [
+  'articleSetLookup',
   'jobCriteria',
   'keyedLookup',
   'orderedPrefix',
@@ -141,7 +142,9 @@ export const reviewServingReadContractKeys = [
   'review.detail.payload',
   'review.detail.judgments',
   'review.detail.humanJudgments',
+  'review.llm.list.judgments',
   'review.human.list.judgments',
+  'review.both.list.judgments',
   'review.both.list.humanJudgments',
   'review.health.snapshot',
   'review.warning.snapshot',

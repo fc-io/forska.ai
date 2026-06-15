@@ -300,14 +300,24 @@ test('human filter facets use a dedicated contract', () => {
 })
 
 test('human payload contracts cover list and detail response judgments', () => {
+  const llmListJudgments = getReviewServingReadContract('review.llm.list.judgments')
   const humanListJudgments = getReviewServingReadContract('review.human.list.judgments')
+  const bothListJudgments = getReviewServingReadContract('review.both.list.judgments')
   const bothListHumanJudgments = getReviewServingReadContract('review.both.list.humanJudgments')
   const detailHumanJudgments = getReviewServingReadContract('review.detail.humanJudgments')
 
+  expect(llmListJudgments?.requiredComponents).toEqual(['llmStatus', 'summary'])
   expect(humanListJudgments?.requiredComponents).toEqual(['humanStatus', 'summary'])
+  expect(bothListJudgments?.requiredComponents).toEqual(['llmStatus', 'summary'])
   expect(bothListHumanJudgments?.requiredComponents).toEqual(['humanStatus', 'summary'])
   expect(detailHumanJudgments?.requiredComponents).toEqual(['humanStatus', 'summary'])
+  expect(llmListJudgments?.physicalAccessStrategy).toBe('articleSetLookup')
+  expect(humanListJudgments?.physicalAccessStrategy).toBe('articleSetLookup')
+  expect(bothListJudgments?.physicalAccessStrategy).toBe('articleSetLookup')
+  expect(bothListHumanJudgments?.physicalAccessStrategy).toBe('articleSetLookup')
+  expect(llmListJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
   expect(humanListJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
+  expect(bothListJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
   expect(bothListHumanJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
   expect(detailHumanJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
 })
@@ -604,7 +614,23 @@ test('list read inventory covers total count and inline judgments', () => {
     'review.llm.count',
     'review.filters.postings',
     'review.prompt.badges',
-    'review.detail.judgments',
+    'review.llm.list.judgments',
+    'review.search.tokenPrefix',
+    'review.search.substringAsync',
+  ])
+})
+
+test('both-list inventory covers LLM and human judgment payloads', () => {
+  const bothListInventoryEntry = reviewServingReadContractRouteInventory.find((entry) => {
+    return entry.productRoute === '/api/articlesreviewsboth'
+  })
+
+  expect(bothListInventoryEntry?.contractKeys).toEqual([
+    'review.both.rows',
+    'review.both.list.judgments',
+    'review.both.list.humanJudgments',
+    'review.filters.postings',
+    'review.both.count',
     'review.search.tokenPrefix',
     'review.search.substringAsync',
   ])
