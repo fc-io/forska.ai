@@ -234,7 +234,7 @@ const getReviewServingRowsSqlIdentityPredicates = (params: {
   }
 
   if (params.contract.servingTable === reviewServingSnapshotManifestTable) {
-    return ''
+    return ` AND review_config_hash IS NOT DISTINCT FROM ${params.reviewConfigHashParameter}`
   }
 
   if (params.contract.servingTable === reviewServingSearchJobTable) {
@@ -325,12 +325,15 @@ const getReviewServingRowsSqlCountPredicate = (params: {
   ].join('')
 }
 
-const getReviewServingRowsSqlFacetVersionPredicate = (contract: ReviewServingReadContract) => {
-  if (contract.servingTable !== reviewServingFilterFacetTable) {
+const getReviewServingRowsSqlFacetVersionPredicate = (params: {
+  contract: ReviewServingReadContract
+  countFilterKeyParameter?: string | null
+}) => {
+  if (params.contract.servingTable !== reviewServingFilterFacetTable) {
     return ''
   }
 
-  const facetDefinitionVersions = contract.namedFastCounts
+  const facetDefinitionVersions = params.contract.namedFastCounts
     .map((countKey) => {
       return namedReviewFastCountDefinitions[countKey]
     })
@@ -342,17 +345,23 @@ const getReviewServingRowsSqlFacetVersionPredicate = (contract: ReviewServingRea
     })
 
   if (facetDefinitionVersions.length === 0) {
-    throw new Error(`Missing facet summary definition for ${contract.key}`)
+    throw new Error(`Missing facet summary definition for ${params.contract.key}`)
   }
 
+  const countFilterKeyParameter = getRequiredReviewServingRowsSqlParameter(
+    params.countFilterKeyParameter,
+    'facet filter key',
+    params.contract,
+  )
+
   const facetKindPredicate =
-    contract.key === 'review.human.filters.facets' ? " AND facet_kind = 'human'" : " AND facet_kind = 'review'"
+    params.contract.key === 'review.human.filters.facets' ? " AND facet_kind = 'human'" : " AND facet_kind = 'review'"
   const summaryVersionPredicate =
     facetDefinitionVersions.length === 1
       ? ` AND summary_definition_version = ${facetDefinitionVersions[0]}`
       : ` AND summary_definition_version IN (${facetDefinitionVersions.join(', ')})`
 
-  return `${facetKindPredicate}${summaryVersionPredicate}`
+  return `${facetKindPredicate}${summaryVersionPredicate} AND summary_identity = ${countFilterKeyParameter}`
 }
 
 const getRequiredReviewServingRowsSqlParameter = (
@@ -418,20 +427,7 @@ const getReviewServingRowsSqlPostingPredicate = (params: {
     return anchorPredicate
   }
 
-  const intersectionPredicate = [
-    ` AND article_id IN (SELECT posting.article_id FROM ${params.contract.servingTable} posting`,
-    ` JOIN ${params.filterPredicatesSql} requested_filter(filter_kind, filter_value)`,
-    ' ON requested_filter.filter_kind = posting.filter_kind',
-    ' AND requested_filter.filter_value = posting.filter_value',
-    ` WHERE posting.project_id = ${params.projectIdParameter}`,
-    ` AND posting.review_config_hash = ${params.reviewConfigHashParameter}`,
-    ` AND posting.snapshot_id = ${params.snapshotIdParameter}`,
-    ` AND posting.list_mode_key = ${params.listModeParameter}`,
-    ' GROUP BY posting.article_id',
-    ` HAVING count(*) = (SELECT count(*) FROM ${params.filterPredicatesSql}))`,
-  ].join('')
-
-  return `${anchorPredicate}${intersectionPredicate}`
+  throw new Error(`Multi-filter posting intersections require a precomputed serving lookup for ${params.contract.key}`)
 }
 
 const getReviewServingRowsSqlSearchPredicate = (params: {
@@ -566,7 +562,7 @@ export const buildReviewServingRowsSql = (params: {
   const identityPredicates = getReviewServingRowsSqlIdentityPredicates(params)
   const listModePredicate = getReviewServingRowsSqlListModePredicate(params)
   const countPredicate = getReviewServingRowsSqlCountPredicate(params)
-  const facetVersionPredicate = getReviewServingRowsSqlFacetVersionPredicate(params.contract)
+  const facetVersionPredicate = getReviewServingRowsSqlFacetVersionPredicate(params)
   const physicalFilterPredicate = getReviewServingRowsSqlPhysicalFilterPredicate(params)
   const listModeDedupeQualifier = getReviewServingRowsSqlListModeDedupeQualifier(params.contract)
   const sortSql = getSortSql(params.contract)

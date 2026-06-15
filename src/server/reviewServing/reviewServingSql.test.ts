@@ -157,6 +157,7 @@ test('buildReviewServingRowsSql separates review and human facet rows', () => {
   const reviewContract = getRequiredReviewServingReadContract('review.filters.facets')
   const humanContract = getRequiredReviewServingReadContract('review.human.filters.facets')
   const baseParams = {
+    countFilterKeyParameter: '$filterKey',
     displayIdentityParameter: '$displayIdentity',
     limitParameter: '$limit',
     listModeParameter: '$listMode',
@@ -178,11 +179,32 @@ test('buildReviewServingRowsSql separates review and human facet rows', () => {
   expect(reviewSql).toContain("'review-filter-import-route:v1'")
   expect(reviewSql).toContain("'review-filter-prompt-answer:v1'")
   expect(reviewSql).toContain("'review-filter-publication-year:v1'")
+  expect(reviewSql).toContain('AND summary_identity = $filterKey')
   expect(humanSql).toContain("AND facet_kind = 'human'")
   expect(humanSql).toContain("AND summary_definition_version = 'review-human-filter-prompt-answer:v1'")
+  expect(humanSql).toContain('AND summary_identity = $filterKey')
 })
 
-test('buildReviewServingRowsSql lets snapshot manifests discover latest project status', () => {
+test('buildReviewServingRowsSql rejects facet reads without a filter key', () => {
+  const contract = getRequiredReviewServingReadContract('review.filters.facets')
+
+  expect(() => {
+    buildReviewServingRowsSql({
+      contract,
+      displayIdentityParameter: '$displayIdentity',
+      limitParameter: '$limit',
+      listModeParameter: '$listMode',
+      payloadIdentityParameter: '$payloadIdentity',
+      projectIdParameter: '$projectId',
+      projectScopeIdentityParameter: '$projectScopeIdentity',
+      reviewConfigHashParameter: '$reviewConfigHash',
+      searchIdentityParameter: '$searchIdentity',
+      snapshotIdParameter: '$snapshotId',
+    })
+  }).toThrow('Missing facet filter key for review.filters.facets')
+})
+
+test('buildReviewServingRowsSql pins snapshot manifests to the active review config', () => {
   const contract = getRequiredReviewServingReadContract('review.health.snapshot')
   const sql = buildReviewServingRowsSql({
     contract,
@@ -198,8 +220,9 @@ test('buildReviewServingRowsSql lets snapshot manifests discover latest project 
   })
 
   expect(assertReviewServingSqlShape(sql, {requireSnapshotScope: false})).toEqual({ok: true, violations: []})
-  expect(sql).toContain('WHERE project_id = $projectId ORDER BY updated_at DESC, snapshot_id DESC')
-  expect(sql).not.toContain('review_config_hash')
+  expect(sql).toContain(
+    'WHERE project_id = $projectId AND review_config_hash IS NOT DISTINCT FROM $reviewConfigHash ORDER BY updated_at DESC, snapshot_id DESC',
+  )
   expect(sql).not.toContain('$snapshotId')
 })
 
@@ -302,31 +325,27 @@ test('buildReviewServingRowsSql applies posting filter keys before row ordering'
   expect(sql).toContain('ORDER BY sort_key DESC, article_id ASC')
 })
 
-test('buildReviewServingRowsSql can require all active posting filters', () => {
+test('buildReviewServingRowsSql rejects foreground multi-filter posting intersections', () => {
   const contract = getRequiredReviewServingReadContract('review.filters.postings')
   const filterPredicatesSql = '(VALUES ($filterKind, $filterValue), ($secondFilterKind, $secondFilterValue))'
-  const sql = buildReviewServingRowsSql({
-    contract,
-    displayIdentityParameter: '$displayIdentity',
-    filterKindParameter: '$filterKind',
-    filterPredicatesSql,
-    filterValueParameter: '$filterValue',
-    limitParameter: '$limit',
-    listModeParameter: '$listMode',
-    payloadIdentityParameter: '$payloadIdentity',
-    projectIdParameter: '$projectId',
-    projectScopeIdentityParameter: '$projectScopeIdentity',
-    reviewConfigHashParameter: '$reviewConfigHash',
-    searchIdentityParameter: '$searchIdentity',
-    snapshotIdParameter: '$snapshotId',
-  })
 
-  expect(assertReviewServingSqlShape(sql)).toEqual({ok: true, violations: []})
-  expect(sql).toContain('AND filter_kind = $filterKind AND filter_value = $filterValue')
-  expect(sql).toContain(`JOIN ${filterPredicatesSql} requested_filter(filter_kind, filter_value)`)
-  expect(sql).toContain('requested_filter.filter_kind = posting.filter_kind')
-  expect(sql).toContain('posting.list_mode_key = $listMode')
-  expect(sql).toContain(`HAVING count(*) = (SELECT count(*) FROM ${filterPredicatesSql})`)
+  expect(() => {
+    buildReviewServingRowsSql({
+      contract,
+      displayIdentityParameter: '$displayIdentity',
+      filterKindParameter: '$filterKind',
+      filterPredicatesSql,
+      filterValueParameter: '$filterValue',
+      limitParameter: '$limit',
+      listModeParameter: '$listMode',
+      payloadIdentityParameter: '$payloadIdentity',
+      projectIdParameter: '$projectId',
+      projectScopeIdentityParameter: '$projectScopeIdentity',
+      reviewConfigHashParameter: '$reviewConfigHash',
+      searchIdentityParameter: '$searchIdentity',
+      snapshotIdParameter: '$snapshotId',
+    })
+  }).toThrow('Multi-filter posting intersections require a precomputed serving lookup for review.filters.postings')
 })
 
 test('buildReviewServingRowsSql uses contract list-mode literals for fixed row contracts', () => {
