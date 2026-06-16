@@ -1,7 +1,15 @@
 import type {ProjectTransferHistoryRecord} from '../../../db/schemaTypes.ts'
+import {
+  appendArticleReviewServingDeltas,
+  type ArticleReviewServingFieldName,
+} from '../../reviewServing/articleReviewServingDeltaService.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {appendLlmJudgmentReviewServingDeltas} from '../../reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../../reviewServing/projectScopeReviewServingDeltaService.ts'
+import {
+  appendProjectReviewConfigReviewServingDelta,
+  appendPromptConfigReviewServingDeltas,
+} from '../../reviewServing/reviewConfigReviewServingDeltaService.ts'
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {
@@ -357,6 +365,28 @@ const articleFieldSelectSql = Object.entries(articleColumnByPayloadField)
       : `${column} AS ${field}`
   })
   .join(',\n')
+const articleReviewServingFieldByTransferField: Partial<Record<ArticleField, ArticleReviewServingFieldName>> = {
+  articleAuthors: 'articleAuthors',
+  articleCreatedAt: 'articleCreatedAt',
+  articleSummary: 'articleSummary',
+  articleTitle: 'articleTitle',
+  arxivId: 'arxivId',
+  biorxivId: 'biorxivId',
+  doi: 'doi',
+  fullText: 'fullText',
+  fullTextHtml: 'fullTextHtml',
+  fullTextPdf: 'fullTextPDF',
+  medrxivId: 'medrxivId',
+  publicationStatus: 'publicationStatus',
+  pubmedId: 'pubmedId',
+  sourceMetadata: 'sourceMetadata',
+  url: 'url',
+}
+const projectTransferCreatedArticleReviewServingFields = Object.values(articleReviewServingFieldByTransferField).filter(
+  (field): field is ArticleReviewServingFieldName => {
+    return field !== undefined
+  },
+)
 const commitWriterInsertBatchSize = 500
 const importedSnapshotMarker = 'projectTransferImportedSnapshot'
 const commitWriterSetBasedTableSuffixes = [
@@ -1621,6 +1651,20 @@ const assertNoProjectPromptDuplicates = (projectPromptRows: readonly {promptId: 
     : undefined
 }
 
+const getProjectPromptTargetId = ({
+  commitIdMaps,
+  sourceProjectPromptId,
+}: {
+  commitIdMaps: ProjectTransferCommitIdMaps
+  sourceProjectPromptId: string
+}) => {
+  return getMappedTargetId({
+    label: 'project prompt',
+    mapped: commitIdMaps.projectPromptIdBySourceId,
+    sourceId: sourceProjectPromptId,
+  })
+}
+
 const getCriteriaDisposition = (value: unknown) => {
   return value === 'include' || value === 'exclude' || value === 'combined' ? value : null
 }
@@ -1668,13 +1712,14 @@ const insertProjectPromptRows = async (
   tx: ProjectTransferCommitWriterTx,
   rows: readonly ReturnType<typeof getProjectPromptRows>[number][],
   commitIdMaps: ProjectTransferCommitIdMaps,
+  now: Date,
 ) => {
   assertNoProjectPromptDuplicates(rows)
 
   return rows.length === 0
     ? undefined
-    : runChunks(rows, (rowChunk) => {
-        return tx.run(`
+    : runChunks(rows, async (rowChunk) => {
+        await tx.run(`
         INSERT INTO app.project_prompt (
           id,
           project_id,
@@ -1688,14 +1733,13 @@ const insertProjectPromptRows = async (
           criteria_section_label
         ) VALUES ${rowChunk
           .map((row) => {
+            const projectPromptId = getProjectPromptTargetId({
+              commitIdMaps,
+              sourceProjectPromptId: row.sourceProjectPromptId,
+            })
+
             return `(
-              ${getSqlLiteral(
-                getMappedTargetId({
-                  label: 'project prompt',
-                  mapped: commitIdMaps.projectPromptIdBySourceId,
-                  sourceId: row.sourceProjectPromptId,
-                }),
-              )},
+              ${getSqlLiteral(projectPromptId)},
               ${getSqlLiteral(row.projectId)},
               ${getSqlLiteral(row.promptId)},
               ${getSqlLiteral(row.order)},
@@ -1709,7 +1753,56 @@ const insertProjectPromptRows = async (
           })
           .join(', ')}
       `)
+
+        await appendPromptConfigReviewServingDeltas(
+          tx,
+          rowChunk.map((row) => {
+            const projectPromptId = getProjectPromptTargetId({
+              commitIdMaps,
+              sourceProjectPromptId: row.sourceProjectPromptId,
+            })
+
+            return {
+              changedPromptConfigFields: ['archived', 'enabled', 'promptOrder'] as const,
+              projectId: row.projectId,
+              promptId: row.promptId,
+              sourceMutationKey: `projectTransferCommit.projectPrompt|${row.projectId}|${projectPromptId}`,
+              sourceOperation: 'insert' as const,
+              sourceRowId: projectPromptId,
+              sourceUpdatedAt: now,
+            }
+          }),
+        )
       })
+}
+
+const appendProjectTransferProjectReviewConfigDelta = async ({
+  now,
+  projectId,
+  tx,
+}: {
+  now: Date
+  projectId: string
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await appendProjectReviewConfigReviewServingDelta(tx, {
+    changedReviewConfigFields: [
+      'dateFrom',
+      'dateTo',
+      'humanJudgmentMode',
+      'importRoutes',
+      'modelId',
+      'promptMembership',
+      'useAbstract',
+      'useFulltext',
+      'useFulltextNoImages',
+      'useTitle',
+    ],
+    projectId,
+    sourceMutationKey: `projectTransferCommit.projectReviewConfig|${projectId}|${now.toISOString()}`,
+    sourceOperation: 'insert',
+    sourceUpdatedAt: now,
+  })
 }
 
 const getResolvedArticleIdBySourceId = ({
@@ -1790,6 +1883,61 @@ const assertNoArticleIdConflicts = async ({
   return conflict ? failCommitWriter(`target article_id already exists: ${conflict.articleId}`) : undefined
 }
 
+const appendProjectTransferCreatedArticleDeltas = async ({
+  articleIds,
+  now,
+  tx,
+}: {
+  articleIds: readonly string[]
+  now: Date
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await articleIds.reduce<Promise<void>>(async (previousRun, articleId) => {
+    await previousRun
+    await appendArticleReviewServingDeltas(tx, {
+      articleId,
+      changedFields: projectTransferCreatedArticleReviewServingFields,
+      sourceMutationKey: `projectTransferCommit.article|${articleId}|${now.toISOString()}`,
+      sourceOperation: 'insert',
+      sourceUpdatedAt: now,
+    })
+  }, Promise.resolve())
+}
+
+const getTransferArticleReviewServingFields = (fields: readonly ArticleField[]) => {
+  return fields
+    .map((field) => {
+      return articleReviewServingFieldByTransferField[field]
+    })
+    .filter((field): field is ArticleReviewServingFieldName => {
+      return field !== undefined
+    })
+}
+
+const appendProjectTransferArticleFieldFillDeltas = async ({
+  articleId,
+  fields,
+  now,
+  tx,
+}: {
+  articleId: string
+  fields: readonly ArticleField[]
+  now: Date
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const changedFields = getTransferArticleReviewServingFields(fields)
+
+  return changedFields.length === 0
+    ? undefined
+    : appendArticleReviewServingDeltas(tx, {
+        articleId,
+        changedFields,
+        sourceMutationKey: `projectTransferCommit.articleFieldFill|${articleId}|${now.toISOString()}|${changedFields.join(',')}`,
+        sourceOperation: 'update',
+        sourceUpdatedAt: now,
+      })
+}
+
 const insertCreatedArticlesSetBased = async ({
   context,
   now,
@@ -1833,9 +1981,17 @@ const insertCreatedArticlesSetBased = async ({
     RETURNING id
   `)
 
-  return insertedRows.length === expectedCount
-    ? undefined
-    : failCommitWriter(`created article insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+  if (insertedRows.length !== expectedCount) {
+    return failCommitWriter(`created article insert wrote ${insertedRows.length} of ${expectedCount} staged rows`)
+  }
+
+  return appendProjectTransferCreatedArticleDeltas({
+    articleIds: insertedRows.map((row) => {
+      return row.id
+    }),
+    now,
+    tx,
+  })
 }
 
 const insertCreatedArticles = async ({
@@ -1855,8 +2011,8 @@ const insertCreatedArticles = async ({
     ? insertCreatedArticlesSetBased({context, now, tx})
     : promotion.articleCreates.length === 0
       ? undefined
-      : runChunks(promotion.articleCreates, (articleChunk) => {
-          return tx.run(`
+      : runChunks(promotion.articleCreates, async (articleChunk) => {
+          await tx.run(`
           INSERT INTO app.article (
             id,
             ${Object.values(articleColumnByPayloadField).join(',\n')},
@@ -1872,6 +2028,18 @@ const insertCreatedArticles = async ({
             })
             .join(', ')}
         `)
+
+          await appendProjectTransferCreatedArticleDeltas({
+            articleIds: articleChunk.map((entry) => {
+              const articleId = articleIdBySourceId[entry.sourceArticleId]
+
+              return articleId === undefined
+                ? failCommitWriter(`missing target article id for ${entry.sourceArticleId}`)
+                : articleId
+            }),
+            now,
+            tx,
+          })
         })
 }
 
@@ -2052,7 +2220,10 @@ const updateReusedArticleFieldSetBased = async ({
   `)
 
   if (updatedRows.length === expectedCount) {
-    return undefined
+    return updatedRows.reduce<Promise<void>>(async (previousRun, row) => {
+      await previousRun
+      await appendProjectTransferArticleFieldFillDeltas({articleId: row.id, fields: [field], now, tx})
+    }, Promise.resolve())
   }
 
   const invalid = await getInvalidArticleFieldFillRow({context, field, tx})
@@ -2124,13 +2295,22 @@ const updateReusedArticles = async ({
       })
       .join(',\n')
 
-    return tx.run(`
+    await tx.run(`
       UPDATE app.article
       SET
         ${setSql},
         updated_at = ${getTimestampLiteral(now)}
       WHERE id = ${getSqlLiteral(articleId)}
     `)
+
+    return appendProjectTransferArticleFieldFillDeltas({
+      articleId,
+      fields: fills.map((fill) => {
+        return fill.field as ArticleField
+      }),
+      now,
+      tx,
+    })
   }, Promise.resolve())
 }
 
@@ -6286,7 +6466,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
     })
 
     await assertNoArticleIdConflicts({articles, matches: materializedPlan.targetPlan.articleMatches, tx})
-    await insertProjectPromptRows(tx, projectPromptRows, materializedPlan.commitIdMaps)
+    await insertProjectPromptRows(tx, projectPromptRows, materializedPlan.commitIdMaps, importedAt)
     await insertCreatedArticles({articleIdBySourceId, context: setBasedContext, now: importedAt, promotion, tx})
     const targetArticleById = await getFillTargetArticleRows({promotion, tx})
     await updateReusedArticles({context: setBasedContext, now: importedAt, promotion, targetArticleById, tx})
@@ -6307,6 +6487,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
       projectRoutePlan: materializedPlan.targetPlan.projectRoutePlan,
       tx,
     })
+    await appendProjectTransferProjectReviewConfigDelta({now: importedAt, projectId: createdProject.id, tx})
     const routeIdBySourceId = getRouteIdBySourceId(materializedPlan.targetPlan.projectRoutePlan)
     const articleImportRouteRows = getArticleImportRouteRows({
       articleIdBySourceId,
