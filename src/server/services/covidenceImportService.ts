@@ -2104,11 +2104,19 @@ const deleteRemovedCovidenceSeededProjectArticles = async (params: {
   if (params.articleIds.length === 0) {
     const removedRows = await params.queryRunner.queryJson<{articleId: string; projectArticleId: string}>(`
       SELECT
-        id AS projectArticleId,
-        article_id AS articleId
-      FROM app.project_article
-      WHERE project_id = ${getSqlLiteral(params.projectId)}
-        AND imported_from_project_id = ${getSqlLiteral(params.projectId)}
+        project_article.id AS projectArticleId,
+        project_article.article_id AS articleId
+      FROM app.project_article project_article
+      WHERE project_article.project_id = ${getSqlLiteral(params.projectId)}
+        AND project_article.imported_from_project_id = ${getSqlLiteral(params.projectId)}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.project_import_route project_import_route
+          INNER JOIN app.article_import_route article_import_route
+            ON article_import_route.import_route_id = project_import_route.import_route_id
+          WHERE project_import_route.project_id = ${getSqlLiteral(params.projectId)}
+            AND article_import_route.article_id = project_article.article_id
+        )
     `)
 
     await params.queryRunner.run(`
@@ -2137,14 +2145,22 @@ const deleteRemovedCovidenceSeededProjectArticles = async (params: {
   await createCovidenceProjectArticleInputTable({articleIds: params.articleIds, queryRunner: params.queryRunner})
   const removedRows = await params.queryRunner.queryJson<{articleId: string; projectArticleId: string}>(`
     SELECT
-      id AS projectArticleId,
-      article_id AS articleId
-    FROM app.project_article
-    WHERE project_id = ${getSqlLiteral(params.projectId)}
-      AND imported_from_project_id = ${getSqlLiteral(params.projectId)}
-      AND article_id NOT IN (
+      project_article.id AS projectArticleId,
+      project_article.article_id AS articleId
+    FROM app.project_article project_article
+    WHERE project_article.project_id = ${getSqlLiteral(params.projectId)}
+      AND project_article.imported_from_project_id = ${getSqlLiteral(params.projectId)}
+      AND project_article.article_id NOT IN (
         SELECT article_id
         FROM ${covidenceProjectArticleInputTableName} article_input
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_import_route project_import_route
+        INNER JOIN app.article_import_route article_import_route
+          ON article_import_route.import_route_id = project_import_route.import_route_id
+        WHERE project_import_route.project_id = ${getSqlLiteral(params.projectId)}
+          AND article_import_route.article_id = project_article.article_id
       )
   `)
   await params.queryRunner.run(`
@@ -2184,7 +2200,7 @@ const insertCovidenceSeededProjectArticles = async (params: {
       })
 
       return params.queryRunner
-        .run(
+        .queryJson<{articleId: string; projectArticleId: string}>(
           `
             INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
             VALUES ${projectArticleRows
@@ -2193,12 +2209,13 @@ const insertCovidenceSeededProjectArticles = async (params: {
               })
               .join(', ')}
             ON CONFLICT(project_id, article_id) DO NOTHING
+            RETURNING id AS projectArticleId, article_id AS articleId
           `,
         )
-        .then(() => {
+        .then((insertedRows) => {
           return appendProjectScopeArticleReviewServingDeltas(
             params.queryRunner,
-            projectArticleRows.map((row) => {
+            insertedRows.map((row) => {
               return {
                 articleId: row.articleId,
                 changeKind: 'projectScope.article.added' as const,
@@ -2456,14 +2473,31 @@ export const syncCovidenceProjectPrompts = async (params: {
           criteria_section_label = EXCLUDED.criteria_section_label,
           updated_at = now()
       `)
+    const promptVersionRows = await queryRunner.queryJson<{promptId: string; updatedAt: string}>(`
+      SELECT prompt_id AS promptId, updated_at AS updatedAt
+      FROM app.project_prompt
+      WHERE project_id = ${getSqlLiteral(params.projectId)}
+        AND prompt_id IN (${getQuotedStringList(
+          promptLinks.map((promptLink) => {
+            return promptLink.promptId
+          }),
+        ).join(', ')})
+    `)
+    const promptUpdatedAtById = new Map(
+      promptVersionRows.map((row) => {
+        return [row.promptId, row.updatedAt]
+      }),
+    )
     await promptLinks.reduce<Promise<void>>(async (previousRun, promptLink) => {
       await previousRun
+      const sourceUpdatedAt = promptUpdatedAtById.get(promptLink.promptId) ?? new Date().toISOString()
       await appendPromptConfigReviewServingDelta(queryRunner, {
         changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
         projectId: params.projectId,
         promptId: promptLink.promptId,
-        sourceMutationKey: `covidenceSyncProjectPrompt|${params.projectId}|${promptLink.promptId}`,
+        sourceMutationKey: `covidenceSyncProjectPrompt|${params.projectId}|${promptLink.promptId}|${sourceUpdatedAt}`,
         sourceOperation: 'upsert',
+        sourceUpdatedAt,
       })
     }, Promise.resolve())
   }
@@ -2724,7 +2758,11 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
         return previousRun.then(async () => {
           const insertValues = judgmentSeedChunk
             .map((judgmentSeed) => {
-              const rowValues = getQuotedStringList([globalThis.crypto.randomUUID(), project.id, judgmentSeed.articleId])
+              const rowValues = getQuotedStringList([
+                globalThis.crypto.randomUUID(),
+                project.id,
+                judgmentSeed.articleId,
+              ])
 
               return `(${rowValues.join(', ')}, ${getSqlLiteral(judgmentSeed.answer)}, 'covidence_import', ${getSqlLiteral(seedUpdatedAt)})`
             })

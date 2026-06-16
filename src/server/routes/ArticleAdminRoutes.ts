@@ -141,17 +141,19 @@ export const articleAdminRoutes = new Elysia()
         return `${columnMap[key] ?? key} = ${getSqlLiteral(value)}`
       })
       await getAppDatabaseService().transaction(async (tx) => {
+        const sourceUpdatedAt = new Date()
         await tx.run(`
           UPDATE app.article
           SET ${updateParts.join(', ')},
-              updated_at = current_timestamp
+              updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
           WHERE id = '${escapeSqlString(id)}'
         `)
         await appendArticleReviewServingDeltas(tx, {
           articleId: id,
           changedFields: result.fullTextPDF ? ['fullText', 'fullTextHtml', 'fullTextPDF'] : [],
-          sourceMutationKey: `ArticleAdminRoutes.fetchPdf|article|${id}|${getArticleReviewServingMutationValueHash(result)}`,
+          sourceMutationKey: `ArticleAdminRoutes.fetchPdf|article|${id}|${sourceUpdatedAt.toISOString()}|${getArticleReviewServingMutationValueHash(result)}`,
           sourceOperation: 'update',
+          sourceUpdatedAt,
         })
       })
 

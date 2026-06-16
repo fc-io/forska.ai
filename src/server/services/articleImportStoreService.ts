@@ -1809,7 +1809,11 @@ const getMergedImportRefreshState = (states: ArticleImportRefreshState[]) => {
 }
 
 const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
-  const states = await getValueChunks(rows).reduce<Promise<ArticleImportRefreshState[]>>(
+  const implicitImportRunId = globalThis.crypto.randomUUID()
+  const rowsWithImportRunIds = rows.map((row) => {
+    return {...row, importRunId: row.importRunId ?? implicitImportRunId}
+  })
+  const states = await getValueChunks(rowsWithImportRunIds).reduce<Promise<ArticleImportRefreshState[]>>(
     async (statesPromise, rowChunk) => {
       const states = await statesPromise
       const state = await storeImportedArticleChunkInTx(tx, rowChunk)

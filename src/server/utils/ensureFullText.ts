@@ -4,7 +4,7 @@ import {
   getArticleReviewServingMutationValueHash,
 } from '../reviewServing/articleReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {escapeSqlString, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {ConversionError, convertPdfToText} from './convertPdfToText.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
@@ -129,6 +129,7 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
     })
 
     await getAppDatabaseService().transaction(async (tx) => {
+      const sourceUpdatedAt = new Date()
       await tx.run(`
         UPDATE app.article
         SET full_text = ${getSqlLiteral(md)},
@@ -137,14 +138,15 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
             full_text_conversion_error = NULL,
             full_text_char_count = ${md.length},
             full_text_conversion_attempts = ${(fresh.fullTextConversionAttempts ?? 0) + 1},
-            updated_at = current_timestamp
+            updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
         WHERE id = '${escapeSqlString(articleId)}'
       `)
       await appendArticleReviewServingDeltas(tx, {
         articleId,
         changedFields: ['fullText', 'fullTextHtml'],
-        sourceMutationKey: `ensureFullText|article|${articleId}|success|${getArticleReviewServingMutationValueHash({html, md})}`,
+        sourceMutationKey: `ensureFullText|article|${articleId}|success|${sourceUpdatedAt.toISOString()}|${getArticleReviewServingMutationValueHash({html, md})}`,
         sourceOperation: 'update',
+        sourceUpdatedAt,
       })
     })
 
