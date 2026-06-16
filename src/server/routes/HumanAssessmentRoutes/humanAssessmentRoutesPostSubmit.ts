@@ -202,7 +202,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
       tx,
       pending
         .filter((row) => {
-          return submittedIds.has(row.id)
+          return submittedIds.has(row.id) && preparedAnswersById[row.id] !== null
         })
         .map((row) => {
           return {

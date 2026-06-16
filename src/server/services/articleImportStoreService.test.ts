@@ -137,6 +137,91 @@ test('storeImportedArticlesWithTx upserts articles in DuckDB without current_tim
   }
 })
 
+test('storeImportedArticlesWithTx backfills hot fields for unchanged source records', async () => {
+  const duckdbPath = `/tmp/f1-article-import-hot-field-backfill-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {storeImportedArticlesWithTx}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const row = {
+          articleAuthors: ['Alice Example'],
+          articleId: 'hot-field-backfill-article',
+          articleSummary: 'Hot field summary',
+          articleTitle: 'Hot field title',
+          doi: '10.1000/hot-field-backfill',
+          importRoute: 'structured-file:hot-field-backfill',
+          sourceKind: 'structured_file',
+          sourceRecordHash: 'stable-hot-field-hash',
+          sourceRecordKey: 'stable-hot-field-key',
+        }
+
+        await database.transaction(async (tx) => {
+          await storeImportedArticlesWithTx(tx, [row])
+        })
+        await database.run('DELETE FROM app.review_import_article_hot_field')
+        await database.transaction(async (tx) => {
+          await storeImportedArticlesWithTx(tx, [row])
+        })
+
+        const [hotFieldRow] = await database.queryJson(
+          "SELECT COUNT(*)::INTEGER AS count FROM app.review_import_article_hot_field WHERE source_record_key = 'stable-hot-field-key'"
+        )
+
+        console.log(JSON.stringify({hotFieldRow}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to backfill hot fields')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {hotFieldRow: {count: number}}
+
+    expect(parsed.hotFieldRow.count).toBe(1)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('storeImportedArticlesWithTx collapses duplicate strong identifiers into one canonical article', async () => {
   const duckdbPath = `/tmp/f1-article-import-duplicate-identifier-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(
