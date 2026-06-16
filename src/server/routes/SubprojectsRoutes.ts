@@ -2,9 +2,16 @@ import {Elysia, t} from 'elysia'
 
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
+import {
+  appendProjectReviewConfigReviewServingDelta,
+  appendPromptConfigReviewServingDeltas,
+} from '../reviewServing/reviewConfigReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
-import {getOrCreateImmutablePromptTx} from '../services/immutablePromptService.ts'
+import {
+  getOrCreateImmutablePromptTx,
+  immutablePromptIdentityReviewServingFields,
+} from '../services/immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -451,6 +458,7 @@ export const subprojectsRoutes = new Elysia()
           useFulltextNoImages: boolean
           dateFrom: unknown
           dateTo: unknown
+          updatedAt: Date | string
         }>(`
           INSERT INTO app.project (
             id,
@@ -484,12 +492,15 @@ export const subprojectsRoutes = new Elysia()
             use_fulltext AS useFulltext,
             use_fulltext_no_images AS useFulltextNoImages,
             date_from AS dateFrom,
-            date_to AS dateTo
+            date_to AS dateTo,
+            updated_at AS updatedAt
         `)
 
         if (!createdProject) {
           throw new Error('Failed to create project')
         }
+
+        const linkedPromptIds: string[] = []
 
         for (const [orderIndex, prompt] of orderedPromptDetails.entries()) {
           const targetPromptId = await getOrCreateImmutablePromptTx(tx, {
@@ -505,7 +516,38 @@ export const subprojectsRoutes = new Elysia()
           }
 
           await linkProjectPromptTx(tx, {order: orderIndex, projectId: createdProject.id, promptId: targetPromptId})
+          linkedPromptIds.push(targetPromptId)
         }
+
+        await appendProjectReviewConfigReviewServingDelta(tx, {
+          changedReviewConfigFields: [
+            'modelId',
+            'modelExecutionIdentity',
+            'useTitle',
+            'useAbstract',
+            'useFulltext',
+            'useFulltextNoImages',
+            ...(linkedPromptIds.length > 0 ? (['promptMembership'] as const) : []),
+          ],
+          projectId: createdProject.id,
+          sourceMutationKey: `SubprojectsRoutes.projectConfig|${createdProject.id}|${String(createdProject.updatedAt)}`,
+          sourceOperation: 'insert',
+          sourceUpdatedAt: createdProject.updatedAt,
+        })
+
+        await appendPromptConfigReviewServingDeltas(
+          tx,
+          linkedPromptIds.map((promptId) => {
+            return {
+              changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
+              projectId: createdProject.id,
+              promptId,
+              sourceMutationKey: `SubprojectsRoutes.promptConfig|${createdProject.id}|${promptId}|${String(createdProject.updatedAt)}`,
+              sourceOperation: 'insert' as const,
+              sourceUpdatedAt: createdProject.updatedAt,
+            }
+          }),
+        )
 
         for (const idsChunk of chunk(articleIds, batchSize)) {
           if (idsChunk.length === 0) {
@@ -559,6 +601,7 @@ export const subprojectsRoutes = new Elysia()
         useFulltextNoImages: boolean
         dateFrom: unknown
         dateTo: unknown
+        updatedAt: Date | string
       }
 
       console.log(`[subprojects] Inserted ${articleIds.length} articles into project ${newProject.id}`)

@@ -1,6 +1,11 @@
 import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
+import {
+  appendProjectReviewConfigReviewServingDelta,
+  appendPromptConfigReviewServingDeltas,
+} from '../reviewServing/reviewConfigReviewServingDeltaService.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList} from './appQueryHelpers.ts'
+import {immutablePromptIdentityReviewServingFields} from './immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 
 const chunk = <T>(arr: T[], size: number): T[][] => {
@@ -212,6 +217,30 @@ export const insertArticlesIntoProject = async (
         VALUES ${values.join(', ')}
         ON CONFLICT(project_id, prompt_id) DO NOTHING
       `)
+    }
+
+    if (ensuredPromptIds.length > 0) {
+      const sourceUpdatedAt = new Date()
+      await appendPromptConfigReviewServingDeltas(
+        tx,
+        ensuredPromptIds.map((promptId) => {
+          return {
+            changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
+            projectId,
+            promptId,
+            sourceMutationKey: `insertArticlesIntoProject.promptConfig|${projectId}|${promptId}|${sourceUpdatedAt.toISOString()}`,
+            sourceOperation: 'insert' as const,
+            sourceUpdatedAt,
+          }
+        }),
+      )
+      await appendProjectReviewConfigReviewServingDelta(tx, {
+        changedReviewConfigFields: ['promptMembership'],
+        projectId,
+        sourceMutationKey: `insertArticlesIntoProject.reviewConfig|${projectId}|${sourceUpdatedAt.toISOString()}`,
+        sourceOperation: 'update',
+        sourceUpdatedAt,
+      })
     }
 
     if (toInsert.length > 0 || linkedPrompts > 0) {

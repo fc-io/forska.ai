@@ -142,6 +142,7 @@ export const articlesRoutes = new Elysia()
   .post('/api/articles/pdf-fetch-reset', () => {
     void getAppDatabaseService()
       .transaction(async (tx) => {
+        const sourceUpdatedAt = new Date()
         const whereSql = `full_text_pdf LIKE 'assets/article_pdfs/%'
           AND full_text_source IS NOT NULL
           AND full_text_source != 'user_upload'`
@@ -160,15 +161,16 @@ export const articlesRoutes = new Elysia()
               full_text_pdf = NULL,
               full_text_source = NULL,
               full_text_original_format = NULL,
-              updated_at = current_timestamp
+              updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
           WHERE ${whereSql}
         `,
         )
         await appendArticleReviewServingDeltasForIds(tx, {
           articleIds,
           changedFields: ['fullTextPDF'],
-          sourceMutationKey: 'ArticlesRoutes.pdfFetchReset',
+          sourceMutationKey: `ArticlesRoutes.pdfFetchReset|${sourceUpdatedAt.toISOString()}`,
           sourceOperation: 'update',
+          sourceUpdatedAt,
         })
       })
       .then(() => {
