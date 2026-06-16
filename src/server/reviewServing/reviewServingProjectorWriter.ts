@@ -1,0 +1,277 @@
+import {createHash} from 'node:crypto'
+
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
+import {type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {
+  advanceReviewServingProjectorWatermark,
+  assertReviewServingProjectorWatermarkCanAdvance,
+  type ReviewServingProjectorWatermarkAdvanceInput,
+} from './reviewServingDeltaReconciliation.ts'
+import {
+  completeReviewServingDirtyWorkClaims,
+  type ReviewServingDirtyWorkClaim,
+} from './reviewServingDirtyWorkService.ts'
+import {
+  getActiveReviewServingSnapshotManifest,
+  type ReviewServingProjectionIdentityManifestInput,
+  type ReviewServingSnapshotManifestInput,
+  upsertReviewServingProjectionIdentityManifest,
+} from './reviewServingManifestRepository.ts'
+
+export type ReviewServingProjectorWriterDatabase = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+  transaction: <T>(operation: (tx: ReviewServingProjectorWriterTransaction) => Promise<T>) => Promise<T>
+}
+
+export type ReviewServingProjectorWriterTransaction = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
+
+export type ReviewServingProjectorWritableTable =
+  | 'app.review_selected_article_import_v4'
+  | 'mart.review_article_count_serving_v4'
+  | 'mart.review_article_filter_posting_serving_v4'
+  | 'mart.review_article_judgment_detail_serving_v4'
+  | 'mart.review_article_serving_payload_v4'
+  | 'mart.review_article_serving_v4'
+  | 'mart.review_article_summary_contribution_v4'
+  | 'mart.review_filter_facet_serving_v4'
+  | 'mart.review_filter_option_serving_v4'
+  | 'mart.review_filter_posting_stats_v4'
+  | 'mart.review_title_search_serving_v4'
+  | 'mart.review_unassessed_queue_serving_v4'
+
+export type ReviewServingProjectorRecordValue = Date | ReviewServingIdentityValue | readonly string[] | null
+
+export type ReviewServingProjectorRecord = {
+  keyColumns: readonly string[]
+  table: ReviewServingProjectorWritableTable
+  values: Record<string, ReviewServingProjectorRecordValue>
+}
+
+export type PromoteReviewServingProjectorSnapshotInput = {
+  projectId: string
+  reviewConfigHash?: string | null
+  snapshotId: string
+}
+
+export type WriteReviewServingProjectorComponentInput = {
+  acknowledgements?: readonly ReviewServingDirtyWorkClaim[]
+  candidateSnapshot?: ReviewServingSnapshotManifestInput
+  component: ReviewServingProjectionComponent
+  projectionManifests?: readonly ReviewServingProjectionIdentityManifestInput[]
+  records?: readonly ReviewServingProjectorRecord[]
+  snapshotPromotion?: PromoteReviewServingProjectorSnapshotInput
+  watermark?: ReviewServingProjectorWatermarkAdvanceInput
+}
+
+const getReviewServingProjectorHash = (label: string, value: ReviewServingIdentityValue) => {
+  return createHash('sha256')
+    .update(`${label}:${getStableReviewServingJson(value)}`)
+    .digest('hex')
+}
+
+const getSqlRecordValue = (value: ReviewServingProjectorRecordValue) => {
+  if (value instanceof Date) {
+    return getSqlLiteral(value.toISOString())
+  }
+
+  return Array.isArray(value) ? getSqlLiteral(value) : getSqlLiteral(value)
+}
+
+const getReviewServingJsonLiteral = (value: ReviewServingIdentityValue) => {
+  return `${getSqlLiteral(getStableReviewServingJson(value))}::JSON`
+}
+
+const getReviewServingNullableJsonLiteral = (value: ReviewServingIdentityValue | null | undefined) => {
+  return value === null || value === undefined ? 'NULL' : getReviewServingJsonLiteral(value)
+}
+
+export const getReviewServingProjectorReplayKey = (input: {
+  articleId?: string | null
+  baseGeneration: number
+  contributionKey?: string | null
+  filterKey?: string | null
+  patchWatermark: number
+  projectionIdentity: string
+  promptId?: string | null
+  snapshotId: string
+}) => {
+  return `projectorReplay:${getReviewServingProjectorHash('review-serving-projector-replay', {
+    articleId: input.articleId ?? null,
+    baseGeneration: input.baseGeneration,
+    contributionKey: input.contributionKey ?? null,
+    filterKey: input.filterKey ?? null,
+    patchWatermark: input.patchWatermark,
+    projectionIdentity: input.projectionIdentity,
+    promptId: input.promptId ?? null,
+    snapshotId: input.snapshotId,
+  }).slice(0, 32)}`
+}
+
+const writeReviewServingProjectorRecord = async (
+  record: ReviewServingProjectorRecord,
+  tx: ReviewServingProjectorWriterTransaction,
+) => {
+  const columns = Object.keys(record.values)
+  const assignments = columns
+    .filter((column) => {
+      return !record.keyColumns.includes(column)
+    })
+    .map((column) => {
+      return `${column} = excluded.${column}`
+    })
+  const conflictUpdate = assignments.length === 0 ? 'DO NOTHING' : `DO UPDATE SET ${assignments.join(', ')}`
+
+  await tx.run(`
+    INSERT INTO ${record.table} (
+      ${columns.join(',\n      ')}
+    ) VALUES (
+      ${columns
+        .map((column) => {
+          return getSqlRecordValue(record.values[column] ?? null)
+        })
+        .join(',\n      ')}
+    )
+    ON CONFLICT(${record.keyColumns.join(', ')}) ${conflictUpdate}
+  `)
+}
+
+const createCandidateReviewServingSnapshotManifestFromWriter = async (
+  input: ReviewServingSnapshotManifestInput,
+  tx: ReviewServingProjectorWriterTransaction,
+) => {
+  await tx.run(`
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id,
+      snapshot_id,
+      snapshot_status,
+      review_config_hash,
+      composed_identity_json,
+      component_state_json,
+      required_components_json,
+      optional_components_json,
+      source_watermarks_json,
+      validation_result_json,
+      selected_import_snapshot_id,
+      last_known_good_snapshot_id,
+      updated_at
+    ) VALUES (
+      ${getSqlLiteral(input.projectId)},
+      ${getSqlLiteral(input.snapshotId)},
+      'candidate',
+      ${getSqlLiteral(input.reviewConfigHash ?? null)},
+      ${getReviewServingJsonLiteral(input.composedIdentity)},
+      ${getReviewServingJsonLiteral(input.componentState as unknown as ReviewServingIdentityValue)},
+      ${getReviewServingJsonLiteral(input.componentRequirements.requiredComponents)},
+      ${getReviewServingJsonLiteral(input.componentRequirements.optionalComponents)},
+      ${getReviewServingJsonLiteral(input.sourceWatermarks)},
+      ${getReviewServingNullableJsonLiteral(input.validationResult)},
+      ${getSqlLiteral(input.selectedImportSnapshotId ?? null)},
+      ${getSqlLiteral(input.lastKnownGoodSnapshotId ?? null)},
+      current_timestamp
+    )
+    ON CONFLICT(project_id, snapshot_id) DO UPDATE SET
+      snapshot_status = 'candidate',
+      review_config_hash = excluded.review_config_hash,
+      composed_identity_json = excluded.composed_identity_json,
+      component_state_json = excluded.component_state_json,
+      required_components_json = excluded.required_components_json,
+      optional_components_json = excluded.optional_components_json,
+      source_watermarks_json = excluded.source_watermarks_json,
+      validation_result_json = excluded.validation_result_json,
+      selected_import_snapshot_id = excluded.selected_import_snapshot_id,
+      last_known_good_snapshot_id = excluded.last_known_good_snapshot_id,
+      failed_at = NULL,
+      last_error = NULL,
+      updated_at = current_timestamp
+  `)
+}
+
+export const promoteReviewServingProjectorSnapshot = async (
+  input: PromoteReviewServingProjectorSnapshotInput,
+  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService(),
+) => {
+  return database.transaction(async (tx) => {
+    const active = await getActiveReviewServingSnapshotManifest(
+      {projectId: input.projectId, reviewConfigHash: input.reviewConfigHash ?? null},
+      tx,
+    )
+    const lastKnownGoodSnapshotId = active?.snapshotId ?? active?.lastKnownGoodSnapshotId ?? null
+
+    await tx.run(`
+      UPDATE app.review_serving_snapshot_manifest
+      SET
+        snapshot_status = 'retired',
+        updated_at = current_timestamp
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash ?? null)}
+        AND snapshot_status = 'active'
+        AND snapshot_id <> ${getSqlLiteral(input.snapshotId)}
+    `)
+    await tx.run(`
+      UPDATE app.review_serving_snapshot_manifest
+      SET
+        snapshot_status = 'active',
+        last_known_good_snapshot_id = ${getSqlLiteral(lastKnownGoodSnapshotId)},
+        activated_at = current_timestamp,
+        failed_at = NULL,
+        last_error = NULL,
+        updated_at = current_timestamp
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND snapshot_status = 'candidate'
+    `)
+  })
+}
+
+export const writeReviewServingProjectorComponent = async (
+  input: WriteReviewServingProjectorComponentInput,
+  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService(),
+) => {
+  return database.transaction(async (tx) => {
+    if (input.watermark !== undefined) {
+      await assertReviewServingProjectorWatermarkCanAdvance(tx, input.watermark)
+    }
+
+    if (input.candidateSnapshot !== undefined) {
+      await createCandidateReviewServingSnapshotManifestFromWriter(input.candidateSnapshot, tx)
+    }
+
+    await (input.projectionManifests ?? []).reduce<Promise<void>>((previous, manifest) => {
+      return previous.then(async () => {
+        await upsertReviewServingProjectionIdentityManifest(manifest, tx)
+      })
+    }, Promise.resolve())
+
+    await (input.records ?? []).reduce<Promise<void>>((previous, record) => {
+      return previous.then(async () => {
+        await writeReviewServingProjectorRecord(record, tx)
+      })
+    }, Promise.resolve())
+
+    if (input.acknowledgements !== undefined) {
+      await completeReviewServingDirtyWorkClaims(input.acknowledgements, tx)
+    }
+
+    if (input.watermark !== undefined) {
+      await advanceReviewServingProjectorWatermark(tx, input.watermark)
+    }
+
+    if (input.snapshotPromotion !== undefined) {
+      await promoteReviewServingProjectorSnapshot(input.snapshotPromotion, {
+        queryJson: tx.queryJson,
+        run: tx.run,
+        transaction: async (operation) => {
+          return operation(tx)
+        },
+      })
+    }
+
+    return {component: input.component, promotedSnapshotId: input.snapshotPromotion?.snapshotId ?? null}
+  })
+}

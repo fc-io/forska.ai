@@ -350,43 +350,6 @@ export const markCandidateReviewServingSnapshotManifestFailed = async (
   `)
 }
 
-export const promoteCandidateReviewServingSnapshotManifest = async (
-  input: {projectId: string; reviewConfigHash?: string | null; snapshotId: string},
-  database: ReviewServingManifestRepositoryDatabase = getAppDatabaseService(),
-) => {
-  return database.transaction(async (tx) => {
-    const active = await getActiveReviewServingSnapshotManifest(
-      {projectId: input.projectId, reviewConfigHash: input.reviewConfigHash ?? null},
-      tx,
-    )
-    const lastKnownGoodSnapshotId = active?.snapshotId ?? active?.lastKnownGoodSnapshotId ?? null
-
-    await tx.run(`
-      UPDATE app.review_serving_snapshot_manifest
-      SET
-        snapshot_status = 'retired',
-        updated_at = current_timestamp
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND ${getReviewConfigPredicate(input.reviewConfigHash)}
-        AND snapshot_status = 'active'
-        AND snapshot_id <> ${getSqlLiteral(input.snapshotId)}
-    `)
-    await tx.run(`
-      UPDATE app.review_serving_snapshot_manifest
-      SET
-        snapshot_status = 'active',
-        last_known_good_snapshot_id = ${getSqlLiteral(lastKnownGoodSnapshotId)},
-        activated_at = current_timestamp,
-        failed_at = NULL,
-        last_error = NULL,
-        updated_at = current_timestamp
-      WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
-        AND snapshot_status = 'candidate'
-    `)
-  })
-}
-
 export const getActiveReviewServingSnapshotManifest = async (
   input: {projectId: string; reviewConfigHash?: string | null},
   database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
