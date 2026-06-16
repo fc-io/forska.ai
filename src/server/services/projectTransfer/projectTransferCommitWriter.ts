@@ -278,6 +278,10 @@ type HumanJudgmentSummaryCommitRow = {
   updatedAt: Date
 }
 
+const hasNonEmptyHumanAnswer = (answer: string | null) => {
+  return typeof answer === 'string' && answer.trim().length > 0
+}
+
 type ReviewCommitRow = {
   articleId: string
   createdAt: Date
@@ -4641,7 +4645,7 @@ const appendProjectTransferHumanJudgmentDeltas = async ({
     tx,
     rows
       .filter((row) => {
-        return row.isAnswered
+        return row.isAnswered && hasNonEmptyHumanAnswer(row.answer)
       })
       .map((row) => {
         const humanJudgmentKey = `${row.projectId}:${row.articleId}:${row.promptId}`
@@ -4671,21 +4675,25 @@ const appendProjectTransferHumanSummaryDeltas = async ({
 }) => {
   await appendHumanJudgmentReviewServingDeltas(
     tx,
-    rows.map((row) => {
-      const humanJudgmentKey = `${row.projectId}:${row.articleId}:summary`
+    rows
+      .filter((row) => {
+        return hasNonEmptyHumanAnswer(row.answer)
+      })
+      .map((row) => {
+        const humanJudgmentKey = `${row.projectId}:${row.articleId}:summary`
 
-      return {
-        answer: row.answer,
-        articleId: row.articleId,
-        humanJudgmentKey,
-        projectId: row.projectId,
-        sourceMutationKey: `projectTransferHumanSummary|${row.projectId}|${row.sourceHumanJudgmentSummaryId}|${humanJudgmentKey}`,
-        sourceOperation: 'insert' as const,
-        sourceRowId: humanJudgmentKey,
-        sourceTable: 'app.judgment_human_summary',
-        sourceUpdatedAt: row.updatedAt,
-      }
-    }),
+        return {
+          answer: row.answer,
+          articleId: row.articleId,
+          humanJudgmentKey,
+          projectId: row.projectId,
+          sourceMutationKey: `projectTransferHumanSummary|${row.projectId}|${row.sourceHumanJudgmentSummaryId}|${humanJudgmentKey}`,
+          sourceOperation: 'insert' as const,
+          sourceRowId: humanJudgmentKey,
+          sourceTable: 'app.judgment_human_summary',
+          sourceUpdatedAt: row.updatedAt,
+        }
+      }),
   )
 }
 

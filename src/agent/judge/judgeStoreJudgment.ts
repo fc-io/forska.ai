@@ -1,5 +1,8 @@
 import type {JudgmentChunkingStrategy} from '../../db/schemaTypes.ts'
-import {appendLlmJudgmentReviewServingDeltas} from '../../server/reviewServing/llmJudgmentReviewServingDeltaService.ts'
+import {
+  type AppendLlmJudgmentReviewServingDeltaInput,
+  appendLlmJudgmentReviewServingDeltas,
+} from '../../server/reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
 import {getComparisonProjectServingInvalidationService} from '../../server/services/comparisonProjectServingInvalidationService.ts'
@@ -24,6 +27,7 @@ type StoredJudgmentRow = {
   useFulltextNoImages: boolean
   useTitle: boolean
 }
+type AffectedLlmJudgmentProjectRow = {projectId: string}
 
 const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
   const match = entries.find(([key]) => {
@@ -184,6 +188,48 @@ const storeJudgmentForPrompt = async ({
       )[0]
 }
 
+const getAffectedProjectIdsForStoredJudgment = async (runner: JudgmentStoreRunner, result: StoredJudgmentRow) => {
+  const rows = await runner.queryJson<AffectedLlmJudgmentProjectRow>(`
+    SELECT DISTINCT project.id AS projectId
+    FROM app.project project
+    INNER JOIN app.project_prompt project_prompt
+      ON project_prompt.project_id = project.id
+     AND project_prompt.prompt_id = ${getSqlLiteral(result.promptId)}
+     AND project_prompt.enabled = TRUE
+    WHERE project.archived = FALSE
+      AND project.model_id = ${getSqlLiteral(result.modelId)}
+      AND project.use_title = ${getSqlLiteral(result.useTitle)}
+      AND project.use_abstract = ${getSqlLiteral(result.useAbstract)}
+      AND project.use_fulltext = ${getSqlLiteral(result.useFulltext)}
+      AND project.use_fulltext_no_images = ${getSqlLiteral(result.useFulltextNoImages)}
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM app.project_article project_article
+          WHERE project_article.project_id = project.id
+            AND project_article.article_id = ${getSqlLiteral(result.articleId)}
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM app.project_import_route project_import_route
+          INNER JOIN app.article_import_route article_import_route
+            ON article_import_route.import_route_id = project_import_route.import_route_id
+           AND article_import_route.article_id = ${getSqlLiteral(result.articleId)}
+          WHERE project_import_route.project_id = project.id
+        )
+      )
+    ORDER BY project.id ASC
+  `)
+
+  return rows.length === 0
+    ? [result.projectId].filter((projectId): projectId is string => {
+        return projectId !== null
+      })
+    : rows.map((row) => {
+        return row.projectId
+      })
+}
+
 // Helper that stores a validated judgment via RPC to our server and logs the outcome
 export const judgeStoreJudgment = async (
   articleId: string,
@@ -263,26 +309,34 @@ export const judgeStoreJudgment = async (
       })
 
       if (successfulResults.length > 0) {
-        await appendLlmJudgmentReviewServingDeltas(
-          runner,
-          successfulResults.map((result) => {
-            return {
-              articleId: result.articleId,
-              changeKind: result.changeKind,
-              judgmentId: result.id,
-              modelId: result.modelId,
-              projectId: snapshotValues.snapshotProjectId ?? result.projectId,
-              promptId: result.promptId,
-              sourceMutationKey: `judgeStoreJudgment|${result.id}|${result.changeKind}|${String(result.updatedAt)}`,
-              sourceOperation: result.changeKind === 'judgment.llm.created' ? 'insert' : 'update',
-              sourceUpdatedAt: result.updatedAt,
-              useAbstract: result.useAbstract,
-              useFulltext: result.useFulltext,
-              useFulltextNoImages: result.useFulltextNoImages,
-              useTitle: result.useTitle,
-            }
-          }),
-        )
+        const llmJudgmentDeltas: AppendLlmJudgmentReviewServingDeltaInput[] = []
+
+        await successfulResults.reduce<Promise<void>>(async (promise, result) => {
+          await promise
+          const affectedProjectIds = await getAffectedProjectIdsForStoredJudgment(runner, result)
+
+          llmJudgmentDeltas.push(
+            ...affectedProjectIds.map((projectId) => {
+              return {
+                articleId: result.articleId,
+                changeKind: result.changeKind,
+                judgmentId: result.id,
+                modelId: result.modelId,
+                projectId,
+                promptId: result.promptId,
+                sourceMutationKey: `judgeStoreJudgment|${projectId}|${result.id}|${result.changeKind}|${String(result.updatedAt)}`,
+                sourceOperation: result.changeKind === 'judgment.llm.created' ? 'insert' : 'update',
+                sourceUpdatedAt: result.updatedAt,
+                useAbstract: result.useAbstract,
+                useFulltext: result.useFulltext,
+                useFulltextNoImages: result.useFulltextNoImages,
+                useTitle: result.useTitle,
+              }
+            }),
+          )
+        }, Promise.resolve())
+
+        await appendLlmJudgmentReviewServingDeltas(runner, llmJudgmentDeltas)
         await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
           articleIds: [articleId],
           reason: 'judgeStoreJudgment',
