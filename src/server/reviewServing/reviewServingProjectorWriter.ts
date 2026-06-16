@@ -12,6 +12,8 @@ import {
 import {
   completeReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
+  type ReviewServingDirtyWorkInput,
+  upsertReviewServingDirtyWork,
 } from './reviewServingDirtyWorkService.ts'
 import {
   getActiveReviewServingSnapshotManifest,
@@ -85,6 +87,7 @@ export type WriteReviewServingProjectorComponentInput = {
   component: ReviewServingProjectionComponent
   projectionManifests?: readonly ReviewServingProjectionIdentityManifestInput[]
   records?: readonly ReviewServingProjectorRecord[]
+  repairDirtyWork?: readonly ReviewServingDirtyWorkInput[]
   selectedImportSnapshotCursor?: ReviewServingSelectedImportSnapshotCursorInput
   snapshotPromotion?: PromoteReviewServingProjectorSnapshotInput
   statements?: readonly string[]
@@ -338,6 +341,12 @@ export const writeReviewServingProjectorComponent = async (
     await (input.records ?? []).reduce<Promise<void>>((previous, record) => {
       return previous.then(async () => {
         await writeReviewServingProjectorRecord(record, tx)
+      })
+    }, Promise.resolve())
+
+    await (input.repairDirtyWork ?? []).reduce<Promise<void>>((previous, dirtyWork) => {
+      return previous.then(async () => {
+        await upsertReviewServingDirtyWork(dirtyWork, tx)
       })
     }, Promise.resolve())
 

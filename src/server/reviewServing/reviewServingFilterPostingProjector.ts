@@ -1,6 +1,11 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
+import {
+  prepareReviewServingContributionDiff,
+  type ReviewServingContributionDiff,
+  type ReviewServingContributionRow,
+} from './reviewServingContributionService.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -129,6 +134,23 @@ const getContributionStatsKey = (row: Pick<PostingContributionRow, 'filterKind' 
     filterValue: row.filterValue,
     listModeKey: row.listModeKey,
   })
+}
+
+const getPostingRowsAsContributionRows = (rows: readonly PostingContributionRow[]) => {
+  const liveRowsByArticleAndStatsKey = rows
+    .filter((row) => {
+      return !row.tombstone
+    })
+    .reduce<Map<string, ReviewServingContributionRow>>((result, row) => {
+      const contributionKey = getContributionStatsKey(row)
+      const articleStatsKey = getStableReviewServingJson({articleId: row.articleId, contributionKey})
+
+      result.set(articleStatsKey, {articleId: row.articleId, contributionKey, contributionValue: 1})
+
+      return result
+    }, new Map())
+
+  return [...liveRowsByArticleAndStatsKey.values()]
 }
 
 const getDirtyArticleCte = (projectId: string, articleIds: readonly string[]) => {
@@ -438,54 +460,13 @@ const getPostingManifest = (
   }
 }
 
-const getContributionDiffs = (input: {
-  existingRows: readonly PostingContributionRow[]
-  newRows: readonly PostingContributionRow[]
-}) => {
-  const getCountsByStatsKey = (rows: readonly PostingContributionRow[]) => {
-    return rows.reduce<Map<string, Set<string>>>((counts, row) => {
-      const statsKey = getContributionStatsKey(row)
-      const contributionKeys = counts.get(statsKey) ?? new Set<string>()
-
-      contributionKeys.add(getContributionKey(row))
-      counts.set(statsKey, contributionKeys)
-
-      return counts
-    }, new Map())
-  }
-  const existingCounts = getCountsByStatsKey(input.existingRows)
-  const newCounts = getCountsByStatsKey(
-    input.newRows.filter((row) => {
-      return !row.tombstone
-    }),
-  )
-  const statsKeys = new Set<string>()
-
-  input.existingRows.map((row) => {
-    statsKeys.add(getContributionStatsKey(row))
-    return row
-  })
-  input.newRows.map((row) => {
-    statsKeys.add(getContributionStatsKey(row))
-    return row
-  })
-
-  return [...statsKeys].map((statsKey) => {
-    const oldCount = existingCounts.get(statsKey)?.size ?? 0
-    const newCount = newCounts.get(statsKey)?.size ?? 0
-
-    return {delta: newCount - oldCount, statsKey}
-  })
-}
-
 const getStatsRecords = async (input: {
   database: ReviewServingFilterPostingProjectorDatabase
-  existingRows: readonly PostingContributionRow[]
-  newRows: readonly PostingContributionRow[]
+  diffs: readonly ReviewServingContributionDiff[]
+  rows: readonly PostingContributionRow[]
   projectorInput: ProjectReviewServingFilterPostingsInput
 }) => {
-  const diffs = getContributionDiffs({existingRows: input.existingRows, newRows: input.newRows})
-  const changedDiffs = diffs.filter((diff) => {
+  const changedDiffs = input.diffs.filter((diff) => {
     return diff.delta !== 0
   })
   const [existingStatsRows, totalRows] = await Promise.all([
@@ -493,7 +474,7 @@ const getStatsRecords = async (input: {
       input.projectorInput,
       input.database,
       changedDiffs.map((diff) => {
-        return diff.statsKey
+        return diff.contributionKey
       }),
     ),
     getPostingTotalRows(input.projectorInput, input.database),
@@ -509,14 +490,14 @@ const getStatsRecords = async (input: {
     }),
   )
   const rowsByKey = new Map(
-    [...input.existingRows, ...input.newRows].map((row) => {
+    input.rows.map((row) => {
       return [getContributionStatsKey(row), row]
     }),
   )
 
   return changedDiffs.flatMap((diff) => {
-    const row = rowsByKey.get(diff.statsKey)
-    const existingCardinality = statsRowsByKey.get(diff.statsKey)?.cardinality ?? 0
+    const row = rowsByKey.get(diff.contributionKey)
+    const existingCardinality = statsRowsByKey.get(diff.contributionKey)?.cardinality ?? 0
     const cardinality = Math.max(0, existingCardinality + diff.delta)
 
     return row === undefined
@@ -576,6 +557,22 @@ export const projectReviewServingFilterPostings = async (
   const liveRows = contributionRows.filter((row) => {
     return !row.tombstone
   })
+  const contributionDiff = await prepareReviewServingContributionDiff(
+    {
+      claims: input.claims,
+      componentKind: 'posting',
+      expectedArticleIds: getClaimArticleIds(input.claims),
+      newRows: getPostingRowsAsContributionRows(liveRows),
+      projectId: input.projectId,
+      projectionComponent: 'posting',
+      projectionIdentity: input.projectionIdentity,
+      requireExistingState: existingRows.length > 0,
+      reviewConfigHash: input.reviewConfigHash,
+      snapshotId: input.snapshotId,
+      summaryDefinitionVersion: input.definitionVersion,
+    },
+    database,
+  )
   const patchRecords = contributionRows.map((row) => {
     return getPostingPatchRecord({
       baseGeneration: input.baseGeneration,
@@ -592,7 +589,12 @@ export const projectReviewServingFilterPostings = async (
       snapshotId: input.snapshotId,
     })
   })
-  const statsRecords = await getStatsRecords({database, existingRows, newRows: contributionRows, projectorInput: input})
+  const statsRecords = await getStatsRecords({
+    database,
+    diffs: contributionDiff.diffs,
+    projectorInput: input,
+    rows: contributionRows,
+  })
   const deleteServingRowsStatement = getDeleteServingRowsStatement(input)
 
   await writeReviewServingProjectorComponent(
@@ -600,8 +602,13 @@ export const projectReviewServingFilterPostings = async (
       acknowledgements: input.claims,
       component: 'posting',
       projectionManifests: input.claims.length === 0 ? [] : [getPostingManifest(input)],
-      records: [...patchRecords, ...servingRecords, ...statsRecords],
-      statements: deleteServingRowsStatement === null ? [] : [deleteServingRowsStatement],
+      records: [...patchRecords, ...servingRecords, ...statsRecords, ...contributionDiff.contributionRecords],
+      repairDirtyWork: contributionDiff.repairDirtyWork,
+      statements: [deleteServingRowsStatement, contributionDiff.deleteContributionStateStatement].flatMap(
+        (statement) => {
+          return statement === null ? [] : [statement]
+        },
+      ),
       watermark:
         input.claims.length === 0
           ? undefined
@@ -619,6 +626,7 @@ export const projectReviewServingFilterPostings = async (
   return {
     patchRowCount: patchRecords.length,
     patchWatermark,
+    repairRequired: contributionDiff.repairRequired,
     servingRowCount: servingRecords.length,
     statsRowCount: statsRecords.length,
     statsValues: statsRecords.map((record) => {
