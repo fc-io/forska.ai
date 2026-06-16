@@ -1617,6 +1617,8 @@ export const projectsRoutes = new Elysia()
             'useAbstract',
             'useFulltext',
             'useFulltextNoImages',
+            ...(dateFrom ? (['dateFrom'] as const) : []),
+            ...(dateTo ? (['dateTo'] as const) : []),
             ...(body.prompts?.length || body.existingPromptIds?.length ? (['promptMembership'] as const) : []),
             ...(selectedRoutes.length > 0 ? (['importRoutes'] as const) : []),
           ],

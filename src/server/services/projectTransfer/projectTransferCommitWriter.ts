@@ -10,6 +10,12 @@ import {
   appendProjectReviewConfigReviewServingDelta,
   appendPromptConfigReviewServingDeltas,
 } from '../../reviewServing/reviewConfigReviewServingDeltaService.ts'
+import {
+  getReviewImportHotFieldRow,
+  type ReviewImportHotFieldInput,
+  upsertReviewImportArticleHotField,
+} from '../../reviewServing/reviewImportHotFieldService.ts'
+import {appendReviewServingImportRunArticleDelta} from '../../reviewServing/reviewServingDeltaLedger.ts'
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {
@@ -1809,6 +1815,144 @@ const appendProjectTransferProjectReviewConfigDelta = async ({
     sourceMutationKey: `projectTransferCommit.projectReviewConfig|${projectId}|${now.toISOString()}`,
     sourceOperation: 'insert',
     sourceUpdatedAt: now,
+  })
+}
+
+const projectTransferImportRouteRankFilterFields = [
+  'articleTitle',
+  'duplicateFlag',
+  'duplicateKey',
+  'filterBucketKey',
+  'filterBucketValue',
+  'journalTitle',
+  'publicationYear',
+  'selectedRankKey',
+  'sourceKind',
+  'sourceRecordHash',
+] as const
+
+type ProjectTransferArticleImportRouteReviewServingRecord = {
+  articleId: string
+  externalArticleId: string | null
+  importMetadata: unknown
+  importRouteId: string
+  importRunId: string | null
+  matchMetadata: unknown
+  sourceKind: string | null
+  sourceRecordHash: string
+  sourceRecordKey: string
+}
+
+const getMetadataRecordValue = (metadata: unknown) => {
+  const value = getJsonValue(metadata)
+
+  return isRecord(value) ? value : {}
+}
+
+const getNullableMetadataString = (metadata: unknown, keys: string[]) => {
+  const record = getMetadataRecordValue(metadata)
+  const value = keys
+    .map((key) => {
+      return getRecordField(record, key)
+    })
+    .find((entry) => {
+      return typeof entry === 'string' && entry.trim() !== ''
+    })
+
+  return getNullableString(value)
+}
+
+const getNullableMetadataInteger = (metadata: unknown, keys: string[]) => {
+  const record = getMetadataRecordValue(metadata)
+  const value = keys
+    .map((key) => {
+      return getRecordField(record, key)
+    })
+    .find((entry) => {
+      return typeof entry === 'number' && Number.isInteger(entry)
+    })
+
+  return typeof value === 'number' ? value : null
+}
+
+const getProjectTransferArticleImportRouteHotFieldInput = (
+  record: ProjectTransferArticleImportRouteReviewServingRecord,
+): ReviewImportHotFieldInput => {
+  return {
+    articleId: record.articleId,
+    articleTitle: getNullableMetadataString(record.importMetadata, ['articleTitle', 'title']),
+    duplicateFlag: getNullableMetadataString(record.matchMetadata, ['duplicateKey']) !== null,
+    duplicateKey: getNullableMetadataString(record.matchMetadata, ['duplicateKey']),
+    externalId: record.externalArticleId,
+    filterBucketKey: record.sourceKind ? 'source_kind' : null,
+    filterBucketValue: record.sourceKind,
+    importRouteId: record.importRouteId,
+    journalTitle: getNullableMetadataString(record.importMetadata, ['journalTitle', 'journal', 'journalName']),
+    publicationYear: getNullableMetadataInteger(record.importMetadata, ['publicationYear', 'year']),
+    sourceKind: record.sourceKind,
+    sourceRecordHash: record.sourceRecordHash,
+    sourceRecordKey: record.sourceRecordKey,
+  }
+}
+
+const getProjectTransferArticleImportRouteDeltaPartition = (importRouteId: string) => {
+  return `import-route:${importRouteId}`
+}
+
+const appendProjectTransferArticleImportRouteReviewServingDeltas = async ({
+  now,
+  records,
+  tx,
+}: {
+  now: Date
+  records: readonly ProjectTransferArticleImportRouteReviewServingRecord[]
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  await runChunks(records, (recordChunk) => {
+    return recordChunk.reduce<Promise<void>>(async (previousRun, record) => {
+      await previousRun
+      const hotFieldInput = getProjectTransferArticleImportRouteHotFieldInput(record)
+      const hotFieldRow = getReviewImportHotFieldRow(hotFieldInput)
+      const sourceMutationKey = [
+        'projectTransferCommit.articleImportRoute',
+        record.articleId,
+        record.importRouteId,
+        record.sourceRecordKey,
+        record.sourceRecordHash,
+        now.toISOString(),
+      ].join('|')
+
+      await upsertReviewImportArticleHotField(tx, hotFieldInput)
+      await appendReviewServingImportRunArticleDelta(tx, {
+        articleId: record.articleId,
+        changeKind: 'importRoute.article.added',
+        importRouteId: record.importRouteId,
+        importRunId: record.importRunId,
+        payloadJson: {
+          changedRankFilterFields: projectTransferImportRouteRankFilterFields,
+          externalArticleId: record.externalArticleId,
+          importSourceRecordKey: record.sourceRecordKey,
+          sourceKind: record.sourceKind,
+          sourceRecordKey: record.sourceRecordKey,
+        },
+        payloadVersion: 1,
+        publicationYear: hotFieldRow.publicationYear,
+        selectedRankKey: hotFieldRow.selectedRankKey,
+        sourceMutationKey,
+        sourceOperation: 'insert',
+        sourcePartition: getProjectTransferArticleImportRouteDeltaPartition(record.importRouteId),
+        sourceRecordHash: record.sourceRecordHash,
+        sourceRecordKey: record.sourceRecordKey,
+        sourceRowId: `${record.importRouteId}|${record.sourceRecordKey}`,
+        sourceTable: 'app.article_import_route',
+        sourceUpdatedAt: now,
+        typedKey: {
+          articleId: record.articleId,
+          importRouteId: record.importRouteId,
+          importSourceRecordKey: record.sourceRecordKey,
+        },
+      })
+    }, Promise.resolve())
   })
 }
 
@@ -6506,6 +6650,29 @@ const writeProjectTransferCommitAppTablesTx = async ({
       commitIdMaps: materializedPlan.commitIdMaps,
       context: setBasedContext,
       rows: articleImportRouteRows,
+      tx,
+    })
+    await appendProjectTransferArticleImportRouteReviewServingDeltas({
+      now: importedAt,
+      records: articleImportRouteRows.map((row) => {
+        return {
+          articleId: row.articleId,
+          externalArticleId: getNullableString(getRecordField(row.payload, 'externalArticleId')),
+          importMetadata: getRecordField(row.payload, 'importMetadata'),
+          importRouteId: row.importRouteId,
+          importRunId: getNullableString(getRecordField(row.payload, 'importRunId')),
+          matchMetadata: getRecordField(row.payload, 'matchMetadata'),
+          sourceKind: getNullableString(getRecordField(row.payload, 'sourceKind')),
+          sourceRecordHash: getRequiredString(
+            getRecordField(row.payload, 'sourceRecordHash'),
+            'articleImportRoute.sourceRecordHash',
+          ),
+          sourceRecordKey: getRequiredString(
+            getRecordField(row.payload, 'sourceRecordKey'),
+            'articleImportRoute.sourceRecordKey',
+          ),
+        }
+      }),
       tx,
     })
     await insertProjectArticles({
