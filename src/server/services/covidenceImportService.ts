@@ -2502,16 +2502,24 @@ export const syncCovidenceProjectPrompts = async (params: {
     }, Promise.resolve())
   }
 
+  const [projectPromptMembershipVersion] = await queryRunner.queryJson<{updatedAt: string | null}>(`
+    SELECT MAX(updated_at) AS updatedAt
+    FROM app.project_prompt
+    WHERE project_id = ${getSqlLiteral(params.projectId)}
+  `)
+  const sourceUpdatedAt = projectPromptMembershipVersion?.updatedAt ?? new Date().toISOString()
+
   await appendProjectReviewConfigReviewServingDelta(queryRunner, {
     changedReviewConfigFields: ['promptMembership'],
     projectId: params.projectId,
-    sourceMutationKey: `covidenceProjectPrompts|${params.projectId}|${promptLinks
+    sourceMutationKey: `covidenceProjectPrompts|${params.projectId}|${sourceUpdatedAt}|${promptLinks
       .map((promptLink) => {
         return promptLink.promptId
       })
       .join(',')}`,
     sourceOperation: 'upsert',
     sourceTable: 'app.project_prompt',
+    sourceUpdatedAt,
   })
 }
 
