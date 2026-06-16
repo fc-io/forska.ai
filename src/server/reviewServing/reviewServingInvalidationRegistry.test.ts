@@ -95,14 +95,14 @@ test('every emitted delta kind declares complete invalidation metadata', () => {
     [
       'importRoute.article.added',
       'projectScope',
-      ['selectedImport', 'posting', 'summary'],
+      ['selectedImport', 'llmStatus', 'humanStatus', 'queue', 'posting', 'summary', 'payload'],
       ['importRouteId', 'articleId', 'importSourceRecordKey', 'sourceHighWaterMark'],
       'appendPatch',
     ],
     [
       'importRoute.article.removed',
       'projectScope',
-      ['selectedImport', 'posting', 'summary'],
+      ['selectedImport', 'llmStatus', 'humanStatus', 'queue', 'posting', 'summary', 'payload'],
       ['importRouteId', 'articleId', 'importSourceRecordKey', 'sourceHighWaterMark'],
       'appendPatch',
     ],
