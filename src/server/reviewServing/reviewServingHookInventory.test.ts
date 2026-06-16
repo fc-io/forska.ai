@@ -196,12 +196,6 @@ const hookInventory: HookInventoryEntry[] = [
     symbol: 'humanAssessmentRoutesPostSubmit',
   },
   {
-    filePath: 'src/server/routes/HumanAssessmentRoutes/humanAssessmentPendingJudgments.ts',
-    label: 'pending human prompt rows',
-    markers: ['appendHumanJudgmentReviewServingDeltas'],
-    symbol: 'syncPendingHumanJudgmentsForArticle',
-  },
-  {
     filePath: 'src/server/routes/PromptsRoutes.ts',
     label: 'prompt merge human judgment moves',
     markers: ['appendHumanJudgmentReviewServingDeltas'],
