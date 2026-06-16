@@ -1775,6 +1775,7 @@ const insertProjectPromptRows = async (
                 'archived',
                 'enabled',
                 'promptOrder',
+                'thresholding',
               ],
               projectId: row.projectId,
               promptId: row.promptId,
@@ -4638,22 +4639,26 @@ const appendProjectTransferHumanJudgmentDeltas = async ({
 }) => {
   await appendHumanJudgmentReviewServingDeltas(
     tx,
-    rows.map((row) => {
-      const humanJudgmentKey = `${row.projectId}:${row.articleId}:${row.promptId}`
+    rows
+      .filter((row) => {
+        return row.isAnswered
+      })
+      .map((row) => {
+        const humanJudgmentKey = `${row.projectId}:${row.articleId}:${row.promptId}`
 
-      return {
-        answer: row.answer,
-        articleId: row.articleId,
-        humanJudgmentKey,
-        projectId: row.projectId,
-        promptId: row.promptId,
-        sourceMutationKey: `projectTransferHumanJudgment|${row.projectId}|${row.sourceHumanJudgmentId}|${humanJudgmentKey}`,
-        sourceOperation: 'insert' as const,
-        sourceRowId: humanJudgmentKey,
-        sourceTable: 'app.judgment_human',
-        sourceUpdatedAt: row.updatedAt,
-      }
-    }),
+        return {
+          answer: row.answer,
+          articleId: row.articleId,
+          humanJudgmentKey,
+          projectId: row.projectId,
+          promptId: row.promptId,
+          sourceMutationKey: `projectTransferHumanJudgment|${row.projectId}|${row.sourceHumanJudgmentId}|${humanJudgmentKey}`,
+          sourceOperation: 'insert' as const,
+          sourceRowId: humanJudgmentKey,
+          sourceTable: 'app.judgment_human',
+          sourceUpdatedAt: row.updatedAt,
+        }
+      }),
   )
 }
 

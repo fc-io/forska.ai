@@ -2492,7 +2492,13 @@ export const syncCovidenceProjectPrompts = async (params: {
       await previousRun
       const sourceUpdatedAt = promptUpdatedAtById.get(promptLink.promptId) ?? new Date().toISOString()
       await appendPromptConfigReviewServingDelta(queryRunner, {
-        changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'archived', 'enabled'],
+        changedPromptConfigFields: [
+          ...immutablePromptIdentityReviewServingFields,
+          'promptOrder',
+          'archived',
+          'enabled',
+          'thresholding',
+        ],
         projectId: params.projectId,
         promptId: promptLink.promptId,
         sourceMutationKey: `covidenceSyncProjectPrompt|${params.projectId}|${promptLink.promptId}|${sourceUpdatedAt}`,

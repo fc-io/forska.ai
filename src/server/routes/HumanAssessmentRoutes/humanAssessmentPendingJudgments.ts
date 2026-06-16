@@ -1,4 +1,3 @@
-import {appendHumanJudgmentReviewServingDeltas} from '../../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList} from '../../services/appQueryHelpers.ts'
 
@@ -64,21 +63,6 @@ export const syncPendingHumanJudgmentsForArticle = async (params: {
               .join(', ')}
             RETURNING id, prompt_id AS promptId, is_answered AS isAnswered
           `)
-    await appendHumanJudgmentReviewServingDeltas(
-      tx,
-      insertedRows.map((row) => {
-        return {
-          answer: null,
-          articleId: params.articleId,
-          humanJudgmentKey: row.id,
-          projectId: params.projectId,
-          promptId: row.promptId,
-          sourceMutationKey: `syncPendingHumanJudgments|${params.projectId}|${params.articleId}|${row.promptId}|${row.id}`,
-          sourceOperation: 'insert' as const,
-          sourceTable: 'app.judgment_human',
-        }
-      }),
-    )
     const pendingRowsByPromptId = new Map(
       [...existingRows, ...insertedRows]
         .filter((row) => {

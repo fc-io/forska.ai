@@ -2491,6 +2491,7 @@ export const projectsRoutes = new Elysia()
               'promptOrder',
               'archived',
               'enabled',
+              'thresholding',
             ],
             projectId: clonedProject.id,
             promptId: prompt.promptId,

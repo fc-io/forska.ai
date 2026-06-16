@@ -242,10 +242,12 @@ const moveJudgmentAssessmentToKeptJudgment = async ({
 }
 
 const resolveJudgmentPromptCollisions = async ({
+  affectedProjectIds,
   keepPromptId,
   mergeId,
   tx,
 }: {
+  affectedProjectIds: string[]
   keepPromptId: string
   mergeId: string
   tx: PromptMergeTransaction
@@ -258,23 +260,28 @@ const resolveJudgmentPromptCollisions = async ({
       mergeJudgmentId: collision.mergeJudgmentId,
       tx,
     })
-    await appendLlmJudgmentReviewServingDeltas(tx, [
-      {
-        articleId: collision.articleId,
-        changeKind: 'judgment.llm.deleted',
-        judgmentId: collision.mergeJudgmentId,
-        modelId: collision.modelId,
-        projectId: collision.projectId,
-        promptId: collision.promptId,
-        sourceMutationKey: `promptMerge|${mergeId}|${keepPromptId}|${collision.mergeJudgmentId}`,
-        sourceOperation: 'delete',
-        sourceUpdatedAt: collision.updatedAt,
-        useAbstract: collision.useAbstract,
-        useFulltext: collision.useFulltext,
-        useFulltextNoImages: collision.useFulltextNoImages,
-        useTitle: collision.useTitle,
-      },
-    ])
+    await appendLlmJudgmentReviewServingDeltas(
+      tx,
+      (collision.projectId ? [collision.projectId] : affectedProjectIds).map((projectId) => {
+        return {
+          articleId: collision.articleId,
+          changeKind: 'judgment.llm.deleted',
+          judgmentId: collision.mergeJudgmentId,
+          modelId: collision.modelId,
+          projectId,
+          promptId: collision.promptId,
+          sourceMutationKey: collision.projectId
+            ? `promptMerge|${mergeId}|${keepPromptId}|${collision.mergeJudgmentId}`
+            : `promptMerge|${mergeId}|${keepPromptId}|${collision.mergeJudgmentId}|${projectId}`,
+          sourceOperation: 'delete',
+          sourceUpdatedAt: collision.updatedAt,
+          useAbstract: collision.useAbstract,
+          useFulltext: collision.useFulltext,
+          useFulltextNoImages: collision.useFulltextNoImages,
+          useTitle: collision.useTitle,
+        }
+      }),
+    )
     await tx.run(`
       DELETE FROM app.judgment
       WHERE id = '${escapeSqlString(collision.mergeJudgmentId)}'
@@ -589,7 +596,14 @@ const promptsAdminRoutes = new Elysia()
             }
           }
 
-          await resolveJudgmentPromptCollisions({keepPromptId, mergeId, tx})
+          await resolveJudgmentPromptCollisions({
+            affectedProjectIds: affectedProjects.map((project) => {
+              return project.projectId
+            }),
+            keepPromptId,
+            mergeId,
+            tx,
+          })
           await tx.run(`
             UPDATE app.judgment
             SET prompt_id = '${escapeSqlString(keepPromptId)}',
