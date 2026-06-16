@@ -130,6 +130,10 @@ type ChangedProjectPromptLink = {
   reason: 'removed' | 'replaced'
 }
 
+const hasNonEmptyHumanAnswer = (answer: string | null) => {
+  return typeof answer === 'string' && answer.trim().length > 0
+}
+
 type ProjectPromptLlmCleanupSummary = {
   keptSharedLlmJudgments: number
   skippedComparisonPromptReferencedJudgments: number
@@ -1931,13 +1935,18 @@ export const projectsRoutes = new Elysia()
                 const currentAssociation = existing.find((entry) => {
                   return entry.promptId === prompt.originalId
                 })
+                const shouldIncludePromptIdentity = !currentAssociation || targetPromptId !== prompt.originalId
 
                 resolvedPromptEdits.push({
                   archived,
                   changedPromptConfigFields: [
-                    ...(textChanged ? (['promptText'] as const) : []),
-                    ...(targetPromptHeading !== existingPromptHeading ? (['promptHeading'] as const) : []),
-                    ...(targetPromptType !== existingPromptType ? (['promptType'] as const) : []),
+                    ...(shouldIncludePromptIdentity
+                      ? immutablePromptIdentityReviewServingFields
+                      : [
+                          ...(textChanged ? (['promptText'] as const) : []),
+                          ...(targetPromptHeading !== existingPromptHeading ? (['promptHeading'] as const) : []),
+                          ...(targetPromptType !== existingPromptType ? (['promptType'] as const) : []),
+                        ]),
                     'promptOrder',
                     ...(typeof archived === 'boolean' && archived !== currentAssociation?.archived
                       ? (['archived'] as const)
@@ -2552,20 +2561,24 @@ export const projectsRoutes = new Elysia()
         `)
         await appendHumanJudgmentReviewServingDeltas(
           tx,
-          sourceSummaryJudgments.map((judgment) => {
-            const humanJudgmentKey = `${clonedProject.id}:${judgment.articleId}:summary`
+          sourceSummaryJudgments
+            .filter((judgment) => {
+              return hasNonEmptyHumanAnswer(judgment.answer)
+            })
+            .map((judgment) => {
+              const humanJudgmentKey = `${clonedProject.id}:${judgment.articleId}:summary`
 
-            return {
-              answer: judgment.answer,
-              articleId: judgment.articleId,
-              humanJudgmentKey,
-              projectId: clonedProject.id,
-              sourceMutationKey: `projectCloneHumanSummary|${params.id}|${humanJudgmentKey}`,
-              sourceOperation: 'insert' as const,
-              sourceRowId: humanJudgmentKey,
-              sourceTable: 'app.judgment_human_summary',
-            }
-          }),
+              return {
+                answer: judgment.answer,
+                articleId: judgment.articleId,
+                humanJudgmentKey,
+                projectId: clonedProject.id,
+                sourceMutationKey: `projectCloneHumanSummary|${params.id}|${humanJudgmentKey}`,
+                sourceOperation: 'insert' as const,
+                sourceRowId: humanJudgmentKey,
+                sourceTable: 'app.judgment_human_summary',
+              }
+            }),
         )
       }
 

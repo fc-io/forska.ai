@@ -2870,22 +2870,26 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
         await appendHumanJudgmentReviewServingDeltas(
           queryRunner,
           promptIds.flatMap((promptId) => {
-            return judgmentSeedChunk.map((judgmentSeed) => {
-              const humanJudgmentKey = `${project.id}:${judgmentSeed.articleId}:${promptId}`
+            return judgmentSeedChunk
+              .filter((judgmentSeed) => {
+                return judgmentSeed.isAnswered && judgmentSeed.answer !== null
+              })
+              .map((judgmentSeed) => {
+                const humanJudgmentKey = `${project.id}:${judgmentSeed.articleId}:${promptId}`
 
-              return {
-                answer: judgmentSeed.answer,
-                articleId: judgmentSeed.articleId,
-                humanJudgmentKey,
-                projectId: project.id,
-                promptId,
-                sourceMutationKey: `covidenceHumanPromptSeed|${humanJudgmentKey}|${seedUpdatedAt.toISOString()}`,
-                sourceOperation: 'upsert' as const,
-                sourceRowId: humanJudgmentKey,
-                sourceTable: 'app.judgment_human',
-                sourceUpdatedAt: seedUpdatedAt,
-              }
-            })
+                return {
+                  answer: judgmentSeed.answer,
+                  articleId: judgmentSeed.articleId,
+                  humanJudgmentKey,
+                  projectId: project.id,
+                  promptId,
+                  sourceMutationKey: `covidenceHumanPromptSeed|${humanJudgmentKey}|${seedUpdatedAt.toISOString()}`,
+                  sourceOperation: 'upsert' as const,
+                  sourceRowId: humanJudgmentKey,
+                  sourceTable: 'app.judgment_human',
+                  sourceUpdatedAt: seedUpdatedAt,
+                }
+              })
           }),
         )
       })

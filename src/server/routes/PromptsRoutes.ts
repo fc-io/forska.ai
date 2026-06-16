@@ -616,6 +616,9 @@ const promptsAdminRoutes = new Elysia()
             SELECT id, project_id AS projectId, article_id AS articleId, answer, updated_at AS updatedAt
             FROM app.judgment_human
             WHERE prompt_id = '${escapeSqlString(mergeId)}'
+              AND is_answered = TRUE
+              AND answer IS NOT NULL
+              AND TRIM(answer) <> ''
           `)
           await tx.run(`
             UPDATE app.judgment_human
