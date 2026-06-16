@@ -2901,11 +2901,19 @@ export const clearCovidenceSeededHumanJudgments = async (params: {importRoute: s
   const queryRunner = getCovidenceProjectQueryRunner(params.tx)
   const removedProjectArticleRows = await queryRunner.queryJson<{articleId: string; projectArticleId: string}>(`
     SELECT
-      id AS projectArticleId,
-      article_id AS articleId
-    FROM app.project_article
-    WHERE project_id = ${getSqlLiteral(project.id)}
-      AND imported_from_project_id = ${getSqlLiteral(project.id)}
+      project_article.id AS projectArticleId,
+      project_article.article_id AS articleId
+    FROM app.project_article project_article
+    WHERE project_article.project_id = ${getSqlLiteral(project.id)}
+      AND project_article.imported_from_project_id = ${getSqlLiteral(project.id)}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_import_route project_import_route
+        INNER JOIN app.article_import_route article_import_route
+          ON article_import_route.import_route_id = project_import_route.import_route_id
+        WHERE project_import_route.project_id = ${getSqlLiteral(project.id)}
+          AND article_import_route.article_id = project_article.article_id
+      )
   `)
 
   await queryRunner.run(`

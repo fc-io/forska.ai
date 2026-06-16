@@ -1875,6 +1875,28 @@ const clearStaleImportRouteLinks = async (
     WHERE import_route_id = ${getSqlLiteral(importRouteId)}
       ${currentLinkSourceRecordKeyClause}
   `)
+  const deletedSourceRecordRows = await tx.queryJson<DeletedArticleImportRouteLinkRow>(`
+    SELECT
+      source_record.article_id AS articleId,
+      source_record.external_article_id AS externalArticleId,
+      TO_JSON(source_record.import_metadata) AS importMetadata,
+      source_record.import_run_id AS importRunId,
+      TO_JSON(source_record.match_metadata) AS matchMetadata,
+      TO_JSON(source_record.raw_payload) AS rawPayload,
+      source_record.source_kind AS sourceKind,
+      source_record.source_record_hash AS sourceRecordHash,
+      source_record.source_record_key AS sourceRecordKey
+    FROM app.article_import_route_source_record source_record
+    WHERE source_record.import_route_id = ${getSqlLiteral(importRouteId)}
+      AND (source_record.quarantined_at IS NULL OR COALESCE(source_record.quarantine_reason, '') <> 'source_record_remap')
+      ${sourceRecordKeyClause}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.article_import_route current_link
+        WHERE current_link.import_route_id = source_record.import_route_id
+          AND current_link.source_record_key = source_record.source_record_key
+      )
+  `)
   const deletedRecords = deletedRows
     .filter((row) => {
       return row.sourceRecordKey !== null && row.sourceRecordHash !== null
@@ -1888,6 +1910,15 @@ const clearStaleImportRouteLinks = async (
         rawPayload: getJsonValue(row.rawPayload),
       }
     })
+  const deletedSourceRecords = deletedSourceRecordRows.map((row): DeletedArticleImportRouteLink => {
+    return {
+      ...row,
+      importMetadata: getJsonValue(row.importMetadata),
+      importRouteId,
+      matchMetadata: getJsonValue(row.matchMetadata),
+      rawPayload: getJsonValue(row.rawPayload),
+    }
+  })
 
   await tx.run(`
     DELETE FROM app.article_import_route_source_record
@@ -1911,6 +1942,21 @@ const clearStaleImportRouteLinks = async (
         sourceMutationKey: getArticleImportRouteCurrentLinkMutationKey(record),
         sourceOperation: 'delete',
         sourceTable: 'app.article_import_route',
+        tombstone: true,
+        tx,
+      })
+    })
+  }, Promise.resolve())
+
+  await deletedSourceRecords.reduce<Promise<void>>((previousRun, record) => {
+    return previousRun.then(async () => {
+      await upsertReviewImportArticleHotField(tx, getArticleImportRouteLinkHotFieldInput(record, true))
+      await appendImportRouteArticleDelta({
+        changeKind: 'importRoute.article.rankFields.updated',
+        record,
+        sourceMutationKey: getArticleImportRouteSourceRecordMutationKey(record),
+        sourceOperation: 'delete',
+        sourceTable: 'app.article_import_route_source_record',
         tombstone: true,
         tx,
       })
