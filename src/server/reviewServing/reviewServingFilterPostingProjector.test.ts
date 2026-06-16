@@ -18,7 +18,21 @@ const postingRow = (input?: Record<string, unknown>) => {
   }
 }
 
+const contributionKey = (row: Record<string, unknown>) => {
+  return JSON.stringify({filterKind: row.filterKind, filterValue: row.filterValue, listModeKey: row.listModeKey})
+}
+
+const contributionRow = (row: Record<string, unknown>) => {
+  return {
+    articleId: row.articleId,
+    contributionKey: contributionKey(row),
+    contributionValue: 1,
+    summaryDefinitionVersion: 'posting-v4-test',
+  }
+}
+
 const createPostingDatabase = (input?: {
+  contributionRows?: readonly Record<string, unknown>[]
   existingRows?: readonly Record<string, unknown>[]
   newRows?: readonly Record<string, unknown>[]
   statsRows?: readonly Record<string, unknown>[]
@@ -42,6 +56,13 @@ const createPostingDatabase = (input?: {
         && statement.includes('review_article_filter_posting_serving_v4 serving')
       ) {
         return (input?.existingRows ?? []) as T[]
+      }
+
+      if (
+        statement.includes('FROM article_id_filter dirty')
+        && statement.includes('review_article_summary_contribution_v4')
+      ) {
+        return (input?.contributionRows ?? (input?.existingRows ?? []).map(contributionRow)) as T[]
       }
 
       if (statement.includes('FROM mart.review_filter_posting_stats_v4')) {
