@@ -62,6 +62,12 @@ const registerModuleMocks = () => {
 
             const result = await work({
               queryJson: async <TRow>(statement: string) => {
+                if (statement.includes('INSERT INTO app.project_article')) {
+                  pendingProjectArticleStatements.push(statement)
+
+                  return [{articleId: 'article-1', projectArticleId: 'project-article-1'}] as TRow[]
+                }
+
                 return (await state.queryJson(statement)) as TRow[]
               },
               run: async (statement: string) => {
