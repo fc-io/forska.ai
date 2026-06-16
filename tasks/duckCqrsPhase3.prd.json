@@ -1,0 +1,638 @@
+{
+  "name": "DuckDB CQRS Phase 3",
+  "description": "Build the bounded projector pipeline that consumes Phase 2 deltas and produces completed logical snapshots from component-scoped projection state.",
+  "branchName": "ralph/duck-cqrs-phase-3",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add review-serving projector domain helpers",
+      "description": "As a developer, I want Phase 3 projector domain helpers so repositories, projectors, and writers share stable component, identity, watermark, lease, and snapshot types.",
+      "acceptanceCriteria": [
+        "Add local Phase 3 domain helpers under `src/server/reviewServing` using existing `reviewServingContracts.ts` and `reviewServingInvalidationRegistry.ts` types where possible.",
+        "Represent projection component identity, source partition high-water state, base generation, patch watermark, snapshot status, dirty-work scope, and lease owner values without creating parallel route contract types.",
+        "Keep helpers aligned with the existing V4 foundation schema in `src/db/duckdbMigrations/0097_reviewServingV4Foundation.sql` and add no schema unless a tested invariant cannot be represented.",
+        "Use `Effect` for non-trivial async service flow and keep pure transforms as plain functions.",
+        "Targeted review-serving tests cover stable identity key generation and invalidation-registry lookup behavior.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Add manifest repository",
+      "description": "As a developer, I want a manifest repository so component projection identities and serving snapshot manifests can be created, queried, failed, and promoted consistently.",
+      "acceptanceCriteria": [
+        "Create `src/server/reviewServing/reviewServingManifestRepository.ts` backed by `app.review_projection_identity_manifest` and `app.review_serving_snapshot_manifest`.",
+        "Repository APIs can upsert component identity manifests with base generation, patch watermark, patch range, input watermark, input digest, definition version, review config hash, prompt config hash, and status.",
+        "Repository APIs can create candidate snapshot manifests, mark candidates failed, read active and last-known-good manifests, and retire obsolete manifests without deleting referenced state.",
+        "Manifest writes are idempotent for the same project, component, and projection identity.",
+        "Targeted tests prove active and last-known-good state is preserved when a candidate snapshot fails.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Add dirty-work repository and coalescing service",
+      "description": "As a developer, I want dirty-work repository helpers so Phase 2 deltas can collapse into bounded component work instead of replaying large historical ranges repeatedly.",
+      "acceptanceCriteria": [
+        "Create `src/server/reviewServing/reviewServingDirtyWorkService.ts` backed by `app.review_serving_dirty_work`.",
+        "Coalesce work by project, projection component, projection identity, article or scope key, source partition, and high-water range.",
+        "Repeated changes update `latest_source_high_water_mark`, `latest_delta_id`, dirty range, status, and `updated_at` without creating duplicate effective work.",
+        "The service can claim bounded pending work by component and release or fail claims without exceeding configured wake budgets.",
+        "Targeted tests cover coalesced dirty-work creation, repeated-change collapse, bounded claims, wake release, and retention-ready status transitions.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Add component acknowledgements and watermarks",
+      "description": "As a developer, I want component acknowledgement and watermark helpers so each projector can advance independently without crossing unreconciled source mutations.",
+      "acceptanceCriteria": [
+        "Extend `reviewServingDirtyWorkService.ts` or add a focused sibling for `app.review_serving_dirty_work_ack` and `app.review_serving_projector_watermark` operations.",
+        "Acknowledgements compact into component high-water rows or compressed ranges after consumer watermarks advance.",
+        "Projector consumers cannot advance a watermark past pending, retryable, malformed, or quarantined source high-water marks in Phase 2 reconciliation state unless an explicit terminal operator state exists.",
+        "Optional or slow component acknowledgement lag does not force already-current required components to reprocess the same dirty key.",
+        "Targeted tests cover component ack skip behavior, watermark atomicity, high-water safety, and ack compaction.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Add delta-to-dirty intake for review change deltas",
+      "description": "As a developer, I want review change deltas converted into component dirty work using the invalidation registry so projectors start at the first affected component.",
+      "acceptanceCriteria": [
+        "Read bounded ranges from `app.review_change_delta` and convert supported `change_kind` values into dirty work through the invalidation registry.",
+        "Validate required typed keys, source high-water mark, payload version, first affected component, downstream dependents, and update mode before writing dirty work.",
+        "Malformed deltas, missing required keys, unsupported payload versions, or incompatible change kinds fail or quarantine the work before any component output is written.",
+        "LLM and human judgment updates start at status/contribution components and do not enqueue selected-import or display work.",
+        "Targeted tests cover projector dependency order, malformed delta handling, route/project delta fanout, and idempotent replay from the same delta range.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Add delta-to-dirty intake for import deltas",
+      "description": "As a developer, I want import-route deltas resolved into bounded project dirty work so selected-import and downstream components can update without write-time affected-project fanout.",
+      "acceptanceCriteria": [
+        "Read bounded ranges from `app.import_run_article_delta` and convert import-route adds, removals, and rank-field updates into dirty work.",
+        "Resolve affected projects from route/project membership in projector work, not from fanout persisted by import write transactions.",
+        "Use `app.review_import_article_hot_field` typed keys for selected-import and rank/filter dirty identities instead of parsing raw import JSON.",
+        "Tombstone import deltas create dirty work for removed selected-import, posting, summary, queue, payload, and status state as declared by the invalidation registry.",
+        "Targeted tests prove import fanout is bounded, repeated import changes collapse, and selected-import-only changes do not dirty unrelated display or judgment-input components.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Add projector writer boundary",
+      "description": "As a developer, I want a single V4 serving writer boundary so normal Phase 3 projectors own all V4 rows and snapshot promotion consistently.",
+      "acceptanceCriteria": [
+        "Create `src/server/reviewServing/reviewServingProjectorWriter.ts` as the normal write boundary for V4 review-serving rows, selected-import rows, component manifests, projector watermarks, acknowledgements, and active snapshot promotion.",
+        "Writer inputs are typed projection records from projectors and do not parse raw import JSON, run `selected_scoped_article_import`, aggregate raw judgments at request time, or compute project-wide windows.",
+        "Writer transactions update component rows, contribution rows, summary rows, postings, payload rows, watermarks, acknowledgements, and manifest state together for the component being promoted.",
+        "Replay keys use stable snapshot, base generation, patch watermark, projection identity, article, prompt, filter, and contribution keys so repeated writes are idempotent.",
+        "Targeted or static tests prove only the projector writer boundary writes V4 `mart.review_*_v4` rows and promotes V4 active snapshots.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Add selected-import base projector",
+      "description": "As a developer, I want a selected-import projector so project-scoped selected import rows are built from hot fields in bounded batches instead of runtime CTE ranking.",
+      "acceptanceCriteria": [
+        "Create `src/server/reviewServing/reviewServingSelectedImportProjector.ts` for building `app.review_selected_import_snapshot` and `app.review_selected_article_import_v4` base rows.",
+        "Project selected imports from project scope plus `app.review_import_article_hot_field` using deterministic rank ordering and article ID tie-breaks.",
+        "Projection runs in bounded batches with checkpoint/resume state in the selected-import snapshot cursor.",
+        "Internal V4 selected-import logic never uses the runtime `selected_scoped_article_import` CTE.",
+        "Targeted tests cover selected import projector snapshot creation, checkpoint behavior, bounded batches, and no `selected_scoped_article_import` usage.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006",
+        "US-007"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Add selected-import patch and tombstone handling",
+      "description": "As a developer, I want selected-import routine updates to write component-narrow patches and tombstones so minor snapshots avoid rebuilding whole project import state.",
+      "acceptanceCriteria": [
+        "Write selected-import routine updates to `mart.review_selected_import_patch_v4` with stable patch watermarks and tombstone rows for removals.",
+        "Patch promotion updates selected-import component manifests and watermarks without changing unrelated component base generations.",
+        "Deletes, rank-field changes, import-route removals, and membership removals update only affected selected-import rows and downstream dirty components.",
+        "Patch budget checks can request compaction when selected-import patch read cost exceeds configured thresholds.",
+        "Targeted tests prove selected-import-only changes write component-narrow patches, tombstones replay idempotently, and patches promote atomically.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-008"
+      ]
+    },
+    {
+      "id": "US-010",
+      "title": "Add display and payload projectors",
+      "description": "As a developer, I want display and payload projectors so article display updates and detail payload inputs can patch V4 serving state without touching judgment-derived components.",
+      "acceptanceCriteria": [
+        "Project display fields into `mart.review_article_serving_v4` base rows and `mart.review_article_display_patch_v4` routine patches through the projector writer.",
+        "Project payload fields into `mart.review_article_serving_payload_v4`, including article-created timestamps, source metadata, abstract preview, full-text preview, payload byte counts, and prompt-preview sample ordering inputs.",
+        "Article display-only updates start at display, payload, posting, or summary components and do not run judgment-status or prompt summary projectors.",
+        "Display and payload projectors do not parse raw import JSON or use `selected_scoped_article_import`.",
+        "Targeted tests prove display-only changes write component-narrow patches and preserve prompt-preview ordering by `article_created_at ASC NULLS LAST, article_id ASC`.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-007",
+        "US-009"
+      ]
+    },
+    {
+      "id": "US-011",
+      "title": "Add LLM status projector",
+      "description": "As a developer, I want an LLM status projector so judgment deltas update prompt-scoped status rows and dependent queue/posting/summary work without rebuilding unrelated state.",
+      "acceptanceCriteria": [
+        "Project LLM judgment create, update, and delete deltas into `mart.review_llm_status_patch_v4` with review config hash, prompt config hash, list mode, article, prompt, status key, answer values, and tombstone fields.",
+        "Preserve persisted model ID and content flags from deltas when selecting affected project review config identities.",
+        "LLM judgment updates start at `llmStatus` and enqueue only downstream queue, posting, and summary components.",
+        "Prompt config changes rebuild only affected prompt-derived LLM status rows and do not rebuild unchanged prompt outputs.",
+        "Targeted tests prove judgment-only changes write component-narrow patches and preserve model/content settings without retrying, downgrading, or reinterpreting benchmark-critical settings.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005",
+        "US-007"
+      ]
+    },
+    {
+      "id": "US-012",
+      "title": "Add human status projector",
+      "description": "As a developer, I want a human status projector so prompt-mode and summary-mode human review updates become patchable status and downstream summary inputs.",
+      "acceptanceCriteria": [
+        "Project `judgment.human.updated` deltas into `mart.review_human_status_patch_v4` with prompt config hash, list mode, article, prompt or summary key, human status key, answer value, update timestamp, and tombstone support where applicable.",
+        "Summary-mode human updates do not require `promptId` and still dirty human status, posting, and summary components.",
+        "Human status projection keeps LLM and selected-import components unchanged unless their declared dependencies are affected.",
+        "Projector supports prompt config identity changes without rebuilding unrelated article/import/title/payload/search state.",
+        "Targeted tests prove human prompt and summary answer changes produce old/new contribution inputs and component-narrow patches.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005",
+        "US-007"
+      ]
+    },
+    {
+      "id": "US-013",
+      "title": "Add queue projector",
+      "description": "As a developer, I want queue projections so unassessed and related review queues can update from status changes without scanning raw judgments.",
+      "acceptanceCriteria": [
+        "Project queue rows into `mart.review_queue_patch_v4` and `mart.review_unassessed_queue_serving_v4` from completed LLM, human, selected-import, and project-scope inputs.",
+        "Queue rows include project, review config hash or queue identity, snapshot or base/patch state, queue kind, priority bucket, activity sort key, article, prompt where relevant, and tombstone support for patches.",
+        "Queue projection updates only affected queue rows for routine judgment, human, project-scope, and selected-import changes.",
+        "Unassessed queue state is optional or stale rather than triggering raw foreground aggregation when inputs are missing or failed.",
+        "Targeted tests prove queue contribution diffs for answer changes, deletes, prompt config changes, and membership removals.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-009",
+        "US-011",
+        "US-012"
+      ]
+    },
+    {
+      "id": "US-014",
+      "title": "Add posting projector and posting stats",
+      "description": "As a developer, I want filter posting and posting-stat projectors so filtered list pages can later choose bounded candidate access paths.",
+      "acceptanceCriteria": [
+        "Project filter postings into `mart.review_article_filter_posting_patch_v4` and `mart.review_article_filter_posting_serving_v4` with list mode, filter kind, filter value, sort key, article, and tombstone support.",
+        "Maintain `mart.review_filter_posting_stats_v4` cardinality and selectivity from old/new contribution diffs.",
+        "Posting rows are article-candidate access paths only and do not replace complete filter-option route responses.",
+        "Posting stats update in the same transaction as affected posting rows and projector watermarks.",
+        "Targeted tests prove posting stats update for deletes, answer changes, membership removals, selected-import rank changes, and list-mode separation.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-010",
+        "US-011",
+        "US-012"
+      ]
+    },
+    {
+      "id": "US-015",
+      "title": "Add contribution diff service",
+      "description": "As a developer, I want a contribution diff service so counts, facets, badges, queues, and posting statistics can update by applying old/new article contributions.",
+      "acceptanceCriteria": [
+        "Create `src/server/reviewServing/reviewServingContributionService.ts` for computing old/new contribution rows by named definition version.",
+        "Store previous per-article contribution rows in `mart.review_article_summary_contribution_v4` for each count, facet, badge, queue, or posting definition updated incrementally.",
+        "Apply `-old +new` deltas to summary tables in the same transaction as updated contribution rows and projector watermark advancement.",
+        "If contribution state is missing, corrupted, or from an incompatible definition version, enqueue bounded repair instead of falling back to full foreground aggregation.",
+        "Targeted tests cover old/new contribution diffs for counts, facets, badges, queues, posting stats, deletes, answer changes, and membership removals.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-011",
+        "US-012",
+        "US-014"
+      ]
+    },
+    {
+      "id": "US-016",
+      "title": "Add count and facet projectors",
+      "description": "As a developer, I want count and facet projections so named product-critical summaries are available from V4 serving state with explicit unavailable states for unsupported combinations.",
+      "acceptanceCriteria": [
+        "Project named counts into `mart.review_article_count_serving_v4` and facets into `mart.review_filter_facet_serving_v4` from contribution diffs.",
+        "Persist list mode, summary identity, facet kind, filter/search scope, option value keys where needed, and summary definition version so modes and old definitions cannot mix.",
+        "Standalone count projections cover the same search/filter scope as the current count panel or return explicit unavailable or async availability state.",
+        "Unsupported count/facet combinations return nullable, unavailable, or async states instead of scanning raw tables.",
+        "Targeted tests cover list-mode, summary identity, date-range, search-scope, human summary-answer behavior, and unsupported count/facet states.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-015"
+      ]
+    },
+    {
+      "id": "US-017",
+      "title": "Add filter-option projector",
+      "description": "As a developer, I want filter-option projections so filter routes can later return complete option and min/max payloads without deriving them from posting rows or raw scans.",
+      "acceptanceCriteria": [
+        "Project filter option rows into `mart.review_filter_option_serving_v4` with search identity, filter option identity, filter kind, facet key, option value key, option payload, counts, and numeric min/max values.",
+        "Filter-option projections preserve active search/filter scope and do not use posting rows alone as a route response substitute.",
+        "Human-specific option projections include summary-mode human answer scope where current routes apply it.",
+        "Option rows are keyed so list modes, human/review facets, search scope, and old summary versions cannot mix.",
+        "Targeted tests prove complete option/min-max payloads, option value keys, active search/filter scope, and human summary-answer behavior.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-016"
+      ]
+    },
+    {
+      "id": "US-018",
+      "title": "Add judgment detail and list payload projectors",
+      "description": "As a developer, I want detail and list judgment payload projections so route migration can later hydrate rows and details from V4 serving state without raw judgment aggregation.",
+      "acceptanceCriteria": [
+        "Project prompt-level LLM detail rows, human prompt rows, and human summary rows into `mart.review_article_judgment_detail_serving_v4` with payload kind separation.",
+        "Detail/list payload rows include prompt order, judgment IDs, model IDs, answer values, explanations, quotes, assessments, placeholder judgments, payload references, and detail update timestamps where available from source inputs.",
+        "List payload projections preserve LLM judgment arrays, human prompt/summary arrays, both-mode LLM and human payloads, and prompt badges required by current list route semantics.",
+        "Article-set hydration after posting/search selection can read list row payloads by bounded article ID sets with stable list-mode and article-ID tie-break ordering.",
+        "Targeted tests prove payload kind separation, prompt-overlap row counts, explanations, quotes, assessments, placeholders, payload references, and article-set hydration behavior.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-010",
+        "US-011",
+        "US-012",
+        "US-014"
+      ]
+    },
+    {
+      "id": "US-019",
+      "title": "Add search and diagnostic projectors",
+      "description": "As a developer, I want token-prefix search and warning/health diagnostic projections so optional search and operational state can be represented without blocking unrelated snapshot activation.",
+      "acceptanceCriteria": [
+        "Project token/prefix title search rows into `mart.review_title_search_serving_v4` with search identity, project scope identity, snapshot ID, token, title prefix, article, and activity sort state.",
+        "Search-token updates start at search projection and search stats only and do not dirty judgment or selected-import components.",
+        "Expose diagnostic state from manifest, maintenance lease, queued/in-flight refresh, large-rebuild progress, dirty-work, and quarantine inputs for warning/health routes.",
+        "Optional search state exposes ready, indexing, unavailable, or async availability and does not block unrelated route activation.",
+        "Targeted tests prove search-only changes write component-narrow patches and diagnostics represent maintenance, rebuild, dirty-work, and quarantine states.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-010",
+        "US-014"
+      ]
+    },
+    {
+      "id": "US-020",
+      "title": "Add snapshot promotion service",
+      "description": "As a developer, I want snapshot promotion so completed component identities can compose into atomic active V4 serving snapshots with last-known-good fallback.",
+      "acceptanceCriteria": [
+        "Create promotion logic in `reviewServingProjectorService.ts` or a focused helper that composes required and optional component manifests into candidate snapshot manifests.",
+        "Promotion validates required component completeness, component watermarks, selected-import snapshot ID, review config hash, source watermarks, and cheap consistency checks before activation.",
+        "Active snapshot promotion is atomic and preserves last-known-good snapshot state when candidate validation fails.",
+        "Optional search/count components expose availability states and do not block unrelated route activation.",
+        "Targeted tests prove atomic manifest promotion, failed-snapshot recovery, required versus optional components, route-specific availability states, and cursor/pin component-state consistency.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-009",
+        "US-013",
+        "US-017",
+        "US-018",
+        "US-019"
+      ]
+    },
+    {
+      "id": "US-021",
+      "title": "Add snapshot pin repository",
+      "description": "As a developer, I want snapshot pins so durable jobs and repeatable consumers can protect active V4 state from cleanup while they read it.",
+      "acceptanceCriteria": [
+        "Create `src/server/reviewServing/reviewServingSnapshotPinRepository.ts` backed by `app.review_serving_snapshot_pin`.",
+        "Repository APIs acquire, increment, release, expire, and query pins by project, snapshot ID, composed identity, owner kind, and owner ID.",
+        "Pins preserve active and last-known-good referenced base generations, patch ranges, payloads, counts, facets, search rows, selected-import snapshots, and manifests from cleanup.",
+        "Expired or released pins no longer block cleanup once no active or last-known-good manifest references the same state.",
+        "Targeted tests prove pin acquisition, ref-count updates, release/expiry behavior, and cleanup eligibility decisions.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-020"
+      ]
+    },
+    {
+      "id": "US-022",
+      "title": "Add chunk manifest repository",
+      "description": "As a developer, I want rebuild and compaction chunk manifests so long projectors can resume, skip unchanged work, and avoid source-row hash scans.",
+      "acceptanceCriteria": [
+        "Create `src/server/reviewServing/reviewServingChunkManifestRepository.ts` backed by `app.review_rebuild_chunk_manifest`.",
+        "Chunk manifests are keyed by project, component, projection identity, input watermark or digest, chunk key range, output base generation, status, checksum, lease, and error state.",
+        "Workers can claim chunks independently, write output, validate chunk-level counts/checksums, and mark chunks complete transactionally.",
+        "Completed chunks are skipped after crash, sleep, restart, or repeated runs when maintained input watermark/digest still matches, without scanning source rows only to decide skip eligibility.",
+        "Targeted tests prove chunk resume, failed chunk retry, completed chunk skip, and use of maintained input digests instead of source-row scans.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-007"
+      ]
+    },
+    {
+      "id": "US-023",
+      "title": "Add patch compaction and retention cleanup",
+      "description": "As a developer, I want patch compaction and retention cleanup so routine patches stay cheap and obsolete V4 state is removed only when it is safe.",
+      "acceptanceCriteria": [
+        "Create `src/server/reviewServing/reviewServingRetentionService.ts` backed by `app.review_serving_retention_mark` and existing manifest/pin repositories.",
+        "Candidate snapshots that exceed patch read budgets compact into a new major base generation before activation.",
+        "Cleanup deletes old base generations, patches, payloads, counts, facets, selected-import rows, queue rows, posting rows, and search state only when no active manifest, last-known-good manifest, or snapshot pin references them.",
+        "Retention cleanup advances cursors in bounded batches and records cutoff snapshot, base generation, patch watermark, and cleanup cursor state.",
+        "Targeted tests prove major base generation, bounded patch promotion, patch merge-cost budgets, patch compaction thresholds, and pin-aware cleanup.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-020",
+        "US-021",
+        "US-022"
+      ]
+    },
+    {
+      "id": "US-024",
+      "title": "Add projector orchestration service",
+      "description": "As a developer, I want a projector orchestration service so dirty work can run through component dependencies, writer transactions, snapshots, retries, and failure states consistently.",
+      "acceptanceCriteria": [
+        "Create `src/server/reviewServing/reviewServingProjectorService.ts` to coordinate dirty-work intake, component projector execution, writer transactions, watermarks, acknowledgements, candidate snapshots, failure state, and promotion attempts.",
+        "Projector execution starts at the first affected component declared by the invalidation registry and does not force unrelated upstream components to run.",
+        "Projector wakes are bounded by batch size, row limits, queue pressure, active import state, and wake duration budgets.",
+        "Failures preserve last-known-good data, mark candidate or dirty work failed with diagnostics, and allow bounded retry without raw foreground fallback.",
+        "Targeted tests prove dependency order, watermarks, idempotent replay, crash/retry safety, bounded batch size, wake release, and failed snapshots preserving last-known-good data.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005",
+        "US-006",
+        "US-020",
+        "US-023"
+      ]
+    },
+    {
+      "id": "US-025",
+      "title": "Add review-serving projector worker",
+      "description": "As a developer, I want a background worker for Phase 3 projectors so dirty work, rebuild chunks, compaction, promotion, and cleanup can progress under bounded leases.",
+      "acceptanceCriteria": [
+        "Create `src/server/workers/reviewServingProjectorWorker.ts` to call the projector orchestration service with lease acquisition, wake budgets, retry/backoff schedules, and graceful release behavior.",
+        "Worker resumes after sleep or restart by skipping completed chunks whose maintained input digests still match and retrying failed or expired work leases.",
+        "Worker does not start product route migration, does not switch route handlers to V4 serving readers, and does not remove legacy read paths in Phase 3.",
+        "Worker operations use the review projector workload class and do not run unregistered foreground DuckDB work.",
+        "Targeted tests prove bounded wake duration, lease release, retry/backoff, chunk resume/skip, cleanup scheduling, and no route cutover side effects.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-022",
+        "US-023",
+        "US-024"
+      ]
+    },
+    {
+      "id": "US-026",
+      "title": "Add Phase 3 integration and static guard tests",
+      "description": "As a developer, I want integrated Phase 3 tests so internal V4 snapshots prove replay, promotion, component coverage, and route-readiness invariants before Phase 4 starts.",
+      "acceptanceCriteria": [
+        "Add integration tests that run representative Phase 2 deltas through dirty-work intake, projectors, writer transactions, manifest promotion, and snapshot failure recovery.",
+        "Tests prove required route components share one logical snapshot and optional search/count components expose availability states without blocking unrelated activation.",
+        "Tests prove internal V4 selected-import projection does not use `selected_scoped_article_import` and routine judgment-only, display-only, search-only, and selected-import-only changes write component-narrow patches instead of row-wide patches.",
+        "Tests prove warning/health diagnostics represent maintenance, rebuild, dirty-work, and quarantine states.",
+        "Static or inventory tests prove only Phase 3 writer boundaries write V4 serving state and Phase 3 does not migrate product review routes.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-025"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-06-16T13:48:35.538Z"
+  }
+}

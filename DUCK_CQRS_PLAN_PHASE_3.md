@@ -12,12 +12,31 @@ Build projectors and serving writers behind internal wiring only. Product review
 
 The serving projector service becomes the single normal write boundary for V4 `mart.review_*_v4` rows and V4 active-snapshot promotion. Legacy V3 writers may continue only for not-yet-migrated normal routes until Phase 4 removes those route paths.
 
+## Current Baseline
+
+- Phase 2 is treated as complete input for this phase: delta ledgers, source high-water allocation, outbox reconciliation, import hot fields, read-your-write overlays, the invalidation registry, and read contract definitions are available.
+- The V4 schema foundation already exists in `src/db/duckdbMigrations/0097_reviewServingV4Foundation.sql`, including delta tables, dirty-work tables, projector watermarks, projection manifests, chunk manifests, selected-import snapshots, V4 serving tables, snapshot pins, jobs, overlays, and retention marks.
+- Phase 3 should implement services and projectors on that schema. Add schema only for a proven route payload or projector invariant that cannot be represented by the existing foundation.
+- Phase 3 artifacts are not yet implemented: dirty-work conversion/coalescing, component acknowledgements, manifest repositories, snapshot pins, chunk repositories, contribution diffs, selected-import projector, V4 serving writers, projector worker, diagnostics, and retention cleanup remain to do.
+- Phase 3 ends when internal V4 snapshots can be built, patched, promoted, failed, replayed, pinned, and cleaned up safely. Product route migration and removal of legacy read paths remain Phase 4 work.
+
+## Remaining Implementation Order
+
+| Status | Slice | Build | Exit Gate |
+|---|---|---|---|
+| [ ] | Projector foundation | Repositories/services for dirty work, component acknowledgements, leases, source-watermark checks, projection manifests, active/failed snapshot manifests, snapshot pins, and retention marks. | Tests prove bounded leases, no watermark advancement past unreconciled source marks, idempotent ack/write behavior, active/last-known-good preservation, and pin-aware cleanup. |
+| [ ] | Delta-to-dirty intake | Convert `app.import_run_article_delta` and `app.review_change_delta` rows into coalesced component dirty work using the invalidation registry. Resolve import-route affected projects in bounded projector work, not in write transactions. | Tests prove repeated changes collapse, malformed/missing required keys quarantine or fail the work without advancing watermarks, import fanout is bounded, and optional component lag does not force required components to reprocess. |
+| [ ] | Selected-import projector | Project snapshot-scoped selected import from project scope plus `app.review_import_article_hot_field`, with tombstone handling and checkpoint/resume state. | Tests prove selected-import rows and patches are built by bounded batches, promoted atomically, and internal V4 selected-import logic never depends on the runtime `selected_scoped_article_import` CTE. |
+| [ ] | Component projectors and single writer | Build V4 component projectors for display, payload, judgment input status, LLM/human status, queues, postings, posting stats, summaries, badges, counts/facets/options, judgment details, list judgment payloads, prompt preview inputs, search/token-prefix state, and warning diagnostics. | Tests prove the single writer owns all `mart.review_*_v4` writes, routine changes are component-narrow, contribution diffs update summaries without full aggregation, and route-required components share one logical snapshot. |
+| [ ] | Snapshot promotion and failure recovery | Compose component identities into candidate manifests, validate required/optional component states, promote active snapshots atomically, preserve last-known-good snapshots, and expose failed/indexing/unavailable diagnostics. | Tests prove active promotion is atomic, failed candidates do not affect normal readers, optional search/count state does not block unrelated activation, and snapshot cursors/pins cannot mix component states. |
+| [ ] | Worker, chunks, compaction, and cleanup | Add `reviewServingProjectorWorker`, deterministic rebuild/compaction chunk manifests, patch budget checks, major-base compaction, wake budgets, retry/backoff, sleep/restart resume, and retention cleanup. | Tests prove bounded wake duration, chunk resume/skip from maintained digests, patch compaction thresholds, crash/retry/replay safety, and cleanup skips active, last-known-good, and pinned state. |
+
 ## Workstreams
 
 | Status | Theme | Implement First | Done When |
 |---|---|---|---|
-| [ ] | Projector core | Build component-scoped projector dependency graph, coalesced dirty-work service, compacted component acknowledgements, leases, watermarks, idempotent replay, wake budgets, single serving-writer boundary, major base/minor patch snapshot model, contribution diff service, incrementally digested rebuild chunk manifests, failure state, snapshot pins, and retention cleanup primitives. | Projector tests prove crash/retry/replay safety, bounded batch size, dirty-work coalescing, component ack skip behavior, wake release, watermark atomicity, single-writer ownership, contribution diffs, component-narrow patches, patch compaction thresholds, chunk resume/skip behavior without source-row hash scans, pin-aware cleanup, and failed snapshots preserving last-known-good data. |
-| [ ] | Selected-import projection | Replace runtime `selected_scoped_article_import` ranking with snapshot-scoped selected-import projection. | Selected import rows are projected by bounded batches, promoted atomically, and normal foreground SQL never contains `selected_scoped_article_import` after cutover. |
+| [ ] | Projector core | Build component-scoped projector dependency graph, delta-to-dirty conversion, coalesced dirty-work service, compacted component acknowledgements, leases, watermarks, idempotent replay, wake budgets, single serving-writer boundary, major base/minor patch snapshot model, contribution diff service, incrementally digested rebuild chunk manifests, failure state, snapshot pins, and retention cleanup primitives. | Projector tests prove crash/retry/replay safety, bounded batch size, dirty-work coalescing, component ack skip behavior, wake release, no watermark advancement past unreconciled source marks, single-writer ownership, contribution diffs, component-narrow patches, patch compaction thresholds, chunk resume/skip behavior without source-row hash scans, pin-aware cleanup, and failed snapshots preserving last-known-good data. |
+| [ ] | Selected-import projection | Replace runtime `selected_scoped_article_import` ranking with snapshot-scoped selected-import projection built from project scope plus hot import fields. | Selected import rows are projected by bounded batches, promoted atomically, and internal V4 selected-import serving logic never uses `selected_scoped_article_import`. Phase 4 route gates remove the remaining product-route CTE usage. |
 | [ ] | Serving projections | Write compacted base rows, component-narrow patch rows, payload rows, human/both/unassessed status, badges, contribution rows, count/facet rows, filter-option rows, prompt judgment-detail rows, list judgment payload rows, article-set hydration support, filter postings, posting stats, queue rows, warning/health diagnostic state, and search projection or async search state from completed dependency inputs. | Manifest checks prove all route-required components and watermarks match one logical snapshot before promotion. Optional search/count components expose availability states and do not block unrelated route activation. Routine changes update only affected component fields, contributions, postings, option rows, detail rows, list payload rows, diagnostic rows, and chunk digests. |
 
 ## Snapshot And Generation Rules
@@ -30,6 +49,24 @@ The serving projector service becomes the single normal write boundary for V4 `m
 - Ordinary interactive cursors may be invalidated when the active snapshot changes.
 - Durable jobs that need repeatable results pin the snapshot instead of relying on long-lived interactive cursors.
 - Cleanup deletes old base generations, patches, payloads, counts, facets, and search state only when no active manifest, last-known-good manifest, or snapshot pin references them.
+
+## Projector Intake Rules
+
+- Projectors consume `app.import_run_article_delta` and `app.review_change_delta` as the source of truth and use Phase 2 reconciliation state to decide source high-water safety.
+- No projector watermark may advance past a pending, retryable, malformed, or quarantined outbox/delta at or below the candidate source high-water mark unless there is an explicit terminal operator state.
+- Delta-to-dirty conversion uses the invalidation registry for first affected component, downstream dependents, required keys, and update mode.
+- Deltas with missing required typed keys, unsupported payload versions, or incompatible change kinds fail or quarantine the dirty-work item before any component output is written.
+- Import-route deltas resolve affected projects in bounded projector batches from route/project membership state. They do not rely on affected-project fanout stored by write transactions.
+- Dirty work coalesces by project, projection component, projection identity, article or scope key, source partition, and high-water range.
+- Component acknowledgements advance independently so optional or slow components do not force already-current required components to rerun.
+
+## Serving Writer Rules
+
+- A single Phase 3 writer service owns normal writes to `mart.review_*_v4`, `app.review_selected_article_import_v4`, `app.review_projection_identity_manifest`, `app.review_serving_projector_watermark`, and V4 active-snapshot promotion.
+- Legacy V3 services may continue serving not-yet-migrated routes, but they must not write or promote V4 review-serving state except through the Phase 3 writer boundary.
+- Writer transactions update component rows, contribution rows, summary rows, postings, payload rows, watermarks, acknowledgements, and manifest state together for the component being promoted.
+- Writer inputs are typed projection records from projectors. They must not parse raw import JSON, run `selected_scoped_article_import`, aggregate raw judgments at request time, or compute project-wide windows.
+- Replays use stable snapshot, base generation, patch watermark, projection identity, article, prompt, filter, and contribution keys so repeated writes are idempotent.
 
 ## Projector Dependency Rules
 
@@ -81,10 +118,12 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - `src/server/reviewServing/reviewServingChunkManifestRepository.ts`
 - `src/server/reviewServing/reviewServingManifestRepository.ts`
 - `src/server/reviewServing/reviewServingSnapshotPinRepository.ts`
+- `src/server/reviewServing/reviewServingProjectorWriter.ts`
 - `src/server/reviewServing/reviewServingProjectorService.ts`
 - `src/server/workers/reviewServingProjectorWorker.ts`
-- Selected-import projector and serving projection writers
-- Retention cleanup primitives
+- `src/server/reviewServing/reviewServingSelectedImportProjector.ts`
+- Component projector modules for display, payload, LLM/human status, queue, posting, summary/count/facet/option, detail/list judgment payload, search, and diagnostics
+- `src/server/reviewServing/reviewServingRetentionService.ts`
 
 ## Quality Gates
 
@@ -92,6 +131,7 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [ ] `bun test src/server/services/projectMartDirtyMaterializationService.test.ts`
 - [ ] `bun test src/server/workers/projectMartRefreshWorker.test.ts`
 - [ ] `bun test src/server/services/projectMartLargeRebuildExecutor.test.ts`
+- [ ] Targeted tests proving projector consumers do not advance watermarks past pending, retryable, malformed, or quarantined source high-water marks
 - [ ] Targeted tests for coalesced dirty-work creation, repeated-change collapse, component acknowledgements, retention, and compaction after consumer watermarks advance
 - [ ] Targeted tests proving dirty-work acknowledgements compact into component high-water rows or compressed ranges
 - [ ] Targeted tests for route/project delta projector fanout and cursor behavior
@@ -101,6 +141,7 @@ Use the `effect` library for non-trivial JavaScript/TypeScript async and server 
 - [ ] Targeted tests proving judgment-only, display-only, search-only, and selected-import-only changes write component-narrow patches instead of row-wide patches
 - [ ] Targeted tests for chunk manifests proving rebuilds and compactions skip unchanged completed chunks, resume failed chunks, and use incrementally maintained input digests instead of source-row scans
 - [ ] Targeted tests for selected import projector snapshot/checkpoint behavior
+- [ ] Targeted tests proving internal V4 selected-import projection does not use `selected_scoped_article_import`
 - [ ] Targeted tests for atomic review serving snapshot manifest promotion and failed-snapshot recovery
 - [ ] Targeted tests for required versus optional manifest components and route-specific availability states
 - [ ] Targeted tests for count/facet serving projections
