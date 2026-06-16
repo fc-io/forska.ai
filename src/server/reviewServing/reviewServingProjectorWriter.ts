@@ -33,6 +33,7 @@ export type ReviewServingProjectorWriterTransaction = {
 
 export type ReviewServingProjectorWritableTable =
   | 'app.review_selected_article_import_v4'
+  | 'mart.review_article_filter_posting_patch_v4'
   | 'mart.review_article_display_patch_v4'
   | 'mart.review_human_status_patch_v4'
   | 'mart.review_llm_status_patch_v4'
@@ -58,6 +59,11 @@ export type ReviewServingProjectorRecord = {
   values: Record<string, ReviewServingProjectorRecordValue>
 }
 
+export type DeleteReviewServingProjectorRowsInput = {
+  predicates: Record<string, ReviewServingProjectorRecordValue | readonly string[]>
+  table: ReviewServingProjectorWritableTable
+}
+
 export type PromoteReviewServingProjectorSnapshotInput = {
   projectId: string
   reviewConfigHash?: string | null
@@ -81,6 +87,7 @@ export type WriteReviewServingProjectorComponentInput = {
   records?: readonly ReviewServingProjectorRecord[]
   selectedImportSnapshotCursor?: ReviewServingSelectedImportSnapshotCursorInput
   snapshotPromotion?: PromoteReviewServingProjectorSnapshotInput
+  statements?: readonly string[]
   watermark?: ReviewServingProjectorWatermarkAdvanceInput
 }
 
@@ -104,6 +111,27 @@ const getReviewServingJsonLiteral = (value: ReviewServingIdentityValue) => {
 
 const getReviewServingNullableJsonLiteral = (value: ReviewServingIdentityValue | null | undefined) => {
   return value === null || value === undefined ? 'NULL' : getReviewServingJsonLiteral(value)
+}
+
+const getReviewServingDeletePredicate = (
+  column: string,
+  value: ReviewServingProjectorRecordValue | readonly string[],
+) => {
+  return Array.isArray(value)
+    ? `${column} IN (${value
+        .map((entry) => {
+          return getSqlLiteral(entry)
+        })
+        .join(', ')})`
+    : `${column} IS NOT DISTINCT FROM ${getSqlRecordValue(value)}`
+}
+
+export const getDeleteReviewServingProjectorRowsStatement = (input: DeleteReviewServingProjectorRowsInput) => {
+  const predicates = Object.entries(input.predicates).map(([column, value]) => {
+    return getReviewServingDeletePredicate(column, value)
+  })
+
+  return `DELETE FROM ${input.table} WHERE ${predicates.join(' AND ')}`
 }
 
 export const getReviewServingProjectorReplayKey = (input: {
@@ -298,6 +326,12 @@ export const writeReviewServingProjectorComponent = async (
     await (input.projectionManifests ?? []).reduce<Promise<void>>((previous, manifest) => {
       return previous.then(async () => {
         await upsertReviewServingProjectionIdentityManifest(manifest, tx)
+      })
+    }, Promise.resolve())
+
+    await (input.statements ?? []).reduce<Promise<void>>((previous, statement) => {
+      return previous.then(async () => {
+        await tx.run(statement)
       })
     }, Promise.resolve())
 
