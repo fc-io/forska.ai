@@ -9,8 +9,10 @@ your results with others, but it is not a hosted multi-tenant web app suitable
 for large teams (at least not yet). If you want that, then please reach out.
 
 The current USP is that it can let LLMs run through millions of scientific
-articles in days or hours. Perfect for finding obscure papers, keeping track of
-the latest in your field, or helping you with your systematic reviews.
+articles in days or hours (depending on your token/gpu allowance). Perfect for
+finding obscure papers, keeping track of the latest in your field, or helping
+you with your systematic reviews or other document heavy tasks like structuring
+data from millions of EHR records.
 
 ## Under active development
 
