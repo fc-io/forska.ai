@@ -596,14 +596,15 @@
         "bun run lint passes"
       ],
       "priority": 24,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-005",
         "US-006",
         "US-020",
         "US-023"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-025",
@@ -655,6 +656,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-06-16T17:37:56.712Z"
+    "updatedAt": "2026-06-16T17:45:18.016Z"
   }
 }
