@@ -842,15 +842,18 @@ const getArticleImportRouteDeltaTypedKey = (
 }
 
 const getArticleImportRouteSourceRecordMutationKey = (
-  record: Pick<ArticleImportRouteLinkRecord, 'importRouteId' | 'sourceRecordHash' | 'sourceRecordKey'>,
+  record: Pick<ArticleImportRouteLinkRecord, 'importRouteId' | 'importRunId' | 'sourceRecordHash' | 'sourceRecordKey'>,
 ) => {
-  return [record.importRouteId, record.sourceRecordKey, record.sourceRecordHash].join('|')
+  return [record.importRouteId, record.importRunId, record.sourceRecordKey, record.sourceRecordHash].join('|')
 }
 
 const getArticleImportRouteCurrentLinkMutationKey = (
-  record: Pick<ArticleImportRouteLinkRecord, 'articleId' | 'importRouteId' | 'sourceRecordHash' | 'sourceRecordKey'>,
+  record: Pick<
+    ArticleImportRouteLinkRecord,
+    'articleId' | 'importRouteId' | 'importRunId' | 'sourceRecordHash' | 'sourceRecordKey'
+  >,
 ) => {
-  return [record.articleId, record.importRouteId, record.sourceRecordKey, record.sourceRecordHash].join('|')
+  return [record.articleId, record.importRouteId, record.importRunId, record.sourceRecordKey, record.sourceRecordHash].join('|')
 }
 
 const getArticleImportRouteLinkHotFieldInput = (

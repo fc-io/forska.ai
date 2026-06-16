@@ -645,6 +645,7 @@ const appendProjectReviewConfigDeltaIfNeeded = async (
     projectId: string
     sourceMutationKey: string
     sourceOperation: 'insert' | 'update' | 'upsert'
+    sourceUpdatedAt?: Date | string | null
     sourceTable?: string
   },
 ) => {
@@ -655,8 +656,21 @@ const appendProjectReviewConfigDeltaIfNeeded = async (
         projectId: params.projectId,
         sourceMutationKey: params.sourceMutationKey,
         sourceOperation: params.sourceOperation,
+        sourceUpdatedAt: params.sourceUpdatedAt,
         sourceTable: params.sourceTable,
       })
+}
+
+const getReviewServingSourceTimestamp = (value: unknown) => {
+  if (value instanceof Date) {
+    return value
+  }
+
+  if (value === null || value === undefined) {
+    return null
+  }
+
+  return String(value)
 }
 
 const deleteProjectHumanPromptAnswersForChangedPromptLinksTx = async (
@@ -960,7 +974,7 @@ const upsertProjectPromptTx = async (
     'updated_at = now()',
   ]
 
-  await tx.run(`
+  const [upsertedPrompt] = await tx.queryJson<{updatedAt: string}>(`
     INSERT INTO app.project_prompt (
       id,
       project_id,
@@ -987,14 +1001,17 @@ const upsertProjectPromptTx = async (
     )
     ON CONFLICT(project_id, prompt_id) DO UPDATE SET
       ${updateParts.join(',\n      ')}
+    RETURNING updated_at AS updatedAt
   `)
+  const sourceUpdatedAt = upsertedPrompt?.updatedAt ?? new Date().toISOString()
 
   await appendPromptConfigReviewServingDelta(tx, {
     changedPromptConfigFields: params.changedPromptConfigFields ?? ['archived', 'enabled', 'promptOrder'],
     projectId: params.projectId,
     promptId: params.promptId,
-    sourceMutationKey: `projectPromptUpsert|${params.projectId}|${params.promptId}|${params.order}|${params.archived}|${params.enabled}`,
+    sourceMutationKey: `projectPromptUpsert|${params.projectId}|${params.promptId}|${sourceUpdatedAt}`,
     sourceOperation: 'upsert',
+    sourceUpdatedAt,
   })
 }
 
@@ -1604,6 +1621,7 @@ export const projectsRoutes = new Elysia()
           projectId: createdProject.id,
           sourceMutationKey: `projectCreate|${createdProject.id}`,
           sourceOperation: 'insert',
+          sourceUpdatedAt: getReviewServingSourceTimestamp(createdProject.updatedAt),
         })
 
         const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(tx, [
@@ -2103,11 +2121,14 @@ export const projectsRoutes = new Elysia()
             }
           }
 
+          const projectSourceUpdatedAt = getReviewServingSourceTimestamp(updatedProject.updatedAt)
+
           await appendProjectReviewConfigDeltaIfNeeded(tx, {
             changedReviewConfigFields,
             projectId: params.id,
-            sourceMutationKey: `projectEdit|${params.id}|${changedReviewConfigFields.join(',')}`,
+            sourceMutationKey: `projectEdit|${params.id}|${projectSourceUpdatedAt}`,
             sourceOperation: 'update',
+            sourceUpdatedAt: projectSourceUpdatedAt,
           })
 
           const updatedPrompts = await tx.queryJson<{

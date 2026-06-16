@@ -58,6 +58,7 @@ test('review write overlay appends small pending rows with TTL and no serving pr
   expect(result.overlayId).toStartWith('review-overlay:')
   expect(result.reconcileStatus).toBe('pending')
   expect(insertStatement).toContain('review_config_hash')
+  expect(insertStatement).toContain('read_surface')
   expect(insertStatement).toContain('source_high_water_mark')
   expect(insertStatement).toContain("'pending'")
   expect(insertStatement).toContain("'2026-06-16T10:01:00.000Z'::TIMESTAMPTZ")
@@ -84,6 +85,7 @@ test('active overlay reads are scoped to row/detail feedback and filter expired 
   expect(selectStatement).toContain("article_id = 'article-1'")
   expect(selectStatement).toContain("reconcile_status = 'pending'")
   expect(selectStatement).toContain("expires_at > '2026-06-16T10:00:30.000Z'::TIMESTAMPTZ")
+  expect(selectStatement).toContain("read_surface = 'detail'")
   expect(selectStatement).toContain('review_config_hash IS NULL')
 })
 

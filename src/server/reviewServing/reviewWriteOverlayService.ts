@@ -45,6 +45,7 @@ export type ReviewWriteOverlayRow = ReviewWriteOverlayKey & {
   expiresAt: string
   overlayId: string
   overlayValueJson: unknown
+  readSurface: ReviewWriteOverlayEligibleReadSurface
   reconcileStatus: ReviewWriteOverlayReconcileStatus
   reconciledAt: string | null
   sourceHighWaterMark: number
@@ -78,7 +79,11 @@ const getDefaultExpiresAt = (createdAt: Date, ttlMs: number | undefined) => {
 }
 
 const getOverlayIdentityValue = (
-  input: ReviewWriteOverlayKey & {sourceHighWaterMark: number; sourcePartition: string},
+  input: ReviewWriteOverlayKey & {
+    readSurface?: ReviewWriteOverlayEligibleReadSurface
+    sourceHighWaterMark: number
+    sourcePartition: string
+  },
 ) => {
   return {
     articleId: input.articleId,
@@ -87,6 +92,7 @@ const getOverlayIdentityValue = (
     overlayKind: input.overlayKind,
     projectId: input.projectId,
     promptId: input.promptId ?? null,
+    readSurface: input.readSurface ?? null,
     reviewConfigHash: input.reviewConfigHash ?? null,
     sourceHighWaterMark: input.sourceHighWaterMark,
     sourcePartition: input.sourcePartition,
@@ -94,7 +100,11 @@ const getOverlayIdentityValue = (
 }
 
 const getReviewWriteOverlayId = (
-  input: ReviewWriteOverlayKey & {sourceHighWaterMark: number; sourcePartition: string},
+  input: ReviewWriteOverlayKey & {
+    readSurface?: ReviewWriteOverlayEligibleReadSurface
+    sourceHighWaterMark: number
+    sourcePartition: string
+  },
 ) => {
   return `review-overlay:${getReviewWriteOverlayHash('review-write-overlay-identity', getOverlayIdentityValue(input)).slice(0, 32)}`
 }
@@ -140,6 +150,7 @@ export const appendReviewWriteOverlay = async (
       judgment_id,
       human_judgment_key,
       overlay_kind,
+      read_surface,
       overlay_value_json,
       source_partition,
       source_high_water_mark,
@@ -156,6 +167,7 @@ export const appendReviewWriteOverlay = async (
       ${getSqlLiteral(input.judgmentId ?? null)},
       ${getSqlLiteral(input.humanJudgmentKey ?? null)},
       ${getSqlLiteral(input.overlayKind)},
+      ${getSqlLiteral(input.readSurface)},
       ${getReviewWriteOverlayJsonLiteral(input.overlayValueJson)},
       ${getSqlLiteral(input.sourcePartition)},
       ${getSqlLiteral(input.sourceHighWaterMark)},
@@ -166,6 +178,7 @@ export const appendReviewWriteOverlay = async (
     )
     ON CONFLICT(overlay_id) DO UPDATE SET
       overlay_value_json = excluded.overlay_value_json,
+      read_surface = excluded.read_surface,
       reconcile_status = 'pending',
       expires_at = excluded.expires_at,
       reconciled_at = NULL
@@ -190,6 +203,7 @@ export const getActiveReviewWriteOverlays = async (
       judgment_id AS judgmentId,
       human_judgment_key AS humanJudgmentKey,
       overlay_kind AS overlayKind,
+      read_surface AS readSurface,
       overlay_value_json AS overlayValueJson,
       source_partition AS sourcePartition,
       source_high_water_mark AS sourceHighWaterMark,
@@ -202,6 +216,7 @@ export const getActiveReviewWriteOverlays = async (
       AND article_id = ${getSqlLiteral(scope.articleId)}
       AND reconcile_status = 'pending'
       AND expires_at > ${getReviewWriteOverlayTimestampLiteral(now)}
+      AND read_surface = ${getSqlLiteral(scope.readSurface)}
       AND ${scope.reviewConfigHash === null || scope.reviewConfigHash === undefined ? 'review_config_hash IS NULL' : `review_config_hash = ${getSqlLiteral(scope.reviewConfigHash)}`}
     ORDER BY created_at DESC, overlay_id ASC
   `)

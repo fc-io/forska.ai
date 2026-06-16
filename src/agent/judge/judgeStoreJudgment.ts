@@ -90,6 +90,10 @@ const storeJudgmentForPrompt = async ({
     WHERE article_id = ${getSqlLiteral(articleId)}
       AND model_id = ${getSqlLiteral(modelId)}
       AND prompt_id = ${getSqlLiteral(promptId)}
+      AND use_title = ${getSqlLiteral(useTitle)}
+      AND use_abstract = ${getSqlLiteral(useAbstract)}
+      AND use_fulltext = ${getSqlLiteral(useFulltext)}
+      AND use_fulltext_no_images = ${getSqlLiteral(useFulltextNoImages)}
       AND deleted_at IS NULL
     LIMIT 1
   `)
