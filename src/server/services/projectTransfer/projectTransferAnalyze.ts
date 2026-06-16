@@ -566,15 +566,31 @@ const writeTextToStream = async (stream: WriteStream, text: string) => {
   }
 
   return new Promise<void>((resolve, reject) => {
-    stream.once('drain', resolve)
-    stream.once('error', reject)
+    const onDrain = () => {
+      stream.off('error', onError)
+      resolve()
+    }
+    const onError = (error: Error) => {
+      stream.off('drain', onDrain)
+      reject(error)
+    }
+
+    stream.once('drain', onDrain)
+    stream.once('error', onError)
   })
 }
 
 const closeWriteStream = async (stream: WriteStream) => {
   return new Promise<void>((resolve, reject) => {
-    stream.once('error', reject)
-    stream.end(resolve)
+    const onError = (error: Error) => {
+      reject(error)
+    }
+
+    stream.once('error', onError)
+    stream.end(() => {
+      stream.off('error', onError)
+      resolve()
+    })
   })
 }
 
