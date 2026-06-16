@@ -177,10 +177,11 @@ export const insertArticlesIntoProject = async (
   }
 
   const batchSize = 1000
+  const insertedProjectArticleRows: {articleId: string; projectArticleId: string}[] = []
   await database.transaction(async (tx) => {
     for (const rowChunk of chunk(projectArticleRowsToInsert, batchSize)) {
       if (rowChunk.length === 0) continue
-      await tx.run(`
+      const insertedRows = await tx.queryJson<{articleId: string; projectArticleId: string}>(`
         INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
         VALUES ${rowChunk
           .map((row) => {
@@ -188,12 +189,14 @@ export const insertArticlesIntoProject = async (
           })
           .join(', ')}
         ON CONFLICT(project_id, article_id) DO NOTHING
+        RETURNING id AS projectArticleId, article_id AS articleId
       `)
+      insertedProjectArticleRows.push(...insertedRows)
     }
 
     await appendProjectScopeArticleReviewServingDeltas(
       tx,
-      projectArticleRowsToInsert.map((row) => {
+      insertedProjectArticleRows.map((row) => {
         return {
           articleId: row.articleId,
           changeKind: 'projectScope.article.added' as const,
@@ -243,7 +246,7 @@ export const insertArticlesIntoProject = async (
       })
     }
 
-    if (toInsert.length > 0 || linkedPrompts > 0) {
+    if (insertedProjectArticleRows.length > 0 || linkedPrompts > 0) {
       await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
         projects: [{articleIds: validIds, projectId}],
         reason: 'insertArticlesIntoProject',
@@ -258,7 +261,7 @@ export const insertArticlesIntoProject = async (
     totalValid: validIds.length,
     invalidIds,
     existingAssociations: existingAssocSet.size,
-    insertedCount: toInsert.length,
+    insertedCount: insertedProjectArticleRows.length,
     linkedPrompts,
   }
 }

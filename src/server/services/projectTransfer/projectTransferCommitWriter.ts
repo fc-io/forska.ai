@@ -19,6 +19,7 @@ import {
   getSqlLiteral,
   getTimestampLiteral,
 } from '../appQueryHelpers.ts'
+import {immutablePromptIdentityReviewServingFields} from '../immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../projectMartDirtyRefreshStateService.ts'
 import type {ProjectTransferImportPlanArtifact} from './projectTransferAnalyze.ts'
 import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
@@ -1763,7 +1764,12 @@ const insertProjectPromptRows = async (
             })
 
             return {
-              changedPromptConfigFields: ['archived', 'enabled', 'promptOrder'] as const,
+              changedPromptConfigFields: [
+                ...immutablePromptIdentityReviewServingFields,
+                'archived',
+                'enabled',
+                'promptOrder',
+              ],
               projectId: row.projectId,
               promptId: row.promptId,
               sourceMutationKey: `projectTransferCommit.projectPrompt|${row.projectId}|${projectPromptId}`,
@@ -1791,6 +1797,7 @@ const appendProjectTransferProjectReviewConfigDelta = async ({
       'dateTo',
       'humanJudgmentMode',
       'importRoutes',
+      'modelExecutionIdentity',
       'modelId',
       'promptMembership',
       'useAbstract',
