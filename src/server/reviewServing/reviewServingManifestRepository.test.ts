@@ -92,7 +92,7 @@ const createFakeManifestDatabase = (initialSnapshots: FakeSnapshotRow[] = []) =>
       baseGeneration: Number(statement.match(/'[^']*',\s*'[^']*',\s*'[^']*',\s*'[^']*',\s*(\d+)/u)?.[1] ?? 0),
       definitionVersion: strings[5] ?? '',
       inputDigest: strings[4] ?? null,
-      inputWatermark: Number(statement.match(/,\s*(\d+),\s*'[^']*',\s*'[^']*',/u)?.[1] ?? 0),
+      inputWatermark: Number(statement.match(/,\s*(\d+),\s*(?:NULL|'(?:''|[^']*)'),\s*'[^']*',\s*'[^']*',/u)?.[1] ?? 0),
       invalidationReason: strings[9] ?? null,
       manifestId,
       patchRangeEnd: null,
@@ -191,6 +191,10 @@ const createFakeManifestDatabase = (initialSnapshots: FakeSnapshotRow[] = []) =>
   }
   const queryJson = async <T>(statement: string) => {
     statements.push(statement)
+
+    if (statement.includes('FROM app.review_selected_import_snapshot')) {
+      return [{status: 'completed'}] as T[]
+    }
 
     if (statement.includes('FROM app.review_projection_identity_manifest')) {
       const manifestId = getWhereLiteral(statement, 'manifest_id') ?? ''
@@ -390,6 +394,21 @@ test('promotion retires previous active and preserves it as last-known-good', as
 
   await createCandidateReviewServingSnapshotManifest(
     {...baseSnapshotInput, lastKnownGoodSnapshotId: 'snapshot-active', snapshotId: 'snapshot-next'},
+    database,
+  )
+  await upsertReviewServingProjectionIdentityManifest(
+    {
+      baseGeneration: 1,
+      definitionVersion: 'display-v1',
+      inputDigest: 'display-digest-1',
+      inputWatermark: 10,
+      patchWatermark: 3,
+      projectId: 'project-1',
+      projectionComponent: 'display',
+      projectionIdentity: 'display:identity-1',
+      reviewConfigHash: 'review-config-1',
+      status: 'candidate',
+    },
     database,
   )
   await promoteReviewServingProjectorSnapshot(

@@ -25,6 +25,63 @@ const createWriterDatabase = () => {
     queryJson: async <T>(statement: string) => {
       statements.push(statement)
 
+      if (statement.includes('FROM app.review_selected_import_snapshot')) {
+        return [{status: 'completed'}] as T[]
+      }
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: 1,
+            definitionVersion: 'display-v1',
+            inputDigest: null,
+            inputWatermark: 8,
+            invalidationReason: null,
+            manifestId: 'display-manifest-1',
+            patchRangeEnd: null,
+            patchRangeStart: null,
+            patchWatermark: 2,
+            projectId: 'project-1',
+            projectionComponent: 'display',
+            projectionIdentity: 'display:identity-1',
+            promptConfigHash: null,
+            reviewConfigHash: 'review-config-1',
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest') && statement.includes('snapshot_id =')) {
+        return [
+          {
+            componentStateJson: JSON.stringify({
+              optional: [],
+              required: [
+                {
+                  baseGeneration: '1',
+                  component: 'display',
+                  patchWatermark: '2',
+                  projectionIdentity: 'display:identity-1',
+                  requirement: 'required',
+                },
+              ],
+            }),
+            composedIdentityJson: JSON.stringify({route: 'review.llm.rows', version: 1}),
+            lastError: null,
+            lastKnownGoodSnapshotId: null,
+            optionalComponentsJson: JSON.stringify([]),
+            projectId: 'project-1',
+            requiredComponentsJson: JSON.stringify(['display']),
+            reviewConfigHash: 'review-config-1',
+            selectedImportSnapshotId: 'selected-import-1',
+            snapshotId: 'snapshot-1',
+            snapshotStatus: 'candidate',
+            sourceWatermarksJson: JSON.stringify({reviewChange: 8}),
+            validationResultJson: null,
+          },
+        ] as T[]
+      }
+
       return [] as T[]
     },
     run: async (statement: string) => {
@@ -129,6 +186,27 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
           },
         },
       ],
+      candidateSnapshot: {
+        componentRequirements: {optionalComponents: [], requiredComponents: ['display']},
+        componentState: {
+          optional: [],
+          required: [
+            {
+              baseGeneration: '1',
+              component: 'display',
+              patchWatermark: '2',
+              projectionIdentity: 'display:identity-1',
+              requirement: 'required',
+            },
+          ],
+        },
+        composedIdentity: {route: 'review.llm.rows', version: 1},
+        projectId: 'project-1',
+        reviewConfigHash: 'review-config-1',
+        selectedImportSnapshotId: 'selected-import-1',
+        snapshotId: 'snapshot-1',
+        sourceWatermarks: {reviewChange: 8},
+      },
       snapshotPromotion: {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'},
       watermark: {
         projectId: 'project-1',
