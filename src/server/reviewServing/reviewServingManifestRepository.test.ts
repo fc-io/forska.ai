@@ -6,7 +6,6 @@ import {
   getLastKnownGoodReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
   markCandidateReviewServingSnapshotManifestFailed,
-  promoteCandidateReviewServingSnapshotManifest,
   retireObsoleteReviewServingSnapshotManifests,
   type ReviewServingManifestRepositoryDatabase,
   type ReviewServingManifestRepositoryTransaction,
@@ -14,6 +13,7 @@ import {
   type ReviewServingSnapshotManifest,
   upsertReviewServingProjectionIdentityManifest,
 } from './reviewServingManifestRepository.ts'
+import {promoteReviewServingProjectorSnapshot} from './reviewServingProjectorWriter.ts'
 
 type FakeProjectionRow = ReviewServingProjectionIdentityManifest
 type FakeSnapshotRow = Omit<ReviewServingSnapshotManifest, 'status'> & {
@@ -392,7 +392,7 @@ test('promotion retires previous active and preserves it as last-known-good', as
     {...baseSnapshotInput, lastKnownGoodSnapshotId: 'snapshot-active', snapshotId: 'snapshot-next'},
     database,
   )
-  await promoteCandidateReviewServingSnapshotManifest(
+  await promoteReviewServingProjectorSnapshot(
     {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-next'},
     database,
   )
