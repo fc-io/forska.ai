@@ -33,6 +33,7 @@ type CovidencePromptTx = {
   run: (statement: string) => Promise<void>
 }
 type CovidenceProjectTx = CovidencePromptTx & {run: (statement: string) => Promise<void>}
+type CovidenceProjectPromptMutationRow = {updatedAt: string | null}
 type CovidenceCsvParseErrorCode =
   | 'duplicate_header'
   | 'empty_file'
@@ -2542,7 +2543,7 @@ export const getOrCreateCovidenceProject = async (params: {
 
   if (existingProject) {
     if (params.promptId) {
-      await queryRunner.run(`
+      const [projectPromptMutation] = await queryRunner.queryJson<CovidenceProjectPromptMutationRow>(`
         INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
         VALUES (
           '${escapeSqlString(globalThis.crypto.randomUUID())}',
@@ -2558,13 +2559,15 @@ export const getOrCreateCovidenceProject = async (params: {
           archived = FALSE,
           enabled = TRUE,
           updated_at = now()
+        RETURNING updated_at AS updatedAt
       `)
       await appendPromptConfigReviewServingDelta(queryRunner, {
         changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
         projectId: existingProject.id,
         promptId: params.promptId,
-        sourceMutationKey: `covidenceProjectPrompt|${existingProject.id}|${params.promptId}`,
+        sourceMutationKey: `covidenceProjectPrompt|${existingProject.id}|${params.promptId}|${projectPromptMutation?.updatedAt ?? 'unknown'}`,
         sourceOperation: 'upsert',
+        sourceUpdatedAt: projectPromptMutation?.updatedAt,
       })
       await appendProjectReviewConfigReviewServingDelta(queryRunner, {
         changedReviewConfigFields: ['promptMembership'],

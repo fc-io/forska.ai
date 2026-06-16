@@ -262,7 +262,7 @@ const resolveJudgmentPromptCollisions = async ({
     })
     await appendLlmJudgmentReviewServingDeltas(
       tx,
-      (collision.projectId ? [collision.projectId] : affectedProjectIds).map((projectId) => {
+      affectedProjectIds.map((projectId) => {
         return {
           articleId: collision.articleId,
           changeKind: 'judgment.llm.deleted',
@@ -270,9 +270,7 @@ const resolveJudgmentPromptCollisions = async ({
           modelId: collision.modelId,
           projectId,
           promptId: collision.promptId,
-          sourceMutationKey: collision.projectId
-            ? `promptMerge|${mergeId}|${keepPromptId}|${collision.mergeJudgmentId}`
-            : `promptMerge|${mergeId}|${keepPromptId}|${collision.mergeJudgmentId}|${projectId}`,
+          sourceMutationKey: `promptMerge|${mergeId}|${keepPromptId}|${collision.mergeJudgmentId}|${projectId}`,
           sourceOperation: 'delete',
           sourceUpdatedAt: collision.updatedAt,
           useAbstract: collision.useAbstract,
