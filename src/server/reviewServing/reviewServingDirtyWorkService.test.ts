@@ -2,7 +2,9 @@ import {expect, test} from 'bun:test'
 
 import {
   claimReviewServingDirtyWork,
+  compactReviewServingDirtyWorkAcknowledgements,
   completeReviewServingDirtyWorkClaims,
+  completeReviewServingDirtyWorkClaimsAndAdvanceWatermark,
   failReviewServingDirtyWorkClaims,
   getReviewServingDirtyWork,
   releaseReviewServingDirtyWorkClaims,
@@ -21,7 +23,19 @@ type FakeDirtyWorkRow = Omit<ReviewServingDirtyWorkRecord, 'createdAt' | 'update
   updatedAt: string
 }
 
-type FakeAckRow = {completedSourceHighWaterMark: number; dirtyAckId: string; dirtyWorkId: string; status: string}
+type FakeAckRow = {
+  completedSourceHighWaterMark: number
+  dirtyAckId: string
+  dirtyRangeEnd: string | null
+  dirtyRangeStart: string | null
+  dirtyWorkId: string | null
+  projectionComponent: string
+  projectionIdentity: string
+  sourcePartition: string
+  status: string
+}
+
+type FakeOutboxBarrier = {outboxId: string; sourceHighWaterMark: number; status: string} | null
 
 const getSqlStrings = (statement: string) => {
   return [...statement.matchAll(/'((?:''|[^'])*)'/g)].map((match) => {
@@ -76,9 +90,10 @@ const getBaseScope = (sourceHighWaterMark: number, dirtyRangeStart = '1', dirtyR
   return scope
 }
 
-const createFakeDirtyWorkDatabase = () => {
+const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier} = {}) => {
   const dirtyWork = new Map<string, FakeDirtyWorkRow>()
   const acks = new Map<string, FakeAckRow>()
+  const watermarks = new Map<string, number>()
   const statements: string[] = []
   const getQueryRow = (row: FakeDirtyWorkRow) => {
     return {
@@ -162,16 +177,94 @@ const createFakeDirtyWorkDatabase = () => {
     const strings = getSqlStrings(statement)
     const numbers = getNumbers(statement)
     const dirtyAckId = strings[0] ?? ''
+    const compacted = statement.includes('NULL,')
+    const dirtyWorkId = compacted ? null : (strings[1] ?? '')
+    const projectionComponent = strings[compacted ? 1 : 2] ?? ''
+    const projectionIdentity = strings[compacted ? 2 : 3] ?? ''
+    const sourcePartition = strings[compacted ? 3 : 4] ?? ''
 
     acks.set(dirtyAckId, {
       completedSourceHighWaterMark: numbers[0] ?? 0,
       dirtyAckId,
-      dirtyWorkId: strings[1] ?? '',
+      dirtyRangeEnd: compacted ? null : (strings[6] ?? null),
+      dirtyRangeStart: compacted ? null : (strings[5] ?? null),
+      dirtyWorkId,
+      projectionComponent,
+      projectionIdentity,
+      sourcePartition,
       status: 'completed',
     })
   }
+  const deleteCompactedAcks = (statement: string) => {
+    const strings = getSqlStrings(statement)
+    const numbers = getNumbers(statement)
+    const keepDirtyAckId = strings[0] ?? ''
+    const projectionComponent = strings[1] ?? ''
+    const projectionIdentity = strings[2] ?? ''
+    const sourcePartition = strings[3] ?? ''
+    const completedSourceHighWaterMark = numbers[0] ?? 0
+
+    ;[...acks.values()]
+      .filter((ack) => {
+        return (
+          ack.dirtyAckId !== keepDirtyAckId
+          && ack.dirtyWorkId !== null
+          && ack.projectionComponent === projectionComponent
+          && ack.projectionIdentity === projectionIdentity
+          && ack.sourcePartition === sourcePartition
+          && ack.completedSourceHighWaterMark <= completedSourceHighWaterMark
+        )
+      })
+      .map((ack) => {
+        return ack.dirtyAckId
+      })
+      .forEach((dirtyAckId) => {
+        acks.delete(dirtyAckId)
+      })
+  }
+  const upsertWatermark = (statement: string) => {
+    const strings = getSqlStrings(statement)
+    const numbers = getNumbers(statement)
+    const watermarkId = strings[0] ?? ''
+
+    watermarks.set(watermarkId, Math.max(watermarks.get(watermarkId) ?? 0, numbers[0] ?? 0))
+  }
+  const isAckRangeCoveringStatement = (ack: FakeAckRow, statement: string) => {
+    const strings = getSqlStrings(statement)
+    const dirtyRangeStart = strings[4] ?? null
+    const dirtyRangeEnd = strings[5] ?? null
+
+    return ack.dirtyRangeStart === null || dirtyRangeStart === null || dirtyRangeEnd === null
+      ? ack.dirtyRangeStart === null && ack.dirtyRangeEnd === null
+      : ack.dirtyRangeStart <= dirtyRangeStart && (ack.dirtyRangeEnd ?? '') >= dirtyRangeEnd
+  }
   const queryJson = async <T>(statement: string) => {
     statements.push(statement)
+
+    if (statement.includes('FROM app.review_source_change_outbox')) {
+      return (options.barrier === undefined || options.barrier === null ? [] : [options.barrier]) as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_dirty_work_ack')) {
+      const strings = getSqlStrings(statement)
+      const numbers = getNumbers(statement)
+      const projectionComponent = strings[0] ?? ''
+      const projectionIdentity = strings[1] ?? ''
+      const sourcePartition = strings[2] ?? ''
+      const sourceHighWaterMark = numbers[0] ?? 0
+      const acknowledged = [...acks.values()].some((ack) => {
+        return (
+          ack.projectionComponent === projectionComponent
+          && ack.projectionIdentity === projectionIdentity
+          && ack.sourcePartition === sourcePartition
+          && ack.status === 'completed'
+          && ack.completedSourceHighWaterMark >= sourceHighWaterMark
+          && isAckRangeCoveringStatement(ack, statement)
+        )
+      })
+
+      return (acknowledged ? [{acknowledged: true}] : []) as T[]
+    }
 
     if (statement.includes('WHERE dirty_work_id =')) {
       const row = dirtyWork.get(getWhereLiteral(statement, 'dirty_work_id') ?? '')
@@ -216,6 +309,14 @@ const createFakeDirtyWorkDatabase = () => {
       insertAck(statement)
     }
 
+    if (statement.includes('DELETE FROM app.review_serving_dirty_work_ack')) {
+      deleteCompactedAcks(statement)
+    }
+
+    if (statement.includes('INSERT INTO app.review_serving_projector_watermark')) {
+      upsertWatermark(statement)
+    }
+
     if (statement.includes("SET status = 'completed'")) {
       updateStatus(statement, 'completed', 'running')
     }
@@ -228,7 +329,7 @@ const createFakeDirtyWorkDatabase = () => {
     },
   }
 
-  return {acks, database, dirtyWork, statements}
+  return {acks, database, dirtyWork, statements, watermarks}
 }
 
 const upsertDisplayWork = (
@@ -339,4 +440,106 @@ test('completion and failure move running claims into retention-ready terminal s
   expect(completed?.status).toBe('completed')
   expect(failed?.status).toBe('failed')
   expect(acks.size).toBe(1)
+})
+
+test('component acknowledgements skip already completed dirty keys', async () => {
+  const {acks, database, dirtyWork} = createFakeDirtyWorkDatabase()
+
+  await upsertDisplayWork(database, getBaseScope(5), 'delta-1')
+  const firstClaims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  await completeReviewServingDirtyWorkClaims(firstClaims, database)
+
+  const result = await upsertDisplayWork(database, getBaseScope(5), 'delta-1-replayed')
+  const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+  expect(result.skipped).toBe(true)
+  expect(acks.size).toBe(1)
+  expect(dirtyWork.size).toBe(1)
+  expect(claims).toHaveLength(0)
+})
+
+test('dirty-work completion and watermark advance are blocked atomically by source barriers', async () => {
+  const {acks, database, statements} = createFakeDirtyWorkDatabase({
+    barrier: {outboxId: 'outbox-blocked', sourceHighWaterMark: 3, status: 'retryable'},
+  })
+
+  await upsertDisplayWork(database, getBaseScope(5), 'delta-1')
+  const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  const error = await completeReviewServingDirtyWorkClaimsAndAdvanceWatermark(
+    {
+      claims,
+      watermark: {
+        projectionComponent: 'display',
+        projectorName: 'review-serving-v4-display',
+        sourceHighWaterMark: 5,
+        sourcePartition: 'article:display',
+      },
+    },
+    database,
+  ).then(
+    () => {
+      return null
+    },
+    (caught: unknown) => {
+      return caught instanceof Error ? caught : new Error(String(caught))
+    },
+  )
+
+  expect(error?.message).toBe('review-serving watermark blocked by unreconciled outbox outbox-blocked at 3 (retryable)')
+  expect(acks.size).toBe(0)
+  expect(statements.join('\n')).not.toContain('INSERT INTO app.review_serving_projector_watermark')
+})
+
+test('dirty-work acknowledgements and watermark advance in one transaction', async () => {
+  const {acks, database, statements, watermarks} = createFakeDirtyWorkDatabase({barrier: null})
+
+  await upsertDisplayWork(database, getBaseScope(5), 'delta-1')
+  const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+  await completeReviewServingDirtyWorkClaimsAndAdvanceWatermark(
+    {
+      claims,
+      watermark: {
+        projectionComponent: 'display',
+        projectorName: 'review-serving-v4-display',
+        sourceHighWaterMark: 5,
+        sourcePartition: 'article:display',
+      },
+    },
+    database,
+  )
+
+  expect(acks.size).toBe(1)
+  expect(watermarks.size).toBe(1)
+  expect(statements.join('\n')).toContain("status NOT IN ('operator_terminal', 'reconciled')")
+})
+
+test('ack compaction creates a component high-water row and removes covered point acks', async () => {
+  const {acks, database} = createFakeDirtyWorkDatabase({barrier: null})
+
+  await upsertDisplayWork(database, getBaseScope(3), 'delta-1')
+  const claims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+  await completeReviewServingDirtyWorkClaims(claims, database)
+
+  expect(acks.size).toBe(1)
+
+  const result = await compactReviewServingDirtyWorkAcknowledgements(
+    {
+      completedSourceHighWaterMark: 5,
+      projectionComponent: 'display',
+      projectionIdentity: 'display:identity-1',
+      sourcePartition: 'article:display',
+    },
+    database,
+  )
+
+  const remainingAcks = [...acks.values()]
+
+  expect(result.compactedThroughHighWaterMark).toBe(5)
+  expect(remainingAcks).toHaveLength(1)
+  expect(remainingAcks[0]).toMatchObject({
+    completedSourceHighWaterMark: 5,
+    dirtyWorkId: null,
+    projectionComponent: 'display',
+  })
 })
