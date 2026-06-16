@@ -15,6 +15,8 @@ export type PromptConfigReviewServingField =
   | 'thresholding'
 
 export type ProjectReviewConfigReviewServingField =
+  | 'dateFrom'
+  | 'dateTo'
   | 'humanJudgmentMode'
   | 'importRoutes'
   | 'modelExecutionIdentity'

@@ -327,7 +327,10 @@ export const advanceReviewServingProjectorWatermark = async (
       ${input.sourceHighWaterMark}
     )
     ON CONFLICT(watermark_id) DO UPDATE SET
-      source_high_water_mark = excluded.source_high_water_mark,
+      source_high_water_mark = GREATEST(
+        app.review_serving_projector_watermark.source_high_water_mark,
+        excluded.source_high_water_mark
+      ),
       updated_at = current_timestamp
   `)
 }

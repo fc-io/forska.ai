@@ -62,7 +62,13 @@ test('project review config updates emit review scoped model content prompt and 
   const {statements, tx} = createFakeLedgerTransaction()
 
   await appendProjectReviewConfigReviewServingDelta(tx, {
-    changedReviewConfigFields: ['modelExecutionIdentity', 'promptMembership', 'humanJudgmentMode', 'useTitle'],
+    changedReviewConfigFields: [
+      'modelExecutionIdentity',
+      'promptMembership',
+      'humanJudgmentMode',
+      'useTitle',
+      'dateFrom',
+    ],
     projectId: 'project-1',
     sourceMutationKey: 'project-edit-1',
     sourceOperation: 'update',
@@ -71,16 +77,18 @@ test('project review config updates emit review scoped model content prompt and 
   const inserts = getReviewChangeInsertStatements(statements).join('\n')
 
   expect(inserts).toContain('project.reviewConfig.updated')
-  expect(inserts).toContain('humanJudgmentMode,modelExecutionIdentity,promptMembership,useTitle')
+  expect(inserts).toContain('dateFrom,humanJudgmentMode,modelExecutionIdentity,promptMembership,useTitle')
   expect(inserts).toContain('projectReviewConfig:project-1')
 })
 
-test('config delta invalidation stays away from config independent projections', () => {
+test('config delta invalidation includes project scope for date and import-route edits', () => {
   const promptRule = getReviewServingInvalidationRuleOrNull('prompt.config.updated')
   const projectRule = getReviewServingInvalidationRuleOrNull('project.reviewConfig.updated')
 
   expect(promptRule?.affectedComponents).toEqual(['llmStatus', 'humanStatus', 'queue', 'posting', 'summary'])
   expect(projectRule?.affectedComponents).toEqual([
+    'projectScope',
+    'selectedImport',
     'judgmentInputContent',
     'llmStatus',
     'humanStatus',
@@ -90,6 +98,5 @@ test('config delta invalidation stays away from config independent projections',
   ])
   expect(projectRule?.affectedComponents).not.toContain('display')
   expect(projectRule?.affectedComponents).not.toContain('search')
-  expect(projectRule?.affectedComponents).not.toContain('selectedImport')
   expect(projectRule?.affectedComponents).not.toContain('payload')
 })

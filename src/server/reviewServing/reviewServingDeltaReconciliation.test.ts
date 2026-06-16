@@ -216,5 +216,7 @@ test('projector watermark advancement proceeds only after reconciliation or oper
   expect(statements.join('\n')).toContain("status NOT IN ('operator_terminal', 'reconciled')")
   expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(statements.join('\n')).toContain('ON CONFLICT(watermark_id) DO UPDATE SET')
+  expect(statements.join('\n')).toContain('GREATEST(')
+  expect(statements.join('\n')).toContain('app.review_serving_projector_watermark.source_high_water_mark')
   expect(statements.join('\n')).toContain('excluded.source_high_water_mark')
 })

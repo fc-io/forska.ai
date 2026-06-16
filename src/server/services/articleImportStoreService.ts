@@ -742,9 +742,22 @@ const updateExistingCanonicalArticlesInTx = async (params: {
       })
       const changedFields = Object.keys(update.values).filter(
         (fieldName): fieldName is ArticleReviewServingFieldName => {
-          return ['articleAuthors', 'articleSummary', 'articleTitle', 'publicationStatus', 'url'].includes(fieldName)
+          return [
+            'articleAuthors',
+            'articleSummary',
+            'articleTitle',
+            'arxivId',
+            'biorxivId',
+            'doi',
+            'medrxivId',
+            'publicationStatus',
+            'pubmedId',
+            'sourceMetadata',
+            'url',
+          ].includes(fieldName)
         },
       )
+      const sourceUpdatedAt = new Date()
 
       await params.tx.run(`
         UPDATE app.article
@@ -756,9 +769,9 @@ const updateExistingCanonicalArticlesInTx = async (params: {
       await appendArticleReviewServingDeltas(params.tx, {
         articleId: update.current.id,
         changedFields,
-        sourceMutationKey: `articleImportStoreService|canonicalArticle|${update.current.id}|${getArticleReviewServingMutationValueHash(update.values)}`,
+        sourceMutationKey: `articleImportStoreService|canonicalArticle|${update.current.id}|${sourceUpdatedAt.toISOString()}|${getArticleReviewServingMutationValueHash(update.values)}`,
         sourceOperation: 'update',
-        sourceUpdatedAt: new Date(),
+        sourceUpdatedAt,
       })
     })
   }, Promise.resolve())
@@ -836,10 +849,27 @@ const getArticleImportRouteDeltaPartition = (importRouteId: string) => {
 }
 
 const getArticleImportRouteDeltaTypedKey = (
-  record: Pick<ArticleImportRouteLinkRecord, 'articleId' | 'importRouteId'>,
+  record: Pick<ArticleImportRouteLinkRecord, 'articleId' | 'importRouteId' | 'sourceRecordKey'>,
 ) => {
-  return {articleId: record.articleId, importRouteId: record.importRouteId}
+  return {
+    articleId: record.articleId,
+    importRouteId: record.importRouteId,
+    importSourceRecordKey: record.sourceRecordKey,
+  }
 }
+
+const changedImportRouteRankFilterFields = [
+  'articleTitle',
+  'duplicateFlag',
+  'duplicateKey',
+  'filterBucketKey',
+  'filterBucketValue',
+  'journalTitle',
+  'publicationYear',
+  'selectedRankKey',
+  'sourceKind',
+  'sourceRecordHash',
+] as const
 
 const getArticleImportRouteSourceRecordMutationKey = (
   record: Pick<ArticleImportRouteLinkRecord, 'importRouteId' | 'importRunId' | 'sourceRecordHash' | 'sourceRecordKey'>,
@@ -853,7 +883,13 @@ const getArticleImportRouteCurrentLinkMutationKey = (
     'articleId' | 'importRouteId' | 'importRunId' | 'sourceRecordHash' | 'sourceRecordKey'
   >,
 ) => {
-  return [record.articleId, record.importRouteId, record.importRunId, record.sourceRecordKey, record.sourceRecordHash].join('|')
+  return [
+    record.articleId,
+    record.importRouteId,
+    record.importRunId,
+    record.sourceRecordKey,
+    record.sourceRecordHash,
+  ].join('|')
 }
 
 const getArticleImportRouteLinkHotFieldInput = (
@@ -897,7 +933,10 @@ const appendImportRouteArticleDelta = async (params: {
     importRouteId: params.record.importRouteId,
     importRunId: params.record.importRunId,
     payloadJson: {
+      changedRankFilterFields:
+        params.changeKind === 'importRoute.article.rankFields.updated' ? changedImportRouteRankFilterFields : undefined,
       externalArticleId: params.record.externalArticleId,
+      importSourceRecordKey: params.record.sourceRecordKey,
       sourceKind: params.record.sourceKind,
       sourceRecordKey: params.record.sourceRecordKey,
     },
@@ -912,7 +951,13 @@ const appendImportRouteArticleDelta = async (params: {
     sourceRowId: `${params.record.importRouteId}|${params.record.sourceRecordKey}`,
     sourceTable: params.sourceTable,
     tombstone: params.tombstone,
-    typedKey: getArticleImportRouteDeltaTypedKey(params.record),
+    typedKey:
+      params.changeKind === 'importRoute.article.rankFields.updated'
+        ? {
+            ...getArticleImportRouteDeltaTypedKey(params.record),
+            changedRankFilterFields: changedImportRouteRankFilterFields,
+          }
+        : getArticleImportRouteDeltaTypedKey(params.record),
   })
 }
 

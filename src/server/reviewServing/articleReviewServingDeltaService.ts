@@ -12,10 +12,16 @@ export type ArticleReviewServingFieldName =
   | 'articleCreatedAt'
   | 'articleSummary'
   | 'articleTitle'
+  | 'arxivId'
+  | 'biorxivId'
+  | 'doi'
   | 'fullText'
   | 'fullTextHtml'
   | 'fullTextPDF'
+  | 'medrxivId'
   | 'publicationStatus'
+  | 'pubmedId'
+  | 'sourceMetadata'
   | 'url'
 
 export type ArticleReviewServingDeltaInput = {
@@ -40,7 +46,15 @@ const displayFieldNames = [
   'articleCreatedAt',
   'articleSummary',
   'articleTitle',
+  'arxivId',
+  'biorxivId',
+  'doi',
+  'fullTextPDF',
+  'medrxivId',
   'publicationStatus',
+  'pubmedId',
+  'sourceMetadata',
+  'url',
 ] as const
 const searchFieldNames = ['articleSummary', 'articleTitle', 'fullText'] as const
 const titleFieldNames = ['articleTitle'] as const

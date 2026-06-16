@@ -273,7 +273,7 @@ export const judgeStoreJudgment = async (
               modelId: result.modelId,
               projectId: result.projectId,
               promptId: result.promptId,
-              sourceMutationKey: `judgeStoreJudgment|${result.id}|${result.changeKind}`,
+              sourceMutationKey: `judgeStoreJudgment|${result.id}|${result.changeKind}|${String(result.updatedAt)}`,
               sourceOperation: result.changeKind === 'judgment.llm.created' ? 'insert' : 'update',
               sourceUpdatedAt: result.updatedAt,
               useAbstract: result.useAbstract,

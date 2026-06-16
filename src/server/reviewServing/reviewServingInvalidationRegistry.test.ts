@@ -164,8 +164,8 @@ test('every emitted delta kind declares complete invalidation metadata', () => {
     ],
     [
       'project.reviewConfig.updated',
-      'judgmentInputContent',
-      ['llmStatus', 'humanStatus', 'queue', 'posting', 'summary'],
+      'projectScope',
+      ['selectedImport', 'judgmentInputContent', 'llmStatus', 'humanStatus', 'queue', 'posting', 'summary'],
       ['projectId', 'changedReviewConfigFields', 'sourceHighWaterMark'],
       'componentRebuild',
     ],
@@ -236,9 +236,19 @@ test('human judgment updates do not require prompt-scoped keys', () => {
 test('review config changes invalidate judgment input content for content flag changes', () => {
   const rule = getReviewServingInvalidationRule('project.reviewConfig.updated')
 
-  expect(rule.firstAffectedComponent).toBe('judgmentInputContent')
+  expect(rule.firstAffectedComponent).toBe('projectScope')
+  expect(rule.affectedComponents).toContain('projectScope')
+  expect(rule.affectedComponents).toContain('selectedImport')
   expect(rule.affectedComponents).toContain('judgmentInputContent')
-  expect(rule.downstreamDependents).toEqual(['llmStatus', 'humanStatus', 'queue', 'posting', 'summary'])
+  expect(rule.downstreamDependents).toEqual([
+    'selectedImport',
+    'judgmentInputContent',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+    'posting',
+    'summary',
+  ])
 })
 
 test('unknown change kinds are not treated as broad project invalidation', () => {
