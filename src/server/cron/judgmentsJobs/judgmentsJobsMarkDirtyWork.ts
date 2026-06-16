@@ -15,6 +15,16 @@ type JudgmentOutboxImportMarkerInput = {
 }
 type JudgmentOutboxImportMarkerRow = {jobId: string; outboxSeq: number}
 type JudgmentOutboxImportRow = {jobId: string; outboxSeq: number}
+type StoredJudgmentIdentityRow = {
+  articleId: string
+  id: string
+  modelId: string
+  promptId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
 
 export type JudgmentSqliteOutboxDirtyWorkResult = {
   discardedRows: Array<JudgmentOutboxImportRow & {errorMessage: string}>
@@ -127,6 +137,58 @@ const getJudgmentInsertValueSql = (row: JudgmentInsertRow) => {
   )`
 }
 
+const getJudgmentIdentityKey = (
+  row: Pick<
+    StoredJudgmentIdentityRow,
+    'articleId' | 'modelId' | 'promptId' | 'useAbstract' | 'useFulltext' | 'useFulltextNoImages' | 'useTitle'
+  >,
+) => {
+  return [
+    row.articleId,
+    row.promptId,
+    row.modelId,
+    row.useTitle,
+    row.useAbstract,
+    row.useFulltext,
+    row.useFulltextNoImages,
+  ].join('|')
+}
+
+const getStoredJudgmentIdsByIdentity = async (runner: DirtyWorkRunner, entries: JudgmentJobSqliteOutboxEntry[]) => {
+  const rows = await runner.queryJson<StoredJudgmentIdentityRow>(`
+    SELECT
+      id,
+      article_id AS articleId,
+      model_id AS modelId,
+      prompt_id AS promptId,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages
+    FROM app.judgment
+    WHERE ${entries
+      .map((entry) => {
+        return `(
+          article_id = ${getSqlLiteral(entry.articleId)}
+          AND prompt_id = ${getSqlLiteral(entry.promptId)}
+          AND model_id = ${getSqlLiteral(entry.modelId)}
+          AND use_title = ${getSqlLiteral(entry.useTitle)}
+          AND use_abstract = ${getSqlLiteral(entry.useAbstract)}
+          AND use_fulltext = ${getSqlLiteral(entry.useFulltext)}
+          AND use_fulltext_no_images = ${getSqlLiteral(entry.useFulltextNoImages)}
+          AND delete_generation = 0
+        )`
+      })
+      .join(' OR ')}
+  `)
+
+  return new Map(
+    rows.map((row) => {
+      return [getJudgmentIdentityKey(row), row.id]
+    }),
+  )
+}
+
 const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqliteOutboxEntry[]) => {
   if (entries.length === 0) {
     return new Set<string>()
@@ -164,17 +226,31 @@ const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqli
     }),
   )
 
+  const storedJudgmentIdsByIdentity = await getStoredJudgmentIdsByIdentity(runner, entries)
+
   await appendLlmJudgmentReviewServingDeltas(
     runner,
     entries
-      .filter((entry) => {
-        return insertedJudgmentIds.has(entry.judgmentId)
-      })
       .map((entry) => {
+        const judgmentId = insertedJudgmentIds.has(entry.judgmentId)
+          ? entry.judgmentId
+          : storedJudgmentIdsByIdentity.get(getJudgmentIdentityKey(entry))
+
+        return judgmentId
+          ? {
+              entry,
+              judgmentId,
+            }
+          : null
+      })
+      .filter((entry): entry is {entry: JudgmentJobSqliteOutboxEntry; judgmentId: string} => {
+        return entry !== null
+      })
+      .map(({entry, judgmentId}) => {
         return {
           articleId: entry.articleId,
           changeKind: 'judgment.llm.created' as const,
-          judgmentId: entry.judgmentId,
+          judgmentId,
           modelId: entry.modelId,
           projectId: entry.projectId,
           promptId: entry.promptId,

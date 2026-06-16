@@ -1869,10 +1869,11 @@ const getNullableMetadataInteger = (metadata: unknown, keys: string[]) => {
       return getRecordField(record, key)
     })
     .find((entry) => {
-      return typeof entry === 'number' && Number.isInteger(entry)
+      return (typeof entry === 'number' && Number.isInteger(entry)) || typeof entry === 'string'
     })
+  const parsedValue = typeof value === 'string' ? Number.parseInt(value, 10) : value
 
-  return typeof value === 'number' ? value : null
+  return typeof parsedValue === 'number' && Number.isInteger(parsedValue) ? parsedValue : null
 }
 
 const getProjectTransferArticleImportRouteHotFieldInput = (
