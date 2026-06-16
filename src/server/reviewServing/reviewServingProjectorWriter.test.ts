@@ -256,7 +256,11 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
     .filter((filePath) => {
       const repoPath = relative(workspaceRoot, filePath)
 
-      return repoPath !== 'src/server/reviewServing/reviewServingProjectorWriter.ts' && !repoPath.endsWith('.test.ts')
+      return (
+        repoPath !== 'src/server/reviewServing/reviewServingProjectorWriter.ts'
+        && repoPath !== 'src/server/reviewServing/reviewServingRetentionService.ts'
+        && !repoPath.endsWith('.test.ts')
+      )
     })
     .flatMap((filePath) => {
       const source = readFileSync(filePath, 'utf8')

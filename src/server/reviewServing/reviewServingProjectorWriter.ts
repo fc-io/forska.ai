@@ -23,6 +23,7 @@ import {
   type ReviewServingSnapshotManifestInput,
   upsertReviewServingProjectionIdentityManifest,
 } from './reviewServingManifestRepository.ts'
+import {compactReviewServingCandidateSnapshotPatches} from './reviewServingRetentionService.ts'
 import {validateReviewServingCandidateSnapshotManifest} from './reviewServingSnapshotPromotionService.ts'
 
 export type ReviewServingProjectorWriterDatabase = {
@@ -317,6 +318,17 @@ export const promoteReviewServingProjectorSnapshot = async (
 
       return {error: validation.error, promoted: false, snapshotId: input.snapshotId}
     }
+
+    await compactReviewServingCandidateSnapshotPatches(
+      {candidate},
+      {
+        queryJson: tx.queryJson,
+        run: tx.run,
+        transaction: async (operation) => {
+          return operation(tx)
+        },
+      },
+    )
 
     const active = await getActiveReviewServingSnapshotManifest(
       {projectId: input.projectId, reviewConfigHash: input.reviewConfigHash ?? null},
