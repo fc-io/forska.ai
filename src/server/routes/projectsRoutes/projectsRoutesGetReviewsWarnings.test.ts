@@ -88,6 +88,11 @@ type ReviewsWarningsResponse = {
       recoveryMode: 'archived_project_mart_recovery' | 'none' | 'retry_backoff'
       requiredConsumerRole: 'maintenance-worker'
       retryAfterAt: string | null
+      search: {
+        availability: 'ready' | 'indexing' | 'unavailable' | 'async'
+        optionalComponent: boolean
+        snapshotId: string | null
+      }
       status: 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
     }
     projectId: string
@@ -400,6 +405,49 @@ const insertReviewServingRow = async (projectId: string, articleId: string) => {
   `)
 }
 
+const insertActiveReviewServingManifest = async (input: {
+  includeSearchState: boolean
+  optionalComponents: string[]
+  projectId: string
+  snapshotId: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const optional = input.includeSearchState
+    ? [{baseGeneration: '1', component: 'search', patchWatermark: '0', projectionIdentity: 'search:identity-1'}]
+    : []
+
+  await runDatabase(`
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id,
+      snapshot_id,
+      snapshot_status,
+      review_config_hash,
+      composed_identity_json,
+      component_state_json,
+      required_components_json,
+      optional_components_json,
+      source_watermarks_json,
+      activated_at,
+      updated_at
+    ) VALUES (
+      '${input.projectId}',
+      '${input.snapshotId}',
+      'active',
+      NULL,
+      '{}'::JSON,
+      '${JSON.stringify({optional, required: []}).replaceAll("'", "''")}'::JSON,
+      '[]'::JSON,
+      '${JSON.stringify(input.optionalComponents).replaceAll("'", "''")}'::JSON,
+      '{}'::JSON,
+      TIMESTAMPTZ '2026-04-02T12:08:00.000Z',
+      TIMESTAMPTZ '2026-04-02T12:08:00.000Z'
+    )
+  `)
+}
+
 const postWarningsRequest = async (projectId: string) => {
   if (!app) {
     throw new Error('Test app not initialized')
@@ -495,6 +543,31 @@ test('reviews warnings expose bounded cleanup lease progress without blocking re
   })
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.status).toBe('ready')
+})
+
+test('reviews warnings expose optional search diagnostic without blocking ready activation', async () => {
+  const projectId = 'project-search-diagnostic-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: ['search'],
+    projectId,
+    snapshotId: 'snapshot-search-indexing',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.search).toEqual({
+    availability: 'indexing',
+    optionalComponent: true,
+    snapshotId: 'snapshot-search-indexing',
+  })
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.status).toBe('ready')
 })
 

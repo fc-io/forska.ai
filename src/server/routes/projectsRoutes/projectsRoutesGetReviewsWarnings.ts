@@ -1,7 +1,8 @@
 import {Elysia, t} from 'elysia'
 
+import {getReviewServingSearchAvailabilityFromManifest} from '../../reviewServing/reviewServingTitleSearchProjector.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getJsonValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getDuckdbMartMaintenanceService} from '../../services/getDuckdbMartMaintenanceService.ts'
 import {
   type FreshMaintenanceWorkLeaseRecord,
@@ -84,6 +85,11 @@ type ReviewsRuntimeDiagnostics = {
   }
   processMemory: {rssBytes: number}
   tempSpill: DuckdbTempSpillMetrics
+}
+type ReviewServingSearchDiagnostic = {
+  availability: 'ready' | 'indexing' | 'unavailable' | 'async'
+  optionalComponent: boolean
+  snapshotId: string | null
 }
 
 type ProjectLargeRebuildState = {
@@ -502,6 +508,39 @@ const getProjectLargeRebuildState = async (projectId: string): Promise<ProjectLa
   }
 }
 
+const getReviewServingSearchDiagnostic = async (projectId: string): Promise<ReviewServingSearchDiagnostic> => {
+  const [row] = await getAppDatabaseService().queryJson<{
+    componentStateJson: unknown
+    optionalComponentsJson: unknown
+    snapshotId: string
+  }>(`
+    SELECT
+      snapshot_id AS snapshotId,
+      component_state_json AS componentStateJson,
+      optional_components_json AS optionalComponentsJson
+    FROM app.review_serving_snapshot_manifest
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND snapshot_status = 'active'
+    ORDER BY activated_at DESC NULLS LAST, updated_at DESC
+    LIMIT 1
+  `)
+  const optionalComponents = (getJsonValue(row?.optionalComponentsJson ?? []) as readonly string[]) ?? []
+  const componentState = getJsonValue(row?.componentStateJson ?? {}) as {optional?: Array<{component?: string}>}
+  const optionalSearchStatePresent = (componentState.optional ?? []).some((state) => {
+    return state.component === 'search'
+  })
+
+  return {
+    availability: getReviewServingSearchAvailabilityFromManifest({
+      hasActiveSnapshot: row !== undefined,
+      optionalComponents,
+      optionalSearchStatePresent,
+    }),
+    optionalComponent: optionalComponents.includes('search'),
+    snapshotId: row?.snapshotId ?? null,
+  }
+}
+
 const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshCountInfo> => {
   const projectLiteral = getSqlLiteral(projectId)
   const rows = await getAppDatabaseService().queryJson<{oldestQueuedAt: string | null; queuedRefreshCount: number}>(`
@@ -851,6 +890,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       freshMaintenanceLeases,
       maintenanceRecoveryContext,
       maintenanceConsumerAvailability,
+      searchDiagnostic,
     ] = await Promise.all([
       getEnabledPromptCount(projectId),
       getHasCuratedArticles(projectId),
@@ -863,6 +903,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       getMaintenanceWorkLeaseService().getFreshProjectMaintenanceWorkLeases(projectId, currentNow),
       getMaintenanceWorkLeaseService().getProjectMaintenanceRecoveryContext(projectId, currentNow),
       getMaintenanceConsumerAvailability(),
+      getReviewServingSearchDiagnostic(projectId),
     ])
     const freshArticleRefreshLeaseCount = getFreshArticleRefreshLeaseCount(freshMaintenanceLeases)
     const freshProjectRefreshLeaseCount = getFreshMaintenanceLeaseCount(
@@ -1038,6 +1079,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           recoveryMode: (maintenanceRecoveryContext?.recoveryMode ?? 'none') as ReviewsIndexingRecoveryMode,
           requiredConsumerRole: 'maintenance-worker',
           retryAfterAt: maintenanceRecoveryContext?.retryAfterAt ?? null,
+          search: searchDiagnostic,
           status: indexingStatus,
         },
       },
