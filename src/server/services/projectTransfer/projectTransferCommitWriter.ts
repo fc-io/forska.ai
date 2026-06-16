@@ -4,7 +4,10 @@ import {
   type ArticleReviewServingFieldName,
 } from '../../reviewServing/articleReviewServingDeltaService.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../../reviewServing/humanJudgmentReviewServingDeltaService.ts'
-import {appendLlmJudgmentReviewServingDeltas} from '../../reviewServing/llmJudgmentReviewServingDeltaService.ts'
+import {
+  appendLlmJudgmentReviewServingDeltas,
+  type AppendLlmJudgmentReviewServingDeltaInput,
+} from '../../reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {
   appendProjectReviewConfigReviewServingDelta,
@@ -27,6 +30,7 @@ import {
 } from '../appQueryHelpers.ts'
 import {immutablePromptIdentityReviewServingFields} from '../immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../projectMartDirtyRefreshStateService.ts'
+import {getProjectVisibleJudgmentScopeSql} from '../projectVisibleJudgmentRule.ts'
 import type {ProjectTransferImportPlanArtifact} from './projectTransferAnalyze.ts'
 import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
 import {
@@ -242,6 +246,7 @@ type ProjectTransferInsertedJudgmentDeltaRow = {
   useFulltextNoImages: boolean
   useTitle: boolean
 }
+type ProjectTransferVisibleJudgmentProjectRow = {projectId: string}
 
 type JudgmentAssessmentCommitRow = {
   action: 'insert' | 'reuse'
@@ -4612,25 +4617,62 @@ const appendProjectTransferJudgmentCreatedDeltas = async ({
   rows: readonly ProjectTransferInsertedJudgmentDeltaRow[]
   tx: ProjectTransferCommitWriterTx
 }) => {
+  const deltaInputs = await rows.reduce<Promise<AppendLlmJudgmentReviewServingDeltaInput[]>>(
+    async (previousInputs, row) => {
+      const currentInputs = await previousInputs
+      const visibleProjects = await tx.queryJson<ProjectTransferVisibleJudgmentProjectRow>(`
+        WITH inserted_judgment AS (
+          SELECT
+            ${getSqlLiteral(row.articleId)} AS article_id,
+            ${getSqlLiteral(row.promptId)} AS prompt_id,
+            ${getSqlLiteral(row.modelId)} AS model_id,
+            ${getSqlLiteral(row.useTitle)} AS use_title,
+            ${getSqlLiteral(row.useAbstract)} AS use_abstract,
+            ${getSqlLiteral(row.useFulltext)} AS use_fulltext,
+            ${getSqlLiteral(row.useFulltextNoImages)} AS use_fulltext_no_images
+        )
+        SELECT DISTINCT project.id AS projectId
+        FROM inserted_judgment
+        INNER JOIN app.project_article project_scope
+          ON project_scope.article_id = inserted_judgment.article_id
+        INNER JOIN app.project project
+          ON project.id = project_scope.project_id
+        INNER JOIN app.project_prompt project_prompt
+          ON ${getProjectVisibleJudgmentScopeSql({
+            judgmentAlias: 'inserted_judgment',
+            projectAlias: 'project',
+            projectPromptAlias: 'project_prompt',
+            projectScopeAlias: 'project_scope',
+          })}
+      `)
+
+      return [
+        ...currentInputs,
+        ...visibleProjects.map((visibleProject) => {
+          return {
+            articleId: row.articleId,
+            changeKind: 'judgment.llm.created' as const,
+            judgmentId: row.id,
+            modelId: row.modelId,
+            projectId: visibleProject.projectId,
+            promptId: row.promptId,
+            sourceMutationKey: `projectTransfer|${visibleProject.projectId}|${row.sourceJudgmentId}|${row.id}`,
+            sourceOperation: 'insert' as const,
+            sourceUpdatedAt: row.updatedAt,
+            useAbstract: row.useAbstract,
+            useFulltext: row.useFulltext,
+            useFulltextNoImages: row.useFulltextNoImages,
+            useTitle: row.useTitle,
+          }
+        }),
+      ]
+    },
+    Promise.resolve([]),
+  )
+
   await appendLlmJudgmentReviewServingDeltas(
     tx,
-    rows.map((row) => {
-      return {
-        articleId: row.articleId,
-        changeKind: 'judgment.llm.created' as const,
-        judgmentId: row.id,
-        modelId: row.modelId,
-        projectId: row.projectId,
-        promptId: row.promptId,
-        sourceMutationKey: `projectTransfer|${row.projectId}|${row.sourceJudgmentId}|${row.id}`,
-        sourceOperation: 'insert' as const,
-        sourceUpdatedAt: row.updatedAt,
-        useAbstract: row.useAbstract,
-        useFulltext: row.useFulltext,
-        useFulltextNoImages: row.useFulltextNoImages,
-        useTitle: row.useTitle,
-      }
-    }),
+    deltaInputs,
   )
 }
 
