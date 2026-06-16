@@ -2899,6 +2899,7 @@ export const clearCovidenceSeededHumanJudgments = async (params: {importRoute: s
   }
 
   const queryRunner = getCovidenceProjectQueryRunner(params.tx)
+  const clearedAt = new Date()
   const removedProjectArticleRows = await queryRunner.queryJson<{articleId: string; projectArticleId: string}>(`
     SELECT
       project_article.id AS projectArticleId,
@@ -2914,6 +2915,28 @@ export const clearCovidenceSeededHumanJudgments = async (params: {importRoute: s
         WHERE project_import_route.project_id = ${getSqlLiteral(project.id)}
           AND article_import_route.article_id = project_article.article_id
       )
+  `)
+  const removedHumanJudgmentRows = await queryRunner.queryJson<{
+    answer: string | null
+    articleId: string
+    humanJudgmentKey: string
+    promptId: string | null
+  }>(`
+    SELECT
+      answer,
+      article_id AS articleId,
+      CONCAT(project_id, ':', article_id, ':', prompt_id) AS humanJudgmentKey,
+      prompt_id AS promptId
+    FROM app.judgment_human
+    WHERE project_id = ${getSqlLiteral(project.id)}
+    UNION ALL
+    SELECT
+      answer,
+      article_id AS articleId,
+      CONCAT(project_id, ':', article_id, ':summary') AS humanJudgmentKey,
+      NULL AS promptId
+    FROM app.judgment_human_summary
+    WHERE project_id = ${getSqlLiteral(project.id)}
   `)
 
   await queryRunner.run(`
@@ -2942,6 +2965,23 @@ export const clearCovidenceSeededHumanJudgments = async (params: {importRoute: s
         projectId: project.id,
         sourceMutationKey: `covidenceSeedProjectArticle.clear|${project.id}|${row.projectArticleId}`,
         sourceOperation: 'delete' as const,
+      }
+    }),
+  )
+  await appendHumanJudgmentReviewServingDeltas(
+    queryRunner,
+    removedHumanJudgmentRows.map((row) => {
+      return {
+        answer: row.answer,
+        articleId: row.articleId,
+        humanJudgmentKey: row.humanJudgmentKey,
+        projectId: project.id,
+        promptId: row.promptId,
+        sourceMutationKey: `covidenceHumanJudgment.clear|${row.humanJudgmentKey}|${clearedAt.toISOString()}`,
+        sourceOperation: 'delete' as const,
+        sourceRowId: row.humanJudgmentKey,
+        sourceTable: row.promptId ? 'app.judgment_human' : 'app.judgment_human_summary',
+        sourceUpdatedAt: clearedAt,
       }
     }),
   )

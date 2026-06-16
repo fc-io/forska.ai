@@ -119,6 +119,7 @@ type ArticleImportRouteRemapRecord = {
   sourceRecordHash: string
   sourceRecordKey: string
 }
+type ArticleImportRouteSourceRecordRow = ArticleImportRouteLinkRecord
 type ArticleImportRouteSourceRecordLookup = {importRouteId: string; sourceRecordKey: string}
 type ArticleImportRouteSourceRecordCandidate = {
   candidateRecord: CanonicalArticleImportCandidateRecord
@@ -1257,6 +1258,58 @@ const quarantineRemappedArticleImportSourceRecords = async (
   tx: ArticleImportStoreTx,
   records: ArticleImportRouteRemapRecord[],
 ) => {
+  const remappedExistingRows = await getValueChunks(records).reduce<Promise<ArticleImportRouteSourceRecordRow[]>>(
+    async (previousRows, recordChunk) => {
+      const rows = await previousRows
+      const chunkRows = await tx.queryJson<{
+        articleId: string
+        externalArticleId: string | null
+        importMetadata: unknown
+        importRouteId: string
+        importRunId: string | null
+        matchMetadata: unknown
+        rawPayload: unknown
+        sourceKind: string | null
+        sourceRecordHash: string
+        sourceRecordKey: string
+      }>(`
+        SELECT
+          article_id AS articleId,
+          external_article_id AS externalArticleId,
+          TO_JSON(import_metadata) AS importMetadata,
+          import_route_id AS importRouteId,
+          import_run_id AS importRunId,
+          TO_JSON(match_metadata) AS matchMetadata,
+          TO_JSON(raw_payload) AS rawPayload,
+          source_kind AS sourceKind,
+          source_record_hash AS sourceRecordHash,
+          source_record_key AS sourceRecordKey
+        FROM app.article_import_route_source_record
+        WHERE ${recordChunk
+          .map((record) => {
+            return `(
+              import_route_id = ${getSqlLiteral(record.importRouteId)}
+              AND source_record_key = ${getSqlLiteral(record.sourceRecordKey)}
+            )`
+          })
+          .join(' OR ')}
+      `)
+
+      return [
+        ...rows,
+        ...chunkRows.map((row) => {
+          return {
+            ...row,
+            importMetadata: getJsonValue(row.importMetadata),
+            matchMetadata: getJsonValue(row.matchMetadata),
+            rawPayload: getJsonValue(row.rawPayload),
+          }
+        }),
+      ]
+    },
+    Promise.resolve([]),
+  )
+
   await records.reduce<Promise<void>>((previousRun, record) => {
     return previousRun.then(() => {
       return tx.run(`
@@ -1274,6 +1327,21 @@ const quarantineRemappedArticleImportSourceRecords = async (
         WHERE import_route_id = ${getSqlLiteral(record.importRouteId)}
           AND source_record_key = ${getSqlLiteral(record.sourceRecordKey)}
       `)
+    })
+  }, Promise.resolve())
+
+  await remappedExistingRows.reduce<Promise<void>>((previousRun, record) => {
+    return previousRun.then(async () => {
+      await upsertReviewImportArticleHotField(tx, getArticleImportRouteLinkHotFieldInput(record, true))
+      await appendImportRouteArticleDelta({
+        changeKind: 'importRoute.article.rankFields.updated',
+        record,
+        sourceMutationKey: `sourceRecordRemap|${getArticleImportRouteSourceRecordMutationKey(record)}`,
+        sourceOperation: 'update',
+        sourceTable: 'app.article_import_route_source_record',
+        tombstone: true,
+        tx,
+      })
     })
   }, Promise.resolve())
 }
