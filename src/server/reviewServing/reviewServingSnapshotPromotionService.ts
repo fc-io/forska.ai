@@ -1,0 +1,289 @@
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
+import {
+  type ReviewServingComponentRequirements,
+  type ReviewServingCountAvailability,
+  type ReviewServingProjectionComponent,
+  type ReviewServingSearchAvailability,
+  type ReviewServingSnapshotComponentStates,
+} from './reviewServingContracts.ts'
+import {
+  getReviewServingProjectionIdentityManifest,
+  type ReviewServingManifestRepositoryTransaction,
+  type ReviewServingProjectionIdentityManifest,
+  type ReviewServingSnapshotManifest,
+  type ReviewServingSnapshotManifestInput,
+} from './reviewServingManifestRepository.ts'
+import {type ReviewServingProjectionComponentIdentity} from './reviewServingProjectorDomain.ts'
+
+export type ReviewServingSnapshotPromotionDatabase = ReviewServingManifestRepositoryTransaction
+
+export type ComposeReviewServingCandidateSnapshotInput = {
+  componentIdentities: Partial<Record<ReviewServingProjectionComponent, ReviewServingProjectionComponentIdentity>>
+  componentRequirements: ReviewServingComponentRequirements
+  composedIdentity: ReviewServingIdentityValue
+  projectId: string
+  reviewConfigHash?: string | null
+  selectedImportSnapshotId: string
+  snapshotId: string
+  sourceWatermarks: ReviewServingIdentityValue
+}
+
+export type ReviewServingSnapshotValidationResult =
+  | {candidate: ReviewServingSnapshotManifest; ok: true; validationResult: ReviewServingIdentityValue}
+  | {candidate: ReviewServingSnapshotManifest; error: string; ok: false; validationResult: ReviewServingIdentityValue}
+
+type SelectedImportSnapshotStatusRow = {status: string}
+
+const completeManifestStatuses = ['active', 'candidate'] as const
+
+const getComponentState = (manifest: ReviewServingProjectionIdentityManifest, requirement: 'optional' | 'required') => {
+  return {
+    baseGeneration: String(manifest.baseGeneration),
+    component: manifest.projectionComponent,
+    patchWatermark: String(manifest.patchWatermark),
+    projectionIdentity: manifest.projectionIdentity,
+    requirement,
+  }
+}
+
+const getNumericIdentityValues = (value: ReviewServingIdentityValue): readonly number[] => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return [value]
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap(getNumericIdentityValues)
+  }
+
+  if (value !== null && typeof value === 'object') {
+    return Object.values(value).flatMap(getNumericIdentityValues)
+  }
+
+  return []
+}
+
+const getRequiredSourceWatermark = (sourceWatermarks: ReviewServingIdentityValue) => {
+  const values = getNumericIdentityValues(sourceWatermarks)
+
+  return values.length === 0 ? 0 : Math.max(...values)
+}
+
+const getManifestCompletenessError = (
+  manifest: ReviewServingProjectionIdentityManifest | null,
+  component: ReviewServingProjectionComponent,
+) => {
+  return manifest === null
+    ? `required component ${component} has no manifest`
+    : completeManifestStatuses.includes(manifest.status as (typeof completeManifestStatuses)[number])
+      ? null
+      : `required component ${component} is ${manifest.status}`
+}
+
+const getReviewConfigError = (manifest: ReviewServingProjectionIdentityManifest, reviewConfigHash: string | null) => {
+  return manifest.reviewConfigHash !== null && manifest.reviewConfigHash !== reviewConfigHash
+    ? `component ${manifest.projectionComponent} review config ${manifest.reviewConfigHash} does not match snapshot ${reviewConfigHash}`
+    : null
+}
+
+const getWatermarkError = (manifest: ReviewServingProjectionIdentityManifest, requiredSourceWatermark: number) => {
+  return manifest.inputWatermark < requiredSourceWatermark
+    ? `component ${manifest.projectionComponent} input watermark ${manifest.inputWatermark} is behind source ${requiredSourceWatermark}`
+    : null
+}
+
+const getComponentStateConsistencyError = (
+  manifest: ReviewServingProjectionIdentityManifest | null,
+  state: {
+    baseGeneration: string
+    component: ReviewServingProjectionComponent
+    patchWatermark: string
+    projectionIdentity: string
+  },
+) => {
+  return manifest === null
+    ? `component ${state.component} state has no manifest`
+    : manifest.baseGeneration !== Number(state.baseGeneration)
+      ? `component ${state.component} base generation does not match manifest`
+      : manifest.patchWatermark !== Number(state.patchWatermark)
+        ? `component ${state.component} patch watermark does not match manifest`
+        : manifest.projectionIdentity !== state.projectionIdentity
+          ? `component ${state.component} projection identity does not match manifest`
+          : null
+}
+
+const getSelectedImportSnapshotCompleted = async (
+  selectedImportSnapshotId: string | null,
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  const rows =
+    selectedImportSnapshotId === null
+      ? []
+      : await database.queryJson<SelectedImportSnapshotStatusRow>(`
+          SELECT status
+          FROM app.review_selected_import_snapshot
+          WHERE selected_import_snapshot_id = ${getSqlLiteral(selectedImportSnapshotId)}
+          LIMIT 1
+        `)
+
+  return rows[0]?.status === 'completed'
+}
+
+const getManifestForState = async (
+  projectId: string,
+  state: {component: ReviewServingProjectionComponent; projectionIdentity: string},
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  return getReviewServingProjectionIdentityManifest(
+    {projectId, projectionComponent: state.component, projectionIdentity: state.projectionIdentity},
+    database,
+  )
+}
+
+const getRequiredManifestValidationError = async (
+  candidate: ReviewServingSnapshotManifest,
+  state: ReviewServingSnapshotComponentStates['required'][number],
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  const manifest = await getManifestForState(candidate.projectId, state, database)
+  const requiredSourceWatermark = getRequiredSourceWatermark(candidate.sourceWatermarks)
+
+  return (
+    getManifestCompletenessError(manifest, state.component)
+    ?? (manifest === null ? null : getReviewConfigError(manifest, candidate.reviewConfigHash))
+    ?? (manifest === null ? null : getWatermarkError(manifest, requiredSourceWatermark))
+    ?? getComponentStateConsistencyError(manifest, state)
+  )
+}
+
+const getOptionalManifestValidationError = async (
+  candidate: ReviewServingSnapshotManifest,
+  state: ReviewServingSnapshotComponentStates['optional'][number],
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  const manifest = await getManifestForState(candidate.projectId, state, database)
+
+  return manifest === null ? null : getComponentStateConsistencyError(manifest, state)
+}
+
+const getCandidateValidationError = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  const selectedImportCompleted = await getSelectedImportSnapshotCompleted(candidate.selectedImportSnapshotId, database)
+  const requiredErrors = await candidate.componentState.required.reduce<Promise<readonly string[]>>(
+    async (previous, state) => {
+      const errors = await previous
+      const error = await getRequiredManifestValidationError(candidate, state, database)
+
+      return error === null ? errors : [...errors, error]
+    },
+    Promise.resolve([]),
+  )
+  const optionalErrors = await candidate.componentState.optional.reduce<Promise<readonly string[]>>(
+    async (previous, state) => {
+      const errors = await previous
+      const error = await getOptionalManifestValidationError(candidate, state, database)
+
+      return error === null ? errors : [...errors, error]
+    },
+    Promise.resolve([]),
+  )
+  const missingRequiredComponents = candidate.requiredComponents.filter((component) => {
+    return !candidate.componentState.required.some((state) => {
+      return state.component === component
+    })
+  })
+  const errors = [
+    ...(selectedImportCompleted ? [] : ['selected import snapshot is not completed']),
+    ...missingRequiredComponents.map((component) => {
+      return `required component ${component} is missing from snapshot state`
+    }),
+    ...requiredErrors,
+    ...optionalErrors,
+  ]
+
+  return errors[0] ?? null
+}
+
+const getValidationResultValue = (candidate: ReviewServingSnapshotManifest, error: string | null) => {
+  return {
+    error,
+    ok: error === null,
+    requiredComponentCount: candidate.componentState.required.length,
+    snapshotId: candidate.snapshotId,
+  }
+}
+
+const getAvailableManifest = async (
+  identity: ReviewServingProjectionComponentIdentity | undefined,
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  return identity === undefined ? null : getReviewServingProjectionIdentityManifest(identity, database)
+}
+
+export const composeReviewServingCandidateSnapshotManifest = async (
+  input: ComposeReviewServingCandidateSnapshotInput,
+  database: ReviewServingSnapshotPromotionDatabase = getAppDatabaseService(),
+): Promise<ReviewServingSnapshotManifestInput> => {
+  const requiredManifests = await input.componentRequirements.requiredComponents.reduce<
+    Promise<readonly ReviewServingProjectionIdentityManifest[]>
+  >(async (previous, component) => {
+    const manifests = await previous
+    const manifest = await getAvailableManifest(input.componentIdentities[component], database)
+
+    return manifest === null ? manifests : [...manifests, manifest]
+  }, Promise.resolve([]))
+  const optionalManifests = await input.componentRequirements.optionalComponents.reduce<
+    Promise<readonly ReviewServingProjectionIdentityManifest[]>
+  >(async (previous, component) => {
+    const manifests = await previous
+    const manifest = await getAvailableManifest(input.componentIdentities[component], database)
+
+    return manifest === null ? manifests : [...manifests, manifest]
+  }, Promise.resolve([]))
+
+  return {
+    componentRequirements: input.componentRequirements,
+    componentState: {
+      optional: optionalManifests.map((manifest) => {
+        return getComponentState(manifest, 'optional')
+      }),
+      required: requiredManifests.map((manifest) => {
+        return getComponentState(manifest, 'required')
+      }),
+    },
+    composedIdentity: input.composedIdentity,
+    projectId: input.projectId,
+    reviewConfigHash: input.reviewConfigHash ?? null,
+    selectedImportSnapshotId: input.selectedImportSnapshotId,
+    snapshotId: input.snapshotId,
+    sourceWatermarks: input.sourceWatermarks,
+  }
+}
+
+export const validateReviewServingCandidateSnapshotManifest = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingSnapshotPromotionDatabase = getAppDatabaseService(),
+): Promise<ReviewServingSnapshotValidationResult> => {
+  const error = await getCandidateValidationError(candidate, database)
+  const validationResult = getValidationResultValue(candidate, error)
+
+  return error === null ? {candidate, ok: true, validationResult} : {candidate, error, ok: false, validationResult}
+}
+
+export const getReviewServingOptionalComponentAvailability = (input: {
+  component: ReviewServingProjectionComponent
+  hasActiveSnapshot: boolean
+  optionalComponents: readonly ReviewServingProjectionComponent[]
+  optionalStatePresent: boolean
+}): ReviewServingCountAvailability | ReviewServingSearchAvailability => {
+  return !input.hasActiveSnapshot
+    ? 'unavailable'
+    : !input.optionalComponents.includes(input.component)
+      ? 'async'
+      : input.optionalStatePresent
+        ? 'ready'
+        : 'indexing'
+}

@@ -17,10 +17,13 @@ import {
 } from './reviewServingDirtyWorkService.ts'
 import {
   getActiveReviewServingSnapshotManifest,
+  getReviewServingSnapshotManifest,
+  markCandidateReviewServingSnapshotManifestFailed,
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingSnapshotManifestInput,
   upsertReviewServingProjectionIdentityManifest,
 } from './reviewServingManifestRepository.ts'
+import {validateReviewServingCandidateSnapshotManifest} from './reviewServingSnapshotPromotionService.ts'
 
 export type ReviewServingProjectorWriterDatabase = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -71,6 +74,10 @@ export type PromoteReviewServingProjectorSnapshotInput = {
   reviewConfigHash?: string | null
   snapshotId: string
 }
+
+export type PromoteReviewServingProjectorSnapshotResult =
+  | {error: string; promoted: false; snapshotId: string}
+  | {promoted: true; snapshotId: string}
 
 export type ReviewServingSelectedImportSnapshotCursorInput = {
   cursorJson: ReviewServingIdentityValue | null
@@ -279,8 +286,38 @@ const writeReviewServingSelectedImportSnapshotCursor = async (
 export const promoteReviewServingProjectorSnapshot = async (
   input: PromoteReviewServingProjectorSnapshotInput,
   database: ReviewServingProjectorWriterDatabase = getAppDatabaseService(),
-) => {
+): Promise<PromoteReviewServingProjectorSnapshotResult> => {
   return database.transaction(async (tx) => {
+    const candidate = await getReviewServingSnapshotManifest(
+      {projectId: input.projectId, snapshotId: input.snapshotId},
+      tx,
+    )
+
+    if (candidate === null || candidate.status !== 'candidate') {
+      return {error: 'candidate snapshot manifest is missing', promoted: false, snapshotId: input.snapshotId}
+    }
+
+    const validation = await validateReviewServingCandidateSnapshotManifest(candidate, tx)
+
+    await tx.run(`
+      UPDATE app.review_serving_snapshot_manifest
+      SET
+        validation_result_json = ${getReviewServingJsonLiteral(validation.validationResult)},
+        updated_at = current_timestamp
+      WHERE project_id = ${getSqlLiteral(input.projectId)}
+        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND snapshot_status = 'candidate'
+    `)
+
+    if (!validation.ok) {
+      await markCandidateReviewServingSnapshotManifestFailed(
+        {lastError: validation.error, projectId: input.projectId, snapshotId: input.snapshotId},
+        tx,
+      )
+
+      return {error: validation.error, promoted: false, snapshotId: input.snapshotId}
+    }
+
     const active = await getActiveReviewServingSnapshotManifest(
       {projectId: input.projectId, reviewConfigHash: input.reviewConfigHash ?? null},
       tx,
@@ -310,6 +347,8 @@ export const promoteReviewServingProjectorSnapshot = async (
         AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
         AND snapshot_status = 'candidate'
     `)
+
+    return {promoted: true, snapshotId: input.snapshotId}
   })
 }
 

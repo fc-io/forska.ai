@@ -366,6 +366,20 @@ export const getActiveReviewServingSnapshotManifest = async (
   return rows[0] === undefined ? null : getSnapshotManifestFromRow(rows[0])
 }
 
+export const getReviewServingSnapshotManifest = async (
+  input: {projectId: string; snapshotId: string},
+  database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
+) => {
+  const rows = await database.queryJson<SnapshotManifestRow>(`
+    ${getSnapshotManifestSelect()}
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+    LIMIT 1
+  `)
+
+  return rows[0] === undefined ? null : getSnapshotManifestFromRow(rows[0])
+}
+
 export const getLastKnownGoodReviewServingSnapshotManifest = async (
   input: {projectId: string; reviewConfigHash?: string | null},
   database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),

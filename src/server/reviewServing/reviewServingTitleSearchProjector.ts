@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {type ReviewServingSearchAvailability} from './reviewServingContracts.ts'
+import {type ReviewServingProjectionComponent, type ReviewServingSearchAvailability} from './reviewServingContracts.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -12,6 +12,7 @@ import {
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
+import {getReviewServingOptionalComponentAvailability} from './reviewServingSnapshotPromotionService.ts'
 
 export type ReviewServingTitleSearchProjectorDatabase = ReviewServingProjectorWriterDatabase
 
@@ -215,13 +216,12 @@ export const getReviewServingSearchAvailabilityFromManifest = (input: {
   optionalComponents: readonly string[]
   optionalSearchStatePresent: boolean
 }): ReviewServingSearchAvailability => {
-  return !input.hasActiveSnapshot
-    ? 'unavailable'
-    : !input.optionalComponents.includes('search')
-      ? 'async'
-      : input.optionalSearchStatePresent
-        ? 'ready'
-        : 'indexing'
+  return getReviewServingOptionalComponentAvailability({
+    component: 'search',
+    hasActiveSnapshot: input.hasActiveSnapshot,
+    optionalComponents: input.optionalComponents as readonly ReviewServingProjectionComponent[],
+    optionalStatePresent: input.optionalSearchStatePresent,
+  }) as ReviewServingSearchAvailability
 }
 
 export const projectReviewServingTitleSearchRows = async (
