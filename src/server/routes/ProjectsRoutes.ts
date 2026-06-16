@@ -881,7 +881,7 @@ const softDeleteProjectPromptLlmJudgmentsTx = async (
             changeKind: 'judgment.llm.deleted' as const,
             judgmentId: row.id,
             modelId: row.modelId,
-            projectId: row.projectId,
+            projectId: params.projectId,
             promptId: row.promptId,
             sourceMutationKey: `projectPromptCleanup|${params.projectId}|${row.id}`,
             sourceOperation: 'delete' as const,

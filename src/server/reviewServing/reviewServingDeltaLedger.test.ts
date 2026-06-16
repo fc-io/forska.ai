@@ -230,7 +230,7 @@ test('import article delta appends common envelope fields without affected-proje
   expect(insertStatement).not.toContain('project_id')
   expect(statements.join('\n')).not.toContain('affected_project')
   expect(statements.join('\n')).not.toContain('mart.review')
-  expect(insertStatement).toContain('importSourceRecordKey')
+  expect(insertStatement).toContain('record-1')
 })
 
 test('import removal deltas default to tombstones for replay after removals', async () => {
