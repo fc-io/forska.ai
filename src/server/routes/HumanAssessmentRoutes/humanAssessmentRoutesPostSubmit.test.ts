@@ -211,3 +211,60 @@ test('human assessment submit rejects summary-mode projects before prompt valida
     }),
   ).toBe(false)
 })
+
+test('human assessment submit skips deltas for blank optional answers', async () => {
+  const statements: string[] = []
+  dirtyMarksRef.current = []
+  comparisonServingInvalidationMarksRef.current = []
+  queryJsonRef.current = async (statement) => {
+    statements.push(statement)
+
+    return statement.includes('SELECT DISTINCT article_id AS articleId')
+      ? [{articleId: 'article-optional'}]
+      : statement.includes('FROM app.project_prompt pp')
+        ? [{id: 'prompt-optional'}]
+        : statement.includes('FROM app.review_delta_reconciliation_cursor')
+          ? [{sourceHighWaterMark: 1}]
+          : statement.includes('SELECT id, prompt_id AS promptId, is_answered AS isAnswered')
+            ? [{id: 'judgment-human-optional', promptId: 'prompt-optional', isAnswered: false}]
+            : statement.includes('FROM app.judgment_human jh')
+              ? [
+                  {
+                    articleId: 'article-optional',
+                    id: 'judgment-human-optional',
+                    promptId: 'prompt-optional',
+                    type: 'string | null',
+                  },
+                ]
+              : statement.includes('WHERE id IN') && statement.includes('AND is_answered = FALSE')
+                ? [{id: 'judgment-human-optional'}]
+                : []
+  }
+  runRef.current = async (statement) => {
+    statements.push(statement)
+  }
+  transactionRef.current = async (operation) => {
+    return operation({queryJson: queryJsonRef.current, run: runRef.current})
+  }
+
+  const {humanAssessmentRoutesPostSubmit} = await loadHandler()
+  const set: {status: number} = {status: 200}
+  const response = await humanAssessmentRoutesPostSubmit({
+    body: {answers: [{answer: '   ', judgmentHumanId: 'judgment-human-optional'}], projectId: 'project-optional'},
+    set: set as never,
+  })
+
+  expect(response).toEqual({data: {updated: 1}})
+  expect(
+    statements.some((statement) => {
+      return statement.includes('INSERT INTO app.review_change_delta') && statement.includes('judgment.human.updated')
+    }),
+  ).toBe(false)
+  expect(dirtyMarksRef.current).toEqual([
+    {
+      hasRunner: true,
+      projects: [{articleIds: ['article-optional'], projectId: 'project-optional'}],
+      reason: 'humanAssessmentRoutesPostSubmit',
+    },
+  ])
+})

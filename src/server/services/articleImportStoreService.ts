@@ -1239,7 +1239,7 @@ const upsertArticleImportRouteSourceRecords = async (
     })
   }, Promise.resolve())
 
-  await upsertReviewImportArticleHotFields(tx, recordsToWrite)
+  await upsertReviewImportArticleHotFields(tx, deduplicatedRecords)
   await recordsToWrite.reduce<Promise<void>>((previousRun, record) => {
     return previousRun.then(() => {
       return appendImportRouteArticleDelta({

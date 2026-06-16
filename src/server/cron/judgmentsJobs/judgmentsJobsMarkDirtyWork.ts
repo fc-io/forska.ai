@@ -4,6 +4,7 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {getComparisonProjectServingInvalidationService} from '../../services/comparisonProjectServingInvalidationService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../../services/projectMartDirtyRefreshStateService.ts'
+import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import type {JudgmentJobSqliteOutboxEntry} from './judgmentJobSqliteService.ts'
 
 type DirtyWorkRunner = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
@@ -20,6 +21,20 @@ type StoredJudgmentIdentityRow = {
   id: string
   modelId: string
   promptId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+type VisibleJudgmentDeltaRow = {
+  articleId: string
+  judgmentId: string
+  modelId: string
+  projectId: string
+  promptId: string
+  sourceMutationKey: string
+  sourcePartition: string
+  sourceUpdatedAt: Date | string
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -189,6 +204,74 @@ const getStoredJudgmentIdsByIdentity = async (runner: DirtyWorkRunner, entries: 
   )
 }
 
+const getVisibleJudgmentDeltaRows = async (
+  runner: DirtyWorkRunner,
+  entries: Array<{entry: JudgmentJobSqliteOutboxEntry; judgmentId: string}>,
+) => {
+  if (entries.length === 0) {
+    return []
+  }
+
+  return runner.queryJson<VisibleJudgmentDeltaRow>(`
+    WITH imported_judgment (
+      article_id,
+      prompt_id,
+      model_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      judgment_id,
+      source_updated_at,
+      source_mutation_key,
+      source_partition
+    ) AS (
+      VALUES ${entries
+        .map(({entry, judgmentId}) => {
+          return `(
+            ${getSqlLiteral(entry.articleId)},
+            ${getSqlLiteral(entry.promptId)},
+            ${getSqlLiteral(entry.modelId)},
+            ${getSqlLiteral(entry.useTitle)},
+            ${getSqlLiteral(entry.useAbstract)},
+            ${getSqlLiteral(entry.useFulltext)},
+            ${getSqlLiteral(entry.useFulltextNoImages)},
+            ${getSqlLiteral(judgmentId)},
+            ${getTimestampLiteral(entry.updatedAt)},
+            ${getSqlLiteral(`sqliteOutboxImport|${entry.jobId}|${entry.outboxSeq}|${entry.judgmentId}`)},
+            ${getSqlLiteral(`judgmentSqliteOutboxImport:${entry.jobId}`)}
+          )`
+        })
+        .join(', ')}
+    )
+    SELECT
+      imported_judgment.article_id AS articleId,
+      imported_judgment.prompt_id AS promptId,
+      imported_judgment.model_id AS modelId,
+      imported_judgment.use_title AS useTitle,
+      imported_judgment.use_abstract AS useAbstract,
+      imported_judgment.use_fulltext AS useFulltext,
+      imported_judgment.use_fulltext_no_images AS useFulltextNoImages,
+      imported_judgment.judgment_id AS judgmentId,
+      imported_judgment.source_updated_at AS sourceUpdatedAt,
+      imported_judgment.source_mutation_key AS sourceMutationKey,
+      imported_judgment.source_partition AS sourcePartition,
+      project.id AS projectId
+    FROM imported_judgment
+    INNER JOIN app.project_article project_scope
+      ON project_scope.article_id = imported_judgment.article_id
+    INNER JOIN app.project project
+      ON project.id = project_scope.project_id
+    INNER JOIN app.project_prompt project_prompt
+      ON ${getProjectVisibleJudgmentScopeSql({
+        judgmentAlias: 'imported_judgment',
+        projectAlias: 'project',
+        projectPromptAlias: 'project_prompt',
+        projectScopeAlias: 'project_scope',
+      })}
+  `)
+}
+
 const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqliteOutboxEntry[]) => {
   if (entries.length === 0) {
     return new Set<string>()
@@ -228,7 +311,7 @@ const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqli
 
   const storedJudgmentIdsByIdentity = await getStoredJudgmentIdsByIdentity(runner, entries)
 
-  await appendLlmJudgmentReviewServingDeltas(
+  const deltaRows = await getVisibleJudgmentDeltaRows(
     runner,
     entries
       .map((entry) => {
@@ -236,34 +319,33 @@ const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqli
           ? entry.judgmentId
           : storedJudgmentIdsByIdentity.get(getJudgmentIdentityKey(entry))
 
-        return judgmentId
-          ? {
-              entry,
-              judgmentId,
-            }
-          : null
+        return judgmentId ? {entry, judgmentId} : null
       })
       .filter((entry): entry is {entry: JudgmentJobSqliteOutboxEntry; judgmentId: string} => {
         return entry !== null
-      })
-      .map(({entry, judgmentId}) => {
-        return {
-          articleId: entry.articleId,
-          changeKind: 'judgment.llm.created' as const,
-          judgmentId,
-          modelId: entry.modelId,
-          projectId: entry.projectId,
-          promptId: entry.promptId,
-          sourceMutationKey: `sqliteOutboxImport|${entry.jobId}|${entry.outboxSeq}|${entry.judgmentId}`,
-          sourceOperation: 'insert' as const,
-          sourcePartition: `judgmentSqliteOutboxImport:${entry.jobId}`,
-          sourceUpdatedAt: entry.updatedAt,
-          useAbstract: entry.useAbstract,
-          useFulltext: entry.useFulltext,
-          useFulltextNoImages: entry.useFulltextNoImages,
-          useTitle: entry.useTitle,
-        }
       }),
+  )
+
+  await appendLlmJudgmentReviewServingDeltas(
+    runner,
+    deltaRows.map((row) => {
+      return {
+        articleId: row.articleId,
+        changeKind: 'judgment.llm.created' as const,
+        judgmentId: row.judgmentId,
+        modelId: row.modelId,
+        projectId: row.projectId,
+        promptId: row.promptId,
+        sourceMutationKey: row.sourceMutationKey,
+        sourceOperation: 'insert' as const,
+        sourcePartition: row.sourcePartition,
+        sourceUpdatedAt: row.sourceUpdatedAt,
+        useAbstract: row.useAbstract,
+        useFulltext: row.useFulltext,
+        useFulltextNoImages: row.useFulltextNoImages,
+        useTitle: row.useTitle,
+      }
+    }),
   )
 
   return insertedJudgmentIds

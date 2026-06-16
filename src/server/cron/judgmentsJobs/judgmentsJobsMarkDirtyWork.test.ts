@@ -60,6 +60,7 @@ const seedImportFixture = async (suffix: string) => {
     judgmentId: `judgment-mark-dirty-${suffix}`,
     modelId: `model-mark-dirty-${suffix}`,
     projectId: `project-mark-dirty-${suffix}`,
+    projectPromptId: `project-prompt-mark-dirty-${suffix}`,
     promptId: `prompt-mark-dirty-${suffix}`,
     queuePromptId: `queue-mark-dirty-${suffix}`,
   }
@@ -91,6 +92,10 @@ const seedImportFixture = async (suffix: string) => {
   await runDatabase(`
     INSERT INTO app.project_article (id, project_id, article_id)
     VALUES ('${ids.jobId}-project-article', '${ids.projectId}', '${ids.articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES ('${ids.projectPromptId}', '${ids.projectId}', '${ids.promptId}', 1, TRUE)
   `)
 
   return ids
@@ -183,6 +188,44 @@ test('dirty work commits judgment, import marker, and dirty state idempotently',
   expect(row?.useFulltext).toBe(false)
   expect(row?.useFulltextNoImages).toBe(false)
   expect(Number(row?.dirtyToken ?? 0)).toBe(1)
+})
+
+test('dirty work fans out SQLite LLM deltas to every visible project', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const ids = await seedImportFixture(`visible-fanout-${Date.now()}`)
+  const visibleProjectId = `${ids.projectId}-visible`
+  const entry = getEntry(ids)
+
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${visibleProjectId}', 'Visible Project', '${ids.modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${visibleProjectId}-article', '${visibleProjectId}', '${ids.articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES ('${visibleProjectId}-prompt', '${visibleProjectId}', '${ids.promptId}', 1, TRUE)
+  `)
+
+  await commitJudgmentSqliteOutboxImportDirtyWork({
+    discardedEntries: [],
+    importableEntries: [entry],
+    requestedBy: 'test-importer',
+  })
+
+  const rows = await queryDatabase<{projectId: string}>(`
+    SELECT project_id AS projectId
+    FROM app.review_change_delta
+    WHERE judgment_id = '${ids.judgmentId}'
+    ORDER BY project_id ASC
+  `)
+
+  expect(rows).toEqual([{projectId: ids.projectId}, {projectId: visibleProjectId}])
 })
 
 test('dirty work records import before refresh claims can pass quarantine barriers', async () => {
