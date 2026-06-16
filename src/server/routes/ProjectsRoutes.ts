@@ -1568,7 +1568,7 @@ export const projectsRoutes = new Elysia()
             }
 
             await upsertProjectPromptTx(tx, {
-              changedPromptConfigFields: ['promptOrder', 'enabled'],
+              changedPromptConfigFields: [...immutablePromptIdentityReviewServingFields, 'promptOrder', 'enabled'],
               projectId: createdProject.id,
               promptId: existing.originalId,
               order: existing.order,
@@ -2486,7 +2486,12 @@ export const projectsRoutes = new Elysia()
             )
           `)
           await appendPromptConfigReviewServingDelta(tx, {
-            changedPromptConfigFields: ['promptOrder', 'archived', 'enabled'],
+            changedPromptConfigFields: [
+              ...immutablePromptIdentityReviewServingFields,
+              'promptOrder',
+              'archived',
+              'enabled',
+            ],
             projectId: clonedProject.id,
             promptId: prompt.promptId,
             sourceMutationKey: `projectClonePrompt|${params.id}|${clonedProject.id}|${prompt.promptId}`,
@@ -2572,6 +2577,8 @@ export const projectsRoutes = new Elysia()
           'useAbstract',
           'useFulltext',
           'useFulltextNoImages',
+          ...(sourceProject.dateFrom ? (['dateFrom'] as const) : []),
+          ...(sourceProject.dateTo ? (['dateTo'] as const) : []),
           ...(sourcePrompts.length > 0 ? (['promptMembership'] as const) : []),
           ...(sourceRouteLinks.length > 0 ? (['importRoutes'] as const) : []),
         ],

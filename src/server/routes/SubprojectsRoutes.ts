@@ -527,6 +527,8 @@ export const subprojectsRoutes = new Elysia()
             'useAbstract',
             'useFulltext',
             'useFulltextNoImages',
+            ...(body.dateFrom ? (['dateFrom'] as const) : []),
+            ...(body.dateTo ? (['dateTo'] as const) : []),
             ...(linkedPromptIds.length > 0 ? (['promptMembership'] as const) : []),
           ],
           projectId: createdProject.id,
