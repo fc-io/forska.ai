@@ -95,9 +95,29 @@ test('display search and judgment-input content identities advance independently
   expect(searchAndJudgmentInserts).not.toContain('article.display.updated')
   expect(searchAndJudgmentInserts).toContain('article.searchText.updated')
   expect(searchAndJudgmentInserts).toContain('article.judgmentInput.updated')
-  expect(judgmentOnlyInserts).not.toContain('article.display.updated')
+  expect(judgmentOnlyInserts).toContain('article.display.updated')
   expect(judgmentOnlyInserts).not.toContain('article.searchText.updated')
   expect(judgmentOnlyInserts).toContain('article.judgmentInput.updated')
+})
+
+test('url and metadata-only article updates emit display payload deltas', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  await appendArticleReviewServingDeltas(tx, {
+    articleId: 'article-1',
+    changedFields: ['url', 'sourceMetadata', 'doi'],
+    sourceMutationKey: 'source:payload-change',
+    sourceOperation: 'update',
+  })
+
+  const inserts = getReviewChangeInsertStatements(statements).join('\n')
+
+  expect(inserts).toContain('article.display.updated')
+  expect(inserts).toContain('url')
+  expect(inserts).toContain('sourceMetadata')
+  expect(inserts).toContain('doi')
+  expect(inserts).not.toContain('article.searchText.updated')
+  expect(inserts).not.toContain('article.judgmentInput.updated')
 })
 
 test('article delta idempotency separates display search and judgment-input identities', () => {

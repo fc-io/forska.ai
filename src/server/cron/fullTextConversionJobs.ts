@@ -323,6 +323,8 @@ const convertArticle = async ({
       timeoutMs: DOCLING_CONVERSION_TIMEOUT_MS,
     })
 
+    const sourceUpdatedAt = new Date()
+
     await getAppDatabaseService().transaction(async (tx) => {
       await tx.run(`
         UPDATE app.article
@@ -345,8 +347,9 @@ const convertArticle = async ({
       await appendArticleReviewServingDeltas(tx, {
         articleId: article.id,
         changedFields: ['fullText', 'fullTextHtml'],
-        sourceMutationKey: `fullTextConversionJobs|article|${article.id}|success|${getArticleReviewServingMutationValueHash({html, md})}`,
+        sourceMutationKey: `fullTextConversionJobs|article|${article.id}|success|${sourceUpdatedAt.toISOString()}|${getArticleReviewServingMutationValueHash({html, md})}`,
         sourceOperation: 'update',
+        sourceUpdatedAt,
       })
     })
 

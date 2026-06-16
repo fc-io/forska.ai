@@ -606,14 +606,20 @@ const getChangedReviewConfigFields = (params: {
   hasPromptChanges: boolean
   currentProject: ProjectEditCurrentProject
   body: {
+    dateFrom?: string | null
+    dateTo?: string | null
     humanJudgmentMode?: 'prompt' | 'summary'
     useAbstract?: boolean
     useFulltext?: boolean
     useFulltextNoImages?: boolean
     useTitle?: boolean
   }
+  parsedDateFrom?: Date | null
+  parsedDateTo?: Date | null
 }) => {
   return [
+    hasDateEditChanged(params.parsedDateFrom, params.currentProject.dateFrom) ? 'dateFrom' : null,
+    hasDateEditChanged(params.parsedDateTo, params.currentProject.dateTo) ? 'dateTo' : null,
     params.hasModelIdUpdate ? 'modelId' : null,
     params.hasModelIdUpdate ? 'modelExecutionIdentity' : null,
     params.body.useTitle !== undefined && params.body.useTitle !== params.currentProject.useTitle ? 'useTitle' : null,
@@ -663,14 +669,10 @@ const appendProjectReviewConfigDeltaIfNeeded = async (
 
 const getReviewServingSourceTimestamp = (value: unknown) => {
   if (value instanceof Date) {
-    return value
+    return value.toISOString()
   }
 
-  if (value === null || value === undefined) {
-    return null
-  }
-
-  return String(value)
+  return typeof value === 'string' ? value : null
 }
 
 const deleteProjectHumanPromptAnswersForChangedPromptLinksTx = async (
@@ -1789,6 +1791,8 @@ export const projectsRoutes = new Elysia()
         hasImportRouteChanges,
         hasModelIdUpdate,
         hasPromptChanges,
+        parsedDateFrom,
+        parsedDateTo,
       })
 
       const runEditTransaction = () => {

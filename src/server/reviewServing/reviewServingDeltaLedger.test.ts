@@ -102,7 +102,7 @@ test('import article delta idempotency keys are deterministic from stable source
     sourcePartition: 'importRoute:route-1',
     sourceRowId: 'run-1:record-1',
     sourceTable: 'app.import_run_article',
-    typedKey: {articleId: 'article-1', importRouteId: 'route-1', importRunId: 'run-1', sourceRecordKey: 'record-1'},
+    typedKey: {articleId: 'article-1', importRouteId: 'route-1', importSourceRecordKey: 'record-1'},
   })
   const second = getReviewServingDeltaIdempotencyKey({
     sourceMutationKey: 'import-run-article:run-1:route-1:record-1:v1',
@@ -110,7 +110,7 @@ test('import article delta idempotency keys are deterministic from stable source
     sourcePartition: 'importRoute:route-1',
     sourceRowId: 'run-1:record-1',
     sourceTable: 'app.import_run_article',
-    typedKey: {sourceRecordKey: 'record-1', importRunId: 'run-1', importRouteId: 'route-1', articleId: 'article-1'},
+    typedKey: {importSourceRecordKey: 'record-1', importRouteId: 'route-1', articleId: 'article-1'},
   })
 
   expect(first).toBe(second)
@@ -230,6 +230,7 @@ test('import article delta appends common envelope fields without affected-proje
   expect(insertStatement).not.toContain('project_id')
   expect(statements.join('\n')).not.toContain('affected_project')
   expect(statements.join('\n')).not.toContain('mart.review')
+  expect(insertStatement).toContain('importSourceRecordKey')
 })
 
 test('import removal deltas default to tombstones for replay after removals', async () => {
@@ -247,7 +248,7 @@ test('import removal deltas default to tombstones for replay after removals', as
     sourceRecordKey: 'record-1',
     sourceRowId: 'run-1:record-1',
     sourceTable: 'app.import_run_article',
-    typedKey: {articleId: 'article-1', importRouteId: 'route-1', importRunId: 'run-1', sourceRecordKey: 'record-1'},
+    typedKey: {articleId: 'article-1', importRouteId: 'route-1', importSourceRecordKey: 'record-1'},
   })
   const insertStatement = getInsertStatement(statements, 'app.import_run_article_delta') ?? ''
 
