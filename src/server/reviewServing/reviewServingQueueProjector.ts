@@ -1,0 +1,361 @@
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
+import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {
+  type ReviewServingProjectionIdentityManifestInput,
+  type ReviewServingProjectionManifestStatus,
+} from './reviewServingManifestRepository.ts'
+import {
+  type ReviewServingProjectorRecord,
+  type ReviewServingProjectorWriterDatabase,
+  writeReviewServingProjectorComponent,
+} from './reviewServingProjectorWriter.ts'
+
+export type ReviewServingQueueProjectorDatabase = ReviewServingProjectorWriterDatabase
+
+export type ProjectReviewServingQueueInput = {
+  baseGeneration: number
+  claims: readonly ReviewServingDirtyWorkClaim[]
+  definitionVersion: string
+  projectId: string
+  projectScopeIdentity: string
+  projectionIdentity: string
+  selectedImportSnapshotId: string
+  snapshotId?: string | null
+  status?: ReviewServingProjectionManifestStatus
+}
+
+type QueueSourceRow = {
+  activitySortAt: Date | string | null
+  articleId: string
+  priorityBucket: number | null
+  promptId: string | null
+  queueIdentity: string | null
+  queueKind: string
+  reviewConfigHash: string | null
+  tombstone: boolean
+}
+
+const queueProjectorName = 'queue-projector'
+const staleQueueSortAt = '1970-01-01T00:00:00.000Z'
+
+const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return Math.max(
+    0,
+    ...claims.map((claim) => {
+      return claim.latestSourceHighWaterMark
+    }),
+  )
+}
+
+const getPatchRangeStart = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return Math.min(
+    ...claims.map((claim) => {
+      return claim.firstSourceHighWaterMark
+    }),
+  )
+}
+
+const getClaimSourcePartition = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return claims[0]?.sourcePartition ?? 'review-change'
+}
+
+const getClaimKinds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return [
+    ...new Set(
+      claims.map((claim) => {
+        return claim.dirtyKind
+      }),
+    ),
+  ].join(',')
+}
+
+const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return [
+    ...new Set(
+      claims
+        .map((claim) => {
+          return claim.articleId ?? (claim.scopeKind === 'article' ? (claim.scopeId.split(':').at(-1) ?? null) : null)
+        })
+        .filter((articleId) => {
+          return articleId !== null && articleId.trim().length > 0
+        }) as string[],
+    ),
+  ]
+}
+
+const getClaimPromptIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return [
+    ...new Set(
+      claims
+        .map((claim) => {
+          return claim.scopeKind === 'prompt' ? (claim.scopeId.split(':').at(-1) ?? null) : null
+        })
+        .filter((promptId) => {
+          return promptId !== null && promptId.trim().length > 0
+        }) as string[],
+    ),
+  ]
+}
+
+const getValuesCte = (columnName: string, values: readonly string[]) => {
+  return values.length === 0
+    ? ''
+    : `${columnName}_filter(${columnName}) AS (SELECT * FROM (VALUES ${values
+        .map((value) => {
+          return `(${getSqlLiteral(value)})`
+        })
+        .join(', ')}))`
+}
+
+const getDirtyArticleCte = (projectId: string, articleIds: readonly string[], promptIds: readonly string[]) => {
+  if (articleIds.length > 0) {
+    return getValuesCte('article_id', articleIds)
+  }
+
+  return promptIds.length === 0
+    ? ''
+    : `article_id_filter(article_id) AS (
+        SELECT scope.article_id
+        FROM mart.project_scope_article scope
+        WHERE scope.project_id = ${getSqlLiteral(projectId)}
+          AND (scope.in_curated_scope OR scope.in_route_scope)
+      )`
+}
+
+const getDirtyPromptJoin = (promptIds: readonly string[], alias: string) => {
+  return promptIds.length === 0
+    ? ''
+    : `INNER JOIN prompt_id_filter dirty_prompt
+          ON dirty_prompt.prompt_id = ${alias}.prompt_id`
+}
+
+const getQueueIdentity = (row: QueueSourceRow) => {
+  return (
+    row.queueIdentity
+    ?? getStableReviewServingJson({
+      promptId: row.promptId,
+      queueKind: row.queueKind,
+      reviewConfigHash: row.reviewConfigHash,
+    })
+  )
+}
+
+const getQueueRows = async (input: ProjectReviewServingQueueInput, database: ReviewServingQueueProjectorDatabase) => {
+  const articleIds = getClaimArticleIds(input.claims)
+  const promptIds = getClaimPromptIds(input.claims)
+  const dirtyArticleCte = getDirtyArticleCte(input.projectId, articleIds, promptIds)
+  const dirtyPromptCte = getValuesCte('prompt_id', promptIds)
+  const ctes = [dirtyArticleCte, dirtyPromptCte].filter((cte) => {
+    return cte.length > 0
+  })
+
+  return ctes.length === 0
+    ? []
+    : database.queryJson<QueueSourceRow>(`
+        WITH ${ctes.join(',\n        ')},
+        scoped_article AS (
+          SELECT
+            scope.article_id,
+            COALESCE(scope.article_updated_at, scope.source_updated_at, scope.article_created_at, TIMESTAMPTZ ${getSqlLiteral(staleQueueSortAt)}) AS activity_sort_at,
+            NOT (scope.in_curated_scope OR scope.in_route_scope) AS scope_tombstone
+          FROM article_id_filter dirty
+          INNER JOIN mart.project_scope_article scope
+            ON scope.project_id = ${getSqlLiteral(input.projectId)}
+            AND scope.article_id = dirty.article_id
+        ),
+        selected_import_state AS (
+          SELECT
+            scoped.article_id,
+            COALESCE(selected_patch.tombstone, selected_base.tombstone, TRUE) AS selected_tombstone
+          FROM scoped_article scoped
+          LEFT JOIN app.review_selected_article_import_v4 selected_base
+            ON selected_base.project_id = ${getSqlLiteral(input.projectId)}
+            AND selected_base.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+            AND selected_base.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+            AND selected_base.article_id = scoped.article_id
+          LEFT JOIN mart.review_selected_import_patch_v4 selected_patch
+            ON selected_patch.project_id = ${getSqlLiteral(input.projectId)}
+            AND selected_patch.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+            AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+            AND selected_patch.article_id = scoped.article_id
+        ),
+        llm_queue AS (
+          SELECT
+            scoped.article_id AS articleId,
+            llm.prompt_id AS promptId,
+            llm.review_config_hash AS reviewConfigHash,
+            ${getSqlLiteral('unassessed')} AS queueKind,
+            CASE WHEN llm.latest_llm_created_at IS NULL THEN 0 ELSE 1 END AS priorityBucket,
+            COALESCE(llm.latest_llm_created_at, scoped.activity_sort_at) AS activitySortAt,
+            llm.tombstone OR llm.llm_status_key = 'answered' OR selected.selected_tombstone OR scoped.scope_tombstone AS tombstone
+          FROM scoped_article scoped
+          INNER JOIN selected_import_state selected
+            ON selected.article_id = scoped.article_id
+          INNER JOIN mart.review_llm_status_patch_v4 llm
+            ON llm.project_id = ${getSqlLiteral(input.projectId)}
+            AND llm.article_id = scoped.article_id
+            ${getDirtyPromptJoin(promptIds, 'llm')}
+        ),
+        human_queue AS (
+          SELECT
+            scoped.article_id AS articleId,
+            human.prompt_id AS promptId,
+            ${getSqlLiteral(null)} AS reviewConfigHash,
+            ${getSqlLiteral('human-unreviewed')} AS queueKind,
+            CASE WHEN human.latest_human_updated_at IS NULL THEN 0 ELSE 1 END AS priorityBucket,
+            COALESCE(human.latest_human_updated_at, scoped.activity_sort_at) AS activitySortAt,
+            human.tombstone OR human.human_status_key = 'answered' OR selected.selected_tombstone OR scoped.scope_tombstone AS tombstone
+          FROM scoped_article scoped
+          INNER JOIN selected_import_state selected
+            ON selected.article_id = scoped.article_id
+          INNER JOIN mart.review_human_status_patch_v4 human
+            ON human.project_id = ${getSqlLiteral(input.projectId)}
+            AND human.article_id = scoped.article_id
+            ${getDirtyPromptJoin(promptIds, 'human')}
+        ),
+        queue_union AS (
+          SELECT * FROM llm_queue
+          UNION ALL
+          SELECT * FROM human_queue
+        )
+        SELECT
+          queue.articleId,
+          queue.promptId,
+          queue.reviewConfigHash,
+          ${getSqlLiteral(null)} AS queueIdentity,
+          queue.queueKind,
+          queue.priorityBucket,
+          queue.activitySortAt,
+          queue.tombstone
+        FROM queue_union queue
+        ORDER BY queue.articleId ASC, queue.promptId ASC, queue.queueKind ASC, queue.reviewConfigHash ASC
+      `)
+}
+
+const getQueuePatchRecord = (
+  input: ProjectReviewServingQueueInput,
+  row: QueueSourceRow,
+): ReviewServingProjectorRecord => {
+  const activitySortAt = row.activitySortAt ?? staleQueueSortAt
+
+  return {
+    keyColumns: [
+      'project_id',
+      'queue_identity',
+      'base_generation',
+      'patch_watermark',
+      'queue_kind',
+      'priority_bucket',
+      'sort_key',
+      'article_id',
+    ],
+    table: 'mart.review_queue_patch_v4',
+    values: {
+      article_id: row.articleId,
+      base_generation: input.baseGeneration,
+      patch_updated_at: new Date(),
+      patch_watermark: getPatchWatermark(input.claims),
+      priority_bucket: row.priorityBucket ?? 0,
+      project_id: input.projectId,
+      queue_identity: getQueueIdentity(row),
+      queue_kind: row.queueKind,
+      sort_key: activitySortAt,
+      tombstone: row.tombstone,
+    },
+  }
+}
+
+const getUnassessedQueueServingRecord = (
+  input: ProjectReviewServingQueueInput,
+  row: QueueSourceRow,
+): ReviewServingProjectorRecord | null => {
+  const activitySortAt = row.activitySortAt ?? staleQueueSortAt
+
+  return input.snapshotId === null || input.snapshotId === undefined || row.reviewConfigHash === null || row.tombstone
+    ? null
+    : {
+        keyColumns: [
+          'project_id',
+          'review_config_hash',
+          'snapshot_id',
+          'queue_kind',
+          'priority_bucket',
+          'activity_sort_at',
+          'article_id',
+        ],
+        table: 'mart.review_unassessed_queue_serving_v4',
+        values: {
+          activity_sort_at: activitySortAt,
+          article_id: row.articleId,
+          priority_bucket: row.priorityBucket ?? 0,
+          project_id: input.projectId,
+          prompt_id: row.promptId,
+          queue_identity: getQueueIdentity(row),
+          queue_kind: row.queueKind,
+          queue_updated_at: new Date(),
+          review_config_hash: row.reviewConfigHash,
+          snapshot_id: input.snapshotId,
+        },
+      }
+}
+
+const getQueuePatchManifest = (input: ProjectReviewServingQueueInput): ReviewServingProjectionIdentityManifestInput => {
+  const patchWatermark = getPatchWatermark(input.claims)
+
+  return {
+    baseGeneration: input.baseGeneration,
+    definitionVersion: input.definitionVersion,
+    inputDigest: getClaimKinds(input.claims),
+    inputWatermark: patchWatermark,
+    invalidationReason: getClaimKinds(input.claims),
+    patchRangeEnd: patchWatermark,
+    patchRangeStart: getPatchRangeStart(input.claims),
+    patchWatermark,
+    projectId: input.projectId,
+    projectionComponent: 'queue',
+    projectionIdentity: input.projectionIdentity,
+    status: input.status ?? 'candidate',
+  }
+}
+
+export const projectReviewServingQueuePatches = async (
+  input: ProjectReviewServingQueueInput,
+  database: ReviewServingQueueProjectorDatabase = getAppDatabaseService(),
+) => {
+  const rows = await getQueueRows(input, database)
+  const patchRecords = rows.map((row) => {
+    return getQueuePatchRecord(input, row)
+  })
+  const servingRecords = rows
+    .map((row) => {
+      return getUnassessedQueueServingRecord(input, row)
+    })
+    .filter((record) => {
+      return record !== null
+    })
+  const patchWatermark = getPatchWatermark(input.claims)
+
+  await writeReviewServingProjectorComponent(
+    {
+      acknowledgements: input.claims,
+      component: 'queue',
+      projectionManifests: input.claims.length === 0 ? [] : [getQueuePatchManifest(input)],
+      records: [...patchRecords, ...servingRecords],
+      watermark:
+        input.claims.length === 0
+          ? undefined
+          : {
+              projectId: input.projectId,
+              projectionComponent: 'queue',
+              projectorName: queueProjectorName,
+              sourceHighWaterMark: patchWatermark,
+              sourcePartition: getClaimSourcePartition(input.claims),
+            },
+    },
+    database,
+  )
+
+  return {patchRowCount: patchRecords.length, patchWatermark, servingRowCount: servingRecords.length}
+}
