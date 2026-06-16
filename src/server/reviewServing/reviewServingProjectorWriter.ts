@@ -59,12 +59,22 @@ export type PromoteReviewServingProjectorSnapshotInput = {
   snapshotId: string
 }
 
+export type ReviewServingSelectedImportSnapshotCursorInput = {
+  cursorJson: ReviewServingIdentityValue | null
+  projectId: string
+  projectScopeIdentity: string
+  selectedImportSnapshotId: string
+  sourceDeltaHighWater: number
+  status: 'candidate' | 'completed'
+}
+
 export type WriteReviewServingProjectorComponentInput = {
   acknowledgements?: readonly ReviewServingDirtyWorkClaim[]
   candidateSnapshot?: ReviewServingSnapshotManifestInput
   component: ReviewServingProjectionComponent
   projectionManifests?: readonly ReviewServingProjectionIdentityManifestInput[]
   records?: readonly ReviewServingProjectorRecord[]
+  selectedImportSnapshotCursor?: ReviewServingSelectedImportSnapshotCursorInput
   snapshotPromotion?: PromoteReviewServingProjectorSnapshotInput
   watermark?: ReviewServingProjectorWatermarkAdvanceInput
 }
@@ -192,6 +202,44 @@ const createCandidateReviewServingSnapshotManifestFromWriter = async (
   `)
 }
 
+const writeReviewServingSelectedImportSnapshotCursor = async (
+  input: ReviewServingSelectedImportSnapshotCursorInput,
+  tx: ReviewServingProjectorWriterTransaction,
+) => {
+  await tx.run(`
+    INSERT INTO app.review_selected_import_snapshot (
+      selected_import_snapshot_id,
+      project_id,
+      project_scope_identity,
+      source_delta_high_water,
+      cursor_json,
+      status,
+      started_at,
+      completed_at,
+      updated_at
+    ) VALUES (
+      ${getSqlLiteral(input.selectedImportSnapshotId)},
+      ${getSqlLiteral(input.projectId)},
+      ${getSqlLiteral(input.projectScopeIdentity)},
+      ${getSqlLiteral(input.sourceDeltaHighWater)},
+      ${getReviewServingNullableJsonLiteral(input.cursorJson)},
+      ${getSqlLiteral(input.status)},
+      current_timestamp,
+      ${input.status === 'completed' ? 'current_timestamp' : 'NULL'},
+      current_timestamp
+    )
+    ON CONFLICT(selected_import_snapshot_id) DO UPDATE SET
+      project_id = excluded.project_id,
+      project_scope_identity = excluded.project_scope_identity,
+      source_delta_high_water = excluded.source_delta_high_water,
+      cursor_json = excluded.cursor_json,
+      status = excluded.status,
+      completed_at = excluded.completed_at,
+      last_error = NULL,
+      updated_at = current_timestamp
+  `)
+}
+
 export const promoteReviewServingProjectorSnapshot = async (
   input: PromoteReviewServingProjectorSnapshotInput,
   database: ReviewServingProjectorWriterDatabase = getAppDatabaseService(),
@@ -253,6 +301,10 @@ export const writeReviewServingProjectorComponent = async (
         await writeReviewServingProjectorRecord(record, tx)
       })
     }, Promise.resolve())
+
+    if (input.selectedImportSnapshotCursor !== undefined) {
+      await writeReviewServingSelectedImportSnapshotCursor(input.selectedImportSnapshotCursor, tx)
+    }
 
     if (input.acknowledgements !== undefined) {
       await completeReviewServingDirtyWorkClaims(input.acknowledgements, tx)
