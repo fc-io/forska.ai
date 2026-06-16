@@ -200,7 +200,7 @@ test('unreconciled outbox rows block projector watermark advancement', async () 
     'review-serving watermark blocked by unreconciled outbox outbox-blocked at 7 (quarantined)',
   )
   expect(statements.join('\n')).toContain("status NOT IN ('operator_terminal', 'reconciled')")
-  expect(statements.join('\n')).not.toContain('UPDATE app.review_serving_projector_watermark')
+  expect(statements.join('\n')).not.toContain('INSERT INTO app.review_serving_projector_watermark')
 })
 
 test('projector watermark advancement proceeds only after reconciliation or operator terminal status', async () => {
@@ -214,6 +214,7 @@ test('projector watermark advancement proceeds only after reconciliation or oper
   })
 
   expect(statements.join('\n')).toContain("status NOT IN ('operator_terminal', 'reconciled')")
-  expect(statements.join('\n')).toContain('UPDATE app.review_serving_projector_watermark')
-  expect(statements.join('\n')).toContain('source_high_water_mark = 10')
+  expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(statements.join('\n')).toContain('ON CONFLICT(watermark_id) DO UPDATE SET')
+  expect(statements.join('\n')).toContain('excluded.source_high_water_mark')
 })

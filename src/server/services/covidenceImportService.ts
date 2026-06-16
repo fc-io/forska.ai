@@ -2715,6 +2715,7 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
   }
 
   const queryRunner = getCovidenceProjectQueryRunner(params.tx)
+  const seedUpdatedAt = new Date()
   await syncCovidenceSeededProjectArticles({articleIds, projectId: project.id, tx: params.tx})
 
   if (project.humanJudgmentMode === 'summary') {
@@ -2723,7 +2724,9 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
         return previousRun.then(async () => {
           const insertValues = judgmentSeedChunk
             .map((judgmentSeed) => {
-              return `(${getQuotedStringList([globalThis.crypto.randomUUID(), project.id, judgmentSeed.articleId]).join(', ')}, ${getSqlLiteral(judgmentSeed.answer)}, 'covidence_import')`
+              const rowValues = getQuotedStringList([globalThis.crypto.randomUUID(), project.id, judgmentSeed.articleId])
+
+              return `(${rowValues.join(', ')}, ${getSqlLiteral(judgmentSeed.answer)}, 'covidence_import', ${getSqlLiteral(seedUpdatedAt)})`
             })
             .join(', ')
 
@@ -2732,12 +2735,12 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
           }
 
           await queryRunner.run(`
-      INSERT INTO app.judgment_human_summary (id, project_id, article_id, answer, origin)
+      INSERT INTO app.judgment_human_summary (id, project_id, article_id, answer, origin, updated_at)
       VALUES ${insertValues}
       ON CONFLICT(project_id, article_id) DO UPDATE SET
         answer = EXCLUDED.answer,
         origin = EXCLUDED.origin,
-        updated_at = now()
+        updated_at = EXCLUDED.updated_at
     `)
           await appendHumanJudgmentReviewServingDeltas(
             queryRunner,
@@ -2749,10 +2752,11 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
                 articleId: judgmentSeed.articleId,
                 humanJudgmentKey,
                 projectId: project.id,
-                sourceMutationKey: `covidenceHumanSummarySeed|${humanJudgmentKey}`,
+                sourceMutationKey: `covidenceHumanSummarySeed|${humanJudgmentKey}|${seedUpdatedAt.toISOString()}`,
                 sourceOperation: 'upsert' as const,
                 sourceRowId: humanJudgmentKey,
                 sourceTable: 'app.judgment_human_summary',
+                sourceUpdatedAt: seedUpdatedAt,
               }
             }),
           )
@@ -2786,7 +2790,14 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
         const insertValues = promptIds
           .flatMap((promptId) => {
             return judgmentSeedChunk.map((judgmentSeed) => {
-              return `(${getQuotedStringList([globalThis.crypto.randomUUID(), project.id, judgmentSeed.articleId, promptId]).join(', ')}, ${getSqlLiteral(judgmentSeed.isAnswered)}, ${getSqlLiteral(judgmentSeed.answer)}, NULL)`
+              const rowValues = getQuotedStringList([
+                globalThis.crypto.randomUUID(),
+                project.id,
+                judgmentSeed.articleId,
+                promptId,
+              ])
+
+              return `(${rowValues.join(', ')}, ${getSqlLiteral(judgmentSeed.isAnswered)}, ${getSqlLiteral(judgmentSeed.answer)}, NULL, ${getSqlLiteral(seedUpdatedAt)})`
             })
           })
           .join(', ')
@@ -2796,13 +2807,13 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
         }
 
         await queryRunner.run(`
-      INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered, answer, comment)
+      INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered, answer, comment, updated_at)
       VALUES ${insertValues}
       ON CONFLICT(project_id, article_id, prompt_id) DO UPDATE SET
         is_answered = EXCLUDED.is_answered,
         answer = EXCLUDED.answer,
         comment = EXCLUDED.comment,
-        updated_at = now()
+        updated_at = EXCLUDED.updated_at
     `)
         await appendHumanJudgmentReviewServingDeltas(
           queryRunner,
@@ -2816,10 +2827,11 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
                 humanJudgmentKey,
                 projectId: project.id,
                 promptId,
-                sourceMutationKey: `covidenceHumanPromptSeed|${humanJudgmentKey}`,
+                sourceMutationKey: `covidenceHumanPromptSeed|${humanJudgmentKey}|${seedUpdatedAt.toISOString()}`,
                 sourceOperation: 'upsert' as const,
                 sourceRowId: humanJudgmentKey,
                 sourceTable: 'app.judgment_human',
+                sourceUpdatedAt: seedUpdatedAt,
               }
             })
           }),

@@ -384,6 +384,7 @@ CREATE TABLE IF NOT EXISTS app.review_write_overlay (
   judgment_id VARCHAR,
   human_judgment_key VARCHAR,
   overlay_kind VARCHAR NOT NULL,
+  read_surface VARCHAR NOT NULL,
   overlay_value_json JSON NOT NULL,
   source_partition VARCHAR NOT NULL,
   source_high_water_mark BIGINT NOT NULL,
@@ -395,6 +396,7 @@ CREATE TABLE IF NOT EXISTS app.review_write_overlay (
   CHECK (length(trim(project_id)) > 0),
   CHECK (length(trim(article_id)) > 0),
   CHECK (length(trim(overlay_kind)) > 0),
+  CHECK (length(trim(read_surface)) > 0),
   CHECK (length(trim(source_partition)) > 0),
   CHECK (source_high_water_mark >= 0)
 );

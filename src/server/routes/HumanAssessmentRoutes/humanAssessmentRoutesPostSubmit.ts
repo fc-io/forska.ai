@@ -157,13 +157,16 @@ export const humanAssessmentRoutesPostSubmit = async ({
 
   const idsToUpdate = Array.from(submittedIds)
   const updatedAt = new Date()
+  const preparedAnswersById = idsToUpdate.reduce<Record<string, string | null>>((acc, id) => {
+    const payload = byId[id]
+    const raw = payload?.answer
+    const value = typeof raw === 'string' ? raw : raw == null ? '' : String(raw)
+    acc[id] = value.trim() === '' ? null : value
+    return acc
+  }, {})
   const answerCase = idsToUpdate
     .map((id) => {
-      const payload = byId[id]
-      const raw = payload?.answer
-      const value = typeof raw === 'string' ? raw : raw == null ? '' : String(raw)
-      const preparedAnswer = value.trim() === '' ? null : value
-      return `WHEN id = '${escapeSqlString(id)}' THEN ${getSqlLiteral(preparedAnswer)}`
+      return `WHEN id = '${escapeSqlString(id)}' THEN ${getSqlLiteral(preparedAnswersById[id] ?? null)}`
     })
     .join(' ')
   const commentCase = idsToUpdate
@@ -203,7 +206,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
         })
         .map((row) => {
           return {
-            answer: byId[row.id]?.answer ?? null,
+            answer: preparedAnswersById[row.id] ?? null,
             articleId: row.articleId,
             comment: byId[row.id]?.comment ?? null,
             humanJudgmentKey: row.id,

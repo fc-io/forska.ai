@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto'
+
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {
@@ -28,6 +30,18 @@ export type ReviewServingProjectorWatermarkAdvanceInput = {
   projectorName: string
   sourceHighWaterMark: number
   sourcePartition: string
+}
+
+const getProjectorWatermarkId = (input: ReviewServingProjectorWatermarkAdvanceInput) => {
+  const identity = [
+    input.projectorName,
+    input.projectId ?? '',
+    input.importRouteId ?? '',
+    input.projectionComponent,
+    input.sourcePartition,
+  ].join('|')
+
+  return `watermark:${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`
 }
 
 type ReviewServingSourceChangeOutboxRow = {
@@ -292,15 +306,28 @@ export const advanceReviewServingProjectorWatermark = async (
   input: ReviewServingProjectorWatermarkAdvanceInput,
 ) => {
   await assertReviewServingProjectorWatermarkCanAdvance(tx, input)
+  const watermarkId = getProjectorWatermarkId(input)
+
   await tx.run(`
-    UPDATE app.review_serving_projector_watermark
-    SET
-      source_high_water_mark = ${input.sourceHighWaterMark},
+    INSERT INTO app.review_serving_projector_watermark (
+      watermark_id,
+      projector_name,
+      project_id,
+      import_route_id,
+      projection_component,
+      source_partition,
+      source_high_water_mark
+    ) VALUES (
+      ${getSqlLiteral(watermarkId)},
+      ${getSqlLiteral(input.projectorName)},
+      ${getSqlLiteral(input.projectId ?? null)},
+      ${getSqlLiteral(input.importRouteId ?? null)},
+      ${getSqlLiteral(input.projectionComponent)},
+      ${getSqlLiteral(input.sourcePartition)},
+      ${input.sourceHighWaterMark}
+    )
+    ON CONFLICT(watermark_id) DO UPDATE SET
+      source_high_water_mark = excluded.source_high_water_mark,
       updated_at = current_timestamp
-    WHERE projector_name = ${getSqlLiteral(input.projectorName)}
-      AND project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
-      AND import_route_id IS NOT DISTINCT FROM ${getSqlLiteral(input.importRouteId)}
-      AND projection_component = ${getSqlLiteral(input.projectionComponent)}
-      AND source_partition = ${getSqlLiteral(input.sourcePartition)}
   `)
 }

@@ -92,14 +92,25 @@ export const projectArticlesRoutes = new Elysia()
           AND article_id = '${escapeSqlString(articleId)}'
       `)
 
-      await appendProjectScopeArticleReviewServingDelta(tx, {
-        articleId,
-        changeKind: 'projectScope.article.removed',
-        projectArticleId: existingProjectArticle.projectArticleId,
-        projectId,
-        sourceMutationKey: `ProjectArticlesRoutes.delete|${projectId}|${existingProjectArticle.projectArticleId}`,
-        sourceOperation: 'delete',
-      })
+      const [remainingImportScope] = await tx.queryJson<{articleId: string}>(`
+        SELECT air.article_id AS articleId
+        FROM app.article_import_route air
+        INNER JOIN app.project_import_route pir ON pir.import_route_id = air.import_route_id
+        WHERE pir.project_id = '${escapeSqlString(projectId)}'
+          AND air.article_id = '${escapeSqlString(articleId)}'
+        LIMIT 1
+      `)
+
+      if (!remainingImportScope) {
+        await appendProjectScopeArticleReviewServingDelta(tx, {
+          articleId,
+          changeKind: 'projectScope.article.removed',
+          projectArticleId: existingProjectArticle.projectArticleId,
+          projectId,
+          sourceMutationKey: `ProjectArticlesRoutes.delete|${projectId}|${existingProjectArticle.projectArticleId}`,
+          sourceOperation: 'delete',
+        })
+      }
 
       await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
         projects: [{articleIds: [articleId], projectId}],

@@ -146,17 +146,19 @@ const fetchAndStoreForRow = async (jobId: string, row: PdfFetchRow): Promise<voi
     return `${columnNameMap[key] ?? key} = ${getSqlLiteral(value)}`
   })
   await getAppDatabaseService().transaction(async (tx) => {
+    const updatedAt = new Date()
     await tx.run(`
       UPDATE app.article
       SET ${updateParts.join(', ')},
-          updated_at = ${getTimestampLiteral(new Date())}
+          updated_at = ${getTimestampLiteral(updatedAt)}
       WHERE id = '${escapeSqlString(row.id)}'
     `)
     await appendArticleReviewServingDeltas(tx, {
       articleId: row.id,
       changedFields: result?.fullTextPDF ? ['fullText', 'fullTextHtml', 'fullTextPDF'] : [],
-      sourceMutationKey: `pdfFetchJobs|article|${row.id}|${getArticleReviewServingMutationValueHash(result)}`,
+      sourceMutationKey: `pdfFetchJobs|article|${row.id}|${updatedAt.toISOString()}|${getArticleReviewServingMutationValueHash(result)}`,
       sourceOperation: 'update',
+      sourceUpdatedAt: updatedAt,
     })
   })
   processAttemptResult(jobId, result)
