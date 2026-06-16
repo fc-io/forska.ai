@@ -1,37 +1,40 @@
 # forska.ai - AI Agents for research
 
-Forska is a local-first very deep, deep research app.
+Do you want to put scientists in a data center? Forska is a local-first,
+privacy-conscious deep research application suitable for actual
+science. It's also open source.
 
-Forska is currently designed as a standalone single-user app. It is not a hosted multi-tenant web app.
+Forska is currently designed as a standalone single-user app. You can share
+your results with others, but it is not a hosted multi-tenant web app suitable
+for large teams (at least not yet). If you want that, then please reach out.
 
-## Stack
+The current USP is that it can let LLMs run through millions of scientific
+articles in days or hours. Perfect for finding obscure papers, keeping track of
+the latest in your field, or helping you with your systematic reviews.
 
-- Bun and Elysia API
-- SolidJS and Vite client
-- DuckDB for local app/query data
-- SQLite for local job/runtime state
+## Under active development
 
-## Local Development
+This project is set up to enable my PhD research. It's under active development
+and sometimes buggy because of that. Feel free to file issues.
 
-Install dependencies and initialize the local database:
+The goal with the project is to replace a lot of manual and tedious tasks
+researchers of all stripes go through. The main focus is on AI and medical
+research.
+
+## To run:
+
+Clone the repo and install dependencies
+
 
 ```bash
 bun install
-bun run db:mig
 ```
 
-Start the local API/server stack and web app:
+Then start the local API/server stack and web app:
 
 ```bash
-bun run dev:server
-bun run dev:app
+bun run dev:start
 ```
-
-The default local profile uses:
-
-- Web app: `http://127.0.0.1:3000`
-- API: `http://127.0.0.1:3001`
-- Runtime data: `data/runtime/primary/`
 
 Open the local URL printed by Vite after `bun run dev:app` starts.
 
@@ -47,39 +50,7 @@ Configure models and providers in the Forska UI:
 4. Open the provider, click `Test`, then `Sync Models` or `Add Model`.
 5. Enable the models you want and click `Save Models`.
 
-Provider credentials and model settings should be entered through the app, not committed into files.
-
-## Optional Local llama.cpp
-
-Forska can use a local OpenAI-compatible endpoint such as `llama-server`.
-
-Install `llama.cpp` / `llama-server` from the upstream project:
-
-- [Install guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md)
-- [Releases](https://github.com/ggml-org/llama.cpp/releases)
-- [Build from source](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
-
-Example model: [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF)
-
-Run a local server:
-
-```bash
-llama-server -hf Qwen/Qwen3-4B-GGUF:Q4_K_M --jinja --reasoning-format deepseek -c 8192 --temp 0.6 --top-k 20 --top-p 0.95 --min-p 0
-```
-
-Default `llama-server` port is `8080`, so the provider base URL is usually:
-
-```text
-http://127.0.0.1:8080/v1
-```
-
-Optional check:
-
-```bash
-curl http://127.0.0.1:8080/v1/models
-```
-
-In the Forska UI, choose an OpenAI-compatible provider, set the base URL to `http://127.0.0.1:8080/v1`, then test and sync models.
+Provider credentials and model settings should be entered through the app.
 
 ## Resource Usage
 

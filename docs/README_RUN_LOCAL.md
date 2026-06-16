@@ -87,6 +87,38 @@ http://127.0.0.1:8080/v1
 
 Then click `Test`, sync or manually add models, and enable the models you want.
 
+## Optional Local llama.cpp
+
+Forska can use a local OpenAI-compatible endpoint such as `llama-server`.
+
+Install `llama.cpp` / `llama-server` from the upstream project:
+
+- [Install guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md)
+- [Releases](https://github.com/ggml-org/llama.cpp/releases)
+- [Build from source](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
+
+Example model: [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF)
+
+Run a local server:
+
+```bash
+llama-server -hf Qwen/Qwen3-4B-GGUF:Q4_K_M --jinja --reasoning-format deepseek -c 8192 --temp 0.6 --top-k 20 --top-p 0.95 --min-p 0
+```
+
+Default `llama-server` port is `8080`, so the provider base URL is usually:
+
+```text
+http://127.0.0.1:8080/v1
+```
+
+Optional check:
+
+```bash
+curl http://127.0.0.1:8080/v1/models
+```
+
+In the Forska UI, choose an OpenAI-compatible provider, set the base URL to `http://127.0.0.1:8080/v1`, then test and sync models.
+
 ## Optional Docling PDF Conversion
 
 If you run a local Docling-compatible service, add it as a provider in `/providers`, add or sync the model, and select that model in `/settings` as the PDF conversion model.
