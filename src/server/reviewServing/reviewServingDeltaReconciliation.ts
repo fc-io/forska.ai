@@ -1,7 +1,6 @@
-import {createHash} from 'node:crypto'
-
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
+import {type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   appendReviewServingChangeDelta,
   appendReviewServingImportRunArticleDelta,
@@ -12,6 +11,7 @@ import {
   type ReviewServingImportRunArticleDeltaAppendInput,
   type ReviewServingSourceOperation,
 } from './reviewServingDeltaLedger.ts'
+import {getReviewServingProjectorWatermarkId} from './reviewServingProjectorDomain.ts'
 
 export type ReviewServingOutboxReconciliationResult =
   | {outboxId: string; status: 'missing'}
@@ -26,22 +26,20 @@ export type ReviewServingOutboxBarrier = {outboxId: string; sourceHighWaterMark:
 export type ReviewServingProjectorWatermarkAdvanceInput = {
   importRouteId?: string | null
   projectId?: string | null
-  projectionComponent: string
+  projectionComponent: ReviewServingProjectionComponent
   projectorName: string
   sourceHighWaterMark: number
   sourcePartition: string
 }
 
 const getProjectorWatermarkId = (input: ReviewServingProjectorWatermarkAdvanceInput) => {
-  const identity = [
-    input.projectorName,
-    input.projectId ?? '',
-    input.importRouteId ?? '',
-    input.projectionComponent,
-    input.sourcePartition,
-  ].join('|')
-
-  return `watermark:${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`
+  return getReviewServingProjectorWatermarkId({
+    importRouteId: input.importRouteId ?? null,
+    projectId: input.projectId ?? null,
+    projectionComponent: input.projectionComponent,
+    projectorName: input.projectorName,
+    sourcePartition: input.sourcePartition,
+  })
 }
 
 type ReviewServingSourceChangeOutboxRow = {

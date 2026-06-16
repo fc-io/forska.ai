@@ -5,8 +5,8 @@ import {
 } from '../../reviewServing/articleReviewServingDeltaService.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {
-  appendLlmJudgmentReviewServingDeltas,
   type AppendLlmJudgmentReviewServingDeltaInput,
+  appendLlmJudgmentReviewServingDeltas,
 } from '../../reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {
@@ -4670,10 +4670,7 @@ const appendProjectTransferJudgmentCreatedDeltas = async ({
     Promise.resolve([]),
   )
 
-  await appendLlmJudgmentReviewServingDeltas(
-    tx,
-    deltaInputs,
-  )
+  await appendLlmJudgmentReviewServingDeltas(tx, deltaInputs)
 }
 
 const appendProjectTransferHumanJudgmentDeltas = async ({
