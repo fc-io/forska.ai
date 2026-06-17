@@ -221,11 +221,11 @@ const getJudgmentDeltaRows = async (
             delta.prompt_id AS promptId,
             COALESCE(delta.prompt_id, 'summary') AS promptOrSummaryKey,
             delta.source_operation AS sourceOperation,
-            delta.tombstone OR delta.source_operation = 'delete' AS tombstone,
+            delta.tombstone AS tombstone,
             delta.payload_json AS payloadJson,
             COALESCE(judgment_human.answer, judgment_human_summary.answer) AS humanAnsweredValue,
             CASE
-              WHEN delta.tombstone OR delta.source_operation = 'delete' THEN NULL
+              WHEN delta.tombstone THEN NULL
               WHEN NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NULL THEN 'unanswered'
               ELSE 'answered'
             END AS humanStatusKey,
@@ -312,6 +312,7 @@ const getPromptScopedRows = async (
           ON project_prompt.project_id = ${getSqlLiteral(input.projectId)}
           AND project_prompt.prompt_id = dirty_prompt.prompt_id
           AND project_prompt.enabled = TRUE
+          AND COALESCE(project_prompt.archived, FALSE) = FALSE
           AND COALESCE(prompt.archived, FALSE) = FALSE
         LEFT JOIN app."judgment_human" judgment_human
           ON judgment_human.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}

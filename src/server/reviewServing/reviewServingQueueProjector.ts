@@ -168,7 +168,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
         selected_import_state AS (
           SELECT
             scoped.article_id,
-            COALESCE(selected_patch.tombstone, selected_base.tombstone, TRUE) AS selected_tombstone
+            COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) AS selected_tombstone
           FROM scoped_article scoped
           LEFT JOIN app.review_selected_article_import_v4 selected_base
             ON selected_base.project_id = ${getSqlLiteral(input.projectId)}

@@ -377,6 +377,7 @@ const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplay
         SET
           article_external_id = ${getSqlLiteral(row.articleExternalId)},
           article_title = ${getSqlLiteral(row.articleTitle)},
+          full_text_pdf = ${getSqlLiteral(row.fullTextPdf)},
           journal_title = ${getSqlLiteral(row.journalTitle)},
           publication_year = ${getSqlLiteral(row.publicationYear)},
           sort_key = ${getSqlLiteral(row.sortKey)},
