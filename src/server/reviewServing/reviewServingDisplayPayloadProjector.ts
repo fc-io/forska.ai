@@ -33,6 +33,7 @@ export type ProjectReviewServingDisplayBaseInput = {
 }
 
 export type ProjectReviewServingDisplayPatchInput = {
+  acknowledgeClaims?: boolean
   baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
@@ -46,6 +47,7 @@ export type ProjectReviewServingDisplayPatchInput = {
 }
 
 export type ProjectReviewServingPayloadInput = {
+  acknowledgeClaims?: boolean
   baseGeneration: number
   claims?: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion?: string
@@ -440,7 +442,7 @@ export const projectReviewServingDisplayPatches = async (
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.claims,
+      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'display',
       projectionManifests: input.claims.length === 0 ? [] : [getPatchManifest(input, 'display')],
       records: rows.map((row) => {
@@ -474,11 +476,12 @@ export const projectReviewServingPayloadRows = async (
   const rows = await getPayloadRows(input, database)
   const hasClaimedWork =
     claims.length > 0 && input.definitionVersion !== undefined && input.projectionIdentity !== undefined
+  const shouldAcknowledgeClaims = hasClaimedWork && input.acknowledgeClaims !== false
   const patchWatermark = getPatchWatermark(claims)
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: hasClaimedWork ? claims : [],
+      acknowledgements: shouldAcknowledgeClaims ? claims : [],
       component: 'payload',
       projectionManifests: hasClaimedWork
         ? [

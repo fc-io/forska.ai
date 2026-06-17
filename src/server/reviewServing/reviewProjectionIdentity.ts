@@ -174,6 +174,16 @@ export const buildReviewProjectionIdentity = (input: ReviewProjectionIdentityInp
   return `${input.component}:${getReviewServingHash('review-projection', getReviewProjectionIdentityValue(input))}`
 }
 
+export const buildReviewDirtyProjectionIdentity = (input: {
+  projectId: string | null
+  projectionComponent: ReviewServingProjectionComponent
+}) => {
+  return `${input.projectionComponent}:${getReviewServingHash('review-change-delta-dirty-projection', {
+    projectionComponent: input.projectionComponent,
+    projectId: input.projectId,
+  })}`
+}
+
 export const buildReviewDisplayIdentity = (input: ReviewDisplayIdentityInput) => {
   return buildReviewProjectionIdentity({
     component: 'display',

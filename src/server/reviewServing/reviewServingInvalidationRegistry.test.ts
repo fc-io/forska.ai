@@ -151,7 +151,7 @@ test('every emitted delta kind declares complete invalidation metadata', () => {
     [
       'judgment.human.updated',
       'humanStatus',
-      ['posting', 'summary', 'payload'],
+      ['queue', 'posting', 'summary', 'payload'],
       ['projectId', 'articleId', 'humanJudgmentKey', 'sourceHighWaterMark'],
       'contributionDiff',
     ],
@@ -229,8 +229,8 @@ test('human judgment updates do not require prompt-scoped keys', () => {
   const rule = getReviewServingInvalidationRule('judgment.human.updated')
 
   expect(rule.requiredKeys).toEqual(['projectId', 'articleId', 'humanJudgmentKey', 'sourceHighWaterMark'])
-  expect(rule.affectedComponents).toEqual(['humanStatus', 'posting', 'summary', 'payload'])
-  expect(rule.downstreamDependents).toEqual(['posting', 'summary', 'payload'])
+  expect(rule.affectedComponents).toEqual(['humanStatus', 'queue', 'posting', 'summary', 'payload'])
+  expect(rule.downstreamDependents).toEqual(['queue', 'posting', 'summary', 'payload'])
 })
 
 test('review config changes invalidate judgment input content for content flag changes', () => {

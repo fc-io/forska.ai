@@ -305,9 +305,9 @@ test('delta intake replay from the same range is idempotent', async () => {
     return statement.includes('INSERT INTO app.review_serving_dirty_work')
   })
 
-  expect(dirtyInserts).toHaveLength(2)
-  expect(dirtyWorkIds.size).toBe(1)
-  expect(getProjectionKey(dirtyInserts[0] ?? '')).toBe(getProjectionKey(dirtyInserts[1] ?? ''))
+  expect(dirtyInserts).toHaveLength(10)
+  expect(dirtyWorkIds.size).toBe(5)
+  expect(getProjectionKey(dirtyInserts[0] ?? '')).toBe(getProjectionKey(dirtyInserts[5] ?? ''))
   expect(getProjectionKey(dirtyInserts[0] ?? '')).toBe(
     getStableReviewServingJson({
       projectionComponent: 'humanStatus',
