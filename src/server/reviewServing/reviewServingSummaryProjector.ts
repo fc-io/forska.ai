@@ -604,6 +604,7 @@ export const projectReviewServingSummaries = async (
                 projectId: input.projectId,
                 projectionComponent: 'summary',
                 projectionIdentity: input.projectionIdentity,
+                reviewConfigHash: input.reviewConfigHash,
                 status: 'candidate',
               },
             ],

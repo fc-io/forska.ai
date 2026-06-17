@@ -225,7 +225,7 @@ const getJudgmentDeltaRows = async (
           delta.use_fulltext AS useFulltext,
           delta.use_fulltext_no_images AS useFulltextNoImages,
           delta.source_operation AS sourceOperation,
-          delta.tombstone OR delta.source_operation = 'delete' OR judgment.id IS NULL AS tombstone,
+          delta.tombstone AS tombstone,
           judgment.is_answered AS isAnswered,
           judgment.answered_original AS answeredOriginal,
           judgment.answered_original_as_array AS answeredOriginalAsArray,

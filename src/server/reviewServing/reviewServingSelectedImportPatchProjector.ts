@@ -220,7 +220,7 @@ const getSelectedImportPatchRecord = (
   } satisfies ReviewServingProjectorRecord
 }
 
-const getApplySelectedImportServingStatement = (input: {
+const getApplySelectedImportServingStatements = (input: {
   baseGeneration: number
   patchWatermark: number
   projectId: string
@@ -229,29 +229,45 @@ const getApplySelectedImportServingStatement = (input: {
 }) => {
   const values = input.rows
     .map((row) => {
-      return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.tombstone ? null : row.importRouteId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedRankKey)}, ${getSqlLiteral(row.tombstone ? null : row.publicationYear)}, ${getSqlLiteral(row.tombstone ? false : (row.duplicateFlag ?? false))}, ${getSqlLiteral(row.tombstone ? false : (row.conflictFlag ?? false))})`
+      return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.tombstone ? null : row.importRouteId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedRankKey)}, ${getSqlLiteral(row.tombstone ? null : row.publicationYear)}, ${getSqlLiteral(row.tombstone ? false : (row.duplicateFlag ?? false))}, ${getSqlLiteral(row.tombstone ? false : (row.conflictFlag ?? false))}, ${getSqlLiteral(row.tombstone)})`
     })
     .join(', ')
 
   return values.length === 0
-    ? null
-    : `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, duplicate_flag, conflict_flag) AS (
-        SELECT * FROM (VALUES ${values})
-      )
-      UPDATE mart.review_article_serving_v4 serving
-      SET
-        selected_import_route_id = changed.import_route_id,
-        selected_rank_key = changed.selected_rank_key,
-        publication_year = changed.publication_year,
-        duplicate_flag = changed.duplicate_flag,
-        conflict_flag = changed.conflict_flag,
-        patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),
-        serving_updated_at = current_timestamp
-      FROM changed
-      WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-        AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
-        AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-        AND serving.article_id = changed.article_id`
+    ? []
+    : [
+        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, duplicate_flag, conflict_flag, tombstone) AS (
+           SELECT * FROM (VALUES ${values})
+         )
+         DELETE FROM mart.review_article_serving_v4 serving
+         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+           AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
+           AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+           AND EXISTS (
+             SELECT 1
+             FROM changed
+             WHERE changed.article_id = serving.article_id
+               AND changed.tombstone = TRUE
+           )`,
+        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, duplicate_flag, conflict_flag, tombstone) AS (
+           SELECT * FROM (VALUES ${values})
+         )
+         UPDATE mart.review_article_serving_v4 serving
+         SET
+           selected_import_route_id = changed.import_route_id,
+           selected_rank_key = changed.selected_rank_key,
+           publication_year = changed.publication_year,
+           duplicate_flag = changed.duplicate_flag,
+           conflict_flag = changed.conflict_flag,
+           patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),
+           serving_updated_at = current_timestamp
+         FROM changed
+         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+           AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
+           AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+           AND serving.article_id = changed.article_id
+           AND changed.tombstone = FALSE`,
+      ]
 }
 
 const getSelectedImportPatchManifest = (
@@ -290,16 +306,12 @@ export const projectReviewServingSelectedImportPatches = async (
       records: rows.map((row) => {
         return getSelectedImportPatchRecord(input, row)
       }),
-      statements: [
-        getApplySelectedImportServingStatement({
-          baseGeneration: input.baseGeneration,
-          patchWatermark,
-          projectId: input.projectId,
-          projectionIdentity: input.projectionIdentity,
-          rows,
-        }),
-      ].flatMap((statement) => {
-        return statement === null ? [] : [statement]
+      statements: getApplySelectedImportServingStatements({
+        baseGeneration: input.baseGeneration,
+        patchWatermark,
+        projectId: input.projectId,
+        projectionIdentity: input.projectionIdentity,
+        rows,
       }),
       watermark:
         input.claims.length === 0
