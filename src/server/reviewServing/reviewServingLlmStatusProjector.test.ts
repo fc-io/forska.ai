@@ -11,6 +11,7 @@ const createLlmStatusDatabase = (input?: {
   projectRows?: readonly Record<string, unknown>[]
   promptConfigRows?: readonly Record<string, unknown>[]
   promptRows?: readonly Record<string, unknown>[]
+  scopedArticleRows?: readonly Record<string, unknown>[]
 }) => {
   const statements: string[] = []
   const database: ReviewServingLlmStatusProjectorDatabase = {
@@ -35,6 +36,10 @@ const createLlmStatusDatabase = (input?: {
 
       if (statement.includes('FROM app.project project')) {
         return (input?.projectRows ?? []) as T[]
+      }
+
+      if (statement.includes('FROM article_id_filter dirty')) {
+        return (input?.scopedArticleRows ?? []) as T[]
       }
 
       return [] as T[]
@@ -141,6 +146,7 @@ test('LLM judgment deltas write component-narrow status patches from persisted b
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, review_config_hash, prompt_config_hash, base_generation, patch_watermark, list_mode_key, article_id, prompt_id)',
   )
+  expect(statements.join('\n')).toContain('UPDATE mart.review_article_serving_v4 serving')
 })
 
 test('LLM deletes write idempotent tombstone patches without rebuilding unrelated components', async () => {
@@ -224,4 +230,42 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
   expect(projectSelect).toContain('judgment.model_id = project.model_id')
   expect(projectSelect).toContain('judgment.use_title = project.use_title')
   expect(projectSelect).toContain('WHERE project.id =')
+})
+
+test('newly scoped articles emit unanswered status rows for enabled prompts', async () => {
+  const {database, statements} = createLlmStatusDatabase({
+    promptConfigRows: [promptConfigRow(), promptConfigRow({promptId: 'prompt-2', promptTextHash: 'prompt-text-2'})],
+    scopedArticleRows: [
+      llmStatusRow({
+        answeredOriginal: null,
+        answeredOriginalAsArray: null,
+        isAnswered: null,
+        latestLlmCreatedAt: null,
+        promptId: 'prompt-1',
+      }),
+      llmStatusRow({
+        answeredOriginal: null,
+        answeredOriginalAsArray: null,
+        isAnswered: null,
+        latestLlmCreatedAt: null,
+        promptId: 'prompt-2',
+        promptTextHash: 'prompt-text-2',
+      }),
+    ],
+  })
+
+  const result = await projectReviewServingLlmStatusPatches(
+    projectInput([llmClaim({dirtyKind: 'projectScope.article.added', sourcePartition: 'projectScope:project-1'})]),
+    database,
+  )
+  const articleSelect = statements.find((statement) => {
+    return statement.includes('FROM article_id_filter dirty')
+  })
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({patchRowCount: 2, patchWatermark: 14})
+  expect(articleSelect).toContain('INNER JOIN app.project_prompt project_prompt')
+  expect(articleSelect).toContain('LEFT JOIN app."judgment" judgment')
+  expect(joined).toContain("'unanswered'")
+  expect(joined).toContain('enabled_prompt_count')
 })

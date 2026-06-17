@@ -782,7 +782,7 @@ CREATE TABLE IF NOT EXISTS mart.review_unassessed_queue_serving_v4 (
   article_id VARCHAR NOT NULL,
   prompt_id VARCHAR,
   queue_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-  PRIMARY KEY(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id)
+  PRIMARY KEY(project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, activity_sort_at, article_id, prompt_id, queue_identity)
 );
 
 CREATE INDEX IF NOT EXISTS idx_import_run_article_delta_route_watermark
