@@ -37,6 +37,7 @@ export type ClaimReviewServingDirtyWorkParams = {
   maxWakeCount?: number
   now?: Date
   projectionComponent: ReviewServingProjectionComponent
+  staleRunningClaimSeconds?: number
 }
 
 export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
@@ -141,6 +142,14 @@ const getNormalizedLimit = (params: {limit: number; maxWakeCount?: number}) => {
   const maxWakeCount = params.maxWakeCount === undefined ? limit : Math.max(0, Math.floor(params.maxWakeCount))
 
   return Math.min(limit, maxWakeCount)
+}
+
+const getStaleRunningClaimSeconds = (params: ClaimReviewServingDirtyWorkParams) => {
+  return Math.max(0, Math.floor(params.staleRunningClaimSeconds ?? 15 * 60))
+}
+
+const getClaimNowSql = (params: ClaimReviewServingDirtyWorkParams) => {
+  return params.now === undefined ? 'current_timestamp' : `TIMESTAMPTZ ${getSqlLiteral(params.now.toISOString())}`
 }
 
 const getArticleId = (input: ReviewServingDirtyWorkInput) => {
@@ -370,13 +379,21 @@ export const claimReviewServingDirtyWork = async (
   database: ReviewServingDirtyWorkDatabase = getAppDatabaseService(),
 ) => {
   const limit = getNormalizedLimit(params)
+  const claimNowSql = getClaimNowSql(params)
+  const staleRunningClaimSeconds = getStaleRunningClaimSeconds(params)
 
   return limit === 0
     ? []
     : database.transaction(async (tx) => {
         const rows = await tx.queryJson<DirtyWorkRow>(`
           ${getDirtyWorkSelect()}
-          WHERE status = 'pending'
+          WHERE (
+              status = 'pending'
+              OR (
+                status = 'running'
+                AND updated_at <= ${claimNowSql} - INTERVAL '${staleRunningClaimSeconds} seconds'
+              )
+            )
             AND starts_with(projection_key, ${getSqlLiteral(getProjectionKeyPrefix(params.projectionComponent))})
           ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
           LIMIT ${limit}
@@ -391,7 +408,13 @@ export const claimReviewServingDirtyWork = async (
             UPDATE app.review_serving_dirty_work
             SET status = 'running', updated_at = current_timestamp
             WHERE dirty_work_id IN (${dirtyWorkIds.map(getSqlLiteral).join(', ')})
-              AND status = 'pending'
+              AND (
+                status = 'pending'
+                OR (
+                  status = 'running'
+                  AND updated_at <= ${claimNowSql} - INTERVAL '${staleRunningClaimSeconds} seconds'
+                )
+              )
           `)
         }
 

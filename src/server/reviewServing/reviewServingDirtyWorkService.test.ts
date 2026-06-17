@@ -275,7 +275,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier} = {}
       const prefix = getSqlStrings(statement).at(-1) ?? ''
       return [...dirtyWork.values()]
         .filter((row) => {
-          return row.status === 'pending' && row.projectionKey.startsWith(prefix)
+          return (row.status === 'pending' || row.status === 'running') && row.projectionKey.startsWith(prefix)
         })
         .sort((left, right) => {
           return left.updatedAt.localeCompare(right.updatedAt) || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
@@ -295,6 +295,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier} = {}
 
     if (statement.includes("SET status = 'running'")) {
       updateStatus(statement, 'running', 'pending')
+      updateStatus(statement, 'running', 'running')
     }
 
     if (statement.includes("SET status = 'pending'")) {
@@ -414,6 +415,30 @@ test('release returns running claims to pending for the next wake', async () => 
   const row = await getReviewServingDirtyWork(claim?.dirtyWorkId ?? '', database)
 
   expect(row?.status).toBe('pending')
+})
+
+test('claims stale running work after the running lease expires', async () => {
+  const {database, statements} = createFakeDirtyWorkDatabase()
+
+  await upsertDisplayWork(database, getBaseScope(1), 'delta-1')
+  await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+
+  const claims = await claimReviewServingDirtyWork({
+    limit: 1,
+    now: new Date(Date.UTC(2026, 5, 16, 13, 0)),
+    projectionComponent: 'display',
+    staleRunningClaimSeconds: 60,
+  }, database)
+  const claimSelect = statements
+    .filter((statement) => {
+      return statement.includes('FROM app.review_serving_dirty_work') && statement.includes("status = 'running'")
+    })
+    .at(-1)
+
+  expect(claims).toHaveLength(1)
+  expect(claimSelect).toContain("status = 'running'")
+  expect(claimSelect).toContain("INTERVAL '60 seconds'")
+  expect(claimSelect).toContain("TIMESTAMPTZ '2026-06-16T13:00:00.000Z'")
 })
 
 test('completion and failure move running claims into retention-ready terminal states', async () => {

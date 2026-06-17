@@ -243,3 +243,63 @@ test('delta intake replay from the same range is idempotent', async () => {
     }),
   )
 })
+
+test('delta projection identity is stable across per-mutation values', async () => {
+  const {database, statements} = createFakeIntakeDatabase([
+    createReviewChangeDelta({
+      articleId: 'article-1',
+      judgmentId: 'judgment-1',
+      modelId: 'model-1',
+      payloadJson: {
+        articleId: 'article-1',
+        contentFlags: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+        judgmentId: 'judgment-1',
+        modelId: 'model-1',
+        projectId: 'project-1',
+        promptId: 'prompt-1',
+      },
+      projectId: 'project-1',
+      promptId: 'prompt-1',
+      sourceHighWaterMark: 12,
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }),
+    createReviewChangeDelta({
+      articleId: 'article-2',
+      deltaId: 'delta-2',
+      judgmentId: 'judgment-2',
+      modelId: 'model-1',
+      payloadJson: {
+        articleId: 'article-2',
+        contentFlags: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+        judgmentId: 'judgment-2',
+        modelId: 'model-1',
+        projectId: 'project-1',
+        promptId: 'prompt-1',
+      },
+      projectId: 'project-1',
+      promptId: 'prompt-1',
+      sourceHighWaterMark: 13,
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }),
+  ])
+
+  await intakeReviewChangeDeltasToDirtyWork(
+    {endSourceHighWaterMark: 13, limit: 10, sourcePartition: 'reviewChange:project-1', startSourceHighWaterMark: 1},
+    database,
+  )
+
+  const projectionKeys = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    })
+    .map(getProjectionKey)
+
+  expect(projectionKeys).toHaveLength(2)
+  expect(projectionKeys[0]).toBe(projectionKeys[1])
+})

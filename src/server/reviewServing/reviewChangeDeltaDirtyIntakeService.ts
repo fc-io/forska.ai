@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
-import type {ReviewServingChangeKind, ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {type ReviewServingDirtyWorkTransaction, upsertReviewServingDirtyWork} from './reviewServingDirtyWorkService.ts'
 import {
   getReviewServingInvalidationRuleOrNull,
@@ -171,18 +171,12 @@ const getRuleValidationError = (rule: ReviewServingInvalidationRule) => {
 }
 
 const getProjectionIdentity = (input: {
-  changeKind: ReviewServingChangeKind
   projectionComponent: ReviewServingProjectionComponent
   projectId: string | null
-  updateMode: string
-  values: Record<string, ReviewServingIdentityValue>
 }) => {
   return `${input.projectionComponent}:${getReviewServingHash('review-change-delta-dirty-projection', {
-    changeKind: input.changeKind,
     projectionComponent: input.projectionComponent,
     projectId: input.projectId,
-    updateMode: input.updateMode,
-    values: input.values,
   })}`
 }
 
@@ -234,11 +228,8 @@ const getValidatedReviewChangeDelta = (row: ReviewChangeDeltaRow) => {
     deltaId: row.deltaId,
     projectionComponent: rule.firstAffectedComponent,
     projectionIdentity: getProjectionIdentity({
-      changeKind: rule.changeKind,
       projectionComponent: rule.firstAffectedComponent,
       projectId: scope.projectId,
-      updateMode: rule.updateMode,
-      values,
     }),
     scope,
     sourceHighWaterMark: row.sourceHighWaterMark,

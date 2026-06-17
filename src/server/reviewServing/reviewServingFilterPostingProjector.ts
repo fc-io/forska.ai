@@ -205,6 +205,14 @@ const getPostingContributionRows = async (
             AND selected_patch.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
             AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
             AND selected_patch.article_id = scoped.article_id
+            AND selected_patch.patch_watermark = (
+              SELECT MAX(newer.patch_watermark)
+              FROM mart.review_selected_import_patch_v4 newer
+              WHERE newer.project_id = selected_patch.project_id
+                AND newer.project_scope_identity = selected_patch.project_scope_identity
+                AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
+                AND newer.article_id = selected_patch.article_id
+            )
         ),
         selected_postings AS (
           SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'importRoute' AS filterKind, selected.import_route_id AS filterValue

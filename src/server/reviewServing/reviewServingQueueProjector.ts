@@ -180,6 +180,14 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
             AND selected_patch.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
             AND selected_patch.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
             AND selected_patch.article_id = scoped.article_id
+            AND selected_patch.patch_watermark = (
+              SELECT MAX(newer.patch_watermark)
+              FROM mart.review_selected_import_patch_v4 newer
+              WHERE newer.project_id = selected_patch.project_id
+                AND newer.project_scope_identity = selected_patch.project_scope_identity
+                AND newer.selected_import_snapshot_id = selected_patch.selected_import_snapshot_id
+                AND newer.article_id = selected_patch.article_id
+            )
         ),
         llm_queue AS (
           SELECT
@@ -197,6 +205,13 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
             ON llm.project_id = ${getSqlLiteral(input.projectId)}
             AND llm.article_id = scoped.article_id
             ${getDirtyPromptJoin(promptIds, 'llm')}
+            AND llm.patch_watermark = (
+              SELECT MAX(newer.patch_watermark)
+              FROM mart.review_llm_status_patch_v4 newer
+              WHERE newer.project_id = llm.project_id
+                AND newer.prompt_config_hash = llm.prompt_config_hash
+                AND newer.article_id = llm.article_id
+            )
         ),
         human_queue AS (
           SELECT
@@ -214,6 +229,13 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
             ON human.project_id = ${getSqlLiteral(input.projectId)}
             AND human.article_id = scoped.article_id
             ${getDirtyPromptJoin(promptIds, 'human')}
+            AND human.patch_watermark = (
+              SELECT MAX(newer.patch_watermark)
+              FROM mart.review_human_status_patch_v4 newer
+              WHERE newer.project_id = human.project_id
+                AND newer.human_status_key = human.human_status_key
+                AND newer.article_id = human.article_id
+            )
         ),
         queue_union AS (
           SELECT * FROM llm_queue
@@ -320,6 +342,17 @@ const getQueuePatchManifest = (input: ProjectReviewServingQueueInput): ReviewSer
   }
 }
 
+const getDeleteReplacedQueueServingStatement = (input: ProjectReviewServingQueueInput) => {
+  const articleIds = getClaimArticleIds(input.claims)
+
+  return input.snapshotId === null || input.snapshotId === undefined || articleIds.length === 0
+    ? null
+    : `DELETE FROM mart.review_unassessed_queue_serving_v4
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND article_id IN (${articleIds.map(getSqlLiteral).join(', ')})`
+}
+
 export const projectReviewServingQueuePatches = async (
   input: ProjectReviewServingQueueInput,
   database: ReviewServingQueueProjectorDatabase = getAppDatabaseService(),
@@ -336,6 +369,7 @@ export const projectReviewServingQueuePatches = async (
       return record !== null
     })
   const patchWatermark = getPatchWatermark(input.claims)
+  const deleteReplacedQueueServingStatement = getDeleteReplacedQueueServingStatement(input)
 
   await writeReviewServingProjectorComponent(
     {
@@ -343,6 +377,7 @@ export const projectReviewServingQueuePatches = async (
       component: 'queue',
       projectionManifests: input.claims.length === 0 ? [] : [getQueuePatchManifest(input)],
       records: [...patchRecords, ...servingRecords],
+      statements: deleteReplacedQueueServingStatement === null ? [] : [deleteReplacedQueueServingStatement],
       watermark:
         input.claims.length === 0
           ? undefined
