@@ -286,8 +286,8 @@ const getPromptScopedRows = async (
         WITH ${getValuesCte('prompt_id', promptIds)}
         SELECT
           scope.article_id AS articleId,
-          judgment_human.prompt_id AS promptId,
-          judgment_human.prompt_id AS promptOrSummaryKey,
+          dirty_prompt.prompt_id AS promptId,
+          dirty_prompt.prompt_id AS promptOrSummaryKey,
           'update' AS sourceOperation,
           project_prompt.prompt_id IS NULL AS tombstone,
           NULL AS payloadJson,
@@ -296,7 +296,7 @@ const getPromptScopedRows = async (
             WHEN NULLIF(TRIM(COALESCE(judgment_human.answer, '')), '') IS NULL THEN 'unanswered'
             ELSE 'answered'
           END AS humanStatusKey,
-          judgment_human.updated_at AS latestHumanUpdatedAt,
+          COALESCE(judgment_human.updated_at, scope.article_updated_at, scope.source_updated_at, scope.article_created_at) AS latestHumanUpdatedAt,
           COALESCE(prompt.content_hash, sha256(prompt.original_text)) AS promptTextHash,
           NULL AS answerSchemaHash,
           'prompt-v1' AS settingsVersion,
@@ -306,19 +306,104 @@ const getPromptScopedRows = async (
         INNER JOIN mart.project_scope_article scope
           ON scope.project_id = ${getSqlLiteral(input.projectId)}
           AND (scope.in_curated_scope OR scope.in_route_scope)
-        INNER JOIN app."judgment_human" judgment_human
+        INNER JOIN app.prompt prompt
+          ON prompt.id = dirty_prompt.prompt_id
+        LEFT JOIN app.project_prompt project_prompt
+          ON project_prompt.project_id = ${getSqlLiteral(input.projectId)}
+          AND project_prompt.prompt_id = dirty_prompt.prompt_id
+          AND project_prompt.enabled = TRUE
+          AND COALESCE(prompt.archived, FALSE) = FALSE
+        LEFT JOIN app."judgment_human" judgment_human
           ON judgment_human.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
           AND judgment_human.article_id = scope.article_id
           AND judgment_human.prompt_id = dirty_prompt.prompt_id
-        LEFT JOIN app.prompt prompt
-          ON prompt.id = judgment_human.prompt_id
-        LEFT JOIN app.project_prompt project_prompt
-          ON project_prompt.project_id = ${getSqlLiteral(input.projectId)}
-          AND project_prompt.prompt_id = judgment_human.prompt_id
-          AND project_prompt.enabled = TRUE
-          AND COALESCE(prompt.archived, FALSE) = FALSE
-        ORDER BY judgment_human.prompt_id ASC, scope.article_id ASC
+        ORDER BY dirty_prompt.prompt_id ASC, scope.article_id ASC
       `)
+}
+
+const getApplyHumanStatusServingStatement = (input: {
+  baseGeneration: number
+  patchWatermark: number
+  projectId: string
+  recordRows: readonly {
+    articleId: string
+    humanStatusKey: string | null
+    listModeKey: string
+    promptConfigHash: string
+    promptId: string | null
+    tombstone: boolean
+  }[]
+}) => {
+  const values = input.recordRows
+    .map((row) => {
+      return `(${getSqlLiteral(row.listModeKey)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.promptConfigHash)}, ${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.humanStatusKey)}, ${getSqlLiteral(row.tombstone)})`
+    })
+    .join(', ')
+
+  return values.length === 0
+    ? null
+    : `WITH changed(list_mode_key, article_id, prompt_config_hash, prompt_id, human_status_key, tombstone) AS (
+        SELECT * FROM (VALUES ${values})
+      ), candidate_prompt AS (
+        SELECT
+          changed.list_mode_key,
+          changed.article_id,
+          changed.prompt_config_hash,
+          changed.prompt_id,
+          changed.human_status_key,
+          changed.tombstone,
+          ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
+        FROM changed
+        UNION ALL
+        SELECT
+          human.list_mode_key,
+          human.article_id,
+          human.prompt_config_hash,
+          human.prompt_id,
+          human.human_status_key,
+          human.tombstone,
+          human.patch_watermark
+        FROM mart.review_human_status_patch_v4 human
+        INNER JOIN changed
+          ON changed.list_mode_key = human.list_mode_key
+          AND changed.article_id = human.article_id
+        WHERE human.project_id = ${getSqlLiteral(input.projectId)}
+          AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
+          AND human.patch_watermark <= ${getSqlLiteral(input.patchWatermark)}
+      ), latest_prompt AS (
+        SELECT candidate.*
+        FROM candidate_prompt candidate
+        WHERE candidate.patch_watermark = (
+          SELECT MAX(newer.patch_watermark)
+          FROM candidate_prompt newer
+          WHERE newer.prompt_config_hash = candidate.prompt_config_hash
+            AND newer.list_mode_key = candidate.list_mode_key
+            AND newer.article_id = candidate.article_id
+            AND newer.prompt_id IS NOT DISTINCT FROM candidate.prompt_id
+        )
+      ), article_status AS (
+        SELECT
+          list_mode_key,
+          article_id,
+          COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id IS NOT NULL AND human_status_key = 'answered') AS human_answered_prompt_count
+        FROM latest_prompt
+        GROUP BY list_mode_key, article_id
+      )
+      UPDATE mart.review_article_serving_v4 serving
+      SET
+        human_answered_prompt_count = CAST(article_status.human_answered_prompt_count AS INTEGER),
+        human_status_key = CASE
+          WHEN serving.enabled_prompt_count = 0 THEN NULL
+          WHEN serving.enabled_prompt_count = article_status.human_answered_prompt_count THEN 'answered'
+          ELSE 'unanswered'
+        END,
+        patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),
+        serving_updated_at = current_timestamp
+      FROM article_status
+      WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+        AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+        AND serving.list_mode_key = article_status.list_mode_key
+        AND serving.article_id = article_status.article_id`
 }
 
 const getHumanStatusPatchRecord = (input: {
@@ -388,6 +473,20 @@ export const projectReviewServingHumanStatusPatches = async (
   ])
   const patchWatermark = getPatchWatermark(input.claims)
   const rows = [...judgmentRows, ...promptRows]
+  const recordRows = rows.flatMap((row) => {
+    const promptConfigHash = getPromptConfigHash(row)
+
+    return input.listModeKeys.map((listModeKey) => {
+      return {
+        articleId: row.articleId,
+        humanStatusKey: row.humanStatusKey,
+        listModeKey,
+        promptConfigHash,
+        promptId: row.promptId,
+        tombstone: row.tombstone,
+      }
+    })
+  })
   const records = rows.flatMap((row) => {
     return input.listModeKeys.map((listModeKey) => {
       return getHumanStatusPatchRecord({
@@ -406,6 +505,16 @@ export const projectReviewServingHumanStatusPatches = async (
       component: 'humanStatus',
       projectionManifests: input.claims.length === 0 ? [] : [getHumanStatusPatchManifest(input)],
       records,
+      statements: [
+        getApplyHumanStatusServingStatement({
+          baseGeneration: input.baseGeneration,
+          patchWatermark,
+          projectId: input.projectId,
+          recordRows,
+        }),
+      ].flatMap((statement) => {
+        return statement === null ? [] : [statement]
+      }),
       watermark:
         input.claims.length === 0
           ? undefined

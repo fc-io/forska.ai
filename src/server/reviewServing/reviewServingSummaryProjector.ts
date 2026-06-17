@@ -102,6 +102,20 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
+const getExpectedArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[], rows: readonly SummaryContributionSourceRow[]) => {
+  const claimArticleIds = getClaimArticleIds(claims)
+
+  return claimArticleIds.length > 0
+    ? claimArticleIds
+    : [
+        ...new Set(
+          rows.map((row) => {
+            return row.articleId
+          }),
+        ),
+      ]
+}
+
 const getValuesCte = (columnName: string, values: readonly string[]) => {
   return values.length === 0
     ? ''
@@ -555,7 +569,7 @@ export const projectReviewServingSummaries = async (
     {
       claims: input.claims,
       componentKind: 'count',
-      expectedArticleIds: getClaimArticleIds(input.claims),
+      expectedArticleIds: getExpectedArticleIds(input.claims, sourceRows),
       newRows: getRowsAsContributionRows(sourceRows),
       projectId: input.projectId,
       projectionComponent: 'summary',

@@ -93,6 +93,7 @@ test('selected-import routine updates write component-narrow patches for only cl
   const insertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_selected_import_patch_v4')
   })
+  const joined = statements.join('\n')
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 9})
   expect(selectStatement).toContain("VALUES ('article-1')")
@@ -104,6 +105,9 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, patch_watermark, article_id)',
   )
+  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).toContain('selected_import_route_id = changed.import_route_id')
+  expect(joined).toContain('selected_rank_key = changed.selected_rank_key')
 })
 
 test('selected-import tombstones replay idempotently with the same patch watermark and article key', async () => {

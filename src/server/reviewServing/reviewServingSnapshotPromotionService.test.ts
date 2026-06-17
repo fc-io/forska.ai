@@ -173,6 +173,41 @@ test('snapshot validation catches selected import and component-state pin mismat
   expect(result.ok ? null : result.error).toBe('selected import snapshot is not completed')
 })
 
+test('snapshot validation checks component watermarks against matching source partitions', async () => {
+  const {database} = createPromotionDatabase()
+  const result = await validateReviewServingCandidateSnapshotManifest(
+    {
+      componentState: {
+        optional: [],
+        required: [
+          {
+            baseGeneration: '1',
+            component: 'display',
+            patchWatermark: '4',
+            projectionIdentity: 'display:identity-1',
+            requirement: 'required',
+          },
+        ],
+      },
+      composedIdentity: {route: 'review.rows', version: 1},
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: [],
+      projectId: 'project-1',
+      requiredComponents: ['display'],
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {importRunArticle: 1000, reviewChange: 10},
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+
+  expect(result.ok).toBe(true)
+})
+
 test('optional component availability distinguishes route states', () => {
   expect(
     getReviewServingOptionalComponentAvailability({

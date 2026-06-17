@@ -95,6 +95,20 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
+const getExpectedArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[], rows: readonly PostingContributionRow[]) => {
+  const claimArticleIds = getClaimArticleIds(claims)
+
+  return claimArticleIds.length > 0
+    ? claimArticleIds
+    : [
+        ...new Set(
+          rows.map((row) => {
+            return row.articleId
+          }),
+        ),
+      ]
+}
+
 const getClaimPromptIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return [
     ...new Set(
@@ -638,7 +652,7 @@ export const projectReviewServingFilterPostings = async (
     {
       claims: input.claims,
       componentKind: 'posting',
-      expectedArticleIds: getClaimArticleIds(input.claims),
+      expectedArticleIds: getExpectedArticleIds(input.claims, contributionRows),
       newRows: getPostingRowsAsContributionRows(liveRows),
       projectId: input.projectId,
       projectionComponent: 'posting',

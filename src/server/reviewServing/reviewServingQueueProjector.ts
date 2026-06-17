@@ -209,8 +209,12 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
               SELECT MAX(newer.patch_watermark)
               FROM mart.review_llm_status_patch_v4 newer
               WHERE newer.project_id = llm.project_id
+                AND newer.review_config_hash = llm.review_config_hash
                 AND newer.prompt_config_hash = llm.prompt_config_hash
+                AND newer.base_generation = llm.base_generation
                 AND newer.article_id = llm.article_id
+                AND newer.prompt_id = llm.prompt_id
+                AND newer.list_mode_key = llm.list_mode_key
             )
         ),
         human_queue AS (

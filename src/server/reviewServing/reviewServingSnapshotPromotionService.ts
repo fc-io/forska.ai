@@ -48,26 +48,40 @@ const getComponentState = (manifest: ReviewServingProjectionIdentityManifest, re
   }
 }
 
-const getNumericIdentityValues = (value: ReviewServingIdentityValue): readonly number[] => {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return [value]
-  }
-
-  if (Array.isArray(value)) {
-    return value.flatMap(getNumericIdentityValues)
-  }
-
-  if (value !== null && typeof value === 'object') {
-    return Object.values(value).flatMap(getNumericIdentityValues)
-  }
-
-  return []
+const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, readonly string[]> = {
+  display: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
+  humanStatus: ['reviewChange', 'review-change'],
+  judgmentInputContent: ['reviewChange', 'review-change'],
+  llmStatus: ['reviewChange', 'review-change'],
+  payload: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
+  posting: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article'],
+  projectScope: ['projectScope', 'project-scope'],
+  queue: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article'],
+  search: ['reviewChange', 'review-change'],
+  selectedImport: ['importRunArticle', 'import-run-article'],
+  summary: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article'],
 }
 
-const getRequiredSourceWatermark = (sourceWatermarks: ReviewServingIdentityValue) => {
-  const values = getNumericIdentityValues(sourceWatermarks)
+const getNumericObjectValue = (sourceWatermarks: ReviewServingIdentityValue, key: string) => {
+  const value = sourceWatermarks !== null && typeof sourceWatermarks === 'object' && !Array.isArray(sourceWatermarks)
+    ? sourceWatermarks[key]
+    : undefined
 
-  return values.length === 0 ? 0 : Math.max(...values)
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const getRequiredSourceWatermark = (
+  sourceWatermarks: ReviewServingIdentityValue,
+  component: ReviewServingProjectionComponent,
+) => {
+  const componentValue = getNumericObjectValue(sourceWatermarks, component)
+  const sourceValues = componentSourceWatermarkKeys[component].flatMap((key) => {
+    const value = getNumericObjectValue(sourceWatermarks, key)
+
+    return value === null ? [] : [value]
+  })
+
+  return componentValue ?? (sourceValues.length === 0 ? 0 : Math.max(...sourceValues))
 }
 
 const getManifestCompletenessError = (
@@ -147,7 +161,7 @@ const getRequiredManifestValidationError = async (
   database: ReviewServingSnapshotPromotionDatabase,
 ) => {
   const manifest = await getManifestForState(candidate.projectId, state, database)
-  const requiredSourceWatermark = getRequiredSourceWatermark(candidate.sourceWatermarks)
+  const requiredSourceWatermark = getRequiredSourceWatermark(candidate.sourceWatermarks, state.component)
 
   return (
     getManifestCompletenessError(manifest, state.component)
@@ -163,7 +177,7 @@ const getOptionalManifestValidationError = async (
   database: ReviewServingSnapshotPromotionDatabase,
 ) => {
   const manifest = await getManifestForState(candidate.projectId, state, database)
-  const requiredSourceWatermark = getRequiredSourceWatermark(candidate.sourceWatermarks)
+  const requiredSourceWatermark = getRequiredSourceWatermark(candidate.sourceWatermarks, state.component)
 
   return (
     getManifestCompletenessError(manifest, state.component)
