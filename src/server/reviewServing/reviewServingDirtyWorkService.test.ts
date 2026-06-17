@@ -286,10 +286,14 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier} = {}
         })
 
       const sourcePartition = statement.includes('source_partition = (') ? eligibleRows[0]?.sourcePartition : null
+      const projectionKey = statement.includes('projection_key = (') ? eligibleRows[0]?.projectionKey : null
 
       return eligibleRows
         .filter((row) => {
-          return sourcePartition === null || row.sourcePartition === sourcePartition
+          return (
+            (sourcePartition === null || row.sourcePartition === sourcePartition)
+            && (projectionKey === null || row.projectionKey === projectionKey)
+          )
         })
         .slice(0, getLimit(statement))
         .map(getQueryRow) as T[]
@@ -431,6 +435,26 @@ test('claims pending work from one source partition per batch', async () => {
   expect(claims[0]?.sourcePartition).toBe('article:display')
 })
 
+test('claims pending work from one projection identity per batch', async () => {
+  const {database} = createFakeDirtyWorkDatabase()
+
+  await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
+  await upsertReviewServingDirtyWork(
+    {
+      latestDeltaId: 'delta-2',
+      projectionComponent: 'display',
+      projectionIdentity: 'display:identity-2',
+      scope: {...getBaseScope(2, '2', '2'), scopeId: 'project-1:article-2'},
+    },
+    database,
+  )
+
+  const claims = await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
+
+  expect(claims).toHaveLength(1)
+  expect(claims[0]?.projectionIdentity).toBe('display:identity-1')
+})
+
 test('release returns running claims to pending for the next wake', async () => {
   const {database} = createFakeDirtyWorkDatabase()
 
@@ -450,12 +474,15 @@ test('claims stale running work after the running lease expires', async () => {
   await upsertDisplayWork(database, getBaseScope(1), 'delta-1')
   await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
 
-  const claims = await claimReviewServingDirtyWork({
-    limit: 1,
-    now: new Date(Date.UTC(2026, 5, 16, 13, 0)),
-    projectionComponent: 'display',
-    staleRunningClaimSeconds: 60,
-  }, database)
+  const claims = await claimReviewServingDirtyWork(
+    {
+      limit: 1,
+      now: new Date(Date.UTC(2026, 5, 16, 13, 0)),
+      projectionComponent: 'display',
+      staleRunningClaimSeconds: 60,
+    },
+    database,
+  )
   const claimSelect = statements
     .filter((statement) => {
       return statement.includes('FROM app.review_serving_dirty_work') && statement.includes("status = 'running'")

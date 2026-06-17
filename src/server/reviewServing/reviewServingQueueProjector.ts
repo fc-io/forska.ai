@@ -220,7 +220,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
             ${getSqlLiteral('unassessed')} AS queueKind,
             CASE WHEN llm.latest_llm_created_at IS NULL THEN 0 ELSE 1 END AS priorityBucket,
             COALESCE(llm.latest_llm_created_at, scoped.activity_sort_at) AS activitySortAt,
-            llm.tombstone OR llm.llm_status_key = 'answered' OR selected.selected_tombstone OR scoped.scope_tombstone AS tombstone
+            llm.tombstone OR llm.llm_status_key = 'answered' OR scoped.scope_tombstone AS tombstone
           FROM scoped_article scoped
           INNER JOIN selected_import_state selected
             ON selected.article_id = scoped.article_id
@@ -249,7 +249,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
             ${getSqlLiteral('human-unreviewed')} AS queueKind,
             CASE WHEN human.latest_human_updated_at IS NULL THEN 0 ELSE 1 END AS priorityBucket,
             COALESCE(human.latest_human_updated_at, scoped.activity_sort_at) AS activitySortAt,
-            human.tombstone OR human.human_status_key = 'answered' OR selected.selected_tombstone OR scoped.scope_tombstone AS tombstone
+            human.tombstone OR human.human_status_key = 'answered' OR scoped.scope_tombstone AS tombstone
           FROM scoped_article scoped
           INNER JOIN selected_import_state selected
             ON selected.article_id = scoped.article_id
