@@ -217,7 +217,7 @@ const getLlmJudgmentRows = async (
         latest_judgment AS (
           SELECT
             judgment.*,
-            ${rowNumberSql}() OVER (PARTITION BY judgment.article_id, judgment.prompt_id ORDER BY judgment.created_at DESC NULLS LAST, judgment.id ASC) AS judgment_rank
+            ${rowNumberSql}() OVER (PARTITION BY judgment.article_id, judgment.prompt_id ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC) AS judgment_rank
           FROM app."judgment" judgment
           INNER JOIN active_article active
             ON active.article_id = judgment.article_id

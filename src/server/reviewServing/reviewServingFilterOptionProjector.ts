@@ -106,14 +106,6 @@ const getPromptAnswerFacetKey = (_input: ProjectReviewServingFilterOptionsInput)
   return 'promptAnswer'
 }
 
-const getAnswerValueExpression = () => {
-  return `CASE
-    WHEN detail.answered_original_as_array IS NOT NULL AND array_length(detail.answered_original_as_array) > 0
-      THEN unnest(detail.answered_original_as_array)
-    ELSE detail.answered_original
-  END`
-}
-
 const getFilterOptionSourceRows = async (
   input: ProjectReviewServingFilterOptionsInput,
   database: ReviewServingFilterOptionProjectorDatabase,
@@ -175,7 +167,7 @@ const getFilterOptionSourceRows = async (
           ${aggregateBySql} serving.human_status_key
         ),
         answer_values AS (
-          SELECT detail.article_id, detail.prompt_id, ${getAnswerValueExpression()} AS answerValue
+          SELECT detail.article_id, detail.prompt_id, detail.answered_original AS answerValue
           FROM mart.review_article_judgment_detail_serving_v4 detail
           INNER JOIN active_article active ON active.article_id = detail.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = detail.list_mode_key
@@ -183,6 +175,18 @@ const getFilterOptionSourceRows = async (
             AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
             ${getOptionModePredicate(input)}
+            AND detail.answered_original_as_array IS NULL
+          UNION ALL
+          SELECT detail.article_id, detail.prompt_id, unnest(detail.answered_original_as_array) AS answerValue
+          FROM mart.review_article_judgment_detail_serving_v4 detail
+          INNER JOIN active_article active ON active.article_id = detail.article_id
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = detail.list_mode_key
+          WHERE detail.project_id = ${getSqlLiteral(input.projectId)}
+            AND detail.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND detail.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            ${getOptionModePredicate(input)}
+            AND detail.answered_original_as_array IS NOT NULL
+            AND array_length(detail.answered_original_as_array) > 0
         ),
         prompt_answer_options AS (
           SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, ${getSqlLiteral(getPromptAnswerFacetKey(input))} AS facetKey, answer.answerValue AS facetValue, answer.prompt_id AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':', ${getSqlLiteral(getPromptAnswerFacetKey(input))}, ':', answer.prompt_id, ':', answer.answerValue) AS optionValueKey, json_object('filterType', 'enum', 'promptId', answer.prompt_id, 'value', answer.answerValue) AS optionPayloadJson, COUNT(DISTINCT answer.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax

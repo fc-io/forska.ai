@@ -143,6 +143,8 @@ test('source query preserves active search and filter scope without using postin
   expect(sourceStatement).toContain("LIKE LOWER('%heart%')")
   expect(sourceStatement).toContain("('llm'), ('human')")
   expect(sourceStatement).toContain('mart.review_article_judgment_detail_serving_v4 detail')
+  expect(sourceStatement).toContain('detail.answered_original AS answerValue')
+  expect(sourceStatement).toContain('unnest(detail.answered_original_as_array) AS answerValue')
   expect(sourceStatement).not.toContain('mart.review_article_filter_posting_serving_v4')
   expect(joined).toContain("search_identity IS NOT DISTINCT FROM 'search:title'")
   expect(joined).toContain("filter_option_identity IS NOT DISTINCT FROM 'identity:search'")
