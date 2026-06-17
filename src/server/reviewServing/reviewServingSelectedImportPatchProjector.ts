@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {reviewServingListModes, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -36,6 +37,38 @@ export type ReviewServingSelectedImportPatchBudgetResult = {
   patchRows: number
   patchWatermarks: number
   shouldCompact: boolean
+}
+
+type SelectedImportServingTemplateRow = {
+  baseGeneration: number
+  displayIdentity: string
+  humanStatusIdentity: string
+  listModeKey: string
+  llmStatusIdentity: string
+  payloadIdentity: string
+  postingIdentity: string
+  projectScopeIdentity: string
+  reviewConfigHash: string
+  selectedImportIdentity: string
+  snapshotId: string
+  summaryIdentity: string
+}
+
+type SnapshotTemplateRow = {
+  componentStateJson: unknown
+  reviewConfigHash: string | null
+  snapshotId: string
+}
+
+type SnapshotComponentState = {
+  baseGeneration?: string
+  component?: string
+  projectionIdentity?: string
+}
+
+type SnapshotComponentStates = {
+  optional?: readonly SnapshotComponentState[]
+  required?: readonly SnapshotComponentState[]
 }
 
 type SelectedImportPatchRow = {
@@ -95,6 +128,128 @@ const getClaimKinds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
       }),
     ),
   ].join(',')
+}
+
+const getSnapshotComponentStates = (componentStateJson: unknown) => {
+  return getJsonValue(componentStateJson) as SnapshotComponentStates
+}
+
+const getSnapshotComponentState = (
+  componentState: SnapshotComponentStates,
+  component: ReviewServingProjectionComponent,
+) => {
+  return [...(componentState.required ?? []), ...(componentState.optional ?? [])].find((state) => {
+    return state.component === component
+  }) ?? null
+}
+
+const getSnapshotComponentIdentity = (
+  componentState: SnapshotComponentStates,
+  component: ReviewServingProjectionComponent,
+) => {
+  return getSnapshotComponentState(componentState, component)?.projectionIdentity ?? null
+}
+
+const getSnapshotBaseGeneration = (componentState: SnapshotComponentStates) => {
+  const selectedImportState = getSnapshotComponentState(componentState, 'selectedImport')
+  const baseGeneration = Number(selectedImportState?.baseGeneration ?? Number.NaN)
+
+  return Number.isFinite(baseGeneration) ? baseGeneration : null
+}
+
+const getTemplateRowsFromSnapshot = (row: SnapshotTemplateRow) => {
+  const componentState = getSnapshotComponentStates(row.componentStateJson)
+  const baseGeneration = getSnapshotBaseGeneration(componentState)
+  const displayIdentity = getSnapshotComponentIdentity(componentState, 'display')
+  const projectScopeIdentity = getSnapshotComponentIdentity(componentState, 'projectScope')
+  const selectedImportIdentity = getSnapshotComponentIdentity(componentState, 'selectedImport')
+  const llmStatusIdentity = getSnapshotComponentIdentity(componentState, 'llmStatus')
+  const humanStatusIdentity = getSnapshotComponentIdentity(componentState, 'humanStatus')
+  const postingIdentity = getSnapshotComponentIdentity(componentState, 'posting')
+  const summaryIdentity = getSnapshotComponentIdentity(componentState, 'summary')
+  const payloadIdentity = getSnapshotComponentIdentity(componentState, 'payload')
+
+  return row.reviewConfigHash === null
+    || baseGeneration === null
+    || displayIdentity === null
+    || projectScopeIdentity === null
+    || selectedImportIdentity === null
+    || llmStatusIdentity === null
+    || humanStatusIdentity === null
+    || postingIdentity === null
+    || summaryIdentity === null
+    || payloadIdentity === null
+    ? []
+    : reviewServingListModes.map((listModeKey): SelectedImportServingTemplateRow => {
+        return {
+          baseGeneration,
+          displayIdentity,
+          humanStatusIdentity,
+          listModeKey,
+          llmStatusIdentity,
+          payloadIdentity,
+          postingIdentity,
+          projectScopeIdentity,
+          reviewConfigHash: row.reviewConfigHash,
+          selectedImportIdentity,
+          snapshotId: row.snapshotId,
+          summaryIdentity,
+        }
+      })
+}
+
+const getSelectedImportServingTemplates = async (
+  input: ProjectReviewServingSelectedImportPatchInput,
+  database: ReviewServingSelectedImportPatchProjectorDatabase,
+) => {
+  const rows = await database.queryJson<SnapshotTemplateRow>(`
+    SELECT
+      snapshot_id AS snapshotId,
+      review_config_hash AS reviewConfigHash,
+      component_state_json AS componentStateJson
+    FROM app.review_serving_snapshot_manifest
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+      AND snapshot_status IN ('candidate', 'active')
+    ORDER BY updated_at DESC
+  `)
+
+  return rows.flatMap(getTemplateRowsFromSnapshot)
+}
+
+const getTemplateValuesSql = (templates: readonly SelectedImportServingTemplateRow[]) => {
+  return templates
+    .map((template) => {
+      return `(${getSqlLiteral(template.projectScopeIdentity)}, ${getSqlLiteral(template.reviewConfigHash)}, ${getSqlLiteral(template.snapshotId)}, ${getSqlLiteral(template.baseGeneration)}, ${getSqlLiteral(template.displayIdentity)}, ${getSqlLiteral(template.selectedImportIdentity)}, ${getSqlLiteral(template.llmStatusIdentity)}, ${getSqlLiteral(template.humanStatusIdentity)}, ${getSqlLiteral(template.postingIdentity)}, ${getSqlLiteral(template.summaryIdentity)}, ${getSqlLiteral(template.payloadIdentity)}, ${getSqlLiteral(template.listModeKey)})`
+    })
+    .join(', ')
+}
+
+const getFallbackTemplateCte = (input: {
+  projectId: string
+  templates: readonly SelectedImportServingTemplateRow[]
+}) => {
+  const values = getTemplateValuesSql(input.templates)
+
+  return values.length === 0
+    ? ''
+    : `
+           UNION
+           SELECT DISTINCT
+             ${getSqlLiteral(input.projectId)} AS project_id,
+             fallback.review_config_hash,
+             fallback.snapshot_id,
+             fallback.base_generation,
+             fallback.display_identity,
+             fallback.project_scope_identity,
+             fallback.selected_import_identity,
+             fallback.llm_status_identity,
+             fallback.human_status_identity,
+             fallback.posting_identity,
+             fallback.summary_identity,
+             fallback.payload_identity,
+             fallback.list_mode_key
+           FROM (VALUES ${values}) AS fallback(project_scope_identity, review_config_hash, snapshot_id, base_generation, display_identity, selected_import_identity, llm_status_identity, human_status_identity, posting_identity, summary_identity, payload_identity, list_mode_key)`
 }
 
 const getSelectedImportPatchRows = async (
@@ -232,12 +387,14 @@ const getApplySelectedImportServingStatements = (input: {
   projectionIdentity: string
   selectedImportSnapshotId: string
   rows: readonly SelectedImportPatchRow[]
+  templates: readonly SelectedImportServingTemplateRow[]
 }) => {
   const values = input.rows
     .map((row) => {
       return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.tombstone ? null : row.importRouteId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedRankKey)}, ${getSqlLiteral(row.tombstone ? null : row.publicationYear)}, ${getSqlLiteral(row.tombstone ? false : (row.duplicateFlag ?? false))}, ${getSqlLiteral(row.tombstone ? false : (row.conflictFlag ?? false))}, ${getSqlLiteral(row.tombstone)}, ${getSqlLiteral(row.scopeTombstone)})`
     })
     .join(', ')
+  const fallbackTemplateCte = getFallbackTemplateCte({projectId: input.projectId, templates: input.templates})
 
   return values.length === 0
     ? []
@@ -292,7 +449,8 @@ const getApplySelectedImportServingStatements = (input: {
                   AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
                   AND snapshot.snapshot_status IN ('candidate', 'active')
               )
-          )
+            ${fallbackTemplateCte}
+           )
           INSERT INTO mart.review_article_serving_v4 (
             project_id,
             review_config_hash,
@@ -423,6 +581,7 @@ export const projectReviewServingSelectedImportPatches = async (
   database: ReviewServingSelectedImportPatchProjectorDatabase = getAppDatabaseService(),
 ) => {
   const rows = await getSelectedImportPatchRows(input, database)
+  const templates = await getSelectedImportServingTemplates(input, database)
   const patchWatermark = getPatchWatermark(input.claims)
 
   await writeReviewServingProjectorComponent(
@@ -440,6 +599,7 @@ export const projectReviewServingSelectedImportPatches = async (
         projectionIdentity: input.projectionIdentity,
         selectedImportSnapshotId: input.selectedImportSnapshotId,
         rows,
+        templates,
       }),
       watermark:
         input.claims.length === 0

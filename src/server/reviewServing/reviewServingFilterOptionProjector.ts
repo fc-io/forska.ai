@@ -142,6 +142,13 @@ const getFilterOptionSourceRows = async (
           WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
           ${aggregateBySql} serving.duplicate_flag
           UNION ALL
+          SELECT 'review' AS filterKind, 'conflictFlag' AS facetKey, CAST(serving.conflict_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:conflictFlag:', CAST(serving.conflict_flag AS VARCHAR)) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'conflictFlag', 'value', CAST(serving.conflict_flag AS VARCHAR)) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM mart.review_article_serving_v4 serving
+          INNER JOIN active_article active ON active.article_id = serving.article_id
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
+          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          ${aggregateBySql} serving.conflict_flag
+          UNION ALL
           SELECT 'review' AS filterKind, 'importRoute' AS facetKey, serving.selected_import_route_id AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:importRoute:', serving.selected_import_route_id) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'importRoute', 'value', serving.selected_import_route_id) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id

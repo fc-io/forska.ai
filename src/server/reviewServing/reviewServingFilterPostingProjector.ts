@@ -311,6 +311,29 @@ const getPostingContributionRows = async (
             )
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = llm.list_mode_key
+          UNION ALL
+          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, answer.answer_value AS filterValue
+          FROM scoped_article scoped
+          INNER JOIN mart.review_llm_status_patch_v4 llm
+            ON llm.project_id = ${getSqlLiteral(input.projectId)}
+            AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
+            AND llm.article_id = scoped.article_id
+            AND llm.answered_original_as_array IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_llm_status_patch_v4 newer
+              WHERE newer.project_id = llm.project_id
+                AND newer.review_config_hash = llm.review_config_hash
+                AND newer.base_generation = llm.base_generation
+                AND newer.article_id = llm.article_id
+                AND newer.prompt_id = llm.prompt_id
+                AND newer.list_mode_key = llm.list_mode_key
+                AND newer.patch_watermark > llm.patch_watermark
+            )
+          INNER JOIN list_mode_key_filter list_mode_key
+            ON list_mode_key.list_mode_key = llm.list_mode_key
+          CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)
         ),
         human_postings AS (
           SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, COALESCE(human.latest_human_updated_at, scoped.sort_key) AS sortKey, human.tombstone OR scoped.scope_tombstone AS tombstone, 'humanStatus' AS filterKind, human.human_status_key AS filterValue

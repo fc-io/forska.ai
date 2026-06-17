@@ -50,16 +50,16 @@ const getComponentState = (manifest: ReviewServingProjectionIdentityManifest, re
 
 const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, readonly string[]> = {
   display: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
-  humanStatus: ['reviewChange', 'review-change'],
+  humanStatus: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
   judgmentInputContent: ['reviewChange', 'review-change'],
-  llmStatus: ['reviewChange', 'review-change'],
+  llmStatus: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
   payload: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
-  posting: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article'],
+  posting: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   projectScope: ['projectScope', 'project-scope'],
-  queue: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article'],
+  queue: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   search: ['reviewChange', 'review-change'],
-  selectedImport: ['importRunArticle', 'import-run-article'],
-  summary: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article'],
+  selectedImport: ['importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  summary: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
 }
 
 const getNumericObjectValue = (sourceWatermarks: ReviewServingIdentityValue, key: string) => {

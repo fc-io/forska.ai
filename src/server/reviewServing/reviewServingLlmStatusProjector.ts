@@ -394,6 +394,7 @@ const getArticleScopedRows = async (
           AND NOT project_prompt.archived
         INNER JOIN app.prompt prompt
           ON prompt.id = project_prompt.prompt_id
+          AND COALESCE(prompt.archived, FALSE) = FALSE
         LEFT JOIN mart.project_scope_article scope
           ON scope.project_id = project.id
           AND scope.article_id = dirty.article_id
