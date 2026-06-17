@@ -223,6 +223,7 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
   expect(llmDeleteStatement).toContain("list_mode_key IS NOT DISTINCT FROM 'llm'")
   expect(humanDeleteStatement).toContain("article_id IN ('article-1')")
   expect(humanDeleteStatement).toContain("list_mode_key IS NOT DISTINCT FROM 'human'")
+  expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_dirty_work_ack')
 })
 
 test('article-set judgment hydration reads bounded payload rows with stable ordering', () => {

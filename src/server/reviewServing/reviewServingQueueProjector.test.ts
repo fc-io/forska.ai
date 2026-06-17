@@ -194,6 +194,35 @@ test('prompt config changes rebuild only prompt-scoped queue rows', async () => 
   expect(servingDelete).toContain("prompt_id IN ('prompt-1')")
 })
 
+test('project review config changes rebuild queue rows for all scoped project articles', async () => {
+  const {database, statements} = createQueueDatabase({queueRows: [queueRow({articleId: 'article-2'})]})
+
+  const result = await projectReviewServingQueuePatches(
+    projectInput([
+      queueClaim({
+        articleId: null,
+        dirtyKind: 'project.reviewConfig.updated',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ]),
+    database,
+  )
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM queue_union queue')
+  })
+  const servingDelete = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  })
+
+  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14, servingRowCount: 1})
+  expect(selectStatement).toContain('article_id_filter(article_id) AS')
+  expect(selectStatement).toContain('FROM mart.project_scope_article scope')
+  expect(selectStatement).toContain('AND (scope.in_curated_scope OR scope.in_route_scope)')
+  expect(servingDelete).not.toContain('article_id IN')
+  expect(servingDelete).not.toContain('prompt_id IN')
+})
+
 test('membership removals write tombstones and keep queue projection component narrow', async () => {
   const {database, statements} = createQueueDatabase({queueRows: [queueRow({tombstone: true})]})
 

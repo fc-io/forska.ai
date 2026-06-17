@@ -400,15 +400,15 @@ export const writeReviewServingProjectorComponent = async (
       await writeReviewServingSelectedImportSnapshotCursor(input.selectedImportSnapshotCursor, tx)
     }
 
-    if (input.acknowledgements !== undefined) {
-      await completeReviewServingDirtyWorkClaims(input.acknowledgements, tx)
-    }
-
     await (input.repairDirtyWork ?? []).reduce<Promise<void>>((previous, dirtyWork) => {
       return previous.then(async () => {
         await upsertReviewServingDirtyWork(dirtyWork, tx)
       })
     }, Promise.resolve())
+
+    if (input.acknowledgements !== undefined) {
+      await completeReviewServingDirtyWorkClaims(input.acknowledgements, tx)
+    }
 
     if (input.watermark !== undefined) {
       await advanceReviewServingProjectorWatermark(tx, input.watermark)

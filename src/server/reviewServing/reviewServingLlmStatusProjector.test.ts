@@ -205,6 +205,7 @@ test('prompt config claims rebuild only prompt-scoped LLM status rows', async ()
   expect(promptSelect).toContain('judgment.use_abstract = project.use_abstract')
   expect(promptSelect).toContain('judgment.use_fulltext = project.use_fulltext')
   expect(promptSelect).toContain('judgment.use_fulltext_no_images = project.use_fulltext_no_images')
+  expect(promptSelect).toContain('COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone')
   expect(deltaSelect).toBeUndefined()
 })
 
@@ -232,6 +233,7 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
   expect(projectSelect).toContain('LEFT JOIN app."judgment" judgment')
   expect(projectSelect).toContain('judgment.model_id = project.model_id')
   expect(projectSelect).toContain('judgment.use_title = project.use_title')
+  expect(projectSelect).toContain('COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone')
   expect(projectSelect).toContain('WHERE project.id =')
 })
 
