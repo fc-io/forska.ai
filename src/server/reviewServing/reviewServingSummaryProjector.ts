@@ -21,6 +21,7 @@ import {
 export type ReviewServingSummaryProjectorDatabase = ReviewServingProjectorWriterDatabase
 
 export type ProjectReviewServingSummariesInput = {
+  acknowledgeClaims?: boolean
   baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
   listModeKeys: readonly string[]
@@ -644,7 +645,7 @@ export const projectReviewServingSummaries = async (
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.claims,
+      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'summary',
       projectionManifests:
         input.claims.length === 0

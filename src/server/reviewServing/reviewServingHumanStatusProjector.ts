@@ -50,6 +50,14 @@ type HumanStatusSourceRow = {
   tombstone: boolean
 }
 
+type HumanStatusArticleScopedRow = {
+  articleId: string
+  humanAnsweredValue: string | null
+  promptId: string | null
+  tombstone: boolean
+  updatedAt: Date | string | null
+}
+
 const humanStatusProjectorName = 'human-status-projector'
 const summaryPromptConfigRow: ProjectPromptConfigRow = {
   answerSchemaHash: null,
@@ -326,6 +334,73 @@ const getPromptScopedRows = async (
       `)
 }
 
+const getArticleScopedRows = async (
+  input: ProjectReviewServingHumanStatusInput,
+  database: ReviewServingHumanStatusProjectorDatabase,
+  promptConfigRows: readonly ProjectPromptConfigRow[],
+) => {
+  const articleIds = getClaimArticleIds(input.claims)
+  const promptConfigRowsWithSummary = [...promptConfigRows, summaryPromptConfigRow]
+
+  if (articleIds.length === 0 || promptConfigRowsWithSummary.length === 0) {
+    return []
+  }
+
+  const rows = await database.queryJson<HumanStatusArticleScopedRow>(`
+    WITH ${getValuesCte('article_id', articleIds)},
+    prompt_config(prompt_id) AS (
+      SELECT * FROM (VALUES ${promptConfigRowsWithSummary
+        .map((row) => {
+          return `(${getSqlLiteral(row.promptId)})`
+        })
+        .join(', ')})
+    ), article_prompt AS (
+      SELECT dirty.article_id, prompt_config.prompt_id
+      FROM article_id_filter dirty
+      CROSS JOIN prompt_config
+    )
+    SELECT
+      article_prompt.article_id AS articleId,
+      article_prompt.prompt_id AS promptId,
+      scope.article_id IS NULL AS tombstone,
+      COALESCE(judgment_human.answer, judgment_human_summary.answer) AS humanAnsweredValue,
+      COALESCE(judgment_human.updated_at, judgment_human_summary.updated_at, scope.article_updated_at, scope.source_updated_at, scope.article_created_at) AS updatedAt
+    FROM article_prompt
+    LEFT JOIN mart.project_scope_article scope
+      ON scope.project_id = ${getSqlLiteral(input.projectId)}
+      AND scope.article_id = article_prompt.article_id
+      AND (scope.in_curated_scope OR scope.in_route_scope)
+    LEFT JOIN app."judgment_human" judgment_human
+      ON judgment_human.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+      AND judgment_human.article_id = article_prompt.article_id
+      AND judgment_human.prompt_id = article_prompt.prompt_id
+      AND article_prompt.prompt_id <> 'summary'
+    LEFT JOIN app."judgment_human_summary" judgment_human_summary
+      ON judgment_human_summary.project_id = ${getSqlLiteral(input.projectId)}
+      AND judgment_human_summary.article_id = article_prompt.article_id
+      AND article_prompt.prompt_id = 'summary'
+    ORDER BY article_prompt.article_id ASC, article_prompt.prompt_id ASC
+  `)
+
+  return rows.map((row): HumanStatusSourceRow => {
+    const promptConfigRow = getPromptConfigRowByPromptId(promptConfigRowsWithSummary, row.promptId) ?? summaryPromptConfigRow
+    const humanAnsweredValue = row.tombstone ? null : row.humanAnsweredValue
+
+    return {
+      ...promptConfigRow,
+      articleId: row.articleId,
+      humanAnsweredValue,
+      humanStatusKey: getHumanStatusKey(humanAnsweredValue, row.tombstone),
+      latestHumanUpdatedAt: row.updatedAt,
+      payloadJson: null,
+      promptId: row.promptId,
+      promptOrSummaryKey: getPromptOrSummaryKey(row.promptId),
+      sourceOperation: 'update',
+      tombstone: row.tombstone,
+    }
+  })
+}
+
 const getApplyHumanStatusServingStatement = (input: {
   baseGeneration: number
   patchWatermark: number
@@ -484,12 +559,13 @@ export const projectReviewServingHumanStatusPatches = async (
   database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService(),
 ) => {
   const promptConfigRows = await getProjectPromptConfigRows(input.projectId, database)
-  const [judgmentRows, promptRows] = await Promise.all([
+  const [judgmentRows, promptRows, articleRows] = await Promise.all([
     getJudgmentDeltaRows(input, database, promptConfigRows),
     getPromptScopedRows(input, database),
+    getArticleScopedRows(input, database, promptConfigRows),
   ])
   const patchWatermark = getPatchWatermark(input.claims)
-  const rows = [...judgmentRows, ...promptRows]
+  const rows = [...judgmentRows, ...promptRows, ...articleRows]
   const recordRows = rows.flatMap((row) => {
     const promptConfigHash = getPromptConfigHash(row)
 

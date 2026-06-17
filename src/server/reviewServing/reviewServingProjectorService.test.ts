@@ -104,7 +104,7 @@ test('component run plan starts at the invalidation registry first affected comp
   const scope = getScope()
   const plan = getReviewServingProjectorComponentRunPlan(scope)
 
-  expect(plan).toEqual(['humanStatus', 'posting', 'summary'])
+  expect(plan).toEqual(['humanStatus', 'queue', 'posting', 'summary', 'payload'])
   expect(plan).not.toContain('selectedImport')
   expect(plan).not.toContain('display')
 })
@@ -145,17 +145,17 @@ test('dirty-work intake enqueues only the affected component slice', async () =>
     },
   )
 
-  expect(result).toEqual({dirtyWorkCount: 3, status: 'queued'})
+  expect(result).toEqual({dirtyWorkCount: 5, status: 'queued'})
   expect(
     upserts.map((input) => {
       return input.projectionComponent
     }),
-  ).toEqual(['humanStatus', 'posting', 'summary'])
+  ).toEqual(['humanStatus', 'queue', 'posting', 'summary', 'payload'])
   expect(
     upserts.map((input) => {
       return input.projectionIdentity
     }),
-  ).toEqual(['humanStatus:identity', 'posting:identity', 'summary:identity'])
+  ).toEqual(['humanStatus:identity', 'queue:identity', 'posting:identity', 'summary:identity', 'payload:identity'])
 })
 
 test('wake runs claimed component batches in dependency order under row budgets', async () => {

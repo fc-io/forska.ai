@@ -2,7 +2,11 @@ import {createHash} from 'node:crypto'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
+import {
+  buildReviewDirtyProjectionIdentity,
+  getStableReviewServingJson,
+  type ReviewServingIdentityValue,
+} from './reviewProjectionIdentity.ts'
 import {type ReviewServingProjectionIdentityManifestInput} from './reviewServingManifestRepository.ts'
 import {
   type ReviewServingProjectorRecord,
@@ -272,7 +276,10 @@ const getSelectedImportProjectionManifest = (input: {
     patchWatermark: input.sourceDeltaHighWater,
     projectId: input.projectId,
     projectionComponent: 'selectedImport',
-    projectionIdentity: input.selectedImportSnapshotId,
+    projectionIdentity: buildReviewDirtyProjectionIdentity({
+      projectId: input.projectId,
+      projectionComponent: 'selectedImport',
+    }),
     status: 'candidate',
   }
 }

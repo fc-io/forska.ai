@@ -5,6 +5,10 @@ import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {reviewServingListModes, type ReviewServingProjectionComponent} from '../reviewServing/reviewServingContracts.ts'
 import {projectReviewServingDisplayPatches, projectReviewServingPayloadRows} from '../reviewServing/reviewServingDisplayPayloadProjector.ts'
 import {
+  getReviewServingFilterOptionIdentity,
+  projectReviewServingFilterOptions,
+} from '../reviewServing/reviewServingFilterOptionProjector.ts'
+import {
   claimReviewServingRebuildChunk,
   isReviewServingRebuildChunkComplete,
   markReviewServingRebuildChunkFailed,
@@ -151,6 +155,25 @@ const defaultReviewServingProjectorWorkerErrorBackoffMs = 10_000
 const reviewServingProjectorWorkerRouteOrJobKey = 'reviewServing.projector.worker'
 const defaultReviewServingLlmListModeKeys = ['llm', 'both'] as const
 const defaultReviewServingHumanListModeKeys = ['human', 'both'] as const
+const defaultReviewFilterOptionKeys = [
+  'conflictFlag',
+  'duplicateFlag',
+  'humanStatus',
+  'importRoute',
+  'llmStatus',
+  'promptAnswer',
+  'publicationYear',
+  'searchTokenPrefix',
+] as const
+const defaultHumanFilterOptionKeys = [
+  'conflictFlag',
+  'duplicateFlag',
+  'humanStatus',
+  'importRoute',
+  'promptAnswer',
+  'publicationYear',
+  'searchTokenPrefix',
+] as const
 
 const getClaimProjectId = (claims: readonly {projectId: string | null}[]) => {
   return claims.find((claim) => {
@@ -217,6 +240,59 @@ const getSnapshotContext = async (
         return getSnapshotComponentState(snapshot, input.component)?.projectionIdentity === input.projectionIdentity
       }) ?? null
     : snapshots[0] ?? null
+}
+
+const getSnapshotContexts = async (
+  input: {
+    component: ReviewServingProjectionComponent
+    projectId: string
+    projectionIdentity: string
+    reviewConfigHash: string | null
+  },
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const rows = await database.queryJson<ReviewServingSnapshotContextRow>(`
+    SELECT
+      snapshot_id AS snapshotId,
+      review_config_hash AS reviewConfigHash,
+      selected_import_snapshot_id AS selectedImportSnapshotId,
+      component_state_json AS componentStateJson
+    FROM app.review_serving_snapshot_manifest
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      ${input.reviewConfigHash === null ? '' : `AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}`}
+      AND snapshot_status IN ('candidate', 'active')
+    ORDER BY CASE WHEN snapshot_status = 'candidate' THEN 0 ELSE 1 END, updated_at DESC
+  `)
+  const snapshots = rows.map((row) => {
+    return {
+      ...row,
+      componentState: getJsonValue(row.componentStateJson) as ReviewServingSnapshotComponentStateJson,
+    }
+  })
+
+  return input.reviewConfigHash === null
+    ? snapshots.filter((snapshot) => {
+        return getSnapshotComponentState(snapshot, input.component)?.projectionIdentity === input.projectionIdentity
+      })
+    : snapshots
+}
+
+const requireSnapshotContexts = async (
+  input: {
+    component: ReviewServingProjectionComponent
+    projectId: string
+    projectionIdentity: string
+    reviewConfigHash: string | null
+  },
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const contexts = await getSnapshotContexts(input, database)
+
+  if (contexts.length === 0) {
+    throw new Error(`cannot run projector without a candidate or active snapshot for project ${input.projectId}`)
+  }
+
+  return contexts
 }
 
 const requireSnapshotContext = async (
@@ -319,28 +395,57 @@ const getDefaultReviewServingProjectorRunners = (
 ): ReviewServingProjectorServiceDependencies['runners'] => {
   return {
     display: async (context) => {
-      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
-      const result = await projectReviewServingDisplayPatches(
+      const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
+      const snapshots = await requireSnapshotContexts(
         {
-          baseGeneration: manifest.baseGeneration,
-          claims: context.claims,
-          definitionVersion: manifest.definitionVersion,
-          displayIdentity: manifest.projectionIdentity,
+          component: context.component,
           projectId,
-          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
           projectionIdentity: manifest.projectionIdentity,
-          selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-          snapshotId: snapshot.snapshotId,
+          reviewConfigHash: manifest.reviewConfigHash,
         },
         database,
       )
+      const patchSnapshot = (snapshot: ReviewServingSnapshotContext, acknowledgeClaims: boolean) => {
+        return projectReviewServingDisplayPatches(
+          {
+            acknowledgeClaims,
+            baseGeneration: manifest.baseGeneration,
+            claims: context.claims,
+            definitionVersion: manifest.definitionVersion,
+            displayIdentity: manifest.projectionIdentity,
+            projectId,
+            projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+            projectionIdentity: manifest.projectionIdentity,
+            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+            snapshotId: snapshot.snapshotId,
+          },
+          database,
+        )
+      }
+      const patchSnapshotsWithoutAcknowledgement = await Promise.all(
+        snapshots.slice(0, -1).map((snapshot) => {
+          return patchSnapshot(snapshot, false)
+        }),
+      )
+      const finalPatchSnapshot = snapshots.at(-1)
+      const results = finalPatchSnapshot === undefined
+        ? patchSnapshotsWithoutAcknowledgement
+        : [
+            ...patchSnapshotsWithoutAcknowledgement,
+            await patchSnapshot(finalPatchSnapshot, true),
+          ]
 
-      return {processedCount: result.patchRowCount}
+      return {
+        processedCount: results.reduce((total, result) => {
+          return total + result.patchRowCount
+        }, 0),
+      }
     },
     humanStatus: async (context) => {
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
       const result = await projectReviewServingHumanStatusPatches(
         {
+          acknowledgeClaims: false,
           baseGeneration: manifest.baseGeneration,
           claims: context.claims,
           definitionVersion: manifest.definitionVersion,
@@ -435,6 +540,7 @@ const getDefaultReviewServingProjectorRunners = (
       const project = await getProjectReviewSettings(projectId, database)
       const articlePayloadResult = await projectReviewServingPayloadRows(
         {
+          acknowledgeClaims: false,
           baseGeneration: manifest.baseGeneration,
           claims: context.claims,
           definitionVersion: manifest.definitionVersion,
@@ -569,8 +675,50 @@ const getDefaultReviewServingProjectorRunners = (
         },
         database,
       )
+      const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
+      const reviewFilterOptionsResult = await projectReviewServingFilterOptions(
+        {
+          claims: [],
+          filterOptionIdentity: getReviewServingFilterOptionIdentity({
+            filterKeys: defaultReviewFilterOptionKeys,
+            listModeKeys: reviewServingListModes,
+            optionMode: 'review',
+            searchIdentity,
+          }),
+          listModeKeys: reviewServingListModes,
+          optionMode: 'review',
+          projectId,
+          projectionIdentity: manifest.projectionIdentity,
+          reviewConfigHash: requireReviewConfigHash(snapshot),
+          searchIdentity,
+          snapshotId: snapshot.snapshotId,
+        },
+        database,
+      )
+      const humanFilterOptionsResult = await projectReviewServingFilterOptions(
+        {
+          claims: context.claims,
+          filterOptionIdentity: getReviewServingFilterOptionIdentity({
+            filterKeys: defaultHumanFilterOptionKeys,
+            listModeKeys: defaultReviewServingHumanListModeKeys,
+            optionMode: 'human',
+            searchIdentity,
+          }),
+          listModeKeys: defaultReviewServingHumanListModeKeys,
+          optionMode: 'human',
+          projectId,
+          projectionIdentity: manifest.projectionIdentity,
+          reviewConfigHash: requireReviewConfigHash(snapshot),
+          searchIdentity,
+          snapshotId: snapshot.snapshotId,
+        },
+        database,
+      )
 
-      return {processedCount: result.summaryRowCount}
+      return {
+        processedCount:
+          result.summaryRowCount + reviewFilterOptionsResult.optionRowCount + humanFilterOptionsResult.optionRowCount,
+      }
     },
   }
 }

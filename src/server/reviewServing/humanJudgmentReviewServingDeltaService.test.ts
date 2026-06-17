@@ -115,7 +115,7 @@ test('summary human judgment updates do not require promptId', async () => {
   expect(inserts).toContain('project-1:article-summary-1:summary')
   expect(inserts).toContain('app.judgment_human_summary')
   expect(inserts).not.toContain('prompt-')
-  expect(rule?.affectedComponents).toEqual(['humanStatus', 'posting', 'summary'])
+  expect(rule?.affectedComponents).toEqual(['humanStatus', 'queue', 'posting', 'summary', 'payload'])
   expect(rule?.requiredKeys).not.toContain('promptId')
 })
 
