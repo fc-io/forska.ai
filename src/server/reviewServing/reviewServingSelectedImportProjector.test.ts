@@ -77,6 +77,11 @@ test('selected-import projector creates snapshot cursor and selected article imp
       return statement.includes('INSERT INTO app.review_selected_import_snapshot') && statement.includes("'completed'")
     }),
   ).toBe(true)
+  expect(
+    statements.some((statement) => {
+      return statement.includes('INSERT INTO app.review_projection_identity_manifest') && statement.includes("'selectedImport'")
+    }),
+  ).toBe(true)
   expect(statements.join('\n')).toContain('"processedRowCount":1')
 })
 

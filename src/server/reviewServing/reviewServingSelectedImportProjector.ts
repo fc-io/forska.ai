@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
+import {type ReviewServingProjectionIdentityManifestInput} from './reviewServingManifestRepository.ts'
 import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
@@ -255,6 +256,27 @@ const getSelectedImportProjectorRecord = (
   }
 }
 
+const getSelectedImportProjectionManifest = (input: {
+  projectId: string
+  selectedImportSnapshotId: string
+  sourceDeltaHighWater: number
+}): ReviewServingProjectionIdentityManifestInput => {
+  return {
+    baseGeneration: 0,
+    definitionVersion: selectedImportProjectorDefinitionVersion,
+    inputDigest: input.selectedImportSnapshotId,
+    inputWatermark: input.sourceDeltaHighWater,
+    invalidationReason: 'selectedImport.base.completed',
+    patchRangeEnd: input.sourceDeltaHighWater,
+    patchRangeStart: input.sourceDeltaHighWater,
+    patchWatermark: input.sourceDeltaHighWater,
+    projectId: input.projectId,
+    projectionComponent: 'selectedImport',
+    projectionIdentity: input.selectedImportSnapshotId,
+    status: 'candidate',
+  }
+}
+
 export const projectReviewServingSelectedImportBatch = async (
   params: ProjectReviewServingSelectedImportBatchInput,
   database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService(),
@@ -275,6 +297,10 @@ export const projectReviewServingSelectedImportBatch = async (
   await writeReviewServingProjectorComponent(
     {
       component: 'selectedImport',
+      projectionManifests:
+        status === 'completed'
+          ? [getSelectedImportProjectionManifest({...params, selectedImportSnapshotId})]
+          : [],
       records: rows.map((row) => {
         return getSelectedImportProjectorRecord({...params, selectedImportSnapshotId}, row)
       }),

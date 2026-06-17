@@ -225,7 +225,7 @@ const getJudgmentDeltaRows = async (
           delta.use_fulltext AS useFulltext,
           delta.use_fulltext_no_images AS useFulltextNoImages,
           delta.source_operation AS sourceOperation,
-          delta.tombstone AS tombstone,
+          delta.tombstone OR project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
           judgment.is_answered AS isAnswered,
           judgment.answered_original AS answeredOriginal,
           judgment.answered_original_as_array AS answeredOriginalAsArray,
@@ -239,6 +239,9 @@ const getJudgmentDeltaRows = async (
           ON dirty.article_id = delta.article_id
         INNER JOIN app.prompt prompt
           ON prompt.id = delta.prompt_id
+        LEFT JOIN app.project_prompt project_prompt
+          ON project_prompt.project_id = delta.project_id
+          AND project_prompt.prompt_id = delta.prompt_id
         LEFT JOIN app."judgment" judgment
           ON judgment.id = delta.judgment_id
           AND judgment.model_id = delta.model_id

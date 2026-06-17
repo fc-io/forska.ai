@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {buildPromptConfigHash, buildReviewConfigHash} from '../../reviewServing/reviewProjectionIdentity.ts'
 import {getReviewServingSearchAvailabilityFromManifest} from '../../reviewServing/reviewServingTitleSearchProjector.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getJsonValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
@@ -509,6 +510,7 @@ const getProjectLargeRebuildState = async (projectId: string): Promise<ProjectLa
 }
 
 const getReviewServingSearchDiagnostic = async (projectId: string): Promise<ReviewServingSearchDiagnostic> => {
+  const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
   const [row] = await getAppDatabaseService().queryJson<{
     componentStateJson: unknown
     optionalComponentsJson: unknown
@@ -520,6 +522,7 @@ const getReviewServingSearchDiagnostic = async (projectId: string): Promise<Revi
       optional_components_json AS optionalComponentsJson
     FROM app.review_serving_snapshot_manifest
     WHERE project_id = ${getSqlLiteral(projectId)}
+      AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(reviewConfigHash)}
       AND snapshot_status = 'active'
     ORDER BY activated_at DESC NULLS LAST, updated_at DESC
     LIMIT 1
@@ -539,6 +542,69 @@ const getReviewServingSearchDiagnostic = async (projectId: string): Promise<Revi
     optionalComponent: optionalComponents.includes('search'),
     snapshotId: row?.snapshotId ?? null,
   }
+}
+
+const getCurrentReviewConfigHash = async (projectId: string) => {
+  const [project] = await getAppDatabaseService().queryJson<{
+    modelId: string
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    useTitle: boolean
+  }>(`
+    SELECT
+      model_id AS modelId,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages
+    FROM app.project
+    WHERE id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+  const promptConfigs = await getAppDatabaseService().queryJson<{
+    promptId: string
+    promptOrder: number | null
+    promptTextHash: string | null
+  }>(`
+    SELECT
+      prompt.id AS promptId,
+      project_prompt.prompt_order AS promptOrder,
+      COALESCE(prompt.content_hash, sha256(prompt.original_text)) AS promptTextHash
+    FROM app.project_prompt project_prompt
+    INNER JOIN app.prompt prompt
+      ON prompt.id = project_prompt.prompt_id
+    WHERE project_prompt.project_id = ${getSqlLiteral(projectId)}
+      AND project_prompt.enabled
+      AND NOT project_prompt.archived
+      AND COALESCE(prompt.archived, FALSE) = FALSE
+    ORDER BY COALESCE(project_prompt.prompt_order, 0) ASC, prompt.id ASC
+  `)
+
+  return project === undefined
+    ? null
+    : buildReviewConfigHash({
+        humanJudgmentMode: 'prompt',
+        modelExecutionIdentity: {modelId: project.modelId},
+        modelId: project.modelId,
+        promptConfigs: promptConfigs.map((row, index) => {
+          return {
+            promptConfigHash: buildPromptConfigHash({
+              answerSchemaHash: null,
+              promptId: row.promptId,
+              promptTextHash: row.promptTextHash ?? row.promptId,
+              settingsVersion: 'prompt-v1',
+              thresholdVersion: null,
+            }),
+            promptId: row.promptId,
+            promptOrder: row.promptOrder ?? index,
+          }
+        }),
+        useAbstract: project.useAbstract,
+        useFulltext: project.useFulltext,
+        useFulltextNoImages: project.useFulltextNoImages,
+        useTitle: project.useTitle,
+      })
 }
 
 const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshCountInfo> => {
