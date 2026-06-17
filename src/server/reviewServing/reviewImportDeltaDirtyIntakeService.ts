@@ -57,8 +57,10 @@ type ReviewImportDeltaRow = {
 
 type ValidatedReviewImportDelta = {
   deltaId: string
-  projectionComponent: ReviewServingProjectionComponent
-  projectionIdentity: string
+  projections: readonly {
+    projectionComponent: ReviewServingProjectionComponent
+    projectionIdentity: string
+  }[]
   scope: ReviewServingDirtyWorkScope
   sourceHighWaterMark: number
 }
@@ -175,10 +177,14 @@ const getValidatedReviewImportDelta = (row: ReviewImportDeltaRow) => {
 
   return {
     deltaId: row.deltaId,
-    projectionComponent: rule.firstAffectedComponent,
-    projectionIdentity: getProjectionIdentity({
-      projectionComponent: rule.firstAffectedComponent,
-      projectId: scope.projectId,
+    projections: rule.affectedComponents.map((projectionComponent) => {
+      return {
+        projectionComponent,
+        projectionIdentity: getProjectionIdentity({
+          projectionComponent,
+          projectId: scope.projectId,
+        }),
+      }
     }),
     scope,
     sourceHighWaterMark: row.sourceHighWaterMark,
@@ -286,7 +292,12 @@ export const intakeReviewImportDeltasToDirtyWork = async (
   }) as ValidatedReviewImportDelta[]
 
   return database.transaction(async (tx) => {
-    const upserts = await deltas.reduce<Promise<{skipped: boolean}[]>>(async (previousRun, delta) => {
+    const projectionDeltas = deltas.flatMap((delta) => {
+      return delta.projections.map((projection) => {
+        return {...delta, ...projection}
+      })
+    })
+    const upserts = await projectionDeltas.reduce<Promise<{skipped: boolean}[]>>(async (previousRun, delta) => {
       const results = await previousRun
       const result = await upsertReviewServingDirtyWork(
         {

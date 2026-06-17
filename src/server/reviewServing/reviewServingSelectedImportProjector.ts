@@ -163,6 +163,7 @@ const getSelectedImportProjectionRows = async (
             AND hot.article_id = scope.article_id
           WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
             AND (scope.in_curated_scope OR scope.in_route_scope)
+            AND NOT hot.tombstone
         )
         SELECT
           candidate.article_id AS articleId,

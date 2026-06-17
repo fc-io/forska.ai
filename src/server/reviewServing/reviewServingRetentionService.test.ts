@@ -68,7 +68,7 @@ const candidateManifest = (input?: Partial<ReviewServingSnapshotManifest>): Revi
   }
 }
 
-test('candidate patch budget assessment uses component identity and bounded thresholds', async () => {
+test('candidate patch budget assessment uses component table and bounded thresholds', async () => {
   const candidate = candidateManifest({
     componentState: {
       optional: [],
@@ -105,7 +105,7 @@ test('candidate patch budget assessment uses component identity and bounded thre
     },
   ])
   expect(statements.join('\n')).toContain('FROM mart.review_article_display_patch_v4')
-  expect(statements.join('\n')).toContain('display_identity =')
+  expect(statements.join('\n')).not.toContain('display_identity =')
   expect(statements.join('\n')).toContain('base_generation = 2')
 })
 
@@ -167,6 +167,7 @@ test('patch cleanup uses component-state protection for pinned snapshot base gen
   expect(joined).toContain('UNION ALL')
   expect(joined).toContain('INNER JOIN app.review_serving_snapshot_manifest pinned_manifest')
   expect(joined).toContain('component_state_json')
+  expect(joined).not.toContain('manifest.projection_identity = candidate.display_identity')
   expect(joined).toContain('CAST(candidate.base_generation AS VARCHAR)')
   expect(joined).toContain('LIMIT 5')
 })

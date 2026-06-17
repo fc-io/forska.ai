@@ -163,8 +163,14 @@ const getOptionalManifestValidationError = async (
   database: ReviewServingSnapshotPromotionDatabase,
 ) => {
   const manifest = await getManifestForState(candidate.projectId, state, database)
+  const requiredSourceWatermark = getRequiredSourceWatermark(candidate.sourceWatermarks)
 
-  return manifest === null ? null : getComponentStateConsistencyError(manifest, state)
+  return (
+    getManifestCompletenessError(manifest, state.component)
+    ?? (manifest === null ? null : getReviewConfigError(manifest, candidate.reviewConfigHash))
+    ?? (manifest === null ? null : getWatermarkError(manifest, requiredSourceWatermark))
+    ?? getComponentStateConsistencyError(manifest, state)
+  )
 }
 
 const getCandidateValidationError = async (

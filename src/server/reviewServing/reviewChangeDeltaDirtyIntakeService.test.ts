@@ -131,16 +131,18 @@ test('delta intake starts projector work at first affected component only', asyn
     {endSourceHighWaterMark: 7, limit: 10, sourcePartition: 'reviewChange:project-1', startSourceHighWaterMark: 1},
     database,
   )
-  const dirtyInsert = statements.find((statement) => {
+  const dirtyInserts = statements.filter((statement) => {
     return statement.includes('INSERT INTO app.review_serving_dirty_work')
   })
-  const projectionKey = dirtyInsert === undefined ? {} : parseProjectionKey(dirtyInsert)
+  const projectionComponents = dirtyInserts.map((statement) => {
+    return parseProjectionKey(statement).projectionComponent
+  })
 
-  expect(result).toMatchObject({dirtyWorkCount: 1, maxSourceHighWaterMark: 7, status: 'converted'})
-  expect(projectionKey).toMatchObject({projectionComponent: 'llmStatus'})
-  expect(dirtyInsert).toContain('judgment.llm.updated')
-  expect(dirtyInsert).not.toContain('selectedImport')
-  expect(dirtyInsert).not.toContain('display')
+  expect(result).toMatchObject({dirtyWorkCount: 4, maxSourceHighWaterMark: 7, status: 'converted'})
+  expect(projectionComponents).toEqual(['llmStatus', 'queue', 'posting', 'summary'])
+  expect(dirtyInserts[0]).toContain('judgment.llm.updated')
+  expect(dirtyInserts[0]).not.toContain('selectedImport')
+  expect(dirtyInserts[0]).not.toContain('display')
 })
 
 test('delta intake rejects malformed rows before dirty work writes', async () => {
@@ -203,9 +205,43 @@ test('delta intake fans route and project changes to project-scope dirty work', 
     return parseProjectionKey(statement).projectionComponent
   })
 
-  expect(result).toMatchObject({dirtyWorkCount: 2, maxSourceHighWaterMark: 10, status: 'converted'})
-  expect(projectionComponents).toEqual(['projectScope', 'projectScope'])
-  expect(dirtyInserts.map(getDirtyKind)).toEqual(['projectScope.article.added', 'project.reviewConfig.updated'])
+  expect(result).toMatchObject({dirtyWorkCount: 16, maxSourceHighWaterMark: 10, status: 'converted'})
+  expect(projectionComponents).toEqual([
+    'projectScope',
+    'selectedImport',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+    'posting',
+    'summary',
+    'payload',
+    'projectScope',
+    'selectedImport',
+    'judgmentInputContent',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+    'posting',
+    'summary',
+  ])
+  expect(dirtyInserts.map(getDirtyKind)).toEqual([
+    'projectScope.article.added',
+    'projectScope.article.added',
+    'projectScope.article.added',
+    'projectScope.article.added',
+    'projectScope.article.added',
+    'projectScope.article.added',
+    'projectScope.article.added',
+    'projectScope.article.added',
+    'project.reviewConfig.updated',
+    'project.reviewConfig.updated',
+    'project.reviewConfig.updated',
+    'project.reviewConfig.updated',
+    'project.reviewConfig.updated',
+    'project.reviewConfig.updated',
+    'project.reviewConfig.updated',
+    'project.reviewConfig.updated',
+  ])
 })
 
 test('delta intake replay from the same range is idempotent', async () => {

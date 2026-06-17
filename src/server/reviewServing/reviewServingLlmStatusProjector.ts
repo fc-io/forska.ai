@@ -253,7 +253,7 @@ const getPromptScopedRows = async (
           judgment.use_fulltext AS useFulltext,
           judgment.use_fulltext_no_images AS useFulltextNoImages,
           'update' AS sourceOperation,
-          FALSE AS tombstone,
+          project_prompt.id IS NULL OR NOT project_prompt.enabled OR project_prompt.archived AS tombstone,
           judgment.is_answered AS isAnswered,
           judgment.answered_original AS answeredOriginal,
           judgment.answered_original_as_array AS answeredOriginalAsArray,
@@ -277,6 +277,9 @@ const getPromptScopedRows = async (
           AND judgment.use_fulltext = project.use_fulltext
           AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
           AND judgment.deleted_at IS NULL
+        LEFT JOIN app.project_prompt project_prompt
+          ON project_prompt.project_id = project.id
+          AND project_prompt.prompt_id = judgment.prompt_id
         INNER JOIN app.prompt prompt
           ON prompt.id = judgment.prompt_id
         ORDER BY judgment.prompt_id ASC, scope.article_id ASC

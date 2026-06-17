@@ -116,6 +116,16 @@ const getListModeCte = (listModeKeys: readonly string[]) => {
   return getValuesCte('list_mode_key', listModeKeys)
 }
 
+const getDirtyArticleCte = (projectId: string, articleIds: readonly string[]) => {
+  return articleIds.length > 0
+    ? getValuesCte('article_id', articleIds)
+    : `article_id_filter(article_id) AS (
+        SELECT scope.article_id
+        FROM mart.project_scope_article scope
+        WHERE scope.project_id = ${getSqlLiteral(projectId)}
+      )`
+}
+
 const getSummaryDefinitionVersion = (identity: Pick<SummaryContributionIdentity, 'countKind'>) => {
   return identity.countKind === null
     ? null
@@ -140,10 +150,10 @@ const getSummaryContributionRows = async (
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
 
-  return articleIds.length === 0 || input.listModeKeys.length === 0
+  return input.listModeKeys.length === 0
     ? []
     : database.queryJson<SummaryContributionSourceRow>(`
-        WITH ${getValuesCte('article_id', articleIds)},
+        WITH ${getDirtyArticleCte(input.projectId, articleIds)},
         ${getListModeCte(input.listModeKeys)},
         scoped_article AS (
           SELECT
@@ -208,6 +218,29 @@ const getSummaryContributionRows = async (
           INNER JOIN article_id_filter dirty ON dirty.article_id = llm.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = llm.list_mode_key
           WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND NOT llm.tombstone AND llm.llm_status_key = 'answered'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_llm_status_patch_v4 newer
+              WHERE newer.project_id = llm.project_id
+                AND newer.review_config_hash = llm.review_config_hash
+                AND newer.article_id = llm.article_id
+                AND newer.prompt_id = llm.prompt_id
+                AND newer.list_mode_key = llm.list_mode_key
+                AND newer.base_generation = llm.base_generation
+                AND newer.patch_watermark > llm.patch_watermark
+            )
+          UNION ALL
+          SELECT queue.article_id AS articleId, 'count' AS summaryKind, 'review.llm.unassessedByPrompt' AS countKind, concat('prompt:', queue.prompt_id) AS filterKey, list_mode_key.list_mode_key AS listModeKey, 'review.llm.unassessedByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, queue.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM mart.review_unassessed_queue_serving_v4 queue
+          INNER JOIN article_id_filter dirty ON dirty.article_id = queue.article_id
+          CROSS JOIN list_mode_key_filter list_mode_key
+          WHERE queue.project_id = ${getSqlLiteral(input.projectId)} AND queue.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND queue.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND queue.queue_kind = 'unassessed' AND queue.prompt_id IS NOT NULL
+          UNION ALL
+          SELECT queue.article_id AS articleId, 'count' AS summaryKind, 'review.queue.unassessedReady' AS countKind, 'queue:ready' AS filterKey, list_mode_key.list_mode_key AS listModeKey, 'review.queue.unassessedReady' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, queue.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM mart.review_unassessed_queue_serving_v4 queue
+          INNER JOIN article_id_filter dirty ON dirty.article_id = queue.article_id
+          CROSS JOIN list_mode_key_filter list_mode_key
+          WHERE queue.project_id = ${getSqlLiteral(input.projectId)} AND queue.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND queue.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND queue.queue_kind = 'unassessed'
         ),
         human_counts AS (
           SELECT human.article_id AS articleId, 'count' AS summaryKind, 'review.human.reviewedByPrompt' AS countKind, concat('prompt:', human.prompt_id) AS filterKey, human.list_mode_key AS listModeKey, 'review.human.reviewedByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, human.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
@@ -221,6 +254,17 @@ const getSummaryContributionRows = async (
           FROM mart.review_llm_status_patch_v4 llm
           INNER JOIN article_id_filter dirty ON dirty.article_id = llm.article_id
           WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND NOT llm.tombstone AND llm.answered_original IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_llm_status_patch_v4 newer
+              WHERE newer.project_id = llm.project_id
+                AND newer.review_config_hash = llm.review_config_hash
+                AND newer.article_id = llm.article_id
+                AND newer.prompt_id = llm.prompt_id
+                AND newer.list_mode_key = llm.list_mode_key
+                AND newer.base_generation = llm.base_generation
+                AND newer.patch_watermark > llm.patch_watermark
+            )
           UNION ALL
           SELECT human.article_id AS articleId, 'facet' AS summaryKind, 'review.human.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.promptAnswer' AS summaryIdentity, 'human' AS facetKind, 'promptAnswer' AS facetKey, human.human_answered_value AS facetValue, human.prompt_id AS promptId, NULL AS answerId, human.human_answered_value AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM mart.review_human_status_patch_v4 human
