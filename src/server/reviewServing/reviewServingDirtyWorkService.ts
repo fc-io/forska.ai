@@ -412,6 +412,13 @@ export const claimReviewServingDirtyWork = async (
               ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
               LIMIT 1
             )
+            AND projection_key = (
+              SELECT projection_key
+              FROM app.review_serving_dirty_work oldest
+              WHERE ${eligiblePredicate}
+              ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+              LIMIT 1
+            )
           ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
           LIMIT ${limit}
         `)

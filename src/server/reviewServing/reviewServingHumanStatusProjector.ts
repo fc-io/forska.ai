@@ -169,6 +169,7 @@ const getProjectPromptConfigRows = async (
     WHERE project_prompt.project_id = ${getSqlLiteral(projectId)}
       AND project_prompt.enabled
       AND NOT project_prompt.archived
+      AND COALESCE(prompt.archived, FALSE) = FALSE
     ORDER BY COALESCE(project_prompt.prompt_order, 0) ASC, prompt.id ASC
   `)
 }
@@ -221,7 +222,10 @@ const getJudgmentDeltaRows = async (
             delta.prompt_id AS promptId,
             COALESCE(delta.prompt_id, 'summary') AS promptOrSummaryKey,
             delta.source_operation AS sourceOperation,
-            delta.tombstone AS tombstone,
+            delta.tombstone OR (
+              delta.prompt_id IS NOT NULL
+              AND (project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE))
+            ) AS tombstone,
             delta.payload_json AS payloadJson,
             COALESCE(judgment_human.answer, judgment_human_summary.answer) AS humanAnsweredValue,
             CASE
@@ -326,6 +330,7 @@ const getApplyHumanStatusServingStatement = (input: {
   baseGeneration: number
   patchWatermark: number
   projectId: string
+  projectionIdentity: string
   recordRows: readonly {
     articleId: string
     humanStatusKey: string | null
@@ -381,8 +386,7 @@ const getApplyHumanStatusServingStatement = (input: {
         WHERE candidate.patch_watermark = (
           SELECT MAX(newer.patch_watermark)
           FROM candidate_prompt newer
-          WHERE newer.prompt_config_hash = candidate.prompt_config_hash
-            AND newer.list_mode_key = candidate.list_mode_key
+          WHERE newer.list_mode_key = candidate.list_mode_key
             AND newer.article_id = candidate.article_id
             AND newer.prompt_id IS NOT DISTINCT FROM candidate.prompt_id
         )
@@ -406,9 +410,17 @@ const getApplyHumanStatusServingStatement = (input: {
         serving_updated_at = current_timestamp
       FROM article_status
       WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+        AND serving.human_status_identity = ${getSqlLiteral(input.projectionIdentity)}
         AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
         AND serving.list_mode_key = article_status.list_mode_key
-        AND serving.article_id = article_status.article_id`
+        AND serving.article_id = article_status.article_id
+        AND EXISTS (
+          SELECT 1
+          FROM app.review_serving_snapshot_manifest snapshot
+          WHERE snapshot.project_id = serving.project_id
+            AND snapshot.snapshot_id = serving.snapshot_id
+            AND snapshot.snapshot_status IN ('candidate', 'active')
+        )`
 }
 
 const getHumanStatusPatchRecord = (input: {
@@ -515,6 +527,7 @@ export const projectReviewServingHumanStatusPatches = async (
           baseGeneration: input.baseGeneration,
           patchWatermark,
           projectId: input.projectId,
+          projectionIdentity: input.projectionIdentity,
           recordRows,
         }),
       ].flatMap((statement) => {

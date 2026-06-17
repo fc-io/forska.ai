@@ -162,6 +162,7 @@ const getProjectPromptConfigRows = async (
     WHERE project_prompt.project_id = ${getSqlLiteral(projectId)}
       AND project_prompt.enabled
       AND NOT project_prompt.archived
+      AND COALESCE(prompt.archived, FALSE) = FALSE
     ORDER BY COALESCE(project_prompt.prompt_order, 0) ASC, prompt.id ASC
   `)
 }
@@ -483,6 +484,7 @@ const getApplyLlmStatusServingStatement = (input: {
   baseGeneration: number
   patchWatermark: number
   projectId: string
+  projectionIdentity: string
   recordRows: readonly {
     articleId: string
     listModeKey: string
@@ -543,7 +545,6 @@ const getApplyLlmStatusServingStatement = (input: {
           SELECT MAX(newer.patch_watermark)
           FROM candidate_prompt newer
           WHERE newer.review_config_hash = candidate.review_config_hash
-            AND newer.prompt_config_hash = candidate.prompt_config_hash
             AND newer.list_mode_key = candidate.list_mode_key
             AND newer.article_id = candidate.article_id
             AND newer.prompt_id = candidate.prompt_id
@@ -571,10 +572,19 @@ const getApplyLlmStatusServingStatement = (input: {
         serving_updated_at = current_timestamp
       FROM article_status
       WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+        AND serving.llm_status_identity = ${getSqlLiteral(input.projectionIdentity)}
         AND serving.review_config_hash = article_status.review_config_hash
         AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
         AND serving.list_mode_key = article_status.list_mode_key
-        AND serving.article_id = article_status.article_id`
+        AND serving.article_id = article_status.article_id
+        AND EXISTS (
+          SELECT 1
+          FROM app.review_serving_snapshot_manifest snapshot
+          WHERE snapshot.project_id = serving.project_id
+            AND snapshot.snapshot_id = serving.snapshot_id
+            AND snapshot.review_config_hash IS NOT DISTINCT FROM serving.review_config_hash
+            AND snapshot.snapshot_status IN ('candidate', 'active')
+        )`
 }
 
 export const projectReviewServingLlmStatusPatches = async (
@@ -630,6 +640,7 @@ export const projectReviewServingLlmStatusPatches = async (
           baseGeneration: input.baseGeneration,
           patchWatermark,
           projectId: input.projectId,
+          projectionIdentity: input.projectionIdentity,
           recordRows,
         }),
       ].flatMap((statement) => {

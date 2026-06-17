@@ -230,6 +230,7 @@ const getApplySelectedImportServingStatements = (input: {
   patchWatermark: number
   projectId: string
   projectionIdentity: string
+  selectedImportSnapshotId: string
   rows: readonly SelectedImportPatchRow[]
 }) => {
   const values = input.rows
@@ -250,7 +251,15 @@ const getApplySelectedImportServingStatements = (input: {
            AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
            AND EXISTS (
              SELECT 1
-              FROM changed
+             FROM app.review_serving_snapshot_manifest snapshot
+             WHERE snapshot.project_id = serving.project_id
+               AND snapshot.snapshot_id = serving.snapshot_id
+               AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+               AND snapshot.snapshot_status IN ('candidate', 'active')
+           )
+           AND EXISTS (
+             SELECT 1
+               FROM changed
               WHERE changed.article_id = serving.article_id
                 AND changed.scope_tombstone = TRUE
             )`,
@@ -275,6 +284,14 @@ const getApplySelectedImportServingStatements = (input: {
             WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
               AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
               AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+              AND EXISTS (
+                SELECT 1
+                FROM app.review_serving_snapshot_manifest snapshot
+                WHERE snapshot.project_id = serving.project_id
+                  AND snapshot.snapshot_id = serving.snapshot_id
+                  AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+                  AND snapshot.snapshot_status IN ('candidate', 'active')
+              )
           )
           INSERT INTO mart.review_article_serving_v4 (
             project_id,
@@ -364,11 +381,19 @@ const getApplySelectedImportServingStatements = (input: {
            patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),
            serving_updated_at = current_timestamp
          FROM changed
-         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-            AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
-            AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
-            AND serving.article_id = changed.article_id
-            AND changed.scope_tombstone = FALSE`,
+          WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+             AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
+             AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+             AND serving.article_id = changed.article_id
+             AND changed.scope_tombstone = FALSE
+             AND EXISTS (
+               SELECT 1
+               FROM app.review_serving_snapshot_manifest snapshot
+               WHERE snapshot.project_id = serving.project_id
+                 AND snapshot.snapshot_id = serving.snapshot_id
+                 AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+                 AND snapshot.snapshot_status IN ('candidate', 'active')
+             )`,
       ]
 }
 
@@ -413,6 +438,7 @@ export const projectReviewServingSelectedImportPatches = async (
         patchWatermark,
         projectId: input.projectId,
         projectionIdentity: input.projectionIdentity,
+        selectedImportSnapshotId: input.selectedImportSnapshotId,
         rows,
       }),
       watermark:
