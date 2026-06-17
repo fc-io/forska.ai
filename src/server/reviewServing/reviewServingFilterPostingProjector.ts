@@ -505,9 +505,17 @@ const getStatsRecord = (input: {
   }
 }
 
-const getDeleteServingRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
+const getDeleteServingRowsStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  tombstoneRows: readonly PostingContributionRow[],
+) => {
   const articleIds = getClaimArticleIds(input.claims)
   const promptIds = getClaimPromptIds(input.claims)
+  const tombstoneValues = tombstoneRows
+    .map((row) => {
+      return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.filterKind)}, ${getSqlLiteral(row.filterValue)}, ${getSqlLiteral(row.listModeKey)})`
+    })
+    .join(', ')
 
   return articleIds.length > 0
     ? getDeleteReviewServingProjectorRowsStatement({
@@ -519,16 +527,20 @@ const getDeleteServingRowsStatement = (input: ProjectReviewServingFilterPostings
         },
         table: 'mart.review_article_filter_posting_serving_v4',
       })
-    : promptIds.length === 0
+    : promptIds.length === 0 || tombstoneValues.length === 0
       ? null
-      : getDeleteReviewServingProjectorRowsStatement({
-          predicates: {
-            project_id: input.projectId,
-            review_config_hash: input.reviewConfigHash,
-            snapshot_id: input.snapshotId,
-          },
-          table: 'mart.review_article_filter_posting_serving_v4',
-        })
+      : `WITH deleted(article_id, filter_kind, filter_value, list_mode_key) AS (
+          SELECT * FROM (VALUES ${tombstoneValues})
+        )
+        DELETE FROM mart.review_article_filter_posting_serving_v4 serving
+        USING deleted
+        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+          AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND serving.article_id = deleted.article_id
+          AND serving.filter_kind = deleted.filter_kind
+          AND serving.filter_value = deleted.filter_value
+          AND serving.list_mode_key = deleted.list_mode_key`
 }
 
 const getPostingManifest = (
@@ -688,7 +700,12 @@ export const projectReviewServingFilterPostings = async (
     projectorInput: input,
     rows: contributionRows,
   })
-  const deleteServingRowsStatement = getDeleteServingRowsStatement(input)
+  const deleteServingRowsStatement = getDeleteServingRowsStatement(
+    input,
+    contributionRows.filter((row) => {
+      return row.tombstone
+    }),
+  )
 
   await writeReviewServingProjectorComponent(
     {

@@ -21,6 +21,7 @@ import {
 export type ReviewServingSummaryProjectorDatabase = ReviewServingProjectorWriterDatabase
 
 export type ProjectReviewServingSummariesInput = {
+  baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
   listModeKeys: readonly string[]
   projectId: string
@@ -184,7 +185,7 @@ const getSummaryContributionRows = async (
             scoped.article_id,
             CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.import_route_id, selected_base.import_route_id) END AS import_route_id,
             CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN scoped.publication_year ELSE COALESCE(selected_patch.publication_year, selected_base.publication_year, scoped.publication_year) END AS publication_year,
-            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag) END AS duplicate_flag,
+            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag, FALSE) END AS duplicate_flag,
             CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.conflict_flag, selected_base.conflict_flag) END AS conflict_flag,
             scoped.in_scope AS in_selected_scope
           FROM scoped_article scoped
@@ -232,7 +233,7 @@ const getSummaryContributionRows = async (
           INNER JOIN article_id_filter dirty ON dirty.article_id = llm.article_id
           INNER JOIN selected_state selected ON selected.article_id = llm.article_id AND selected.in_selected_scope
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = llm.list_mode_key
-          WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND NOT llm.tombstone AND llm.llm_status_key = 'answered'
+          WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)} AND NOT llm.tombstone AND llm.llm_status_key = 'answered'
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_llm_status_patch_v4 newer
@@ -265,7 +266,7 @@ const getSummaryContributionRows = async (
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
           INNER JOIN selected_state selected ON selected.article_id = human.article_id AND selected.in_selected_scope
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = human.list_mode_key
-          WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND NOT human.tombstone AND human.human_status_key = 'answered'
+          WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND human.base_generation = ${getSqlLiteral(input.baseGeneration)} AND NOT human.tombstone AND human.human_status_key = 'answered'
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
@@ -283,7 +284,7 @@ const getSummaryContributionRows = async (
           FROM mart.review_llm_status_patch_v4 llm
           INNER JOIN article_id_filter dirty ON dirty.article_id = llm.article_id
           INNER JOIN selected_state selected ON selected.article_id = llm.article_id AND selected.in_selected_scope
-          WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND NOT llm.tombstone AND llm.answered_original IS NOT NULL
+          WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)} AND NOT llm.tombstone AND llm.answered_original IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_llm_status_patch_v4 newer
@@ -300,7 +301,7 @@ const getSummaryContributionRows = async (
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
           INNER JOIN selected_state selected ON selected.article_id = human.article_id AND selected.in_selected_scope
-          WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND NOT human.tombstone AND human.prompt_id <> 'summary' AND human.human_answered_value IS NOT NULL
+          WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND human.base_generation = ${getSqlLiteral(input.baseGeneration)} AND NOT human.tombstone AND human.prompt_id <> 'summary' AND human.human_answered_value IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
@@ -317,7 +318,7 @@ const getSummaryContributionRows = async (
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
           INNER JOIN selected_state selected ON selected.article_id = human.article_id AND selected.in_selected_scope
-          WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND NOT human.tombstone AND human.prompt_id = 'summary' AND human.human_answered_value IS NOT NULL
+          WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND human.base_generation = ${getSqlLiteral(input.baseGeneration)} AND NOT human.tombstone AND human.prompt_id = 'summary' AND human.human_answered_value IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
@@ -593,7 +594,7 @@ export const projectReviewServingSummaries = async (
           ? []
           : [
               {
-                baseGeneration: 0,
+                baseGeneration: input.baseGeneration,
                 definitionVersion: 'review-serving-summary:v1',
                 inputDigest: getClaimKinds(input.claims),
                 inputWatermark: patchWatermark,

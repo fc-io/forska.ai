@@ -190,6 +190,8 @@ test('prompt config changes rebuild only prompt-scoped queue rows', async () => 
   expect(selectStatement).toContain("VALUES ('prompt-1')")
   expect(selectStatement).toContain('ON dirty_prompt.prompt_id = llm.prompt_id')
   expect(selectStatement).toContain('ON dirty_prompt.prompt_id = human.prompt_id')
+  expect(selectStatement).toContain('llm.base_generation = 5')
+  expect(selectStatement).toContain('human.base_generation = 5')
   expect(selectStatement).toContain('FROM mart.project_scope_article scope')
   expect(servingDelete).toContain("prompt_id IN ('prompt-1')")
 })
