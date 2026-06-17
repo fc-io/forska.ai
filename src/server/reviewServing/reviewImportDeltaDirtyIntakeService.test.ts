@@ -165,6 +165,40 @@ test('repeated import changes collapse into one dirty row per project component 
   expect(getProjectionKey(dirtyInserts[0] ?? '')).toBe(getProjectionKey(dirtyInserts[1] ?? ''))
 })
 
+test('import projection identity is stable across per-mutation article values', async () => {
+  const {database, statements} = createFakeIntakeDatabase([
+    createReviewImportDelta({
+      articleId: 'article-1',
+      deltaId: 'delta-rank-1',
+      hotArticleId: 'article-1',
+      selectedRankKey: '0000:article-1:source-1',
+      sourceHighWaterMark: 5,
+    }),
+    createReviewImportDelta({
+      articleId: 'article-2',
+      deltaId: 'delta-rank-2',
+      hotArticleId: 'article-2',
+      selectedRankKey: '0000:article-2:source-2',
+      sourceHighWaterMark: 6,
+      sourceRecordKey: 'source-2',
+    }),
+  ])
+
+  await intakeReviewImportDeltasToDirtyWork(
+    {endSourceHighWaterMark: 6, limit: 10, sourcePartition: 'importRoute:route-1', startSourceHighWaterMark: 1},
+    database,
+  )
+
+  const projectionKeys = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    })
+    .map(getProjectionKey)
+
+  expect(projectionKeys).toHaveLength(2)
+  expect(projectionKeys[0]).toBe(projectionKeys[1])
+})
+
 test('selected import rank-field changes do not dirty display or judgment input components', async () => {
   const {database, statements} = createFakeIntakeDatabase([
     createReviewImportDelta({deltaId: 'delta-selected', changeKind: 'importRoute.article.rankFields.updated'}),

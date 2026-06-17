@@ -237,6 +237,8 @@ test('selected-import rank changes move filter contribution between selected imp
   })
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
+  expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
+  expect(selectStatement).toContain('newer.patch_watermark')
 })
 
 test('list modes keep posting stats and serving rows separated', async () => {

@@ -4,7 +4,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {reviewImportHotFieldProjectorColumns} from './reviewImportHotFieldService.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
-import type {ReviewServingChangeKind, ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {type ReviewServingDirtyWorkTransaction, upsertReviewServingDirtyWork} from './reviewServingDirtyWorkService.ts'
 import {
   getReviewServingInvalidationRuleOrNull,
@@ -121,18 +121,12 @@ const getImportDeltaValues = (row: ReviewImportDeltaRow) => {
 }
 
 const getProjectionIdentity = (input: {
-  changeKind: ReviewServingChangeKind
   projectionComponent: ReviewServingProjectionComponent
   projectId: string | null
-  updateMode: string
-  values: Record<string, ReviewServingIdentityValue>
 }) => {
   return `${input.projectionComponent}:${getReviewServingHash('review-import-delta-dirty-projection', {
-    changeKind: input.changeKind,
     projectionComponent: input.projectionComponent,
     projectId: input.projectId,
-    updateMode: input.updateMode,
-    values: input.values,
   })}`
 }
 
@@ -183,11 +177,8 @@ const getValidatedReviewImportDelta = (row: ReviewImportDeltaRow) => {
     deltaId: row.deltaId,
     projectionComponent: rule.firstAffectedComponent,
     projectionIdentity: getProjectionIdentity({
-      changeKind: rule.changeKind,
       projectionComponent: rule.firstAffectedComponent,
       projectId: scope.projectId,
-      updateMode: rule.updateMode,
-      values,
     }),
     scope,
     sourceHighWaterMark: row.sourceHighWaterMark,

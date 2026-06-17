@@ -263,12 +263,19 @@ const getPromptScopedRows = async (
           'prompt-v1' AS settingsVersion,
           NULL AS thresholdVersion
         FROM prompt_id_filter dirty_prompt
+        INNER JOIN app.project project
+          ON project.id = ${getSqlLiteral(input.projectId)}
         INNER JOIN mart.project_scope_article scope
           ON scope.project_id = ${getSqlLiteral(input.projectId)}
           AND (scope.in_curated_scope OR scope.in_route_scope)
         INNER JOIN app."judgment" judgment
           ON judgment.article_id = scope.article_id
           AND judgment.prompt_id = dirty_prompt.prompt_id
+          AND judgment.model_id = project.model_id
+          AND judgment.use_title = project.use_title
+          AND judgment.use_abstract = project.use_abstract
+          AND judgment.use_fulltext = project.use_fulltext
+          AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
           AND judgment.deleted_at IS NULL
         INNER JOIN app.prompt prompt
           ON prompt.id = judgment.prompt_id

@@ -32,8 +32,10 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[], listModeKe
     claims,
     listModeKeys,
     projectId: 'project-1',
+    projectScopeIdentity: 'project-scope-1',
     projectionIdentity: 'summary:identity-1',
     reviewConfigHash: 'review-config-1',
+    selectedImportSnapshotId: 'selected-snapshot-1',
     snapshotId: 'snapshot-1',
   }
 }
@@ -167,6 +169,9 @@ test('projects list-mode count deltas with summary identity and definition versi
     }),
   ).toBe(true)
   expect(hasSummaryValue(result.summaryValues, {count_value: 8, list_mode_key: 'llm'})).toBe(true)
+  expect(joined).toContain('selected_base.project_scope_identity')
+  expect(joined).toContain('selected_base.selected_import_snapshot_id')
+  expect(joined).toContain('FROM mart.review_selected_import_patch_v4 newer')
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
 })

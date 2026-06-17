@@ -94,14 +94,23 @@ test('LLM answer changes write unassessed queue patches and serving rows from co
   const servingInsert = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_unassessed_queue_serving_v4')
   })
+  const servingDelete = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  })
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 14, servingRowCount: 1})
   expect(selectStatement).toContain('INNER JOIN mart.review_llm_status_patch_v4 llm')
+  expect(selectStatement).toContain('FROM mart.review_llm_status_patch_v4 newer')
   expect(selectStatement).toContain('INNER JOIN mart.review_human_status_patch_v4 human')
+  expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
+  expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
   expect(selectStatement).toContain('INNER JOIN mart.project_scope_article scope')
   expect(selectStatement).toContain("VALUES ('article-1')")
+  expect(servingDelete).toContain('snapshot_id =')
+  expect(servingDelete).toContain("article_id IN ('article-1')")
+  expect(statements.indexOf(servingDelete ?? '')).toBeLessThan(statements.indexOf(servingInsert ?? ''))
   expect(patchInsert).toContain('queue_identity')
   expect(patchInsert).toContain('priority_bucket')
   expect(patchInsert).toContain('sort_key')
