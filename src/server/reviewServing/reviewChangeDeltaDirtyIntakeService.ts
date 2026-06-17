@@ -292,7 +292,7 @@ const getReviewChangeDeltaRows = async (
           delta_id AS deltaId,
           change_kind AS changeKind,
           source_partition AS sourcePartition,
-          CAST(source_high_water_mark AS INTEGER) AS sourceHighWaterMark,
+          source_high_water_mark AS sourceHighWaterMark,
           payload_version AS payloadVersion,
           project_id AS projectId,
           article_id AS articleId,

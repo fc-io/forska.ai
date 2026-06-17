@@ -15,6 +15,7 @@ import {
 export type ReviewServingQueueProjectorDatabase = ReviewServingProjectorWriterDatabase
 
 export type ProjectReviewServingQueueInput = {
+  acknowledgeClaims?: boolean
   baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
@@ -435,7 +436,7 @@ export const projectReviewServingQueuePatches = async (
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.claims,
+      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'queue',
       projectionManifests: input.claims.length === 0 ? [] : [getQueuePatchManifest(input)],
       records: [...patchRecords, ...servingRecords],

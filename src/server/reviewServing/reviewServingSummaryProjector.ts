@@ -186,8 +186,8 @@ const getSummaryContributionRows = async (
             scoped.article_id,
             CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.import_route_id, selected_base.import_route_id) END AS import_route_id,
             CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN scoped.publication_year ELSE COALESCE(selected_patch.publication_year, selected_base.publication_year, scoped.publication_year) END AS publication_year,
-            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag, FALSE) END AS duplicate_flag,
-            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.conflict_flag, selected_base.conflict_flag) END AS conflict_flag,
+            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN FALSE ELSE COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag, FALSE) END AS duplicate_flag,
+            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN FALSE ELSE COALESCE(selected_patch.conflict_flag, selected_base.conflict_flag, FALSE) END AS conflict_flag,
             scoped.in_scope AS in_selected_scope
           FROM scoped_article scoped
           LEFT JOIN app.review_selected_article_import_v4 selected_base

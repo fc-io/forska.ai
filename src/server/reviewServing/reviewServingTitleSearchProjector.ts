@@ -17,6 +17,7 @@ import {getReviewServingOptionalComponentAvailability} from './reviewServingSnap
 export type ReviewServingTitleSearchProjectorDatabase = ReviewServingProjectorWriterDatabase
 
 export type ProjectReviewServingTitleSearchInput = {
+  acknowledgeClaims?: boolean
   baseGeneration: number
   claims?: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion?: string
@@ -243,7 +244,7 @@ export const projectReviewServingTitleSearchRows = async (
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: hasClaimedWork ? claims : [],
+      acknowledgements: hasClaimedWork && input.acknowledgeClaims !== false ? claims : [],
       component: 'search',
       projectionManifests: hasClaimedWork
         ? [
