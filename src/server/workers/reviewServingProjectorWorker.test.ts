@@ -237,3 +237,12 @@ test('worker source does not start product route migration or V4 route cutover',
   expect(source).not.toContain('projectsRoutes')
   expect(source).not.toContain('legacy')
 })
+
+test('worker default dependencies wire real projector runners instead of an empty runner map', () => {
+  const source = readFileSync(join(import.meta.dir, 'reviewServingProjectorWorker.ts'), 'utf8')
+
+  expect(source).not.toContain('runners: {}}')
+  expect(source).toContain('getDefaultReviewServingProjectorRunners(database)')
+  expect(source).toContain('projectReviewServingLlmStatusPatches')
+  expect(source).toContain('projectReviewServingHumanStatusPatches')
+})

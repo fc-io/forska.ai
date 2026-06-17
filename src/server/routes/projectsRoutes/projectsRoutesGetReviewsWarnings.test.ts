@@ -1,6 +1,7 @@
 import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
+import {buildPromptConfigHash, buildReviewConfigHash} from '../../reviewServing/reviewProjectionIdentity.ts'
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 
 const tempRuntimeRoot = createTempRuntimeRoot('f1-project-reviews-warnings')
@@ -409,6 +410,7 @@ const insertActiveReviewServingManifest = async (input: {
   includeSearchState: boolean
   optionalComponents: string[]
   projectId: string
+  reviewConfigHash?: string | null
   snapshotId: string
 }) => {
   if (!runDatabase) {
@@ -418,6 +420,8 @@ const insertActiveReviewServingManifest = async (input: {
   const optional = input.includeSearchState
     ? [{baseGeneration: '1', component: 'search', patchWatermark: '0', projectionIdentity: 'search:identity-1'}]
     : []
+  const reviewConfigHash = input.reviewConfigHash === undefined ? getFixtureReviewConfigHash(input.projectId) : input.reviewConfigHash
+  const reviewConfigHashSql = reviewConfigHash === null ? 'NULL' : `'${reviewConfigHash}'`
 
   await runDatabase(`
     INSERT INTO app.review_serving_snapshot_manifest (
@@ -436,7 +440,7 @@ const insertActiveReviewServingManifest = async (input: {
       '${input.projectId}',
       '${input.snapshotId}',
       'active',
-      NULL,
+      ${reviewConfigHashSql},
       '{}'::JSON,
       '${JSON.stringify({optional, required: []}).replaceAll("'", "''")}'::JSON,
       '[]'::JSON,
@@ -446,6 +450,31 @@ const insertActiveReviewServingManifest = async (input: {
       TIMESTAMPTZ '2026-04-02T12:08:00.000Z'
     )
   `)
+}
+
+const getFixtureReviewConfigHash = (projectId: string) => {
+  return buildReviewConfigHash({
+    humanJudgmentMode: 'prompt',
+    modelExecutionIdentity: {modelId: `model-${projectId}`},
+    modelId: `model-${projectId}`,
+    promptConfigs: [
+      {
+        promptConfigHash: buildPromptConfigHash({
+          answerSchemaHash: null,
+          promptId: `prompt-${projectId}`,
+          promptTextHash: `hash-${projectId}`,
+          settingsVersion: 'prompt-v1',
+          thresholdVersion: null,
+        }),
+        promptId: `prompt-${projectId}`,
+        promptOrder: 1,
+      },
+    ],
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
 }
 
 const postWarningsRequest = async (projectId: string) => {
@@ -569,6 +598,36 @@ test('reviews warnings expose optional search diagnostic without blocking ready 
   })
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.status).toBe('ready')
+})
+
+test('reviews warnings search diagnostic ignores active snapshots for older review configs', async () => {
+  const projectId = 'project-search-diagnostic-current-config-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: true,
+    optionalComponents: ['search'],
+    projectId,
+    reviewConfigHash: 'old-review-config-hash',
+    snapshotId: 'snapshot-search-old-config',
+  })
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: ['search'],
+    projectId,
+    snapshotId: 'snapshot-search-current-config',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.search).toEqual({
+    availability: 'indexing',
+    optionalComponent: true,
+    snapshotId: 'snapshot-search-current-config',
+  })
 })
 
 test('reviews warnings expose quarantined article refreshes without pending healthy work', async () => {

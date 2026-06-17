@@ -135,6 +135,9 @@ test('LLM judgment deltas write component-narrow status patches from persisted b
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
   expect(selectStatement).toContain('delta.model_id AS modelId')
+  expect(selectStatement).toContain('LEFT JOIN app.project_prompt project_prompt')
+  expect(selectStatement).toContain('project_prompt.id IS NULL OR NOT project_prompt.enabled')
+  expect(selectStatement).toContain('COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone')
   expect(selectStatement).toContain('judgment.model_id = delta.model_id')
   expect(selectStatement).toContain('judgment.use_fulltext_no_images = delta.use_fulltext_no_images')
   expect(selectStatement).toContain("VALUES ('article-1')")

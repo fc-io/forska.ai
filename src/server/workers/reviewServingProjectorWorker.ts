@@ -9,7 +9,12 @@ import {
   type ReviewServingRebuildChunkIdentity,
   type ReviewServingRebuildChunkManifest,
 } from '../reviewServing/reviewServingChunkManifestRepository.ts'
+import {projectReviewServingHumanStatusPatches} from '../reviewServing/reviewServingHumanStatusProjector.ts'
+import {projectReviewServingLlmStatusPatches} from '../reviewServing/reviewServingLlmStatusProjector.ts'
+import {getReviewServingProjectionIdentityManifest} from '../reviewServing/reviewServingManifestRepository.ts'
+import {projectReviewServingProjectScopePatches} from '../reviewServing/reviewServingProjectScopeProjector.ts'
 import {
+  type ReviewServingProjectorRunner,
   type ReviewServingProjectorServiceDependencies,
   wakeReviewServingProjectorService,
   type WakeReviewServingProjectorServiceInput,
@@ -103,6 +108,92 @@ const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
 const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerErrorBackoffMs = 10_000
 const reviewServingProjectorWorkerRouteOrJobKey = 'reviewServing.projector.worker'
+
+const getClaimProjectId = (claims: readonly {projectId: string | null}[]) => {
+  return claims.find((claim) => {
+    return claim.projectId !== null
+  })?.projectId ?? null
+}
+
+const getDefaultClaimManifestInput = async (
+  context: Parameters<ReviewServingProjectorRunner>[0],
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = getClaimProjectId(context.claims)
+
+  if (projectId === null) {
+    throw new Error(`cannot run ${context.component} projector without a project id`)
+  }
+
+  const manifest = await getReviewServingProjectionIdentityManifest(
+    {
+      projectId,
+      projectionComponent: context.component,
+      projectionIdentity: context.claims[0]?.projectionIdentity ?? '',
+    },
+    database,
+  )
+
+  if (manifest === null) {
+    throw new Error(`cannot run ${context.component} projector without an identity manifest`)
+  }
+
+  return {manifest, projectId}
+}
+
+const getDefaultReviewServingProjectorRunners = (
+  database: ReviewServingProjectorWorkerDatabase,
+): ReviewServingProjectorServiceDependencies['runners'] => {
+  return {
+    humanStatus: async (context) => {
+      const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
+      const result = await projectReviewServingHumanStatusPatches(
+        {
+          baseGeneration: manifest.baseGeneration,
+          claims: context.claims,
+          definitionVersion: manifest.definitionVersion,
+          listModeKeys: ['global'],
+          projectId,
+          projectionIdentity: manifest.projectionIdentity,
+        },
+        database,
+      )
+
+      return {processedCount: result.patchRowCount}
+    },
+    llmStatus: async (context) => {
+      const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
+      const result = await projectReviewServingLlmStatusPatches(
+        {
+          baseGeneration: manifest.baseGeneration,
+          claims: context.claims,
+          definitionVersion: manifest.definitionVersion,
+          listModeKeys: ['global'],
+          projectId,
+          projectionIdentity: manifest.projectionIdentity,
+        },
+        database,
+      )
+
+      return {processedCount: result.patchRowCount}
+    },
+    projectScope: async (context) => {
+      const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
+      await projectReviewServingProjectScopePatches(
+        {
+          baseGeneration: manifest.baseGeneration,
+          claims: context.claims,
+          definitionVersion: manifest.definitionVersion,
+          projectId,
+          projectionIdentity: manifest.projectionIdentity,
+        },
+        database,
+      )
+
+      return {processedCount: context.claims.length}
+    },
+  }
+}
 
 const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWorkerDependencies = {
   cleanupRetentionState: cleanupReviewServingRetentionState,
@@ -328,7 +419,7 @@ export const runReviewServingProjectorWorkerCycle = async (
     workerId,
   })
   const projector = await dependencies.wakeProjectors(getWakeInput(options, wakeId), {
-    ...(dependencies.projectorServiceDependencies ?? {runners: {}}),
+    ...(dependencies.projectorServiceDependencies ?? {runners: getDefaultReviewServingProjectorRunners(database)}),
     database,
     nowMs: () => {
       return getWorkerNowMs(dependencies, options)
