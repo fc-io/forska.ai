@@ -81,6 +81,7 @@ test('selected-import routine updates write component-narrow patches for only cl
         publicationYear: 2026,
         selectedRankKey: '0001:article-1',
         selectedRankNumeric: 1,
+        scopeTombstone: false,
         tombstone: false,
       },
     ],
@@ -121,6 +122,7 @@ test('selected-import tombstones replay idempotently with the same patch waterma
         publicationYear: null,
         selectedRankKey: null,
         selectedRankNumeric: null,
+        scopeTombstone: false,
         tombstone: true,
       },
     ],
@@ -141,6 +143,31 @@ test('selected-import tombstones replay idempotently with the same patch waterma
   expect(patchInserts[1]).toContain(
     'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, patch_watermark, article_id)',
   )
+})
+
+test('selected-import tombstones clear selected columns without deleting curated scoped articles', async () => {
+  const {database, statements} = createSelectedImportPatchDatabase({
+    patchRows: [
+      {
+        articleId: 'article-1',
+        conflictFlag: null,
+        duplicateFlag: null,
+        importRouteId: null,
+        publicationYear: null,
+        selectedRankKey: null,
+        selectedRankNumeric: null,
+        scopeTombstone: false,
+        tombstone: true,
+      },
+    ],
+  })
+
+  await projectReviewServingSelectedImportPatches(projectPatchInput([selectedImportClaim()]), database)
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('changed.scope_tombstone = TRUE')
+  expect(joined).toContain('changed.scope_tombstone = FALSE')
+  expect(joined).toContain('selected_import_route_id = changed.import_route_id')
 })
 
 test('selected-import patches promote manifest and watermark atomically without unrelated component base generations', async () => {

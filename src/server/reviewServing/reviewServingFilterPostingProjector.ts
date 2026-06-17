@@ -233,9 +233,9 @@ const getPostingContributionRows = async (
             COALESCE(selected_patch.import_route_id, selected_base.import_route_id) AS import_route_id,
             COALESCE(selected_patch.selected_rank_key, selected_base.selected_rank_key) AS selected_rank_key,
             COALESCE(selected_patch.publication_year, selected_base.publication_year) AS publication_year,
-            COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag) AS duplicate_flag,
-            COALESCE(selected_patch.conflict_flag, selected_base.conflict_flag) AS conflict_flag,
-            scoped.scope_tombstone OR COALESCE(selected_patch.tombstone, selected_base.tombstone, TRUE) AS tombstone
+            COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag, FALSE) AS duplicate_flag,
+            COALESCE(selected_patch.conflict_flag, selected_base.conflict_flag, FALSE) AS conflict_flag,
+            scoped.scope_tombstone AS tombstone
           FROM scoped_article scoped
           LEFT JOIN app.review_selected_article_import_v4 selected_base
             ON selected_base.project_id = ${getSqlLiteral(input.projectId)}

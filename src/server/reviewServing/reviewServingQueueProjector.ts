@@ -99,6 +99,12 @@ const getClaimPromptIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
+const hasProjectScopedClaim = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return claims.some((claim) => {
+    return claim.scopeKind === 'project'
+  })
+}
+
 const getValuesCte = (columnName: string, values: readonly string[]) => {
   return values.length === 0
     ? ''
@@ -124,6 +130,22 @@ const getDirtyArticleCte = (projectId: string, articleIds: readonly string[], pr
       )`
 }
 
+const getQueueDirtyArticleCte = (
+  projectId: string,
+  articleIds: readonly string[],
+  promptIds: readonly string[],
+  claims: readonly ReviewServingDirtyWorkClaim[],
+) => {
+  return promptIds.length === 0 && hasProjectScopedClaim(claims)
+    ? `article_id_filter(article_id) AS (
+        SELECT scope.article_id
+        FROM mart.project_scope_article scope
+        WHERE scope.project_id = ${getSqlLiteral(projectId)}
+          AND (scope.in_curated_scope OR scope.in_route_scope)
+      )`
+    : getDirtyArticleCte(projectId, articleIds, promptIds)
+}
+
 const getDirtyPromptJoin = (promptIds: readonly string[], alias: string) => {
   return promptIds.length === 0
     ? ''
@@ -143,9 +165,10 @@ const getQueueIdentity = (row: QueueSourceRow) => {
 }
 
 const getQueueRows = async (input: ProjectReviewServingQueueInput, database: ReviewServingQueueProjectorDatabase) => {
-  const articleIds = getClaimArticleIds(input.claims)
-  const promptIds = getClaimPromptIds(input.claims)
-  const dirtyArticleCte = getDirtyArticleCte(input.projectId, articleIds, promptIds)
+  const broadProjectClaim = hasProjectScopedClaim(input.claims)
+  const articleIds = broadProjectClaim ? [] : getClaimArticleIds(input.claims)
+  const promptIds = broadProjectClaim ? [] : getClaimPromptIds(input.claims)
+  const dirtyArticleCte = getQueueDirtyArticleCte(input.projectId, articleIds, promptIds, input.claims)
   const dirtyPromptCte = getValuesCte('prompt_id', promptIds)
   const ctes = [dirtyArticleCte, dirtyPromptCte].filter((cte) => {
     return cte.length > 0
@@ -368,8 +391,9 @@ const getQueuePatchManifest = (input: ProjectReviewServingQueueInput): ReviewSer
 }
 
 const getDeleteReplacedQueueServingStatement = (input: ProjectReviewServingQueueInput) => {
-  const articleIds = getClaimArticleIds(input.claims)
-  const promptIds = getClaimPromptIds(input.claims)
+  const broadProjectClaim = hasProjectScopedClaim(input.claims)
+  const articleIds = broadProjectClaim ? [] : getClaimArticleIds(input.claims)
+  const promptIds = broadProjectClaim ? [] : getClaimPromptIds(input.claims)
 
   return input.snapshotId === null || input.snapshotId === undefined
     ? null

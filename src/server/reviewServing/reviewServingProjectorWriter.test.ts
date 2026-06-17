@@ -186,6 +186,27 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
           },
         },
       ],
+      repairDirtyWork: [
+        {
+          articleId: 'article-2',
+          latestDeltaId: 'repair-delta-1',
+          projectionComponent: 'display',
+          projectionIdentity: 'display:identity-1',
+          scope: {
+            affectedComponents: ['display'],
+            dirtyKind: 'article.display.updated',
+            dirtyRangeEnd: 'article-2',
+            dirtyRangeStart: 'article-2',
+            firstAffectedComponent: 'display',
+            projectId: 'project-1',
+            projectionKey: null,
+            scopeId: 'project-1:article-2',
+            scopeKind: 'article',
+            sourceHighWaterMark: 9,
+            sourcePartition: 'review-change',
+          },
+        },
+      ],
       candidateSnapshot: {
         componentRequirements: {optionalComponents: [], requiredComponents: ['display']},
         componentState: {
@@ -244,6 +265,15 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
       return statement.includes('INSERT INTO app.review_serving_projector_watermark')
     }),
   ).toBe(true)
+  expect(
+    statements.findIndex((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_dirty_work')
+    }),
+  ).toBeLessThan(
+    statements.findIndex((statement) => {
+      return statement.includes('INSERT INTO app.review_serving_dirty_work_ack')
+    }),
+  )
   expect(
     statements.some((statement) => {
       return statement.includes("snapshot_status = 'active'")

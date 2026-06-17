@@ -425,6 +425,7 @@ export const projectReviewServingJudgmentPayloadRows = async (
 
   await writeReviewServingProjectorComponent(
     {
+      acknowledgements: input.claims ?? [],
       component: 'payload',
       records: [...llmRecords, ...humanRecords],
       statements: getReplacementDeleteStatements(input, getRequestedPayloadKinds(input.listModeKeys)),
