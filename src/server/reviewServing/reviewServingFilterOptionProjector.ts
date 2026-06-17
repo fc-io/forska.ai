@@ -102,12 +102,12 @@ const getOptionModePredicate = (input: ProjectReviewServingFilterOptionsInput) =
   return input.optionMode === 'human' ? "AND detail.payload_kind = 'human'" : "AND detail.payload_kind = 'llm'"
 }
 
-const getPromptAnswerFacetKey = (input: ProjectReviewServingFilterOptionsInput) => {
-  return input.optionMode === 'human' ? 'humanPromptAnswer' : 'promptAnswer'
+const getPromptAnswerFacetKey = (_input: ProjectReviewServingFilterOptionsInput) => {
+  return 'promptAnswer'
 }
 
-const getNumericFacetKey = (input: ProjectReviewServingFilterOptionsInput) => {
-  return input.optionMode === 'human' ? 'humanNumericPromptAnswer' : 'numericPromptAnswer'
+const getNumericFacetKey = (_input: ProjectReviewServingFilterOptionsInput) => {
+  return 'numericPromptAnswer'
 }
 
 const getAnswerValueExpression = () => {

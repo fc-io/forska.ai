@@ -171,6 +171,13 @@ test('human option projection keeps prompt answers separate from summary-mode an
   const {database, statements} = createFilterOptionDatabase({
     sourceRows: [
       sourceRow({
+        facetKey: 'promptAnswer',
+        filterKind: 'human',
+        optionPayloadJson: {filterType: 'enum', promptId: 'prompt-1', value: 'yes'},
+        optionValueKey: 'human:promptAnswer:prompt-1:yes',
+        promptId: 'prompt-1',
+      }),
+      sourceRow({
         facetKey: 'summaryAnswer',
         filterKind: 'human',
         optionPayloadJson: {filterType: 'enum', promptId: 'summary', summaryMode: true, value: 'include'},
@@ -186,8 +193,17 @@ test('human option projection keeps prompt answers separate from summary-mode an
   })
 
   expect(sourceStatement).toContain("detail.payload_kind = 'human'")
+  expect(sourceStatement).toContain("'promptAnswer' AS facetKey")
   expect(sourceStatement).toContain("answer.prompt_id = 'summary'")
   expect(sourceStatement).toContain("answer.prompt_id <> 'summary'")
+  expect(
+    hasOptionValue(result.optionValues, {
+      facet_key: 'promptAnswer',
+      filter_kind: 'human',
+      option_value_key: 'human:promptAnswer:prompt-1:yes',
+      prompt_id: 'prompt-1',
+    }),
+  ).toBe(true)
   expect(
     hasOptionValue(result.optionValues, {
       facet_key: 'summaryAnswer',

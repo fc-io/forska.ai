@@ -96,7 +96,10 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
-const getExpectedArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[], rows: readonly PostingContributionRow[]) => {
+const getExpectedArticleIds = (
+  claims: readonly ReviewServingDirtyWorkClaim[],
+  rows: readonly PostingContributionRow[],
+) => {
   const claimArticleIds = getClaimArticleIds(claims)
 
   return claimArticleIds.length > 0
@@ -110,26 +113,11 @@ const getExpectedArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[], r
       ]
 }
 
-const getClaimPromptIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
-  return [
-    ...new Set(
-      claims
-        .map((claim) => {
-          return claim.scopeKind === 'prompt' ? (claim.scopeId.split(':').at(-1) ?? null) : null
-        })
-        .filter((promptId) => {
-          return promptId !== null && promptId.trim().length > 0
-        }) as string[],
-    ),
-  ]
-}
-
 const getLatestHumanPatchPredicate = (alias: string) => {
   return `NOT EXISTS (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
               WHERE newer.project_id = ${alias}.project_id
-                AND newer.prompt_config_hash = ${alias}.prompt_config_hash
                 AND newer.base_generation = ${alias}.base_generation
                 AND newer.article_id = ${alias}.article_id
                 AND newer.prompt_id IS NOT DISTINCT FROM ${alias}.prompt_id
@@ -534,7 +522,6 @@ const getDeleteServingRowsStatement = (
   tombstoneRows: readonly PostingContributionRow[],
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
-  const promptIds = getClaimPromptIds(input.claims)
   const tombstoneValues = tombstoneRows
     .map((row) => {
       return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.filterKind)}, ${getSqlLiteral(row.filterValue)}, ${getSqlLiteral(row.listModeKey)})`
@@ -551,7 +538,7 @@ const getDeleteServingRowsStatement = (
         },
         table: 'mart.review_article_filter_posting_serving_v4',
       })
-    : promptIds.length === 0 || tombstoneValues.length === 0
+    : tombstoneValues.length === 0
       ? null
       : `WITH deleted(article_id, filter_kind, filter_value, list_mode_key) AS (
           SELECT * FROM (VALUES ${tombstoneValues})

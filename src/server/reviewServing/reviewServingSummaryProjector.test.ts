@@ -216,7 +216,6 @@ test('projects human summary-answer facets independently from prompt answers', a
   ).toBe(true)
   expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
   expect(selectStatement).toContain('human.base_generation = 5')
-  expect(selectStatement).toContain('newer.prompt_config_hash = human.prompt_config_hash')
   expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
 })
 
@@ -253,7 +252,9 @@ test('date range and search-scope SQL stays scoped and explicit unsupported filt
     return statement.includes('FROM summary_union')
   })
 
-  expect(sourceStatement).toContain('scope.publication_year')
+  expect(sourceStatement).toContain('selected_base.publication_year')
+  expect(sourceStatement).toContain('selected_patch.publication_year')
+  expect(sourceStatement).not.toContain('scope.publication_year')
   expect(sourceStatement).toContain('filter:dynamic')
   expect(
     hasSummaryValue(result.summaryValues, {
@@ -268,7 +269,9 @@ test('date range and search-scope SQL stays scoped and explicit unsupported filt
 
 test('summary diffs aggregate before writing shared count keys', async () => {
   const {database} = createSummaryDatabase({
-    countRows: [{countKind: 'review.queue.unassessedReady', countValue: 4, filterKey: 'queue:ready', listModeKey: 'llm'}],
+    countRows: [
+      {countKind: 'review.queue.unassessedReady', countValue: 4, filterKey: 'queue:ready', listModeKey: 'llm'},
+    ],
     sourceRows: [
       sourceCountRow({
         countKind: 'review.queue.unassessedReady',
@@ -287,7 +290,11 @@ test('summary diffs aggregate before writing shared count keys', async () => {
 
   const result = await projectReviewServingSummaries(projectInput([summaryClaim()]), database)
 
-  expect(result.summaryValues.filter((row) => row.count_kind === 'review.queue.unassessedReady')).toHaveLength(1)
+  expect(
+    result.summaryValues.filter((row) => {
+      return row.count_kind === 'review.queue.unassessedReady'
+    }),
+  ).toHaveLength(1)
   expect(hasSummaryValue(result.summaryValues, {count_kind: 'review.queue.unassessedReady', count_value: 6})).toBe(true)
 })
 

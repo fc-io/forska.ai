@@ -135,6 +135,8 @@ test('import delta intake bounds source rows before route fanout', async () => {
 
   expect(result).toMatchObject({dirtyWorkCount: 16, maxSourceHighWaterMark: 4, status: 'converted'})
   expect(deltaSelect).toContain('LIMIT 1')
+  expect(deltaSelect).toContain('delta.source_high_water_mark AS sourceHighWaterMark')
+  expect(deltaSelect).not.toContain('CAST(delta.source_high_water_mark AS INTEGER)')
   expect(deltaSelect).toContain('LEFT JOIN app.project_import_route')
   expect(dirtyInserts).toHaveLength(16)
 })
