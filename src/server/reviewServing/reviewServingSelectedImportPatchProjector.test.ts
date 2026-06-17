@@ -107,6 +107,8 @@ test('selected-import routine updates write component-narrow patches for only cl
     'ON CONFLICT(project_id, project_scope_identity, selected_import_snapshot_id, patch_watermark, article_id)',
   )
   expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).toContain('INSERT INTO mart.review_article_serving_v4')
+  expect(joined).toContain('serving_template AS')
   expect(joined).toContain('selected_import_route_id = changed.import_route_id')
   expect(joined).toContain('selected_rank_key = changed.selected_rank_key')
 })

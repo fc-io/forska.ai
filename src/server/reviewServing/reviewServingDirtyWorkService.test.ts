@@ -464,6 +464,7 @@ test('claims stale running work after the running lease expires', async () => {
 
   expect(claims).toHaveLength(1)
   expect(claimSelect).toContain("status = 'running'")
+  expect(claimSelect).toContain("status = 'failed'")
   expect(claimSelect).toContain("INTERVAL '60 seconds'")
   expect(claimSelect).toContain("TIMESTAMPTZ '2026-06-16T13:00:00.000Z'")
 })

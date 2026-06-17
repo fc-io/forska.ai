@@ -75,6 +75,7 @@ test('display routine updates write component-narrow patches for only claimed ar
         articleExternalId: 'NCT-1',
         articleId: 'article-1',
         articleTitle: 'Updated title',
+        fullTextPdf: 'https://example.test/article-1.pdf',
         journalTitle: null,
         publicationYear: null,
         sortKey: '2026-01-01T00:00:00.000Z',
@@ -94,6 +95,7 @@ test('display routine updates write component-narrow patches for only claimed ar
       projectScopeIdentity: 'projectScope:identity-1',
       projectionIdentity: 'display:identity-1',
       selectedImportSnapshotId: 'selected-import-snapshot-1',
+      snapshotId: 'snapshot-1',
     },
     database,
   )
@@ -115,6 +117,8 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('UPDATE mart.review_article_serving_v4')
   expect(joined).toContain("article_title = 'Updated title'")
+  expect(joined).toContain("full_text_pdf = 'https://example.test/article-1.pdf'")
+  expect(joined).toContain("snapshot_id = 'snapshot-1'")
   expect(joined).toContain("url = 'https://example.test/article-1'")
   expect(joined).toContain("'display'")
   expect(joined).not.toContain("'llmStatus'")

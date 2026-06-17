@@ -345,6 +345,9 @@ const getApplyHumanStatusServingStatement = (input: {
     ? null
     : `WITH changed(list_mode_key, article_id, prompt_config_hash, prompt_id, human_status_key, tombstone) AS (
         SELECT * FROM (VALUES ${values})
+      ), changed_article AS (
+        SELECT DISTINCT list_mode_key, article_id
+        FROM changed
       ), candidate_prompt AS (
         SELECT
           changed.list_mode_key,
@@ -355,6 +358,7 @@ const getApplyHumanStatusServingStatement = (input: {
           changed.tombstone,
           ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
         FROM changed
+        GROUP BY changed.list_mode_key, changed.article_id, changed.prompt_config_hash, changed.prompt_id, changed.human_status_key, changed.tombstone
         UNION ALL
         SELECT
           human.list_mode_key,
@@ -365,7 +369,7 @@ const getApplyHumanStatusServingStatement = (input: {
           human.tombstone,
           human.patch_watermark
         FROM mart.review_human_status_patch_v4 human
-        INNER JOIN changed
+        INNER JOIN changed_article changed
           ON changed.list_mode_key = human.list_mode_key
           AND changed.article_id = human.article_id
         WHERE human.project_id = ${getSqlLiteral(input.projectId)}

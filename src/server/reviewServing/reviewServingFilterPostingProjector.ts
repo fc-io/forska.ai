@@ -230,11 +230,11 @@ const getPostingContributionRows = async (
           SELECT
             scoped.article_id,
             scoped.sort_key,
-            COALESCE(selected_patch.import_route_id, selected_base.import_route_id) AS import_route_id,
-            COALESCE(selected_patch.selected_rank_key, selected_base.selected_rank_key) AS selected_rank_key,
-            COALESCE(selected_patch.publication_year, selected_base.publication_year) AS publication_year,
-            COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag, FALSE) AS duplicate_flag,
-            COALESCE(selected_patch.conflict_flag, selected_base.conflict_flag, FALSE) AS conflict_flag,
+            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.import_route_id, selected_base.import_route_id) END AS import_route_id,
+            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.selected_rank_key, selected_base.selected_rank_key) END AS selected_rank_key,
+            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.publication_year, selected_base.publication_year) END AS publication_year,
+            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN FALSE ELSE COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag, FALSE) END AS duplicate_flag,
+            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN FALSE ELSE COALESCE(selected_patch.conflict_flag, selected_base.conflict_flag, FALSE) END AS conflict_flag,
             scoped.scope_tombstone AS tombstone
           FROM scoped_article scoped
           LEFT JOIN app.review_selected_article_import_v4 selected_base
@@ -317,6 +317,7 @@ const getPostingContributionRows = async (
           FROM scoped_article scoped
           INNER JOIN mart.review_human_status_patch_v4 human
             ON human.project_id = ${getSqlLiteral(input.projectId)}
+            AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND human.article_id = scoped.article_id
             AND ${getLatestHumanPatchPredicate('human')}
           INNER JOIN list_mode_key_filter list_mode_key
@@ -326,6 +327,7 @@ const getPostingContributionRows = async (
           FROM scoped_article scoped
           INNER JOIN mart.review_human_status_patch_v4 human
             ON human.project_id = ${getSqlLiteral(input.projectId)}
+            AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND human.article_id = scoped.article_id
             AND ${getLatestHumanPatchPredicate('human')}
           INNER JOIN list_mode_key_filter list_mode_key
