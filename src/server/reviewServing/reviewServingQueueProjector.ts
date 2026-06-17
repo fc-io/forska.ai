@@ -226,6 +226,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
             ON selected.article_id = scoped.article_id
           INNER JOIN mart.review_llm_status_patch_v4 llm
             ON llm.project_id = ${getSqlLiteral(input.projectId)}
+            AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND llm.article_id = scoped.article_id
             ${getDirtyPromptJoin(promptIds, 'llm')}
             AND llm.patch_watermark = (
@@ -254,10 +255,12 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
             ON selected.article_id = scoped.article_id
           INNER JOIN mart.review_human_status_patch_v4 human
             ON human.project_id = ${getSqlLiteral(input.projectId)}
+            AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND human.article_id = scoped.article_id
             ${getDirtyPromptJoin(promptIds, 'human')}
           INNER JOIN mart.review_llm_status_patch_v4 llm
             ON llm.project_id = ${getSqlLiteral(input.projectId)}
+            AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND llm.article_id = human.article_id
             AND llm.prompt_id = human.prompt_id
             AND llm.list_mode_key = human.list_mode_key

@@ -257,7 +257,7 @@ test('human postings read only the current status patch per logical prompt key',
   expect(selectStatement).toContain('newer.list_mode_key = human.list_mode_key')
 })
 
-test('prompt-scoped posting rebuilds clear snapshot serving rows before reinserting', async () => {
+test('prompt-scoped posting rebuilds clear only changed tombstoned serving rows before reinserting', async () => {
   const {database, statements} = createPostingDatabase({existingRows: [postingRow()], newRows: []})
 
   await projectReviewServingFilterPostings(
@@ -274,8 +274,11 @@ test('prompt-scoped posting rebuilds clear snapshot serving rows before reinsert
   })
 
   expect(existingSelect).not.toContain('article_id IN')
+  expect(deleteStatement).toContain('USING deleted')
+  expect(deleteStatement).toContain('filter_kind = deleted.filter_kind')
   expect(deleteStatement).toContain('snapshot_id')
   expect(deleteStatement).not.toContain('article_id IN')
+  expect(deleteStatement).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 WHERE project_id')
 })
 
 test('list modes keep posting stats and serving rows separated', async () => {
