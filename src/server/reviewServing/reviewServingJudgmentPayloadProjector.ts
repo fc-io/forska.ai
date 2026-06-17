@@ -293,6 +293,9 @@ const getHumanJudgmentRows = async (
           judgment_human.updated_at AS humanJudgmentUpdatedAt,
           'human_prompt' AS payloadReferenceKind
         FROM active_article active
+        INNER JOIN app.project project
+          ON project.id = ${getSqlLiteral(input.projectId)}
+          AND COALESCE(project.human_judgment_mode, 'prompt') = 'prompt'
         INNER JOIN app."judgment_human" judgment_human
           ON judgment_human.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
           AND judgment_human.article_id = active.article_id
@@ -311,6 +314,9 @@ const getHumanJudgmentRows = async (
           judgment_human_summary.updated_at AS humanJudgmentUpdatedAt,
           'human_summary' AS payloadReferenceKind
         FROM active_article active
+        INNER JOIN app.project project
+          ON project.id = ${getSqlLiteral(input.projectId)}
+          AND COALESCE(project.human_judgment_mode, 'prompt') = 'summary'
         INNER JOIN app."judgment_human_summary" judgment_human_summary
           ON judgment_human_summary.project_id = ${getSqlLiteral(input.projectId)}
           AND judgment_human_summary.article_id = active.article_id

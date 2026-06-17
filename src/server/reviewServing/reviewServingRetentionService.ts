@@ -297,6 +297,12 @@ const compactSelectedImportPatches = async (
       tombstone = excluded.tombstone,
       selected_import_updated_at = excluded.selected_import_updated_at
   `)
+
+  await database.run(`
+    DELETE FROM mart.review_selected_import_patch_v4
+    WHERE project_id = ${getSqlLiteral(candidate.projectId)}
+      AND selected_import_snapshot_id = ${getSqlLiteral(candidate.selectedImportSnapshotId)}
+  `)
 }
 
 const compactPatchComponent = async (

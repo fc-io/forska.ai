@@ -236,6 +236,18 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
   expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_dirty_work_ack')
 })
 
+test('human payload projection filters rows by active human judgment mode', async () => {
+  const {database, statements} = createJudgmentPayloadDatabase({humanRows: [], llmRows: []})
+
+  await projectReviewServingJudgmentPayloadRows(projectInput([judgmentClaim()]), database)
+  const humanSelect = statements.find((statement) => {
+    return statement.includes('FROM active_article active') && statement.includes('judgment_human_summary')
+  })
+
+  expect(humanSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') = 'prompt'")
+  expect(humanSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') = 'summary'")
+})
+
 test('judgment payload projection writes payload manifest when acknowledging claims', async () => {
   const {database, statements} = createJudgmentPayloadDatabase({humanRows: [], llmRows: []})
 
