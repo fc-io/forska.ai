@@ -38,6 +38,8 @@ const projectInput = (input?: {
 }) => {
   return {
     claims: input?.claims ?? [optionClaim()],
+    baseGeneration: 5,
+    definitionVersion: 'summary-v1-test',
     filterOptionIdentity: input?.filterOptionIdentity ?? 'filter-option:identity-1',
     listModeKeys: input?.listModeKeys ?? ['llm'],
     optionMode: input?.optionMode ?? 'review',
@@ -118,6 +120,9 @@ test('projects supported enum option payloads into scoped option rows', async ()
   ).toBe(true)
   expect(joined).toContain('DELETE FROM mart.review_filter_option_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_filter_option_serving_v4')
+  expect(joined.indexOf('INSERT INTO mart.review_filter_option_serving_v4')).toBeLessThan(
+    joined.indexOf('INSERT INTO app.review_projection_identity_manifest'),
+  )
   expect(joined).not.toContain('numericPromptAnswer')
   expect(joined).not.toContain('numeric_options')
 })

@@ -105,8 +105,8 @@ const defaultComponentOrder: readonly ReviewServingProjectionComponent[] = [
   'humanStatus',
   'queue',
   'posting',
-  'summary',
   'payload',
+  'summary',
 ]
 
 const getDiagnostic = (error: unknown) => {

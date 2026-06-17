@@ -820,7 +820,9 @@ const getDefaultReviewServingProjectorRunners = (
         const reviewFilterOptionsResult = await projectReviewServingFilterOptions(
           {
             acknowledgeClaims: false,
+            baseGeneration: manifest.baseGeneration,
             claims: context.claims,
+            definitionVersion: manifest.definitionVersion,
             filterOptionIdentity: getReviewServingFilterOptionIdentity({
               filterKeys: defaultReviewFilterOptionKeys,
               listModeKeys: reviewServingListModes,
@@ -840,7 +842,9 @@ const getDefaultReviewServingProjectorRunners = (
         const humanFilterOptionsResult = await projectReviewServingFilterOptions(
           {
             acknowledgeClaims,
+            baseGeneration: manifest.baseGeneration,
             claims: context.claims,
+            definitionVersion: manifest.definitionVersion,
             filterOptionIdentity: getReviewServingFilterOptionIdentity({
               filterKeys: defaultHumanFilterOptionKeys,
               listModeKeys: defaultReviewServingHumanListModeKeys,
