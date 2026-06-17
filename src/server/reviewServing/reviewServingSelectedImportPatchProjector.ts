@@ -256,8 +256,105 @@ const getApplySelectedImportServingStatements = (input: {
             )`,
         `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
            SELECT * FROM (VALUES ${values})
+          ), serving_template AS (
+            SELECT DISTINCT
+              serving.project_id,
+              serving.review_config_hash,
+              serving.snapshot_id,
+              serving.base_generation,
+              serving.display_identity,
+              serving.project_scope_identity,
+              serving.selected_import_identity,
+              serving.llm_status_identity,
+              serving.human_status_identity,
+              serving.posting_identity,
+              serving.summary_identity,
+              serving.payload_identity,
+              serving.list_mode_key
+            FROM mart.review_article_serving_v4 serving
+            WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+              AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
+              AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
           )
-         UPDATE mart.review_article_serving_v4 serving
+          INSERT INTO mart.review_article_serving_v4 (
+            project_id,
+            review_config_hash,
+            snapshot_id,
+            base_generation,
+            patch_watermark,
+            display_identity,
+            project_scope_identity,
+            selected_import_identity,
+            llm_status_identity,
+            human_status_identity,
+            posting_identity,
+            summary_identity,
+            payload_identity,
+            list_mode_key,
+            article_id,
+            sort_key,
+            activity_sort_at,
+            article_title,
+            article_external_id,
+            journal_title,
+            url,
+            full_text_pdf,
+            selected_import_route_id,
+            selected_rank_key,
+            publication_year,
+            duplicate_flag,
+            conflict_flag,
+            llm_judged_prompt_count,
+            enabled_prompt_count,
+            human_answered_prompt_count,
+            review_opened,
+            review_sections_completed,
+            serving_updated_at
+          )
+          SELECT
+            template.project_id,
+            template.review_config_hash,
+            template.snapshot_id,
+            template.base_generation,
+            ${getSqlLiteral(input.patchWatermark)} AS patch_watermark,
+            template.display_identity,
+            template.project_scope_identity,
+            template.selected_import_identity,
+            template.llm_status_identity,
+            template.human_status_identity,
+            template.posting_identity,
+            template.summary_identity,
+            template.payload_identity,
+            template.list_mode_key,
+            changed.article_id,
+            COALESCE(article.article_created_at, current_timestamp) AS sort_key,
+            COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activity_sort_at,
+            article.article_title,
+            article.article_id AS article_external_id,
+            NULL AS journal_title,
+            article.url,
+            article.full_text_pdf,
+            changed.import_route_id,
+            changed.selected_rank_key,
+            changed.publication_year,
+            changed.duplicate_flag,
+            changed.conflict_flag,
+            0 AS llm_judged_prompt_count,
+            0 AS enabled_prompt_count,
+            0 AS human_answered_prompt_count,
+            FALSE AS review_opened,
+            0 AS review_sections_completed,
+            current_timestamp AS serving_updated_at
+          FROM changed
+          INNER JOIN app."article" article
+            ON article.id = changed.article_id
+          CROSS JOIN serving_template template
+          WHERE changed.scope_tombstone = FALSE
+          ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`,
+        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
+           SELECT * FROM (VALUES ${values})
+           )
+          UPDATE mart.review_article_serving_v4 serving
          SET
            selected_import_route_id = changed.import_route_id,
            selected_rank_key = changed.selected_rank_key,

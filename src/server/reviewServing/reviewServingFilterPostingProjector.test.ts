@@ -234,6 +234,7 @@ test('selected-import rank changes move filter contribution between selected imp
   })
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
+  expect(selectStatement).toContain('COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE)')
   expect(selectStatement).toContain('COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag, FALSE)')
   expect(selectStatement).toContain('COALESCE(selected_patch.conflict_flag, selected_base.conflict_flag, FALSE)')
   expect(selectStatement).toContain('scoped.scope_tombstone AS tombstone')
@@ -250,6 +251,7 @@ test('human postings read only the current status patch per logical prompt key',
   })
 
   expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
+  expect(selectStatement).toContain('human.base_generation = 5')
   expect(selectStatement).toContain('newer.prompt_config_hash = human.prompt_config_hash')
   expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
   expect(selectStatement).toContain('newer.list_mode_key = human.list_mode_key')

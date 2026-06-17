@@ -171,6 +171,8 @@ test('projects list-mode count deltas with summary identity and definition versi
   expect(hasSummaryValue(result.summaryValues, {count_value: 8, list_mode_key: 'llm'})).toBe(true)
   expect(joined).toContain('selected_base.project_scope_identity')
   expect(joined).toContain('selected_base.selected_import_snapshot_id')
+  expect(joined).toContain('COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE)')
+  expect(joined).toContain('scoped.in_scope AS in_selected_scope')
   expect(joined).toContain('FROM mart.review_selected_import_patch_v4 newer')
   expect(joined).toContain('INSERT INTO mart.review_article_count_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')

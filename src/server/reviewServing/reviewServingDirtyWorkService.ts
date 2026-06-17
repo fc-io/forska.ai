@@ -117,6 +117,10 @@ const getEligibleDirtyWorkPredicate = (params: ClaimReviewServingDirtyWorkParams
         status = 'running'
         AND updated_at <= ${claimNowSql} - INTERVAL '${staleRunningClaimSeconds} seconds'
       )
+      OR (
+        status = 'failed'
+        AND updated_at <= ${claimNowSql} - INTERVAL '${staleRunningClaimSeconds} seconds'
+      )
     )
     AND starts_with(projection_key, ${getSqlLiteral(getProjectionKeyPrefix(params.projectionComponent))})`
 }

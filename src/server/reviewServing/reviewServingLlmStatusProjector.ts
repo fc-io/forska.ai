@@ -500,6 +500,9 @@ const getApplyLlmStatusServingStatement = (input: {
     ? null
     : `WITH changed(review_config_hash, list_mode_key, article_id, prompt_config_hash, prompt_id, llm_status_key, tombstone) AS (
         SELECT * FROM (VALUES ${values})
+      ), changed_article AS (
+        SELECT DISTINCT review_config_hash, list_mode_key, article_id
+        FROM changed
       ), candidate_prompt AS (
         SELECT
           changed.review_config_hash,
@@ -511,6 +514,7 @@ const getApplyLlmStatusServingStatement = (input: {
           changed.tombstone,
           ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
         FROM changed
+        GROUP BY changed.review_config_hash, changed.list_mode_key, changed.article_id, changed.prompt_config_hash, changed.prompt_id, changed.llm_status_key, changed.tombstone
         UNION ALL
         SELECT
           llm.review_config_hash,
@@ -522,7 +526,7 @@ const getApplyLlmStatusServingStatement = (input: {
           llm.tombstone,
           llm.patch_watermark
         FROM mart.review_llm_status_patch_v4 llm
-        INNER JOIN changed
+        INNER JOIN changed_article changed
           ON changed.review_config_hash = llm.review_config_hash
           AND changed.list_mode_key = llm.list_mode_key
           AND changed.article_id = llm.article_id

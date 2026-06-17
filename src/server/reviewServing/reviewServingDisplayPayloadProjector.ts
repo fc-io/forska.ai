@@ -41,6 +41,7 @@ export type ProjectReviewServingDisplayPatchInput = {
   projectScopeIdentity: string
   projectionIdentity: string
   selectedImportSnapshotId: string
+  snapshotId: string
   status?: ReviewServingProjectionManifestStatus
 }
 
@@ -76,6 +77,7 @@ type DisplayPatchRow = {
   articleExternalId: string | null
   articleId: string
   articleTitle: string | null
+  fullTextPdf: string | null
   journalTitle: string | null
   publicationYear: number | null
   sortKey: Date | string | null
@@ -203,6 +205,7 @@ const getDisplayPatchRows = async (
           article.article_created_at AS sortKey,
           article.article_title AS articleTitle,
           article.article_id AS articleExternalId,
+          article.full_text_pdf AS fullTextPdf,
           selected.journal_title AS journalTitle,
           article.url,
           selected.publication_year AS publicationYear,
@@ -367,6 +370,7 @@ const getDeletePayloadRowsStatement = (input: ProjectReviewServingPayloadInput) 
 const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplayPatchInput, row: DisplayPatchRow) => {
   const rowPredicate = `project_id = ${getSqlLiteral(input.projectId)}
           AND display_identity = ${getSqlLiteral(input.displayIdentity)}
+          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
           AND base_generation = ${getSqlLiteral(input.baseGeneration)}
           AND article_id = ${getSqlLiteral(row.articleId)}`
 
