@@ -76,6 +76,7 @@ type SelectedImportPatchRow = {
   conflictFlag: boolean | null
   duplicateFlag: boolean | null
   importRouteId: string | null
+  journalTitle: string | null
   publicationYear: number | null
   selectedRankKey: string | null
   selectedRankNumeric: number | null
@@ -275,6 +276,7 @@ const getSelectedImportPatchRows = async (
             hot.selected_rank_key,
             hot.selected_rank_numeric,
             hot.publication_year,
+            hot.journal_title,
             hot.duplicate_flag,
             hot.conflict_flag,
             hot.tombstone,
@@ -300,6 +302,7 @@ const getSelectedImportPatchRows = async (
             candidate.selected_rank_key,
             candidate.selected_rank_numeric,
             candidate.publication_year,
+            candidate.journal_title,
             candidate.duplicate_flag,
             candidate.conflict_flag
           FROM selected_import_candidates candidate
@@ -333,6 +336,7 @@ const getSelectedImportPatchRows = async (
           winner.selected_rank_key AS selectedRankKey,
           winner.selected_rank_numeric AS selectedRankNumeric,
           winner.publication_year AS publicationYear,
+          winner.journal_title AS journalTitle,
           winner.duplicate_flag AS duplicateFlag,
           winner.conflict_flag AS conflictFlag,
           NOT (COALESCE(scope.in_curated_scope, FALSE) OR COALESCE(scope.in_route_scope, FALSE)) AS scopeTombstone,
@@ -391,7 +395,7 @@ const getApplySelectedImportServingStatements = (input: {
 }) => {
   const values = input.rows
     .map((row) => {
-      return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.tombstone ? null : row.importRouteId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedRankKey)}, ${getSqlLiteral(row.tombstone ? null : row.publicationYear)}, ${getSqlLiteral(row.tombstone ? false : (row.duplicateFlag ?? false))}, ${getSqlLiteral(row.tombstone ? false : (row.conflictFlag ?? false))}, ${getSqlLiteral(row.tombstone)}, ${getSqlLiteral(row.scopeTombstone)})`
+      return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.tombstone ? null : row.importRouteId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedRankKey)}, ${getSqlLiteral(row.tombstone ? null : row.publicationYear)}, ${getSqlLiteral(row.tombstone ? null : row.journalTitle)}, ${getSqlLiteral(row.tombstone ? false : (row.duplicateFlag ?? false))}, ${getSqlLiteral(row.tombstone ? false : (row.conflictFlag ?? false))}, ${getSqlLiteral(row.tombstone)}, ${getSqlLiteral(row.scopeTombstone)})`
     })
     .join(', ')
   const fallbackTemplateCte = getFallbackTemplateCte({projectId: input.projectId, templates: input.templates})
@@ -399,7 +403,7 @@ const getApplySelectedImportServingStatements = (input: {
   return values.length === 0
     ? []
     : [
-        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
+        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, journal_title, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
            SELECT * FROM (VALUES ${values})
          )
          DELETE FROM mart.review_article_serving_v4 serving
@@ -420,7 +424,7 @@ const getApplySelectedImportServingStatements = (input: {
               WHERE changed.article_id = serving.article_id
                 AND changed.scope_tombstone = TRUE
             )`,
-        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
+        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, journal_title, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
            SELECT * FROM (VALUES ${values})
           ), serving_template AS (
             SELECT DISTINCT
@@ -506,7 +510,7 @@ const getApplySelectedImportServingStatements = (input: {
             COALESCE(article.article_updated_at, article.article_created_at, current_timestamp) AS activity_sort_at,
             article.article_title,
             article.article_id AS article_external_id,
-            NULL AS journal_title,
+            changed.journal_title,
             article.url,
             article.full_text_pdf,
             changed.import_route_id,
@@ -526,14 +530,15 @@ const getApplySelectedImportServingStatements = (input: {
           CROSS JOIN serving_template template
           WHERE changed.scope_tombstone = FALSE
           ON CONFLICT(project_id, review_config_hash, snapshot_id, list_mode_key, article_id) DO NOTHING`,
-        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
+        `WITH changed(article_id, import_route_id, selected_rank_key, publication_year, journal_title, duplicate_flag, conflict_flag, tombstone, scope_tombstone) AS (
            SELECT * FROM (VALUES ${values})
            )
           UPDATE mart.review_article_serving_v4 serving
          SET
-           selected_import_route_id = changed.import_route_id,
-           selected_rank_key = changed.selected_rank_key,
-           publication_year = changed.publication_year,
+            selected_import_route_id = changed.import_route_id,
+            selected_rank_key = changed.selected_rank_key,
+            journal_title = changed.journal_title,
+            publication_year = changed.publication_year,
            duplicate_flag = changed.duplicate_flag,
            conflict_flag = changed.conflict_flag,
            patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),

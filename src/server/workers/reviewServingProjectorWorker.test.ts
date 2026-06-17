@@ -250,6 +250,7 @@ test('worker default dependencies wire real projector runners instead of an empt
   expect(source).toContain('projectReviewServingFilterPostings')
   expect(source).toContain('projectReviewServingSummaries')
   expect(source).toContain('projectReviewServingPayloadRows')
+  expect(source).toContain('projectReviewServingJudgmentPayloadRows')
   expect(source).toContain('projectReviewServingDisplayPatches')
   expect(source).toContain('projectReviewServingTitleSearchRows')
   expect(source).toContain("component: 'judgmentInputContent'")

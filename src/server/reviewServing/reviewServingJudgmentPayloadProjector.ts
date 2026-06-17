@@ -156,6 +156,7 @@ const getLlmJudgmentRows = async (
           WHERE project_prompt.project_id = ${getSqlLiteral(input.projectId)}
             AND project_prompt.enabled
             AND NOT project_prompt.archived
+            AND COALESCE(prompt.archived, FALSE) = FALSE
         ),
         latest_judgment AS (
           SELECT

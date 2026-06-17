@@ -202,7 +202,7 @@ const getDisplayPatchRows = async (
         ${getDirtyArticleCteSql(articleIds)}
         SELECT
           dirty.article_id AS articleId,
-          article.article_created_at AS sortKey,
+          COALESCE(article.article_created_at, current_timestamp) AS sortKey,
           article.article_title AS articleTitle,
           article.article_id AS articleExternalId,
           article.full_text_pdf AS fullTextPdf,
