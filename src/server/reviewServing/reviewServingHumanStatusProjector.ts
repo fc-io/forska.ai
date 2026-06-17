@@ -289,7 +289,7 @@ const getPromptScopedRows = async (
           judgment_human.prompt_id AS promptId,
           judgment_human.prompt_id AS promptOrSummaryKey,
           'update' AS sourceOperation,
-          FALSE AS tombstone,
+          project_prompt.prompt_id IS NULL AS tombstone,
           NULL AS payloadJson,
           judgment_human.answer AS humanAnsweredValue,
           CASE
@@ -310,11 +310,13 @@ const getPromptScopedRows = async (
           ON judgment_human.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
           AND judgment_human.article_id = scope.article_id
           AND judgment_human.prompt_id = dirty_prompt.prompt_id
-        INNER JOIN app.prompt prompt
+        LEFT JOIN app.prompt prompt
           ON prompt.id = judgment_human.prompt_id
-        INNER JOIN app.project_prompt project_prompt
+        LEFT JOIN app.project_prompt project_prompt
           ON project_prompt.project_id = ${getSqlLiteral(input.projectId)}
           AND project_prompt.prompt_id = judgment_human.prompt_id
+          AND project_prompt.enabled = TRUE
+          AND COALESCE(prompt.archived, FALSE) = FALSE
         ORDER BY judgment_human.prompt_id ASC, scope.article_id ASC
       `)
 }

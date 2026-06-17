@@ -233,8 +233,11 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
               SELECT MAX(newer.patch_watermark)
               FROM mart.review_human_status_patch_v4 newer
               WHERE newer.project_id = human.project_id
-                AND newer.human_status_key = human.human_status_key
+                AND newer.prompt_config_hash = human.prompt_config_hash
+                AND newer.base_generation = human.base_generation
                 AND newer.article_id = human.article_id
+                AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
+                AND newer.list_mode_key = human.list_mode_key
             )
         ),
         queue_union AS (
@@ -344,13 +347,23 @@ const getQueuePatchManifest = (input: ProjectReviewServingQueueInput): ReviewSer
 
 const getDeleteReplacedQueueServingStatement = (input: ProjectReviewServingQueueInput) => {
   const articleIds = getClaimArticleIds(input.claims)
+  const promptIds = getClaimPromptIds(input.claims)
 
-  return input.snapshotId === null || input.snapshotId === undefined || articleIds.length === 0
+  return input.snapshotId === null || input.snapshotId === undefined
     ? null
-    : `DELETE FROM mart.review_unassessed_queue_serving_v4
+    : articleIds.length > 0
+      ? `DELETE FROM mart.review_unassessed_queue_serving_v4
         WHERE project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
           AND article_id IN (${articleIds.map(getSqlLiteral).join(', ')})`
+      : promptIds.length > 0
+        ? `DELETE FROM mart.review_unassessed_queue_serving_v4
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND prompt_id IN (${promptIds.map(getSqlLiteral).join(', ')})`
+    : `DELETE FROM mart.review_unassessed_queue_serving_v4
+        WHERE project_id = ${getSqlLiteral(input.projectId)}
+          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}`
 }
 
 export const projectReviewServingQueuePatches = async (

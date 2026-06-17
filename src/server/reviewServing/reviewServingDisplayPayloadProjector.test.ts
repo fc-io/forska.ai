@@ -106,6 +106,9 @@ test('display routine updates write component-narrow patches for only claimed ar
     'ON CONFLICT(project_id, display_identity, base_generation, patch_watermark, article_id)',
   )
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).toContain('UPDATE mart.review_article_serving_v4')
+  expect(joined).toContain("article_title = 'Updated title'")
+  expect(joined).toContain("url = 'https://example.test/article-1'")
   expect(joined).toContain("'display'")
   expect(joined).not.toContain("'llmStatus'")
   expect(joined).not.toContain("'humanStatus'")
@@ -151,6 +154,31 @@ test('payload projection preserves prompt-preview ordering inputs and avoids imp
   expect(insertStatement).toContain('payload_bytes')
   expect(joined).not.toContain('selected_scoped_article_import')
   expect(joined).not.toContain('payload_json')
+})
+
+test('payload claimed updates delete stale rows for removed articles before inserting replacements', async () => {
+  const {database, statements} = createDisplayPayloadDatabase({payloadRows: []})
+
+  const result = await projectReviewServingPayloadRows(
+    {
+      baseGeneration: 1,
+      claims: [displayClaim({dirtyKind: 'projectScope.article.removed'})],
+      definitionVersion: 'payload-v4-test',
+      displayIdentity: 'display:identity-1',
+      payloadIdentity: 'payload:identity-1',
+      projectId: 'project-1',
+      projectionIdentity: 'payload:identity-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const deleteStatement = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_article_serving_payload_v4')
+  })
+
+  expect(result).toEqual({payloadRowCount: 0, patchWatermark: 6})
+  expect(deleteStatement).toContain("article_id IN ('article-1')")
+  expect(deleteStatement).toContain('payload_identity')
 })
 
 test('display base rows flow through writer with display fields and selected import hot projection', async () => {

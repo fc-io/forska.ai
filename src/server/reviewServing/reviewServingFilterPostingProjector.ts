@@ -95,6 +95,34 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
+const getClaimPromptIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return [
+    ...new Set(
+      claims
+        .map((claim) => {
+          return claim.scopeKind === 'prompt' ? (claim.scopeId.split(':').at(-1) ?? null) : null
+        })
+        .filter((promptId) => {
+          return promptId !== null && promptId.trim().length > 0
+        }) as string[],
+    ),
+  ]
+}
+
+const getLatestHumanPatchPredicate = (alias: string) => {
+  return `NOT EXISTS (
+              SELECT 1
+              FROM mart.review_human_status_patch_v4 newer
+              WHERE newer.project_id = ${alias}.project_id
+                AND newer.prompt_config_hash = ${alias}.prompt_config_hash
+                AND newer.base_generation = ${alias}.base_generation
+                AND newer.article_id = ${alias}.article_id
+                AND newer.prompt_id IS NOT DISTINCT FROM ${alias}.prompt_id
+                AND newer.list_mode_key = ${alias}.list_mode_key
+                AND newer.patch_watermark > ${alias}.patch_watermark
+            )`
+}
+
 const getValuesCte = (columnName: string, values: readonly string[]) => {
   return values.length === 0
     ? ''
@@ -276,6 +304,7 @@ const getPostingContributionRows = async (
           INNER JOIN mart.review_human_status_patch_v4 human
             ON human.project_id = ${getSqlLiteral(input.projectId)}
             AND human.article_id = scoped.article_id
+            AND ${getLatestHumanPatchPredicate('human')}
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = human.list_mode_key
           UNION ALL
@@ -284,6 +313,7 @@ const getPostingContributionRows = async (
           INNER JOIN mart.review_human_status_patch_v4 human
             ON human.project_id = ${getSqlLiteral(input.projectId)}
             AND human.article_id = scoped.article_id
+            AND ${getLatestHumanPatchPredicate('human')}
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = human.list_mode_key
         ),
@@ -304,11 +334,16 @@ const getExistingPostingRows = async (
   database: ReviewServingFilterPostingProjectorDatabase,
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
+  const articlePredicate =
+    articleIds.length === 0
+      ? ''
+      : `AND serving.article_id IN (${articleIds
+          .map((articleId) => {
+            return getSqlLiteral(articleId)
+          })
+          .join(', ')})`
 
-  return articleIds.length === 0
-    ? []
-    : database.queryJson<PostingContributionRow>(`
-        WITH ${getValuesCte('article_id', articleIds)}
+  return database.queryJson<PostingContributionRow>(`
         SELECT
           serving.article_id AS articleId,
           serving.filter_kind AS filterKind,
@@ -316,12 +351,11 @@ const getExistingPostingRows = async (
           serving.list_mode_key AS listModeKey,
           serving.sort_key AS sortKey,
           FALSE AS tombstone
-        FROM article_id_filter dirty
-        INNER JOIN mart.review_article_filter_posting_serving_v4 serving
-          ON serving.project_id = ${getSqlLiteral(input.projectId)}
+        FROM mart.review_article_filter_posting_serving_v4 serving
+        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
           AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
           AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          AND serving.article_id = dirty.article_id
+          ${articlePredicate}
       `)
 }
 
@@ -457,10 +491,10 @@ const getStatsRecord = (input: {
 
 const getDeleteServingRowsStatement = (input: ProjectReviewServingFilterPostingsInput) => {
   const articleIds = getClaimArticleIds(input.claims)
+  const promptIds = getClaimPromptIds(input.claims)
 
-  return articleIds.length === 0
-    ? null
-    : getDeleteReviewServingProjectorRowsStatement({
+  return articleIds.length > 0
+    ? getDeleteReviewServingProjectorRowsStatement({
         predicates: {
           article_id: articleIds,
           project_id: input.projectId,
@@ -469,6 +503,16 @@ const getDeleteServingRowsStatement = (input: ProjectReviewServingFilterPostings
         },
         table: 'mart.review_article_filter_posting_serving_v4',
       })
+    : promptIds.length === 0
+      ? null
+      : getDeleteReviewServingProjectorRowsStatement({
+          predicates: {
+            project_id: input.projectId,
+            review_config_hash: input.reviewConfigHash,
+            snapshot_id: input.snapshotId,
+          },
+          table: 'mart.review_article_filter_posting_serving_v4',
+        })
 }
 
 const getPostingManifest = (

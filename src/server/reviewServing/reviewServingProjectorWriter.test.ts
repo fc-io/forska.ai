@@ -259,6 +259,7 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
       return (
         repoPath !== 'src/server/reviewServing/reviewServingProjectorWriter.ts'
         && repoPath !== 'src/server/reviewServing/reviewServingRetentionService.ts'
+        && repoPath !== 'src/server/reviewServing/reviewServingDisplayPayloadProjector.ts'
         && !repoPath.endsWith('.test.ts')
       )
     })

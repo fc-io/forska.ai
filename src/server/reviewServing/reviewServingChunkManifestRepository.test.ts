@@ -281,8 +281,8 @@ test('failed chunks can be claimed again and completed transactionally with outp
   expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.lastError).toBeNull()
 })
 
-test('validation mismatch marks the claimed chunk failed for retry', async () => {
-  const {database, rows} = createFakeChunkManifestDatabase([getChunkRowFromIdentity(baseChunkIdentity, [])])
+test('validation mismatch rolls back output writes and marks the claimed chunk failed for retry', async () => {
+  const {database, rows, statements} = createFakeChunkManifestDatabase([getChunkRowFromIdentity(baseChunkIdentity, [])])
 
   await claimReviewServingRebuildChunk(
     {
@@ -306,6 +306,9 @@ test('validation mismatch marks the claimed chunk failed for retry', async () =>
   )
 
   expect(failed).toMatchObject({status: 'failed'})
+  expect(statements).toContain('SAVEPOINT review_serving_rebuild_chunk_output')
+  expect(statements).toContain('ROLLBACK TO SAVEPOINT review_serving_rebuild_chunk_output')
+  expect(statements).toContain('RELEASE SAVEPOINT review_serving_rebuild_chunk_output')
   expect(rows.get(getReviewServingRebuildChunkId(baseChunkIdentity))?.lastError).toContain('chunk validation failed')
 })
 

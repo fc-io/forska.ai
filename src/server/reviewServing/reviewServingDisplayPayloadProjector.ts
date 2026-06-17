@@ -7,6 +7,7 @@ import {
   type ReviewServingProjectionManifestStatus,
 } from './reviewServingManifestRepository.ts'
 import {
+  getDeleteReviewServingProjectorRowsStatement,
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
@@ -338,6 +339,44 @@ const getPayloadRecord = (
   }
 }
 
+const getDeletePayloadRowsStatement = (input: ProjectReviewServingPayloadInput) => {
+  const articleIds = getClaimArticleIds(input.claims)
+
+  return articleIds.length === 0
+    ? null
+    : getDeleteReviewServingProjectorRowsStatement({
+        predicates: {
+          article_id: articleIds,
+          display_identity: input.displayIdentity,
+          payload_identity: input.payloadIdentity,
+          project_id: input.projectId,
+          snapshot_id: input.snapshotId,
+        },
+        table: 'mart.review_article_serving_payload_v4',
+      })
+}
+
+const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplayPatchInput, row: DisplayPatchRow) => {
+  const rowPredicate = `project_id = ${getSqlLiteral(input.projectId)}
+          AND display_identity = ${getSqlLiteral(input.displayIdentity)}
+          AND base_generation = ${getSqlLiteral(input.baseGeneration)}
+          AND article_id = ${getSqlLiteral(row.articleId)}`
+
+  return row.tombstone
+    ? `DELETE FROM mart.review_article_serving_v4
+        WHERE ${rowPredicate}`
+    : `UPDATE mart.review_article_serving_v4
+        SET
+          article_external_id = ${getSqlLiteral(row.articleExternalId)},
+          article_title = ${getSqlLiteral(row.articleTitle)},
+          journal_title = ${getSqlLiteral(row.journalTitle)},
+          publication_year = ${getSqlLiteral(row.publicationYear)},
+          sort_key = ${getSqlLiteral(row.sortKey)},
+          url = ${getSqlLiteral(row.url)},
+          serving_updated_at = current_timestamp
+        WHERE ${rowPredicate}`
+}
+
 const getPatchManifest = (
   input:
     | ProjectReviewServingDisplayPatchInput
@@ -394,6 +433,9 @@ export const projectReviewServingDisplayPatches = async (
       records: rows.map((row) => {
         return getDisplayPatchRecord(input, row)
       }),
+      statements: rows.map((row) => {
+        return getApplyDisplayPatchServingStatement(input, row)
+      }),
       watermark:
         input.claims.length === 0
           ? undefined
@@ -440,6 +482,9 @@ export const projectReviewServingPayloadRows = async (
         : [],
       records: rows.map((row) => {
         return getPayloadRecord(input, row)
+      }),
+      statements: [getDeletePayloadRowsStatement(input)].flatMap((statement) => {
+        return statement === null ? [] : [statement]
       }),
       watermark: hasClaimedWork
         ? {
