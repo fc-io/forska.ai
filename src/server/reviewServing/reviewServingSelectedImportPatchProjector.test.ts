@@ -10,6 +10,7 @@ import {
 const createSelectedImportPatchDatabase = (input?: {
   budgetRow?: {patchRows: number; patchWatermarks: number}
   patchRows?: readonly Record<string, unknown>[]
+  snapshotRows?: readonly Record<string, unknown>[]
 }) => {
   const statements: string[] = []
   const database: ReviewServingSelectedImportPatchProjectorDatabase = {
@@ -22,6 +23,10 @@ const createSelectedImportPatchDatabase = (input?: {
 
       if (statement.includes('COUNT(DISTINCT patch_watermark)')) {
         return [input?.budgetRow ?? {patchRows: 0, patchWatermarks: 0}] as T[]
+      }
+
+      if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return (input?.snapshotRows ?? []) as T[]
       }
 
       return (input?.patchRows ?? []) as T[]
@@ -185,6 +190,69 @@ test('selected-import patches promote manifest and watermark atomically without 
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).not.toContain("'display'")
   expect(joined).not.toContain("'projectScope'")
+})
+
+test('selected-import serving insert can seed rows from snapshot templates without existing serving rows', async () => {
+  const {database, statements} = createSelectedImportPatchDatabase({
+    patchRows: [
+      {
+        articleId: 'article-1',
+        conflictFlag: false,
+        duplicateFlag: false,
+        importRouteId: 'import-route-1',
+        publicationYear: 2026,
+        selectedRankKey: '0001:article-1',
+        selectedRankNumeric: 1,
+        scopeTombstone: false,
+        tombstone: false,
+      },
+    ],
+    snapshotRows: [
+      {
+        componentStateJson: JSON.stringify({
+          optional: [],
+          required: [
+            {baseGeneration: '3', component: 'display', patchWatermark: '1', projectionIdentity: 'display:identity-1'},
+            {
+              baseGeneration: '3',
+              component: 'projectScope',
+              patchWatermark: '1',
+              projectionIdentity: 'projectScope:identity-1',
+            },
+            {
+              baseGeneration: '3',
+              component: 'selectedImport',
+              patchWatermark: '1',
+              projectionIdentity: 'selectedImport:identity-1',
+            },
+            {baseGeneration: '3', component: 'llmStatus', patchWatermark: '1', projectionIdentity: 'llmStatus:identity-1'},
+            {
+              baseGeneration: '3',
+              component: 'humanStatus',
+              patchWatermark: '1',
+              projectionIdentity: 'humanStatus:identity-1',
+            },
+            {baseGeneration: '3', component: 'posting', patchWatermark: '1', projectionIdentity: 'posting:identity-1'},
+            {baseGeneration: '3', component: 'summary', patchWatermark: '1', projectionIdentity: 'summary:identity-1'},
+            {baseGeneration: '3', component: 'payload', patchWatermark: '1', projectionIdentity: 'payload:identity-1'},
+          ],
+        }),
+        reviewConfigHash: 'review-config-1',
+        snapshotId: 'snapshot-1',
+      },
+    ],
+  })
+
+  await projectReviewServingSelectedImportPatches(projectPatchInput([selectedImportClaim()]), database)
+
+  const servingInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_serving_v4')
+  })
+
+  expect(servingInsert).toContain('UNION')
+  expect(servingInsert).toContain('review-config-1')
+  expect(servingInsert).toContain('snapshot-1')
+  expect(servingInsert).toContain('llmStatus:identity-1')
 })
 
 test('selected-import patch budget requests compaction when patch read cost exceeds thresholds', async () => {

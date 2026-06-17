@@ -126,7 +126,7 @@ const getProjectionIdentity = (input: {
   projectionComponent: ReviewServingProjectionComponent
   projectId: string | null
 }) => {
-  return `${input.projectionComponent}:${getReviewServingHash('review-import-delta-dirty-projection', {
+  return `${input.projectionComponent}:${getReviewServingHash('review-change-delta-dirty-projection', {
     projectionComponent: input.projectionComponent,
     projectId: input.projectId,
   })}`

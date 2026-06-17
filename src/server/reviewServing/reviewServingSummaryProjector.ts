@@ -279,12 +279,50 @@ const getSummaryContributionRows = async (
                 AND newer.patch_watermark > human.patch_watermark
             )
         ),
+        conflict_counts AS (
+          SELECT llm.article_id AS articleId, 'count' AS summaryKind, 'review.both.conflictByPrompt' AS countKind, concat('prompt:', llm.prompt_id) AS filterKey, 'both' AS listModeKey, 'review.both.conflictByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM mart.review_llm_status_patch_v4 llm
+          INNER JOIN mart.review_human_status_patch_v4 human
+            ON human.project_id = llm.project_id
+            AND human.base_generation = llm.base_generation
+            AND human.prompt_config_hash = llm.prompt_config_hash
+            AND human.article_id = llm.article_id
+            AND human.prompt_id = llm.prompt_id
+            AND human.list_mode_key = llm.list_mode_key
+            AND NOT human.tombstone
+            AND human.human_answered_value IS NOT NULL
+          INNER JOIN article_id_filter dirty ON dirty.article_id = llm.article_id
+          INNER JOIN selected_state selected ON selected.article_id = llm.article_id AND selected.in_selected_scope
+          WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)} AND llm.list_mode_key = 'both' AND NOT llm.tombstone AND llm.answered_original IS NOT NULL AND llm.answered_original IS DISTINCT FROM human.human_answered_value
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_llm_status_patch_v4 newer
+              WHERE newer.project_id = llm.project_id
+                AND newer.review_config_hash = llm.review_config_hash
+                AND newer.article_id = llm.article_id
+                AND newer.prompt_id = llm.prompt_id
+                AND newer.list_mode_key = llm.list_mode_key
+                AND newer.base_generation = llm.base_generation
+                AND newer.patch_watermark > llm.patch_watermark
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_human_status_patch_v4 newer
+              WHERE newer.project_id = human.project_id
+                AND newer.prompt_config_hash = human.prompt_config_hash
+                AND newer.article_id = human.article_id
+                AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
+                AND newer.list_mode_key = human.list_mode_key
+                AND newer.base_generation = human.base_generation
+                AND newer.patch_watermark > human.patch_watermark
+            )
+        ),
         answer_facets AS (
           SELECT llm.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, llm.answered_original AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, llm.answered_original AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM mart.review_llm_status_patch_v4 llm
           INNER JOIN article_id_filter dirty ON dirty.article_id = llm.article_id
           INNER JOIN selected_state selected ON selected.article_id = llm.article_id AND selected.in_selected_scope
-          WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)} AND NOT llm.tombstone AND llm.answered_original IS NOT NULL
+          WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)} AND llm.list_mode_key = 'llm' AND NOT llm.tombstone AND llm.answered_original IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_llm_status_patch_v4 newer
@@ -301,7 +339,7 @@ const getSummaryContributionRows = async (
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
           INNER JOIN selected_state selected ON selected.article_id = human.article_id AND selected.in_selected_scope
-          WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND human.base_generation = ${getSqlLiteral(input.baseGeneration)} AND NOT human.tombstone AND human.prompt_id <> 'summary' AND human.human_answered_value IS NOT NULL
+          WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND human.base_generation = ${getSqlLiteral(input.baseGeneration)} AND human.list_mode_key = 'human' AND NOT human.tombstone AND human.prompt_id <> 'summary' AND human.human_answered_value IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
@@ -318,7 +356,7 @@ const getSummaryContributionRows = async (
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
           INNER JOIN selected_state selected ON selected.article_id = human.article_id AND selected.in_selected_scope
-          WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND human.base_generation = ${getSqlLiteral(input.baseGeneration)} AND NOT human.tombstone AND human.prompt_id = 'summary' AND human.human_answered_value IS NOT NULL
+          WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND human.base_generation = ${getSqlLiteral(input.baseGeneration)} AND human.list_mode_key = 'human' AND NOT human.tombstone AND human.prompt_id = 'summary' AND human.human_answered_value IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
@@ -336,6 +374,7 @@ const getSummaryContributionRows = async (
           UNION ALL SELECT * FROM selected_facets
           UNION ALL SELECT * FROM llm_counts
           UNION ALL SELECT * FROM human_counts
+          UNION ALL SELECT * FROM conflict_counts
           UNION ALL SELECT * FROM answer_facets
         )
         SELECT * FROM summary_union

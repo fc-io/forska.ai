@@ -1,6 +1,9 @@
 import {hostname} from 'node:os'
 
 import {sleep} from '../../utils/sleep.ts'
+import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {reviewServingListModes, type ReviewServingProjectionComponent} from '../reviewServing/reviewServingContracts.ts'
+import {projectReviewServingDisplayPatches, projectReviewServingPayloadRows} from '../reviewServing/reviewServingDisplayPayloadProjector.ts'
 import {
   claimReviewServingRebuildChunk,
   isReviewServingRebuildChunkComplete,
@@ -12,6 +15,9 @@ import {
 import {projectReviewServingHumanStatusPatches} from '../reviewServing/reviewServingHumanStatusProjector.ts'
 import {projectReviewServingLlmStatusPatches} from '../reviewServing/reviewServingLlmStatusProjector.ts'
 import {getReviewServingProjectionIdentityManifest} from '../reviewServing/reviewServingManifestRepository.ts'
+import {projectReviewServingFilterPostings} from '../reviewServing/reviewServingFilterPostingProjector.ts'
+import {projectReviewServingQueuePatches} from '../reviewServing/reviewServingQueueProjector.ts'
+import {projectReviewServingSelectedImportPatches} from '../reviewServing/reviewServingSelectedImportPatchProjector.ts'
 import {projectReviewServingProjectScopePatches} from '../reviewServing/reviewServingProjectScopeProjector.ts'
 import {
   type ReviewServingProjectorRunner,
@@ -20,6 +26,9 @@ import {
   type WakeReviewServingProjectorServiceInput,
   type WakeReviewServingProjectorServiceResult,
 } from '../reviewServing/reviewServingProjectorService.ts'
+import {writeReviewServingProjectorComponent} from '../reviewServing/reviewServingProjectorWriter.ts'
+import {projectReviewServingSummaries} from '../reviewServing/reviewServingSummaryProjector.ts'
+import {projectReviewServingTitleSearchRows} from '../reviewServing/reviewServingTitleSearchProjector.ts'
 import {
   cleanupReviewServingRetentionState,
   type ReviewServingRetentionCleanupInput,
@@ -28,7 +37,7 @@ import {
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 
-type ReviewServingProjectorWorkerDatabase = ReviewServingProjectorServiceDependencies['database']
+type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']>
 
 type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupInput
 
@@ -99,6 +108,29 @@ type ReviewServingProjectorWorkerCycleResult = {
   workerId: string
 }
 
+type ReviewServingSnapshotContextRow = {
+  componentStateJson: unknown
+  reviewConfigHash: string | null
+  selectedImportSnapshotId: string | null
+  snapshotId: string
+}
+
+type ReviewServingSnapshotComponentState = {
+  baseGeneration: string
+  component: ReviewServingProjectionComponent
+  patchWatermark: string
+  projectionIdentity: string
+}
+
+type ReviewServingSnapshotComponentStateJson = {
+  optional?: readonly ReviewServingSnapshotComponentState[]
+  required?: readonly ReviewServingSnapshotComponentState[]
+}
+
+type ReviewServingSnapshotContext = ReviewServingSnapshotContextRow & {
+  componentState: ReviewServingSnapshotComponentStateJson
+}
+
 const defaultReviewServingProjectorWorkerBatchSize = 64
 const defaultReviewServingProjectorWorkerCleanupIntervalMs = 60_000
 const defaultReviewServingProjectorWorkerLeaseMs = 30_000
@@ -108,6 +140,8 @@ const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
 const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerErrorBackoffMs = 10_000
 const reviewServingProjectorWorkerRouteOrJobKey = 'reviewServing.projector.worker'
+const defaultReviewServingLlmListModeKeys = ['llm', 'both'] as const
+const defaultReviewServingHumanListModeKeys = ['human', 'both'] as const
 
 const getClaimProjectId = (claims: readonly {projectId: string | null}[]) => {
   return claims.find((claim) => {
@@ -141,10 +175,117 @@ const getDefaultClaimManifestInput = async (
   return {manifest, projectId}
 }
 
+const getSnapshotContext = async (
+  input: {projectId: string; reviewConfigHash: string | null},
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const rows = await database.queryJson<ReviewServingSnapshotContextRow>(`
+    SELECT
+      snapshot_id AS snapshotId,
+      review_config_hash AS reviewConfigHash,
+      selected_import_snapshot_id AS selectedImportSnapshotId,
+      component_state_json AS componentStateJson
+    FROM app.review_serving_snapshot_manifest
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash)}
+      AND snapshot_status IN ('candidate', 'active')
+    ORDER BY CASE WHEN snapshot_status = 'candidate' THEN 0 ELSE 1 END, updated_at DESC
+    LIMIT 1
+  `)
+  const row = rows[0]
+
+  return row === undefined
+    ? null
+    : {
+        ...row,
+        componentState: getJsonValue(row.componentStateJson) as ReviewServingSnapshotComponentStateJson,
+      }
+}
+
+const requireSnapshotContext = async (
+  input: {projectId: string; reviewConfigHash: string | null},
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const context = await getSnapshotContext(input, database)
+
+  if (context === null) {
+    throw new Error(`cannot run projector without a candidate or active snapshot for project ${input.projectId}`)
+  }
+
+  return context
+}
+
+const getSnapshotComponentState = (
+  snapshot: ReviewServingSnapshotContext,
+  component: ReviewServingProjectionComponent,
+) => {
+  return [...(snapshot.componentState.required ?? []), ...(snapshot.componentState.optional ?? [])].find((state) => {
+    return state.component === component
+  }) ?? null
+}
+
+const requireSnapshotComponentIdentity = (
+  snapshot: ReviewServingSnapshotContext,
+  component: ReviewServingProjectionComponent,
+) => {
+  const projectionIdentity = getSnapshotComponentState(snapshot, component)?.projectionIdentity ?? null
+
+  if (projectionIdentity === null) {
+    throw new Error(`cannot run projector without ${component} identity in snapshot ${snapshot.snapshotId}`)
+  }
+
+  return projectionIdentity
+}
+
+const requireReviewConfigHash = (snapshot: ReviewServingSnapshotContext) => {
+  if (snapshot.reviewConfigHash === null) {
+    throw new Error(`cannot run projector without review config hash in snapshot ${snapshot.snapshotId}`)
+  }
+
+  return snapshot.reviewConfigHash
+}
+
+const requireSelectedImportSnapshotId = (snapshot: ReviewServingSnapshotContext) => {
+  if (snapshot.selectedImportSnapshotId === null) {
+    throw new Error(`cannot run projector without selected import snapshot id in snapshot ${snapshot.snapshotId}`)
+  }
+
+  return snapshot.selectedImportSnapshotId
+}
+
+const getDefaultRunnerInput = async (
+  context: Parameters<ReviewServingProjectorRunner>[0],
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
+  const snapshot = await requireSnapshotContext({projectId, reviewConfigHash: manifest.reviewConfigHash}, database)
+
+  return {manifest, projectId, snapshot}
+}
+
 const getDefaultReviewServingProjectorRunners = (
   database: ReviewServingProjectorWorkerDatabase,
 ): ReviewServingProjectorServiceDependencies['runners'] => {
   return {
+    display: async (context) => {
+      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
+      const result = await projectReviewServingDisplayPatches(
+        {
+          baseGeneration: manifest.baseGeneration,
+          claims: context.claims,
+          definitionVersion: manifest.definitionVersion,
+          displayIdentity: manifest.projectionIdentity,
+          projectId,
+          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+          projectionIdentity: manifest.projectionIdentity,
+          selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+          snapshotId: snapshot.snapshotId,
+        },
+        database,
+      )
+
+      return {processedCount: result.patchRowCount}
+    },
     humanStatus: async (context) => {
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
       const result = await projectReviewServingHumanStatusPatches(
@@ -152,7 +293,7 @@ const getDefaultReviewServingProjectorRunners = (
           baseGeneration: manifest.baseGeneration,
           claims: context.claims,
           definitionVersion: manifest.definitionVersion,
-          listModeKeys: ['global'],
+          listModeKeys: defaultReviewServingHumanListModeKeys,
           projectId,
           projectionIdentity: manifest.projectionIdentity,
         },
@@ -161,6 +302,67 @@ const getDefaultReviewServingProjectorRunners = (
 
       return {processedCount: result.patchRowCount}
     },
+    judgmentInputContent: async (context) => {
+      const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
+      const patchWatermark = Math.max(
+        0,
+        ...context.claims.map((claim) => {
+          return claim.latestSourceHighWaterMark
+        }),
+      )
+      const patchRangeStart = Math.min(
+        ...context.claims.map((claim) => {
+          return claim.firstSourceHighWaterMark
+        }),
+      )
+      const inputDigest = [
+        ...new Set(
+          context.claims.map((claim) => {
+            return claim.dirtyKind
+          }),
+        ),
+      ].join(',')
+
+      await writeReviewServingProjectorComponent(
+        {
+          acknowledgements: context.claims,
+          component: 'judgmentInputContent',
+          projectionManifests:
+            context.claims.length === 0
+              ? []
+              : [
+                  {
+                    baseGeneration: manifest.baseGeneration,
+                    definitionVersion: manifest.definitionVersion,
+                    inputDigest,
+                    inputWatermark: patchWatermark,
+                    invalidationReason: inputDigest,
+                    patchRangeEnd: patchWatermark,
+                    patchRangeStart,
+                    patchWatermark,
+                    projectId,
+                    projectionComponent: 'judgmentInputContent',
+                    projectionIdentity: manifest.projectionIdentity,
+                    reviewConfigHash: manifest.reviewConfigHash,
+                    status: 'candidate',
+                  },
+                ],
+          watermark:
+            context.claims.length === 0
+              ? undefined
+              : {
+                  projectId,
+                  projectionComponent: 'judgmentInputContent',
+                  projectorName: 'judgment-input-content-projector',
+                  sourceHighWaterMark: patchWatermark,
+                  sourcePartition: context.claims[0]?.sourcePartition ?? 'review-change',
+                },
+        },
+        database,
+      )
+
+      return {processedCount: context.claims.length}
+    },
     llmStatus: async (context) => {
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
       const result = await projectReviewServingLlmStatusPatches(
@@ -168,7 +370,7 @@ const getDefaultReviewServingProjectorRunners = (
           baseGeneration: manifest.baseGeneration,
           claims: context.claims,
           definitionVersion: manifest.definitionVersion,
-          listModeKeys: ['global'],
+          listModeKeys: defaultReviewServingLlmListModeKeys,
           projectId,
           projectionIdentity: manifest.projectionIdentity,
         },
@@ -176,6 +378,44 @@ const getDefaultReviewServingProjectorRunners = (
       )
 
       return {processedCount: result.patchRowCount}
+    },
+    payload: async (context) => {
+      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
+      const result = await projectReviewServingPayloadRows(
+        {
+          baseGeneration: manifest.baseGeneration,
+          claims: context.claims,
+          definitionVersion: manifest.definitionVersion,
+          displayIdentity: requireSnapshotComponentIdentity(snapshot, 'display'),
+          payloadIdentity: manifest.projectionIdentity,
+          projectId,
+          projectionIdentity: manifest.projectionIdentity,
+          snapshotId: snapshot.snapshotId,
+        },
+        database,
+      )
+
+      return {processedCount: result.payloadRowCount}
+    },
+    posting: async (context) => {
+      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
+      const result = await projectReviewServingFilterPostings(
+        {
+          baseGeneration: manifest.baseGeneration,
+          claims: context.claims,
+          definitionVersion: manifest.definitionVersion,
+          listModeKeys: reviewServingListModes,
+          projectId,
+          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+          projectionIdentity: manifest.projectionIdentity,
+          reviewConfigHash: requireReviewConfigHash(snapshot),
+          selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+          snapshotId: snapshot.snapshotId,
+        },
+        database,
+      )
+
+      return {processedCount: result.servingRowCount}
     },
     projectScope: async (context) => {
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
@@ -191,6 +431,79 @@ const getDefaultReviewServingProjectorRunners = (
       )
 
       return {processedCount: context.claims.length}
+    },
+    queue: async (context) => {
+      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
+      const result = await projectReviewServingQueuePatches(
+        {
+          baseGeneration: manifest.baseGeneration,
+          claims: context.claims,
+          definitionVersion: manifest.definitionVersion,
+          projectId,
+          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+          projectionIdentity: manifest.projectionIdentity,
+          selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+          snapshotId: snapshot.snapshotId,
+        },
+        database,
+      )
+
+      return {processedCount: result.servingRowCount}
+    },
+    search: async (context) => {
+      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
+      const result = await projectReviewServingTitleSearchRows(
+        {
+          baseGeneration: manifest.baseGeneration,
+          claims: context.claims,
+          definitionVersion: manifest.definitionVersion,
+          projectId,
+          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+          projectionIdentity: manifest.projectionIdentity,
+          searchIdentity: manifest.projectionIdentity,
+          selectedImportSnapshotId: snapshot.selectedImportSnapshotId,
+          snapshotId: snapshot.snapshotId,
+        },
+        database,
+      )
+
+      return {processedCount: result.searchRowCount}
+    },
+    selectedImport: async (context) => {
+      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
+      const result = await projectReviewServingSelectedImportPatches(
+        {
+          baseGeneration: manifest.baseGeneration,
+          claims: context.claims,
+          definitionVersion: manifest.definitionVersion,
+          projectId,
+          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+          projectionIdentity: manifest.projectionIdentity,
+          selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+        },
+        database,
+      )
+
+      return {processedCount: result.patchRowCount}
+    },
+    summary: async (context) => {
+      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
+      const result = await projectReviewServingSummaries(
+        {
+          baseGeneration: manifest.baseGeneration,
+          claims: context.claims,
+          listModeKeys: reviewServingListModes,
+          projectId,
+          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+          projectionIdentity: manifest.projectionIdentity,
+          reviewConfigHash: requireReviewConfigHash(snapshot),
+          selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+          snapshotId: snapshot.snapshotId,
+        },
+        database,
+      )
+
+      return {processedCount: result.summaryRowCount}
     },
   }
 }
@@ -242,7 +555,7 @@ const getWorkerNowMs = (
 }
 
 const getPositiveInteger = (value: number | null | undefined, fallback: number) => {
-  return Number.isInteger(value) && value > 0 ? Math.trunc(value) : fallback
+  return value !== null && value !== undefined && Number.isInteger(value) && value > 0 ? Math.trunc(value) : fallback
 }
 
 const getLeaseExpiresAt = (options: ReviewServingProjectorWorkerCycleOptions) => {
