@@ -106,6 +106,22 @@ const hasProjectScopedClaim = (claims: readonly ReviewServingDirtyWorkClaim[]) =
   })
 }
 
+const isQueueReviewConfigHash = (reviewConfigHash: string | null): reviewConfigHash is string => {
+  return reviewConfigHash !== null
+}
+
+const getQueueReviewConfigHashes = (rows: readonly QueueSourceRow[]) => {
+  return [
+    ...new Set(
+      rows
+        .map((row) => {
+          return row.reviewConfigHash
+        })
+        .filter(isQueueReviewConfigHash),
+    ),
+  ]
+}
+
 const getValuesCte = (columnName: string, values: readonly string[]) => {
   return values.length === 0
     ? ''
@@ -401,26 +417,31 @@ const getQueuePatchManifest = (input: ProjectReviewServingQueueInput): ReviewSer
   }
 }
 
-const getDeleteReplacedQueueServingStatement = (input: ProjectReviewServingQueueInput) => {
+const getDeleteReplacedQueueServingStatement = (input: ProjectReviewServingQueueInput, rows: readonly QueueSourceRow[]) => {
   const broadProjectClaim = hasProjectScopedClaim(input.claims)
   const articleIds = broadProjectClaim ? [] : getClaimArticleIds(input.claims)
   const promptIds = broadProjectClaim ? [] : getClaimPromptIds(input.claims)
+  const reviewConfigHashes = getQueueReviewConfigHashes(rows)
+  const reviewConfigPredicate = `AND review_config_hash IN (${reviewConfigHashes.map(getSqlLiteral).join(', ')})`
 
-  return input.snapshotId === null || input.snapshotId === undefined
+  return input.snapshotId === null || input.snapshotId === undefined || reviewConfigHashes.length === 0
     ? null
     : articleIds.length > 0
       ? `DELETE FROM mart.review_unassessed_queue_serving_v4
         WHERE project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          ${reviewConfigPredicate}
           AND article_id IN (${articleIds.map(getSqlLiteral).join(', ')})`
       : promptIds.length > 0
         ? `DELETE FROM mart.review_unassessed_queue_serving_v4
         WHERE project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          ${reviewConfigPredicate}
           AND prompt_id IN (${promptIds.map(getSqlLiteral).join(', ')})`
         : `DELETE FROM mart.review_unassessed_queue_serving_v4
         WHERE project_id = ${getSqlLiteral(input.projectId)}
-          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}`
+          AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          ${reviewConfigPredicate}`
 }
 
 export const projectReviewServingQueuePatches = async (
@@ -439,7 +460,7 @@ export const projectReviewServingQueuePatches = async (
       return record !== null
     })
   const patchWatermark = getPatchWatermark(input.claims)
-  const deleteReplacedQueueServingStatement = getDeleteReplacedQueueServingStatement(input)
+  const deleteReplacedQueueServingStatement = getDeleteReplacedQueueServingStatement(input, rows)
 
   await writeReviewServingProjectorComponent(
     {

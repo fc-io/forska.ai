@@ -114,6 +114,7 @@ test('LLM answer changes write unassessed queue patches and serving rows from co
   expect(selectStatement).toContain('INNER JOIN mart.project_scope_article scope')
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(servingDelete).toContain('snapshot_id =')
+  expect(servingDelete).toContain("review_config_hash IN ('review-config-1')")
   expect(servingDelete).toContain("article_id IN ('article-1')")
   expect(statements.indexOf(servingDelete ?? '')).toBeLessThan(statements.indexOf(servingInsert ?? ''))
   expect(patchInsert).toContain('queue_identity')
@@ -262,6 +263,20 @@ test('membership removals write tombstones and keep queue projection component n
   expect(joined).not.toContain('FROM app."judgment_human"')
 })
 
+test('queue serving replacement deletes only projected review configs', async () => {
+  const {database, statements} = createQueueDatabase({
+    queueRows: [queueRow({reviewConfigHash: 'review-config-2'}), queueRow({reviewConfigHash: null})],
+  })
+
+  await projectReviewServingQueuePatches(projectInput([queueClaim()]), database)
+  const servingDelete = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  })
+
+  expect(servingDelete).toContain("review_config_hash IN ('review-config-2')")
+  expect(servingDelete).not.toContain('review-config-1')
+})
+
 test('missing queue inputs leave optional unassessed state stale without raw aggregation', async () => {
   const {database, statements} = createQueueDatabase()
 
@@ -272,4 +287,5 @@ test('missing queue inputs leave optional unassessed state stale without raw agg
   expect(joined).not.toContain('mart.judgment_fact')
   expect(joined).not.toContain('app."judgment"')
   expect(joined).not.toContain('GROUP BY')
+  expect(joined).not.toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
 })
