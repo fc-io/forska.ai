@@ -116,14 +116,14 @@ test('every emitted delta kind declares complete invalidation metadata', () => {
     [
       'projectScope.article.added',
       'projectScope',
-      ['selectedImport', 'llmStatus', 'humanStatus', 'queue', 'posting', 'summary', 'payload'],
+      ['selectedImport', 'llmStatus', 'humanStatus', 'queue', 'posting', 'search', 'summary', 'payload'],
       ['projectId', 'articleId', 'projectArticleId', 'sourceHighWaterMark'],
       'appendPatch',
     ],
     [
       'projectScope.article.removed',
       'projectScope',
-      ['selectedImport', 'llmStatus', 'humanStatus', 'queue', 'posting', 'summary', 'payload'],
+      ['selectedImport', 'llmStatus', 'humanStatus', 'queue', 'posting', 'search', 'summary', 'payload'],
       ['projectId', 'articleId', 'projectArticleId', 'sourceHighWaterMark'],
       'appendPatch',
     ],
@@ -158,7 +158,7 @@ test('every emitted delta kind declares complete invalidation metadata', () => {
     [
       'prompt.config.updated',
       'llmStatus',
-      ['queue', 'posting', 'summary'],
+      ['queue', 'posting', 'summary', 'payload'],
       ['projectId', 'promptId', 'changedPromptConfigFields', 'sourceHighWaterMark'],
       'promptScopedRebuild',
     ],

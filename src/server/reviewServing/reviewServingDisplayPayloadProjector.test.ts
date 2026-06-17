@@ -193,6 +193,30 @@ test('payload claimed updates delete stale rows for removed articles before inse
   expect(deleteStatement).toContain('payload_identity')
 })
 
+test('payload projection defers manifest and watermark when claims are not acknowledged', async () => {
+  const {database, statements} = createDisplayPayloadDatabase({payloadRows: []})
+
+  await projectReviewServingPayloadRows(
+    {
+      acknowledgeClaims: false,
+      baseGeneration: 1,
+      claims: [displayClaim({projectionComponent: 'payload'})],
+      definitionVersion: 'payload-v4-test',
+      displayIdentity: 'display:identity-1',
+      payloadIdentity: 'payload:identity-1',
+      projectId: 'project-1',
+      projectionIdentity: 'payload:identity-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+})
+
 test('display base rows flow through writer with display fields and selected import hot projection', async () => {
   const {database, statements} = createDisplayPayloadDatabase({
     displayBaseRows: [
