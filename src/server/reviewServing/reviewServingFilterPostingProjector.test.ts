@@ -51,10 +51,7 @@ const createPostingDatabase = (input?: {
         return (input?.newRows ?? []) as T[]
       }
 
-      if (
-        statement.includes('FROM article_id_filter dirty')
-        && statement.includes('review_article_filter_posting_serving_v4 serving')
-      ) {
+      if (statement.includes('FROM mart.review_article_filter_posting_serving_v4 serving')) {
         return (input?.existingRows ?? []) as T[]
       }
 
@@ -239,6 +236,41 @@ test('selected-import rank changes move filter contribution between selected imp
   expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
   expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
   expect(selectStatement).toContain('newer.patch_watermark')
+})
+
+test('human postings read only the current status patch per logical prompt key', async () => {
+  const {database, statements} = createPostingDatabase({newRows: []})
+
+  await projectReviewServingFilterPostings(projectInput([postingClaim({dirtyKind: 'judgment.human.updated'})]), database)
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM posting_union')
+  })
+
+  expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
+  expect(selectStatement).toContain('newer.prompt_config_hash = human.prompt_config_hash')
+  expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
+  expect(selectStatement).toContain('newer.list_mode_key = human.list_mode_key')
+})
+
+test('prompt-scoped posting rebuilds clear snapshot serving rows before reinserting', async () => {
+  const {database, statements} = createPostingDatabase({existingRows: [postingRow()], newRows: []})
+
+  await projectReviewServingFilterPostings(
+    projectInput([
+      postingClaim({articleId: null, dirtyKind: 'prompt.config.updated', scopeId: 'project-1:prompt-1', scopeKind: 'prompt'}),
+    ]),
+    database,
+  )
+  const deleteStatement = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  })
+  const existingSelect = statements.find((statement) => {
+    return statement.includes('FROM mart.review_article_filter_posting_serving_v4 serving')
+  })
+
+  expect(existingSelect).not.toContain('article_id IN')
+  expect(deleteStatement).toContain('snapshot_id')
+  expect(deleteStatement).not.toContain('article_id IN')
 })
 
 test('list modes keep posting stats and serving rows separated', async () => {

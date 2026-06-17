@@ -177,7 +177,7 @@ test('projects list-mode count deltas with summary identity and definition versi
 })
 
 test('projects human summary-answer facets independently from prompt answers', async () => {
-  const {database} = createSummaryDatabase({
+  const {database, statements} = createSummaryDatabase({
     facetRows: [
       {
         countValue: 4,
@@ -193,6 +193,9 @@ test('projects human summary-answer facets independently from prompt answers', a
     projectInput([summaryClaim({dirtyKind: 'judgment.human.updated'})]),
     database,
   )
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM summary_union')
+  })
 
   expect(
     hasSummaryValue(result.summaryValues, {
@@ -206,6 +209,9 @@ test('projects human summary-answer facets independently from prompt answers', a
       summary_identity: 'review.human.filter.summaryAnswer',
     }),
   ).toBe(true)
+  expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
+  expect(selectStatement).toContain('newer.prompt_config_hash = human.prompt_config_hash')
+  expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
 })
 
 test('date range and search-scope SQL stays scoped and explicit unsupported filtered counts are unavailable', async () => {

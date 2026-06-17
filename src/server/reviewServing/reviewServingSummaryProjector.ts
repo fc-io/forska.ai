@@ -248,6 +248,17 @@ const getSummaryContributionRows = async (
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = human.list_mode_key
           WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND NOT human.tombstone AND human.human_status_key = 'answered'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_human_status_patch_v4 newer
+              WHERE newer.project_id = human.project_id
+                AND newer.prompt_config_hash = human.prompt_config_hash
+                AND newer.article_id = human.article_id
+                AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
+                AND newer.list_mode_key = human.list_mode_key
+                AND newer.base_generation = human.base_generation
+                AND newer.patch_watermark > human.patch_watermark
+            )
         ),
         answer_facets AS (
           SELECT llm.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, llm.answered_original AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, llm.answered_original AS answerValue, 'ready' AS availability, NULL AS staleReason
@@ -270,11 +281,33 @@ const getSummaryContributionRows = async (
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
           WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND NOT human.tombstone AND human.prompt_id <> 'summary' AND human.human_answered_value IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_human_status_patch_v4 newer
+              WHERE newer.project_id = human.project_id
+                AND newer.prompt_config_hash = human.prompt_config_hash
+                AND newer.article_id = human.article_id
+                AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
+                AND newer.list_mode_key = human.list_mode_key
+                AND newer.base_generation = human.base_generation
+                AND newer.patch_watermark > human.patch_watermark
+            )
           UNION ALL
           SELECT human.article_id AS articleId, 'facet' AS summaryKind, 'review.human.filter.summaryAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.summaryAnswer' AS summaryIdentity, 'human' AS facetKind, 'summaryAnswer' AS facetKey, human.human_answered_value AS facetValue, human.prompt_id AS promptId, NULL AS answerId, human.human_answered_value AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
           WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND NOT human.tombstone AND human.prompt_id = 'summary' AND human.human_answered_value IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_human_status_patch_v4 newer
+              WHERE newer.project_id = human.project_id
+                AND newer.prompt_config_hash = human.prompt_config_hash
+                AND newer.article_id = human.article_id
+                AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
+                AND newer.list_mode_key = human.list_mode_key
+                AND newer.base_generation = human.base_generation
+                AND newer.patch_watermark > human.patch_watermark
+            )
         ),
         summary_union AS (
           SELECT * FROM base_counts

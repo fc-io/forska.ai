@@ -103,6 +103,9 @@ test('LLM answer changes write unassessed queue patches and serving rows from co
   expect(selectStatement).toContain('FROM mart.review_llm_status_patch_v4 newer')
   expect(selectStatement).toContain('INNER JOIN mart.review_human_status_patch_v4 human')
   expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
+  expect(selectStatement).toContain('newer.prompt_config_hash = human.prompt_config_hash')
+  expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
+  expect(selectStatement).toContain('newer.list_mode_key = human.list_mode_key')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
   expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
@@ -177,6 +180,9 @@ test('prompt config changes rebuild only prompt-scoped queue rows', async () => 
   const selectStatement = statements.find((statement) => {
     return statement.includes('FROM queue_union queue')
   })
+  const servingDelete = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  })
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 14, servingRowCount: 1})
   expect(selectStatement).toContain('prompt_id_filter(prompt_id)')
@@ -184,6 +190,7 @@ test('prompt config changes rebuild only prompt-scoped queue rows', async () => 
   expect(selectStatement).toContain('ON dirty_prompt.prompt_id = llm.prompt_id')
   expect(selectStatement).toContain('ON dirty_prompt.prompt_id = human.prompt_id')
   expect(selectStatement).toContain('FROM mart.project_scope_article scope')
+  expect(servingDelete).toContain("prompt_id IN ('prompt-1')")
 })
 
 test('membership removals write tombstones and keep queue projection component narrow', async () => {
