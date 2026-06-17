@@ -124,7 +124,7 @@ test('LLM answer changes write unassessed queue patches and serving rows from co
 
 test('human status changes write related review queue patches without raw human judgment reads', async () => {
   const {database, statements} = createQueueDatabase({
-    queueRows: [queueRow({queueKind: 'human-unreviewed', reviewConfigHash: null})],
+    queueRows: [queueRow({queueKind: 'human-unreviewed', reviewConfigHash: 'review-config-1'})],
   })
 
   const result = await projectReviewServingQueuePatches(
@@ -138,9 +138,10 @@ test('human status changes write related review queue patches without raw human 
   })
   const joined = statements.join('\n')
 
-  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14, servingRowCount: 0})
+  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14, servingRowCount: 1})
   expect(patchInsert).toContain("'human-unreviewed'")
   expect(joined).toContain('INNER JOIN mart.review_human_status_patch_v4 human')
+  expect(joined).toContain('INNER JOIN mart.review_llm_status_patch_v4 llm')
   expect(joined).not.toContain('FROM app."judgment_human"')
 })
 

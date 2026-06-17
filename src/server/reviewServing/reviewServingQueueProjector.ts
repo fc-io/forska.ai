@@ -217,7 +217,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
           SELECT
             scoped.article_id AS articleId,
             human.prompt_id AS promptId,
-            ${getSqlLiteral(null)} AS reviewConfigHash,
+            llm.review_config_hash AS reviewConfigHash,
             ${getSqlLiteral('human-unreviewed')} AS queueKind,
             CASE WHEN human.latest_human_updated_at IS NULL THEN 0 ELSE 1 END AS priorityBucket,
             COALESCE(human.latest_human_updated_at, scoped.activity_sort_at) AS activitySortAt,
@@ -229,6 +229,22 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
             ON human.project_id = ${getSqlLiteral(input.projectId)}
             AND human.article_id = scoped.article_id
             ${getDirtyPromptJoin(promptIds, 'human')}
+          INNER JOIN mart.review_llm_status_patch_v4 llm
+            ON llm.project_id = ${getSqlLiteral(input.projectId)}
+            AND llm.article_id = human.article_id
+            AND llm.prompt_id = human.prompt_id
+            AND llm.list_mode_key = human.list_mode_key
+            AND llm.patch_watermark = (
+              SELECT MAX(newer_llm.patch_watermark)
+              FROM mart.review_llm_status_patch_v4 newer_llm
+              WHERE newer_llm.project_id = llm.project_id
+                AND newer_llm.review_config_hash = llm.review_config_hash
+                AND newer_llm.prompt_config_hash = llm.prompt_config_hash
+                AND newer_llm.base_generation = llm.base_generation
+                AND newer_llm.list_mode_key = llm.list_mode_key
+                AND newer_llm.article_id = llm.article_id
+                AND newer_llm.prompt_id = llm.prompt_id
+            )
             AND human.patch_watermark = (
               SELECT MAX(newer.patch_watermark)
               FROM mart.review_human_status_patch_v4 newer
@@ -309,6 +325,8 @@ const getUnassessedQueueServingRecord = (
           'priority_bucket',
           'activity_sort_at',
           'article_id',
+          'prompt_id',
+          'queue_identity',
         ],
         table: 'mart.review_unassessed_queue_serving_v4',
         values: {
@@ -361,7 +379,7 @@ const getDeleteReplacedQueueServingStatement = (input: ProjectReviewServingQueue
         WHERE project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
           AND prompt_id IN (${promptIds.map(getSqlLiteral).join(', ')})`
-    : `DELETE FROM mart.review_unassessed_queue_serving_v4
+        : `DELETE FROM mart.review_unassessed_queue_serving_v4
         WHERE project_id = ${getSqlLiteral(input.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.snapshotId)}`
 }

@@ -22,15 +22,19 @@ const createDisplayPayloadDatabase = (input?: {
         return [] as T[]
       }
 
-      if (statement.includes('LEFT JOIN app.review_selected_article_import_v4 selected')) {
-        return (input?.displayBaseRows ?? []) as T[]
-      }
-
       if (statement.includes('LEFT JOIN app."article" article')) {
         return (input?.displayPatchRows ?? []) as T[]
       }
 
-      return (input?.payloadRows ?? []) as T[]
+      if (statement.includes('ORDER BY article.article_created_at ASC NULLS LAST, scope.article_id ASC')) {
+        return (input?.payloadRows ?? []) as T[]
+      }
+
+      if (statement.includes('LEFT JOIN app.review_selected_article_import_v4 selected')) {
+        return (input?.displayBaseRows ?? []) as T[]
+      }
+
+      return [] as T[]
     },
     run: async (statement: string) => {
       statements.push(statement)
@@ -87,7 +91,9 @@ test('display routine updates write component-narrow patches for only claimed ar
       definitionVersion: 'display-v4-test',
       displayIdentity: 'display:identity-1',
       projectId: 'project-1',
+      projectScopeIdentity: 'projectScope:identity-1',
       projectionIdentity: 'display:identity-1',
+      selectedImportSnapshotId: 'selected-import-snapshot-1',
     },
     database,
   )
@@ -102,6 +108,7 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 6})
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(selectStatement).toContain('FROM dirty_article dirty')
+  expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, display_identity, base_generation, patch_watermark, article_id)',
   )

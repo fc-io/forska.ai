@@ -120,6 +120,20 @@ const hasProjectReviewConfigClaim = (claims: readonly ReviewServingDirtyWorkClai
   })
 }
 
+const hasArticleScopeClaim = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return claims.some((claim) => {
+    return (
+      claim.scopeKind === 'article'
+      && [
+        'importRoute.article.added',
+        'importRoute.article.removed',
+        'projectScope.article.added',
+        'projectScope.article.removed',
+      ].includes(claim.dirtyKind)
+    )
+  })
+}
+
 const getValuesCte = (columnName: string, values: readonly string[]) => {
   return values.length === 0
     ? ''
@@ -339,6 +353,59 @@ const getProjectScopedRows = async (
       `)
 }
 
+const getArticleScopedRows = async (
+  input: ProjectReviewServingLlmStatusInput,
+  database: ReviewServingLlmStatusProjectorDatabase,
+) => {
+  const articleIds = getClaimArticleIds(input.claims)
+
+  return !hasArticleScopeClaim(input.claims) || articleIds.length === 0
+    ? []
+    : database.queryJson<LlmStatusSourceRow>(`
+        WITH ${getValuesCte('article_id', articleIds)}
+        SELECT
+          dirty.article_id AS articleId,
+          prompt.id AS promptId,
+          project.model_id AS modelId,
+          project.use_title AS useTitle,
+          project.use_abstract AS useAbstract,
+          project.use_fulltext AS useFulltext,
+          project.use_fulltext_no_images AS useFulltextNoImages,
+          'update' AS sourceOperation,
+          NOT (COALESCE(scope.in_curated_scope, FALSE) OR COALESCE(scope.in_route_scope, FALSE)) AS tombstone,
+          judgment.is_answered AS isAnswered,
+          judgment.answered_original AS answeredOriginal,
+          judgment.answered_original_as_array AS answeredOriginalAsArray,
+          judgment.created_at AS latestLlmCreatedAt,
+          COALESCE(prompt.content_hash, sha256(prompt.original_text)) AS promptTextHash,
+          NULL AS answerSchemaHash,
+          'prompt-v1' AS settingsVersion,
+          NULL AS thresholdVersion
+        FROM article_id_filter dirty
+        INNER JOIN app.project project
+          ON project.id = ${getSqlLiteral(input.projectId)}
+        INNER JOIN app.project_prompt project_prompt
+          ON project_prompt.project_id = project.id
+          AND project_prompt.enabled
+          AND NOT project_prompt.archived
+        INNER JOIN app.prompt prompt
+          ON prompt.id = project_prompt.prompt_id
+        LEFT JOIN mart.project_scope_article scope
+          ON scope.project_id = project.id
+          AND scope.article_id = dirty.article_id
+        LEFT JOIN app."judgment" judgment
+          ON judgment.article_id = dirty.article_id
+          AND judgment.prompt_id = prompt.id
+          AND judgment.model_id = project.model_id
+          AND judgment.use_title = project.use_title
+          AND judgment.use_abstract = project.use_abstract
+          AND judgment.use_fulltext = project.use_fulltext
+          AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
+          AND judgment.deleted_at IS NULL
+        ORDER BY dirty.article_id ASC, project_prompt.prompt_order ASC NULLS LAST, prompt.id ASC
+      `)
+}
+
 const getLlmStatusKey = (row: LlmStatusSourceRow) => {
   return row.tombstone
     ? null
@@ -409,18 +476,129 @@ const getLlmStatusPatchManifest = (
   }
 }
 
+const getApplyLlmStatusServingStatement = (input: {
+  baseGeneration: number
+  patchWatermark: number
+  projectId: string
+  recordRows: readonly {
+    articleId: string
+    listModeKey: string
+    llmStatusKey: string | null
+    promptConfigHash: string
+    promptId: string
+    reviewConfigHash: string
+    tombstone: boolean
+  }[]
+}) => {
+  const values = input.recordRows
+    .map((row) => {
+      return `(${getSqlLiteral(row.reviewConfigHash)}, ${getSqlLiteral(row.listModeKey)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.promptConfigHash)}, ${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.llmStatusKey)}, ${getSqlLiteral(row.tombstone)})`
+    })
+    .join(', ')
+
+  return input.recordRows.length === 0
+    ? null
+    : `WITH changed(review_config_hash, list_mode_key, article_id, prompt_config_hash, prompt_id, llm_status_key, tombstone) AS (
+        SELECT * FROM (VALUES ${values})
+      ), candidate_prompt AS (
+        SELECT
+          changed.review_config_hash,
+          changed.list_mode_key,
+          changed.article_id,
+          changed.prompt_config_hash,
+          changed.prompt_id,
+          changed.llm_status_key,
+          changed.tombstone,
+          ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
+        FROM changed
+        UNION ALL
+        SELECT
+          llm.review_config_hash,
+          llm.list_mode_key,
+          llm.article_id,
+          llm.prompt_config_hash,
+          llm.prompt_id,
+          llm.llm_status_key,
+          llm.tombstone,
+          llm.patch_watermark
+        FROM mart.review_llm_status_patch_v4 llm
+        INNER JOIN changed
+          ON changed.review_config_hash = llm.review_config_hash
+          AND changed.list_mode_key = llm.list_mode_key
+          AND changed.article_id = llm.article_id
+        WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
+          AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
+          AND llm.patch_watermark <= ${getSqlLiteral(input.patchWatermark)}
+      ), latest_prompt AS (
+        SELECT candidate.*
+        FROM candidate_prompt candidate
+        WHERE candidate.patch_watermark = (
+          SELECT MAX(newer.patch_watermark)
+          FROM candidate_prompt newer
+          WHERE newer.review_config_hash = candidate.review_config_hash
+            AND newer.prompt_config_hash = candidate.prompt_config_hash
+            AND newer.list_mode_key = candidate.list_mode_key
+            AND newer.article_id = candidate.article_id
+            AND newer.prompt_id = candidate.prompt_id
+        )
+      ), article_status AS (
+        SELECT
+          review_config_hash,
+          list_mode_key,
+          article_id,
+          COUNT(*) FILTER (WHERE NOT tombstone) AS enabled_prompt_count,
+          COUNT(*) FILTER (WHERE NOT tombstone AND llm_status_key = 'answered') AS llm_judged_prompt_count
+        FROM latest_prompt
+        GROUP BY review_config_hash, list_mode_key, article_id
+      )
+      UPDATE mart.review_article_serving_v4 serving
+      SET
+        enabled_prompt_count = CAST(article_status.enabled_prompt_count AS INTEGER),
+        llm_judged_prompt_count = CAST(article_status.llm_judged_prompt_count AS INTEGER),
+        llm_status_key = CASE
+          WHEN article_status.enabled_prompt_count = 0 THEN NULL
+          WHEN article_status.enabled_prompt_count = article_status.llm_judged_prompt_count THEN 'answered'
+          ELSE 'unanswered'
+        END,
+        patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),
+        serving_updated_at = current_timestamp
+      FROM article_status
+      WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+        AND serving.review_config_hash = article_status.review_config_hash
+        AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+        AND serving.list_mode_key = article_status.list_mode_key
+        AND serving.article_id = article_status.article_id`
+}
+
 export const projectReviewServingLlmStatusPatches = async (
   input: ProjectReviewServingLlmStatusInput,
   database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService(),
 ) => {
   const promptConfigRows = await getProjectPromptConfigRows(input.projectId, database)
-  const [judgmentRows, promptRows, projectRows] = await Promise.all([
+  const [judgmentRows, promptRows, projectRows, articleRows] = await Promise.all([
     getJudgmentDeltaRows(input, database),
     getPromptScopedRows(input, database),
     getProjectScopedRows(input, database),
+    getArticleScopedRows(input, database),
   ])
   const patchWatermark = getPatchWatermark(input.claims)
-  const rows = [...judgmentRows, ...promptRows, ...projectRows]
+  const rows = [...judgmentRows, ...promptRows, ...projectRows, ...articleRows]
+  const recordRows = rows.flatMap((row) => {
+    const promptConfigHash = getPromptConfigHash(row)
+    const reviewConfigHash = getReviewConfigHash({...row, promptConfigRows})
+
+    return input.listModeKeys.map((listModeKey) => {
+      return {
+        articleId: row.articleId,
+        listModeKey,
+        llmStatusKey: getLlmStatusKey(row),
+        promptConfigHash,
+        promptId: row.promptId,
+        reviewConfigHash,
+        tombstone: row.tombstone,
+      }
+    })
+  })
   const records = rows.flatMap((row) => {
     return input.listModeKeys.map((listModeKey) => {
       return getLlmStatusPatchRecord({
@@ -440,6 +618,16 @@ export const projectReviewServingLlmStatusPatches = async (
       component: 'llmStatus',
       projectionManifests: input.claims.length === 0 ? [] : [getLlmStatusPatchManifest(input)],
       records,
+      statements: [
+        getApplyLlmStatusServingStatement({
+          baseGeneration: input.baseGeneration,
+          patchWatermark,
+          projectId: input.projectId,
+          recordRows,
+        }),
+      ].flatMap((statement) => {
+        return statement === null ? [] : [statement]
+      }),
       watermark:
         input.claims.length === 0
           ? undefined

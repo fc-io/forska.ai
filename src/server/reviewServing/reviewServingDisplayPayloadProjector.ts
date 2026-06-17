@@ -38,7 +38,9 @@ export type ProjectReviewServingDisplayPatchInput = {
   definitionVersion: string
   displayIdentity: string
   projectId: string
+  projectScopeIdentity: string
   projectionIdentity: string
+  selectedImportSnapshotId: string
   status?: ReviewServingProjectionManifestStatus
 }
 
@@ -201,13 +203,19 @@ const getDisplayPatchRows = async (
           article.article_created_at AS sortKey,
           article.article_title AS articleTitle,
           article.article_id AS articleExternalId,
-          NULL AS journalTitle,
+          selected.journal_title AS journalTitle,
           article.url,
-          NULL AS publicationYear,
+          selected.publication_year AS publicationYear,
           article.id IS NULL AS tombstone
         FROM dirty_article dirty
         LEFT JOIN app."article" article
           ON article.id = dirty.article_id
+        LEFT JOIN app.review_selected_article_import_v4 selected
+          ON selected.project_id = ${getSqlLiteral(input.projectId)}
+          AND selected.project_scope_identity = ${getSqlLiteral(input.projectScopeIdentity)}
+          AND selected.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+          AND selected.article_id = dirty.article_id
+          AND NOT selected.tombstone
         ORDER BY dirty.article_id ASC
       `)
 }
