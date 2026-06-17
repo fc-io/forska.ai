@@ -259,6 +259,22 @@ test('human postings read only the current status patch per logical prompt key',
   expect(selectStatement).toContain('newer.list_mode_key = human.list_mode_key')
 })
 
+test('status postings use article-level all-prompt status rows', async () => {
+  const {database, statements} = createPostingDatabase({newRows: []})
+
+  await projectReviewServingFilterPostings(projectInput([postingClaim()], ['llm', 'human']), database)
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM posting_union')
+  })
+
+  expect(selectStatement).toContain('llm_article_status AS')
+  expect(selectStatement).toContain("'llmStatus' AS filterKind, llm.llm_status_key AS filterValue")
+  expect(selectStatement).toContain('human_article_status AS')
+  expect(selectStatement).toContain("'humanStatus' AS filterKind, human.human_status_key AS filterValue")
+  expect(selectStatement).toContain("COUNT(*) FILTER (WHERE NOT tombstone AND llm_status_key = 'answered')")
+  expect(selectStatement).toContain("COUNT(*) FILTER (WHERE NOT tombstone AND human_status_key = 'answered')")
+})
+
 test('prompt-answer postings encode prompt ids in filter values', async () => {
   const {database, statements} = createPostingDatabase({newRows: []})
 

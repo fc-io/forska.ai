@@ -106,10 +106,6 @@ const getPromptAnswerFacetKey = (_input: ProjectReviewServingFilterOptionsInput)
   return 'promptAnswer'
 }
 
-const getNumericFacetKey = (_input: ProjectReviewServingFilterOptionsInput) => {
-  return 'numericPromptAnswer'
-}
-
 const getAnswerValueExpression = () => {
   return `CASE
     WHEN detail.answered_original_as_array IS NOT NULL AND array_length(detail.answered_original_as_array) > 0
@@ -202,18 +198,10 @@ const getFilterOptionSourceRows = async (
             AND answer.prompt_id = 'summary'
             AND NULLIF(TRIM(COALESCE(answer.answerValue, '')), '') IS NOT NULL
           ${aggregateBySql} answer.answerValue
-        ),
-        numeric_options AS (
-          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, ${getSqlLiteral(getNumericFacetKey(input))} AS facetKey, NULL AS facetValue, answer.prompt_id AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':', ${getSqlLiteral(getNumericFacetKey(input))}, ':', answer.prompt_id) AS optionValueKey, json_object('filterType', 'numeric', 'promptId', answer.prompt_id) AS optionPayloadJson, COUNT(DISTINCT answer.article_id) AS countValue, MIN(CAST(answer.answerValue AS DOUBLE)) AS numericMin, MAX(CAST(answer.answerValue AS DOUBLE)) AS numericMax
-          FROM answer_values answer
-          WHERE regexp_full_match(TRIM(COALESCE(answer.answerValue, '')), '^[-+]?[0-9]+$')
-            AND (${getSqlLiteral(input.optionMode)} <> 'human' OR answer.prompt_id <> 'summary')
-          ${aggregateBySql} answer.prompt_id
         )
         SELECT * FROM review_facet_options WHERE facetValue IS NOT NULL
         UNION ALL SELECT * FROM prompt_answer_options
         UNION ALL SELECT * FROM human_summary_options
-        UNION ALL SELECT * FROM numeric_options
       `)
 }
 

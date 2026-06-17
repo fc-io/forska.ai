@@ -97,27 +97,15 @@ const hasOptionValue = (rows: readonly Record<string, unknown>[], expected: Reco
   })
 }
 
-test('projects complete enum and numeric option payloads into scoped option rows', async () => {
+test('projects supported enum option payloads into scoped option rows', async () => {
   const {database, statements} = createFilterOptionDatabase({
-    sourceRows: [
-      sourceRow(),
-      sourceRow({
-        countValue: 5,
-        facetKey: 'numericPromptAnswer',
-        facetValue: null,
-        numericMax: 9,
-        numericMin: 2,
-        optionPayloadJson: {filterType: 'numeric', promptId: 'prompt-2'},
-        optionValueKey: 'review:numericPromptAnswer:prompt-2',
-        promptId: 'prompt-2',
-      }),
-    ],
+    sourceRows: [sourceRow()],
   })
 
   const result = await projectReviewServingFilterOptions(projectInput(), database)
   const joined = statements.join('\n')
 
-  expect(result.optionRowCount).toBe(2)
+  expect(result.optionRowCount).toBe(1)
   expect(
     hasOptionValue(result.optionValues, {
       count_value: 3,
@@ -128,17 +116,10 @@ test('projects complete enum and numeric option payloads into scoped option rows
       prompt_id: 'prompt-1',
     }),
   ).toBe(true)
-  expect(
-    hasOptionValue(result.optionValues, {
-      count_value: 5,
-      facet_key: 'numericPromptAnswer',
-      numeric_max: 9,
-      numeric_min: 2,
-      option_value_key: 'review:numericPromptAnswer:prompt-2',
-    }),
-  ).toBe(true)
   expect(joined).toContain('DELETE FROM mart.review_filter_option_serving_v4')
   expect(joined).toContain('INSERT INTO mart.review_filter_option_serving_v4')
+  expect(joined).not.toContain('numericPromptAnswer')
+  expect(joined).not.toContain('numeric_options')
 })
 
 test('source query preserves active search and filter scope without using posting rows as response rows', async () => {

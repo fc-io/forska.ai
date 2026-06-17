@@ -258,14 +258,12 @@ const getPostingContributionRows = async (
           SELECT selected.article_id AS articleId, list_mode_key.list_mode_key AS listModeKey, selected.sort_key AS sortKey, selected.tombstone AS tombstone, 'conflictFlag' AS filterKind, CAST(selected.conflict_flag AS VARCHAR) AS filterValue
           FROM selected_import_state selected CROSS JOIN list_mode_key_filter list_mode_key
         ),
-        llm_postings AS (
-          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'llmStatus' AS filterKind, llm.llm_status_key AS filterValue
-          FROM scoped_article scoped
-          INNER JOIN mart.review_llm_status_patch_v4 llm
-            ON llm.project_id = ${getSqlLiteral(input.projectId)}
+        latest_llm_patch AS (
+          SELECT llm.*
+          FROM mart.review_llm_status_patch_v4 llm
+          WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
             AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
-            AND llm.article_id = scoped.article_id
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_llm_status_patch_v4 newer
@@ -277,75 +275,64 @@ const getPostingContributionRows = async (
                 AND newer.list_mode_key = llm.list_mode_key
                 AND newer.patch_watermark > llm.patch_watermark
             )
+        ),
+        llm_article_status AS (
+          SELECT article_id, list_mode_key, MAX(latest_llm_created_at) AS latest_llm_created_at, COUNT(*) FILTER (WHERE NOT tombstone) = 0 AS tombstone, CASE WHEN COUNT(*) FILTER (WHERE NOT tombstone AND llm_status_key = 'answered') = COUNT(*) FILTER (WHERE NOT tombstone) AND COUNT(*) FILTER (WHERE NOT tombstone) > 0 THEN 'answered' ELSE 'unanswered' END AS llm_status_key
+          FROM latest_llm_patch
+          GROUP BY article_id, list_mode_key
+        ),
+        llm_postings AS (
+          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'llmStatus' AS filterKind, llm.llm_status_key AS filterValue
+          FROM scoped_article scoped
+          INNER JOIN llm_article_status llm
+            ON llm.article_id = scoped.article_id
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = llm.list_mode_key
           UNION ALL
           SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original) AS filterValue
           FROM scoped_article scoped
-          INNER JOIN mart.review_llm_status_patch_v4 llm
-            ON llm.project_id = ${getSqlLiteral(input.projectId)}
-            AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
-            AND llm.article_id = scoped.article_id
+          INNER JOIN latest_llm_patch llm
+            ON llm.article_id = scoped.article_id
             AND llm.answered_original IS NOT NULL
             AND llm.answered_original_as_array IS NULL
-            AND NOT EXISTS (
-              SELECT 1
-              FROM mart.review_llm_status_patch_v4 newer
-              WHERE newer.project_id = llm.project_id
-                AND newer.review_config_hash = llm.review_config_hash
-                AND newer.base_generation = llm.base_generation
-                AND newer.article_id = llm.article_id
-                AND newer.prompt_id = llm.prompt_id
-                AND newer.list_mode_key = llm.list_mode_key
-                AND newer.patch_watermark > llm.patch_watermark
-            )
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = llm.list_mode_key
           UNION ALL
           SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', answer.answer_value) AS filterValue
           FROM scoped_article scoped
-          INNER JOIN mart.review_llm_status_patch_v4 llm
-            ON llm.project_id = ${getSqlLiteral(input.projectId)}
-            AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-            AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
-            AND llm.article_id = scoped.article_id
+          INNER JOIN latest_llm_patch llm
+            ON llm.article_id = scoped.article_id
             AND llm.answered_original_as_array IS NOT NULL
-            AND NOT EXISTS (
-              SELECT 1
-              FROM mart.review_llm_status_patch_v4 newer
-              WHERE newer.project_id = llm.project_id
-                AND newer.review_config_hash = llm.review_config_hash
-                AND newer.base_generation = llm.base_generation
-                AND newer.article_id = llm.article_id
-                AND newer.prompt_id = llm.prompt_id
-                AND newer.list_mode_key = llm.list_mode_key
-                AND newer.patch_watermark > llm.patch_watermark
-            )
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = llm.list_mode_key
           CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)
           WHERE answer.answer_value IS NOT NULL
         ),
+        latest_human_patch AS (
+          SELECT human.*
+          FROM mart.review_human_status_patch_v4 human
+          WHERE human.project_id = ${getSqlLiteral(input.projectId)}
+            AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
+            AND ${getLatestHumanPatchPredicate('human')}
+        ),
+        human_article_status AS (
+          SELECT article_id, list_mode_key, MAX(latest_human_updated_at) AS latest_human_updated_at, COUNT(*) FILTER (WHERE NOT tombstone) = 0 AS tombstone, CASE WHEN COUNT(*) FILTER (WHERE NOT tombstone AND human_status_key = 'answered') = COUNT(*) FILTER (WHERE NOT tombstone) AND COUNT(*) FILTER (WHERE NOT tombstone) > 0 THEN 'answered' ELSE 'unanswered' END AS human_status_key
+          FROM latest_human_patch
+          GROUP BY article_id, list_mode_key
+        ),
         human_postings AS (
           SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, COALESCE(human.latest_human_updated_at, scoped.sort_key) AS sortKey, human.tombstone OR scoped.scope_tombstone AS tombstone, 'humanStatus' AS filterKind, human.human_status_key AS filterValue
           FROM scoped_article scoped
-          INNER JOIN mart.review_human_status_patch_v4 human
-            ON human.project_id = ${getSqlLiteral(input.projectId)}
-            AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
-            AND human.article_id = scoped.article_id
-            AND ${getLatestHumanPatchPredicate('human')}
+          INNER JOIN human_article_status human
+            ON human.article_id = scoped.article_id
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = human.list_mode_key
           UNION ALL
           SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, COALESCE(human.latest_human_updated_at, scoped.sort_key) AS sortKey, human.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, concat('human:promptAnswer:', human.prompt_id, ':', human.human_answered_value) AS filterValue
           FROM scoped_article scoped
-          INNER JOIN mart.review_human_status_patch_v4 human
-            ON human.project_id = ${getSqlLiteral(input.projectId)}
-            AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
-            AND human.article_id = scoped.article_id
+          INNER JOIN latest_human_patch human
+            ON human.article_id = scoped.article_id
             AND human.human_answered_value IS NOT NULL
-            AND ${getLatestHumanPatchPredicate('human')}
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = human.list_mode_key
         ),
