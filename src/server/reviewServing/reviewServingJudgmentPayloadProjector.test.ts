@@ -228,6 +228,7 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
 
   expect(llmSelect).toContain("VALUES ('article-1')")
   expect(llmSelect).toContain('COALESCE(prompt.archived, FALSE) = FALSE')
+  expect(llmSelect).toContain('ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC')
   expect(llmSelect).toContain('INNER JOIN article_id_filter dirty ON dirty.article_id = scope.article_id')
   expect(llmDeleteStatement).toContain("article_id IN ('article-1')")
   expect(llmDeleteStatement).toContain("list_mode_key IS NOT DISTINCT FROM 'llm'")

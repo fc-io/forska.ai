@@ -2,6 +2,7 @@ import {hostname} from 'node:os'
 
 import {sleep} from '../../utils/sleep.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {buildPromptConfigHash, buildReviewConfigHash} from '../reviewServing/reviewProjectionIdentity.ts'
 import {reviewServingListModes, type ReviewServingProjectionComponent} from '../reviewServing/reviewServingContracts.ts'
 import {projectReviewServingDisplayPatches, projectReviewServingPayloadRows} from '../reviewServing/reviewServingDisplayPayloadProjector.ts'
 import {
@@ -137,12 +138,24 @@ type ReviewServingSnapshotContext = ReviewServingSnapshotContextRow & {
 }
 
 type ProjectReviewSettingsRow = {
+  humanJudgmentMode: 'prompt' | 'summary'
   modelId: string
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
   useTitle: boolean
 }
+
+type ProjectPromptConfigRow = {
+  answerSchemaHash: string | null
+  promptId: string
+  promptOrder: number | null
+  promptTextHash: string | null
+  settingsVersion: string | null
+  thresholdVersion: string | null
+}
+
+type ProjectReviewSnapshotSettings = ProjectReviewSettingsRow & {reviewConfigHash: string}
 
 const defaultReviewServingProjectorWorkerBatchSize = 64
 const defaultReviewServingProjectorWorkerCleanupIntervalMs = 60_000
@@ -354,6 +367,7 @@ const requireSelectedImportSnapshotId = (snapshot: ReviewServingSnapshotContext)
 const getProjectReviewSettings = async (projectId: string, database: ReviewServingProjectorWorkerDatabase) => {
   const rows = await database.queryJson<ProjectReviewSettingsRow>(`
     SELECT
+      COALESCE(human_judgment_mode, 'prompt') AS humanJudgmentMode,
       model_id AS modelId,
       use_title AS useTitle,
       use_abstract AS useAbstract,
@@ -370,6 +384,69 @@ const getProjectReviewSettings = async (projectId: string, database: ReviewServi
   }
 
   return row
+}
+
+const getProjectPromptConfigRows = async (projectId: string, database: ReviewServingProjectorWorkerDatabase) => {
+  return database.queryJson<ProjectPromptConfigRow>(`
+    SELECT
+      prompt.id AS promptId,
+      project_prompt.prompt_order AS promptOrder,
+      COALESCE(prompt.content_hash, sha256(prompt.original_text)) AS promptTextHash,
+      NULL AS answerSchemaHash,
+      'prompt-v1' AS settingsVersion,
+      NULL AS thresholdVersion
+    FROM app.project_prompt project_prompt
+    INNER JOIN app.prompt prompt
+      ON prompt.id = project_prompt.prompt_id
+    WHERE project_prompt.project_id = ${getSqlLiteral(projectId)}
+      AND project_prompt.enabled
+      AND NOT project_prompt.archived
+      AND COALESCE(prompt.archived, FALSE) = FALSE
+    ORDER BY COALESCE(project_prompt.prompt_order, 0) ASC, prompt.id ASC
+  `)
+}
+
+const getPromptConfigHash = (row: ProjectPromptConfigRow) => {
+  return buildPromptConfigHash({
+    answerSchemaHash: row.answerSchemaHash,
+    promptId: row.promptId,
+    promptTextHash: row.promptTextHash ?? row.promptId,
+    settingsVersion: row.settingsVersion ?? 'prompt-v1',
+    thresholdVersion: row.thresholdVersion,
+  })
+}
+
+const getReviewConfigHash = (input: ProjectReviewSettingsRow & {promptConfigRows: readonly ProjectPromptConfigRow[]}) => {
+  return buildReviewConfigHash({
+    humanJudgmentMode: input.humanJudgmentMode,
+    modelExecutionIdentity: {modelId: input.modelId},
+    modelId: input.modelId,
+    promptConfigs: input.promptConfigRows.map((row, index) => {
+      return {promptConfigHash: getPromptConfigHash(row), promptId: row.promptId, promptOrder: row.promptOrder ?? index}
+    }),
+    useAbstract: input.useAbstract,
+    useFulltext: input.useFulltext,
+    useFulltextNoImages: input.useFulltextNoImages,
+    useTitle: input.useTitle,
+  })
+}
+
+const getCurrentProjectReviewSnapshotSettings = async (
+  projectId: string,
+  database: ReviewServingProjectorWorkerDatabase,
+): Promise<ProjectReviewSnapshotSettings> => {
+  const project = await getProjectReviewSettings(projectId, database)
+  const promptConfigRows = await getProjectPromptConfigRows(projectId, database)
+  const reviewConfigHash = getReviewConfigHash({...project, promptConfigRows})
+
+  return {...project, reviewConfigHash}
+}
+
+const getSnapshotReviewSettings = (
+  snapshot: ReviewServingSnapshotContext,
+  currentSettings: ProjectReviewSnapshotSettings,
+) => {
+  return snapshot.reviewConfigHash === currentSettings.reviewConfigHash ? currentSettings : null
 }
 
 const getDefaultRunnerInput = async (
@@ -570,8 +647,17 @@ const getDefaultReviewServingProjectorRunners = (
     },
     payload: async (context) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
-      const project = await getProjectReviewSettings(projectId, database)
-      const results = await runSnapshotProjectors(snapshots, async (snapshot, acknowledgeClaims) => {
+      const currentSettings = await getCurrentProjectReviewSnapshotSettings(projectId, database)
+      const payloadSnapshots = snapshots.filter((snapshot) => {
+        return getSnapshotReviewSettings(snapshot, currentSettings) !== null
+      })
+      const results = await runSnapshotProjectors(payloadSnapshots, async (snapshot, acknowledgeClaims) => {
+        const project = getSnapshotReviewSettings(snapshot, currentSettings)
+
+        if (project === null) {
+          return 0
+        }
+
         const articlePayloadResult = await projectReviewServingPayloadRows(
           {
             acknowledgeClaims: false,

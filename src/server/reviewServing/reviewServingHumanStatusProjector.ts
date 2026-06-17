@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {buildPromptConfigHash} from './reviewProjectionIdentity.ts'
+import {buildPromptConfigHash, buildReviewConfigHash} from './reviewProjectionIdentity.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -32,6 +32,15 @@ type ProjectPromptConfigRow = {
   promptTextHash: string | null
   settingsVersion: string | null
   thresholdVersion: string | null
+}
+
+type ProjectReviewSettingsRow = {
+  humanJudgmentMode: 'prompt' | 'summary'
+  modelId: string | null
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
 }
 
 type HumanStatusSourceRow = {
@@ -202,6 +211,49 @@ const getPromptConfigHash = (
     settingsVersion: row.settingsVersion ?? 'prompt-v1',
     thresholdVersion: row.thresholdVersion,
   })
+}
+
+const getReviewConfigHash = (input: {
+  humanJudgmentMode: 'prompt' | 'summary'
+  modelId: string | null
+  promptConfigRows: readonly ProjectPromptConfigRow[]
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}) => {
+  return buildReviewConfigHash({
+    humanJudgmentMode: input.humanJudgmentMode,
+    modelExecutionIdentity: {modelId: input.modelId},
+    modelId: input.modelId,
+    promptConfigs: input.promptConfigRows.map((row, index) => {
+      return {promptConfigHash: getPromptConfigHash(row), promptId: row.promptId, promptOrder: row.promptOrder ?? index}
+    }),
+    useAbstract: input.useAbstract,
+    useFulltext: input.useFulltext,
+    useFulltextNoImages: input.useFulltextNoImages,
+    useTitle: input.useTitle,
+  })
+}
+
+const getProjectReviewSettings = async (
+  projectId: string,
+  database: Pick<ReviewServingHumanStatusProjectorDatabase, 'queryJson'>,
+) => {
+  const rows = await database.queryJson<ProjectReviewSettingsRow>(`
+    SELECT
+      COALESCE(human_judgment_mode, 'prompt') AS humanJudgmentMode,
+      model_id AS modelId,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages
+    FROM app.project
+    WHERE id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+
+  return rows[0] ?? null
 }
 
 const getPromptConfigRowByPromptId = (promptConfigRows: readonly ProjectPromptConfigRow[], promptId: string | null) => {
@@ -494,6 +546,7 @@ const getProjectScopedRows = async (
 
 const getApplyHumanStatusServingStatement = (input: {
   baseGeneration: number
+  currentSummaryReviewConfigHash: string | null
   patchWatermark: number
   projectId: string
   projectionIdentity: string
@@ -560,7 +613,8 @@ const getApplyHumanStatusServingStatement = (input: {
         SELECT
           list_mode_key,
           article_id,
-          COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id IS NOT NULL AND human_status_key = 'answered') AS human_answered_prompt_count
+          COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id IS NOT NULL AND prompt_id <> 'summary' AND human_status_key = 'answered') AS human_answered_prompt_count,
+          COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id = 'summary' AND human_status_key = 'answered') AS human_answered_summary_count
         FROM latest_prompt
         GROUP BY list_mode_key, article_id
       )
@@ -569,7 +623,8 @@ const getApplyHumanStatusServingStatement = (input: {
         human_answered_prompt_count = CAST(article_status.human_answered_prompt_count AS INTEGER),
         human_status_key = CASE
           WHEN serving.enabled_prompt_count = 0 THEN NULL
-          WHEN serving.enabled_prompt_count = article_status.human_answered_prompt_count THEN 'answered'
+          WHEN serving.review_config_hash = ${getSqlLiteral(input.currentSummaryReviewConfigHash)} AND article_status.human_answered_summary_count > 0 THEN 'answered'
+          WHEN serving.review_config_hash IS DISTINCT FROM ${getSqlLiteral(input.currentSummaryReviewConfigHash)} AND serving.enabled_prompt_count = article_status.human_answered_prompt_count THEN 'answered'
           ELSE 'unanswered'
         END,
         patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)}),
@@ -650,6 +705,11 @@ export const projectReviewServingHumanStatusPatches = async (
   database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService(),
 ) => {
   const promptConfigRows = await getProjectPromptConfigRows(input.projectId, database)
+  const projectSettings = await getProjectReviewSettings(input.projectId, database)
+  const currentSummaryReviewConfigHash =
+    projectSettings === null
+      ? null
+      : getReviewConfigHash({...projectSettings, humanJudgmentMode: 'summary', promptConfigRows})
   const [judgmentRows, promptRows, articleRows, projectRows] = await Promise.all([
     getJudgmentDeltaRows(input, database, promptConfigRows),
     getPromptScopedRows(input, database),
@@ -693,6 +753,7 @@ export const projectReviewServingHumanStatusPatches = async (
       statements: [
         getApplyHumanStatusServingStatement({
           baseGeneration: input.baseGeneration,
+          currentSummaryReviewConfigHash,
           patchWatermark,
           projectId: input.projectId,
           projectionIdentity: input.projectionIdentity,
