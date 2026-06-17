@@ -10,7 +10,7 @@ const postingRow = (input?: Record<string, unknown>) => {
   return {
     articleId: 'article-1',
     filterKind: 'promptAnswer',
-    filterValue: 'yes',
+    filterValue: 'review:promptAnswer:prompt-1:yes',
     listModeKey: 'llm',
     sortKey: '2026-06-16T10:00:00.000Z',
     tombstone: false,
@@ -121,11 +121,11 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[], listModeKe
 
 test('answer changes update posting stats from old and new contribution diffs', async () => {
   const {database, statements} = createPostingDatabase({
-    existingRows: [postingRow({filterValue: 'no'})],
-    newRows: [postingRow({filterValue: 'yes'})],
+    existingRows: [postingRow({filterValue: 'review:promptAnswer:prompt-1:no'})],
+    newRows: [postingRow({filterValue: 'review:promptAnswer:prompt-1:yes'})],
     statsRows: [
-      {cardinality: 3, filterKind: 'promptAnswer', filterValue: 'no', listModeKey: 'llm'},
-      {cardinality: 7, filterKind: 'promptAnswer', filterValue: 'yes', listModeKey: 'llm'},
+      {cardinality: 3, filterKind: 'promptAnswer', filterValue: 'review:promptAnswer:prompt-1:no', listModeKey: 'llm'},
+      {cardinality: 7, filterKind: 'promptAnswer', filterValue: 'review:promptAnswer:prompt-1:yes', listModeKey: 'llm'},
     ],
   })
 
@@ -137,14 +137,14 @@ test('answer changes update posting stats from old and new contribution diffs', 
   expect(result.statsValues).toContainEqual({
     cardinality: 2,
     filterKind: 'promptAnswer',
-    filterValue: 'no',
+    filterValue: 'review:promptAnswer:prompt-1:no',
     listModeKey: 'llm',
     selectivity: 0.2,
   })
   expect(result.statsValues).toContainEqual({
     cardinality: 8,
     filterKind: 'promptAnswer',
-    filterValue: 'yes',
+    filterValue: 'review:promptAnswer:prompt-1:yes',
     listModeKey: 'llm',
     selectivity: 0.8,
   })
@@ -259,6 +259,19 @@ test('human postings read only the current status patch per logical prompt key',
   expect(selectStatement).toContain('newer.list_mode_key = human.list_mode_key')
 })
 
+test('prompt-answer postings encode prompt ids in filter values', async () => {
+  const {database, statements} = createPostingDatabase({newRows: []})
+
+  await projectReviewServingFilterPostings(projectInput([postingClaim()]), database)
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM posting_union')
+  })
+
+  expect(selectStatement).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original)")
+  expect(selectStatement).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', answer.answer_value)")
+  expect(selectStatement).toContain("concat('human:promptAnswer:', human.prompt_id, ':', human.human_answered_value)")
+})
+
 test('prompt-scoped posting rebuilds clear only changed tombstoned serving rows before reinserting', async () => {
   const {database, statements} = createPostingDatabase({existingRows: [postingRow()], newRows: []})
 
@@ -328,14 +341,14 @@ test('list modes keep posting stats and serving rows separated', async () => {
   expect(result.statsValues).toContainEqual({
     cardinality: 1,
     filterKind: 'promptAnswer',
-    filterValue: 'yes',
+    filterValue: 'review:promptAnswer:prompt-1:yes',
     listModeKey: 'llm',
     selectivity: 0.1,
   })
   expect(result.statsValues).toContainEqual({
     cardinality: 1,
     filterKind: 'promptAnswer',
-    filterValue: 'yes',
+    filterValue: 'review:promptAnswer:prompt-1:yes',
     listModeKey: 'human',
     selectivity: 0.2,
   })

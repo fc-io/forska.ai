@@ -142,8 +142,14 @@ test('missing or incompatible contribution state enqueues bounded repair', async
   )
 
   expect(missingState.repairRequired).toBe(true)
+  expect(missingState.contributionRecords).toHaveLength(1)
+  expect(missingState.deleteContributionStateStatement).toContain(
+    'DELETE FROM mart.review_article_summary_contribution_v4',
+  )
   expect(missingState.repairDirtyWork[0]?.scope.scopeKind).toBe('article')
   expect(missingState.diffs).toEqual([])
   expect(incompatibleState.repairRequired).toBe(true)
+  expect(incompatibleState.contributionRecords).toHaveLength(1)
+  expect(incompatibleState.deleteContributionStateStatement).not.toContain('summary_definition_version')
   expect(incompatibleState.repairDirtyWork[0]?.scope.dirtyRangeStart).toBe('article-1')
 })

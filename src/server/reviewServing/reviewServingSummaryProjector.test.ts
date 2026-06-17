@@ -324,5 +324,15 @@ test('unsupported or incompatible contribution state enqueues repair instead of 
   expect(result.repairRequired).toBe(true)
   expect(result.summaryRowCount).toBe(0)
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work')
-  expect(joined).not.toContain('INSERT INTO mart.review_article_count_serving_v4')
+  expect(joined).toContain('INSERT INTO mart.review_article_summary_contribution_v4')
+})
+
+test('deferred summary option phases do not publish manifests or watermarks', async () => {
+  const {database, statements} = createSummaryDatabase({sourceRows: [sourceCountRow()]})
+
+  await projectReviewServingSummaries({...projectInput([summaryClaim()]), acknowledgeClaims: false}, database)
+  const joined = statements.join('\n')
+
+  expect(joined).not.toContain('INSERT INTO app.review_serving_projection_manifest')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
 })

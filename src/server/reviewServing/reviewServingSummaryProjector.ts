@@ -637,47 +637,46 @@ export const projectReviewServingSummaries = async (
   )
   const summaryRecords = await getSummaryRecords({database, diffs: contributionDiff.diffs, projectorInput: input})
   const patchWatermark = getPatchWatermark(input.claims)
+  const shouldPublishManifest = input.acknowledgeClaims !== false && input.claims.length > 0
 
   await writeReviewServingProjectorComponent(
     {
       acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'summary',
-      projectionManifests:
-        input.claims.length === 0
-          ? []
-          : [
-              {
-                baseGeneration: input.baseGeneration,
-                definitionVersion: 'review-serving-summary:v1',
-                inputDigest: getClaimKinds(input.claims),
-                inputWatermark: patchWatermark,
-                invalidationReason: getClaimKinds(input.claims),
-                patchRangeEnd: patchWatermark,
-                patchRangeStart: getPatchRangeStart(input.claims),
-                patchWatermark,
-                projectId: input.projectId,
-                projectionComponent: 'summary',
-                projectionIdentity: input.projectionIdentity,
-                reviewConfigHash: input.reviewConfigHash,
-                status: 'candidate',
-              },
-            ],
+      projectionManifests: !shouldPublishManifest
+        ? []
+        : [
+            {
+              baseGeneration: input.baseGeneration,
+              definitionVersion: 'review-serving-summary:v1',
+              inputDigest: getClaimKinds(input.claims),
+              inputWatermark: patchWatermark,
+              invalidationReason: getClaimKinds(input.claims),
+              patchRangeEnd: patchWatermark,
+              patchRangeStart: getPatchRangeStart(input.claims),
+              patchWatermark,
+              projectId: input.projectId,
+              projectionComponent: 'summary',
+              projectionIdentity: input.projectionIdentity,
+              reviewConfigHash: input.reviewConfigHash,
+              status: 'candidate',
+            },
+          ],
       records: [...summaryRecords, ...contributionDiff.contributionRecords],
       repairDirtyWork: contributionDiff.repairDirtyWork,
       statements:
         contributionDiff.deleteContributionStateStatement === null
           ? []
           : [contributionDiff.deleteContributionStateStatement],
-      watermark:
-        input.claims.length === 0
-          ? undefined
-          : {
-              projectId: input.projectId,
-              projectionComponent: 'summary',
-              projectorName: summaryProjectorName,
-              sourceHighWaterMark: patchWatermark,
-              sourcePartition: getClaimSourcePartition(input.claims),
-            },
+      watermark: !shouldPublishManifest
+        ? undefined
+        : {
+            projectId: input.projectId,
+            projectionComponent: 'summary',
+            projectorName: summaryProjectorName,
+            sourceHighWaterMark: patchWatermark,
+            sourcePartition: getClaimSourcePartition(input.claims),
+          },
     },
     database,
   )

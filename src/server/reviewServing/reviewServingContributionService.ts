@@ -180,8 +180,14 @@ const getContributionRecord = (input: {
   }
 }
 
-const getDeleteContributionStateStatement = (input: PrepareReviewServingContributionDiffInput) => {
+const getDeleteContributionStateStatement = (
+  input: PrepareReviewServingContributionDiffInput,
+  includeSummaryDefinitionVersion: boolean,
+) => {
   const articleIds = getUniqueValues(input.expectedArticleIds)
+  const summaryDefinitionVersionPredicate = includeSummaryDefinitionVersion
+    ? {summary_definition_version: input.summaryDefinitionVersion}
+    : {}
 
   return articleIds.length === 0
     ? null
@@ -192,7 +198,7 @@ const getDeleteContributionStateStatement = (input: PrepareReviewServingContribu
           project_id: input.projectId,
           review_config_hash: input.reviewConfigHash,
           snapshot_id: input.snapshotId,
-          summary_definition_version: input.summaryDefinitionVersion,
+          ...summaryDefinitionVersionPredicate,
         },
         table: 'mart.review_article_summary_contribution_v4',
       })
@@ -258,8 +264,8 @@ export const prepareReviewServingContributionDiff = async (
   })
 
   return {
-    contributionRecords: repairRequired ? [] : contributionRecords,
-    deleteContributionStateStatement: repairRequired ? null : getDeleteContributionStateStatement(input),
+    contributionRecords,
+    deleteContributionStateStatement: getDeleteContributionStateStatement(input, !repairRequired),
     diffs: repairRequired ? [] : getContributionDiffsFromRows({newRows: input.newRows, oldRows}),
     repairDirtyWork: repairRequired
       ? getRepairDirtyWork({

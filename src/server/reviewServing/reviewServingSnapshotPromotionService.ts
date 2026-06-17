@@ -4,7 +4,9 @@ import {type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {
   type ReviewServingComponentRequirements,
   type ReviewServingCountAvailability,
+  type ReviewServingOptionalComponentState,
   type ReviewServingProjectionComponent,
+  type ReviewServingRequiredComponentState,
   type ReviewServingSearchAvailability,
   type ReviewServingSnapshotComponentStates,
 } from './reviewServingContracts.ts'
@@ -38,13 +40,27 @@ type SelectedImportSnapshotStatusRow = {status: string}
 
 const completeManifestStatuses = ['active', 'candidate'] as const
 
-const getComponentState = (manifest: ReviewServingProjectionIdentityManifest, requirement: 'optional' | 'required') => {
+const getOptionalComponentState = (
+  manifest: ReviewServingProjectionIdentityManifest,
+): ReviewServingOptionalComponentState => {
   return {
     baseGeneration: String(manifest.baseGeneration),
     component: manifest.projectionComponent,
     patchWatermark: String(manifest.patchWatermark),
     projectionIdentity: manifest.projectionIdentity,
-    requirement,
+    requirement: 'optional',
+  }
+}
+
+const getRequiredComponentState = (
+  manifest: ReviewServingProjectionIdentityManifest,
+): ReviewServingRequiredComponentState => {
+  return {
+    baseGeneration: String(manifest.baseGeneration),
+    component: manifest.projectionComponent,
+    patchWatermark: String(manifest.patchWatermark),
+    projectionIdentity: manifest.projectionIdentity,
+    requirement: 'required',
   }
 }
 
@@ -55,7 +71,7 @@ const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, rea
   llmStatus: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
   payload: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   posting: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
-  projectScope: ['projectScope', 'project-scope'],
+  projectScope: ['importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   queue: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   search: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
   selectedImport: ['importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
@@ -63,9 +79,11 @@ const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, rea
 }
 
 const getNumericObjectValue = (sourceWatermarks: ReviewServingIdentityValue, key: string) => {
-  const value = sourceWatermarks !== null && typeof sourceWatermarks === 'object' && !Array.isArray(sourceWatermarks)
-    ? sourceWatermarks[key]
-    : undefined
+  const values =
+    sourceWatermarks !== null && typeof sourceWatermarks === 'object' && !Array.isArray(sourceWatermarks)
+      ? (sourceWatermarks as Record<string, ReviewServingIdentityValue>)
+      : null
+  const value = values?.[key]
 
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
@@ -268,10 +286,10 @@ export const composeReviewServingCandidateSnapshotManifest = async (
     componentRequirements: input.componentRequirements,
     componentState: {
       optional: optionalManifests.map((manifest) => {
-        return getComponentState(manifest, 'optional')
+        return getOptionalComponentState(manifest)
       }),
       required: requiredManifests.map((manifest) => {
-        return getComponentState(manifest, 'required')
+        return getRequiredComponentState(manifest)
       }),
     },
     composedIdentity: input.composedIdentity,
