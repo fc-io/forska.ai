@@ -270,6 +270,10 @@ test('prompt-answer postings encode prompt ids in filter values', async () => {
   expect(selectStatement).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original)")
   expect(selectStatement).toContain("concat('review:promptAnswer:', llm.prompt_id, ':', answer.answer_value)")
   expect(selectStatement).toContain("concat('human:promptAnswer:', human.prompt_id, ':', human.human_answered_value)")
+  expect(selectStatement).toContain('llm.answered_original IS NOT NULL')
+  expect(selectStatement).toContain('llm.answered_original_as_array IS NULL')
+  expect(selectStatement).toContain('answer.answer_value IS NOT NULL')
+  expect(selectStatement).toContain('human.human_answered_value IS NOT NULL')
 })
 
 test('prompt-scoped posting rebuilds clear only changed tombstoned serving rows before reinserting', async () => {

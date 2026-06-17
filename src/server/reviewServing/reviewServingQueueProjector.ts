@@ -154,6 +154,13 @@ const getDirtyPromptJoin = (promptIds: readonly string[], alias: string) => {
           ON dirty_prompt.prompt_id = ${alias}.prompt_id`
 }
 
+const getHumanDirtyPromptJoin = (promptIds: readonly string[]) => {
+  return promptIds.length === 0
+    ? ''
+    : `INNER JOIN prompt_id_filter dirty_prompt
+          ON dirty_prompt.prompt_id = human.prompt_id OR human.prompt_id = 'summary'`
+}
+
 const getQueueIdentity = (row: QueueSourceRow) => {
   return (
     row.queueIdentity
@@ -243,7 +250,7 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
             )
         ),
         human_queue AS (
-          SELECT
+          SELECT DISTINCT
             scoped.article_id AS articleId,
             human.prompt_id AS promptId,
             llm.review_config_hash AS reviewConfigHash,
@@ -258,12 +265,12 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
             ON human.project_id = ${getSqlLiteral(input.projectId)}
             AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND human.article_id = scoped.article_id
-            ${getDirtyPromptJoin(promptIds, 'human')}
+            ${getHumanDirtyPromptJoin(promptIds)}
           INNER JOIN mart.review_llm_status_patch_v4 llm
             ON llm.project_id = ${getSqlLiteral(input.projectId)}
             AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND llm.article_id = human.article_id
-            AND llm.prompt_id = human.prompt_id
+            AND (llm.prompt_id = human.prompt_id OR human.prompt_id = 'summary')
             AND llm.list_mode_key = human.list_mode_key
             AND llm.patch_watermark = (
               SELECT MAX(newer_llm.patch_watermark)

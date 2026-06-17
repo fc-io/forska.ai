@@ -142,8 +142,12 @@ test('LLM judgment deltas write component-narrow status patches from persisted b
   expect(selectStatement).toContain(
     'COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone',
   )
+  expect(selectStatement).toContain('judgment.article_id = delta.article_id')
+  expect(selectStatement).toContain('judgment.prompt_id = delta.prompt_id')
   expect(selectStatement).toContain('judgment.model_id = delta.model_id')
   expect(selectStatement).toContain('judgment.use_fulltext_no_images = delta.use_fulltext_no_images')
+  expect(selectStatement).toContain('FROM app."judgment" newer_judgment')
+  expect(selectStatement).not.toContain('judgment.id = delta.judgment_id')
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(insertStatement).toContain('review_config_hash')
   expect(insertStatement).toContain('prompt_config_hash')

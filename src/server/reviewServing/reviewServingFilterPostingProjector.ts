@@ -287,6 +287,8 @@ const getPostingContributionRows = async (
             AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND llm.article_id = scoped.article_id
+            AND llm.answered_original IS NOT NULL
+            AND llm.answered_original_as_array IS NULL
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_llm_status_patch_v4 newer
@@ -323,6 +325,7 @@ const getPostingContributionRows = async (
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = llm.list_mode_key
           CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)
+          WHERE answer.answer_value IS NOT NULL
         ),
         human_postings AS (
           SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, COALESCE(human.latest_human_updated_at, scoped.sort_key) AS sortKey, human.tombstone OR scoped.scope_tombstone AS tombstone, 'humanStatus' AS filterKind, human.human_status_key AS filterValue
@@ -341,6 +344,7 @@ const getPostingContributionRows = async (
             ON human.project_id = ${getSqlLiteral(input.projectId)}
             AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND human.article_id = scoped.article_id
+            AND human.human_answered_value IS NOT NULL
             AND ${getLatestHumanPatchPredicate('human')}
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = human.list_mode_key

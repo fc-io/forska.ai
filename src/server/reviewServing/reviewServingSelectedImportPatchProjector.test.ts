@@ -279,3 +279,26 @@ test('selected-import patch budget requests compaction when patch read cost exce
   expect(statements.join('\n')).toContain('COUNT(DISTINCT patch_watermark)')
   expect(statements.join('\n')).toContain('FROM mart.review_selected_import_patch_v4')
 })
+
+test('project-scoped selected-import rebuilds all project scope articles', async () => {
+  const {database, statements} = createSelectedImportPatchDatabase({patchRows: []})
+
+  await projectReviewServingSelectedImportPatches(
+    projectPatchInput([
+      selectedImportClaim({
+        articleId: null,
+        dirtyKind: 'project.reviewConfig.updated',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ]),
+    database,
+  )
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('WITH dirty_article(article_id)')
+  })
+
+  expect(selectStatement).toContain('FROM mart.project_scope_article scope')
+  expect(selectStatement).toContain("scope.project_id = 'project-1'")
+  expect(selectStatement).not.toContain("VALUES ('project-1')")
+})

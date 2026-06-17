@@ -230,6 +230,51 @@ test('projects llm prompt-answer facets from array answers', async () => {
   expect(selectStatement).toContain('CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)')
   expect(selectStatement).toContain('answer.answer_value AS facetValue')
   expect(selectStatement).toContain('llm.answered_original_as_array IS NOT NULL')
+  expect(selectStatement).toContain('llm.answered_original IS NOT NULL AND llm.answered_original_as_array IS NULL')
+})
+
+test('project-scoped summary rebuilds subtract prior contribution articles missing from new rows', async () => {
+  const oldRow = sourceCountRow({articleId: 'article-old'})
+  const {database, statements} = createSummaryDatabase({
+    contributionRows: [storedContributionRow(oldRow)],
+    countRows: [{countKind: 'review.llm.assessedByPrompt', countValue: 3, filterKey: 'prompt:prompt-1', listModeKey: 'llm'}],
+    sourceRows: [],
+  })
+
+  const result = await projectReviewServingSummaries(
+    projectInput([
+      summaryClaim({
+        articleId: null,
+        dirtyKind: 'project.reviewConfig.updated',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ]),
+    database,
+  )
+  const priorArticleSelect = statements.find((statement) => {
+    return statement.includes('SELECT DISTINCT contribution.article_id AS articleId')
+  })
+  const storedContributionSelect = statements.find((statement) => {
+    return statement.includes("VALUES ('article-old')")
+  })
+
+  expect(result.summaryValues).toContainEqual({
+    availability: 'ready',
+    count_kind: 'review.llm.assessedByPrompt',
+    count_updated_at: expect.any(Date),
+    count_value: 2,
+    filter_key: 'prompt:prompt-1',
+    list_mode_key: 'llm',
+    project_id: 'project-1',
+    review_config_hash: 'review-config-1',
+    snapshot_id: 'snapshot-1',
+    stale_reason: null,
+    summary_definition_version: 'review-llm-assessed-by-prompt:v1',
+    summary_identity: 'review.llm.assessedByPrompt',
+  })
+  expect(priorArticleSelect).toContain('component_kind = \'count\'')
+  expect(storedContributionSelect).toBeDefined()
 })
 
 test('date range and search-scope SQL stays scoped and explicit unsupported filtered counts are unavailable', async () => {
