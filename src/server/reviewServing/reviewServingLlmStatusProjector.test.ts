@@ -75,6 +75,7 @@ const llmStatusRow = (input?: Record<string, unknown>) => {
     articleId: 'article-1',
     isAnswered: true,
     latestLlmCreatedAt: '2026-06-16T10:00:00.000Z',
+    humanJudgmentMode: 'prompt',
     modelId: 'model-delta',
     promptId: 'prompt-1',
     promptTextHash: 'prompt-text-1',
@@ -135,9 +136,12 @@ test('LLM judgment deltas write component-narrow status patches from persisted b
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
   expect(selectStatement).toContain('delta.model_id AS modelId')
+  expect(selectStatement).toContain("COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode")
   expect(selectStatement).toContain('LEFT JOIN app.project_prompt project_prompt')
   expect(selectStatement).toContain('project_prompt.id IS NULL OR NOT project_prompt.enabled')
-  expect(selectStatement).toContain('COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone')
+  expect(selectStatement).toContain(
+    'COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone',
+  )
   expect(selectStatement).toContain('judgment.model_id = delta.model_id')
   expect(selectStatement).toContain('judgment.use_fulltext_no_images = delta.use_fulltext_no_images')
   expect(selectStatement).toContain("VALUES ('article-1')")
@@ -200,6 +204,7 @@ test('prompt config claims rebuild only prompt-scoped LLM status rows', async ()
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
   expect(promptSelect).toContain("VALUES ('prompt-1')")
   expect(promptSelect).toContain('INNER JOIN app.project project')
+  expect(promptSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode")
   expect(promptSelect).toContain('INNER JOIN mart.project_scope_article scope')
   expect(promptSelect).toContain('LEFT JOIN app."judgment" judgment')
   expect(promptSelect).toContain('judgment.prompt_id = dirty_prompt.prompt_id')
@@ -208,7 +213,9 @@ test('prompt config claims rebuild only prompt-scoped LLM status rows', async ()
   expect(promptSelect).toContain('judgment.use_abstract = project.use_abstract')
   expect(promptSelect).toContain('judgment.use_fulltext = project.use_fulltext')
   expect(promptSelect).toContain('judgment.use_fulltext_no_images = project.use_fulltext_no_images')
-  expect(promptSelect).toContain('COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone')
+  expect(promptSelect).toContain(
+    'COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone',
+  )
   expect(deltaSelect).toBeUndefined()
 })
 
@@ -236,7 +243,9 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
   expect(projectSelect).toContain('LEFT JOIN app."judgment" judgment')
   expect(projectSelect).toContain('judgment.model_id = project.model_id')
   expect(projectSelect).toContain('judgment.use_title = project.use_title')
-  expect(projectSelect).toContain('COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone')
+  expect(projectSelect).toContain(
+    'COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone',
+  )
   expect(projectSelect).toContain('WHERE project.id =')
 })
 

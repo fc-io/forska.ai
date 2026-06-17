@@ -245,14 +245,16 @@ test('selected-import rank changes move filter contribution between selected imp
 test('human postings read only the current status patch per logical prompt key', async () => {
   const {database, statements} = createPostingDatabase({newRows: []})
 
-  await projectReviewServingFilterPostings(projectInput([postingClaim({dirtyKind: 'judgment.human.updated'})]), database)
+  await projectReviewServingFilterPostings(
+    projectInput([postingClaim({dirtyKind: 'judgment.human.updated'})]),
+    database,
+  )
   const selectStatement = statements.find((statement) => {
     return statement.includes('FROM posting_union')
   })
 
   expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
   expect(selectStatement).toContain('human.base_generation = 5')
-  expect(selectStatement).toContain('newer.prompt_config_hash = human.prompt_config_hash')
   expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
   expect(selectStatement).toContain('newer.list_mode_key = human.list_mode_key')
 })
@@ -262,7 +264,12 @@ test('prompt-scoped posting rebuilds clear only changed tombstoned serving rows 
 
   await projectReviewServingFilterPostings(
     projectInput([
-      postingClaim({articleId: null, dirtyKind: 'prompt.config.updated', scopeId: 'project-1:prompt-1', scopeKind: 'prompt'}),
+      postingClaim({
+        articleId: null,
+        dirtyKind: 'prompt.config.updated',
+        scopeId: 'project-1:prompt-1',
+        scopeKind: 'prompt',
+      }),
     ]),
     database,
   )
@@ -279,6 +286,29 @@ test('prompt-scoped posting rebuilds clear only changed tombstoned serving rows 
   expect(deleteStatement).toContain('snapshot_id')
   expect(deleteStatement).not.toContain('article_id IN')
   expect(deleteStatement).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4 WHERE project_id')
+})
+
+test('project-scoped posting rebuilds delete tombstoned serving rows without prompt ids', async () => {
+  const {database, statements} = createPostingDatabase({existingRows: [postingRow()], newRows: []})
+
+  await projectReviewServingFilterPostings(
+    projectInput([
+      postingClaim({
+        articleId: null,
+        dirtyKind: 'project.reviewConfig.updated',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ]),
+    database,
+  )
+  const deleteStatement = statements.find((statement) => {
+    return statement.includes('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  })
+
+  expect(deleteStatement).toContain('USING deleted')
+  expect(deleteStatement).toContain('filter_kind = deleted.filter_kind')
+  expect(deleteStatement).not.toContain('article_id IN')
 })
 
 test('list modes keep posting stats and serving rows separated', async () => {

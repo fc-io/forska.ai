@@ -40,6 +40,7 @@ type LlmStatusSourceRow = {
   articleId: string
   isAnswered: boolean | null
   latestLlmCreatedAt: Date | string | null
+  humanJudgmentMode: 'prompt' | 'summary'
   modelId: string
   promptId: string
   promptTextHash: string | null
@@ -184,6 +185,7 @@ const getPromptConfigHash = (
 }
 
 const getReviewConfigHash = (input: {
+  humanJudgmentMode: 'prompt' | 'summary'
   modelId: string
   promptConfigRows: readonly ProjectPromptConfigRow[]
   useAbstract: boolean
@@ -192,7 +194,7 @@ const getReviewConfigHash = (input: {
   useTitle: boolean
 }) => {
   return buildReviewConfigHash({
-    humanJudgmentMode: 'prompt',
+    humanJudgmentMode: input.humanJudgmentMode,
     modelExecutionIdentity: {modelId: input.modelId},
     modelId: input.modelId,
     promptConfigs: input.promptConfigRows.map((row, index) => {
@@ -226,6 +228,7 @@ const getJudgmentDeltaRows = async (
           delta.use_abstract AS useAbstract,
           delta.use_fulltext AS useFulltext,
           delta.use_fulltext_no_images AS useFulltextNoImages,
+          COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
           delta.source_operation AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
           judgment.is_answered AS isAnswered,
@@ -239,6 +242,8 @@ const getJudgmentDeltaRows = async (
         FROM app.review_change_delta delta
         INNER JOIN article_id_filter dirty
           ON dirty.article_id = delta.article_id
+        INNER JOIN app.project project
+          ON project.id = delta.project_id
         INNER JOIN app.prompt prompt
           ON prompt.id = delta.prompt_id
         LEFT JOIN app.project_prompt project_prompt
@@ -277,6 +282,7 @@ const getPromptScopedRows = async (
           project.use_abstract AS useAbstract,
           project.use_fulltext AS useFulltext,
           project.use_fulltext_no_images AS useFulltextNoImages,
+          COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
           'update' AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
           judgment.is_answered AS isAnswered,
@@ -326,6 +332,7 @@ const getProjectScopedRows = async (
           project.use_abstract AS useAbstract,
           project.use_fulltext AS useFulltext,
           project.use_fulltext_no_images AS useFulltextNoImages,
+          COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
           'update' AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
           judgment.is_answered AS isAnswered,
@@ -376,6 +383,7 @@ const getArticleScopedRows = async (
           project.use_abstract AS useAbstract,
           project.use_fulltext AS useFulltext,
           project.use_fulltext_no_images AS useFulltextNoImages,
+          COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
           'update' AS sourceOperation,
           NOT (COALESCE(scope.in_curated_scope, FALSE) OR COALESCE(scope.in_route_scope, FALSE)) AS tombstone,
           judgment.is_answered AS isAnswered,

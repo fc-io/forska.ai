@@ -57,10 +57,7 @@ type ReviewImportDeltaRow = {
 
 type ValidatedReviewImportDelta = {
   deltaId: string
-  projections: readonly {
-    projectionComponent: ReviewServingProjectionComponent
-    projectionIdentity: string
-  }[]
+  projections: readonly {projectionComponent: ReviewServingProjectionComponent; projectionIdentity: string}[]
   scope: ReviewServingDirtyWorkScope
   sourceHighWaterMark: number
 }
@@ -180,10 +177,7 @@ const getValidatedReviewImportDelta = (row: ReviewImportDeltaRow) => {
     projections: rule.affectedComponents.map((projectionComponent) => {
       return {
         projectionComponent,
-        projectionIdentity: getProjectionIdentity({
-          projectionComponent,
-          projectId: scope.projectId,
-        }),
+        projectionIdentity: getProjectionIdentity({projectionComponent, projectId: scope.projectId}),
       }
     }),
     scope,
@@ -222,7 +216,7 @@ const getReviewImportDeltaRows = async (
           delta.delta_id AS deltaId,
           delta.change_kind AS changeKind,
           delta.source_partition AS sourcePartition,
-          CAST(delta.source_high_water_mark AS INTEGER) AS sourceHighWaterMark,
+          delta.source_high_water_mark AS sourceHighWaterMark,
           delta.payload_version AS payloadVersion,
           delta.import_route_id AS importRouteId,
           delta.article_id AS articleId,

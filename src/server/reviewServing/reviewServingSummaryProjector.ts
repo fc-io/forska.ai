@@ -104,7 +104,10 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
-const getExpectedArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[], rows: readonly SummaryContributionSourceRow[]) => {
+const getExpectedArticleIds = (
+  claims: readonly ReviewServingDirtyWorkClaim[],
+  rows: readonly SummaryContributionSourceRow[],
+) => {
   const claimArticleIds = getClaimArticleIds(claims)
 
   return claimArticleIds.length > 0
@@ -174,7 +177,6 @@ const getSummaryContributionRows = async (
         scoped_article AS (
           SELECT
             scope.article_id,
-            scope.publication_year,
             scope.in_curated_scope OR scope.in_route_scope AS in_scope
           FROM article_id_filter dirty
           INNER JOIN mart.project_scope_article scope
@@ -185,7 +187,7 @@ const getSummaryContributionRows = async (
           SELECT
             scoped.article_id,
             CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.import_route_id, selected_base.import_route_id) END AS import_route_id,
-            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN scoped.publication_year ELSE COALESCE(selected_patch.publication_year, selected_base.publication_year, scoped.publication_year) END AS publication_year,
+            CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN NULL ELSE COALESCE(selected_patch.publication_year, selected_base.publication_year) END AS publication_year,
             CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN FALSE ELSE COALESCE(selected_patch.duplicate_flag, selected_base.duplicate_flag, FALSE) END AS duplicate_flag,
             CASE WHEN COALESCE(selected_patch.tombstone, selected_base.tombstone, FALSE) THEN FALSE ELSE COALESCE(selected_patch.conflict_flag, selected_base.conflict_flag, FALSE) END AS conflict_flag,
             scoped.in_scope AS in_selected_scope
@@ -272,7 +274,6 @@ const getSummaryContributionRows = async (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
               WHERE newer.project_id = human.project_id
-                AND newer.prompt_config_hash = human.prompt_config_hash
                 AND newer.article_id = human.article_id
                 AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
                 AND newer.list_mode_key = human.list_mode_key
@@ -310,7 +311,6 @@ const getSummaryContributionRows = async (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
               WHERE newer.project_id = human.project_id
-                AND newer.prompt_config_hash = human.prompt_config_hash
                 AND newer.article_id = human.article_id
                 AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
                 AND newer.list_mode_key = human.list_mode_key
@@ -363,7 +363,6 @@ const getSummaryContributionRows = async (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
               WHERE newer.project_id = human.project_id
-                AND newer.prompt_config_hash = human.prompt_config_hash
                 AND newer.article_id = human.article_id
                 AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
                 AND newer.list_mode_key = human.list_mode_key
@@ -380,7 +379,6 @@ const getSummaryContributionRows = async (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
               WHERE newer.project_id = human.project_id
-                AND newer.prompt_config_hash = human.prompt_config_hash
                 AND newer.article_id = human.article_id
                 AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
                 AND newer.list_mode_key = human.list_mode_key
@@ -588,22 +586,19 @@ const getSummaryRecords = async (input: {
       return [getFacetExistingKey(row), row.countValue ?? 0] as const
     }),
   ])
-  const aggregatedDiffs = input.diffs.reduce(
-    (acc, diff) => {
-      const identity = parseSummaryContributionKey(diff.contributionKey)
+  const aggregatedDiffs = input.diffs.reduce((acc, diff) => {
+    const identity = parseSummaryContributionKey(diff.contributionKey)
 
-      if (identity === null) {
-        return acc
-      }
-
-      const existingKey = getIdentityExistingValueKey(identity)
-      const current = acc.get(existingKey)
-      acc.set(existingKey, {delta: (current?.delta ?? 0) + diff.delta, identity})
-
+    if (identity === null) {
       return acc
-    },
-    new Map<string, {delta: number; identity: SummaryContributionIdentity}>(),
-  )
+    }
+
+    const existingKey = getIdentityExistingValueKey(identity)
+    const current = acc.get(existingKey)
+    acc.set(existingKey, {delta: (current?.delta ?? 0) + diff.delta, identity})
+
+    return acc
+  }, new Map<string, {delta: number; identity: SummaryContributionIdentity}>())
 
   return Array.from(aggregatedDiffs.entries()).flatMap(([existingKey, diff]) => {
     const existingValue = existingValues.get(existingKey) ?? 0
