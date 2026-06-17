@@ -53,7 +53,7 @@ const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, rea
   humanStatus: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
   judgmentInputContent: ['reviewChange', 'review-change'],
   llmStatus: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
-  payload: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
+  payload: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   posting: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   projectScope: ['projectScope', 'project-scope'],
   queue: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],

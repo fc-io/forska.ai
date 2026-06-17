@@ -13,6 +13,7 @@ import {
 export type ReviewServingFilterOptionProjectorDatabase = ReviewServingProjectorWriterDatabase
 
 export type ProjectReviewServingFilterOptionsInput = {
+  acknowledgeClaims?: boolean
   claims: readonly ReviewServingDirtyWorkClaim[]
   filterOptionIdentity: string
   listModeKeys: readonly string[]
@@ -135,33 +136,47 @@ const getFilterOptionSourceRows = async (
             ${getSearchPredicate(input.searchTitle)}
         ),
         review_facet_options AS (
-          SELECT 'review' AS filterKind, 'duplicateFlag' AS facetKey, CAST(serving.duplicate_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:duplicateFlag:', CAST(serving.duplicate_flag AS VARCHAR)) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'duplicateFlag', 'value', CAST(serving.duplicate_flag AS VARCHAR)) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'duplicateFlag' AS facetKey, CAST(serving.duplicate_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':duplicateFlag:', CAST(serving.duplicate_flag AS VARCHAR)) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'duplicateFlag', 'value', CAST(serving.duplicate_flag AS VARCHAR)) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
           ${aggregateBySql} serving.duplicate_flag
           UNION ALL
-          SELECT 'review' AS filterKind, 'conflictFlag' AS facetKey, CAST(serving.conflict_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:conflictFlag:', CAST(serving.conflict_flag AS VARCHAR)) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'conflictFlag', 'value', CAST(serving.conflict_flag AS VARCHAR)) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'conflictFlag' AS facetKey, CAST(serving.conflict_flag AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':conflictFlag:', CAST(serving.conflict_flag AS VARCHAR)) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'conflictFlag', 'value', CAST(serving.conflict_flag AS VARCHAR)) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
           ${aggregateBySql} serving.conflict_flag
           UNION ALL
-          SELECT 'review' AS filterKind, 'importRoute' AS facetKey, serving.selected_import_route_id AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:importRoute:', serving.selected_import_route_id) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'importRoute', 'value', serving.selected_import_route_id) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'importRoute' AS facetKey, serving.selected_import_route_id AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':importRoute:', serving.selected_import_route_id) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'importRoute', 'value', serving.selected_import_route_id) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.selected_import_route_id IS NOT NULL
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.selected_import_route_id IS NOT NULL
           ${aggregateBySql} serving.selected_import_route_id
           UNION ALL
-          SELECT 'review' AS filterKind, 'publicationYear' AS facetKey, CAST(serving.publication_year AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:publicationYear:', CAST(serving.publication_year AS VARCHAR)) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'publicationYear', 'value', CAST(serving.publication_year AS VARCHAR)) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'publicationYear' AS facetKey, CAST(serving.publication_year AS VARCHAR) AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':publicationYear:', CAST(serving.publication_year AS VARCHAR)) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'publicationYear', 'value', CAST(serving.publication_year AS VARCHAR)) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM mart.review_article_serving_v4 serving
           INNER JOIN active_article active ON active.article_id = serving.article_id
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
-          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.publication_year IS NOT NULL
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.publication_year IS NOT NULL
           ${aggregateBySql} serving.publication_year
+          UNION ALL
+          SELECT 'review' AS filterKind, 'llmStatus' AS facetKey, serving.llm_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat('review:llmStatus:', serving.llm_status_key) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'llmStatus', 'value', serving.llm_status_key) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM mart.review_article_serving_v4 serving
+          INNER JOIN active_article active ON active.article_id = serving.article_id
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
+          WHERE ${getSqlLiteral(input.optionMode)} = 'review' AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.llm_status_key IS NOT NULL
+          ${aggregateBySql} serving.llm_status_key
+          UNION ALL
+          SELECT ${getSqlLiteral(input.optionMode)} AS filterKind, 'humanStatus' AS facetKey, serving.human_status_key AS facetValue, NULL AS promptId, NULL::INTEGER AS answerId, concat(${getSqlLiteral(input.optionMode)}, ':humanStatus:', serving.human_status_key) AS optionValueKey, json_object('filterType', 'enum', 'facetKey', 'humanStatus', 'value', serving.human_status_key) AS optionPayloadJson, COUNT(DISTINCT serving.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          FROM mart.review_article_serving_v4 serving
+          INNER JOIN active_article active ON active.article_id = serving.article_id
+          INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = serving.list_mode_key
+          WHERE ${getSqlLiteral(input.optionMode)} IN ('review', 'human') AND serving.project_id = ${getSqlLiteral(input.projectId)} AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND serving.human_status_key IS NOT NULL
+          ${aggregateBySql} serving.human_status_key
         ),
         answer_values AS (
           SELECT detail.article_id, detail.prompt_id, ${getAnswerValueExpression()} AS answerValue
@@ -279,7 +294,7 @@ export const projectReviewServingFilterOptions = async (
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.claims,
+      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'summary',
       records,
       statements: [getDeleteFilterOptionRowsStatement(input)],

@@ -13,6 +13,7 @@ import {
 export type ReviewServingJudgmentPayloadProjectorDatabase = ReviewServingProjectorWriterDatabase
 
 export type ProjectReviewServingJudgmentPayloadInput = {
+  acknowledgeClaims?: boolean
   claims?: readonly ReviewServingDirtyWorkClaim[]
   listModeKeys: readonly ReviewServingListMode[]
   modelId: string
@@ -223,6 +224,7 @@ const getHumanJudgmentRows = async (
           WHERE project_prompt.project_id = ${getSqlLiteral(input.projectId)}
             AND project_prompt.enabled
             AND NOT project_prompt.archived
+            AND COALESCE(prompt.archived, FALSE) = FALSE
         )
         SELECT
           active.article_id AS articleId,
@@ -426,7 +428,7 @@ export const projectReviewServingJudgmentPayloadRows = async (
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.claims ?? [],
+      acknowledgements: input.acknowledgeClaims === false ? [] : (input.claims ?? []),
       component: 'payload',
       records: [...llmRecords, ...humanRecords],
       statements: getReplacementDeleteStatements(input, getRequestedPayloadKinds(input.listModeKeys)),

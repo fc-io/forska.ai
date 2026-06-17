@@ -121,7 +121,7 @@ const getRepairDirtyWork = (input: {
     }),
   )
   const firstClaim = input.claims[0]
-  const sourcePartition = firstClaim?.sourcePartition ?? 'review-serving-contribution-repair'
+  const sourcePartition = 'review-serving-contribution-repair' as const
   const dirtyKind =
     input.repairDirtyKind ?? ((firstClaim?.dirtyKind ?? 'project.reviewConfig.updated') as ReviewServingChangeKind)
 
@@ -139,7 +139,7 @@ const getRepairDirtyWork = (input: {
         projectId: input.projectId,
         projectionKey: null,
         scopeId: `${input.projectId}:${articleId}`,
-        scopeKind: 'article',
+        scopeKind: 'article' as const,
         sourceHighWaterMark: highWaterMark,
         sourcePartition,
       },

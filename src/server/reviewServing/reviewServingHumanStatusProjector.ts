@@ -15,6 +15,7 @@ import {
 export type ReviewServingHumanStatusProjectorDatabase = ReviewServingProjectorWriterDatabase
 
 export type ProjectReviewServingHumanStatusInput = {
+  acknowledgeClaims?: boolean
   baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
@@ -125,6 +126,12 @@ const getClaimPromptIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
         }) as string[],
     ),
   ]
+}
+
+const shouldRebuildProjectHumanStatus = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return claims.some((claim) => {
+    return claim.dirtyKind === 'project.reviewConfig.updated' && claim.scopeKind === 'project'
+  })
 }
 
 const getValuesCte = (columnName: string, values: readonly string[]) => {
@@ -401,6 +408,90 @@ const getArticleScopedRows = async (
   })
 }
 
+const getProjectScopedRows = async (
+  input: ProjectReviewServingHumanStatusInput,
+  database: ReviewServingHumanStatusProjectorDatabase,
+  promptConfigRows: readonly ProjectPromptConfigRow[],
+) => {
+  const promptConfigRowsWithSummary = [...promptConfigRows, summaryPromptConfigRow]
+  const activePromptValues = promptConfigRowsWithSummary
+    .map((row) => {
+      return `(${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.promptOrder)}, ${getSqlLiteral(row.promptTextHash)}, ${getSqlLiteral(row.answerSchemaHash)}, ${getSqlLiteral(row.settingsVersion)}, ${getSqlLiteral(row.thresholdVersion)}, TRUE)`
+    })
+    .join(', ')
+
+  if (!shouldRebuildProjectHumanStatus(input.claims) || promptConfigRowsWithSummary.length === 0) {
+    return []
+  }
+
+  return database.queryJson<HumanStatusSourceRow>(`
+    WITH active_prompt_config(prompt_id, prompt_order, prompt_text_hash, answer_schema_hash, settings_version, threshold_version, active) AS (
+      SELECT * FROM (VALUES ${activePromptValues})
+    ), existing_prompt_config AS (
+      SELECT DISTINCT
+        human.prompt_id,
+        NULL::INTEGER AS prompt_order,
+        human.prompt_id AS prompt_text_hash,
+        NULL AS answer_schema_hash,
+        'prompt-v1' AS settings_version,
+        NULL AS threshold_version,
+        FALSE AS active
+      FROM mart.review_human_status_patch_v4 human
+      WHERE human.project_id = ${getSqlLiteral(input.projectId)}
+        AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
+        AND human.prompt_id IS NOT NULL
+        AND human.prompt_id <> 'summary'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM active_prompt_config active
+          WHERE active.prompt_id = human.prompt_id
+        )
+    ), prompt_config AS (
+      SELECT * FROM active_prompt_config
+      UNION ALL
+      SELECT * FROM existing_prompt_config
+    ), article_prompt AS (
+      SELECT scope.article_id, prompt_config.*
+      FROM mart.project_scope_article scope
+      CROSS JOIN prompt_config
+      WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+        AND (scope.in_curated_scope OR scope.in_route_scope)
+    )
+    SELECT
+      article_prompt.article_id AS articleId,
+      article_prompt.prompt_id AS promptId,
+      article_prompt.prompt_id AS promptOrSummaryKey,
+      'update' AS sourceOperation,
+      NOT article_prompt.active AS tombstone,
+      NULL AS payloadJson,
+      COALESCE(judgment_human.answer, judgment_human_summary.answer) AS humanAnsweredValue,
+      CASE
+        WHEN NOT article_prompt.active THEN NULL
+        WHEN NULLIF(TRIM(COALESCE(judgment_human.answer, judgment_human_summary.answer, '')), '') IS NULL THEN 'unanswered'
+        ELSE 'answered'
+      END AS humanStatusKey,
+      COALESCE(judgment_human.updated_at, judgment_human_summary.updated_at) AS latestHumanUpdatedAt,
+      article_prompt.prompt_text_hash AS promptTextHash,
+      article_prompt.answer_schema_hash AS answerSchemaHash,
+      article_prompt.settings_version AS settingsVersion,
+      article_prompt.threshold_version AS thresholdVersion,
+      article_prompt.prompt_order AS promptOrder
+    FROM article_prompt
+    LEFT JOIN app."judgment_human" judgment_human
+      ON judgment_human.project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+      AND judgment_human.article_id = article_prompt.article_id
+      AND judgment_human.prompt_id = article_prompt.prompt_id
+      AND article_prompt.prompt_id <> 'summary'
+      AND article_prompt.active
+    LEFT JOIN app."judgment_human_summary" judgment_human_summary
+      ON judgment_human_summary.project_id = ${getSqlLiteral(input.projectId)}
+      AND judgment_human_summary.article_id = article_prompt.article_id
+      AND article_prompt.prompt_id = 'summary'
+      AND article_prompt.active
+    ORDER BY article_prompt.article_id ASC, article_prompt.prompt_id ASC
+  `)
+}
+
 const getApplyHumanStatusServingStatement = (input: {
   baseGeneration: number
   patchWatermark: number
@@ -526,7 +617,7 @@ const getHumanStatusPatchRecord = (input: {
       patch_updated_at: new Date(),
       patch_watermark: input.patchWatermark,
       project_id: input.projectId,
-      prompt_config_hash: getPromptConfigHash(input.row),
+      prompt_config_hash: getPromptConfigHash({...input.row, promptId: getPromptOrSummaryKey(input.row.promptId)}),
       prompt_id: input.row.promptOrSummaryKey,
       tombstone: input.row.tombstone,
     },
@@ -559,15 +650,16 @@ export const projectReviewServingHumanStatusPatches = async (
   database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService(),
 ) => {
   const promptConfigRows = await getProjectPromptConfigRows(input.projectId, database)
-  const [judgmentRows, promptRows, articleRows] = await Promise.all([
+  const [judgmentRows, promptRows, articleRows, projectRows] = await Promise.all([
     getJudgmentDeltaRows(input, database, promptConfigRows),
     getPromptScopedRows(input, database),
     getArticleScopedRows(input, database, promptConfigRows),
+    getProjectScopedRows(input, database, promptConfigRows),
   ])
   const patchWatermark = getPatchWatermark(input.claims)
-  const rows = [...judgmentRows, ...promptRows, ...articleRows]
+  const rows = [...judgmentRows, ...promptRows, ...articleRows, ...projectRows]
   const recordRows = rows.flatMap((row) => {
-    const promptConfigHash = getPromptConfigHash(row)
+    const promptConfigHash = getPromptConfigHash({...row, promptId: getPromptOrSummaryKey(row.promptId)})
 
     return input.listModeKeys.map((listModeKey) => {
       return {
@@ -594,7 +686,7 @@ export const projectReviewServingHumanStatusPatches = async (
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.claims,
+      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'humanStatus',
       projectionManifests: input.claims.length === 0 ? [] : [getHumanStatusPatchManifest(input)],
       records,

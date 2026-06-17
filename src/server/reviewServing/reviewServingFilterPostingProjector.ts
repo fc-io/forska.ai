@@ -21,6 +21,7 @@ import {
 export type ReviewServingFilterPostingProjectorDatabase = ReviewServingProjectorWriterDatabase
 
 export type ProjectReviewServingFilterPostingsInput = {
+  acknowledgeClaims?: boolean
   baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
@@ -732,7 +733,7 @@ export const projectReviewServingFilterPostings = async (
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.claims,
+      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'posting',
       projectionManifests: input.claims.length === 0 ? [] : [getPostingManifest(input)],
       records: [...patchRecords, ...servingRecords, ...statsRecords, ...contributionDiff.contributionRecords],

@@ -390,6 +390,40 @@ const getDefaultRunnerInput = async (
   return {manifest, projectId, snapshot}
 }
 
+const getDefaultRunnerInputs = async (
+  context: Parameters<ReviewServingProjectorRunner>[0],
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
+  const snapshots = await requireSnapshotContexts(
+    {
+      component: context.component,
+      projectId,
+      projectionIdentity: manifest.projectionIdentity,
+      reviewConfigHash: manifest.reviewConfigHash,
+    },
+    database,
+  )
+
+  return {manifest, projectId, snapshots}
+}
+
+const runSnapshotProjectors = async <T>(
+  snapshots: readonly ReviewServingSnapshotContext[],
+  runSnapshot: (snapshot: ReviewServingSnapshotContext, acknowledgeClaims: boolean) => Promise<T>,
+) => {
+  const resultsWithoutAcknowledgement = await Promise.all(
+    snapshots.slice(0, -1).map((snapshot) => {
+      return runSnapshot(snapshot, false)
+    }),
+  )
+  const finalSnapshot = snapshots.at(-1)
+
+  return finalSnapshot === undefined
+    ? resultsWithoutAcknowledgement
+    : [...resultsWithoutAcknowledgement, await runSnapshot(finalSnapshot, true)]
+}
+
 const getDefaultReviewServingProjectorRunners = (
   database: ReviewServingProjectorWorkerDatabase,
 ): ReviewServingProjectorServiceDependencies['runners'] => {
@@ -445,7 +479,6 @@ const getDefaultReviewServingProjectorRunners = (
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
       const result = await projectReviewServingHumanStatusPatches(
         {
-          acknowledgeClaims: false,
           baseGeneration: manifest.baseGeneration,
           claims: context.claims,
           definitionVersion: manifest.definitionVersion,
@@ -536,59 +569,67 @@ const getDefaultReviewServingProjectorRunners = (
       return {processedCount: result.patchRowCount}
     },
     payload: async (context) => {
-      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
+      const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
       const project = await getProjectReviewSettings(projectId, database)
-      const articlePayloadResult = await projectReviewServingPayloadRows(
-        {
-          acknowledgeClaims: false,
-          baseGeneration: manifest.baseGeneration,
-          claims: context.claims,
-          definitionVersion: manifest.definitionVersion,
-          displayIdentity: requireSnapshotComponentIdentity(snapshot, 'display'),
-          payloadIdentity: manifest.projectionIdentity,
-          projectId,
-          projectionIdentity: manifest.projectionIdentity,
-          snapshotId: snapshot.snapshotId,
-        },
-        database,
-      )
-      const judgmentPayloadResult = await projectReviewServingJudgmentPayloadRows(
-        {
-          claims: context.claims,
-          listModeKeys: reviewServingListModes,
-          modelId: project.modelId,
-          projectId,
-          reviewConfigHash: requireReviewConfigHash(snapshot),
-          snapshotId: snapshot.snapshotId,
-          useAbstract: project.useAbstract,
-          useFulltext: project.useFulltext,
-          useFulltextNoImages: project.useFulltextNoImages,
-          useTitle: project.useTitle,
-        },
-        database,
-      )
+      const results = await runSnapshotProjectors(snapshots, async (snapshot, acknowledgeClaims) => {
+        const articlePayloadResult = await projectReviewServingPayloadRows(
+          {
+            acknowledgeClaims: false,
+            baseGeneration: manifest.baseGeneration,
+            claims: context.claims,
+            definitionVersion: manifest.definitionVersion,
+            displayIdentity: requireSnapshotComponentIdentity(snapshot, 'display'),
+            payloadIdentity: manifest.projectionIdentity,
+            projectId,
+            projectionIdentity: manifest.projectionIdentity,
+            snapshotId: snapshot.snapshotId,
+          },
+          database,
+        )
+        const judgmentPayloadResult = await projectReviewServingJudgmentPayloadRows(
+          {
+            acknowledgeClaims,
+            claims: context.claims,
+            listModeKeys: reviewServingListModes,
+            modelId: project.modelId,
+            projectId,
+            reviewConfigHash: requireReviewConfigHash(snapshot),
+            snapshotId: snapshot.snapshotId,
+            useAbstract: project.useAbstract,
+            useFulltext: project.useFulltext,
+            useFulltextNoImages: project.useFulltextNoImages,
+            useTitle: project.useTitle,
+          },
+          database,
+        )
 
-      return {processedCount: articlePayloadResult.payloadRowCount + judgmentPayloadResult.payloadRowCount}
+        return articlePayloadResult.payloadRowCount + judgmentPayloadResult.humanRowCount + judgmentPayloadResult.llmRowCount
+      })
+
+      return {processedCount: results.reduce((total, count) => total + count, 0)}
     },
     posting: async (context) => {
-      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
-      const result = await projectReviewServingFilterPostings(
-        {
-          baseGeneration: manifest.baseGeneration,
-          claims: context.claims,
-          definitionVersion: manifest.definitionVersion,
-          listModeKeys: reviewServingListModes,
-          projectId,
-          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-          projectionIdentity: manifest.projectionIdentity,
-          reviewConfigHash: requireReviewConfigHash(snapshot),
-          selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-          snapshotId: snapshot.snapshotId,
-        },
-        database,
-      )
+      const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
+      const results = await runSnapshotProjectors(snapshots, (snapshot, acknowledgeClaims) => {
+        return projectReviewServingFilterPostings(
+          {
+            acknowledgeClaims,
+            baseGeneration: manifest.baseGeneration,
+            claims: context.claims,
+            definitionVersion: manifest.definitionVersion,
+            listModeKeys: reviewServingListModes,
+            projectId,
+            projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+            projectionIdentity: manifest.projectionIdentity,
+            reviewConfigHash: requireReviewConfigHash(snapshot),
+            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+            snapshotId: snapshot.snapshotId,
+          },
+          database,
+        )
+      })
 
-      return {processedCount: result.servingRowCount}
+      return {processedCount: results.reduce((total, result) => total + result.servingRowCount, 0)}
     },
     projectScope: async (context) => {
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
@@ -606,119 +647,132 @@ const getDefaultReviewServingProjectorRunners = (
       return {processedCount: context.claims.length}
     },
     queue: async (context) => {
-      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
-      const result = await projectReviewServingQueuePatches(
-        {
-          baseGeneration: manifest.baseGeneration,
-          claims: context.claims,
-          definitionVersion: manifest.definitionVersion,
-          projectId,
-          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-          projectionIdentity: manifest.projectionIdentity,
-          selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-          snapshotId: snapshot.snapshotId,
-        },
-        database,
-      )
+      const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
+      const results = await runSnapshotProjectors(snapshots, (snapshot, acknowledgeClaims) => {
+        return projectReviewServingQueuePatches(
+          {
+            acknowledgeClaims,
+            baseGeneration: manifest.baseGeneration,
+            claims: context.claims,
+            definitionVersion: manifest.definitionVersion,
+            projectId,
+            projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+            projectionIdentity: manifest.projectionIdentity,
+            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+            snapshotId: snapshot.snapshotId,
+          },
+          database,
+        )
+      })
 
-      return {processedCount: result.servingRowCount}
+      return {processedCount: results.reduce((total, result) => total + result.servingRowCount, 0)}
     },
     search: async (context) => {
-      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
-      const result = await projectReviewServingTitleSearchRows(
-        {
-          baseGeneration: manifest.baseGeneration,
-          claims: context.claims,
-          definitionVersion: manifest.definitionVersion,
-          projectId,
-          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-          projectionIdentity: manifest.projectionIdentity,
-          searchIdentity: manifest.projectionIdentity,
-          selectedImportSnapshotId: snapshot.selectedImportSnapshotId,
-          snapshotId: snapshot.snapshotId,
-        },
-        database,
-      )
+      const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
+      const results = await runSnapshotProjectors(snapshots, (snapshot, acknowledgeClaims) => {
+        return projectReviewServingTitleSearchRows(
+          {
+            acknowledgeClaims,
+            baseGeneration: manifest.baseGeneration,
+            claims: context.claims,
+            definitionVersion: manifest.definitionVersion,
+            projectId,
+            projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+            projectionIdentity: manifest.projectionIdentity,
+            searchIdentity: manifest.projectionIdentity,
+            selectedImportSnapshotId: snapshot.selectedImportSnapshotId,
+            snapshotId: snapshot.snapshotId,
+          },
+          database,
+        )
+      })
 
-      return {processedCount: result.searchRowCount}
+      return {processedCount: results.reduce((total, result) => total + result.searchRowCount, 0)}
     },
     selectedImport: async (context) => {
-      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
-      const result = await projectReviewServingSelectedImportPatches(
-        {
-          baseGeneration: manifest.baseGeneration,
-          claims: context.claims,
-          definitionVersion: manifest.definitionVersion,
-          projectId,
-          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-          projectionIdentity: manifest.projectionIdentity,
-          selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-        },
-        database,
-      )
+      const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
+      const results = await runSnapshotProjectors(snapshots, (snapshot, acknowledgeClaims) => {
+        return projectReviewServingSelectedImportPatches(
+          {
+            acknowledgeClaims,
+            baseGeneration: manifest.baseGeneration,
+            claims: context.claims,
+            definitionVersion: manifest.definitionVersion,
+            projectId,
+            projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+            projectionIdentity: manifest.projectionIdentity,
+            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+          },
+          database,
+        )
+      })
 
-      return {processedCount: result.patchRowCount}
+      return {processedCount: results.reduce((total, result) => total + result.patchRowCount, 0)}
     },
     summary: async (context) => {
-      const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
-      const result = await projectReviewServingSummaries(
-        {
-          baseGeneration: manifest.baseGeneration,
-          claims: context.claims,
-          listModeKeys: reviewServingListModes,
-          projectId,
-          projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-          projectionIdentity: manifest.projectionIdentity,
-          reviewConfigHash: requireReviewConfigHash(snapshot),
-          selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-          snapshotId: snapshot.snapshotId,
-        },
-        database,
-      )
-      const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
-      const reviewFilterOptionsResult = await projectReviewServingFilterOptions(
-        {
-          claims: [],
-          filterOptionIdentity: getReviewServingFilterOptionIdentity({
-            filterKeys: defaultReviewFilterOptionKeys,
+      const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
+      const results = await runSnapshotProjectors(snapshots, async (snapshot, acknowledgeClaims) => {
+        const result = await projectReviewServingSummaries(
+          {
+            acknowledgeClaims: false,
+            baseGeneration: manifest.baseGeneration,
+            claims: context.claims,
+            listModeKeys: reviewServingListModes,
+            projectId,
+            projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+            projectionIdentity: manifest.projectionIdentity,
+            reviewConfigHash: requireReviewConfigHash(snapshot),
+            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+            snapshotId: snapshot.snapshotId,
+          },
+          database,
+        )
+        const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
+        const reviewFilterOptionsResult = await projectReviewServingFilterOptions(
+          {
+            acknowledgeClaims: false,
+            claims: context.claims,
+            filterOptionIdentity: getReviewServingFilterOptionIdentity({
+              filterKeys: defaultReviewFilterOptionKeys,
+              listModeKeys: reviewServingListModes,
+              optionMode: 'review',
+              searchIdentity,
+            }),
             listModeKeys: reviewServingListModes,
             optionMode: 'review',
+            projectId,
+            projectionIdentity: manifest.projectionIdentity,
+            reviewConfigHash: requireReviewConfigHash(snapshot),
             searchIdentity,
-          }),
-          listModeKeys: reviewServingListModes,
-          optionMode: 'review',
-          projectId,
-          projectionIdentity: manifest.projectionIdentity,
-          reviewConfigHash: requireReviewConfigHash(snapshot),
-          searchIdentity,
-          snapshotId: snapshot.snapshotId,
-        },
-        database,
-      )
-      const humanFilterOptionsResult = await projectReviewServingFilterOptions(
-        {
-          claims: context.claims,
-          filterOptionIdentity: getReviewServingFilterOptionIdentity({
-            filterKeys: defaultHumanFilterOptionKeys,
+            snapshotId: snapshot.snapshotId,
+          },
+          database,
+        )
+        const humanFilterOptionsResult = await projectReviewServingFilterOptions(
+          {
+            acknowledgeClaims,
+            claims: context.claims,
+            filterOptionIdentity: getReviewServingFilterOptionIdentity({
+              filterKeys: defaultHumanFilterOptionKeys,
+              listModeKeys: defaultReviewServingHumanListModeKeys,
+              optionMode: 'human',
+              searchIdentity,
+            }),
             listModeKeys: defaultReviewServingHumanListModeKeys,
             optionMode: 'human',
+            projectId,
+            projectionIdentity: manifest.projectionIdentity,
+            reviewConfigHash: requireReviewConfigHash(snapshot),
             searchIdentity,
-          }),
-          listModeKeys: defaultReviewServingHumanListModeKeys,
-          optionMode: 'human',
-          projectId,
-          projectionIdentity: manifest.projectionIdentity,
-          reviewConfigHash: requireReviewConfigHash(snapshot),
-          searchIdentity,
-          snapshotId: snapshot.snapshotId,
-        },
-        database,
-      )
+            snapshotId: snapshot.snapshotId,
+          },
+          database,
+        )
 
-      return {
-        processedCount:
-          result.summaryRowCount + reviewFilterOptionsResult.optionRowCount + humanFilterOptionsResult.optionRowCount,
-      }
+        return result.summaryRowCount + reviewFilterOptionsResult.optionRowCount + humanFilterOptionsResult.optionRowCount
+      })
+
+      return {processedCount: results.reduce((total, count) => total + count, 0)}
     },
   }
 }

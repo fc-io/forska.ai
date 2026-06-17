@@ -15,6 +15,7 @@ import {
 export type ReviewServingSelectedImportPatchProjectorDatabase = ReviewServingProjectorWriterDatabase
 
 export type ProjectReviewServingSelectedImportPatchInput = {
+  acknowledgeClaims?: boolean
   baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
@@ -591,7 +592,7 @@ export const projectReviewServingSelectedImportPatches = async (
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.claims,
+      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'selectedImport',
       projectionManifests: input.claims.length === 0 ? [] : [getSelectedImportPatchManifest(input)],
       records: rows.map((row) => {
