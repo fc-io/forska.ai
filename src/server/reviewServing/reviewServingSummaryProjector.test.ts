@@ -220,6 +220,19 @@ test('projects human summary-answer facets independently from prompt answers', a
   expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
 })
 
+test('projects llm prompt-answer facets from array answers', async () => {
+  const {database, statements} = createSummaryDatabase({sourceRows: []})
+
+  await projectReviewServingSummaries(projectInput([summaryClaim()]), database)
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM summary_union')
+  })
+
+  expect(selectStatement).toContain('CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)')
+  expect(selectStatement).toContain('answer.answer_value AS facetValue')
+  expect(selectStatement).toContain('llm.answered_original_as_array IS NOT NULL')
+})
+
 test('date range and search-scope SQL stays scoped and explicit unsupported filtered counts are unavailable', async () => {
   const unavailableRow = sourceCountRow({
     availability: 'unavailable',

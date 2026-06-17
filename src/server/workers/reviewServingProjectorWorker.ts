@@ -13,6 +13,7 @@ import {
   type ReviewServingRebuildChunkManifest,
 } from '../reviewServing/reviewServingChunkManifestRepository.ts'
 import {projectReviewServingHumanStatusPatches} from '../reviewServing/reviewServingHumanStatusProjector.ts'
+import {projectReviewServingJudgmentPayloadRows} from '../reviewServing/reviewServingJudgmentPayloadProjector.ts'
 import {projectReviewServingLlmStatusPatches} from '../reviewServing/reviewServingLlmStatusProjector.ts'
 import {getReviewServingProjectionIdentityManifest} from '../reviewServing/reviewServingManifestRepository.ts'
 import {projectReviewServingFilterPostings} from '../reviewServing/reviewServingFilterPostingProjector.ts'
@@ -131,6 +132,14 @@ type ReviewServingSnapshotContext = ReviewServingSnapshotContextRow & {
   componentState: ReviewServingSnapshotComponentStateJson
 }
 
+type ProjectReviewSettingsRow = {
+  modelId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
 const defaultReviewServingProjectorWorkerBatchSize = 64
 const defaultReviewServingProjectorWorkerCleanupIntervalMs = 60_000
 const defaultReviewServingProjectorWorkerLeaseMs = 30_000
@@ -176,7 +185,12 @@ const getDefaultClaimManifestInput = async (
 }
 
 const getSnapshotContext = async (
-  input: {projectId: string; reviewConfigHash: string | null},
+  input: {
+    component: ReviewServingProjectionComponent
+    projectId: string
+    projectionIdentity: string
+    reviewConfigHash: string | null
+  },
   database: ReviewServingProjectorWorkerDatabase,
 ) => {
   const rows = await database.queryJson<ReviewServingSnapshotContextRow>(`
@@ -187,23 +201,31 @@ const getSnapshotContext = async (
       component_state_json AS componentStateJson
     FROM app.review_serving_snapshot_manifest
     WHERE project_id = ${getSqlLiteral(input.projectId)}
-      AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash)}
+      ${input.reviewConfigHash === null ? '' : `AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}`}
       AND snapshot_status IN ('candidate', 'active')
     ORDER BY CASE WHEN snapshot_status = 'candidate' THEN 0 ELSE 1 END, updated_at DESC
-    LIMIT 1
   `)
-  const row = rows[0]
+  const snapshots = rows.map((row) => {
+    return {
+      ...row,
+      componentState: getJsonValue(row.componentStateJson) as ReviewServingSnapshotComponentStateJson,
+    }
+  })
 
-  return row === undefined
-    ? null
-    : {
-        ...row,
-        componentState: getJsonValue(row.componentStateJson) as ReviewServingSnapshotComponentStateJson,
-      }
+  return input.reviewConfigHash === null
+    ? snapshots.find((snapshot) => {
+        return getSnapshotComponentState(snapshot, input.component)?.projectionIdentity === input.projectionIdentity
+      }) ?? null
+    : snapshots[0] ?? null
 }
 
 const requireSnapshotContext = async (
-  input: {projectId: string; reviewConfigHash: string | null},
+  input: {
+    component: ReviewServingProjectionComponent
+    projectId: string
+    projectionIdentity: string
+    reviewConfigHash: string | null
+  },
   database: ReviewServingProjectorWorkerDatabase,
 ) => {
   const context = await getSnapshotContext(input, database)
@@ -253,12 +275,41 @@ const requireSelectedImportSnapshotId = (snapshot: ReviewServingSnapshotContext)
   return snapshot.selectedImportSnapshotId
 }
 
+const getProjectReviewSettings = async (projectId: string, database: ReviewServingProjectorWorkerDatabase) => {
+  const rows = await database.queryJson<ProjectReviewSettingsRow>(`
+    SELECT
+      model_id AS modelId,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages
+    FROM app.project
+    WHERE id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+  const row = rows[0]
+
+  if (row === undefined) {
+    throw new Error(`cannot run projector without review settings for project ${projectId}`)
+  }
+
+  return row
+}
+
 const getDefaultRunnerInput = async (
   context: Parameters<ReviewServingProjectorRunner>[0],
   database: ReviewServingProjectorWorkerDatabase,
 ) => {
   const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
-  const snapshot = await requireSnapshotContext({projectId, reviewConfigHash: manifest.reviewConfigHash}, database)
+  const snapshot = await requireSnapshotContext(
+    {
+      component: context.component,
+      projectId,
+      projectionIdentity: manifest.projectionIdentity,
+      reviewConfigHash: manifest.reviewConfigHash,
+    },
+    database,
+  )
 
   return {manifest, projectId, snapshot}
 }
@@ -381,7 +432,8 @@ const getDefaultReviewServingProjectorRunners = (
     },
     payload: async (context) => {
       const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)
-      const result = await projectReviewServingPayloadRows(
+      const project = await getProjectReviewSettings(projectId, database)
+      const articlePayloadResult = await projectReviewServingPayloadRows(
         {
           baseGeneration: manifest.baseGeneration,
           claims: context.claims,
@@ -394,8 +446,23 @@ const getDefaultReviewServingProjectorRunners = (
         },
         database,
       )
+      const judgmentPayloadResult = await projectReviewServingJudgmentPayloadRows(
+        {
+          claims: context.claims,
+          listModeKeys: reviewServingListModes,
+          modelId: project.modelId,
+          projectId,
+          reviewConfigHash: requireReviewConfigHash(snapshot),
+          snapshotId: snapshot.snapshotId,
+          useAbstract: project.useAbstract,
+          useFulltext: project.useFulltext,
+          useFulltextNoImages: project.useFulltextNoImages,
+          useTitle: project.useTitle,
+        },
+        database,
+      )
 
-      return {processedCount: result.payloadRowCount}
+      return {processedCount: articlePayloadResult.payloadRowCount + judgmentPayloadResult.payloadRowCount}
     },
     posting: async (context) => {
       const {manifest, projectId, snapshot} = await getDefaultRunnerInput(context, database)

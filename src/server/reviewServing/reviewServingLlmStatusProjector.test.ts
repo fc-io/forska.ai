@@ -240,6 +240,23 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
   expect(projectSelect).toContain('WHERE project.id =')
 })
 
+test('article judgment-input claims rebuild article-scoped LLM status rows', async () => {
+  const {database, statements} = createLlmStatusDatabase({scopedArticleRows: [llmStatusRow()]})
+
+  const result = await projectReviewServingLlmStatusPatches(
+    projectInput([llmClaim({dirtyKind: 'article.judgmentInput.updated'})]),
+    database,
+  )
+  const articleSelect = statements.find((statement) => {
+    return statement.includes('FROM article_id_filter dirty')
+  })
+
+  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(articleSelect).toContain("VALUES ('article-1')")
+  expect(articleSelect).toContain('LEFT JOIN app."judgment" judgment')
+  expect(articleSelect).toContain('judgment.article_id = dirty.article_id')
+})
+
 test('newly scoped articles emit unanswered status rows for enabled prompts', async () => {
   const {database, statements} = createLlmStatusDatabase({
     promptConfigRows: [promptConfigRow(), promptConfigRow({promptId: 'prompt-2', promptTextHash: 'prompt-text-2'})],

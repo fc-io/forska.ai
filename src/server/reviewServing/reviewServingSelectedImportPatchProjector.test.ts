@@ -83,6 +83,7 @@ test('selected-import routine updates write component-narrow patches for only cl
         conflictFlag: false,
         duplicateFlag: true,
         importRouteId: 'import-route-1',
+        journalTitle: 'Selected Journal',
         publicationYear: 2026,
         selectedRankKey: '0001:article-1',
         selectedRankNumeric: 1,
@@ -116,6 +117,8 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(joined).toContain('serving_template AS')
   expect(joined).toContain('selected_import_route_id = changed.import_route_id')
   expect(joined).toContain('selected_rank_key = changed.selected_rank_key')
+  expect(joined).toContain('journal_title = changed.journal_title')
+  expect(joined).toContain("changed.journal_title")
 })
 
 test('selected-import tombstones replay idempotently with the same patch watermark and article key', async () => {
@@ -126,6 +129,7 @@ test('selected-import tombstones replay idempotently with the same patch waterma
         conflictFlag: null,
         duplicateFlag: null,
         importRouteId: null,
+        journalTitle: null,
         publicationYear: null,
         selectedRankKey: null,
         selectedRankNumeric: null,
@@ -160,6 +164,7 @@ test('selected-import tombstones clear selected columns without deleting curated
         conflictFlag: null,
         duplicateFlag: null,
         importRouteId: null,
+        journalTitle: null,
         publicationYear: null,
         selectedRankKey: null,
         selectedRankNumeric: null,
@@ -200,6 +205,7 @@ test('selected-import serving insert can seed rows from snapshot templates witho
         conflictFlag: false,
         duplicateFlag: false,
         importRouteId: 'import-route-1',
+        journalTitle: 'Selected Journal',
         publicationYear: 2026,
         selectedRankKey: '0001:article-1',
         selectedRankNumeric: 1,

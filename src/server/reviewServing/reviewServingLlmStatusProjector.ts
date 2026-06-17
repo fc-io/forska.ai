@@ -127,6 +127,7 @@ const hasArticleScopeClaim = (claims: readonly ReviewServingDirtyWorkClaim[]) =>
       && [
         'importRoute.article.added',
         'importRoute.article.removed',
+        'article.judgmentInput.updated',
         'projectScope.article.added',
         'projectScope.article.removed',
       ].includes(claim.dirtyKind)

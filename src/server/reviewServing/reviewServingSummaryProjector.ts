@@ -335,6 +335,24 @@ const getSummaryContributionRows = async (
                 AND newer.patch_watermark > llm.patch_watermark
             )
           UNION ALL
+          SELECT llm.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, answer.answer_value AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, answer.answer_value AS answerValue, 'ready' AS availability, NULL AS staleReason
+          FROM mart.review_llm_status_patch_v4 llm
+          INNER JOIN article_id_filter dirty ON dirty.article_id = llm.article_id
+          INNER JOIN selected_state selected ON selected.article_id = llm.article_id AND selected.in_selected_scope
+          CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)
+          WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)} AND llm.list_mode_key = 'llm' AND NOT llm.tombstone AND llm.answered_original_as_array IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_llm_status_patch_v4 newer
+              WHERE newer.project_id = llm.project_id
+                AND newer.review_config_hash = llm.review_config_hash
+                AND newer.article_id = llm.article_id
+                AND newer.prompt_id = llm.prompt_id
+                AND newer.list_mode_key = llm.list_mode_key
+                AND newer.base_generation = llm.base_generation
+                AND newer.patch_watermark > llm.patch_watermark
+            )
+          UNION ALL
           SELECT human.article_id AS articleId, 'facet' AS summaryKind, 'review.human.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.promptAnswer' AS summaryIdentity, 'human' AS facetKind, 'promptAnswer' AS facetKey, human.human_answered_value AS facetValue, human.prompt_id AS promptId, NULL AS answerId, human.human_answered_value AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id

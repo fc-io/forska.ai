@@ -109,6 +109,7 @@ test('display routine updates write component-narrow patches for only claimed ar
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 6})
   expect(selectStatement).toContain("VALUES ('article-1')")
+  expect(selectStatement).toContain('COALESCE(article.article_created_at, current_timestamp) AS sortKey')
   expect(selectStatement).toContain('FROM dirty_article dirty')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected')
   expect(insertStatement).toContain(
