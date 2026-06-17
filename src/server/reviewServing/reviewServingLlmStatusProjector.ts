@@ -302,10 +302,10 @@ const getPromptScopedRows = async (
           COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
           'update' AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
-          judgment.is_answered AS isAnswered,
-          judgment.answered_original AS answeredOriginal,
-          judgment.answered_original_as_array AS answeredOriginalAsArray,
-          judgment.created_at AS latestLlmCreatedAt,
+          NULL AS isAnswered,
+          NULL AS answeredOriginal,
+          NULL AS answeredOriginalAsArray,
+          NULL AS latestLlmCreatedAt,
           COALESCE(prompt.content_hash, sha256(prompt.original_text)) AS promptTextHash,
           NULL AS answerSchemaHash,
           'prompt-v1' AS settingsVersion,
@@ -321,24 +321,6 @@ const getPromptScopedRows = async (
           AND project_prompt.prompt_id = dirty_prompt.prompt_id
         INNER JOIN app.prompt prompt
           ON prompt.id = dirty_prompt.prompt_id
-        LEFT JOIN (
-          SELECT
-            *,
-            ROW_NUMBER() OVER (
-              PARTITION BY article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images
-              ORDER BY created_at DESC NULLS LAST, id DESC
-            ) AS judgment_rank
-          FROM app."judgment"
-          WHERE deleted_at IS NULL
-        ) judgment
-          ON judgment.article_id = scope.article_id
-          AND judgment.prompt_id = dirty_prompt.prompt_id
-          AND judgment.model_id = project.model_id
-          AND judgment.use_title = project.use_title
-          AND judgment.use_abstract = project.use_abstract
-          AND judgment.use_fulltext = project.use_fulltext
-          AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
-          AND judgment.judgment_rank = 1
         ORDER BY dirty_prompt.prompt_id ASC, scope.article_id ASC
       `)
 }

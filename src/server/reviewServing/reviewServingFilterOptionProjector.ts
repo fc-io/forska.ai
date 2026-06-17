@@ -14,7 +14,9 @@ export type ReviewServingFilterOptionProjectorDatabase = ReviewServingProjectorW
 
 export type ProjectReviewServingFilterOptionsInput = {
   acknowledgeClaims?: boolean
+  baseGeneration: number
   claims: readonly ReviewServingDirtyWorkClaim[]
+  definitionVersion: string
   filterOptionIdentity: string
   listModeKeys: readonly string[]
   optionMode: 'human' | 'review'
@@ -74,6 +76,24 @@ const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
       return claim.latestSourceHighWaterMark
     }),
   )
+}
+
+const getPatchRangeStart = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return Math.min(
+    ...claims.map((claim) => {
+      return claim.firstSourceHighWaterMark
+    }),
+  )
+}
+
+const getClaimKinds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return [
+    ...new Set(
+      claims.map((claim) => {
+        return claim.dirtyKind
+      }),
+    ),
+  ].join(',')
 }
 
 const getClaimSourcePartition = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
@@ -283,15 +303,16 @@ export const projectReviewServingFilterOptions = async (
     })
   })
   const patchWatermark = getPatchWatermark(input.claims)
+  const shouldPublishManifest = input.acknowledgeClaims !== false && input.claims.length > 0
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
+      acknowledgements: shouldPublishManifest ? [] : input.acknowledgeClaims === false ? [] : input.claims,
       component: 'summary',
       records,
       statements: [getDeleteFilterOptionRowsStatement(input)],
       watermark:
-        input.claims.length === 0
+        shouldPublishManifest || input.claims.length === 0
           ? undefined
           : {
               projectId: input.projectId,
@@ -303,6 +324,40 @@ export const projectReviewServingFilterOptions = async (
     },
     database,
   )
+
+  if (shouldPublishManifest) {
+    await writeReviewServingProjectorComponent(
+      {
+        acknowledgements: input.claims,
+        component: 'summary',
+        projectionManifests: [
+          {
+            baseGeneration: input.baseGeneration,
+            definitionVersion: input.definitionVersion,
+            inputDigest: getClaimKinds(input.claims),
+            inputWatermark: patchWatermark,
+            invalidationReason: getClaimKinds(input.claims),
+            patchRangeEnd: patchWatermark,
+            patchRangeStart: getPatchRangeStart(input.claims),
+            patchWatermark,
+            projectId: input.projectId,
+            projectionComponent: 'summary',
+            projectionIdentity: input.projectionIdentity,
+            reviewConfigHash: input.reviewConfigHash,
+            status: 'candidate',
+          },
+        ],
+        watermark: {
+          projectId: input.projectId,
+          projectionComponent: 'summary',
+          projectorName: filterOptionProjectorName,
+          sourceHighWaterMark: patchWatermark,
+          sourcePartition: getClaimSourcePartition(input.claims),
+        },
+      },
+      database,
+    )
+  }
 
   return {
     optionRowCount: records.length,
