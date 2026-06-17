@@ -182,37 +182,58 @@ const getProjectionIdentity = (input: {
   })}`
 }
 
-const getValidatedReviewChangeDelta = (row: ReviewChangeDeltaRow) => {
+const shouldExpandArticleDeltaToProjects = (row: ReviewChangeDeltaRow) => {
+  return row.projectId === null && row.articleId !== null && row.changeKind.startsWith('article.')
+}
+
+const getArticleProjectIds = async (row: ReviewChangeDeltaRow, database: ReviewChangeDeltaDirtyIntakeDatabase) => {
+  return !shouldExpandArticleDeltaToProjects(row)
+    ? []
+    : database.queryJson<{projectId: string}>(`
+        SELECT DISTINCT project_id AS projectId
+        FROM mart.project_scope_article
+        WHERE article_id = ${getSqlLiteral(row.articleId)}
+          AND (in_curated_scope OR in_route_scope)
+        ORDER BY project_id ASC
+      `)
+}
+
+const getValidatedReviewChangeDelta = (
+  row: ReviewChangeDeltaRow,
+  valuesOverride: Record<string, ReviewServingIdentityValue> = {},
+) => {
   const rule = getReviewServingInvalidationRuleOrNull(row.changeKind)
 
   if (rule === null) {
-    return {reason: `unsupported change kind: ${row.changeKind}`}
+    return {deltaId: row.deltaId, reason: `unsupported change kind: ${row.changeKind}`}
   }
 
   const ruleValidationError = getRuleValidationError(rule)
 
   if (ruleValidationError !== null) {
-    return {reason: ruleValidationError}
+    return {deltaId: row.deltaId, reason: ruleValidationError}
   }
 
   if (row.payloadVersion !== supportedPayloadVersion) {
-    return {reason: `unsupported payload version: ${row.payloadVersion}`}
+    return {deltaId: row.deltaId, reason: `unsupported payload version: ${row.payloadVersion}`}
   }
 
   if (!Number.isInteger(row.sourceHighWaterMark) || row.sourceHighWaterMark < 0) {
-    return {reason: `invalid source high-water mark: ${row.sourceHighWaterMark}`}
+    return {deltaId: row.deltaId, reason: `invalid source high-water mark: ${row.sourceHighWaterMark}`}
   }
 
-  const values = getTypedValues(row)
+  const typedValues = getTypedValues(row)
 
-  if (values === null) {
-    return {reason: 'malformed payload_json'}
+  if (typedValues === null) {
+    return {deltaId: row.deltaId, reason: 'malformed payload_json'}
   }
+
+  const values = {...typedValues, ...valuesOverride}
 
   const missingKeys = getMissingRequiredKeys(rule, values)
 
   if (missingKeys.length > 0) {
-    return {reason: `missing required keys: ${missingKeys.join(', ')}`}
+    return {deltaId: row.deltaId, reason: `missing required keys: ${missingKeys.join(', ')}`}
   }
 
   const scope = getReviewServingDirtyWorkScopeForChange({
@@ -223,7 +244,7 @@ const getValidatedReviewChangeDelta = (row: ReviewChangeDeltaRow) => {
   })
 
   if (scope === null) {
-    return {reason: 'invalid dirty-work scope'}
+    return {deltaId: row.deltaId, reason: 'invalid dirty-work scope'}
   }
 
   return {
@@ -240,6 +261,22 @@ const getValidatedReviewChangeDelta = (row: ReviewChangeDeltaRow) => {
     scope,
     sourceHighWaterMark: row.sourceHighWaterMark,
   }
+}
+
+const getValidatedReviewChangeDeltas = async (row: ReviewChangeDeltaRow, database: ReviewChangeDeltaDirtyIntakeDatabase) => {
+  const projectRows = await getArticleProjectIds(row, database)
+
+  if (projectRows.length > 0) {
+    return projectRows.map((projectRow) => {
+      return getValidatedReviewChangeDelta(row, {projectId: projectRow.projectId})
+    })
+  }
+
+  const validated = getValidatedReviewChangeDelta(row)
+
+  return shouldExpandArticleDeltaToProjects(row) && !('reason' in validated)
+    ? [{...validated, projections: []}]
+    : [validated]
 }
 
 const getReviewChangeDeltaRows = async (
@@ -300,15 +337,17 @@ export const intakeReviewChangeDeltasToDirtyWork = async (
   database: ReviewChangeDeltaDirtyIntakeDatabase = getAppDatabaseService(),
 ): Promise<ReviewChangeDeltaDirtyIntakeResult> => {
   const rows = await getReviewChangeDeltaRows(database, params)
-  const validated = rows.map(getValidatedReviewChangeDelta)
+  const validated = (await Promise.all(
+    rows.map((row) => {
+      return getValidatedReviewChangeDeltas(row, database)
+    }),
+  )).flat()
   const invalid = validated.find((delta) => {
     return 'reason' in delta
   })
 
   if (invalid !== undefined && 'reason' in invalid) {
-    const row = rows[validated.indexOf(invalid)]
-
-    return {deltaId: row?.deltaId ?? 'unknown', reason: invalid.reason, status: 'failed'}
+    return {deltaId: invalid.deltaId, reason: invalid.reason, status: 'failed'}
   }
 
   const deltas = validated as ValidatedReviewChangeDelta[]

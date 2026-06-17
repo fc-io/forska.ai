@@ -114,6 +114,12 @@ const getClaimPromptIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
+const hasProjectReviewConfigClaim = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return claims.some((claim) => {
+    return claim.dirtyKind === 'project.reviewConfig.updated' && claim.scopeKind === 'project'
+  })
+}
+
 const getValuesCte = (columnName: string, values: readonly string[]) => {
   return values.length === 0
     ? ''
@@ -286,6 +292,53 @@ const getPromptScopedRows = async (
       `)
 }
 
+const getProjectScopedRows = async (
+  input: ProjectReviewServingLlmStatusInput,
+  database: ReviewServingLlmStatusProjectorDatabase,
+) => {
+  return !hasProjectReviewConfigClaim(input.claims)
+    ? []
+    : database.queryJson<LlmStatusSourceRow>(`
+        SELECT
+          scope.article_id AS articleId,
+          judgment.prompt_id AS promptId,
+          judgment.model_id AS modelId,
+          judgment.use_title AS useTitle,
+          judgment.use_abstract AS useAbstract,
+          judgment.use_fulltext AS useFulltext,
+          judgment.use_fulltext_no_images AS useFulltextNoImages,
+          'update' AS sourceOperation,
+          project_prompt.id IS NULL OR NOT project_prompt.enabled OR project_prompt.archived AS tombstone,
+          judgment.is_answered AS isAnswered,
+          judgment.answered_original AS answeredOriginal,
+          judgment.answered_original_as_array AS answeredOriginalAsArray,
+          judgment.created_at AS latestLlmCreatedAt,
+          COALESCE(prompt.content_hash, sha256(prompt.original_text)) AS promptTextHash,
+          NULL AS answerSchemaHash,
+          'prompt-v1' AS settingsVersion,
+          NULL AS thresholdVersion
+        FROM app.project project
+        INNER JOIN mart.project_scope_article scope
+          ON scope.project_id = project.id
+          AND (scope.in_curated_scope OR scope.in_route_scope)
+        INNER JOIN app."judgment" judgment
+          ON judgment.article_id = scope.article_id
+          AND judgment.model_id = project.model_id
+          AND judgment.use_title = project.use_title
+          AND judgment.use_abstract = project.use_abstract
+          AND judgment.use_fulltext = project.use_fulltext
+          AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
+          AND judgment.deleted_at IS NULL
+        LEFT JOIN app.project_prompt project_prompt
+          ON project_prompt.project_id = project.id
+          AND project_prompt.prompt_id = judgment.prompt_id
+        INNER JOIN app.prompt prompt
+          ON prompt.id = judgment.prompt_id
+        WHERE project.id = ${getSqlLiteral(input.projectId)}
+        ORDER BY scope.article_id ASC, judgment.prompt_id ASC
+      `)
+}
+
 const getLlmStatusKey = (row: LlmStatusSourceRow) => {
   return row.tombstone
     ? null
@@ -361,12 +414,13 @@ export const projectReviewServingLlmStatusPatches = async (
   database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService(),
 ) => {
   const promptConfigRows = await getProjectPromptConfigRows(input.projectId, database)
-  const [judgmentRows, promptRows] = await Promise.all([
+  const [judgmentRows, promptRows, projectRows] = await Promise.all([
     getJudgmentDeltaRows(input, database),
     getPromptScopedRows(input, database),
+    getProjectScopedRows(input, database),
   ])
   const patchWatermark = getPatchWatermark(input.claims)
-  const rows = [...judgmentRows, ...promptRows]
+  const rows = [...judgmentRows, ...promptRows, ...projectRows]
   const records = rows.flatMap((row) => {
     return input.listModeKeys.map((listModeKey) => {
       return getLlmStatusPatchRecord({

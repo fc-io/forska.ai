@@ -247,6 +247,45 @@ test('date range and search-scope SQL stays scoped and explicit unsupported filt
   ).toBe(true)
 })
 
+test('summary diffs aggregate before writing shared count keys', async () => {
+  const {database} = createSummaryDatabase({
+    countRows: [{countKind: 'review.queue.unassessedReady', countValue: 4, filterKey: 'queue:ready', listModeKey: 'llm'}],
+    sourceRows: [
+      sourceCountRow({
+        countKind: 'review.queue.unassessedReady',
+        filterKey: 'queue:ready',
+        promptId: 'prompt-1',
+        summaryIdentity: 'review.queue.unassessedReady',
+      }),
+      sourceCountRow({
+        countKind: 'review.queue.unassessedReady',
+        filterKey: 'queue:ready',
+        promptId: 'prompt-2',
+        summaryIdentity: 'review.queue.unassessedReady',
+      }),
+    ],
+  })
+
+  const result = await projectReviewServingSummaries(projectInput([summaryClaim()]), database)
+
+  expect(result.summaryValues.filter((row) => row.count_kind === 'review.queue.unassessedReady')).toHaveLength(1)
+  expect(hasSummaryValue(result.summaryValues, {count_kind: 'review.queue.unassessedReady', count_value: 6})).toBe(true)
+})
+
+test('summary status and answer sources require selected scope', async () => {
+  const {database, statements} = createSummaryDatabase()
+
+  await projectReviewServingSummaries(projectInput([summaryClaim()]), database)
+
+  const sourceStatement = statements.find((statement) => {
+    return statement.includes('FROM summary_union')
+  })
+
+  expect(sourceStatement).toContain('selected.article_id = llm.article_id AND selected.in_selected_scope')
+  expect(sourceStatement).toContain('selected.article_id = queue.article_id AND selected.in_selected_scope')
+  expect(sourceStatement).toContain('selected.article_id = human.article_id AND selected.in_selected_scope')
+})
+
 test('unsupported or incompatible contribution state enqueues repair instead of scanning raw tables', async () => {
   const {database, statements} = createSummaryDatabase({
     contributionRows: [{...storedContributionRow(sourceCountRow()), summaryDefinitionVersion: 'old-summary:v0'}],

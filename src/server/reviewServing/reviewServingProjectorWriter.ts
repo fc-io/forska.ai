@@ -330,8 +330,9 @@ export const promoteReviewServingProjectorSnapshot = async (
       },
     )
 
+    const candidateReviewConfigHash = candidate.reviewConfigHash
     const active = await getActiveReviewServingSnapshotManifest(
-      {projectId: input.projectId, reviewConfigHash: input.reviewConfigHash ?? null},
+      {projectId: input.projectId, reviewConfigHash: candidateReviewConfigHash},
       tx,
     )
     const lastKnownGoodSnapshotId = active?.snapshotId ?? active?.lastKnownGoodSnapshotId ?? null
@@ -342,7 +343,7 @@ export const promoteReviewServingProjectorSnapshot = async (
         snapshot_status = 'retired',
         updated_at = current_timestamp
       WHERE project_id = ${getSqlLiteral(input.projectId)}
-        AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(input.reviewConfigHash ?? null)}
+        AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(candidateReviewConfigHash)}
         AND snapshot_status = 'active'
         AND snapshot_id <> ${getSqlLiteral(input.snapshotId)}
     `)

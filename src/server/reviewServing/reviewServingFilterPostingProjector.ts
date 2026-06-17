@@ -532,6 +532,7 @@ const getPostingManifest = (
     projectId: input.projectId,
     projectionComponent: 'posting',
     projectionIdentity: input.projectionIdentity,
+    reviewConfigHash: input.reviewConfigHash,
     status: input.status ?? 'candidate',
   }
 }

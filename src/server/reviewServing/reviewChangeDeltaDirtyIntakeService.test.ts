@@ -69,7 +69,10 @@ const createReviewChangeDelta = (input: Record<string, unknown>) => {
   }
 }
 
-const createFakeIntakeDatabase = (rows: readonly Record<string, unknown>[]) => {
+const createFakeIntakeDatabase = (
+  rows: readonly Record<string, unknown>[],
+  input?: {articleProjectRows?: readonly Record<string, unknown>[]},
+) => {
   const statements: string[] = []
   const dirtyWorkIds = new Set<string>()
   const queryJson = async <T>(statement: string) => {
@@ -81,6 +84,10 @@ const createFakeIntakeDatabase = (rows: readonly Record<string, unknown>[]) => {
 
     if (statement.includes('FROM app.review_change_delta')) {
       return rows.slice(0, getLimit(statement)) as T[]
+    }
+
+    if (statement.includes('FROM mart.project_scope_article')) {
+      return (input?.articleProjectRows ?? []) as T[]
     }
 
     return [] as T[]
@@ -242,6 +249,35 @@ test('delta intake fans route and project changes to project-scope dirty work', 
     'project.reviewConfig.updated',
     'project.reviewConfig.updated',
   ])
+})
+
+test('delta intake expands article-only changes to affected projects', async () => {
+  const {database, statements} = createFakeIntakeDatabase(
+    [
+      createReviewChangeDelta({
+        articleId: 'article-1',
+        changeKind: 'article.display.updated',
+        deltaId: 'delta-article-display',
+        payloadJson: {articleId: 'article-1', changedDisplayFieldNames: ['articleTitle']},
+        sourceHighWaterMark: 11,
+      }),
+    ],
+    {articleProjectRows: [{projectId: 'project-1'}, {projectId: 'project-2'}]},
+  )
+
+  const result = await intakeReviewChangeDeltasToDirtyWork(
+    {endSourceHighWaterMark: 11, limit: 10, sourcePartition: 'reviewChange:article-1', startSourceHighWaterMark: 1},
+    database,
+  )
+  const dirtyInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_dirty_work')
+  })
+
+  expect(result).toMatchObject({dirtyWorkCount: 8, maxSourceHighWaterMark: 11, status: 'converted'})
+  expect(dirtyInserts).toHaveLength(8)
+  expect(dirtyInserts.join('\n')).toContain('project-1:article-1')
+  expect(dirtyInserts.join('\n')).toContain('project-2:article-1')
+  expect(dirtyInserts.join('\n')).not.toContain('global')
 })
 
 test('delta intake replay from the same range is idempotent', async () => {

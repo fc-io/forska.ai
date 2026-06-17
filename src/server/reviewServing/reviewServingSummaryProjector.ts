@@ -216,6 +216,7 @@ const getSummaryContributionRows = async (
           SELECT llm.article_id AS articleId, 'count' AS summaryKind, 'review.llm.assessedByPrompt' AS countKind, concat('prompt:', llm.prompt_id) AS filterKey, llm.list_mode_key AS listModeKey, 'review.llm.assessedByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM mart.review_llm_status_patch_v4 llm
           INNER JOIN article_id_filter dirty ON dirty.article_id = llm.article_id
+          INNER JOIN selected_state selected ON selected.article_id = llm.article_id AND selected.in_selected_scope
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = llm.list_mode_key
           WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND NOT llm.tombstone AND llm.llm_status_key = 'answered'
             AND NOT EXISTS (
@@ -233,12 +234,14 @@ const getSummaryContributionRows = async (
           SELECT queue.article_id AS articleId, 'count' AS summaryKind, 'review.llm.unassessedByPrompt' AS countKind, concat('prompt:', queue.prompt_id) AS filterKey, list_mode_key.list_mode_key AS listModeKey, 'review.llm.unassessedByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, queue.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM mart.review_unassessed_queue_serving_v4 queue
           INNER JOIN article_id_filter dirty ON dirty.article_id = queue.article_id
+          INNER JOIN selected_state selected ON selected.article_id = queue.article_id AND selected.in_selected_scope
           CROSS JOIN list_mode_key_filter list_mode_key
           WHERE queue.project_id = ${getSqlLiteral(input.projectId)} AND queue.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND queue.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND queue.queue_kind = 'unassessed' AND queue.prompt_id IS NOT NULL
           UNION ALL
           SELECT queue.article_id AS articleId, 'count' AS summaryKind, 'review.queue.unassessedReady' AS countKind, 'queue:ready' AS filterKey, list_mode_key.list_mode_key AS listModeKey, 'review.queue.unassessedReady' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, queue.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM mart.review_unassessed_queue_serving_v4 queue
           INNER JOIN article_id_filter dirty ON dirty.article_id = queue.article_id
+          INNER JOIN selected_state selected ON selected.article_id = queue.article_id AND selected.in_selected_scope
           CROSS JOIN list_mode_key_filter list_mode_key
           WHERE queue.project_id = ${getSqlLiteral(input.projectId)} AND queue.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND queue.snapshot_id = ${getSqlLiteral(input.snapshotId)} AND queue.queue_kind = 'unassessed'
         ),
@@ -246,6 +249,7 @@ const getSummaryContributionRows = async (
           SELECT human.article_id AS articleId, 'count' AS summaryKind, 'review.human.reviewedByPrompt' AS countKind, concat('prompt:', human.prompt_id) AS filterKey, human.list_mode_key AS listModeKey, 'review.human.reviewedByPrompt' AS summaryIdentity, NULL AS facetKind, NULL AS facetKey, NULL AS facetValue, human.prompt_id AS promptId, NULL AS answerId, NULL AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
+          INNER JOIN selected_state selected ON selected.article_id = human.article_id AND selected.in_selected_scope
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = human.list_mode_key
           WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND NOT human.tombstone AND human.human_status_key = 'answered'
             AND NOT EXISTS (
@@ -264,6 +268,7 @@ const getSummaryContributionRows = async (
           SELECT llm.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, llm.answered_original AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, llm.answered_original AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM mart.review_llm_status_patch_v4 llm
           INNER JOIN article_id_filter dirty ON dirty.article_id = llm.article_id
+          INNER JOIN selected_state selected ON selected.article_id = llm.article_id AND selected.in_selected_scope
           WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND NOT llm.tombstone AND llm.answered_original IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
@@ -280,6 +285,7 @@ const getSummaryContributionRows = async (
           SELECT human.article_id AS articleId, 'facet' AS summaryKind, 'review.human.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.promptAnswer' AS summaryIdentity, 'human' AS facetKind, 'promptAnswer' AS facetKey, human.human_answered_value AS facetValue, human.prompt_id AS promptId, NULL AS answerId, human.human_answered_value AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
+          INNER JOIN selected_state selected ON selected.article_id = human.article_id AND selected.in_selected_scope
           WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND NOT human.tombstone AND human.prompt_id <> 'summary' AND human.human_answered_value IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
@@ -296,6 +302,7 @@ const getSummaryContributionRows = async (
           SELECT human.article_id AS articleId, 'facet' AS summaryKind, 'review.human.filter.summaryAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.summaryAnswer' AS summaryIdentity, 'human' AS facetKind, 'summaryAnswer' AS facetKey, human.human_answered_value AS facetValue, human.prompt_id AS promptId, NULL AS answerId, human.human_answered_value AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
+          INNER JOIN selected_state selected ON selected.article_id = human.article_id AND selected.in_selected_scope
           WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND NOT human.tombstone AND human.prompt_id = 'summary' AND human.human_answered_value IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
@@ -508,20 +515,32 @@ const getSummaryRecords = async (input: {
       return [getFacetExistingKey(row), row.countValue ?? 0] as const
     }),
   ])
+  const aggregatedDiffs = input.diffs.reduce(
+    (acc, diff) => {
+      const identity = parseSummaryContributionKey(diff.contributionKey)
 
-  return input.diffs.flatMap((diff) => {
-    const identity = parseSummaryContributionKey(diff.contributionKey)
-    const existingValue = identity === null ? 0 : (existingValues.get(getIdentityExistingValueKey(identity)) ?? 0)
-    const record =
-      identity === null
-        ? null
-        : getSummaryRecord({
-            countValue: Math.max(0, existingValue + diff.delta),
-            identity,
-            projectId: input.projectorInput.projectId,
-            reviewConfigHash: input.projectorInput.reviewConfigHash,
-            snapshotId: input.projectorInput.snapshotId,
-          })
+      if (identity === null) {
+        return acc
+      }
+
+      const existingKey = getIdentityExistingValueKey(identity)
+      const current = acc.get(existingKey)
+      acc.set(existingKey, {delta: (current?.delta ?? 0) + diff.delta, identity})
+
+      return acc
+    },
+    new Map<string, {delta: number; identity: SummaryContributionIdentity}>(),
+  )
+
+  return Array.from(aggregatedDiffs.entries()).flatMap(([existingKey, diff]) => {
+    const existingValue = existingValues.get(existingKey) ?? 0
+    const record = getSummaryRecord({
+      countValue: Math.max(0, existingValue + diff.delta),
+      identity: diff.identity,
+      projectId: input.projectorInput.projectId,
+      reviewConfigHash: input.projectorInput.reviewConfigHash,
+      snapshotId: input.projectorInput.snapshotId,
+    })
 
     return record === null ? [] : [record]
   })

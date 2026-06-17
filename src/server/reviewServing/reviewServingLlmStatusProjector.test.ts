@@ -8,6 +8,7 @@ import {
 
 const createLlmStatusDatabase = (input?: {
   judgmentRows?: readonly Record<string, unknown>[]
+  projectRows?: readonly Record<string, unknown>[]
   promptConfigRows?: readonly Record<string, unknown>[]
   promptRows?: readonly Record<string, unknown>[]
 }) => {
@@ -30,6 +31,10 @@ const createLlmStatusDatabase = (input?: {
 
       if (statement.includes('FROM prompt_id_filter dirty_prompt')) {
         return (input?.promptRows ?? []) as T[]
+      }
+
+      if (statement.includes('FROM app.project project')) {
+        return (input?.projectRows ?? []) as T[]
       }
 
       return [] as T[]
@@ -194,4 +199,29 @@ test('prompt config claims rebuild only prompt-scoped LLM status rows', async ()
   expect(promptSelect).toContain('judgment.use_fulltext = project.use_fulltext')
   expect(promptSelect).toContain('judgment.use_fulltext_no_images = project.use_fulltext_no_images')
   expect(deltaSelect).toBeUndefined()
+})
+
+test('project review config claims rebuild project-scoped LLM status rows', async () => {
+  const {database, statements} = createLlmStatusDatabase({projectRows: [llmStatusRow({articleId: 'article-3'})]})
+
+  const result = await projectReviewServingLlmStatusPatches(
+    projectInput([
+      llmClaim({
+        articleId: null,
+        dirtyKind: 'project.reviewConfig.updated',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ]),
+    database,
+  )
+  const projectSelect = statements.find((statement) => {
+    return statement.includes('FROM app.project project') && !statement.includes('FROM prompt_id_filter dirty_prompt')
+  })
+
+  expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(projectSelect).toContain('INNER JOIN mart.project_scope_article scope')
+  expect(projectSelect).toContain('judgment.model_id = project.model_id')
+  expect(projectSelect).toContain('judgment.use_title = project.use_title')
+  expect(projectSelect).toContain('WHERE project.id =')
 })
