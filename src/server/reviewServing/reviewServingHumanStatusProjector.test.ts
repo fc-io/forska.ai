@@ -133,6 +133,9 @@ test('human prompt answer deltas write component-narrow status patches', async (
   expect(insertStatement).toContain(
     'ON CONFLICT(project_id, prompt_config_hash, base_generation, patch_watermark, list_mode_key, article_id, prompt_id)',
   )
+  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).toContain('human_answered_prompt_count')
+  expect(joined).toContain('human_status_key')
   expect(joined).toContain("'humanStatus'")
   expect(joined).not.toContain("'llmStatus'")
   expect(joined).not.toContain("'selectedImport'")
@@ -229,6 +232,7 @@ test('prompt config claims rebuild only prompt-scoped human status rows', async 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
   expect(promptSelect).toContain("VALUES ('prompt-1')")
   expect(promptSelect).toContain('INNER JOIN mart.project_scope_article scope')
+  expect(promptSelect).toContain('LEFT JOIN app."judgment_human" judgment_human')
   expect(promptSelect).toContain('judgment_human.prompt_id = dirty_prompt.prompt_id')
   expect(promptSelect).toContain('project_prompt.prompt_id IS NULL AS tombstone')
   expect(promptSelect).toContain('LEFT JOIN app.project_prompt project_prompt')

@@ -340,16 +340,6 @@ const compactPatchComponent = async (
       AND projection_identity = ${getSqlLiteral(assessment.projectionIdentity)}
   `)
 
-  await database.run(`
-    UPDATE mart.review_article_serving_v4
-    SET
-      base_generation = ${getSqlLiteral(nextBaseGeneration)},
-      patch_watermark = 0,
-      serving_updated_at = current_timestamp
-    WHERE project_id = ${getSqlLiteral(candidate.projectId)}
-      AND snapshot_id = ${getSqlLiteral(candidate.snapshotId)}
-      AND base_generation = ${getSqlLiteral(assessment.baseGeneration)}
-  `)
 }
 
 const getRetentionState = async (retentionScope: string, database: ReviewServingRetentionServiceTransaction) => {

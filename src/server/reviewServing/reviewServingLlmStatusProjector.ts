@@ -266,12 +266,12 @@ const getPromptScopedRows = async (
         WITH ${getValuesCte('prompt_id', promptIds)}
         SELECT
           scope.article_id AS articleId,
-          judgment.prompt_id AS promptId,
-          judgment.model_id AS modelId,
-          judgment.use_title AS useTitle,
-          judgment.use_abstract AS useAbstract,
-          judgment.use_fulltext AS useFulltext,
-          judgment.use_fulltext_no_images AS useFulltextNoImages,
+          dirty_prompt.prompt_id AS promptId,
+          project.model_id AS modelId,
+          project.use_title AS useTitle,
+          project.use_abstract AS useAbstract,
+          project.use_fulltext AS useFulltext,
+          project.use_fulltext_no_images AS useFulltextNoImages,
           'update' AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR project_prompt.archived AS tombstone,
           judgment.is_answered AS isAnswered,
@@ -288,7 +288,12 @@ const getPromptScopedRows = async (
         INNER JOIN mart.project_scope_article scope
           ON scope.project_id = ${getSqlLiteral(input.projectId)}
           AND (scope.in_curated_scope OR scope.in_route_scope)
-        INNER JOIN app."judgment" judgment
+        LEFT JOIN app.project_prompt project_prompt
+          ON project_prompt.project_id = project.id
+          AND project_prompt.prompt_id = dirty_prompt.prompt_id
+        INNER JOIN app.prompt prompt
+          ON prompt.id = dirty_prompt.prompt_id
+        LEFT JOIN app."judgment" judgment
           ON judgment.article_id = scope.article_id
           AND judgment.prompt_id = dirty_prompt.prompt_id
           AND judgment.model_id = project.model_id
@@ -297,12 +302,7 @@ const getPromptScopedRows = async (
           AND judgment.use_fulltext = project.use_fulltext
           AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
           AND judgment.deleted_at IS NULL
-        LEFT JOIN app.project_prompt project_prompt
-          ON project_prompt.project_id = project.id
-          AND project_prompt.prompt_id = judgment.prompt_id
-        INNER JOIN app.prompt prompt
-          ON prompt.id = judgment.prompt_id
-        ORDER BY judgment.prompt_id ASC, scope.article_id ASC
+        ORDER BY dirty_prompt.prompt_id ASC, scope.article_id ASC
       `)
 }
 
@@ -315,12 +315,12 @@ const getProjectScopedRows = async (
     : database.queryJson<LlmStatusSourceRow>(`
         SELECT
           scope.article_id AS articleId,
-          judgment.prompt_id AS promptId,
-          judgment.model_id AS modelId,
-          judgment.use_title AS useTitle,
-          judgment.use_abstract AS useAbstract,
-          judgment.use_fulltext AS useFulltext,
-          judgment.use_fulltext_no_images AS useFulltextNoImages,
+          project_prompt.prompt_id AS promptId,
+          project.model_id AS modelId,
+          project.use_title AS useTitle,
+          project.use_abstract AS useAbstract,
+          project.use_fulltext AS useFulltext,
+          project.use_fulltext_no_images AS useFulltextNoImages,
           'update' AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR project_prompt.archived AS tombstone,
           judgment.is_answered AS isAnswered,
@@ -335,21 +335,21 @@ const getProjectScopedRows = async (
         INNER JOIN mart.project_scope_article scope
           ON scope.project_id = project.id
           AND (scope.in_curated_scope OR scope.in_route_scope)
-        INNER JOIN app."judgment" judgment
+        INNER JOIN app.project_prompt project_prompt
+          ON project_prompt.project_id = project.id
+        INNER JOIN app.prompt prompt
+          ON prompt.id = project_prompt.prompt_id
+        LEFT JOIN app."judgment" judgment
           ON judgment.article_id = scope.article_id
+          AND judgment.prompt_id = project_prompt.prompt_id
           AND judgment.model_id = project.model_id
           AND judgment.use_title = project.use_title
           AND judgment.use_abstract = project.use_abstract
           AND judgment.use_fulltext = project.use_fulltext
           AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
           AND judgment.deleted_at IS NULL
-        LEFT JOIN app.project_prompt project_prompt
-          ON project_prompt.project_id = project.id
-          AND project_prompt.prompt_id = judgment.prompt_id
-        INNER JOIN app.prompt prompt
-          ON prompt.id = judgment.prompt_id
         WHERE project.id = ${getSqlLiteral(input.projectId)}
-        ORDER BY scope.article_id ASC, judgment.prompt_id ASC
+        ORDER BY scope.article_id ASC, project_prompt.prompt_id ASC
       `)
 }
 
