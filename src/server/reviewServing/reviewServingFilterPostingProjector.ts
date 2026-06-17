@@ -280,7 +280,7 @@ const getPostingContributionRows = async (
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = llm.list_mode_key
           UNION ALL
-          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, llm.answered_original AS filterValue
+          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', llm.answered_original) AS filterValue
           FROM scoped_article scoped
           INNER JOIN mart.review_llm_status_patch_v4 llm
             ON llm.project_id = ${getSqlLiteral(input.projectId)}
@@ -301,7 +301,7 @@ const getPostingContributionRows = async (
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = llm.list_mode_key
           UNION ALL
-          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, answer.answer_value AS filterValue
+          SELECT llm.article_id AS articleId, llm.list_mode_key AS listModeKey, COALESCE(llm.latest_llm_created_at, scoped.sort_key) AS sortKey, llm.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, concat('review:promptAnswer:', llm.prompt_id, ':', answer.answer_value) AS filterValue
           FROM scoped_article scoped
           INNER JOIN mart.review_llm_status_patch_v4 llm
             ON llm.project_id = ${getSqlLiteral(input.projectId)}
@@ -335,7 +335,7 @@ const getPostingContributionRows = async (
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = human.list_mode_key
           UNION ALL
-          SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, COALESCE(human.latest_human_updated_at, scoped.sort_key) AS sortKey, human.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, human.human_answered_value AS filterValue
+          SELECT human.article_id AS articleId, human.list_mode_key AS listModeKey, COALESCE(human.latest_human_updated_at, scoped.sort_key) AS sortKey, human.tombstone OR scoped.scope_tombstone AS tombstone, 'promptAnswer' AS filterKind, concat('human:promptAnswer:', human.prompt_id, ':', human.human_answered_value) AS filterValue
           FROM scoped_article scoped
           INNER JOIN mart.review_human_status_patch_v4 human
             ON human.project_id = ${getSqlLiteral(input.projectId)}

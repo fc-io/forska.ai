@@ -356,6 +356,10 @@ export const upsertReviewServingDirtyWork = async (
       current_timestamp
     )
     ON CONFLICT(dirty_work_id) DO UPDATE SET
+      first_source_high_water_mark = LEAST(
+        app.review_serving_dirty_work.first_source_high_water_mark,
+        excluded.first_source_high_water_mark
+      ),
       latest_source_high_water_mark = GREATEST(
         app.review_serving_dirty_work.latest_source_high_water_mark,
         excluded.latest_source_high_water_mark

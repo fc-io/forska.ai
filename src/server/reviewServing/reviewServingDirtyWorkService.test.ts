@@ -128,7 +128,10 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier} = {}
       dirtyRangeEnd: strings[10] ?? null,
       dirtyRangeStart: strings[9] ?? null,
       dirtyWorkId,
-      firstSourceHighWaterMark: existing?.firstSourceHighWaterMark ?? numbers[0] ?? 0,
+      firstSourceHighWaterMark: Math.min(
+        existing?.firstSourceHighWaterMark ?? Number.POSITIVE_INFINITY,
+        numbers[0] ?? 0,
+      ),
       latestDeltaId: strings[8] ?? null,
       latestSourceHighWaterMark: Math.max(existing?.latestSourceHighWaterMark ?? 0, numbers[1] ?? 0),
       projectId: strings[1] ?? null,

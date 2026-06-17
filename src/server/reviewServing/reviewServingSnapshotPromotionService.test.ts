@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {type ReviewServingProjectionIdentityManifest} from './reviewServingManifestRepository.ts'
 import {getReviewServingProjectionComponentIdentityKey} from './reviewServingProjectorDomain.ts'
 import {
   composeReviewServingCandidateSnapshotManifest,
@@ -34,17 +35,26 @@ const searchManifest = {
   projectionIdentity: 'search:identity-1',
 } as const
 
+const projectScopeManifest = {
+  ...displayManifest,
+  definitionVersion: 'project-scope-v1',
+  manifestId: 'project-scope-manifest',
+  projectionComponent: 'projectScope',
+  projectionIdentity: 'project-scope:identity-1',
+} as const
+
 const getManifestKey = (manifest: {
   projectId: string
-  projectionComponent: 'display' | 'search'
+  projectionComponent: 'display' | 'projectScope' | 'search'
   projectionIdentity: string
 }) => {
   return getReviewServingProjectionComponentIdentityKey(manifest)
 }
 
 const createPromotionDatabase = (input?: {selectedImportStatus?: string}) => {
-  const manifests = new Map([
+  const manifests = new Map<string, ReviewServingProjectionIdentityManifest>([
     [getManifestKey(displayManifest), displayManifest],
+    [getManifestKey(projectScopeManifest), projectScopeManifest],
     [getManifestKey(searchManifest), searchManifest],
   ])
   const database: ReviewServingSnapshotPromotionDatabase = {
@@ -127,6 +137,8 @@ test('snapshot validation fails required gaps but allows missing optional compon
       lastKnownGoodSnapshotId: null,
       optionalComponents: candidate.componentRequirements.optionalComponents,
       requiredComponents: candidate.componentRequirements.requiredComponents,
+      reviewConfigHash: candidate.reviewConfigHash ?? null,
+      selectedImportSnapshotId: candidate.selectedImportSnapshotId ?? null,
       status: 'candidate',
       validationResult: null,
     },
@@ -271,7 +283,47 @@ test('snapshot validation ignores project-scope watermarks for display and requi
 
   expect(displayResult.ok).toBe(true)
   expect(searchResult.ok).toBe(false)
-  expect(searchResult.ok ? null : searchResult.error).toBe('optional component search input watermark 10 is behind source 1000')
+  expect(searchResult.ok ? null : searchResult.error).toBe(
+    'optional component search input watermark 10 is behind source 1000',
+  )
+})
+
+test('snapshot validation requires import-run watermarks for project-scope manifests', async () => {
+  const {database} = createPromotionDatabase()
+  const result = await validateReviewServingCandidateSnapshotManifest(
+    {
+      componentState: {
+        optional: [],
+        required: [
+          {
+            baseGeneration: '1',
+            component: 'projectScope',
+            patchWatermark: '4',
+            projectionIdentity: 'project-scope:identity-1',
+            requirement: 'required',
+          },
+        ],
+      },
+      composedIdentity: {route: 'review.rows', version: 1},
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: [],
+      projectId: 'project-1',
+      requiredComponents: ['projectScope'],
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {importRunArticle: 1000, projectScope: 10},
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+
+  expect(result.ok).toBe(false)
+  expect(result.ok ? null : result.error).toBe(
+    'required component projectScope input watermark 10 is behind source 1000',
+  )
 })
 
 test('optional component availability distinguishes route states', () => {
