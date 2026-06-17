@@ -162,7 +162,6 @@ const getPatchBudget = async (
       CAST(COUNT(DISTINCT patch_watermark) AS INTEGER) AS patchWatermarks
     FROM ${spec.table}
     WHERE project_id = ${getSqlLiteral(projectId)}
-      AND ${spec.identityColumn} = ${getSqlLiteral(state.projectionIdentity)}
       AND base_generation = ${getSqlLiteral(Number(state.baseGeneration))}
   `)
 
@@ -324,6 +323,8 @@ const compactPatchComponent = async (
 
   if (assessment.component === 'selectedImport') {
     await compactSelectedImportPatches(candidate, database)
+  } else {
+    return
   }
 
   await database.run(`
@@ -366,6 +367,37 @@ const getRetentionState = async (retentionScope: string, database: ReviewServing
   return rows[0] ?? null
 }
 
+const getSupportedPatchCompactions = (assessments: readonly ReviewServingPatchBudgetAssessment[]) => {
+  return assessments.filter((assessment) => {
+    return assessment.shouldCompact && assessment.component === 'selectedImport'
+  })
+}
+
+const getSelectedImportProtectedPredicate = (spec: CleanupTableSpec, now: Date | string) => {
+  return spec.protectedPredicate !== 'selected_import_snapshot_id'
+    ? 'FALSE'
+    : `EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_manifest active_manifest
+        LEFT JOIN app.review_serving_snapshot_manifest lkg_manifest
+          ON lkg_manifest.project_id = active_manifest.project_id
+          AND lkg_manifest.snapshot_id = active_manifest.last_known_good_snapshot_id
+        WHERE active_manifest.project_id = candidate.project_id
+          AND active_manifest.snapshot_status = 'active'
+          AND lkg_manifest.selected_import_snapshot_id = candidate.selected_import_snapshot_id
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_pin pin
+        INNER JOIN app.review_serving_snapshot_manifest pinned_manifest
+          ON pinned_manifest.project_id = pin.project_id
+          AND pinned_manifest.snapshot_id = pin.snapshot_id
+        WHERE pin.project_id = candidate.project_id
+          AND pinned_manifest.selected_import_snapshot_id = candidate.selected_import_snapshot_id
+          AND ${getActivePinPredicate(now)}
+      )`
+}
+
 const getRetentionCursorIndex = (row: RetentionStateRow | null) => {
   const cursor = getJsonValue(row?.cursorJson ?? null) as {tableIndex?: number} | null
 
@@ -393,6 +425,7 @@ const deleteCleanupBatch = async (
                 OR active_manifest.selected_import_snapshot_id = candidate.${input.spec.protectedPredicate}
               )
           )
+          AND NOT (${getSelectedImportProtectedPredicate(input.spec, input.now)})
           AND NOT EXISTS (
             SELECT 1
             FROM app.review_serving_snapshot_pin pin
@@ -421,7 +454,6 @@ const deletePatchTableBatch = async (
         FROM app.review_projection_identity_manifest manifest
         WHERE manifest.project_id = ${getSqlLiteral(input.projectId)}
           AND manifest.projection_component = ${getSqlLiteral(input.spec.component)}
-          AND manifest.projection_identity = candidate.${input.spec.identityColumn}
           AND manifest.base_generation = candidate.base_generation
       )
         AND NOT EXISTS (
@@ -451,7 +483,6 @@ const deletePatchTableBatch = async (
         ) protected_manifest
         WHERE protected_manifest.project_id = ${getSqlLiteral(input.projectId)}
           AND CAST(protected_manifest.component_state_json AS VARCHAR) LIKE '%' || ${getSqlLiteral(input.spec.component)} || '%'
-          AND CAST(protected_manifest.component_state_json AS VARCHAR) LIKE '%' || candidate.${input.spec.identityColumn} || '%'
           AND CAST(protected_manifest.component_state_json AS VARCHAR) LIKE '%' || CAST(candidate.base_generation AS VARCHAR) || '%'
       )
       ORDER BY candidate.${input.spec.identityColumn}, candidate.base_generation, candidate.patch_watermark
@@ -488,9 +519,7 @@ export const compactReviewServingCandidateSnapshotPatches = async (
 ): Promise<ReviewServingCompactionResult> => {
   return database.transaction(async (tx) => {
     const assessments = await assessReviewServingCandidatePatchBudgets(input, tx)
-    const compactedComponents = assessments.filter((assessment) => {
-      return assessment.shouldCompact
-    })
+    const compactedComponents = getSupportedPatchCompactions(assessments)
 
     await compactedComponents.reduce<Promise<void>>(async (previous, assessment) => {
       await previous

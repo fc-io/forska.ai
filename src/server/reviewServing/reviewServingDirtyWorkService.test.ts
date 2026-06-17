@@ -273,12 +273,23 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier} = {}
 
     if (statement.includes("status = 'pending'") && statement.includes('starts_with(projection_key')) {
       const prefix = getSqlStrings(statement).at(-1) ?? ''
-      return [...dirtyWork.values()]
+      const eligibleRows = [...dirtyWork.values()]
         .filter((row) => {
           return (row.status === 'pending' || row.status === 'running') && row.projectionKey.startsWith(prefix)
         })
         .sort((left, right) => {
-          return left.updatedAt.localeCompare(right.updatedAt) || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
+          return (
+            left.updatedAt.localeCompare(right.updatedAt)
+            || left.latestSourceHighWaterMark - right.latestSourceHighWaterMark
+            || left.dirtyWorkId.localeCompare(right.dirtyWorkId)
+          )
+        })
+
+      const sourcePartition = statement.includes('source_partition = (') ? eligibleRows[0]?.sourcePartition : null
+
+      return eligibleRows
+        .filter((row) => {
+          return sourcePartition === null || row.sourcePartition === sourcePartition
         })
         .slice(0, getLimit(statement))
         .map(getQueryRow) as T[]
@@ -402,6 +413,22 @@ test('claims pending work by component without exceeding wake budget', async () 
   expect(claims).toHaveLength(1)
   expect(claims[0]?.projectionComponent).toBe('display')
   expect(claims[0]?.status).toBe('running')
+})
+
+test('claims pending work from one source partition per batch', async () => {
+  const {database} = createFakeDirtyWorkDatabase()
+
+  await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
+  await upsertDisplayWork(
+    database,
+    {...getBaseScope(2, '2', '2'), sourcePartition: 'prompt:config', scopeId: 'project-1:prompt-1'},
+    'delta-2',
+  )
+
+  const claims = await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
+
+  expect(claims).toHaveLength(1)
+  expect(claims[0]?.sourcePartition).toBe('article:display')
 })
 
 test('release returns running claims to pending for the next wake', async () => {

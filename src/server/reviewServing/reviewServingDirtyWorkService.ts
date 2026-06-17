@@ -108,6 +108,19 @@ const getProjectionKeyPrefix = (projectionComponent: ReviewServingProjectionComp
   return getStableReviewServingJson({projectionComponent}).replace(/\}$/u, ',"projectionIdentity":')
 }
 
+const getEligibleDirtyWorkPredicate = (params: ClaimReviewServingDirtyWorkParams, claimNowSql: string) => {
+  const staleRunningClaimSeconds = getStaleRunningClaimSeconds(params)
+
+  return `(
+      status = 'pending'
+      OR (
+        status = 'running'
+        AND updated_at <= ${claimNowSql} - INTERVAL '${staleRunningClaimSeconds} seconds'
+      )
+    )
+    AND starts_with(projection_key, ${getSqlLiteral(getProjectionKeyPrefix(params.projectionComponent))})`
+}
+
 const getDirtyWorkId = (input: ReviewServingDirtyWorkInput) => {
   return `dirtyWork:${getReviewServingHash('review-serving-dirty-work', {
     projectionKey: getProjectionKey({
@@ -380,21 +393,21 @@ export const claimReviewServingDirtyWork = async (
 ) => {
   const limit = getNormalizedLimit(params)
   const claimNowSql = getClaimNowSql(params)
-  const staleRunningClaimSeconds = getStaleRunningClaimSeconds(params)
+  const eligiblePredicate = getEligibleDirtyWorkPredicate(params, claimNowSql)
 
   return limit === 0
     ? []
     : database.transaction(async (tx) => {
         const rows = await tx.queryJson<DirtyWorkRow>(`
           ${getDirtyWorkSelect()}
-          WHERE (
-              status = 'pending'
-              OR (
-                status = 'running'
-                AND updated_at <= ${claimNowSql} - INTERVAL '${staleRunningClaimSeconds} seconds'
-              )
+          WHERE ${eligiblePredicate}
+            AND source_partition = (
+              SELECT source_partition
+              FROM app.review_serving_dirty_work oldest
+              WHERE ${eligiblePredicate}
+              ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
+              LIMIT 1
             )
-            AND starts_with(projection_key, ${getSqlLiteral(getProjectionKeyPrefix(params.projectionComponent))})
           ORDER BY updated_at ASC, latest_source_high_water_mark ASC, dirty_work_id ASC
           LIMIT ${limit}
         `)
@@ -408,13 +421,7 @@ export const claimReviewServingDirtyWork = async (
             UPDATE app.review_serving_dirty_work
             SET status = 'running', updated_at = current_timestamp
             WHERE dirty_work_id IN (${dirtyWorkIds.map(getSqlLiteral).join(', ')})
-              AND (
-                status = 'pending'
-                OR (
-                  status = 'running'
-                  AND updated_at <= ${claimNowSql} - INTERVAL '${staleRunningClaimSeconds} seconds'
-                )
-              )
+              AND ${eligiblePredicate}
           `)
         }
 

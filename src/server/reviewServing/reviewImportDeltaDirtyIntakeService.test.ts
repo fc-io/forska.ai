@@ -133,10 +133,10 @@ test('import delta intake bounds source rows before route fanout', async () => {
     return statement.includes('INSERT INTO app.review_serving_dirty_work')
   })
 
-  expect(result).toMatchObject({dirtyWorkCount: 2, maxSourceHighWaterMark: 4, status: 'converted'})
+  expect(result).toMatchObject({dirtyWorkCount: 16, maxSourceHighWaterMark: 4, status: 'converted'})
   expect(deltaSelect).toContain('LIMIT 1')
   expect(deltaSelect).toContain('LEFT JOIN app.project_import_route')
-  expect(dirtyInserts).toHaveLength(2)
+  expect(dirtyInserts).toHaveLength(16)
 })
 
 test('repeated import changes collapse into one dirty row per project component identity', async () => {
@@ -159,10 +159,10 @@ test('repeated import changes collapse into one dirty row per project component 
     return statement.includes('INSERT INTO app.review_serving_dirty_work')
   })
 
-  expect(dirtyInserts).toHaveLength(2)
-  expect(dirtyWorkIds.size).toBe(1)
+  expect(dirtyInserts).toHaveLength(6)
+  expect(dirtyWorkIds.size).toBe(3)
   expect(parseProjectionKey(dirtyInserts[0] ?? '').projectionComponent).toBe('selectedImport')
-  expect(getProjectionKey(dirtyInserts[0] ?? '')).toBe(getProjectionKey(dirtyInserts[1] ?? ''))
+  expect(getProjectionKey(dirtyInserts[0] ?? '')).toBe(getProjectionKey(dirtyInserts[3] ?? ''))
 })
 
 test('import projection identity is stable across per-mutation article values', async () => {

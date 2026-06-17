@@ -233,7 +233,19 @@ const getPostingContributionRows = async (
           INNER JOIN mart.review_llm_status_patch_v4 llm
             ON llm.project_id = ${getSqlLiteral(input.projectId)}
             AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND llm.article_id = scoped.article_id
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_llm_status_patch_v4 newer
+              WHERE newer.project_id = llm.project_id
+                AND newer.review_config_hash = llm.review_config_hash
+                AND newer.base_generation = llm.base_generation
+                AND newer.article_id = llm.article_id
+                AND newer.prompt_id = llm.prompt_id
+                AND newer.list_mode_key = llm.list_mode_key
+                AND newer.patch_watermark > llm.patch_watermark
+            )
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = llm.list_mode_key
           UNION ALL
@@ -242,7 +254,19 @@ const getPostingContributionRows = async (
           INNER JOIN mart.review_llm_status_patch_v4 llm
             ON llm.project_id = ${getSqlLiteral(input.projectId)}
             AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+            AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND llm.article_id = scoped.article_id
+            AND NOT EXISTS (
+              SELECT 1
+              FROM mart.review_llm_status_patch_v4 newer
+              WHERE newer.project_id = llm.project_id
+                AND newer.review_config_hash = llm.review_config_hash
+                AND newer.base_generation = llm.base_generation
+                AND newer.article_id = llm.article_id
+                AND newer.prompt_id = llm.prompt_id
+                AND newer.list_mode_key = llm.list_mode_key
+                AND newer.patch_watermark > llm.patch_watermark
+            )
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = llm.list_mode_key
         ),
