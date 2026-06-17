@@ -85,7 +85,7 @@ test('config delta invalidation includes project scope for date and import-route
   const promptRule = getReviewServingInvalidationRuleOrNull('prompt.config.updated')
   const projectRule = getReviewServingInvalidationRuleOrNull('project.reviewConfig.updated')
 
-  expect(promptRule?.affectedComponents).toEqual(['llmStatus', 'humanStatus', 'queue', 'posting', 'summary'])
+  expect(promptRule?.affectedComponents).toEqual(['llmStatus', 'humanStatus', 'queue', 'posting', 'summary', 'payload'])
   expect(projectRule?.affectedComponents).toEqual([
     'projectScope',
     'selectedImport',

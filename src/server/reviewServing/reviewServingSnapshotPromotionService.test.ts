@@ -208,6 +208,72 @@ test('snapshot validation checks component watermarks against matching source pa
   expect(result.ok).toBe(true)
 })
 
+test('snapshot validation ignores project-scope watermarks for display and requires them for search', async () => {
+  const {database} = createPromotionDatabase()
+  const displayResult = await validateReviewServingCandidateSnapshotManifest(
+    {
+      componentState: {
+        optional: [],
+        required: [
+          {
+            baseGeneration: '1',
+            component: 'display',
+            patchWatermark: '4',
+            projectionIdentity: 'display:identity-1',
+            requirement: 'required',
+          },
+        ],
+      },
+      composedIdentity: {route: 'review.rows', version: 1},
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: [],
+      projectId: 'project-1',
+      requiredComponents: ['display'],
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {projectScope: 1000, reviewChange: 10},
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+  const searchResult = await validateReviewServingCandidateSnapshotManifest(
+    {
+      componentState: {
+        optional: [
+          {
+            baseGeneration: '1',
+            component: 'search',
+            patchWatermark: '4',
+            projectionIdentity: 'search:identity-1',
+            requirement: 'optional',
+          },
+        ],
+        required: [],
+      },
+      composedIdentity: {route: 'review.search', version: 1},
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: ['search'],
+      projectId: 'project-1',
+      requiredComponents: [],
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {projectScope: 1000, reviewChange: 10},
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+
+  expect(displayResult.ok).toBe(true)
+  expect(searchResult.ok).toBe(false)
+  expect(searchResult.ok ? null : searchResult.error).toBe('optional component search input watermark 10 is behind source 1000')
+})
+
 test('optional component availability distinguishes route states', () => {
   expect(
     getReviewServingOptionalComponentAvailability({

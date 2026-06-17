@@ -589,10 +589,13 @@ const getDefaultReviewServingProjectorRunners = (
         const judgmentPayloadResult = await projectReviewServingJudgmentPayloadRows(
           {
             acknowledgeClaims,
+            baseGeneration: manifest.baseGeneration,
             claims: context.claims,
+            definitionVersion: manifest.definitionVersion,
             listModeKeys: reviewServingListModes,
             modelId: project.modelId,
             projectId,
+            projectionIdentity: manifest.projectionIdentity,
             reviewConfigHash: requireReviewConfigHash(snapshot),
             snapshotId: snapshot.snapshotId,
             useAbstract: project.useAbstract,

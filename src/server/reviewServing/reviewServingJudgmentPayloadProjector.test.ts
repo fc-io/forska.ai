@@ -70,6 +70,15 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[] = []) => {
   }
 }
 
+const claimedProjectInput = (claims: readonly ReviewServingDirtyWorkClaim[] = []) => {
+  return {
+    ...projectInput(claims),
+    baseGeneration: 1,
+    definitionVersion: 'payload-v4-test',
+    projectionIdentity: 'payload:identity-1',
+  }
+}
+
 test('judgment payload projection separates llm and human payload kinds across overlapping prompts', async () => {
   const {database, statements} = createJudgmentPayloadDatabase({
     humanRows: [
@@ -225,6 +234,18 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
   expect(humanDeleteStatement).toContain("article_id IN ('article-1')")
   expect(humanDeleteStatement).toContain("list_mode_key IS NOT DISTINCT FROM 'human'")
   expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+})
+
+test('judgment payload projection writes payload manifest when acknowledging claims', async () => {
+  const {database, statements} = createJudgmentPayloadDatabase({humanRows: [], llmRows: []})
+
+  await projectReviewServingJudgmentPayloadRows(claimedProjectInput([judgmentClaim()]), database)
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
+  expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
+  expect(joined).toContain('review-serving-judgment-payload-projector')
+  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
 })
 
 test('article-set judgment hydration reads bounded payload rows with stable ordering', () => {

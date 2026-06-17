@@ -546,6 +546,7 @@ const getReviewServingSearchDiagnostic = async (projectId: string): Promise<Revi
 
 const getCurrentReviewConfigHash = async (projectId: string) => {
   const [project] = await getAppDatabaseService().queryJson<{
+    humanJudgmentMode: 'prompt' | 'summary' | null
     modelId: string
     useAbstract: boolean
     useFulltext: boolean
@@ -553,6 +554,7 @@ const getCurrentReviewConfigHash = async (projectId: string) => {
     useTitle: boolean
   }>(`
     SELECT
+      human_judgment_mode AS humanJudgmentMode,
       model_id AS modelId,
       use_title AS useTitle,
       use_abstract AS useAbstract,
@@ -584,7 +586,7 @@ const getCurrentReviewConfigHash = async (projectId: string) => {
   return project === undefined
     ? null
     : buildReviewConfigHash({
-        humanJudgmentMode: 'prompt',
+        humanJudgmentMode: project.humanJudgmentMode ?? 'prompt',
         modelExecutionIdentity: {modelId: project.modelId},
         modelId: project.modelId,
         promptConfigs: promptConfigs.map((row, index) => {

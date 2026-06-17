@@ -49,7 +49,7 @@ const getComponentState = (manifest: ReviewServingProjectionIdentityManifest, re
 }
 
 const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, readonly string[]> = {
-  display: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
+  display: ['reviewChange', 'review-change'],
   humanStatus: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
   judgmentInputContent: ['reviewChange', 'review-change'],
   llmStatus: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
@@ -57,7 +57,7 @@ const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, rea
   posting: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   projectScope: ['projectScope', 'project-scope'],
   queue: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
-  search: ['reviewChange', 'review-change'],
+  search: ['reviewChange', 'review-change', 'projectScope', 'project-scope'],
   selectedImport: ['importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   summary: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
 }

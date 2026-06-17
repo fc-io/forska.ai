@@ -123,11 +123,15 @@ test('project-scope invalidation registry uses project article affected keys', (
   const removedRule = getReviewServingInvalidationRule('projectScope.article.removed')
 
   expect(addedRule).toMatchObject({
+    affectedComponents: expect.arrayContaining(['search']),
+    downstreamDependents: expect.arrayContaining(['search']),
     firstAffectedComponent: 'projectScope',
     requiredKeys: ['projectId', 'articleId', 'projectArticleId', 'sourceHighWaterMark'],
     updateMode: 'appendPatch',
   })
   expect(removedRule).toMatchObject({
+    affectedComponents: expect.arrayContaining(['search']),
+    downstreamDependents: expect.arrayContaining(['search']),
     firstAffectedComponent: 'projectScope',
     requiredKeys: ['projectId', 'articleId', 'projectArticleId', 'sourceHighWaterMark'],
     updateMode: 'appendPatch',

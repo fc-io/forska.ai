@@ -560,7 +560,7 @@ const getApplyHumanStatusServingStatement = (input: {
         SELECT
           list_mode_key,
           article_id,
-          COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id IS NOT NULL AND prompt_id <> 'summary' AND human_status_key = 'answered') AS human_answered_prompt_count
+          COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id IS NOT NULL AND human_status_key = 'answered') AS human_answered_prompt_count
         FROM latest_prompt
         GROUP BY list_mode_key, article_id
       )

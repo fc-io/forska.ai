@@ -96,6 +96,15 @@ type PayloadProjectionRow = {
   sourceMetadata: ReviewServingIdentityValue | null
 }
 
+type ReviewServingPayloadPatchManifestInput = {
+  baseGeneration: number
+  claims: readonly ReviewServingDirtyWorkClaim[]
+  definitionVersion: string
+  projectId: string
+  projectionIdentity: string
+  status?: ReviewServingProjectionManifestStatus
+}
+
 const displayProjectorName = 'display-projector'
 const payloadProjectorName = 'payload-projector'
 
@@ -392,10 +401,8 @@ const getApplyDisplayPatchServingStatement = (input: ProjectReviewServingDisplay
         WHERE ${rowPredicate}`
 }
 
-const getPatchManifest = (
-  input:
-    | ProjectReviewServingDisplayPatchInput
-    | (ProjectReviewServingPayloadInput & {claims: readonly ReviewServingDirtyWorkClaim[]}),
+export const getReviewServingPayloadPatchManifest = (
+  input: ReviewServingPayloadPatchManifestInput,
   projectionComponent: 'display' | 'payload',
 ): ReviewServingProjectionIdentityManifestInput => {
   const claims = input.claims
@@ -415,6 +422,30 @@ const getPatchManifest = (
     projectionIdentity: input.projectionIdentity,
     status: input.status ?? 'candidate',
   }
+}
+
+const getPayloadProjectionManifests = (
+  input: ProjectReviewServingPayloadInput,
+  claims: readonly ReviewServingDirtyWorkClaim[],
+) => {
+  return claims.length === 0 ||
+    input.acknowledgeClaims === false ||
+    input.definitionVersion === undefined ||
+    input.projectionIdentity === undefined
+    ? []
+    : [
+        getReviewServingPayloadPatchManifest(
+          {
+            baseGeneration: input.baseGeneration,
+            claims,
+            definitionVersion: input.definitionVersion,
+            projectId: input.projectId,
+            projectionIdentity: input.projectionIdentity,
+            status: input.status,
+          },
+          'payload',
+        ),
+      ]
 }
 
 export const projectReviewServingDisplayBaseRows = async (
@@ -444,7 +475,7 @@ export const projectReviewServingDisplayPatches = async (
     {
       acknowledgements: input.acknowledgeClaims === false ? [] : input.claims,
       component: 'display',
-      projectionManifests: input.claims.length === 0 ? [] : [getPatchManifest(input, 'display')],
+      projectionManifests: input.claims.length === 0 ? [] : [getReviewServingPayloadPatchManifest(input, 'display')],
       records: rows.map((row) => {
         return getDisplayPatchRecord(input, row)
       }),
@@ -477,32 +508,21 @@ export const projectReviewServingPayloadRows = async (
   const hasClaimedWork =
     claims.length > 0 && input.definitionVersion !== undefined && input.projectionIdentity !== undefined
   const shouldAcknowledgeClaims = hasClaimedWork && input.acknowledgeClaims !== false
+  const projectionManifests = getPayloadProjectionManifests(input, claims)
   const patchWatermark = getPatchWatermark(claims)
 
   await writeReviewServingProjectorComponent(
     {
       acknowledgements: shouldAcknowledgeClaims ? claims : [],
       component: 'payload',
-      projectionManifests: hasClaimedWork
-        ? [
-            getPatchManifest(
-              {
-                ...input,
-                claims,
-                definitionVersion: input.definitionVersion,
-                projectionIdentity: input.projectionIdentity,
-              },
-              'payload',
-            ),
-          ]
-        : [],
+      projectionManifests,
       records: rows.map((row) => {
         return getPayloadRecord(input, row)
       }),
       statements: [getDeletePayloadRowsStatement(input)].flatMap((statement) => {
         return statement === null ? [] : [statement]
       }),
-      watermark: hasClaimedWork
+      watermark: shouldAcknowledgeClaims
         ? {
             projectId: input.projectId,
             projectionComponent: 'payload',

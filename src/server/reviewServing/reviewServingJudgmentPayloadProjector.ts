@@ -3,6 +3,7 @@ import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {type ReviewServingListMode} from './reviewServingContracts.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {getReviewServingPayloadPatchManifest} from './reviewServingDisplayPayloadProjector.ts'
 import {
   getDeleteReviewServingProjectorRowsStatement,
   type ReviewServingProjectorRecord,
@@ -14,10 +15,13 @@ export type ReviewServingJudgmentPayloadProjectorDatabase = ReviewServingProject
 
 export type ProjectReviewServingJudgmentPayloadInput = {
   acknowledgeClaims?: boolean
+  baseGeneration?: number
   claims?: readonly ReviewServingDirtyWorkClaim[]
+  definitionVersion?: string
   listModeKeys: readonly ReviewServingListMode[]
   modelId: string
   projectId: string
+  projectionIdentity?: string
   reviewConfigHash: string
   snapshotId: string
   useAbstract: boolean
@@ -139,6 +143,57 @@ const getRequestedPayloadKinds = (listModeKeys: readonly ReviewServingListMode[]
   ].filter((payloadKind): payloadKind is JudgmentPayloadKind => {
     return payloadKind !== null
   })
+}
+
+const getPayloadManifestInputs = (input: ProjectReviewServingJudgmentPayloadInput, claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return claims.length === 0 ||
+    input.acknowledgeClaims === false ||
+    input.baseGeneration === undefined ||
+    input.definitionVersion === undefined ||
+    input.projectionIdentity === undefined
+    ? []
+    : [
+        getReviewServingPayloadPatchManifest(
+          {
+            baseGeneration: input.baseGeneration,
+            claims,
+            definitionVersion: input.definitionVersion,
+            projectId: input.projectId,
+            projectionIdentity: input.projectionIdentity,
+          },
+          'payload',
+        ),
+      ]
+}
+
+const getPayloadWatermark = (input: ProjectReviewServingJudgmentPayloadInput, claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  const sourceHighWaterMark = Math.max(
+    0,
+    ...claims.map((claim) => {
+      return claim.latestSourceHighWaterMark
+    }),
+  )
+
+  return getPayloadManifestInputs(input, claims).length === 0
+    ? undefined
+    : {
+        projectId: input.projectId,
+        projectionComponent: 'payload' as const,
+        projectorName: 'review-serving-judgment-payload-projector',
+        sourceHighWaterMark,
+        sourcePartition: claims[0]?.sourcePartition ?? 'review-change',
+      }
+}
+
+const getPayloadAcknowledgements = (input: ProjectReviewServingJudgmentPayloadInput, claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return claims.length > 0 && input.acknowledgeClaims !== false ? claims : []
+}
+
+const getPayloadProjectionManifests = (
+  input: ProjectReviewServingJudgmentPayloadInput,
+  claims: readonly ReviewServingDirtyWorkClaim[],
+) => {
+  return getPayloadManifestInputs(input, claims)
 }
 
 const getLlmJudgmentRows = async (
@@ -425,13 +480,16 @@ export const projectReviewServingJudgmentPayloadRows = async (
       return getHumanJudgmentRecord({input, listModeKey, row})
     })
   })
+  const claims = input.claims ?? []
 
   await writeReviewServingProjectorComponent(
     {
-      acknowledgements: input.acknowledgeClaims === false ? [] : (input.claims ?? []),
+      acknowledgements: getPayloadAcknowledgements(input, claims),
       component: 'payload',
+      projectionManifests: getPayloadProjectionManifests(input, claims),
       records: [...llmRecords, ...humanRecords],
       statements: getReplacementDeleteStatements(input, getRequestedPayloadKinds(input.listModeKeys)),
+      watermark: getPayloadWatermark(input, claims),
     },
     database,
   )
