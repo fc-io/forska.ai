@@ -250,13 +250,30 @@ const getJudgmentDeltaRows = async (
           ON project_prompt.project_id = delta.project_id
           AND project_prompt.prompt_id = delta.prompt_id
         LEFT JOIN app."judgment" judgment
-          ON judgment.id = delta.judgment_id
+          ON judgment.article_id = delta.article_id
+          AND judgment.prompt_id = delta.prompt_id
           AND judgment.model_id = delta.model_id
           AND judgment.use_title = delta.use_title
           AND judgment.use_abstract = delta.use_abstract
           AND judgment.use_fulltext = delta.use_fulltext
           AND judgment.use_fulltext_no_images = delta.use_fulltext_no_images
           AND judgment.deleted_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app."judgment" newer_judgment
+            WHERE newer_judgment.article_id = judgment.article_id
+              AND newer_judgment.prompt_id = judgment.prompt_id
+              AND newer_judgment.model_id = judgment.model_id
+              AND newer_judgment.use_title = judgment.use_title
+              AND newer_judgment.use_abstract = judgment.use_abstract
+              AND newer_judgment.use_fulltext = judgment.use_fulltext
+              AND newer_judgment.use_fulltext_no_images = judgment.use_fulltext_no_images
+              AND newer_judgment.deleted_at IS NULL
+              AND (
+                newer_judgment.created_at > judgment.created_at
+                OR (newer_judgment.created_at = judgment.created_at AND newer_judgment.id > judgment.id)
+              )
+          )
         WHERE delta.project_id = ${getSqlLiteral(input.projectId)}
           AND delta.change_kind IN ('judgment.llm.created', 'judgment.llm.updated', 'judgment.llm.deleted')
           AND (${claimPredicates.join(' OR ')})

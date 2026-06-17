@@ -106,6 +106,7 @@ test('LLM answer changes write unassessed queue patches and serving rows from co
   expect(selectStatement).toContain('newer.prompt_config_hash = human.prompt_config_hash')
   expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
   expect(selectStatement).toContain('newer.list_mode_key = human.list_mode_key')
+  expect(selectStatement).toContain('SELECT DISTINCT')
   expect(selectStatement).toContain('LEFT JOIN app.review_selected_article_import_v4 selected_base')
   expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
   expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
@@ -190,11 +191,29 @@ test('prompt config changes rebuild only prompt-scoped queue rows', async () => 
   expect(selectStatement).toContain('prompt_id_filter(prompt_id)')
   expect(selectStatement).toContain("VALUES ('prompt-1')")
   expect(selectStatement).toContain('ON dirty_prompt.prompt_id = llm.prompt_id')
-  expect(selectStatement).toContain('ON dirty_prompt.prompt_id = human.prompt_id')
+  expect(selectStatement).toContain("ON dirty_prompt.prompt_id = human.prompt_id OR human.prompt_id = 'summary'")
   expect(selectStatement).toContain('llm.base_generation = 5')
   expect(selectStatement).toContain('human.base_generation = 5')
   expect(selectStatement).toContain('FROM mart.project_scope_article scope')
   expect(servingDelete).toContain("prompt_id IN ('prompt-1')")
+})
+
+test('summary-mode human rows join queue work through article-level summary prompt', async () => {
+  const {database, statements} = createQueueDatabase({
+    queueRows: [queueRow({promptId: 'summary', queueKind: 'human-unreviewed'})],
+  })
+
+  const result = await projectReviewServingQueuePatches(
+    projectInput([queueClaim({dirtyKind: 'judgment.human.updated'})]),
+    database,
+  )
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM queue_union queue')
+  })
+
+  expect(result.patchRowCount).toBe(1)
+  expect(selectStatement).toContain("AND (llm.prompt_id = human.prompt_id OR human.prompt_id = 'summary')")
+  expect(selectStatement).toContain('SELECT DISTINCT')
 })
 
 test('project review config changes rebuild queue rows for all scoped project articles', async () => {

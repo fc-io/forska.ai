@@ -92,13 +92,41 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
     ...new Set(
       claims
         .map((claim) => {
-          return claim.articleId ?? claim.scopeId.split(':').at(-1) ?? null
+          return claim.articleId ?? (claim.scopeKind === 'article' ? (claim.scopeId.split(':').at(-1) ?? null) : null)
         })
         .filter((articleId) => {
           return articleId !== null && articleId.trim().length > 0
         }) as string[],
     ),
   ]
+}
+
+const hasProjectScopedClaim = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return claims.some((claim) => {
+    return claim.scopeKind === 'project'
+  })
+}
+
+const getDirtyArticleCte = (projectId: string, articleIds: readonly string[], claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  if (articleIds.length > 0) {
+    return `dirty_article(article_id) AS (
+          SELECT * FROM (VALUES ${articleIds
+            .map((articleId) => {
+              return `(${getSqlLiteral(articleId)})`
+            })
+            .join(', ')})
+        )`
+  }
+
+  if (hasProjectScopedClaim(claims)) {
+    return `dirty_article(article_id) AS (
+          SELECT scope.article_id
+          FROM mart.project_scope_article scope
+          WHERE scope.project_id = ${getSqlLiteral(projectId)}
+        )`
+  }
+
+  return ''
 }
 
 const getPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
@@ -170,8 +198,10 @@ const getTemplateRowsFromSnapshot = (row: SnapshotTemplateRow) => {
   const postingIdentity = getSnapshotComponentIdentity(componentState, 'posting')
   const summaryIdentity = getSnapshotComponentIdentity(componentState, 'summary')
   const payloadIdentity = getSnapshotComponentIdentity(componentState, 'payload')
+  const reviewConfigHash = row.reviewConfigHash
 
-  return row.reviewConfigHash === null
+  if (
+    reviewConfigHash === null
     || baseGeneration === null
     || displayIdentity === null
     || projectScopeIdentity === null
@@ -181,23 +211,26 @@ const getTemplateRowsFromSnapshot = (row: SnapshotTemplateRow) => {
     || postingIdentity === null
     || summaryIdentity === null
     || payloadIdentity === null
-    ? []
-    : reviewServingListModes.map((listModeKey): SelectedImportServingTemplateRow => {
-        return {
-          baseGeneration,
-          displayIdentity,
-          humanStatusIdentity,
-          listModeKey,
-          llmStatusIdentity,
-          payloadIdentity,
-          postingIdentity,
-          projectScopeIdentity,
-          reviewConfigHash: row.reviewConfigHash,
-          selectedImportIdentity,
-          snapshotId: row.snapshotId,
-          summaryIdentity,
-        }
-      })
+  ) {
+    return []
+  }
+
+  return reviewServingListModes.map((listModeKey): SelectedImportServingTemplateRow => {
+    return {
+      baseGeneration,
+      displayIdentity,
+      humanStatusIdentity,
+      listModeKey,
+      llmStatusIdentity,
+      payloadIdentity,
+      postingIdentity,
+      projectScopeIdentity,
+      reviewConfigHash,
+      selectedImportIdentity,
+      snapshotId: row.snapshotId,
+      summaryIdentity,
+    }
+  })
 }
 
 const getSelectedImportServingTemplates = async (
@@ -259,17 +292,12 @@ const getSelectedImportPatchRows = async (
   database: ReviewServingSelectedImportPatchProjectorDatabase,
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
+  const dirtyArticleCte = getDirtyArticleCte(input.projectId, articleIds, input.claims)
 
-  return articleIds.length === 0
+  return dirtyArticleCte.length === 0
     ? []
     : database.queryJson<SelectedImportPatchRow>(`
-        WITH dirty_article(article_id) AS (
-          SELECT * FROM (VALUES ${articleIds
-            .map((articleId) => {
-              return `(${getSqlLiteral(articleId)})`
-            })
-            .join(', ')})
-        ),
+        WITH ${dirtyArticleCte},
         selected_import_candidates AS (
           SELECT
             dirty.article_id,

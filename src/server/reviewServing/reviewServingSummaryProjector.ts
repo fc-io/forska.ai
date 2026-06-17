@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
+import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {
   namedReviewFastCountDefinitions,
   type NamedReviewFastCountKey,
@@ -107,6 +107,7 @@ const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
 const getExpectedArticleIds = (
   claims: readonly ReviewServingDirtyWorkClaim[],
   rows: readonly SummaryContributionSourceRow[],
+  priorArticleIds: readonly string[],
 ) => {
   const claimArticleIds = getClaimArticleIds(claims)
 
@@ -114,11 +115,31 @@ const getExpectedArticleIds = (
     ? claimArticleIds
     : [
         ...new Set(
-          rows.map((row) => {
-            return row.articleId
-          }),
+          [
+            ...priorArticleIds,
+            ...rows.map((row) => {
+              return row.articleId
+            }),
+          ],
         ),
       ]
+}
+
+const getPriorContributionArticleIds = async (
+  input: ProjectReviewServingSummariesInput,
+  database: ReviewServingSummaryProjectorDatabase,
+) => {
+  return getClaimArticleIds(input.claims).length > 0
+    ? []
+    : database.queryJson<{articleId: string}>(`
+        SELECT DISTINCT contribution.article_id AS articleId
+        FROM mart.review_article_summary_contribution_v4 contribution
+        WHERE contribution.project_id = ${getSqlLiteral(input.projectId)}
+          AND contribution.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+          AND contribution.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+          AND contribution.component_kind = 'count'
+          AND contribution.summary_definition_version = 'review-serving-summary:v1'
+      `)
 }
 
 const getValuesCte = (columnName: string, values: readonly string[]) => {
@@ -152,7 +173,7 @@ const getSummaryDefinitionVersion = (identity: Pick<SummaryContributionIdentity,
 }
 
 const getSummaryContributionKey = (row: SummaryContributionIdentity) => {
-  return getStableReviewServingJson(row as unknown as Record<string, unknown>)
+  return getStableReviewServingJson(row as unknown as ReviewServingIdentityValue)
 }
 
 const parseSummaryContributionKey = (contributionKey: string): SummaryContributionIdentity | null => {
@@ -323,7 +344,7 @@ const getSummaryContributionRows = async (
           FROM mart.review_llm_status_patch_v4 llm
           INNER JOIN article_id_filter dirty ON dirty.article_id = llm.article_id
           INNER JOIN selected_state selected ON selected.article_id = llm.article_id AND selected.in_selected_scope
-          WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)} AND llm.list_mode_key = 'llm' AND NOT llm.tombstone AND llm.answered_original IS NOT NULL
+          WHERE llm.project_id = ${getSqlLiteral(input.projectId)} AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)} AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)} AND llm.list_mode_key = 'llm' AND NOT llm.tombstone AND llm.answered_original IS NOT NULL AND llm.answered_original_as_array IS NULL
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_llm_status_patch_v4 newer
@@ -619,11 +640,18 @@ export const projectReviewServingSummaries = async (
   database: ReviewServingSummaryProjectorDatabase = getAppDatabaseService(),
 ) => {
   const sourceRows = await getSummaryContributionRows(input, database)
+  const priorArticleRows = await getPriorContributionArticleIds(input, database)
   const contributionDiff = await prepareReviewServingContributionDiff(
     {
       claims: input.claims,
       componentKind: 'count',
-      expectedArticleIds: getExpectedArticleIds(input.claims, sourceRows),
+      expectedArticleIds: getExpectedArticleIds(
+        input.claims,
+        sourceRows,
+        priorArticleRows.map((row) => {
+          return row.articleId
+        }),
+      ),
       newRows: getRowsAsContributionRows(sourceRows),
       projectId: input.projectId,
       projectionComponent: 'summary',
