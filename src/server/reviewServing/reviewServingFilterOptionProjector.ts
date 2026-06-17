@@ -216,7 +216,7 @@ const getFilterOptionSourceRows = async (
           ${aggregateBySql} answer.prompt_id, answer.answerValue
         ),
         human_summary_options AS (
-          SELECT 'human' AS filterKind, 'summaryAnswer' AS facetKey, answer.answerValue AS facetValue, 'summary' AS promptId, NULL::INTEGER AS answerId, concat('human:summaryAnswer:summary:', answer.answerValue) AS optionValueKey, json_object('filterType', 'enum', 'promptId', 'summary', 'summaryMode', true, 'value', answer.answerValue) AS optionPayloadJson, COUNT(DISTINCT answer.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
+          SELECT 'human' AS filterKind, 'promptAnswer' AS facetKey, answer.answerValue AS facetValue, 'summary' AS promptId, NULL::INTEGER AS answerId, concat('human:promptAnswer:summary:', answer.answerValue) AS optionValueKey, json_object('filterType', 'enum', 'promptId', 'summary', 'summaryMode', true, 'value', answer.answerValue) AS optionPayloadJson, COUNT(DISTINCT answer.article_id) AS countValue, NULL::DOUBLE AS numericMin, NULL::DOUBLE AS numericMax
           FROM answer_values answer
           WHERE ${getSqlLiteral(input.optionMode)} = 'human'
             AND answer.prompt_id = 'summary'

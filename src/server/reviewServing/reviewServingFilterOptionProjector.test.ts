@@ -166,10 +166,10 @@ test('human option projection keeps prompt answers separate from summary-mode an
         promptId: 'prompt-1',
       }),
       sourceRow({
-        facetKey: 'summaryAnswer',
+        facetKey: 'promptAnswer',
         filterKind: 'human',
         optionPayloadJson: {filterType: 'enum', promptId: 'summary', summaryMode: true, value: 'include'},
-        optionValueKey: 'human:summaryAnswer:summary:include',
+        optionValueKey: 'human:promptAnswer:summary:include',
         promptId: 'summary',
       }),
     ],
@@ -194,9 +194,9 @@ test('human option projection keeps prompt answers separate from summary-mode an
   ).toBe(true)
   expect(
     hasOptionValue(result.optionValues, {
-      facet_key: 'summaryAnswer',
+      facet_key: 'promptAnswer',
       filter_kind: 'human',
-      option_value_key: 'human:summaryAnswer:summary:include',
+      option_value_key: 'human:promptAnswer:summary:include',
       prompt_id: 'summary',
     }),
   ).toBe(true)
