@@ -10,6 +10,7 @@ import type {
 } from '../../../db/schemaTypes.ts'
 import {getArticleSourceMetadataValue} from '../../../utils/articleSourceMetadata.ts'
 import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
+import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -140,6 +141,30 @@ type ProjectReviewDetailJudgmentRow = {
   modelVersion: string | null
 }
 
+type ServingJudgmentDetailRow = {
+  answered_original?: string | null
+  answered_original_as_array?: unknown
+  article_id?: string
+  detail_updated_at?: unknown
+  judgment_id?: string | null
+  judgment_payload_json?: unknown
+  model_id?: string | null
+  placeholder_kind?: string | null
+  prompt_id?: string
+  prompt_order?: number | null
+}
+
+type ServingHumanJudgmentDetailRow = {
+  answered_original?: string | null
+  article_id?: string
+  detail_updated_at?: unknown
+  judgment_id?: string | null
+  judgment_payload_json?: unknown
+  payload_kind?: string
+  prompt_id?: string
+  prompt_order?: number | null
+}
+
 type ProjectPromptRow = {
   id: string
   originalText: string
@@ -184,6 +209,20 @@ type CovidenceRelatedRecord = {
   stageMembership: Record<string, boolean>
 }
 
+const getJsonObjectValue = (value: unknown): Record<string, unknown> => {
+  const parsed = getJsonValue(value)
+
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
+}
+
+const getServingDateValue = (value: unknown) => {
+  return getDateValue(value) ?? null
+}
+
+const getStringPayloadValue = (value: unknown, fallback: string) => {
+  return typeof value === 'string' ? value : fallback
+}
+
 const getPromptValue = (row: {promptOriginalText: string; promptHeading: string | null}) => {
   return {originalText: row.promptOriginalText, promptHeading: row.promptHeading}
 }
@@ -192,52 +231,166 @@ const getProjectReviewDetailJudgmentRows = async (params: {
   projectId: string
   articleId: string
 }): Promise<ProjectReviewDetailJudgmentRow[]> => {
-  const rows = await getAppDatabaseService().queryJson<ProjectReviewDetailJudgmentRow>(`
-    WITH active_generation AS (
-      SELECT project_id AS projectId, active_generation AS generation
-      FROM app.project_review_serving_generation
-      WHERE project_id = '${escapeSqlString(params.projectId)}'
-    )
-    SELECT
-      j.judgment_id AS judgmentId,
-      j.created_at AS judgmentCreatedAt,
-      j.judgment_updated_at AS judgmentUpdatedAt,
-      j.article_id AS judgmentArticleId,
-      j.model_id AS judgmentModelId,
-      j.prompt_id AS judgmentPromptId,
-      j.judgment_project_id AS judgmentProjectId,
-      j.use_title AS judgmentUseTitle,
-      j.use_abstract AS judgmentUseAbstract,
-      j.use_fulltext AS judgmentUseFulltext,
-      j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
-      j.chunking_strategy AS judgmentChunkingStrategy,
-      j.is_answered AS judgmentIsAnswered,
-      j.answered_original AS judgmentAnsweredOriginal,
-      TO_JSON(j.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,
-      j.confidence_original AS judgmentConfidenceOriginal,
-      j.explanation AS judgmentExplanation,
-      TO_JSON(j.quotes) AS judgmentQuotes,
-      j.snapshot_project_id AS judgmentSnapshotProjectId,
-      j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
-      p.original_text AS promptOriginalText,
-      p.prompt_heading AS promptHeading,
-      TO_JSON(m.metadata_json) AS modelMetadataJson,
-      COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
-      pc.provider_kind AS modelProvider,
-      m.variant AS modelVersion
-    FROM mart.review_article_serving_detail j
-    INNER JOIN active_generation active
-      ON active.projectId = j.project_id
-     AND active.generation = j.generation
-    INNER JOIN app.prompt p ON p.id = j.prompt_id
-    LEFT JOIN app.model m ON m.id = j.model_id
-    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-    WHERE j.project_id = '${escapeSqlString(params.projectId)}'
-      AND j.article_id = '${escapeSqlString(params.articleId)}'
-    ORDER BY j.prompt_order ASC NULLS LAST, j.created_at DESC NULLS LAST, j.judgment_id ASC
-  `)
+  const result = await readReviewServingRows<ServingJudgmentDetailRow>({
+    allowStale: true,
+    articleId: params.articleId,
+    contractKey: 'review.detail.judgments',
+    limit: 512,
+    projectId: params.projectId,
+    searchMode: 'none',
+  })
+
+  if (result.status === 'rejected') {
+    throw new Error(`Review detail judgments are unavailable: ${result.reason}`)
+  }
+
+  const rows = result.rows
+  const promptIds = Array.from(
+    new Set(
+      rows
+        .map((row) => {
+          return row.prompt_id
+        })
+        .filter((promptId): promptId is string => {
+          return Boolean(promptId)
+        }),
+    ),
+  )
+  const modelIds = Array.from(
+    new Set(
+      rows
+        .map((row) => {
+          return row.model_id
+        })
+        .filter((modelId): modelId is string => {
+          return Boolean(modelId)
+        }),
+    ),
+  )
+  const [promptRows, modelRows] = await Promise.all([
+    promptIds.length > 0
+      ? getAppDatabaseService().queryJson<{id: string; originalText: string; promptHeading: string | null}>(`
+          SELECT id, original_text AS originalText, prompt_heading AS promptHeading
+          FROM app.prompt
+          WHERE id IN (${getQuotedStringList(promptIds).join(', ')})
+        `)
+      : [],
+    modelIds.length > 0
+      ? getAppDatabaseService().queryJson<{
+          id: string
+          metadataJson: unknown
+          modelName: string | null
+          modelProvider: string | null
+          modelVersion: string | null
+        }>(`
+          SELECT
+            m.id,
+            TO_JSON(m.metadata_json) AS metadataJson,
+            COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+            pc.provider_kind AS modelProvider,
+            m.variant AS modelVersion
+          FROM app.model m
+          LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+          WHERE m.id IN (${getQuotedStringList(modelIds).join(', ')})
+        `)
+      : [],
+  ])
+  const promptsById = new Map(
+    promptRows.map((row) => {
+      return [row.id, row]
+    }),
+  )
+  const modelsById = new Map(
+    modelRows.map((row) => {
+      return [row.id, row]
+    }),
+  )
 
   return rows
+    .filter((row) => {
+      return row.placeholder_kind === null || row.placeholder_kind === undefined
+    })
+    .map((row) => {
+      const payload = getJsonObjectValue(row.judgment_payload_json)
+      const promptId = row.prompt_id ?? ''
+      const modelId = row.model_id ?? ''
+      const prompt = promptsById.get(promptId)
+      const model = modelsById.get(modelId)
+
+      return {
+        judgmentId: row.judgment_id ?? getStringPayloadValue(payload.id, `placeholder:${promptId}`),
+        judgmentCreatedAt: payload.createdAt ?? null,
+        judgmentUpdatedAt: payload.updatedAt ?? row.detail_updated_at ?? null,
+        judgmentArticleId: row.article_id ?? params.articleId,
+        judgmentModelId: modelId,
+        judgmentPromptId: promptId,
+        judgmentProjectId: params.projectId,
+        judgmentUseTitle: null,
+        judgmentUseAbstract: null,
+        judgmentUseFulltext: null,
+        judgmentUseFulltextNoImages: null,
+        judgmentChunkingStrategy: (payload.chunkingStrategy as string | null | undefined) ?? null,
+        judgmentIsAnswered: (payload.isAnswered as boolean | null | undefined) ?? false,
+        judgmentAnsweredOriginal: row.answered_original ?? null,
+        judgmentAnsweredOriginalAsArray: row.answered_original_as_array ?? null,
+        judgmentConfidenceOriginal: (payload.confidenceOriginal as number | null | undefined) ?? 50,
+        judgmentExplanation: (payload.explanation as string | null | undefined) ?? null,
+        judgmentQuotes: payload.quotes ?? [],
+        judgmentSnapshotProjectId: (payload.snapshotProjectId as string | null | undefined) ?? null,
+        judgmentSnapshotProjectModelName: (payload.snapshotProjectModelName as string | null | undefined) ?? null,
+        promptOriginalText: prompt?.originalText ?? '',
+        promptHeading: prompt?.promptHeading ?? null,
+        modelMetadataJson: model?.metadataJson ?? null,
+        modelName: model?.modelName ?? null,
+        modelProvider: model?.modelProvider ?? null,
+        modelVersion: model?.modelVersion ?? null,
+      }
+    })
+}
+
+const getProjectReviewDetailHumanRows = async (params: {
+  articleId: string
+  projectId: string
+  promptRows: ProjectPromptRow[]
+}) => {
+  const result = await readReviewServingRows<ServingHumanJudgmentDetailRow>({
+    allowStale: true,
+    articleId: params.articleId,
+    contractKey: 'review.detail.humanJudgments',
+    limit: 512,
+    projectId: params.projectId,
+    searchMode: 'none',
+  })
+
+  if (result.status === 'rejected') {
+    throw new Error(`Review detail human judgments are unavailable: ${result.reason}`)
+  }
+
+  const promptsById = new Map(
+    params.promptRows.map((row) => {
+      return [row.id, row]
+    }),
+  )
+
+  return result.rows
+    .map((row) => {
+      const payload = getJsonObjectValue(row.judgment_payload_json)
+      const promptId = row.prompt_id ?? ''
+      const prompt = promptId === 'summary' ? null : promptsById.get(promptId)
+
+      return {
+        judgmentId: row.judgment_id ?? getStringPayloadValue(payload.id, ''),
+        promptId,
+        answer: row.answered_original ?? (payload.answer as string | null | undefined) ?? null,
+        comment: (payload.comment as string | null | undefined) ?? null,
+        promptOriginalText: prompt?.originalText ?? 'Overall human screening decision',
+        promptOrder: promptId === 'summary' ? 0 : (row.prompt_order ?? prompt?.order ?? null),
+        updatedAt: getServingDateValue(payload.updatedAt ?? row.detail_updated_at),
+      }
+    })
+    .filter((row) => {
+      return row.judgmentId.length > 0 && row.answer !== null && row.answer !== ''
+    })
 }
 
 const getProjectReviewDetailMartFreshness = async (projectId: string): Promise<ProjectReviewDetailMartFreshness> => {
@@ -416,6 +569,7 @@ const getJudgmentValue = (row: ArticleJudgmentRow): JudgmentRecord => {
     createdAt: getDateValue(row.judgmentCreatedAt) ?? new Date(0),
     updatedAt: getDateValue(row.judgmentUpdatedAt) ?? new Date(0),
     deletedAt: getDateValue(row.judgmentDeletedAt),
+    deleteGeneration: 0,
     articleId: row.judgmentArticleId,
     modelId: row.judgmentModelId,
     promptId: row.judgmentPromptId,
@@ -449,6 +603,7 @@ const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow
     createdAt: getDateValue(row.judgmentCreatedAt) ?? new Date(0),
     updatedAt: getDateValue(row.judgmentUpdatedAt) ?? new Date(0),
     deletedAt: null,
+    deleteGeneration: 0,
     articleId: row.judgmentArticleId,
     modelId: row.judgmentModelId,
     promptId: row.judgmentPromptId,
@@ -465,7 +620,7 @@ const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow
           return typeof value === 'string'
         })
       : null,
-    confidenceOriginal: row.judgmentConfidenceOriginal,
+    confidenceOriginal: row.judgmentConfidenceOriginal ?? 50,
     explanation: row.judgmentExplanation,
     quotes: Array.isArray(quotes) ? quotes : [],
     snapshotProjectId: row.judgmentSnapshotProjectId,
@@ -474,7 +629,7 @@ const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow
 }
 
 const getModelThinkingValue = (row: {modelMetadataJson: unknown}) => {
-  return getProviderModelMetadataOptions(getJsonValue(row.modelMetadataJson)).thinking
+  return getProviderModelMetadataOptions(getJsonValue(row.modelMetadataJson)).thinking ?? null
 }
 
 const getAssessmentValue = (row: {
@@ -914,54 +1069,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       const systemActor = getSystemActor()
 
-      const humanRows =
-        projectReviewConfig?.humanJudgmentMode === 'summary'
-          ? await getAppDatabaseService().queryJson<{
-              judgmentId: string
-              promptId: string
-              answer: string | null
-              comment: string | null
-              promptOriginalText: string
-              promptOrder: number | null
-            }>(`
-            SELECT
-              jhs.id AS judgmentId,
-              'summary' AS promptId,
-              jhs.answer AS answer,
-              NULL AS comment,
-              'Overall human screening decision' AS promptOriginalText,
-              0 AS promptOrder
-            FROM app.judgment_human_summary jhs
-            WHERE jhs.article_id = '${escapeSqlString(articleId)}'
-              AND jhs.project_id = '${escapeSqlString(projectId)}'
-              AND NULLIF(TRIM(COALESCE(jhs.answer, '')), '') IS NOT NULL
-            ORDER BY jhs.updated_at DESC NULLS LAST
-          `)
-          : await getAppDatabaseService().queryJson<{
-              judgmentId: string
-              promptId: string
-              answer: string | null
-              comment: string | null
-              promptOriginalText: string
-              promptOrder: number | null
-            }>(`
-            SELECT
-              jh.id AS judgmentId,
-              jh.prompt_id AS promptId,
-              jh.answer AS answer,
-              jh.comment AS comment,
-              p.original_text AS promptOriginalText,
-              pp.prompt_order AS promptOrder
-            FROM app.judgment_human jh
-            INNER JOIN app.prompt p ON p.id = jh.prompt_id
-            INNER JOIN app.project_prompt pp
-              ON pp.prompt_id = p.id
-             AND pp.project_id = '${escapeSqlString(projectId)}'
-            WHERE jh.article_id = '${escapeSqlString(articleId)}'
-              AND jh.project_id = '${escapeSqlString(projectId)}'
-              AND jh.is_answered = TRUE
-            ORDER BY pp.prompt_order ASC NULLS LAST, jh.updated_at DESC NULLS LAST
-          `)
+      const humanRows = await getProjectReviewDetailHumanRows({articleId, projectId, promptRows: projectPromptRows})
 
       const humanAssessmentsByUser =
         humanRows.length === 0
@@ -989,25 +1097,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       let humanAnswersByPrompt: Record<string, Array<{userName: string; answer: string}>> | undefined = undefined
       if (projectReviewConfig?.humanJudgmentMode !== 'summary' && promptIds.length > 0) {
         type HumanRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
-        const rows = await getAppDatabaseService().queryJson<{
-          articleId: string
-          promptId: string
-          answer: string | null
-          updatedAt: unknown
-        }>(`
-          SELECT
-            article_id AS articleId,
-            prompt_id AS promptId,
-            answer,
-            updated_at AS updatedAt
-          FROM app.judgment_human
-          WHERE article_id = '${escapeSqlString(articleId)}'
-            AND project_id = '${escapeSqlString(projectId)}'
-            AND prompt_id IN (${getQuotedStringList(promptIds).join(', ')})
-            AND answer IS NOT NULL
-        `)
-        const normalizedRows: HumanRow[] = rows.map((row) => {
-          return {...row, updatedAt: getDateValue(row.updatedAt)}
+        const normalizedRows: HumanRow[] = humanRows.map((row) => {
+          return {articleId, promptId: row.promptId, answer: row.answer, updatedAt: row.updatedAt}
         })
 
         // Deduplicate by latest updatedAt for (articleId, promptId)

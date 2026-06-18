@@ -583,11 +583,9 @@ test('mounted routes stay off incomplete option, detail, warning, and preview co
     '/api/articles/pdf-fetch-by-project',
     '/api/articlesreviewsboth',
     '/api/articlesreviewsfilters',
-    '/api/articlesreviewshuman',
     '/api/articlesreviewshumanfilters',
     '/api/projects/add_articles_by_filter',
     '/api/articlesreviewsunassessed',
-    '/api/projectsreview',
     '/api/projectsreviewswarnings',
     '/api/projects/:id/prompts/:promptId/preview',
     '/api/projects/:id/export',
@@ -601,6 +599,7 @@ test('mounted routes stay off incomplete option, detail, warning, and preview co
       && entry.contractKeys.includes('review.filters.postings')
       && entry.productRoute !== '/api/articlesreviews'
       && entry.productRoute !== '/api/articlesreviewscount'
+      && entry.productRoute !== '/api/articlesreviewshuman'
     )
   })
   const mountedFacetRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
@@ -642,7 +641,7 @@ test('unmigrated filter posting and facet contracts stay unmounted until route s
   ).toEqual([
     ['/api/articlesreviews', true],
     ['/api/articlesreviewscount', true],
-    ['/api/articlesreviewshuman', false],
+    ['/api/articlesreviewshuman', true],
     ['/api/articlesreviewsboth', false],
     ['/api/articlesreviewsunassessed', false],
     ['/api/review-serving/filter-postings', false],

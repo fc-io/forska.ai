@@ -1,10 +1,13 @@
-import {afterEach, expect, mock, test} from 'bun:test'
+import {afterEach, beforeEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
 const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
+const reviewServingReaderModulePath = new URL('../../reviewServing/reviewServingReader.ts', import.meta.url).pathname
 const systemActorModulePath = new URL('../../utils/getSystemActor.ts', import.meta.url).pathname
 const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).pathname
+
+type ReviewServingRouteTestRequest = {articleId?: string | null; contractKey: string; projectId?: string | null}
 
 const fullArticlesByIdsRef = {
   current: async (_articleIds: string[]): Promise<unknown[]> => {
@@ -21,6 +24,12 @@ const projectReviewConfigRef = {
 const queryJsonRef = {
   current: async (_statement: string): Promise<unknown[]> => {
     return []
+  },
+}
+
+const reviewServingRowsRef = {
+  current: async (_request: ReviewServingRouteTestRequest): Promise<{rows: unknown[]; status: 'accepted'}> => {
+    return {rows: [], status: 'accepted'}
   },
 }
 
@@ -56,6 +65,14 @@ const registerModuleMocks = () => {
     }
   })
 
+  void mock.module(reviewServingReaderModulePath, () => {
+    return {
+      readReviewServingRows: (request: ReviewServingRouteTestRequest) => {
+        return reviewServingRowsRef.current(request)
+      },
+    }
+  })
+
   void mock.module(systemActorModulePath, () => {
     return {
       getSystemActor: () => {
@@ -81,6 +98,21 @@ const loadHandler = (): Promise<typeof import('./projectsRoutesPostArticleReview
 
 afterEach(() => {
   mock.restore()
+})
+
+beforeEach(() => {
+  fullArticlesByIdsRef.current = async () => {
+    return []
+  }
+  projectReviewConfigRef.current = async () => {
+    return null
+  }
+  queryJsonRef.current = async () => {
+    return []
+  }
+  reviewServingRowsRef.current = async () => {
+    return {rows: [], status: 'accepted'}
+  }
 })
 
 const getPromptRow = (id: string, order: number) => {
@@ -128,33 +160,43 @@ const getArticleJudgmentRow = (overrides: Partial<Record<string, unknown>>) => {
   }
 }
 
-const getProjectReviewDetailJudgmentRow = (overrides: Partial<Record<string, unknown>>) => {
+const getServingJudgmentRow = (overrides: Partial<Record<string, unknown>> = {}) => {
   return {
-    judgmentAnsweredOriginal: 'yes',
-    judgmentAnsweredOriginalAsArray: ['yes'],
-    judgmentArticleId: 'article-1',
-    judgmentChunkingStrategy: null,
-    judgmentConfidenceOriginal: 80,
-    judgmentCreatedAt: '2024-01-03T00:00:00.000Z',
-    judgmentExplanation: 'because',
-    judgmentId: 'judgment-1',
-    judgmentIsAnswered: true,
-    judgmentModelId: 'model-1',
-    judgmentProjectId: 'project-1',
-    judgmentPromptId: 'prompt-1',
-    judgmentQuotes: [],
-    judgmentSnapshotProjectId: null,
-    judgmentSnapshotProjectModelName: null,
-    judgmentUpdatedAt: '2024-01-04T00:00:00.000Z',
-    judgmentUseAbstract: true,
-    judgmentUseFulltext: false,
-    judgmentUseFulltextNoImages: false,
-    judgmentUseTitle: true,
-    modelName: 'Model 1',
-    modelProvider: 'sglang',
-    modelVersion: 'v1',
-    promptHeading: 'Prompt 1',
-    promptOriginalText: 'Prompt 1',
+    answered_original: 'yes',
+    answered_original_as_array: ['yes'],
+    article_id: 'article-1',
+    detail_updated_at: '2024-01-04T00:00:00.000Z',
+    judgment_id: 'judgment-1',
+    judgment_payload_json: {
+      assessments: [],
+      chunkingStrategy: null,
+      confidenceOriginal: 80,
+      createdAt: '2024-01-03T00:00:00.000Z',
+      explanation: 'because',
+      id: 'judgment-1',
+      isAnswered: true,
+      quotes: [],
+      updatedAt: '2024-01-04T00:00:00.000Z',
+    },
+    model_id: 'model-1',
+    payload_kind: 'llm',
+    placeholder_kind: null,
+    prompt_id: 'prompt-1',
+    prompt_order: 0,
+    ...overrides,
+  }
+}
+
+const getServingHumanJudgmentRow = (overrides: Partial<Record<string, unknown>> = {}) => {
+  return {
+    answered_original: 'yes',
+    article_id: 'article-1',
+    detail_updated_at: '2024-01-05T00:00:00.000Z',
+    judgment_id: 'human-1',
+    judgment_payload_json: {answer: 'yes', comment: null, id: 'human-1', updatedAt: '2024-01-05T00:00:00.000Z'},
+    payload_kind: 'human',
+    prompt_id: 'prompt-1',
+    prompt_order: 0,
     ...overrides,
   }
 }
@@ -484,12 +526,8 @@ test('project review details keeps legacy covidence rows when source record cove
   expect(covidenceStatement).toContain('source_record.canonicalArticleId = legacy_related_record.canonicalArticleId')
 })
 
-test('project review details merges detail mart rows, raw fallback rows, and placeholders', async () => {
-  let detailStatement = ''
-  const getDetailRows = (statement: string) => {
-    detailStatement = statement
-    return [getProjectReviewDetailJudgmentRow({judgmentId: 'judgment-detail', judgmentPromptId: 'prompt-1'})]
-  }
+test('project review details merges serving detail rows, scoped extras, and placeholders', async () => {
+  const servingContractKeys: string[] = []
 
   fullArticlesByIdsRef.current = async () => {
     return [{articleTitle: 'Article 1', id: 'article-1'}]
@@ -497,30 +535,34 @@ test('project review details merges detail mart rows, raw fallback rows, and pla
   projectReviewConfigRef.current = async () => {
     return {modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
   }
+  reviewServingRowsRef.current = async (request) => {
+    servingContractKeys.push(request.contractKey)
+    return request.contractKey === 'review.detail.judgments'
+      ? {rows: [getServingJudgmentRow({judgment_id: 'judgment-detail', prompt_id: 'prompt-1'})], status: 'accepted'}
+      : {rows: [], status: 'accepted'}
+  }
   queryJsonRef.current = async (statement) => {
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0), getPromptRow('prompt-2', 1), getPromptRow('prompt-3', 2)]
       : statement.includes('FROM app.project_mart_refresh_state')
         ? [getFreshnessRow()]
-        : statement.includes('FROM mart.review_article_serving_detail j')
-          ? getDetailRows(statement)
-          : statement.includes('FROM app.judgment j')
+        : statement.includes('FROM app.judgment j')
+          ? [
+              getArticleJudgmentRow({judgmentId: 'judgment-detail', judgmentPromptId: 'prompt-1'}),
+              getArticleJudgmentRow({judgmentId: 'judgment-fallback', judgmentPromptId: 'prompt-2'}),
+            ]
+          : statement.includes('FROM app.judgment_assessment')
             ? [
-                getArticleJudgmentRow({judgmentId: 'judgment-detail', judgmentPromptId: 'prompt-1'}),
-                getArticleJudgmentRow({judgmentId: 'judgment-fallback', judgmentPromptId: 'prompt-2'}),
+                {
+                  assessmentComment: 'looks good',
+                  assessmentIsCorrect: true,
+                  createdAt: '2024-01-05T00:00:00.000Z',
+                  id: 'assessment-1',
+                  judgmentId: 'judgment-detail',
+                  updatedAt: '2024-01-05T00:00:00.000Z',
+                },
               ]
-            : statement.includes('FROM app.judgment_assessment')
-              ? [
-                  {
-                    assessmentComment: 'looks good',
-                    assessmentIsCorrect: true,
-                    createdAt: '2024-01-05T00:00:00.000Z',
-                    id: 'assessment-1',
-                    judgmentId: 'judgment-detail',
-                    updatedAt: '2024-01-05T00:00:00.000Z',
-                  },
-                ]
-              : []
+            : []
   }
 
   const response = await postReviewDetailsRequest()
@@ -539,8 +581,8 @@ test('project review details merges detail mart rows, raw fallback rows, and pla
       return assessment.id
     }),
   ).toEqual(['assessment-1'])
-  expect(detailStatement).toContain('WITH active_generation AS')
-  expect(detailStatement).toContain('active.generation = j.generation')
+  expect(servingContractKeys).toContain('review.detail.judgments')
+  expect(servingContractKeys).toContain('review.detail.humanJudgments')
 })
 
 test('project review details reuses project-visible raw judgments from another source project', async () => {
@@ -585,7 +627,7 @@ test('project review details reuses project-visible raw judgments from another s
 })
 
 test('project review details keeps active detail mart rows while surfacing stale freshness', async () => {
-  let detailQueryCount = 0
+  let detailReaderCount = 0
 
   fullArticlesByIdsRef.current = async () => {
     return [{articleTitle: 'Article 1', id: 'article-1'}]
@@ -593,32 +635,48 @@ test('project review details keeps active detail mart rows while surfacing stale
   projectReviewConfigRef.current = async () => {
     return {modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
   }
+  reviewServingRowsRef.current = async (request) => {
+    if (request.contractKey !== 'review.detail.judgments') {
+      return {rows: [], status: 'accepted'}
+    }
+
+    detailReaderCount += 1
+    return {
+      rows: [
+        getServingJudgmentRow({
+          answered_original: 'old',
+          judgment_id: 'stale-detail',
+          judgment_payload_json: {
+            confidenceOriginal: 80,
+            createdAt: '2024-01-03T00:00:00.000Z',
+            explanation: 'old detail',
+            id: 'stale-detail',
+            isAnswered: true,
+            quotes: [],
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+        }),
+      ],
+      status: 'accepted',
+    }
+  }
   queryJsonRef.current = async (statement) => {
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0)]
       : statement.includes('FROM app.project_mart_refresh_state')
         ? [getFreshnessRow({dirtyToken: 4, lastCompletedDirtyToken: 3, refreshStatus: 'failed'})]
-        : statement.includes('FROM mart.review_article_serving_detail j')
-          ? ((detailQueryCount += 1),
-            [
-              getProjectReviewDetailJudgmentRow({
-                judgmentAnsweredOriginal: 'old',
-                judgmentExplanation: 'old detail',
-                judgmentId: 'stale-detail',
+        : statement.includes('FROM app.judgment j')
+          ? [
+              getArticleJudgmentRow({
+                judgmentAnsweredOriginal: 'new',
+                judgmentExplanation: 'new detail',
+                judgmentId: 'judgment-fallback',
+                judgmentProjectId: 'project-other',
+                judgmentPromptId: 'prompt-1',
+                judgmentSnapshotProjectId: 'project-other',
               }),
-            ])
-          : statement.includes('FROM app.judgment j')
-            ? [
-                getArticleJudgmentRow({
-                  judgmentAnsweredOriginal: 'new',
-                  judgmentExplanation: 'new detail',
-                  judgmentId: 'judgment-fallback',
-                  judgmentProjectId: 'project-other',
-                  judgmentPromptId: 'prompt-1',
-                  judgmentSnapshotProjectId: 'project-other',
-                }),
-              ]
-            : []
+            ]
+          : []
   }
 
   const response = await postReviewDetailsRequest()
@@ -629,7 +687,7 @@ test('project review details keeps active detail mart rows while surfacing stale
   }
 
   expect(response.status).toBe(200)
-  expect(detailQueryCount).toBe(1)
+  expect(detailReaderCount).toBe(1)
   expect(body.martFreshness).toMatchObject({isFresh: false, state: 'stale'})
   expect(
     body.judgments.map((judgment) => {
@@ -646,7 +704,7 @@ test('project review details keeps active detail mart rows while surfacing stale
 })
 
 test('project review details keeps active detail mart rows while surfacing running freshness', async () => {
-  let detailQueryCount = 0
+  let detailReaderCount = 0
 
   fullArticlesByIdsRef.current = async () => {
     return [{articleTitle: 'Article 1', id: 'article-1'}]
@@ -654,32 +712,48 @@ test('project review details keeps active detail mart rows while surfacing runni
   projectReviewConfigRef.current = async () => {
     return {modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
   }
+  reviewServingRowsRef.current = async (request) => {
+    if (request.contractKey !== 'review.detail.judgments') {
+      return {rows: [], status: 'accepted'}
+    }
+
+    detailReaderCount += 1
+    return {
+      rows: [
+        getServingJudgmentRow({
+          answered_original: 'old',
+          judgment_id: 'running-detail',
+          judgment_payload_json: {
+            confidenceOriginal: 80,
+            createdAt: '2024-01-03T00:00:00.000Z',
+            explanation: 'old detail',
+            id: 'running-detail',
+            isAnswered: true,
+            quotes: [],
+            updatedAt: '2024-01-04T00:00:00.000Z',
+          },
+        }),
+      ],
+      status: 'accepted',
+    }
+  }
   queryJsonRef.current = async (statement) => {
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0)]
       : statement.includes('FROM app.project_mart_refresh_state')
         ? [getFreshnessRow({dirtyToken: 5, lastCompletedDirtyToken: 4, refreshStatus: 'running'})]
-        : statement.includes('FROM mart.review_article_serving_detail j')
-          ? ((detailQueryCount += 1),
-            [
-              getProjectReviewDetailJudgmentRow({
-                judgmentAnsweredOriginal: 'old',
-                judgmentExplanation: 'old detail',
-                judgmentId: 'running-detail',
+        : statement.includes('FROM app.judgment j')
+          ? [
+              getArticleJudgmentRow({
+                judgmentAnsweredOriginal: 'new',
+                judgmentExplanation: 'new detail',
+                judgmentId: 'judgment-fallback',
+                judgmentProjectId: 'project-other',
+                judgmentPromptId: 'prompt-1',
+                judgmentSnapshotProjectId: 'project-other',
               }),
-            ])
-          : statement.includes('FROM app.judgment j')
-            ? [
-                getArticleJudgmentRow({
-                  judgmentAnsweredOriginal: 'new',
-                  judgmentExplanation: 'new detail',
-                  judgmentId: 'judgment-fallback',
-                  judgmentProjectId: 'project-other',
-                  judgmentPromptId: 'prompt-1',
-                  judgmentSnapshotProjectId: 'project-other',
-                }),
-              ]
-            : []
+            ]
+          : []
   }
 
   const response = await postReviewDetailsRequest()
@@ -690,7 +764,7 @@ test('project review details keeps active detail mart rows while surfacing runni
   }
 
   expect(response.status).toBe(200)
-  expect(detailQueryCount).toBe(1)
+  expect(detailReaderCount).toBe(1)
   expect(body.martFreshness).toMatchObject({isFresh: false, state: 'running'})
   expect(
     body.judgments.map((judgment) => {
@@ -741,7 +815,7 @@ test('project review details raw fallback query uses project-visible scope witho
 })
 
 test('project review details human prompt map is scoped to project and current prompts', async () => {
-  let humanPromptMapStatement = ''
+  const servingRequests: Array<{articleId?: string | null; contractKey: string; projectId?: string | null}> = []
 
   fullArticlesByIdsRef.current = async () => {
     return [{articleTitle: 'Article 1', id: 'article-1'}]
@@ -756,12 +830,15 @@ test('project review details human prompt map is scoped to project and current p
       useTitle: true,
     }
   }
+  reviewServingRowsRef.current = async (request) => {
+    servingRequests.push(request)
+    return request.contractKey === 'review.detail.judgments'
+      ? {rows: [getServingJudgmentRow({judgment_id: 'judgment-1', prompt_id: 'prompt-1'})], status: 'accepted'}
+      : request.contractKey === 'review.detail.humanJudgments'
+        ? {rows: [getServingHumanJudgmentRow({prompt_id: 'prompt-1'})], status: 'accepted'}
+        : {rows: [], status: 'accepted'}
+  }
   queryJsonRef.current = async (statement) => {
-    if (statement.includes('FROM app.judgment_human') && statement.includes('answer IS NOT NULL')) {
-      humanPromptMapStatement = statement
-      return [{articleId: 'article-1', promptId: 'prompt-1', answer: 'yes', updatedAt: '2024-01-05T00:00:00.000Z'}]
-    }
-
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0)]
       : statement.includes('FROM app.project_mart_refresh_state')
@@ -777,8 +854,15 @@ test('project review details human prompt map is scoped to project and current p
   }
 
   expect(response.status).toBe(200)
-  expect(humanPromptMapStatement).toContain("project_id = 'project-1'")
-  expect(humanPromptMapStatement).toContain("prompt_id IN ('prompt-1')")
+  expect(
+    servingRequests.some((request) => {
+      return (
+        request.articleId === 'article-1'
+        && request.contractKey === 'review.detail.humanJudgments'
+        && request.projectId === 'project-1'
+      )
+    }),
+  ).toBe(true)
   expect(body.humanAnswersByPrompt).toEqual({'prompt-1': [{answer: 'yes', userName: 'System'}]})
 })
 
@@ -796,37 +880,46 @@ test('project review details exposes summary-mode overall answers without prompt
       useTitle: true,
     }
   }
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.judgments'
+      ? {
+          rows: [
+            getServingJudgmentRow({
+              answered_original: 'yes',
+              answered_original_as_array: ['yes'],
+              judgment_id: 'judgment-1',
+              prompt_id: 'prompt-1',
+            }),
+            getServingJudgmentRow({
+              answered_original: 'no',
+              answered_original_as_array: ['no'],
+              judgment_id: 'judgment-2',
+              prompt_id: 'prompt-2',
+              prompt_order: 1,
+            }),
+          ],
+          status: 'accepted',
+        }
+      : request.contractKey === 'review.detail.humanJudgments'
+        ? {
+            rows: [
+              getServingHumanJudgmentRow({
+                answered_original: 'no',
+                judgment_id: 'human-summary-1',
+                judgment_payload_json: {answer: 'no', comment: null, id: 'human-summary-1'},
+                prompt_id: 'summary',
+              }),
+            ],
+            status: 'accepted',
+          }
+        : {rows: [], status: 'accepted'}
+  }
   queryJsonRef.current = async (statement) => {
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0), getPromptRow('prompt-2', 1)]
       : statement.includes('FROM app.project_mart_refresh_state')
         ? [getFreshnessRow()]
-        : statement.includes('FROM app.judgment j')
-          ? [
-              getArticleJudgmentRow({
-                judgmentId: 'judgment-1',
-                judgmentPromptId: 'prompt-1',
-                judgmentAnsweredOriginal: 'yes',
-                judgmentAnsweredOriginalAsArray: ['yes'],
-              }),
-              getArticleJudgmentRow({
-                judgmentId: 'judgment-2',
-                judgmentPromptId: 'prompt-2',
-                judgmentAnsweredOriginal: 'no',
-                judgmentAnsweredOriginalAsArray: ['no'],
-              }),
-            ]
-          : statement.includes('FROM app.judgment_human_summary jhs')
-            ? [
-                {
-                  judgmentId: 'human-summary-1',
-                  promptId: 'summary',
-                  answer: 'no',
-                  comment: null,
-                  promptOriginalText: 'Overall',
-                },
-              ]
-            : []
+        : []
   }
 
   const response = await postReviewDetailsRequest()
