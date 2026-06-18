@@ -105,7 +105,7 @@ test('selected-import routine updates write component-narrow patches for only cl
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 9})
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(selectStatement).toContain('FROM dirty_article dirty')
-  expect(selectStatement).toContain('INNER JOIN mart.project_scope_article scope')
+  expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
   expect(selectStatement).toContain('INNER JOIN app.review_import_article_hot_field hot')
   expect(insertStatement).toContain('patch_watermark')
   expect(insertStatement).toContain('9')
@@ -180,6 +180,31 @@ test('selected-import tombstones clear selected columns without deleting curated
   expect(joined).toContain('changed.scope_tombstone = TRUE')
   expect(joined).toContain('changed.scope_tombstone = FALSE')
   expect(joined).toContain('selected_import_route_id = changed.import_route_id')
+})
+
+test('project-scoped selected-import rebuilds include previous serving articles for scope tombstones', async () => {
+  const {database, statements} = createSelectedImportPatchDatabase({patchRows: []})
+
+  await projectReviewServingSelectedImportPatches(
+    projectPatchInput([
+      selectedImportClaim({
+        articleId: null,
+        dirtyKind: 'project.reviewConfig.updated',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ]),
+    database,
+  )
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('WITH dirty_article(article_id)')
+  })
+
+  expect(selectStatement).toContain('FROM mart.project_scope_article scope')
+  expect(selectStatement).toContain('UNION')
+  expect(selectStatement).toContain('FROM mart.review_article_serving_v4 serving')
+  expect(selectStatement).toContain("serving.selected_import_identity = 'selectedImport:identity-1'")
+  expect(selectStatement).toContain("snapshot.selected_import_snapshot_id = 'selected-import-snapshot-1'")
 })
 
 test('selected-import patches promote manifest and watermark atomically without unrelated component base generations', async () => {

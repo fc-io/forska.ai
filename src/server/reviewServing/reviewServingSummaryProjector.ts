@@ -195,6 +195,9 @@ const getSummaryContributionRows = async (
     : database.queryJson<SummaryContributionSourceRow>(`
         WITH ${getDirtyArticleCte(input.projectId, articleIds)},
         ${getListModeCte(input.listModeKeys)},
+        project_settings AS (
+          SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
+        ),
         scoped_article AS (
           SELECT
             scope.article_id,
@@ -379,7 +382,9 @@ const getSummaryContributionRows = async (
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
           INNER JOIN selected_state selected ON selected.article_id = human.article_id AND selected.in_selected_scope
+          CROSS JOIN project_settings
           WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND human.base_generation = ${getSqlLiteral(input.baseGeneration)} AND human.list_mode_key = 'human' AND NOT human.tombstone AND human.prompt_id <> 'summary' AND human.human_answered_value IS NOT NULL
+            AND project_settings.human_judgment_mode <> 'summary'
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
@@ -395,7 +400,9 @@ const getSummaryContributionRows = async (
           FROM mart.review_human_status_patch_v4 human
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
           INNER JOIN selected_state selected ON selected.article_id = human.article_id AND selected.in_selected_scope
+          CROSS JOIN project_settings
           WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND human.base_generation = ${getSqlLiteral(input.baseGeneration)} AND human.list_mode_key = 'human' AND NOT human.tombstone AND human.prompt_id = 'summary' AND human.human_answered_value IS NOT NULL
+            AND project_settings.human_judgment_mode = 'summary'
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer

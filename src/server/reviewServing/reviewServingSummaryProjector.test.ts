@@ -216,6 +216,9 @@ test('projects human summary-answer facets independently from prompt answers', a
   ).toBe(true)
   expect(selectStatement).toContain('FROM mart.review_human_status_patch_v4 newer')
   expect(selectStatement).toContain('human.base_generation = 5')
+  expect(selectStatement).toContain("COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = 'project-1'), 'prompt') AS human_judgment_mode")
+  expect(selectStatement).toContain("project_settings.human_judgment_mode <> 'summary'")
+  expect(selectStatement).toContain("project_settings.human_judgment_mode = 'summary'")
   expect(selectStatement).toContain('newer.prompt_id IS NOT DISTINCT FROM human.prompt_id')
 })
 
