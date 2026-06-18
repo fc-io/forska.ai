@@ -239,8 +239,10 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
   })
 
   expect(result).toEqual({patchRowCount: 1, patchWatermark: 14})
+  expect(projectSelect).toContain('WITH prompt_id_filter(prompt_id) AS')
+  expect(projectSelect).toContain('FROM mart.review_llm_status_patch_v4 llm')
+  expect(projectSelect).toContain('LEFT JOIN app.project_prompt project_prompt')
   expect(projectSelect).toContain('INNER JOIN mart.project_scope_article scope')
-  expect(projectSelect).toContain('INNER JOIN app.project_prompt project_prompt')
   expect(projectSelect).toContain('FROM app."judgment"')
   expect(projectSelect).toContain('ROW_NUMBER() OVER')
   expect(projectSelect).toContain('ORDER BY created_at DESC NULLS LAST, id DESC')
@@ -250,7 +252,7 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
   expect(projectSelect).toContain(
     'COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone',
   )
-  expect(projectSelect).toContain('WHERE project.id =')
+  expect(projectSelect).toContain('WHERE llm.project_id =')
 })
 
 test('article judgment-input claims rebuild article-scoped LLM status rows', async () => {

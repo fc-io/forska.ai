@@ -133,12 +133,12 @@ test('import delta intake bounds source rows before route fanout', async () => {
     return statement.includes('INSERT INTO app.review_serving_dirty_work')
   })
 
-  expect(result).toMatchObject({dirtyWorkCount: 16, maxSourceHighWaterMark: 4, status: 'converted'})
+  expect(result).toMatchObject({dirtyWorkCount: 18, maxSourceHighWaterMark: 4, status: 'converted'})
   expect(deltaSelect).toContain('LIMIT 1')
   expect(deltaSelect).toContain('delta.source_high_water_mark AS sourceHighWaterMark')
   expect(deltaSelect).not.toContain('CAST(delta.source_high_water_mark AS INTEGER)')
   expect(deltaSelect).toContain('LEFT JOIN app.project_import_route')
-  expect(dirtyInserts).toHaveLength(16)
+  expect(dirtyInserts).toHaveLength(18)
 })
 
 test('repeated import changes collapse into one dirty row per project component identity', async () => {
@@ -196,9 +196,10 @@ test('import projection identity is stable across per-mutation article values', 
       return statement.includes('INSERT INTO app.review_serving_dirty_work')
     })
     .map(getProjectionKey)
+  const uniqueProjectionKeys = new Set(projectionKeys)
 
-  expect(projectionKeys).toHaveLength(2)
-  expect(projectionKeys[0]).toBe(projectionKeys[1])
+  expect(projectionKeys).toHaveLength(18)
+  expect(uniqueProjectionKeys.size).toBe(9)
 })
 
 test('selected import rank-field changes do not dirty display or judgment input components', async () => {
@@ -215,7 +216,7 @@ test('selected import rank-field changes do not dirty display or judgment input 
   })
   const projectionKey = dirtyInsert === undefined ? {} : parseProjectionKey(dirtyInsert)
 
-  expect(result).toMatchObject({dirtyWorkCount: 1, maxSourceHighWaterMark: 1, status: 'converted'})
+  expect(result).toMatchObject({dirtyWorkCount: 3, maxSourceHighWaterMark: 1, status: 'converted'})
   expect(projectionKey).toMatchObject({projectionComponent: 'selectedImport'})
   expect(dirtyInsert).toContain('importRoute.article.rankFields.updated')
   expect(dirtyInsert).not.toContain('display')
@@ -236,7 +237,7 @@ test('tombstone import deltas create removed work with registry declared compone
   })
   const tombstoneRule = getReviewServingInvalidationRule('importRoute.article.removed')
 
-  expect(result).toMatchObject({dirtyWorkCount: 1, maxSourceHighWaterMark: 1, status: 'converted'})
+  expect(result).toMatchObject({dirtyWorkCount: 9, maxSourceHighWaterMark: 1, status: 'converted'})
   expect(parseProjectionKey(dirtyInsert ?? '').projectionComponent).toBe('projectScope')
   expect(getDirtyKind(dirtyInsert ?? '')).toBe('importRoute.article.removed')
   expect(tombstoneRule.affectedComponents).toEqual([
@@ -246,6 +247,7 @@ test('tombstone import deltas create removed work with registry declared compone
     'humanStatus',
     'queue',
     'posting',
+    'search',
     'summary',
     'payload',
   ])

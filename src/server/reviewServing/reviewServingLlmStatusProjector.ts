@@ -332,9 +332,19 @@ const getProjectScopedRows = async (
   return !hasProjectReviewConfigClaim(input.claims)
     ? []
     : database.queryJson<LlmStatusSourceRow>(`
+        WITH prompt_id_filter(prompt_id) AS (
+          SELECT project_prompt.prompt_id
+          FROM app.project_prompt project_prompt
+          WHERE project_prompt.project_id = ${getSqlLiteral(input.projectId)}
+          UNION
+          SELECT llm.prompt_id
+          FROM mart.review_llm_status_patch_v4 llm
+          WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
+            AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
+        )
         SELECT
           scope.article_id AS articleId,
-          project_prompt.prompt_id AS promptId,
+          dirty_prompt.prompt_id AS promptId,
           project.model_id AS modelId,
           project.use_title AS useTitle,
           project.use_abstract AS useAbstract,
@@ -355,10 +365,13 @@ const getProjectScopedRows = async (
         INNER JOIN mart.project_scope_article scope
           ON scope.project_id = project.id
           AND (scope.in_curated_scope OR scope.in_route_scope)
-        INNER JOIN app.project_prompt project_prompt
+        INNER JOIN prompt_id_filter dirty_prompt
+          ON TRUE
+        LEFT JOIN app.project_prompt project_prompt
           ON project_prompt.project_id = project.id
+          AND project_prompt.prompt_id = dirty_prompt.prompt_id
         INNER JOIN app.prompt prompt
-          ON prompt.id = project_prompt.prompt_id
+          ON prompt.id = dirty_prompt.prompt_id
         LEFT JOIN (
           SELECT
             *,
@@ -370,7 +383,7 @@ const getProjectScopedRows = async (
           WHERE deleted_at IS NULL
         ) judgment
           ON judgment.article_id = scope.article_id
-          AND judgment.prompt_id = project_prompt.prompt_id
+          AND judgment.prompt_id = dirty_prompt.prompt_id
           AND judgment.model_id = project.model_id
           AND judgment.use_title = project.use_title
           AND judgment.use_abstract = project.use_abstract
@@ -378,7 +391,7 @@ const getProjectScopedRows = async (
           AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
           AND judgment.judgment_rank = 1
         WHERE project.id = ${getSqlLiteral(input.projectId)}
-        ORDER BY scope.article_id ASC, project_prompt.prompt_id ASC
+        ORDER BY scope.article_id ASC, dirty_prompt.prompt_id ASC
       `)
 }
 
