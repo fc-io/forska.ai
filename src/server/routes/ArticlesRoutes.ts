@@ -1,25 +1,22 @@
 import {Elysia, t} from 'elysia'
 
-import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {appendArticleReviewServingDeltasForIds} from '../reviewServing/articleReviewServingDeltaService.ts'
+import {
+  assertArticleIdOnlyBulkOperationCaps,
+  createReviewBulkOperationJob,
+} from '../reviewServing/reviewBulkOperationService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
   getDateValue,
   getJsonValue,
-  getProjectScopeClause,
   getQuotedStringList,
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {storeImportedArticlesWithTx} from '../services/articleImportStoreService.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
 import {getPdfFetchJob, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
-import {
-  getScopedArticleImportJoinSql,
-  getScopedArticleImportSelectionCteSql,
-  getScopedArticleMetadataExpression,
-} from '../services/scopedArticleReadAdapter.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type ArticleJudgmentRow = {
@@ -182,6 +179,7 @@ export const articlesRoutes = new Elysia()
   .post(
     '/api/articles/pdf-fetch-bulk',
     ({body, set}) => {
+      assertArticleIdOnlyBulkOperationCaps(body.articleIds)
       const job = startPdfFetchJob({
         articleIds: body.articleIds,
         concurrency: body.concurrency,
@@ -202,22 +200,40 @@ export const articlesRoutes = new Elysia()
   .post(
     '/api/articles/pdf-fetch-by-filter',
     async ({body, set}) => {
-      const articleIds = await selectArticleIdsByFilterOlap(
-        body.sourceProjectId,
-        body.listType,
-        body.llmStatus,
-        body.prompts,
-        body.from,
-        body.to,
-        body.search,
-        body.hasDuplicateStudyRecords,
-        body.hasStudyDecisionConflict,
-      )
-
-      const job = startPdfFetchJob({articleIds, concurrency: body.concurrency, forceRefetch: body.forceRefetch})
+      const job = await createReviewBulkOperationJob({
+        criteria: {
+          concurrency: body.concurrency,
+          forceRefetch: body.forceRefetch,
+          from: body.from,
+          hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+          hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+          listType: body.listType,
+          llmStatus: body.llmStatus,
+          operation: 'pdfFetch',
+          prompts: body.prompts,
+          search: body.search,
+          sourceProjectId: body.sourceProjectId,
+          to: body.to,
+        },
+        filters: {
+          from: body.from,
+          hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+          hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+          listType: body.listType,
+          llmStatus: body.llmStatus,
+          prompts: body.prompts,
+          search: body.search,
+          to: body.to,
+        },
+        jobKind: 'review.pdf.selection',
+        projectId: body.sourceProjectId,
+        searchMode: body.search ? 'substring' : 'none',
+        searchText: body.search,
+        snapshot: {type: 'latest'},
+      })
 
       set.status = 202
-      return {success: true, selectionTotal: articleIds.length, job}
+      return {success: true, job}
     },
     {
       body: t.Object({
@@ -238,68 +254,40 @@ export const articlesRoutes = new Elysia()
   .post(
     '/api/articles/pdf-fetch-by-project',
     async ({body, set}) => {
-      const fromDate = body.from ? new Date(`${body.from}T00:00:00.000Z`) : null
-      const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
-      const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
-
       const projectBounds = await getAppQueryService().getProjectReviewConfig(body.projectId)
 
       if (!projectBounds) {
         throw new Error('Project not found')
       }
 
-      const effectiveFromDate = (() => {
-        if (projectBounds.dateFrom && fromDate) {
-          return projectBounds.dateFrom > fromDate ? projectBounds.dateFrom : fromDate
-        }
-        return projectBounds.dateFrom ?? fromDate
-      })()
-
-      const effectiveToDate = (() => {
-        if (projectBounds.dateTo && toDate) {
-          return projectBounds.dateTo < toDate ? projectBounds.dateTo : toDate
-        }
-        return projectBounds.dateTo ?? toDate
-      })()
-      const scopedArticleImportCte = getScopedArticleImportSelectionCteSql({projectIds: [body.projectId]})
-      const scopedArticleImportJoin = getScopedArticleImportJoinSql({articleIdExpression: 'a.id'})
-      const scopedMetadataExpression = getScopedArticleMetadataExpression({articleAlias: 'a'})
-
-      const whereParts = [
-        getProjectScopeClause({
-          articleAlias: 'a',
-          importRouteIds: projectBounds.importRouteIds,
-          projectId: body.projectId,
-        }),
-        effectiveFromDate ? `a.article_created_at >= ${getTimestampLiteral(effectiveFromDate)}` : null,
-        effectiveToDate ? `a.article_created_at <= ${getTimestampLiteral(effectiveToDate)}` : null,
-        searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
-        body.hasDuplicateStudyRecords
-          ? `LOWER(COALESCE(json_extract_string(${scopedMetadataExpression}, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'`
-          : null,
-        body.hasStudyDecisionConflict
-          ? `LOWER(COALESCE(json_extract_string(${scopedMetadataExpression}, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'`
-          : null,
-      ].filter((part): part is string => {
-        return part !== null
+      const job = await createReviewBulkOperationJob({
+        criteria: {
+          concurrency: body.concurrency,
+          forceRefetch: body.forceRefetch,
+          from: body.from,
+          hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+          hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+          operation: 'pdfFetch',
+          search: body.search,
+          sourceProjectId: body.projectId,
+          to: body.to,
+        },
+        filters: {
+          from: body.from,
+          hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+          hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+          search: body.search,
+          to: body.to,
+        },
+        jobKind: 'review.pdf.selection',
+        projectId: body.projectId,
+        searchMode: body.search ? 'substring' : 'none',
+        searchText: body.search,
+        snapshot: {type: 'latest'},
       })
-
-      const idRows = await getAppDatabaseService().queryJson<{id: string}>(`
-        WITH ${scopedArticleImportCte}
-        SELECT a.id AS id
-        FROM app.article a
-        ${scopedArticleImportJoin}
-        WHERE ${whereParts.join(' AND ')}
-      `)
-
-      const articleIds = idRows.map((r) => {
-        return r.id
-      })
-
-      const job = startPdfFetchJob({articleIds, concurrency: body.concurrency, forceRefetch: body.forceRefetch})
 
       set.status = 202
-      return {success: true, selectionTotal: articleIds.length, job}
+      return {success: true, job}
     },
     {
       body: t.Object({
