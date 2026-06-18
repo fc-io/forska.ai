@@ -7,12 +7,14 @@ import {
   type ReviewServingDirtyWorkScope,
 } from './reviewServingProjectorDomain.ts'
 import {
+  ensureReviewServingClaimManifests,
   getReviewServingProjectorComponentRunPlan,
   intakeReviewServingProjectorDirtyWork,
   type ReviewServingProjectorServiceDependencies,
   wakeReviewServingProjectorService,
 } from './reviewServingProjectorService.ts'
 import type {PromoteReviewServingProjectorSnapshotInput} from './reviewServingProjectorWriter.ts'
+import {getReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
 
 const getScope = (changeKind = 'judgment.human.updated') => {
   const scope = getReviewServingDirtyWorkScopeForChange({
@@ -51,6 +53,34 @@ const getClaim = (input: {
     sourcePartition: 'review-change',
     status: 'running',
   } satisfies ReviewServingDirtyWorkClaim
+}
+
+const promptConfigRow = () => {
+  return {
+    answerSchemaHash: null,
+    promptId: 'prompt-1',
+    promptOrder: 1,
+    promptTextHash: 'prompt-text-1',
+    settingsVersion: 'prompt-v1',
+    thresholdVersion: null,
+  }
+}
+
+const projectSettingsRow = () => {
+  return {
+    humanJudgmentMode: 'prompt' as const,
+    modelExecutionOptions: '{"thinking":{"effort":"medium"}}',
+    modelId: 'model-1',
+    modelProviderBaseUrl: 'https://provider.example',
+    modelProviderConnectionId: 'provider-1',
+    modelProviderKind: 'openai-compatible',
+    modelRemoteModelId: 'remote-model-1',
+    modelVariant: 'thinking',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
 }
 
 const createDependencyHarness = (
@@ -156,6 +186,64 @@ test('dirty-work intake enqueues only the affected component slice', async () =>
       return input.projectionIdentity
     }),
   ).toEqual(['humanStatus:identity', 'queue:identity', 'posting:identity', 'summary:identity', 'payload:identity'])
+})
+
+test('claim manifest ensure refreshes stale review config hashes before reuse', async () => {
+  const statements: string[] = []
+  const expectedHash = getReviewServingReviewConfigHash({
+    ...projectSettingsRow(),
+    promptConfigRows: [promptConfigRow()],
+  })
+  const database = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      if (statement.includes('FROM app.review_projection_identity_manifest')) {
+        return [
+          {
+            baseGeneration: 3,
+            definitionVersion: 'posting-v1',
+            inputDigest: null,
+            inputWatermark: 12,
+            inputWatermarksJson: '{}',
+            invalidationReason: null,
+            manifestId: 'manifest-1',
+            patchRangeEnd: null,
+            patchRangeStart: null,
+            patchWatermark: 10,
+            projectId: 'project-1',
+            projectionComponent: 'posting',
+            projectionIdentity: 'posting:identity',
+            promptConfigHash: null,
+            reviewConfigHash: 'review:stale',
+            status: 'candidate',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.project project')) {
+        return [projectSettingsRow()] as T[]
+      }
+
+      if (statement.includes('FROM app.project_prompt project_prompt')) {
+        return [promptConfigRow()] as T[]
+      }
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+  }
+
+  await ensureReviewServingClaimManifests([getClaim({component: 'posting', dirtyWorkId: 'posting-1'})], database)
+
+  const upsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_projection_identity_manifest')
+  })
+
+  expect(upsert).toContain(expectedHash)
+  expect(upsert).not.toContain('review:stale')
 })
 
 test('wake runs claimed component batches in dependency order under row budgets', async () => {

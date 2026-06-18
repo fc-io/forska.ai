@@ -57,8 +57,15 @@ const getInLiterals = (statement: string, columnName: string) => {
   return getSqlStrings(inList)
 }
 
+const getStartsWithLiteral = (statement: string, columnName: string) => {
+  return (
+    statement.match(new RegExp(`starts_with\\(${columnName},\\s*'((?:''|[^'])*)'\\)`, 'u'))?.[1]?.replaceAll("''", "'")
+    ?? null
+  )
+}
+
 const getLimit = (statement: string) => {
-  return Number(statement.match(/LIMIT\s+(\d+)/u)?.[1] ?? 0)
+  return Number([...statement.matchAll(/LIMIT\s+(\d+)/gu)].at(-1)?.[1] ?? 0)
 }
 
 const getNumbers = (statement: string) => {
@@ -275,7 +282,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier} = {}
     }
 
     if (statement.includes("status = 'pending'") && statement.includes('starts_with(projection_key')) {
-      const prefix = getSqlStrings(statement).at(-1) ?? ''
+      const prefix = getStartsWithLiteral(statement, 'projection_key') ?? ''
       const eligibleRows = [...dirtyWork.values()]
         .filter((row) => {
           return (row.status === 'pending' || row.status === 'running') && row.projectionKey.startsWith(prefix)
@@ -456,6 +463,24 @@ test('claims pending work from one projection identity per batch', async () => {
 
   expect(claims).toHaveLength(1)
   expect(claims[0]?.projectionIdentity).toBe('display:identity-1')
+})
+
+test('claim query blocks newer lane work behind lower running or backoff watermarks', async () => {
+  const {database, statements} = createFakeDirtyWorkDatabase()
+
+  await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-1')
+  await upsertDisplayWork(database, {...getBaseScope(2, '2', '2'), scopeId: 'project-1:article-2'}, 'delta-2')
+
+  await claimReviewServingDirtyWork({limit: 2, projectionComponent: 'display'}, database)
+  const claimSelect = statements.find((statement) => {
+    return statement.includes('NOT EXISTS') && statement.includes('blocker.latest_source_high_water_mark')
+  })
+
+  expect(claimSelect).toContain("blocker.status IN ('running', 'failed')")
+  expect(claimSelect).toContain("blocker.updated_at > current_timestamp - INTERVAL '900 seconds'")
+  expect(claimSelect).toContain(
+    'blocker.latest_source_high_water_mark < app.review_serving_dirty_work.latest_source_high_water_mark',
+  )
 })
 
 test('release returns running claims to pending for the next wake', async () => {

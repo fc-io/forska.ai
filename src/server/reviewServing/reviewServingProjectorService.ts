@@ -24,6 +24,7 @@ import {
   type PromoteReviewServingProjectorSnapshotInput,
   type PromoteReviewServingProjectorSnapshotResult,
 } from './reviewServingProjectorWriter.ts'
+import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
 
 export type ReviewServingProjectorRunContext = {
   claims: readonly ReviewServingDirtyWorkClaim[]
@@ -152,6 +153,30 @@ const getClaimInputWatermarks = (claim: ReviewServingDirtyWorkClaim): ReviewServ
   return {[claim.sourcePartition]: claim.latestSourceHighWaterMark}
 }
 
+const getClaimManifestInput = async (
+  claim: ReviewServingDirtyWorkClaim,
+  existing: Awaited<ReturnType<typeof getReviewServingProjectionIdentityManifest>>,
+  database: ReviewServingManifestRepositoryTransaction,
+) => {
+  const reviewConfigHash =
+    claim.projectId === null ? null : await getCurrentReviewServingReviewConfigHash(claim.projectId, database)
+
+  return existing === null
+    ? {
+        baseGeneration: 0,
+        definitionVersion: `${claim.projectionComponent}:dirty-claim-seed-v1`,
+        inputWatermark: claim.latestSourceHighWaterMark,
+        inputWatermarks: getClaimInputWatermarks(claim),
+        patchWatermark: 0,
+        projectId: claim.projectId,
+        projectionComponent: claim.projectionComponent,
+        projectionIdentity: claim.projectionIdentity,
+        reviewConfigHash,
+        status: 'candidate' as const,
+      }
+    : {...existing, reviewConfigHash}
+}
+
 export const ensureReviewServingClaimManifests: ReviewServingClaimManifestEnsurer = async (claims, database) => {
   await claims.reduce<Promise<void>>(async (previousEnsure, claim) => {
     await previousEnsure
@@ -169,24 +194,13 @@ export const ensureReviewServingClaimManifests: ReviewServingClaimManifestEnsure
       database,
     )
 
-    if (existing !== null) {
+    const manifestInput = await getClaimManifestInput(claim, existing, database)
+
+    if (existing !== null && existing.reviewConfigHash === manifestInput.reviewConfigHash) {
       return
     }
 
-    await upsertReviewServingProjectionIdentityManifest(
-      {
-        baseGeneration: 0,
-        definitionVersion: `${claim.projectionComponent}:dirty-claim-seed-v1`,
-        inputWatermark: claim.latestSourceHighWaterMark,
-        inputWatermarks: getClaimInputWatermarks(claim),
-        patchWatermark: 0,
-        projectId: claim.projectId,
-        projectionComponent: claim.projectionComponent,
-        projectionIdentity: claim.projectionIdentity,
-        status: 'candidate',
-      },
-      database,
-    )
+    await upsertReviewServingProjectionIdentityManifest(manifestInput, database)
   }, Promise.resolve())
 }
 

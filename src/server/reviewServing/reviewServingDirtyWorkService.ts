@@ -125,6 +125,20 @@ const getEligibleDirtyWorkPredicate = (params: ClaimReviewServingDirtyWorkParams
     AND starts_with(projection_key, ${getSqlLiteral(getProjectionKeyPrefix(params.projectionComponent))})`
 }
 
+const getLowerWatermarkLaneBlockerPredicate = (params: ClaimReviewServingDirtyWorkParams, claimNowSql: string) => {
+  const staleRunningClaimSeconds = getStaleRunningClaimSeconds(params)
+
+  return `NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_dirty_work blocker
+      WHERE blocker.projection_key = app.review_serving_dirty_work.projection_key
+        AND blocker.source_partition = app.review_serving_dirty_work.source_partition
+        AND blocker.status IN ('running', 'failed')
+        AND blocker.updated_at > ${claimNowSql} - INTERVAL '${staleRunningClaimSeconds} seconds'
+        AND blocker.latest_source_high_water_mark < app.review_serving_dirty_work.latest_source_high_water_mark
+    )`
+}
+
 const getDirtyWorkId = (input: ReviewServingDirtyWorkInput) => {
   return `dirtyWork:${getReviewServingHash('review-serving-dirty-work', {
     projectionKey: getProjectionKey({
@@ -397,11 +411,12 @@ export const getReviewServingDirtyWork = async (
 
 export const claimReviewServingDirtyWork = async (
   params: ClaimReviewServingDirtyWorkParams,
-  database: ReviewServingDirtyWorkDatabase = getAppDatabaseService(),
+  database: ReviewServingDirtyWorkDatabase = getAppDatabaseService() as ReviewServingDirtyWorkDatabase,
 ) => {
   const limit = getNormalizedLimit(params)
   const claimNowSql = getClaimNowSql(params)
   const eligiblePredicate = getEligibleDirtyWorkPredicate(params, claimNowSql)
+  const laneBlockerPredicate = getLowerWatermarkLaneBlockerPredicate(params, claimNowSql)
 
   return limit === 0
     ? []
@@ -409,6 +424,7 @@ export const claimReviewServingDirtyWork = async (
         const rows = await tx.queryJson<DirtyWorkRow>(`
           ${getDirtyWorkSelect()}
           WHERE ${eligiblePredicate}
+            AND ${laneBlockerPredicate}
             AND source_partition = (
               SELECT source_partition
               FROM app.review_serving_dirty_work oldest
@@ -518,7 +534,7 @@ export const completeReviewServingDirtyWorkClaims = async (
 
 export const completeReviewServingDirtyWorkClaimsAndAdvanceWatermark = async (
   input: {claims: readonly ReviewServingDirtyWorkClaim[]; watermark: ReviewServingProjectorWatermarkAdvanceInput},
-  database: ReviewServingDirtyWorkDatabase = getAppDatabaseService(),
+  database: ReviewServingDirtyWorkDatabase = getAppDatabaseService() as ReviewServingDirtyWorkDatabase,
 ) => {
   return database.transaction(async (tx) => {
     await assertReviewServingProjectorWatermarkCanAdvance(tx, input.watermark)
