@@ -156,6 +156,7 @@ test('createReviewBulkOperationJob persists pinned PDF criteria and verifies thr
   expect(bulkDatabase.runs[1]).toContain('heart failure')
   expect(bulkDatabase.runs[1]).toContain('FALSE')
   expect(bulkDatabase.runs[1]).toContain('"cursor":null')
+  expect(bulkDatabase.runs[1]).toContain('"jobId":"')
   expect(
     bulkDatabase.statements.some((statement) => {
       return statement.includes('FROM app.review_bulk_operation_job')
@@ -247,6 +248,7 @@ test('PDF fetch job lookup reads durable cursor progress from review bulk operat
           resultManifestJson: {attempted: 9, failed: 1, noPdf: 2, skipped: 1, succeeded: 6},
           status: 'running',
           totalEstimate: 40,
+          updatedAt: '2026-06-18T00:01:00.000Z',
         },
       ] as T[]
     },
@@ -270,6 +272,7 @@ test('PDF fetch job lookup reads durable cursor progress from review bulk operat
   })
   expect(joined).toContain('FROM app.review_bulk_operation_job')
   expect(joined).toContain('cursor_json AS cursorJson')
+  expect(joined).toContain('updated_at AS updatedAt')
   expect(joined).toContain('processed_count AS processedCount')
   expect(joined).toContain("job_kind = 'review.pdf.selection'")
 })

@@ -1,3 +1,5 @@
+import {randomUUID} from 'node:crypto'
+
 import {Elysia, t} from 'elysia'
 
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
@@ -16,7 +18,7 @@ import {
 } from '../services/appQueryHelpers.ts'
 import {storeImportedArticlesWithTx} from '../services/articleImportStoreService.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
-import {getPdfFetchJobFromDatabase, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
+import {getPdfFetchJobFromDatabase} from '../services/pdfFetchJobs.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type ArticleJudgmentRow = {
@@ -178,12 +180,24 @@ export const articlesRoutes = new Elysia()
   })
   .post(
     '/api/articles/pdf-fetch-bulk',
-    ({body, set}) => {
+    async ({body, set}) => {
       assertArticleIdOnlyBulkOperationCaps(body.articleIds)
-      const job = startPdfFetchJob({
-        articleIds: body.articleIds,
-        concurrency: body.concurrency,
-        forceRefetch: body.forceRefetch,
+
+      const job = await createReviewBulkOperationJob({
+        batchSize: body.concurrency,
+        criteria: {
+          articleIds: body.articleIds,
+          concurrency: body.concurrency,
+          forceRefetch: body.forceRefetch,
+          operation: 'pdfFetch',
+          requestId: randomUUID(),
+        },
+        filters: {},
+        jobKind: 'review.pdf.selection',
+        projectId: 'article-id-only',
+        searchMode: 'none',
+        searchText: null,
+        snapshot: {type: 'latest'},
       })
 
       set.status = 202
