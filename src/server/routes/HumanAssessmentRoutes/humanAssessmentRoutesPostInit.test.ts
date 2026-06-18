@@ -2,6 +2,11 @@ import {afterEach, expect, mock, test} from 'bun:test'
 
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
 const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
+const reviewServingManifestRepositoryModulePath = new URL(
+  '../../reviewServing/reviewServingManifestRepository.ts',
+  import.meta.url,
+).pathname
+const reviewServingReaderModulePath = new URL('../../reviewServing/reviewServingReader.ts', import.meta.url).pathname
 
 const projectReviewConfigRef = {
   current: async (_projectId: string): Promise<unknown> => {
@@ -16,6 +21,24 @@ const queryJsonRef = {
 }
 
 const runRef = {current: async (_statement: string): Promise<void> => {}}
+
+const readReviewServingRowsRef = {
+  current: async (_request: unknown): Promise<unknown> => {
+    return {rows: [{article_id: 'article-1'}], status: 'ready'}
+  },
+}
+
+const activeManifestRef = {
+  current: async (_params: unknown): Promise<unknown> => {
+    return {reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}
+  },
+}
+
+const lastKnownManifestRef = {
+  current: async (_params: unknown): Promise<unknown> => {
+    return null
+  },
+}
 
 const transactionRef = {
   current: async <T>(
@@ -55,6 +78,25 @@ const registerModuleMocks = () => {
       },
     }
   })
+
+  void mock.module(reviewServingManifestRepositoryModulePath, () => {
+    return {
+      getActiveReviewServingSnapshotManifest: (params: unknown) => {
+        return activeManifestRef.current(params)
+      },
+      getLastKnownGoodReviewServingSnapshotManifest: (params: unknown) => {
+        return lastKnownManifestRef.current(params)
+      },
+    }
+  })
+
+  void mock.module(reviewServingReaderModulePath, () => {
+    return {
+      readReviewServingRows: (request: unknown) => {
+        return readReviewServingRowsRef.current(request)
+      },
+    }
+  })
 }
 
 const loadHandler = async (): Promise<typeof import('./humanAssessmentRoutesPostInit.ts')> => {
@@ -66,11 +108,21 @@ const loadHandler = async (): Promise<typeof import('./humanAssessmentRoutesPost
 }
 
 afterEach(() => {
+  readReviewServingRowsRef.current = async () => {
+    return {rows: [{article_id: 'article-1'}], status: 'ready'}
+  }
+  activeManifestRef.current = async () => {
+    return {reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}
+  }
+  lastKnownManifestRef.current = async () => {
+    return null
+  }
   mock.restore()
 })
 
 test('human assessment init inserts project id before the answered flag', async () => {
   const statements: string[] = []
+  const readerRequests: unknown[] = []
   projectReviewConfigRef.current = async () => {
     return {importRouteIds: []}
   }
@@ -83,7 +135,7 @@ test('human assessment init inserts project id before the answered flag', async 
         ? [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Heading 1', order: 0, type: 'string'}]
         : statement.includes('ORDER BY created_at DESC')
           ? []
-          : statement.includes('FROM app.article a')
+          : statement.includes('FROM app.article')
             ? [{articleSummary: 'Summary 1', articleTitle: 'Article 1', id: 'article-1'}]
             : statement.includes('FROM app.project_article')
               ? [{articleId: 'article-1'}]
@@ -93,6 +145,10 @@ test('human assessment init inserts project id before the answered flag', async 
   }
   runRef.current = async (statement) => {
     statements.push(statement)
+  }
+  readReviewServingRowsRef.current = async (request) => {
+    readerRequests.push(request)
+    return {rows: [{article_id: 'article-1'}], status: 'ready'}
   }
   transactionRef.current = async (operation) => {
     return operation({queryJson: queryJsonRef.current, run: runRef.current})
@@ -108,6 +164,17 @@ test('human assessment init inserts project id before the answered flag', async 
 
   expect(insertStatement).toContain('(id, article_id, prompt_id, project_id, is_answered, answer, comment)')
   expect(insertStatement).toMatch(/\('[^']+', 'article-1', 'prompt-1', 'project-1', FALSE, NULL, NULL\)/)
+  expect(statements.join('\n')).not.toContain('ORDER BY RANDOM()')
+  expect(readerRequests).toEqual([
+    expect.objectContaining({
+      contractKey: 'review.queue.unassessed',
+      filters: {queueKind: 'human-unreviewed'},
+      projectId: 'project-1',
+      queueKind: 'human-unreviewed',
+      searchMode: 'none',
+      snapshotId: 'snapshot-1',
+    }),
+  ])
   expect(response).toEqual({
     data: {
       article: {articleSummary: 'Summary 1', articleTitle: 'Article 1', id: 'article-1'},
