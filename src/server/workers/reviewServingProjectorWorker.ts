@@ -1257,6 +1257,10 @@ export const runReviewServingProjectorWorker = async (
   options: ReviewServingProjectorWorkerLoopOptions = {},
   dependencies: ReviewServingProjectorWorkerDependencies = defaultReviewServingProjectorWorkerDependencies,
 ): Promise<void> => {
+  if (options.signal?.aborted) {
+    return
+  }
+
   const cycleResult = await runReviewServingProjectorWorkerOnce(options, dependencies)
 
   if (options.signal?.aborted) {
@@ -1273,6 +1277,10 @@ export const runReviewServingProjectorWorker = async (
 
   return delayMs > 0
     ? dependencies.sleep(delayMs).then(() => {
+        if (options.signal?.aborted) {
+          return
+        }
+
         return runReviewServingProjectorWorker(nextOptions, dependencies)
       })
     : runReviewServingProjectorWorker(nextOptions, dependencies)
