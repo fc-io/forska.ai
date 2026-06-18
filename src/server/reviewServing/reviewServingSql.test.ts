@@ -36,7 +36,12 @@ const getReviewServingSourceFiles = (directory: string): string[] => {
 
 const getGuardedReviewServingSourceFiles = () => {
   return getReviewServingSourceFiles(reviewServingSourceRoot).filter((filePath) => {
-    return filePath.endsWith('.ts') && !filePath.endsWith('.test.ts') && filePath !== sqlGuardDefinitionFile
+    return (
+      filePath.endsWith('.ts')
+      && !filePath.endsWith('.test.ts')
+      && !filePath.endsWith('Projector.ts')
+      && filePath !== sqlGuardDefinitionFile
+    )
   })
 }
 
@@ -481,6 +486,7 @@ test('buildReviewServingRowsSql uses activity ordering for unassessed row contra
   expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
   expect(sql).toContain('queue.review_config_hash = $reviewConfigHash')
   expect(sql).toContain('queue.snapshot_id = $snapshotId')
+  expect(sql).toContain("queue.queue_kind = 'unassessed'")
   expect(sql).toContain('queue.article_id = mart.review_article_serving_v4.article_id')
   expect(sql).toContain('ORDER BY activity_sort_at DESC, article_id DESC')
   expect(sql).not.toContain('ORDER BY sort_key')
@@ -503,6 +509,7 @@ test('buildReviewServingRowsSql filters unassessed article-set hydration through
 
   expect(sql).toContain('AND article_id IN (SELECT unnest($articleIds))')
   expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(sql).toContain("queue.queue_kind = 'unassessed'")
   expect(sql).toContain('queue.article_id = mart.review_article_serving_v4.article_id')
 })
 
@@ -915,7 +922,7 @@ test('assertReviewServingSqlShape rejects literal scope predicates', () => {
   expect(violations).toContain('snapshot scoped read')
 })
 
-test('reviewServing source files are statically guarded without scanning legacy route SQL', () => {
+test('reviewServing read source files are statically guarded without scanning projector or legacy route SQL', () => {
   const sourceViolations = getGuardedReviewServingSourceFiles().flatMap((filePath) => {
     return getReviewServingSqlShapeViolations(readFileSync(filePath, 'utf8'), {
       allowedTables: reviewServingRegisteredSqlTables,

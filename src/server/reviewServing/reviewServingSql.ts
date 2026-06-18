@@ -524,6 +524,7 @@ const getReviewServingRowsSqlUnassessedQueuePredicate = (params: {
         ` WHERE queue.project_id = ${params.projectIdParameter}`,
         ` AND queue.review_config_hash = ${params.reviewConfigHashParameter}`,
         ` AND queue.snapshot_id = ${params.snapshotIdParameter}`,
+        " AND queue.queue_kind = 'unassessed'",
         ` AND queue.article_id = ${params.contract.servingTable}.article_id)`,
       ].join('')
     : ''
@@ -589,7 +590,9 @@ const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
   jobFilterSignatureParameter?: string | null
   listModeParameter: string
   projectIdParameter: string
+  projectScopeIdentityParameter: string
   reviewConfigHashParameter: string
+  searchIdentityParameter: string
   queueKindParameter?: string | null
   searchTokenPrefixParameter?: string | null
   searchTextParameter?: string | null
