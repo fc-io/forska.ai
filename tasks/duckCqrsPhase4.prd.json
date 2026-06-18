@@ -1,0 +1,397 @@
+{
+  "name": "DuckDB CQRS Phase 4 - Serving Reads And Job Migration",
+  "description": "Move production review reads and bulk/search/export/PDF behavior behind serving readers and durable jobs, with route-specific parity gates and no raw fallback paths.",
+  "branchName": "ralph/duck-cqrs-phase-4-serving-migration",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Build reviewServingReader core",
+      "description": "As a developer, I want a reviewServingReader core so migrated routes can read through manifests, admission, cursors, and serving SQL without raw fallback decisions.",
+      "acceptanceCriteria": [
+        "Add `src/server/reviewServing/reviewServingReader.ts` with manifest lookup, contract lookup, admission, cursor/filter signature validation, SQL builder usage, SQL-shape assertion, and diagnostics plumbing.",
+        "Reader execution rejects missing project/snapshot identity, unsupported contract keys, stale snapshots without explicit stale allowance, and missing required component state before DuckDB execution.",
+        "Reader code does not call OLAP wrappers, raw fallback helpers, route-local cursor parsers, or `selected_scoped_article_import` builders.",
+        "Targeted reader tests cover ready, stale, indexing, unavailable, failed, candidate, retired, and missing-snapshot diagnostics without raw fallback.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Add reader count and search states",
+      "description": "As a developer, I want the reader to handle count and search state explicitly so count and search routes can return ready, stale, unavailable, or async responses without foreground raw scans.",
+      "acceptanceCriteria": [
+        "Reader count lookups require supported named count keys, filter keys, matching snapshot state, and bounded result caps.",
+        "Reader search handling distinguishes token/prefix ready reads from unsupported substring search and returns explicit unavailable or async state for substring search.",
+        "Tests prove searched counts preserve supported scope or return explicit unavailable/async state instead of scanning raw or large serving rows.",
+        "Tests prove foreground admission rejects mismatched search modes before DuckDB execution.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Add reader article-set hydration",
+      "description": "As a developer, I want bounded article-set hydration in the reader so filtered list and detail routes can hydrate rows and judgment payloads without N+1 lookups.",
+      "acceptanceCriteria": [
+        "Reader supports article-set row hydration from serving tables with stable list-mode and article-ID tie-break ordering.",
+        "Reader supports article-set LLM, human, and both-list judgment payload hydration through `mart.review_article_judgment_detail_serving_v4` contracts.",
+        "Hydration requests enforce max page size, max response bytes, max hydrated payload bytes, and per-request article ID caps.",
+        "Tests prove filtered list hydration uses posting/search selection plus article-set row and payload hydration with no N+1 single-article lookup path.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Create route parity runner",
+      "description": "As a maintainer, I want a route-specific parity runner so each route migration is blocked on semantic, budget, freshness, cursor, and SQL-shape mismatches.",
+      "acceptanceCriteria": [
+        "Add a parity runner/check module that compares `reviewServingReader` output against semantic fixtures and safe-size current behavior before a route is mounted.",
+        "Parity checks cover row payload semantics, named count states, freshness states, cursor behavior, SQL shape, latency budgets, result bytes, and forbidden foreground DuckDB work.",
+        "Tests prove parity validation blocks route migration on semantic fixture, invariant, sampled parity, cursor, freshness-state, SQL-shape, latency, or response-size mismatches.",
+        "Existing OLAP forwarding tests are not treated as passing Phase 4 serving parity by themselves.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Build review search service",
+      "description": "As a developer, I want a reviewSearchService so ready token/prefix search and async/unavailable substring behavior are enforced at the API boundary.",
+      "acceptanceCriteria": [
+        "Add `src/server/reviewServing/reviewSearchService.ts` that serves ready token/prefix search from `review.search.tokenPrefix` contracts.",
+        "Substring search returns unavailable/search-indexing state or creates bounded async search work; it never runs as a synchronous full-table scan.",
+        "Search requests bind search mode, search text, project identity, snapshot identity, and projection identity before DuckDB work.",
+        "Targeted tests prove token/prefix search behavior and async/unavailable substring behavior.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Create bulk operation job service",
+      "description": "As a developer, I want a durable reviewBulkOperationService so select-all, add-to-project, PDF, and export criteria are persisted instead of materializing all matching IDs in foreground requests.",
+      "acceptanceCriteria": [
+        "Add `src/server/reviewServing/reviewBulkOperationService.ts` backed by `app.review_bulk_operation_job` and existing read contracts.",
+        "Job creation persists job kind, criteria, filter signature, search mode/text when relevant, projection identity, snapshot pin or declared latest-snapshot semantics, cancellation state, retry state, and progress metadata.",
+        "Select-all, add-to-project-by-filter, PDF-by-filter/project, and export jobs do not return all matching article IDs from foreground requests.",
+        "Explicit-ID add-to-project and PDF bulk paths enforce article-ID-only caps or are explicitly classified outside project-scoped review-serving selection semantics.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Create bulk operation worker",
+      "description": "As a developer, I want a reviewBulkOperationWorker so durable review jobs execute in bounded keyset batches with retry, cancellation, resume, and snapshot safety.",
+      "acceptanceCriteria": [
+        "Add `src/server/workers/reviewBulkOperationWorker.ts` that claims durable job work and executes bounded keyset batches.",
+        "Worker supports cancellation, retry, resume, progress updates, terminal failure, and terminal completion without process-local memory state.",
+        "Repeatable durable jobs pin serving snapshots and cleanup skips pinned base, patch, payload, count, and search state.",
+        "Job lookup tests prove `/api/articles/pdf-fetch-jobs/:jobId`-style reads use job-table cursor fields instead of in-memory process-local state.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Migrate LLM list and count routes",
+      "description": "As a user, I want LLM review list and count routes served by the serving reader so the normal LLM review flow avoids raw OLAP fallbacks and large-offset pagination.",
+      "acceptanceCriteria": [
+        "Migrate `projectsRoutesGetArticlesReviews.ts` and `projectsRoutesGetArticlesReviewsCount.ts` to `reviewServingReader` without raw fallback logic.",
+        "Routes preserve current row metadata, article timestamps or capped companion hydration, prompt-level LLM judgment arrays, prompt badges, duplicate/conflict/article-created-date/prompt/search filter scope, and count states.",
+        "Route inventory entries become `mounted: true` only when the full product response shape is covered; partial helper contracts remain unmounted.",
+        "Route tests prove no raw fallback, no `selected_scoped_article_import`, no raw project-wide scans, no large ID arrays, no `OFFSET`, and no JSON extraction/sorts.",
+        "Browser review-flow verification covers ready, stale, indexing, and unavailable freshness states for this migrated flow.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-003",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Migrate human both and unassessed routes",
+      "description": "As a user, I want human, both, and unassessed review routes served by the serving reader so those flows use bounded rows, queues, postings, and payload hydration.",
+      "acceptanceCriteria": [
+        "Migrate `projectsRoutesGetArticlesReviewsHuman.ts`, `projectsRoutesGetArticlesReviewsBoth.ts`, and `projectsRoutesGetArticlesReviewsUnassessed.ts` to `reviewServingReader` without raw fallback logic.",
+        "Human and both routes preserve human prompt/summary arrays, both-mode LLM and human payloads, prompt badges, row metadata, article timestamps or capped companion hydration, and current filter scope.",
+        "Unassessed and queue routes read through queue serving contracts with correct queue kind, activity ordering, freshness, and count behavior.",
+        "Route tests prove no raw fallback, no large candidate ID arrays, no `OFFSET`, no N+1 detail hydration, and no unbounded project-wide windows.",
+        "Browser review-flow verification covers human, both, and unassessed freshness states.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-010",
+      "title": "Migrate review filter and facet routes",
+      "description": "As a user, I want review and human filter routes served by facet and filter-option contracts so filter responses are complete and not derived from posting rows alone.",
+      "acceptanceCriteria": [
+        "Migrate `projectsRoutesGetArticlesReviewsFilters.ts` and `projectsRoutesGetArticlesReviewsHumanFilters.ts` to serving reader contracts without raw fallback logic.",
+        "Filter responses include complete review-specific and human-specific facet plus filter-option/min-max payloads, active search scope, option value keys, and summary-mode human answer scope where current routes apply it.",
+        "Posting rows are used only as article-candidate access paths, not as filter-option route responses.",
+        "Tests prove every synchronous filter combination uses ordered-prefix, posting/projection, bounded-candidate access, or explicit unavailable/async state with maintained selectivity stats.",
+        "Browser review-flow verification covers filter panels and stale/unavailable diagnostics.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-011",
+      "title": "Migrate detail and article hydration routes",
+      "description": "As a user, I want project review detail and article hydration routes served by bounded detail contracts so detail reads preserve current payload semantics without hot-list overhydration.",
+      "acceptanceCriteria": [
+        "Migrate `projectsRoutesPostArticleReviewDetails.ts`, relevant `ArticlesRoutes.ts` detail reads, and `appQueryServiceCore.ts` review article hydration helpers to serving reader paths.",
+        "Detail responses preserve prompt-level explanations, quotes, assessments, placeholder judgments, payload references, human prompt/summary fields, row metadata, badges, related-record/project-context extras, and freshness diagnostics.",
+        "Detail payloads are keyed and capped, not hydrated by default into hot list responses.",
+        "Route tests prove standalone detail routes preserve current semantics or return explicit unavailable/async state for unsupported pieces.",
+        "Browser review-flow verification covers article detail open/read behavior and freshness diagnostics.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-012",
+      "title": "Migrate warnings health and prompt preview",
+      "description": "As a user, I want warning, health, and prompt preview routes backed by serving diagnostics and payload contracts so diagnostics and prompt previews avoid raw review scans.",
+      "acceptanceCriteria": [
+        "Migrate `projectsRoutesGetReviewsWarnings.ts`, any mounted health route, and `projectsRoutesGetPromptPreview.ts` to serving reader or diagnostic paths without raw fallback logic.",
+        "Warnings include active refresh counts, usable manifest status, maintenance lease state, large-rebuild progress, quarantine warnings, and last-known-good/failed state.",
+        "Prompt preview preserves sample-article order, prompt/config identity, model execution context, full-text preparation behavior, `no_fulltext` handling, and conversion-failure behavior or returns explicit unavailable/async state.",
+        "Health route inventory matches the actual mounted route surface and does not count an internal-only contract as a migrated production route.",
+        "Browser review-flow verification covers stale, indexing, unavailable, failed, candidate, retired, and missing snapshot diagnostics.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-013",
+      "title": "Classify adjacent article surfaces",
+      "description": "As a maintainer, I want adjacent article and human-assessment route surfaces classified so Phase 4 does not leave ambiguous product paths outside serving, job, or admin/debug rules.",
+      "acceptanceCriteria": [
+        "Classify `/api/articles/search`, `/api/articles/latest`, `/api/projects/:id/articles`, and `HumanAssessmentRoutes.ts` as migrated serving/job/admission paths or explicitly out of scope/admin/debug with a reason.",
+        "Any route that participates in review flows delegates to serving/admission/job logic and has no raw fallback decision path.",
+        "Out-of-scope/admin/debug classifications are route-classified, guarded, and excluded from normal browser or desktop review flows.",
+        "Route-surface tests prove each adjacent surface has the chosen classification.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-014",
+      "title": "Migrate add-to-project selection jobs",
+      "description": "As a user, I want add-to-project selection flows backed by durable jobs so select-all and filter selections never materialize all matching IDs in foreground requests.",
+      "acceptanceCriteria": [
+        "Migrate `/api/projects/add_articles_by_filter` and relevant select-all flows to `reviewBulkOperationService` jobs with persisted criteria and bounded keyset execution.",
+        "Add-to-project by filter supports substring input only through async selection semantics, not token-prefix certification unless the route input is token-prefix search.",
+        "Add-to-project by explicit IDs uses article-ID-only admission with per-request ID and payload caps or is explicitly classified outside review-serving selection semantics.",
+        "Route/job tests prove no all-ID foreground materialization, durable job creation, bounded batches, cancellation, retry, resume, and no raw fallback path.",
+        "Desktop route-surface verification or targeted desktop build passes when shared runtime paths change.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006",
+        "US-007",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-015",
+      "title": "Migrate PDF durable jobs",
+      "description": "As a user, I want PDF filter, project, and job lookup flows backed by durable jobs so PDF work survives process restarts and avoids all-ID foreground materialization.",
+      "acceptanceCriteria": [
+        "Migrate `/api/articles/pdf-fetch-by-filter`, `/api/articles/pdf-fetch-by-project`, and `/api/articles/pdf-fetch-jobs/:jobId` to durable job service and worker paths.",
+        "Replace `src/server/services/pdfFetchJobs.ts` in-memory `Map` usage for migrated PDF flows with job-table lookup state.",
+        "PDF-by-filter and PDF-by-project criteria include list type, date bounds, duplicate/conflict filters, search scope, projection identity, and snapshot pin or declared latest-snapshot semantics.",
+        "Explicit-ID PDF bulk route `/api/articles/pdf-fetch-bulk` uses durable article-ID-only job admission with per-request ID and payload caps.",
+        "Route/job tests prove durable job lookup binds job kind, filter signature, search mode/text when relevant, pinned/latest snapshot semantics, `updated_at`, and `job_id` cursor fields.",
+        "Desktop route-surface verification or targeted desktop build passes when shared runtime paths change.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006",
+        "US-007",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-016",
+      "title": "Migrate project export jobs",
+      "description": "As a user, I want project export routes backed by serving/export jobs so exports use bounded selection, snapshot pins, and prompt-output semantics without raw review scans.",
+      "acceptanceCriteria": [
+        "Migrate `/api/projects/:id/export` and related `ProjectExportRoutes.ts` review selection paths to durable serving/export job logic.",
+        "Export contracts cover selected article metadata plus prompt answers, explanations, quotes, projection identity, snapshot/filter cursors, snapshot pins, and payload budgets.",
+        "Export execution is keyset-batched, resumable, cancellable, and does not return or materialize all matching article IDs in the foreground request.",
+        "Route/job tests prove export product routes preserve explicit-ID, list-type, article metadata, and prompt-output semantics before route inventory is mounted.",
+        "Desktop route-surface verification or targeted desktop build passes when shared runtime paths change.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006",
+        "US-007",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-017",
+      "title": "Resolve DuckDB usage migration inventory",
+      "description": "As a maintainer, I want every review-related DuckDB usage classified or migrated so no production review path keeps hidden OLAP wrappers or raw fallback behavior.",
+      "acceptanceCriteria": [
+        "Resolve every row in the DuckDB usage migration inventory for review-related reads, bulk operations, PDF, export, and search.",
+        "Legacy helpers and OLAP wrappers such as `duckdbOlap.ts`, `articlesReviewsOlap.ts`, and `scopedArticleReadAdapter.ts` no longer serve migrated production review routes.",
+        "Migrated route handlers do not call `runDuckdbJsonQuery`, build DuckDB SQL, decode review cursors, compute filter signatures, or decide raw fallback.",
+        "Matching legacy raw/OLAP paths are deleted or hard-disabled in the same change unless explicitly reclassified as admin/maintenance/debug-only.",
+        "Route tests prove each migrated LLM, human, both, unassessed, filter, count, badge, row, queue, bulk, PDF, and export route does not include raw fallback, `selected_scoped_article_import`, raw project-wide scans, large ID arrays, or large-offset pagination.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-008",
+        "US-009",
+        "US-010",
+        "US-011",
+        "US-012",
+        "US-013",
+        "US-014",
+        "US-015",
+        "US-016"
+      ]
+    },
+    {
+      "id": "US-018",
+      "title": "Run browser and desktop verification",
+      "description": "As a maintainer, I want browser and desktop verification for migrated review flows so shared serving and job behavior works consistently across web and desktop surfaces.",
+      "acceptanceCriteria": [
+        "Browser review-flow verification covers stale, indexing, unavailable, failed, candidate, retired, and missing snapshot diagnostics across migrated list, filter, detail, warning, and prompt-preview flows.",
+        "Desktop route-surface verification or `bun run desktop:build` passes for shared runtime paths touched by serving reader, route adapter, job, search, export, or PDF migration work.",
+        "Verification notes identify every migrated route inventory entry and confirm full product response shape or explicit unavailable/async behavior for unsupported pieces.",
+        "No normal browser or desktop review flow reaches raw fallback, `selected_scoped_article_import`, raw project-wide scans, unbounded ID materialization, or large-offset pagination.",
+        "bun test src/server/reviewServing passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-017"
+      ]
+    }
+  ]
+}
