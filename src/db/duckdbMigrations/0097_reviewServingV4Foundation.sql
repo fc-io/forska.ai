@@ -540,6 +540,7 @@ CREATE TABLE IF NOT EXISTS mart.review_article_display_patch_v4 (
   patch_watermark BIGINT NOT NULL,
   article_id VARCHAR NOT NULL,
   sort_key TIMESTAMPTZ,
+  activity_sort_at TIMESTAMPTZ,
   article_title VARCHAR,
   article_external_id VARCHAR,
   journal_title VARCHAR,
