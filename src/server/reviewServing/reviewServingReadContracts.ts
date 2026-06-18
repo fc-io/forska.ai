@@ -988,7 +988,7 @@ export const reviewServingReadContractRouteInventory = [
   {
     contractKeys: ['review.export.selection'],
     method: 'POST',
-    mounted: false,
+    mounted: true,
     productRoute: '/api/projects/:id/export',
     routeFile: 'src/server/routes/ProjectExportRoutes.ts',
     surfaces: ['export', 'bulk', 'filter', 'search', 'detail'],
