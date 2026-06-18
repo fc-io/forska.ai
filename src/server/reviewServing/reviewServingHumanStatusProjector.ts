@@ -442,7 +442,8 @@ const getArticleScopedRows = async (
   `)
 
   return rows.map((row): HumanStatusSourceRow => {
-    const promptConfigRow = getPromptConfigRowByPromptId(promptConfigRowsWithSummary, row.promptId) ?? summaryPromptConfigRow
+    const promptConfigRow =
+      getPromptConfigRowByPromptId(promptConfigRowsWithSummary, row.promptId) ?? summaryPromptConfigRow
     const humanAnsweredValue = row.tombstone ? null : row.humanAnsweredValue
 
     return {
@@ -547,6 +548,7 @@ const getProjectScopedRows = async (
 const getApplyHumanStatusServingStatement = (input: {
   baseGeneration: number
   currentSummaryReviewConfigHash: string | null
+  currentReviewConfigHash: string | null
   patchWatermark: number
   projectId: string
   projectionIdentity: string
@@ -556,18 +558,19 @@ const getApplyHumanStatusServingStatement = (input: {
     listModeKey: string
     promptConfigHash: string
     promptId: string | null
+    reviewConfigHash: string | null
     tombstone: boolean
   }[]
 }) => {
   const values = input.recordRows
     .map((row) => {
-      return `(${getSqlLiteral(row.listModeKey)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.promptConfigHash)}, ${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.humanStatusKey)}, ${getSqlLiteral(row.tombstone)})`
+      return `(${getSqlLiteral(row.listModeKey)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.reviewConfigHash)}, ${getSqlLiteral(row.promptConfigHash)}, ${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.humanStatusKey)}, ${getSqlLiteral(row.tombstone)})`
     })
     .join(', ')
 
   return values.length === 0
     ? null
-    : `WITH changed(list_mode_key, article_id, prompt_config_hash, prompt_id, human_status_key, tombstone) AS (
+    : `WITH changed(list_mode_key, article_id, review_config_hash, prompt_config_hash, prompt_id, human_status_key, tombstone) AS (
         SELECT * FROM (VALUES ${values})
       ), changed_article AS (
         SELECT DISTINCT list_mode_key, article_id
@@ -576,17 +579,19 @@ const getApplyHumanStatusServingStatement = (input: {
         SELECT
           changed.list_mode_key,
           changed.article_id,
+          changed.review_config_hash,
           changed.prompt_config_hash,
           changed.prompt_id,
           changed.human_status_key,
           changed.tombstone,
           ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
         FROM changed
-        GROUP BY changed.list_mode_key, changed.article_id, changed.prompt_config_hash, changed.prompt_id, changed.human_status_key, changed.tombstone
+        GROUP BY changed.list_mode_key, changed.article_id, changed.review_config_hash, changed.prompt_config_hash, changed.prompt_id, changed.human_status_key, changed.tombstone
         UNION ALL
         SELECT
           human.list_mode_key,
           human.article_id,
+          ${getSqlLiteral(input.currentReviewConfigHash)} AS review_config_hash,
           human.prompt_config_hash,
           human.prompt_id,
           human.human_status_key,
@@ -607,16 +612,18 @@ const getApplyHumanStatusServingStatement = (input: {
           FROM candidate_prompt newer
           WHERE newer.list_mode_key = candidate.list_mode_key
             AND newer.article_id = candidate.article_id
+            AND newer.review_config_hash IS NOT DISTINCT FROM candidate.review_config_hash
             AND newer.prompt_id IS NOT DISTINCT FROM candidate.prompt_id
         )
       ), article_status AS (
         SELECT
           list_mode_key,
           article_id,
+          review_config_hash,
           COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id IS NOT NULL AND prompt_id <> 'summary' AND human_status_key = 'answered') AS human_answered_prompt_count,
           COUNT(*) FILTER (WHERE NOT tombstone AND prompt_id = 'summary' AND human_status_key = 'answered') AS human_answered_summary_count
         FROM latest_prompt
-        GROUP BY list_mode_key, article_id
+        GROUP BY list_mode_key, article_id, review_config_hash
       )
       UPDATE mart.review_article_serving_v4 serving
       SET
@@ -633,6 +640,7 @@ const getApplyHumanStatusServingStatement = (input: {
       WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
         AND serving.human_status_identity = ${getSqlLiteral(input.projectionIdentity)}
         AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+        AND serving.review_config_hash IS NOT DISTINCT FROM article_status.review_config_hash
         AND serving.list_mode_key = article_status.list_mode_key
         AND serving.article_id = article_status.article_id
         AND EXISTS (
@@ -710,6 +718,8 @@ export const projectReviewServingHumanStatusPatches = async (
     projectSettings === null
       ? null
       : getReviewConfigHash({...projectSettings, humanJudgmentMode: 'summary', promptConfigRows})
+  const currentReviewConfigHash =
+    projectSettings === null ? null : getReviewConfigHash({...projectSettings, promptConfigRows})
   const [judgmentRows, promptRows, articleRows, projectRows] = await Promise.all([
     getJudgmentDeltaRows(input, database, promptConfigRows),
     getPromptScopedRows(input, database),
@@ -728,6 +738,7 @@ export const projectReviewServingHumanStatusPatches = async (
         listModeKey,
         promptConfigHash,
         promptId: row.promptId,
+        reviewConfigHash: currentReviewConfigHash,
         tombstone: row.tombstone,
       }
     })
@@ -754,6 +765,7 @@ export const projectReviewServingHumanStatusPatches = async (
         getApplyHumanStatusServingStatement({
           baseGeneration: input.baseGeneration,
           currentSummaryReviewConfigHash,
+          currentReviewConfigHash,
           patchWatermark,
           projectId: input.projectId,
           projectionIdentity: input.projectionIdentity,

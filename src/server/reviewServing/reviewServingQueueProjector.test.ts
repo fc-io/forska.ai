@@ -111,7 +111,7 @@ test('LLM answer changes write unassessed queue patches and serving rows from co
   expect(selectStatement).toContain('LEFT JOIN mart.review_selected_import_patch_v4 selected_patch')
   expect(selectStatement).toContain('FROM mart.review_selected_import_patch_v4 newer')
   expect(selectStatement).not.toContain('OR selected.selected_tombstone')
-  expect(selectStatement).toContain('INNER JOIN mart.project_scope_article scope')
+  expect(selectStatement).toContain('LEFT JOIN mart.project_scope_article scope')
   expect(selectStatement).toContain("VALUES ('article-1')")
   expect(servingDelete).toContain('snapshot_id =')
   expect(servingDelete).toContain("review_config_hash IN ('review-config-1')")
@@ -274,6 +274,9 @@ test('membership removals write tombstones and keep queue projection component n
   const joined = statements.join('\n')
 
   expect(joined).toContain('scope_tombstone')
+  expect(joined).toContain(
+    'scope.article_id IS NULL OR NOT (scope.in_curated_scope OR scope.in_route_scope) AS scope_tombstone',
+  )
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).toContain("'queue'")
@@ -295,7 +298,7 @@ test('queue serving replacement deletes only projected review configs', async ()
   expect(servingDelete).not.toContain('review-config-1')
 })
 
-test('missing queue inputs leave optional unassessed state stale without raw aggregation', async () => {
+test('missing article-scoped queue inputs clear optional unassessed state without raw aggregation', async () => {
   const {database, statements} = createQueueDatabase()
 
   const result = await projectReviewServingQueuePatches(projectInput([queueClaim()]), database)
@@ -305,7 +308,9 @@ test('missing queue inputs leave optional unassessed state stale without raw agg
   expect(joined).not.toContain('mart.judgment_fact')
   expect(joined).not.toContain('app."judgment"')
   expect(joined).not.toContain('GROUP BY')
-  expect(joined).not.toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  expect(joined).toContain("article_id IN ('article-1')")
+  expect(joined).not.toContain('review_config_hash IN')
 })
 
 test('project-scoped empty queue rebuild clears snapshot serving rows', async () => {
