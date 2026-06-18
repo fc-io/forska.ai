@@ -5,11 +5,16 @@ import {
   projectReviewServingHumanStatusPatches,
   type ReviewServingHumanStatusProjectorDatabase,
 } from './reviewServingHumanStatusProjector.ts'
+import {
+  getReviewServingReviewConfigHash,
+  type ReviewServingProjectReviewSettingsRow,
+} from './reviewServingReviewConfig.ts'
 
 const createHumanStatusDatabase = (input?: {
   judgmentRows?: readonly Record<string, unknown>[]
   promptConfigRows?: readonly Record<string, unknown>[]
   promptRows?: readonly Record<string, unknown>[]
+  projectSettingsRows?: readonly Record<string, unknown>[]
 }) => {
   const statements: string[] = []
   const database: ReviewServingHumanStatusProjectorDatabase = {
@@ -22,6 +27,10 @@ const createHumanStatusDatabase = (input?: {
 
       if (statement.includes('FROM app.project_prompt project_prompt')) {
         return (input?.promptConfigRows ?? [promptConfigRow()]) as T[]
+      }
+
+      if (statement.includes('FROM app.project project')) {
+        return (input?.projectSettingsRows ?? [projectSettingsRow()]) as T[]
       }
 
       if (statement.includes('FROM app.review_change_delta delta')) {
@@ -53,6 +62,26 @@ const promptConfigRow = (input?: Record<string, unknown>) => {
     promptTextHash: 'prompt-text-1',
     settingsVersion: 'prompt-v1',
     thresholdVersion: null,
+    ...input,
+  }
+}
+
+const projectSettingsRow = (
+  input?: Partial<ReviewServingProjectReviewSettingsRow>,
+): ReviewServingProjectReviewSettingsRow => {
+  return {
+    humanJudgmentMode: 'prompt',
+    modelExecutionOptions: '{"thinking":{"effort":"medium"}}',
+    modelId: 'model-1',
+    modelProviderBaseUrl: 'https://provider.example',
+    modelProviderConnectionId: 'provider-1',
+    modelProviderKind: 'openai-compatible',
+    modelRemoteModelId: 'remote-model-1',
+    modelVariant: 'thinking',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
     ...input,
   }
 }
@@ -143,6 +172,21 @@ test('human prompt answer deltas write component-narrow status patches', async (
   expect(joined).toContain("'humanStatus'")
   expect(joined).not.toContain("'llmStatus'")
   expect(joined).not.toContain("'selectedImport'")
+})
+
+test('human status review config hash includes model execution identity', async () => {
+  const promptRows = [promptConfigRow()]
+  const projectRows = [projectSettingsRow()]
+  const expectedHash = getReviewServingReviewConfigHash({...projectSettingsRow(), promptConfigRows: promptRows})
+  const {database, statements} = createHumanStatusDatabase({
+    judgmentRows: [humanStatusRow()],
+    projectSettingsRows: projectRows,
+    promptConfigRows: promptRows,
+  })
+
+  await projectReviewServingHumanStatusPatches(projectInput([humanClaim()]), database)
+
+  expect(statements.join('\n')).toContain(expectedHash)
 })
 
 test('summary human answers do not require prompt IDs and write summary-key patches', async () => {

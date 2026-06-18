@@ -1,6 +1,5 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {buildPromptConfigHash, buildReviewConfigHash} from './reviewProjectionIdentity.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -12,6 +11,13 @@ import {
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
+import {
+  getReviewServingProjectPromptConfigRows,
+  getReviewServingProjectReviewSettings,
+  getReviewServingPromptConfigHash,
+  getReviewServingReviewConfigHash,
+  type ReviewServingProjectPromptConfigRow,
+} from './reviewServingReviewConfig.ts'
 
 export type ReviewServingHumanStatusProjectorDatabase = ReviewServingProjectorWriterDatabase
 
@@ -26,23 +32,7 @@ export type ProjectReviewServingHumanStatusInput = {
   status?: ReviewServingProjectionManifestStatus
 }
 
-type ProjectPromptConfigRow = {
-  answerSchemaHash: string | null
-  promptId: string
-  promptOrder: number | null
-  promptTextHash: string | null
-  settingsVersion: string | null
-  thresholdVersion: string | null
-}
-
-type ProjectReviewSettingsRow = {
-  humanJudgmentMode: 'prompt' | 'summary'
-  modelId: string | null
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-  useTitle: boolean
-}
+type ProjectPromptConfigRow = ReviewServingProjectPromptConfigRow
 
 type HumanStatusSourceRow = {
   answerSchemaHash: string | null
@@ -176,85 +166,13 @@ const getPayloadAnswer = (payloadJson: unknown) => {
     : undefined
 }
 
-const getProjectPromptConfigRows = async (
-  projectId: string,
-  database: Pick<ReviewServingHumanStatusProjectorDatabase, 'queryJson'>,
-) => {
-  return database.queryJson<ProjectPromptConfigRow>(`
-    SELECT
-      prompt.id AS promptId,
-      project_prompt.prompt_order AS promptOrder,
-      COALESCE(prompt.content_hash, sha256(prompt.original_text)) AS promptTextHash,
-      NULL AS answerSchemaHash,
-      'prompt-v1' AS settingsVersion,
-      NULL AS thresholdVersion
-    FROM app.project_prompt project_prompt
-    INNER JOIN app.prompt prompt
-      ON prompt.id = project_prompt.prompt_id
-    WHERE project_prompt.project_id = ${getSqlLiteral(projectId)}
-      AND project_prompt.enabled
-      AND NOT project_prompt.archived
-      AND COALESCE(prompt.archived, FALSE) = FALSE
-    ORDER BY COALESCE(project_prompt.prompt_order, 0) ASC, prompt.id ASC
-  `)
-}
-
 const getPromptConfigHash = (
   row: Pick<
     ProjectPromptConfigRow,
     'answerSchemaHash' | 'promptId' | 'promptTextHash' | 'settingsVersion' | 'thresholdVersion'
   >,
 ) => {
-  return buildPromptConfigHash({
-    answerSchemaHash: row.answerSchemaHash,
-    promptId: row.promptId,
-    promptTextHash: row.promptTextHash ?? row.promptId,
-    settingsVersion: row.settingsVersion ?? 'prompt-v1',
-    thresholdVersion: row.thresholdVersion,
-  })
-}
-
-const getReviewConfigHash = (input: {
-  humanJudgmentMode: 'prompt' | 'summary'
-  modelId: string | null
-  promptConfigRows: readonly ProjectPromptConfigRow[]
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-  useTitle: boolean
-}) => {
-  return buildReviewConfigHash({
-    humanJudgmentMode: input.humanJudgmentMode,
-    modelExecutionIdentity: {modelId: input.modelId},
-    modelId: input.modelId,
-    promptConfigs: input.promptConfigRows.map((row, index) => {
-      return {promptConfigHash: getPromptConfigHash(row), promptId: row.promptId, promptOrder: row.promptOrder ?? index}
-    }),
-    useAbstract: input.useAbstract,
-    useFulltext: input.useFulltext,
-    useFulltextNoImages: input.useFulltextNoImages,
-    useTitle: input.useTitle,
-  })
-}
-
-const getProjectReviewSettings = async (
-  projectId: string,
-  database: Pick<ReviewServingHumanStatusProjectorDatabase, 'queryJson'>,
-) => {
-  const rows = await database.queryJson<ProjectReviewSettingsRow>(`
-    SELECT
-      COALESCE(human_judgment_mode, 'prompt') AS humanJudgmentMode,
-      model_id AS modelId,
-      use_title AS useTitle,
-      use_abstract AS useAbstract,
-      use_fulltext AS useFulltext,
-      use_fulltext_no_images AS useFulltextNoImages
-    FROM app.project
-    WHERE id = ${getSqlLiteral(projectId)}
-    LIMIT 1
-  `)
-
-  return rows[0] ?? null
+  return getReviewServingPromptConfigHash(row)
 }
 
 const getPromptConfigRowByPromptId = (promptConfigRows: readonly ProjectPromptConfigRow[], promptId: string | null) => {
@@ -712,16 +630,16 @@ const getHumanStatusPatchManifest = (
 
 export const projectReviewServingHumanStatusPatches = async (
   input: ProjectReviewServingHumanStatusInput,
-  database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService(),
+  database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService() as ReviewServingHumanStatusProjectorDatabase,
 ) => {
-  const promptConfigRows = await getProjectPromptConfigRows(input.projectId, database)
-  const projectSettings = await getProjectReviewSettings(input.projectId, database)
+  const promptConfigRows = await getReviewServingProjectPromptConfigRows(input.projectId, database)
+  const projectSettings = await getReviewServingProjectReviewSettings(input.projectId, database)
   const currentSummaryReviewConfigHash =
     projectSettings === null
       ? null
-      : getReviewConfigHash({...projectSettings, humanJudgmentMode: 'summary', promptConfigRows})
+      : getReviewServingReviewConfigHash({...projectSettings, humanJudgmentMode: 'summary', promptConfigRows})
   const currentReviewConfigHash =
-    projectSettings === null ? null : getReviewConfigHash({...projectSettings, promptConfigRows})
+    projectSettings === null ? null : getReviewServingReviewConfigHash({...projectSettings, promptConfigRows})
   const [judgmentRows, promptRows, articleRows, projectRows] = await Promise.all([
     getJudgmentDeltaRows(input, database, promptConfigRows),
     getPromptScopedRows(input, database),
