@@ -99,10 +99,19 @@ test('title search projection writes token rows and search-only component state 
   expect(joined).not.toContain("'selectedImport'")
 })
 
-test('project-scoped title search rebuilds all scoped articles instead of deriving an article id from scope id', async () => {
-  const {database, statements} = createTitleSearchDatabase()
+test('project-scoped title search rebuilds scoped articles and clears snapshot search rows', async () => {
+  const {database, statements} = createTitleSearchDatabase({
+    rows: [
+      {
+        activitySortAt: '2026-01-02T00:00:00.000Z',
+        articleId: 'article-2',
+        articleTitle: 'Gamma Delta',
+        tombstone: false,
+      },
+    ],
+  })
 
-  await projectReviewServingTitleSearchRows(
+  const result = await projectReviewServingTitleSearchRows(
     {
       baseGeneration: 2,
       claims: [
@@ -129,8 +138,12 @@ test('project-scoped title search rebuilds all scoped articles instead of derivi
     return statement.includes('DELETE FROM mart.review_title_search_serving_v4')
   })
 
+  expect(result).toEqual({patchWatermark: 9, searchRowCount: 2})
   expect(selectStatement).not.toContain('WITH dirty_article(article_id)')
+  expect(selectStatement).not.toContain('dirty_article(article_id)')
   expect(selectStatement).not.toContain('INNER JOIN dirty_article dirty')
+  expect(deleteStatement).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
+  expect(deleteStatement).toContain("snapshot_id IS NOT DISTINCT FROM 'snapshot-1'")
   expect(deleteStatement).toContain('search_identity')
   expect(deleteStatement).not.toContain('article_id IN')
 })

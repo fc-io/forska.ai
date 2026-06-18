@@ -429,10 +429,10 @@ const getPayloadProjectionManifests = (
   input: ProjectReviewServingPayloadInput,
   claims: readonly ReviewServingDirtyWorkClaim[],
 ) => {
-  return claims.length === 0 ||
-    input.acknowledgeClaims === false ||
-    input.definitionVersion === undefined ||
-    input.projectionIdentity === undefined
+  return claims.length === 0
+    || input.acknowledgeClaims === false
+    || input.definitionVersion === undefined
+    || input.projectionIdentity === undefined
     ? []
     : [
         getReviewServingPayloadPatchManifest(

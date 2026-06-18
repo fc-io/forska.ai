@@ -331,7 +331,7 @@ const getPostingContributionRows = async (
               WHEN project_settings.human_judgment_mode <> 'summary' AND COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id <> 'summary' AND human.human_status_key = 'answered') = COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id <> 'summary') AND COUNT(*) FILTER (WHERE NOT human.tombstone AND human.prompt_id <> 'summary') > 0 THEN 'answered'
               ELSE 'unanswered'
             END AS human_status_key
-          FROM latest_human_patch
+          FROM latest_human_patch human
           CROSS JOIN project_settings
           GROUP BY human.article_id, human.list_mode_key, project_settings.human_judgment_mode
         ),

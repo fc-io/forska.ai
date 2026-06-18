@@ -195,6 +195,8 @@ test('prompt config changes rebuild only prompt-scoped queue rows', async () => 
   expect(selectStatement).toContain("ON dirty_prompt.prompt_id = human.prompt_id OR human.prompt_id = 'summary'")
   expect(selectStatement).toContain('llm.base_generation = 5')
   expect(selectStatement).toContain('human.base_generation = 5')
+  expect(selectStatement).toContain('project_settings AS')
+  expect(selectStatement).toContain("human.prompt_id <> 'summary' OR project_settings.human_judgment_mode = 'summary'")
   expect(selectStatement).toContain('FROM mart.project_scope_article scope')
   expect(servingDelete).toContain("prompt_id IN ('prompt-1')")
 })
@@ -216,6 +218,21 @@ test('summary-mode human rows join queue work through article-level summary prom
   expect(selectStatement).toContain("AND (llm.prompt_id = human.prompt_id OR human.prompt_id = 'summary')")
   expect(selectStatement).toContain("human.prompt_id <> 'summary' OR project_settings.human_judgment_mode = 'summary'")
   expect(selectStatement).toContain('SELECT DISTINCT')
+})
+
+test('prompt-mode queue rebuilds suppress synthetic summary human rows', async () => {
+  const {database, statements} = createQueueDatabase({
+    queueRows: [queueRow({promptId: 'prompt-1', queueKind: 'human-unreviewed'})],
+  })
+
+  await projectReviewServingQueuePatches(projectInput([queueClaim({dirtyKind: 'judgment.human.updated'})]), database)
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM queue_union queue')
+  })
+
+  expect(selectStatement).toContain('project_settings AS')
+  expect(selectStatement).toContain('CROSS JOIN project_settings')
+  expect(selectStatement).toContain("human.prompt_id <> 'summary' OR project_settings.human_judgment_mode = 'summary'")
 })
 
 test('project review config changes rebuild queue rows for all scoped project articles', async () => {
