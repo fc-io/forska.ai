@@ -6,6 +6,7 @@ import {
   getReviewServingLeaseOwner,
   getReviewServingProjectionComponentIdentityKey,
   getReviewServingProjectorWatermarkId,
+  getReviewServingSourcePartitionWatermarks,
 } from './reviewServingProjectorDomain.ts'
 
 test('projection component identity keys are stable and scoped by component identity', () => {
@@ -80,6 +81,22 @@ test('dirty work scope returns null for unknown or incomplete invalidation input
 
   expect(getReviewServingDirtyWorkScopeForChange({...baseInput, changeKind: 'project.everything.changed'})).toBeNull()
   expect(getReviewServingDirtyWorkScopeForChange({...baseInput, changeKind: 'judgment.human.updated'})).toBeNull()
+})
+
+test('source partition watermarks map dirty partitions to promotion source keys', () => {
+  expect(
+    getReviewServingSourcePartitionWatermarks([
+      {latestSourceHighWaterMark: 10, sourcePartition: 'projectReviewConfig:project-a'},
+      {latestSourceHighWaterMark: 12, sourcePartition: 'projectScope:project-a'},
+      {latestSourceHighWaterMark: 14, sourcePartition: 'importRoute:route-a'},
+    ]),
+  ).toEqual({
+    importRoute: 14,
+    importRunArticle: 14,
+    projectReviewConfig: 10,
+    projectScope: 12,
+    reviewChange: 10,
+  })
 })
 
 test('lease owner values are non-empty strings', () => {

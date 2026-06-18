@@ -131,8 +131,15 @@ export const getReviewServingProjectorWatermarkId = (
 }
 
 const sourcePartitionAliases: Record<string, string> = {
+  article: 'reviewChange',
   'import-run-article': 'importRunArticle',
+  importRoute: 'importRunArticle',
+  humanJudgment: 'reviewChange',
+  llmJudgment: 'reviewChange',
+  projectReviewConfig: 'reviewChange',
+  projectScope: 'projectScope',
   'project-scope': 'projectScope',
+  promptConfig: 'reviewChange',
   'review-change': 'reviewChange',
 }
 

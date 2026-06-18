@@ -353,8 +353,16 @@ const getPostingContributionRows = async (
           INNER JOIN latest_human_patch human
             ON human.article_id = scoped.article_id
             AND human.human_answered_value IS NOT NULL
+          CROSS JOIN project_settings
           INNER JOIN list_mode_key_filter list_mode_key
             ON list_mode_key.list_mode_key = human.list_mode_key
+          WHERE (
+            project_settings.human_judgment_mode = 'summary'
+            AND human.prompt_id = 'summary'
+          ) OR (
+            project_settings.human_judgment_mode <> 'summary'
+            AND human.prompt_id <> 'summary'
+          )
         ),
         posting_union AS (
           SELECT * FROM selected_postings
