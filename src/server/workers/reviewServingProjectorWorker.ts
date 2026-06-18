@@ -20,6 +20,7 @@ import {
 import {projectReviewServingHumanStatusPatches} from '../reviewServing/reviewServingHumanStatusProjector.ts'
 import {projectReviewServingJudgmentPayloadRows} from '../reviewServing/reviewServingJudgmentPayloadProjector.ts'
 import {projectReviewServingLlmStatusPatches} from '../reviewServing/reviewServingLlmStatusProjector.ts'
+import {completeReviewServingDirtyWorkClaims} from '../reviewServing/reviewServingDirtyWorkService.ts'
 import {getReviewServingProjectionIdentityManifest} from '../reviewServing/reviewServingManifestRepository.ts'
 import {projectReviewServingFilterPostings} from '../reviewServing/reviewServingFilterPostingProjector.ts'
 import {projectReviewServingQueuePatches} from '../reviewServing/reviewServingQueueProjector.ts'
@@ -248,11 +249,9 @@ const getSnapshotContext = async (
     }
   })
 
-  return input.reviewConfigHash === null
-    ? snapshots.find((snapshot) => {
-        return getSnapshotComponentState(snapshot, input.component)?.projectionIdentity === input.projectionIdentity
-      }) ?? null
-    : snapshots[0] ?? null
+  return snapshots.find((snapshot) => {
+    return getSnapshotComponentState(snapshot, input.component)?.projectionIdentity === input.projectionIdentity
+  }) ?? null
 }
 
 const getSnapshotContexts = async (
@@ -283,11 +282,9 @@ const getSnapshotContexts = async (
     }
   })
 
-  return input.reviewConfigHash === null
-    ? snapshots.filter((snapshot) => {
-        return getSnapshotComponentState(snapshot, input.component)?.projectionIdentity === input.projectionIdentity
-      })
-    : snapshots
+  return snapshots.filter((snapshot) => {
+    return getSnapshotComponentState(snapshot, input.component)?.projectionIdentity === input.projectionIdentity
+  })
 }
 
 const requireSnapshotContexts = async (
@@ -651,6 +648,13 @@ const getDefaultReviewServingProjectorRunners = (
       const payloadSnapshots = snapshots.filter((snapshot) => {
         return getSnapshotReviewSettings(snapshot, currentSettings) !== null
       })
+
+      if (payloadSnapshots.length === 0) {
+        await completeReviewServingDirtyWorkClaims(context.claims, database)
+
+        return {processedCount: 0}
+      }
+
       const results = await runSnapshotProjectors(payloadSnapshots, async (snapshot, acknowledgeClaims) => {
         const project = getSnapshotReviewSettings(snapshot, currentSettings)
 

@@ -262,6 +262,8 @@ const getPostingContributionRows = async (
         latest_llm_patch AS (
           SELECT llm.*
           FROM mart.review_llm_status_patch_v4 llm
+          INNER JOIN scoped_article scoped_llm
+            ON scoped_llm.article_id = llm.article_id
           WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
             AND llm.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
@@ -312,6 +314,8 @@ const getPostingContributionRows = async (
         latest_human_patch AS (
           SELECT human.*
           FROM mart.review_human_status_patch_v4 human
+          INNER JOIN scoped_article scoped_human
+            ON scoped_human.article_id = human.article_id
           WHERE human.project_id = ${getSqlLiteral(input.projectId)}
             AND human.base_generation = ${getSqlLiteral(input.baseGeneration)}
             AND ${getLatestHumanPatchPredicate('human')}

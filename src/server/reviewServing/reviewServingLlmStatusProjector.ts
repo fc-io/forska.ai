@@ -342,6 +342,31 @@ const getProjectScopedRows = async (
           FROM mart.review_llm_status_patch_v4 llm
           WHERE llm.project_id = ${getSqlLiteral(input.projectId)}
             AND llm.base_generation = ${getSqlLiteral(input.baseGeneration)}
+        ), scoped_article AS (
+          SELECT scope.article_id
+          FROM mart.project_scope_article scope
+          WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+            AND (scope.in_curated_scope OR scope.in_route_scope)
+        ), latest_judgment AS (
+          SELECT
+            judgment.*,
+            ROW_NUMBER() OVER (
+              PARTITION BY judgment.article_id, judgment.prompt_id, judgment.model_id, judgment.use_title, judgment.use_abstract, judgment.use_fulltext, judgment.use_fulltext_no_images
+              ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC
+            ) AS judgment_rank
+          FROM app."judgment" judgment
+          INNER JOIN scoped_article scoped_judgment
+            ON scoped_judgment.article_id = judgment.article_id
+          INNER JOIN prompt_id_filter dirty_judgment_prompt
+            ON dirty_judgment_prompt.prompt_id = judgment.prompt_id
+          INNER JOIN app.project project_judgment
+            ON project_judgment.id = ${getSqlLiteral(input.projectId)}
+            AND project_judgment.model_id = judgment.model_id
+            AND project_judgment.use_title = judgment.use_title
+            AND project_judgment.use_abstract = judgment.use_abstract
+            AND project_judgment.use_fulltext = judgment.use_fulltext
+            AND project_judgment.use_fulltext_no_images = judgment.use_fulltext_no_images
+          WHERE judgment.deleted_at IS NULL
         )
         SELECT
           scope.article_id AS articleId,
@@ -363,9 +388,8 @@ const getProjectScopedRows = async (
           'prompt-v1' AS settingsVersion,
           NULL AS thresholdVersion
         FROM app.project project
-        INNER JOIN mart.project_scope_article scope
-          ON scope.project_id = project.id
-          AND (scope.in_curated_scope OR scope.in_route_scope)
+        INNER JOIN scoped_article scope
+          ON TRUE
         INNER JOIN prompt_id_filter dirty_prompt
           ON TRUE
         LEFT JOIN app.project_prompt project_prompt
@@ -373,16 +397,7 @@ const getProjectScopedRows = async (
           AND project_prompt.prompt_id = dirty_prompt.prompt_id
         INNER JOIN app.prompt prompt
           ON prompt.id = dirty_prompt.prompt_id
-        LEFT JOIN (
-          SELECT
-            *,
-            ROW_NUMBER() OVER (
-              PARTITION BY article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images
-              ORDER BY created_at DESC NULLS LAST, id DESC
-            ) AS judgment_rank
-          FROM app."judgment"
-          WHERE deleted_at IS NULL
-        ) judgment
+        LEFT JOIN latest_judgment judgment
           ON judgment.article_id = scope.article_id
           AND judgment.prompt_id = dirty_prompt.prompt_id
           AND judgment.model_id = project.model_id
@@ -405,7 +420,26 @@ const getArticleScopedRows = async (
   return !hasArticleScopeClaim(input.claims) || articleIds.length === 0
     ? []
     : database.queryJson<LlmStatusSourceRow>(`
-        WITH ${getValuesCte('article_id', articleIds)}
+        WITH ${getValuesCte('article_id', articleIds)},
+        latest_judgment AS (
+          SELECT
+            judgment.*,
+            ROW_NUMBER() OVER (
+              PARTITION BY judgment.article_id, judgment.prompt_id, judgment.model_id, judgment.use_title, judgment.use_abstract, judgment.use_fulltext, judgment.use_fulltext_no_images
+              ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC
+            ) AS judgment_rank
+          FROM app."judgment" judgment
+          INNER JOIN article_id_filter dirty_judgment
+            ON dirty_judgment.article_id = judgment.article_id
+          INNER JOIN app.project project_judgment
+            ON project_judgment.id = ${getSqlLiteral(input.projectId)}
+            AND project_judgment.model_id = judgment.model_id
+            AND project_judgment.use_title = judgment.use_title
+            AND project_judgment.use_abstract = judgment.use_abstract
+            AND project_judgment.use_fulltext = judgment.use_fulltext
+            AND project_judgment.use_fulltext_no_images = judgment.use_fulltext_no_images
+          WHERE judgment.deleted_at IS NULL
+        )
         SELECT
           dirty.article_id AS articleId,
           prompt.id AS promptId,
@@ -438,16 +472,7 @@ const getArticleScopedRows = async (
         LEFT JOIN mart.project_scope_article scope
           ON scope.project_id = project.id
           AND scope.article_id = dirty.article_id
-        LEFT JOIN (
-          SELECT
-            *,
-            ROW_NUMBER() OVER (
-              PARTITION BY article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images
-              ORDER BY created_at DESC NULLS LAST, id DESC
-            ) AS judgment_rank
-          FROM app."judgment"
-          WHERE deleted_at IS NULL
-        ) judgment
+        LEFT JOIN latest_judgment judgment
           ON judgment.article_id = dirty.article_id
           AND judgment.prompt_id = prompt.id
           AND judgment.model_id = project.model_id
