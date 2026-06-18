@@ -1,0 +1,228 @@
+import {readFile} from 'node:fs/promises'
+
+import {expect, test} from 'bun:test'
+
+import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import type {ReviewServingProjectionComponent, ReviewServingSnapshotStatus} from './reviewServingContracts.ts'
+import {
+  countLlmReviewArticlesFromServing,
+  getLlmReviewArticlesFromServing,
+} from './reviewServingLlmReviewRouteService.ts'
+import type {ReviewServingManifestRepositoryDatabase} from './reviewServingManifestRepository.ts'
+import type {ReviewServingReaderDatabase} from './reviewServingReader.ts'
+
+const components: readonly ReviewServingProjectionComponent[] = [
+  'display',
+  'projectScope',
+  'selectedImport',
+  'payload',
+  'llmStatus',
+  'humanStatus',
+  'posting',
+  'summary',
+  'queue',
+  'search',
+]
+const forbiddenSqlFragments = [
+  'selected_scoped_article_import',
+  'FROM app.article',
+  'FROM app.judgment',
+  'OFFSET',
+  'json_extract',
+  'json_extract_string',
+]
+
+const getComponentState = () => {
+  return {
+    optional: [],
+    required: components.map((component) => {
+      return {
+        baseGeneration: '1',
+        component,
+        patchWatermark: '2',
+        projectionIdentity: `${component}-identity`,
+        requirement: 'required' as const,
+      }
+    }),
+  }
+}
+
+const getSnapshotRow = (status: ReviewServingSnapshotStatus) => {
+  return {
+    componentStateJson: getComponentState(),
+    composedIdentityJson: {snapshot: `${status}-snapshot`},
+    lastError: status === 'failed' ? 'projection failed' : null,
+    lastKnownGoodSnapshotId: status === 'active' ? 'retired-snapshot' : null,
+    optionalComponentsJson: [],
+    projectId: 'project-1',
+    requiredComponentsJson: components,
+    reviewConfigHash: 'config-1',
+    selectedImportSnapshotId: 'selected-import-snapshot-1',
+    snapshotId: `${status}-snapshot`,
+    snapshotStatus: status,
+    sourceWatermarksJson: {},
+    validationResultJson: null,
+  }
+}
+
+const getDiagnosticsRows = (statement: string) => {
+  return statement.includes('GROUP BY snapshot_status') ? [{snapshotCount: 1, snapshotStatus: 'active'}] : []
+}
+
+const createManifestDatabase = (status: ReviewServingSnapshotStatus | 'missing') => {
+  const database: ReviewServingManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      if (!statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return getDiagnosticsRows(statement) as T[]
+      }
+
+      if (status === 'missing') {
+        return []
+      }
+
+      if (statement.includes("snapshot_status = 'active'")) {
+        return status === 'active' ? ([getSnapshotRow('active')] as T[]) : []
+      }
+
+      if (statement.includes("snapshot_status = 'retired'")) {
+        return status === 'retired' ? ([getSnapshotRow('retired')] as T[]) : []
+      }
+
+      return [getSnapshotRow(status)] as T[]
+    },
+    run: async () => {},
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+
+  return database
+}
+
+const createReaderDatabase = () => {
+  const statements: string[] = []
+  const database: ReviewServingReaderDatabase = {
+    queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
+      statements.push(statement)
+
+      if (statement.includes('FROM mart.review_article_serving_v4')) {
+        return [
+          {
+            article_id: 'article-1',
+            article_external_id: 'external-1',
+            article_title: 'Article 1',
+            journal_title: 'Journal',
+            sort_key: '2026-01-01T00:00:00.000Z',
+            activity_sort_at: '2026-01-02T00:00:00.000Z',
+            url: 'https://example.test/article-1',
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM mart.review_article_judgment_detail_serving_v4')) {
+        return [
+          {
+            article_id: 'article-1',
+            prompt_id: 'prompt-1',
+            model_id: 'model-1',
+            judgment_id: 'judgment-1',
+            answered_original: 'yes',
+            answered_original_as_array: ['yes'],
+            judgment_payload_json: {createdAt: '2026-01-03T00:00:00.000Z', explanation: 'because', quotes: []},
+          },
+        ] as T[]
+      }
+
+      return [{availability: 'ready', count_value: 1}] as T[]
+    },
+  }
+
+  return {database, statements}
+}
+
+test('LLM review list route service composes serving rows, judgments, and count without raw fallback SQL', async () => {
+  const reader = createReaderDatabase()
+  const result = await getLlmReviewArticlesFromServing(
+    {
+      projectId: 'project-1',
+      page: 1,
+      limit: 100,
+      from: '2026-01-01',
+      to: '2026-01-31',
+      search: 'heart',
+      hasDuplicateStudyRecords: true,
+      hasStudyDecisionConflict: true,
+      prompts: {'prompt-1': ['yes']},
+      llmStatus: 'complete',
+    },
+    {database: reader.database, manifestDatabase: createManifestDatabase('active')},
+  )
+  const sql = reader.statements.join('\n')
+
+  expect(result.data[0]?.judgments[0]?.answeredOriginal).toBe('yes')
+  expect(reader.statements).toHaveLength(3)
+  expect(sql).toContain('FROM mart.review_article_serving_v4')
+  expect(sql).toContain('FROM mart.review_article_judgment_detail_serving_v4')
+  expect(sql).toContain('FROM mart.review_article_count_serving_v4')
+  expect(sql).toContain('article_id IN (SELECT unnest($articleIds))')
+  expect(sql).toContain("count_kind = 'review.list.filteredTotal'")
+  forbiddenSqlFragments.forEach((fragment) => {
+    expect(sql).not.toContain(fragment)
+  })
+})
+
+test('LLM review count route service uses count serving state without row hydration', async () => {
+  const reader = createReaderDatabase()
+  const result = await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {database: reader.database, manifestDatabase: createManifestDatabase('active')},
+  )
+
+  expect(result).toEqual({totalCount: 1, totalPages: 1})
+  expect(reader.statements).toHaveLength(1)
+  expect(reader.statements[0]).toContain('FROM mart.review_article_count_serving_v4')
+  expect(reader.statements[0]).toContain("count_kind = 'review.list.total'")
+})
+
+test('LLM review route service surfaces stale, indexing, and unavailable freshness without raw fallback', async () => {
+  const staleReader = createReaderDatabase()
+  const staleResult = await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {database: staleReader.database, manifestDatabase: createManifestDatabase('retired')},
+  )
+
+  expect(staleResult.totalCount).toBe(1)
+  expect(staleReader.statements.join('\n')).toContain('FROM mart.review_article_count_serving_v4')
+  await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {database: createReaderDatabase().database, manifestDatabase: createManifestDatabase('candidate')},
+  )
+    .then(() => {
+      throw new Error('expected indexing freshness to reject')
+    })
+    .catch((error: unknown) => {
+      expect(error).toBeInstanceOf(Error)
+      expect(error instanceof Error ? error.message : '').toContain('Review serving snapshot is unavailable')
+    })
+  await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {database: createReaderDatabase().database, manifestDatabase: createManifestDatabase('missing')},
+  )
+    .then(() => {
+      throw new Error('expected unavailable freshness to reject')
+    })
+    .catch((error: unknown) => {
+      expect(error).toBeInstanceOf(Error)
+      expect(error instanceof Error ? error.message : '').toContain('Review serving snapshot is unavailable')
+    })
+})
+
+test('migrated LLM review routes do not import OLAP fallback wrappers', async () => {
+  const listRoute = await readFile('src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts', 'utf8')
+  const countRoute = await readFile('src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts', 'utf8')
+
+  expect(listRoute).not.toContain('articlesReviewsOlap')
+  expect(listRoute).not.toContain('queryArticlesReviewsFromOlap')
+  expect(countRoute).not.toContain('articlesReviewsOlap')
+  expect(countRoute).not.toContain('countArticlesReviewsFromOlap')
+})
