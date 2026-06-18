@@ -1,6 +1,7 @@
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
+import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 
@@ -579,6 +580,68 @@ test('project prompt preview uses the first project article and shared prompt bu
         TIMESTAMPTZ '2026-02-01T00:00:00.000Z',
         NULL
       )
+  `)
+  const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
+  const required = ['judgmentInputContent', 'projectScope', 'selectedImport', 'payload'].map((component) => {
+    return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:preview-identity`}
+  })
+  const displayState = {
+    baseGeneration: '1',
+    component: 'display',
+    patchWatermark: '0',
+    projectionIdentity: 'display:preview-identity',
+  }
+  await runDatabase(`
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id,
+      snapshot_id,
+      snapshot_status,
+      review_config_hash,
+      composed_identity_json,
+      component_state_json,
+      required_components_json,
+      optional_components_json,
+      source_watermarks_json,
+      activated_at,
+      updated_at
+    ) VALUES (
+      '${projectId}',
+      'snapshot-preview-route',
+      'active',
+      ${getSqlLiteral(reviewConfigHash)},
+      '{}'::JSON,
+      '${JSON.stringify({optional: [displayState], required}).replaceAll("'", "''")}'::JSON,
+      '${JSON.stringify(required).replaceAll("'", "''")}'::JSON,
+      '[]'::JSON,
+      '{}'::JSON,
+      TIMESTAMPTZ '2026-02-02T00:00:00.000Z',
+      TIMESTAMPTZ '2026-02-02T00:00:00.000Z'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_article_serving_payload_v4 (
+      project_id,
+      display_identity,
+      payload_identity,
+      snapshot_id,
+      article_id,
+      article_created_at,
+      source_metadata,
+      abstract_text,
+      full_text_preview,
+      payload_bytes
+    ) VALUES (
+      '${projectId}',
+      'display:preview-identity',
+      'payload:preview-identity',
+      'snapshot-preview-route',
+      'preview-article-second',
+      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
+      '{}'::JSON,
+      'Second article summary',
+      NULL,
+      128
+    )
   `)
 
   const response = await app.handle(
