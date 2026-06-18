@@ -6,6 +6,7 @@ import {
   assertArticleIdOnlyBulkOperationCaps,
   createReviewBulkOperationJob,
   reviewBulkOperationArticleIdCap,
+  reviewBulkOperationPayloadByteCap,
   type ReviewBulkOperationServiceDatabase,
 } from './reviewBulkOperationService.ts'
 import type {ReviewServingProjectionComponent, ReviewServingSnapshotStatus} from './reviewServingContracts.ts'
@@ -214,6 +215,16 @@ test('article-id-only bulk operations enforce a foreground cap', () => {
   expect(() => {
     return assertArticleIdOnlyBulkOperationCaps(ids)
   }).toThrow('Bulk article ID operation exceeds cap')
+})
+
+test('article-id-only bulk operations enforce a payload cap', () => {
+  const ids = Array.from({length: 100}, (_, index) => {
+    return `article-${index}-${'x'.repeat(Math.ceil(reviewBulkOperationPayloadByteCap / 50))}`
+  })
+
+  expect(() => {
+    return assertArticleIdOnlyBulkOperationCaps(ids)
+  }).toThrow('Bulk article ID operation payload exceeds cap')
 })
 
 test('PDF fetch job lookup reads durable cursor progress from review bulk operation jobs', async () => {

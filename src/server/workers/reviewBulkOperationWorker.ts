@@ -36,7 +36,19 @@ type ReviewBulkOperationJobRow = {
   totalEstimate: number | null
 }
 
-type ReviewBulkOperationCriteria = {articleIds?: readonly string[]; operation?: string; targetProjectId?: string}
+type ReviewBulkOperationCriteria = {
+  articleIds?: readonly string[]
+  from?: string
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
+  listType?: string
+  llmStatus?: string
+  operation?: string
+  prompts?: Record<string, readonly string[]>
+  search?: string
+  targetProjectId?: string
+  to?: string
+}
 
 type ReviewBulkOperationCursor = {cursor?: string | null; limit?: number}
 
@@ -173,19 +185,91 @@ const getExplicitArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: stri
   `
 }
 
+const getListModeKey = (criteria: ReviewBulkOperationCriteria) => {
+  return criteria.listType ?? 'llm'
+}
+
+const getPromptAnswerPredicates = (criteria: ReviewBulkOperationCriteria) => {
+  return Object.entries(criteria.prompts ?? {})
+    .filter(([, values]) => {
+      return values.length > 0
+    })
+    .map(([promptId, values], index) => {
+      const filterValues = values.map((value) => {
+        return `review:promptAnswer:${promptId}:${value}`
+      })
+
+      return `AND EXISTS (
+        SELECT 1
+        FROM mart.review_article_filter_posting_serving_v4 prompt_filter_${index}
+        WHERE prompt_filter_${index}.project_id = p.project_id
+          AND prompt_filter_${index}.snapshot_id = p.snapshot_id
+          AND prompt_filter_${index}.review_config_hash = p.review_config_hash
+          AND prompt_filter_${index}.list_mode_key = p.list_mode_key
+          AND prompt_filter_${index}.article_id = p.article_id
+          AND prompt_filter_${index}.filter_kind = 'promptAnswer'
+          AND prompt_filter_${index}.filter_value IN (SELECT unnest(${getSqlLiteral(filterValues)}::VARCHAR[]))
+      )`
+    })
+}
+
+const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
+  const llmStatusValue =
+    criteria.llmStatus === 'complete' ? 'answered' : criteria.llmStatus === 'partial' ? 'unanswered' : null
+  const simpleFilters = [
+    criteria.hasDuplicateStudyRecords ? {kind: 'duplicateFlag', value: 'true'} : null,
+    criteria.hasStudyDecisionConflict ? {kind: 'conflictFlag', value: 'true'} : null,
+    llmStatusValue ? {kind: 'llmStatus', value: llmStatusValue} : null,
+  ].filter((filter): filter is {kind: string; value: string} => {
+    return filter !== null
+  })
+  const simplePredicates = simpleFilters.map((filter, index) => {
+    return `AND EXISTS (
+      SELECT 1
+      FROM mart.review_article_filter_posting_serving_v4 filter_${index}
+      WHERE filter_${index}.project_id = p.project_id
+        AND filter_${index}.snapshot_id = p.snapshot_id
+        AND filter_${index}.review_config_hash = p.review_config_hash
+        AND filter_${index}.list_mode_key = p.list_mode_key
+        AND filter_${index}.article_id = p.article_id
+        AND filter_${index}.filter_kind = ${getSqlLiteral(filter.kind)}
+        AND filter_${index}.filter_value = ${getSqlLiteral(filter.value)}
+    )`
+  })
+  const publicationYearPredicate =
+    criteria.from || criteria.to
+      ? `AND EXISTS (
+        SELECT 1
+        FROM mart.review_article_filter_posting_serving_v4 year_filter
+        WHERE year_filter.project_id = p.project_id
+          AND year_filter.snapshot_id = p.snapshot_id
+          AND year_filter.review_config_hash = p.review_config_hash
+          AND year_filter.list_mode_key = p.list_mode_key
+          AND year_filter.article_id = p.article_id
+          AND year_filter.filter_kind = 'publicationYear'
+          ${criteria.from ? `AND TRY_CAST(year_filter.filter_value AS INTEGER) >= TRY_CAST(${getSqlLiteral(criteria.from)} AS INTEGER)` : ''}
+          ${criteria.to ? `AND TRY_CAST(year_filter.filter_value AS INTEGER) <= TRY_CAST(${getSqlLiteral(criteria.to)} AS INTEGER)` : ''}
+      )`
+      : ''
+
+  return [...simplePredicates, publicationYearPredicate, ...getPromptAnswerPredicates(criteria)].join('\n')
+}
+
 const getServingArticleBatchSql = (job: ReviewBulkOperationJobRow, cursor: string | null, limit: number) => {
+  const criteria = getCriteria(job)
   const snapshotPredicate = job.latestSnapshotSemantics
-    ? `snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = ${getSqlLiteral(job.projectId)} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
-    : `snapshot_id = ${getSqlLiteral(job.snapshotId)}`
-  const cursorPredicate = cursor ? `AND article_id > ${getSqlLiteral(cursor)}` : ''
+    ? `p.snapshot_id = (SELECT snapshot_id FROM app.review_serving_snapshot_manifest WHERE project_id = ${getSqlLiteral(job.projectId)} AND snapshot_status = 'active' ORDER BY updated_at DESC, snapshot_id DESC LIMIT 1)`
+    : `p.snapshot_id = ${getSqlLiteral(job.snapshotId)}`
 
   return `
-    SELECT DISTINCT article_id AS articleId
-    FROM mart.review_article_filter_posting_serving_v4
-    WHERE project_id = ${getSqlLiteral(job.projectId)}
+    SELECT DISTINCT p.article_id AS articleId
+    FROM mart.review_article_filter_posting_serving_v4 p
+    WHERE p.project_id = ${getSqlLiteral(job.projectId)}
       AND ${snapshotPredicate}
-      ${cursorPredicate}
-    ORDER BY article_id ASC
+      AND p.list_mode_key = ${getSqlLiteral(getListModeKey(criteria))}
+      ${cursor ? `AND p.article_id > ${getSqlLiteral(cursor)}` : ''}
+      ${getPostingFilterPredicates(criteria)}
+    ORDER BY p.article_id ASC
     LIMIT ${getSqlLiteral(limit)}
   `
 }
@@ -199,6 +283,11 @@ const getArticleBatch = async (
   const criteria = getCriteria(job)
   const cursor = getCursor(job).cursor ?? null
   const limit = getBatchLimit(job, options)
+
+  if (job.jobKind === 'review.bulk.substringSelection' || criteria.search) {
+    throw new Error('Substring bulk selection is waiting for async search results')
+  }
+
   const sql = Array.isArray(criteria.articleIds)
     ? getExplicitArticleBatchSql(job, cursor, limit)
     : getServingArticleBatchSql(job, cursor, limit)
