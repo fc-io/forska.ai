@@ -1,7 +1,11 @@
 import {Elysia, t} from 'elysia'
 
+import {getReviewServingDiagnostics} from '../../reviewServing/reviewServingDiagnosticsRepository.ts'
+import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
+import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 const getEnabledPromptCount = async (projectId: string): Promise<number> => {
   const rows = await getAppDatabaseService().queryJson<{count: number}>(`
@@ -41,14 +45,38 @@ export const projectsRoutesGetReviewsHealth = new Elysia().post(
   '/api/projectsreviewshealth',
   async ({body}) => {
     const projectId = body.projectId
+    await assertProjectIsActive(projectId)
+    const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
     const [enabledPromptCount, hasCuratedArticles] = await Promise.all([
       getEnabledPromptCount(projectId),
       getHasCuratedArticles(projectId),
     ])
     const hasAnyArticlesInScope =
       enabledPromptCount === 0 || hasCuratedArticles ? hasCuratedArticles : await getHasRouteArticles(projectId)
+    const [servingDiagnostics, healthSnapshot] = await Promise.all([
+      getReviewServingDiagnostics({projectId, reviewConfigHash}),
+      readReviewServingRows({
+        allowStale: true,
+        contractKey: 'review.health.snapshot',
+        estimatedResultRows: 1,
+        limit: 1,
+        projectId,
+        reviewConfigHash,
+      }),
+    ])
 
-    return {data: {projectId, enabledPromptCount, scope: {hasAnyArticlesInScope}}}
+    return {
+      data: {
+        projectId,
+        enabledPromptCount,
+        scope: {hasAnyArticlesInScope},
+        serving: {
+          diagnostics: servingDiagnostics,
+          manifest: healthSnapshot.diagnostics.manifest,
+          status: healthSnapshot.status,
+        },
+      },
+    }
   },
   {body: t.Object({projectId: t.String()})},
 )

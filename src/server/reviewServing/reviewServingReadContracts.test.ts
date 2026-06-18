@@ -586,8 +586,6 @@ test('mounted routes stay off incomplete option, detail, warning, and preview co
     '/api/articlesreviewshumanfilters',
     '/api/projects/add_articles_by_filter',
     '/api/articlesreviewsunassessed',
-    '/api/projectsreviewswarnings',
-    '/api/projects/:id/prompts/:promptId/preview',
     '/api/projects/:id/export',
   ])
   const mountedIncompleteRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
@@ -934,7 +932,34 @@ test('warning read inventory maps to the mounted project warnings route', () => 
   expect(warningInventoryEntries).toHaveLength(1)
   expect(warningInventoryEntries[0]).toMatchObject({
     method: 'POST',
+    mounted: true,
     productRoute: '/api/projectsreviewswarnings',
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts',
+  })
+})
+
+test('health and prompt preview inventories map only to mounted product routes', () => {
+  const healthInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.contractKeys.includes('review.health.snapshot')
+  })
+  const previewInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
+    return entry.contractKeys.includes('review.prompt.preview')
+  })
+
+  expect(healthInventoryEntries).toHaveLength(1)
+  expect(healthInventoryEntries[0]).toMatchObject({
+    method: 'POST',
+    mounted: true,
+    productRoute: '/api/projectsreviewshealth',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsHealth.ts',
+    surfaces: ['health'],
+  })
+  expect(previewInventoryEntries).toHaveLength(1)
+  expect(previewInventoryEntries[0]).toMatchObject({
+    method: 'GET',
+    mounted: true,
+    productRoute: '/api/projects/:id/prompts/:promptId/preview',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview.ts',
+    surfaces: ['promptPreview', 'detail'],
   })
 })

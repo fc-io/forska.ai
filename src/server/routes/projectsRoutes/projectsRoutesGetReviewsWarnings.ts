@@ -1,13 +1,9 @@
 import {Elysia, t} from 'elysia'
 
-import {
-  buildPromptConfigHash,
-  buildReviewConfigHash,
-  type ReviewServingIdentityValue,
-} from '../../reviewServing/reviewProjectionIdentity.ts'
-import {getReviewServingSearchAvailabilityFromManifest} from '../../reviewServing/reviewServingTitleSearchProjector.ts'
+import {getReviewServingDiagnostics} from '../../reviewServing/reviewServingDiagnosticsRepository.ts'
+import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getJsonValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getDuckdbMartMaintenanceService} from '../../services/getDuckdbMartMaintenanceService.ts'
 import {
   type FreshMaintenanceWorkLeaseRecord,
@@ -20,6 +16,7 @@ import {
   isArticleScopedLargeRebuildPhase,
 } from '../../services/projectMartLargeRebuildProgressService.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
+import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {getDuckdbOwnerConnectionsOverview} from '../../utils/duckdbOwnerConnections.ts'
 import {
   type DuckdbQueueRuntimeMetrics,
@@ -91,12 +88,6 @@ type ReviewsRuntimeDiagnostics = {
   processMemory: {rssBytes: number}
   tempSpill: DuckdbTempSpillMetrics
 }
-type ReviewServingSearchDiagnostic = {
-  availability: 'ready' | 'indexing' | 'unavailable' | 'async'
-  optionalComponent: boolean
-  snapshotId: string | null
-}
-
 type ProjectLargeRebuildState = {
   cursorArticleCreatedAt: string | null
   cursorArticleId: string | null
@@ -147,12 +138,12 @@ const getMaxNullableNumber = (left: number | null, right: number | null) => {
   return left === null ? right : right === null ? left : Math.max(left, right)
 }
 
-const getNullableNumberSum = (values: Array<number | null>) => {
+const getNullableNumberSum = (values: Array<number | null | undefined>) => {
   return values.every((value) => {
     return value === null
   })
     ? null
-    : values.reduce((sum, value) => {
+    : values.reduce((sum: number, value) => {
         return sum + (value ?? 0)
       }, 0)
 }
@@ -165,10 +156,10 @@ const getLargeRebuildRuntimeCycleDiagnostic = (
     : {
         endedAt: cycle.endedAt,
         phase: cycle.phase,
-        queueWaitMs: cycle.queueWaitMs,
-        rowsPerSecond: cycle.rowsPerSecond,
-        rssBytes: cycle.processMemory.rssBytes,
-        tempSpill: cycle.tempSpill,
+        queueWaitMs: cycle.queueWaitMs ?? null,
+        rowsPerSecond: cycle.rowsPerSecond ?? null,
+        rssBytes: cycle.processMemory?.rssBytes ?? null,
+        tempSpill: cycle.tempSpill ?? null,
       }
 }
 
@@ -178,7 +169,7 @@ const getLargeRebuildRuntimePhaseDiagnostic = (
 ): ProjectLargeRebuildRuntimePhaseDiagnostic | null => {
   const [lastCycle = null] = cycles.slice(-1)
   const committedRowCount = cycles.reduce((sum, cycle) => {
-    return sum + cycle.committedRowCount
+    return sum + (cycle.committedRowCount ?? 0)
   }, 0)
   const durationMs = cycles.reduce((sum, cycle) => {
     return sum + cycle.durationMs
@@ -189,7 +180,7 @@ const getLargeRebuildRuntimePhaseDiagnostic = (
     }),
   )
   const maxRssBytes = cycles.reduce<number | null>((maxValue, cycle) => {
-    return getMaxNullableNumber(maxValue, cycle.processMemory.rssBytes)
+    return getMaxNullableNumber(maxValue, cycle.processMemory?.rssBytes ?? null)
   }, null)
   const maxTempSpillBytes = cycles.reduce<number | null>((maxValue, cycle) => {
     return getMaxNullableNumber(maxValue, cycle.tempSpill?.totalBytes ?? null)
@@ -202,7 +193,7 @@ const getLargeRebuildRuntimePhaseDiagnostic = (
         cycleCount: cycles.length,
         durationMs,
         lastEndedAt: lastCycle?.endedAt ?? null,
-        lastRssBytes: lastCycle?.processMemory.rssBytes ?? null,
+        lastRssBytes: lastCycle?.processMemory?.rssBytes ?? null,
         lastTempSpill: lastCycle?.tempSpill ?? null,
         maxRssBytes,
         maxTempSpillBytes,
@@ -513,130 +504,6 @@ const getProjectLargeRebuildState = async (projectId: string): Promise<ProjectLa
   }
 }
 
-const getReviewServingSearchDiagnostic = async (projectId: string): Promise<ReviewServingSearchDiagnostic> => {
-  const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
-  const [row] = await getAppDatabaseService().queryJson<{
-    componentStateJson: unknown
-    optionalComponentsJson: unknown
-    snapshotId: string
-  }>(`
-    SELECT
-      snapshot_id AS snapshotId,
-      component_state_json AS componentStateJson,
-      optional_components_json AS optionalComponentsJson
-    FROM app.review_serving_snapshot_manifest
-    WHERE project_id = ${getSqlLiteral(projectId)}
-      AND review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(reviewConfigHash)}
-      AND snapshot_status = 'active'
-    ORDER BY activated_at DESC NULLS LAST, updated_at DESC
-    LIMIT 1
-  `)
-  const optionalComponents = (getJsonValue(row?.optionalComponentsJson ?? []) as readonly string[]) ?? []
-  const componentState = getJsonValue(row?.componentStateJson ?? {}) as {optional?: Array<{component?: string}>}
-  const optionalSearchStatePresent = (componentState.optional ?? []).some((state) => {
-    return state.component === 'search'
-  })
-
-  return {
-    availability: getReviewServingSearchAvailabilityFromManifest({
-      hasActiveSnapshot: row !== undefined,
-      optionalComponents,
-      optionalSearchStatePresent,
-    }),
-    optionalComponent: optionalComponents.includes('search'),
-    snapshotId: row?.snapshotId ?? null,
-  }
-}
-
-const getCurrentReviewConfigHash = async (projectId: string) => {
-  const [project] = await getAppDatabaseService().queryJson<{
-    humanJudgmentMode: 'prompt' | 'summary' | null
-    modelExecutionOptions: unknown
-    modelId: string
-    modelProviderBaseUrl: string | null
-    modelProviderConnectionId: string | null
-    modelProviderKind: string | null
-    modelRemoteModelId: string | null
-    modelVariant: string | null
-    useAbstract: boolean
-    useFulltext: boolean
-    useFulltextNoImages: boolean
-    useTitle: boolean
-  }>(`
-    SELECT
-      app.project.human_judgment_mode AS humanJudgmentMode,
-      app.project.model_id AS modelId,
-      model.provider_connection_id AS modelProviderConnectionId,
-      provider_connection.provider_kind AS modelProviderKind,
-      provider_connection.base_url AS modelProviderBaseUrl,
-      model.remote_model_id AS modelRemoteModelId,
-      model.variant AS modelVariant,
-      TO_JSON(json_extract(model.metadata_json, '$.options')) AS modelExecutionOptions,
-      app.project.use_title AS useTitle,
-      app.project.use_abstract AS useAbstract,
-      app.project.use_fulltext AS useFulltext,
-      app.project.use_fulltext_no_images AS useFulltextNoImages
-    FROM app.project
-    LEFT JOIN app.model model
-      ON model.id = app.project.model_id
-    LEFT JOIN app.provider_connection provider_connection
-      ON provider_connection.id = model.provider_connection_id
-    WHERE app.project.id = ${getSqlLiteral(projectId)}
-    LIMIT 1
-  `)
-  const promptConfigs = await getAppDatabaseService().queryJson<{
-    promptId: string
-    promptOrder: number | null
-    promptTextHash: string | null
-  }>(`
-    SELECT
-      prompt.id AS promptId,
-      project_prompt.prompt_order AS promptOrder,
-      COALESCE(prompt.content_hash, sha256(prompt.original_text)) AS promptTextHash
-    FROM app.project_prompt project_prompt
-    INNER JOIN app.prompt prompt
-      ON prompt.id = project_prompt.prompt_id
-    WHERE project_prompt.project_id = ${getSqlLiteral(projectId)}
-      AND project_prompt.enabled
-      AND NOT project_prompt.archived
-      AND COALESCE(prompt.archived, FALSE) = FALSE
-    ORDER BY COALESCE(project_prompt.prompt_order, 0) ASC, prompt.id ASC
-  `)
-
-  return project === undefined
-    ? null
-    : buildReviewConfigHash({
-        humanJudgmentMode: project.humanJudgmentMode ?? 'prompt',
-        modelExecutionIdentity: {
-          modelExecutionOptions: getJsonValue(project.modelExecutionOptions) as ReviewServingIdentityValue,
-          modelId: project.modelId,
-          providerBaseUrl: project.modelProviderBaseUrl,
-          providerConnectionId: project.modelProviderConnectionId,
-          providerKind: project.modelProviderKind,
-          remoteModelId: project.modelRemoteModelId,
-          variant: project.modelVariant,
-        },
-        modelId: project.modelId,
-        promptConfigs: promptConfigs.map((row, index) => {
-          return {
-            promptConfigHash: buildPromptConfigHash({
-              answerSchemaHash: null,
-              promptId: row.promptId,
-              promptTextHash: row.promptTextHash ?? row.promptId,
-              settingsVersion: 'prompt-v1',
-              thresholdVersion: null,
-            }),
-            promptId: row.promptId,
-            promptOrder: row.promptOrder ?? index,
-          }
-        }),
-        useAbstract: project.useAbstract,
-        useFulltext: project.useFulltext,
-        useFulltextNoImages: project.useFulltextNoImages,
-        useTitle: project.useTitle,
-      })
-}
-
 const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshCountInfo> => {
   const projectLiteral = getSqlLiteral(projectId)
   const rows = await getAppDatabaseService().queryJson<{oldestQueuedAt: string | null; queuedRefreshCount: number}>(`
@@ -748,26 +615,6 @@ const getOldestQueuedAt = (...values: Array<string | null>) => {
 
     return new Date(value).getTime() < new Date(oldestValue).getTime() ? value : oldestValue
   }, null)
-}
-
-const getHasReviewServingRows = async (projectId: string): Promise<boolean> => {
-  const rows = await getAppDatabaseService().queryJson<{projectId: string}>(`
-    SELECT generation.project_id AS projectId
-    FROM app.project_review_serving_generation generation
-    LEFT JOIN app.project_mart_refresh_state refresh_state
-      ON refresh_state.project_id = generation.project_id
-    INNER JOIN mart.review_article_serving serving
-      ON serving.project_id = generation.project_id
-     AND serving.generation = generation.active_generation
-    WHERE generation.project_id = '${escapeSqlString(projectId)}'
-      AND (
-        refresh_state.project_id IS NULL
-        OR CAST(refresh_state.dirty_token AS BIGINT) <= CAST(refresh_state.last_completed_dirty_token AS BIGINT)
-      )
-    LIMIT 1
-  `)
-
-  return rows.length > 0
 }
 
 const getMissingVisibleJudgmentFactArticleIds = async (projectId: string): Promise<string[]> => {
@@ -974,6 +821,16 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const martRefreshService = getDuckdbMartMaintenanceService()
     const throughputSnapshot = martRefreshService.getThroughputSnapshot()
     const currentNow = new Date()
+    const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
+    const servingDiagnostics = await getReviewServingDiagnostics({projectId, reviewConfigHash})
+    const warningSnapshot = await readReviewServingRows({
+      allowStale: true,
+      contractKey: 'review.warning.snapshot',
+      estimatedResultRows: 1,
+      limit: 1,
+      projectId,
+      reviewConfigHash,
+    })
     const [
       enabledPromptCount,
       hasCuratedArticles,
@@ -982,11 +839,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       projectLargeRebuildState,
       pendingArticleRefreshInfo,
       quarantinedArticleRefreshes,
-      hasReviewServingRows,
       freshMaintenanceLeases,
       maintenanceRecoveryContext,
       maintenanceConsumerAvailability,
-      searchDiagnostic,
     ] = await Promise.all([
       getEnabledPromptCount(projectId),
       getHasCuratedArticles(projectId),
@@ -995,12 +850,12 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       getProjectLargeRebuildState(projectId),
       getPendingArticleRefreshInfo(projectId),
       getQuarantinedArticleRefreshes(projectId),
-      getHasReviewServingRows(projectId),
       getMaintenanceWorkLeaseService().getFreshProjectMaintenanceWorkLeases(projectId, currentNow),
       getMaintenanceWorkLeaseService().getProjectMaintenanceRecoveryContext(projectId, currentNow),
       getMaintenanceConsumerAvailability(),
-      getReviewServingSearchDiagnostic(projectId),
     ])
+    const hasReviewServingRows =
+      warningSnapshot.status === 'accepted' && warningSnapshot.diagnostics.manifest.status === 'active'
     const freshArticleRefreshLeaseCount = getFreshArticleRefreshLeaseCount(freshMaintenanceLeases)
     const freshProjectRefreshLeaseCount = getFreshMaintenanceLeaseCount(
       freshMaintenanceLeases,
@@ -1175,7 +1030,12 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           recoveryMode: (maintenanceRecoveryContext?.recoveryMode ?? 'none') as ReviewsIndexingRecoveryMode,
           requiredConsumerRole: 'maintenance-worker',
           retryAfterAt: maintenanceRecoveryContext?.retryAfterAt ?? null,
-          search: searchDiagnostic,
+          search: servingDiagnostics.search,
+          serving: {
+            diagnostics: servingDiagnostics,
+            manifest: warningSnapshot.diagnostics.manifest,
+            usable: hasReviewServingRows,
+          },
           status: indexingStatus,
         },
       },

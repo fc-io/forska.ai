@@ -420,6 +420,9 @@ const insertActiveReviewServingManifest = async (input: {
   const optional = input.includeSearchState
     ? [{baseGeneration: '1', component: 'search', patchWatermark: '0', projectionIdentity: 'search:identity-1'}]
     : []
+  const required = ['projectScope', 'posting', 'queue', 'summary'].map((component) => {
+    return {baseGeneration: '1', component, patchWatermark: '0', projectionIdentity: `${component}:identity-1`}
+  })
   const reviewConfigHash =
     input.reviewConfigHash === undefined ? getFixtureReviewConfigHash(input.projectId) : input.reviewConfigHash
   const reviewConfigHashSql = reviewConfigHash === null ? 'NULL' : `'${reviewConfigHash}'`
@@ -443,8 +446,8 @@ const insertActiveReviewServingManifest = async (input: {
       'active',
       ${reviewConfigHashSql},
       '{}'::JSON,
-      '${JSON.stringify({optional, required: []}).replaceAll("'", "''")}'::JSON,
-      '[]'::JSON,
+      '${JSON.stringify({optional, required}).replaceAll("'", "''")}'::JSON,
+      '${JSON.stringify(required).replaceAll("'", "''")}'::JSON,
       '${JSON.stringify(input.optionalComponents).replaceAll("'", "''")}'::JSON,
       '{}'::JSON,
       TIMESTAMPTZ '2026-04-02T12:08:00.000Z',
@@ -553,6 +556,12 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
   await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-ready-warning',
+  })
 
   const {body, response} = await postWarningsRequest(projectId)
 
@@ -570,6 +579,12 @@ test('reviews warnings expose bounded cleanup lease progress without blocking re
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
   await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-generation-cleanup-warning',
+  })
   await insertFreshGenerationCleanupLease(projectId)
 
   const {body, response} = await postWarningsRequest(projectId)
