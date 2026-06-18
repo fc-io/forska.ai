@@ -49,6 +49,7 @@ export type ReviewServingReaderRequest = {
   countFilterKey?: string | null
   countState?: ReviewServingCountState | null
   cursor?: string | null
+  estimatedHydratedPayloadBytes?: number
   estimatedResultBytes?: number
   estimatedResultRows?: number
   filterKind?: string | null
@@ -74,6 +75,7 @@ export type ReviewServingReaderRequest = {
 
 export type ReviewServingReaderRejectionReason =
   | 'admissionRejected'
+  | 'articleSetBoundsRejected'
   | 'cursorInvalid'
   | 'filterSignatureMismatch'
   | 'manifestStatusRejected'
@@ -123,6 +125,8 @@ const snapshotScopedTables = new Set([
   'app.review_search_job',
   'app.review_serving_snapshot_manifest',
 ])
+const maxArticleSetHydrationArticleIds = 100
+const maxArticleSetHydrationPayloadBytes = 2_000_000
 
 const getReaderDatabase = () => {
   return getApiReadOnlyAppDatabaseService()
@@ -217,6 +221,23 @@ const getUnsupportedFilterKeys = (contract: ReviewServingReadContract, filters: 
   return Object.keys(filters).filter((filterKey) => {
     return !isReviewServingFilterKey(filterKey) || !allowedFilters.has(filterKey)
   })
+}
+
+const hasValidArticleSetBounds = (contract: ReviewServingReadContract, request: ReviewServingReaderRequest) => {
+  if (contract.physicalAccessStrategy !== 'articleSetLookup') {
+    return true
+  }
+
+  const articleIdCount = request.articleIds?.length ?? 0
+  const hydratedPayloadBytes = request.estimatedHydratedPayloadBytes ?? 0
+
+  return (
+    articleIdCount > 0
+    && articleIdCount <= maxArticleSetHydrationArticleIds
+    && Number.isFinite(hydratedPayloadBytes)
+    && hydratedPayloadBytes >= 0
+    && hydratedPayloadBytes <= maxArticleSetHydrationPayloadBytes
+  )
 }
 
 const getCursorPredicate = (contract: ReviewServingReadContract, cursorValues: readonly (null | number | string)[]) => {
@@ -435,6 +456,17 @@ export const readReviewServingRows = async <T>(
       filterSignature,
       manifest,
       reason: 'servingIdentityMissing',
+    })
+  }
+
+  if (!hasValidArticleSetBounds(contract, request)) {
+    return rejectReaderRequest({
+      admission: null,
+      contract,
+      diagnostics,
+      filterSignature,
+      manifest,
+      reason: 'articleSetBoundsRejected',
     })
   }
 

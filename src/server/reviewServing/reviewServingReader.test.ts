@@ -19,6 +19,17 @@ const llmRowComponents: readonly ReviewServingProjectionComponent[] = [
   'posting',
   'summary',
 ]
+const hydratedListComponents: readonly ReviewServingProjectionComponent[] = [
+  'display',
+  'projectScope',
+  'selectedImport',
+  'payload',
+  'llmStatus',
+  'humanStatus',
+  'posting',
+  'summary',
+  'search',
+]
 
 const getComponentState = (components: readonly ReviewServingProjectionComponent[]) => {
   return {
@@ -443,5 +454,111 @@ test('readReviewServingRows rejects mismatched and missing token-prefix search m
   expect(substringSync.diagnostics.admission?.rejectionReason).toBe('synchronousSubstringSearchUnavailable')
   expect(missingSearchComponent).toMatchObject({reason: 'missingRequiredComponentState', status: 'rejected'})
   expect(missingSearchComponent.diagnostics.missingRequiredComponents).toContain('search')
+  expect(reader.statements).toHaveLength(0)
+})
+
+test('readReviewServingRows hydrates filtered lists through postings and article-set contracts without single-article lookups', async () => {
+  const reader = createReaderDatabase([{article_id: 'article-1'}, {article_id: 'article-2'}])
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: hydratedListComponents,
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const dependencies = {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase}
+  const postings = await readReviewServingRows(
+    {
+      ...readyRequest,
+      contractKey: 'review.filters.postings',
+      filterKind: 'promptAnswer',
+      filterValue: 'include',
+      limit: 2,
+      listMode: 'both',
+      searchMode: 'tokenPrefix',
+      searchState: {availability: 'ready' as const, snapshotId: 'active-snapshot'},
+      searchTokenPrefix: 'hea',
+    },
+    dependencies,
+  )
+  const rows = await readReviewServingRows(
+    {
+      ...readyRequest,
+      articleIds: ['article-1', 'article-2'],
+      contractKey: 'review.both.rowsByArticleSet',
+      estimatedHydratedPayloadBytes: 12_000,
+      estimatedResultBytes: 40_000,
+      limit: 2,
+    },
+    dependencies,
+  )
+  const judgments = await readReviewServingRows(
+    {
+      ...readyRequest,
+      articleIds: ['article-1', 'article-2'],
+      contractKey: 'review.both.list.judgments',
+      estimatedHydratedPayloadBytes: 120_000,
+      estimatedResultBytes: 200_000,
+      limit: 100,
+    },
+    dependencies,
+  )
+
+  expect(postings.status).toBe('accepted')
+  expect(rows.status).toBe('accepted')
+  expect(judgments.status).toBe('accepted')
+  expect(reader.statements).toHaveLength(3)
+  expect(reader.statements[0]).toContain('FROM mart.review_article_filter_posting_serving_v4')
+  expect(reader.statements[0]).toContain('EXISTS (SELECT 1 FROM mart.review_title_search_serving_v4 search')
+  expect(reader.statements[1]).toContain('FROM mart.review_article_serving_v4')
+  expect(reader.statements[1]).toContain("AND list_mode_key = 'both'")
+  expect(reader.statements[1]).toContain('AND article_id IN (SELECT unnest($articleIds))')
+  expect(reader.statements[1]).toContain('ORDER BY sort_key DESC, article_id ASC LIMIT $limit')
+  expect(reader.statements[2]).toContain('FROM mart.review_article_judgment_detail_serving_v4')
+  expect(reader.statements[2]).toContain('AND article_id IN (SELECT unnest($articleIds))')
+  expect(reader.statements[2]).toContain('ORDER BY article_id ASC, prompt_order ASC NULLS LAST, prompt_id ASC')
+  expect(reader.statements.join('\n')).not.toContain('article_id = $articleId')
+  expect(reader.statements.join('\n')).not.toContain('selected_scoped_article_import')
+})
+
+test('readReviewServingRows rejects article-set hydration over article ID and payload byte caps', async () => {
+  const reader = createReaderDatabase()
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: hydratedListComponents,
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const dependencies = {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase}
+  const tooManyArticleIds = await readReviewServingRows(
+    {
+      ...readyRequest,
+      articleIds: Array.from({length: 101}, (_value, index) => {
+        return `article-${index}`
+      }),
+      contractKey: 'review.llm.rowsByArticleSet',
+      estimatedHydratedPayloadBytes: 1_000,
+      limit: 100,
+    },
+    dependencies,
+  )
+  const tooManyPayloadBytes = await readReviewServingRows(
+    {
+      ...readyRequest,
+      articleIds: ['article-1'],
+      contractKey: 'review.llm.list.judgments',
+      estimatedHydratedPayloadBytes: 2_000_001,
+      limit: 100,
+    },
+    dependencies,
+  )
+
+  expect(tooManyArticleIds).toMatchObject({reason: 'articleSetBoundsRejected', status: 'rejected'})
+  expect(tooManyPayloadBytes).toMatchObject({reason: 'articleSetBoundsRejected', status: 'rejected'})
   expect(reader.statements).toHaveLength(0)
 })
