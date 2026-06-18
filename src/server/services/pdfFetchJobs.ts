@@ -39,6 +39,8 @@ export type PdfFetchJob = {
 
 export type StartPdfFetchJobArgs = {articleIds: string[]; concurrency?: number; forceRefetch?: boolean}
 
+export type PdfFetchBatchStats = {attempted: number; failed: number; noPdf: number; skipped: number; succeeded: number}
+
 type DurablePdfFetchJobRow = {
   batchSize: number
   cancelRequested: boolean
@@ -52,6 +54,7 @@ type DurablePdfFetchJobRow = {
   resultManifestJson: unknown
   status: string
   totalEstimate: number | null
+  updatedAt: string
 }
 
 const DEFAULT_CONCURRENCY = 5
@@ -143,7 +146,11 @@ const processAttemptError = (jobId: string, error: unknown) => {
 
 type PdfFetchRow = Pick<ArticleRecord, 'id' | 'arxivId' | 'doi'> & {sourceMetadata: ArticleSourceMetadata | null}
 
-const fetchAndStoreForRow = async (jobId: string, row: PdfFetchRow): Promise<void> => {
+const emptyPdfFetchBatchStats = (): PdfFetchBatchStats => {
+  return {attempted: 0, failed: 0, noPdf: 0, skipped: 0, succeeded: 0}
+}
+
+const fetchAndStoreForRow = async (row: PdfFetchRow) => {
   const result = await fetchPdfForArticle({
     arxivId: row.arxivId,
     doi: row.doi,
@@ -183,12 +190,60 @@ const fetchAndStoreForRow = async (jobId: string, row: PdfFetchRow): Promise<voi
       sourceUpdatedAt: updatedAt,
     })
   })
+  return result
+}
+
+const fetchAndStoreForMapJob = async (jobId: string, row: PdfFetchRow): Promise<void> => {
+  const result = await fetchAndStoreForRow(row)
   processAttemptResult(jobId, result)
+}
+
+const fetchAndStorePdfForRowSafe = async (row: PdfFetchRow): Promise<PdfFetchBatchStats> => {
+  return fetchAndStoreForRow(row)
+    .then((result) => {
+      return {
+        ...emptyPdfFetchBatchStats(),
+        attempted: 1,
+        noPdf: result?.fullTextPDF ? 0 : 1,
+        succeeded: result?.fullTextPDF ? 1 : 0,
+      }
+    })
+    .catch(async () => {
+      const update = buildUpdateForAttempt(null)
+      const updateParts = Object.entries(update).map(([key, value]) => {
+        const columnNameMap: Record<string, string> = {
+          fullTextFetchedAt: 'full_text_fetched_at',
+          fullTextPDF: 'full_text_pdf',
+          fullTextSource: 'full_text_source',
+          fullTextOriginalFormat: 'full_text_original_format',
+        }
+        return `${columnNameMap[key] ?? key} = ${getSqlLiteral(value)}`
+      })
+      await getAppDatabaseService().run(`
+        UPDATE app.article
+        SET ${updateParts.join(', ')},
+            updated_at = ${getTimestampLiteral(new Date())}
+        WHERE id = '${escapeSqlString(row.id)}'
+      `)
+      return {...emptyPdfFetchBatchStats(), attempted: 1, failed: 1}
+    })
+}
+
+const sumPdfFetchBatchStats = (stats: readonly PdfFetchBatchStats[]): PdfFetchBatchStats => {
+  return stats.reduce((acc, stat) => {
+    return {
+      attempted: acc.attempted + stat.attempted,
+      failed: acc.failed + stat.failed,
+      noPdf: acc.noPdf + stat.noPdf,
+      skipped: acc.skipped + stat.skipped,
+      succeeded: acc.succeeded + stat.succeeded,
+    }
+  }, emptyPdfFetchBatchStats())
 }
 
 const fetchAndStoreForRowSafe = async (jobId: string, row: PdfFetchRow): Promise<void> => {
   const run = async () => {
-    await fetchAndStoreForRow(jobId, row)
+    await fetchAndStoreForMapJob(jobId, row)
   }
 
   return run().catch(async (error) => {
@@ -258,6 +313,58 @@ const processChunk = async (jobId: string, ids: string[], forceRefetch: boolean)
       return fetchAndStoreForRowSafe(jobId, r)
     }),
   )
+}
+
+export const processPdfFetchArticleIds = async (args: {
+  articleIds: readonly string[]
+  forceRefetch?: boolean
+}): Promise<PdfFetchBatchStats> => {
+  const ids = normalizeArticleIds([...args.articleIds])
+  if (ids.length === 0) {
+    return emptyPdfFetchBatchStats()
+  }
+
+  const rows = await getAppDatabaseService().queryJson<{
+    id: string
+    arxivId: string | null
+    doi: string | null
+    sourceMetadata: unknown
+    fullTextPDF: string | null
+    fullTextSource: string | null
+  }>(`
+    SELECT
+      id,
+      arxiv_id AS arxivId,
+      doi,
+      TO_JSON(source_metadata) AS sourceMetadata,
+      full_text_pdf AS fullTextPDF,
+      full_text_source AS fullTextSource
+    FROM app.article
+    WHERE id IN (${getQuotedStringList(ids).join(', ')})
+  `)
+  const normalizedRows = rows.map((row) => {
+    return {...row, sourceMetadata: getArticleSourceMetadataValue(row.sourceMetadata)}
+  })
+  const foundIds = new Set(
+    normalizedRows.map((row) => {
+      return row.id
+    }),
+  )
+  const missingCount = ids.reduce((acc, id) => {
+    return acc + (foundIds.has(id) ? 0 : 1)
+  }, 0)
+  const rowsToAttempt = normalizedRows.filter((row) => {
+    return !shouldSkipRow(row, Boolean(args.forceRefetch))
+  })
+  const skippedCount = rows.length - rowsToAttempt.length
+  const attemptStats = await Promise.all(
+    rowsToAttempt.map((row) => {
+      return fetchAndStorePdfForRowSafe(row)
+    }),
+  )
+  const stats = sumPdfFetchBatchStats(attemptStats)
+
+  return {...stats, failed: stats.failed + missingCount, skipped: stats.skipped + skippedCount}
 }
 
 const processAllChunks = async (
@@ -373,6 +480,7 @@ export const getPdfFetchJobFromDatabase = async (
       result_manifest_json AS resultManifestJson,
       processed_count AS processedCount,
       total_estimate AS totalEstimate,
+      updated_at AS updatedAt,
       cancel_requested AS cancelRequested,
       last_error AS lastError,
       created_at AS createdAt,

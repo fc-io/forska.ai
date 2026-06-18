@@ -124,3 +124,51 @@ test('batch article upsert fails when canonical matching drops entries', async (
   expect(response.status).toBe(400)
   expect(body.error).toContain('accepted 0 of 1 entries')
 })
+
+test('PDF explicit bulk route admits durable article-id-only jobs', async () => {
+  const statements: string[] = []
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: async () => {
+            return []
+          },
+          run: async (statement: string) => {
+            statements.push(statement)
+          },
+          transaction: async <T>(callback: (tx: unknown) => Promise<T>) => {
+            return callback({})
+          },
+        }
+      },
+    }
+  })
+  void mock.module(articleImportStoreServiceModulePath, () => {
+    return {storeImportedArticlesWithTx: storeImportedArticlesWithTxRef.current}
+  })
+
+  const routesModule = (await import(
+    `./ArticlesRoutes.ts?test=pdf-bulk-${Date.now()}-${Math.random()}`
+  )) as typeof import('./ArticlesRoutes.ts')
+  const {articlesRoutes} = routesModule
+  const app = new Elysia().use(articlesRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/articles/pdf-fetch-bulk', {
+      body: JSON.stringify({articleIds: ['article-1', 'article-2'], concurrency: 2, forceRefetch: true}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {job: {jobKind: string; latestSnapshotSemantics: boolean}}
+  const joined = statements.join('\n')
+
+  expect(response.status).toBe(202)
+  expect(body.job).toMatchObject({jobKind: 'review.pdf.selection', latestSnapshotSemantics: true})
+  expect(joined).toContain('INSERT INTO app.review_bulk_operation_job')
+  expect(joined).toContain("'review.pdf.selection'")
+  expect(joined).toContain('article-id-only')
+  expect(joined).toContain('article-1')
+  expect(joined).toContain('requestId')
+})

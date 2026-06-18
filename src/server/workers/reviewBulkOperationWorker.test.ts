@@ -120,6 +120,7 @@ test('review bulk operation worker claims and advances bounded keyset progress d
   expect(joined).toContain('LIMIT 2')
   expect(joined).toContain('processed_count = processed_count + 2')
   expect(joined).toContain('"cursor":"article-003"')
+  expect(joined).toContain('"jobId":"job-1"')
   expect(
     harness.workloadContexts.some((context) => {
       return context.fallbackIntent === 'reject' && context.workloadClass === 'bulkReviewJob'
@@ -175,6 +176,37 @@ test('review bulk operation worker leaves substring add-to-project jobs on async
   expect(joined).toContain('Substring bulk selection is waiting for async search results')
   expect(joined).not.toContain('FROM mart.review_article_filter_posting_serving_v4 p')
   expect(joined).not.toContain('review_title_search_serving_v4')
+})
+
+test('review bulk operation worker advances PDF jobs with durable article-id criteria and counters', async () => {
+  const harness = createWorkerHarness({
+    criteriaJson: {
+      articleIds: ['article-001', 'article-002', 'article-003'],
+      forceRefetch: true,
+      operation: 'pdfFetch',
+      requestId: 'request-1',
+    },
+    jobKind: 'review.pdf.selection',
+  })
+  const dependencies: ReviewBulkOperationWorkerDependencies = {
+    ...harness.dependencies,
+    executeBatch: async ({articleIds}) => {
+      harness.executedBatches.push([...articleIds])
+      return {pdfStats: {attempted: 2, failed: 0, noPdf: 1, skipped: 0, succeeded: 1}}
+    },
+  }
+
+  const result = await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, dependencies)
+  const joined = harness.statements.join('\n')
+
+  expect(result.status).toBe('partial')
+  expect(harness.executedBatches).toEqual([['article-002', 'article-003']])
+  expect(joined).toContain('json_extract(criteria_json')
+  expect(joined).toContain('processed_count = processed_count + 2')
+  expect(joined).toContain("'attempted'")
+  expect(joined).toContain("'succeeded'")
+  expect(joined).toContain('json_extract_string(result_manifest_json')
+  expect(joined).toContain('"jobId":"job-1"')
 })
 
 test('review bulk operation worker completes terminally when the final batch is short', async () => {

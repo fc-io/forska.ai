@@ -40,6 +40,7 @@ export type ReviewBulkOperationCriteria = {
   llmStatus?: string
   operation: 'addToProject' | 'export' | 'pdfFetch' | 'selectAll'
   prompts?: Record<string, readonly string[]>
+  requestId?: string
   search?: string
   sourceProjectId?: string
   targetProjectId?: string
@@ -218,7 +219,7 @@ const insertBulkOperationJob = async (input: {
       ${getJsonSql(input.composedIdentity)},
       ${getSqlLiteral(input.filterSignature)},
       ${getJsonSql(getCriteriaJson(input.request))},
-      ${getJsonSql({cursor: null, limit: batchSize})},
+      ${getJsonSql({cursor: null, jobId: input.jobId, limit: batchSize})},
       ${batchSize},
       'pending',
       ${getJsonSql({articleIdOnly: Array.isArray(input.request.criteria.articleIds), operation: input.request.criteria.operation})},

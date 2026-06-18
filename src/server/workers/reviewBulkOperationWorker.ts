@@ -3,6 +3,7 @@ import {hostname} from 'node:os'
 import {sleep} from '../../utils/sleep.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {type PdfFetchBatchStats, processPdfFetchArticleIds} from '../services/pdfFetchJobs.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 
 type ReviewBulkOperationWorkerDatabase = {
@@ -38,6 +39,7 @@ type ReviewBulkOperationJobRow = {
 
 type ReviewBulkOperationCriteria = {
   articleIds?: readonly string[]
+  forceRefetch?: boolean
   from?: string
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
@@ -45,6 +47,7 @@ type ReviewBulkOperationCriteria = {
   llmStatus?: string
   operation?: string
   prompts?: Record<string, readonly string[]>
+  requestId?: string
   search?: string
   targetProjectId?: string
   to?: string
@@ -55,6 +58,8 @@ type ReviewBulkOperationCursor = {cursor?: string | null; limit?: number}
 type ReviewBulkOperationBatchRow = {articleId: string}
 
 type ReviewBulkOperationWorkerOptions = {batchSize?: number; maxRetries?: number; now?: Date; workerId?: string}
+
+type ReviewBulkOperationBatchResult = {pdfStats?: PdfFetchBatchStats} | undefined
 
 type ReviewBulkOperationWorkerLoopOptions = ReviewBulkOperationWorkerOptions & {
   errorBackoffMs?: number
@@ -67,7 +72,7 @@ export type ReviewBulkOperationWorkerDependencies = {
     articleIds: readonly string[]
     database: ReviewBulkOperationWorkerDatabase
     job: ReviewBulkOperationJobRow
-  }) => Promise<void>
+  }) => Promise<ReviewBulkOperationBatchResult>
   getDatabase?: () => ReviewBulkOperationWorkerDatabase
   sleep?: typeof sleep
 }
@@ -321,17 +326,29 @@ const markProgress = async (input: {
   articleIds: readonly string[]
   database: ReviewBulkOperationWorkerDatabase
   job: ReviewBulkOperationJobRow
+  pdfStats?: PdfFetchBatchStats
   workerId: string
 }) => {
   const lastArticleId = input.articleIds[input.articleIds.length - 1] ?? null
+  const manifestSql = input.pdfStats
+    ? `json_object(
+        'attempted', COALESCE(TRY_CAST(json_extract_string(result_manifest_json, '$.attempted') AS BIGINT), 0) + ${getSqlLiteral(input.pdfStats.attempted)},
+        'failed', COALESCE(TRY_CAST(json_extract_string(result_manifest_json, '$.failed') AS BIGINT), 0) + ${getSqlLiteral(input.pdfStats.failed)},
+        'noPdf', COALESCE(TRY_CAST(json_extract_string(result_manifest_json, '$.noPdf') AS BIGINT), 0) + ${getSqlLiteral(input.pdfStats.noPdf)},
+        'skipped', COALESCE(TRY_CAST(json_extract_string(result_manifest_json, '$.skipped') AS BIGINT), 0) + ${getSqlLiteral(input.pdfStats.skipped)},
+        'succeeded', COALESCE(TRY_CAST(json_extract_string(result_manifest_json, '$.succeeded') AS BIGINT), 0) + ${getSqlLiteral(input.pdfStats.succeeded)},
+        'lastArticleId', ${getSqlLiteral(lastArticleId)},
+        'lastBatchSize', ${getSqlLiteral(input.articleIds.length)}
+      )`
+    : `${getSqlLiteral({lastArticleId, lastBatchSize: input.articleIds.length})}::JSON`
 
   await input.database.run(
     `
       UPDATE app.review_bulk_operation_job
       SET
-        cursor_json = ${getSqlLiteral({cursor: lastArticleId, limit: input.job.batchSize})}::JSON,
+        cursor_json = ${getSqlLiteral({cursor: lastArticleId, jobId: input.job.jobId, limit: input.job.batchSize})}::JSON,
         processed_count = processed_count + ${getSqlLiteral(input.articleIds.length)},
-        result_manifest_json = ${getSqlLiteral({lastArticleId, lastBatchSize: input.articleIds.length})}::JSON,
+        result_manifest_json = ${manifestSql},
         updated_at = current_timestamp,
         last_error = NULL
       WHERE job_id = ${getSqlLiteral(input.job.jobId)}
@@ -373,8 +390,17 @@ const executeDefaultBatch = async (input: {
   articleIds: readonly string[]
   database: ReviewBulkOperationWorkerDatabase
   job: ReviewBulkOperationJobRow
-}) => {
+}): Promise<ReviewBulkOperationBatchResult> => {
   const criteria = getCriteria(input.job)
+
+  if (criteria.operation === 'pdfFetch') {
+    const pdfStats = await processPdfFetchArticleIds({
+      articleIds: input.articleIds,
+      forceRefetch: criteria.forceRefetch,
+    })
+
+    return {pdfStats}
+  }
 
   if (criteria.operation !== 'addToProject' || !criteria.targetProjectId || input.articleIds.length === 0) {
     return
@@ -416,8 +442,9 @@ export const runReviewBulkOperationWorkerOnce = async (
     })
     const executeBatch = dependencies.executeBatch ?? executeDefaultBatch
 
-    await executeBatch({articleIds, database, job})
-    await markProgress({articleIds, database, job, workerId})
+    const batchResult = await executeBatch({articleIds, database, job})
+    const pdfStats = batchResult && 'pdfStats' in batchResult ? batchResult.pdfStats : undefined
+    await markProgress({articleIds, database, job, pdfStats, workerId})
 
     if (articleIds.length < getBatchLimit(job, options)) {
       await markCompleted(job.jobId, database, workerId)
