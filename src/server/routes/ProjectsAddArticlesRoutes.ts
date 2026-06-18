@@ -1,39 +1,49 @@
 import {Elysia, t} from 'elysia'
 
-import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
+import {createReviewBulkOperationJob} from '../reviewServing/reviewBulkOperationService.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 const projectsAddArticlesLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 
-/**
- * Routes for adding articles to a project by various filter criteria.
- *
- * Uses the OLAP layer for LLM judgment queries (llm, unassessed, both list types)
- * and the app database for human judgment queries (human list type).
- */
 export const projectsAddArticlesRoutes = new Elysia()
   .post(
     '/api/projects/add_articles_by_filter',
     async ({body}) => {
-      const articleIds = await selectArticleIdsByFilterOlap(
-        body.sourceProjectId,
-        body.listType,
-        body.llmStatus,
-        body.prompts,
-        body.from,
-        body.to,
-        body.search,
-        body.hasDuplicateStudyRecords,
-        body.hasStudyDecisionConflict,
-      )
-
-      // Upsert associations + auto-link prompts
-      const result = await insertArticlesIntoProject(body.targetProjectId, articleIds, body.sourceProjectId)
+      const job = await createReviewBulkOperationJob({
+        criteria: {
+          from: body.from,
+          hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+          hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+          listType: body.listType,
+          llmStatus: body.llmStatus,
+          operation: 'addToProject',
+          prompts: body.prompts,
+          search: body.search,
+          sourceProjectId: body.sourceProjectId,
+          targetProjectId: body.targetProjectId,
+          to: body.to,
+        },
+        filters: {
+          from: body.from,
+          hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+          hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+          listType: body.listType,
+          llmStatus: body.llmStatus,
+          prompts: body.prompts,
+          search: body.search,
+          to: body.to,
+        },
+        jobKind: body.search ? 'review.bulk.substringSelection' : 'review.bulk.selection',
+        projectId: body.sourceProjectId,
+        searchMode: body.search ? 'substring' : 'none',
+        searchText: body.search,
+        snapshot: {type: 'latest'},
+      })
 
       projectsAddArticlesLogger.force(
         'projects.add-articles.applied-filter-summary',
-        'Articles added by filter',
+        'Articles add-by-filter job created',
         'log',
         {
           targetProjectId: body.targetProjectId,
@@ -48,12 +58,11 @@ export const projectsAddArticlesRoutes = new Elysia()
             hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
             hasStudyDecisionConflict: body.hasStudyDecisionConflict,
           },
-          selectionTotal: articleIds.length,
-          ...result,
+          jobId: job.jobId,
         },
       )
 
-      return {success: true, targetProjectId: body.targetProjectId, selectionTotal: articleIds.length, ...result}
+      return {success: true, job, targetProjectId: body.targetProjectId}
     },
     {
       body: t.Object({
