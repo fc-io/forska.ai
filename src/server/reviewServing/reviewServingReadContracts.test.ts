@@ -167,13 +167,57 @@ test('direct ordered row contracts advertise only migrated route filters', () =>
       ['sort_key DESC', 'article_id ASC'],
       ['sort_key', 'article_id ASC'],
     ],
-    ['review.human.rows', [], [], 'none', ['sort_key DESC', 'article_id ASC'], ['sort_key', 'article_id ASC']],
-    ['review.both.rows', [], [], 'none', ['sort_key DESC', 'article_id ASC'], ['sort_key', 'article_id ASC']],
+    [
+      'review.human.rows',
+      [
+        'duplicateFlag',
+        'importRoute',
+        'publicationYear',
+        'articleCreatedAtFrom',
+        'articleCreatedAtTo',
+        'searchTokenPrefix',
+        'conflictFlag',
+        'humanStatus',
+        'promptAnswer',
+      ],
+      ['search'],
+      'tokenPrefix',
+      ['sort_key DESC', 'article_id ASC'],
+      ['sort_key', 'article_id ASC'],
+    ],
+    [
+      'review.both.rows',
+      [
+        'duplicateFlag',
+        'importRoute',
+        'publicationYear',
+        'articleCreatedAtFrom',
+        'articleCreatedAtTo',
+        'searchTokenPrefix',
+        'conflictFlag',
+        'humanStatus',
+        'llmStatus',
+        'promptAnswer',
+      ],
+      ['search'],
+      'tokenPrefix',
+      ['sort_key DESC', 'article_id ASC'],
+      ['sort_key', 'article_id ASC'],
+    ],
     [
       'review.unassessed.rows',
-      [],
-      [],
-      'none',
+      [
+        'duplicateFlag',
+        'importRoute',
+        'publicationYear',
+        'articleCreatedAtFrom',
+        'articleCreatedAtTo',
+        'searchTokenPrefix',
+        'conflictFlag',
+        'queueKind',
+      ],
+      ['search'],
+      'tokenPrefix',
       ['activity_sort_at DESC', 'article_id DESC'],
       ['activity_sort_at', 'article_id'],
     ],
@@ -221,7 +265,7 @@ test('detail row contract does not pin article lookups to a list mode', () => {
   ])
 })
 
-test('only migrated LLM count contract advertises searched-count reads', () => {
+test('migrated review count contracts advertise searched-count filter signatures', () => {
   const countContracts = reviewServingReadContractList.filter((contract) => {
     return contract.workloadClass === 'foregroundReviewCount'
   })
@@ -232,9 +276,9 @@ test('only migrated LLM count contract advertises searched-count reads', () => {
     }),
   ).toEqual([
     ['review.llm.count', 'none', true],
-    ['review.human.count', 'none', false],
-    ['review.both.count', 'none', false],
-    ['review.unassessed.count', 'none', false],
+    ['review.human.count', 'none', true],
+    ['review.both.count', 'none', true],
+    ['review.unassessed.count', 'none', true],
     ['review.prompt.badges', 'none', false],
   ])
 })
@@ -349,7 +393,7 @@ test('human filter facets use a dedicated contract', () => {
     'promptAnswer',
     'publicationYear',
     'searchTokenPrefix',
-  ]
+  ] as const
 
   expect(humanFacets?.allowedFilters).toEqual(humanArticleScopeFilters)
   expect(humanOptions?.allowedFilters).toEqual(humanArticleScopeFilters)
@@ -452,9 +496,54 @@ test('filtered row routes have article-set hydration contracts', () => {
         'promptAnswer',
       ],
     ],
-    ['human', 'articleSetLookup', ['articleId']],
-    ['both', 'articleSetLookup', ['articleId']],
-    ['unassessed', 'articleSetLookup', ['articleId']],
+    [
+      'human',
+      'articleSetLookup',
+      [
+        'duplicateFlag',
+        'importRoute',
+        'publicationYear',
+        'articleCreatedAtFrom',
+        'articleCreatedAtTo',
+        'searchTokenPrefix',
+        'articleId',
+        'conflictFlag',
+        'humanStatus',
+        'promptAnswer',
+      ],
+    ],
+    [
+      'both',
+      'articleSetLookup',
+      [
+        'duplicateFlag',
+        'importRoute',
+        'publicationYear',
+        'articleCreatedAtFrom',
+        'articleCreatedAtTo',
+        'searchTokenPrefix',
+        'articleId',
+        'conflictFlag',
+        'humanStatus',
+        'llmStatus',
+        'promptAnswer',
+      ],
+    ],
+    [
+      'unassessed',
+      'articleSetLookup',
+      [
+        'duplicateFlag',
+        'importRoute',
+        'publicationYear',
+        'articleCreatedAtFrom',
+        'articleCreatedAtTo',
+        'searchTokenPrefix',
+        'articleId',
+        'conflictFlag',
+        'queueKind',
+      ],
+    ],
   ])
 })
 

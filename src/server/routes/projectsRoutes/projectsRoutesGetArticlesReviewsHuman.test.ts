@@ -1,60 +1,31 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
-const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
 const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).pathname
+const reviewServingRouteServiceModulePath = new URL(
+  '../../reviewServing/reviewServingHumanBothUnassessedRouteService.ts',
+  import.meta.url,
+).pathname
 
-const queryJsonRef = {
-  current: async (_statement: string): Promise<unknown[]> => {
-    return []
-  },
-}
-
-const fullArticlesByIdsRef = {
-  current: async (_articleIds: string[]): Promise<unknown[]> => {
-    return []
-  },
-}
-
-const projectReviewConfigRef = {
-  current: async (_projectId: string): Promise<unknown> => {
-    return null
+const humanReviewArticlesFromServingRef = {
+  current: async (_params: unknown): Promise<unknown> => {
+    return {data: [], humanJudgmentMode: 'prompt', limit: 10, page: 1, totalCount: 0, totalPages: 0}
   },
 }
 
 const registerModuleMocks = () => {
-  void mock.module(appDatabaseServiceModulePath, () => {
-    return {
-      getAppDatabaseService: () => {
-        return {
-          queryJson: (statement: string) => {
-            return queryJsonRef.current(statement)
-          },
-        }
-      },
-    }
-  })
-
-  void mock.module(appQueryServiceModulePath, () => {
-    return {
-      getAppQueryService: () => {
-        return {
-          getFullArticlesByIds: (articleIds: string[]) => {
-            return fullArticlesByIdsRef.current(articleIds)
-          },
-          getProjectReviewConfig: (projectId: string) => {
-            return projectReviewConfigRef.current(projectId)
-          },
-        }
-      },
-    }
-  })
-
   void mock.module(projectAccessGuardModulePath, () => {
     return {
       assertProjectIsActive: async () => {
         return {archived: false, id: 'project-1', name: 'Project 1'}
+      },
+    }
+  })
+
+  void mock.module(reviewServingRouteServiceModulePath, () => {
+    return {
+      getHumanReviewArticlesFromServing: (params: unknown) => {
+        return humanReviewArticlesFromServingRef.current(params)
       },
     }
   })
@@ -71,42 +42,34 @@ afterEach(() => {
   mock.restore()
 })
 
-test('articles reviews human returns summary-mode overall judgments', async () => {
-  projectReviewConfigRef.current = async () => {
+test('articles reviews human returns serving summary-mode overall judgments', async () => {
+  humanReviewArticlesFromServingRef.current = async () => {
     return {
+      data: [
+        {
+          id: 'article-1',
+          articleTitle: 'Article 1',
+          humanJudgmentMode: 'summary',
+          humanSummaryAnswer: 'no',
+          judgments: [
+            {
+              answer: 'no',
+              articleId: 'article-1',
+              createdAt: '2024-01-01T00:00:00.000Z',
+              id: 'summary-1',
+              projectId: 'project-1',
+              promptId: 'summary',
+              updatedAt: '2024-01-02T00:00:00.000Z',
+            },
+          ],
+        },
+      ],
       humanJudgmentMode: 'summary',
-      importRouteIds: ['route-1'],
-      dateFrom: null,
-      dateTo: null,
-      modelId: 'model-1',
-      useTitle: true,
-      useAbstract: true,
-      useFulltext: false,
-      useFulltextNoImages: false,
+      limit: 10,
+      page: 1,
+      totalCount: 1,
+      totalPages: 1,
     }
-  }
-  fullArticlesByIdsRef.current = async () => {
-    return [{id: 'article-1', articleTitle: 'Article 1'}]
-  }
-  queryJsonRef.current = async (statement) => {
-    return statement.includes('FROM app.judgment_human_summary') && statement.includes('SELECT article_id AS articleId')
-      ? [{articleId: 'article-1'}]
-      : statement.includes('COUNT(*) AS count')
-        ? [{count: 1}]
-        : statement.includes('SELECT a.id AS id')
-          ? [{id: 'article-1'}]
-          : statement.includes('FROM app.judgment_human_summary')
-            ? [
-                {
-                  id: 'summary-1',
-                  createdAt: '2024-01-01T00:00:00.000Z',
-                  updatedAt: '2024-01-02T00:00:00.000Z',
-                  articleId: 'article-1',
-                  answer: 'no',
-                  projectId: 'project-1',
-                },
-              ]
-            : []
   }
 
   const {projectsRoutesGetArticlesReviewsHuman} = await loadHandler()
