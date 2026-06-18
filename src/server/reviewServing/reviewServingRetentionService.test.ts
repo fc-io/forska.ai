@@ -132,14 +132,19 @@ test('patch compaction writes a new major base generation before activation', as
     database,
   )
   const joined = statements.join('\n')
+  const servingUpdateStatement = statements.find((statement) => {
+    return statement.includes('UPDATE mart.review_article_serving_v4 serving')
+  })
 
   expect(result.compactedComponents).toHaveLength(1)
   expect(result.compactedComponents[0]?.component).toBe('selectedImport')
   expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
   expect(joined).toContain('FROM mart.review_selected_import_patch_v4 patch')
   expect(joined).toContain('DELETE FROM mart.review_selected_import_patch_v4')
-  expect(joined).toContain('UPDATE mart.review_article_serving_v4')
-  expect(joined).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
+  expect(joined).toContain('FROM app.review_serving_snapshot_manifest snapshot')
+  expect(joined).toContain("snapshot.selected_import_snapshot_id = 'selected-import-snapshot-1'")
+  expect(servingUpdateStatement).not.toContain("AND selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(joined).toContain('base_generation = 5')
   expect(joined).toContain('patch_watermark = 0')
   expect(joined).toContain('UPDATE app.review_serving_snapshot_manifest')
