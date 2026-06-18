@@ -136,6 +136,8 @@ test('human prompt answer deltas write component-narrow status patches', async (
   expect(joined).toContain('UPDATE mart.review_article_serving_v4 serving')
   expect(joined).toContain('human_answered_prompt_count')
   expect(joined).toContain('human_answered_summary_count')
+  expect(joined).toContain('review_config_hash')
+  expect(joined).toContain('serving.review_config_hash IS NOT DISTINCT FROM article_status.review_config_hash')
   expect(joined).toContain("prompt_id <> 'summary'")
   expect(joined).toContain('human_status_key')
   expect(joined).toContain("'humanStatus'")

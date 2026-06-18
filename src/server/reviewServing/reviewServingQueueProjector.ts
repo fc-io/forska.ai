@@ -204,11 +204,11 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
         WITH ${ctes.join(',\n        ')},
         scoped_article AS (
           SELECT
-            scope.article_id,
+            dirty.article_id,
             COALESCE(scope.article_updated_at, scope.source_updated_at, scope.article_created_at, TIMESTAMPTZ ${getSqlLiteral(staleQueueSortAt)}) AS activity_sort_at,
-            NOT (scope.in_curated_scope OR scope.in_route_scope) AS scope_tombstone
+            scope.article_id IS NULL OR NOT (scope.in_curated_scope OR scope.in_route_scope) AS scope_tombstone
           FROM article_id_filter dirty
-          INNER JOIN mart.project_scope_article scope
+          LEFT JOIN mart.project_scope_article scope
             ON scope.project_id = ${getSqlLiteral(input.projectId)}
             AND scope.article_id = dirty.article_id
         ),
@@ -436,7 +436,7 @@ const getDeleteReplacedQueueServingStatement = (
 
   return input.snapshotId === null
     || input.snapshotId === undefined
-    || (!broadProjectClaim && reviewConfigHashes.length === 0)
+    || (!broadProjectClaim && articleIds.length === 0 && reviewConfigHashes.length === 0)
     ? null
     : articleIds.length > 0
       ? `DELETE FROM mart.review_unassessed_queue_serving_v4
