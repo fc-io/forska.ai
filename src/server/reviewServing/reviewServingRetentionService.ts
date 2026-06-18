@@ -365,6 +365,13 @@ const compactPatchComponent = async (
 
   if (assessment.component === 'selectedImport') {
     await compactSelectedImportPatches(candidate, database)
+    await database.run(`
+      UPDATE mart.review_article_serving_v4
+      SET base_generation = ${getSqlLiteral(nextBaseGeneration)}
+      WHERE project_id = ${getSqlLiteral(candidate.projectId)}
+        AND selected_import_snapshot_id = ${getSqlLiteral(candidate.selectedImportSnapshotId)}
+        AND base_generation = ${getSqlLiteral(assessment.baseGeneration)}
+    `)
   } else {
     return
   }
@@ -381,7 +388,6 @@ const compactPatchComponent = async (
       AND projection_component = ${getSqlLiteral(assessment.component)}
       AND projection_identity = ${getSqlLiteral(assessment.projectionIdentity)}
   `)
-
 }
 
 const getRetentionState = async (retentionScope: string, database: ReviewServingRetentionServiceTransaction) => {

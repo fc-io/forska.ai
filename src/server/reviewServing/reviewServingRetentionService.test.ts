@@ -138,6 +138,8 @@ test('patch compaction writes a new major base generation before activation', as
   expect(joined).toContain('INSERT INTO app.review_selected_article_import_v4')
   expect(joined).toContain('FROM mart.review_selected_import_patch_v4 patch')
   expect(joined).toContain('DELETE FROM mart.review_selected_import_patch_v4')
+  expect(joined).toContain('UPDATE mart.review_article_serving_v4')
+  expect(joined).toContain("selected_import_snapshot_id = 'selected-import-snapshot-1'")
   expect(joined).toContain('base_generation = 5')
   expect(joined).toContain('patch_watermark = 0')
   expect(joined).toContain('UPDATE app.review_serving_snapshot_manifest')

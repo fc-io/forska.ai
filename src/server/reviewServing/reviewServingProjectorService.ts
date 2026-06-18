@@ -9,7 +9,16 @@ import {
   upsertReviewServingDirtyWork,
 } from './reviewServingDirtyWorkService.ts'
 import {getReviewServingInvalidationRuleOrNull} from './reviewServingInvalidationRegistry.ts'
-import type {ReviewServingDirtyWorkScope} from './reviewServingProjectorDomain.ts'
+import {
+  getReviewServingProjectionIdentityManifest,
+  type ReviewServingManifestRepositoryDatabase,
+  type ReviewServingManifestRepositoryTransaction,
+  upsertReviewServingProjectionIdentityManifest,
+} from './reviewServingManifestRepository.ts'
+import type {
+  ReviewServingDirtyWorkScope,
+  ReviewServingSourcePartitionWatermarks,
+} from './reviewServingProjectorDomain.ts'
 import {
   promoteReviewServingProjectorSnapshot,
   type PromoteReviewServingProjectorSnapshotInput,
@@ -40,7 +49,8 @@ export type ReviewServingProjectorQueueState = {activeImportCount?: number; pend
 
 export type ReviewServingProjectorServiceDependencies = {
   claimDirtyWork?: typeof claimReviewServingDirtyWork
-  database?: ReviewServingDirtyWorkDatabase
+  database?: ReviewServingProjectorServiceDatabase
+  ensureClaimManifests?: ReviewServingClaimManifestEnsurer
   failDirtyWork?: typeof failReviewServingDirtyWorkClaims
   getQueueState?: () => Promise<ReviewServingProjectorQueueState>
   nowMs?: () => number
@@ -49,6 +59,13 @@ export type ReviewServingProjectorServiceDependencies = {
   runners: Partial<Record<ReviewServingProjectionComponent, ReviewServingProjectorRunner>>
   upsertDirtyWork?: typeof upsertReviewServingDirtyWork
 }
+
+type ReviewServingProjectorServiceDatabase = ReviewServingDirtyWorkDatabase & ReviewServingManifestRepositoryDatabase
+
+type ReviewServingClaimManifestEnsurer = (
+  claims: readonly ReviewServingDirtyWorkClaim[],
+  database: ReviewServingManifestRepositoryTransaction,
+) => Promise<void>
 
 export type IntakeReviewServingProjectorDirtyWorkInput = {
   identityResolver: ReviewServingProjectorIdentityResolver
@@ -121,14 +138,56 @@ const getNormalizedBudget = (input: WakeReviewServingProjectorServiceInput) => {
   return {batchSize, maxRetries, maxRowsPerWake}
 }
 
-const getDefaultDatabase = () => {
-  return getAppDatabaseService()
+const getDefaultDatabase = (): ReviewServingProjectorServiceDatabase => {
+  return getAppDatabaseService() as ReviewServingProjectorServiceDatabase
 }
 
 const getDirtyWorkIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return claims.map((claim) => {
     return claim.dirtyWorkId
   })
+}
+
+const getClaimInputWatermarks = (claim: ReviewServingDirtyWorkClaim): ReviewServingSourcePartitionWatermarks => {
+  return {[claim.sourcePartition]: claim.latestSourceHighWaterMark}
+}
+
+export const ensureReviewServingClaimManifests: ReviewServingClaimManifestEnsurer = async (claims, database) => {
+  await claims.reduce<Promise<void>>(async (previousEnsure, claim) => {
+    await previousEnsure
+
+    if (claim.projectId === null) {
+      return
+    }
+
+    const existing = await getReviewServingProjectionIdentityManifest(
+      {
+        projectId: claim.projectId,
+        projectionComponent: claim.projectionComponent,
+        projectionIdentity: claim.projectionIdentity,
+      },
+      database,
+    )
+
+    if (existing !== null) {
+      return
+    }
+
+    await upsertReviewServingProjectionIdentityManifest(
+      {
+        baseGeneration: 0,
+        definitionVersion: `${claim.projectionComponent}:dirty-claim-seed-v1`,
+        inputWatermark: claim.latestSourceHighWaterMark,
+        inputWatermarks: getClaimInputWatermarks(claim),
+        patchWatermark: 0,
+        projectId: claim.projectId,
+        projectionComponent: claim.projectionComponent,
+        projectionIdentity: claim.projectionIdentity,
+        status: 'candidate',
+      },
+      database,
+    )
+  }, Promise.resolve())
 }
 
 const getWakeStatus = (input: {
@@ -238,6 +297,7 @@ export const wakeReviewServingProjectorService = async (
   const claimDirtyWork = dependencies.claimDirtyWork ?? claimReviewServingDirtyWork
   const releaseDirtyWork = dependencies.releaseDirtyWork ?? releaseReviewServingDirtyWorkClaims
   const failDirtyWork = dependencies.failDirtyWork ?? failReviewServingDirtyWorkClaims
+  const ensureClaimManifests = dependencies.ensureClaimManifests ?? ensureReviewServingClaimManifests
   const promoteSnapshot = dependencies.promoteSnapshot ?? promoteReviewServingProjectorSnapshot
   const nowMs = dependencies.nowMs ?? Date.now
   const budget = getNormalizedBudget(input)
@@ -293,6 +353,7 @@ export const wakeReviewServingProjectorService = async (
       }
 
       try {
+        await ensureClaimManifests(claims, database)
         const result = await runProjectorWithRetry({
           claims,
           component,
