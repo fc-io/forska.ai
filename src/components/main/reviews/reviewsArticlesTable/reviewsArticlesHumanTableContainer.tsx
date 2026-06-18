@@ -4,6 +4,7 @@ import {createEffect, createSignal, Show, Suspense} from 'solid-js'
 
 import {createArticlesHumanReviewsQueryOptions} from '../../projects/projectsArticlesHumanReviewsQuery.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
+import type {ArticleWithHumanJudgments} from './reviewsArticlesHumanTable.tsx'
 import {ReviewsArticlesHumanTable} from './reviewsArticlesHumanTable.tsx'
 
 interface ReviewsArticlesHumanTableContainerProps {
@@ -67,6 +68,10 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
 
         <Show when={articlesQuery.data}>
           {(response) => {
+            const articles = () => {
+              return response().data as ArticleWithHumanJudgments[]
+            }
+
             return (
               <div class="space-y-4">
                 <div class="p-4 bg-white rounded-lg shadow">
@@ -94,8 +99,8 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                   page={props.currentPage()}
                   totalPages={response().totalPages}
                   setCurrentPage={props.setCurrentPage}
-                  currentPageRowIds={response().data.map((a) => {
-                    return a.id
+                  currentPageRowIds={articles().map((a) => {
+                    return String(a.id)
                   })}
                   rowSelection={rowSelection}
                   setRowSelection={setRowSelection}
@@ -149,7 +154,7 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                 >
                   <ReviewsArticlesHumanTable
                     projectId={props.projectId}
-                    articles={response().data}
+                    articles={articles()}
                     rowSelection={rowSelection}
                     setRowSelection={setRowSelection}
                     humanJudgmentMode={response().humanJudgmentMode}
@@ -160,8 +165,8 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                   page={props.currentPage()}
                   totalPages={response().totalPages}
                   setCurrentPage={props.setCurrentPage}
-                  currentPageRowIds={response().data.map((a) => {
-                    return a.id
+                  currentPageRowIds={articles().map((a) => {
+                    return String(a.id)
                   })}
                   rowSelection={rowSelection}
                   setRowSelection={setRowSelection}
