@@ -445,17 +445,24 @@ const getReplacementDeleteStatements = (
   input: ProjectReviewServingJudgmentPayloadInput,
   payloadKinds: readonly JudgmentPayloadKind[],
 ) => {
-  const articleIds = getClaimArticleIds(input.claims)
-  return articleIds.length === 0
+  const claims = input.claims ?? []
+  const articleIds = getClaimArticleIds(claims)
+  const shouldReplaceBroadScope = claims.some((claim) => {
+    return claim.scopeKind === 'project' || claim.scopeKind === 'prompt'
+  })
+
+  return articleIds.length === 0 && !shouldReplaceBroadScope
     ? []
     : payloadKinds.flatMap((payloadKind) => {
         const listModeKeys =
           payloadKind === 'llm' ? getLlmListModeKeys(input.listModeKeys) : getHumanListModeKeys(input.listModeKeys)
 
         return listModeKeys.map((listModeKey) => {
+          const articlePredicate = articleIds.length === 0 ? {} : {article_id: articleIds}
+
           return getDeleteReviewServingProjectorRowsStatement({
             predicates: {
-              article_id: articleIds,
+              ...articlePredicate,
               list_mode_key: listModeKey,
               payload_kind: payloadKind,
               project_id: input.projectId,

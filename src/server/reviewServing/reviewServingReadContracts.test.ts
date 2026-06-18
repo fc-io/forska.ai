@@ -196,6 +196,7 @@ test('detail row contract does not pin article lookups to a list mode', () => {
   expect(detailRow?.sort.fields[0]).toContain('CASE list_mode_key')
   expect(detailJudgments?.servingTable).toBe('mart.review_article_judgment_detail_serving_v4')
   expect(detailJudgments?.allowedFilters).toEqual(['articleId'])
+  expect(detailJudgments?.requiredComponents).toContain('payload')
   expect(detailJudgments?.sort.fields).toEqual([
     "CASE list_mode_key WHEN 'both' THEN 0 WHEN 'llm' THEN 1 WHEN 'human' THEN 2 WHEN 'unassessed' THEN 3 ELSE 4 END",
     'prompt_order ASC NULLS LAST',
@@ -347,11 +348,11 @@ test('human payload contracts cover list and detail response judgments', () => {
   const bothListHumanJudgments = getReviewServingReadContract('review.both.list.humanJudgments')
   const detailHumanJudgments = getReviewServingReadContract('review.detail.humanJudgments')
 
-  expect(llmListJudgments?.requiredComponents).toEqual(['llmStatus', 'summary'])
-  expect(humanListJudgments?.requiredComponents).toEqual(['humanStatus', 'summary'])
-  expect(bothListJudgments?.requiredComponents).toEqual(['llmStatus', 'humanStatus', 'summary'])
-  expect(bothListHumanJudgments?.requiredComponents).toEqual(['llmStatus', 'humanStatus', 'summary'])
-  expect(detailHumanJudgments?.requiredComponents).toEqual(['humanStatus', 'summary'])
+  expect(llmListJudgments?.requiredComponents).toEqual(['llmStatus', 'summary', 'payload'])
+  expect(humanListJudgments?.requiredComponents).toEqual(['humanStatus', 'summary', 'payload'])
+  expect(bothListJudgments?.requiredComponents).toEqual(['llmStatus', 'humanStatus', 'summary', 'payload'])
+  expect(bothListHumanJudgments?.requiredComponents).toEqual(['llmStatus', 'humanStatus', 'summary', 'payload'])
+  expect(detailHumanJudgments?.requiredComponents).toEqual(['humanStatus', 'summary', 'payload'])
   expect(llmListJudgments?.physicalAccessStrategy).toBe('articleSetLookup')
   expect(humanListJudgments?.physicalAccessStrategy).toBe('articleSetLookup')
   expect(bothListJudgments?.physicalAccessStrategy).toBe('articleSetLookup')

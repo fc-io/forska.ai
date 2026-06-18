@@ -249,6 +249,30 @@ test('human payload projection filters rows by active human judgment mode', asyn
   expect(humanSelect).toContain("COALESCE(project.human_judgment_mode, 'prompt') = 'summary'")
 })
 
+test('judgment payload projection replaces broad project detail rows', async () => {
+  const {database, statements} = createJudgmentPayloadDatabase({humanRows: [], llmRows: []})
+
+  await projectReviewServingJudgmentPayloadRows(
+    projectInput([
+      judgmentClaim({
+        articleId: null,
+        dirtyKind: 'project.reviewConfig.updated',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ]),
+    database,
+  )
+  const deleteStatements = statements.filter((statement) => {
+    return statement.includes('DELETE FROM mart.review_article_judgment_detail_serving_v4')
+  })
+
+  expect(deleteStatements.length).toBeGreaterThan(0)
+  expect(deleteStatements[0]).not.toContain('article_id IN')
+  expect(deleteStatements[0]).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
+  expect(deleteStatements[0]).toContain("review_config_hash IS NOT DISTINCT FROM 'review-config-1'")
+})
+
 test('judgment payload projection writes payload manifest when acknowledging claims', async () => {
   const {database, statements} = createJudgmentPayloadDatabase({humanRows: [], llmRows: []})
 
