@@ -97,6 +97,8 @@ const createWorkerHarness = (input?: {
       if (input?.executeThrows) {
         throw new Error('executor failed')
       }
+
+      return undefined
     },
     getDatabase: () => {
       return database
@@ -207,6 +209,37 @@ test('review bulk operation worker advances PDF jobs with durable article-id cri
   expect(joined).toContain("'succeeded'")
   expect(joined).toContain('json_extract_string(result_manifest_json')
   expect(joined).toContain('"jobId":"job-1"')
+})
+
+test('review bulk operation worker advances export jobs through bounded keyset selection', async () => {
+  const harness = createWorkerHarness({
+    criteriaJson: {
+      exportContract: {
+        payloadBudgetBytes: 10_000_000,
+        promptOutput: {includeExplanation: true, includeQuotes: true, promptIds: ['prompt-1']},
+        selectedMetadata: {includeArticleId: true, includeSummary: true},
+        snapshotCursor: {mode: 'keyset', orderBy: ['article_id']},
+      },
+      listType: 'llm',
+      operation: 'export',
+      prompts: {'prompt-1': ['yes']},
+      sourceProjectIds: ['project-1'],
+    },
+    jobKind: 'review.export.selection',
+  })
+
+  const result = await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+  const joined = harness.statements.join('\n')
+
+  expect(result.status).toBe('partial')
+  expect(harness.executedBatches).toEqual([['article-002', 'article-003']])
+  expect(joined).toContain('FROM mart.review_article_filter_posting_serving_v4 p')
+  expect(joined).toContain("p.list_mode_key = 'llm'")
+  expect(joined).toContain('ORDER BY p.article_id ASC')
+  expect(joined).toContain('LIMIT 2')
+  expect(joined).toContain('processed_count = processed_count + 2')
+  expect(joined).not.toContain('FROM app.judgment')
+  expect(joined).not.toContain('OFFSET')
 })
 
 test('review bulk operation worker completes terminally when the final batch is short', async () => {

@@ -6,6 +6,7 @@ import {createEffect, createSignal, For, Show} from 'solid-js'
 import {Button} from '../../../../components/ui/button'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
 import {downloadCsvFromPost} from '../../../utils/downloadCsv.ts'
+import {getApiRequestUrl} from '../../../utils/getApiRequestUrl.ts'
 import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
 
 type PromptInfo = {id: string; promptHeading: string | null; originalText: string; type: string | null}
@@ -28,6 +29,22 @@ type ExportRequestBody = {
 }
 
 type ExportPromptsRequestBody = {promptIds: string[]}
+type ExportJobResponse = {job?: {jobId?: string}; success?: boolean}
+
+const createProjectExportJob = async (projectId: string, body: ExportRequestBody): Promise<ExportJobResponse> => {
+  const response = await fetch(getApiRequestUrl(`/api/projects/${projectId}/export`), {
+    body: JSON.stringify(body),
+    credentials: 'include',
+    headers: {'Content-Type': 'application/json'},
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    throw new Error('Export failed')
+  }
+
+  return (await response.json()) as ExportJobResponse
+}
 
 const parseArktypeOptions = (typeStr: string | null): string[] => {
   if (!typeStr) return []
@@ -75,6 +92,7 @@ const ExportData = () => {
   const [includePromptType, setIncludePromptType] = createSignal(false)
   const [includePromptContent, setIncludePromptContent] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
+  const [exportJobId, setExportJobId] = createSignal<string | null>(null)
   const [hasInitializedPrompts, setHasInitializedPrompts] = createSignal(false)
   const [promptAnswerFilters, setPromptAnswerFilters] = createSignal<Record<string, string[]>>({})
   const [hasInitializedFilters, setHasInitializedFilters] = createSignal(false)
@@ -251,13 +269,10 @@ const ExportData = () => {
   const exportMutation = useMutation(() => {
     return {
       mutationFn: async (body: ExportRequestBody) => {
-        await downloadCsvFromPost({
-          body,
-          errorMessage: 'Export failed',
-          fallbackFilename: `export-${projectId}.csv`,
-          path: `/api/projects/${projectId}/export`,
-        })
-        return {success: true}
+        return createProjectExportJob(projectId, body)
+      },
+      onSuccess: (result) => {
+        setExportJobId(result.job?.jobId ?? null)
       },
       onError: (err) => {
         const message = err instanceof Error ? err.message : 'An unexpected error occurred'
@@ -286,6 +301,7 @@ const ExportData = () => {
 
   const handleExport = () => {
     setError(null)
+    setExportJobId(null)
     const selectedPromptIds = Object.keys(selectedPrompts())
     const promptSelections = Object.entries(promptAnswerFilters())
       .filter(([_, types]) => {
@@ -360,6 +376,15 @@ const ExportData = () => {
           <div class="bg-card border rounded-lg p-6">
             <Show when={error()}>
               <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">{error()}</div>
+            </Show>
+            <Show when={exportJobId()}>
+              {(jobId) => {
+                return (
+                  <div class="mb-4 p-3 bg-green-50 border border-green-200 rounded-md text-green-700 text-sm">
+                    Export job queued: {jobId()}
+                  </div>
+                )
+              }}
             </Show>
 
             {/* Project Info */}
@@ -728,7 +753,7 @@ const ExportData = () => {
                 }}
                 disabled={exportMutation.isPending || exportPromptsMutation.isPending}
               >
-                {exportMutation.isPending ? 'Exporting...' : 'Export to CSV'}
+                {exportMutation.isPending ? 'Queueing...' : 'Queue CSV Export'}
               </Button>
               <Button
                 variant="outline"

@@ -31,6 +31,7 @@ export type ReviewBulkOperationSnapshotSemantics =
 export type ReviewBulkOperationCriteria = {
   articleIds?: readonly string[]
   concurrency?: number
+  exportContract?: ReviewServingIdentityValue
   filters?: Partial<Record<string, ReviewServingFilterSignatureValue>>
   forceRefetch?: boolean
   from?: string
@@ -43,6 +44,7 @@ export type ReviewBulkOperationCriteria = {
   requestId?: string
   search?: string
   sourceProjectId?: string
+  sourceProjectIds?: readonly string[]
   targetProjectId?: string
   to?: string
 }

@@ -39,6 +39,7 @@ type ReviewBulkOperationJobRow = {
 
 type ReviewBulkOperationCriteria = {
   articleIds?: readonly string[]
+  exportContract?: unknown
   forceRefetch?: boolean
   from?: string
   hasDuplicateStudyRecords?: boolean
@@ -49,6 +50,7 @@ type ReviewBulkOperationCriteria = {
   prompts?: Record<string, readonly string[]>
   requestId?: string
   search?: string
+  sourceProjectIds?: readonly string[]
   targetProjectId?: string
   to?: string
 }

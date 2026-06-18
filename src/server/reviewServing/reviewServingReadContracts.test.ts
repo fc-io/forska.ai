@@ -577,7 +577,7 @@ test('snapshot contracts align cursor fields with sort keys and required counts'
   expect(warning?.optionalComponents).not.toContain('queue')
 })
 
-test('mounted routes stay off incomplete option, detail, warning, and preview coverage', () => {
+test('mounted routes stay off incomplete option, detail, warning, preview, and bulk coverage', () => {
   const incompleteProductRoutes = new Set([
     '/api/articles/pdf-fetch-by-filter',
     '/api/articles/pdf-fetch-by-project',
@@ -586,7 +586,6 @@ test('mounted routes stay off incomplete option, detail, warning, and preview co
     '/api/articlesreviewshumanfilters',
     '/api/projects/add_articles_by_filter',
     '/api/articlesreviewsunassessed',
-    '/api/projects/:id/export',
   ])
   const mountedIncompleteRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
     return entry.mounted && incompleteProductRoutes.has(entry.productRoute)
@@ -817,7 +816,7 @@ test('add-articles filter inventory maps to the mounted bulk selection route', (
   })
 })
 
-test('filtered PDF and export inventories stay unmounted until full response coverage is migrated', () => {
+test('filtered PDF inventory stays unmounted while export inventory maps to the mounted job route', () => {
   const pdfByProjectEntry = reviewServingReadContractRouteInventory.find((entry) => {
     return entry.productRoute === '/api/articles/pdf-fetch-by-project'
   })
@@ -826,7 +825,7 @@ test('filtered PDF and export inventories stay unmounted until full response cov
   })
 
   expect(pdfByProjectEntry).toMatchObject({mounted: false, surfaces: ['pdf', 'bulk', 'filter', 'search']})
-  expect(exportEntry).toMatchObject({mounted: false, surfaces: ['export', 'bulk', 'filter', 'search', 'detail']})
+  expect(exportEntry).toMatchObject({mounted: true, surfaces: ['export', 'bulk', 'filter', 'search', 'detail']})
 })
 
 test('count read inventory maps to the mounted review count route', () => {
