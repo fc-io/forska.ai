@@ -165,7 +165,17 @@ test('every emitted delta kind declares complete invalidation metadata', () => {
     [
       'project.reviewConfig.updated',
       'projectScope',
-      ['selectedImport', 'judgmentInputContent', 'llmStatus', 'humanStatus', 'queue', 'posting', 'summary'],
+      [
+        'selectedImport',
+        'judgmentInputContent',
+        'llmStatus',
+        'humanStatus',
+        'queue',
+        'posting',
+        'search',
+        'summary',
+        'payload',
+      ],
       ['projectId', 'changedReviewConfigFields', 'sourceHighWaterMark'],
       'componentRebuild',
     ],
@@ -240,6 +250,8 @@ test('review config changes invalidate judgment input content for content flag c
   expect(rule.affectedComponents).toContain('projectScope')
   expect(rule.affectedComponents).toContain('selectedImport')
   expect(rule.affectedComponents).toContain('judgmentInputContent')
+  expect(rule.affectedComponents).toContain('search')
+  expect(rule.affectedComponents).toContain('payload')
   expect(rule.downstreamDependents).toEqual([
     'selectedImport',
     'judgmentInputContent',
@@ -247,7 +259,9 @@ test('review config changes invalidate judgment input content for content flag c
     'humanStatus',
     'queue',
     'posting',
+    'search',
     'summary',
+    'payload',
   ])
 })
 
