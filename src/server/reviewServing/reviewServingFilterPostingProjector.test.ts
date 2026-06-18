@@ -278,6 +278,23 @@ test('status postings use article-level all-prompt status rows', async () => {
   expect(selectStatement).toContain("human.prompt_id <> 'summary' AND human.human_status_key = 'answered'")
 })
 
+test('human status postings honor summary-mode status rows separately from prompt rows', async () => {
+  const {database, statements} = createPostingDatabase({newRows: []})
+
+  await projectReviewServingFilterPostings(
+    projectInput([postingClaim({dirtyKind: 'judgment.human.updated'})]),
+    database,
+  )
+  const selectStatement = statements.find((statement) => {
+    return statement.includes('FROM posting_union')
+  })
+
+  expect(selectStatement).toContain('CROSS JOIN project_settings')
+  expect(selectStatement).toContain("human.prompt_id = 'summary'")
+  expect(selectStatement).toContain("human.prompt_id <> 'summary'")
+  expect(selectStatement).toContain("THEN 'answered'")
+})
+
 test('prompt-answer postings encode prompt ids in filter values', async () => {
   const {database, statements} = createPostingDatabase({newRows: []})
 

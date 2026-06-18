@@ -511,6 +511,24 @@ const getReviewServingRowsSqlQueuePredicate = (params: {
   return ` AND queue_kind = ${queueKindParameter}`
 }
 
+const getReviewServingRowsSqlUnassessedQueuePredicate = (params: {
+  contract: ReviewServingReadContract
+  projectIdParameter: string
+  reviewConfigHashParameter: string
+  snapshotIdParameter: string
+}) => {
+  return params.contract.key === 'review.unassessed.rows'
+    || params.contract.key === 'review.unassessed.rowsByArticleSet'
+    ? [
+        ' AND EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue',
+        ` WHERE queue.project_id = ${params.projectIdParameter}`,
+        ` AND queue.review_config_hash = ${params.reviewConfigHashParameter}`,
+        ` AND queue.snapshot_id = ${params.snapshotIdParameter}`,
+        ` AND queue.article_id = ${params.contract.servingTable}.article_id)`,
+      ].join('')
+    : ''
+}
+
 const getReviewServingRowsSqlJobPredicate = (params: {
   contract: ReviewServingReadContract
   jobFilterSignatureParameter?: string | null
@@ -582,6 +600,7 @@ const getReviewServingRowsSqlPhysicalFilterPredicate = (params: {
     getReviewServingRowsSqlPostingPredicate(params),
     getReviewServingRowsSqlSearchPredicate(params),
     getReviewServingRowsSqlQueuePredicate(params),
+    getReviewServingRowsSqlUnassessedQueuePredicate(params),
     getReviewServingRowsSqlJobPredicate(params),
   ].join('')
 }

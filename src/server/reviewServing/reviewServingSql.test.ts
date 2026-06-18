@@ -478,8 +478,32 @@ test('buildReviewServingRowsSql uses activity ordering for unassessed row contra
   })
 
   expect(sql).toContain("AND list_mode_key = 'unassessed'")
+  expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(sql).toContain('queue.review_config_hash = $reviewConfigHash')
+  expect(sql).toContain('queue.snapshot_id = $snapshotId')
+  expect(sql).toContain('queue.article_id = mart.review_article_serving_v4.article_id')
   expect(sql).toContain('ORDER BY activity_sort_at DESC, article_id DESC')
   expect(sql).not.toContain('ORDER BY sort_key')
+})
+
+test('buildReviewServingRowsSql filters unassessed article-set hydration through queue rows', () => {
+  const sql = buildReviewServingRowsSql({
+    articleIdsParameter: '$articleIds',
+    contract: getRequiredReviewServingReadContract('review.unassessed.rowsByArticleSet'),
+    displayIdentityParameter: '$displayIdentity',
+    limitParameter: '$limit',
+    listModeParameter: '$wrongRuntimeMode',
+    payloadIdentityParameter: '$payloadIdentity',
+    projectIdParameter: '$projectId',
+    projectScopeIdentityParameter: '$projectScopeIdentity',
+    reviewConfigHashParameter: '$reviewConfigHash',
+    searchIdentityParameter: '$searchIdentity',
+    snapshotIdParameter: '$snapshotId',
+  })
+
+  expect(sql).toContain('AND article_id IN (SELECT unnest($articleIds))')
+  expect(sql).toContain('EXISTS (SELECT 1 FROM mart.review_unassessed_queue_serving_v4 queue')
+  expect(sql).toContain('queue.article_id = mart.review_article_serving_v4.article_id')
 })
 
 test('buildReviewServingRowsSql uses count-table sort columns for count serving tables', () => {

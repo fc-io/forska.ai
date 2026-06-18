@@ -193,10 +193,21 @@ test('payload claimed updates delete stale rows for removed articles before inse
   expect(deleteStatement).toContain('payload_identity')
 })
 
-test('project-scoped payload rebuilds all scoped articles instead of deriving an article id from scope id', async () => {
-  const {database, statements} = createDisplayPayloadDatabase({payloadRows: []})
+test('project-scoped payload rebuilds read scoped articles and clear snapshot payload rows', async () => {
+  const {database, statements} = createDisplayPayloadDatabase({
+    payloadRows: [
+      {
+        abstractText: 'Abstract preview',
+        articleCreatedAt: '2026-01-01T00:00:00.000Z',
+        articleId: 'article-2',
+        fullTextPreview: 'Full text preview',
+        payloadBytes: 34,
+        sourceMetadata: {source: 'fixture'},
+      },
+    ],
+  })
 
-  await projectReviewServingPayloadRows(
+  const result = await projectReviewServingPayloadRows(
     {
       baseGeneration: 1,
       claims: [
@@ -224,8 +235,12 @@ test('project-scoped payload rebuilds all scoped articles instead of deriving an
     return statement.includes('DELETE FROM mart.review_article_serving_payload_v4')
   })
 
+  expect(result).toEqual({payloadRowCount: 1, patchWatermark: 6})
+  expect(selectStatement).toContain('FROM mart.project_scope_article scope')
   expect(selectStatement).not.toContain('WITH dirty_article(article_id)')
   expect(selectStatement).not.toContain('INNER JOIN dirty_article dirty')
+  expect(deleteStatement).toContain("project_id IS NOT DISTINCT FROM 'project-1'")
+  expect(deleteStatement).toContain("snapshot_id IS NOT DISTINCT FROM 'snapshot-1'")
   expect(deleteStatement).toContain('payload_identity')
   expect(deleteStatement).not.toContain('article_id IN')
 })
