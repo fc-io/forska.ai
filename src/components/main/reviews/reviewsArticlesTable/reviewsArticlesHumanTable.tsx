@@ -20,7 +20,7 @@ declare module '@tanstack/solid-table' {
 
 type HumanJudgmentType = JudgmentHumanRecord
 
-type ArticleWithHumanJudgments = Omit<ArticleRecord, 'judgments'>
+export type ArticleWithHumanJudgments = Omit<ArticleRecord, 'judgments'>
   & ArticleUrlInput & {
     canonicalArticleId?: string | null
     judgments: Array<HumanJudgmentType>

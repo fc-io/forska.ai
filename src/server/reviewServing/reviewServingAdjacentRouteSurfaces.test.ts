@@ -12,6 +12,8 @@ const requiredUs013SurfaceKeys = [
   'GET /api/projects/:id/articles',
   'POST /api/projects/:id/articles',
   'DELETE /api/projects/:id/articles/:articleId',
+  'GET /api/judgmentsjobs-unassessed-count',
+  'GET /api/judgmentsjobs-unassessed-articles',
   'GET /api/humanassessment/overview',
   'GET /api/humanassessment/overview-both-projects',
   'POST /api/humanassessment/init',
@@ -68,6 +70,8 @@ test('US-013 out-of-scope adjacent surfaces are guarded and excluded from normal
     ['GET', '/api/articles/latest', 'out-of-scope-non-review'],
     ['GET', '/api/articles/search', 'out-of-scope-non-review'],
     ['GET', '/api/projects/:id/articles', 'out-of-scope-non-review'],
+    ['GET', '/api/judgmentsjobs-unassessed-count', 'out-of-scope-admin-debug'],
+    ['GET', '/api/judgmentsjobs-unassessed-articles', 'out-of-scope-admin-debug'],
     ['GET', '/api/humanassessment/overview', 'out-of-scope-admin-debug'],
     ['GET', '/api/humanassessment/overview-both-projects', 'out-of-scope-admin-debug'],
   ])

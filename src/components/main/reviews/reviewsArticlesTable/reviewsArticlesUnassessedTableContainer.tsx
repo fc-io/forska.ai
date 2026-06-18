@@ -7,6 +7,7 @@ import {getReviewIndexingStateCopy} from '../getReviewIndexingInProgressTitle.ts
 import {ReviewsIndexingProgress} from '../reviewsIndexingProgress.tsx'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
+import type {ArticleWithJudgments} from './reviewsArticlesTable.tsx'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
 const formatThousandSeparatedNumber = (value: number) => {
@@ -104,6 +105,10 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
 
         <Show when={articlesQuery.data}>
           {(response) => {
+            const articles = () => {
+              return response().data as ArticleWithJudgments[]
+            }
+
             return (
               <div class="space-y-4">
                 <div class="p-4 bg-white rounded-lg shadow">
@@ -123,8 +128,8 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                   page={props.currentPage()}
                   totalPages={response().totalPages}
                   setCurrentPage={props.setCurrentPage}
-                  currentPageRowIds={response().data.map((a) => {
-                    return a.id
+                  currentPageRowIds={articles().map((a) => {
+                    return String(a.id)
                   })}
                   rowSelection={rowSelection}
                   setRowSelection={setRowSelection}
@@ -169,7 +174,7 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                 >
                   <ReviewsArticlesTable
                     projectId={props.projectId}
-                    articles={response().data}
+                    articles={articles()}
                     rowSelection={rowSelection}
                     setRowSelection={setRowSelection}
                   />
@@ -179,8 +184,8 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                   page={props.currentPage()}
                   totalPages={response().totalPages}
                   setCurrentPage={props.setCurrentPage}
-                  currentPageRowIds={response().data.map((a) => {
-                    return a.id
+                  currentPageRowIds={articles().map((a) => {
+                    return String(a.id)
                   })}
                   rowSelection={rowSelection}
                   setRowSelection={setRowSelection}

@@ -1,4 +1,5 @@
 import {expect, test} from 'bun:test'
+import {readFile} from 'fs/promises'
 
 import {
   namedReviewFastCountDefinitions,
@@ -577,52 +578,61 @@ test('snapshot contracts align cursor fields with sort keys and required counts'
   expect(warning?.optionalComponents).not.toContain('queue')
 })
 
-test('mounted routes stay off incomplete option, detail, warning, preview, and bulk coverage', () => {
-  const incompleteProductRoutes = new Set([
-    '/api/articles/pdf-fetch-by-filter',
-    '/api/articles/pdf-fetch-by-project',
+test('US-017 migrated review route inventory rows are mounted or explicitly internal', () => {
+  const expectedMountedProductRoutes: string[] = [
+    '/api/articlesreviews',
+    '/api/articlesreviewscount',
+    '/api/articlesreviewshuman',
     '/api/articlesreviewsboth',
+    '/api/articlesreviewsunassessed',
     '/api/articlesreviewsfilters',
     '/api/articlesreviewshumanfilters',
+    '/api/projectsreview',
+    '/api/projectsreviewswarnings',
+    '/api/projectsreviewshealth',
+    '/api/projects/:id/prompts/:promptId/preview',
+    '/api/articles/pdf-fetch-by-filter',
     '/api/projects/add_articles_by_filter',
-    '/api/articlesreviewsunassessed',
-  ])
-  const mountedIncompleteRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.mounted && incompleteProductRoutes.has(entry.productRoute)
+    '/api/articles/pdf-fetch-by-project',
+    '/api/articles/pdf-fetch-bulk',
+    '/api/projects/:id/export',
+  ]
+  const mountedRoutes: string[] = reviewServingReadContractRouteInventory.flatMap((entry) => {
+    return entry.mounted ? [entry.productRoute] : []
   })
-  const mountedPostingRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
-    return (
-      entry.mounted
-      && entry.contractKeys.includes('review.filters.postings')
-      && entry.productRoute !== '/api/articlesreviews'
-      && entry.productRoute !== '/api/articlesreviewscount'
-      && entry.productRoute !== '/api/articlesreviewshuman'
-    )
-  })
-  const mountedFacetRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.mounted && entry.contractKeys.includes('review.filters.facets')
+  const unmountedProductRoutes = reviewServingReadContractRouteInventory.flatMap((entry) => {
+    return entry.mounted || entry.productRoute.startsWith('/api/review-serving/') ? [] : [entry.productRoute]
   })
 
-  expect(mountedIncompleteRoutes).toEqual([])
-  expect(mountedPostingRoutes).toEqual([])
-  expect(mountedFacetRoutes).toEqual([])
+  expect(mountedRoutes).toEqual(expectedMountedProductRoutes)
+  expect(unmountedProductRoutes).toEqual([])
 })
 
-test('explicit PDF bulk ID route is not mapped to project-scoped review serving selection', () => {
+test('explicit PDF bulk ID route maps to mounted PDF job selection without project-scoped filter surfaces', () => {
   const explicitBulkPdfRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
     return entry.productRoute === '/api/articles/pdf-fetch-bulk'
   })
 
-  expect(explicitBulkPdfRoutes).toEqual([])
+  expect(explicitBulkPdfRoutes).toEqual([
+    {
+      contractKeys: ['review.pdf.selection'],
+      method: 'POST',
+      mounted: true,
+      productRoute: '/api/articles/pdf-fetch-bulk',
+      routeFile: 'src/server/routes/ArticlesRoutes.ts',
+      surfaces: ['pdf', 'bulk'],
+    },
+  ])
 })
 
-test('unmigrated filter posting and facet contracts stay unmounted until route shapes are complete', () => {
+test('migrated filter posting and facet contracts are mounted for production routes', () => {
   const postingInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.contractKeys.includes('review.filters.postings')
+    return (entry.contractKeys as readonly string[]).includes('review.filters.postings')
   })
   const facetInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
     return (
-      entry.contractKeys.includes('review.filters.facets') || entry.contractKeys.includes('review.human.filters.facets')
+      (entry.contractKeys as readonly string[]).includes('review.filters.facets')
+      || (entry.contractKeys as readonly string[]).includes('review.human.filters.facets')
     )
   })
   const optionInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
@@ -639,8 +649,8 @@ test('unmigrated filter posting and facet contracts stay unmounted until route s
     ['/api/articlesreviews', true],
     ['/api/articlesreviewscount', true],
     ['/api/articlesreviewshuman', true],
-    ['/api/articlesreviewsboth', false],
-    ['/api/articlesreviewsunassessed', false],
+    ['/api/articlesreviewsboth', true],
+    ['/api/articlesreviewsunassessed', true],
     ['/api/review-serving/filter-postings', false],
   ])
   expect(facetInventoryEntries).toHaveLength(2)
@@ -648,7 +658,7 @@ test('unmigrated filter posting and facet contracts stay unmounted until route s
     facetInventoryEntries.map((entry) => {
       return entry.mounted
     }),
-  ).toEqual([false, false])
+  ).toEqual([true, true])
   expect(optionInventoryEntries).toHaveLength(2)
   expect(
     optionInventoryEntries.map((entry) => {
@@ -684,7 +694,7 @@ test('filtered row product routes include posting-intersection coverage', () => 
 
       return [
         entry.productRoute,
-        entry.contractKeys.includes('review.filters.postings'),
+        (entry.contractKeys as readonly string[]).includes('review.filters.postings'),
         hasRowSetContract,
         entry.surfaces,
       ]
@@ -767,7 +777,7 @@ test('review serving migration inventory maps contracts to product routes and pl
   })
   const missingSurfaces = reviewServingReadSurfaces.filter((surface) => {
     return !reviewServingReadContractRouteInventory.some((entry) => {
-      return entry.surfaces.includes(surface)
+      return (entry.surfaces as readonly string[]).includes(surface)
     })
   })
   const missingRoutes = reviewServingReadContractRouteInventory.filter((entry) => {
@@ -781,9 +791,46 @@ test('review serving migration inventory maps contracts to product routes and pl
   expect(missingRoutes).toEqual([])
 })
 
+test('US-017 mounted migrated route files stay behind serving and job seams', async () => {
+  const migratedRouteFiles = [
+    ...new Set(
+      reviewServingReadContractRouteInventory.flatMap((entry) => {
+        return entry.mounted ? [entry.routeFile] : []
+      }),
+    ),
+  ]
+  const routeSources = await Promise.all(
+    migratedRouteFiles.map(async (routeFile) => {
+      return [routeFile, await readFile(routeFile, 'utf8')] as const
+    }),
+  )
+  const forbiddenPatterns = [
+    /runDuckdbJsonQuery/,
+    /selected_scoped_article_import/,
+    /articlesReviewsOlap/,
+    /articlesReviewsBothOlap/,
+    /articlesReviewsFiltersOlap/,
+    /unassessedArticlesOlap/,
+    /selectArticleIdsOlap/,
+    /duckdbOlap/,
+    /decodeReviewServingCursor/,
+    /buildReviewServingFilterSignature/,
+    /getReviewServingFilterSignature/,
+    /raw fallback/i,
+    /\bOFFSET\b/i,
+  ]
+  const violations = routeSources.flatMap(([routeFile, source]) => {
+    return forbiddenPatterns.flatMap((pattern) => {
+      return pattern.test(source) ? [`${routeFile}: ${pattern.source}`] : []
+    })
+  })
+
+  expect(violations).toEqual([])
+})
+
 test('detail read inventory maps to the mounted project review route', () => {
   const detailInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.contractKeys.includes('review.detail.row')
+    return (entry.contractKeys as readonly string[]).includes('review.detail.row')
   })
 
   expect(detailInventoryEntries).toHaveLength(1)
@@ -810,21 +857,25 @@ test('add-articles filter inventory maps to the mounted bulk selection route', (
   expect(addArticlesInventoryEntries[0]).toMatchObject({
     contractKeys: ['review.bulk.substringSelection'],
     method: 'POST',
-    mounted: false,
+    mounted: true,
     routeFile: 'src/server/routes/ProjectsAddArticlesRoutes.ts',
     surfaces: ['bulk', 'filter', 'search'],
   })
 })
 
-test('filtered PDF inventory stays unmounted while export inventory maps to the mounted job route', () => {
+test('filtered PDF and export inventories map to mounted job routes', () => {
   const pdfByProjectEntry = reviewServingReadContractRouteInventory.find((entry) => {
     return entry.productRoute === '/api/articles/pdf-fetch-by-project'
+  })
+  const pdfByFilterEntry = reviewServingReadContractRouteInventory.find((entry) => {
+    return entry.productRoute === '/api/articles/pdf-fetch-by-filter'
   })
   const exportEntry = reviewServingReadContractRouteInventory.find((entry) => {
     return entry.productRoute === '/api/projects/:id/export'
   })
 
-  expect(pdfByProjectEntry).toMatchObject({mounted: false, surfaces: ['pdf', 'bulk', 'filter', 'search']})
+  expect(pdfByFilterEntry).toMatchObject({mounted: true, surfaces: ['bulk', 'pdf', 'filter', 'search']})
+  expect(pdfByProjectEntry).toMatchObject({mounted: true, surfaces: ['pdf', 'bulk', 'filter', 'search']})
   expect(exportEntry).toMatchObject({mounted: true, surfaces: ['export', 'bulk', 'filter', 'search', 'detail']})
 })
 
@@ -884,7 +935,10 @@ test('both-list inventory covers LLM and human judgment payloads', () => {
 
 test('facet read inventory maps to the mounted review filters route', () => {
   const facetInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.contractKeys.includes('review.filters.facets') && entry.productRoute === '/api/articlesreviewsfilters'
+    return (
+      (entry.contractKeys as readonly string[]).includes('review.filters.facets')
+      && entry.productRoute === '/api/articlesreviewsfilters'
+    )
   })
 
   expect(facetInventoryEntries).toHaveLength(1)
@@ -904,7 +958,7 @@ test('facet read inventory maps to the mounted review filters route', () => {
 test('human facet read inventory maps to the mounted human review filters route', () => {
   const humanFacetInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
     return (
-      entry.contractKeys.includes('review.human.filters.facets')
+      (entry.contractKeys as readonly string[]).includes('review.human.filters.facets')
       && entry.productRoute === '/api/articlesreviewshumanfilters'
     )
   })
@@ -925,7 +979,7 @@ test('human facet read inventory maps to the mounted human review filters route'
 
 test('warning read inventory maps to the mounted project warnings route', () => {
   const warningInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.contractKeys.includes('review.warning.snapshot')
+    return (entry.contractKeys as readonly string[]).includes('review.warning.snapshot')
   })
 
   expect(warningInventoryEntries).toHaveLength(1)
@@ -939,10 +993,10 @@ test('warning read inventory maps to the mounted project warnings route', () => 
 
 test('health and prompt preview inventories map only to mounted product routes', () => {
   const healthInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.contractKeys.includes('review.health.snapshot')
+    return (entry.contractKeys as readonly string[]).includes('review.health.snapshot')
   })
   const previewInventoryEntries = reviewServingReadContractRouteInventory.filter((entry) => {
-    return entry.contractKeys.includes('review.prompt.preview')
+    return (entry.contractKeys as readonly string[]).includes('review.prompt.preview')
   })
 
   expect(healthInventoryEntries).toHaveLength(1)
