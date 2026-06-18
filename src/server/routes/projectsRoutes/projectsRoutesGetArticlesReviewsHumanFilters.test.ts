@@ -1,16 +1,12 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
 const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
 const projectAccessGuardModulePath = new URL('./projectAccessGuard.ts', import.meta.url).pathname
-
-const queryJsonRef = {
-  current: async (_statement: string): Promise<unknown[]> => {
-    return []
-  },
-}
-const queryStatements: string[] = []
+const reviewServingFilterRouteServiceModulePath = new URL(
+  '../../reviewServing/reviewServingFilterRouteService.ts',
+  import.meta.url,
+).pathname
 
 const projectPromptRowsRef = {
   current: async (_projectId: string): Promise<unknown[]> => {
@@ -24,20 +20,13 @@ const projectReviewConfigRef = {
   },
 }
 
-const registerModuleMocks = () => {
-  void mock.module(appDatabaseServiceModulePath, () => {
-    return {
-      getAppDatabaseService: () => {
-        return {
-          queryJson: (statement: string) => {
-            queryStatements.push(statement)
-            return queryJsonRef.current(statement)
-          },
-        }
-      },
-    }
-  })
+const reviewFiltersRef = {
+  current: async (_input: unknown): Promise<unknown> => {
+    return {diagnostics: [], facets: [], filterOptions: [], filters: [], searchScope: null}
+  },
+}
 
+const registerModuleMocks = () => {
   void mock.module(appQueryServiceModulePath, () => {
     return {
       getAppQueryService: () => {
@@ -60,6 +49,14 @@ const registerModuleMocks = () => {
       },
     }
   })
+
+  void mock.module(reviewServingFilterRouteServiceModulePath, () => {
+    return {
+      getReviewFiltersFromServing: (input: unknown) => {
+        return reviewFiltersRef.current(input)
+      },
+    }
+  })
 }
 
 const loadHandler = async (): Promise<typeof import('./projectsRoutesGetArticlesReviewsHumanFilters.ts')> => {
@@ -70,7 +67,6 @@ const loadHandler = async (): Promise<typeof import('./projectsRoutesGetArticles
 }
 
 afterEach(() => {
-  queryStatements.length = 0
   mock.restore()
 })
 
@@ -91,8 +87,20 @@ test('articles reviews human filters returns overall summary filter in summary m
   projectPromptRowsRef.current = async () => {
     return []
   }
-  queryJsonRef.current = async (statement) => {
-    return statement.includes('FROM app.judgment_human_summary jhs') ? [{answer: 'no'}, {answer: 'yes'}] : []
+  reviewFiltersRef.current = async (input) => {
+    return {
+      diagnostics: [],
+      facets: [],
+      filterOptions: [
+        {facet_key: 'promptAnswer', optionValueKey: 'human:promptAnswer:summary:no'},
+        {facet_key: 'promptAnswer', optionValueKey: 'human:promptAnswer:summary:yes'},
+      ],
+      filters: [
+        {promptId: 'summary', promptName: 'Overall human screening decision', answeredOriginalValues: ['no', 'yes']},
+      ],
+      searchScope: {mode: 'none'},
+      serviceInput: input,
+    }
   }
 
   const {projectsRoutesGetArticlesReviewsHumanFilters} = await loadHandler()
@@ -100,18 +108,21 @@ test('articles reviews human filters returns overall summary filter in summary m
   const response = await app.handle(
     new Request('http://localhost/api/articlesreviewshumanfilters?projectId=project-1&covidenceDuplicates=1'),
   )
-  const body = (await response.json()) as {filters: Array<Record<string, unknown>>; humanJudgmentMode: string}
+  const body = (await response.json()) as Record<string, unknown>
 
   expect(response.status).toBe(200)
-  expect(
-    queryStatements.some((statement) => {
-      return statement.includes('COALESCE(scoped_import.import_metadata, a.source_metadata)')
-    }),
-  ).toBe(true)
   expect(body).toEqual({
+    diagnostics: [],
+    facets: [],
+    filterOptions: [
+      {facet_key: 'promptAnswer', optionValueKey: 'human:promptAnswer:summary:no'},
+      {facet_key: 'promptAnswer', optionValueKey: 'human:promptAnswer:summary:yes'},
+    ],
     filters: [
       {promptId: 'summary', promptName: 'Overall human screening decision', answeredOriginalValues: ['no', 'yes']},
     ],
     humanJudgmentMode: 'summary',
+    searchScope: {mode: 'none'},
+    serviceInput: {mode: 'human', params: {covidenceDuplicates: '1', projectId: 'project-1'}, promptRows: []},
   })
 })

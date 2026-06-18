@@ -19,6 +19,7 @@ type NumericFilter = {
 }
 
 type PromptFilter = EnumFilter | NumericFilter
+type ReviewsFilterResponse = {filters: PromptFilter[]}
 
 const getSelectedPromptValues = (value: string[] | null | undefined): string[] => {
   return Array.isArray(value) ? value : []
@@ -95,7 +96,9 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
           throw new Error('Failed to fetch filters')
         }
 
-        return response.data as PromptFilter[]
+        const data = response.data as PromptFilter[] | ReviewsFilterResponse
+
+        return Array.isArray(data) ? data : data.filters
       },
       enabled: !props.hidePromptSelectors,
     }
