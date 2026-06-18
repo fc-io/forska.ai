@@ -107,7 +107,7 @@ const hasProjectScopedClaim = (claims: readonly ReviewServingDirtyWorkClaim[]) =
   })
 }
 
-const getDirtyArticleCte = (projectId: string, articleIds: readonly string[], claims: readonly ReviewServingDirtyWorkClaim[]) => {
+const getDirtyArticleCte = (input: ProjectReviewServingSelectedImportPatchInput, articleIds: readonly string[]) => {
   if (articleIds.length > 0) {
     return `dirty_article(article_id) AS (
           SELECT * FROM (VALUES ${articleIds
@@ -118,11 +118,25 @@ const getDirtyArticleCte = (projectId: string, articleIds: readonly string[], cl
         )`
   }
 
-  if (hasProjectScopedClaim(claims)) {
+  if (hasProjectScopedClaim(input.claims)) {
     return `dirty_article(article_id) AS (
           SELECT scope.article_id
           FROM mart.project_scope_article scope
-          WHERE scope.project_id = ${getSqlLiteral(projectId)}
+          WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+          UNION
+          SELECT serving.article_id
+          FROM mart.review_article_serving_v4 serving
+          WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+            AND serving.selected_import_identity = ${getSqlLiteral(input.projectionIdentity)}
+            AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
+            AND EXISTS (
+              SELECT 1
+              FROM app.review_serving_snapshot_manifest snapshot
+              WHERE snapshot.project_id = serving.project_id
+                AND snapshot.snapshot_id = serving.snapshot_id
+                AND snapshot.selected_import_snapshot_id = ${getSqlLiteral(input.selectedImportSnapshotId)}
+                AND snapshot.snapshot_status IN ('candidate', 'active')
+            )
         )`
   }
 
@@ -292,7 +306,7 @@ const getSelectedImportPatchRows = async (
   database: ReviewServingSelectedImportPatchProjectorDatabase,
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
-  const dirtyArticleCte = getDirtyArticleCte(input.projectId, articleIds, input.claims)
+  const dirtyArticleCte = getDirtyArticleCte(input, articleIds)
 
   return dirtyArticleCte.length === 0
     ? []
