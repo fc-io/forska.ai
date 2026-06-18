@@ -2,7 +2,9 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {
+  type ReviewServingOptionalComponentState,
   type ReviewServingProjectionComponent,
+  type ReviewServingRequiredComponentState,
   type ReviewServingSnapshotComponentStates,
 } from './reviewServingContracts.ts'
 import {type ReviewServingSnapshotManifest} from './reviewServingManifestRepository.ts'
@@ -123,6 +125,36 @@ const getAllComponentStates = (componentState: ReviewServingSnapshotComponentSta
   return [...componentState.required, ...componentState.optional]
 }
 
+const getComposedComponentState = (componentState: ReviewServingSnapshotComponentStates) => {
+  return {
+    optional: componentState.optional.map((state) => {
+      return {
+        baseGeneration: state.baseGeneration,
+        component: state.component,
+        patchWatermark: state.patchWatermark,
+        projectionIdentity: state.projectionIdentity,
+      }
+    }),
+    required: componentState.required.map((state) => {
+      return {
+        baseGeneration: state.baseGeneration,
+        component: state.component,
+        patchWatermark: state.patchWatermark,
+        projectionIdentity: state.projectionIdentity,
+      }
+    }),
+  }
+}
+
+const getCompactedComposedIdentity = (
+  composedIdentity: ReviewServingIdentityValue,
+  componentState: ReviewServingSnapshotComponentStates,
+) => {
+  return composedIdentity !== null && typeof composedIdentity === 'object' && !Array.isArray(composedIdentity)
+    ? {...composedIdentity, componentStates: getComposedComponentState(componentState)}
+    : composedIdentity
+}
+
 const getPatchSpec = (component: ReviewServingProjectionComponent) => {
   return patchComponentSpecs.find((spec) => {
     return spec.component === component
@@ -189,19 +221,23 @@ const getCompactedComponentState = (
   componentState: ReviewServingSnapshotComponentStates,
   compacted: readonly ReviewServingPatchBudgetAssessment[],
 ) => {
-  const getCompactedState = (state: ReturnType<typeof getAllComponentStates>[number]) => {
+  const getCompactedState = <T extends ReturnType<typeof getAllComponentStates>[number]>(state: T): T => {
     const compaction = compacted.find((assessment) => {
       return assessment.component === state.component && assessment.projectionIdentity === state.projectionIdentity
     })
 
     return compaction === undefined
       ? state
-      : {...state, baseGeneration: String(compaction.baseGeneration + 1), patchWatermark: '0'}
+      : ({...state, baseGeneration: String(compaction.baseGeneration + 1), patchWatermark: '0'} as T)
   }
 
   return {
-    optional: componentState.optional.map(getCompactedState),
-    required: componentState.required.map(getCompactedState),
+    optional: componentState.optional.map((state): ReviewServingOptionalComponentState => {
+      return getCompactedState(state)
+    }),
+    required: componentState.required.map((state): ReviewServingRequiredComponentState => {
+      return getCompactedState(state)
+    }),
   } satisfies ReviewServingSnapshotComponentStates
 }
 
@@ -523,15 +559,15 @@ export const compactReviewServingCandidateSnapshotPatches = async (
     }, Promise.resolve())
 
     if (compactedComponents.length > 0) {
+      const componentState = getCompactedComponentState(input.candidate.componentState, compactedComponents)
+
       await tx.run(`
         UPDATE app.review_serving_snapshot_manifest
         SET
           component_state_json = ${getJsonLiteral(
-            getCompactedComponentState(
-              input.candidate.componentState,
-              compactedComponents,
-            ) as unknown as ReviewServingIdentityValue,
+            componentState as unknown as ReviewServingIdentityValue,
           )},
+          composed_identity_json = ${getJsonLiteral(getCompactedComposedIdentity(input.candidate.composedIdentity, componentState))},
           updated_at = current_timestamp
         WHERE project_id = ${getSqlLiteral(input.candidate.projectId)}
           AND snapshot_id = ${getSqlLiteral(input.candidate.snapshotId)}
@@ -552,7 +588,7 @@ export const cleanupReviewServingRetentionState = async (
     const retentionState = await getRetentionState(retentionScope, tx)
     const tableIndex = getRetentionCursorIndex(retentionState)
     const allSpecs = [...cleanupTableSpecs, ...patchComponentSpecs]
-    const spec = allSpecs[tableIndex % allSpecs.length]
+    const spec = allSpecs[tableIndex % allSpecs.length]!
 
     if ('protectedPredicate' in spec) {
       await deleteCleanupBatch({...input, spec}, tx)
