@@ -6,6 +6,7 @@ import {
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingProjectionManifestStatus,
 } from './reviewServingManifestRepository.ts'
+import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
@@ -55,17 +56,9 @@ type SelectedImportServingTemplateRow = {
   summaryIdentity: string
 }
 
-type SnapshotTemplateRow = {
-  componentStateJson: unknown
-  reviewConfigHash: string | null
-  snapshotId: string
-}
+type SnapshotTemplateRow = {componentStateJson: unknown; reviewConfigHash: string | null; snapshotId: string}
 
-type SnapshotComponentState = {
-  baseGeneration?: string
-  component?: string
-  projectionIdentity?: string
-}
+type SnapshotComponentState = {baseGeneration?: string; component?: string; projectionIdentity?: string}
 
 type SnapshotComponentStates = {
   optional?: readonly SnapshotComponentState[]
@@ -182,9 +175,11 @@ const getSnapshotComponentState = (
   componentState: SnapshotComponentStates,
   component: ReviewServingProjectionComponent,
 ) => {
-  return [...(componentState.required ?? []), ...(componentState.optional ?? [])].find((state) => {
-    return state.component === component
-  }) ?? null
+  return (
+    [...(componentState.required ?? []), ...(componentState.optional ?? [])].find((state) => {
+      return state.component === component
+    }) ?? null
+  )
 }
 
 const getSnapshotComponentIdentity = (
@@ -274,10 +269,7 @@ const getTemplateValuesSql = (templates: readonly SelectedImportServingTemplateR
     .join(', ')
 }
 
-const getFallbackTemplateCte = (input: {
-  projectId: string
-  templates: readonly SelectedImportServingTemplateRow[]
-}) => {
+const getFallbackTemplateCte = (input: {projectId: string; templates: readonly SelectedImportServingTemplateRow[]}) => {
   const values = getTemplateValuesSql(input.templates)
 
   return values.length === 0
@@ -613,6 +605,7 @@ const getSelectedImportPatchManifest = (
     definitionVersion: input.definitionVersion,
     inputDigest: getClaimKinds(input.claims),
     inputWatermark: patchWatermark,
+    inputWatermarks: getReviewServingSourcePartitionWatermarks(input.claims),
     invalidationReason: getClaimKinds(input.claims),
     patchRangeEnd: patchWatermark,
     patchRangeStart: getPatchRangeStart(input.claims),

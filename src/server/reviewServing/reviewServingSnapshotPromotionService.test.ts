@@ -14,6 +14,7 @@ const displayManifest = {
   definitionVersion: 'display-v1',
   inputDigest: null,
   inputWatermark: 10,
+  inputWatermarks: {reviewChange: 10},
   invalidationReason: null,
   manifestId: 'display-manifest',
   patchRangeEnd: null,
@@ -94,7 +95,9 @@ const createPromotionDatabase = (input?: {selectedImportStatus?: string}) => {
         const manifestId = statement.match(/manifest_id = '((?:''|[^'])*)'/u)?.[1]?.replaceAll("''", "'") ?? ''
         const manifest = manifests.get(manifestId)
 
-        return (manifest === undefined ? [] : [manifest]) as T[]
+        return (
+          manifest === undefined ? [] : [{...manifest, inputWatermarksJson: JSON.stringify(manifest.inputWatermarks)}]
+        ) as T[]
       }
 
       return [] as T[]
@@ -310,7 +313,9 @@ test('snapshot validation ignores project-scope watermarks for display and requi
 
   expect(displayResult.ok).toBe(true)
   expect(searchResult.ok).toBe(false)
-  expect(searchResult.ok ? null : searchResult.error).toBe('component search input watermark 10 is behind source 1000')
+  expect(searchResult.ok ? null : searchResult.error).toBe(
+    'component search input watermark 0 for source projectScope is behind source 1000',
+  )
 })
 
 test('snapshot validation requires import-run watermarks for project-scope manifests', async () => {
@@ -346,7 +351,9 @@ test('snapshot validation requires import-run watermarks for project-scope manif
   )
 
   expect(result.ok).toBe(false)
-  expect(result.ok ? null : result.error).toBe('component projectScope input watermark 10 is behind source 1000')
+  expect(result.ok ? null : result.error).toBe(
+    'component projectScope input watermark 0 for source importRunArticle is behind source 1000',
+  )
 })
 
 test('snapshot validation requires import-run watermarks for search manifests', async () => {
@@ -382,7 +389,52 @@ test('snapshot validation requires import-run watermarks for search manifests', 
   )
 
   expect(result.ok).toBe(false)
-  expect(result.ok ? null : result.error).toBe('component search input watermark 10 is behind source 1000')
+  expect(result.ok ? null : result.error).toBe(
+    'component search input watermark 0 for source importRunArticle is behind source 1000',
+  )
+})
+
+test('snapshot validation checks each source watermark partition independently', async () => {
+  const {database, manifests} = createPromotionDatabase()
+  manifests.set(getManifestKey(searchManifest), {
+    ...searchManifest,
+    inputWatermark: 1000,
+    inputWatermarks: {importRunArticle: 1000},
+  })
+  const result = await validateReviewServingCandidateSnapshotManifest(
+    {
+      componentState: {
+        optional: [
+          {
+            baseGeneration: '1',
+            component: 'search',
+            patchWatermark: '4',
+            projectionIdentity: 'search:identity-1',
+            requirement: 'optional',
+          },
+        ],
+        required: [],
+      },
+      composedIdentity: {route: 'review.search', version: 1},
+      lastError: null,
+      lastKnownGoodSnapshotId: null,
+      optionalComponents: ['search'],
+      projectId: 'project-1',
+      requiredComponents: [],
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-import-1',
+      snapshotId: 'snapshot-1',
+      sourceWatermarks: {importRunArticle: 1000, reviewChange: 10},
+      status: 'candidate',
+      validationResult: null,
+    },
+    database,
+  )
+
+  expect(result.ok).toBe(false)
+  expect(result.ok ? null : result.error).toBe(
+    'component search input watermark 0 for source reviewChange is behind source 10',
+  )
 })
 
 test('snapshot validation requires review-change watermarks for config scope rebuild manifests', async () => {
@@ -448,11 +500,11 @@ test('snapshot validation requires review-change watermarks for config scope reb
 
   expect(projectScopeResult.ok).toBe(false)
   expect(projectScopeResult.ok ? null : projectScopeResult.error).toBe(
-    'component projectScope input watermark 10 is behind source 1000',
+    'component projectScope input watermark 10 for source reviewChange is behind source 1000',
   )
   expect(selectedImportResult.ok).toBe(false)
   expect(selectedImportResult.ok ? null : selectedImportResult.error).toBe(
-    'component selectedImport input watermark 10 is behind source 1000',
+    'component selectedImport input watermark 10 for source reviewChange is behind source 1000',
   )
 })
 
@@ -518,10 +570,12 @@ test('snapshot validation requires import-run watermarks for status manifests', 
   )
 
   expect(llmResult.ok).toBe(false)
-  expect(llmResult.ok ? null : llmResult.error).toBe('component llmStatus input watermark 10 is behind source 1000')
+  expect(llmResult.ok ? null : llmResult.error).toBe(
+    'component llmStatus input watermark 0 for source importRunArticle is behind source 1000',
+  )
   expect(humanResult.ok).toBe(false)
   expect(humanResult.ok ? null : humanResult.error).toBe(
-    'component humanStatus input watermark 10 is behind source 1000',
+    'component humanStatus input watermark 0 for source importRunArticle is behind source 1000',
   )
 })
 

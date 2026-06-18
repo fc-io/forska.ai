@@ -90,10 +90,15 @@ const createFakeManifestDatabase = (initialSnapshots: FakeSnapshotRow[] = []) =>
     const existing = projections.get(manifestId)
     const row = {
       baseGeneration: Number(statement.match(/'[^']*',\s*'[^']*',\s*'[^']*',\s*'[^']*',\s*(\d+)/u)?.[1] ?? 0),
-      definitionVersion: strings[5] ?? '',
-      inputDigest: strings[4] ?? null,
-      inputWatermark: Number(statement.match(/,\s*(\d+),\s*(?:NULL|'(?:''|[^']*)'),\s*'[^']*',\s*'[^']*',/u)?.[1] ?? 0),
-      invalidationReason: strings[9] ?? null,
+      definitionVersion: strings[6] ?? '',
+      inputDigest: strings[5] ?? null,
+      inputWatermark: Number(
+        statement.match(
+          /'[^']*',\s*'[^']*',\s*'[^']*',\s*'[^']*',\s*\d+,\s*\d+,\s*(?:NULL|\d+),\s*(?:NULL|\d+),\s*(\d+)/u,
+        )?.[1] ?? 0,
+      ),
+      inputWatermarks: JSON.parse(strings[4] ?? '{}') as FakeProjectionRow['inputWatermarks'],
+      invalidationReason: strings[10] ?? null,
       manifestId,
       patchRangeEnd: null,
       patchRangeStart: null,
@@ -101,8 +106,8 @@ const createFakeManifestDatabase = (initialSnapshots: FakeSnapshotRow[] = []) =>
       projectId: strings[1] ?? null,
       projectionComponent: (strings[2] ?? 'display') as FakeProjectionRow['projectionComponent'],
       projectionIdentity: strings[3] ?? '',
-      promptConfigHash: strings[7] ?? null,
-      reviewConfigHash: strings[6] ?? null,
+      promptConfigHash: strings[8] ?? null,
+      reviewConfigHash: strings[7] ?? null,
       status: getProjectionStatus(strings),
     }
 
@@ -207,6 +212,7 @@ const createFakeManifestDatabase = (initialSnapshots: FakeSnapshotRow[] = []) =>
                 ...projection,
                 inputDigest: projection.inputDigest,
                 inputWatermark: projection.inputWatermark,
+                inputWatermarksJson: JSON.stringify(projection.inputWatermarks),
                 invalidationReason: projection.invalidationReason,
               },
             ]
@@ -307,6 +313,7 @@ test('projection identity manifest upsert is idempotent for project component id
     definitionVersion: 'display-v1',
     inputDigest: 'input-digest-1',
     inputWatermark: 42,
+    inputWatermarks: {reviewChange: 42},
     patchRangeEnd: 5,
     patchRangeStart: 3,
     patchWatermark: 7,
@@ -402,6 +409,7 @@ test('promotion retires previous active and preserves it as last-known-good', as
       definitionVersion: 'display-v1',
       inputDigest: 'display-digest-1',
       inputWatermark: 10,
+      inputWatermarks: {reviewChange: 10},
       patchWatermark: 3,
       projectId: 'project-1',
       projectionComponent: 'display',
@@ -411,7 +419,7 @@ test('promotion retires previous active and preserves it as last-known-good', as
     },
     database,
   )
-  await promoteReviewServingProjectorSnapshot(
+  const promotionResult = await promoteReviewServingProjectorSnapshot(
     {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-next'},
     database,
   )
@@ -425,6 +433,7 @@ test('promotion retires previous active and preserves it as last-known-good', as
     database,
   )
 
+  expect(promotionResult).toEqual({promoted: true, snapshotId: 'snapshot-next'})
   expect(active?.snapshotId).toBe('snapshot-next')
   expect(active?.lastKnownGoodSnapshotId).toBe('snapshot-active')
   expect(lastKnownGood?.snapshotId).toBe('snapshot-active')

@@ -270,6 +270,7 @@ const getSelectedImportProjectionManifest = (input: {
     definitionVersion: selectedImportProjectorDefinitionVersion,
     inputDigest: input.selectedImportSnapshotId,
     inputWatermark: input.sourceDeltaHighWater,
+    inputWatermarks: {importRunArticle: input.sourceDeltaHighWater},
     invalidationReason: 'selectedImport.base.completed',
     patchRangeEnd: input.sourceDeltaHighWater,
     patchRangeStart: input.sourceDeltaHighWater,
@@ -305,9 +306,7 @@ export const projectReviewServingSelectedImportBatch = async (
     {
       component: 'selectedImport',
       projectionManifests:
-        status === 'completed'
-          ? [getSelectedImportProjectionManifest({...params, selectedImportSnapshotId})]
-          : [],
+        status === 'completed' ? [getSelectedImportProjectionManifest({...params, selectedImportSnapshotId})] : [],
       records: rows.map((row) => {
         return getSelectedImportProjectorRecord({...params, selectedImportSnapshotId}, row)
       }),

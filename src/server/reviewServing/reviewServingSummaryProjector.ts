@@ -12,6 +12,7 @@ import {
   type ReviewServingContributionRow,
 } from './reviewServingContributionService.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
@@ -114,14 +115,12 @@ const getExpectedArticleIds = (
   return claimArticleIds.length > 0
     ? claimArticleIds
     : [
-        ...new Set(
-          [
-            ...priorArticleIds,
-            ...rows.map((row) => {
-              return row.articleId
-            }),
-          ],
-        ),
+        ...new Set([
+          ...priorArticleIds,
+          ...rows.map((row) => {
+            return row.articleId
+          }),
+        ]),
       ]
 }
 
@@ -293,7 +292,12 @@ const getSummaryContributionRows = async (
           INNER JOIN article_id_filter dirty ON dirty.article_id = human.article_id
           INNER JOIN selected_state selected ON selected.article_id = human.article_id AND selected.in_selected_scope
           INNER JOIN list_mode_key_filter list_mode_key ON list_mode_key.list_mode_key = human.list_mode_key
+          CROSS JOIN project_settings
           WHERE human.project_id = ${getSqlLiteral(input.projectId)} AND human.base_generation = ${getSqlLiteral(input.baseGeneration)} AND NOT human.tombstone AND human.human_status_key = 'answered'
+            AND (
+              (project_settings.human_judgment_mode = 'summary' AND human.prompt_id = 'summary')
+              OR (project_settings.human_judgment_mode <> 'summary' AND human.prompt_id <> 'summary')
+            )
             AND NOT EXISTS (
               SELECT 1
               FROM mart.review_human_status_patch_v4 newer
@@ -686,6 +690,7 @@ export const projectReviewServingSummaries = async (
               definitionVersion: 'review-serving-summary:v1',
               inputDigest: getClaimKinds(input.claims),
               inputWatermark: patchWatermark,
+              inputWatermarks: getReviewServingSourcePartitionWatermarks(input.claims),
               invalidationReason: getClaimKinds(input.claims),
               patchRangeEnd: patchWatermark,
               patchRangeStart: getPatchRangeStart(input.claims),

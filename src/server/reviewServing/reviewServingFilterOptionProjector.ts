@@ -3,6 +3,7 @@ import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
 import {namedReviewFastCountDefinitions} from './reviewServingContracts.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   getDeleteReviewServingProjectorRowsStatement,
   type ReviewServingProjectorRecord,
@@ -336,6 +337,7 @@ export const projectReviewServingFilterOptions = async (
             definitionVersion: input.definitionVersion,
             inputDigest: getClaimKinds(input.claims),
             inputWatermark: patchWatermark,
+            inputWatermarks: getReviewServingSourcePartitionWatermarks(input.claims),
             invalidationReason: getClaimKinds(input.claims),
             patchRangeEnd: patchWatermark,
             patchRangeStart: getPatchRangeStart(input.claims),

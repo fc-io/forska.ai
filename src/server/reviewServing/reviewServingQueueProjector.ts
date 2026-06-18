@@ -6,6 +6,7 @@ import {
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingProjectionManifestStatus,
 } from './reviewServingManifestRepository.ts'
+import {getReviewServingSourcePartitionWatermarks} from './reviewServingProjectorDomain.ts'
 import {
   type ReviewServingProjectorRecord,
   type ReviewServingProjectorWriterDatabase,
@@ -312,7 +313,10 @@ const getQueueRows = async (input: ProjectReviewServingQueueInput, database: Rev
                 AND newer.prompt_id IS NOT DISTINCT FROM human.prompt_id
                 AND newer.list_mode_key = human.list_mode_key
             )
-            AND (human.prompt_id <> 'summary' OR project_settings.human_judgment_mode = 'summary')
+            AND (
+              (project_settings.human_judgment_mode = 'summary' AND human.prompt_id = 'summary')
+              OR (project_settings.human_judgment_mode <> 'summary' AND human.prompt_id <> 'summary')
+            )
         ),
         queue_union AS (
           SELECT * FROM llm_queue
@@ -410,6 +414,7 @@ const getQueuePatchManifest = (input: ProjectReviewServingQueueInput): ReviewSer
     definitionVersion: input.definitionVersion,
     inputDigest: getClaimKinds(input.claims),
     inputWatermark: patchWatermark,
+    inputWatermarks: getReviewServingSourcePartitionWatermarks(input.claims),
     invalidationReason: getClaimKinds(input.claims),
     patchRangeEnd: patchWatermark,
     patchRangeStart: getPatchRangeStart(input.claims),

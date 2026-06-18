@@ -18,6 +18,8 @@ export type ReviewServingSnapshotLifecycleStatus = ReviewServingSnapshotStatus
 
 export type ReviewServingSourcePartitionHighWaterState = {sourceHighWaterMark: number; sourcePartition: string}
 
+export type ReviewServingSourcePartitionWatermarks = Record<string, number>
+
 export type ReviewServingProjectionComponentIdentity = {
   projectId: string | null
   projectionComponent: ReviewServingProjectionComponent
@@ -126,6 +128,33 @@ export const getReviewServingProjectorWatermarkId = (
     projectorName: input.projectorName,
     sourcePartition: input.sourcePartition,
   }).slice(0, 32)}`
+}
+
+const sourcePartitionAliases: Record<string, string> = {
+  'import-run-article': 'importRunArticle',
+  'project-scope': 'projectScope',
+  'review-change': 'reviewChange',
+}
+
+const getReviewServingSourceWatermarkKeys = (sourcePartition: string) => {
+  const sourceKey = sourcePartition.split(':')[0] ?? sourcePartition
+  const alias = sourcePartitionAliases[sourceKey]
+
+  return alias === undefined ? [sourceKey] : [sourceKey, alias]
+}
+
+export const getReviewServingSourcePartitionWatermarks = (
+  claims: readonly {latestSourceHighWaterMark: number; sourcePartition: string}[],
+): ReviewServingSourcePartitionWatermarks => {
+  return claims.reduce<ReviewServingSourcePartitionWatermarks>((watermarks, claim) => {
+    const sourceKeys = getReviewServingSourceWatermarkKeys(claim.sourcePartition)
+
+    return sourceKeys.reduce<ReviewServingSourcePartitionWatermarks>((nextWatermarks, sourceKey) => {
+      const previous = nextWatermarks[sourceKey] ?? 0
+
+      return {...nextWatermarks, [sourceKey]: Math.max(previous, claim.latestSourceHighWaterMark)}
+    }, watermarks)
+  }, {})
 }
 
 export const getReviewServingDirtyWorkScopeKey = (scope: ReviewServingDirtyWorkScope) => {

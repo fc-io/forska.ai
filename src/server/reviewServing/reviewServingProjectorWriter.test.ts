@@ -36,6 +36,7 @@ const createWriterDatabase = () => {
             definitionVersion: 'display-v1',
             inputDigest: null,
             inputWatermark: 8,
+            inputWatermarksJson: JSON.stringify({reviewChange: 8}),
             invalidationReason: null,
             manifestId: 'display-manifest-1',
             patchRangeEnd: null,
