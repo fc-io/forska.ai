@@ -322,6 +322,28 @@ test('missing article-scoped queue inputs clear optional unassessed state withou
   expect(joined).not.toContain('review_config_hash IN')
 })
 
+test('missing prompt-scoped queue inputs clear stale prompt serving rows', async () => {
+  const {database, statements} = createQueueDatabase()
+
+  const result = await projectReviewServingQueuePatches(
+    projectInput([
+      queueClaim({
+        articleId: null,
+        dirtyKind: 'prompt.config.updated',
+        scopeId: 'project-1:prompt-1',
+        scopeKind: 'prompt',
+      }),
+    ]),
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
+  expect(joined).toContain('DELETE FROM mart.review_unassessed_queue_serving_v4')
+  expect(joined).toContain("prompt_id IN ('prompt-1')")
+  expect(joined).not.toContain('review_config_hash IN')
+})
+
 test('project-scoped empty queue rebuild clears snapshot serving rows', async () => {
   const {database, statements} = createQueueDatabase()
 

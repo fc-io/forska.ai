@@ -441,7 +441,7 @@ const getDeleteReplacedQueueServingStatement = (
 
   return input.snapshotId === null
     || input.snapshotId === undefined
-    || (!broadProjectClaim && articleIds.length === 0 && reviewConfigHashes.length === 0)
+    || (!broadProjectClaim && articleIds.length === 0 && promptIds.length === 0 && reviewConfigHashes.length === 0)
     ? null
     : articleIds.length > 0
       ? `DELETE FROM mart.review_unassessed_queue_serving_v4
