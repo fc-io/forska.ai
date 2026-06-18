@@ -16,7 +16,7 @@ import {
 } from '../services/appQueryHelpers.ts'
 import {storeImportedArticlesWithTx} from '../services/articleImportStoreService.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
-import {getPdfFetchJob, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
+import {getPdfFetchJobFromDatabase, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
 type ArticleJudgmentRow = {
@@ -304,8 +304,8 @@ export const articlesRoutes = new Elysia()
   )
   .get(
     '/api/articles/pdf-fetch-jobs/:jobId',
-    ({params}) => {
-      const job = getPdfFetchJob(params.jobId)
+    async ({params}) => {
+      const job = await getPdfFetchJobFromDatabase(params.jobId)
       if (!job) {
         throw new Error('Job not found')
       }

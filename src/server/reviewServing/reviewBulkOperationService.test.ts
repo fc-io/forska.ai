@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {getPdfFetchJobFromDatabase} from '../services/pdfFetchJobs.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   assertArticleIdOnlyBulkOperationCaps,
@@ -213,4 +214,51 @@ test('article-id-only bulk operations enforce a foreground cap', () => {
   expect(() => {
     return assertArticleIdOnlyBulkOperationCaps(ids)
   }).toThrow('Bulk article ID operation exceeds cap')
+})
+
+test('PDF fetch job lookup reads durable cursor progress from review bulk operation jobs', async () => {
+  const statements: string[] = []
+  const database = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      statements.push(statement)
+
+      return [
+        {
+          batchSize: 25,
+          cancelRequested: false,
+          completedAt: null,
+          createdAt: '2026-06-18T00:00:00.000Z',
+          criteriaJson: {concurrency: 7, forceRefetch: true, operation: 'pdfFetch'},
+          cursorJson: {cursor: 'article-010', limit: 25},
+          jobId: 'job-1',
+          lastError: null,
+          processedCount: 10,
+          resultManifestJson: {attempted: 9, failed: 1, noPdf: 2, skipped: 1, succeeded: 6},
+          status: 'running',
+          totalEstimate: 40,
+        },
+      ] as T[]
+    },
+  }
+
+  const job = await getPdfFetchJobFromDatabase('job-1', database)
+  const joined = statements.join('\n')
+
+  expect(job).toMatchObject({
+    attempted: 9,
+    concurrency: 7,
+    failed: 1,
+    forceRefetch: true,
+    jobId: 'job-1',
+    noPdf: 2,
+    processed: 10,
+    skipped: 1,
+    status: 'running',
+    succeeded: 6,
+    total: 40,
+  })
+  expect(joined).toContain('FROM app.review_bulk_operation_job')
+  expect(joined).toContain('cursor_json AS cursorJson')
+  expect(joined).toContain('processed_count AS processedCount')
+  expect(joined).toContain("job_kind = 'review.pdf.selection'")
 })
